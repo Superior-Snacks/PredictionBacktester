@@ -1,6 +1,6 @@
 ﻿namespace PredictionBacktester.Strategies
 {
-    public class Class1
+    public class EventArbStrategy
     {
 
     }
