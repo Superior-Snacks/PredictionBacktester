@@ -10,4 +10,10 @@
     <ProjectReference Include="..\PredictionBacktester.Core\PredictionBacktester.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Folder Include="APIClients\" />
+    <Folder Include="Database\" />
+    <Folder Include="Repositories\" />
+  </ItemGroup>
+
 </Project>
