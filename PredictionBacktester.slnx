@@ -1,3 +1,4 @@
 <Solution>
   <Project Path="PredictionBacktester.Core/PredictionBacktester.Core.csproj" />
+  <Project Path="PredictionBacktester.Data/PredictionBacktester.Data.csproj" />
 </Solution>
