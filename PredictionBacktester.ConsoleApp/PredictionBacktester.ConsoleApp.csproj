@@ -7,4 +7,11 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\PredictionBacktester.Core\PredictionBacktester.Core.csproj" />
+    <ProjectReference Include="..\PredictionBacktester.Data\PredictionBacktester.Data.csproj" />
+    <ProjectReference Include="..\PredictionBacktester.Engine\PredictionBacktester.Engine.csproj" />
+    <ProjectReference Include="..\PredictionBacktester.Strategies\PredictionBacktester.Strategies.csproj" />
+  </ItemGroup>
+
 </Project>
