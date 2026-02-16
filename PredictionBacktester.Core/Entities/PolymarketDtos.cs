@@ -2,6 +2,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
+
 namespace PredictionBacktester.Core.Entities;
 
 // --- GAMMA API MODELS (Market Metadata) ---
@@ -33,6 +34,7 @@ public class PolymarketMarketResponse
     public bool IsClosed { get; set; }     // Useful to stop the backtest for this token
 
     [JsonPropertyName("volume")]
+    [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
     public decimal Volume { get; set; }    // Helps your strategy know if the market is liquid
 
     [JsonPropertyName("outcomes")]

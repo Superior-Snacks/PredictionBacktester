@@ -1,6 +1,8 @@
-﻿using System.Net.Http.Json;
-using PredictionBacktester.Core.Entities;
+﻿using PredictionBacktester.Core.Entities;
 using System.Net.Http;
+using System.Net.Http.Json;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace PredictionBacktester.Data.ApiClients;
 
@@ -19,14 +21,30 @@ public class PolymarketClient
     /// <summary>
     /// Fetches a list of active events and their nested markets.
     /// </summary>
-    public async Task<List<PolymarketEventResponse>> GetActiveEventsAsync(int limit = 100, int offset = 10000)
+    public async Task<List<PolymarketEventResponse>> GetActiveEventsAsync(int limit = 100, int offset = 0)
     {
-        var url = $"events?closed=false&active=true&limit={limit}&offset={offset}";
+        // 1. Let's remove the 'active' and 'closed' filters temporarily to force it to give us ANYTHING
+        var url = $"events?limit={limit}&offset={offset}";
 
-        // GetFromJsonAsync handles the HTTP GET request and JSON deserialization in one line
-        var events = await _gammaClient.GetFromJsonAsync<List<PolymarketEventResponse>>(url);
+        try
+        {
+            // 2. Instead of direct JSON conversion, let's download the raw string first
+            var rawJson = await _gammaClient.GetStringAsync(url);
 
-        return events ?? new List<PolymarketEventResponse>();
+            // 3. Print the first 500 characters to the console so we can see what they sent us
+            Console.WriteLine("\n--- RAW API RESPONSE ---");
+            Console.WriteLine(rawJson.Substring(0, Math.Min(rawJson.Length, 500)) + "...\n");
+
+            // 4. Now deserialize it manually
+            var events = JsonSerializer.Deserialize<List<PolymarketEventResponse>>(rawJson);
+            return events ?? new List<PolymarketEventResponse>();
+        }
+        catch (Exception ex)
+        {
+            // If Cloudflare blocks us or there is an HTTP error, this will catch it!
+            Console.WriteLine($"\nAPI ERROR: {ex.Message}");
+            return new List<PolymarketEventResponse>();
+        }
     }
 
     /// <summary>
