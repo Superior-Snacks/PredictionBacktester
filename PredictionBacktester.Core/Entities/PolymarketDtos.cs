@@ -1,5 +1,6 @@
-﻿using System.Text.Json.Serialization;
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace PredictionBacktester.Core.Entities;
 
@@ -26,10 +27,12 @@ public class PolymarketMarketResponse
     public string Question { get; set; }
 
     [JsonPropertyName("outcomes")]
-    public string[] Outcomes { get; set; } // e.g., ["Yes", "No"]
+    [JsonConverter(typeof(PolymarketStringArrayConverter))] // <-- ADD THIS
+    public string[] Outcomes { get; set; }
 
     [JsonPropertyName("clobTokenIds")]
-    public string[] ClobTokenIds { get; set; } // The ID needed to get the price history!
+    [JsonConverter(typeof(PolymarketStringArrayConverter))] // <-- ADD THIS
+    public string[] ClobTokenIds { get; set; }
 }
 
 // --- CLOB API MODELS (Historical Prices) ---
@@ -47,4 +50,38 @@ public class PolymarketTick
 
     [JsonPropertyName("p")]
     public decimal Price { get; set; }
+}
+
+public class PolymarketStringArrayConverter : JsonConverter<string[]>
+{
+    public override string[] Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        // 1. Check if Polymarket sent us a stringified array like "[\"Yes\", \"No\"]"
+        if (reader.TokenType == JsonTokenType.String)
+        {
+            string jsonString = reader.GetString();
+            if (string.IsNullOrWhiteSpace(jsonString)) return Array.Empty<string>();
+
+            // Unpack the string back into a real JSON array
+            return JsonSerializer.Deserialize<string[]>(jsonString) ?? Array.Empty<string>();
+        }
+
+        // 2. Fallback: If Polymarket ever fixes their API and sends a real array
+        if (reader.TokenType == JsonTokenType.StartArray)
+        {
+            var list = new List<string>();
+            while (reader.Read() && reader.TokenType != JsonTokenType.EndArray)
+            {
+                list.Add(reader.GetString());
+            }
+            return list.ToArray();
+        }
+
+        return Array.Empty<string>();
+    }
+
+    public override void Write(Utf8JsonWriter writer, string[] value, JsonSerializerOptions options)
+    {
+        JsonSerializer.Serialize(writer, value, options);
+    }
 }

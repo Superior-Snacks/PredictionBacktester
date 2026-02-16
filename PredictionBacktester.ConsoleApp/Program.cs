@@ -28,9 +28,10 @@ var apiClient = serviceProvider.GetRequiredService<PolymarketClient>();
 Console.WriteLine("Fetching Polymarket Events...");
 var events = await apiClient.GetActiveEventsAsync(limit: 2); // Just pulling 2 for a quick test
 Console.WriteLine(1);
-
+Console.WriteLine(events);
 foreach (var ev in events)
 {
+    Console.WriteLine(1.5);
     Console.WriteLine($"\nEvent: {ev.Title}");
     Console.WriteLine(2);
 
