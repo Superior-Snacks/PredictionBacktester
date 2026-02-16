@@ -10,12 +10,13 @@ public class PolymarketClient
 {
     private readonly HttpClient _gammaClient;
     private readonly HttpClient _clobClient;
+    private readonly HttpClient _dataClient;
 
     public PolymarketClient(IHttpClientFactory httpClientFactory)
     {
-        // We inject a factory that gives us pre-configured clients for both APIs
         _gammaClient = httpClientFactory.CreateClient("PolymarketGamma");
         _clobClient = httpClientFactory.CreateClient("PolymarketClob");
+        _dataClient = httpClientFactory.CreateClient("PolymarketData");
     }
 
     /// <summary>
@@ -44,6 +45,23 @@ public class PolymarketClient
             // If Cloudflare blocks us or there is an HTTP error, this will catch it!
             Console.WriteLine($"\nAPI ERROR: {ex.Message}");
             return new List<PolymarketEventResponse>();
+        }
+    }
+
+    public async Task<List<PolymarketTradeResponse>> GetTradesAsync(string conditionId)
+    {
+        // The Data API uses the conditionId to find all trades for a specific market
+        var url = $"trades?market={conditionId}";
+
+        try
+        {
+            var trades = await _dataClient.GetFromJsonAsync<List<PolymarketTradeResponse>>(url);
+            return trades ?? new List<PolymarketTradeResponse>();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"     API ERROR fetching trades: {ex.Message}");
+            return new List<PolymarketTradeResponse>();
         }
     }
 

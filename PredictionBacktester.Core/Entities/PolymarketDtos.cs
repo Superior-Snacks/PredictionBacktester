@@ -21,6 +21,9 @@ public class PolymarketEventResponse
 
 public class PolymarketMarketResponse
 {
+    [JsonPropertyName("conditionId")]
+    public string ConditionId { get; set; } // We need this to fetch the raw trades!
+
     [JsonPropertyName("id")]
     public string Id { get; set; }
 

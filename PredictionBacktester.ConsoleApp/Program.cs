@@ -17,6 +17,11 @@ services.AddHttpClient("PolymarketClob", client =>
     client.BaseAddress = new Uri("https://clob.polymarket.com/");
 });
 
+services.AddHttpClient("PolymarketData", client =>
+{
+    client.BaseAddress = new Uri("https://data-api.polymarket.com/");
+});
+
 // Register our custom client
 services.AddTransient<PolymarketClient>();
 
@@ -40,20 +45,21 @@ foreach (var ev in events)
         Console.WriteLine($"  -> Question: {market.Question}");
         Console.WriteLine(3);
 
-        // Let's grab the price history for the first outcome (usually "Yes")
-        if (market.ClobTokenIds != null && market.ClobTokenIds.Length > 0)
+        // Check if the market has a conditionId
+        if (!string.IsNullOrEmpty(market.ConditionId))
         {
             Console.WriteLine(4);
-            string firstOutcomeId = market.ClobTokenIds[0];
-            string firstOutcomeName = market.Outcomes[0];
+            Console.WriteLine($"     Fetching RAW TRADES for market...");
 
-            Console.WriteLine($"     Fetching history for outcome '{firstOutcomeName}'...");
-            var history = await apiClient.GetPriceHistoryAsync(firstOutcomeId);
+            // Call the new Data API endpoint!
+            var trades = await apiClient.GetTradesAsync(market.ConditionId);
 
-            Console.WriteLine($"     Got {history.Count} historical price ticks.");
-            if (history.Count > 0)
+            Console.WriteLine($"     Got {trades.Count} raw trades.");
+            if (trades.Count > 0)
             {
-                Console.WriteLine($"     Latest Price: {history.Last().Price}");
+                // Let's print out the exact wallet that made the first trade in the list
+                var t = trades.First();
+                Console.WriteLine($"     Example Trade: Wallet {t.ProxyWallet} {t.Side} {t.Size} shares at ${t.Price}");
             }
         }
     }
