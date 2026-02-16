@@ -27,18 +27,22 @@ var apiClient = serviceProvider.GetRequiredService<PolymarketClient>();
 
 Console.WriteLine("Fetching Polymarket Events...");
 var events = await apiClient.GetActiveEventsAsync(limit: 2); // Just pulling 2 for a quick test
+Console.WriteLine(1);
 
 foreach (var ev in events)
 {
     Console.WriteLine($"\nEvent: {ev.Title}");
+    Console.WriteLine(2);
 
     foreach (var market in ev.Markets)
     {
         Console.WriteLine($"  -> Question: {market.Question}");
+        Console.WriteLine(3);
 
         // Let's grab the price history for the first outcome (usually "Yes")
         if (market.ClobTokenIds != null && market.ClobTokenIds.Length > 0)
         {
+            Console.WriteLine(4);
             string firstOutcomeId = market.ClobTokenIds[0];
             string firstOutcomeName = market.Outcomes[0];
 
