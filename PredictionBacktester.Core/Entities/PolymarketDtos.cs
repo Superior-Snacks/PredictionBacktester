@@ -26,12 +26,21 @@ public class PolymarketMarketResponse
     [JsonPropertyName("question")]
     public string Question { get; set; }
 
+    [JsonPropertyName("endDate")]
+    public DateTime? EndDate { get; set; } // Useful for knowing when the market expires
+
+    [JsonPropertyName("closed")]
+    public bool IsClosed { get; set; }     // Useful to stop the backtest for this token
+
+    [JsonPropertyName("volume")]
+    public decimal Volume { get; set; }    // Helps your strategy know if the market is liquid
+
     [JsonPropertyName("outcomes")]
-    [JsonConverter(typeof(PolymarketStringArrayConverter))] // <-- ADD THIS
+    [JsonConverter(typeof(PolymarketStringArrayConverter))]
     public string[] Outcomes { get; set; }
 
     [JsonPropertyName("clobTokenIds")]
-    [JsonConverter(typeof(PolymarketStringArrayConverter))] // <-- ADD THIS
+    [JsonConverter(typeof(PolymarketStringArrayConverter))]
     public string[] ClobTokenIds { get; set; }
 }
 
