@@ -64,17 +64,4 @@ public class PolymarketClient
             return new List<PolymarketTradeResponse>();
         }
     }
-
-    /// <summary>
-    /// Fetches the historical price data for a specific outcome token (e.g., the "Yes" share).
-    /// </summary>
-    public async Task<List<PolymarketTick>> GetPriceHistoryAsync(string clobTokenId)
-    {
-        // interval=max gets all history. fidelity=60 gets 1-hour intervals (candles).
-        var url = $"prices-history?market={clobTokenId}&interval=max&fidelity=60";
-
-        var response = await _clobClient.GetFromJsonAsync<PolymarketPriceHistoryResponse>(url);
-
-        return response?.History ?? new List<PolymarketTick>();
-    }
 }
