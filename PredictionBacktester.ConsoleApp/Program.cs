@@ -1,5 +1,6 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using PredictionBacktester.Data.ApiClients;
+using System.Net.Http;
 
 // 1. Setup Dependency Injection
 var services = new ServiceCollection();
