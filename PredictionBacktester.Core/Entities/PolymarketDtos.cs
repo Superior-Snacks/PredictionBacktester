@@ -44,6 +44,32 @@ public class PolymarketMarketResponse
     public string[] ClobTokenIds { get; set; }
 }
 
+public class PolymarketTradeResponse
+{
+    [JsonPropertyName("asset")]
+    public string AssetId { get; set; } // The ClobTokenId / OutcomeId
+
+    [JsonPropertyName("conditionId")]
+    public string ConditionId { get; set; } // The MarketId
+
+    [JsonPropertyName("proxyWallet")]
+    public string ProxyWallet { get; set; } // The bettor's address
+
+    [JsonPropertyName("side")]
+    public string Side { get; set; } // "BUY" or "SELL"
+
+    [JsonPropertyName("size")]
+    public decimal Size { get; set; }
+
+    [JsonPropertyName("price")]
+    public decimal Price { get; set; }
+
+    [JsonPropertyName("timestamp")]
+    public long Timestamp { get; set; } // Unix timestamp
+
+    [JsonPropertyName("transactionHash")]
+    public string TransactionHash { get; set; }
+}
 // --- CLOB API MODELS (Historical Prices) ---
 
 public class PolymarketPriceHistoryResponse
