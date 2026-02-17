@@ -22,7 +22,7 @@ public class PolymarketClient
     /// <summary>
     /// Fetches a list of active events and their nested markets.
     /// </summary>
-    public async Task<List<PolymarketEventResponse>> GetActiveEventsAsync(int limit = 100, int offset = 11000)
+    public async Task<List<PolymarketEventResponse>> GetActiveEventsAsync(int limit = 100, int offset = 0)
     {
         // 1. Let's remove the 'active' and 'closed' filters temporarily to force it to give us ANYTHING
         var url = $"events?limit={limit}&offset={offset}";
