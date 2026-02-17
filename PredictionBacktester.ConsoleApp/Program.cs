@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using PredictionBacktester.Data.ApiClients;
 using PredictionBacktester.Data.Database;     // <-- ADD THIS
 using PredictionBacktester.Data.Repositories;
+using PredictionBacktester.Engine;
 using System.Net.Http;
 
 
@@ -32,6 +33,7 @@ services.AddHttpClient("PolymarketData", client =>
     client.BaseAddress = new Uri("https://data-api.polymarket.com/");
 });
 
+/*
 // Register our custom client
 services.AddTransient<PolymarketClient>();
 
@@ -49,7 +51,7 @@ int marketOffset = 2900;
 bool hasMoreMarkets = true;
 
 Console.WriteLine("Starting full exchange sync...");
-/*
+
 // --- THE NEW OUTER LOOP ---
 while (hasMoreMarkets)
 {
@@ -109,3 +111,16 @@ while (hasMoreMarkets)
     marketOffset += marketLimit;
 }
 */
+// Register the engine
+services.AddTransient<BacktestRunner>();
+
+var serviceProvider = services.BuildServiceProvider();
+
+// Resolve the engine
+var engine = serviceProvider.GetRequiredService<BacktestRunner>();
+
+// Pick a ConditionId that you saw successfully save in your PowerShell logs!
+// (Replace this hash with the real ConditionId from your logs or database)
+string testMarketId = "0xYOUR_MARKET_CONDITION_ID_HERE";
+
+await engine.RunMarketSimulationAsync(testMarketId);
