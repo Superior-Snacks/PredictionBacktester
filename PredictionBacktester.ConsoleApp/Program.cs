@@ -37,7 +37,7 @@ services.AddTransient<PolymarketClient>();
 var serviceProvider = services.BuildServiceProvider();
 
 var apiClient = serviceProvider.GetRequiredService<PolymarketClient>();
-var repository = serviceProvider.GetRequiredService<PolymarketRepository>(); // <-- Get the Repo!
+var repository = serviceProvider.GetRequiredService<PolymarketRepository>();
 
 Console.WriteLine("Fetching Polymarket Events...");
 var events = await apiClient.GetActiveEventsAsync(limit: 2); // Just pulling 2 for a quick test
