@@ -121,6 +121,6 @@ var engine = serviceProvider.GetRequiredService<BacktestRunner>();
 
 // Pick a ConditionId that you saw successfully save in your PowerShell logs!
 // (Replace this hash with the real ConditionId from your logs or database)
-string testMarketId = "0xYOUR_MARKET_CONDITION_ID_HERE";
+string testMarketId = "0xe099310e095cef92526d3410317f1254e1123584c54b5833fa6bbd2a903e2249";// mjög nýlegt kanski virkar ekki ef powershell running
 
 await engine.RunMarketSimulationAsync(testMarketId);
