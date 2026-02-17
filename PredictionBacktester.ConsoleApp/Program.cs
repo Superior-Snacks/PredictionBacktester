@@ -1,4 +1,5 @@
-﻿using Microsoft.Extensions.DependencyInjection;
+﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using PredictionBacktester.Data.ApiClients;
 using PredictionBacktester.Data.Database;     // <-- ADD THIS
 using PredictionBacktester.Data.Repositories;
@@ -35,6 +36,9 @@ services.AddHttpClient("PolymarketData", client =>
 services.AddTransient<PolymarketClient>();
 
 var serviceProvider = services.BuildServiceProvider();
+
+var dbContext = serviceProvider.GetRequiredService<PolymarketDbContext>();
+await dbContext.Database.MigrateAsync();
 
 var apiClient = serviceProvider.GetRequiredService<PolymarketClient>();
 var repository = serviceProvider.GetRequiredService<PolymarketRepository>();
