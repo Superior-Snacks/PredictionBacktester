@@ -48,20 +48,50 @@ public class PolymarketClient
         }
     }
 
-    public async Task<List<PolymarketTradeResponse>> GetTradesAsync(string conditionId)
+    /// <summary>
+    /// Fetches ALL raw, tick-level trades for a specific market using pagination.
+    /// </summary>
+    public async Task<List<PolymarketTradeResponse>> GetAllTradesAsync(string conditionId)
     {
-        // The Data API uses the conditionId to find all trades for a specific market
-        var url = $"trades?market={conditionId}";
+        var allTrades = new List<PolymarketTradeResponse>();
+        int limit = 500; // Pull 500 trades per request
+        int offset = 0;
 
-        try
+        while (true)
         {
-            var trades = await _dataClient.GetFromJsonAsync<List<PolymarketTradeResponse>>(url);
-            return trades ?? new List<PolymarketTradeResponse>();
+            // We append both limit and offset to the URL
+            var url = $"trades?market={conditionId}&limit={limit}&offset={offset}";
+
+            try
+            {
+                var batch = await _dataClient.GetFromJsonAsync<List<PolymarketTradeResponse>>(url);
+
+                // If the API returns null or an empty list, we've reached the end!
+                if (batch == null || batch.Count == 0)
+                {
+                    break;
+                }
+
+                allTrades.AddRange(batch);
+                offset += limit; // Move the cursor forward by 500 for the next loop
+
+                // If the API gave us less than 500 trades, we know it was the final page
+                if (batch.Count < limit)
+                {
+                    break;
+                }
+
+                // RATE LIMITING: Pause for 100 milliseconds before asking for the next page.
+                // This ensures we only make 10 requests per second, keeping us safely under the limit.
+                await Task.Delay(100);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"     API ERROR fetching trades at offset {offset}: {ex.Message}");
+                break; // Stop looping if the API throws an error
+            }
         }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"     API ERROR fetching trades: {ex.Message}");
-            return new List<PolymarketTradeResponse>();
-        }
+
+        return allTrades;
     }
 }

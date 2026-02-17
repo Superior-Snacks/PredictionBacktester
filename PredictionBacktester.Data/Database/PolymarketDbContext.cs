@@ -13,7 +13,7 @@ public class PolymarketDbContext : DbContext
     protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
     {
         // This tells EF Core to create a file named 'polymarket_backtest.db' in your root folder
-        optionsBuilder.UseSqlite("Data Source=polymarket_backtest.db");
+        optionsBuilder.UseSqlite("Data Source=polymarket_backtest.db;");
     }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)

@@ -44,7 +44,7 @@ var apiClient = serviceProvider.GetRequiredService<PolymarketClient>();
 var repository = serviceProvider.GetRequiredService<PolymarketRepository>();
 
 Console.WriteLine("Fetching Polymarket Events...");
-var events = await apiClient.GetActiveEventsAsync(limit: 4); // Just pulling 2 for a quick test
+var events = await apiClient.GetActiveEventsAsync();
 foreach (var ev in events)
 {
     Console.WriteLine($"\nEvent: {ev.Title}");
@@ -61,24 +61,26 @@ foreach (var ev in events)
             if (wasNewMarket)
             {
                 Console.WriteLine($"     [SAVED] New Market: {market.Question}");
-                Console.WriteLine($"     Fetching RAW TRADES...");
+                Console.WriteLine($"     Fetching ALL RAW TRADES (Paginated)...");
 
-                var trades = await apiClient.GetTradesAsync(market.ConditionId);
+                // 1. Call the new Paginated Method
+                var trades = await apiClient.GetAllTradesAsync(market.ConditionId);
 
                 if (trades.Count > 0)
                 {
-                    Console.WriteLine($"     [SAVED] {trades.Count} trades to database.");
-                    // 2. Save the Trades to SQLite
+                    Console.WriteLine($"     [SAVED] {trades.Count} total trades to database.");
                     await repository.SaveTradesAsync(trades);
                 }
                 else
                 {
-                    Console.WriteLine($"     [EMPTY] No trades found for this market on the Data API.");
+                    Console.WriteLine($"     [EMPTY] No trades found for this market.");
                 }
+
+                // 2. RATE LIMITING: Pause for 200 milliseconds before processing the next market
+                await Task.Delay(200);
             }
             else
             {
-                // We skipped it! So we also skip fetching trades.
                 Console.WriteLine($"     [SKIPPED] Market already exists in database: {market.Question}");
             }
         }
