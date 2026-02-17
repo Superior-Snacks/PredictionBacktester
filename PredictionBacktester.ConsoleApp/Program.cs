@@ -45,7 +45,7 @@ var repository = serviceProvider.GetRequiredService<PolymarketRepository>();
 
 Console.WriteLine("Fetching Polymarket Events...");
 int marketLimit = 100;
-int marketOffset = 0;
+int marketOffset = 3000;
 bool hasMoreMarkets = true;
 
 Console.WriteLine("Starting full exchange sync...");
@@ -68,6 +68,10 @@ while (hasMoreMarkets)
 
     foreach (var ev in events)
     {
+        if (ev.Markets == null)
+        {
+            continue;
+        }
         foreach (var market in ev.Markets)
         {
             if (!string.IsNullOrEmpty(market.ConditionId))
