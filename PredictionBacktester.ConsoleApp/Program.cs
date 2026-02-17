@@ -55,20 +55,31 @@ foreach (var ev in events)
 
         if (!string.IsNullOrEmpty(market.ConditionId))
         {
-            Console.WriteLine($"     Saving Market: {market.Question}");
+            // 1. Try to save the market and capture the result
+            bool wasNewMarket = await repository.SaveMarketAsync(market);
 
-            // 1. Save the Market and its Outcomes to SQLite
-            await repository.SaveMarketAsync(market);
-
-            Console.WriteLine($"     Fetching RAW TRADES...");
-            var trades = await apiClient.GetTradesAsync(market.ConditionId);
-
-            if (trades.Count > 0)
+            if (wasNewMarket)
             {
-                Console.WriteLine($"     Saving {trades.Count} trades to database...");
+                Console.WriteLine($"     [SAVED] New Market: {market.Question}");
+                Console.WriteLine($"     Fetching RAW TRADES...");
 
-                // 2. Save the Trades to SQLite
-                await repository.SaveTradesAsync(trades);
+                var trades = await apiClient.GetTradesAsync(market.ConditionId);
+
+                if (trades.Count > 0)
+                {
+                    Console.WriteLine($"     [SAVED] {trades.Count} trades to database.");
+                    // 2. Save the Trades to SQLite
+                    await repository.SaveTradesAsync(trades);
+                }
+                else
+                {
+                    Console.WriteLine($"     [EMPTY] No trades found for this market on the Data API.");
+                }
+            }
+            else
+            {
+                // We skipped it! So we also skip fetching trades.
+                Console.WriteLine($"     [SKIPPED] Market already exists in database: {market.Question}");
             }
         }
     }
