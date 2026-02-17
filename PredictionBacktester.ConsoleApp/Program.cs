@@ -41,18 +41,13 @@ var repository = serviceProvider.GetRequiredService<PolymarketRepository>(); // 
 
 Console.WriteLine("Fetching Polymarket Events...");
 var events = await apiClient.GetActiveEventsAsync(limit: 2); // Just pulling 2 for a quick test
-Console.WriteLine(1);
-Console.WriteLine(events);
 foreach (var ev in events)
 {
-    Console.WriteLine(1.5);
     Console.WriteLine($"\nEvent: {ev.Title}");
-    Console.WriteLine(2);
 
     foreach (var market in ev.Markets)
     {
         Console.WriteLine($"  -> Question: {market.Question}");
-        Console.WriteLine(3);
 
         if (!string.IsNullOrEmpty(market.ConditionId))
         {
