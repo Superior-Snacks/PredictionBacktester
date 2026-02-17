@@ -49,7 +49,7 @@ int marketOffset = 2900;
 bool hasMoreMarkets = true;
 
 Console.WriteLine("Starting full exchange sync...");
-
+/*
 // --- THE NEW OUTER LOOP ---
 while (hasMoreMarkets)
 {
@@ -108,5 +108,4 @@ while (hasMoreMarkets)
     // Move the cursor forward to get the next 100 events on the next loop
     marketOffset += marketLimit;
 }
-
-//spurja hversu marigir eru pulled og hernig ég reseta db
+*/
