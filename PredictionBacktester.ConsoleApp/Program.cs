@@ -45,7 +45,7 @@ var repository = serviceProvider.GetRequiredService<PolymarketRepository>();
 
 Console.WriteLine("Fetching Polymarket Events...");
 int marketLimit = 100;
-int marketOffset = 3000;
+int marketOffset = 2900;
 bool hasMoreMarkets = true;
 
 Console.WriteLine("Starting full exchange sync...");
