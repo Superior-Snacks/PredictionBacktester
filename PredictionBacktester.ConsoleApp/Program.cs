@@ -74,3 +74,5 @@ foreach (var ev in events)
         }
     }
 }
+
+//spurja hversu marigir eru pulled og hernig ég reseta db
