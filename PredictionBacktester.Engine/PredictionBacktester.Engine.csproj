@@ -8,6 +8,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\PredictionBacktester.Core\PredictionBacktester.Core.csproj" />
+    <ProjectReference Include="..\PredictionBacktester.Data\PredictionBacktester.Data.csproj" />
   </ItemGroup>
 
 </Project>
