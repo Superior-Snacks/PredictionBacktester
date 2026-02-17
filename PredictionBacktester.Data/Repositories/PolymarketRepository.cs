@@ -16,12 +16,14 @@ public class PolymarketRepository
     /// <summary>
     /// Saves the market and its outcomes to the database if they don't already exist.
     /// </summary>
-    public async Task SaveMarketAsync(PolymarketMarketResponse apiMarket)
+    public async Task<bool> SaveMarketAsync(PolymarketMarketResponse apiMarket)
     {
-        // 1. Check if we already saved this market to avoid duplicate key errors
-        if (_dbContext.Markets.Any(m => m.MarketId == apiMarket.ConditionId)) return;
+        // Check if we already saved this market to avoid duplicate key errors
+        if (_dbContext.Markets.Any(m => m.MarketId == apiMarket.ConditionId))
+        {
+            return false; // <-- Return false so the main loop knows we skipped it!
+        }
 
-        // 2. Map the DTO to the Database Entity
         var dbMarket = new Market
         {
             MarketId = apiMarket.ConditionId,
@@ -48,9 +50,10 @@ public class PolymarketRepository
             }
         }
 
-        // 4. Save to the database!
         _dbContext.Markets.Add(dbMarket);
         await _dbContext.SaveChangesAsync();
+
+        return true;
     }
 
     /// <summary>
