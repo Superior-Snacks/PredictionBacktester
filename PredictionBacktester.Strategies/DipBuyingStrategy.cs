@@ -1,6 +1,7 @@
 ﻿using PredictionBacktester.Core.Entities.Database;
+using PredictionBacktester.Engine;
 
-namespace PredictionBacktester.Engine;
+namespace PredictionBacktester.Strategies;
 
 public class DipBuyingStrategy : IStrategy
 {
