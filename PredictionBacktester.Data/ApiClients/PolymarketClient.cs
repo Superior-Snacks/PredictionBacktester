@@ -96,7 +96,7 @@ public class PolymarketClient
     }
 
     /// <summary>
-    /// Fetches older trades using Timestamp Pagination to bypass the 3,500 offset limit.
+    /// Fetches older trades using dynamic Timestamp Pagination to infinitely bypass the offset limit.
     /// </summary>
     public async Task<List<PolymarketTradeResponse>> GetTradesBeforeTimestampAsync(string conditionId, long beforeTimestamp)
     {
@@ -104,28 +104,40 @@ public class PolymarketClient
         int limit = 500;
         int offset = 0;
 
+        // We make the timestamp a variable so we can change it dynamically!
+        long currentTimestampLimit = beforeTimestamp;
+
         while (true)
         {
-            // Notice the new '&before=' parameter!
-            var url = $"trades?market={conditionId}&limit={limit}&offset={offset}&before={beforeTimestamp}";
+            var url = $"trades?market={conditionId}&limit={limit}&offset={offset}&before={currentTimestampLimit}";
 
             try
             {
                 var batch = await _dataClient.GetFromJsonAsync<List<PolymarketTradeResponse>>(url);
-
                 if (batch == null || batch.Count == 0) break;
 
                 allTrades.AddRange(batch);
+
+                // Move the offset forward for the next 500 trades
                 offset += limit;
+
+                // --- THE INFINITE BYPASS ---
+                // Before we hit Polymarket's 3500 Bad Request wall, we reset!
+                if (offset >= 3000)
+                {
+                    offset = 0; // Reset the cursor back to 0
+                    currentTimestampLimit = batch.Min(t => t.Timestamp); // Push the time window backward!
+                    Console.WriteLine($"     [SHIFT] Resetting offset and shifting time window to {currentTimestampLimit}...");
+                }
+                // ---------------------------
 
                 if (batch.Count < limit) break;
 
-                await Task.Delay(100); // Rate Limit
+                await Task.Delay(100);
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"     API ERROR at offset {offset}: {ex.Message}");
-                // If we hit the 3500 limit AGAIN on this older timeframe, we break and let the CLI handle it.
                 break;
             }
         }
