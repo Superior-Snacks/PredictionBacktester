@@ -27,7 +27,7 @@ public class SmaCrossoverStrategy : IStrategy
         _wasFastAboveSlow = null;
     }
 
-    public void Execute(Trade tick, SimulatedBroker broker)
+    public void OnTick(Trade tick, SimulatedBroker broker)
     {
         // 1. Update our rolling memory with the newest price
         _fastWindow.Enqueue(tick.Price);

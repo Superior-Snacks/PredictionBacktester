@@ -5,6 +5,8 @@ using PredictionBacktester.Data.ApiClients;
 using PredictionBacktester.Data.Database;     // <-- ADD THIS
 using PredictionBacktester.Data.Repositories;
 using PredictionBacktester.Engine;
+using PredictionBacktester.Strategies;
+
 using System.Net.Http;
 
 
@@ -76,7 +78,7 @@ while (true)
             // 1. Instantiate whichever strategy you want to test today
             IStrategy myStrategy = new SmaCrossoverStrategy(fastPeriod: 10, slowPeriod: 50);
             // 2. Pass it into the engine
-            await engine.RunMarketSimulationAsync("0xa4ae7bd4acf2e291e870b0a89df20ac186b30c4942f02ff14004d11347b7c3f6", myStrategy);
+            await engine.RunMarketSimulationAsync("0xeb6e3bde4d9b0b0b171a37cc5f439b55197c8bdb16847367e760aaca572a67e5", myStrategy);
             break;
         case "4":
             // Pass the database context directly to our new viewer

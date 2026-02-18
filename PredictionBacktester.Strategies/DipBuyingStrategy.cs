@@ -1,11 +1,10 @@
 ﻿using PredictionBacktester.Core.Entities.Database;
 using PredictionBacktester.Engine;
-
 namespace PredictionBacktester.Strategies;
 
 public class DipBuyingStrategy : IStrategy
 {
-    public void Execute(Trade tick, SimulatedBroker broker)
+    public void OnTick(Trade tick, SimulatedBroker broker)
     {
         // If we have no shares and the price dips below 40 cents, BUY $100 worth!
         if (broker.PositionShares == 0 && tick.Price < 0.40m)

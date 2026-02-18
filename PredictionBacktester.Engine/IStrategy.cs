@@ -1,11 +1,22 @@
-﻿using PredictionBacktester.Core.Entities.Database;
+﻿using PredictionBacktester.Core.Entities;
+using PredictionBacktester.Core.Entities.Database;
 
 namespace PredictionBacktester.Engine;
 
-public interface IStrategy
+// The blank parent (The "Plug Socket")
+public interface IStrategy { }
+
+// Flavor 1: For your Whale-Tracking / High-Frequency strategies
+public interface ITickStrategy : IStrategy
 {
-    /// <summary>
-    /// Evaluates the current market tick and decides whether to buy or sell via the broker.
-    /// </summary>
-    void Execute(Trade tick, SimulatedBroker broker);
+    void OnTick(Trade tick, SimulatedBroker broker);
+}
+
+// Flavor 2: For your Moving Average / Trend strategies
+public interface ICandleStrategy : IStrategy
+{
+    // The strategy tells the engine what size candles it wants (e.g., 1 Hour)
+    TimeSpan Timeframe { get; }
+
+    void OnCandle(Candle candle, SimulatedBroker broker);
 }
