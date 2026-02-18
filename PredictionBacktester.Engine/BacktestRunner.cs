@@ -16,7 +16,7 @@ public class BacktestRunner
     /// <summary>
     /// Runs a simulation on a specific market.
     /// </summary>
-    public async Task RunMarketSimulationAsync(string marketId)
+    public async Task RunMarketSimulationAsync(string marketId, IStrategy strategy)
     {
         Console.WriteLine($"\n--- STARTING BACKTEST FOR MARKET: {marketId} ---");
 
@@ -52,21 +52,7 @@ public class BacktestRunner
 
         foreach (var tick in trades)
         {
-            // --- OUR DUMB STRATEGY ---
-
-            // If we have no shares and the price is cheap, BUY $100 worth!
-            if (broker.PositionShares == 0 && tick.Price < 0.40m)
-            {
-                broker.Buy(tick.Price, 100m);
-                Console.WriteLine($"[BUY] Bought shares at ${tick.Price}. Remaining Cash: ${broker.CashBalance:F2}");
-            }
-
-            // If we hold shares and the price is high, SELL EVERYTHING!
-            else if (broker.PositionShares > 0 && tick.Price > 0.60m)
-            {
-                broker.SellAll(tick.Price);
-                Console.WriteLine($"[SELL] Sold shares at ${tick.Price}. New Cash: ${broker.CashBalance:F2}");
-            }
+            strategy.Execute(tick, broker);
         }
 
         // 4. THE RESULTS
