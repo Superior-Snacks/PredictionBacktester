@@ -91,16 +91,17 @@ public class PolymarketRepository
     /// </summary>
     public async Task<Dictionary<string, long>> GetIncompleteMarketsAsync()
     {
-        // 1. Find all outcomes that have 3000 or more trades
+        // 1. Group, Select the aggregates FIRST, and then Filter (Where/Having)
         var incompleteOutcomes = await _dbContext.Trades
             .GroupBy(t => t.OutcomeId)
-            .Where(g => g.Count() >= 3000)
             .Select(g => new
             {
                 OutcomeId = g.Key,
+                TradeCount = g.Count(),
                 OldestTimestamp = g.Min(t => t.Timestamp)
             })
-            .ToListAsync();
+            .Where(x => x.TradeCount >= 3000) // Filter AFTER the Select
+            .ToListAsync(); // The compiler will now perfectly infer this!
 
         var result = new Dictionary<string, long>();
 
