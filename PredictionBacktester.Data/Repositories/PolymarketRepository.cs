@@ -1,6 +1,7 @@
 ﻿using PredictionBacktester.Core.Entities;
 using PredictionBacktester.Core.Entities.Database;
 using PredictionBacktester.Data.Database;
+using Microsoft.EntityFrameworkCore;
 
 namespace PredictionBacktester.Data.Repositories;
 
