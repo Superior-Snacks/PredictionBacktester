@@ -74,10 +74,9 @@ while (true)
             Console.WriteLine("\n[Starting Simulation...]");
 
             // 1. Instantiate whichever strategy you want to test today
-            IStrategy myStrategy = new DipBuyingStrategy();
-
+            IStrategy myStrategy = new SmaCrossoverStrategy(fastPeriod: 10, slowPeriod: 50);
             // 2. Pass it into the engine
-            await engine.RunMarketSimulationAsync("0xYOUR_REAL_MARKET_ID_HERE", myStrategy);
+            await engine.RunMarketSimulationAsync("0xa4ae7bd4acf2e291e870b0a89df20ac186b30c4942f02ff14004d11347b7c3f6", myStrategy);
             break;
         case "4":
             // Pass the database context directly to our new viewer
@@ -424,3 +423,5 @@ var engine = serviceProvider.GetRequiredService<BacktestRunner>();
 string testMarketId = "0xe099310e095cef92526d3410317f1254e1123584c54b5833fa6bbd2a903e2249";// mjög nýlegt kanski virkar ekki ef powershell running
 
 await engine.RunMarketSimulationAsync(testMarketId);*/
+
+//ok I need to be able to set paramiters for the stratergies, ammount of markets tested, time range tested, volume filtering and so on
