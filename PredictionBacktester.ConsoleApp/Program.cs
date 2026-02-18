@@ -56,8 +56,9 @@ while (true)
     Console.WriteLine("2. Run Deep Sync (Fix 3000+ Trade Markets)");
     Console.WriteLine("3. Run Strategy Backtest (Time Machine)");
     Console.WriteLine("4. Explore Market & Trade Data");
-    Console.WriteLine("5. Exit");
-    Console.Write("\nSelect an option (1-4): ");
+    Console.WriteLine("5. Explore Live API Data (Raw JSON)");
+    Console.WriteLine("6. Exit");
+    Console.Write("\nSelect an option (1-6): ");
 
     var choice = Console.ReadLine();
 
@@ -78,6 +79,9 @@ while (true)
             await ExploreMarketData(dbContext);
             break;
         case "5":
+            await ExploreLiveApiData(apiClient);
+            break;
+        case "6":
             Console.WriteLine("Exiting...");
             return;
         default:
@@ -272,6 +276,56 @@ async Task ExploreMarketData(PolymarketDbContext db)
     else
     {
         Console.WriteLine("\n[ERROR] Invalid trade number. Returning to menu.");
+    }
+}
+
+async Task ExploreLiveApiData(PolymarketClient api)
+{
+    Console.WriteLine("\n--- LIVE API EXPLORER ---");
+    Console.WriteLine("Fetching a fresh batch of live events from Polymarket...");
+
+    // 1. Fetch the first 50 active events directly from the API
+    var events = await api.GetActiveEventsAsync(limit: 50, offset: 50000);
+    if (events == null || events.Count == 0)
+    {
+        Console.WriteLine("\n[ERROR] Failed to fetch from API.");
+        return;
+    }
+
+    // 2. Pick a random event, and grab its first valid market
+    var random = new Random();
+    var randomEvent = events[random.Next(events.Count)];
+    var randomMarket = randomEvent.Markets?.FirstOrDefault(m => !string.IsNullOrEmpty(m.ConditionId));
+
+    if (randomMarket == null)
+    {
+        Console.WriteLine("\n[SKIPPED] Random event had no valid markets. Try hitting 5 again!");
+        return;
+    }
+
+    // 3. Setup JSON formatting options for pretty-printing
+    var jsonOptions = new System.Text.Json.JsonSerializerOptions { WriteIndented = true };
+
+    Console.WriteLine($"\n[1/2] RAW MARKET JSON (Direct from Gamma API)");
+    Console.WriteLine("======================================================");
+    string marketJson = System.Text.Json.JsonSerializer.Serialize(randomMarket, jsonOptions);
+    Console.WriteLine(marketJson);
+
+    Console.WriteLine("\nFetching recent trades for this market...");
+
+    // 4. Fetch the trades from the API using the ConditionId
+    var trades = await api.GetAllTradesAsync(randomMarket.ConditionId);
+
+    if (trades != null && trades.Count > 0)
+    {
+        Console.WriteLine($"\n[2/2] RAW TRADE JSON (Trade 1 of {trades.Count} fetched)");
+        Console.WriteLine("======================================================");
+        string tradeJson = System.Text.Json.JsonSerializer.Serialize(trades.First(), jsonOptions);
+        Console.WriteLine(tradeJson);
+    }
+    else
+    {
+        Console.WriteLine("\n[EMPTY] No recent trades found for this market.");
     }
 }
 /*
