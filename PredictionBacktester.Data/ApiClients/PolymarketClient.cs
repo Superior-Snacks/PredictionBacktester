@@ -94,4 +94,42 @@ public class PolymarketClient
 
         return allTrades;
     }
+
+    /// <summary>
+    /// Fetches older trades using Timestamp Pagination to bypass the 3,500 offset limit.
+    /// </summary>
+    public async Task<List<PolymarketTradeResponse>> GetTradesBeforeTimestampAsync(string conditionId, long beforeTimestamp)
+    {
+        var allTrades = new List<PolymarketTradeResponse>();
+        int limit = 500;
+        int offset = 0;
+
+        while (true)
+        {
+            // Notice the new '&before=' parameter!
+            var url = $"trades?market={conditionId}&limit={limit}&offset={offset}&before={beforeTimestamp}";
+
+            try
+            {
+                var batch = await _dataClient.GetFromJsonAsync<List<PolymarketTradeResponse>>(url);
+
+                if (batch == null || batch.Count == 0) break;
+
+                allTrades.AddRange(batch);
+                offset += limit;
+
+                if (batch.Count < limit) break;
+
+                await Task.Delay(100); // Rate Limit
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"     API ERROR at offset {offset}: {ex.Message}");
+                // If we hit the 3500 limit AGAIN on this older timeframe, we break and let the CLI handle it.
+                break;
+            }
+        }
+
+        return allTrades;
+    }
 }
