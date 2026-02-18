@@ -76,7 +76,7 @@ while (true)
             Console.WriteLine("\n[Starting Simulation...]");
 
             // 1. Instantiate whichever strategy you want to test today
-            IStrategy myStrategy = new SmaCrossoverStrategy(fastPeriod: 10, slowPeriod: 50);
+            IStrategy myStrategy = new CandleSmaCrossoverStrategy(TimeSpan.FromHours(1), 10, 50);
             // 2. Pass it into the engine
             await engine.RunMarketSimulationAsync("0xeb6e3bde4d9b0b0b171a37cc5f439b55197c8bdb16847367e760aaca572a67e5", myStrategy);
             break;
