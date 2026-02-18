@@ -84,4 +84,40 @@ public class PolymarketRepository
         _dbContext.Trades.AddRange(dbTrades);
         await _dbContext.SaveChangesAsync();
     }
+
+    /// <summary>
+    /// Finds markets that hit the offset limit (e.g., have exactly 3500 trades) 
+    /// and returns their ConditionId and the Timestamp of their oldest trade.
+    /// </summary>
+    public async Task<Dictionary<string, long>> GetIncompleteMarketsAsync()
+    {
+        // 1. Find all outcomes that have 3000 or more trades
+        var incompleteOutcomes = await _dbContext.Trades
+            .GroupBy(t => t.OutcomeId)
+            .Where(g => g.Count() >= 3000)
+            .Select(g => new
+            {
+                OutcomeId = g.Key,
+                OldestTimestamp = g.Min(t => t.Timestamp)
+            })
+            .ToListAsync();
+
+        var result = new Dictionary<string, long>();
+
+        // 2. Map those outcomes back to their parent ConditionId
+        foreach (var item in incompleteOutcomes)
+        {
+            var marketId = await _dbContext.Outcomes
+                .Where(o => o.OutcomeId == item.OutcomeId)
+                .Select(o => o.MarketId)
+                .FirstOrDefaultAsync();
+
+            if (marketId != null && !result.ContainsKey(marketId))
+            {
+                result.Add(marketId, item.OldestTimestamp);
+            }
+        }
+
+        return result;
+    }
 }
