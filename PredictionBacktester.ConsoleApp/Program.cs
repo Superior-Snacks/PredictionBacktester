@@ -16,6 +16,8 @@ services.AddDbContext<PolymarketDbContext>();
 // Register our new Repository
 services.AddTransient<PolymarketRepository>();
 
+services.AddTransient<BacktestRunner>();
+
 // Configure the Gamma Client base URL
 services.AddHttpClient("PolymarketGamma", client =>
 {
@@ -42,6 +44,7 @@ await dbContext.Database.MigrateAsync();
 
 var apiClient = serviceProvider.GetRequiredService<PolymarketClient>();
 var repository = serviceProvider.GetRequiredService<PolymarketRepository>();
+var engine = serviceProvider.GetRequiredService<BacktestRunner>();
 
 while (true)
 {
@@ -65,8 +68,8 @@ while (true)
             await RunDeepSync(apiClient, repository);
             break;
         case "3":
-            Console.WriteLine("\n[Backtester Engine coming in Phase 3...]");
-            // await engine.RunMarketSimulationAsync("YOUR_ID_HERE");
+            Console.WriteLine("\n[Starting Simulation...]");
+            await engine.RunMarketSimulationAsync("0xYOUR_REAL_MARKET_ID_HERE");
             break;
         case "4":
             Console.WriteLine("Exiting...");
