@@ -90,36 +90,32 @@ public class PolymarketRepository
     /// Finds markets that hit the offset limit (e.g., have exactly 3500 trades) 
     /// and returns their ConditionId and the Timestamp of their oldest trade.
     /// </summary>
+    /// <summary>
+    /// Joins Trades to Outcomes to find the total trades per MARKET, 
+    /// returning the ConditionId and the Timestamp of the oldest trade.
+    /// </summary>
     public async Task<Dictionary<string, long>> GetIncompleteMarketsAsync()
     {
-        // 1. Group, Select the aggregates FIRST, and then Filter (Where/Having)
-        var incompleteOutcomes = await _dbContext.Trades
-            .GroupBy(t => t.OutcomeId)
+        var incompleteMarkets = await _dbContext.Outcomes
+            // 1. Join Outcomes to Trades using the OutcomeId
+            .Join(_dbContext.Trades,
+                  outcome => outcome.OutcomeId,
+                  trade => trade.OutcomeId,
+                  (outcome, trade) => new { outcome.MarketId, trade.Timestamp })
+            // 2. Group by the Parent Market
+            .GroupBy(x => x.MarketId)
+            // 3. Select the aggregations
             .Select(g => new
             {
-                OutcomeId = g.Key,
+                MarketId = g.Key,
                 TradeCount = g.Count(),
-                OldestTimestamp = g.Min(t => t.Timestamp)
+                OldestTimestamp = g.Min(x => x.Timestamp)
             })
-            .Where(x => x.TradeCount >= 3000) // Filter AFTER the Select
-            .ToListAsync(); // The compiler will now perfectly infer this!
+            // 4. Now filter by the API limit!
+            .Where(x => x.TradeCount >= 3000)
+            // 5. Instantly map it to a Dictionary
+            .ToDictionaryAsync(x => x.MarketId, x => x.OldestTimestamp);
 
-        var result = new Dictionary<string, long>();
-
-        // 2. Map those outcomes back to their parent ConditionId
-        foreach (var item in incompleteOutcomes)
-        {
-            var marketId = await _dbContext.Outcomes
-                .Where(o => o.OutcomeId == item.OutcomeId)
-                .Select(o => o.MarketId)
-                .FirstOrDefaultAsync();
-
-            if (marketId != null && !result.ContainsKey(marketId))
-            {
-                result.Add(marketId, item.OldestTimestamp);
-            }
-        }
-
-        return result;
+        return incompleteMarkets;
     }
 }
