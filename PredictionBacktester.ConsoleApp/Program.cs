@@ -60,8 +60,9 @@ while (true)
     Console.WriteLine("4. Explore Market & Trade Data");
     Console.WriteLine("5. Explore Live API Data (Raw JSON)");
     Console.WriteLine("6. Run Portfolio Backtest (Dynamic Multi-Market)");
-    Console.WriteLine("7. Exit");
-    Console.Write("\nSelect an option (1-7): ");
+    Console.WriteLine("7. topup open  markets");
+    Console.WriteLine("8. exit");
+    Console.Write("\nSelect an option (1-8): ");
 
     var choice = Console.ReadLine();
 
@@ -92,6 +93,9 @@ while (true)
             await RunDynamicPortfolioBacktest(repository, engine);
             break;
         case "7":
+            await RunActiveMarketSync(apiClient, repository);
+            break;
+        case "8":
             Console.WriteLine("Exiting...");
             return;
         default:
@@ -370,6 +374,48 @@ async Task RunDynamicPortfolioBacktest(PolymarketRepository repo, BacktestRunner
 
     // 4. Run the Portfolio Engine
     await engine.RunPortfolioSimulationAsync(dynamicMarketIds, startDate, endDate, myStrategy);
+}
+
+async Task RunActiveMarketSync(PolymarketClient api, PolymarketRepository repo)
+{
+    Console.WriteLine("\n--- SYNCING ACTIVE MARKETS ---");
+
+    // 1. Ask the database who is still alive
+    var openMarkets = await repo.GetOpenMarketIdsAsync();
+    Console.WriteLine($"Found {openMarkets.Count} open markets in the database. Checking for new trades...");
+
+    foreach (var conditionId in openMarkets)
+    {
+        Console.WriteLine($"\nSyncing Market: {conditionId}");
+
+        // 2. Fetch missing trades since our last known timestamp
+        long? newestKnown = await repo.GetNewestTradeTimestampAsync(conditionId);
+        long searchTimestamp = newestKnown ?? 0; // If it's somehow 0, fetch from the beginning
+
+        var missingTrades = await api.GetRecentTradesUntilAsync(conditionId, searchTimestamp);
+
+        if (missingTrades.Count > 0)
+        {
+            await repo.SaveTradesAsync(missingTrades);
+            Console.WriteLine($"   [UPDATED] Downloaded {missingTrades.Count} new trades.");
+        }
+        else
+        {
+            Console.WriteLine("   [UP TO DATE] No new volume.");
+        }
+
+        // 3. THE CLEANUP: Did it close while we were away?
+        bool isNowClosed = await api.IsMarketClosedAsync(conditionId);
+        if (isNowClosed)
+        {
+            await repo.MarkMarketClosedAsync(conditionId);
+            Console.WriteLine("   [CLOSED] Market has officially resolved. State saved.");
+        }
+
+        await Task.Delay(100); // Respect the API rate limits!
+    }
+
+    Console.WriteLine("\n[COMPLETE] All active markets have been synced.");
 }
 /*
 // Register our custom client
