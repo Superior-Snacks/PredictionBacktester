@@ -1,5 +1,6 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using PredictionBacktester.Core.Entities.Database;
 using PredictionBacktester.Data.ApiClients;
 using PredictionBacktester.Data.Database;     // <-- ADD THIS
 using PredictionBacktester.Data.Repositories;
@@ -54,7 +55,8 @@ while (true)
     Console.WriteLine("1. Run Standard Ingestion (Sync New Markets)");
     Console.WriteLine("2. Run Deep Sync (Fix 3000+ Trade Markets)");
     Console.WriteLine("3. Run Strategy Backtest (Time Machine)");
-    Console.WriteLine("4. Exit");
+    Console.WriteLine("4. Explore Market & Trade Data");
+    Console.WriteLine("5. Exit");
     Console.Write("\nSelect an option (1-4): ");
 
     var choice = Console.ReadLine();
@@ -69,9 +71,13 @@ while (true)
             break;
         case "3":
             Console.WriteLine("\n[Starting Simulation...]");
-            await engine.RunMarketSimulationAsync("0xYOUR_REAL_MARKET_ID_HERE");
+            // await engine.RunMarketSimulationAsync("0xYOUR_REAL_MARKET_ID_HERE"); 
             break;
         case "4":
+            // Pass the database context directly to our new viewer
+            await ExploreMarketData(dbContext);
+            break;
+        case "5":
             Console.WriteLine("Exiting...");
             return;
         default:
@@ -185,6 +191,88 @@ async Task RunDeepSync(PolymarketClient api, PolymarketRepository repo)
     }
 
     Console.WriteLine("\nDeep Sync Finished.");
+}
+
+async Task ExploreMarketData(PolymarketDbContext db)
+{
+    Console.WriteLine("\n--- DATA EXPLORER ---");
+    Console.Write("Enter keyword to search (or press Enter for a random market): ");
+    var search = Console.ReadLine()?.Trim();
+
+    Market market = null;
+
+    if (string.IsNullOrEmpty(search))
+    {
+        // Pick a random market directly inside the SQLite engine
+        market = await db.Markets
+            .Include(m => m.Outcomes)
+            .OrderBy(m => EF.Functions.Random())
+            .FirstOrDefaultAsync();
+    }
+    else
+    {
+        // Search for a market title containing the keyword (Case-Insensitive)
+        market = await db.Markets
+            .Include(m => m.Outcomes)
+            .Where(m => EF.Functions.Like(m.Title, $"%{search}%"))
+            .FirstOrDefaultAsync();
+    }
+
+    if (market == null)
+    {
+        Console.WriteLine("\n[ERROR] No market found matching that criteria.");
+        return;
+    }
+
+    // --- DISPLAY MARKET INFO ---
+    Console.WriteLine($"\n=========================================");
+    Console.WriteLine($"MARKET: {market.Title}");
+    Console.WriteLine($"MARKET ID: {market.MarketId}");
+    Console.WriteLine($"OUTCOMES: {market.Outcomes.Count}");
+    Console.WriteLine($"=========================================");
+
+    foreach (var outcome in market.Outcomes)
+    {
+        Console.WriteLine($" - {outcome.OutcomeName ?? "Outcome"} (ID: {outcome.OutcomeId})");
+    }
+
+    // --- FIND TRADES ---
+    var outcomeIds = market.Outcomes.Select(o => o.OutcomeId).ToList();
+    var totalTrades = await db.Trades.CountAsync(t => outcomeIds.Contains(t.OutcomeId));
+
+    Console.WriteLine($"\nTotal Trades in Database: {totalTrades}");
+
+    if (totalTrades == 0)
+    {
+        Console.WriteLine("No trades saved for this market yet. Returning to menu...");
+        return;
+    }
+
+    // --- FETCH SPECIFIC TRADE ---
+    Console.Write($"\nEnter the trade number you want to view (1 to {totalTrades}): ");
+    if (int.TryParse(Console.ReadLine(), out int tradeIndex) && tradeIndex > 0 && tradeIndex <= totalTrades)
+    {
+        var specificTrade = await db.Trades
+            .Where(t => outcomeIds.Contains(t.OutcomeId))
+            .OrderBy(t => t.Timestamp)
+            .Skip(tradeIndex - 1) // If they want trade 10, skip the first 9
+            .Take(1)              // And take exactly 1
+            .FirstOrDefaultAsync();
+
+        if (specificTrade != null)
+        {
+            var date = DateTimeOffset.FromUnixTimeSeconds(specificTrade.Timestamp).DateTime;
+            Console.WriteLine($"\n--- TRADE #{tradeIndex} ---");
+            Console.WriteLine($"Date:   {date} UTC");
+            Console.WriteLine($"Price:  ${specificTrade.Price}");
+            Console.WriteLine($"Shares: {specificTrade.Size}");
+            Console.WriteLine($"Side:   {specificTrade.Side}"); // "BUY" or "SELL" if you track it
+        }
+    }
+    else
+    {
+        Console.WriteLine("\n[ERROR] Invalid trade number. Returning to menu.");
+    }
 }
 /*
 // Register our custom client
