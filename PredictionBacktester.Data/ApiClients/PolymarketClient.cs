@@ -87,10 +87,10 @@ public class PolymarketClient
         try
         {
             // We reuse the exact same JSON structure we saw in your raw data dump!
-            var markets = await _dataClient.GetFromJsonAsync<List<PolymarketMarket>>(url);
+            var markets = await _dataClient.GetFromJsonAsync<List<PolymarketMarketResponse>>(url); //PolymarketMarketResponse?
             var market = markets?.FirstOrDefault();
 
-            return market != null && market.Closed;
+            return market != null && market.IsClosed;
         }
         catch
         {
