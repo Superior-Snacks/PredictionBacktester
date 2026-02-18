@@ -44,19 +44,39 @@ public class BacktestRunner
         Console.WriteLine($"Loaded {trades.Count} historical ticks into memory.");
 
         // 3. THE TIME MACHINE LOOP
+
+        // Start with $1,000 of fake money
+        var broker = new SimulatedBroker(1000m);
+
+        Console.WriteLine($"Starting Balance: ${broker.CashBalance}");
+
         foreach (var tick in trades)
         {
-            // Here is where we will eventually pass the tick to your Strategy!
-            // Example: _strategy.OnTick(tick);
+            // --- OUR DUMB STRATEGY ---
 
-            // For now, let's just prove the time machine works by printing every 100th trade
-            if (trades.IndexOf(tick) % 100 == 0)
+            // If we have no shares and the price is cheap, BUY $100 worth!
+            if (broker.PositionShares == 0 && tick.Price < 0.40m)
             {
-                var date = DateTimeOffset.FromUnixTimeSeconds(tick.Timestamp).DateTime;
-                Console.WriteLine($"[Time: {date}] Price moved to ${tick.Price} (Volume: {tick.Size})");
+                broker.Buy(tick.Price, 100m);
+                Console.WriteLine($"[BUY] Bought shares at ${tick.Price}. Remaining Cash: ${broker.CashBalance:F2}");
+            }
+
+            // If we hold shares and the price is high, SELL EVERYTHING!
+            else if (broker.PositionShares > 0 && tick.Price > 0.60m)
+            {
+                broker.SellAll(tick.Price);
+                Console.WriteLine($"[SELL] Sold shares at ${tick.Price}. New Cash: ${broker.CashBalance:F2}");
             }
         }
 
+        // 4. THE RESULTS
+        decimal finalPrice = trades.Last().Price;
+        decimal finalPortfolioValue = broker.GetTotalPortfolioValue(finalPrice);
+
+        Console.WriteLine($"\n--- BACKTEST COMPLETE ---");
+        Console.WriteLine($"Total Trades Executed: {broker.TotalTradesExecuted}");
+        Console.WriteLine($"Ending Portfolio Value: ${finalPortfolioValue:F2}");
+        Console.WriteLine($"Total Return: {((finalPortfolioValue - 1000m) / 1000m) * 100m:F2}%");
         Console.WriteLine($"--- BACKTEST COMPLETE ---");
     }
 }
