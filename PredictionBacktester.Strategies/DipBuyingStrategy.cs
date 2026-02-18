@@ -2,7 +2,7 @@
 using PredictionBacktester.Engine;
 namespace PredictionBacktester.Strategies;
 
-public class DipBuyingStrategy : IStrategy
+public class DipBuyingStrategy : ITickStrategy
 {
     public void OnTick(Trade tick, SimulatedBroker broker)
     {

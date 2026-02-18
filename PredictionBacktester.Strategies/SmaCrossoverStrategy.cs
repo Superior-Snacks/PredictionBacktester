@@ -6,7 +6,7 @@ using PredictionBacktester.Engine;
 
 namespace PredictionBacktester.Strategies;
 
-public class SmaCrossoverStrategy : IStrategy
+public class SmaCrossoverStrategy : ITickStrategy
 {
     private readonly int _fastPeriod;
     private readonly int _slowPeriod;
