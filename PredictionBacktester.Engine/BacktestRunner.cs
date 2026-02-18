@@ -119,4 +119,93 @@ public class BacktestRunner
         Console.WriteLine($"Total Return: {((finalPortfolioValue - 1000m) / 1000m) * 100m:F2}%");
         Console.WriteLine($"--- BACKTEST COMPLETE ---");
     }
+    public async Task RunPortfolioSimulationAsync(List<string> marketIds, DateTime startDate, DateTime endDate, IStrategy strategy)
+    {
+        Console.WriteLine($"\n--- STARTING PORTFOLIO BACKTEST ---");
+        Console.WriteLine($"Strategy: {strategy.GetType().Name}");
+        Console.WriteLine($"Period: {startDate.ToShortDateString()} to {endDate.ToShortDateString()}");
+        Console.WriteLine($"Markets Analyzed: {marketIds.Count}\n");
+
+        long startUnix = ((DateTimeOffset)startDate).ToUnixTimeSeconds();
+        long endUnix = ((DateTimeOffset)endDate).ToUnixTimeSeconds();
+
+        // 1. Initialize a single Master Broker for the whole portfolio ($10,000 starting cash)
+        var masterBroker = new SimulatedBroker(10000m);
+        decimal finalTickPrice = 0;
+
+        // 2. Loop through every requested market
+        foreach (var conditionId in marketIds)
+        {
+            // Fetch ONLY the trades within our requested date range
+            var trades = await _dbContext.Trades
+                .Join(_dbContext.Outcomes, t => t.OutcomeId, o => o.OutcomeId, (t, o) => new { t, o.MarketId })
+                .Where(x => x.MarketId == conditionId && x.t.Timestamp >= startUnix && x.t.Timestamp <= endUnix)
+                .Select(x => x.t)
+                .OrderBy(t => t.Timestamp)
+                .ToListAsync();
+
+            if (trades.Count == 0) continue;
+
+            // --- THE TIME MACHINE CORE ---
+            Candle currentCandle = null;
+            long candleDurationSeconds = strategy is ICandleStrategy cStrat ? (long)cStrat.Timeframe.TotalSeconds : 0;
+
+            foreach (var tick in trades)
+            {
+                // Update the equity curve on every single tick to catch intra-trade drawdowns!
+                masterBroker.UpdateEquityCurve(tick.Price);
+                finalTickPrice = tick.Price;
+
+                if (strategy is ITickStrategy tickStrategy)
+                {
+                    tickStrategy.OnTick(tick, masterBroker);
+                }
+                else if (strategy is ICandleStrategy candleStrategy)
+                {
+                    if (currentCandle == null || tick.Timestamp >= currentCandle.OpenTimestamp + candleDurationSeconds)
+                    {
+                        if (currentCandle != null) candleStrategy.OnCandle(currentCandle, masterBroker);
+                        currentCandle = new Candle { OpenTimestamp = tick.Timestamp, Open = tick.Price, High = tick.Price, Low = tick.Price, Close = tick.Price, Volume = tick.Size };
+                    }
+                    else
+                    {
+                        currentCandle.High = Math.Max(currentCandle.High, tick.Price);
+                        currentCandle.Low = Math.Min(currentCandle.Low, tick.Price);
+                        currentCandle.Close = tick.Price;
+                        currentCandle.Volume += tick.Size;
+                    }
+                }
+            }
+
+            // Close out the final candle for this market
+            if (strategy is ICandleStrategy finalStrat && currentCandle != null)
+            {
+                finalStrat.OnCandle(currentCandle, masterBroker);
+            }
+        }
+
+        // 3. GENERATE THE DETAILED REPORT
+        decimal finalPortfolioValue = masterBroker.GetTotalPortfolioValue(finalTickPrice);
+        decimal totalReturn = ((finalPortfolioValue - 10000m) / 10000m) * 100m;
+
+        // Prevent division by zero if no trades happened
+        decimal winRate = masterBroker.TotalTradesExecuted > 0
+            ? ((decimal)masterBroker.WinningTrades / masterBroker.TotalTradesExecuted) * 100m
+            : 0;
+
+        Console.WriteLine($"=========================================");
+        Console.WriteLine($"          PORTFOLIO REPORT               ");
+        Console.WriteLine($"=========================================");
+        Console.WriteLine($"Initial Capital:   $10,000.00");
+        Console.WriteLine($"Ending Capital:    ${finalPortfolioValue:F2}");
+        Console.WriteLine($"Total Return:      {totalReturn:F2}%");
+        Console.WriteLine($"Peak Equity:       ${masterBroker.PeakEquity:F2}");
+        Console.WriteLine($"Max Drawdown:      -{masterBroker.MaxDrawdown * 100m:F2}%");
+        Console.WriteLine($"-----------------------------------------");
+        Console.WriteLine($"Total Trades:      {masterBroker.TotalTradesExecuted}");
+        Console.WriteLine($"Winning Trades:    {masterBroker.WinningTrades}");
+        Console.WriteLine($"Losing Trades:     {masterBroker.LosingTrades}");
+        Console.WriteLine($"Win Rate:          {winRate:F2}%");
+        Console.WriteLine($"=========================================");
+    }
 }

@@ -59,8 +59,9 @@ while (true)
     Console.WriteLine("3. Run Strategy Backtest (Time Machine)");
     Console.WriteLine("4. Explore Market & Trade Data");
     Console.WriteLine("5. Explore Live API Data (Raw JSON)");
-    Console.WriteLine("6. Exit");
-    Console.Write("\nSelect an option (1-6): ");
+    Console.WriteLine("6. Run Portfolio Backtest (Dynamic Multi-Market)");
+    Console.WriteLine("7. Exit");
+    Console.Write("\nSelect an option (1-7): ");
 
     var choice = Console.ReadLine();
 
@@ -76,7 +77,7 @@ while (true)
             Console.WriteLine("\n[Starting Simulation...]");
 
             // 1. Instantiate whichever strategy you want to test today
-            IStrategy myStrategy = new CandleSmaCrossoverStrategy(TimeSpan.FromHours(1), 10, 50);
+            IStrategy myStrategy = new CandleSmaCrossoverStrategy(TimeSpan.FromHours(1), 5, 25);
             // 2. Pass it into the engine
             await engine.RunMarketSimulationAsync("0xeb6e3bde4d9b0b0b171a37cc5f439b55197c8bdb16847367e760aaca572a67e5", myStrategy);
             break;
@@ -88,6 +89,9 @@ while (true)
             await ExploreLiveApiData(apiClient);
             break;
         case "6":
+            await RunDynamicPortfolioBacktest(repository, engine);
+            break;
+        case "7":
             Console.WriteLine("Exiting...");
             return;
         default:
@@ -333,6 +337,39 @@ async Task ExploreLiveApiData(PolymarketClient api)
     {
         Console.WriteLine("\n[EMPTY] No recent trades found for this market.");
     }
+}
+
+async Task RunDynamicPortfolioBacktest(PolymarketRepository repo, BacktestRunner engine)
+{
+    Console.WriteLine("\n--- PORTFOLIO BACKTEST SETUP ---");
+
+    // 1. Get Date Parameters from the User (with easy defaults)
+    Console.Write("Enter Start Date (YYYY-MM-DD) [Default: 2024-07-01]: ");
+    var startInput = Console.ReadLine();
+    DateTime startDate = string.IsNullOrWhiteSpace(startInput) ? new DateTime(2024, 7, 1) : DateTime.Parse(startInput);
+
+    Console.Write("Enter End Date (YYYY-MM-DD) [Default: 2024-11-01]: ");
+    var endInput = Console.ReadLine();
+    DateTime endDate = string.IsNullOrWhiteSpace(endInput) ? new DateTime(2024, 11, 1) : DateTime.Parse(endInput);
+
+    Console.WriteLine($"\nScanning database for markets active between {startDate.ToShortDateString()} and {endDate.ToShortDateString()}...");
+
+    // 2. Fetch the dynamic list from SQLite!
+    var dynamicMarketIds = await repo.GetActiveMarketsInDateRangeAsync(startDate, endDate);
+
+    if (dynamicMarketIds.Count == 0)
+    {
+        Console.WriteLine("\n[ERROR] No markets found with trades in that date range. Try expanding your dates!");
+        return;
+    }
+
+    Console.WriteLine($"Found {dynamicMarketIds.Count} active markets! Initializing Time Machine...\n");
+
+    // 3. Setup your Strategy
+    IStrategy myStrategy = new CandleSmaCrossoverStrategy(TimeSpan.FromHours(1), 5, 25);
+
+    // 4. Run the Portfolio Engine
+    await engine.RunPortfolioSimulationAsync(dynamicMarketIds, startDate, endDate, myStrategy);
 }
 /*
 // Register our custom client

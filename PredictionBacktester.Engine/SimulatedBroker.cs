@@ -1,66 +1,81 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Text;
-
-namespace PredictionBacktester.Engine;
+﻿namespace PredictionBacktester.Engine;
 
 public class SimulatedBroker
 {
     public decimal CashBalance { get; private set; }
     public decimal PositionShares { get; private set; }
+    public decimal AverageEntryPrice { get; private set; } // Needed for Win Rate
+
+    // --- NEW PERFORMANCE METRICS ---
     public int TotalTradesExecuted { get; private set; }
+    public int WinningTrades { get; private set; }
+    public int LosingTrades { get; private set; }
+    public decimal PeakEquity { get; private set; }
+    public decimal MaxDrawdown { get; private set; }
 
     public SimulatedBroker(decimal startingCash)
     {
         CashBalance = startingCash;
+        PeakEquity = startingCash;
         PositionShares = 0;
         TotalTradesExecuted = 0;
     }
 
-    /// <summary>
-    /// Simulates buying shares of an outcome at the current tick price.
-    /// </summary>
-    public bool Buy(decimal currentPrice, decimal dollarsToInvest)
+    public void Buy(decimal currentPrice, decimal dollarsToInvest)
     {
-        if (CashBalance < dollarsToInvest)
-        {
-            return false; // Insufficient funds!
-        }
+        if (CashBalance < dollarsToInvest) return;
 
-        // Calculate how many shares we get (ignoring fee slippage for now)
         decimal sharesBought = dollarsToInvest / currentPrice;
 
-        CashBalance -= dollarsToInvest;
+        // Calculate new average entry price (in case we scale in)
+        decimal totalCost = (PositionShares * AverageEntryPrice) + dollarsToInvest;
         PositionShares += sharesBought;
-        TotalTradesExecuted++;
+        AverageEntryPrice = totalCost / PositionShares;
 
-        return true;
+        CashBalance -= dollarsToInvest;
     }
 
-    /// <summary>
-    /// Simulates selling all currently held shares at the current tick price.
-    /// </summary>
-    public bool SellAll(decimal currentPrice)
+    public void SellAll(decimal currentPrice)
     {
-        if (PositionShares <= 0)
-        {
-            return false; // Nothing to sell!
-        }
+        if (PositionShares <= 0) return;
 
         decimal cashReceived = PositionShares * currentPrice;
 
+        // Did we win or lose?
+        if (currentPrice > AverageEntryPrice) WinningTrades++;
+        else LosingTrades++;
+
         CashBalance += cashReceived;
         PositionShares = 0;
+        AverageEntryPrice = 0;
         TotalTradesExecuted++;
 
-        return true;
+        UpdateEquityCurve(currentPrice); // Check for new peaks or valleys!
     }
 
-    /// <summary>
-    /// Calculates total portfolio value (Cash + Value of current shares).
-    /// </summary>
     public decimal GetTotalPortfolioValue(decimal currentPrice)
     {
         return CashBalance + (PositionShares * currentPrice);
+    }
+
+    // --- THE MAX DRAWDOWN CALCULATOR ---
+    public void UpdateEquityCurve(decimal currentPrice)
+    {
+        decimal currentEquity = GetTotalPortfolioValue(currentPrice);
+
+        // 1. Did we hit a new all-time high?
+        if (currentEquity > PeakEquity)
+        {
+            PeakEquity = currentEquity;
+        }
+
+        // 2. How far are we currently down from our all-time high?
+        decimal currentDrawdown = (PeakEquity - currentEquity) / PeakEquity;
+
+        // 3. Is this the worst drop we've ever experienced?
+        if (currentDrawdown > MaxDrawdown)
+        {
+            MaxDrawdown = currentDrawdown;
+        }
     }
 }

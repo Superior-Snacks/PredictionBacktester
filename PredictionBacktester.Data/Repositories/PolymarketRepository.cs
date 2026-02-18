@@ -118,4 +118,68 @@ public class PolymarketRepository
 
         return incompleteMarkets;
     }
+
+    /// <summary>
+    /// Scans the database for any markets that had active trading volume within a specific date range.
+    /// </summary>
+    public async Task<List<string>> GetActiveMarketsInDateRangeAsync(DateTime startDate, DateTime endDate)
+    {
+        long startUnix = ((DateTimeOffset)startDate).ToUnixTimeSeconds();
+        long endUnix = ((DateTimeOffset)endDate).ToUnixTimeSeconds();
+
+        var activeMarketIds = await _dbContext.Trades
+            .Where(t => t.Timestamp >= startUnix && t.Timestamp <= endUnix)
+            .Select(t => t.OutcomeId)
+            .Distinct() // Get only the unique Outcome IDs to speed up the join
+            .Join(_dbContext.Outcomes,
+                  outcomeId => outcomeId,
+                  outcome => outcome.OutcomeId,
+                  (outcomeId, outcome) => outcome.MarketId)
+            .Distinct() // Narrow it down to just the unique parent Market IDs
+            .ToListAsync();
+
+        return activeMarketIds;
+    }
+
+    public async Task<long?> GetNewestTradeTimestampAsync(string marketId)
+    {
+        var outcomeIds = await _dbContext.Outcomes
+            .Where(o => o.MarketId == marketId)
+            .Select(o => o.OutcomeId)
+            .ToListAsync();
+
+        if (outcomeIds.Count == 0) return null;
+
+        var newestTrade = await _dbContext.Trades
+            .Where(t => outcomeIds.Contains(t.OutcomeId))
+            .OrderByDescending(t => t.Timestamp)
+            .Select(t => t.Timestamp)
+            .FirstOrDefaultAsync();
+
+        return newestTrade == 0 ? null : newestTrade;
+    }
+
+    /// <summary>
+    /// Grabs every market in our database that is still actively trading.
+    /// </summary>
+    public async Task<List<string>> GetOpenMarketIdsAsync()
+    {
+        return await _dbContext.Markets
+            .Where(m => !m.IsClosed)
+            .Select(m => m.MarketId)
+            .ToListAsync();
+    }
+
+    /// <summary>
+    /// Flips the switch so we never query this market's API again.
+    /// </summary>
+    public async Task MarkMarketClosedAsync(string conditionId)
+    {
+        var market = await _dbContext.Markets.FirstOrDefaultAsync(m => m.MarketId == conditionId);
+        if (market != null && !market.IsClosed)
+        {
+            market.IsClosed = true;
+            await _dbContext.SaveChangesAsync();
+        }
+    }
 }

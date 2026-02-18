@@ -22,11 +22,10 @@ public class PolymarketClient
     /// <summary>
     /// Fetches a list of active events and their nested markets.
     /// </summary>
-    public async Task<List<PolymarketEventResponse>> GetActiveEventsAsync(int limit = 100, int offset = 0)
+    public async Task<List<PolymarketEventResponse>> GetActiveEventsAsync(int limit = 100, int offset = 0, bool oldestFirst = false)
     {
         // 1. Let's remove the 'active' and 'closed' filters temporarily to force it to give us ANYTHING
-        var url = $"events?limit={limit}&offset={offset}";
-
+        var url = $"events?limit={limit}&offset={offset}&closed=false&ascending={oldestFirst.ToString().ToLower()}";
         try
         {
             // 2. Instead of direct JSON conversion, let's download the raw string first
@@ -45,6 +44,57 @@ public class PolymarketClient
             // If Cloudflare blocks us or there is an HTTP error, this will catch it!
             Console.WriteLine($"\nAPI ERROR: {ex.Message}");
             return new List<PolymarketEventResponse>();
+        }
+    }
+    public async Task<List<PolymarketTradeResponse>> GetRecentTradesUntilAsync(string conditionId, long stopTimestamp)
+    {
+        var newTrades = new List<PolymarketTradeResponse>();
+        int offset = 0;
+
+        while (true)
+        {
+            var url = $"trades?market={conditionId}&limit=500&offset={offset}";
+            try
+            {
+                var batch = await _dataClient.GetFromJsonAsync<List<PolymarketTradeResponse>>(url);
+                if (batch == null || batch.Count == 0) break;
+
+                foreach (var trade in batch)
+                {
+                    // If we hit a trade that is as old (or older) than what's in our database, we stop!
+                    if (trade.Timestamp <= stopTimestamp)
+                        return newTrades;
+
+                    newTrades.Add(trade);
+                }
+
+                offset += 500;
+                if (offset >= 3000) break; // API limit safety
+                await Task.Delay(100);
+            }
+            catch
+            {
+                break;
+            }
+        }
+        return newTrades;
+    }
+
+    public async Task<bool> IsMarketClosedAsync(string conditionId)
+    {
+        // Gamma API allows us to fetch a specific market directly by its Condition ID
+        var url = $"markets?condition_ids={conditionId}";
+        try
+        {
+            // We reuse the exact same JSON structure we saw in your raw data dump!
+            var markets = await _dataClient.GetFromJsonAsync<List<PolymarketMarket>>(url);
+            var market = markets?.FirstOrDefault();
+
+            return market != null && market.Closed;
+        }
+        catch
+        {
+            return false; // If the API fails, assume it's still open to be safe
         }
     }
 
