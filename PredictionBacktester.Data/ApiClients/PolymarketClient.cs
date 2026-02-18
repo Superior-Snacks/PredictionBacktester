@@ -104,12 +104,12 @@ public class PolymarketClient
         int limit = 500;
         int offset = 0;
 
-        // We make the timestamp a variable so we can change it dynamically!
         long currentTimestampLimit = beforeTimestamp;
 
         while (true)
         {
-            var url = $"trades?market={conditionId}&limit={limit}&offset={offset}&before={currentTimestampLimit}";
+            // 1. Changed '&before=' to '&end_ts=' (Polymarket's actual undocumented parameter)
+            var url = $"trades?market={conditionId}&limit={limit}&offset={offset}&end_ts={currentTimestampLimit}";
 
             try
             {
@@ -117,19 +117,25 @@ public class PolymarketClient
                 if (batch == null || batch.Count == 0) break;
 
                 allTrades.AddRange(batch);
-
-                // Move the offset forward for the next 500 trades
                 offset += limit;
 
-                // --- THE INFINITE BYPASS ---
-                // Before we hit Polymarket's 3500 Bad Request wall, we reset!
                 if (offset >= 3000)
                 {
-                    offset = 0; // Reset the cursor back to 0
-                    currentTimestampLimit = batch.Min(t => t.Timestamp); // Push the time window backward!
-                    Console.WriteLine($"     [SHIFT] Resetting offset and shifting time window to {currentTimestampLimit}...");
+                    offset = 0;
+                    long oldestInBatch = batch.Min(t => t.Timestamp);
+
+                    // 2. THE SAFETY BREAK: If time didn't move backward, the API rejected our filter!
+                    if (oldestInBatch >= currentTimestampLimit)
+                    {
+                        Console.WriteLine("     [API LIMIT] Server ignored timestamp. Hard cap reached for this market.");
+                        break; // Kill the loop instantly
+                    }
+
+                    // 3. Subtract 1 second so we don't fetch the exact same trade again
+                    currentTimestampLimit = oldestInBatch - 1;
+
+                    Console.WriteLine($"     [SHIFT] Reset offset. Shifting time window to end_ts={currentTimestampLimit}...");
                 }
-                // ---------------------------
 
                 if (batch.Count < limit) break;
 
