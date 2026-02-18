@@ -72,7 +72,12 @@ while (true)
             break;
         case "3":
             Console.WriteLine("\n[Starting Simulation...]");
-            // await engine.RunMarketSimulationAsync("0xYOUR_REAL_MARKET_ID_HERE"); 
+
+            // 1. Instantiate whichever strategy you want to test today
+            IStrategy myStrategy = new DipBuyingStrategy();
+
+            // 2. Pass it into the engine
+            await engine.RunMarketSimulationAsync("0xYOUR_REAL_MARKET_ID_HERE", myStrategy);
             break;
         case "4":
             // Pass the database context directly to our new viewer
