@@ -72,7 +72,7 @@ while (true)
             await RunStandardIngestion(apiClient, repository);
             break;
         case "2":
-            await RunDeepSync(apiClient, repository);
+            await RunDeepSync(apiClient, repository);// dose not work
             break;
         case "3":
             Console.Write("Enter OutcomeID to analyze: ");
@@ -181,7 +181,7 @@ async Task RunStandardIngestion(PolymarketClient api, PolymarketRepository repo)
 {
     Console.WriteLine("Fetching Polymarket Events...");
     int marketLimit = 100;
-    int marketOffset = 2900;
+    int marketOffset = 30000; //2900 start
     bool hasMoreMarkets = true;
 
     Console.WriteLine("Starting full exchange sync...");
