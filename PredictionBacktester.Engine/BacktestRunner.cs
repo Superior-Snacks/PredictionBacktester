@@ -115,15 +115,15 @@ public class BacktestRunner
     public async Task<PortfolioResult> RunPortfolioSimulationAsync(
         List<string> outcomeIds, 
         DateTime startDate, 
-        DateTime endDate, 
-        IStrategy strategy, 
+        DateTime endDate,
+        Func<IStrategy> strategyFactory, 
         bool isSilent = false, 
         decimal initialAllocationPerMarket = 1000m)
     {
         if (!isSilent)
         {
             Console.WriteLine($"\n--- STARTING PORTFOLIO BACKTEST ---");
-            Console.WriteLine($"Strategy: {strategy.GetType().Name}");
+            Console.WriteLine($"Strategy: {strategyFactory.GetType().Name}");
             Console.WriteLine($"Outcomes Analyzed: {outcomeIds.Count}\n");
         }
 
@@ -150,8 +150,9 @@ public class BacktestRunner
 
             // Give THIS specific market its own isolated $1,000 broker!
             var localBroker = new SimulatedBroker(initialAllocationPerMarket, outcomeId);
+            IStrategy localStrategy = strategyFactory();
             Candle currentCandle = null;
-            long candleDurationSeconds = strategy is ICandleStrategy cStrat ? (long)cStrat.Timeframe.TotalSeconds : 0;
+            long candleDurationSeconds = localStrategy is ICandleStrategy cStrat ? (long)cStrat.Timeframe.TotalSeconds : 0;
             decimal finalTickPrice = 0;
 
             foreach (var tick in trades)
@@ -159,11 +160,11 @@ public class BacktestRunner
                 finalTickPrice = tick.Price;
                 localBroker.CurrentTime = DateTimeOffset.FromUnixTimeSeconds(tick.Timestamp).DateTime;
 
-                if (strategy is ITickStrategy tickStrategy)
+                if (localStrategy is ITickStrategy tickStrategy)
                 {
                     tickStrategy.OnTick(tick, localBroker);
                 }
-                else if (strategy is ICandleStrategy candleStrategy)
+                else if (localStrategy is ICandleStrategy candleStrategy)
                 {
                     if (currentCandle == null || tick.Timestamp >= currentCandle.OpenTimestamp + candleDurationSeconds)
                     {
@@ -181,7 +182,7 @@ public class BacktestRunner
             }
 
             // ... (End of the tick/candle loop)
-            if (strategy is ICandleStrategy finalStrat && currentCandle != null)
+            if (localStrategy is ICandleStrategy finalStrat && currentCandle != null)
             {
                 finalStrat.OnCandle(currentCandle, localBroker);
             }
@@ -191,16 +192,17 @@ public class BacktestRunner
             localBroker.SellAll(finalTickPrice, decimal.MaxValue);
             localBroker.SellAllNo(finalTickPrice, decimal.MaxValue);
 
-            // At the end of this market's timeline, collect the results!
-            totalEndingCapital += localBroker.GetTotalPortfolioValue(finalTickPrice);
-            grandTotalTrades += localBroker.TotalTradesExecuted;
-            // ...
+            // --- NEW: THE REALITY CHECK (FORCED LIQUIDATION) ---
+            localBroker.SellAll(finalTickPrice, decimal.MaxValue);
+            localBroker.SellAllNo(finalTickPrice, decimal.MaxValue);
 
             // At the end of this market's timeline, collect the results!
             totalEndingCapital += localBroker.GetTotalPortfolioValue(finalTickPrice);
             grandTotalTrades += localBroker.TotalTradesExecuted;
             grandWinningTrades += localBroker.WinningTrades;
             grandLosingTrades += localBroker.LosingTrades;
+
+            masterLedger.AddRange(localBroker.TradeLedger);
 
             masterLedger.AddRange(localBroker.TradeLedger);
         }
@@ -226,6 +228,16 @@ public class BacktestRunner
             Console.WriteLine($"=========================================");
         }
 
+        // Save the CSV to your Desktop!
+        string desktopPath = Environment.GetFolderPath(Environment.SpecialFolder.Desktop);
+        string filePath = Path.Combine(desktopPath, "Polymarket_Portfolio_Trades.csv");
+        TradeExporter.ExportToCsv(masterLedger, filePath);
+
+        //Console.WriteLine($"\n[DATA SAVED] Exported {masterLedger.Count} detailed trades.");
+        //Console.WriteLine($"FILE PATH: {filePath}"); // <-- THIS WILL REVEAL THE HIDING SPOT
+
+        //Console.WriteLine($"\n[DATA SAVED] Exported {masterLedger.Count} detailed trades to your Desktop!");
+
         // 3. RETURN THE SCORECARD
         return new PortfolioResult
         {
@@ -233,15 +245,5 @@ public class BacktestRunner
             WinRate = winRate,
             TotalTrades = grandTotalTrades
         };
-        
-        // Save the CSV to your Desktop!
-        string desktopPath = Environment.GetFolderPath(Environment.SpecialFolder.Desktop);
-        string filePath = Path.Combine(desktopPath, "Polymarket_Portfolio_Trades.csv");
-        TradeExporter.ExportToCsv(masterLedger, filePath);
-
-        Console.WriteLine($"\n[DATA SAVED] Exported {masterLedger.Count} detailed trades.");
-        Console.WriteLine($"FILE PATH: {filePath}"); // <-- THIS WILL REVEAL THE HIDING SPOT
-
-        Console.WriteLine($"\n[DATA SAVED] Exported {masterLedger.Count} detailed trades to your Desktop!");
     }
 }

@@ -96,9 +96,11 @@ while (true)
             await ExploreLiveApiData(apiClient);
             break;
         case "6":
+            Func<IStrategy> strategyFactory = () => new RsiReversionStrategy(TimeSpan.FromHours(1), 14, 20m, 80m, 0.05m, 24, 10000m, 0.85m);
+            //var result = await engine.RunPortfolioSimulationAsync(dynamicOutcomeIds, startDate, endDate, strategyFactory);
             await RunDynamicPortfolioBacktest(repository, engine);
             break;
-        case "7":
+        /*case "7":
             // 1. Define the levers for RSI
             decimal[] rsiPeriods = { 7, 10, 14 }; // How fast the rubber band reacts
             decimal[] oversoldLevels = { 20, 30, 40 }; // How deep the panic needs to be to buy YES
@@ -118,6 +120,26 @@ while (true)
                 new RsiReversionStrategy(TimeSpan.FromHours(1), (int)combo[0], combo[1], combo[2], combo[4], 24, 10000m, combo[3]);
 
             await RunUniversalOptimizer(repository, engine, rsiGrid, rsiBuilder, "RSI Mean Reversion (5D)");
+            break;*/
+        case "7":
+            // 1. Define ALL the levers you want to test
+            decimal[] fastSmas = { 3, 5, 7 };
+            decimal[] slowSmas = { 15, 20, 25 };
+            decimal[] takeProfits = { 0.85m, 0.90m, 0.95m }; // Let's optimize the profit target!
+            decimal[] riskPcts = { 0.02m, 0.05m }; // Let's test 2% risk vs 5% risk!
+
+            // 2. Pack them into the N-Dimensional Grid
+            decimal[][] grid = { fastSmas, slowSmas, takeProfits, riskPcts };
+
+            // 3. The Factory: Map the array indexes to your constructor!
+            // combo[0] = Fast Sma
+            // combo[1] = Slow Sma
+            // combo[2] = Take Profit
+            // combo[3] = Risk Percentage
+            Func<decimal[], IStrategy> smaBuilder = (combo) =>
+                new CandleSmaCrossoverStrategy(TimeSpan.FromHours(1), (int)combo[0], (int)combo[1], combo[3], 24, 10000m, combo[2]);
+
+            await RunUniversalOptimizer(repository, engine, grid, smaBuilder, "SMA Crossover (4D)");
             break;
         case "8":
             Console.WriteLine("Exiting...");
@@ -403,30 +425,24 @@ async Task RunDynamicPortfolioBacktest(PolymarketRepository repo, BacktestRunner
     var endInput = Console.ReadLine();
     DateTime endDate = string.IsNullOrWhiteSpace(endInput) ? new DateTime(2024, 11, 1) : DateTime.Parse(endInput);
 
-    Console.WriteLine($"\nScanning database for markets active between {startDate.ToShortDateString()} and {endDate.ToShortDateString()}...");
+    Console.WriteLine($"\nScanning database for outcomes active between {startDate.ToShortDateString()} and {endDate.ToShortDateString()}...");
 
-    // 2. Fetch the dynamic list from SQLite!
-    var dynamicMarketIds = await repo.GetActiveMarketsInDateRangeAsync(startDate, endDate);
+    // 2. THE FIX: Fetch OUTCOMES instead of MARKETS!
+    var dynamicOutcomeIds = await repo.GetActiveOutcomesInDateRangeAsync(startDate, endDate);
 
-    if (dynamicMarketIds.Count == 0)
+    if (dynamicOutcomeIds.Count == 0)
     {
-        Console.WriteLine("\n[ERROR] No markets found with trades in that date range. Try expanding your dates!");
+        Console.WriteLine("\n[ERROR] No outcomes found with trades in that date range. Try expanding your dates!");
         return;
     }
 
-    Console.WriteLine($"Found {dynamicMarketIds.Count} active markets! Initializing Time Machine...\n");
+    Console.WriteLine($"Found {dynamicOutcomeIds.Count} active outcomes! Initializing Time Machine...\n");
 
-    // Timeframe: 1 Hour
-    // Fast SMA: 5
-    // Slow SMA: 25
-    // Risk: 2%
-    // Volume Window: 24 Hours
-    // Min Volume: $10,000
-    // Take Profit: $0.90
-    IStrategy myStrategy = new CandleSmaCrossoverStrategy(TimeSpan.FromHours(1), 7, 15, 0.05m, 24, 100m, 0.85m);
-
+    // 3. THE STRATEGY: Your #1 RSI Black Swan Hunter
+    // Params: [ Period: 14 | Oversold: 20 | Overbought: 80 | Risk: 0.05 | Take Profit: 0.85 ]
+    Func<IStrategy> strategyFactory = () => new RsiReversionStrategy(TimeSpan.FromHours(1), 14, 20m, 80m, 0.05m, 24, 10000m, 0.85m);
     // 4. Run the Portfolio Engine
-    await engine.RunPortfolioSimulationAsync(dynamicMarketIds, startDate, endDate, myStrategy);
+    var result = await engine.RunPortfolioSimulationAsync(dynamicOutcomeIds, startDate, endDate, strategyFactory);
 }
 
 async Task RunUniversalOptimizer(
@@ -459,10 +475,9 @@ async Task RunUniversalOptimizer(
         Console.Write($"Testing [{currentTest}/{totalTests}] - Params: [{comboString}]... ");
 
         // 3. Ask the factory to build the strategy with this specific combo array!
-        IStrategy strategy = strategyFactory(combo);
+        Func<IStrategy> portfolioFactory = () => strategyFactory(combo);
 
-        var result = await engine.RunPortfolioSimulationAsync(outcomeIds, startDate, endDate, strategy, isSilent: true, initialAllocationPerMarket);
-
+        var result = await engine.RunPortfolioSimulationAsync(outcomeIds, startDate, endDate, portfolioFactory, isSilent: true, initialAllocationPerMarket);
         result.Parameters = combo; // Save the array to the scorecard!
         results.Add(result);
 
@@ -527,96 +542,3 @@ async Task RunActiveMarketSync(PolymarketClient api, PolymarketRepository repo)
 
     Console.WriteLine("\n[COMPLETE] All active markets have been synced.");
 }
-/*
-// Register our custom client
-services.AddTransient<PolymarketClient>();
-
-var serviceProvider = services.BuildServiceProvider();
-
-var dbContext = serviceProvider.GetRequiredService<PolymarketDbContext>();
-await dbContext.Database.MigrateAsync();
-
-var apiClient = serviceProvider.GetRequiredService<PolymarketClient>();
-var repository = serviceProvider.GetRequiredService<PolymarketRepository>();
-
-Console.WriteLine("Fetching Polymarket Events...");
-int marketLimit = 100;
-int marketOffset = 2900;
-bool hasMoreMarkets = true;
-
-Console.WriteLine("Starting full exchange sync...");
-
-// --- THE NEW OUTER LOOP ---
-while (hasMoreMarkets)
-{
-    Console.WriteLine($"\n--- Fetching Events Page (Offset: {marketOffset}) ---");
-
-    // Fetch a page of 100 events
-    var events = await apiClient.GetActiveEventsAsync(limit: marketLimit, offset: marketOffset);
-
-    // If the API gives us an empty list, we've downloaded the entire exchange!
-    if (events == null || events.Count == 0)
-    {
-        Console.WriteLine("\n[FINISHED] No more markets to download. Sync complete!");
-        hasMoreMarkets = false;
-        break;
-    }
-
-    foreach (var ev in events)
-    {
-        if (ev.Markets == null)
-        {
-            continue;
-        }
-        foreach (var market in ev.Markets)
-        {
-            if (!string.IsNullOrEmpty(market.ConditionId))
-            {
-                bool wasNewMarket = await repository.SaveMarketAsync(market);
-
-                if (wasNewMarket)
-                {
-                    Console.WriteLine($"     [SAVED] New Market: {market.Question}");
-
-                    var trades = await apiClient.GetAllTradesAsync(market.ConditionId);
-
-                    if (trades.Count > 0)
-                    {
-                        Console.WriteLine($"     [SAVED] {trades.Count} total trades.");
-                        await repository.SaveTradesAsync(trades);
-                    }
-                    else
-                    {
-                        Console.WriteLine($"     [EMPTY] No trades found.");
-                    }
-
-                    // Protect our IP Address
-                    await Task.Delay(200);
-                }
-                else
-                {
-                    Console.WriteLine($"     [SKIPPED] Market already exists: {market.Question}");
-                }
-            }
-        }
-    }
-
-    // Move the cursor forward to get the next 100 events on the next loop
-    marketOffset += marketLimit;
-}
-
-// Register the engine
-services.AddTransient<BacktestRunner>();
-
-var serviceProvider = services.BuildServiceProvider();
-
-// Resolve the engine
-var engine = serviceProvider.GetRequiredService<BacktestRunner>();
-
-// Pick a ConditionId that you saw successfully save in your PowerShell logs!
-// (Replace this hash with the real ConditionId from your logs or database)
-string testMarketId = "0xe099310e095cef92526d3410317f1254e1123584c54b5833fa6bbd2a903e2249";// mjög nýlegt kanski virkar ekki ef powershell running
-
-await engine.RunMarketSimulationAsync(testMarketId);*/
-
-//ok I need to be able to set paramiters for the stratergies, ammount of markets tested, time range tested, volume filtering and so on
