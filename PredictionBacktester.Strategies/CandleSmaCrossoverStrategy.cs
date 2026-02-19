@@ -13,17 +13,19 @@ public class CandleSmaCrossoverStrategy : ICandleStrategy
 
     private readonly int _fastPeriod;
     private readonly int _slowPeriod;
+    private readonly decimal _riskPercentage;
 
     private readonly Queue<decimal> _fastWindow;
     private readonly Queue<decimal> _slowWindow;
 
     private bool? _wasFastAboveSlow;
 
-    public CandleSmaCrossoverStrategy(TimeSpan timeframe, int fastPeriod = 10, int slowPeriod = 50)
+    public CandleSmaCrossoverStrategy(TimeSpan timeframe, int fastPeriod = 10, int slowPeriod = 50, decimal riskPercentage = 0.02m)
     {
         Timeframe = timeframe;
         _fastPeriod = fastPeriod;
         _slowPeriod = slowPeriod;
+        _riskPercentage = riskPercentage;
 
         _fastWindow = new Queue<decimal>();
         _slowWindow = new Queue<decimal>();
@@ -45,6 +47,7 @@ public class CandleSmaCrossoverStrategy : ICandleStrategy
         decimal fastSma = _fastWindow.Average();
         decimal slowSma = _slowWindow.Average();
 
+
         bool isFastAboveSlow = fastSma > slowSma;
 
         // 3. Trade Logic
@@ -54,10 +57,18 @@ public class CandleSmaCrossoverStrategy : ICandleStrategy
             {
                 if (broker.PositionShares == 0)
                 {
-                    broker.Buy(candle.Close, 100m);
-                    // Let's print the actual Date of the candle so you can see the time machine moving!
-                    var date = DateTimeOffset.FromUnixTimeSeconds(candle.OpenTimestamp).DateTime;
-                    Console.WriteLine($"[CANDLE GOLDEN CROSS] {date} | Buy at ${candle.Close:F3}");
+                    decimal currentEquity = broker.GetTotalPortfolioValue(candle.Close);
+                    decimal dollarsToInvest = currentEquity * _riskPercentage;
+                    dollarsToInvest = Math.Min(dollarsToInvest, broker.CashBalance);
+
+                    // NEW: Only place the bet if we are risking at least $1.00
+                    if (dollarsToInvest >= 1.00m)
+                    {
+                        broker.Buy(candle.Close, dollarsToInvest);
+
+                        var date = DateTimeOffset.FromUnixTimeSeconds(candle.OpenTimestamp).DateTime;
+                        Console.WriteLine($"[BUY] {date} | Price: ${candle.Close:F3} | Size: ${dollarsToInvest:F2}");
+                    }
                 }
             }
             else if (_wasFastAboveSlow.Value == true && isFastAboveSlow == false)

@@ -78,8 +78,8 @@ while (true)
             Console.WriteLine("\n[Starting Simulation...]");
 
             // 1. Instantiate whichever strategy you want to test today
-            IStrategy myStrategy = new CandleSmaCrossoverStrategy(TimeSpan.FromHours(1), 5, 25);
-            // 2. Pass it into the engine
+            // 5-hour fast, 25-hour slow, risking 2% of the portfolio per trade
+            IStrategy myStrategy = new CandleSmaCrossoverStrategy(TimeSpan.FromHours(1), 5, 25, 0.02m);            // 2. Pass it into the engine
             await engine.RunMarketSimulationAsync("0xeb6e3bde4d9b0b0b171a37cc5f439b55197c8bdb16847367e760aaca572a67e5", myStrategy);
             break;
         case "4":
@@ -369,8 +369,8 @@ async Task RunDynamicPortfolioBacktest(PolymarketRepository repo, BacktestRunner
 
     Console.WriteLine($"Found {dynamicMarketIds.Count} active markets! Initializing Time Machine...\n");
 
-    // 3. Setup your Strategy
-    IStrategy myStrategy = new CandleSmaCrossoverStrategy(TimeSpan.FromHours(1), 5, 25);
+    // 5-hour fast, 25-hour slow, risking 2% of the portfolio per trade
+    IStrategy myStrategy = new CandleSmaCrossoverStrategy(TimeSpan.FromHours(1), 5, 25, 0.02m);
 
     // 4. Run the Portfolio Engine
     await engine.RunPortfolioSimulationAsync(dynamicMarketIds, startDate, endDate, myStrategy);

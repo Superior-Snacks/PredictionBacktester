@@ -123,20 +123,23 @@ public class BacktestRunner
     {
         Console.WriteLine($"\n--- STARTING PORTFOLIO BACKTEST ---");
         Console.WriteLine($"Strategy: {strategy.GetType().Name}");
-        Console.WriteLine($"Period: {startDate.ToShortDateString()} to {endDate.ToShortDateString()}");
         Console.WriteLine($"Markets Analyzed: {marketIds.Count}\n");
 
         long startUnix = ((DateTimeOffset)startDate).ToUnixTimeSeconds();
         long endUnix = ((DateTimeOffset)endDate).ToUnixTimeSeconds();
 
-        // 1. Initialize a single Master Broker for the whole portfolio ($10,000 starting cash)
-        var masterBroker = new SimulatedBroker(10000m);
-        decimal finalTickPrice = 0;
+        var masterLedger = new List<ExecutedTrade>();
 
-        // 2. Loop through every requested market
+        // --- THE HEDGE FUND AGGREGATORS ---
+        decimal initialAllocationPerMarket = 1000m;
+        decimal totalStartingCapital = marketIds.Count * initialAllocationPerMarket;
+        decimal totalEndingCapital = 0;
+        int grandTotalTrades = 0;
+        int grandWinningTrades = 0;
+        int grandLosingTrades = 0;
+
         foreach (var conditionId in marketIds)
         {
-            // Fetch ONLY the trades within our requested date range
             var trades = await _dbContext.Trades
                 .Join(_dbContext.Outcomes, t => t.OutcomeId, o => o.OutcomeId, (t, o) => new { t, o.MarketId })
                 .Where(x => x.MarketId == conditionId && x.t.Timestamp >= startUnix && x.t.Timestamp <= endUnix)
@@ -146,25 +149,26 @@ public class BacktestRunner
 
             if (trades.Count == 0) continue;
 
-            // --- THE TIME MACHINE CORE ---
+            // Give THIS specific market its own isolated $1,000 broker!
+            var localBroker = new SimulatedBroker(initialAllocationPerMarket, conditionId); 
             Candle currentCandle = null;
             long candleDurationSeconds = strategy is ICandleStrategy cStrat ? (long)cStrat.Timeframe.TotalSeconds : 0;
+            decimal finalTickPrice = 0;
 
             foreach (var tick in trades)
             {
-                // Update the equity curve on every single tick to catch intra-trade drawdowns!
-                masterBroker.UpdateEquityCurve(tick.Price);
                 finalTickPrice = tick.Price;
+                localBroker.CurrentTime = DateTimeOffset.FromUnixTimeSeconds(tick.Timestamp).DateTime;
 
                 if (strategy is ITickStrategy tickStrategy)
                 {
-                    tickStrategy.OnTick(tick, masterBroker);
+                    tickStrategy.OnTick(tick, localBroker);
                 }
                 else if (strategy is ICandleStrategy candleStrategy)
                 {
                     if (currentCandle == null || tick.Timestamp >= currentCandle.OpenTimestamp + candleDurationSeconds)
                     {
-                        if (currentCandle != null) candleStrategy.OnCandle(currentCandle, masterBroker);
+                        if (currentCandle != null) candleStrategy.OnCandle(currentCandle, localBroker);
                         currentCandle = new Candle { OpenTimestamp = tick.Timestamp, Open = tick.Price, High = tick.Price, Low = tick.Price, Close = tick.Price, Volume = tick.Size };
                     }
                     else
@@ -177,35 +181,43 @@ public class BacktestRunner
                 }
             }
 
-            // Close out the final candle for this market
             if (strategy is ICandleStrategy finalStrat && currentCandle != null)
             {
-                finalStrat.OnCandle(currentCandle, masterBroker);
+                finalStrat.OnCandle(currentCandle, localBroker);
             }
+
+            // At the end of this market's timeline, collect the results!
+            totalEndingCapital += localBroker.GetTotalPortfolioValue(finalTickPrice);
+            grandTotalTrades += localBroker.TotalTradesExecuted;
+            grandWinningTrades += localBroker.WinningTrades;
+            grandLosingTrades += localBroker.LosingTrades;
+
+            masterLedger.AddRange(localBroker.TradeLedger);
         }
 
-        // 3. GENERATE THE DETAILED REPORT
-        decimal finalPortfolioValue = masterBroker.GetTotalPortfolioValue(finalTickPrice);
-        decimal totalReturn = ((finalPortfolioValue - 10000m) / 10000m) * 100m;
-
-        // Prevent division by zero if no trades happened
-        decimal winRate = masterBroker.TotalTradesExecuted > 0
-            ? ((decimal)masterBroker.WinningTrades / masterBroker.TotalTradesExecuted) * 100m
-            : 0;
+        // --- PRINT TRUE PORTFOLIO RESULTS ---
+        decimal totalReturn = totalStartingCapital > 0 ? ((totalEndingCapital - totalStartingCapital) / totalStartingCapital) * 100m : 0;
+        decimal winRate = grandTotalTrades > 0 ? ((decimal)grandWinningTrades / grandTotalTrades) * 100m : 0;
 
         Console.WriteLine($"=========================================");
-        Console.WriteLine($"          PORTFOLIO REPORT               ");
+        Console.WriteLine($"          TRUE PORTFOLIO REPORT          ");
         Console.WriteLine($"=========================================");
-        Console.WriteLine($"Initial Capital:   $10,000.00");
-        Console.WriteLine($"Ending Capital:    ${finalPortfolioValue:F2}");
-        Console.WriteLine($"Total Return:      {totalReturn:F2}%");
-        Console.WriteLine($"Peak Equity:       ${masterBroker.PeakEquity:F2}");
-        Console.WriteLine($"Max Drawdown:      -{masterBroker.MaxDrawdown * 100m:F2}%");
+        Console.WriteLine($"Total Markets Traded: {marketIds.Count}");
+        Console.WriteLine($"Initial Capital:      ${totalStartingCapital:F2} ($1k per market)");
+        Console.WriteLine($"Ending Capital:       ${totalEndingCapital:F2}");
+        Console.WriteLine($"Total Return:         {totalReturn:F2}%");
         Console.WriteLine($"-----------------------------------------");
-        Console.WriteLine($"Total Trades:      {masterBroker.TotalTradesExecuted}");
-        Console.WriteLine($"Winning Trades:    {masterBroker.WinningTrades}");
-        Console.WriteLine($"Losing Trades:     {masterBroker.LosingTrades}");
-        Console.WriteLine($"Win Rate:          {winRate:F2}%");
+        Console.WriteLine($"Total Trades:         {grandTotalTrades}");
+        Console.WriteLine($"Winning Trades:       {grandWinningTrades}");
+        Console.WriteLine($"Losing Trades:        {grandLosingTrades}");
+        Console.WriteLine($"Win Rate:             {winRate:F2}%");
         Console.WriteLine($"=========================================");
+
+        // Save the CSV to your Desktop!
+        string desktopPath = Environment.GetFolderPath(Environment.SpecialFolder.Desktop);
+        string filePath = Path.Combine(desktopPath, "Polymarket_Portfolio_Trades.csv");
+        TradeExporter.ExportToCsv(masterLedger, filePath);
+
+        Console.WriteLine($"\n[DATA SAVED] Exported {masterLedger.Count} detailed trades to your Desktop!");
     }
 }

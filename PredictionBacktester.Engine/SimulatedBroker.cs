@@ -1,4 +1,6 @@
-﻿namespace PredictionBacktester.Engine;
+﻿using PredictionBacktester.Core.Entities.Database;
+
+namespace PredictionBacktester.Engine;
 
 public class SimulatedBroker
 {
@@ -13,26 +15,53 @@ public class SimulatedBroker
     public decimal PeakEquity { get; private set; }
     public decimal MaxDrawdown { get; private set; }
 
-    public SimulatedBroker(decimal startingCash)
+    // --- NEW LEDGER PROPERTIES ---
+    public string MarketId { get; private set; }
+    public DateTime CurrentTime { get; set; } // The Engine will update this on every tick
+    public List<ExecutedTrade> TradeLedger { get; private set; }
+
+    public SimulatedBroker(decimal startingCash, string marketId = "Unknown")
     {
         CashBalance = startingCash;
         PeakEquity = startingCash;
         PositionShares = 0;
         TotalTradesExecuted = 0;
+
+        MarketId = marketId;
+        TradeLedger = new List<ExecutedTrade>();
     }
 
     public void Buy(decimal currentPrice, decimal dollarsToInvest)
     {
-        if (CashBalance < dollarsToInvest) return;
+        // 1. SAFETY NET: Don't execute if the trade is essentially $0
+        if (dollarsToInvest <= 0.01m || CashBalance < dollarsToInvest)
+        {
+            return;
+        }
 
         decimal sharesBought = dollarsToInvest / currentPrice;
 
-        // Calculate new average entry price (in case we scale in)
         decimal totalCost = (PositionShares * AverageEntryPrice) + dollarsToInvest;
         PositionShares += sharesBought;
-        AverageEntryPrice = totalCost / PositionShares;
+
+        // 2. SAFETY NET: Prevent divide-by-zero crashes
+        if (PositionShares > 0)
+        {
+            AverageEntryPrice = totalCost / PositionShares;
+        }
 
         CashBalance -= dollarsToInvest;
+
+        // WRITE THE RECEIPT!
+        TradeLedger.Add(new ExecutedTrade
+        {
+            MarketId = MarketId,
+            Date = CurrentTime,
+            Side = "BUY",
+            Price = currentPrice,
+            Shares = sharesBought,
+            DollarValue = dollarsToInvest
+        });
     }
 
     public void SellAll(decimal currentPrice)
@@ -44,6 +73,17 @@ public class SimulatedBroker
         // Did we win or lose?
         if (currentPrice > AverageEntryPrice) WinningTrades++;
         else LosingTrades++;
+
+        // WRITE THE RECEIPT!
+        TradeLedger.Add(new ExecutedTrade
+        {
+            MarketId = MarketId,
+            Date = CurrentTime,
+            Side = "SELL",
+            Price = currentPrice,
+            Shares = PositionShares,
+            DollarValue = cashReceived
+        });
 
         CashBalance += cashReceived;
         PositionShares = 0;
