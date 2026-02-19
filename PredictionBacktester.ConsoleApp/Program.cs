@@ -79,8 +79,10 @@ while (true)
 
             // 1. Instantiate whichever strategy you want to test today
             // 5-hour fast, 25-hour slow, risking 2% of the portfolio per trade
-            IStrategy myStrategy = new CandleSmaCrossoverStrategy(TimeSpan.FromHours(1), 5, 25, 0.02m);            // 2. Pass it into the engine
-            await engine.RunMarketSimulationAsync("0xeb6e3bde4d9b0b0b171a37cc5f439b55197c8bdb16847367e760aaca572a67e5", myStrategy);
+            var startDate = 0;
+            var endDate = 0;
+            IStrategy myStrategy = new CandleSmaCrossoverStrategy(TimeSpan.FromHours(1), 7, 15, 0.05m, 24, 100m, 0.85m);            // 2. Pass it into the engine
+            await engine.RunMarketSimulationAsync("0xeb6e3bde4d9b0b0b171a37cc5f439b55197c8bdb16847367e760aaca572a67e5", startDate, endDate, myStrategy);
             break;
         case "4":
             // Pass the database context directly to our new viewer
@@ -428,7 +430,8 @@ async Task RunUniversalOptimizer(
     BacktestRunner engine,
     decimal[][] parameterSpace,
     Func<decimal[], IStrategy> strategyFactory,
-    string strategyName)
+    string strategyName,
+    decimal initialAllocationPerMarket = 1000m)
 {
     Console.WriteLine($"\n--- N-DIMENSIONAL OPTIMIZER: {strategyName} ---");
 
@@ -455,7 +458,7 @@ async Task RunUniversalOptimizer(
         // 3. Ask the factory to build the strategy with this specific combo array!
         IStrategy strategy = strategyFactory(combo);
 
-        var result = await engine.RunPortfolioSimulationAsync(marketIds, startDate, endDate, strategy, isSilent: true);
+        var result = await engine.RunPortfolioSimulationAsync(marketIds, startDate, endDate, strategy, isSilent: true, initialAllocationPerMarket);
 
         result.Parameters = combo; // Save the array to the scorecard!
         results.Add(result);

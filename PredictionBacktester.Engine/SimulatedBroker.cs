@@ -4,6 +4,7 @@ namespace PredictionBacktester.Engine;
 
 public class SimulatedBroker
 {
+    public decimal SpreadPenalty { get; private set; } = 0.015m; // 1.5 cents per trade!
     public decimal CashBalance { get; private set; }
     // Existing YES properties
     public decimal PositionShares { get; private set; }
@@ -43,9 +44,10 @@ public class SimulatedBroker
     {
         if (dollarsToInvest <= 0.01m || CashBalance < dollarsToInvest) return;
 
-        // 1. How many shares do we WANT?
-        decimal desiredShares = dollarsToInvest / currentPrice;
+        decimal executionPrice = Math.Min(currentPrice + SpreadPenalty, 0.99m);
 
+        // 1. How many shares do we WANT?
+        decimal desiredShares = dollarsToInvest / executionPrice;
         // 2. How many shares are we ALLOWED to take?
         decimal maxAllowedShares = availableVolumeShares * MaxParticipationRate;
 
@@ -83,7 +85,8 @@ public class SimulatedBroker
 
         if (sharesToSell <= 0) return;
 
-        decimal cashReceived = sharesToSell * currentPrice;
+        decimal executionPrice = Math.Max(currentPrice - SpreadPenalty, 0.01m);
+        decimal cashReceived = sharesToSell * executionPrice;
 
         if (currentPrice > AverageEntryPrice) WinningTrades++;
         else LosingTrades++;

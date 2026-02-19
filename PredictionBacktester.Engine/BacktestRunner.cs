@@ -17,84 +17,54 @@ public class BacktestRunner
     /// <summary>
     /// Runs a simulation on a specific market.
     /// </summary>
-    public async Task RunMarketSimulationAsync(string marketId, IStrategy strategy)
+    public async Task RunMarketSimulationAsync(string marketId, DateTime startDate, DateTime endDate, IStrategy strategy, decimal initialCapital = 1000m)
     {
-        Console.WriteLine($"\n--- STARTING BACKTEST FOR MARKET: {marketId} ---");
+        Console.WriteLine($"\n--- STARTING SINGLE MARKET SIMULATION ---");
+        Console.WriteLine($"Market: {marketId}");
+        Console.WriteLine($"Strategy: {strategy.GetType().Name}\n");
 
-        // 1. Fetch the Market and Outcomes so we know what we are trading
-        var market = await _dbContext.Markets
-            .Include(m => m.Outcomes)
-            .FirstOrDefaultAsync(m => m.MarketId == marketId);
+        long startUnix = ((DateTimeOffset)startDate).ToUnixTimeSeconds();
+        long endUnix = ((DateTimeOffset)endDate).ToUnixTimeSeconds();
 
-        if (market == null)
-        {
-            Console.WriteLine("Market not found in database.");
-            return;
-        }
-
-        Console.WriteLine($"Question: {market.Title}");
-
-        // 2. Load ALL trades for this market into RAM, ordered by Time (Oldest to Newest)
-        // We use AsNoTracking() because we are just reading the data, which makes it massively faster.
+        // Note: Make sure your Single Market query joins Outcomes if you need ConditionIds, 
+        // or just queries the Trades table directly if you are using the raw MarketId.
         var trades = await _dbContext.Trades
-            .AsNoTracking()
-            .Where(t => t.OutcomeId == market.Outcomes.First().OutcomeId) // Let's just track the "Yes" outcome for now
+            .Where(t => t.MarketId == marketId && t.Timestamp >= startUnix && t.Timestamp <= endUnix)
             .OrderBy(t => t.Timestamp)
             .ToListAsync();
 
-        Console.WriteLine($"Loaded {trades.Count} historical ticks into memory.");
-
-        // 3. THE TIME MACHINE LOOP
-
-        // Start with $1,000 of fake money
-        var broker = new SimulatedBroker(1000m);
-
-        Console.WriteLine($"Starting Balance: ${broker.CashBalance}");
-
-        // --- CANDLE BUILDER STATE ---
-        Candle currentCandle = null;
-        long candleDurationSeconds = 0;
-
-        // If it's a candle strategy, extract the requested timeframe in seconds
-        if (strategy is ICandleStrategy cStrat)
+        if (trades.Count == 0)
         {
-            candleDurationSeconds = (long)cStrat.Timeframe.TotalSeconds;
+            Console.WriteLine("No trades found for this market in the specified date range.");
+            return;
         }
+
+        // Give the microscope a clean $1,000 wallet
+        var broker = new SimulatedBroker(initialCapital, marketId); 
+        Candle currentCandle = null;
+        long candleDurationSeconds = strategy is ICandleStrategy cStrat ? (long)cStrat.Timeframe.TotalSeconds : 0;
+        decimal finalTickPrice = 0;
 
         foreach (var tick in trades)
         {
-            // ROUTE 1: If it's a Tick Strategy, feed it the raw tick immediately!
+            finalTickPrice = tick.Price;
+
+            // Sync the clock so the ledger prints the correct dates!
+            broker.CurrentTime = DateTimeOffset.FromUnixTimeSeconds(tick.Timestamp).DateTime;
+
             if (strategy is ITickStrategy tickStrategy)
             {
                 tickStrategy.OnTick(tick, broker);
             }
-
-            // ROUTE 2: If it's a Candle Strategy, build the candle on the fly!
-            if (strategy is ICandleStrategy candleStrategy)
+            else if (strategy is ICandleStrategy candleStrategy)
             {
-                // If we don't have a candle yet, or the tick has crossed into a new time window
                 if (currentCandle == null || tick.Timestamp >= currentCandle.OpenTimestamp + candleDurationSeconds)
                 {
-                    // If we just finished building a previous candle, hand it to the strategy!
-                    if (currentCandle != null)
-                    {
-                        candleStrategy.OnCandle(currentCandle, broker);
-                    }
-
-                    // Start a brand new candle with this tick's data
-                    currentCandle = new Candle
-                    {
-                        OpenTimestamp = tick.Timestamp,
-                        Open = tick.Price,
-                        High = tick.Price,
-                        Low = tick.Price,
-                        Close = tick.Price,
-                        Volume = tick.Size
-                    };
+                    if (currentCandle != null) candleStrategy.OnCandle(currentCandle, broker);
+                    currentCandle = new Candle { OpenTimestamp = tick.Timestamp, Open = tick.Price, High = tick.Price, Low = tick.Price, Close = tick.Price, Volume = tick.Size };
                 }
                 else
                 {
-                    // The tick belongs to the current candle time window, so just update the High/Low/Close/Volume
                     currentCandle.High = Math.Max(currentCandle.High, tick.Price);
                     currentCandle.Low = Math.Min(currentCandle.Low, tick.Price);
                     currentCandle.Close = tick.Price;
@@ -103,23 +73,52 @@ public class BacktestRunner
             }
         }
 
-        // Catch the final pending candle when the loop finishes!
-        if (strategy is ICandleStrategy finalStrategy && currentCandle != null)
+        if (strategy is ICandleStrategy finalStrat && currentCandle != null)
         {
-            finalStrategy.OnCandle(currentCandle, broker);
+            finalStrat.OnCandle(currentCandle, broker);
         }
 
-        // 4. THE RESULTS
-        decimal finalPrice = trades.Last().Price;
-        decimal finalPortfolioValue = broker.GetTotalPortfolioValue(finalPrice);
+        // --- THE REALITY CHECK (FORCED LIQUIDATION) ---
+        // Liquidate any leftover bags at the final known price so the scorecard is honest!
+        broker.SellAll(finalTickPrice, decimal.MaxValue);
+        broker.SellAllNo(finalTickPrice, decimal.MaxValue);
 
-        Console.WriteLine($"\n--- BACKTEST COMPLETE ---");
-        Console.WriteLine($"Total Trades Executed: {broker.TotalTradesExecuted}");
-        Console.WriteLine($"Ending Portfolio Value: ${finalPortfolioValue:F2}");
-        Console.WriteLine($"Total Return: {((finalPortfolioValue - 1000m) / 1000m) * 100m:F2}%");
-        Console.WriteLine($"--- BACKTEST COMPLETE ---");
+        // --- THE MICROSCOPE LEDGER PRINT-OUT ---
+        Console.WriteLine("=== CHRONOLOGICAL TRADE LEDGER ===");
+        if (broker.TradeLedger.Count == 0)
+        {
+            Console.WriteLine("No trades executed. The strategy stayed flat.");
+        }
+        else
+        {
+            foreach (var t in broker.TradeLedger)
+            {
+                // Format: [2024-08-01 14:00:00] BUY YES  | Price: $0.450 | Shares: 150.50 | Value: $67.72
+                Console.WriteLine($"[{t.Date:yyyy-MM-dd HH:mm:ss}] {t.Side,-8} | Price: ${t.Price:F3} | Shares: {t.Shares,8:F2} | Value: ${t.DollarValue,7:F2}");
+            }
+        }
+
+        // --- THE MICROSCOPE SCORECARD ---
+        // 3. UPDATE THE SCORECARD MATH
+        decimal totalEndingCapital = broker.GetTotalPortfolioValue(finalTickPrice);
+        decimal totalReturn = ((totalEndingCapital - initialCapital) / initialCapital) * 100m;
+
+        Console.WriteLine($"\n=========================================");
+        Console.WriteLine($"          MARKET SCORECARD               ");
+        Console.WriteLine($"=========================================");
+        Console.WriteLine($"Initial Capital:      ${initialCapital:F2}"); // Dynamic!
+        Console.WriteLine($"Ending Capital:       ${totalEndingCapital:F2}");
+        Console.WriteLine($"Net Profit:           ${totalEndingCapital - initialCapital:F2}"); // Dynamic!
+        Console.WriteLine($"Return:               {totalReturn:F2}%");
     }
-    public async Task<PortfolioResult> RunPortfolioSimulationAsync(List<string> marketIds, DateTime startDate, DateTime endDate, IStrategy strategy, bool isSilent = false)
+
+    public async Task<PortfolioResult> RunPortfolioSimulationAsync(
+        List<string> marketIds, 
+        DateTime startDate, 
+        DateTime endDate, 
+        IStrategy strategy, 
+        bool isSilent = false, 
+        decimal initialAllocationPerMarket = 1000m)
     {
         if (!isSilent)
         {
@@ -134,7 +133,6 @@ public class BacktestRunner
         var masterLedger = new List<ExecutedTrade>();
 
         // --- THE HEDGE FUND AGGREGATORS ---
-        decimal initialAllocationPerMarket = 1000m;
         decimal totalStartingCapital = marketIds.Count * initialAllocationPerMarket;
         decimal totalEndingCapital = 0;
         int grandTotalTrades = 0;
@@ -184,10 +182,21 @@ public class BacktestRunner
                 }
             }
 
+            // ... (End of the tick/candle loop)
             if (strategy is ICandleStrategy finalStrat && currentCandle != null)
             {
                 finalStrat.OnCandle(currentCandle, localBroker);
             }
+
+            // --- NEW: THE REALITY CHECK (FORCED LIQUIDATION) ---
+            // If the market is over and we are still holding bags, force sell everything at the final price!
+            localBroker.SellAll(finalTickPrice, decimal.MaxValue);
+            localBroker.SellAllNo(finalTickPrice, decimal.MaxValue);
+
+            // At the end of this market's timeline, collect the results!
+            totalEndingCapital += localBroker.GetTotalPortfolioValue(finalTickPrice);
+            grandTotalTrades += localBroker.TotalTradesExecuted;
+            // ...
 
             // At the end of this market's timeline, collect the results!
             totalEndingCapital += localBroker.GetTotalPortfolioValue(finalTickPrice);
