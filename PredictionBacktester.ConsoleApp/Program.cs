@@ -75,7 +75,7 @@ while (true)
             await RunDeepSync(apiClient, repository);
             break;
         case "3":
-            Console.Write("Enter Market ID to analyze: ");
+            Console.Write("Enter OutcomeID to analyze: ");
             string targetMarketId = Console.ReadLine();
 
             // Your exact #1 RSI parameters from the Leaderboard!
@@ -100,7 +100,7 @@ while (true)
             //var result = await engine.RunPortfolioSimulationAsync(dynamicOutcomeIds, startDate, endDate, strategyFactory);
             await RunDynamicPortfolioBacktest(repository, engine);
             break;
-        /*case "7":
+        case "7":
             // 1. Define the levers for RSI
             decimal[] rsiPeriods = { 7, 10, 14 }; // How fast the rubber band reacts
             decimal[] oversoldLevels = { 20, 30, 40 }; // How deep the panic needs to be to buy YES
@@ -120,8 +120,8 @@ while (true)
                 new RsiReversionStrategy(TimeSpan.FromHours(1), (int)combo[0], combo[1], combo[2], combo[4], 24, 10000m, combo[3]);
 
             await RunUniversalOptimizer(repository, engine, rsiGrid, rsiBuilder, "RSI Mean Reversion (5D)");
-            break;*/
-        case "7":
+            break;
+        /*case "7":
             // 1. Define ALL the levers you want to test
             decimal[] fastSmas = { 3, 5, 7 };
             decimal[] slowSmas = { 15, 20, 25 };
@@ -140,7 +140,7 @@ while (true)
                 new CandleSmaCrossoverStrategy(TimeSpan.FromHours(1), (int)combo[0], (int)combo[1], combo[3], 24, 10000m, combo[2]);
 
             await RunUniversalOptimizer(repository, engine, grid, smaBuilder, "SMA Crossover (4D)");
-            break;
+            break;*/
         case "8":
             Console.WriteLine("Exiting...");
             return;
