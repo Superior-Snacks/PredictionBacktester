@@ -66,7 +66,7 @@ public class SimulatedBroker
 
         TradeLedger.Add(new ExecutedTrade
         {
-            MarketId = MarketId,
+            OutcomeId = OutcomeId,
             Date = CurrentTime,
             Side = "BUY",
             Price = currentPrice,
@@ -93,7 +93,7 @@ public class SimulatedBroker
 
         TradeLedger.Add(new ExecutedTrade
         {
-            MarketId = MarketId,
+            OutcomeId = OutcomeId,
             Date = CurrentTime,
             Side = "SELL",
             Price = currentPrice,
@@ -130,7 +130,7 @@ public class SimulatedBroker
         AverageNoEntryPrice = totalCost / NoPositionShares;
         CashBalance -= actualDollarsSpent;
 
-        TradeLedger.Add(new ExecutedTrade { MarketId = MarketId, Date = CurrentTime, Side = "BUY NO", Price = currentNoPrice, Shares = actualSharesBought, DollarValue = actualDollarsSpent });
+        TradeLedger.Add(new ExecutedTrade { OutcomeId = OutcomeId, Date = CurrentTime, Side = "BUY NO", Price = currentNoPrice, Shares = actualSharesBought, DollarValue = actualDollarsSpent });
     }
 
     public void SellAllNo(decimal currentYesPrice, decimal availableVolumeShares)
@@ -148,7 +148,7 @@ public class SimulatedBroker
         if (currentNoPrice > AverageNoEntryPrice) WinningTrades++;
         else LosingTrades++;
 
-        TradeLedger.Add(new ExecutedTrade { MarketId = MarketId, Date = CurrentTime, Side = "SELL NO", Price = currentNoPrice, Shares = sharesToSell, DollarValue = cashReceived });
+        TradeLedger.Add(new ExecutedTrade { OutcomeId = OutcomeId, Date = CurrentTime, Side = "SELL NO", Price = currentNoPrice, Shares = sharesToSell, DollarValue = cashReceived });
 
         CashBalance += cashReceived;
         NoPositionShares -= sharesToSell;

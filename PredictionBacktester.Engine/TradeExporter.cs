@@ -17,7 +17,7 @@ public static class TradeExporter
         foreach (var t in trades)
         {
             // Formatting dates and decimals so Excel reads them perfectly
-            csv.AppendLine($"{t.Date:yyyy-MM-dd HH:mm:ss},{t.MarketId},{t.Side},{t.Price:F4},{t.Shares:F4},{t.DollarValue:F2}");
+            csv.AppendLine($"{t.Date:yyyy-MM-dd HH:mm:ss},{t.OutcomeId},{t.Side},{t.Price:F4},{t.Shares:F4},{t.DollarValue:F2}");
         }
 
         File.WriteAllText(filePath, csv.ToString());

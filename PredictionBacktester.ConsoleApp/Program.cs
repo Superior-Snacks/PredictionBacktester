@@ -75,14 +75,18 @@ while (true)
             await RunDeepSync(apiClient, repository);
             break;
         case "3":
-            Console.WriteLine("\n[Starting Simulation...]");
+            Console.Write("Enter Market ID to analyze: ");
+            string targetMarketId = Console.ReadLine();
 
-            // 1. Instantiate whichever strategy you want to test today
-            // 5-hour fast, 25-hour slow, risking 2% of the portfolio per trade
-            var startDate = 0;
-            var endDate = 0;
-            IStrategy myStrategy = new CandleSmaCrossoverStrategy(TimeSpan.FromHours(1), 7, 15, 0.05m, 24, 100m, 0.85m);            // 2. Pass it into the engine
-            await engine.RunMarketSimulationAsync("0xeb6e3bde4d9b0b0b171a37cc5f439b55197c8bdb16847367e760aaca572a67e5", startDate, endDate, myStrategy);
+            // Your exact #1 RSI parameters from the Leaderboard!
+            // Params: [ Period: 7 | Oversold: 40 | Overbought: 60 | TakeProfit: 0.85 | Risk: 0.05 ]
+            IStrategy microscopeStrategy = new RsiReversionStrategy(TimeSpan.FromHours(1), 7, 40m, 60m, 0.05m, 24, 10000m, 0.85m);
+
+            DateTime start = new DateTime(2024, 7, 1);
+            DateTime end = new DateTime(2024, 11, 1);
+
+            // Run it with a clean $1,000 wallet
+            await engine.RunMarketSimulationAsync(targetMarketId, start, end, microscopeStrategy, 1000m);
             break;
         case "4":
             // Pass the database context directly to our new viewer
@@ -437,8 +441,7 @@ async Task RunUniversalOptimizer(
 
     DateTime startDate = new DateTime(2024, 7, 1);
     DateTime endDate = new DateTime(2024, 11, 1);
-    var marketIds = await repo.GetActiveMarketsInDateRangeAsync(startDate, endDate);
-
+    var outcomeIds = await repo.GetActiveOutcomesInDateRangeAsync(startDate, endDate);
     // 1. Generate every possible combination of your parameters
     var allCombinations = GenerateCombinations(parameterSpace);
     int totalTests = allCombinations.Count;
@@ -458,7 +461,7 @@ async Task RunUniversalOptimizer(
         // 3. Ask the factory to build the strategy with this specific combo array!
         IStrategy strategy = strategyFactory(combo);
 
-        var result = await engine.RunPortfolioSimulationAsync(marketIds, startDate, endDate, strategy, isSilent: true, initialAllocationPerMarket);
+        var result = await engine.RunPortfolioSimulationAsync(outcomeIds, startDate, endDate, strategy, isSilent: true, initialAllocationPerMarket);
 
         result.Parameters = combo; // Save the array to the scorecard!
         results.Add(result);

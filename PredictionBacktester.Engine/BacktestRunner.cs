@@ -17,30 +17,30 @@ public class BacktestRunner
     /// <summary>
     /// Runs a simulation on a specific market.
     /// </summary>
-    public async Task RunMarketSimulationAsync(string marketId, DateTime startDate, DateTime endDate, IStrategy strategy, decimal initialCapital = 1000m)
+    public async Task RunMarketSimulationAsync(string outcomeId, DateTime startDate, DateTime endDate, IStrategy strategy, decimal initialCapital = 1000m)
     {
-        Console.WriteLine($"\n--- STARTING SINGLE MARKET SIMULATION ---");
-        Console.WriteLine($"Market: {marketId}");
+        Console.WriteLine($"\n--- STARTING SINGLE OUTCOME SIMULATION ---");
+        Console.WriteLine($"Outcome ID: {outcomeId}"); // 2. Update print
         Console.WriteLine($"Strategy: {strategy.GetType().Name}\n");
 
         long startUnix = ((DateTimeOffset)startDate).ToUnixTimeSeconds();
         long endUnix = ((DateTimeOffset)endDate).ToUnixTimeSeconds();
 
-        // Note: Make sure your Single Market query joins Outcomes if you need ConditionIds, 
-        // or just queries the Trades table directly if you are using the raw MarketId.
+        // 3. THE FIX: Query only trades for THIS SPECIFIC OUTCOME
         var trades = await _dbContext.Trades
-            .Where(t => t.MarketId == marketId && t.Timestamp >= startUnix && t.Timestamp <= endUnix)
+            .Where(t => t.OutcomeId == outcomeId && t.Timestamp >= startUnix && t.Timestamp <= endUnix)
             .OrderBy(t => t.Timestamp)
             .ToListAsync();
 
         if (trades.Count == 0)
         {
-            Console.WriteLine("No trades found for this market in the specified date range.");
+            Console.WriteLine("No trades found for this outcome in the specified date range.");
             return;
         }
 
-        // Give the microscope a clean $1,000 wallet
-        var broker = new SimulatedBroker(initialCapital, marketId); 
+        var broker = new SimulatedBroker(initialCapital, outcomeId);
+
+        // ... (The rest of the method stays exactly the same!) ... 
         Candle currentCandle = null;
         long candleDurationSeconds = strategy is ICandleStrategy cStrat ? (long)cStrat.Timeframe.TotalSeconds : 0;
         decimal finalTickPrice = 0;
@@ -113,7 +113,7 @@ public class BacktestRunner
     }
 
     public async Task<PortfolioResult> RunPortfolioSimulationAsync(
-        List<string> marketIds, 
+        List<string> outcomeIds, 
         DateTime startDate, 
         DateTime endDate, 
         IStrategy strategy, 
@@ -124,7 +124,7 @@ public class BacktestRunner
         {
             Console.WriteLine($"\n--- STARTING PORTFOLIO BACKTEST ---");
             Console.WriteLine($"Strategy: {strategy.GetType().Name}");
-            Console.WriteLine($"Markets Analyzed: {marketIds.Count}\n");
+            Console.WriteLine($"Outcomes Analyzed: {outcomeIds.Count}\n");
         }
 
         long startUnix = ((DateTimeOffset)startDate).ToUnixTimeSeconds();
@@ -133,25 +133,23 @@ public class BacktestRunner
         var masterLedger = new List<ExecutedTrade>();
 
         // --- THE HEDGE FUND AGGREGATORS ---
-        decimal totalStartingCapital = marketIds.Count * initialAllocationPerMarket;
+        decimal totalStartingCapital = outcomeIds.Count * initialAllocationPerMarket;
         decimal totalEndingCapital = 0;
         int grandTotalTrades = 0;
         int grandWinningTrades = 0;
         int grandLosingTrades = 0;
 
-        foreach (var conditionId in marketIds)
+        foreach (var outcomeId in outcomeIds)
         {
             var trades = await _dbContext.Trades
-                .Join(_dbContext.Outcomes, t => t.OutcomeId, o => o.OutcomeId, (t, o) => new { t, o.MarketId })
-                .Where(x => x.MarketId == conditionId && x.t.Timestamp >= startUnix && x.t.Timestamp <= endUnix)
-                .Select(x => x.t)
+                .Where(t => t.OutcomeId == outcomeId && t.Timestamp >= startUnix && t.Timestamp <= endUnix)
                 .OrderBy(t => t.Timestamp)
                 .ToListAsync();
 
             if (trades.Count == 0) continue;
 
             // Give THIS specific market its own isolated $1,000 broker!
-            var localBroker = new SimulatedBroker(initialAllocationPerMarket, conditionId); 
+            var localBroker = new SimulatedBroker(initialAllocationPerMarket, outcomeId);
             Candle currentCandle = null;
             long candleDurationSeconds = strategy is ICandleStrategy cStrat ? (long)cStrat.Timeframe.TotalSeconds : 0;
             decimal finalTickPrice = 0;
@@ -216,7 +214,7 @@ public class BacktestRunner
             Console.WriteLine($"=========================================");
             Console.WriteLine($"          TRUE PORTFOLIO REPORT          ");
             Console.WriteLine($"=========================================");
-            Console.WriteLine($"Total Markets Traded: {marketIds.Count}");
+            Console.WriteLine($"Total Markets Traded: {outcomeIds.Count}");
             Console.WriteLine($"Initial Capital:      ${totalStartingCapital:F2} ($1k per market)");
             Console.WriteLine($"Ending Capital:       ${totalEndingCapital:F2}");
             Console.WriteLine($"Total Return:         {totalReturn:F2}%");
@@ -235,7 +233,7 @@ public class BacktestRunner
             WinRate = winRate,
             TotalTrades = grandTotalTrades
         };
-        /*
+        
         // Save the CSV to your Desktop!
         string desktopPath = Environment.GetFolderPath(Environment.SpecialFolder.Desktop);
         string filePath = Path.Combine(desktopPath, "Polymarket_Portfolio_Trades.csv");
@@ -244,6 +242,6 @@ public class BacktestRunner
         Console.WriteLine($"\n[DATA SAVED] Exported {masterLedger.Count} detailed trades.");
         Console.WriteLine($"FILE PATH: {filePath}"); // <-- THIS WILL REVEAL THE HIDING SPOT
 
-        Console.WriteLine($"\n[DATA SAVED] Exported {masterLedger.Count} detailed trades to your Desktop!");*/
+        Console.WriteLine($"\n[DATA SAVED] Exported {masterLedger.Count} detailed trades to your Desktop!");
     }
 }

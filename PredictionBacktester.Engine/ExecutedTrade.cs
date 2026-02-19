@@ -4,7 +4,7 @@ namespace PredictionBacktester.Engine;
 
 public class ExecutedTrade
 {
-    public string MarketId { get; set; }
+    public string OutcomeId { get; set; }
     public DateTime Date { get; set; }
     public string Side { get; set; }
     public decimal Price { get; set; }

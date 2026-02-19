@@ -14,6 +14,19 @@ public class PolymarketRepository
         _dbContext = dbContext;
     }
 
+    public async Task<List<string>> GetActiveOutcomesInDateRangeAsync(DateTime startDate, DateTime endDate)
+    {
+        long startUnix = ((DateTimeOffset)startDate).ToUnixTimeSeconds();
+        long endUnix = ((DateTimeOffset)endDate).ToUnixTimeSeconds();
+
+        // Fetches every unique Outcome ID that had trading activity during this time
+        return await _dbContext.Trades
+            .Where(t => t.Timestamp >= startUnix && t.Timestamp <= endUnix)
+            .Select(t => t.OutcomeId)
+            .Distinct()
+            .ToListAsync();
+    }
+
     /// <summary>
     /// Saves the market and its outcomes to the database if they don't already exist.
     /// </summary>
