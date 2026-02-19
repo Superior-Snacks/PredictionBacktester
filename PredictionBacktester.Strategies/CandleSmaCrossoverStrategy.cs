@@ -72,36 +72,41 @@ public class CandleSmaCrossoverStrategy : ICandleStrategy
 
         bool isFastAboveSlow = fastSma > slowSma;
 
-        // 4. TRADE LOGIC (Refactored for Cleanliness)
+        // 4. OMNIDIRECTIONAL TRADE LOGIC
         if (_wasFastAboveSlow.HasValue)
         {
-            // SELL CONDITIONS (Check these first!)
+            bool isGoldenCross = (_wasFastAboveSlow.Value == false && isFastAboveSlow == true);
+            bool isDeathCross = (_wasFastAboveSlow.Value == true && isFastAboveSlow == false);
+
+            decimal currentNoPrice = 1.00m - candle.Close;
+            decimal currentEquity = broker.GetTotalPortfolioValue(candle.Close);
+            decimal dollarsToInvest = Math.Min(currentEquity * _riskPercentage, broker.CashBalance);
+            bool hasLiquidity = (rollingDollarVolume >= _minDollarVolume);
+
+            // --- THE "YES" SIDE ---
             if (broker.PositionShares > 0)
             {
-                bool isDeathCross = (_wasFastAboveSlow.Value == true && isFastAboveSlow == false);
-                bool isTakeProfit = (candle.Close >= _takeProfitThreshold);
-
-                // If the trend is dying OR we hit our 90 cent target, dump the bags!
-                if (isDeathCross || isTakeProfit)
-                {
-                    broker.SellAll(candle.Close, candle.Volume);
-                }
+                bool isYesTakeProfit = (candle.Close >= _takeProfitThreshold);
+                // If trend dies OR we hit our profit target, dump YES bags!
+                if (isDeathCross || isYesTakeProfit) broker.SellAll(candle.Close, candle.Volume);
             }
-            // BUY CONDITIONS
-            else if (broker.PositionShares == 0)
+            else if (isGoldenCross && dollarsToInvest >= 1.00m && hasLiquidity)
             {
-                bool isGoldenCross = (_wasFastAboveSlow.Value == false && isFastAboveSlow == true);
+                // Trend is up, buy YES!
+                broker.Buy(candle.Close, dollarsToInvest, candle.Volume);
+            }
 
-                if (isGoldenCross)
-                {
-                    decimal currentEquity = broker.GetTotalPortfolioValue(candle.Close);
-                    decimal dollarsToInvest = Math.Min(currentEquity * _riskPercentage, broker.CashBalance);
-
-                    if (dollarsToInvest >= 1.00m && rollingDollarVolume >= _minDollarVolume)
-                    {
-                        broker.Buy(candle.Close, dollarsToInvest, candle.Volume);
-                    }
-                }
+            // --- THE "NO" SIDE ---
+            if (broker.NoPositionShares > 0)
+            {
+                bool isNoTakeProfit = (currentNoPrice >= _takeProfitThreshold);
+                // If trend reverses UP OR our NO shares hit the profit target, dump NO bags!
+                if (isGoldenCross || isNoTakeProfit) broker.SellAllNo(candle.Close, candle.Volume);
+            }
+            else if (isDeathCross && dollarsToInvest >= 1.00m && hasLiquidity)
+            {
+                // Trend is down, buy NO!
+                broker.BuyNo(candle.Close, dollarsToInvest, candle.Volume);
             }
         }
 
