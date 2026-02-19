@@ -31,66 +31,73 @@ public class SimulatedBroker
         TradeLedger = new List<ExecutedTrade>();
     }
 
-    public void Buy(decimal currentPrice, decimal dollarsToInvest)
+    // We strictly limit our algorithm to 10% of the historical volume
+    public decimal MaxParticipationRate { get; private set; } = 0.10m;
+
+    public void Buy(decimal currentPrice, decimal dollarsToInvest, decimal availableVolumeShares)
     {
-        // 1. SAFETY NET: Don't execute if the trade is essentially $0
-        if (dollarsToInvest <= 0.01m || CashBalance < dollarsToInvest)
-        {
-            return;
-        }
+        if (dollarsToInvest <= 0.01m || CashBalance < dollarsToInvest) return;
 
-        decimal sharesBought = dollarsToInvest / currentPrice;
+        // 1. How many shares do we WANT?
+        decimal desiredShares = dollarsToInvest / currentPrice;
 
-        decimal totalCost = (PositionShares * AverageEntryPrice) + dollarsToInvest;
-        PositionShares += sharesBought;
+        // 2. How many shares are we ALLOWED to take?
+        decimal maxAllowedShares = availableVolumeShares * MaxParticipationRate;
 
-        // 2. SAFETY NET: Prevent divide-by-zero crashes
-        if (PositionShares > 0)
-        {
-            AverageEntryPrice = totalCost / PositionShares;
-        }
+        // 3. The Reality Check: Take the smaller of the two!
+        decimal actualSharesBought = Math.Min(desiredShares, maxAllowedShares);
 
-        CashBalance -= dollarsToInvest;
+        if (actualSharesBought <= 0) return;
 
-        // WRITE THE RECEIPT!
+        // 4. Recalculate the actual dollars spent based on our limited fill
+        decimal actualDollarsSpent = actualSharesBought * currentPrice;
+        decimal totalCost = (PositionShares * AverageEntryPrice) + actualDollarsSpent;
+
+        PositionShares += actualSharesBought;
+        AverageEntryPrice = totalCost / PositionShares;
+        CashBalance -= actualDollarsSpent;
+
         TradeLedger.Add(new ExecutedTrade
         {
             MarketId = MarketId,
             Date = CurrentTime,
             Side = "BUY",
             Price = currentPrice,
-            Shares = sharesBought,
-            DollarValue = dollarsToInvest
+            Shares = actualSharesBought,
+            DollarValue = actualDollarsSpent
         });
     }
 
-    public void SellAll(decimal currentPrice)
+    public void SellAll(decimal currentPrice, decimal availableVolumeShares)
     {
         if (PositionShares <= 0) return;
 
-        decimal cashReceived = PositionShares * currentPrice;
+        // The Reality Check: We might not be able to dump our whole bag at once!
+        decimal maxAllowedSharesToSell = availableVolumeShares * MaxParticipationRate;
+        decimal sharesToSell = Math.Min(PositionShares, maxAllowedSharesToSell);
 
-        // Did we win or lose?
+        if (sharesToSell <= 0) return;
+
+        decimal cashReceived = sharesToSell * currentPrice;
+
         if (currentPrice > AverageEntryPrice) WinningTrades++;
         else LosingTrades++;
 
-        // WRITE THE RECEIPT!
         TradeLedger.Add(new ExecutedTrade
         {
             MarketId = MarketId,
             Date = CurrentTime,
             Side = "SELL",
             Price = currentPrice,
-            Shares = PositionShares,
+            Shares = sharesToSell,
             DollarValue = cashReceived
         });
 
         CashBalance += cashReceived;
-        PositionShares = 0;
-        AverageEntryPrice = 0;
-        TotalTradesExecuted++;
+        PositionShares -= sharesToSell; // Subtract what we sold, keep the rest!
 
-        UpdateEquityCurve(currentPrice); // Check for new peaks or valleys!
+        if (PositionShares == 0) AverageEntryPrice = 0;
+        TotalTradesExecuted++;
     }
 
     public decimal GetTotalPortfolioValue(decimal currentPrice)

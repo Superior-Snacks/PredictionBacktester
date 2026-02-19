@@ -8,7 +8,7 @@ namespace PredictionBacktester.Strategies;
 
 public class CandleSmaCrossoverStrategy : ICandleStrategy
 {
-    // The engine will read this property to know how to group the ticks!
+    // The engine will read this property to know how to group the ticks!c
     public TimeSpan Timeframe { get; }
 
     private readonly int _fastPeriod;
@@ -61,13 +61,10 @@ public class CandleSmaCrossoverStrategy : ICandleStrategy
                     decimal dollarsToInvest = currentEquity * _riskPercentage;
                     dollarsToInvest = Math.Min(dollarsToInvest, broker.CashBalance);
 
-                    // NEW: Only place the bet if we are risking at least $1.00
                     if (dollarsToInvest >= 1.00m)
                     {
-                        broker.Buy(candle.Close, dollarsToInvest);
-
-                        var date = DateTimeOffset.FromUnixTimeSeconds(candle.OpenTimestamp).DateTime;
-                        Console.WriteLine($"[BUY] {date} | Price: ${candle.Close:F3} | Size: ${dollarsToInvest:F2}");
+                        // NEW: Pass the candle.Volume into the Buy method!
+                        broker.Buy(candle.Close, dollarsToInvest, candle.Volume);
                     }
                 }
             }
@@ -75,9 +72,8 @@ public class CandleSmaCrossoverStrategy : ICandleStrategy
             {
                 if (broker.PositionShares > 0)
                 {
-                    broker.SellAll(candle.Close);
-                    var date = DateTimeOffset.FromUnixTimeSeconds(candle.OpenTimestamp).DateTime;
-                    Console.WriteLine($"[CANDLE DEATH CROSS] {date} | Sell at ${candle.Close:F3}");
+                    // NEW: Pass the candle.Volume into the Sell method!
+                    broker.SellAll(candle.Close, candle.Volume);
                 }
             }
         }

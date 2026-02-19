@@ -218,6 +218,9 @@ public class BacktestRunner
         string filePath = Path.Combine(desktopPath, "Polymarket_Portfolio_Trades.csv");
         TradeExporter.ExportToCsv(masterLedger, filePath);
 
+        Console.WriteLine($"\n[DATA SAVED] Exported {masterLedger.Count} detailed trades.");
+        Console.WriteLine($"FILE PATH: {filePath}"); // <-- THIS WILL REVEAL THE HIDING SPOT
+
         Console.WriteLine($"\n[DATA SAVED] Exported {masterLedger.Count} detailed trades to your Desktop!");
     }
 }
