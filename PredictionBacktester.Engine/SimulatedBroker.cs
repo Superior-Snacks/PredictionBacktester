@@ -5,8 +5,13 @@ namespace PredictionBacktester.Engine;
 public class SimulatedBroker
 {
     public decimal CashBalance { get; private set; }
+    // Existing YES properties
     public decimal PositionShares { get; private set; }
-    public decimal AverageEntryPrice { get; private set; } // Needed for Win Rate
+    public decimal AverageEntryPrice { get; private set; }
+
+    // --- NEW: NO SIDE PROPERTIES ---
+    public decimal NoPositionShares { get; private set; }
+    public decimal AverageNoEntryPrice { get; private set; }
 
     // --- NEW PERFORMANCE METRICS ---
     public int TotalTradesExecuted { get; private set; }
@@ -100,9 +105,63 @@ public class SimulatedBroker
         TotalTradesExecuted++;
     }
 
-    public decimal GetTotalPortfolioValue(decimal currentPrice)
+    // --- NEW: THE "NO" SIDE EXECUTORS ---
+    public void BuyNo(decimal currentYesPrice, decimal dollarsToInvest, decimal availableVolumeShares)
     {
-        return CashBalance + (PositionShares * currentPrice);
+        // MATHEMATICAL INVERSION: If YES is $0.80, NO is $0.20!
+        decimal currentNoPrice = 1.00m - currentYesPrice;
+
+        // Safety checks: We can't buy at $0.00, and don't buy if we're broke
+        if (currentNoPrice <= 0.00m || dollarsToInvest <= 0.01m || CashBalance < dollarsToInvest) return;
+
+        decimal desiredShares = dollarsToInvest / currentNoPrice;
+        decimal maxAllowedShares = availableVolumeShares * MaxParticipationRate;
+        decimal actualSharesBought = Math.Min(desiredShares, maxAllowedShares);
+
+        if (actualSharesBought <= 0) return;
+
+        decimal actualDollarsSpent = actualSharesBought * currentNoPrice;
+        decimal totalCost = (NoPositionShares * AverageNoEntryPrice) + actualDollarsSpent;
+
+        NoPositionShares += actualSharesBought;
+        AverageNoEntryPrice = totalCost / NoPositionShares;
+        CashBalance -= actualDollarsSpent;
+
+        TradeLedger.Add(new ExecutedTrade { MarketId = MarketId, Date = CurrentTime, Side = "BUY NO", Price = currentNoPrice, Shares = actualSharesBought, DollarValue = actualDollarsSpent });
+    }
+
+    public void SellAllNo(decimal currentYesPrice, decimal availableVolumeShares)
+    {
+        if (NoPositionShares <= 0) return;
+
+        decimal currentNoPrice = 1.00m - currentYesPrice;
+        decimal maxAllowedSharesToSell = availableVolumeShares * MaxParticipationRate;
+        decimal sharesToSell = Math.Min(NoPositionShares, maxAllowedSharesToSell);
+
+        if (sharesToSell <= 0) return;
+
+        decimal cashReceived = sharesToSell * currentNoPrice;
+
+        if (currentNoPrice > AverageNoEntryPrice) WinningTrades++;
+        else LosingTrades++;
+
+        TradeLedger.Add(new ExecutedTrade { MarketId = MarketId, Date = CurrentTime, Side = "SELL NO", Price = currentNoPrice, Shares = sharesToSell, DollarValue = cashReceived });
+
+        CashBalance += cashReceived;
+        NoPositionShares -= sharesToSell;
+
+        if (NoPositionShares == 0) AverageNoEntryPrice = 0;
+        TotalTradesExecuted++;
+    }
+
+    // --- UPDATE YOUR PORTFOLIO CALCULATOR ---
+    public decimal GetTotalPortfolioValue(decimal currentYesPrice)
+    {
+        decimal currentNoPrice = 1.00m - currentYesPrice;
+        decimal yesValue = PositionShares * currentYesPrice;
+        decimal noValue = NoPositionShares * currentNoPrice;
+
+        return CashBalance + yesValue + noValue;
     }
 
     // --- THE MAX DRAWDOWN CALCULATOR ---

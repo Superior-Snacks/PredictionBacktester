@@ -369,8 +369,14 @@ async Task RunDynamicPortfolioBacktest(PolymarketRepository repo, BacktestRunner
 
     Console.WriteLine($"Found {dynamicMarketIds.Count} active markets! Initializing Time Machine...\n");
 
-    // 5-hour fast, 25-hour slow, risking 2% of the portfolio per trade
-    IStrategy myStrategy = new CandleSmaCrossoverStrategy(TimeSpan.FromHours(1), 5, 25, 0.02m);
+    // Timeframe: 1 Hour
+    // Fast SMA: 5
+    // Slow SMA: 25
+    // Risk: 2%
+    // Volume Window: 24 Hours
+    // Min Volume: $10,000
+    // Take Profit: $0.90
+    IStrategy myStrategy = new CandleSmaCrossoverStrategy(TimeSpan.FromHours(1), 5, 25, 0.02m, 24, 10000m, 0.8m);
 
     // 4. Run the Portfolio Engine
     await engine.RunPortfolioSimulationAsync(dynamicMarketIds, startDate, endDate, myStrategy);
