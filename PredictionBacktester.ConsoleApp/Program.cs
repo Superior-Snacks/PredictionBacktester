@@ -376,7 +376,7 @@ async Task RunDynamicPortfolioBacktest(PolymarketRepository repo, BacktestRunner
     // Volume Window: 24 Hours
     // Min Volume: $10,000
     // Take Profit: $0.90
-    IStrategy myStrategy = new CandleSmaCrossoverStrategy(TimeSpan.FromHours(1), 5, 25, 0.02m, 24, 10000m, 0.8m);
+    IStrategy myStrategy = new CandleSmaCrossoverStrategy(TimeSpan.FromHours(1), 5, 25, 0.02m, 24, 10m, 0.8m);
 
     // 4. Run the Portfolio Engine
     await engine.RunPortfolioSimulationAsync(dynamicMarketIds, startDate, endDate, myStrategy);
