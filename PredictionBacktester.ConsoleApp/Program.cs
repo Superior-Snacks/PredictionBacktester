@@ -93,24 +93,25 @@ while (true)
             await RunDynamicPortfolioBacktest(repository, engine);
             break;
         case "7":
-            // 1. Define ALL the levers you want to test
-            decimal[] fastSmas = { 3, 5, 7 };
-            decimal[] slowSmas = { 15, 20, 25 };
-            decimal[] takeProfits = { 0.85m, 0.90m, 0.95m }; // Let's optimize the profit target!
-            decimal[] riskPcts = { 0.02m, 0.05m }; // Let's test 2% risk vs 5% risk!
+            // 1. Define the levers for RSI
+            decimal[] rsiPeriods = { 7, 10, 14 }; // How fast the rubber band reacts
+            decimal[] oversoldLevels = { 20, 30, 40 }; // How deep the panic needs to be to buy YES
+            decimal[] overboughtLevels = { 60, 70, 80 }; // How high the greed needs to be to buy NO
+            decimal[] takeProfits = { 0.85m }; // Locking this in based on previous findings!
+            decimal[] riskPcts = { 0.05m }; // Locking this in too!
 
-            // 2. Pack them into the N-Dimensional Grid
-            decimal[][] grid = { fastSmas, slowSmas, takeProfits, riskPcts };
+            decimal[][] rsiGrid = { rsiPeriods, oversoldLevels, overboughtLevels, takeProfits, riskPcts };
 
-            // 3. The Factory: Map the array indexes to your constructor!
-            // combo[0] = Fast Sma
-            // combo[1] = Slow Sma
-            // combo[2] = Take Profit
-            // combo[3] = Risk Percentage
-            Func<decimal[], IStrategy> smaBuilder = (combo) =>
-                new CandleSmaCrossoverStrategy(TimeSpan.FromHours(1), (int)combo[0], (int)combo[1], combo[3], 24, 10000m, combo[2]);
+            // 2. Map the array to the RSI Constructor!
+            // combo[0] = Period
+            // combo[1] = Oversold
+            // combo[2] = Overbought
+            // combo[3] = Take Profit
+            // combo[4] = Risk
+            Func<decimal[], IStrategy> rsiBuilder = (combo) =>
+                new RsiReversionStrategy(TimeSpan.FromHours(1), (int)combo[0], combo[1], combo[2], combo[4], 24, 10000m, combo[3]);
 
-            await RunUniversalOptimizer(repository, engine, grid, smaBuilder, "SMA Crossover (4D)");
+            await RunUniversalOptimizer(repository, engine, rsiGrid, rsiBuilder, "RSI Mean Reversion (5D)");
             break;
         case "8":
             Console.WriteLine("Exiting...");
@@ -416,7 +417,7 @@ async Task RunDynamicPortfolioBacktest(PolymarketRepository repo, BacktestRunner
     // Volume Window: 24 Hours
     // Min Volume: $10,000
     // Take Profit: $0.90
-    IStrategy myStrategy = new CandleSmaCrossoverStrategy(TimeSpan.FromHours(1), 7, 15, 0.02m, 24, 10000m, 0.90m);
+    IStrategy myStrategy = new CandleSmaCrossoverStrategy(TimeSpan.FromHours(1), 7, 15, 0.05m, 24, 100m, 0.85m);
 
     // 4. Run the Portfolio Engine
     await engine.RunPortfolioSimulationAsync(dynamicMarketIds, startDate, endDate, myStrategy);
