@@ -60,7 +60,7 @@ while (true)
     Console.WriteLine("4. Explore Market & Trade Data");
     Console.WriteLine("5. Explore Live API Data (Raw JSON)");
     Console.WriteLine("6. Run Portfolio Backtest (Dynamic Multi-Market)");
-    Console.WriteLine("7. topup open  markets");
+    Console.WriteLine("7. RunUniversalOptimizer");
     Console.WriteLine("8. exit");
     Console.Write("\nSelect an option (1-8): ");
 
@@ -93,7 +93,24 @@ while (true)
             await RunDynamicPortfolioBacktest(repository, engine);
             break;
         case "7":
-            await RunActiveMarketSync(apiClient, repository);
+            // 1. Define ALL the levers you want to test
+            decimal[] fastSmas = { 3, 5, 7 };
+            decimal[] slowSmas = { 15, 20, 25 };
+            decimal[] takeProfits = { 0.85m, 0.90m, 0.95m }; // Let's optimize the profit target!
+            decimal[] riskPcts = { 0.02m, 0.05m }; // Let's test 2% risk vs 5% risk!
+
+            // 2. Pack them into the N-Dimensional Grid
+            decimal[][] grid = { fastSmas, slowSmas, takeProfits, riskPcts };
+
+            // 3. The Factory: Map the array indexes to your constructor!
+            // combo[0] = Fast Sma
+            // combo[1] = Slow Sma
+            // combo[2] = Take Profit
+            // combo[3] = Risk Percentage
+            Func<decimal[], IStrategy> smaBuilder = (combo) =>
+                new CandleSmaCrossoverStrategy(TimeSpan.FromHours(1), (int)combo[0], (int)combo[1], combo[3], 24, 10000m, combo[2]);
+
+            await RunUniversalOptimizer(repository, engine, grid, smaBuilder, "SMA Crossover (4D)");
             break;
         case "8":
             Console.WriteLine("Exiting...");
@@ -102,6 +119,29 @@ while (true)
             Console.WriteLine("Invalid option.");
             break;
     }
+}
+
+// This math magic takes [[1, 2], [A, B], [X, Y]] and generates:
+// [1, A, X], [1, A, Y], [1, B, X], [1, B, Y]...
+List<decimal[]> GenerateCombinations(decimal[][] arrays)
+{
+    var result = new List<decimal[]> { Array.Empty<decimal>() };
+    foreach (var array in arrays)
+    {
+        var temp = new List<decimal[]>();
+        foreach (var existingCombo in result)
+        {
+            foreach (var item in array)
+            {
+                var newCombo = new decimal[existingCombo.Length + 1];
+                existingCombo.CopyTo(newCombo, 0);
+                newCombo[newCombo.Length - 1] = item;
+                temp.Add(newCombo);
+            }
+        }
+        result = temp;
+    }
+    return result;
 }
 
 // ==========================================
@@ -376,10 +416,67 @@ async Task RunDynamicPortfolioBacktest(PolymarketRepository repo, BacktestRunner
     // Volume Window: 24 Hours
     // Min Volume: $10,000
     // Take Profit: $0.90
-    IStrategy myStrategy = new CandleSmaCrossoverStrategy(TimeSpan.FromHours(1), 5, 25, 0.02m, 24, 10m, 0.8m);
+    IStrategy myStrategy = new CandleSmaCrossoverStrategy(TimeSpan.FromHours(1), 7, 15, 0.02m, 24, 10000m, 0.90m);
 
     // 4. Run the Portfolio Engine
     await engine.RunPortfolioSimulationAsync(dynamicMarketIds, startDate, endDate, myStrategy);
+}
+
+async Task RunUniversalOptimizer(
+    PolymarketRepository repo,
+    BacktestRunner engine,
+    decimal[][] parameterSpace,
+    Func<decimal[], IStrategy> strategyFactory,
+    string strategyName)
+{
+    Console.WriteLine($"\n--- N-DIMENSIONAL OPTIMIZER: {strategyName} ---");
+
+    DateTime startDate = new DateTime(2024, 7, 1);
+    DateTime endDate = new DateTime(2024, 11, 1);
+    var marketIds = await repo.GetActiveMarketsInDateRangeAsync(startDate, endDate);
+
+    // 1. Generate every possible combination of your parameters
+    var allCombinations = GenerateCombinations(parameterSpace);
+    int totalTests = allCombinations.Count;
+
+    Console.WriteLine($"Generated {totalTests} unique parameter combinations to test. Starting engine...\n");
+
+    var results = new List<PortfolioResult>();
+    int currentTest = 1;
+
+    // 2. Loop through the generated combinations
+    foreach (var combo in allCombinations)
+    {
+        // Print the combo to the screen so you know what's running
+        string comboString = string.Join(", ", combo.Select(p => p.ToString("0.##")));
+        Console.Write($"Testing [{currentTest}/{totalTests}] - Params: [{comboString}]... ");
+
+        // 3. Ask the factory to build the strategy with this specific combo array!
+        IStrategy strategy = strategyFactory(combo);
+
+        var result = await engine.RunPortfolioSimulationAsync(marketIds, startDate, endDate, strategy, isSilent: true);
+
+        result.Parameters = combo; // Save the array to the scorecard!
+        results.Add(result);
+
+        Console.WriteLine($"Return: {result.TotalReturn:F2}%, Win: {result.WinRate:F2}%");
+        currentTest++;
+    }
+
+    // 4. PRINT THE LEADERBOARD
+    Console.WriteLine("\n=========================================");
+    Console.WriteLine($"          {strategyName.ToUpper()} LEADERBOARD       ");
+    Console.WriteLine("=========================================");
+
+    var topResults = results.OrderByDescending(r => r.TotalReturn).Take(5).ToList();
+
+    for (int i = 0; i < topResults.Count; i++)
+    {
+        var r = topResults[i];
+        string bestComboStr = string.Join(" | ", r.Parameters.Select(p => $"{p,5:0.##}"));
+        Console.WriteLine($"#{i + 1} | Params: [{bestComboStr}] | Return: {r.TotalReturn:F2}% | Win: {r.WinRate:F2}% | Trades: {r.TotalTrades}");
+    }
+    Console.WriteLine("=========================================");
 }
 
 async Task RunActiveMarketSync(PolymarketClient api, PolymarketRepository repo)

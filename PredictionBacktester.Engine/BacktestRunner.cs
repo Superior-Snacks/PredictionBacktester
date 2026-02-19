@@ -119,11 +119,14 @@ public class BacktestRunner
         Console.WriteLine($"Total Return: {((finalPortfolioValue - 1000m) / 1000m) * 100m:F2}%");
         Console.WriteLine($"--- BACKTEST COMPLETE ---");
     }
-    public async Task RunPortfolioSimulationAsync(List<string> marketIds, DateTime startDate, DateTime endDate, IStrategy strategy)
+    public async Task<PortfolioResult> RunPortfolioSimulationAsync(List<string> marketIds, DateTime startDate, DateTime endDate, IStrategy strategy, bool isSilent = false)
     {
-        Console.WriteLine($"\n--- STARTING PORTFOLIO BACKTEST ---");
-        Console.WriteLine($"Strategy: {strategy.GetType().Name}");
-        Console.WriteLine($"Markets Analyzed: {marketIds.Count}\n");
+        if (!isSilent)
+        {
+            Console.WriteLine($"\n--- STARTING PORTFOLIO BACKTEST ---");
+            Console.WriteLine($"Strategy: {strategy.GetType().Name}");
+            Console.WriteLine($"Markets Analyzed: {marketIds.Count}\n");
+        }
 
         long startUnix = ((DateTimeOffset)startDate).ToUnixTimeSeconds();
         long endUnix = ((DateTimeOffset)endDate).ToUnixTimeSeconds();
@@ -199,20 +202,31 @@ public class BacktestRunner
         decimal totalReturn = totalStartingCapital > 0 ? ((totalEndingCapital - totalStartingCapital) / totalStartingCapital) * 100m : 0;
         decimal winRate = grandTotalTrades > 0 ? ((decimal)grandWinningTrades / grandTotalTrades) * 100m : 0;
 
-        Console.WriteLine($"=========================================");
-        Console.WriteLine($"          TRUE PORTFOLIO REPORT          ");
-        Console.WriteLine($"=========================================");
-        Console.WriteLine($"Total Markets Traded: {marketIds.Count}");
-        Console.WriteLine($"Initial Capital:      ${totalStartingCapital:F2} ($1k per market)");
-        Console.WriteLine($"Ending Capital:       ${totalEndingCapital:F2}");
-        Console.WriteLine($"Total Return:         {totalReturn:F2}%");
-        Console.WriteLine($"-----------------------------------------");
-        Console.WriteLine($"Total Trades:         {grandTotalTrades}");
-        Console.WriteLine($"Winning Trades:       {grandWinningTrades}");
-        Console.WriteLine($"Losing Trades:        {grandLosingTrades}");
-        Console.WriteLine($"Win Rate:             {winRate:F2}%");
-        Console.WriteLine($"=========================================");
+        if (!isSilent)
+        {
+            Console.WriteLine($"=========================================");
+            Console.WriteLine($"          TRUE PORTFOLIO REPORT          ");
+            Console.WriteLine($"=========================================");
+            Console.WriteLine($"Total Markets Traded: {marketIds.Count}");
+            Console.WriteLine($"Initial Capital:      ${totalStartingCapital:F2} ($1k per market)");
+            Console.WriteLine($"Ending Capital:       ${totalEndingCapital:F2}");
+            Console.WriteLine($"Total Return:         {totalReturn:F2}%");
+            Console.WriteLine($"-----------------------------------------");
+            Console.WriteLine($"Total Trades:         {grandTotalTrades}");
+            Console.WriteLine($"Winning Trades:       {grandWinningTrades}");
+            Console.WriteLine($"Losing Trades:        {grandLosingTrades}");
+            Console.WriteLine($"Win Rate:             {winRate:F2}%");
+            Console.WriteLine($"=========================================");
+        }
 
+        // 3. RETURN THE SCORECARD
+        return new PortfolioResult
+        {
+            TotalReturn = totalReturn,
+            WinRate = winRate,
+            TotalTrades = grandTotalTrades
+        };
+        /*
         // Save the CSV to your Desktop!
         string desktopPath = Environment.GetFolderPath(Environment.SpecialFolder.Desktop);
         string filePath = Path.Combine(desktopPath, "Polymarket_Portfolio_Trades.csv");
@@ -221,6 +235,6 @@ public class BacktestRunner
         Console.WriteLine($"\n[DATA SAVED] Exported {masterLedger.Count} detailed trades.");
         Console.WriteLine($"FILE PATH: {filePath}"); // <-- THIS WILL REVEAL THE HIDING SPOT
 
-        Console.WriteLine($"\n[DATA SAVED] Exported {masterLedger.Count} detailed trades to your Desktop!");
+        Console.WriteLine($"\n[DATA SAVED] Exported {masterLedger.Count} detailed trades to your Desktop!");*/
     }
 }
