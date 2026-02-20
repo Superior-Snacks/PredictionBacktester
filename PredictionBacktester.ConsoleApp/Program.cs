@@ -117,21 +117,29 @@ while (true)
             // --- LEVERS FOR CASE 7 ---
             DateTime case7Start = new DateTime(2024, 1, 1);
             DateTime case7End = new DateTime(2025, 12, 1);
-            string case7Keyword = "Bitcoin"; // e.g., "Bitcoin", "Trump", "NFL"
+            string case7Keyword = "Trump"; // e.g., "Bitcoin", "Trump", "NFL" Election
 
-            decimal[] rsiPeriods = { 7, 10 };
-            decimal[] smaPeriods = { 20, 50 };
-            decimal[] oversoldLevels = { 30, 40 };
-            decimal[] overboughtLevels = { 70, 80 };
+            // Let's test this strictly on Politics, since news breakouts happen constantly in elections!
+            // (Make sure your repository call is set to "Election" or "Trump" or "Harris")
+
+            // 1. Define the Levers for Bollinger
+            decimal[] bollingerPeriods = { 10, 20 }; // Fast vs Slow moving average base
+            decimal[] standardDeviations = { 1.5m, 2.0m, 2.5m }; // How violent does the breakout need to be?
             decimal[] takeProfits = { 0.85m };
+            decimal[] stopLosses = { 0.15m, 1.00m }; // Test tight leash vs no leash
             decimal[] riskPcts = { 0.05m };
 
-            decimal[][] hybridGrid = { rsiPeriods, smaPeriods, oversoldLevels, overboughtLevels, takeProfits, riskPcts };
+            decimal[][] bollingerGrid = { bollingerPeriods, standardDeviations, takeProfits, stopLosses, riskPcts };
 
-            Func<decimal[], IStrategy> hybridBuilder = (combo) =>
-                new HybridConfluenceStrategy(TimeSpan.FromHours(1), (int)combo[0], (int)combo[1], combo[2], combo[3], combo[5], 24, 10000m, combo[4]);
-
-            await RunUniversalOptimizer(repository, engine, hybridGrid, hybridBuilder, case7Start, case7End, case7Keyword, "Hybrid Confluence (SMA + RSI)");
+            // 2. Map the array to the Bollinger Constructor!
+            // combo[0] = Period
+            // combo[1] = Multiplier (StdDev)
+            // combo[2] = Take Profit
+            // combo[3] = Stop Loss
+            // combo[4] = Risk
+            Func<decimal[], IStrategy> bollingerBuilder = (combo) =>
+                new BollingerBreakoutStrategy(TimeSpan.FromHours(1), (int)combo[0], combo[1], combo[4], 24, 10000m, combo[2], combo[3]);
+            await RunUniversalOptimizer(repository, engine, bollingerGrid, bollingerBuilder, case7Start, case7End, case7Keyword, "Hybrid Confluence (SMA + RSI)");
             break;
 
         case "8":
