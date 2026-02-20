@@ -203,8 +203,6 @@ public class BacktestRunner
             grandLosingTrades += localBroker.LosingTrades;
 
             masterLedger.AddRange(localBroker.TradeLedger);
-
-            masterLedger.AddRange(localBroker.TradeLedger);
         }
 
         // --- PRINT TRUE PORTFOLIO RESULTS ---
@@ -220,6 +218,7 @@ public class BacktestRunner
             Console.WriteLine($"Initial Capital:      ${totalStartingCapital:F2} ($1k per market)");
             Console.WriteLine($"Ending Capital:       ${totalEndingCapital:F2}");
             Console.WriteLine($"Total Return:         {totalReturn:F2}%");
+            Console.WriteLine($"Profit-Loss:          ${(totalEndingCapital - totalStartingCapital):F2}");
             Console.WriteLine($"-----------------------------------------");
             Console.WriteLine($"Total Trades:         {grandTotalTrades}");
             Console.WriteLine($"Winning Trades:       {grandWinningTrades}");
@@ -243,7 +242,8 @@ public class BacktestRunner
         {
             TotalReturn = totalReturn,
             WinRate = winRate,
-            TotalTrades = grandTotalTrades
+            TotalTrades = grandTotalTrades,
+            NetProfit = totalEndingCapital - totalStartingCapital
         };
     }
 }

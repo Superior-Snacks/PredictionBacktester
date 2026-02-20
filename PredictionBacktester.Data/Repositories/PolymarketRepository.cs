@@ -14,15 +14,24 @@ public class PolymarketRepository
         _dbContext = dbContext;
     }
 
-    public async Task<List<string>> GetActiveOutcomesInDateRangeAsync(DateTime startDate, DateTime endDate)
+    public async Task<List<string>> GetActiveOutcomesInDateRangeAsync(DateTime startDate, DateTime endDate, string keyword = null)
     {
         long startUnix = ((DateTimeOffset)startDate).ToUnixTimeSeconds();
         long endUnix = ((DateTimeOffset)endDate).ToUnixTimeSeconds();
 
-        // Fetches every unique Outcome ID that had trading activity during this time
-        return await _dbContext.Trades
-            .Where(t => t.Timestamp >= startUnix && t.Timestamp <= endUnix)
-            .Select(t => t.OutcomeId)
+        var query = _dbContext.Trades
+            .Join(_dbContext.Outcomes, t => t.OutcomeId, o => o.OutcomeId, (t, o) => new { t, o.MarketId })
+            .Join(_dbContext.Markets, x => x.MarketId, m => m.MarketId, (x, m) => new { x.t, m.Title })
+            .Where(x => x.t.Timestamp >= startUnix && x.t.Timestamp <= endUnix);
+
+        // THE DOMAIN FILTER!
+        if (!string.IsNullOrEmpty(keyword))
+        {
+            query = query.Where(x => EF.Functions.Like(x.Title, $"%{keyword}%"));
+        }
+
+        return await query
+            .Select(x => x.t.OutcomeId)
             .Distinct()
             .ToListAsync();
     }

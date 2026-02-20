@@ -8,4 +8,5 @@ public class PortfolioResult
     public decimal TotalReturn { get; set; }
     public decimal WinRate { get; set; }
     public int TotalTrades { get; set; }
+    public decimal NetProfit { get; set; }
 }

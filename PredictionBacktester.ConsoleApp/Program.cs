@@ -89,6 +89,24 @@ while (true)
             await engine.RunMarketSimulationAsync(targetMarketId, start, end, microscopeStrategy, 1000m);
             break;
         case "4":
+            Console.WriteLine("\n--- REVERSE LOOKUP ---");
+            Console.Write("Enter an Outcome ID to identify it (or press Enter to search by name): ");
+            var outcomeSearch = Console.ReadLine()?.Trim();
+
+            if (!string.IsNullOrEmpty(outcomeSearch) && outcomeSearch.Length > 20)
+            {
+                var foundOutcome = await dbContext.Outcomes
+                    .Include(o => o.Market) // Pull the parent market too!
+                    .FirstOrDefaultAsync(o => o.OutcomeId == outcomeSearch);
+
+                if (foundOutcome != null)
+                {
+                    Console.WriteLine($"\n[TARGET IDENTIFIED]");
+                    Console.WriteLine($"Market: {foundOutcome.Market?.Title}");
+                    Console.WriteLine($"Outcome: {foundOutcome.OutcomeName}");
+                    break; // Skip the rest of Option 4
+                }
+            }
             // Pass the database context directly to our new viewer
             await ExploreMarketData(dbContext);
             break;
@@ -96,30 +114,35 @@ while (true)
             await ExploreLiveApiData(apiClient);
             break;
         case "6":
-            Func<IStrategy> strategyFactory = () => new RsiReversionStrategy(TimeSpan.FromHours(1), 14, 20m, 80m, 0.05m, 24, 10000m, 0.85m);
+            //Func<IStrategy> strategyFactory = () => new RsiReversionStrategy(TimeSpan.FromHours(1), 14, 20m, 80m, 0.05m, 24, 10000m, 0.85m);
             //var result = await engine.RunPortfolioSimulationAsync(dynamicOutcomeIds, startDate, endDate, strategyFactory);
             await RunDynamicPortfolioBacktest(repository, engine);
             break;
         case "7":
-            // 1. Define the levers for RSI
-            decimal[] rsiPeriods = { 7, 10, 14 }; // How fast the rubber band reacts
-            decimal[] oversoldLevels = { 20, 30, 40 }; // How deep the panic needs to be to buy YES
-            decimal[] overboughtLevels = { 60, 70, 80 }; // How high the greed needs to be to buy NO
-            decimal[] takeProfits = { 0.85m }; // Locking this in based on previous findings!
-            decimal[] riskPcts = { 0.05m }; // Locking this in too!
+            // 1. Define the levers
+            // 1. Define the Crypto-Specific levers
+            decimal[] rsiPeriods = { 7, 10 };
+            decimal[] smaPeriods = { 20, 50 }; // Faster compasses! 100 is too slow for Crypto.
 
-            decimal[][] rsiGrid = { rsiPeriods, oversoldLevels, overboughtLevels, takeProfits, riskPcts };
+            // Loosening the trigger: We will now buy shallower dips (30, 40) instead of waiting for 20
+            decimal[] oversoldLevels = { 30, 40 };
+            decimal[] overboughtLevels = { 70, 80 };
+            decimal[] takeProfits = { 0.85m };
+            decimal[] riskPcts = { 0.05m };
 
-            // 2. Map the array to the RSI Constructor!
-            // combo[0] = Period
-            // combo[1] = Oversold
-            // combo[2] = Overbought
-            // combo[3] = Take Profit
-            // combo[4] = Risk
-            Func<decimal[], IStrategy> rsiBuilder = (combo) =>
-                new RsiReversionStrategy(TimeSpan.FromHours(1), (int)combo[0], combo[1], combo[2], combo[4], 24, 10000m, combo[3]);
+            decimal[][] hybridGrid = { rsiPeriods, smaPeriods, oversoldLevels, overboughtLevels, takeProfits, riskPcts };
 
-            await RunUniversalOptimizer(repository, engine, rsiGrid, rsiBuilder, "RSI Mean Reversion (5D)");
+            // 2. Map the array to the Hybrid Constructor!
+            // combo[0] = RSI Period
+            // combo[1] = SMA Period
+            // combo[2] = Oversold
+            // combo[3] = Overbought
+            // combo[4] = Take Profit
+            // combo[5] = Risk
+            Func<decimal[], IStrategy> hybridBuilder = (combo) =>
+                new HybridConfluenceStrategy(TimeSpan.FromHours(1), (int)combo[0], (int)combo[1], combo[2], combo[3], combo[5], 24, 10000m, combo[4]);
+
+            await RunUniversalOptimizer(repository, engine, hybridGrid, hybridBuilder, "Hybrid Confluence (SMA + RSI)");
             break;
         /*case "7":
             // 1. Define ALL the levers you want to test
@@ -428,21 +451,24 @@ async Task RunDynamicPortfolioBacktest(PolymarketRepository repo, BacktestRunner
     Console.WriteLine($"\nScanning database for outcomes active between {startDate.ToShortDateString()} and {endDate.ToShortDateString()}...");
 
     // 2. THE FIX: Fetch OUTCOMES instead of MARKETS!
-    var dynamicOutcomeIds = await repo.GetActiveOutcomesInDateRangeAsync(startDate, endDate);
+    //var dynamicOutcomeIds = await repo.GetActiveOutcomesInDateRangeAsync(startDate, endDate);
 
-    if (dynamicOutcomeIds.Count == 0)
+    string domainKeyword = "Bitcoin"; // Try "Bitcoin", "Trump", "Election", or "NFL"
+    var outcomeIds = await repo.GetActiveOutcomesInDateRangeAsync(startDate, endDate, domainKeyword);
+
+    if (outcomeIds.Count == 0)
     {
         Console.WriteLine("\n[ERROR] No outcomes found with trades in that date range. Try expanding your dates!");
         return;
     }
 
-    Console.WriteLine($"Found {dynamicOutcomeIds.Count} active outcomes! Initializing Time Machine...\n");
+    Console.WriteLine($"Found {outcomeIds.Count} active outcomes! Initializing Time Machine...\n");
 
     // 3. THE STRATEGY: Your #1 RSI Black Swan Hunter
     // Params: [ Period: 14 | Oversold: 20 | Overbought: 80 | Risk: 0.05 | Take Profit: 0.85 ]
-    Func<IStrategy> strategyFactory = () => new RsiReversionStrategy(TimeSpan.FromHours(1), 14, 20m, 80m, 0.05m, 24, 10000m, 0.85m);
+    Func<IStrategy> strategyFactory = () => new HybridConfluenceStrategy(TimeSpan.FromHours(1), 7, 50, 40m, 70m, 0.05m, 24, 10000m, 0.85m);
     // 4. Run the Portfolio Engine
-    var result = await engine.RunPortfolioSimulationAsync(dynamicOutcomeIds, startDate, endDate, strategyFactory);
+    var result = await engine.RunPortfolioSimulationAsync(outcomeIds, startDate, endDate, strategyFactory);
 }
 
 async Task RunUniversalOptimizer(
@@ -455,9 +481,17 @@ async Task RunUniversalOptimizer(
 {
     Console.WriteLine($"\n--- N-DIMENSIONAL OPTIMIZER: {strategyName} ---");
 
-    DateTime startDate = new DateTime(2024, 7, 1);
-    DateTime endDate = new DateTime(2024, 11, 1);
-    var outcomeIds = await repo.GetActiveOutcomesInDateRangeAsync(startDate, endDate);
+    //DateTime startDate = new DateTime(2024, 7, 1);
+    //DateTime endDate = new DateTime(2024, 11, 1);
+    DateTime startDate = new DateTime(2024, 1, 1);
+    DateTime endDate = new DateTime(2025, 12, 1);
+
+
+    //var outcomeIds = await repo.GetActiveOutcomesInDateRangeAsync(startDate, endDate);
+
+    string domainKeyword = "Bitcoin"; // Try "Bitcoin", "Trump", "Election", or "NFL"
+    var outcomeIds = await repo.GetActiveOutcomesInDateRangeAsync(startDate, endDate, domainKeyword);
+
     // 1. Generate every possible combination of your parameters
     var allCombinations = GenerateCombinations(parameterSpace);
     int totalTests = allCombinations.Count;
@@ -496,7 +530,9 @@ async Task RunUniversalOptimizer(
     {
         var r = topResults[i];
         string bestComboStr = string.Join(" | ", r.Parameters.Select(p => $"{p,5:0.##}"));
-        Console.WriteLine($"#{i + 1} | Params: [{bestComboStr}] | Return: {r.TotalReturn:F2}% | Win: {r.WinRate:F2}% | Trades: {r.TotalTrades}");
+
+        // ADD THE RAW DOLLAR PROFIT TO THE PRINTOUT
+        Console.WriteLine($"#{i + 1} | Params: [{bestComboStr}] | PnL: ${r.NetProfit,7:F2} | Win: {r.WinRate:F2}% | Trades: {r.TotalTrades}");
     }
     Console.WriteLine("=========================================");
 }
