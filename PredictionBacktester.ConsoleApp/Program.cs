@@ -115,31 +115,24 @@ while (true)
 
         case "7":
             // --- LEVERS FOR CASE 7 ---
-            DateTime case7Start = new DateTime(2024, 1, 1);
-            DateTime case7End = new DateTime(2025, 12, 1);
-            string case7Keyword = "Trump"; // e.g., "Bitcoin", "Trump", "NFL" Election
-
-            // Let's test this strictly on Politics, since news breakouts happen constantly in elections!
-            // (Make sure your repository call is set to "Election" or "Trump" or "Harris")
-
-            // 1. Define the Levers for Bollinger
-            decimal[] bollingerPeriods = { 10, 20 }; // Fast vs Slow moving average base
-            decimal[] standardDeviations = { 1.5m, 2.0m, 2.5m }; // How violent does the breakout need to be?
+            DateTime case7Start = new DateTime(2024, 7, 1);
+            DateTime case7End = new DateTime(2024, 11, 1);
+            string case7Keyword = "";
+            // 1. Define the Levers for Smart Money Volume Tracker
+            decimal[] volumePeriods = { 24, 48, 72 }; // How far back defines "normal" volume?
+            decimal[] volumeMultipliers = { 3.0m, 5.0m, 10.0m }; // How massive must the spike be? (3x, 5x, 10x)
             decimal[] takeProfits = { 0.85m };
-            decimal[] stopLosses = { 0.15m, 1.00m }; // Test tight leash vs no leash
             decimal[] riskPcts = { 0.05m };
+            decimal[] stopLosses = { 0.15m, 0.25m }; // Keep a tight leash in case it's a fakeout
 
-            decimal[][] bollingerGrid = { bollingerPeriods, standardDeviations, takeProfits, stopLosses, riskPcts };
+            decimal[][] volumeGrid = { volumePeriods, volumeMultipliers, takeProfits, riskPcts, stopLosses };
 
-            // 2. Map the array to the Bollinger Constructor!
-            // combo[0] = Period
-            // combo[1] = Multiplier (StdDev)
-            // combo[2] = Take Profit
-            // combo[3] = Stop Loss
-            // combo[4] = Risk
-            Func<decimal[], IStrategy> bollingerBuilder = (combo) =>
-                new BollingerBreakoutStrategy(TimeSpan.FromHours(1), (int)combo[0], combo[1], combo[4], 24, 10000m, combo[2], combo[3]);
-            await RunUniversalOptimizer(repository, engine, bollingerGrid, bollingerBuilder, case7Start, case7End, case7Keyword, "Hybrid Confluence (SMA + RSI)");
+            Func<decimal[], IStrategy> volumeBuilder = (combo) =>
+                new VolumeAnomalyStrategy(TimeSpan.FromHours(1), (int)combo[0], combo[1], combo[3], combo[2], combo[4]);
+
+            // Feel free to test this on "Bitcoin", "Election", or just the whole exchange!
+            // var outcomeIds = await repo.GetActiveOutcomesInDateRangeAsync(startDate, endDate);
+            await RunUniversalOptimizer(repository, engine, volumeGrid, volumeBuilder, case7Start, case7End, case7Keyword, "Hybrid Confluence (SMA + RSI)");
             break;
 
         case "8":
