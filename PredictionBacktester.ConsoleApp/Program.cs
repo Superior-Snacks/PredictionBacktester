@@ -45,9 +45,10 @@ while (true)
     Console.WriteLine("4. Explore Market & Trade Data");
     Console.WriteLine("5. Explore Live API Data (Raw JSON)");
     Console.WriteLine("6. Run Portfolio Backtest (Dynamic Multi-Market)");
-    Console.WriteLine("7. Run Universal Optimizer");
+    Console.WriteLine("7. Run Universal Optimizer"); 
     Console.WriteLine("8. Exit");
-    Console.Write("\nSelect an option (1-8): ");
+    Console.WriteLine("9. [DANGER] Reset Entire Database");
+    Console.Write("\nSelect an option (1-9): ");
 
     var choice = Console.ReadLine();
 
@@ -138,6 +139,24 @@ while (true)
         case "8":
             Console.WriteLine("Exiting...");
             return;
+        case "9":
+            Console.WriteLine("\n[WARNING] This will delete all Markets, Outcomes, and Trades.");
+            Console.Write("Are you sure? Type 'YES' to confirm: ");
+            if (Console.ReadLine() == "YES")
+            {
+                Console.WriteLine("Deleting database...");
+                await dbContext.Database.EnsureDeletedAsync();
+
+                Console.WriteLine("Rebuilding schema...");
+                await dbContext.Database.MigrateAsync();
+
+                Console.WriteLine("[SUCCESS] Database has been wiped and rebuilt clean!");
+            }
+            else
+            {
+                Console.WriteLine("Aborted. Database is safe.");
+            }
+            break;
 
         default:
             Console.WriteLine("Invalid option.");
