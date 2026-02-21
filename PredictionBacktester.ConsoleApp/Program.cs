@@ -120,21 +120,23 @@ while (true)
             DateTime case7Start = new DateTime(2024, 7, 1);
             DateTime case7End = new DateTime(2024, 11, 1);
             string case7Keyword = "";
-            // 1. Define the Levers for Smart Money Volume Tracker
-            decimal[] volumePeriods = { 24, 48, 72 }; // How far back defines "normal" volume?
-            decimal[] volumeMultipliers = { 3.0m, 5.0m, 10.0m }; // How massive must the spike be? (3x, 5x, 10x)
-            decimal[] takeProfits = { 0.85m };
+            // 1. Define the Levers for the Flash Crash Sniper
+            decimal[] crashThresholds = { 0.10m, 0.15m, 0.20m }; // Drop of 10c, 15c, or 20c
+            decimal[] timeWindows = { 30, 60, 300 }; // Happened in 30 seconds, 1 minute, or 5 minutes?
+            decimal[] reboundMargins = { 0.03m, 0.05m, 0.10m }; // Quick 3c scalp, or wait for 10c rebound?
             decimal[] riskPcts = { 0.05m };
-            decimal[] stopLosses = { 0.15m, 0.25m }; // Keep a tight leash in case it's a fakeout
 
-            decimal[][] volumeGrid = { volumePeriods, volumeMultipliers, takeProfits, riskPcts, stopLosses };
+            decimal[][] sniperGrid = { crashThresholds, timeWindows, reboundMargins, riskPcts };
 
-            Func<decimal[], IStrategy> volumeBuilder = (combo) =>
-                new VolumeAnomalyStrategy(TimeSpan.FromHours(1), (int)combo[0], combo[1], combo[3], combo[2], combo[4]);
+            // combo[0] = Crash Threshold
+            // combo[1] = Time Window (seconds)
+            // combo[2] = Rebound Margin
+            // combo[3] = Risk %
+            Func<decimal[], IStrategy> sniperBuilder = (combo) =>
+                new FlashCrashSniperStrategy(combo[0], (long)combo[1], combo[2], combo[3]);
 
-            // Feel free to test this on "Bitcoin", "Election", or just the whole exchange!
-            // var outcomeIds = await repo.GetActiveOutcomesInDateRangeAsync(startDate, endDate);
-            await RunUniversalOptimizer(repository, engine, volumeGrid, volumeBuilder, case7Start, case7End, case7Keyword, "Hybrid Confluence (SMA + RSI)");
+            // Test it on everything!
+            await RunUniversalOptimizer(repository, engine, sniperGrid, sniperBuilder, case7Start, case7End, case7Keyword, "HFT Flash Crash Sniper");
             break;
 
         case "8":
