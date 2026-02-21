@@ -25,7 +25,7 @@ public class PolymarketClient
     public async Task<List<PolymarketEventResponse>> GetActiveEventsAsync(int limit = 100, int offset = 0, bool oldestFirst = true)
     {
         // 1. Let's remove the 'active' and 'closed' filters temporarily to force it to give us ANYTHING
-        var url = $"events?limit={limit}&offset={offset}";
+        var url = $"events?limit={limit}&offset={offset}&order=startDate&ascending=false";
         try
         {
             // 2. Instead of direct JSON conversion, let's download the raw string first

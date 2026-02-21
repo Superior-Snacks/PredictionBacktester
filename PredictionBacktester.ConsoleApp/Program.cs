@@ -40,7 +40,7 @@ while (true)
     Console.WriteLine("    POLYMARKET BACKTESTER ENGINE     ");
     Console.WriteLine("=====================================");
     Console.WriteLine("1. Run Standard Ingestion (Sync New Markets)");
-    Console.WriteLine("2. Run Deep Sync (Fix 3000+ Trade Markets)");
+    Console.WriteLine("3. Run Smart Daily Sync (Update Open + Fetch New)");
     Console.WriteLine("3. Run Strategy Backtest (Time Machine)");
     Console.WriteLine("4. Explore Market & Trade Data");
     Console.WriteLine("5. Explore Live API Data (Raw JSON)");
@@ -59,7 +59,7 @@ while (true)
             break;
 
         case "2":
-            await RunDeepSync(apiClient, repository);
+            await RunSmartDailySync(apiClient, repository);
             break;
 
         case "3":
@@ -197,7 +197,7 @@ async Task RunStandardIngestion(PolymarketClient api, PolymarketRepository repo)
 {
     Console.WriteLine("Fetching Polymarket Events...");
     int marketLimit = 100;
-    int marketOffset = 30000;
+    int marketOffset = 0;
     bool hasMoreMarkets = true;
 
     Console.WriteLine("Starting full exchange sync...");
@@ -249,34 +249,6 @@ async Task RunStandardIngestion(PolymarketClient api, PolymarketRepository repo)
         }
         marketOffset += marketLimit;
     }
-}
-
-async Task RunDeepSync(PolymarketClient api, PolymarketRepository repo)
-{
-    Console.WriteLine("\nScanning database for incomplete markets...");
-    var incompleteMarkets = await repo.GetIncompleteMarketsAsync();
-    Console.WriteLine($"Found {incompleteMarkets.Count} markets that need Deep Sync.");
-
-    foreach (var kvp in incompleteMarkets)
-    {
-        string conditionId = kvp.Key;
-        long oldestTimestamp = kvp.Value;
-
-        Console.WriteLine($"\nDeep Syncing Market: {conditionId}");
-        var olderTrades = await api.GetTradesBeforeTimestampAsync(conditionId, oldestTimestamp);
-
-        if (olderTrades.Count > 0)
-        {
-            Console.WriteLine($"[SAVED] Recovered {olderTrades.Count} historical trades!");
-            await repo.SaveTradesAsync(olderTrades);
-        }
-        else
-        {
-            Console.WriteLine($"[COMPLETE] No older trades found.");
-        }
-        await Task.Delay(200);
-    }
-    Console.WriteLine("\nDeep Sync Finished.");
 }
 
 async Task ExploreMarketData(PolymarketDbContext db)
@@ -450,4 +422,93 @@ async Task RunUniversalOptimizer(
         Console.WriteLine($"#{i + 1} | Params: [{bestComboStr}] | PnL: ${r.NetProfit,7:F2} | Win: {r.WinRate:F2}% | Trades: {r.TotalTrades}");
     }
     Console.WriteLine("=========================================");
+}
+
+async Task RunSmartDailySync(PolymarketClient api, PolymarketRepository repo)
+{
+    Console.WriteLine("\n=========================================");
+    Console.WriteLine("   PHASE 1: UPDATING EXISTING MARKETS    ");
+    Console.WriteLine("=========================================");
+
+    // Grab all markets that haven't resolved yet
+    var openMarkets = await repo.GetOpenMarketIdsAsync();
+    Console.WriteLine($"Found {openMarkets.Count} open markets tracking in the database.\n");
+
+    foreach (var conditionId in openMarkets)
+    {
+        // 1. Did the market resolve since we last checked?
+        bool isClosed = await api.IsMarketClosedAsync(conditionId);
+        if (isClosed)
+        {
+            Console.WriteLine($"     [RESOLVED] Market {conditionId} has closed! Updating DB...");
+            await repo.MarkMarketClosedAsync(conditionId);
+        }
+
+        // 2. Find the exact timestamp of the newest trade we currently have
+        long? lastTradeTime = await repo.GetNewestTradeTimestampAsync(conditionId);
+        long stopTimestamp = lastTradeTime ?? 0;
+
+        // 3. Fetch only the new trades that happened AFTER that timestamp
+        var newTrades = await api.GetRecentTradesUntilAsync(conditionId, stopTimestamp);
+
+        if (newTrades.Count > 0)
+        {
+            Console.WriteLine($"     [SYNCED] {conditionId} -> Added {newTrades.Count} new trades.");
+            await repo.SaveTradesAsync(newTrades);
+        }
+
+        await Task.Delay(100); // Respect rate limits
+    }
+
+    Console.WriteLine("\n=========================================");
+    Console.WriteLine("   PHASE 2: FETCHING BRAND NEW MARKETS   ");
+    Console.WriteLine("=========================================");
+
+    int marketLimit = 100;
+    int marketOffset = 0;
+    bool caughtUpToExistingMarkets = false;
+
+    while (!caughtUpToExistingMarkets)
+    {
+        Console.WriteLine($"\n--- Scanning New Markets (Offset: {marketOffset}) ---");
+        var events = await api.GetActiveEventsAsync(limit: marketLimit, offset: marketOffset);
+
+        if (events == null || events.Count == 0) break;
+
+        foreach (var ev in events)
+        {
+            if (ev.Markets == null) continue;
+
+            foreach (var market in ev.Markets)
+            {
+                if (string.IsNullOrEmpty(market.ConditionId)) continue;
+
+                // SaveMarketAsync returns 'false' if the market is already in the DB
+                bool wasNewMarket = await repo.SaveMarketAsync(market);
+
+                if (wasNewMarket)
+                {
+                    Console.WriteLine($"     [NEW] {market.Question}");
+                    var trades = await api.GetAllTradesAsync(market.ConditionId);
+
+                    if (trades.Count > 0)
+                    {
+                        Console.WriteLine($"           -> Downloaded {trades.Count} initial trades.");
+                        await repo.SaveTradesAsync(trades);
+                    }
+                    await Task.Delay(100);
+                }
+                else
+                {
+                    // THE SMART BREAK: Because we sort newest->oldest, hitting a market 
+                    // we already know means we've officially caught up to the past!
+                    Console.WriteLine($"     [CAUGHT UP] Reached existing market: {market.Question}");
+                    caughtUpToExistingMarkets = true;
+                }
+            }
+        }
+        marketOffset += marketLimit;
+    }
+
+    Console.WriteLine("\n[SYNC COMPLETE] Your database is fully up to date!");
 }
