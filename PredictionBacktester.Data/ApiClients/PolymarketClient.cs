@@ -99,7 +99,8 @@ public class PolymarketClient
     }
 
     /// <summary>
-    /// Fetches ALL raw, tick-level trades for a specific market using pagination.
+    /// Fetches ALL raw, tick-level trades for a specific market using dynamic Timestamp Pagination.
+    /// This completely bypasses the API's 3000 offset limit for massive markets!
     /// </summary>
     public async Task<List<PolymarketTradeResponse>> GetAllTradesAsync(string conditionId)
     {
@@ -107,23 +108,44 @@ public class PolymarketClient
         int limit = 500; // Pull 500 trades per request
         int offset = 0;
 
+        // Start from "right now"
+        long currentTimestampLimit = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+
         while (true)
         {
-            // We append both limit and offset to the URL
-            var url = $"trades?market={conditionId}&limit={limit}&offset={offset}";
+            // We append limit, offset, AND the end_ts parameter
+            var url = $"trades?market={conditionId}&limit={limit}&offset={offset}&end_ts={currentTimestampLimit}";
 
             try
             {
                 var batch = await _dataClient.GetFromJsonAsync<List<PolymarketTradeResponse>>(url);
 
-                // If the API returns null or an empty list, we've reached the end!
                 if (batch == null || batch.Count == 0)
                 {
                     break;
                 }
 
                 allTrades.AddRange(batch);
-                offset += limit; // Move the cursor forward by 500 for the next loop
+                offset += limit;
+
+                // --- THE FIX: WHEN WE HIT THE API LIMIT, SHIFT TIME BACKWARD! ---
+                if (offset >= 3000)
+                {
+                    offset = 0; // Reset the offset back to 0
+                    long oldestInBatch = batch.Min(t => t.Timestamp);
+
+                    // SAFETY BREAK: If time didn't move backward, the API rejected our filter
+                    if (oldestInBatch >= currentTimestampLimit)
+                    {
+                        Console.WriteLine("     [API LIMIT] Server ignored timestamp. Hard cap reached for this market.");
+                        break;
+                    }
+
+                    // Subtract 1 second so we don't fetch the exact same trades again
+                    currentTimestampLimit = oldestInBatch - 1;
+
+                    Console.WriteLine($"     [SHIFT] Bypassing 3000 limit. Shifting time window to end_ts={currentTimestampLimit}...");
+                }
 
                 // If the API gave us less than 500 trades, we know it was the final page
                 if (batch.Count < limit)
@@ -131,14 +153,13 @@ public class PolymarketClient
                     break;
                 }
 
-                // RATE LIMITING: Pause for 100 milliseconds before asking for the next page.
-                // This ensures we only make 10 requests per second, keeping us safely under the limit.
+                // Rate limiting pause
                 await Task.Delay(100);
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"     API ERROR fetching trades at offset {offset}: {ex.Message}");
-                break; // Stop looping if the API throws an error
+                break;
             }
         }
 
