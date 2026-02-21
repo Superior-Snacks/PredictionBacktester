@@ -108,8 +108,9 @@ while (true)
             // --- LEVERS FOR CASE 6 ---
             DateTime case6Start = new DateTime(2024, 7, 1);
             DateTime case6End = new DateTime(2024, 11, 1);
-            string case6Keyword = "Bitcoin"; // e.g., "Bitcoin", "Trump", "NFL"
-            Func<IStrategy> case6StrategyFactory = () => new HybridConfluenceStrategy(TimeSpan.FromHours(1), 10, 50, 40m, 80m, 0.05m, 24, 10000m, 0.85m);
+            string case6Keyword = ""; // e.g., "Bitcoin", "Trump", "NFL"
+                                             // Inside case "6":
+            Func<IStrategy> case6StrategyFactory = () => new PureBuyNoStrategy(TimeSpan.FromHours(1), 0.05m);
 
             await RunDynamicPortfolioBacktest(repository, engine, case6Start, case6End, case6Keyword, case6StrategyFactory);
             break;
