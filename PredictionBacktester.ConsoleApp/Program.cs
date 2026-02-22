@@ -517,3 +517,20 @@ async Task RunSmartDailySync(PolymarketClient api, PolymarketRepository repo)
 
     Console.WriteLine("\n[SYNC COMPLETE] Your database is fully up to date!");
 }
+
+async Task RunDataCleanup(PolymarketRepository repo)
+{
+    Console.WriteLine("\n--- DATA CLEANUP ---");
+    Console.WriteLine("Scanning for closed markets with zero trades...");
+
+    int deletedCount = await repo.CleanupEmptyClosedMarketsAsync();
+
+    if (deletedCount > 0)
+    {
+        Console.WriteLine($"[SUCCESS] Deleted {deletedCount} empty markets and their associated outcomes to free up space!");
+    }
+    else
+    {
+        Console.WriteLine("[COMPLETE] No empty closed markets found. Your database is already clean!");
+    }
+}
