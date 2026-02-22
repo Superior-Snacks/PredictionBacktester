@@ -45,10 +45,11 @@ while (true)
     Console.WriteLine("4. Explore Market & Trade Data");
     Console.WriteLine("5. Explore Live API Data (Raw JSON)");
     Console.WriteLine("6. Run Portfolio Backtest (Dynamic Multi-Market)");
-    Console.WriteLine("7. Run Universal Optimizer"); 
-    Console.WriteLine("8. Exit");
-    Console.WriteLine("9. [DANGER] Reset Entire Database");
-    Console.Write("\nSelect an option (1-9): ");
+    Console.WriteLine("7. Run Universal Optimizer");
+    Console.WriteLine("8. Run Data Cleanup (Remove Empty Closed Markets)");
+    Console.WriteLine("9. Exit");
+    Console.WriteLine("10. [DANGER] Reset Entire Database");
+    Console.Write("\nSelect an option (1-10): ");
 
     var choice = Console.ReadLine();
 
@@ -140,9 +141,14 @@ while (true)
             break;
 
         case "8":
+            await RunDataCleanup(repository);
+            break;
+
+        case "9":
             Console.WriteLine("Exiting...");
             return;
-        case "9":
+
+        case "10":
             Console.WriteLine("\n[WARNING] This will delete all Markets, Outcomes, and Trades.");
             Console.Write("Are you sure? Type 'YES' to confirm: ");
             if (Console.ReadLine() == "YES")
@@ -159,10 +165,6 @@ while (true)
             {
                 Console.WriteLine("Aborted. Database is safe.");
             }
-            break;
-
-        default:
-            Console.WriteLine("Invalid option.");
             break;
     }
 }
