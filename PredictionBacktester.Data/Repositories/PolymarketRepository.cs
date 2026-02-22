@@ -204,4 +204,38 @@ public class PolymarketRepository
             await _dbContext.SaveChangesAsync();
         }
     }
+
+    /// <summary>
+    /// Scans the database for Closed markets that have absolutely zero trades, 
+    /// and deletes them (and their outcomes) to free up SQLite storage space.
+    /// </summary>
+    public async Task<int> CleanupEmptyClosedMarketsAsync()
+    {
+        // 1. Get a master list of the Market IDs that actually have at least one trade
+        var marketsWithTrades = await _dbContext.Trades
+            .Select(t => t.OutcomeId)
+            .Distinct()
+            .Join(_dbContext.Outcomes,
+                  outcomeId => outcomeId,
+                  o => o.OutcomeId,
+                  (outcomeId, o) => o.MarketId)
+            .Distinct()
+            .ToListAsync();
+
+        // 2. Find all markets that are CLOSED and NOT in our active list
+        var emptyClosedMarkets = await _dbContext.Markets
+            .Where(m => m.IsClosed && !marketsWithTrades.Contains(m.MarketId))
+            .ToListAsync();
+
+        int deletedCount = emptyClosedMarkets.Count;
+
+        if (deletedCount > 0)
+        {
+            // 3. Delete them! (EF Core's Cascade Delete will automatically destroy their Outcomes too)
+            _dbContext.Markets.RemoveRange(emptyClosedMarkets);
+            await _dbContext.SaveChangesAsync();
+        }
+
+        return deletedCount;
+    }
 }
