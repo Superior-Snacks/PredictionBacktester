@@ -124,7 +124,7 @@ while (true)
             decimal[] crashThresholds = { 0.15m }; // Let's keep this fixed for now
             decimal[] timeWindows = { 60, 300 }; // 1 min vs 5 min crash
             decimal[] reboundMargins = { 0.05m }; // Seek 5 cents profit
-            decimal[] stopLossMargins = { 0.15m }; // Cut losses if it drops another 15 cents
+            decimal[] stopLossMargins = { 0.50m }; // Cut losses if it drops another 15 cents
             decimal[] executionDelays = { 0, 1, 3 }; // TEST LATENCY: 0s vs 1s vs 3s
             decimal[] riskPcts = { 0.05m };
 

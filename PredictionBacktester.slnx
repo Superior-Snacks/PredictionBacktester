@@ -4,4 +4,5 @@
   <Project Path="PredictionBacktester.Data/PredictionBacktester.Data.csproj" />
   <Project Path="PredictionBacktester.Engine/PredictionBacktester.Engine.csproj" />
   <Project Path="PredictionBacktester.Strategies/PredictionBacktester.Strategies.csproj" />
+  <Project Path="PredictionLiveTrader/PredictionLiveTrader.csproj" />
 </Solution>
