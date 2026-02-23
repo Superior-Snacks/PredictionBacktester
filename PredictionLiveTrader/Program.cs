@@ -72,60 +72,75 @@ class Program
             await ws.ConnectAsync(new Uri("wss://ws-subscriptions-clob.polymarket.com/ws/market"), CancellationToken.None);
             Console.WriteLine("\n[CONNECTED] Listening for live flash crashes... (Press CTRL+C to stop)\n");
 
-            // --- 3. CHUNK THE SUBSCRIPTIONS ---
-            // If we send 5000 tokens in one JSON string, the WS will reject it. We send them in batches.
-            int chunkSize = 300;
+            // --- 1. SMALLER CHUNKS ---
+            // 50 tokens per chunk ensures we don't hit Polymarket's max payload size limit
+            int chunkSize = 50;
             for (int i = 0; i < allTokens.Count; i += chunkSize)
             {
                 var chunk = allTokens.Skip(i).Take(chunkSize);
                 string assetListString = string.Join("\",\"", chunk);
-                string subscribeMessage = $"{{\"assets\":[\"{assetListString}\"],\"type\":\"market\"}}";
+
+                string subscribeMessage = $"{{\"assets_ids\":[\"{assetListString}\"],\"type\":\"market\"}}";
 
                 var bytes = Encoding.UTF8.GetBytes(subscribeMessage);
                 await ws.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, CancellationToken.None);
-                await Task.Delay(100); // Give the WebSocket a tiny breather to process
+                await Task.Delay(200); // Be gentle with the API
             }
 
-            var receiveBuffer = new byte[16384]; // Increased buffer for high volume traffic
+            var receiveBuffer = new byte[8192];
+            using var ms = new System.IO.MemoryStream(); // Use a MemoryStream to handle massive messages
 
             while (ws.State == WebSocketState.Open)
             {
-                var result = await ws.ReceiveAsync(new ArraySegment<byte>(receiveBuffer), CancellationToken.None);
+                WebSocketReceiveResult result;
 
-                if (result.MessageType == WebSocketMessageType.Close)
+                // --- 2. THE BUFFER OVERFLOW FIX ---
+                // Keep reading until Polymarket says the message is completely finished
+                do
                 {
-                    await ws.CloseAsync(WebSocketCloseStatus.NormalClosure, string.Empty, CancellationToken.None);
-                    break;
-                }
+                    result = await ws.ReceiveAsync(new ArraySegment<byte>(receiveBuffer), CancellationToken.None);
 
-                string message = Encoding.UTF8.GetString(receiveBuffer, 0, result.Count);
-                Console.WriteLine("\n[RAW WS MESSAGE] " + message);
+                    if (result.MessageType == WebSocketMessageType.Close)
+                    {
+                        await ws.CloseAsync(WebSocketCloseStatus.NormalClosure, string.Empty, CancellationToken.None);
+                        return;
+                    }
+
+                    ms.Write(receiveBuffer, 0, result.Count);
+                }
+                while (!result.EndOfMessage);
+
+                // Convert the fully stitched message into a string
+                string message = Encoding.UTF8.GetString(ms.ToArray());
+                ms.SetLength(0); // Clear the memory stream for the next message!
+
+                // --- 3. THE NEW JSON PARSER ---
                 try
                 {
-                    if (message.Contains("\"price\"") && message.Contains("\"size\""))
-                    {
-                        using var doc = JsonDocument.Parse(message);
-                        var root = doc.RootElement;
+                    using var doc = JsonDocument.Parse(message);
+                    var root = doc.RootElement;
 
-                        if (root.ValueKind == JsonValueKind.Array)
+                    if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty("event_type", out var eventTypeEl))
+                    {
+                        string eventType = eventTypeEl.GetString();
+
+                        // Match the exact event type from your logs!
+                        if (eventType == "price_change" && root.TryGetProperty("price_changes", out var changesEl))
                         {
-                            foreach (var element in root.EnumerateArray())
+                            foreach (var change in changesEl.EnumerateArray())
                             {
-                                if (element.TryGetProperty("price", out var priceEl) &&
-                                    element.TryGetProperty("size", out var sizeEl) &&
-                                    element.TryGetProperty("asset_id", out var assetIdEl))
+                                if (change.TryGetProperty("asset_id", out var assetIdEl) &&
+                                    change.TryGetProperty("price", out var priceEl) &&
+                                    change.TryGetProperty("size", out var sizeEl))
                                 {
                                     string assetId = assetIdEl.GetString();
 
                                     if (!string.IsNullOrEmpty(assetId))
                                     {
-                                        // --- 4. DYNAMIC LAZY INITIALIZATION ---
-                                        // Only create the strategy for this market if someone actually trades it.
-                                        // This saves massive amounts of RAM and CPU.
                                         if (!sniperBots.ContainsKey(assetId))
                                         {
                                             paperBrokers[assetId] = new PaperBroker(1000m, assetId);
-                                            sniperBots[assetId] = new LiveFlashCrashSniperStrategy(0.15m, 300, 0.05m, 0.15m, 0.05m);
+                                            sniperBots[assetId] = new LiveFlashCrashSniperStrategy(0.15m, 60, 0.05m, 0.15m, 0.05m);
                                         }
 
                                         decimal livePrice = decimal.Parse(priceEl.GetString() ?? "0");
@@ -143,7 +158,6 @@ class Program
                                         Console.Write(".");
                                         Console.ResetColor();
 
-                                        // Route the tick to the specific market's isolated bot
                                         sniperBots[assetId].OnTick(liveTick, paperBrokers[assetId]);
                                     }
                                 }
@@ -151,7 +165,7 @@ class Program
                         }
                     }
                 }
-                catch { /* Ignore dirty JSON ticks */ }
+                catch { /* Ignore dirty JSON */ }
             }
         }
         catch (Exception ex)
