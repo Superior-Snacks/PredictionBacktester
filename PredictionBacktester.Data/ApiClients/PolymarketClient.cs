@@ -26,8 +26,8 @@ public class PolymarketClient
     {
         Thread.Sleep(500);
         // 1. Let's remove the 'active' and 'closed' filters temporarily to force it to give us ANYTHING
-        //var url = $"events?limit={limit}&offset={offset}&order=startDate&ascending=false";
-        var url = $"events?limit={limit}&offset={offset}";
+        var url = $"events?limit={limit}&offset={offset}&order=startDate&ascending=false";
+        //var url = $"events?limit={limit}&offset={offset}";
 
         try
         {
