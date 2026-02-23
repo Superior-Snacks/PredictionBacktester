@@ -24,12 +24,10 @@ class Program
         Console.WriteLine("  LIVE PAPER TRADING ENGINE INITIALIZED  ");
         Console.WriteLine("=========================================");
 
-        // Dictionaries to hold a unique bot/broker/book for each market
         var paperBrokers = new Dictionary<string, PaperBroker>();
         var sniperBots = new Dictionary<string, LiveFlashCrashSniperStrategy>();
-        var orderBooks = new Dictionary<string, LocalOrderBook>(); // ADDED: Order Books Dictionary
+        var orderBooks = new Dictionary<string, LocalOrderBook>();
 
-        // --- 1. SETUP API CLIENT TO BYPASS DATABASE ---
         Console.WriteLine("Setting up API Client...");
         var services = new ServiceCollection();
         services.AddHttpClient("PolymarketGamma", client => { client.BaseAddress = new Uri("https://gamma-api.polymarket.com/"); });
@@ -41,12 +39,10 @@ class Program
         var serviceProvider = services.BuildServiceProvider();
         var apiClient = serviceProvider.GetRequiredService<PolymarketClient>();
 
-        // --- 2. FETCH ALL ACTIVE MARKETS FROM API ---
         Console.WriteLine("Fetching active markets from Polymarket API...");
         var allTokens = new List<string>();
 
         int limit = 100;
-        // Fetch the 500 most recent events (this usually yields thousands of outcomes)
         for (int offset = 0; offset < 500; offset += limit)
         {
             var events = await apiClient.GetActiveEventsAsync(limit, offset);
@@ -65,7 +61,7 @@ class Program
             }
         }
 
-        allTokens = allTokens.Distinct().ToList(); // Remove duplicates
+        allTokens = allTokens.Distinct().ToList();
         Console.WriteLine($"Found {allTokens.Count} active outcome tokens to monitor!");
 
         using var ws = new ClientWebSocket();
@@ -74,7 +70,6 @@ class Program
             await ws.ConnectAsync(new Uri("wss://ws-subscriptions-clob.polymarket.com/ws/market"), CancellationToken.None);
             Console.WriteLine("\n[CONNECTED] Listening for live order book updates... (Press CTRL+C to stop)\n");
 
-            // --- 3. START LISTENING IMMEDIATELY (On a separate thread) ---
             var listenTask = Task.Run(async () =>
             {
                 var receiveBuffer = new byte[8192];
@@ -96,44 +91,72 @@ class Program
                     while (!result.EndOfMessage);
 
                     string message = Encoding.UTF8.GetString(ms.ToArray());
-                    ms.SetLength(0); // Clear the memory stream for the next message!
+                    ms.SetLength(0);
 
                     try
                     {
                         using var doc = JsonDocument.Parse(message);
                         var root = doc.RootElement;
 
-                        // ONLY look for Objects
                         if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty("event_type", out var eventTypeEl))
                         {
-                            // PHASE 2: Listen for "book" events instead of "price_change"
-                            if (eventTypeEl.GetString() == "book")
+                            string eventType = eventTypeEl.GetString();
+
+                            // --- 1. INITIAL BOOK SNAPSHOT ---
+                            if (eventType == "book" && root.TryGetProperty("asset_id", out var assetIdEl))
                             {
-                                if (root.TryGetProperty("asset_id", out var assetIdEl))
+                                string assetId = assetIdEl.GetString();
+                                if (!string.IsNullOrEmpty(assetId))
                                 {
-                                    string assetId = assetIdEl.GetString();
-
-                                    if (!string.IsNullOrEmpty(assetId))
+                                    if (!orderBooks.ContainsKey(assetId))
                                     {
-                                        // LAZY INITIALIZATION
-                                        if (!orderBooks.ContainsKey(assetId))
-                                        {
-                                            orderBooks[assetId] = new LocalOrderBook(assetId);
-                                            paperBrokers[assetId] = new PaperBroker(1000m, assetId);
-                                            sniperBots[assetId] = new LiveFlashCrashSniperStrategy(0.15m, 60, 0.05m, 0.15m, 0.05m);
-                                        }
+                                        orderBooks[assetId] = new LocalOrderBook(assetId);
+                                        paperBrokers[assetId] = new PaperBroker(1000m, assetId);
+                                        sniperBots[assetId] = new LiveFlashCrashSniperStrategy(0.15m, 60, 0.05m, 0.15m, 0.05m);
+                                    }
 
-                                        // UPDATE THE ORDER BOOK
-                                        if (root.TryGetProperty("bids", out var bidsEl) && root.TryGetProperty("asks", out var asksEl))
+                                    if (root.TryGetProperty("bids", out var bidsEl) && root.TryGetProperty("asks", out var asksEl))
+                                    {
+                                        orderBooks[assetId].ProcessBookUpdate(bidsEl, asksEl);
+                                    }
+                                }
+                            }
+                            // --- 2. LIVE ORDER BOOK DELTAS ---
+                            else if (eventType == "price_change" && root.TryGetProperty("price_changes", out var changesEl))
+                            {
+                                foreach (var change in changesEl.EnumerateArray())
+                                {
+                                    if (change.TryGetProperty("asset_id", out var idEl))
+                                    {
+                                        string assetId = idEl.GetString();
+
+                                        // Only process if we successfully grabbed the initial snapshot earlier
+                                        if (!string.IsNullOrEmpty(assetId) && orderBooks.ContainsKey(assetId))
                                         {
-                                            orderBooks[assetId].ProcessBookUpdate(bidsEl, asksEl);
+                                            decimal price = decimal.Parse(change.GetProperty("price").GetString() ?? "0");
+                                            decimal size = decimal.Parse(change.GetProperty("size").GetString() ?? "0");
+                                            string side = change.GetProperty("side").GetString() ?? "";
+
+                                            var book = orderBooks[assetId];
+
+                                            // Dynamically add/remove orders from our local shelves
+                                            if (side == "BUY")
+                                            {
+                                                if (size == 0) book.Bids.Remove(price);
+                                                else book.Bids[price] = size;
+                                            }
+                                            else if (side == "SELL")
+                                            {
+                                                if (size == 0) book.Asks.Remove(price);
+                                                else book.Asks[price] = size;
+                                            }
 
                                             Console.ForegroundColor = ConsoleColor.DarkGray;
                                             Console.Write(".");
                                             Console.ResetColor();
 
-                                            // FEED THE BOOK TO THE STRATEGY
-                                            sniperBots[assetId].OnBookUpdate(orderBooks[assetId], paperBrokers[assetId]);
+                                            // Feed the perfectly synced book to the sniper strategy!
+                                            sniperBots[assetId].OnBookUpdate(book, paperBrokers[assetId]);
                                         }
                                     }
                                 }
@@ -144,33 +167,28 @@ class Program
                 }
             });
 
-            // --- 4. SEND SUBSCRIPTIONS SLOWLY ---
             int chunkSize = 50;
             for (int i = 0; i < allTokens.Count; i += chunkSize)
             {
                 var chunk = allTokens.Skip(i).Take(chunkSize);
                 string assetListString = string.Join("\",\"", chunk);
 
-                // PHASE 2: Subscribe to "book" type instead of "market"
-                string subscribeMessage = $"{{\"assets_ids\":[\"{assetListString}\"],\"type\":\"book\"}}";
+                // FIXED: Must be "market" to successfully subscribe!
+                string subscribeMessage = $"{{\"assets_ids\":[\"{assetListString}\"],\"type\":\"market\"}}";
 
                 var bytes = Encoding.UTF8.GetBytes(subscribeMessage);
                 await ws.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, CancellationToken.None);
 
-                // Wait half a second between chunks so we don't overwhelm the server
                 await Task.Delay(500);
             }
 
-            // --- 5. HEARTBEAT (Required by Polymarket) ---
-            // Keep the connection alive by pinging every 10 seconds
             while (ws.State == WebSocketState.Open)
             {
-                await Task.Delay(10000); // Wait 10 seconds
+                await Task.Delay(10000);
                 var pingMessage = Encoding.UTF8.GetBytes("\"PING\"");
                 await ws.SendAsync(new ArraySegment<byte>(pingMessage), WebSocketMessageType.Text, true, CancellationToken.None);
             }
 
-            // Keep the main thread alive while the listener runs in the background
             await listenTask;
         }
         catch (Exception ex)
