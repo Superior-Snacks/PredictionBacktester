@@ -174,7 +174,6 @@ class Program
                 var chunk = allTokens.Skip(i).Take(chunkSize);
                 string assetListString = string.Join("\",\"", chunk);
 
-                // FIXED: Must be "market" to successfully subscribe!
                 string subscribeMessage = $"{{\"assets_ids\":[\"{assetListString}\"],\"type\":\"market\"}}";
 
                 var bytes = Encoding.UTF8.GetBytes(subscribeMessage);
