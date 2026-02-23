@@ -24,7 +24,7 @@ class Program
 
         // Dictionaries to hold a unique bot/broker for each market
         var paperBrokers = new Dictionary<string, PaperBroker>();
-        var sniperBots = new Dictionary<string, FlashCrashSniperStrategy>();
+        var sniperBots = new Dictionary<string, LiveFlashCrashSniperStrategy>();
 
         // --- 1. SETUP API CLIENT TO BYPASS DATABASE ---
         Console.WriteLine("Setting up API Client...");
@@ -125,7 +125,7 @@ class Program
                                         if (!sniperBots.ContainsKey(assetId))
                                         {
                                             paperBrokers[assetId] = new PaperBroker(1000m, assetId);
-                                            sniperBots[assetId] = new FlashCrashSniperStrategy(0.15m, 300, 0.05m, 0.15m, 3, 0.05m);
+                                            sniperBots[assetId] = new LiveFlashCrashSniperStrategy(0.15m, 300, 0.05m, 0.15m, 0.05m);
                                         }
 
                                         decimal livePrice = decimal.Parse(priceEl.GetString() ?? "0");
