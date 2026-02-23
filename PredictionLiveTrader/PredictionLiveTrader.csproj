@@ -4,6 +4,7 @@
     <ProjectReference Include="..\PredictionBacktester.Core\PredictionBacktester.Core.csproj" />
     <ProjectReference Include="..\PredictionBacktester.Strategies\PredictionBacktester.Strategies.csproj" />
     <ProjectReference Include="..\PredictionBacktester.Data\PredictionBacktester.Data.csproj" />
+	<PackageReference Include="Microsoft.Extensions.Http" Version="10.0.3" />
   </ItemGroup>
 
   <PropertyGroup>
