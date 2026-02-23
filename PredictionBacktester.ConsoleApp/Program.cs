@@ -118,8 +118,8 @@ while (true)
 
         case "7":
             // --- LEVERS FOR CASE 7 ---
-            DateTime case7Start = new DateTime(2024, 7, 1);
-            DateTime case7End = new DateTime(2024, 11, 1);
+            DateTime case7Start = new DateTime(2024, 1, 1);
+            DateTime case7End = new DateTime(2025, 12, 1);
             string case7Keyword = "";
             // 1. Define the Levers for the Flash Crash Sniper
             decimal[] crashThresholds = { 0.10m, 0.15m, 0.20m }; // Drop of 10c, 15c, or 20c
