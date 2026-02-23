@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Linq;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
@@ -6,6 +7,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using PredictionBacktester.Strategies;
 using PredictionBacktester.Core.Entities.Database;
+using PredictionBacktester.Data.Database; // NEW: Added database access
 
 namespace PredictionLiveTrader;
 
@@ -18,31 +20,43 @@ class Program
         Console.WriteLine("  LIVE PAPER TRADING ENGINE INITIALIZED  ");
         Console.WriteLine("=========================================");
 
-        // 1. Initialize the Paper Broker with $1,000 fake dollars
         var paperBroker = new PaperBroker(1000m);
-
-        // 2. Load the best HFT Strategy from your Leaderboard!
         var sniperBot = new FlashCrashSniperStrategy(0.15m, 300, 0.05m, 0.15m, 3, 0.05m);
+        Console.WriteLine($"Strategy Loaded: {sniperBot.GetType().Name}\n");
 
-        Console.WriteLine($"Strategy Loaded: {sniperBot.GetType().Name}");
-        Console.WriteLine("Connecting to Polymarket Live Order Book...");
+        // --- NEW: FETCH THE MOST VOLATILE MARKETS FROM DB ---
+        Console.WriteLine("Hunting database for top 10 most active markets...");
+        string assetListString = "";
 
-        // 3. Connect to the Live WebSocket
+        using (var dbContext = new PolymarketDbContext())
+        {
+            // Find the top 10 Outcome IDs (Tokens) with the absolute highest number of historical trades
+            var topTokens = dbContext.Trades
+                .GroupBy(t => t.OutcomeId)
+                .OrderByDescending(g => g.Count())
+                .Select(g => g.Key)
+                .Take(10)
+                .ToList();
+
+            // Format them for the JSON array: "0x123","0x456","0x789"
+            assetListString = string.Join("\",\"", topTokens);
+            Console.WriteLine($"Found {topTokens.Count} massive markets to monitor!");
+        }
+        // ----------------------------------------------------
+
         using var ws = new ClientWebSocket();
         try
         {
-            // Polymarket's live CLOB (Central Limit Order Book) WebSocket endpoint
             await ws.ConnectAsync(new Uri("wss://ws-subscriptions-clob.polymarket.com/ws/market"), CancellationToken.None);
-            Console.WriteLine("[CONNECTED] Listening for live ticks... (Press CTRL+C to stop)\n");
+            Console.WriteLine("\n[CONNECTED] Listening for live flash crashes... (Press CTRL+C to stop)\n");
 
-            // 4. Send the Subscription Payload
-            // NOTE: "0" is a placeholder. To trade a specific market, you'd replace this with the actual Asset/Condition ID.
-            string subscribeMessage = "{\"assets\":[\"0\"],\"type\":\"market\"}";
+            // --- NEW: INJECT THE REAL TOKENS INTO THE SUBSCRIPTION ---
+            string subscribeMessage = $"{{\"assets\":[\"{assetListString}\"],\"type\":\"market\"}}";
             var bytes = Encoding.UTF8.GetBytes(subscribeMessage);
             await ws.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, CancellationToken.None);
 
-            // 5. The Infinite Listening Loop
-            var receiveBuffer = new byte[4096];
+            var receiveBuffer = new byte[8192]; // Increased buffer size for heavy traffic
+
             while (ws.State == WebSocketState.Open)
             {
                 var result = await ws.ReceiveAsync(new ArraySegment<byte>(receiveBuffer), CancellationToken.None);
@@ -50,47 +64,48 @@ class Program
                 if (result.MessageType == WebSocketMessageType.Close)
                 {
                     await ws.CloseAsync(WebSocketCloseStatus.NormalClosure, string.Empty, CancellationToken.None);
-                    Console.WriteLine("[DISCONNECTED] Server closed the connection.");
                     break;
                 }
 
-                // Decode the live JSON message from the exchange
                 string message = Encoding.UTF8.GetString(receiveBuffer, 0, result.Count);
 
-                // Try to parse the message into a Trade tick and feed it to the Bot!
                 try
                 {
-                    // Basic check to see if it's a trade execution message
+                    // Polymarket WebSocket sends arrays of events. Let's do a quick and dirty parse.
                     if (message.Contains("\"price\"") && message.Contains("\"size\""))
                     {
                         using var doc = JsonDocument.Parse(message);
                         var root = doc.RootElement;
 
-                        // NOTE: Polymarket's actual live JSON structure might require tweaking these exact property names!
-                        // This is a generic mapper to get you started.
-                        if (root.TryGetProperty("price", out var priceEl) && root.TryGetProperty("size", out var sizeEl))
+                        // Check if it's an array of events
+                        if (root.ValueKind == JsonValueKind.Array)
                         {
-                            decimal livePrice = decimal.Parse(priceEl.GetString() ?? "0");
-                            decimal liveSize = decimal.Parse(sizeEl.GetString() ?? "0");
-
-                            // Create the Tick
-                            var liveTick = new Trade
+                            foreach (var element in root.EnumerateArray())
                             {
-                                Price = livePrice,
-                                Size = liveSize,
-                                Timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
-                            };
+                                if (element.TryGetProperty("price", out var priceEl) && element.TryGetProperty("size", out var sizeEl))
+                                {
+                                    decimal livePrice = decimal.Parse(priceEl.GetString() ?? "0");
+                                    decimal liveSize = decimal.Parse(sizeEl.GetString() ?? "0");
 
-                            // FEED THE BRAIN
-                            sniperBot.OnTick(liveTick, paperBroker);
+                                    var liveTick = new Trade
+                                    {
+                                        Price = livePrice,
+                                        Size = liveSize,
+                                        Timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
+                                    };
+
+                                    // Print a tiny gray dot so you know data is actively flowing!
+                                    Console.ForegroundColor = ConsoleColor.DarkGray;
+                                    Console.Write(".");
+                                    Console.ResetColor();
+
+                                    sniperBot.OnTick(liveTick, paperBroker);
+                                }
+                            }
                         }
                     }
                 }
-                catch (Exception ex)
-                {
-                    // Ignore parse errors on random heartbeat messages or weird JSON structures
-                    // Console.WriteLine($"Parse error: {ex.Message}");
-                }
+                catch { /* Ignore dirty JSON ticks */ }
             }
         }
         catch (Exception ex)
