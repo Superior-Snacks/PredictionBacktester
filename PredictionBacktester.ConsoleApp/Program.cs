@@ -118,8 +118,8 @@ while (true)
 
         case "7":
             // --- LEVERS FOR CASE 7 ---
-            DateTime case7Start = new DateTime(2024, 1, 1);
-            DateTime case7End = new DateTime(2025, 12, 1);
+            DateTime case7Start = new DateTime(2024, 7, 1);
+            DateTime case7End = new DateTime(2024, 11, 1);
             string case7Keyword = "";
             decimal[] crashThresholds = { 0.15m }; // Let's keep this fixed for now
             decimal[] timeWindows = { 60, 300 }; // 1 min vs 5 min crash
