@@ -42,7 +42,7 @@ public class SimulatedBroker
 
     public decimal MaxParticipationRate { get; private set; } = 0.10m;
 
-    public void Buy(decimal currentPrice, decimal dollarsToInvest, decimal availableVolumeShares)
+    public virtual void Buy(decimal currentPrice, decimal dollarsToInvest, decimal availableVolumeShares)
     {
         if (dollarsToInvest <= 0.01m || CashBalance < dollarsToInvest) return;
 
@@ -67,7 +67,7 @@ public class SimulatedBroker
         TradeLedger.Add(new ExecutedTrade { OutcomeId = OutcomeId, Date = CurrentTime, Side = "BUY", Price = executionPrice, Shares = actualSharesBought, DollarValue = actualDollarsSpent });
     }
 
-    public void SellAll(decimal currentPrice, decimal availableVolumeShares)
+    public virtual void SellAll(decimal currentPrice, decimal availableVolumeShares)
     {
         if (PositionShares <= 0) return;
 
@@ -94,7 +94,7 @@ public class SimulatedBroker
         TotalTradesExecuted++;
     }
 
-    public void BuyNo(decimal currentYesPrice, decimal dollarsToInvest, decimal availableVolumeShares)
+    public virtual void BuyNo(decimal currentYesPrice, decimal dollarsToInvest, decimal availableVolumeShares)
     {
         decimal currentNoPrice = 1.00m - currentYesPrice;
 
@@ -121,7 +121,7 @@ public class SimulatedBroker
         TradeLedger.Add(new ExecutedTrade { OutcomeId = OutcomeId, Date = CurrentTime, Side = "BUY NO", Price = executionPrice, Shares = actualSharesBought, DollarValue = actualDollarsSpent });
     }
 
-    public void SellAllNo(decimal currentYesPrice, decimal availableVolumeShares)
+    public virtual void SellAllNo(decimal currentYesPrice, decimal availableVolumeShares)
     {
         if (NoPositionShares <= 0) return;
 
