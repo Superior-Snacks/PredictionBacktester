@@ -65,8 +65,13 @@ class Program
         Console.WriteLine($"Found {allTokens.Count} active outcome tokens to monitor!");
 
         using var ws = new ClientWebSocket();
+
+        // FIX 1: Set the Heartbeat ping BEFORE opening the connection
+        ws.Options.KeepAliveInterval = TimeSpan.FromSeconds(10);
+
         try
         {
+            // We only connect ONCE!
             await ws.ConnectAsync(new Uri("wss://ws-subscriptions-clob.polymarket.com/ws/market"), CancellationToken.None);
             Console.WriteLine("\n[CONNECTED] Listening for live order book updates... (Press CTRL+C to stop)\n");
 
@@ -92,7 +97,6 @@ class Program
 
                     string message = Encoding.UTF8.GetString(ms.ToArray());
                     ms.SetLength(0);
-                    Console.WriteLine($"[MESSAGE] {message}");
 
                     try
                     {
@@ -103,7 +107,6 @@ class Program
                         {
                             string eventType = eventTypeEl.GetString();
 
-                            // --- 1. INITIAL BOOK SNAPSHOT ---
                             if (eventType == "book" && root.TryGetProperty("asset_id", out var assetIdEl))
                             {
                                 string assetId = assetIdEl.GetString();
@@ -122,7 +125,6 @@ class Program
                                     }
                                 }
                             }
-                            // --- 2. LIVE ORDER BOOK DELTAS ---
                             else if (eventType == "price_change" && root.TryGetProperty("price_changes", out var changesEl))
                             {
                                 foreach (var change in changesEl.EnumerateArray())
@@ -131,7 +133,6 @@ class Program
                                     {
                                         string assetId = idEl.GetString();
 
-                                        // Only process if we successfully grabbed the initial snapshot earlier
                                         if (!string.IsNullOrEmpty(assetId) && orderBooks.ContainsKey(assetId))
                                         {
                                             decimal price = decimal.Parse(change.GetProperty("price").GetString() ?? "0");
@@ -140,7 +141,6 @@ class Program
 
                                             var book = orderBooks[assetId];
 
-                                            // Dynamically add/remove orders from our local shelves
                                             if (side == "BUY")
                                             {
                                                 if (size == 0) book.Bids.Remove(price);
@@ -156,7 +156,6 @@ class Program
                                             Console.Write(".");
                                             Console.ResetColor();
 
-                                            // Feed the perfectly synced book to the sniper strategy!
                                             sniperBots[assetId].OnBookUpdate(book, paperBrokers[assetId]);
                                         }
                                     }
@@ -169,21 +168,32 @@ class Program
             });
 
             int chunkSize = 50;
+            bool isFirstChunk = true;
+
             for (int i = 0; i < allTokens.Count; i += chunkSize)
             {
                 var chunk = allTokens.Skip(i).Take(chunkSize);
                 string assetListString = string.Join("\",\"", chunk);
 
-                string subscribeMessage = $"{{\"assets_ids\":[\"{assetListString}\"],\"type\":\"market\"}}";
+                string subscribeMessage;
+
+                // FIX 2: Only the very first chunk can use "type: market". 
+                // The rest must use "operation: subscribe" to append to the channel.
+                if (isFirstChunk)
+                {
+                    subscribeMessage = $"{{\"assets_ids\":[\"{assetListString}\"],\"type\":\"market\"}}";
+                    isFirstChunk = false;
+                }
+                else
+                {
+                    subscribeMessage = $"{{\"assets_ids\":[\"{assetListString}\"],\"operation\":\"subscribe\"}}";
+                }
 
                 var bytes = Encoding.UTF8.GetBytes(subscribeMessage);
                 await ws.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, CancellationToken.None);
 
                 await Task.Delay(500);
             }
-
-            ws.Options.KeepAliveInterval = TimeSpan.FromSeconds(10);
-            await ws.ConnectAsync(new Uri("wss://ws-subscriptions-clob.polymarket.com/ws/market"), CancellationToken.None);
 
             await listenTask;
         }
