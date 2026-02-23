@@ -11,6 +11,7 @@ using PredictionBacktester.Strategies;
 using PredictionBacktester.Core.Entities.Database;
 using PredictionBacktester.Data.ApiClients;
 using System.IO;
+using PredictionBacktester.Engine;
 
 namespace PredictionLiveTrader;
 

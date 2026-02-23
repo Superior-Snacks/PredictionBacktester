@@ -3,11 +3,11 @@ using System.Collections.Generic;
 using System.Linq;
 using PredictionBacktester.Core.Entities.Database;
 using PredictionBacktester.Engine;
-using PredictionLiveTrader;
+ 
 
 namespace PredictionBacktester.Strategies;
 
-public class LiveFlashCrashSniperStrategy
+public class LiveFlashCrashSniperStrategy 
 {
     private readonly decimal _crashThreshold;
     private readonly long _timeWindowSeconds;
@@ -22,7 +22,7 @@ public class LiveFlashCrashSniperStrategy
         decimal crashThreshold = 0.15m,
         long timeWindowSeconds = 60,
         decimal reboundProfitMargin = 0.05m,
-        decimal stopLossMargin = 0.15m,
+        decimal stopLossMargin = 0.15m, 
         decimal riskPercentage = 0.05m)
     {
         _crashThreshold = crashThreshold;
@@ -35,10 +35,10 @@ public class LiveFlashCrashSniperStrategy
     }
 
     // Notice the signature change: We pass the Order Book instead of a Trade Tick!
-    public void OnBookUpdate(LocalOrderBook book, PaperBroker broker)
+    public void OnBookUpdate(LocalOrderBook book, SimulatedBroker broker)
     {
         long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-
+        
         // Look at the shelves!
         decimal bestAsk = book.GetBestAskPrice();  // Cheapest price we can BUY for
         decimal bestBid = book.GetBestBidPrice();  // Highest price we can SELL for
@@ -57,7 +57,7 @@ public class LiveFlashCrashSniperStrategy
         if (_recentAsks.Count < 2) return;
 
         // Equity is calculated based on what we can ACTUALLY sell our shares for (the Bid)
-        decimal currentEquity = broker.GetTotalPortfolioValue(bestBid);
+        decimal currentEquity = broker.GetTotalPortfolioValue(bestBid); 
         decimal dollarsToInvest = Math.Min(currentEquity * _riskPercentage, broker.CashBalance);
 
         // --- 2. MANAGE OPEN POSITIONS (Take Profit & Stop Loss) ---
@@ -89,7 +89,7 @@ public class LiveFlashCrashSniperStrategy
             if (actualDollarsSpent >= 1.00m) // Ensure minimum order size
             {
                 broker.Buy(bestAsk, actualDollarsSpent, sharesToBuy);
-                _recentAsks.Clear();
+                _recentAsks.Clear(); 
             }
         }
     }
