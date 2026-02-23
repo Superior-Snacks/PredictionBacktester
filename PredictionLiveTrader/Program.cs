@@ -99,7 +99,7 @@ class Program
                 }
 
                 string message = Encoding.UTF8.GetString(receiveBuffer, 0, result.Count);
-
+                Console.WriteLine("\n[RAW WS MESSAGE] " + message);
                 try
                 {
                     if (message.Contains("\"price\"") && message.Contains("\"size\""))
