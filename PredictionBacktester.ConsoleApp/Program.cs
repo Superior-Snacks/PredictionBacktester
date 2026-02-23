@@ -121,21 +121,23 @@ while (true)
             DateTime case7Start = new DateTime(2024, 1, 1);
             DateTime case7End = new DateTime(2025, 12, 1);
             string case7Keyword = "";
-            // 1. Define the Levers for the Flash Crash Sniper
-            decimal[] crashThresholds = { 0.10m, 0.15m, 0.20m }; // Drop of 10c, 15c, or 20c
-            decimal[] timeWindows = { 30, 60, 300 }; // Happened in 30 seconds, 1 minute, or 5 minutes?
-            decimal[] reboundMargins = { 0.03m, 0.05m, 0.10m }; // Quick 3c scalp, or wait for 10c rebound?
+            decimal[] crashThresholds = { 0.15m }; // Let's keep this fixed for now
+            decimal[] timeWindows = { 60, 300 }; // 1 min vs 5 min crash
+            decimal[] reboundMargins = { 0.05m }; // Seek 5 cents profit
+            decimal[] stopLossMargins = { 0.15m }; // Cut losses if it drops another 15 cents
+            decimal[] executionDelays = { 0, 1, 3 }; // TEST LATENCY: 0s vs 1s vs 3s
             decimal[] riskPcts = { 0.05m };
 
-            decimal[][] sniperGrid = { crashThresholds, timeWindows, reboundMargins, riskPcts };
+            decimal[][] sniperGrid = { crashThresholds, timeWindows, reboundMargins, stopLossMargins, executionDelays, riskPcts };
 
             // combo[0] = Crash Threshold
             // combo[1] = Time Window (seconds)
             // combo[2] = Rebound Margin
-            // combo[3] = Risk %
+            // combo[3] = Stop Loss Margin
+            // combo[4] = Execution Delay (seconds)
+            // combo[5] = Risk %
             Func<decimal[], IStrategy> sniperBuilder = (combo) =>
-                new FlashCrashSniperStrategy(combo[0], (long)combo[1], combo[2], combo[3]);
-
+                new FlashCrashSniperStrategy(combo[0], (long)combo[1], combo[2], combo[3], (long)combo[4], combo[5]);
             // Test it on everything!
             await RunUniversalOptimizer(repository, engine, sniperGrid, sniperBuilder, case7Start, case7End, case7Keyword, "HFT Flash Crash Sniper");
             break;
