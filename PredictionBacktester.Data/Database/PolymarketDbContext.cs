@@ -12,10 +12,10 @@ public class PolymarketDbContext : DbContext
 
     protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
     {
-        // This tells EF Core to create a file named 'polymarket_backtest.db' in your root folder
-        optionsBuilder.UseSqlite("Data Source=polymarket_backtest.db;");
+        // Tell EF Core to look for migrations inside the PredictionBacktester.Data project
+        optionsBuilder.UseSqlite("Data Source=polymarket_backtest.db;",
+            options => options.MigrationsAssembly("PredictionBacktester.Data"));
     }
-
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         // Let's create an index on the Trades table so backtesting is lightning fast!
