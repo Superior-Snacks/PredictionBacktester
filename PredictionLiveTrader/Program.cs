@@ -23,9 +23,10 @@ class Program
         Console.WriteLine("  LIVE PAPER TRADING ENGINE INITIALIZED  ");
         Console.WriteLine("=========================================");
 
-        // Dictionaries to hold a unique bot/broker for each market
+        // Dictionaries to hold a unique bot/broker/book for each market
         var paperBrokers = new Dictionary<string, PaperBroker>();
         var sniperBots = new Dictionary<string, LiveFlashCrashSniperStrategy>();
+        var orderBooks = new Dictionary<string, LocalOrderBook>(); // ADDED: Order Books Dictionary
 
         // --- 1. SETUP API CLIENT TO BYPASS DATABASE ---
         Console.WriteLine("Setting up API Client...");
@@ -70,7 +71,7 @@ class Program
         try
         {
             await ws.ConnectAsync(new Uri("wss://ws-subscriptions-clob.polymarket.com/ws/market"), CancellationToken.None);
-            Console.WriteLine("\n[CONNECTED] Listening for live flash crashes... (Press CTRL+C to stop)\n");
+            Console.WriteLine("\n[CONNECTED] Listening for live order book updates... (Press CTRL+C to stop)\n");
 
             // --- 3. START LISTENING IMMEDIATELY (On a separate thread) ---
             var listenTask = Task.Run(async () =>
@@ -101,44 +102,37 @@ class Program
                         using var doc = JsonDocument.Parse(message);
                         var root = doc.RootElement;
 
-                        // ONLY look for Objects (ignores the massive initial arrays of book snapshots)
+                        // ONLY look for Objects
                         if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty("event_type", out var eventTypeEl))
                         {
-                            if (eventTypeEl.GetString() == "price_change" && root.TryGetProperty("price_changes", out var changesEl))
+                            // PHASE 2: Listen for "book" events instead of "price_change"
+                            if (eventTypeEl.GetString() == "book")
                             {
-                                foreach (var change in changesEl.EnumerateArray())
+                                if (root.TryGetProperty("asset_id", out var assetIdEl))
                                 {
-                                    if (change.TryGetProperty("asset_id", out var assetIdEl) &&
-                                        change.TryGetProperty("price", out var priceEl) &&
-                                        change.TryGetProperty("size", out var sizeEl))
+                                    string assetId = assetIdEl.GetString();
+
+                                    if (!string.IsNullOrEmpty(assetId))
                                     {
-                                        string assetId = assetIdEl.GetString();
-
-                                        if (!string.IsNullOrEmpty(assetId))
+                                        // LAZY INITIALIZATION
+                                        if (!orderBooks.ContainsKey(assetId))
                                         {
-                                            // LAZY INITIALIZATION
-                                            if (!sniperBots.ContainsKey(assetId))
-                                            {
-                                                paperBrokers[assetId] = new PaperBroker(1000m, assetId);
-                                                sniperBots[assetId] = new LiveFlashCrashSniperStrategy(0.15m, 60, 0.05m, 0.15m, 0.05m);
-                                            }
+                                            orderBooks[assetId] = new LocalOrderBook(assetId);
+                                            paperBrokers[assetId] = new PaperBroker(1000m, assetId);
+                                            sniperBots[assetId] = new LiveFlashCrashSniperStrategy(0.15m, 60, 0.05m, 0.15m, 0.05m);
+                                        }
 
-                                            decimal livePrice = decimal.Parse(priceEl.GetString() ?? "0");
-                                            decimal liveSize = decimal.Parse(sizeEl.GetString() ?? "0");
-
-                                            var liveTick = new Trade
-                                            {
-                                                OutcomeId = assetId,
-                                                Price = livePrice,
-                                                Size = liveSize,
-                                                Timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
-                                            };
+                                        // UPDATE THE ORDER BOOK
+                                        if (root.TryGetProperty("bids", out var bidsEl) && root.TryGetProperty("asks", out var asksEl))
+                                        {
+                                            orderBooks[assetId].ProcessBookUpdate(bidsEl, asksEl);
 
                                             Console.ForegroundColor = ConsoleColor.DarkGray;
                                             Console.Write(".");
                                             Console.ResetColor();
 
-                                            sniperBots[assetId].OnTick(liveTick, paperBrokers[assetId]);
+                                            // FEED THE BOOK TO THE STRATEGY
+                                            sniperBots[assetId].OnBookUpdate(orderBooks[assetId], paperBrokers[assetId]);
                                         }
                                     }
                                 }
@@ -156,8 +150,8 @@ class Program
                 var chunk = allTokens.Skip(i).Take(chunkSize);
                 string assetListString = string.Join("\",\"", chunk);
 
-                // THE REAL FIX: It absolutely MUST be "assets_ids"!
-                string subscribeMessage = $"{{\"assets_ids\":[\"{assetListString}\"],\"type\":\"market\"}}";
+                // PHASE 2: Subscribe to "book" type instead of "market"
+                string subscribeMessage = $"{{\"assets_ids\":[\"{assetListString}\"],\"type\":\"book\"}}";
 
                 var bytes = Encoding.UTF8.GetBytes(subscribeMessage);
                 await ws.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, CancellationToken.None);
