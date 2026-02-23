@@ -80,6 +80,7 @@ public class FlashCrashSniperStrategy : ITickStrategy
             // FLASH SPIKE DETECTED! Price shot up 15 cents in 60 seconds. Fade the fakeout! (Buy NO)
             broker.BuyNo(tick.Price, dollarsToInvest, tick.Size);
             _recentTicks.Clear();
+            return;
         }
     }
 }
