@@ -40,7 +40,7 @@ public class SimulatedBroker
         TradeLedger = new List<ExecutedTrade>();
     }
 
-    public decimal MaxParticipationRate { get; private set; } = 0.10m;
+    public decimal MaxParticipationRate { get; private set; } = 1.00m;
 
     public virtual void Buy(decimal currentPrice, decimal dollarsToInvest, decimal availableVolumeShares)
     {

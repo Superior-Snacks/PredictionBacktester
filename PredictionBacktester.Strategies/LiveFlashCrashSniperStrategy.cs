@@ -36,11 +36,13 @@ public class LiveFlashCrashSniperStrategy
     {
         long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 
+        // Look at both sides of the shelf
         decimal bestAsk = book.GetBestAskPrice();
         decimal bestBid = book.GetBestBidPrice();
-        decimal availableSize = book.GetBestAskSize();
+        decimal availableAskSize = book.GetBestAskSize();
+        decimal availableBidSize = book.GetBestBidSize(); // The actual volume buyers want
 
-        if (bestAsk >= 1.00m || availableSize <= 0) return;
+        if (bestAsk >= 1.00m || availableAskSize <= 0) return;
 
         _recentAsks.Enqueue((now, bestAsk));
         while (_recentAsks.Count > 0 && (now - _recentAsks.Peek().Timestamp) > _timeWindowSeconds)
@@ -53,6 +55,7 @@ public class LiveFlashCrashSniperStrategy
         decimal currentEquity = broker.GetTotalPortfolioValue(bestBid);
         decimal dollarsToInvest = Math.Min(currentEquity * _riskPercentage, broker.CashBalance);
 
+        // --- MANAGE OPEN POSITIONS (DUMP THE BAGS) ---
         if (broker.PositionShares > 0)
         {
             bool isTakeProfit = bestBid >= broker.AverageEntryPrice + _reboundProfitMargin;
@@ -60,17 +63,19 @@ public class LiveFlashCrashSniperStrategy
 
             if (isTakeProfit || isStopLoss)
             {
-                broker.SellAll(bestBid, broker.PositionShares);
+                // Sell directly into the actual buyer liquidity!
+                broker.SellAll(bestBid, availableBidSize);
             }
             return;
         }
 
+        // --- HUNT FOR NEW CRASHES ---
         decimal maxAskInWindow = _recentAsks.Max(x => x.Price);
 
         if (maxAskInWindow - bestAsk >= _crashThreshold && dollarsToInvest >= 1.00m)
         {
             decimal maxAffordableShares = dollarsToInvest / bestAsk;
-            decimal sharesToBuy = Math.Min(maxAffordableShares, availableSize);
+            decimal sharesToBuy = Math.Min(maxAffordableShares, availableAskSize);
             decimal actualDollarsSpent = sharesToBuy * bestAsk;
 
             if (actualDollarsSpent >= 1.00m)

@@ -77,6 +77,13 @@ public class LocalOrderBook
         return Asks.Keys.Min();
     }
 
+    // Helper to check how many shares buyers actually want
+    public decimal GetBestBidSize()
+    {
+        if (Bids.Count == 0) return 0.00m;
+        return Bids[GetBestBidPrice()];
+    }
+
     // Helper to check how many shares are actually available at the best price
     public decimal GetBestAskSize()
     {
