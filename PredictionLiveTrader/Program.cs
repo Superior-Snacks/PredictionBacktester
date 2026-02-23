@@ -92,6 +92,7 @@ class Program
 
                     string message = Encoding.UTF8.GetString(ms.ToArray());
                     ms.SetLength(0);
+                    Console.WriteLine($"[MESSAGE] {message}");
 
                     try
                     {
@@ -182,12 +183,8 @@ class Program
                 await Task.Delay(500);
             }
 
-            while (ws.State == WebSocketState.Open)
-            {
-                await Task.Delay(10000);
-                var pingMessage = Encoding.UTF8.GetBytes("\"PING\"");
-                await ws.SendAsync(new ArraySegment<byte>(pingMessage), WebSocketMessageType.Text, true, CancellationToken.None);
-            }
+            ws.Options.KeepAliveInterval = TimeSpan.FromSeconds(10);
+            await ws.ConnectAsync(new Uri("wss://ws-subscriptions-clob.polymarket.com/ws/market"), CancellationToken.None);
 
             await listenTask;
         }
