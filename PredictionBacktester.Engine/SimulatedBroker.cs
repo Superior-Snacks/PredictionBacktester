@@ -6,161 +6,175 @@ namespace PredictionBacktester.Engine;
 
 public class SimulatedBroker
 {
-    public decimal SpreadPenalty { get; private set; } = 0.015m;
-    public decimal CashBalance { get; protected set; }
+    public decimal SpreadPenalty { get; private set; } = 0.015m; // 1.5 cents per trade!
+    public decimal CashBalance { get; private set; }
 
-    // Multi-asset properties
-    private Dictionary<string, decimal> _positionShares = new();
-    private Dictionary<string, decimal> _averageEntryPrices = new();
-    private Dictionary<string, decimal> _noPositionShares = new();
-    private Dictionary<string, decimal> _averageNoEntryPrices = new();
-    private Dictionary<string, decimal> _lastKnownPrices = new(); // Tracks latest price for accurate equity
+    // YES properties
+    public decimal PositionShares { get; private set; }
+    public decimal AverageEntryPrice { get; private set; }
+
+    // NO properties
+    public decimal NoPositionShares { get; private set; }
+    public decimal AverageNoEntryPrice { get; private set; }
 
     // Metrics
-    public int TotalTradesExecuted { get; protected set; }
-    public int WinningTrades { get; protected set; }
-    public int LosingTrades { get; protected set; }
-    public decimal PeakEquity { get; protected set; }
-    public decimal MaxDrawdown { get; protected set; }
+    public int TotalTradesExecuted { get; private set; }
+    public int WinningTrades { get; private set; }
+    public int LosingTrades { get; private set; }
+    public decimal PeakEquity { get; private set; }
+    public decimal MaxDrawdown { get; private set; }
 
+    // Ledger properties
+    public string OutcomeId { get; private set; }
     public DateTime CurrentTime { get; set; }
-    public List<ExecutedTrade> TradeLedger { get; protected set; }
+    public List<ExecutedTrade> TradeLedger { get; private set; }
 
-    public decimal MaxParticipationRate { get; private set; } = 1.00m;
-
-    public SimulatedBroker(decimal startingCash)
+    public SimulatedBroker(decimal startingCash, string outcomeId = "Unknown")
     {
         CashBalance = startingCash;
         PeakEquity = startingCash;
+        PositionShares = 0;
+        TotalTradesExecuted = 0;
+
+        OutcomeId = outcomeId;
         TradeLedger = new List<ExecutedTrade>();
     }
 
-    public decimal GetPositionShares(string assetId) => _positionShares.GetValueOrDefault(assetId, 0m);
-    public decimal GetAverageEntryPrice(string assetId) => _averageEntryPrices.GetValueOrDefault(assetId, 0m);
-    public decimal GetNoPositionShares(string assetId) => _noPositionShares.GetValueOrDefault(assetId, 0m);
-    public decimal GetAverageNoEntryPrice(string assetId) => _averageNoEntryPrices.GetValueOrDefault(assetId, 0m);
+    public decimal MaxParticipationRate { get; private set; } = 1.00m;
 
-    public void UpdateLastKnownPrice(string assetId, decimal price)
+    public virtual void Buy(decimal currentPrice, decimal dollarsToInvest, decimal availableVolumeShares)
     {
-        _lastKnownPrices[assetId] = price;
-    }
-
-    public virtual void Buy(string assetId, decimal currentPrice, decimal dollarsToInvest, decimal availableVolumeShares)
-    {
-        UpdateLastKnownPrice(assetId, currentPrice);
         if (dollarsToInvest <= 0.01m || CashBalance < dollarsToInvest) return;
 
+        // REALITY CHECK: Apply the penalty
         decimal executionPrice = Math.Min(currentPrice + SpreadPenalty, 0.99m);
+
         decimal desiredShares = dollarsToInvest / executionPrice;
-        decimal actualSharesBought = Math.Min(desiredShares, availableVolumeShares * MaxParticipationRate);
+        decimal maxAllowedShares = availableVolumeShares * MaxParticipationRate;
+        decimal actualSharesBought = Math.Min(desiredShares, maxAllowedShares);
 
         if (actualSharesBought <= 0) return;
 
+        // FIX: Charge the actual execution price!
         decimal actualDollarsSpent = actualSharesBought * executionPrice;
-        decimal currentShares = GetPositionShares(assetId);
-        decimal currentAvgPrice = GetAverageEntryPrice(assetId);
+        decimal totalCost = (PositionShares * AverageEntryPrice) + actualDollarsSpent;
 
-        decimal totalCost = (currentShares * currentAvgPrice) + actualDollarsSpent;
-
-        _positionShares[assetId] = currentShares + actualSharesBought;
-        _averageEntryPrices[assetId] = totalCost / _positionShares[assetId];
+        PositionShares += actualSharesBought;
+        AverageEntryPrice = totalCost / PositionShares;
         CashBalance -= actualDollarsSpent;
 
-        TradeLedger.Add(new ExecutedTrade { OutcomeId = assetId, Date = CurrentTime, Side = "BUY", Price = executionPrice, Shares = actualSharesBought, DollarValue = actualDollarsSpent });
+        // FIX: Log the execution price!
+        TradeLedger.Add(new ExecutedTrade { OutcomeId = OutcomeId, Date = CurrentTime, Side = "BUY", Price = executionPrice, Shares = actualSharesBought, DollarValue = actualDollarsSpent });
     }
 
-    public virtual void SellAll(string assetId, decimal currentPrice, decimal availableVolumeShares)
+    public virtual void SellAll(decimal currentPrice, decimal availableVolumeShares)
     {
-        UpdateLastKnownPrice(assetId, currentPrice);
-        decimal currentShares = GetPositionShares(assetId);
-        if (currentShares <= 0) return;
+        if (PositionShares <= 0) return;
 
-        decimal sharesToSell = Math.Min(currentShares, availableVolumeShares * MaxParticipationRate);
+        decimal maxAllowedSharesToSell = availableVolumeShares * MaxParticipationRate;
+        decimal sharesToSell = Math.Min(PositionShares, maxAllowedSharesToSell);
+
         if (sharesToSell <= 0) return;
 
+        // REALITY CHECK: Apply the penalty
         decimal executionPrice = Math.Max(currentPrice - SpreadPenalty, 0.01m);
         decimal cashReceived = sharesToSell * executionPrice;
-        decimal currentAvgPrice = GetAverageEntryPrice(assetId);
 
-        if (executionPrice > currentAvgPrice) WinningTrades++;
+        // FIX: Check if we won AFTER the fee
+        if (executionPrice > AverageEntryPrice) WinningTrades++;
         else LosingTrades++;
 
-        TradeLedger.Add(new ExecutedTrade { OutcomeId = assetId, Date = CurrentTime, Side = "SELL", Price = executionPrice, Shares = sharesToSell, DollarValue = cashReceived });
+        // FIX: Log the execution price!
+        TradeLedger.Add(new ExecutedTrade { OutcomeId = OutcomeId, Date = CurrentTime, Side = "SELL", Price = executionPrice, Shares = sharesToSell, DollarValue = cashReceived });
 
         CashBalance += cashReceived;
-        _positionShares[assetId] = currentShares - sharesToSell;
+        PositionShares -= sharesToSell;
 
-        if (_positionShares[assetId] == 0) _averageEntryPrices[assetId] = 0;
+        if (PositionShares == 0) AverageEntryPrice = 0;
         TotalTradesExecuted++;
     }
 
-    // Identical signature updates for BuyNo / SellAllNo
-    public virtual void BuyNo(string assetId, decimal currentYesPrice, decimal dollarsToInvest, decimal availableVolumeShares)
+    public virtual void BuyNo(decimal currentYesPrice, decimal dollarsToInvest, decimal availableVolumeShares)
     {
-        UpdateLastKnownPrice(assetId, currentYesPrice);
         decimal currentNoPrice = 1.00m - currentYesPrice;
+
+        // FIX: Apply the penalty to the NO price!
         decimal executionPrice = Math.Min(currentNoPrice + SpreadPenalty, 0.99m);
 
         if (executionPrice <= 0.00m || dollarsToInvest <= 0.01m || CashBalance < dollarsToInvest) return;
 
         decimal desiredShares = dollarsToInvest / executionPrice;
-        decimal actualSharesBought = Math.Min(desiredShares, availableVolumeShares * MaxParticipationRate);
+        decimal maxAllowedShares = availableVolumeShares * MaxParticipationRate;
+        decimal actualSharesBought = Math.Min(desiredShares, maxAllowedShares);
 
         if (actualSharesBought <= 0) return;
 
+        // FIX: Charge the execution price!
         decimal actualDollarsSpent = actualSharesBought * executionPrice;
-        decimal currentShares = GetNoPositionShares(assetId);
-        decimal currentAvgPrice = GetAverageNoEntryPrice(assetId);
+        decimal totalCost = (NoPositionShares * AverageNoEntryPrice) + actualDollarsSpent;
 
-        decimal totalCost = (currentShares * currentAvgPrice) + actualDollarsSpent;
-
-        _noPositionShares[assetId] = currentShares + actualSharesBought;
-        _averageNoEntryPrices[assetId] = totalCost / _noPositionShares[assetId];
+        NoPositionShares += actualSharesBought;
+        AverageNoEntryPrice = totalCost / NoPositionShares;
         CashBalance -= actualDollarsSpent;
 
-        TradeLedger.Add(new ExecutedTrade { OutcomeId = assetId, Date = CurrentTime, Side = "BUY NO", Price = executionPrice, Shares = actualSharesBought, DollarValue = actualDollarsSpent });
+        // FIX: Log the execution price!
+        TradeLedger.Add(new ExecutedTrade { OutcomeId = OutcomeId, Date = CurrentTime, Side = "BUY NO", Price = executionPrice, Shares = actualSharesBought, DollarValue = actualDollarsSpent });
     }
 
-    public virtual void SellAllNo(string assetId, decimal currentYesPrice, decimal availableVolumeShares)
+    public virtual void SellAllNo(decimal currentYesPrice, decimal availableVolumeShares)
     {
-        UpdateLastKnownPrice(assetId, currentYesPrice);
-        decimal currentShares = GetNoPositionShares(assetId);
-        if (currentShares <= 0) return;
+        if (NoPositionShares <= 0) return;
 
         decimal currentNoPrice = 1.00m - currentYesPrice;
+
+        // FIX: Apply the penalty to the NO price!
         decimal executionPrice = Math.Max(currentNoPrice - SpreadPenalty, 0.01m);
-        decimal sharesToSell = Math.Min(currentShares, availableVolumeShares * MaxParticipationRate);
+
+        decimal maxAllowedSharesToSell = availableVolumeShares * MaxParticipationRate;
+        decimal sharesToSell = Math.Min(NoPositionShares, maxAllowedSharesToSell);
 
         if (sharesToSell <= 0) return;
 
+        // FIX: Calculate cash received using the penalized execution price
         decimal cashReceived = sharesToSell * executionPrice;
-        decimal currentAvgPrice = GetAverageNoEntryPrice(assetId);
 
-        if (executionPrice > currentAvgPrice) WinningTrades++;
+        // FIX: Determine win/loss based on execution price
+        if (executionPrice > AverageNoEntryPrice) WinningTrades++;
         else LosingTrades++;
 
-        TradeLedger.Add(new ExecutedTrade { OutcomeId = assetId, Date = CurrentTime, Side = "SELL NO", Price = executionPrice, Shares = sharesToSell, DollarValue = cashReceived });
+        // FIX: Log the execution price!
+        TradeLedger.Add(new ExecutedTrade { OutcomeId = OutcomeId, Date = CurrentTime, Side = "SELL NO", Price = executionPrice, Shares = sharesToSell, DollarValue = cashReceived });
 
         CashBalance += cashReceived;
-        _noPositionShares[assetId] = currentShares - sharesToSell;
+        NoPositionShares -= sharesToSell;
 
-        if (_noPositionShares[assetId] == 0) _averageNoEntryPrices[assetId] = 0;
+        if (NoPositionShares == 0) AverageNoEntryPrice = 0;
         TotalTradesExecuted++;
     }
 
-    public decimal GetTotalPortfolioValue()
+    public decimal GetTotalPortfolioValue(decimal currentYesPrice)
     {
-        decimal activeValue = 0m;
-        foreach (var kvp in _positionShares)
+        decimal currentNoPrice = 1.00m - currentYesPrice;
+        decimal yesValue = PositionShares * currentYesPrice;
+        decimal noValue = NoPositionShares * currentNoPrice;
+
+        return CashBalance + yesValue + noValue;
+    }
+
+    public void UpdateEquityCurve(decimal currentPrice)
+    {
+        decimal currentEquity = GetTotalPortfolioValue(currentPrice);
+
+        if (currentEquity > PeakEquity)
         {
-            decimal price = _lastKnownPrices.GetValueOrDefault(kvp.Key, 0m);
-            activeValue += kvp.Value * price;
+            PeakEquity = currentEquity;
         }
-        foreach (var kvp in _noPositionShares)
+
+        decimal currentDrawdown = (PeakEquity - currentEquity) / PeakEquity;
+
+        if (currentDrawdown > MaxDrawdown)
         {
-            decimal price = 1.00m - _lastKnownPrices.GetValueOrDefault(kvp.Key, 1.00m);
-            activeValue += kvp.Value * price;
+            MaxDrawdown = currentDrawdown;
         }
-        return CashBalance + activeValue;
     }
 }
