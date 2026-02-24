@@ -6,73 +6,70 @@ namespace PredictionLiveTrader;
 
 public class PaperBroker : SimulatedBroker
 {
-    public PaperBroker(decimal initialCapital, string outcomeId) : base(initialCapital, outcomeId)
+    public PaperBroker(decimal initialCapital) : base(initialCapital)
     {
     }
 
-    public override void Buy(decimal price, decimal dollarAmount, decimal volume)
+    public override void Buy(string assetId, decimal price, decimal dollarAmount, decimal volume)
     {
-        decimal initialShares = PositionShares; // Snapshot
-        base.Buy(price, dollarAmount, volume);
+        decimal initialShares = GetPositionShares(assetId);
+        base.Buy(assetId, price, dollarAmount, volume);
 
-        // ONLY log if the base broker actually succeeded in buying shares!
-        if (PositionShares > initialShares)
-        {
-            var lastTrade = TradeLedger.Last(); // Grab the true execution price
-            Console.ForegroundColor = ConsoleColor.Green;
-            Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [PAPER EXECUTION] BOUGHT YES @ ${lastTrade.Price:0.00} | Size: ${lastTrade.DollarValue:0.00} | Asset: {OutcomeId.Substring(0, 8)}...");
-            Console.ResetColor();
-        }
-    }
-
-    public override void SellAll(decimal price, decimal volume)
-    {
-        decimal initialShares = PositionShares; // Snapshot
-        decimal entryPrice = AverageEntryPrice;
-
-        base.SellAll(price, volume);
-
-        // ONLY log if the base broker actually succeeded in selling shares!
-        if (PositionShares < initialShares)
+        if (GetPositionShares(assetId) > initialShares)
         {
             var lastTrade = TradeLedger.Last();
-            // Calculate accurate PnL using the real execution price and amount of shares sold
-            decimal pnl = (lastTrade.Price - entryPrice) * (initialShares - PositionShares);
-
-            Console.ForegroundColor = pnl >= 0 ? ConsoleColor.Cyan : ConsoleColor.Red;
-            Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [PAPER CLOSED] SOLD YES @ ${lastTrade.Price:0.00} | PnL: ${(pnl):0.00} | Total Equity: ${CashBalance:0.00} | Asset: {OutcomeId.Substring(0, 8)}...");
+            Console.ForegroundColor = ConsoleColor.Green;
+            Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [PAPER EXECUTION] BOUGHT YES @ ${lastTrade.Price:0.00} | Size: ${lastTrade.DollarValue:0.00} | Asset: {assetId.Substring(0, 8)}...");
             Console.ResetColor();
         }
     }
 
-    public override void BuyNo(decimal price, decimal dollarAmount, decimal volume)
+    public override void SellAll(string assetId, decimal price, decimal volume)
     {
-        decimal initialShares = NoPositionShares;
-        base.BuyNo(price, dollarAmount, volume);
+        decimal initialShares = GetPositionShares(assetId);
+        decimal entryPrice = GetAverageEntryPrice(assetId);
 
-        if (NoPositionShares > initialShares)
+        base.SellAll(assetId, price, volume);
+
+        if (GetPositionShares(assetId) < initialShares)
+        {
+            var lastTrade = TradeLedger.Last();
+            decimal pnl = (lastTrade.Price - entryPrice) * (initialShares - GetPositionShares(assetId));
+
+            Console.ForegroundColor = pnl >= 0 ? ConsoleColor.Cyan : ConsoleColor.Red;
+            Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [PAPER CLOSED] SOLD YES @ ${lastTrade.Price:0.00} | PnL: ${(pnl):0.00} | Total Equity: ${GetTotalPortfolioValue():0.00} | Asset: {assetId.Substring(0, 8)}...");
+            Console.ResetColor();
+        }
+    }
+
+    public override void BuyNo(string assetId, decimal price, decimal dollarAmount, decimal volume)
+    {
+        decimal initialShares = GetNoPositionShares(assetId);
+        base.BuyNo(assetId, price, dollarAmount, volume);
+
+        if (GetNoPositionShares(assetId) > initialShares)
         {
             var lastTrade = TradeLedger.Last();
             Console.ForegroundColor = ConsoleColor.Magenta;
-            Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [PAPER EXECUTION] BOUGHT NO @ ${lastTrade.Price:0.00} | Size: ${lastTrade.DollarValue:0.00} | Asset: {OutcomeId.Substring(0, 8)}...");
+            Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [PAPER EXECUTION] BOUGHT NO @ ${lastTrade.Price:0.00} | Size: ${lastTrade.DollarValue:0.00} | Asset: {assetId.Substring(0, 8)}...");
             Console.ResetColor();
         }
     }
 
-    public override void SellAllNo(decimal price, decimal volume)
+    public override void SellAllNo(string assetId, decimal price, decimal volume)
     {
-        decimal initialShares = NoPositionShares;
-        decimal entryPrice = AverageNoEntryPrice;
+        decimal initialShares = GetNoPositionShares(assetId);
+        decimal entryPrice = GetAverageNoEntryPrice(assetId);
 
-        base.SellAllNo(price, volume);
+        base.SellAllNo(assetId, price, volume);
 
-        if (NoPositionShares < initialShares)
+        if (GetNoPositionShares(assetId) < initialShares)
         {
             var lastTrade = TradeLedger.Last();
-            decimal pnl = (lastTrade.Price - entryPrice) * (initialShares - NoPositionShares);
+            decimal pnl = (lastTrade.Price - entryPrice) * (initialShares - GetNoPositionShares(assetId));
 
             Console.ForegroundColor = pnl >= 0 ? ConsoleColor.Cyan : ConsoleColor.Red;
-            Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [PAPER CLOSED] SOLD NO @ ${lastTrade.Price:0.00} | PnL: ${(pnl):0.00} | Total Equity: ${CashBalance:0.00} | Asset: {OutcomeId.Substring(0, 8)}...");
+            Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [PAPER CLOSED] SOLD NO @ ${lastTrade.Price:0.00} | PnL: ${(pnl):0.00} | Total Equity: ${GetTotalPortfolioValue():0.00} | Asset: {assetId.Substring(0, 8)}...");
             Console.ResetColor();
         }
     }

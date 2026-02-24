@@ -24,7 +24,7 @@ class Program
         Console.WriteLine("  LIVE PAPER TRADING ENGINE INITIALIZED  ");
         Console.WriteLine("=========================================");
 
-        var paperBrokers = new Dictionary<string, PaperBroker>();
+        var globalBroker = new PaperBroker(1000m);
         var sniperBots = new Dictionary<string, LiveFlashCrashSniperStrategy>();
         var orderBooks = new Dictionary<string, LocalOrderBook>();
 
@@ -133,7 +133,6 @@ class Program
                                         if (!orderBooks.ContainsKey(assetId))
                                         {
                                             orderBooks[assetId] = new LocalOrderBook(assetId);
-                                            paperBrokers[assetId] = new PaperBroker(1000m, assetId);
                                             sniperBots[assetId] = new LiveFlashCrashSniperStrategy(0.15m, 60, 0.05m, 0.15m, 0.05m);
                                         }
 
@@ -174,7 +173,7 @@ class Program
                                                 Console.Write(".");
                                                 Console.ResetColor();
 
-                                                sniperBots[assetId].OnBookUpdate(book, paperBrokers[assetId]);
+                                                sniperBots[assetId].OnBookUpdate(book, globalBroker);
                                             }
                                         }
                                     }

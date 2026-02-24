@@ -35,12 +35,15 @@ public class LiveFlashCrashSniperStrategy
     public void OnBookUpdate(LocalOrderBook book, SimulatedBroker broker)
     {
         long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        string assetId = book.AssetId;
 
-        // Look at both sides of the shelf
         decimal bestAsk = book.GetBestAskPrice();
         decimal bestBid = book.GetBestBidPrice();
         decimal availableAskSize = book.GetBestAskSize();
-        decimal availableBidSize = book.GetBestBidSize(); // The actual volume buyers want
+        decimal availableBidSize = book.GetBestBidSize();
+
+        // Always keep the global broker updated on this asset's latest price!
+        broker.UpdateLastKnownPrice(assetId, bestAsk);
 
         if (bestAsk >= 1.00m || availableAskSize <= 0) return;
 
@@ -52,24 +55,26 @@ public class LiveFlashCrashSniperStrategy
 
         if (_recentAsks.Count < 2) return;
 
-        decimal currentEquity = broker.GetTotalPortfolioValue(bestBid);
+        // Uses the global portfolio equity across all markets
+        decimal currentEquity = broker.GetTotalPortfolioValue();
         decimal dollarsToInvest = Math.Min(currentEquity * _riskPercentage, broker.CashBalance);
 
-        // --- MANAGE OPEN POSITIONS (DUMP THE BAGS) ---
-        if (broker.PositionShares > 0)
+        // Fetch positions specifically for THIS asset
+        decimal positionShares = broker.GetPositionShares(assetId);
+
+        if (positionShares > 0)
         {
-            bool isTakeProfit = bestBid >= broker.AverageEntryPrice + _reboundProfitMargin;
-            bool isStopLoss = bestBid <= broker.AverageEntryPrice - _stopLossMargin;
+            decimal avgEntry = broker.GetAverageEntryPrice(assetId);
+            bool isTakeProfit = bestBid >= avgEntry + _reboundProfitMargin;
+            bool isStopLoss = bestBid <= avgEntry - _stopLossMargin;
 
             if (isTakeProfit || isStopLoss)
             {
-                // Sell directly into the actual buyer liquidity!
-                broker.SellAll(bestBid, availableBidSize);
+                broker.SellAll(assetId, bestBid, availableBidSize);
             }
             return;
         }
 
-        // --- HUNT FOR NEW CRASHES ---
         decimal maxAskInWindow = _recentAsks.Max(x => x.Price);
 
         if (maxAskInWindow - bestAsk >= _crashThreshold && dollarsToInvest >= 1.00m)
@@ -80,7 +85,7 @@ public class LiveFlashCrashSniperStrategy
 
             if (actualDollarsSpent >= 1.00m)
             {
-                broker.Buy(bestAsk, actualDollarsSpent, sharesToBuy);
+                broker.Buy(assetId, bestAsk, actualDollarsSpent, sharesToBuy);
                 _recentAsks.Clear();
             }
         }
