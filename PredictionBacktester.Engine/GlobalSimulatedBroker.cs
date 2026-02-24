@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Concurrent; // NEW: Required for thread safety!
 using System.Collections.Generic;
 using PredictionBacktester.Core.Entities;
 
@@ -7,16 +8,19 @@ namespace PredictionBacktester.Engine;
 public class GlobalSimulatedBroker
 {
     public decimal SpreadPenalty { get; private set; } = 0.015m;
+
+    // We use a lock object to protect non-concurrent properties like CashBalance and TradeLedger
+    protected readonly object _brokerLock = new object();
+
     public decimal CashBalance { get; protected set; }
 
-    // Multi-asset properties
-    private Dictionary<string, decimal> _positionShares = new();
-    private Dictionary<string, decimal> _averageEntryPrices = new();
-    private Dictionary<string, decimal> _noPositionShares = new();
-    private Dictionary<string, decimal> _averageNoEntryPrices = new();
-    private Dictionary<string, decimal> _lastKnownPrices = new();
+    // THREAD SAFETY: Upgraded to ConcurrentDictionary
+    private ConcurrentDictionary<string, decimal> _positionShares = new();
+    private ConcurrentDictionary<string, decimal> _averageEntryPrices = new();
+    private ConcurrentDictionary<string, decimal> _noPositionShares = new();
+    private ConcurrentDictionary<string, decimal> _averageNoEntryPrices = new();
+    private ConcurrentDictionary<string, decimal> _lastKnownPrices = new();
 
-    // Metrics
     public int TotalTradesExecuted { get; protected set; }
     public int WinningTrades { get; protected set; }
     public int LosingTrades { get; protected set; }
@@ -48,161 +52,182 @@ public class GlobalSimulatedBroker
     public virtual void Buy(string assetId, decimal currentPrice, decimal dollarsToInvest, decimal availableVolumeShares)
     {
         UpdateLastKnownPrice(assetId, currentPrice);
-        if (dollarsToInvest <= 0.01m || CashBalance < dollarsToInvest) return;
 
-        decimal executionPrice = Math.Min(currentPrice + SpreadPenalty, 0.99m);
-        decimal desiredShares = dollarsToInvest / executionPrice;
-        decimal actualSharesBought = Math.Min(desiredShares, availableVolumeShares * MaxParticipationRate);
+        // Grab the bathroom key before modifying cash or ledgers!
+        lock (_brokerLock)
+        {
+            if (dollarsToInvest <= 0.01m || CashBalance < dollarsToInvest) return;
 
-        if (actualSharesBought <= 0) return;
+            decimal executionPrice = Math.Min(currentPrice + SpreadPenalty, 0.99m);
+            decimal desiredShares = dollarsToInvest / executionPrice;
+            decimal actualSharesBought = Math.Min(desiredShares, availableVolumeShares * MaxParticipationRate);
 
-        decimal actualDollarsSpent = actualSharesBought * executionPrice;
-        decimal currentShares = GetPositionShares(assetId);
-        decimal currentAvgPrice = GetAverageEntryPrice(assetId);
+            if (actualSharesBought <= 0) return;
 
-        decimal totalCost = (currentShares * currentAvgPrice) + actualDollarsSpent;
+            decimal actualDollarsSpent = actualSharesBought * executionPrice;
+            decimal currentShares = GetPositionShares(assetId);
+            decimal currentAvgPrice = GetAverageEntryPrice(assetId);
 
-        _positionShares[assetId] = currentShares + actualSharesBought;
-        _averageEntryPrices[assetId] = totalCost / _positionShares[assetId];
-        CashBalance -= actualDollarsSpent;
+            decimal totalCost = (currentShares * currentAvgPrice) + actualDollarsSpent;
 
-        TradeLedger.Add(new ExecutedTrade { OutcomeId = assetId, Date = CurrentTime, Side = "BUY", Price = executionPrice, Shares = actualSharesBought, DollarValue = actualDollarsSpent });
+            _positionShares[assetId] = currentShares + actualSharesBought;
+            _averageEntryPrices[assetId] = totalCost / _positionShares[assetId];
+            CashBalance -= actualDollarsSpent;
+
+            TradeLedger.Add(new ExecutedTrade { OutcomeId = assetId, Date = CurrentTime, Side = "BUY", Price = executionPrice, Shares = actualSharesBought, DollarValue = actualDollarsSpent });
+        }
     }
 
     public virtual void SellAll(string assetId, decimal currentPrice, decimal availableVolumeShares)
     {
         UpdateLastKnownPrice(assetId, currentPrice);
-        decimal currentShares = GetPositionShares(assetId);
-        if (currentShares <= 0) return;
 
-        decimal sharesToSell = Math.Min(currentShares, availableVolumeShares * MaxParticipationRate);
-        if (sharesToSell <= 0) return;
+        lock (_brokerLock)
+        {
+            decimal currentShares = GetPositionShares(assetId);
+            if (currentShares <= 0) return;
 
-        decimal executionPrice = Math.Max(currentPrice - SpreadPenalty, 0.01m);
-        decimal cashReceived = sharesToSell * executionPrice;
-        decimal currentAvgPrice = GetAverageEntryPrice(assetId);
+            decimal sharesToSell = Math.Min(currentShares, availableVolumeShares * MaxParticipationRate);
+            if (sharesToSell <= 0) return;
 
-        if (executionPrice > currentAvgPrice) WinningTrades++;
-        else LosingTrades++;
+            decimal executionPrice = Math.Max(currentPrice - SpreadPenalty, 0.01m);
+            decimal cashReceived = sharesToSell * executionPrice;
+            decimal currentAvgPrice = GetAverageEntryPrice(assetId);
 
-        TradeLedger.Add(new ExecutedTrade { OutcomeId = assetId, Date = CurrentTime, Side = "SELL", Price = executionPrice, Shares = sharesToSell, DollarValue = cashReceived });
+            if (executionPrice > currentAvgPrice) WinningTrades++;
+            else LosingTrades++;
 
-        CashBalance += cashReceived;
-        _positionShares[assetId] = currentShares - sharesToSell;
+            TradeLedger.Add(new ExecutedTrade { OutcomeId = assetId, Date = CurrentTime, Side = "SELL", Price = executionPrice, Shares = sharesToSell, DollarValue = cashReceived });
 
-        if (_positionShares[assetId] == 0) _averageEntryPrices[assetId] = 0;
-        TotalTradesExecuted++;
+            CashBalance += cashReceived;
+            _positionShares[assetId] = currentShares - sharesToSell;
+
+            if (_positionShares[assetId] == 0) _averageEntryPrices[assetId] = 0;
+            TotalTradesExecuted++;
+        }
     }
 
+    // Apply the exact same lock structure to BuyNo and SellAllNo...
     public virtual void BuyNo(string assetId, decimal currentYesPrice, decimal dollarsToInvest, decimal availableVolumeShares)
     {
         UpdateLastKnownPrice(assetId, currentYesPrice);
-        decimal currentNoPrice = 1.00m - currentYesPrice;
-        decimal executionPrice = Math.Min(currentNoPrice + SpreadPenalty, 0.99m);
 
-        if (executionPrice <= 0.00m || dollarsToInvest <= 0.01m || CashBalance < dollarsToInvest) return;
+        lock (_brokerLock)
+        {
+            decimal currentNoPrice = 1.00m - currentYesPrice;
+            decimal executionPrice = Math.Min(currentNoPrice + SpreadPenalty, 0.99m);
 
-        decimal desiredShares = dollarsToInvest / executionPrice;
-        decimal actualSharesBought = Math.Min(desiredShares, availableVolumeShares * MaxParticipationRate);
+            if (executionPrice <= 0.00m || dollarsToInvest <= 0.01m || CashBalance < dollarsToInvest) return;
 
-        if (actualSharesBought <= 0) return;
+            decimal desiredShares = dollarsToInvest / executionPrice;
+            decimal actualSharesBought = Math.Min(desiredShares, availableVolumeShares * MaxParticipationRate);
 
-        decimal actualDollarsSpent = actualSharesBought * executionPrice;
-        decimal currentShares = GetNoPositionShares(assetId);
-        decimal currentAvgPrice = GetAverageNoEntryPrice(assetId);
+            if (actualSharesBought <= 0) return;
 
-        decimal totalCost = (currentShares * currentAvgPrice) + actualDollarsSpent;
+            decimal actualDollarsSpent = actualSharesBought * executionPrice;
+            decimal currentShares = GetNoPositionShares(assetId);
+            decimal currentAvgPrice = GetAverageNoEntryPrice(assetId);
 
-        _noPositionShares[assetId] = currentShares + actualSharesBought;
-        _averageNoEntryPrices[assetId] = totalCost / _noPositionShares[assetId];
-        CashBalance -= actualDollarsSpent;
+            decimal totalCost = (currentShares * currentAvgPrice) + actualDollarsSpent;
 
-        TradeLedger.Add(new ExecutedTrade { OutcomeId = assetId, Date = CurrentTime, Side = "BUY NO", Price = executionPrice, Shares = actualSharesBought, DollarValue = actualDollarsSpent });
+            _noPositionShares[assetId] = currentShares + actualSharesBought;
+            _averageNoEntryPrices[assetId] = totalCost / _noPositionShares[assetId];
+            CashBalance -= actualDollarsSpent;
+
+            TradeLedger.Add(new ExecutedTrade { OutcomeId = assetId, Date = CurrentTime, Side = "BUY NO", Price = executionPrice, Shares = actualSharesBought, DollarValue = actualDollarsSpent });
+        }
     }
 
     public virtual void SellAllNo(string assetId, decimal currentYesPrice, decimal availableVolumeShares)
     {
         UpdateLastKnownPrice(assetId, currentYesPrice);
-        decimal currentShares = GetNoPositionShares(assetId);
-        if (currentShares <= 0) return;
 
-        decimal currentNoPrice = 1.00m - currentYesPrice;
-        decimal executionPrice = Math.Max(currentNoPrice - SpreadPenalty, 0.01m);
-        decimal sharesToSell = Math.Min(currentShares, availableVolumeShares * MaxParticipationRate);
-
-        if (sharesToSell <= 0) return;
-
-        decimal cashReceived = sharesToSell * executionPrice;
-        decimal currentAvgPrice = GetAverageNoEntryPrice(assetId);
-
-        if (executionPrice > currentAvgPrice) WinningTrades++;
-        else LosingTrades++;
-
-        TradeLedger.Add(new ExecutedTrade { OutcomeId = assetId, Date = CurrentTime, Side = "SELL NO", Price = executionPrice, Shares = sharesToSell, DollarValue = cashReceived });
-
-        CashBalance += cashReceived;
-        _noPositionShares[assetId] = currentShares - sharesToSell;
-
-        if (_noPositionShares[assetId] == 0) _averageNoEntryPrices[assetId] = 0;
-        TotalTradesExecuted++;
-    }
-
-    public decimal GetTotalPortfolioValue()
-    {
-        decimal activeValue = 0m;
-        foreach (var kvp in _positionShares)
+        lock (_brokerLock)
         {
-            decimal price = _lastKnownPrices.GetValueOrDefault(kvp.Key, 0m);
-            activeValue += kvp.Value * price;
+            decimal currentShares = GetNoPositionShares(assetId);
+            if (currentShares <= 0) return;
+
+            decimal currentNoPrice = 1.00m - currentYesPrice;
+            decimal executionPrice = Math.Max(currentNoPrice - SpreadPenalty, 0.01m);
+            decimal sharesToSell = Math.Min(currentShares, availableVolumeShares * MaxParticipationRate);
+
+            if (sharesToSell <= 0) return;
+
+            decimal cashReceived = sharesToSell * executionPrice;
+            decimal currentAvgPrice = GetAverageNoEntryPrice(assetId);
+
+            if (executionPrice > currentAvgPrice) WinningTrades++;
+            else LosingTrades++;
+
+            TradeLedger.Add(new ExecutedTrade { OutcomeId = assetId, Date = CurrentTime, Side = "SELL NO", Price = executionPrice, Shares = sharesToSell, DollarValue = cashReceived });
+
+            CashBalance += cashReceived;
+            _noPositionShares[assetId] = currentShares - sharesToSell;
+
+            if (_noPositionShares[assetId] == 0) _averageNoEntryPrices[assetId] = 0;
+            TotalTradesExecuted++;
         }
-        foreach (var kvp in _noPositionShares)
-        {
-            decimal price = 1.00m - _lastKnownPrices.GetValueOrDefault(kvp.Key, 1.00m);
-            activeValue += kvp.Value * price;
-        }
-        return CashBalance + activeValue;
     }
 
     public virtual void ResolveMarket(string assetId, decimal outcomePrice)
     {
         UpdateLastKnownPrice(assetId, outcomePrice);
 
-        decimal yesShares = GetPositionShares(assetId);
-        decimal noShares = GetNoPositionShares(assetId);
-
-        // --- SETTLE YES SHARES ---
-        if (yesShares > 0)
+        lock (_brokerLock)
         {
-            decimal yesPayout = yesShares * outcomePrice; // $1.00 or $0.00
-            CashBalance += yesPayout;
+            decimal yesShares = GetPositionShares(assetId);
+            decimal noShares = GetNoPositionShares(assetId);
 
-            decimal currentAvgPrice = GetAverageEntryPrice(assetId);
-            if (outcomePrice > currentAvgPrice) WinningTrades++;
-            else LosingTrades++;
+            if (yesShares > 0)
+            {
+                decimal yesPayout = yesShares * outcomePrice;
+                CashBalance += yesPayout;
 
-            TradeLedger.Add(new ExecutedTrade { OutcomeId = assetId, Date = CurrentTime, Side = "RESOLVE YES", Price = outcomePrice, Shares = yesShares, DollarValue = yesPayout });
+                decimal currentAvgPrice = GetAverageEntryPrice(assetId);
+                if (outcomePrice > currentAvgPrice) WinningTrades++;
+                else LosingTrades++;
 
-            _positionShares[assetId] = 0;
-            _averageEntryPrices[assetId] = 0;
+                TradeLedger.Add(new ExecutedTrade { OutcomeId = assetId, Date = CurrentTime, Side = "RESOLVE YES", Price = outcomePrice, Shares = yesShares, DollarValue = yesPayout });
+
+                _positionShares[assetId] = 0;
+                _averageEntryPrices[assetId] = 0;
+            }
+
+            if (noShares > 0)
+            {
+                decimal noPayoutPrice = 1.00m - outcomePrice;
+                decimal noPayout = noShares * noPayoutPrice;
+                CashBalance += noPayout;
+
+                decimal currentAvgNoPrice = GetAverageNoEntryPrice(assetId);
+                if (noPayoutPrice > currentAvgNoPrice) WinningTrades++;
+                else LosingTrades++;
+
+                TradeLedger.Add(new ExecutedTrade { OutcomeId = assetId, Date = CurrentTime, Side = "RESOLVE NO", Price = noPayoutPrice, Shares = noShares, DollarValue = noPayout });
+
+                _noPositionShares[assetId] = 0;
+                _averageNoEntryPrices[assetId] = 0;
+            }
+            TotalTradesExecuted++;
         }
+    }
 
-        // --- SETTLE NO SHARES ---
-        if (noShares > 0)
+    public decimal GetTotalPortfolioValue()
+    {
+        lock (_brokerLock)
         {
-            decimal noPayoutPrice = 1.00m - outcomePrice; // Inverse of YES
-            decimal noPayout = noShares * noPayoutPrice;
-            CashBalance += noPayout;
-
-            decimal currentAvgNoPrice = GetAverageNoEntryPrice(assetId);
-            if (noPayoutPrice > currentAvgNoPrice) WinningTrades++;
-            else LosingTrades++;
-
-            TradeLedger.Add(new ExecutedTrade { OutcomeId = assetId, Date = CurrentTime, Side = "RESOLVE NO", Price = noPayoutPrice, Shares = noShares, DollarValue = noPayout });
-
-            _noPositionShares[assetId] = 0;
-            _averageNoEntryPrices[assetId] = 0;
+            decimal activeValue = 0m;
+            foreach (var kvp in _positionShares)
+            {
+                decimal price = _lastKnownPrices.GetValueOrDefault(kvp.Key, 0m);
+                activeValue += kvp.Value * price;
+            }
+            foreach (var kvp in _noPositionShares)
+            {
+                decimal price = 1.00m - _lastKnownPrices.GetValueOrDefault(kvp.Key, 1.00m);
+                activeValue += kvp.Value * price;
+            }
+            return CashBalance + activeValue;
         }
-
-        TotalTradesExecuted++;
     }
 }
