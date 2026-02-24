@@ -4,7 +4,7 @@ using PredictionBacktester.Engine;
 
 namespace PredictionLiveTrader;
 
-public class PaperBroker : SimulatedBroker
+public class PaperBroker : GlobalSimulatedBroker
 {
     public PaperBroker(decimal initialCapital) : base(initialCapital)
     {

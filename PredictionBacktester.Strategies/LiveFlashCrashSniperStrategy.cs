@@ -32,7 +32,7 @@ public class LiveFlashCrashSniperStrategy
         _recentAsks = new Queue<(long, decimal)>();
     }
 
-    public void OnBookUpdate(LocalOrderBook book, SimulatedBroker broker)
+    public void OnBookUpdate(LocalOrderBook book, GlobalSimulatedBroker broker)
     {
         long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         string assetId = book.AssetId;
