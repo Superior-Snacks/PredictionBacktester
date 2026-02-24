@@ -6,7 +6,7 @@ using PredictionBacktester.Engine;
 
 namespace PredictionBacktester.Strategies;
 
-public class LiveFlashCrashSniperStrategy
+public class LiveFlashCrashSniperStrategy : ILiveStrategy
 {
     private readonly decimal _crashThreshold;
     private readonly long _timeWindowSeconds;

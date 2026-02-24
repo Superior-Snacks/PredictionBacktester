@@ -27,7 +27,7 @@ class Program
         // THE GLOBAL BROKER FIX: One shared $1,000 bank account for all markets!
         var globalBroker = new PaperBroker(1000m);
 
-        var sniperBots = new Dictionary<string, LiveFlashCrashSniperStrategy>();
+        var activeStrategies = new Dictionary<string, List<ILiveStrategy>>();
         var orderBooks = new Dictionary<string, LocalOrderBook>();
 
         Console.WriteLine("Setting up API Client...");
@@ -177,7 +177,15 @@ class Program
                                         if (!orderBooks.ContainsKey(assetId))
                                         {
                                             orderBooks[assetId] = new LocalOrderBook(assetId);
-                                            sniperBots[assetId] = new LiveFlashCrashSniperStrategy(0.15m, 60, 0.05m, 0.15m, 0.05m);
+
+                                            // Initialize a LIST of strategies for this specific market
+                                            activeStrategies[assetId] = new List<ILiveStrategy>
+                                            {
+                                                new LiveFlashCrashSniperStrategy(0.15m, 60, 0.05m, 0.15m, 0.05m)
+                                                // In the future, you just add your next strategy right here!
+                                                // new LiveBollingerBreakoutStrategy(),
+                                                // new LiveVolumeAnomalyStrategy()
+                                            };
                                         }
 
                                         if (root.TryGetProperty("bids", out var bidsEl) && root.TryGetProperty("asks", out var asksEl))
@@ -217,8 +225,11 @@ class Program
                                                 Console.Write(".");
                                                 Console.ResetColor();
 
-                                                // THE GLOBAL BROKER FIX: Feed the shared globalBroker into the strategy!
-                                                sniperBots[assetId].OnBookUpdate(book, globalBroker);
+                                                // THE MULTIPLEXER ROUTING: Feed the exact same book to every strategy simultaneously!
+                                                foreach (var strategy in activeStrategies[assetId])
+                                                {
+                                                    strategy.OnBookUpdate(book, globalBroker);
+                                                }
                                             }
                                         }
                                     }
