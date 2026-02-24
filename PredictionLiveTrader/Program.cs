@@ -114,7 +114,7 @@ class Program
 
                         string message = Encoding.UTF8.GetString(ms.ToArray());
                         ms.SetLength(0);
-                        Console.WriteLine($"[MESSAGE] {message}");
+                        //Console.WriteLine($"[MESSAGE] {message}");
 
                         try
                         {
