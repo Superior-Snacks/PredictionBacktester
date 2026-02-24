@@ -17,25 +17,54 @@ namespace PredictionLiveTrader;
 
 class Program
 {
+    // --- PAUSE & RESUME CONTROLS ---
+    private static volatile bool _isPaused = false;
+    private static CancellationTokenSource _pauseCts = new CancellationTokenSource();
+
     static async Task Main(string[] args)
     {
         Console.Clear();
         Console.WriteLine("=========================================");
         Console.WriteLine("  LIVE PAPER TRADING ENGINE INITIALIZED  ");
+        Console.WriteLine("  Controls: Press 'P' to Pause, 'R' to Resume");
         Console.WriteLine("=========================================");
 
-        // THE GLOBAL BROKER FIX: One shared $1,000 bank account for all markets!
         var globalBroker = new PaperBroker(1000m);
-
         var activeStrategies = new Dictionary<string, List<ILiveStrategy>>();
         var orderBooks = new Dictionary<string, LocalOrderBook>();
+
+        // ==========================================
+        // KEYBOARD LISTENER (Pause / Resume)
+        // ==========================================
+        _ = Task.Run(() =>
+        {
+            while (true)
+            {
+                var keyInfo = Console.ReadKey(intercept: true);
+                if (keyInfo.Key == ConsoleKey.P && !_isPaused)
+                {
+                    _isPaused = true;
+                    _pauseCts.Cancel(); // Instantly sever the WebSocket connection!
+                    Console.ForegroundColor = ConsoleColor.Yellow;
+                    Console.WriteLine("\n[SYSTEM] PAUSED by user. Disconnecting and wiping memory... Press 'R' to resume.");
+                    Console.ResetColor();
+                }
+                else if (keyInfo.Key == ConsoleKey.R && _isPaused)
+                {
+                    _isPaused = false;
+                    _pauseCts = new CancellationTokenSource(); // Reset the token for the new connection
+                    Console.ForegroundColor = ConsoleColor.Green;
+                    Console.WriteLine("\n[SYSTEM] RESUMED by user. Reconnecting to Polymarket...");
+                    Console.ResetColor();
+                }
+            }
+        });
 
         Console.WriteLine("Setting up API Client...");
         var services = new ServiceCollection();
         services.AddHttpClient("PolymarketGamma", client => { client.BaseAddress = new Uri("https://gamma-api.polymarket.com/"); });
         services.AddHttpClient("PolymarketClob", client => { client.BaseAddress = new Uri("https://clob.polymarket.com/"); });
         services.AddHttpClient("PolymarketData", client => { client.BaseAddress = new Uri("https://data-api.polymarket.com/"); });
-
         services.AddTransient<PolymarketClient>();
 
         var serviceProvider = services.BuildServiceProvider();
@@ -67,18 +96,18 @@ class Program
         Console.WriteLine($"Found {allTokens.Count} active outcome tokens to monitor!");
 
         // ==========================================
-        // SETTLEMENT SWEEPER (Checks for Expired Markets)
+        // SETTLEMENT SWEEPER 
         // ==========================================
         _ = Task.Run(async () =>
         {
             while (true)
             {
-                await Task.Delay(TimeSpan.FromMinutes(15)); // Run every 15 minutes
-                Console.WriteLine("\n[SYSTEM] Running background settlement sweep...");
+                await Task.Delay(TimeSpan.FromMinutes(15));
+                if (_isPaused) continue; // Don't sweep if we are paused!
 
+                Console.WriteLine("\n[SYSTEM] Running background settlement sweep...");
                 try
                 {
-                    // Check the REST API to see if any markets have closed
                     int sweepLimit = 100;
                     for (int offset = 0; offset < 500; offset += sweepLimit)
                     {
@@ -96,10 +125,8 @@ class Program
                                     {
                                         string tokenId = market.ClobTokenIds[i];
 
-                                        // ONLY resolve if our Global Broker is actually holding bags for this token!
                                         if (globalBroker.GetPositionShares(tokenId) > 0 || globalBroker.GetNoPositionShares(tokenId) > 0)
                                         {
-                                            // Parse the final settled price (1.00m or 0.00m) from the matching index
                                             decimal finalPayoutPrice = 0.00m;
                                             if (i < market.OutcomePrices.Length && decimal.TryParse(market.OutcomePrices[i], out decimal price))
                                             {
@@ -114,12 +141,7 @@ class Program
                         }
                     }
                 }
-                catch (Exception ex)
-                {
-                    Console.ForegroundColor = ConsoleColor.DarkYellow;
-                    Console.WriteLine($"[SYSTEM ERROR] Settlement sweep failed: {ex.Message}");
-                    Console.ResetColor();
-                }
+                catch { /* Ignore sweep errors */ }
             }
         });
 
@@ -128,13 +150,25 @@ class Program
         // ==========================================
         while (true)
         {
+            // 1. If the user paused the bot, just spin here in standby mode.
+            if (_isPaused)
+            {
+                await Task.Delay(1000);
+                continue;
+            }
+
+            // 2. AMNESIA: Wipe the shelves clean so we don't trade on stale Wi-Fi drop data!
+            orderBooks.Clear();
+            activeStrategies.Clear();
+
             try
             {
                 using var ws = new ClientWebSocket();
                 ws.Options.KeepAliveInterval = TimeSpan.FromSeconds(10);
 
                 Console.WriteLine("\n[CONNECTING] Connecting to Polymarket WebSocket...");
-                await ws.ConnectAsync(new Uri("wss://ws-subscriptions-clob.polymarket.com/ws/market"), CancellationToken.None);
+                // Pass the CancellationToken so 'P' instantly aborts the connection
+                await ws.ConnectAsync(new Uri("wss://ws-subscriptions-clob.polymarket.com/ws/market"), _pauseCts.Token);
                 Console.WriteLine("[CONNECTED] Listening for live order book updates... (Press CTRL+C to stop)\n");
 
                 var listenTask = Task.Run(async () =>
@@ -147,7 +181,8 @@ class Program
                         WebSocketReceiveResult result;
                         do
                         {
-                            result = await ws.ReceiveAsync(new ArraySegment<byte>(receiveBuffer), CancellationToken.None);
+                            // Pass the CancellationToken here too!
+                            result = await ws.ReceiveAsync(new ArraySegment<byte>(receiveBuffer), _pauseCts.Token);
                             if (result.MessageType == WebSocketMessageType.Close)
                             {
                                 await ws.CloseAsync(WebSocketCloseStatus.NormalClosure, string.Empty, CancellationToken.None);
@@ -178,13 +213,10 @@ class Program
                                         {
                                             orderBooks[assetId] = new LocalOrderBook(assetId);
 
-                                            // Initialize a LIST of strategies for this specific market
+                                            // THE MULTIPLEXER: Map 1 Asset to Multiple Strategies
                                             activeStrategies[assetId] = new List<ILiveStrategy>
                                             {
                                                 new LiveFlashCrashSniperStrategy(0.15m, 60, 0.05m, 0.15m, 0.05m)
-                                                // In the future, you just add your next strategy right here!
-                                                // new LiveBollingerBreakoutStrategy(),
-                                                // new LiveVolumeAnomalyStrategy()
                                             };
                                         }
 
@@ -236,25 +268,22 @@ class Program
                                 }
                             }
                         }
-                        catch (Exception parseEx)
-                        {
-                            Console.ForegroundColor = ConsoleColor.Red;
-                            Console.WriteLine($"\n[PARSE ERROR] JSON parsing failed: {parseEx.Message}");
-                            Console.ResetColor();
-                        }
+                        catch { /* Ignore dirty JSON */ }
                     }
-                });
+                }, _pauseCts.Token);
 
                 int chunkSize = 50;
                 bool isFirstChunk = true;
 
                 for (int i = 0; i < allTokens.Count; i += chunkSize)
                 {
+                    // If the user hit 'P' while we were still subscribing, abort!
+                    if (_pauseCts.IsCancellationRequested) break;
+
                     var chunk = allTokens.Skip(i).Take(chunkSize);
                     string assetListString = string.Join("\",\"", chunk);
 
                     string subscribeMessage;
-
                     if (isFirstChunk)
                     {
                         subscribeMessage = $"{{\"assets_ids\":[\"{assetListString}\"],\"type\":\"market\"}}";
@@ -266,17 +295,22 @@ class Program
                     }
 
                     var bytes = Encoding.UTF8.GetBytes(subscribeMessage);
-                    await ws.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, CancellationToken.None);
+                    await ws.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, _pauseCts.Token);
 
                     await Task.Delay(500);
                 }
 
                 await listenTask;
             }
+            catch (OperationCanceledException)
+            {
+                // We expect this! It means the user pressed 'P'. 
+                // Do not print an error, just loop back around and wait in standby.
+            }
             catch (Exception ex)
             {
                 Console.ForegroundColor = ConsoleColor.Yellow;
-                Console.WriteLine($"\n[CONNECTION LOST] WebSocket connection failed or dropped: {ex.Message}");
+                Console.WriteLine($"\n[CONNECTION LOST] WebSocket connection dropped: {ex.Message}");
                 Console.WriteLine("Reconnecting in 5 seconds...");
                 Console.ResetColor();
 
