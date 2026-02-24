@@ -21,6 +21,8 @@ class Program
     private static volatile bool _isPaused = false;
     private static CancellationTokenSource _pauseCts = new CancellationTokenSource();
 
+    private static PaperBroker _globalBroker;
+
     static async Task Main(string[] args)
     {
         Console.Clear();
@@ -29,7 +31,24 @@ class Program
         Console.WriteLine("  Controls: Press 'P' to Pause, 'R' to Resume");
         Console.WriteLine("=========================================");
 
-        var globalBroker = new PaperBroker(1000m);
+        _globalBroker = new PaperBroker(1000m);
+
+        // THE INTERCEPTOR: Catch CTRL+C before the console dies!
+        Console.CancelKeyPress += (sender, e) =>
+        {
+            e.Cancel = true; // Tell the OS: "Wait, don't kill the app yet!"
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.WriteLine("\n\n[SYSTEM] Graceful shutdown initiated...");
+
+            // Run our export script
+            ExportLedgerToCsv();
+
+            Console.WriteLine("[SYSTEM] Engine safely terminated. Goodbye.");
+            Console.ResetColor();
+
+            Environment.Exit(0); // Now we have permission to die peacefully.
+        };
+
         var activeStrategies = new Dictionary<string, List<ILiveStrategy>>();
         var orderBooks = new Dictionary<string, LocalOrderBook>();
 
@@ -125,7 +144,7 @@ class Program
                                     {
                                         string tokenId = market.ClobTokenIds[i];
 
-                                        if (globalBroker.GetPositionShares(tokenId) > 0 || globalBroker.GetNoPositionShares(tokenId) > 0)
+                                        if (_globalBroker.GetPositionShares(tokenId) > 0 || _globalBroker.GetNoPositionShares(tokenId) > 0)
                                         {
                                             decimal finalPayoutPrice = 0.00m;
                                             if (i < market.OutcomePrices.Length && decimal.TryParse(market.OutcomePrices[i], out decimal price))
@@ -133,7 +152,7 @@ class Program
                                                 finalPayoutPrice = price;
                                             }
 
-                                            globalBroker.ResolveMarket(tokenId, finalPayoutPrice);
+                                            _globalBroker.ResolveMarket(tokenId, finalPayoutPrice);
                                         }
                                     }
                                 }
@@ -260,7 +279,7 @@ class Program
                                                 // THE MULTIPLEXER ROUTING: Feed the exact same book to every strategy simultaneously!
                                                 foreach (var strategy in activeStrategies[assetId])
                                                 {
-                                                    strategy.OnBookUpdate(book, globalBroker);
+                                                    strategy.OnBookUpdate(book, _globalBroker);
                                                 }
                                             }
                                         }
@@ -316,6 +335,49 @@ class Program
 
                 await Task.Delay(5000);
             }
+        }
+    }
+
+    // ==========================================
+    // GRACEFUL SHUTDOWN & LEDGER EXPORT
+    // ==========================================
+    private static void ExportLedgerToCsv()
+    {
+        var ledger = _globalBroker.TradeLedger;
+
+        if (ledger == null || ledger.Count == 0)
+        {
+            Console.ForegroundColor = ConsoleColor.DarkGray;
+            Console.WriteLine("\n[EXPORT] No trades executed during this session. Skipping ledger export.");
+            Console.ResetColor();
+            return;
+        }
+
+        try
+        {
+            // Name the file based on the exact shutdown time
+            string filename = $"LivePaperTrades_{DateTime.Now:yyyyMMdd_HHmmss}.csv";
+
+            using var writer = new StreamWriter(filename);
+
+            // Write the CSV Headers
+            writer.WriteLine("Timestamp,AssetId,Side,ExecutionPrice,Shares,DollarValue");
+
+            // Dump every trade into the file
+            foreach (var trade in ledger)
+            {
+                writer.WriteLine($"{trade.Date:O},{trade.OutcomeId},{trade.Side},{trade.Price},{trade.Shares},{trade.DollarValue}");
+            }
+
+            Console.ForegroundColor = ConsoleColor.Green;
+            Console.WriteLine($"\n[EXPORT SUCCESS] {_globalBroker.TradeLedger.Count} trades successfully saved to {filename}");
+            Console.ResetColor();
+        }
+        catch (Exception ex)
+        {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"\n[EXPORT FAILED] Could not save ledger: {ex.Message}");
+            Console.ResetColor();
         }
     }
 }
