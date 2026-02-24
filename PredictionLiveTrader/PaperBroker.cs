@@ -73,4 +73,31 @@ public class PaperBroker : GlobalSimulatedBroker
             Console.ResetColor();
         }
     }
+
+    public override void ResolveMarket(string assetId, decimal outcomePrice)
+    {
+        decimal initialYesShares = GetPositionShares(assetId);
+        decimal initialNoShares = GetNoPositionShares(assetId);
+        decimal yesEntryPrice = GetAverageEntryPrice(assetId);
+        decimal noEntryPrice = GetAverageNoEntryPrice(assetId);
+
+        base.ResolveMarket(assetId, outcomePrice);
+
+        if (initialYesShares > 0)
+        {
+            decimal pnl = (outcomePrice - yesEntryPrice) * initialYesShares;
+            Console.ForegroundColor = pnl > 0 ? ConsoleColor.Yellow : ConsoleColor.DarkRed;
+            Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [MARKET SETTLED] YES SHARES @ ${outcomePrice:0.00} | PnL: ${(pnl):0.00} | Total Equity: ${GetTotalPortfolioValue():0.00} | Asset: {assetId.Substring(0, 8)}...");
+            Console.ResetColor();
+        }
+
+        if (initialNoShares > 0)
+        {
+            decimal noOutcomePrice = 1.00m - outcomePrice;
+            decimal pnl = (noOutcomePrice - noEntryPrice) * initialNoShares;
+            Console.ForegroundColor = pnl > 0 ? ConsoleColor.Yellow : ConsoleColor.DarkRed;
+            Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [MARKET SETTLED] NO SHARES @ ${noOutcomePrice:0.00} | PnL: ${(pnl):0.00} | Total Equity: ${GetTotalPortfolioValue():0.00} | Asset: {assetId.Substring(0, 8)}...");
+            Console.ResetColor();
+        }
+    }
 }

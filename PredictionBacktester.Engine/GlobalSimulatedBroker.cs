@@ -162,4 +162,47 @@ public class GlobalSimulatedBroker
         }
         return CashBalance + activeValue;
     }
+
+    public virtual void ResolveMarket(string assetId, decimal outcomePrice)
+    {
+        UpdateLastKnownPrice(assetId, outcomePrice);
+
+        decimal yesShares = GetPositionShares(assetId);
+        decimal noShares = GetNoPositionShares(assetId);
+
+        // --- SETTLE YES SHARES ---
+        if (yesShares > 0)
+        {
+            decimal yesPayout = yesShares * outcomePrice; // $1.00 or $0.00
+            CashBalance += yesPayout;
+
+            decimal currentAvgPrice = GetAverageEntryPrice(assetId);
+            if (outcomePrice > currentAvgPrice) WinningTrades++;
+            else LosingTrades++;
+
+            TradeLedger.Add(new ExecutedTrade { OutcomeId = assetId, Date = CurrentTime, Side = "RESOLVE YES", Price = outcomePrice, Shares = yesShares, DollarValue = yesPayout });
+
+            _positionShares[assetId] = 0;
+            _averageEntryPrices[assetId] = 0;
+        }
+
+        // --- SETTLE NO SHARES ---
+        if (noShares > 0)
+        {
+            decimal noPayoutPrice = 1.00m - outcomePrice; // Inverse of YES
+            decimal noPayout = noShares * noPayoutPrice;
+            CashBalance += noPayout;
+
+            decimal currentAvgNoPrice = GetAverageNoEntryPrice(assetId);
+            if (noPayoutPrice > currentAvgNoPrice) WinningTrades++;
+            else LosingTrades++;
+
+            TradeLedger.Add(new ExecutedTrade { OutcomeId = assetId, Date = CurrentTime, Side = "RESOLVE NO", Price = noPayoutPrice, Shares = noShares, DollarValue = noPayout });
+
+            _noPositionShares[assetId] = 0;
+            _averageNoEntryPrices[assetId] = 0;
+        }
+
+        TotalTradesExecuted++;
+    }
 }

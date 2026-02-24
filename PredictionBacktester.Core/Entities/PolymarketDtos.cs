@@ -47,6 +47,10 @@ public class PolymarketMarketResponse
     [JsonPropertyName("clobTokenIds")]
     [JsonConverter(typeof(PolymarketStringArrayConverter))]
     public string[] ClobTokenIds { get; set; }
+
+    [JsonPropertyName("outcomePrices")]
+    [JsonConverter(typeof(PolymarketStringArrayConverter))]
+    public string[] OutcomePrices { get; set; }
 }
 
 public class PolymarketTradeResponse

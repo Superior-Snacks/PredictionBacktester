@@ -24,7 +24,9 @@ class Program
         Console.WriteLine("  LIVE PAPER TRADING ENGINE INITIALIZED  ");
         Console.WriteLine("=========================================");
 
+        // THE GLOBAL BROKER FIX: One shared $1,000 bank account for all markets!
         var globalBroker = new PaperBroker(1000m);
+
         var sniperBots = new Dictionary<string, LiveFlashCrashSniperStrategy>();
         var orderBooks = new Dictionary<string, LocalOrderBook>();
 
@@ -64,28 +66,71 @@ class Program
         allTokens = allTokens.Distinct().ToList();
         Console.WriteLine($"Found {allTokens.Count} active outcome tokens to monitor!");
 
-        // Background task to clean up stale ticks and prevent memory leaks over time
+        // ==========================================
+        // SETTLEMENT SWEEPER (Checks for Expired Markets)
+        // ==========================================
         _ = Task.Run(async () =>
         {
             while (true)
             {
-                await Task.Delay(TimeSpan.FromMinutes(15));
-                Console.WriteLine("\n[SYSTEM] Running background cleanup sweep...");
-                // Note: Implement a cleanup method inside LiveFlashCrashSniperStrategy
-                // foreach(var bot in sniperBots.Values) { bot.CleanupStaleTicks(); }
+                await Task.Delay(TimeSpan.FromMinutes(15)); // Run every 15 minutes
+                Console.WriteLine("\n[SYSTEM] Running background settlement sweep...");
+
+                try
+                {
+                    // Check the REST API to see if any markets have closed
+                    int sweepLimit = 100;
+                    for (int offset = 0; offset < 500; offset += sweepLimit)
+                    {
+                        var events = await apiClient.GetActiveEventsAsync(sweepLimit, offset);
+                        if (events == null || events.Count == 0) break;
+
+                        foreach (var ev in events)
+                        {
+                            if (ev.Markets == null) continue;
+                            foreach (var market in ev.Markets)
+                            {
+                                if (market.IsClosed && market.ClobTokenIds != null && market.OutcomePrices != null)
+                                {
+                                    for (int i = 0; i < market.ClobTokenIds.Length; i++)
+                                    {
+                                        string tokenId = market.ClobTokenIds[i];
+
+                                        // ONLY resolve if our Global Broker is actually holding bags for this token!
+                                        if (globalBroker.GetPositionShares(tokenId) > 0 || globalBroker.GetNoPositionShares(tokenId) > 0)
+                                        {
+                                            // Parse the final settled price (1.00m or 0.00m) from the matching index
+                                            decimal finalPayoutPrice = 0.00m;
+                                            if (i < market.OutcomePrices.Length && decimal.TryParse(market.OutcomePrices[i], out decimal price))
+                                            {
+                                                finalPayoutPrice = price;
+                                            }
+
+                                            globalBroker.ResolveMarket(tokenId, finalPayoutPrice);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.ForegroundColor = ConsoleColor.DarkYellow;
+                    Console.WriteLine($"[SYSTEM ERROR] Settlement sweep failed: {ex.Message}");
+                    Console.ResetColor();
+                }
             }
         });
 
         // ==========================================
-        // FIX: INFINITE RECONNECT LOOP
+        // WEBSOCKET LISTENER 
         // ==========================================
         while (true)
         {
             try
             {
                 using var ws = new ClientWebSocket();
-
-                // Set the Heartbeat ping BEFORE opening the connection
                 ws.Options.KeepAliveInterval = TimeSpan.FromSeconds(10);
 
                 Console.WriteLine("\n[CONNECTING] Connecting to Polymarket WebSocket...");
@@ -114,7 +159,6 @@ class Program
 
                         string message = Encoding.UTF8.GetString(ms.ToArray());
                         ms.SetLength(0);
-                        //Console.WriteLine($"[MESSAGE] {message}");
 
                         try
                         {
@@ -173,6 +217,7 @@ class Program
                                                 Console.Write(".");
                                                 Console.ResetColor();
 
+                                                // THE GLOBAL BROKER FIX: Feed the shared globalBroker into the strategy!
                                                 sniperBots[assetId].OnBookUpdate(book, globalBroker);
                                             }
                                         }
@@ -182,7 +227,6 @@ class Program
                         }
                         catch (Exception parseEx)
                         {
-                            // FIX: Do not swallow dirty JSON exceptions silently. 
                             Console.ForegroundColor = ConsoleColor.Red;
                             Console.WriteLine($"\n[PARSE ERROR] JSON parsing failed: {parseEx.Message}");
                             Console.ResetColor();
@@ -200,8 +244,6 @@ class Program
 
                     string subscribeMessage;
 
-                    // Only the very first chunk can use "type: market". 
-                    // The rest must use "operation: subscribe" to append to the channel.
                     if (isFirstChunk)
                     {
                         subscribeMessage = $"{{\"assets_ids\":[\"{assetListString}\"],\"type\":\"market\"}}";
@@ -215,15 +257,13 @@ class Program
                     var bytes = Encoding.UTF8.GetBytes(subscribeMessage);
                     await ws.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, CancellationToken.None);
 
-                    await Task.Delay(500); // Respect rate limits when subscribing
+                    await Task.Delay(500);
                 }
 
-                // Wait for the listening task. If connection drops, this task completes, dropping out of the try block.
                 await listenTask;
             }
             catch (Exception ex)
             {
-                // FIX: Catch connection drops, log them, and delay before the while(true) loop restarts
                 Console.ForegroundColor = ConsoleColor.Yellow;
                 Console.WriteLine($"\n[CONNECTION LOST] WebSocket connection failed or dropped: {ex.Message}");
                 Console.WriteLine("Reconnecting in 5 seconds...");
