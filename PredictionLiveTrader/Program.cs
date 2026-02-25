@@ -38,6 +38,8 @@ class Program
         _strategyBrokers["Reverse_TrendFollowerRecc"] = new PaperBroker("Reverse_TrendFollowerRecc", 1000m, _tokenNames);
         _strategyBrokers["Reverse_TrendFollowerOrg"] = new PaperBroker("Reverse_TrendFollowerOrg", 1000m, _tokenNames);
 
+        _strategyBrokers["StatArb_ZScore"] = new PaperBroker("StatArb_ZScore", 1000m, _tokenNames);
+
 
         _strategyBrokers["Imbalance_5x"] = new PaperBroker("Imbalance_5x", 1000m, _tokenNames);
         _strategyBrokers["Imbalance_1.5x very loose"] = new PaperBroker("Imbalance_1.5x very loose", 1000m, _tokenNames);
@@ -285,8 +287,10 @@ class Program
                                                 //reverse: exact
                                                 new LiveFlashCrashReverseStrategy("Reverse_TrendFollowerOrg", 0.15m, 60),
 
+                                                new MeanReversionStatArbStrategy("StatArb_ZScore", 100, -2.0m, 0.0m),
+
                                                 // Change the Take Profit and Stop Loss from 2 cents (0.02m) to 8 cents (0.08m)!
-                                                //new OrderBookImbalanceStrategy("Imbalance_5x", 5.0m, 3, 0.08m, 0.08m),
+                                                new OrderBookImbalanceStrategy("Imbalance_5x", 5.0m, 3, 0.08m, 0.08m),
 
                                                 //loose to see action
                                                 //new OrderBookImbalanceStrategy("Imbalance_1.5x very loose", 1.5m, 3, 0.05m, 0.05m)
