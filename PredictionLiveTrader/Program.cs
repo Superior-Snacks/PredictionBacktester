@@ -35,6 +35,10 @@ class Program
         _strategyBrokers["Sniper_Strict"] = new PaperBroker("Sniper_Strict", 1000m, _tokenNames);
         _strategyBrokers["Sniper_Loose"] = new PaperBroker("Sniper_Loose", 1000m, _tokenNames); // Let's make a trigger-happy one!
 
+        _strategyBrokers["Reverse_TrendFollower"] = new PaperBroker("Reverse_TrendFollower", 1000m, _tokenNames);
+
+        _strategyBrokers["Imbalance_5x"] = new PaperBroker("Imbalance_5x", 1000m, _tokenNames);
+
         // THE INTERCEPTOR: Catch CTRL+C before the console dies!
         Console.CancelKeyPress += (sender, e) =>
         {
@@ -263,7 +267,15 @@ class Program
                                                 new LiveFlashCrashSniperStrategy("Sniper_Strict", 0.15m, 60),
                 
                                                 // Loose bot: only requires a 2 cent drop in 60s (Will trade constantly!)
-                                                new LiveFlashCrashSniperStrategy("Sniper_Loose", 0.02m, 60)
+                                                new LiveFlashCrashSniperStrategy("Sniper_Loose", 0.02m, 60),
+
+                                                //reverse bot: reccomended
+                                                new LiveFlashCrashReverseStrategy("Reverse_TrendFollower", 0.10m, 60),
+
+                                                //reverse: exact
+                                                new LiveFlashCrashReverseStrategy("Reverse_TrendFollower", 0.15m, 60),
+
+                                                new OrderBookImbalanceStrategy("Imbalance_5x", 5.0m, 3, 0.02m, 0.02m)
                                             };
                                         }
 
