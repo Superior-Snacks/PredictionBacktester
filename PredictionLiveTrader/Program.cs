@@ -270,10 +270,10 @@ class Program
                                                 new LiveFlashCrashSniperStrategy("Sniper_Loose", 0.02m, 60),
 
                                                 //reverse bot: reccomended
-                                                new LiveFlashCrashReverseStrategy("Reverse_TrendFollower", 0.10m, 60),
+                                                new LiveFlashCrashReverseStrategy("Reverse_TrendFollowerRecc", 0.10m, 60),
 
                                                 //reverse: exact
-                                                new LiveFlashCrashReverseStrategy("Reverse_TrendFollower", 0.15m, 60),
+                                                new LiveFlashCrashReverseStrategy("Reverse_TrendFollowerOrg", 0.15m, 60),
 
                                                 new OrderBookImbalanceStrategy("Imbalance_5x", 5.0m, 3, 0.02m, 0.02m)
                                             };
