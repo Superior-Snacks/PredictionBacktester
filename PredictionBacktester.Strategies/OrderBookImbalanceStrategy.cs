@@ -41,7 +41,11 @@ public class OrderBookImbalanceStrategy : ILiveStrategy
         // Always keep the broker updated on the latest portfolio valuations
         broker.UpdateLastKnownPrice(assetId, bestAsk);
 
-        if (bestAsk >= 1.00m || bestAsk <= 0.00m || book.Bids.Count == 0 || book.Asks.Count == 0) return;
+        if (bestAsk >= 1.00m || bestAsk <= 0.00m || availableAskSize <= 0 || availableBidSize <= 0) return;
+
+        // THE FIX: The Maximum Spread Filter
+        // If the spread is wider than 5 cents, the market makers have pulled liquidity. DO NOT TRADE!
+        if (bestAsk - bestBid > 0.05m) return;
 
         decimal positionShares = broker.GetPositionShares(assetId);
 

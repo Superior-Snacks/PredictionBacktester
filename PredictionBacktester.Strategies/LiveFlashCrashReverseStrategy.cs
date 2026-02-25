@@ -47,7 +47,11 @@ public class LiveFlashCrashReverseStrategy : ILiveStrategy
         // Always use the Ask for portfolio valuation of the YES token side
         broker.UpdateLastKnownPrice(assetId, bestAsk);
 
-        if (bestAsk >= 1.00m || availableAskSize <= 0 || availableBidSize <= 0) return;
+        if (bestAsk >= 1.00m || bestAsk <= 0.00m || availableAskSize <= 0 || availableBidSize <= 0) return;
+
+        // THE FIX: The Maximum Spread Filter
+        // If the spread is wider than 5 cents, the market makers have pulled liquidity. DO NOT TRADE!
+        if (bestAsk - bestBid > 0.05m) return;
 
         _recentAsks.Enqueue((now, bestAsk));
         while (_recentAsks.Count > 0 && (now - _recentAsks.Peek().Timestamp) > _timeWindowSeconds)
