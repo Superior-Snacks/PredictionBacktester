@@ -119,7 +119,7 @@ class Program
                     if (market.StartDate.HasValue && market.StartDate.Value > DateTime.UtcNow) continue;
 
                     // 2. THE LIQUIDITY FILTER: Skip dead "Ghost Town" markets!
-                    if (market.Volume < 1000m) continue;
+                    if (market.Volume < 50000m) continue;
 
                     if (market.ClobTokenIds != null && !market.IsClosed)
                     {
