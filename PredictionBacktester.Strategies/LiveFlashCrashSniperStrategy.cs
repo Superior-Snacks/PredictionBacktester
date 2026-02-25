@@ -8,6 +8,7 @@ namespace PredictionBacktester.Strategies;
 
 public class LiveFlashCrashSniperStrategy : ILiveStrategy
 {
+    public string StrategyName { get; }
     private readonly decimal _crashThreshold;
     private readonly long _timeWindowSeconds;
     private readonly decimal _reboundProfitMargin;
@@ -17,12 +18,14 @@ public class LiveFlashCrashSniperStrategy : ILiveStrategy
     private readonly Queue<(long Timestamp, decimal Price)> _recentAsks;
 
     public LiveFlashCrashSniperStrategy(
+        string strategyName = "FlashCrashSniper",
         decimal crashThreshold = 0.15m,
         long timeWindowSeconds = 60,
         decimal reboundProfitMargin = 0.05m,
         decimal stopLossMargin = 0.15m,
         decimal riskPercentage = 0.05m)
     {
+        StrategyName = strategyName;
         _crashThreshold = crashThreshold;
         _timeWindowSeconds = timeWindowSeconds;
         _reboundProfitMargin = reboundProfitMargin;

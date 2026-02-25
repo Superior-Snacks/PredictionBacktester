@@ -4,6 +4,6 @@ namespace PredictionBacktester.Engine;
 
 public interface ILiveStrategy
 {
-    // Every live strategy MUST implement this method!
+    string StrategyName { get; } // NEW: Identify the strategy!
     void OnBookUpdate(LocalOrderBook book, GlobalSimulatedBroker broker);
 }

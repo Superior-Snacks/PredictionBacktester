@@ -21,8 +21,7 @@ class Program
     private static volatile bool _isPaused = false;
     private static CancellationTokenSource _pauseCts = new CancellationTokenSource();
 
-    private static PaperBroker _globalBroker;
-
+    private static Dictionary<string, PaperBroker> _strategyBrokers = new Dictionary<string, PaperBroker>();
     private static Dictionary<string, string> _tokenNames = new Dictionary<string, string>();
 
     static async Task Main(string[] args)
@@ -33,7 +32,9 @@ class Program
         Console.WriteLine("  Controls: Press 'P' to Pause, 'R' to Resume");
         Console.WriteLine("=========================================");
 
-        _globalBroker = new PaperBroker(1000m, _tokenNames);
+        _strategyBrokers["Sniper_Strict"] = new PaperBroker("Sniper_Strict", 1000m, _tokenNames);
+        _strategyBrokers["Sniper_Loose"] = new PaperBroker("Sniper_Loose", 1000m, _tokenNames); // Let's make a trigger-happy one!
+
         // THE INTERCEPTOR: Catch CTRL+C before the console dies!
         Console.CancelKeyPress += (sender, e) =>
         {
@@ -130,6 +131,22 @@ class Program
                 await Task.Delay(TimeSpan.FromMinutes(15));
                 if (_isPaused) continue; // Don't sweep if we are paused!
 
+                // --- THE PERFORMANCE DASHBOARD ---
+                Console.WriteLine("\n================= STRATEGY PERFORMANCE OVERVIEW =================");
+                foreach (var kvp in _strategyBrokers)
+                {
+                    var name = kvp.Key;
+                    var broker = kvp.Value;
+                    decimal totalEquity = broker.GetTotalPortfolioValue();
+                    decimal pnl = totalEquity - 1000m;
+                    decimal activeBets = totalEquity - broker.CashBalance;
+
+                    Console.ForegroundColor = pnl >= 0 ? ConsoleColor.Green : ConsoleColor.Red;
+                    Console.WriteLine($"[{name.PadRight(15)}] Equity: ${totalEquity:0.00} | PnL: ${(pnl):0.00} | In Bets: ${activeBets:0.00} | Trades: {broker.TotalTradesExecuted} (W:{broker.WinningTrades} L:{broker.LosingTrades})");
+                    Console.ResetColor();
+                }
+                Console.WriteLine("=================================================================\n");
+
                 Console.WriteLine("\n[SYSTEM] Running background settlement sweep...");
                 try
                 {
@@ -149,16 +166,18 @@ class Program
                                     for (int i = 0; i < market.ClobTokenIds.Length; i++)
                                     {
                                         string tokenId = market.ClobTokenIds[i];
-
-                                        if (_globalBroker.GetPositionShares(tokenId) > 0 || _globalBroker.GetNoPositionShares(tokenId) > 0)
+                                        foreach (var broker in _strategyBrokers.Values)
                                         {
-                                            decimal finalPayoutPrice = 0.00m;
-                                            if (i < market.OutcomePrices.Length && decimal.TryParse(market.OutcomePrices[i], out decimal price))
+                                            if (broker.GetPositionShares(tokenId) > 0 || broker.GetNoPositionShares(tokenId) > 0)
                                             {
-                                                finalPayoutPrice = price;
-                                            }
+                                                decimal finalPayoutPrice = 0.00m;
+                                                if (i < market.OutcomePrices.Length && decimal.TryParse(market.OutcomePrices[i], out decimal price))
+                                                {
+                                                    finalPayoutPrice = price;
+                                                }
 
-                                            _globalBroker.ResolveMarket(tokenId, finalPayoutPrice);
+                                                broker.ResolveMarket(tokenId, finalPayoutPrice);
+                                            }
                                         }
                                     }
                                 }
@@ -238,10 +257,13 @@ class Program
                                         {
                                             orderBooks[assetId] = new LocalOrderBook(assetId);
 
-                                            // THE MULTIPLEXER: Map 1 Asset to Multiple Strategies
                                             activeStrategies[assetId] = new List<ILiveStrategy>
                                             {
-                                                new LiveFlashCrashSniperStrategy(0.15m, 60, 0.05m, 0.15m, 0.05m)
+                                                // Strict bot: requires 15 cent drop in 60s
+                                                new LiveFlashCrashSniperStrategy("Sniper_Strict", 0.15m, 60),
+                
+                                                // Loose bot: only requires a 2 cent drop in 60s (Will trade constantly!)
+                                                new LiveFlashCrashSniperStrategy("Sniper_Loose", 0.02m, 60)
                                             };
                                         }
 
@@ -285,7 +307,7 @@ class Program
                                                 // THE MULTIPLEXER ROUTING: Feed the exact same book to every strategy simultaneously!
                                                 foreach (var strategy in activeStrategies[assetId])
                                                 {
-                                                    strategy.OnBookUpdate(book, _globalBroker);
+                                                    strategy.OnBookUpdate(book, _strategyBrokers[strategy.StrategyName]);
                                                 }
                                             }
                                         }
@@ -349,40 +371,32 @@ class Program
     // ==========================================
     private static void ExportLedgerToCsv()
     {
-        var ledger = _globalBroker.TradeLedger;
-
-        if (ledger == null || ledger.Count == 0)
-        {
-            Console.ForegroundColor = ConsoleColor.DarkGray;
-            Console.WriteLine("\n[EXPORT] No trades executed during this session. Skipping ledger export.");
-            Console.ResetColor();
-            return;
-        }
-
         try
         {
-            // Name the file based on the exact shutdown time
             string filename = $"LivePaperTrades_{DateTime.Now:yyyyMMdd_HHmmss}.csv";
-
             using var writer = new StreamWriter(filename);
 
-            // Write the CSV Headers
-            writer.WriteLine("Timestamp,MarketName,AssetId,Side,ExecutionPrice,Shares,DollarValue");
-            // Dump every trade into the file
-            foreach (var trade in ledger)
+            // Added StrategyName column
+            writer.WriteLine("Timestamp,StrategyName,MarketName,AssetId,Side,ExecutionPrice,Shares,DollarValue");
+
+            int totalTrades = 0;
+            foreach (var brokerKvp in _strategyBrokers)
             {
-                // Retrieve the name, default to Unknown if not found
-                string marketName = _tokenNames.GetValueOrDefault(trade.OutcomeId, "Unknown Market");
+                string strategyName = brokerKvp.Key;
+                var ledger = brokerKvp.Value.TradeLedger;
+                totalTrades += ledger.Count;
 
-                // Escape any internal quotes, and wrap the whole name in quotes so commas don't break the CSV
-                marketName = $"\"{marketName.Replace("\"", "\"\"")}\"";
+                foreach (var trade in ledger)
+                {
+                    string marketName = _tokenNames.GetValueOrDefault(trade.OutcomeId, "Unknown");
+                    marketName = $"\"{marketName.Replace("\"", "\"\"")}\"";
 
-                // Write the complete row
-                writer.WriteLine($"{trade.Date:O},{marketName},{trade.OutcomeId},{trade.Side},{trade.Price},{trade.Shares},{trade.DollarValue}");
+                    writer.WriteLine($"{trade.Date:O},{strategyName},{marketName},{trade.OutcomeId},{trade.Side},{trade.Price},{trade.Shares},{trade.DollarValue}");
+                }
             }
 
             Console.ForegroundColor = ConsoleColor.Green;
-            Console.WriteLine($"\n[EXPORT SUCCESS] {_globalBroker.TradeLedger.Count} trades successfully saved to {filename}");
+            Console.WriteLine($"\n[EXPORT SUCCESS] {totalTrades} trades saved to {filename}");
             Console.ResetColor();
         }
         catch (Exception ex)
