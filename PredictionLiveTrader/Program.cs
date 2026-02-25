@@ -275,7 +275,8 @@ class Program
                                                 //reverse: exact
                                                 new LiveFlashCrashReverseStrategy("Reverse_TrendFollowerOrg", 0.15m, 60),
 
-                                                new OrderBookImbalanceStrategy("Imbalance_5x", 5.0m, 3, 0.02m, 0.02m)
+                                                // Change the Take Profit and Stop Loss from 2 cents (0.02m) to 8 cents (0.08m)!
+                                                new OrderBookImbalanceStrategy("Imbalance_5x", 5.0m, 3, 0.08m, 0.08m)
                                             };
                                         }
 
