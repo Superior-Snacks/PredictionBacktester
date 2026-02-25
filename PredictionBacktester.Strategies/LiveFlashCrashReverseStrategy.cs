@@ -57,7 +57,6 @@ public class LiveFlashCrashReverseStrategy : ILiveStrategy
 
         if (_recentAsks.Count < 2) return;
 
-        // Since the PaperBroker allows us to hold "NO" shares, we will use BuyNo/SellAllNo for Shorting
         decimal noPositionShares = broker.GetNoPositionShares(assetId);
 
         if (noPositionShares > 0)
