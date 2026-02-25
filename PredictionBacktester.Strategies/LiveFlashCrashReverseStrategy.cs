@@ -1,7 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
-using PredictionBacktester.Core.Entities.Database;
 using PredictionBacktester.Engine;
 
 namespace PredictionBacktester.Strategies;
@@ -45,9 +44,10 @@ public class LiveFlashCrashReverseStrategy : ILiveStrategy
         decimal availableAskSize = book.GetBestAskSize();
         decimal availableBidSize = book.GetBestBidSize();
 
+        // Always use the Ask for portfolio valuation of the YES token side
         broker.UpdateLastKnownPrice(assetId, bestAsk);
 
-        if (bestAsk >= 1.00m || availableAskSize <= 0) return;
+        if (bestAsk >= 1.00m || availableAskSize <= 0 || availableBidSize <= 0) return;
 
         _recentAsks.Enqueue((now, bestAsk));
         while (_recentAsks.Count > 0 && (now - _recentAsks.Peek().Timestamp) > _timeWindowSeconds)
@@ -59,26 +59,28 @@ public class LiveFlashCrashReverseStrategy : ILiveStrategy
 
         decimal noPositionShares = broker.GetNoPositionShares(assetId);
 
+        // --- 1. MANAGE OPEN NO POSITIONS ---
         if (noPositionShares > 0)
         {
             decimal avgNoEntry = broker.GetAverageNoEntryPrice(assetId);
-            decimal currentNoPrice = 1.00m - bestAsk; // Approximate NO price
 
-            // Profit if the YES price keeps falling (NO price goes up)
+            // To SELL NO, you sell to NO Buyers (YES Sellers -> bestAsk)
+            decimal currentNoPrice = 1.00m - bestAsk;
+
             bool isTakeProfit = currentNoPrice >= avgNoEntry + _continueProfitMargin;
-            // Stop Loss if the YES price rebounds (NO price goes down)
             bool isStopLoss = currentNoPrice <= avgNoEntry - _reboundStopMargin;
 
             if (isTakeProfit || isStopLoss)
             {
+                // To exit a NO position, you dump into the YES Sellers (availableAskSize)
                 broker.SellAllNo(assetId, bestAsk, availableAskSize);
             }
             return;
         }
 
+        // --- 2. TRIGGER NO ENTRY ---
         decimal maxAskInWindow = _recentAsks.Max(x => x.Price);
 
-        // TRIGGER: If the YES price crashes, we Buy NO (expecting it to keep crashing)
         if (maxAskInWindow - bestAsk >= _crashThreshold)
         {
             decimal currentEquity = broker.GetTotalPortfolioValue();
@@ -86,7 +88,8 @@ public class LiveFlashCrashReverseStrategy : ILiveStrategy
 
             if (dollarsToInvest >= 1.00m)
             {
-                broker.BuyNo(assetId, bestAsk, dollarsToInvest, availableAskSize);
+                // THE FIX: To BUY NO, you buy from NO Sellers (YES Buyers -> bestBid & availableBidSize)
+                broker.BuyNo(assetId, bestBid, dollarsToInvest, availableBidSize);
                 _recentAsks.Clear();
             }
         }
