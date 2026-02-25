@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Linq;
 using PredictionBacktester.Engine;
 
@@ -6,8 +7,22 @@ namespace PredictionLiveTrader;
 
 public class PaperBroker : GlobalSimulatedBroker
 {
-    public PaperBroker(decimal initialCapital) : base(initialCapital)
+    private readonly Dictionary<string, string> _tokenNames;
+
+    // THE FIX: Accept the dictionary of token names
+    public PaperBroker(decimal initialCapital, Dictionary<string, string> tokenNames) : base(initialCapital)
     {
+        _tokenNames = tokenNames;
+    }
+
+    // Helper to format the name cleanly for the console
+    private string GetMarketName(string assetId)
+    {
+        if (_tokenNames.TryGetValue(assetId, out var name))
+        {
+            return name.Length > 40 ? name.Substring(0, 37) + "..." : name;
+        }
+        return assetId.Substring(0, 8) + "...";
     }
 
     public override void Buy(string assetId, decimal price, decimal dollarAmount, decimal volume)
@@ -19,7 +34,7 @@ public class PaperBroker : GlobalSimulatedBroker
         {
             var lastTrade = TradeLedger.Last();
             Console.ForegroundColor = ConsoleColor.Green;
-            Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [PAPER EXECUTION] BOUGHT YES @ ${lastTrade.Price:0.00} | Size: ${lastTrade.DollarValue:0.00} | Asset: {assetId.Substring(0, 8)}...");
+            Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [PAPER EXECUTION] BOUGHT YES @ ${lastTrade.Price:0.00} | Size: ${lastTrade.DollarValue:0.00} | Asset: {GetMarketName(assetId)}");
             Console.ResetColor();
         }
     }
@@ -37,7 +52,7 @@ public class PaperBroker : GlobalSimulatedBroker
             decimal pnl = (lastTrade.Price - entryPrice) * (initialShares - GetPositionShares(assetId));
 
             Console.ForegroundColor = pnl >= 0 ? ConsoleColor.Cyan : ConsoleColor.Red;
-            Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [PAPER CLOSED] SOLD YES @ ${lastTrade.Price:0.00} | PnL: ${(pnl):0.00} | Total Equity: ${GetTotalPortfolioValue():0.00} | Asset: {assetId.Substring(0, 8)}...");
+            Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [PAPER CLOSED] SOLD YES @ ${lastTrade.Price:0.00} | PnL: ${(pnl):0.00} | Total Equity: ${GetTotalPortfolioValue():0.00} | Asset: {GetMarketName(assetId)}");
             Console.ResetColor();
         }
     }
@@ -51,7 +66,7 @@ public class PaperBroker : GlobalSimulatedBroker
         {
             var lastTrade = TradeLedger.Last();
             Console.ForegroundColor = ConsoleColor.Magenta;
-            Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [PAPER EXECUTION] BOUGHT NO @ ${lastTrade.Price:0.00} | Size: ${lastTrade.DollarValue:0.00} | Asset: {assetId.Substring(0, 8)}...");
+            Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [PAPER EXECUTION] BOUGHT NO @ ${lastTrade.Price:0.00} | Size: ${lastTrade.DollarValue:0.00} | Asset: {GetMarketName(assetId)}");
             Console.ResetColor();
         }
     }
@@ -69,7 +84,7 @@ public class PaperBroker : GlobalSimulatedBroker
             decimal pnl = (lastTrade.Price - entryPrice) * (initialShares - GetNoPositionShares(assetId));
 
             Console.ForegroundColor = pnl >= 0 ? ConsoleColor.Cyan : ConsoleColor.Red;
-            Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [PAPER CLOSED] SOLD NO @ ${lastTrade.Price:0.00} | PnL: ${(pnl):0.00} | Total Equity: ${GetTotalPortfolioValue():0.00} | Asset: {assetId.Substring(0, 8)}...");
+            Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [PAPER CLOSED] SOLD NO @ ${lastTrade.Price:0.00} | PnL: ${(pnl):0.00} | Total Equity: ${GetTotalPortfolioValue():0.00} | Asset: {GetMarketName(assetId)}");
             Console.ResetColor();
         }
     }
@@ -87,7 +102,7 @@ public class PaperBroker : GlobalSimulatedBroker
         {
             decimal pnl = (outcomePrice - yesEntryPrice) * initialYesShares;
             Console.ForegroundColor = pnl > 0 ? ConsoleColor.Yellow : ConsoleColor.DarkRed;
-            Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [MARKET SETTLED] YES SHARES @ ${outcomePrice:0.00} | PnL: ${(pnl):0.00} | Total Equity: ${GetTotalPortfolioValue():0.00} | Asset: {assetId.Substring(0, 8)}...");
+            Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [MARKET SETTLED] YES SHARES @ ${outcomePrice:0.00} | PnL: ${(pnl):0.00} | Total Equity: ${GetTotalPortfolioValue():0.00} | Asset: {GetMarketName(assetId)}");
             Console.ResetColor();
         }
 
@@ -96,7 +111,7 @@ public class PaperBroker : GlobalSimulatedBroker
             decimal noOutcomePrice = 1.00m - outcomePrice;
             decimal pnl = (noOutcomePrice - noEntryPrice) * initialNoShares;
             Console.ForegroundColor = pnl > 0 ? ConsoleColor.Yellow : ConsoleColor.DarkRed;
-            Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [MARKET SETTLED] NO SHARES @ ${noOutcomePrice:0.00} | PnL: ${(pnl):0.00} | Total Equity: ${GetTotalPortfolioValue():0.00} | Asset: {assetId.Substring(0, 8)}...");
+            Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [MARKET SETTLED] NO SHARES @ ${noOutcomePrice:0.00} | PnL: ${(pnl):0.00} | Total Equity: ${GetTotalPortfolioValue():0.00} | Asset: {GetMarketName(assetId)}");
             Console.ResetColor();
         }
     }

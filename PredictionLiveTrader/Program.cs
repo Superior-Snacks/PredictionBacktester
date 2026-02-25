@@ -23,6 +23,8 @@ class Program
 
     private static PaperBroker _globalBroker;
 
+    private static Dictionary<string, string> _tokenNames = new Dictionary<string, string>();
+
     static async Task Main(string[] args)
     {
         Console.Clear();
@@ -31,8 +33,7 @@ class Program
         Console.WriteLine("  Controls: Press 'P' to Pause, 'R' to Resume");
         Console.WriteLine("=========================================");
 
-        _globalBroker = new PaperBroker(1000m);
-
+        _globalBroker = new PaperBroker(1000m, _tokenNames);
         // THE INTERCEPTOR: Catch CTRL+C before the console dies!
         Console.CancelKeyPress += (sender, e) =>
         {
@@ -106,6 +107,11 @@ class Program
                     if (market.ClobTokenIds != null && !market.IsClosed)
                     {
                         allTokens.AddRange(market.ClobTokenIds);
+
+                        foreach (var token in market.ClobTokenIds)
+                        {
+                            _tokenNames[token] = market.Question;
+                        }
                     }
                 }
             }
@@ -361,12 +367,18 @@ class Program
             using var writer = new StreamWriter(filename);
 
             // Write the CSV Headers
-            writer.WriteLine("Timestamp,AssetId,Side,ExecutionPrice,Shares,DollarValue");
-
+            writer.WriteLine("Timestamp,MarketName,AssetId,Side,ExecutionPrice,Shares,DollarValue");
             // Dump every trade into the file
             foreach (var trade in ledger)
             {
-                writer.WriteLine($"{trade.Date:O},{trade.OutcomeId},{trade.Side},{trade.Price},{trade.Shares},{trade.DollarValue}");
+                // Retrieve the name, default to Unknown if not found
+                string marketName = _tokenNames.GetValueOrDefault(trade.OutcomeId, "Unknown Market");
+
+                // Escape any internal quotes, and wrap the whole name in quotes so commas don't break the CSV
+                marketName = $"\"{marketName.Replace("\"", "\"\"")}\"";
+
+                // Write the complete row
+                writer.WriteLine($"{trade.Date:O},{marketName},{trade.OutcomeId},{trade.Side},{trade.Price},{trade.Shares},{trade.DollarValue}");
             }
 
             Console.ForegroundColor = ConsoleColor.Green;

@@ -74,7 +74,7 @@ public class GlobalSimulatedBroker
             _averageEntryPrices[assetId] = totalCost / _positionShares[assetId];
             CashBalance -= actualDollarsSpent;
 
-            TradeLedger.Add(new ExecutedTrade { OutcomeId = assetId, Date = CurrentTime, Side = "BUY", Price = executionPrice, Shares = actualSharesBought, DollarValue = actualDollarsSpent });
+            TradeLedger.Add(new ExecutedTrade { OutcomeId = assetId, Date = DateTime.Now, Side = "BUY", Price = executionPrice, Shares = actualSharesBought, DollarValue = actualDollarsSpent });
         }
     }
 
@@ -97,7 +97,7 @@ public class GlobalSimulatedBroker
             if (executionPrice > currentAvgPrice) WinningTrades++;
             else LosingTrades++;
 
-            TradeLedger.Add(new ExecutedTrade { OutcomeId = assetId, Date = CurrentTime, Side = "SELL", Price = executionPrice, Shares = sharesToSell, DollarValue = cashReceived });
+            TradeLedger.Add(new ExecutedTrade { OutcomeId = assetId, Date = DateTime.Now, Side = "SELL", Price = executionPrice, Shares = sharesToSell, DollarValue = cashReceived });
 
             CashBalance += cashReceived;
             _positionShares[assetId] = currentShares - sharesToSell;
@@ -134,7 +134,7 @@ public class GlobalSimulatedBroker
             _averageNoEntryPrices[assetId] = totalCost / _noPositionShares[assetId];
             CashBalance -= actualDollarsSpent;
 
-            TradeLedger.Add(new ExecutedTrade { OutcomeId = assetId, Date = CurrentTime, Side = "BUY NO", Price = executionPrice, Shares = actualSharesBought, DollarValue = actualDollarsSpent });
+            TradeLedger.Add(new ExecutedTrade { OutcomeId = assetId, Date = DateTime.Now, Side = "BUY NO", Price = executionPrice, Shares = actualSharesBought, DollarValue = actualDollarsSpent });
         }
     }
 
@@ -159,7 +159,7 @@ public class GlobalSimulatedBroker
             if (executionPrice > currentAvgPrice) WinningTrades++;
             else LosingTrades++;
 
-            TradeLedger.Add(new ExecutedTrade { OutcomeId = assetId, Date = CurrentTime, Side = "SELL NO", Price = executionPrice, Shares = sharesToSell, DollarValue = cashReceived });
+            TradeLedger.Add(new ExecutedTrade { OutcomeId = assetId, Date = DateTime.Now, Side = "SELL NO", Price = executionPrice, Shares = sharesToSell, DollarValue = cashReceived });
 
             CashBalance += cashReceived;
             _noPositionShares[assetId] = currentShares - sharesToSell;
@@ -187,7 +187,7 @@ public class GlobalSimulatedBroker
                 if (outcomePrice > currentAvgPrice) WinningTrades++;
                 else LosingTrades++;
 
-                TradeLedger.Add(new ExecutedTrade { OutcomeId = assetId, Date = CurrentTime, Side = "RESOLVE YES", Price = outcomePrice, Shares = yesShares, DollarValue = yesPayout });
+                TradeLedger.Add(new ExecutedTrade { OutcomeId = assetId, Date = DateTime.Now, Side = "RESOLVE YES", Price = outcomePrice, Shares = yesShares, DollarValue = yesPayout });
 
                 _positionShares[assetId] = 0;
                 _averageEntryPrices[assetId] = 0;
@@ -203,7 +203,7 @@ public class GlobalSimulatedBroker
                 if (noPayoutPrice > currentAvgNoPrice) WinningTrades++;
                 else LosingTrades++;
 
-                TradeLedger.Add(new ExecutedTrade { OutcomeId = assetId, Date = CurrentTime, Side = "RESOLVE NO", Price = noPayoutPrice, Shares = noShares, DollarValue = noPayout });
+                TradeLedger.Add(new ExecutedTrade { OutcomeId = assetId, Date = DateTime.Now, Side = "RESOLVE NO", Price = noPayoutPrice, Shares = noShares, DollarValue = noPayout });
 
                 _noPositionShares[assetId] = 0;
                 _averageNoEntryPrices[assetId] = 0;
