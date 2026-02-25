@@ -22,12 +22,13 @@ public class PolymarketClient
     /// <summary>
     /// Fetches a list of active events and their nested markets.
     /// </summary>
-    public async Task<List<PolymarketEventResponse>> GetActiveEventsAsync(int limit = 100, int offset = 0, bool oldestFirst = true)
+    public async Task<List<PolymarketEventResponse>> GetActiveEventsAsync(int limit, int offset)
     {
-        Thread.Sleep(500);
-        // 1. Let's remove the 'active' and 'closed' filters temporarily to force it to give us ANYTHING
-        var url = $"events?limit={limit}&offset={offset}&order=startDate&ascending=false";
-        //var url = $"events?limit={limit}&offset={offset}";
+        // 1. Get the current UTC time in the exact format Polymarket requires
+        string now = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ");
+
+        // 2. Inject start_date_max into the query string!
+        string url = $"events?limit={limit}&offset={offset}&active=true&closed=false&start_date_max={now}";
 
         try
         {

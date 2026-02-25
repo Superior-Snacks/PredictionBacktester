@@ -51,6 +51,9 @@ public class PolymarketMarketResponse
     [JsonPropertyName("outcomePrices")]
     [JsonConverter(typeof(PolymarketStringArrayConverter))]
     public string[] OutcomePrices { get; set; }
+
+    [JsonPropertyName("startDate")]
+    public DateTime? StartDate { get; set; }
 }
 
 public class PolymarketTradeResponse

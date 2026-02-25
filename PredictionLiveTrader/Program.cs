@@ -35,9 +35,13 @@ class Program
         _strategyBrokers["Sniper_Strict"] = new PaperBroker("Sniper_Strict", 1000m, _tokenNames);
         _strategyBrokers["Sniper_Loose"] = new PaperBroker("Sniper_Loose", 1000m, _tokenNames); // Let's make a trigger-happy one!
 
-        _strategyBrokers["Reverse_TrendFollower"] = new PaperBroker("Reverse_TrendFollower", 1000m, _tokenNames);
+        _strategyBrokers["Reverse_TrendFollowerRecc"] = new PaperBroker("Reverse_TrendFollowerRecc", 1000m, _tokenNames);
+        _strategyBrokers["Reverse_TrendFollowerOrg"] = new PaperBroker("Reverse_TrendFollowerOrg", 1000m, _tokenNames);
+
 
         _strategyBrokers["Imbalance_5x"] = new PaperBroker("Imbalance_5x", 1000m, _tokenNames);
+        _strategyBrokers["Imbalance_1.5x very loose"] = new PaperBroker("Imbalance_1.5x very loose", 1000m, _tokenNames);
+
 
         // THE INTERCEPTOR: Catch CTRL+C before the console dies!
         Console.CancelKeyPress += (sender, e) =>
@@ -99,7 +103,7 @@ class Program
         var allTokens = new List<string>();
 
         int limit = 100;
-        for (int offset = 0; offset < 500; offset += limit)
+        for (int offset = 0; ; offset += limit)
         {
             var events = await apiClient.GetActiveEventsAsync(limit, offset);
             if (events == null || events.Count == 0) break;
@@ -109,6 +113,12 @@ class Program
                 if (ev.Markets == null) continue;
                 foreach (var market in ev.Markets)
                 {
+                    // 1. Skip if it hasn't started yet
+                    if (market.StartDate.HasValue && market.StartDate.Value > DateTime.UtcNow) continue;
+
+                    // 2. THE LIQUIDITY FILTER: Skip dead "Ghost Town" markets!
+                    if (market.Volume < 1000m) continue;
+
                     if (market.ClobTokenIds != null && !market.IsClosed)
                     {
                         allTokens.AddRange(market.ClobTokenIds);
