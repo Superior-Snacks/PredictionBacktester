@@ -129,7 +129,7 @@ class Program
         foreach (var param in reverseGrid)
         {
             // NEW: Inject Threshold (T) and TakeProfit (P) into the name
-            string name = $"RevArb_v{reverseVersion++}_T{param.threshold}_P{param.tpMargin}";
+            string name = $"RevArb_v{reverseVersion++}_T{param.threshold}_W{param.window}_P{param.tpMargin}";
             
             configs.Add(new StrategyConfig(
                 name, 
