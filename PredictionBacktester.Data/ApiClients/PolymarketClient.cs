@@ -36,8 +36,8 @@ public class PolymarketClient
             var rawJson = await _gammaClient.GetStringAsync(url);
 
             // 3. Print the first 500 characters to the console so we can see what they sent us
-            Console.WriteLine("\n--- RAW API RESPONSE ---");
-            Console.WriteLine(rawJson.Substring(0, Math.Min(rawJson.Length, 500)) + "...\n");
+            //Console.WriteLine("\n--- RAW API RESPONSE ---");
+            //Console.WriteLine(rawJson.Substring(0, Math.Min(rawJson.Length, 500)) + "...\n");
 
             // 4. Now deserialize it manually
             var events = JsonSerializer.Deserialize<List<PolymarketEventResponse>>(rawJson);
