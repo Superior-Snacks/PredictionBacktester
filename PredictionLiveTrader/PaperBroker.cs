@@ -10,6 +10,8 @@ public class PaperBroker : GlobalSimulatedBroker
     public string StrategyName { get; }
     private readonly Dictionary<string, string> _tokenNames;
 
+    public bool IsMuted { get; set; } = false;
+
     // THE FIX: Accept the dictionary of token names
     public PaperBroker(string strategyName, decimal initialCapital, Dictionary<string, string> tokenNames) : base(initialCapital)
     {
@@ -35,9 +37,13 @@ public class PaperBroker : GlobalSimulatedBroker
         if (GetPositionShares(assetId) > initialShares)
         {
             var lastTrade = TradeLedger.Last();
+
+            if (!IsMuted)
+            {
             Console.ForegroundColor = ConsoleColor.Green;
             Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [PAPER EXECUTION] BOUGHT YES @ ${lastTrade.Price:0.00} | Size: ${lastTrade.DollarValue:0.00} | Asset: {GetMarketName(assetId)}");
-            Console.ResetColor();
+            Console.ResetColor();   
+            }
         }
     }
 
@@ -53,9 +59,12 @@ public class PaperBroker : GlobalSimulatedBroker
             var lastTrade = TradeLedger.Last();
             decimal pnl = (lastTrade.Price - entryPrice) * (initialShares - GetPositionShares(assetId));
 
+            if (!IsMuted)
+            {
             Console.ForegroundColor = pnl >= 0 ? ConsoleColor.Cyan : ConsoleColor.Red;
             Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [PAPER CLOSED] SOLD YES @ ${lastTrade.Price:0.00} | PnL: ${(pnl):0.00} | Total Equity: ${GetTotalPortfolioValue():0.00} | Asset: {GetMarketName(assetId)}");
-            Console.ResetColor();
+            Console.ResetColor();   
+            }
         }
     }
 
@@ -67,9 +76,13 @@ public class PaperBroker : GlobalSimulatedBroker
         if (GetNoPositionShares(assetId) > initialShares)
         {
             var lastTrade = TradeLedger.Last();
+
+            if (!IsMuted)
+            {
             Console.ForegroundColor = ConsoleColor.Magenta;
             Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [PAPER EXECUTION] BOUGHT NO @ ${lastTrade.Price:0.00} | Size: ${lastTrade.DollarValue:0.00} | Asset: {GetMarketName(assetId)}");
-            Console.ResetColor();
+            Console.ResetColor();   
+            }
         }
     }
 
@@ -85,9 +98,12 @@ public class PaperBroker : GlobalSimulatedBroker
             var lastTrade = TradeLedger.Last();
             decimal pnl = (lastTrade.Price - entryPrice) * (initialShares - GetNoPositionShares(assetId));
 
+            if (!IsMuted)
+            {
             Console.ForegroundColor = pnl >= 0 ? ConsoleColor.Cyan : ConsoleColor.Red;
             Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [PAPER CLOSED] SOLD NO @ ${lastTrade.Price:0.00} | PnL: ${(pnl):0.00} | Total Equity: ${GetTotalPortfolioValue():0.00} | Asset: {GetMarketName(assetId)}");
             Console.ResetColor();
+            }
         }
     }
 
@@ -103,18 +119,26 @@ public class PaperBroker : GlobalSimulatedBroker
         if (initialYesShares > 0)
         {
             decimal pnl = (outcomePrice - yesEntryPrice) * initialYesShares;
+
+            if (!IsMuted)
+            {
             Console.ForegroundColor = pnl > 0 ? ConsoleColor.Yellow : ConsoleColor.DarkRed;
             Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [MARKET SETTLED] YES SHARES @ ${outcomePrice:0.00} | PnL: ${(pnl):0.00} | Total Equity: ${GetTotalPortfolioValue():0.00} | Asset: {GetMarketName(assetId)}");
-            Console.ResetColor();
+            Console.ResetColor(); 
+            }
         }
 
         if (initialNoShares > 0)
         {
             decimal noOutcomePrice = 1.00m - outcomePrice;
             decimal pnl = (noOutcomePrice - noEntryPrice) * initialNoShares;
+
+            if (!IsMuted)
+            {
             Console.ForegroundColor = pnl > 0 ? ConsoleColor.Yellow : ConsoleColor.DarkRed;
             Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [MARKET SETTLED] NO SHARES @ ${noOutcomePrice:0.00} | PnL: ${(pnl):0.00} | Total Equity: ${GetTotalPortfolioValue():0.00} | Asset: {GetMarketName(assetId)}");
-            Console.ResetColor();
+            Console.ResetColor();   
+            }
         }
     }
 }

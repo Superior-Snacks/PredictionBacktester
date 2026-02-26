@@ -41,9 +41,8 @@ class Program
         // ---------------------------------------------------------
         // GRID 1: Live Flash Crash Sniper
         // ---------------------------------------------------------
-        decimal[] sniperThresholds = { 0.02m, 0.05m, 0.15m }; // 3 options
-        long[] sniperWindows = { 30, 60 };                    // 2 options
-        // Total Combinations: 3 x 2 = 6 bots
+        decimal[] sniperThresholds = { 0.02m, 0.05m, 0.15m, 0.30m}; // 4 options
+        long[] sniperWindows = {20, 30, 60 };                    // 3 options
 
         int sniperVersion = 1;
         
@@ -54,14 +53,15 @@ class Program
 
         foreach (var param in sniperGrid)
         {
-            string name = $"Sniper_v{sniperVersion++}";
+            // NEW: Inject Threshold (T) and Window (W) into the name
+            string name = $"Sniper_v{sniperVersion++}_T{param.threshold}_W{param.window}";
             configs.Add(new StrategyConfig(
                 name, 
                 1000m, 
                 () => new LiveFlashCrashSniperStrategy(name, param.threshold, param.window)
             ));
         }
-
+        /*
         // ---------------------------------------------------------
         // GRID 2: Mean Reversion Stat Arb
         // ---------------------------------------------------------
@@ -106,7 +106,7 @@ class Program
                 // Using 0.08m as the take profit / stop loss margins for this example
                 () => new OrderBookImbalanceStrategy(name, param.ratio, param.depth, 0.08m, 0.08m)
             ));
-        }
+        }*/
 
         // ---------------------------------------------------------
         // GRID 4: Reverse Flash Crash (Trend Follower)
@@ -128,7 +128,8 @@ class Program
 
         foreach (var param in reverseGrid)
         {
-            string name = $"ReverseArb_v{reverseVersion++}";
+            // NEW: Inject Threshold (T) and TakeProfit (P) into the name
+            string name = $"RevArb_v{reverseVersion++}_T{param.threshold}_P{param.tpMargin}";
             
             configs.Add(new StrategyConfig(
                 name, 
@@ -138,7 +139,7 @@ class Program
                     param.threshold, 
                     param.window, 
                     param.tpMargin, 
-                    0.05m // Hardcoding the StopLoss to 5 cents so the grid doesn't get too massive
+                    0.05m
                 )
             ));
         }
@@ -148,7 +149,9 @@ class Program
 
     // --- PAUSE & RESUME CONTROLS ---
     private static volatile bool _isPaused = false;
+    private static volatile bool _isMuted = false;
     private static CancellationTokenSource _pauseCts = new CancellationTokenSource();
+    private static readonly string _sessionCsvFilename = $"LivePaperTrades_{DateTime.Now:yyyyMMdd_HHmmss}.csv";
 
     private static Dictionary<string, PaperBroker> _strategyBrokers = new Dictionary<string, PaperBroker>();
     private static Dictionary<string, string> _tokenNames = new Dictionary<string, string>();
@@ -158,7 +161,7 @@ class Program
         Console.Clear();
         Console.WriteLine("=========================================");
         Console.WriteLine("  LIVE PAPER TRADING ENGINE INITIALIZED  ");
-        Console.WriteLine("  Controls: Press 'P' to Pause, 'R' to Resume");
+        Console.WriteLine("  Controls: 'P' = Pause | 'R' = Resume | 'M' = Mute Logs");
         Console.WriteLine("=========================================");
 
         foreach (var config in _strategyConfigs)
@@ -175,7 +178,7 @@ class Program
             Console.WriteLine("\n\n[SYSTEM] Graceful shutdown initiated...");
 
             // Run our export script
-            ExportLedgerToCsv();
+            ExportLedgerToCsv(quietMode: true);
 
             Console.WriteLine("[SYSTEM] Engine safely terminated. Goodbye.");
             Console.ResetColor();
@@ -208,6 +211,20 @@ class Program
                     _pauseCts = new CancellationTokenSource(); // Reset the token for the new connection
                     Console.ForegroundColor = ConsoleColor.Green;
                     Console.WriteLine("\n[SYSTEM] RESUMED by user. Reconnecting to Polymarket...");
+                    Console.ResetColor();
+                }
+                else if (keyInfo.Key == ConsoleKey.M)
+                {
+                    _isMuted = !_isMuted;
+                    
+                    // Tell every active broker to update its mute status
+                    foreach (var broker in _strategyBrokers.Values)
+                    {
+                        broker.IsMuted = _isMuted;
+                    }
+
+                    Console.ForegroundColor = ConsoleColor.Cyan;
+                    Console.WriteLine($"\n[SYSTEM] Trade logs are now {(_isMuted ? "MUTED" : "UNMUTED")}.");
                     Console.ResetColor();
                 }
             }
@@ -283,6 +300,8 @@ class Program
                     Console.ResetColor();
                 }
                 Console.WriteLine("=================================================================\n");
+                
+                ExportLedgerToCsv(quietMode: true);
 
                 Console.WriteLine("\n[SYSTEM] Running background settlement sweep...");
                 try
@@ -433,9 +452,12 @@ class Program
                                                     else book.Asks[price] = size;
                                                 }
 
+                                                if (!_isMuted)
+                                                {
                                                 Console.ForegroundColor = ConsoleColor.DarkGray;
                                                 Console.Write(".");
-                                                Console.ResetColor();
+                                                Console.ResetColor();   
+                                                }
 
                                                 // THE MULTIPLEXER ROUTING: Feed the exact same book to every strategy simultaneously!
                                                 foreach (var strategy in activeStrategies[assetId])
@@ -502,12 +524,11 @@ class Program
     // ==========================================
     // GRACEFUL SHUTDOWN & LEDGER EXPORT
     // ==========================================
-    private static void ExportLedgerToCsv()
+    private static void ExportLedgerToCsv(bool quietMode = false)
     {
         try
         {
-            string filename = $"LivePaperTrades_{DateTime.Now:yyyyMMdd_HHmmss}.csv";
-            using var writer = new StreamWriter(filename);
+            using var writer = new StreamWriter(_sessionCsvFilename);
 
             // Added StrategyName column
             writer.WriteLine("Timestamp,StrategyName,MarketName,AssetId,Side,ExecutionPrice,Shares,DollarValue");
@@ -536,9 +557,13 @@ class Program
                 }
             }
 
-            Console.ForegroundColor = ConsoleColor.Green;
-            Console.WriteLine($"\n[EXPORT SUCCESS] {totalTrades} trades saved to {filename}");
-            Console.ResetColor();
+            // Only print the success message if we are shutting down (not quiet mode)
+            if (!quietMode)
+            {
+                Console.ForegroundColor = ConsoleColor.Green;
+                Console.WriteLine($"\n[EXPORT SUCCESS] {totalTrades} trades saved to {_sessionCsvFilename}");
+                Console.ResetColor();
+            }
         }
         catch (Exception ex)
         {
