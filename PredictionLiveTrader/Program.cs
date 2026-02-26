@@ -373,7 +373,8 @@ class Program
                         }
                         while (!result.EndOfMessage);
 
-                        string message = Encoding.UTF8.GetString(ms.ToArray());
+                        //string message = Encoding.UTF8.GetString(ms.ToArray());
+                        string message = Encoding.UTF8.GetString(ms.GetBuffer(), 0, (int)ms.Length);
                         ms.SetLength(0);
 
                         try
