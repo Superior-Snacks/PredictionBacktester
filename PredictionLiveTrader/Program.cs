@@ -157,8 +157,7 @@ class Program
     private static Dictionary<string, string> _tokenNames = new Dictionary<string, string>();
     private static readonly HashSet<string> _subscribedTokens = new();
     private static ClientWebSocket? _activeWs;
-    private static readonly object _wsSendLock = new();
-
+private static readonly SemaphoreSlim _wsSendSemaphore = new SemaphoreSlim(1, 1);
     static async Task Main(string[] args)
     {
         Console.Clear();
@@ -318,17 +317,15 @@ class Program
                 // --- NEW MARKET DISCOVERY ---
                 try
                 {
-                    int beforeCount = _subscribedTokens.Count;
-                    await DiscoverNewMarkets(apiClient);
-                    int newCount = _subscribedTokens.Count - beforeCount;
+                    List<string> newTokens = await DiscoverNewMarkets(apiClient);
 
-                    if (newCount > 0)
+                    if (newTokens.Count > 0)
                     {
                         Console.ForegroundColor = ConsoleColor.Green;
-                        Console.WriteLine($"[DISCOVERY] Found {newCount} new market(s)! Subscribing...");
+                        Console.WriteLine($"[DISCOVERY] Found {newTokens.Count} new market(s) crossing the $50k threshold! Subscribing...");
                         Console.ResetColor();
 
-                        await SubscribeNewTokens(_subscribedTokens.Skip(beforeCount).ToList());
+                        await SubscribeNewTokens(newTokens);
                     }
                 }
                 catch { /* Ignore discovery errors */ }
@@ -393,11 +390,11 @@ class Program
 
                             if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty("event_type", out var eventTypeEl))
                             {
-                                string eventType = eventTypeEl.GetString();
+                                string? eventType = eventTypeEl.GetString();
 
                                 if (eventType == "book" && root.TryGetProperty("asset_id", out var assetIdEl))
                                 {
-                                    string assetId = assetIdEl.GetString();
+                                    string? assetId = assetIdEl.GetString();
                                     if (!string.IsNullOrEmpty(assetId))
                                     {
                                         if (!orderBooks.ContainsKey(assetId))
@@ -421,7 +418,7 @@ class Program
                                     {
                                         if (change.TryGetProperty("asset_id", out var idEl))
                                         {
-                                            string assetId = idEl.GetString();
+                                            string? assetId = idEl.GetString();
 
                                             if (!string.IsNullOrEmpty(assetId) && orderBooks.ContainsKey(assetId))
                                             {
@@ -515,9 +512,11 @@ class Program
     // ==========================================
     // NEW MARKET DISCOVERY
     // ==========================================
-    private static async Task DiscoverNewMarkets(PolymarketClient apiClient)
+    private static async Task<List<string>> DiscoverNewMarkets(PolymarketClient apiClient)
     {
+        var newlyDiscovered = new List<string>();
         int limit = 100;
+
         for (int offset = 0; ; offset += limit)
         {
             var events = await apiClient.GetActiveEventsAsync(limit, offset);
@@ -534,12 +533,19 @@ class Program
                     if (market.ClobTokenIds != null && !market.IsClosed && market.ClobTokenIds.Length > 0)
                     {
                         string yesToken = market.ClobTokenIds[0];
-                        _subscribedTokens.Add(yesToken);
-                        _tokenNames.TryAdd(yesToken, market.Question);
+                        
+                        // Add returns 'true' if the item didn't exist before.
+                        // This safely guarantees we only collect truly new tokens!
+                        if (_subscribedTokens.Add(yesToken))
+                        {
+                            _tokenNames.TryAdd(yesToken, market.Question);
+                            newlyDiscovered.Add(yesToken);
+                        }
                     }
                 }
             }
         }
+        return newlyDiscovered;
     }
 
     private static async Task SubscribeNewTokens(List<string> newTokens)
@@ -556,10 +562,15 @@ class Program
 
             var bytes = Encoding.UTF8.GetBytes(msg);
 
-            lock (_wsSendLock)
+            // Async-safe lock! Wait for the line to be clear, send, then release.
+            await _wsSendSemaphore.WaitAsync();
+            try
             {
-                ws.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, CancellationToken.None)
-                    .GetAwaiter().GetResult();
+                await ws.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, CancellationToken.None);
+            }
+            finally
+            {
+                _wsSendSemaphore.Release();
             }
 
             await Task.Delay(500);
