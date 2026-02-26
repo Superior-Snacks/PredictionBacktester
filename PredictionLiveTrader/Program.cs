@@ -20,24 +20,131 @@ record StrategyConfig(string Name, decimal StartingCapital, Func<ILiveStrategy> 
 class Program
 {
     // ==========================================
-    // STRATEGY CONFIGURATION — Add/remove variations here
+    // STRATEGY CONFIGURATION (Grid Search / Cartesian Product)
     // ==========================================
-    private static readonly List<StrategyConfig> _strategyConfigs = new()
+    private static readonly List<StrategyConfig> _strategyConfigs = GenerateStrategyGrid();
+
+    private static List<StrategyConfig> GenerateStrategyGrid()
     {
-        // Flash Crash Snipers
-        new("Sniper_Strict", 1000m, () => new LiveFlashCrashSniperStrategy("Sniper_Strict", 0.15m, 60)),
-        new("Sniper_Loose",  1000m, () => new LiveFlashCrashSniperStrategy("Sniper_Loose", 0.02m, 60)),
+        var configs = new List<StrategyConfig>();
 
-        // Reverse Trend Followers
-        new("Reverse_TrendFollowerRecc", 1000m, () => new LiveFlashCrashReverseStrategy("Reverse_TrendFollowerRecc", 0.10m, 60)),
-        new("Reverse_TrendFollowerOrg",  1000m, () => new LiveFlashCrashReverseStrategy("Reverse_TrendFollowerOrg", 0.15m, 60)),
+        // ---------------------------------------------------------
+        // normal hard test
+        // ---------------------------------------------------------
+        configs.Add(new StrategyConfig(
+            "Sniper_Ultra_Strict", 
+            1000m, 
+            () => new LiveFlashCrashSniperStrategy("Sniper_Ultra_Strict", 0.25m, 60)
+        ));
 
-        // Stat Arb
-        new("StatArb_ZScore", 1000m, () => new MeanReversionStatArbStrategy("StatArb_ZScore", 100, -2.0m, 0.0m)),
 
-        // Order Book Imbalance
-        new("Imbalance_5x", 1000m, () => new OrderBookImbalanceStrategy("Imbalance_5x", 5.0m, 3, 0.08m, 0.08m)),
-    };
+        // ---------------------------------------------------------
+        // GRID 1: Live Flash Crash Sniper
+        // ---------------------------------------------------------
+        decimal[] sniperThresholds = { 0.02m, 0.05m, 0.15m }; // 3 options
+        long[] sniperWindows = { 30, 60 };                    // 2 options
+        // Total Combinations: 3 x 2 = 6 bots
+
+        int sniperVersion = 1;
+        
+        // This LINQ query creates the Cartesian Product automatically!
+        var sniperGrid = from threshold in sniperThresholds
+                         from window in sniperWindows
+                         select new { threshold, window };
+
+        foreach (var param in sniperGrid)
+        {
+            string name = $"Sniper_v{sniperVersion++}";
+            configs.Add(new StrategyConfig(
+                name, 
+                1000m, 
+                () => new LiveFlashCrashSniperStrategy(name, param.threshold, param.window)
+            ));
+        }
+
+        // ---------------------------------------------------------
+        // GRID 2: Mean Reversion Stat Arb
+        // ---------------------------------------------------------
+        int[] rollingWindows = { 50, 100 };
+        decimal[] entryZScores = { -2.0m, -2.5m, -3.0m };
+        // Total Combinations: 2 x 3 = 6 bots
+
+        int statArbVersion = 1;
+
+        var statArbGrid = from window in rollingWindows
+                          from entryZ in entryZScores
+                          select new { window, entryZ };
+
+        foreach (var param in statArbGrid)
+        {
+            string name = $"StatArb_v{statArbVersion++}";
+            configs.Add(new StrategyConfig(
+                name, 
+                1000m, 
+                () => new MeanReversionStatArbStrategy(name, param.window, param.entryZ)
+            ));
+        }
+
+        // ---------------------------------------------------------
+        // GRID 3: Order Book Imbalance
+        // ---------------------------------------------------------
+        decimal[] imbalanceRatios = { 3.0m, 5.0m };
+        int[] depths = { 3, 5 };
+        
+        int imbVersion = 1;
+
+        var imbGrid = from ratio in imbalanceRatios
+                      from depth in depths
+                      select new { ratio, depth };
+
+        foreach (var param in imbGrid)
+        {
+            string name = $"Imbalance_v{imbVersion++}";
+            configs.Add(new StrategyConfig(
+                name, 
+                1000m, 
+                // Using 0.08m as the take profit / stop loss margins for this example
+                () => new OrderBookImbalanceStrategy(name, param.ratio, param.depth, 0.08m, 0.08m)
+            ));
+        }
+
+        // ---------------------------------------------------------
+        // GRID 4: Reverse Flash Crash (Trend Follower)
+        // ---------------------------------------------------------
+        // Parameters to test:
+        decimal[] reverseThresholds = { 0.10m, 0.15m };        // How big of a crash triggers us?
+        long[] reverseWindows = { 30, 60 };                    // How fast does it need to drop?
+        decimal[] takeProfitMargins = { 0.10m, 0.20m };        // How far do we ride the trend down?
+        
+        // Total Combinations: 2 x 2 x 2 = 8 unique bots
+
+        int reverseVersion = 1;
+
+        // A 3D Cartesian Product!
+        var reverseGrid = from threshold in reverseThresholds
+                          from window in reverseWindows
+                          from tpMargin in takeProfitMargins
+                          select new { threshold, window, tpMargin };
+
+        foreach (var param in reverseGrid)
+        {
+            string name = $"ReverseArb_v{reverseVersion++}";
+            
+            configs.Add(new StrategyConfig(
+                name, 
+                1000m, 
+                () => new LiveFlashCrashReverseStrategy(
+                    name, 
+                    param.threshold, 
+                    param.window, 
+                    param.tpMargin, 
+                    0.05m // Hardcoding the StopLoss to 5 cents so the grid doesn't get too massive
+                )
+            ));
+        }
+
+        return configs;
+    }
 
     // --- PAUSE & RESUME CONTROLS ---
     private static volatile bool _isPaused = false;
