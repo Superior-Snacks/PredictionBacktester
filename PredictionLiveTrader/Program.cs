@@ -155,6 +155,9 @@ class Program
     private static readonly int _maxNameLength = _strategyConfigs.Max(c => c.Name.Length);
     private static Dictionary<string, PaperBroker> _strategyBrokers = new Dictionary<string, PaperBroker>();
     private static Dictionary<string, string> _tokenNames = new Dictionary<string, string>();
+    private static readonly HashSet<string> _subscribedTokens = new();
+    private static ClientWebSocket? _activeWs;
+    private static readonly object _wsSendLock = new();
 
     static async Task Main(string[] args)
     {
@@ -241,39 +244,8 @@ class Program
         var apiClient = serviceProvider.GetRequiredService<PolymarketClient>();
 
         Console.WriteLine("Fetching active markets from Polymarket API...");
-        var allTokens = new List<string>();
-
-        int limit = 100;
-        for (int offset = 0; ; offset += limit)
-        {
-            var events = await apiClient.GetActiveEventsAsync(limit, offset);
-            if (events == null || events.Count == 0) break;
-
-            foreach (var ev in events)
-            {
-                if (ev.Markets == null) continue;
-                foreach (var market in ev.Markets)
-                {
-                    // 1. Skip if it hasn't started yet
-                    if (market.StartDate.HasValue && market.StartDate.Value > DateTime.UtcNow) continue;
-
-                    // 2. THE LIQUIDITY FILTER: Skip dead "Ghost Town" markets!
-                    if (market.Volume < 50000m) continue;
-
-                    if (market.ClobTokenIds != null && !market.IsClosed && market.ClobTokenIds.Length > 0)
-                    {
-                        // Only subscribe to the YES token (index 0) to avoid duplicate signals
-                        // and incorrect BuyNo price derivations on NO token order books.
-                        string yesToken = market.ClobTokenIds[0];
-                        allTokens.Add(yesToken);
-                        _tokenNames[yesToken] = market.Question;
-                    }
-                }
-            }
-        }
-
-        allTokens = allTokens.Distinct().ToList();
-        Console.WriteLine($"Found {allTokens.Count} active outcome tokens to monitor!");
+        await DiscoverNewMarkets(apiClient);
+        Console.WriteLine($"Found {_subscribedTokens.Count} active outcome tokens to monitor!");
 
         // ==========================================
         // SETTLEMENT SWEEPER 
@@ -342,6 +314,24 @@ class Program
                     }
                 }
                 catch { /* Ignore sweep errors */ }
+
+                // --- NEW MARKET DISCOVERY ---
+                try
+                {
+                    int beforeCount = _subscribedTokens.Count;
+                    await DiscoverNewMarkets(apiClient);
+                    int newCount = _subscribedTokens.Count - beforeCount;
+
+                    if (newCount > 0)
+                    {
+                        Console.ForegroundColor = ConsoleColor.Green;
+                        Console.WriteLine($"[DISCOVERY] Found {newCount} new market(s)! Subscribing...");
+                        Console.ResetColor();
+
+                        await SubscribeNewTokens(_subscribedTokens.Skip(beforeCount).ToList());
+                    }
+                }
+                catch { /* Ignore discovery errors */ }
             }
         });
 
@@ -367,8 +357,8 @@ class Program
                 ws.Options.KeepAliveInterval = TimeSpan.FromSeconds(10);
 
                 Console.WriteLine("\n[CONNECTING] Connecting to Polymarket WebSocket...");
-                // Pass the CancellationToken so 'P' instantly aborts the connection
                 await ws.ConnectAsync(new Uri("wss://ws-subscriptions-clob.polymarket.com/ws/market"), _pauseCts.Token);
+                _activeWs = ws;
                 Console.WriteLine("[CONNECTED] Listening for live order book updates... (Press CTRL+C to stop)\n");
 
                 var listenTask = Task.Run(async () =>
@@ -476,13 +466,13 @@ class Program
 
                 int chunkSize = 50;
                 bool isFirstChunk = true;
+                var tokenList = _subscribedTokens.ToList();
 
-                for (int i = 0; i < allTokens.Count; i += chunkSize)
+                for (int i = 0; i < tokenList.Count; i += chunkSize)
                 {
-                    // If the user hit 'P' while we were still subscribing, abort!
                     if (_pauseCts.IsCancellationRequested) break;
 
-                    var chunk = allTokens.Skip(i).Take(chunkSize);
+                    var chunk = tokenList.Skip(i).Take(chunkSize);
                     string assetListString = string.Join("\",\"", chunk);
 
                     string subscribeMessage;
@@ -506,11 +496,12 @@ class Program
             }
             catch (OperationCanceledException)
             {
-                // We expect this! It means the user pressed 'P'. 
-                // Do not print an error, just loop back around and wait in standby.
+                // We expect this! It means the user pressed 'P'.
+                _activeWs = null;
             }
             catch (Exception ex)
             {
+                _activeWs = null;
                 Console.ForegroundColor = ConsoleColor.Yellow;
                 Console.WriteLine($"\n[CONNECTION LOST] WebSocket connection dropped: {ex.Message}");
                 Console.WriteLine("Reconnecting in 5 seconds...");
@@ -518,6 +509,60 @@ class Program
 
                 await Task.Delay(5000);
             }
+        }
+    }
+
+    // ==========================================
+    // NEW MARKET DISCOVERY
+    // ==========================================
+    private static async Task DiscoverNewMarkets(PolymarketClient apiClient)
+    {
+        int limit = 100;
+        for (int offset = 0; ; offset += limit)
+        {
+            var events = await apiClient.GetActiveEventsAsync(limit, offset);
+            if (events == null || events.Count == 0) break;
+
+            foreach (var ev in events)
+            {
+                if (ev.Markets == null) continue;
+                foreach (var market in ev.Markets)
+                {
+                    if (market.StartDate.HasValue && market.StartDate.Value > DateTime.UtcNow) continue;
+                    if (market.Volume < 50000m) continue;
+
+                    if (market.ClobTokenIds != null && !market.IsClosed && market.ClobTokenIds.Length > 0)
+                    {
+                        string yesToken = market.ClobTokenIds[0];
+                        _subscribedTokens.Add(yesToken);
+                        _tokenNames.TryAdd(yesToken, market.Question);
+                    }
+                }
+            }
+        }
+    }
+
+    private static async Task SubscribeNewTokens(List<string> newTokens)
+    {
+        var ws = _activeWs;
+        if (ws == null || ws.State != WebSocketState.Open || newTokens.Count == 0) return;
+
+        int chunkSize = 50;
+        for (int i = 0; i < newTokens.Count; i += chunkSize)
+        {
+            var chunk = newTokens.Skip(i).Take(chunkSize);
+            string assetListString = string.Join("\",\"", chunk);
+            string msg = $"{{\"assets_ids\":[\"{assetListString}\"],\"operation\":\"subscribe\"}}";
+
+            var bytes = Encoding.UTF8.GetBytes(msg);
+
+            lock (_wsSendLock)
+            {
+                ws.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, CancellationToken.None)
+                    .GetAwaiter().GetResult();
+            }
+
+            await Task.Delay(500);
         }
     }
 
