@@ -15,8 +15,30 @@ using PredictionBacktester.Engine;
 
 namespace PredictionLiveTrader;
 
+record StrategyConfig(string Name, decimal StartingCapital, Func<ILiveStrategy> Factory);
+
 class Program
 {
+    // ==========================================
+    // STRATEGY CONFIGURATION — Add/remove variations here
+    // ==========================================
+    private static readonly List<StrategyConfig> _strategyConfigs = new()
+    {
+        // Flash Crash Snipers
+        new("Sniper_Strict", 1000m, () => new LiveFlashCrashSniperStrategy("Sniper_Strict", 0.15m, 60)),
+        new("Sniper_Loose",  1000m, () => new LiveFlashCrashSniperStrategy("Sniper_Loose", 0.02m, 60)),
+
+        // Reverse Trend Followers
+        new("Reverse_TrendFollowerRecc", 1000m, () => new LiveFlashCrashReverseStrategy("Reverse_TrendFollowerRecc", 0.10m, 60)),
+        new("Reverse_TrendFollowerOrg",  1000m, () => new LiveFlashCrashReverseStrategy("Reverse_TrendFollowerOrg", 0.15m, 60)),
+
+        // Stat Arb
+        new("StatArb_ZScore", 1000m, () => new MeanReversionStatArbStrategy("StatArb_ZScore", 100, -2.0m, 0.0m)),
+
+        // Order Book Imbalance
+        new("Imbalance_5x", 1000m, () => new OrderBookImbalanceStrategy("Imbalance_5x", 5.0m, 3, 0.08m, 0.08m)),
+    };
+
     // --- PAUSE & RESUME CONTROLS ---
     private static volatile bool _isPaused = false;
     private static CancellationTokenSource _pauseCts = new CancellationTokenSource();
@@ -32,17 +54,10 @@ class Program
         Console.WriteLine("  Controls: Press 'P' to Pause, 'R' to Resume");
         Console.WriteLine("=========================================");
 
-        _strategyBrokers["Sniper_Strict"] = new PaperBroker("Sniper_Strict", 1000m, _tokenNames);
-        _strategyBrokers["Sniper_Loose"] = new PaperBroker("Sniper_Loose", 1000m, _tokenNames); // Let's make a trigger-happy one!
+        foreach (var config in _strategyConfigs)
+            _strategyBrokers[config.Name] = new PaperBroker(config.Name, config.StartingCapital, _tokenNames);
 
-        _strategyBrokers["Reverse_TrendFollowerRecc"] = new PaperBroker("Reverse_TrendFollowerRecc", 1000m, _tokenNames);
-        _strategyBrokers["Reverse_TrendFollowerOrg"] = new PaperBroker("Reverse_TrendFollowerOrg", 1000m, _tokenNames);
-
-        _strategyBrokers["StatArb_ZScore"] = new PaperBroker("StatArb_ZScore", 1000m, _tokenNames);
-
-
-        _strategyBrokers["Imbalance_5x"] = new PaperBroker("Imbalance_5x", 1000m, _tokenNames);
-        _strategyBrokers["Imbalance_1.5x very loose"] = new PaperBroker("Imbalance_1.5x very loose", 1000m, _tokenNames);
+        Console.WriteLine($"Loaded {_strategyConfigs.Count} strategy configurations.");
 
 
         // THE INTERCEPTOR: Catch CTRL+C before the console dies!
@@ -148,12 +163,12 @@ class Program
 
                 // --- THE PERFORMANCE DASHBOARD ---
                 Console.WriteLine("\n================= STRATEGY PERFORMANCE OVERVIEW =================");
-                foreach (var kvp in _strategyBrokers)
+                foreach (var config in _strategyConfigs)
                 {
-                    var name = kvp.Key;
-                    var broker = kvp.Value;
+                    var name = config.Name;
+                    var broker = _strategyBrokers[name];
                     decimal totalEquity = broker.GetTotalPortfolioValue();
-                    decimal pnl = totalEquity - 1000m;
+                    decimal pnl = totalEquity - config.StartingCapital;
                     decimal activeBets = totalEquity - broker.CashBalance;
 
                     Console.ForegroundColor = pnl >= 0 ? ConsoleColor.Green : ConsoleColor.Red;
@@ -272,28 +287,9 @@ class Program
                                         {
                                             orderBooks[assetId] = new LocalOrderBook(assetId);
 
-                                            activeStrategies[assetId] = new List<ILiveStrategy>
-                                            {
-                                                // Strict bot: requires 15 cent drop in 60s
-                                                new LiveFlashCrashSniperStrategy("Sniper_Strict", 0.15m, 60),
-                
-                                                // Loose bot: only requires a 2 cent drop in 60s (Will trade constantly!)
-                                                new LiveFlashCrashSniperStrategy("Sniper_Loose", 0.02m, 60),
-
-                                                //reverse bot: reccomended
-                                                new LiveFlashCrashReverseStrategy("Reverse_TrendFollowerRecc", 0.10m, 60),
-
-                                                //reverse: exact
-                                                new LiveFlashCrashReverseStrategy("Reverse_TrendFollowerOrg", 0.15m, 60),
-
-                                                new MeanReversionStatArbStrategy("StatArb_ZScore", 100, -2.0m, 0.0m),
-
-                                                // Change the Take Profit and Stop Loss from 2 cents (0.02m) to 8 cents (0.08m)!
-                                                new OrderBookImbalanceStrategy("Imbalance_5x", 5.0m, 3, 0.08m, 0.08m),
-
-                                                //loose to see action
-                                                //new OrderBookImbalanceStrategy("Imbalance_1.5x very loose", 1.5m, 3, 0.05m, 0.05m)
-                                            };
+                                            activeStrategies[assetId] = _strategyConfigs
+                                                .Select(c => c.Factory())
+                                                .ToList();
                                         }
 
                                         if (root.TryGetProperty("bids", out var bidsEl) && root.TryGetProperty("asks", out var asksEl))
