@@ -157,7 +157,8 @@ class Program
     private static Dictionary<string, string> _tokenNames = new Dictionary<string, string>();
     private static readonly HashSet<string> _subscribedTokens = new();
     private static ClientWebSocket? _activeWs;
-private static readonly SemaphoreSlim _wsSendSemaphore = new SemaphoreSlim(1, 1);
+    private static readonly SemaphoreSlim _wsSendSemaphore = new SemaphoreSlim(1, 1);
+
     static async Task Main(string[] args)
     {
         Console.Clear();
