@@ -130,7 +130,6 @@ class Program
         {
             // NEW: Inject Threshold (T) and TakeProfit (P) into the name
             string name = $"RevArb_v{reverseVersion++}_T{param.threshold}_W{param.window}_P{param.tpMargin}";
-            
             configs.Add(new StrategyConfig(
                 name, 
                 1000m, 
