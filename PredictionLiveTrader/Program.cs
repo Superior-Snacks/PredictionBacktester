@@ -153,6 +153,7 @@ class Program
     private static CancellationTokenSource _pauseCts = new CancellationTokenSource();
     private static readonly string _sessionCsvFilename = $"LivePaperTrades_{DateTime.Now:yyyyMMdd_HHmmss}.csv";
 
+    private static readonly int _maxNameLength = _strategyConfigs.Max(c => c.Name.Length);
     private static Dictionary<string, PaperBroker> _strategyBrokers = new Dictionary<string, PaperBroker>();
     private static Dictionary<string, string> _tokenNames = new Dictionary<string, string>();
 
@@ -296,7 +297,7 @@ class Program
                     decimal activeBets = totalEquity - broker.CashBalance;
 
                     Console.ForegroundColor = pnl >= 0 ? ConsoleColor.Green : ConsoleColor.Red;
-                    Console.WriteLine($"[{name.PadRight(15)}] Equity: ${totalEquity:0.00} | PnL: ${(pnl):0.00} | In Bets: ${activeBets:0.00} | Trades: {broker.TotalTradesExecuted} (W:{broker.WinningTrades} L:{broker.LosingTrades})");
+                    Console.WriteLine($"[{name.PadRight(_maxNameLength)}] Equity: ${totalEquity:0.00} | PnL: ${(pnl):0.00} | In Bets: ${activeBets:0.00} | Trades: {broker.TotalTradesExecuted} (W:{broker.WinningTrades} L:{broker.LosingTrades})");
                     Console.ResetColor();
                 }
                 Console.WriteLine("=================================================================\n");
