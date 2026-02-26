@@ -121,14 +121,13 @@ class Program
                     // 2. THE LIQUIDITY FILTER: Skip dead "Ghost Town" markets!
                     if (market.Volume < 50000m) continue;
 
-                    if (market.ClobTokenIds != null && !market.IsClosed)
+                    if (market.ClobTokenIds != null && !market.IsClosed && market.ClobTokenIds.Length > 0)
                     {
-                        allTokens.AddRange(market.ClobTokenIds);
-
-                        foreach (var token in market.ClobTokenIds)
-                        {
-                            _tokenNames[token] = market.Question;
-                        }
+                        // Only subscribe to the YES token (index 0) to avoid duplicate signals
+                        // and incorrect BuyNo price derivations on NO token order books.
+                        string yesToken = market.ClobTokenIds[0];
+                        allTokens.Add(yesToken);
+                        _tokenNames[yesToken] = market.Question;
                     }
                 }
             }
@@ -169,7 +168,7 @@ class Program
                     int sweepLimit = 100;
                     for (int offset = 0; offset < 500; offset += sweepLimit)
                     {
-                        var events = await apiClient.GetActiveEventsAsync(sweepLimit, offset);
+                        var events = await apiClient.GetClosedEventsAsync(sweepLimit, offset);
                         if (events == null || events.Count == 0) break;
 
                         foreach (var ev in events)
@@ -413,10 +412,18 @@ class Program
             foreach (var brokerKvp in _strategyBrokers)
             {
                 string strategyName = brokerKvp.Key;
-                var ledger = brokerKvp.Value.TradeLedger;
-                totalTrades += ledger.Count;
+                var broker = brokerKvp.Value;
 
-                foreach (var trade in ledger)
+                // Snapshot the ledger under the broker's lock to avoid concurrent modification
+                List<ExecutedTrade> ledgerSnapshot;
+                lock (broker.BrokerLock)
+                {
+                    ledgerSnapshot = new List<ExecutedTrade>(broker.TradeLedger);
+                }
+
+                totalTrades += ledgerSnapshot.Count;
+
+                foreach (var trade in ledgerSnapshot)
                 {
                     string marketName = _tokenNames.GetValueOrDefault(trade.OutcomeId, "Unknown");
                     marketName = $"\"{marketName.Replace("\"", "\"\"")}\"";

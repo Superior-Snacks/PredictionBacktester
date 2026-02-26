@@ -11,6 +11,7 @@ public class GlobalSimulatedBroker
 
     // We use a lock object to protect non-concurrent properties like CashBalance and TradeLedger
     protected readonly object _brokerLock = new object();
+    public object BrokerLock => _brokerLock;
 
     public decimal CashBalance { get; protected set; }
 
@@ -224,7 +225,7 @@ public class GlobalSimulatedBroker
             }
             foreach (var kvp in _noPositionShares)
             {
-                decimal price = 1.00m - _lastKnownPrices.GetValueOrDefault(kvp.Key, 1.00m);
+                decimal price = 1.00m - _lastKnownPrices.GetValueOrDefault(kvp.Key, 0.50m);
                 activeValue += kvp.Value * price;
             }
             return CashBalance + activeValue;

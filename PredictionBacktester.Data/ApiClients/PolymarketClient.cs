@@ -103,6 +103,26 @@ public class PolymarketClient
     }
 
     /// <summary>
+    /// Fetches recently closed events for settlement sweeping.
+    /// Unlike GetActiveEventsAsync, this uses closed=true to find resolved markets.
+    /// </summary>
+    public async Task<List<PolymarketEventResponse>> GetClosedEventsAsync(int limit, int offset)
+    {
+        string url = $"events?limit={limit}&offset={offset}&closed=true";
+
+        try
+        {
+            var rawJson = await _gammaClient.GetStringAsync(url);
+            var events = JsonSerializer.Deserialize<List<PolymarketEventResponse>>(rawJson);
+            return events ?? new List<PolymarketEventResponse>();
+        }
+        catch
+        {
+            return new List<PolymarketEventResponse>();
+        }
+    }
+
+    /// <summary>
     /// Fetches ALL raw, tick-level trades for a specific market using dynamic Timestamp Pagination.
     /// This completely bypasses the API's 3000 offset limit for massive markets!
     /// </summary>
