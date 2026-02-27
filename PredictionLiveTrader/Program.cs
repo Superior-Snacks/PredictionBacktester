@@ -35,13 +35,13 @@ class Program
         configs.Add(new StrategyConfig(
             "Sniper_Ultra_Strict_100$", 
             100m, 
-            () => new LiveFlashCrashSniperStrategy("Sniper_Ultra_Strict", 0.25m, 60)
+            () => new LiveFlashCrashSniperStrategy("Sniper_Ultra_Strict_100$", 0.25m, 60)
         ));
 
         configs.Add(new StrategyConfig(
-            "Sniper_Ultra_Strict500$", 
-            500m, 
-            () => new LiveFlashCrashSniperStrategy("Sniper_Ultra_Strict", 0.25m, 60)
+            "Sniper_Ultra_Strict_500$",
+            500m,
+            () => new LiveFlashCrashSniperStrategy("Sniper_Ultra_Strict_500$", 0.25m, 60)
         ));
 
 
