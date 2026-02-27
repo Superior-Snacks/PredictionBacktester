@@ -97,7 +97,7 @@ def analyze_latest_run():
     strategy_pnl = df.groupby('StrategyName')['CashFlow'].sum().reset_index()
     strategy_pnl.columns = ['StrategyName', 'StrategyPnL']
 
-    param_names = {'T': 'Threshold', 'W': 'Window', 'P': 'TakeProfit'}
+    param_names = {'T': 'Threshold', 'W': 'Window', 'P': 'TakeProfit', 'S': 'StopLoss'}
 
     for param_letter in sorted(df['Params'].apply(lambda d: list(d.keys())).explode().dropna().unique()):
         param_label = param_names.get(param_letter, param_letter)
@@ -261,17 +261,26 @@ def analyze_latest_run():
     inventory['True_Total_Equity'] = inventory['StartingCapital'] + inventory['Total_PnL'] + inventory['MarkToMarket_Value']
     inventory['True_PnL'] = inventory['True_Total_Equity'] - inventory['StartingCapital']
 
-    # 7. Format and display the reality check!
+    # 7. Calculate estimated hourly P/L based on time each strategy has been active
+    strat_time_span = df.groupby('StrategyName')['Timestamp'].agg(['min', 'max'])
+    strat_time_span['Hours'] = (strat_time_span['max'] - strat_time_span['min']).dt.total_seconds() / 3600.0
+    strat_time_span['Hours'] = strat_time_span['Hours'].clip(lower=0.1)  # Floor at 6 min to avoid division spikes
+    inventory = inventory.merge(strat_time_span[['Hours']], left_on='StrategyName', right_index=True, how='left')
+    inventory['Hourly_PnL'] = inventory['True_PnL'] / inventory['Hours']
+
+    # 8. Format and display the reality check!
     inventory = inventory.sort_values('True_PnL', ascending=False)
-    
+
     # Filter out bots that aren't holding anything to keep the view clean
     bag_holders = inventory[(inventory['Net_Yes_Shares'] > 1) | (inventory['Net_No_Shares'] > 1)].copy()
-    
+
+    bag_holders['Hours_fmt'] = bag_holders['Hours'].apply(lambda x: f"{x:.1f}h")
+    bag_holders['Hourly_PnL'] = bag_holders['Hourly_PnL'].apply(lambda x: f"${x:,.2f}/hr")
     bag_holders['MarkToMarket_Value'] = bag_holders['MarkToMarket_Value'].apply(lambda x: f"${x:,.2f}")
     bag_holders['True_Total_Equity'] = bag_holders['True_Total_Equity'].apply(lambda x: f"${x:,.2f}")
     bag_holders['True_PnL'] = bag_holders['True_PnL'].apply(lambda x: f"${x:,.2f}")
-    
-    print(bag_holders[['StrategyName', 'MarkToMarket_Value', 'True_Total_Equity', 'True_PnL']].to_string(index=False))
+
+    print(bag_holders[['StrategyName', 'MarkToMarket_Value', 'True_Total_Equity', 'True_PnL', 'Hours_fmt', 'Hourly_PnL']].to_string(index=False))
     print("\n" + "="*80 + "\n")
 
 if __name__ == "__main__":
