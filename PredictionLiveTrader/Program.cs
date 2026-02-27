@@ -28,24 +28,30 @@ class Program
     {
         var configs = new List<StrategyConfig>();
 
-        /*
+        
         // ---------------------------------------------------------
         // normal hard test
         // ---------------------------------------------------------
         configs.Add(new StrategyConfig(
-            "Sniper_Ultra_Strict", 
-            1000m, 
+            "Sniper_Ultra_Strict_100$", 
+            100m, 
             () => new LiveFlashCrashSniperStrategy("Sniper_Ultra_Strict", 0.25m, 60)
-        ));*/
+        ));
+
+        configs.Add(new StrategyConfig(
+            "Sniper_Ultra_Strict500$", 
+            500m, 
+            () => new LiveFlashCrashSniperStrategy("Sniper_Ultra_Strict", 0.25m, 60)
+        ));
 
 
         // ---------------------------------------------------------
         // GRID 1: Live Flash Crash Sniper
         // ---------------------------------------------------------
-        decimal[] sniperThresholds = { 0.02m, 0.05m, 0.15m, 0.20m, 0.25m, 0.30m};
-        long[] sniperWindows = {10, 20, 30, 40, 50, 60, 120};
-        decimal[] sniperTakeProfit = {}; // todos
-        decimal[] sniperStopLoss = {};
+        decimal[] sniperThresholds = { 0.15m, 0.20m, 0.25m, 0.30m };
+        long[] sniperWindows = { 10, 20, 30, 60, 120 };
+        decimal[] sniperTakeProfit = { 0.03m, 0.05m, 0.10m };
+        decimal[] sniperStopLoss = { 0.10m, 0.15m, 0.25m };
 
         int sniperVersion = 1;
         
@@ -63,7 +69,7 @@ class Program
             configs.Add(new StrategyConfig(
                 name, 
                 1000m, 
-                () => new LiveFlashCrashSniperStrategy(name, param.threshold, param.window) //todo
+                () => new LiveFlashCrashSniperStrategy(name, param.threshold, param.window, param.Profit, param.stop)
             ));
         }
         /*
