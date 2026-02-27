@@ -48,7 +48,7 @@ class Program
         // ---------------------------------------------------------
         // GRID 1: Live Flash Crash Sniper
         // ---------------------------------------------------------
-        decimal[] sniperThresholds = { 0.15m, 0.20m, 0.25m, 0.30m };
+        decimal[] sniperThresholds = {0.02m, 0.08m, 0.15m, 0.20m, 0.25m, 0.30m };
         long[] sniperWindows = { 10, 20, 30, 60, 120 };
         decimal[] sniperTakeProfit = { 0.03m, 0.05m, 0.10m };
         decimal[] sniperStopLoss = { 0.10m, 0.15m, 0.25m };
