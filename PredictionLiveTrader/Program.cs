@@ -265,10 +265,11 @@ class Program
                     var broker = _strategyBrokers[name];
                     decimal totalEquity = broker.GetTotalPortfolioValue();
                     decimal pnl = totalEquity - config.StartingCapital;
-                    decimal activeBets = totalEquity - broker.CashBalance;
+                    decimal mtmValue = totalEquity - broker.CashBalance;
+                    decimal realizedPnl = broker.CashBalance - config.StartingCapital;
 
                     Console.ForegroundColor = pnl >= 0 ? ConsoleColor.Green : ConsoleColor.Red;
-                    Console.WriteLine($"[{name.PadRight(_maxNameLength)}] Equity: ${totalEquity:0.00} | PnL: ${(pnl):0.00} | In Bets: ${activeBets:0.00} | Trades: {broker.TotalTradesExecuted} (W:{broker.WinningTrades} L:{broker.LosingTrades})");
+                    Console.WriteLine($"[{name.PadRight(_maxNameLength)}] Equity: ${totalEquity:0.00} | PnL: ${pnl:0.00} (Real: ${realizedPnl:0.00} + MTM: ${mtmValue:0.00}) | Trades: {broker.TotalTradesExecuted} (W:{broker.WinningTrades} L:{broker.LosingTrades})");
                     Console.ResetColor();
                 }
                 Console.WriteLine("=================================================================\n");
@@ -587,14 +588,15 @@ class Program
         {
             using var writer = new StreamWriter(_sessionCsvFilename);
 
-            // Added StrategyName column
-            writer.WriteLine("Timestamp,StrategyName,MarketName,AssetId,Side,ExecutionPrice,Shares,DollarValue");
+            writer.WriteLine("Timestamp,StrategyName,StartingCapital,MarketName,AssetId,Side,ExecutionPrice,Shares,DollarValue");
 
             int totalTrades = 0;
             foreach (var brokerKvp in _strategyBrokers)
             {
                 string strategyName = brokerKvp.Key;
                 var broker = brokerKvp.Value;
+                var config = _strategyConfigs.FirstOrDefault(c => c.Name == strategyName);
+                decimal startingCapital = config?.StartingCapital ?? 1000m;
 
                 // Snapshot the ledger under the broker's lock to avoid concurrent modification
                 List<ExecutedTrade> ledgerSnapshot;
@@ -610,7 +612,7 @@ class Program
                     string marketName = _tokenNames.GetValueOrDefault(trade.OutcomeId, "Unknown");
                     marketName = $"\"{marketName.Replace("\"", "\"\"")}\"";
 
-                    writer.WriteLine($"{trade.Date:O},{strategyName},{marketName},{trade.OutcomeId},{trade.Side},{trade.Price},{trade.Shares},{trade.DollarValue}");
+                    writer.WriteLine($"{trade.Date:O},{strategyName},{startingCapital},{marketName},{trade.OutcomeId},{trade.Side},{trade.Price},{trade.Shares},{trade.DollarValue}");
                 }
             }
 

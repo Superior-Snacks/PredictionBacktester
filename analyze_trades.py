@@ -47,6 +47,12 @@ def analyze_latest_run():
         axis=1
     )
 
+    # Extract starting capital per strategy from CSV (falls back to $1000 for old CSVs)
+    if 'StartingCapital' in df.columns:
+        starting_caps = df.drop_duplicates('StrategyName').set_index('StrategyName')['StartingCapital'].to_dict()
+    else:
+        starting_caps = {}
+
     # Extract strategy type and parameters
     df['StrategyType'] = df['StrategyName'].apply(lambda x: x.split('_v')[0].split('_Ultra')[0])
 
@@ -216,6 +222,8 @@ def analyze_latest_run():
     ).reset_index()
 
     # 4. Calculate the true Mark-to-Market value of those held bags
+    # Liquidity haircut — can't assume full exit at last price due to slippage/spread
+    LIQUIDITY_HAIRCUT = 0.07  # 7% discount
     inventory['MarkToMarket_Value'] = 0.0
 
     for idx, row in inventory.iterrows():
@@ -242,14 +250,15 @@ def analyze_latest_run():
             if no_held > 0:
                 strat_mtm += (no_held * (1 - last_price))
                 
-        inventory.at[idx, 'MarkToMarket_Value'] = strat_mtm
+        inventory.at[idx, 'MarkToMarket_Value'] = strat_mtm * (1 - LIQUIDITY_HAIRCUT)
 
     # 5. Bring in the Realized CashFlow we calculated in Dashboard 1
     inventory = inventory.merge(leaderboard[['StrategyName', 'Total_PnL']], on='StrategyName')
     
-    # 6. Calculate True Total Equity = Starting $1000 + CashFlow PnL + MarkToMarket Bag Value
-    inventory['True_Total_Equity'] = 1000.0 + inventory['Total_PnL'] + inventory['MarkToMarket_Value']
-    inventory['True_PnL'] = inventory['True_Total_Equity'] - 1000.0
+    # 6. Calculate True Total Equity = StartingCapital + CashFlow PnL + MarkToMarket Bag Value
+    inventory['StartingCapital'] = inventory['StrategyName'].map(starting_caps).fillna(1000.0)
+    inventory['True_Total_Equity'] = inventory['StartingCapital'] + inventory['Total_PnL'] + inventory['MarkToMarket_Value']
+    inventory['True_PnL'] = inventory['True_Total_Equity'] - inventory['StartingCapital']
 
     # 7. Format and display the reality check!
     inventory = inventory.sort_values('True_PnL', ascending=False)
