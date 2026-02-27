@@ -28,6 +28,7 @@ class Program
     {
         var configs = new List<StrategyConfig>();
 
+        /*
         // ---------------------------------------------------------
         // normal hard test
         // ---------------------------------------------------------
@@ -35,30 +36,34 @@ class Program
             "Sniper_Ultra_Strict", 
             1000m, 
             () => new LiveFlashCrashSniperStrategy("Sniper_Ultra_Strict", 0.25m, 60)
-        ));
+        ));*/
 
 
         // ---------------------------------------------------------
         // GRID 1: Live Flash Crash Sniper
         // ---------------------------------------------------------
-        decimal[] sniperThresholds = { 0.02m, 0.05m, 0.15m, 0.30m}; // 4 options
-        long[] sniperWindows = {20, 30, 60 };                    // 3 options
+        decimal[] sniperThresholds = { 0.02m, 0.05m, 0.15m, 0.20m, 0.25m, 0.30m};
+        long[] sniperWindows = {10, 20, 30, 40, 50, 60, 120};
+        decimal[] sniperTakeProfit = {}; // todos
+        decimal[] sniperStopLoss = {};
 
         int sniperVersion = 1;
         
         // This LINQ query creates the Cartesian Product automatically!
         var sniperGrid = from threshold in sniperThresholds
                          from window in sniperWindows
-                         select new { threshold, window };
+                         from Profit in sniperTakeProfit
+                         from stop in sniperStopLoss
+                         select new { threshold, window, Profit, stop};
 
         foreach (var param in sniperGrid)
         {
             // NEW: Inject Threshold (T) and Window (W) into the name
-            string name = $"Sniper_v{sniperVersion++}_T{param.threshold}_W{param.window}";
+            string name = $"Sniper_v{sniperVersion++}_T{param.threshold}_W{param.window}_P{param.Profit}_S{param.stop}";
             configs.Add(new StrategyConfig(
                 name, 
                 1000m, 
-                () => new LiveFlashCrashSniperStrategy(name, param.threshold, param.window)
+                () => new LiveFlashCrashSniperStrategy(name, param.threshold, param.window) //todo
             ));
         }
         /*
@@ -106,7 +111,7 @@ class Program
                 // Using 0.08m as the take profit / stop loss margins for this example
                 () => new OrderBookImbalanceStrategy(name, param.ratio, param.depth, 0.08m, 0.08m)
             ));
-        }*/
+        }
 
         // ---------------------------------------------------------
         // GRID 4: Reverse Flash Crash (Trend Follower)
@@ -141,7 +146,7 @@ class Program
                     0.05m
                 )
             ));
-        }
+        }*/
 
         return configs;
     }
