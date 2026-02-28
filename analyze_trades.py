@@ -146,7 +146,7 @@ def analyze_latest_run():
     print(breakdown.to_string(index=False))
     print("\n")
 
-    """
+    
     # ==========================================
     # DASHBOARD 7: STRATEGY vs. MARKET MATRIX (DETAILED + EXCEL EXPORT)
     # ==========================================
@@ -200,7 +200,7 @@ def analyze_latest_run():
         print(market_matrix.to_string())
         
     print("\n" + "="*80 + "\n")
-    """
+    
 
     # ==========================================
     # DASHBOARD 8: THE REALITY CHECK (Mark-to-Market Bags)
