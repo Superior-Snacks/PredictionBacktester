@@ -261,7 +261,11 @@ def analyze_latest_run():
     inventory['True_Total_Equity'] = inventory['StartingCapital'] + inventory['Total_PnL'] + inventory['MarkToMarket_Value']
     inventory['True_PnL'] = inventory['True_Total_Equity'] - inventory['StartingCapital']
 
-    # 7. Calculate estimated hourly P/L based on time each strategy has been active
+    # 7. Pessimistic scenario: if all bags go to $0
+    inventory['Worst_Case_Equity'] = inventory['StartingCapital'] + inventory['Total_PnL']
+    inventory['Worst_Case_PnL'] = inventory['Worst_Case_Equity'] - inventory['StartingCapital']
+
+    # 8. Calculate estimated hourly P/L based on time each strategy has been active
     strat_time_span = df.groupby('StrategyName')['Timestamp'].agg(['min', 'max'])
     strat_time_span['Hours'] = (strat_time_span['max'] - strat_time_span['min']).dt.total_seconds() / 3600.0
     strat_time_span['Hours'] = strat_time_span['Hours'].clip(lower=0.1)  # Floor at 6 min to avoid division spikes
@@ -279,8 +283,9 @@ def analyze_latest_run():
     bag_holders['MarkToMarket_Value'] = bag_holders['MarkToMarket_Value'].apply(lambda x: f"${x:,.2f}")
     bag_holders['True_Total_Equity'] = bag_holders['True_Total_Equity'].apply(lambda x: f"${x:,.2f}")
     bag_holders['True_PnL'] = bag_holders['True_PnL'].apply(lambda x: f"${x:,.2f}")
+    bag_holders['Worst_Case_PnL'] = bag_holders['Worst_Case_PnL'].apply(lambda x: f"${x:,.2f}")
 
-    print(bag_holders[['StrategyName', 'MarkToMarket_Value', 'True_Total_Equity', 'True_PnL', 'Hours_fmt', 'Hourly_PnL']].to_string(index=False))
+    print(bag_holders[['StrategyName', 'MarkToMarket_Value', 'True_Total_Equity', 'True_PnL', 'Worst_Case_PnL', 'Hours_fmt', 'Hourly_PnL']].to_string(index=False))
     print("\n" + "="*80 + "\n")
 
 if __name__ == "__main__":
