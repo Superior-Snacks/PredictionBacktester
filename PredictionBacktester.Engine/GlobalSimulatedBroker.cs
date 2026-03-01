@@ -18,6 +18,8 @@ public class GlobalSimulatedBroker
     //Toggleable parameter (0 = Instant execution, 250 = Realistic Latency)
     public int LatencyMs { get; set; } = 0;
 
+    public volatile bool IsMuted;
+
     // THREAD SAFETY: Upgraded to ConcurrentDictionary
     private ConcurrentDictionary<string, decimal> _positionShares = new();
     private ConcurrentDictionary<string, decimal> _averageEntryPrices = new();
@@ -37,6 +39,8 @@ public class GlobalSimulatedBroker
 
     public decimal MaxParticipationRate { get; private set; } = 1.00m;
     public decimal ResolutionFeeRate { get; private set; } = 0.02m;
+
+    protected ConcurrentDictionary<string, bool> _pendingOrders = new ConcurrentDictionary<string, bool>();
 
     public GlobalSimulatedBroker(decimal startingCash)
     {
@@ -256,22 +260,33 @@ public class GlobalSimulatedBroker
         }
     }
 
-    public virtual void SubmitBuyOrder(string assetId, decimal targetPrice, decimal dollarsToInvest, LocalOrderBook book, Action? onCompleted = null)
+    public virtual void SubmitBuyOrder(string assetId, decimal targetPrice, decimal dollarsToInvest, LocalOrderBook book)
+{
+    if (LatencyMs <= 0)
     {
-        if (LatencyMs <= 0)
-        {
-            decimal filled = Buy(assetId, targetPrice, dollarsToInvest, book.GetBestAskSize());
-            if (filled > 0) book.ConsumeAskLiquidity(filled);
-            onCompleted?.Invoke();
-            return;
-        }
+        decimal filled = Buy(assetId, targetPrice, dollarsToInvest, book.GetBestAskSize());
+        if (filled > 0) book.ConsumeAskLiquidity(filled);
+        return;
+    }
 
-        Task.Run(async () =>
+    // GUARD: Don't queue multiple buys for the same asset!
+    if (!_pendingOrders.TryAdd(assetId, true)) return;
+
+    Task.Run(async () =>
+    {
+        try
         {
             await Task.Delay(LatencyMs);
 
             decimal currentAsk = book.GetBestAskPrice();
             decimal availableLiquidity = book.GetBestAskSize();
+
+            // GUARD: Ensure the price is valid
+            if (currentAsk >= 0.99m || currentAsk <= 0.01m)
+            {
+                if (!IsMuted) Console.WriteLine($"[LATENCY REJECT] Invalid price {currentAsk} on {assetId}.");
+                return;
+            }
 
             if (currentAsk <= targetPrice && availableLiquidity > 0)
             {
@@ -284,27 +299,48 @@ public class GlobalSimulatedBroker
                 {
                     TradeLedger.Add(new ExecutedTrade { OutcomeId = assetId, Date = DateTime.Now, Side = "REJECT BUY", Price = currentAsk, Shares = 0, DollarValue = 0 });
                 }
+                if (!IsMuted)
+                {
+                    Console.ForegroundColor = ConsoleColor.DarkGray;
+                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [LATENCY REJECT] Missed BUY race on {assetId}. Price moved to {currentAsk} or liquidity vanished.");
+                    Console.ResetColor();
+                }
             }
-            onCompleted?.Invoke();
-        });
+        }
+        finally
+        {
+            // Always remove the lock when the delay finishes, even if it failed
+            _pendingOrders.TryRemove(assetId, out _);
+        }
+    });
+}
+
+    public virtual void SubmitSellAllOrder(string assetId, decimal targetPrice, LocalOrderBook book)
+{
+    if (LatencyMs <= 0)
+    {
+        decimal filled = SellAll(assetId, targetPrice, book.GetBestBidSize());
+        if (filled > 0) book.ConsumeBidLiquidity(filled);
+        return;
     }
 
-    public virtual void SubmitSellAllOrder(string assetId, decimal targetPrice, LocalOrderBook book, Action? onCompleted = null)
-    {
-        if (LatencyMs <= 0)
-        {
-            decimal filled = SellAll(assetId, targetPrice, book.GetBestBidSize());
-            if (filled > 0) book.ConsumeBidLiquidity(filled);
-            onCompleted?.Invoke();
-            return;
-        }
+    // GUARD: Don't queue multiple sells!
+    if (!_pendingOrders.TryAdd(assetId, true)) return;
 
-        Task.Run(async () =>
+    Task.Run(async () =>
+    {
+        try
         {
             await Task.Delay(LatencyMs);
 
             decimal currentBid = book.GetBestBidPrice();
             decimal availableLiquidity = book.GetBestBidSize();
+
+            if (currentBid >= 0.99m || currentBid <= 0.01m)
+            {
+                if (!IsMuted) Console.WriteLine($"[LATENCY REJECT] Invalid SELL price {currentBid} on {assetId}.");
+                return;
+            }
 
             if (currentBid >= targetPrice && availableLiquidity > 0)
             {
@@ -317,8 +353,18 @@ public class GlobalSimulatedBroker
                 {
                     TradeLedger.Add(new ExecutedTrade { OutcomeId = assetId, Date = DateTime.Now, Side = "REJECT SELL", Price = currentBid, Shares = 0, DollarValue = 0 });
                 }
+                if (!IsMuted)
+                {
+                    Console.ForegroundColor = ConsoleColor.DarkGray;
+                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [LATENCY REJECT] Missed SELL race on {assetId}. Price moved to {currentBid}.");
+                    Console.ResetColor();
+                }
             }
-            onCompleted?.Invoke();
-        });
-    }
+        }
+        finally
+        {
+            _pendingOrders.TryRemove(assetId, out _);
+        }
+    });
+}
 }

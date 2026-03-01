@@ -10,8 +10,6 @@ public class PaperBroker : GlobalSimulatedBroker
     public string StrategyName { get; }
     private readonly Dictionary<string, string> _tokenNames;
 
-    public volatile bool IsMuted;
-
     // THE FIX: Accept the dictionary of token names
     public PaperBroker(string strategyName, decimal initialCapital, Dictionary<string, string> tokenNames) : base(initialCapital)
     {

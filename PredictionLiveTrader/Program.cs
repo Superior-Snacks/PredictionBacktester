@@ -76,7 +76,7 @@ class Program
     }
 
     // --- LATENCY SIMULATION (based on ping to Polymarket CLOB API) ---
-    private const int REALISTIC_LATENCY_MS = 90;
+    private const int REALISTIC_LATENCY_MS = 250;
     private static volatile bool _latencyEnabled = true;
 
     // --- PAUSE & RESUME CONTROLS ---
@@ -99,6 +99,7 @@ class Program
         Console.WriteLine("=========================================");
         Console.WriteLine("  LIVE PAPER TRADING ENGINE INITIALIZED  ");
         Console.WriteLine("  Controls: 'P' = Pause | 'R' = Resume | 'M' = Mute | 'L' = Latency | 'D' = Drop");
+        Console.WriteLine($"  Latency starst at {REALISTIC_LATENCY_MS}");
         Console.WriteLine("=========================================");
 
         foreach (var config in _strategyConfigs)

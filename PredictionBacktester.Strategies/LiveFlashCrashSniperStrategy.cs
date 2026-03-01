@@ -16,8 +16,6 @@ public class LiveFlashCrashSniperStrategy : ILiveStrategy
     private readonly decimal _riskPercentage;
 
     private readonly Queue<(long Timestamp, decimal Price)> _recentAsks;
-    private volatile bool _pendingBuy = false;
-    private volatile bool _pendingSell = false;
 
     public LiveFlashCrashSniperStrategy(
         string strategyName = "FlashCrashSniper",
@@ -73,23 +71,18 @@ public class LiveFlashCrashSniperStrategy : ILiveStrategy
 
         if (positionShares > 0)
         {
-            if (_pendingSell) return;
-
             decimal avgEntry = broker.GetAverageEntryPrice(assetId);
             bool isTakeProfit = bestBid >= avgEntry + _reboundProfitMargin;
             bool isStopLoss = bestBid <= avgEntry - _stopLossMargin;
 
             if (isTakeProfit || isStopLoss)
             {
-                _pendingSell = true;
-                broker.SubmitSellAllOrder(assetId, bestBid, book, () => _pendingSell = false);
+                broker.SubmitSellAllOrder(assetId, bestBid, book);
             }
             return;
         }
 
         decimal maxAskInWindow = _recentAsks.Max(x => x.Price);
-
-        if (_pendingBuy) return;
 
         if (maxAskInWindow - bestAsk >= _crashThreshold && dollarsToInvest >= 1.00m)
         {
@@ -99,8 +92,7 @@ public class LiveFlashCrashSniperStrategy : ILiveStrategy
 
             if (actualDollarsSpent >= 1.00m)
             {
-                _pendingBuy = true;
-                broker.SubmitBuyOrder(assetId, bestAsk, actualDollarsSpent, book, () => _pendingBuy = false);
+                broker.SubmitBuyOrder(assetId, bestAsk, actualDollarsSpent, book);
                 _recentAsks.Clear();
             }
         }
