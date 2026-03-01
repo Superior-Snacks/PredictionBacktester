@@ -42,9 +42,10 @@ def analyze_latest_run():
     df['Timestamp'] = pd.to_datetime(df['Timestamp'])
 
     # 4. Handle all trade sides correctly
+    reject_sides = {'REJECT BUY', 'REJECT SELL'}
     buy_sides = {'BUY', 'BUY NO'}
     df['CashFlow'] = df.apply(
-        lambda row: -row['DollarValue'] if row['Side'] in buy_sides else row['DollarValue'],
+        lambda row: 0 if row['Side'] in reject_sides else (-row['DollarValue'] if row['Side'] in buy_sides else row['DollarValue']),
         axis=1
     )
 
@@ -69,19 +70,21 @@ def analyze_latest_run():
     print("\n🏆 STRATEGY LEADERBOARD (Sorted by Profit)")
     print("-" * 80)
 
+    sell_sides = {'SELL', 'SELL NO', 'RESOLVE YES', 'RESOLVE NO'}
     leaderboard = df.groupby('StrategyName').agg(
         Total_PnL=('CashFlow', 'sum'),
         Buys=('Side', lambda x: x.isin(buy_sides).sum()),
-        Sells=('Side', lambda x: (~x.isin(buy_sides)).sum()),
+        Sells=('Side', lambda x: x.isin(sell_sides).sum()),
+        Rejects=('Side', lambda x: x.isin(reject_sides).sum()),
     ).reset_index()
 
     leaderboard = leaderboard.sort_values('Total_PnL', ascending=False)
     leaderboard['Total_PnL_fmt'] = leaderboard['Total_PnL'].apply(lambda x: f"${x:,.2f}")
-    
-    # NEW: Calculate approximate Win Rate based on paired Buys/Sells
+
+    # Calculate approximate Win Rate based on paired Buys/Sells
     leaderboard['WinRate%'] = (leaderboard['Sells'] / (leaderboard['Buys'] + leaderboard['Sells']) * 100).fillna(0).apply(lambda x: f"{x:.1f}%")
 
-    print(leaderboard[['StrategyName', 'Total_PnL_fmt', 'Buys', 'Sells', 'WinRate%']].to_string(index=False))
+    print(leaderboard[['StrategyName', 'Total_PnL_fmt', 'Buys', 'Sells', 'Rejects', 'WinRate%']].to_string(index=False))
 
     # ==========================================
     # DASHBOARD 2: PARAMETER IMPACT ANALYSIS
@@ -284,8 +287,9 @@ def analyze_latest_run():
     bag_holders['True_Total_Equity'] = bag_holders['True_Total_Equity'].apply(lambda x: f"${x:,.2f}")
     bag_holders['True_PnL'] = bag_holders['True_PnL'].apply(lambda x: f"${x:,.2f}")
     bag_holders['Worst_Case_PnL'] = bag_holders['Worst_Case_PnL'].apply(lambda x: f"${x:,.2f}")
+    bag_holders['Cash_Left'] = bag_holders['Worst_Case_Equity'].apply(lambda x: f"${x:,.2f}")
 
-    print(bag_holders[['StrategyName', 'MarkToMarket_Value', 'True_Total_Equity', 'True_PnL', 'Worst_Case_PnL', 'Hours_fmt', 'Hourly_PnL']].to_string(index=False))
+    print(bag_holders[['StrategyName', 'Cash_Left', 'MarkToMarket_Value', 'True_Total_Equity', 'True_PnL', 'Worst_Case_PnL', 'Hours_fmt', 'Hourly_PnL']].to_string(index=False))
     print("\n" + "="*80 + "\n")
 
 if __name__ == "__main__":

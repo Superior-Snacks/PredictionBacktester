@@ -15,6 +15,9 @@ public class GlobalSimulatedBroker
 
     public decimal CashBalance { get; protected set; }
 
+    //Toggleable parameter (0 = Instant execution, 250 = Realistic Latency)
+    public int LatencyMs { get; set; } = 0;
+
     // THREAD SAFETY: Upgraded to ConcurrentDictionary
     private ConcurrentDictionary<string, decimal> _positionShares = new();
     private ConcurrentDictionary<string, decimal> _averageEntryPrices = new();
@@ -23,6 +26,7 @@ public class GlobalSimulatedBroker
     private ConcurrentDictionary<string, decimal> _lastKnownPrices = new();
 
     public int TotalTradesExecuted { get; protected set; }
+    public int TotalActions { get; protected set; }
     public int WinningTrades { get; protected set; }
     public int LosingTrades { get; protected set; }
     public decimal PeakEquity { get; protected set; }
@@ -32,6 +36,7 @@ public class GlobalSimulatedBroker
     public List<ExecutedTrade> TradeLedger { get; protected set; }
 
     public decimal MaxParticipationRate { get; private set; } = 1.00m;
+    public decimal ResolutionFeeRate { get; private set; } = 0.02m;
 
     public GlobalSimulatedBroker(decimal startingCash)
     {
@@ -50,22 +55,31 @@ public class GlobalSimulatedBroker
         _lastKnownPrices[assetId] = price;
     }
 
-    public virtual void Buy(string assetId, decimal currentPrice, decimal dollarsToInvest, decimal availableVolumeShares)
+    public virtual decimal Buy(string assetId, decimal currentPrice, decimal dollarsToInvest, decimal availableVolumeShares)
     {
         UpdateLastKnownPrice(assetId, currentPrice);
 
         // Grab the bathroom key before modifying cash or ledgers!
         lock (_brokerLock)
         {
-            if (dollarsToInvest <= 0.01m || CashBalance < dollarsToInvest) return;
+            if (dollarsToInvest <= 0.01m || CashBalance < dollarsToInvest) return 0;
 
             decimal executionPrice = Math.Min(currentPrice + SpreadPenalty, 0.99m);
             decimal desiredShares = dollarsToInvest / executionPrice;
             decimal actualSharesBought = Math.Min(desiredShares, availableVolumeShares * MaxParticipationRate);
 
-            if (actualSharesBought <= 0) return;
+            if (actualSharesBought <= 0) return 0;
 
             decimal actualDollarsSpent = actualSharesBought * executionPrice;
+
+            // Bug 4 fix: spread penalty can push cost above cash balance
+            if (actualDollarsSpent > CashBalance)
+            {
+                actualSharesBought = CashBalance / executionPrice;
+                actualDollarsSpent = actualSharesBought * executionPrice;
+                if (actualSharesBought <= 0) return 0;
+            }
+
             decimal currentShares = GetPositionShares(assetId);
             decimal currentAvgPrice = GetAverageEntryPrice(assetId);
 
@@ -76,20 +90,22 @@ public class GlobalSimulatedBroker
             CashBalance -= actualDollarsSpent;
 
             TradeLedger.Add(new ExecutedTrade { OutcomeId = assetId, Date = DateTime.Now, Side = "BUY", Price = executionPrice, Shares = actualSharesBought, DollarValue = actualDollarsSpent });
+            TotalActions++;
+            return actualSharesBought;
         }
     }
 
-    public virtual void SellAll(string assetId, decimal currentPrice, decimal availableVolumeShares)
+    public virtual decimal SellAll(string assetId, decimal currentPrice, decimal availableVolumeShares)
     {
         UpdateLastKnownPrice(assetId, currentPrice);
 
         lock (_brokerLock)
         {
             decimal currentShares = GetPositionShares(assetId);
-            if (currentShares <= 0) return;
+            if (currentShares <= 0) return 0;
 
             decimal sharesToSell = Math.Min(currentShares, availableVolumeShares * MaxParticipationRate);
-            if (sharesToSell <= 0) return;
+            if (sharesToSell <= 0) return 0;
 
             decimal executionPrice = Math.Max(currentPrice - SpreadPenalty, 0.01m);
             decimal cashReceived = sharesToSell * executionPrice;
@@ -105,6 +121,8 @@ public class GlobalSimulatedBroker
 
             if (_positionShares[assetId] == 0) _averageEntryPrices[assetId] = 0;
             TotalTradesExecuted++;
+            TotalActions++;
+            return sharesToSell;
         }
     }
 
@@ -181,10 +199,13 @@ public class GlobalSimulatedBroker
 
             if (yesShares > 0)
             {
-                decimal yesPayout = yesShares * outcomePrice;
+                decimal currentAvgPrice = GetAverageEntryPrice(assetId);
+                decimal grossPayout = yesShares * outcomePrice;
+                decimal profit = Math.Max(0, (outcomePrice - currentAvgPrice) * yesShares);
+                decimal fee = profit * ResolutionFeeRate;
+                decimal yesPayout = grossPayout - fee;
                 CashBalance += yesPayout;
 
-                decimal currentAvgPrice = GetAverageEntryPrice(assetId);
                 if (outcomePrice > currentAvgPrice) WinningTrades++;
                 else LosingTrades++;
 
@@ -197,10 +218,13 @@ public class GlobalSimulatedBroker
             if (noShares > 0)
             {
                 decimal noPayoutPrice = 1.00m - outcomePrice;
-                decimal noPayout = noShares * noPayoutPrice;
+                decimal currentAvgNoPrice = GetAverageNoEntryPrice(assetId);
+                decimal grossPayout = noShares * noPayoutPrice;
+                decimal profit = Math.Max(0, (noPayoutPrice - currentAvgNoPrice) * noShares);
+                decimal fee = profit * ResolutionFeeRate;
+                decimal noPayout = grossPayout - fee;
                 CashBalance += noPayout;
 
-                decimal currentAvgNoPrice = GetAverageNoEntryPrice(assetId);
                 if (noPayoutPrice > currentAvgNoPrice) WinningTrades++;
                 else LosingTrades++;
 
@@ -230,5 +254,71 @@ public class GlobalSimulatedBroker
             }
             return CashBalance + activeValue;
         }
+    }
+
+    public virtual void SubmitBuyOrder(string assetId, decimal targetPrice, decimal dollarsToInvest, LocalOrderBook book, Action? onCompleted = null)
+    {
+        if (LatencyMs <= 0)
+        {
+            decimal filled = Buy(assetId, targetPrice, dollarsToInvest, book.GetBestAskSize());
+            if (filled > 0) book.ConsumeAskLiquidity(filled);
+            onCompleted?.Invoke();
+            return;
+        }
+
+        Task.Run(async () =>
+        {
+            await Task.Delay(LatencyMs);
+
+            decimal currentAsk = book.GetBestAskPrice();
+            decimal availableLiquidity = book.GetBestAskSize();
+
+            if (currentAsk <= targetPrice && availableLiquidity > 0)
+            {
+                decimal filled = Buy(assetId, currentAsk, dollarsToInvest, availableLiquidity);
+                if (filled > 0) book.ConsumeAskLiquidity(filled);
+            }
+            else
+            {
+                lock (_brokerLock)
+                {
+                    TradeLedger.Add(new ExecutedTrade { OutcomeId = assetId, Date = DateTime.Now, Side = "REJECT BUY", Price = currentAsk, Shares = 0, DollarValue = 0 });
+                }
+            }
+            onCompleted?.Invoke();
+        });
+    }
+
+    public virtual void SubmitSellAllOrder(string assetId, decimal targetPrice, LocalOrderBook book, Action? onCompleted = null)
+    {
+        if (LatencyMs <= 0)
+        {
+            decimal filled = SellAll(assetId, targetPrice, book.GetBestBidSize());
+            if (filled > 0) book.ConsumeBidLiquidity(filled);
+            onCompleted?.Invoke();
+            return;
+        }
+
+        Task.Run(async () =>
+        {
+            await Task.Delay(LatencyMs);
+
+            decimal currentBid = book.GetBestBidPrice();
+            decimal availableLiquidity = book.GetBestBidSize();
+
+            if (currentBid >= targetPrice && availableLiquidity > 0)
+            {
+                decimal filled = SellAll(assetId, currentBid, availableLiquidity);
+                if (filled > 0) book.ConsumeBidLiquidity(filled);
+            }
+            else
+            {
+                lock (_brokerLock)
+                {
+                    TradeLedger.Add(new ExecutedTrade { OutcomeId = assetId, Date = DateTime.Now, Side = "REJECT SELL", Price = currentBid, Shares = 0, DollarValue = 0 });
+                }
+            }
+            onCompleted?.Invoke();
+        });
     }
 }

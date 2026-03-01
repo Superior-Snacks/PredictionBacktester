@@ -72,90 +72,12 @@ class Program
                 () => new LiveFlashCrashSniperStrategy(name, param.threshold, param.window, param.Profit, param.stop)
             ));
         }
-        /*
-        // ---------------------------------------------------------
-        // GRID 2: Mean Reversion Stat Arb
-        // ---------------------------------------------------------
-        int[] rollingWindows = { 50, 100 };
-        decimal[] entryZScores = { -2.0m, -2.5m, -3.0m };
-        // Total Combinations: 2 x 3 = 6 bots
-
-        int statArbVersion = 1;
-
-        var statArbGrid = from window in rollingWindows
-                          from entryZ in entryZScores
-                          select new { window, entryZ };
-
-        foreach (var param in statArbGrid)
-        {
-            string name = $"StatArb_v{statArbVersion++}";
-            configs.Add(new StrategyConfig(
-                name, 
-                1000m, 
-                () => new MeanReversionStatArbStrategy(name, param.window, param.entryZ)
-            ));
-        }
-
-        // ---------------------------------------------------------
-        // GRID 3: Order Book Imbalance
-        // ---------------------------------------------------------
-        decimal[] imbalanceRatios = { 3.0m, 5.0m };
-        int[] depths = { 3, 5 };
-        
-        int imbVersion = 1;
-
-        var imbGrid = from ratio in imbalanceRatios
-                      from depth in depths
-                      select new { ratio, depth };
-
-        foreach (var param in imbGrid)
-        {
-            string name = $"Imbalance_v{imbVersion++}";
-            configs.Add(new StrategyConfig(
-                name, 
-                1000m, 
-                // Using 0.08m as the take profit / stop loss margins for this example
-                () => new OrderBookImbalanceStrategy(name, param.ratio, param.depth, 0.08m, 0.08m)
-            ));
-        }
-
-        // ---------------------------------------------------------
-        // GRID 4: Reverse Flash Crash (Trend Follower)
-        // ---------------------------------------------------------
-        // Parameters to test:
-        decimal[] reverseThresholds = { 0.10m, 0.15m };        // How big of a crash triggers us?
-        long[] reverseWindows = { 30, 60 };                    // How fast does it need to drop?
-        decimal[] takeProfitMargins = { 0.10m, 0.20m };        // How far do we ride the trend down?
-        
-        // Total Combinations: 2 x 2 x 2 = 8 unique bots
-
-        int reverseVersion = 1;
-
-        // A 3D Cartesian Product!
-        var reverseGrid = from threshold in reverseThresholds
-                          from window in reverseWindows
-                          from tpMargin in takeProfitMargins
-                          select new { threshold, window, tpMargin };
-
-        foreach (var param in reverseGrid)
-        {
-            // NEW: Inject Threshold (T) and TakeProfit (P) into the name
-            string name = $"RevArb_v{reverseVersion++}_T{param.threshold}_W{param.window}_P{param.tpMargin}";
-            configs.Add(new StrategyConfig(
-                name, 
-                1000m, 
-                () => new LiveFlashCrashReverseStrategy(
-                    name, 
-                    param.threshold, 
-                    param.window, 
-                    param.tpMargin, 
-                    0.05m
-                )
-            ));
-        }*/
-
         return configs;
     }
+
+    // --- LATENCY SIMULATION (based on ping to Polymarket CLOB API) ---
+    private const int REALISTIC_LATENCY_MS = 90;
+    private static volatile bool _latencyEnabled = true;
 
     // --- PAUSE & RESUME CONTROLS ---
     private static volatile bool _isPaused = false;
@@ -167,6 +89,7 @@ class Program
     private static Dictionary<string, PaperBroker> _strategyBrokers = new Dictionary<string, PaperBroker>();
     private static Dictionary<string, string> _tokenNames = new Dictionary<string, string>();
     private static readonly HashSet<string> _subscribedTokens = new();
+    private static readonly HashSet<string> _droppedStrategies = new();
     private static ClientWebSocket? _activeWs;
     private static readonly SemaphoreSlim _wsSendSemaphore = new SemaphoreSlim(1, 1);
 
@@ -175,11 +98,15 @@ class Program
         Console.Clear();
         Console.WriteLine("=========================================");
         Console.WriteLine("  LIVE PAPER TRADING ENGINE INITIALIZED  ");
-        Console.WriteLine("  Controls: 'P' = Pause | 'R' = Resume | 'M' = Mute Logs");
+        Console.WriteLine("  Controls: 'P' = Pause | 'R' = Resume | 'M' = Mute | 'L' = Latency | 'D' = Drop");
         Console.WriteLine("=========================================");
 
         foreach (var config in _strategyConfigs)
-            _strategyBrokers[config.Name] = new PaperBroker(config.Name, config.StartingCapital, _tokenNames);
+        {
+            var broker = new PaperBroker(config.Name, config.StartingCapital, _tokenNames);
+            broker.LatencyMs = _latencyEnabled ? REALISTIC_LATENCY_MS : 0;
+            _strategyBrokers[config.Name] = broker;
+        }
 
         Console.WriteLine($"Loaded {_strategyConfigs.Count} strategy configurations.");
 
@@ -230,7 +157,7 @@ class Program
                 else if (keyInfo.Key == ConsoleKey.M)
                 {
                     _isMuted = !_isMuted;
-                    
+
                     // Tell every active broker to update its mute status
                     foreach (var broker in _strategyBrokers.Values)
                     {
@@ -240,6 +167,62 @@ class Program
                     Console.ForegroundColor = ConsoleColor.Cyan;
                     Console.WriteLine($"\n[SYSTEM] Trade logs are now {(_isMuted ? "MUTED" : "UNMUTED")}.");
                     Console.ResetColor();
+                }
+                else if (keyInfo.Key == ConsoleKey.L)
+                {
+                    _latencyEnabled = !_latencyEnabled;
+                    int newLatency = _latencyEnabled ? REALISTIC_LATENCY_MS : 0;
+
+                    foreach (var broker in _strategyBrokers.Values)
+                    {
+                        broker.LatencyMs = newLatency;
+                    }
+
+                    Console.ForegroundColor = ConsoleColor.Cyan;
+                    Console.WriteLine($"\n[SYSTEM] Latency simulation: {(_latencyEnabled ? $"ON ({REALISTIC_LATENCY_MS}ms)" : "OFF (instant)")}");
+                    Console.ResetColor();
+                }
+                else if (keyInfo.Key == ConsoleKey.D)
+                {
+                    Console.ForegroundColor = ConsoleColor.Yellow;
+                    Console.WriteLine("\n[DROP MODE] Type strategy name (or partial match) and press Enter:");
+                    Console.ResetColor();
+
+                    string? input = Console.ReadLine()?.Trim();
+                    if (string.IsNullOrEmpty(input))
+                    {
+                        Console.WriteLine("[DROP MODE] Cancelled — no input provided.");
+                        continue;
+                    }
+
+                    var matches = _strategyConfigs
+                        .Where(c => c.Name.Contains(input, StringComparison.OrdinalIgnoreCase) && !_droppedStrategies.Contains(c.Name))
+                        .ToList();
+
+                    if (matches.Count == 0)
+                    {
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.WriteLine($"[DROP MODE] No active strategy matches '{input}'.");
+                        Console.ResetColor();
+                    }
+                    else if (matches.Count == 1)
+                    {
+                        string name = matches[0].Name;
+                        _droppedStrategies.Add(name);
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.WriteLine($"[DROPPED] '{name}' has been removed from live trading. ({_strategyConfigs.Count - _droppedStrategies.Count} strategies remaining)");
+                        Console.ResetColor();
+                    }
+                    else
+                    {
+                        Console.ForegroundColor = ConsoleColor.Yellow;
+                        Console.WriteLine($"[DROP MODE] {matches.Count} strategies match '{input}'. Be more specific:");
+                        foreach (var m in matches.Take(20))
+                            Console.WriteLine($"  - {m.Name}");
+                        if (matches.Count > 20)
+                            Console.WriteLine($"  ... and {matches.Count - 20} more");
+                        Console.ResetColor();
+                    }
                 }
             }
         });
@@ -272,6 +255,7 @@ class Program
                 Console.WriteLine("\n================= STRATEGY PERFORMANCE OVERVIEW =================");
                 foreach (var config in _strategyConfigs)
                 {
+                    if (_droppedStrategies.Contains(config.Name)) continue;
                     var name = config.Name;
                     var broker = _strategyBrokers[name];
                     decimal totalEquity = broker.GetTotalPortfolioValue();
@@ -280,7 +264,7 @@ class Program
                     decimal realizedPnl = broker.CashBalance - config.StartingCapital;
 
                     Console.ForegroundColor = pnl >= 0 ? ConsoleColor.Green : ConsoleColor.Red;
-                    Console.WriteLine($"[{name.PadRight(_maxNameLength)}] Equity: ${totalEquity:0.00} | PnL: ${pnl:0.00} (Real: ${realizedPnl:0.00} + MTM: ${mtmValue:0.00}) | Trades: {broker.TotalTradesExecuted} (W:{broker.WinningTrades} L:{broker.LosingTrades})");
+                    Console.WriteLine($"[{name.PadRight(_maxNameLength)}] Equity: ${totalEquity:0.00} | PnL: ${pnl:0.00} (Real: ${realizedPnl:0.00} + MTM: ${mtmValue:0.00}) | Actions: {broker.TotalActions} Exits: {broker.TotalTradesExecuted} (W:{broker.WinningTrades} L:{broker.LosingTrades})");
                     Console.ResetColor();
                 }
                 Console.WriteLine("=================================================================\n");
@@ -415,6 +399,7 @@ class Program
                                             orderBooks[assetId] = new LocalOrderBook(assetId);
 
                                             activeStrategies[assetId] = _strategyConfigs
+                                                .Where(c => !_droppedStrategies.Contains(c.Name))
                                                 .Select(c => c.Factory())
                                                 .ToList();
                                         }
@@ -462,6 +447,7 @@ class Program
                                                 // THE MULTIPLEXER ROUTING: Feed the exact same book to every strategy simultaneously!
                                                 foreach (var strategy in activeStrategies[assetId])
                                                 {
+                                                    if (_droppedStrategies.Contains(strategy.StrategyName)) continue;
                                                     strategy.OnBookUpdate(book, _strategyBrokers[strategy.StrategyName]);
                                                 }
                                             }

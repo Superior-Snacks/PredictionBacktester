@@ -90,4 +90,23 @@ public class LocalOrderBook
         if (Asks.Count == 0) return 0.00m;
         return Asks[GetBestAskPrice()];
     }
+
+    // Deduct consumed liquidity after a simulated fill
+    public void ConsumeAskLiquidity(decimal shares)
+    {
+        if (Asks.Count == 0 || shares <= 0) return;
+        decimal bestPrice = Asks.Keys.Min();
+        decimal remaining = Asks[bestPrice] - shares;
+        if (remaining <= 0) Asks.Remove(bestPrice);
+        else Asks[bestPrice] = remaining;
+    }
+
+    public void ConsumeBidLiquidity(decimal shares)
+    {
+        if (Bids.Count == 0 || shares <= 0) return;
+        decimal bestPrice = Bids.Keys.Max();
+        decimal remaining = Bids[bestPrice] - shares;
+        if (remaining <= 0) Bids.Remove(bestPrice);
+        else Bids[bestPrice] = remaining;
+    }
 }

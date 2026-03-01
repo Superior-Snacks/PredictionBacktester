@@ -29,10 +29,10 @@ public class PaperBroker : GlobalSimulatedBroker
         return assetId.Substring(0, 8) + "...";
     }
 
-    public override void Buy(string assetId, decimal price, decimal dollarAmount, decimal volume)
+    public override decimal Buy(string assetId, decimal price, decimal dollarAmount, decimal volume)
     {
         decimal initialShares = GetPositionShares(assetId);
-        base.Buy(assetId, price, dollarAmount, volume);
+        decimal filled = base.Buy(assetId, price, dollarAmount, volume);
 
         if (GetPositionShares(assetId) > initialShares)
         {
@@ -42,17 +42,18 @@ public class PaperBroker : GlobalSimulatedBroker
             {
             Console.ForegroundColor = ConsoleColor.Green;
             Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [PAPER EXECUTION] BOUGHT YES @ ${lastTrade.Price:0.00} | Size: ${lastTrade.DollarValue:0.00} | Asset: {GetMarketName(assetId)}");
-            Console.ResetColor();   
+            Console.ResetColor();
             }
         }
+        return filled;
     }
 
-    public override void SellAll(string assetId, decimal price, decimal volume)
+    public override decimal SellAll(string assetId, decimal price, decimal volume)
     {
         decimal initialShares = GetPositionShares(assetId);
         decimal entryPrice = GetAverageEntryPrice(assetId);
 
-        base.SellAll(assetId, price, volume);
+        decimal filled = base.SellAll(assetId, price, volume);
 
         if (GetPositionShares(assetId) < initialShares)
         {
@@ -63,9 +64,10 @@ public class PaperBroker : GlobalSimulatedBroker
             {
             Console.ForegroundColor = pnl >= 0 ? ConsoleColor.Cyan : ConsoleColor.Red;
             Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [PAPER CLOSED] SOLD YES @ ${lastTrade.Price:0.00} | PnL: ${(pnl):0.00} | Total Equity: ${GetTotalPortfolioValue():0.00} | Asset: {GetMarketName(assetId)}");
-            Console.ResetColor();   
+            Console.ResetColor();
             }
         }
+        return filled;
     }
 
     public override void BuyNo(string assetId, decimal price, decimal dollarAmount, decimal volume)
