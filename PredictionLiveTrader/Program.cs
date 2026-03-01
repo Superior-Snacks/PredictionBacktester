@@ -48,28 +48,29 @@ class Program
         // ---------------------------------------------------------
         // GRID 1: Live Flash Crash Sniper
         // ---------------------------------------------------------
-        decimal[] sniperThresholds = {0.02m, 0.08m, 0.15m, 0.20m, 0.25m, 0.30m };
+        decimal[] sniperThresholds = {0.15m, 0.20m, 0.25m, 0.30m };
         long[] sniperWindows = { 10, 20, 30, 60, 120 };
         decimal[] sniperTakeProfit = { 0.03m, 0.05m, 0.10m };
         decimal[] sniperStopLoss = { 0.10m, 0.15m, 0.25m };
+        decimal[] sniperSlippage = { 0.01m, 0.03m, 0.05m };
 
         int sniperVersion = 1;
-        
+
         // This LINQ query creates the Cartesian Product automatically!
         var sniperGrid = from threshold in sniperThresholds
                          from window in sniperWindows
                          from Profit in sniperTakeProfit
                          from stop in sniperStopLoss
-                         select new { threshold, window, Profit, stop};
+                         from slip in sniperSlippage
+                         select new { threshold, window, Profit, stop, slip };
 
         foreach (var param in sniperGrid)
         {
-            // NEW: Inject Threshold (T) and Window (W) into the name
-            string name = $"Sniper_v{sniperVersion++}_T{param.threshold}_W{param.window}_P{param.Profit}_S{param.stop}";
+            string name = $"Sniper_v{sniperVersion++}_T{param.threshold}_W{param.window}_P{param.Profit}_S{param.stop}_SL{param.slip}";
             configs.Add(new StrategyConfig(
-                name, 
-                1000m, 
-                () => new LiveFlashCrashSniperStrategy(name, param.threshold, param.window, param.Profit, param.stop)
+                name,
+                1000m,
+                () => new LiveFlashCrashSniperStrategy(name, param.threshold, param.window, param.Profit, param.stop, slippageTolerance: param.slip)
             ));
         }
         return configs;

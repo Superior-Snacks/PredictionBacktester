@@ -100,7 +100,7 @@ def analyze_latest_run():
     strategy_pnl = df.groupby('StrategyName')['CashFlow'].sum().reset_index()
     strategy_pnl.columns = ['StrategyName', 'StrategyPnL']
 
-    param_names = {'T': 'Threshold', 'W': 'Window', 'P': 'TakeProfit', 'S': 'StopLoss'}
+    param_names = {'T': 'Threshold', 'W': 'Window', 'P': 'TakeProfit', 'S': 'StopLoss', 'SL': 'Slippage'}
 
     for param_letter in sorted(df['Params'].apply(lambda d: list(d.keys())).explode().dropna().unique()):
         param_label = param_names.get(param_letter, param_letter)
