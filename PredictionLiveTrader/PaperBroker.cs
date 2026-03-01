@@ -15,6 +15,8 @@ public class PaperBroker : GlobalSimulatedBroker
     {
         StrategyName = strategyName;
         _tokenNames = tokenNames;
+        StrategyLabel = strategyName;
+        AssetNameResolver = GetMarketName;
     }
 
     // Helper to format the name cleanly for the console

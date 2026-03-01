@@ -20,6 +20,9 @@ public class GlobalSimulatedBroker
 
     public volatile bool IsMuted;
 
+    public string StrategyLabel { get; set; } = "";
+    public Func<string, string>? AssetNameResolver { get; set; }
+
     // THREAD SAFETY: Upgraded to ConcurrentDictionary
     private ConcurrentDictionary<string, decimal> _positionShares = new();
     private ConcurrentDictionary<string, decimal> _averageEntryPrices = new();
@@ -53,6 +56,9 @@ public class GlobalSimulatedBroker
     public decimal GetAverageEntryPrice(string assetId) => _averageEntryPrices.GetValueOrDefault(assetId, 0m);
     public decimal GetNoPositionShares(string assetId) => _noPositionShares.GetValueOrDefault(assetId, 0m);
     public decimal GetAverageNoEntryPrice(string assetId) => _averageNoEntryPrices.GetValueOrDefault(assetId, 0m);
+
+    protected string ResolveAssetName(string assetId) =>
+        AssetNameResolver?.Invoke(assetId) ?? assetId.Substring(0, Math.Min(8, assetId.Length)) + "...";
 
     public void UpdateLastKnownPrice(string assetId, decimal price)
     {
@@ -284,7 +290,7 @@ public class GlobalSimulatedBroker
             // GUARD: Ensure the price is valid
             if (currentAsk >= 0.99m || currentAsk <= 0.01m)
             {
-                if (!IsMuted) Console.WriteLine($"[LATENCY REJECT] Invalid price {currentAsk} on {assetId}.");
+                if (!IsMuted) Console.WriteLine($"[LATENCY REJECT] [{StrategyLabel}] Invalid price {currentAsk} on {ResolveAssetName(assetId)}.");
                 return;
             }
 
@@ -302,7 +308,7 @@ public class GlobalSimulatedBroker
                 if (!IsMuted)
                 {
                     Console.ForegroundColor = ConsoleColor.DarkGray;
-                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [LATENCY REJECT] Missed BUY race on {assetId}. Price moved to {currentAsk} or liquidity vanished.");
+                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [{StrategyLabel}] [LATENCY REJECT] Missed BUY on {ResolveAssetName(assetId)}. Price moved to {currentAsk}.");
                     Console.ResetColor();
                 }
             }
@@ -338,7 +344,7 @@ public class GlobalSimulatedBroker
 
             if (currentBid >= 0.99m || currentBid <= 0.01m)
             {
-                if (!IsMuted) Console.WriteLine($"[LATENCY REJECT] Invalid SELL price {currentBid} on {assetId}.");
+                if (!IsMuted) Console.WriteLine($"[LATENCY REJECT] [{StrategyLabel}] Invalid SELL price {currentBid} on {ResolveAssetName(assetId)}.");
                 return;
             }
 
@@ -356,7 +362,7 @@ public class GlobalSimulatedBroker
                 if (!IsMuted)
                 {
                     Console.ForegroundColor = ConsoleColor.DarkGray;
-                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [LATENCY REJECT] Missed SELL race on {assetId}. Price moved to {currentBid}.");
+                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [{StrategyLabel}] [LATENCY REJECT] Missed SELL on {ResolveAssetName(assetId)}. Price moved to {currentBid}.");
                     Console.ResetColor();
                 }
             }
