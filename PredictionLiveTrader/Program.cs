@@ -48,12 +48,12 @@ class Program
         // ---------------------------------------------------------
         // GRID 1: Live Flash Crash Sniper
         // ---------------------------------------------------------
-        decimal[] sniperThresholds = {0.15m, 0.20m, 0.25m, 0.30m };
+        decimal[] sniperThresholds = {0.08m, 0.15m, 0.20m, 0.25m, 0.30m };
         long[] sniperWindows = { 10, 20, 30, 60, 120 };
         decimal[] sniperTakeProfit = { 0.03m, 0.05m, 0.10m };
         decimal[] sniperStopLoss = { 0.10m, 0.15m, 0.25m };
         decimal[] sniperEntrySlippage = { 0.01m, 0.03m, 0.05m };
-        decimal[] sniperExitSlippage = { 0.01m, 0.02m, 0.03m };
+        decimal[] sniperExitSlippage = { 0.01m, 0.02m, 0.03m }; 
 
         int sniperVersion = 1;
 
@@ -85,6 +85,7 @@ class Program
     // --- PAUSE & RESUME CONTROLS ---
     private static volatile bool _isPaused = false;
     private static volatile bool _isMuted = false;
+    private static volatile bool _verboseDots = false;
     private static CancellationTokenSource _pauseCts = new CancellationTokenSource();
     private static readonly string _sessionCsvFilename = $"LivePaperTrades_{DateTime.Now:yyyyMMdd_HHmmss}.csv";
 
@@ -101,7 +102,7 @@ class Program
         Console.Clear();
         Console.WriteLine("=========================================");
         Console.WriteLine("  LIVE PAPER TRADING ENGINE INITIALIZED  ");
-        Console.WriteLine("  Controls: 'P' = Pause | 'R' = Resume | 'M' = Mute | 'L' = Latency | 'D' = Drop | 'K' = Cull");
+        Console.WriteLine("  Controls: 'P' = Pause | 'R' = Resume | 'M' = Mute | 'V' = Verbose | 'L' = Latency | 'D' = Drop | 'K' = Cull");
         Console.WriteLine($"  Latency starst at {REALISTIC_LATENCY_MS}");
         Console.WriteLine("=========================================");
 
@@ -184,6 +185,13 @@ class Program
 
                     Console.ForegroundColor = ConsoleColor.Cyan;
                     Console.WriteLine($"\n[SYSTEM] Latency simulation: {(_latencyEnabled ? $"ON ({REALISTIC_LATENCY_MS}ms)" : "OFF (instant)")}");
+                    Console.ResetColor();
+                }
+                else if (keyInfo.Key == ConsoleKey.V)
+                {
+                    _verboseDots = !_verboseDots;
+                    Console.ForegroundColor = ConsoleColor.Cyan;
+                    Console.WriteLine($"\n[SYSTEM] Book updates: {(_verboseDots ? "VERBOSE (full details)" : "DOTS (compact)")}");
                     Console.ResetColor();
                 }
                 else if (keyInfo.Key == ConsoleKey.D)
@@ -498,9 +506,20 @@ class Program
 
                                                 if (!_isMuted) lock (GlobalSimulatedBroker.ConsoleLock)
                                                 {
-                                                    Console.ForegroundColor = ConsoleColor.DarkGray;
-                                                    Console.Write(".");
-                                                    Console.ResetColor();
+                                                    if (_verboseDots)
+                                                    {
+                                                        string name = _tokenNames.GetValueOrDefault(assetId, assetId.Substring(0, 8) + "...");
+                                                        if (name.Length > 45) name = name.Substring(0, 42) + "...";
+                                                        Console.ForegroundColor = ConsoleColor.DarkGray;
+                                                        Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [BOOK] {side} ${price:0.00} x{size:0} | {name}");
+                                                        Console.ResetColor();
+                                                    }
+                                                    else
+                                                    {
+                                                        Console.ForegroundColor = ConsoleColor.DarkGray;
+                                                        Console.Write(".");
+                                                        Console.ResetColor();
+                                                    }
                                                 }
 
                                                 // THE MULTIPLEXER ROUTING: Feed the exact same book to every strategy simultaneously!
@@ -515,7 +534,15 @@ class Program
                                 }
                             }
                         }
-                        catch { /* Ignore dirty JSON */ }
+                        catch (Exception ex)
+                        {
+                            if (_verboseDots) lock (GlobalSimulatedBroker.ConsoleLock)
+                            {
+                                Console.ForegroundColor = ConsoleColor.DarkYellow;
+                                Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [WS ERROR] {ex.GetType().Name}: {ex.Message}");
+                                Console.ResetColor();
+                            }
+                        }
                     }
                 }, _pauseCts.Token);
 

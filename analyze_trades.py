@@ -10,7 +10,7 @@ def analyze_latest_run():
     csv_files = glob.glob("PredictionLiveTrader/LivePaperTrades_*.csv") + glob.glob("LivePaperTrades_*.csv")
 
     # Filter out our snapshot file so we don't accidentally analyze an old snapshot
-    valid_files = [f for f in csv_files if "SNAPSHOT" not in f]
+    valid_files = [f for f in csv_files if "SNAPSHOT" not in f and "_summary" not in f]
 
     if not valid_files:
         print("No CSV files found! Make sure the bot has exported a ledger.")
@@ -70,7 +70,7 @@ def analyze_latest_run():
     df['StrategyType'] = df['StrategyName'].apply(lambda x: x.split('_v')[0].split('_Ultra')[0])
 
     def extract_params(name):
-        params = re.findall(r'_([A-Z])([0-9.]+)', name)
+        params = re.findall(r'_([A-Z]+)([0-9.]+)', name)
         return {k: float(v) for k, v in params}
 
     df['Params'] = df['StrategyName'].apply(extract_params)
@@ -78,8 +78,6 @@ def analyze_latest_run():
     # ==========================================
     # DASHBOARD 1: STRATEGY LEADERBOARD
     # ==========================================
-    print("\n🏆 STRATEGY LEADERBOARD (Sorted by Profit)")
-    print("-" * 80)
 
     sell_sides = {'SELL', 'SELL NO', 'RESOLVE YES', 'RESOLVE NO'}
     leaderboard = df.groupby('StrategyName').agg(
@@ -89,13 +87,67 @@ def analyze_latest_run():
     ).reset_index()
     leaderboard['Rejects'] = leaderboard['StrategyName'].map(reject_counts).fillna(0).astype(int)
 
-    leaderboard = leaderboard.sort_values('Total_PnL', ascending=False)
+    # --- Mark-to-Market calculations (merged into leaderboard) ---
+    last_prices = df.sort_values('Timestamp').groupby('AssetId')['ExecutionPrice'].last().to_dict()
+
+    df['Yes_Share_Change'] = df.apply(lambda r: r['Shares'] if r['Side'] == 'BUY' else (-r['Shares'] if r['Side'] in ('SELL', 'RESOLVE YES') else 0), axis=1)
+    df['No_Share_Change'] = df.apply(lambda r: r['Shares'] if r['Side'] == 'BUY NO' else (-r['Shares'] if r['Side'] in ('SELL NO', 'RESOLVE NO') else 0), axis=1)
+
+    inventory = df.groupby('StrategyName').agg(
+        Net_Yes_Shares=('Yes_Share_Change', 'sum'),
+        Net_No_Shares=('No_Share_Change', 'sum')
+    ).reset_index()
+
+    LIQUIDITY_HAIRCUT = 0.07
+    inventory['MarkToMarket_Value'] = 0.0
+
+    for idx, row in inventory.iterrows():
+        strat = row['StrategyName']
+        strat_trades = df[df['StrategyName'] == strat]
+        open_assets = strat_trades['AssetId'].unique()
+        strat_mtm = 0.0
+        for asset in open_assets:
+            asset_trades = strat_trades[strat_trades['AssetId'] == asset]
+            yes_held = asset_trades[asset_trades['Side'] == 'BUY']['Shares'].sum() - asset_trades[asset_trades['Side'].isin(['SELL', 'RESOLVE YES'])]['Shares'].sum()
+            no_held = asset_trades[asset_trades['Side'] == 'BUY NO']['Shares'].sum() - asset_trades[asset_trades['Side'].isin(['SELL NO', 'RESOLVE NO'])]['Shares'].sum()
+            last_price = last_prices.get(asset, 0)
+            if yes_held > 0:
+                strat_mtm += (yes_held * last_price)
+            if no_held > 0:
+                strat_mtm += (no_held * (1 - last_price))
+        inventory.at[idx, 'MarkToMarket_Value'] = strat_mtm * (1 - LIQUIDITY_HAIRCUT)
+
+    # Merge inventory into leaderboard
+    leaderboard = leaderboard.merge(inventory[['StrategyName', 'MarkToMarket_Value']], on='StrategyName', how='left')
+    leaderboard['MarkToMarket_Value'] = leaderboard['MarkToMarket_Value'].fillna(0.0)
+
+    leaderboard['StartingCapital'] = leaderboard['StrategyName'].map(starting_caps).fillna(1000.0)
+    leaderboard['True_Total_Equity'] = leaderboard['StartingCapital'] + leaderboard['Total_PnL'] + leaderboard['MarkToMarket_Value']
+    leaderboard['True_PnL'] = leaderboard['True_Total_Equity'] - leaderboard['StartingCapital']
+    leaderboard['Worst_Case_Equity'] = leaderboard['StartingCapital'] + leaderboard['Total_PnL']
+    leaderboard['Worst_Case_PnL'] = leaderboard['Worst_Case_Equity'] - leaderboard['StartingCapital']
+
+    strat_time_span = df.groupby('StrategyName')['Timestamp'].agg(['min', 'max'])
+    strat_time_span['Hours'] = (strat_time_span['max'] - strat_time_span['min']).dt.total_seconds() / 3600.0
+    strat_time_span['Hours'] = strat_time_span['Hours'].clip(lower=0.1)
+    leaderboard = leaderboard.merge(strat_time_span[['Hours']], left_on='StrategyName', right_index=True, how='left')
+    leaderboard['Hourly_PnL'] = leaderboard['True_PnL'] / leaderboard['Hours']
+
+    # Sort and format
+    leaderboard = leaderboard.sort_values('True_PnL', ascending=False)
     leaderboard['Total_PnL_fmt'] = leaderboard['Total_PnL'].apply(lambda x: f"${x:,.2f}")
-
-    # Calculate approximate Win Rate based on paired Buys/Sells
     leaderboard['WinRate%'] = (leaderboard['Sells'] / (leaderboard['Buys'] + leaderboard['Sells']) * 100).fillna(0).apply(lambda x: f"{x:.1f}%")
+    leaderboard['Cash_Left'] = leaderboard['Worst_Case_Equity'].apply(lambda x: f"${x:,.2f}")
+    leaderboard['MTM_Value'] = leaderboard['MarkToMarket_Value'].apply(lambda x: f"${x:,.2f}")
+    leaderboard['Equity'] = leaderboard['True_Total_Equity'].apply(lambda x: f"${x:,.2f}")
+    leaderboard['True_PnL_fmt'] = leaderboard['True_PnL'].apply(lambda x: f"${x:,.2f}")
+    leaderboard['Worst_PnL'] = leaderboard['Worst_Case_PnL'].apply(lambda x: f"${x:,.2f}")
+    leaderboard['Hours_fmt'] = leaderboard['Hours'].apply(lambda x: f"{x:.1f}h")
+    leaderboard['PnL_hr'] = leaderboard['Hourly_PnL'].apply(lambda x: f"${x:,.2f}/hr")
 
-    print(leaderboard[['StrategyName', 'Total_PnL_fmt', 'Buys', 'Sells', 'Rejects', 'WinRate%']].to_string(index=False))
+    print("\n🏆 STRATEGY LEADERBOARD (Sorted by True PnL)")
+    print("-" * 120)
+    print(leaderboard[['StrategyName', 'Total_PnL_fmt', 'Buys', 'Sells', 'Rejects', 'WinRate%', 'Cash_Left', 'MTM_Value', 'Equity', 'True_PnL_fmt', 'Worst_PnL', 'Hours_fmt', 'PnL_hr']].to_string(index=False))
 
     # ==========================================
     # DASHBOARD 2: PARAMETER IMPACT ANALYSIS
@@ -136,172 +188,34 @@ def analyze_latest_run():
         print()
 
     # ==========================================
-    # DASHBOARD 3: HOURLY REGIME ANALYSIS (NEW!)
+    # DASHBOARD 3: HOURLY REGIME ANALYSIS
     # ==========================================
-    print("⏰ HOURLY MARKET REGIME ANALYSIS (When are we making money?)")
-    print("-" * 80)
-    
-    # Group by the Hour of the day and Strategy Type to see timeline trends
-    df['Hour'] = df['Timestamp'].dt.floor('H')
-    hourly_pnl = df.groupby(['Hour', 'StrategyType'])['CashFlow'].sum().unstack(fill_value=0)
-    
-    # Format the hourly table as currency
-    hourly_pnl_fmt = hourly_pnl.map(lambda x: f"${x:,.2f}")
-    print(hourly_pnl_fmt.to_string())
-    print("\n")
+    print("⏰ HOURLY REGIME ANALYSIS (Top 5 Winners & Losers per Hour)")
+    print("-" * 120)
 
-    # ==========================================
-    # DASHBOARD 4: EXECUTION BALANCE
-    # ==========================================
-    print("⚖️  EXECUTION BALANCE (Are bots holding bags?)")
-    print("-" * 80)
+    df['Hour'] = df['Timestamp'].dt.floor('h')
+    hourly_strat = df.groupby(['Hour', 'StrategyName'])['CashFlow'].sum().reset_index()
 
-    breakdown = df.groupby(['StrategyName', 'Side']).size().unstack(fill_value=0).reset_index()
-    print(breakdown.to_string(index=False))
-    print("\n")
+    for hour in sorted(hourly_strat['Hour'].unique()):
+        hour_data = hourly_strat[hourly_strat['Hour'] == hour].sort_values('CashFlow', ascending=False)
+        hour_total = hour_data['CashFlow'].sum()
+        top5 = hour_data.head(5)
+        bot5 = hour_data.tail(5).sort_values('CashFlow', ascending=True)
 
-    
-    # ==========================================
-    # DASHBOARD 7: STRATEGY vs. MARKET MATRIX (DETAILED + EXCEL EXPORT)
-    # ==========================================
-    print("🎯 STRATEGY vs. MARKET MATRIX (Top 10 Markets by Volume)")
-    print("-" * 80)
-    
-    # 1. Find the 10 most heavily traded markets overall
-    top_markets = df['MarketName'].value_counts().head(10).index
-    
-    # 2. Filter our data to only include trades from these top markets
-    df_top = df[df['MarketName'].isin(top_markets)].copy()
-    
-    # 3. Shorten the market names so the table fits on your screen
-    df_top['ShortMarket'] = df_top['MarketName'].apply(lambda x: x[:45] + "..." if len(x) > 45 else x)
-    
-    # 4. Create the Pivot Table: Columns = StrategyName (The specific version!)
-    market_matrix = pd.pivot_table(
-        df_top, 
-        values='CashFlow', 
-        index='ShortMarket', 
-        columns='StrategyName', 
-        aggfunc='sum', 
-        fill_value=0
-    )
-    
-    # 5. Add a "Total" column to see the net result for that market
-    market_matrix['NET_TOTAL'] = market_matrix.sum(axis=1)
-    
-    # 6. Sort the Rows (Markets) by activity level
-    market_matrix = market_matrix.reindex(df_top['ShortMarket'].value_counts().index)
-    
-    # 7. Sort the Columns (Strategies) from most profitable to least profitable
-    strategy_totals = market_matrix.drop(columns=['NET_TOTAL']).sum().sort_values(ascending=False)
-    sorted_columns = list(strategy_totals.index) + ['NET_TOTAL']
-    market_matrix = market_matrix[sorted_columns]
-    
-    # ==========================================
-    # THE FIX: Export the raw numbers to CSV!
-    # ==========================================
-    export_filename = "PredictionLiveTrader/Strategy_Market_Matrix.csv"
-    market_matrix.to_csv(export_filename)
-    print(f"💾 EXPORT SUCCESS: The detailed matrix has been saved to '{export_filename}'")
-    print("   (Open this file in Excel to easily view the full breakdown!)\n")
-    
-    # 8. Format the numbers as currency for the terminal display
-    for col in market_matrix.columns:
-        market_matrix[col] = market_matrix[col].apply(lambda x: f"${x:,.2f}")
-        
-    # 9. Force Pandas to print the whole table (even if it looks messy in the terminal)
-    with pd.option_context('display.max_columns', None, 'display.width', 1000):
-        print(market_matrix.to_string())
-        
-    print("\n" + "="*80 + "\n")
-    
+        print(f"\n  [{pd.Timestamp(hour).strftime('%Y-%m-%d %H:%M')}] Net: ${hour_total:,.2f}")
+        for _, r in top5.iterrows():
+            print(f"    + {r['StrategyName']:<50} ${r['CashFlow']:>10,.2f}")
+        for _, r in bot5.iterrows():
+            print(f"    - {r['StrategyName']:<50} ${r['CashFlow']:>10,.2f}")
 
-    # ==========================================
-    # DASHBOARD 8: THE REALITY CHECK (Mark-to-Market Bags)
-    # ==========================================
-    print("💼 THE REALITY CHECK (Unrealized PnL & Bag Valuation)")
-    print("-" * 80)
+    # Export full strategy x hour matrix to CSV
+    hourly_pivot = hourly_strat.pivot_table(index='Hour', columns='StrategyName', values='CashFlow', fill_value=0)
+    hourly_pivot['NET_TOTAL'] = hourly_pivot.sum(axis=1)
+    hourly_export = "PredictionLiveTrader/Hourly_Strategy_Breakdown.csv"
+    hourly_pivot.to_csv(hourly_export)
+    print(f"\n  💾 Full hourly breakdown exported to '{hourly_export}'")
+    print()
 
-    # 1. Find the most recent price for every asset based on the latest trades in the CSV
-    # This acts as our "Live Market Price" approximation!
-    last_prices = df.sort_values('Timestamp').groupby('AssetId')['ExecutionPrice'].last().to_dict()
-
-    # 2. Separate the flow of shares into YES inventory and NO inventory
-    df['Yes_Share_Change'] = df.apply(lambda r: r['Shares'] if r['Side'] == 'BUY' else (-r['Shares'] if r['Side'] in ('SELL', 'RESOLVE YES') else 0), axis=1)
-    df['No_Share_Change'] = df.apply(lambda r: r['Shares'] if r['Side'] == 'BUY NO' else (-r['Shares'] if r['Side'] in ('SELL NO', 'RESOLVE NO') else 0), axis=1)
-
-    # 3. Calculate the exact number of unsold shares each strategy is holding
-    inventory = df.groupby('StrategyName').agg(
-        Net_Yes_Shares=('Yes_Share_Change', 'sum'),
-        Net_No_Shares=('No_Share_Change', 'sum')
-    ).reset_index()
-
-    # 4. Calculate the true Mark-to-Market value of those held bags
-    # Liquidity haircut — can't assume full exit at last price due to slippage/spread
-    LIQUIDITY_HAIRCUT = 0.07  # 7% discount
-    inventory['MarkToMarket_Value'] = 0.0
-
-    for idx, row in inventory.iterrows():
-        strat = row['StrategyName']
-        strat_trades = df[df['StrategyName'] == strat]
-        
-        # We must value each asset individually for this strategy
-        open_assets = strat_trades['AssetId'].unique()
-        strat_mtm = 0.0
-        
-        for asset in open_assets:
-            asset_trades = strat_trades[strat_trades['AssetId'] == asset]
-            
-            yes_held = asset_trades[asset_trades['Side'] == 'BUY']['Shares'].sum() - asset_trades[asset_trades['Side'].isin(['SELL', 'RESOLVE YES'])]['Shares'].sum()
-            no_held = asset_trades[asset_trades['Side'] == 'BUY NO']['Shares'].sum() - asset_trades[asset_trades['Side'].isin(['SELL NO', 'RESOLVE NO'])]['Shares'].sum()
-            
-            last_price = last_prices.get(asset, 0)
-            
-            # Value of YES shares = shares * current price
-            if yes_held > 0:
-                strat_mtm += (yes_held * last_price)
-                
-            # Value of NO shares = shares * (1 - current price)
-            if no_held > 0:
-                strat_mtm += (no_held * (1 - last_price))
-                
-        inventory.at[idx, 'MarkToMarket_Value'] = strat_mtm * (1 - LIQUIDITY_HAIRCUT)
-
-    # 5. Bring in the Realized CashFlow we calculated in Dashboard 1
-    inventory = inventory.merge(leaderboard[['StrategyName', 'Total_PnL']], on='StrategyName')
-    
-    # 6. Calculate True Total Equity = StartingCapital + CashFlow PnL + MarkToMarket Bag Value
-    inventory['StartingCapital'] = inventory['StrategyName'].map(starting_caps).fillna(1000.0)
-    inventory['True_Total_Equity'] = inventory['StartingCapital'] + inventory['Total_PnL'] + inventory['MarkToMarket_Value']
-    inventory['True_PnL'] = inventory['True_Total_Equity'] - inventory['StartingCapital']
-
-    # 7. Pessimistic scenario: if all bags go to $0
-    inventory['Worst_Case_Equity'] = inventory['StartingCapital'] + inventory['Total_PnL']
-    inventory['Worst_Case_PnL'] = inventory['Worst_Case_Equity'] - inventory['StartingCapital']
-
-    # 8. Calculate estimated hourly P/L based on time each strategy has been active
-    strat_time_span = df.groupby('StrategyName')['Timestamp'].agg(['min', 'max'])
-    strat_time_span['Hours'] = (strat_time_span['max'] - strat_time_span['min']).dt.total_seconds() / 3600.0
-    strat_time_span['Hours'] = strat_time_span['Hours'].clip(lower=0.1)  # Floor at 6 min to avoid division spikes
-    inventory = inventory.merge(strat_time_span[['Hours']], left_on='StrategyName', right_index=True, how='left')
-    inventory['Hourly_PnL'] = inventory['True_PnL'] / inventory['Hours']
-
-    # 8. Format and display the reality check!
-    inventory = inventory.sort_values('True_PnL', ascending=False)
-
-    # Filter out bots that aren't holding anything to keep the view clean
-    bag_holders = inventory[(inventory['Net_Yes_Shares'] > 1) | (inventory['Net_No_Shares'] > 1)].copy()
-
-    bag_holders['Hours_fmt'] = bag_holders['Hours'].apply(lambda x: f"{x:.1f}h")
-    bag_holders['Hourly_PnL'] = bag_holders['Hourly_PnL'].apply(lambda x: f"${x:,.2f}/hr")
-    bag_holders['MarkToMarket_Value'] = bag_holders['MarkToMarket_Value'].apply(lambda x: f"${x:,.2f}")
-    bag_holders['True_Total_Equity'] = bag_holders['True_Total_Equity'].apply(lambda x: f"${x:,.2f}")
-    bag_holders['True_PnL'] = bag_holders['True_PnL'].apply(lambda x: f"${x:,.2f}")
-    bag_holders['Worst_Case_PnL'] = bag_holders['Worst_Case_PnL'].apply(lambda x: f"${x:,.2f}")
-    bag_holders['Cash_Left'] = bag_holders['Worst_Case_Equity'].apply(lambda x: f"${x:,.2f}")
-
-    print(bag_holders[['StrategyName', 'Cash_Left', 'MarkToMarket_Value', 'True_Total_Equity', 'True_PnL', 'Worst_Case_PnL', 'Hours_fmt', 'Hourly_PnL']].to_string(index=False))
-    print("\n" + "="*80 + "\n")
 
 if __name__ == "__main__":
     analyze_latest_run()
