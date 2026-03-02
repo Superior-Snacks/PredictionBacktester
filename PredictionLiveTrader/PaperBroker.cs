@@ -38,11 +38,11 @@ public class PaperBroker : GlobalSimulatedBroker
         {
             var lastTrade = TradeLedger.Last();
 
-            if (!IsMuted)
+            if (!IsMuted) lock (ConsoleLock)
             {
-            Console.ForegroundColor = ConsoleColor.Green;
-            Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [PAPER EXECUTION] BOUGHT YES @ ${lastTrade.Price:0.00} | Size: ${lastTrade.DollarValue:0.00} | Asset: {GetMarketName(assetId)}");
-            Console.ResetColor();
+                Console.ForegroundColor = ConsoleColor.Green;
+                Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [PAPER EXECUTION] BOUGHT YES @ ${lastTrade.Price:0.00} | Size: ${lastTrade.DollarValue:0.00} | Asset: {GetMarketName(assetId)}");
+                Console.ResetColor();
             }
         }
         return filled;
@@ -60,11 +60,11 @@ public class PaperBroker : GlobalSimulatedBroker
             var lastTrade = TradeLedger.Last();
             decimal pnl = (lastTrade.Price - entryPrice) * (initialShares - GetPositionShares(assetId));
 
-            if (!IsMuted)
+            if (!IsMuted) lock (ConsoleLock)
             {
-            Console.ForegroundColor = pnl >= 0 ? ConsoleColor.Cyan : ConsoleColor.Red;
-            Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [PAPER CLOSED] SOLD YES @ ${lastTrade.Price:0.00} | PnL: ${(pnl):0.00} | Total Equity: ${GetTotalPortfolioValue():0.00} | Asset: {GetMarketName(assetId)}");
-            Console.ResetColor();
+                Console.ForegroundColor = pnl >= 0 ? ConsoleColor.Cyan : ConsoleColor.Red;
+                Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [PAPER CLOSED] SOLD YES @ ${lastTrade.Price:0.00} | PnL: ${pnl:0.00} | Total Equity: ${GetTotalPortfolioValue():0.00} | Asset: {GetMarketName(assetId)}");
+                Console.ResetColor();
             }
         }
         return filled;
@@ -79,11 +79,11 @@ public class PaperBroker : GlobalSimulatedBroker
         {
             var lastTrade = TradeLedger.Last();
 
-            if (!IsMuted)
+            if (!IsMuted) lock (ConsoleLock)
             {
-            Console.ForegroundColor = ConsoleColor.Magenta;
-            Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [PAPER EXECUTION] BOUGHT NO @ ${lastTrade.Price:0.00} | Size: ${lastTrade.DollarValue:0.00} | Asset: {GetMarketName(assetId)}");
-            Console.ResetColor();   
+                Console.ForegroundColor = ConsoleColor.Magenta;
+                Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [PAPER EXECUTION] BOUGHT NO @ ${lastTrade.Price:0.00} | Size: ${lastTrade.DollarValue:0.00} | Asset: {GetMarketName(assetId)}");
+                Console.ResetColor();
             }
         }
     }
@@ -100,11 +100,11 @@ public class PaperBroker : GlobalSimulatedBroker
             var lastTrade = TradeLedger.Last();
             decimal pnl = (lastTrade.Price - entryPrice) * (initialShares - GetNoPositionShares(assetId));
 
-            if (!IsMuted)
+            if (!IsMuted) lock (ConsoleLock)
             {
-            Console.ForegroundColor = pnl >= 0 ? ConsoleColor.Cyan : ConsoleColor.Red;
-            Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [PAPER CLOSED] SOLD NO @ ${lastTrade.Price:0.00} | PnL: ${(pnl):0.00} | Total Equity: ${GetTotalPortfolioValue():0.00} | Asset: {GetMarketName(assetId)}");
-            Console.ResetColor();
+                Console.ForegroundColor = pnl >= 0 ? ConsoleColor.Cyan : ConsoleColor.Red;
+                Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [PAPER CLOSED] SOLD NO @ ${lastTrade.Price:0.00} | PnL: ${pnl:0.00} | Total Equity: ${GetTotalPortfolioValue():0.00} | Asset: {GetMarketName(assetId)}");
+                Console.ResetColor();
             }
         }
     }
@@ -122,11 +122,11 @@ public class PaperBroker : GlobalSimulatedBroker
         {
             decimal pnl = (outcomePrice - yesEntryPrice) * initialYesShares;
 
-            if (!IsMuted)
+            if (!IsMuted) lock (ConsoleLock)
             {
-            Console.ForegroundColor = pnl > 0 ? ConsoleColor.Yellow : ConsoleColor.DarkRed;
-            Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [MARKET SETTLED] YES SHARES @ ${outcomePrice:0.00} | PnL: ${(pnl):0.00} | Total Equity: ${GetTotalPortfolioValue():0.00} | Asset: {GetMarketName(assetId)}");
-            Console.ResetColor(); 
+                Console.ForegroundColor = pnl > 0 ? ConsoleColor.Yellow : ConsoleColor.DarkRed;
+                Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [MARKET SETTLED] YES SHARES @ ${outcomePrice:0.00} | PnL: ${pnl:0.00} | Total Equity: ${GetTotalPortfolioValue():0.00} | Asset: {GetMarketName(assetId)}");
+                Console.ResetColor();
             }
         }
 
@@ -135,11 +135,11 @@ public class PaperBroker : GlobalSimulatedBroker
             decimal noOutcomePrice = 1.00m - outcomePrice;
             decimal pnl = (noOutcomePrice - noEntryPrice) * initialNoShares;
 
-            if (!IsMuted)
+            if (!IsMuted) lock (ConsoleLock)
             {
-            Console.ForegroundColor = pnl > 0 ? ConsoleColor.Yellow : ConsoleColor.DarkRed;
-            Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [MARKET SETTLED] NO SHARES @ ${noOutcomePrice:0.00} | PnL: ${(pnl):0.00} | Total Equity: ${GetTotalPortfolioValue():0.00} | Asset: {GetMarketName(assetId)}");
-            Console.ResetColor();   
+                Console.ForegroundColor = pnl > 0 ? ConsoleColor.Yellow : ConsoleColor.DarkRed;
+                Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [MARKET SETTLED] NO SHARES @ ${noOutcomePrice:0.00} | PnL: ${pnl:0.00} | Total Equity: ${GetTotalPortfolioValue():0.00} | Asset: {GetMarketName(assetId)}");
+                Console.ResetColor();
             }
         }
     }

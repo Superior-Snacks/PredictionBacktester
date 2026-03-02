@@ -9,6 +9,9 @@ public class GlobalSimulatedBroker
 {
     public decimal SpreadPenalty { get; private set; } = 0.015m;
 
+    // Shared lock for all console output to prevent color interleaving across threads
+    public static readonly object ConsoleLock = new object();
+
     // We use a lock object to protect non-concurrent properties like CashBalance and TradeLedger
     protected readonly object _brokerLock = new object();
     public object BrokerLock => _brokerLock;
@@ -42,6 +45,8 @@ public class GlobalSimulatedBroker
 
     public decimal MaxParticipationRate { get; private set; } = 1.00m;
     public decimal ResolutionFeeRate { get; private set; } = 0.02m;
+    private int _rejectedOrders;
+    public int RejectedOrders => _rejectedOrders;
 
     protected ConcurrentDictionary<string, bool> _pendingOrders = new ConcurrentDictionary<string, bool>();
 
@@ -290,7 +295,7 @@ public class GlobalSimulatedBroker
             // GUARD: Ensure the price is valid
             if (currentAsk >= 0.99m || currentAsk <= 0.01m)
             {
-                if (!IsMuted) Console.WriteLine($"[LATENCY REJECT] [{StrategyLabel}] Invalid price {currentAsk} on {ResolveAssetName(assetId)}.");
+                if (!IsMuted) lock (ConsoleLock) { Console.WriteLine($"[LATENCY REJECT] [{StrategyLabel}] Invalid price {currentAsk} on {ResolveAssetName(assetId)}."); }
                 return;
             }
 
@@ -301,11 +306,8 @@ public class GlobalSimulatedBroker
             }
             else
             {
-                lock (_brokerLock)
-                {
-                    TradeLedger.Add(new ExecutedTrade { OutcomeId = assetId, Date = DateTime.Now, Side = "REJECT BUY", Price = currentAsk, Shares = 0, DollarValue = 0 });
-                }
-                if (!IsMuted)
+                Interlocked.Increment(ref _rejectedOrders);
+                if (!IsMuted) lock (ConsoleLock)
                 {
                     Console.ForegroundColor = ConsoleColor.DarkGray;
                     Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [{StrategyLabel}] [LATENCY REJECT] Missed BUY on {ResolveAssetName(assetId)}. Price moved to {currentAsk}.");
@@ -344,7 +346,7 @@ public class GlobalSimulatedBroker
 
             if (currentBid >= 0.99m || currentBid <= 0.01m)
             {
-                if (!IsMuted) Console.WriteLine($"[LATENCY REJECT] [{StrategyLabel}] Invalid SELL price {currentBid} on {ResolveAssetName(assetId)}.");
+                if (!IsMuted) lock (ConsoleLock) { Console.WriteLine($"[LATENCY REJECT] [{StrategyLabel}] Invalid SELL price {currentBid} on {ResolveAssetName(assetId)}."); }
                 return;
             }
 
@@ -355,11 +357,8 @@ public class GlobalSimulatedBroker
             }
             else
             {
-                lock (_brokerLock)
-                {
-                    TradeLedger.Add(new ExecutedTrade { OutcomeId = assetId, Date = DateTime.Now, Side = "REJECT SELL", Price = currentBid, Shares = 0, DollarValue = 0 });
-                }
-                if (!IsMuted)
+                Interlocked.Increment(ref _rejectedOrders);
+                if (!IsMuted) lock (ConsoleLock)
                 {
                     Console.ForegroundColor = ConsoleColor.DarkGray;
                     Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [{StrategyLabel}] [LATENCY REJECT] Missed SELL on {ResolveAssetName(assetId)}. Price moved to {currentBid}.");

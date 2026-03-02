@@ -42,12 +42,23 @@ def analyze_latest_run():
     df['Timestamp'] = pd.to_datetime(df['Timestamp'])
 
     # 4. Handle all trade sides correctly
-    reject_sides = {'REJECT BUY', 'REJECT SELL'}
     buy_sides = {'BUY', 'BUY NO'}
     df['CashFlow'] = df.apply(
-        lambda row: 0 if row['Side'] in reject_sides else (-row['DollarValue'] if row['Side'] in buy_sides else row['DollarValue']),
+        lambda row: -row['DollarValue'] if row['Side'] in buy_sides else row['DollarValue'],
         axis=1
     )
+
+    # Load reject counts from summary CSV if it exists
+    summary_file = latest_file.replace(".csv", "_summary.csv")
+    snapshot_summary = snapshot_file.replace(".csv", "_summary.csv")
+    reject_counts = {}
+    if os.path.exists(summary_file):
+        try:
+            shutil.copy2(summary_file, snapshot_summary)
+            summary_df = pd.read_csv(snapshot_summary)
+            reject_counts = dict(zip(summary_df['StrategyName'], summary_df['RejectedOrders']))
+        except Exception:
+            pass
 
     # Extract starting capital per strategy from CSV (falls back to $1000 for old CSVs)
     if 'StartingCapital' in df.columns:
@@ -75,8 +86,8 @@ def analyze_latest_run():
         Total_PnL=('CashFlow', 'sum'),
         Buys=('Side', lambda x: x.isin(buy_sides).sum()),
         Sells=('Side', lambda x: x.isin(sell_sides).sum()),
-        Rejects=('Side', lambda x: x.isin(reject_sides).sum()),
     ).reset_index()
+    leaderboard['Rejects'] = leaderboard['StrategyName'].map(reject_counts).fillna(0).astype(int)
 
     leaderboard = leaderboard.sort_values('Total_PnL', ascending=False)
     leaderboard['Total_PnL_fmt'] = leaderboard['Total_PnL'].apply(lambda x: f"${x:,.2f}")
@@ -100,7 +111,7 @@ def analyze_latest_run():
     strategy_pnl = df.groupby('StrategyName')['CashFlow'].sum().reset_index()
     strategy_pnl.columns = ['StrategyName', 'StrategyPnL']
 
-    param_names = {'T': 'Threshold', 'W': 'Window', 'P': 'TakeProfit', 'S': 'StopLoss', 'SL': 'Slippage'}
+    param_names = {'T': 'Threshold', 'W': 'Window', 'P': 'TakeProfit', 'S': 'StopLoss', 'ES': 'EntrySlippage', 'XS': 'ExitSlippage'}
 
     for param_letter in sorted(df['Params'].apply(lambda d: list(d.keys())).explode().dropna().unique()):
         param_label = param_names.get(param_letter, param_letter)

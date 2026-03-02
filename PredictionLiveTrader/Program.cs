@@ -52,7 +52,8 @@ class Program
         long[] sniperWindows = { 10, 20, 30, 60, 120 };
         decimal[] sniperTakeProfit = { 0.03m, 0.05m, 0.10m };
         decimal[] sniperStopLoss = { 0.10m, 0.15m, 0.25m };
-        decimal[] sniperSlippage = { 0.01m, 0.03m, 0.05m };
+        decimal[] sniperEntrySlippage = { 0.01m, 0.03m, 0.05m };
+        decimal[] sniperExitSlippage = { 0.01m, 0.02m, 0.03m };
 
         int sniperVersion = 1;
 
@@ -61,16 +62,17 @@ class Program
                          from window in sniperWindows
                          from Profit in sniperTakeProfit
                          from stop in sniperStopLoss
-                         from slip in sniperSlippage
-                         select new { threshold, window, Profit, stop, slip };
+                         from eSlip in sniperEntrySlippage
+                         from xSlip in sniperExitSlippage
+                         select new { threshold, window, Profit, stop, eSlip, xSlip };
 
         foreach (var param in sniperGrid)
         {
-            string name = $"Sniper_v{sniperVersion++}_T{param.threshold}_W{param.window}_P{param.Profit}_S{param.stop}_SL{param.slip}";
+            string name = $"Sniper_v{sniperVersion++}_T{param.threshold}_W{param.window}_P{param.Profit}_S{param.stop}_ES{param.eSlip}_XS{param.xSlip}";
             configs.Add(new StrategyConfig(
                 name,
                 1000m,
-                () => new LiveFlashCrashSniperStrategy(name, param.threshold, param.window, param.Profit, param.stop, slippageTolerance: param.slip)
+                () => new LiveFlashCrashSniperStrategy(name, param.threshold, param.window, param.Profit, param.stop, entrySlippage: param.eSlip, exitSlippage: param.xSlip)
             ));
         }
         return configs;
@@ -99,7 +101,7 @@ class Program
         Console.Clear();
         Console.WriteLine("=========================================");
         Console.WriteLine("  LIVE PAPER TRADING ENGINE INITIALIZED  ");
-        Console.WriteLine("  Controls: 'P' = Pause | 'R' = Resume | 'M' = Mute | 'L' = Latency | 'D' = Drop");
+        Console.WriteLine("  Controls: 'P' = Pause | 'R' = Resume | 'M' = Mute | 'L' = Latency | 'D' = Drop | 'K' = Cull");
         Console.WriteLine($"  Latency starst at {REALISTIC_LATENCY_MS}");
         Console.WriteLine("=========================================");
 
@@ -226,6 +228,55 @@ class Program
                         Console.ResetColor();
                     }
                 }
+                else if (keyInfo.Key == ConsoleKey.K)
+                {
+                    Console.ForegroundColor = ConsoleColor.Yellow;
+                    Console.Write("\n[CULL MODE] How many worst performers to drop? ");
+                    Console.ResetColor();
+
+                    string? countInput = Console.ReadLine()?.Trim();
+                    if (!int.TryParse(countInput, out int cullCount) || cullCount <= 0)
+                    {
+                        Console.WriteLine("[CULL MODE] Cancelled — invalid number.");
+                        continue;
+                    }
+
+                    var activeConfigs = _strategyConfigs
+                        .Where(c => !_droppedStrategies.Contains(c.Name))
+                        .ToList();
+
+                    var ranked = activeConfigs
+                        .Select(c => new { c.Name, PnL = _strategyBrokers[c.Name].GetTotalPortfolioValue() - c.StartingCapital })
+                        .OrderBy(x => x.PnL)
+                        .Take(cullCount)
+                        .ToList();
+
+                    Console.ForegroundColor = ConsoleColor.Red;
+                    Console.WriteLine($"\n[CULL MODE] Bottom {ranked.Count} strategies:");
+                    foreach (var r in ranked)
+                        Console.WriteLine($"  {r.Name}  (PnL: ${r.PnL:0.00})");
+
+                    Console.ForegroundColor = ConsoleColor.Yellow;
+                    Console.Write($"\nConfirm dropping these {ranked.Count} strategies? (Y/N): ");
+                    Console.ResetColor();
+
+                    var confirmKey = Console.ReadKey(intercept: true);
+                    Console.WriteLine(confirmKey.KeyChar.ToString());
+
+                    if (confirmKey.Key == ConsoleKey.Y)
+                    {
+                        foreach (var r in ranked)
+                            _droppedStrategies.Add(r.Name);
+
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.WriteLine($"[CULLED] Dropped {ranked.Count} strategies. ({_strategyConfigs.Count - _droppedStrategies.Count} remaining)");
+                        Console.ResetColor();
+                    }
+                    else
+                    {
+                        Console.WriteLine("[CULL MODE] Cancelled.");
+                    }
+                }
             }
         });
 
@@ -265,9 +316,12 @@ class Program
                     decimal mtmValue = totalEquity - broker.CashBalance;
                     decimal realizedPnl = broker.CashBalance - config.StartingCapital;
 
-                    Console.ForegroundColor = pnl >= 0 ? ConsoleColor.Green : ConsoleColor.Red;
-                    Console.WriteLine($"[{name.PadRight(_maxNameLength)}] Equity: ${totalEquity:0.00} | PnL: ${pnl:0.00} (Real: ${realizedPnl:0.00} + MTM: ${mtmValue:0.00}) | Actions: {broker.TotalActions} Exits: {broker.TotalTradesExecuted} (W:{broker.WinningTrades} L:{broker.LosingTrades})");
-                    Console.ResetColor();
+                    lock (GlobalSimulatedBroker.ConsoleLock)
+                    {
+                        Console.ForegroundColor = pnl >= 0 ? ConsoleColor.Green : ConsoleColor.Red;
+                        Console.WriteLine($"[{name.PadRight(_maxNameLength)}] Equity: ${totalEquity:0.00} | PnL: ${pnl:0.00} (Real: ${realizedPnl:0.00} + MTM: ${mtmValue:0.00}) | Actions: {broker.TotalActions} Exits: {broker.TotalTradesExecuted} (W:{broker.WinningTrades} L:{broker.LosingTrades}) Rej: {broker.RejectedOrders}");
+                        Console.ResetColor();
+                    }
                 }
                 Console.WriteLine("=================================================================\n");
                 
@@ -320,9 +374,12 @@ class Program
 
                     if (newTokens.Count > 0)
                     {
-                        Console.ForegroundColor = ConsoleColor.Green;
-                        Console.WriteLine($"[DISCOVERY] Found {newTokens.Count} new market(s) crossing the $50k threshold! Subscribing...");
-                        Console.ResetColor();
+                        lock (GlobalSimulatedBroker.ConsoleLock)
+                        {
+                            Console.ForegroundColor = ConsoleColor.Green;
+                            Console.WriteLine($"[DISCOVERY] Found {newTokens.Count} new market(s) crossing the $50k threshold! Subscribing...");
+                            Console.ResetColor();
+                        }
 
                         await SubscribeNewTokens(newTokens);
                     }
@@ -439,11 +496,11 @@ class Program
                                                     else book.Asks[price] = size;
                                                 }
 
-                                                if (!_isMuted)
+                                                if (!_isMuted) lock (GlobalSimulatedBroker.ConsoleLock)
                                                 {
-                                                Console.ForegroundColor = ConsoleColor.DarkGray;
-                                                Console.Write(".");
-                                                Console.ResetColor();   
+                                                    Console.ForegroundColor = ConsoleColor.DarkGray;
+                                                    Console.Write(".");
+                                                    Console.ResetColor();
                                                 }
 
                                                 // THE MULTIPLEXER ROUTING: Feed the exact same book to every strategy simultaneously!
@@ -500,10 +557,13 @@ class Program
             catch (Exception ex)
             {
                 _activeWs = null;
-                Console.ForegroundColor = ConsoleColor.Yellow;
-                Console.WriteLine($"\n[CONNECTION LOST] WebSocket connection dropped: {ex.Message}");
-                Console.WriteLine("Reconnecting in 5 seconds...");
-                Console.ResetColor();
+                lock (GlobalSimulatedBroker.ConsoleLock)
+                {
+                    Console.ForegroundColor = ConsoleColor.Yellow;
+                    Console.WriteLine($"\n[CONNECTION LOST] WebSocket connection dropped: {ex.Message}");
+                    Console.WriteLine("Reconnecting in 5 seconds...");
+                    Console.ResetColor();
+                }
 
                 await Task.Delay(5000);
             }
@@ -613,6 +673,15 @@ class Program
 
                     writer.WriteLine($"{trade.Date:O},{strategyName},{startingCapital},{marketName},{trade.OutcomeId},{trade.Side},{trade.Price},{trade.Shares},{trade.DollarValue}");
                 }
+            }
+
+            // Write summary CSV with per-strategy reject counts
+            string summaryFilename = _sessionCsvFilename.Replace(".csv", "_summary.csv");
+            using var summaryWriter = new StreamWriter(summaryFilename);
+            summaryWriter.WriteLine("StrategyName,RejectedOrders");
+            foreach (var brokerKvp in _strategyBrokers)
+            {
+                summaryWriter.WriteLine($"{brokerKvp.Key},{brokerKvp.Value.RejectedOrders}");
             }
 
             // Only print the success message if we are shutting down (not quiet mode)

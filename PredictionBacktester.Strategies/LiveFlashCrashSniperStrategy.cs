@@ -14,7 +14,8 @@ public class LiveFlashCrashSniperStrategy : ILiveStrategy
     private readonly decimal _reboundProfitMargin;
     private readonly decimal _stopLossMargin;
     private readonly decimal _riskPercentage;
-    private readonly decimal _slippageTolerance;
+    private readonly decimal _entrySlippage;
+    private readonly decimal _exitSlippage;
 
     private readonly Queue<(long Timestamp, decimal Price)> _recentAsks;
 
@@ -25,7 +26,8 @@ public class LiveFlashCrashSniperStrategy : ILiveStrategy
         decimal reboundProfitMargin = 0.05m,
         decimal stopLossMargin = 0.15m,
         decimal riskPercentage = 0.05m,
-        decimal slippageTolerance = 0.03m)
+        decimal entrySlippage = 0.03m,
+        decimal exitSlippage = 0.02m)
     {
         StrategyName = strategyName;
         _crashThreshold = crashThreshold;
@@ -33,7 +35,8 @@ public class LiveFlashCrashSniperStrategy : ILiveStrategy
         _reboundProfitMargin = reboundProfitMargin;
         _stopLossMargin = stopLossMargin;
         _riskPercentage = riskPercentage;
-        _slippageTolerance = slippageTolerance;
+        _entrySlippage = entrySlippage;
+        _exitSlippage = exitSlippage;
 
         _recentAsks = new Queue<(long, decimal)>();
     }
@@ -80,7 +83,7 @@ public class LiveFlashCrashSniperStrategy : ILiveStrategy
 
             if (isTakeProfit || isStopLoss)
             {
-                broker.SubmitSellAllOrder(assetId, bestBid - _slippageTolerance, book);
+                broker.SubmitSellAllOrder(assetId, bestBid - _exitSlippage, book);
             }
             return;
         }
@@ -95,7 +98,7 @@ public class LiveFlashCrashSniperStrategy : ILiveStrategy
 
             if (actualDollarsSpent >= 1.00m)
             {
-                broker.SubmitBuyOrder(assetId, bestAsk + _slippageTolerance, actualDollarsSpent, book);
+                broker.SubmitBuyOrder(assetId, bestAsk + _entrySlippage, actualDollarsSpent, book);
                 _recentAsks.Clear();
             }
         }
