@@ -1,6 +1,9 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
+    <PackageReference Include="Nethereum.Signer.EIP712" Version="5.8.0" />
+    <PackageReference Include="Nethereum.Web3" Version="5.8.0" />
+    <PackageReference Include="RestSharp" Version="113.1.0" />
     <ProjectReference Include="..\PredictionBacktester.Core\PredictionBacktester.Core.csproj" />
     <ProjectReference Include="..\PredictionBacktester.Strategies\PredictionBacktester.Strategies.csproj" />
     <ProjectReference Include="..\PredictionBacktester.Data\PredictionBacktester.Data.csproj" />
