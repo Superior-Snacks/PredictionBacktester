@@ -1,7 +1,7 @@
 using System.Numerics;
 using Nethereum.ABI.FunctionEncoding.Attributes;
 
-namespace PredictionBacktester.Engine
+namespace PredictionBacktester.Engine.LiveExecution
 {
     // This defines the exact structure Polymarket expects for a trade
     [Struct("Order")]

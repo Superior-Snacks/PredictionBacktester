@@ -12,7 +12,9 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="Nethereum.Signer.EIP712" Version="5.8.0" />
     <PackageReference Include="Nethereum.Web3" Version="5.8.0" />
+    <PackageReference Include="RestSharp" Version="113.1.0" />
   </ItemGroup>
 
 </Project>

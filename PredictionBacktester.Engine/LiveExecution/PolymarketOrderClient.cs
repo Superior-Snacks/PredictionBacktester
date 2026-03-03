@@ -1,0 +1,185 @@
+using System;
+using System.Collections.Generic;
+using System.Numerics;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using System.Threading.Tasks;
+using Nethereum.ABI.EIP712;
+using Nethereum.ABI.FunctionEncoding.Attributes;
+using Nethereum.Contracts;
+using Nethereum.Signer;
+using Nethereum.Signer.EIP712;
+using Nethereum.Web3;
+using Nethereum.Web3.Accounts;
+using RestSharp;
+
+namespace PredictionBacktester.Engine.LiveExecution;
+
+public class PolymarketOrderClient
+{
+    private readonly PolymarketApiConfig _config;
+    private readonly RestClient _httpClient;
+    private readonly Account _account;
+
+    // CTF Exchange for standard binary markets
+    private const string CTF_EXCHANGE = "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E";
+    // NegRisk CTF Exchange for multi-outcome markets
+    private const string NEG_RISK_EXCHANGE = "0xC5d563A36AE78145C45a50134d48A1215220f80a";
+    // USDC on Polygon (bridged USDC.e used by Polymarket)
+    private const string USDC_CONTRACT = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
+    private const int USDC_DECIMALS = 6;
+
+    public PolymarketOrderClient(PolymarketApiConfig config)
+    {
+        _config = config;
+        _httpClient = new RestClient(_config.Endpoint);
+        _account = new Account(_config.PrivateKey, BigInteger.Parse(_config.ChainId));
+    }
+
+    /// <summary>
+    /// Creates, signs, and submits a live order to the Polymarket CLOB.
+    /// </summary>
+    /// <param name="tokenId">The CLOB token ID for the outcome</param>
+    /// <param name="price">Price per share (0.01 to 0.99)</param>
+    /// <param name="size">Number of shares</param>
+    /// <param name="side">0 = Buy, 1 = Sell</param>
+    /// <param name="negRisk">True for multi-outcome (NegRisk) markets</param>
+    public async Task<string> SubmitOrderAsync(string tokenId, decimal price, decimal size, int side, bool negRisk = false)
+    {
+        // 1. Convert to BigIntegers (USDC and conditional tokens both use 6 decimals)
+        const long DECIMALS = 1_000_000;
+        BigInteger makerAmount, takerAmount;
+
+        if (side == 0) // BUY: pay USDC (maker), receive shares (taker)
+        {
+            takerAmount = new BigInteger((long)(size * DECIMALS));
+            makerAmount = new BigInteger((long)(size * price * DECIMALS));
+        }
+        else // SELL: give shares (maker), receive USDC (taker)
+        {
+            makerAmount = new BigInteger((long)(size * DECIMALS));
+            takerAmount = new BigInteger((long)(size * price * DECIMALS));
+        }
+
+        // 2. Build the Order Struct
+        var order = new PolymarketOrder
+        {
+            Salt = GenerateSalt(),
+            Maker = _config.ProxyAddress,
+            Signer = _account.Address,
+            Taker = "0x0000000000000000000000000000000000000000",
+            TokenId = BigInteger.Parse(tokenId),
+            MakerAmount = makerAmount,
+            TakerAmount = takerAmount,
+            Expiration = GetExpirationTimestamp(300), // 5 minutes
+            Nonce = GenerateNonce(),
+            FeeRateBps = 0,
+            Side = side,
+            SignatureType = 0 // EOA
+        };
+
+        // 3. Sign the order (EIP-712) using the correct exchange contract
+        string verifyingContract = negRisk ? NEG_RISK_EXCHANGE : CTF_EXCHANGE;
+        string signature = SignOrder(order, verifyingContract);
+
+        // 4. Build JSON body
+        var payload = new
+        {
+            order = order,
+            signature = signature,
+            owner = _account.Address
+        };
+        string jsonBody = JsonSerializer.Serialize(payload);
+
+        // 5. Build request with L2 HMAC auth headers
+        var request = new RestRequest("/order", Method.Post);
+        string timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString();
+        string hmacSignature = BuildHmacSignature(_config.ApiSecret, timestamp, "POST", "/order", jsonBody);
+
+        request.AddHeader("POLY_ADDRESS", _account.Address);
+        request.AddHeader("POLY_SIGNATURE", hmacSignature);
+        request.AddHeader("POLY_TIMESTAMP", timestamp);
+        request.AddHeader("POLY_API_KEY", _config.ApiKey);
+        request.AddHeader("POLY_PASSPHRASE", _config.ApiPassphrase);
+        request.AddStringBody(jsonBody, ContentType.Json);
+
+        // 6. Submit
+        var response = await _httpClient.ExecuteAsync(request);
+
+        if (!response.IsSuccessful)
+        {
+            throw new Exception($"[Polymarket API Error] {response.StatusCode}: {response.Content ?? "No response body"}");
+        }
+
+        return response.Content ?? "OK";
+    }
+
+    /// <summary>
+    /// Queries the on-chain USDC balance for the proxy wallet.
+    /// Returns the balance as a decimal in dollars (e.g. 250.50).
+    /// </summary>
+    public async Task<decimal> GetUsdcBalanceAsync()
+    {
+        var web3 = new Web3(_config.RpcUrl);
+        var contract = web3.Eth.GetContract(BalanceOfAbi, USDC_CONTRACT);
+        var balanceOf = contract.GetFunction("balanceOf");
+        var rawBalance = await balanceOf.CallAsync<BigInteger>(_config.ProxyAddress);
+        return (decimal)rawBalance / (decimal)Math.Pow(10, USDC_DECIMALS);
+    }
+
+    private static readonly string BalanceOfAbi = @"[{""constant"":true,""inputs"":[{""name"":""account"",""type"":""address""}],""name"":""balanceOf"",""outputs"":[{""name"":"""",""type"":""uint256""}],""type"":""function""}]";
+
+    private string SignOrder(PolymarketOrder order, string verifyingContract)
+    {
+        var typedData = new TypedData<Domain>
+        {
+            Domain = new Domain
+            {
+                Name = "Polymarket CTF Exchange",
+                Version = "1",
+                ChainId = BigInteger.Parse(_config.ChainId),
+                VerifyingContract = verifyingContract
+            },
+            Types = MemberDescriptionFactory.GetTypesMemberDescription(typeof(Domain), typeof(PolymarketOrder)),
+            PrimaryType = "Order"
+        };
+
+        var signer = new Eip712TypedDataSigner();
+        return signer.SignTypedDataV4(order, typedData, new EthECKey(_account.PrivateKey));
+    }
+
+    /// <summary>
+    /// HMAC-SHA256 signature for L2 API authentication.
+    /// Message = timestamp + method + path + body
+    /// Key = base64url-decoded API secret
+    /// </summary>
+    private static string BuildHmacSignature(string secret, string timestamp, string method, string requestPath, string? body = null)
+    {
+        byte[] key = Convert.FromBase64String(secret.Replace('-', '+').Replace('_', '/'));
+        string message = timestamp + method + requestPath;
+        if (!string.IsNullOrEmpty(body))
+            message += body;
+
+        using var hmac = new HMACSHA256(key);
+        byte[] hash = hmac.ComputeHash(Encoding.UTF8.GetBytes(message));
+        return Convert.ToBase64String(hash).Replace('+', '-').Replace('/', '_');
+    }
+
+    private static byte[] GenerateSalt()
+    {
+        byte[] salt = new byte[32];
+        RandomNumberGenerator.Fill(salt);
+        return salt;
+    }
+
+    private static BigInteger GetExpirationTimestamp(int secondsFromNow)
+    {
+        return new BigInteger(DateTimeOffset.UtcNow.AddSeconds(secondsFromNow).ToUnixTimeSeconds());
+    }
+
+    private static BigInteger GenerateNonce()
+    {
+        return new BigInteger(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+    }
+}

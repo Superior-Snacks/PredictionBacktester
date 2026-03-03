@@ -45,7 +45,7 @@ public class GlobalSimulatedBroker
 
     public decimal MaxParticipationRate { get; private set; } = 1.00m;
     public decimal ResolutionFeeRate { get; private set; } = 0.02m;
-    private int _rejectedOrders;
+    protected int _rejectedOrders;
     public int RejectedOrders => _rejectedOrders;
 
     protected ConcurrentDictionary<string, bool> _pendingOrders = new ConcurrentDictionary<string, bool>();
@@ -96,6 +96,11 @@ public class GlobalSimulatedBroker
     public decimal GetAverageEntryPrice(string assetId) => _averageEntryPrices.GetValueOrDefault(assetId, 0m);
     public decimal GetNoPositionShares(string assetId) => _noPositionShares.GetValueOrDefault(assetId, 0m);
     public decimal GetAverageNoEntryPrice(string assetId) => _averageNoEntryPrices.GetValueOrDefault(assetId, 0m);
+
+    protected void SetPositionShares(string assetId, decimal shares) => _positionShares[assetId] = shares;
+    protected void SetAverageEntryPrice(string assetId, decimal price) => _averageEntryPrices[assetId] = price;
+    protected void SetNoPositionShares(string assetId, decimal shares) => _noPositionShares[assetId] = shares;
+    protected void SetAverageNoEntryPrice(string assetId, decimal price) => _averageNoEntryPrices[assetId] = price;
 
     protected string ResolveAssetName(string assetId) =>
         AssetNameResolver?.Invoke(assetId) ?? assetId.Substring(0, Math.Min(8, assetId.Length)) + "...";
