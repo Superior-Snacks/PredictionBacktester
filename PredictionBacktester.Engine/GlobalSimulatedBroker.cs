@@ -50,6 +50,41 @@ public class GlobalSimulatedBroker
 
     protected ConcurrentDictionary<string, bool> _pendingOrders = new ConcurrentDictionary<string, bool>();
 
+    // Per-broker liquidity tracking so strategies don't drain each other's book
+    private ConcurrentDictionary<string, decimal> _consumedAskLiquidity = new();
+    private ConcurrentDictionary<string, decimal> _consumedBidLiquidity = new();
+
+    public decimal GetAvailableAskSize(LocalOrderBook book, string assetId)
+    {
+        decimal bookSize = book.GetBestAskSize();
+        decimal consumed = _consumedAskLiquidity.GetValueOrDefault(assetId, 0m);
+        return Math.Max(0, bookSize - consumed);
+    }
+
+    public decimal GetAvailableBidSize(LocalOrderBook book, string assetId)
+    {
+        decimal bookSize = book.GetBestBidSize();
+        decimal consumed = _consumedBidLiquidity.GetValueOrDefault(assetId, 0m);
+        return Math.Max(0, bookSize - consumed);
+    }
+
+    private void ConsumeAsk(string assetId, decimal shares)
+    {
+        _consumedAskLiquidity.AddOrUpdate(assetId, shares, (_, existing) => existing + shares);
+    }
+
+    private void ConsumeBid(string assetId, decimal shares)
+    {
+        _consumedBidLiquidity.AddOrUpdate(assetId, shares, (_, existing) => existing + shares);
+    }
+
+    /// <summary>Call once per book update cycle to reset consumed liquidity for the asset (fresh WebSocket data arrived).</summary>
+    public void ResetConsumedLiquidity(string assetId)
+    {
+        _consumedAskLiquidity.TryRemove(assetId, out _);
+        _consumedBidLiquidity.TryRemove(assetId, out _);
+    }
+
     public GlobalSimulatedBroker(decimal startingCash)
     {
         CashBalance = startingCash;
@@ -275,8 +310,9 @@ public class GlobalSimulatedBroker
 {
     if (LatencyMs <= 0)
     {
-        decimal filled = Buy(assetId, targetPrice, dollarsToInvest, book.GetBestAskSize());
-        if (filled > 0) book.ConsumeAskLiquidity(filled);
+        decimal available = GetAvailableAskSize(book, assetId);
+        decimal filled = Buy(assetId, targetPrice, dollarsToInvest, available);
+        if (filled > 0) ConsumeAsk(assetId, filled);
         return;
     }
 
@@ -290,7 +326,7 @@ public class GlobalSimulatedBroker
             await Task.Delay(LatencyMs);
 
             decimal currentAsk = book.GetBestAskPrice();
-            decimal availableLiquidity = book.GetBestAskSize();
+            decimal availableLiquidity = GetAvailableAskSize(book, assetId);
 
             // GUARD: Ensure the price is valid
             if (currentAsk >= 0.99m || currentAsk <= 0.01m)
@@ -302,7 +338,7 @@ public class GlobalSimulatedBroker
             if (currentAsk <= targetPrice && availableLiquidity > 0)
             {
                 decimal filled = Buy(assetId, currentAsk, dollarsToInvest, availableLiquidity);
-                if (filled > 0) book.ConsumeAskLiquidity(filled);
+                if (filled > 0) ConsumeAsk(assetId, filled);
             }
             else
             {
@@ -327,8 +363,9 @@ public class GlobalSimulatedBroker
 {
     if (LatencyMs <= 0)
     {
-        decimal filled = SellAll(assetId, targetPrice, book.GetBestBidSize());
-        if (filled > 0) book.ConsumeBidLiquidity(filled);
+        decimal available = GetAvailableBidSize(book, assetId);
+        decimal filled = SellAll(assetId, targetPrice, available);
+        if (filled > 0) ConsumeBid(assetId, filled);
         return;
     }
 
@@ -342,7 +379,7 @@ public class GlobalSimulatedBroker
             await Task.Delay(LatencyMs);
 
             decimal currentBid = book.GetBestBidPrice();
-            decimal availableLiquidity = book.GetBestBidSize();
+            decimal availableLiquidity = GetAvailableBidSize(book, assetId);
 
             if (currentBid >= 0.99m || currentBid <= 0.01m)
             {
@@ -353,7 +390,7 @@ public class GlobalSimulatedBroker
             if (currentBid >= targetPrice && availableLiquidity > 0)
             {
                 decimal filled = SellAll(assetId, currentBid, availableLiquidity);
-                if (filled > 0) book.ConsumeBidLiquidity(filled);
+                if (filled > 0) ConsumeBid(assetId, filled);
             }
             else
             {

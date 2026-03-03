@@ -48,12 +48,12 @@ class Program
         // ---------------------------------------------------------
         // GRID 1: Live Flash Crash Sniper
         // ---------------------------------------------------------
-        decimal[] sniperThresholds = {0.08m, 0.15m, 0.20m, 0.25m, 0.30m };
-        long[] sniperWindows = { 10, 20, 30, 60, 120 };
-        decimal[] sniperTakeProfit = { 0.03m, 0.05m, 0.10m };
+        decimal[] sniperThresholds = { 0.15m, 0.20m, 0.25m, 0.30m };//from here
+        long[] sniperWindows = { 30, 60, 120 };
+        decimal[] sniperTakeProfit = { 0.03m, 0.05m};
         decimal[] sniperStopLoss = { 0.10m, 0.15m, 0.25m };
-        decimal[] sniperEntrySlippage = { 0.01m, 0.03m, 0.05m };
-        decimal[] sniperExitSlippage = { 0.01m, 0.02m, 0.03m }; 
+        decimal[] sniperEntrySlippage = { 0.01m, 0.03m };
+        decimal[] sniperExitSlippage = { 0.03m, 0.05m }; 
 
         int sniperVersion = 1;
 
@@ -426,14 +426,25 @@ class Program
                 {
                     var receiveBuffer = new byte[8192];
                     using var ms = new MemoryStream();
+                    var staleTimeout = TimeSpan.FromSeconds(30);
 
                     while (ws.State == WebSocketState.Open)
                     {
                         WebSocketReceiveResult result;
                         do
                         {
-                            // Pass the CancellationToken here too!
-                            result = await ws.ReceiveAsync(new ArraySegment<byte>(receiveBuffer), _pauseCts.Token);
+                            // Combine user pause token with a stale-connection timeout
+                            using var timeoutCts = new CancellationTokenSource(staleTimeout);
+                            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(_pauseCts.Token, timeoutCts.Token);
+                            try
+                            {
+                                result = await ws.ReceiveAsync(new ArraySegment<byte>(receiveBuffer), linkedCts.Token);
+                            }
+                            catch (OperationCanceledException) when (!_pauseCts.IsCancellationRequested)
+                            {
+                                // Timeout fired, not user pause — connection is stale
+                                throw new TimeoutException("No data received for 30 seconds — forcing reconnect.");
+                            }
                             if (result.MessageType == WebSocketMessageType.Close)
                             {
                                 await ws.CloseAsync(WebSocketCloseStatus.NormalClosure, string.Empty, CancellationToken.None);
@@ -522,12 +533,21 @@ class Program
                                                     }
                                                 }
 
-                                                // THE MULTIPLEXER ROUTING: Feed the exact same book to every strategy simultaneously!
-                                                foreach (var strategy in activeStrategies[assetId])
+                                                // Reset per-broker consumed liquidity for this asset (fresh book data arrived)
+                                                foreach (var broker in _strategyBrokers.Values)
+                                                    broker.ResetConsumedLiquidity(assetId);
+
+                                                // THE MULTIPLEXER ROUTING: Feed the exact same book to every strategy in parallel!
+                                                var strategies = activeStrategies[assetId];
+                                                var parallelOptions = new ParallelOptions
                                                 {
-                                                    if (_droppedStrategies.Contains(strategy.StrategyName)) continue;
+                                                    MaxDegreeOfParallelism = Environment.ProcessorCount - 1
+                                                };
+                                                Parallel.ForEach(strategies, parallelOptions, strategy =>
+                                                {
+                                                    if (_droppedStrategies.Contains(strategy.StrategyName)) return;
                                                     strategy.OnBookUpdate(book, _strategyBrokers[strategy.StrategyName]);
-                                                }
+                                                });
                                             }
                                         }
                                     }
