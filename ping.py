@@ -1,5 +1,7 @@
 import time
 import statistics
+import socket
+from urllib.parse import urlparse
 import requests
 
 ENDPOINTS = {
@@ -30,7 +32,12 @@ def main():
 
     all_results = {}
     for name, url in ENDPOINTS.items():
-        print(f"[{name}] {url}")
+        host = urlparse(url).hostname
+        try:
+            ip = socket.gethostbyname(host)
+        except socket.gaierror:
+            ip = "UNRESOLVED"
+        print(f"[{name}] {url} ({ip})")
         times = ping_endpoint(name, url, ROUNDS)
         all_results[name] = times
         print()
