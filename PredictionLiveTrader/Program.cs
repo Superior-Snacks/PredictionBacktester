@@ -86,6 +86,7 @@ class Program
     private static volatile bool _isPaused = false;
     private static volatile bool _isMuted = false;
     private static volatile bool _verboseDots = false;
+    private static volatile bool _quietMode = false;
     private static CancellationTokenSource _pauseCts = new CancellationTokenSource();
     private static readonly string _sessionCsvFilename = $"LivePaperTrades_{DateTime.Now:yyyyMMdd_HHmmss}.csv";
 
@@ -102,7 +103,7 @@ class Program
         Console.Clear();
         Console.WriteLine("=========================================");
         Console.WriteLine("  LIVE PAPER TRADING ENGINE INITIALIZED  ");
-        Console.WriteLine("  Controls: 'P' = Pause | 'R' = Resume | 'M' = Mute | 'V' = Verbose | 'L' = Latency | 'D' = Drop | 'K' = Cull");
+        Console.WriteLine("  Controls: 'P' = Pause | 'R' = Resume | 'M' = Mute | 'Q' = Quiet | 'V' = Verbose | 'L' = Latency | 'D' = Drop | 'K' = Cull");
         Console.WriteLine($"  Latency starst at {REALISTIC_LATENCY_MS}");
         Console.WriteLine("=========================================");
 
@@ -171,6 +172,14 @@ class Program
 
                     Console.ForegroundColor = ConsoleColor.Cyan;
                     Console.WriteLine($"\n[SYSTEM] Trade logs are now {(_isMuted ? "MUTED" : "UNMUTED")}.");
+                    Console.ResetColor();
+                }
+                else if (keyInfo.Key == ConsoleKey.Q)
+                {
+                    _quietMode = !_quietMode;
+                    // Quiet mode still prints this one message so you know it toggled
+                    Console.ForegroundColor = ConsoleColor.Cyan;
+                    Console.WriteLine($"\n[SYSTEM] Quiet mode: {(_quietMode ? "ON (all output silenced)" : "OFF")}");
                     Console.ResetColor();
                 }
                 else if (keyInfo.Key == ConsoleKey.L)
@@ -313,29 +322,32 @@ class Program
                 if (_isPaused) continue; // Don't sweep if we are paused!
 
                 // --- THE PERFORMANCE DASHBOARD ---
-                Console.WriteLine("\n================= STRATEGY PERFORMANCE OVERVIEW =================");
-                foreach (var config in _strategyConfigs)
+                if (!_quietMode)
                 {
-                    if (_droppedStrategies.Contains(config.Name)) continue;
-                    var name = config.Name;
-                    var broker = _strategyBrokers[name];
-                    decimal totalEquity = broker.GetTotalPortfolioValue();
-                    decimal pnl = totalEquity - config.StartingCapital;
-                    decimal mtmValue = totalEquity - broker.CashBalance;
-                    decimal realizedPnl = broker.CashBalance - config.StartingCapital;
-
-                    lock (GlobalSimulatedBroker.ConsoleLock)
+                    Console.WriteLine("\n================= STRATEGY PERFORMANCE OVERVIEW =================");
+                    foreach (var config in _strategyConfigs)
                     {
-                        Console.ForegroundColor = pnl >= 0 ? ConsoleColor.Green : ConsoleColor.Red;
-                        Console.WriteLine($"[{name.PadRight(_maxNameLength)}] Equity: ${totalEquity:0.00} | PnL: ${pnl:0.00} (Real: ${realizedPnl:0.00} + MTM: ${mtmValue:0.00}) | Actions: {broker.TotalActions} Exits: {broker.TotalTradesExecuted} (W:{broker.WinningTrades} L:{broker.LosingTrades}) Rej: {broker.RejectedOrders}");
-                        Console.ResetColor();
+                        if (_droppedStrategies.Contains(config.Name)) continue;
+                        var name = config.Name;
+                        var broker = _strategyBrokers[name];
+                        decimal totalEquity = broker.GetTotalPortfolioValue();
+                        decimal pnl = totalEquity - config.StartingCapital;
+                        decimal mtmValue = totalEquity - broker.CashBalance;
+                        decimal realizedPnl = broker.CashBalance - config.StartingCapital;
+
+                        lock (GlobalSimulatedBroker.ConsoleLock)
+                        {
+                            Console.ForegroundColor = pnl >= 0 ? ConsoleColor.Green : ConsoleColor.Red;
+                            Console.WriteLine($"[{name.PadRight(_maxNameLength)}] Equity: ${totalEquity:0.00} | PnL: ${pnl:0.00} (Real: ${realizedPnl:0.00} + MTM: ${mtmValue:0.00}) | Actions: {broker.TotalActions} Exits: {broker.TotalTradesExecuted} (W:{broker.WinningTrades} L:{broker.LosingTrades}) Rej: {broker.RejectedOrders}");
+                            Console.ResetColor();
+                        }
                     }
+                    Console.WriteLine("=================================================================\n");
                 }
-                Console.WriteLine("=================================================================\n");
                 
                 ExportLedgerToCsv(quietMode: true);
 
-                Console.WriteLine("\n[SYSTEM] Running background settlement sweep...");
+                if (!_quietMode) Console.WriteLine("\n[SYSTEM] Running background settlement sweep...");
                 try
                 {
                     int sweepLimit = 100;
@@ -382,7 +394,7 @@ class Program
 
                     if (newTokens.Count > 0)
                     {
-                        lock (GlobalSimulatedBroker.ConsoleLock)
+                        if (!_quietMode) lock (GlobalSimulatedBroker.ConsoleLock)
                         {
                             Console.ForegroundColor = ConsoleColor.Green;
                             Console.WriteLine($"[DISCOVERY] Found {newTokens.Count} new market(s) crossing the $50k threshold! Subscribing...");
@@ -417,10 +429,10 @@ class Program
                 using var ws = new ClientWebSocket();
                 ws.Options.KeepAliveInterval = TimeSpan.FromSeconds(10);
 
-                Console.WriteLine("\n[CONNECTING] Connecting to Polymarket WebSocket...");
+                if (!_quietMode) Console.WriteLine("\n[CONNECTING] Connecting to Polymarket WebSocket...");
                 await ws.ConnectAsync(new Uri("wss://ws-subscriptions-clob.polymarket.com/ws/market"), _pauseCts.Token);
                 _activeWs = ws;
-                Console.WriteLine("[CONNECTED] Listening for live order book updates... (Press CTRL+C to stop)\n");
+                if (!_quietMode) Console.WriteLine("[CONNECTED] Listening for live order book updates... (Press CTRL+C to stop)\n");
 
                 var listenTask = Task.Run(async () =>
                 {
@@ -515,7 +527,7 @@ class Program
                                                     else book.Asks[price] = size;
                                                 }
 
-                                                if (!_isMuted) lock (GlobalSimulatedBroker.ConsoleLock)
+                                                if (!_isMuted && !_quietMode) lock (GlobalSimulatedBroker.ConsoleLock)
                                                 {
                                                     if (_verboseDots)
                                                     {
@@ -556,7 +568,7 @@ class Program
                         }
                         catch (Exception ex)
                         {
-                            if (_verboseDots) lock (GlobalSimulatedBroker.ConsoleLock)
+                            if (_verboseDots && !_quietMode) lock (GlobalSimulatedBroker.ConsoleLock)
                             {
                                 Console.ForegroundColor = ConsoleColor.DarkYellow;
                                 Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [WS ERROR] {ex.GetType().Name}: {ex.Message}");
@@ -604,7 +616,7 @@ class Program
             catch (Exception ex)
             {
                 _activeWs = null;
-                lock (GlobalSimulatedBroker.ConsoleLock)
+                if (!_quietMode) lock (GlobalSimulatedBroker.ConsoleLock)
                 {
                     Console.ForegroundColor = ConsoleColor.Yellow;
                     Console.WriteLine($"\n[CONNECTION LOST] WebSocket connection dropped: {ex.Message}");
