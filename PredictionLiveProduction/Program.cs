@@ -86,7 +86,7 @@ class Program
         {
             Console.ForegroundColor = ConsoleColor.Red;
             Console.WriteLine("╔══════════════════════════════════════════════════╗");
-            Console.WriteLine("║     ⚠  LIVE PRODUCTION TRADING ENGINE  ⚠       ║");
+            Console.WriteLine("║     ⚠  LIVE PRODUCTION TRADING ENGINE  ⚠        ║");
             Console.WriteLine("║                                                  ║");
             Console.WriteLine("║  This will place REAL orders with REAL money     ║");
             Console.WriteLine("║  on Polymarket using your connected wallet.      ║");
