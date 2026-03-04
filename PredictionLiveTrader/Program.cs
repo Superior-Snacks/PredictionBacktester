@@ -12,6 +12,7 @@ using PredictionBacktester.Core.Entities.Database;
 using PredictionBacktester.Data.ApiClients;
 using System.IO;
 using PredictionBacktester.Engine;
+using System.Diagnostics;
 
 namespace PredictionLiveTrader;
 
@@ -79,7 +80,7 @@ class Program
     }
 
     // --- LATENCY SIMULATION (based on ping to Polymarket CLOB API) ---
-    private const int REALISTIC_LATENCY_MS = 250;
+    private const int REALISTIC_LATENCY_MS = 50;
     private static volatile bool _latencyEnabled = true;
 
     // --- PAUSE & RESUME CONTROLS ---
@@ -443,6 +444,7 @@ class Program
                     while (ws.State == WebSocketState.Open)
                     {
                         WebSocketReceiveResult result;
+                        var sw = Stopwatch.StartNew(); // stop watch
                         do
                         {
                             // Combine user pause token with a stale-connection timeout
@@ -560,6 +562,11 @@ class Program
                                                     if (_droppedStrategies.Contains(strategy.StrategyName)) return;
                                                     strategy.OnBookUpdate(book, _strategyBrokers[strategy.StrategyName]);
                                                 });
+                                                sw.Stop();
+                                                if (sw.ElapsedMilliseconds > 50)
+                                                {
+                                                    Console.WriteLine($"[WARNING] CPU Bottleneck! Tick processing took {sw.ElapsedMilliseconds}ms");
+                                                }
                                             }
                                         }
                                     }
