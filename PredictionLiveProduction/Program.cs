@@ -33,6 +33,10 @@ class Program
     private const decimal ENTRY_SLIPPAGE = 0.03m;
     private const decimal EXIT_SLIPPAGE = 0.02m;
 
+    // Risk controls (editable at runtime via keyboard)
+    private static decimal _maxBetSize = 10.00m;       // Hard cap on dollars per single trade
+    private static decimal _dailyLossLimit = 25.00m;   // Auto-pause buying if daily losses exceed this
+
     // Market discovery filter
     private const decimal MIN_VOLUME = 50_000m;
 
@@ -40,12 +44,19 @@ class Program
     private static volatile bool _isPaused = false;
     private static volatile bool _isMuted = false;
     private static volatile bool _quietMode = false;
+    private static volatile bool _buyingPaused = false;
+    private static volatile bool _dailyLossTriggered = false;
     private static CancellationTokenSource _pauseCts = new();
     private static readonly string _sessionCsvFilename = $"LiveProduction_{DateTime.Now:yyyyMMdd_HHmmss}.csv";
 
-    private static PolymarketLiveBroker _broker = null!;
+    // Daily loss tracking
+    private static decimal _dayStartEquity;
+    private static DateTime _currentDay = DateTime.UtcNow.Date;
+
+    private static ProductionBroker _broker = null!;
     private static Dictionary<string, string> _tokenNames = new();
     private static readonly HashSet<string> _subscribedTokens = new();
+    private static Dictionary<string, LocalOrderBook> _orderBooks = new();
     private static ClientWebSocket? _activeWs;
     private static readonly SemaphoreSlim _wsSendSemaphore = new(1, 1);
 
@@ -69,30 +80,41 @@ class Program
         // ==========================================
         // 3. SAFETY CONFIRMATION
         // ==========================================
-        Console.ForegroundColor = ConsoleColor.Red;
-        Console.WriteLine("╔══════════════════════════════════════════════════╗");
-        Console.WriteLine("║     ⚠  LIVE PRODUCTION TRADING ENGINE  ⚠       ║");
-        Console.WriteLine("║                                                  ║");
-        Console.WriteLine("║  This will place REAL orders with REAL money     ║");
-        Console.WriteLine("║  on Polymarket using your connected wallet.      ║");
-        Console.WriteLine("╚══════════════════════════════════════════════════╝");
-        Console.ResetColor();
-        Console.Write("\nType 'YES' to confirm: ");
-        string? confirmation = Console.ReadLine()?.Trim();
-        if (confirmation != "YES")
+        bool headless = args.Contains("--no-confirm");
+
+        if (!headless)
         {
-            Console.WriteLine("Aborted. No trades will be placed.");
-            return;
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine("╔══════════════════════════════════════════════════╗");
+            Console.WriteLine("║     ⚠  LIVE PRODUCTION TRADING ENGINE  ⚠       ║");
+            Console.WriteLine("║                                                  ║");
+            Console.WriteLine("║  This will place REAL orders with REAL money     ║");
+            Console.WriteLine("║  on Polymarket using your connected wallet.      ║");
+            Console.WriteLine("╚══════════════════════════════════════════════════╝");
+            Console.ResetColor();
+            Console.Write("\nType 'YES' to confirm: ");
+            string? confirmation = Console.ReadLine()?.Trim();
+            if (confirmation != "YES")
+            {
+                Console.WriteLine("Aborted. No trades will be placed.");
+                return;
+            }
+        }
+        else
+        {
+            Log.Information("Headless mode (--no-confirm). Skipping confirmation prompt.");
         }
 
         // ==========================================
         // 4. BROKER & STRATEGY INITIALIZATION
         // ==========================================
-        Console.Clear();
+        if (!headless) Console.Clear();
         Log.Information("Initializing live broker...");
 
-        _broker = await PolymarketLiveBroker.CreateAsync(STRATEGY_NAME, config, _tokenNames);
-        Log.Information("Wallet balance: ${Balance:0.00}", _broker.CashBalance);
+        _broker = await ProductionBroker.CreateAsync(STRATEGY_NAME, config, _tokenNames, _maxBetSize);
+        _dayStartEquity = _broker.CashBalance;
+        Log.Information("Wallet balance: ${Balance:0.00} | Max bet: ${MaxBet:0.00} | Daily loss limit: ${DailyLimit:0.00}",
+            _broker.CashBalance, _maxBetSize, _dailyLossLimit);
 
         var strategy = new LiveFlashCrashSniperStrategy(
             STRATEGY_NAME,
@@ -110,63 +132,120 @@ class Program
         Console.WriteLine($"  Strategy: {STRATEGY_NAME}");
         Console.WriteLine($"  Wallet:   ${_broker.CashBalance:0.00} USDC");
         Console.WriteLine($"  Params:   Crash={CRASH_THRESHOLD} Window={TIME_WINDOW_SECONDS}s TP={TAKE_PROFIT} SL={STOP_LOSS}");
-        Console.WriteLine("  Controls: P=Pause R=Resume M=Mute Q=Quiet S=Status");
+        Console.WriteLine($"  Limits:   MaxBet=${_maxBetSize} DailyLoss=${_dailyLossLimit}");
+        Console.WriteLine("  Controls: P=Pause R=Resume B=PauseBuying X=SellAll M=Mute Q=Quiet S=Status");
+        Console.WriteLine("  Settings: 1=MaxBet 2=DailyLossLimit");
         Console.WriteLine("=========================================");
 
         // ==========================================
-        // 5. GRACEFUL SHUTDOWN (CTRL+C)
+        // 5. GRACEFUL SHUTDOWN (CTRL+C + SIGTERM)
         // ==========================================
-        Console.CancelKeyPress += (_, e) =>
+        void Shutdown()
         {
-            e.Cancel = true;
             Log.Warning("Graceful shutdown initiated...");
             ExportLedgerToCsv(quietMode: false);
             PrintDashboard();
             Log.Information("Engine terminated.");
             Log.CloseAndFlush();
+        }
+
+        Console.CancelKeyPress += (_, e) =>
+        {
+            e.Cancel = true;
+            Shutdown();
             Environment.Exit(0);
         };
 
-        // ==========================================
-        // 6. KEYBOARD LISTENER
-        // ==========================================
-        _ = Task.Run(() =>
+        // SIGTERM from systemd — export ledger before dying
+        AppDomain.CurrentDomain.ProcessExit += (_, _) =>
         {
-            while (true)
+            Shutdown();
+        };
+
+        // ==========================================
+        // 6. KEYBOARD LISTENER (skipped in headless mode)
+        // ==========================================
+        if (!headless)
+        {
+            _ = Task.Run(() =>
             {
-                var key = Console.ReadKey(intercept: true).Key;
-
-                switch (key)
+                while (true)
                 {
-                    case ConsoleKey.P when !_isPaused:
-                        _isPaused = true;
-                        _pauseCts.Cancel();
-                        Log.Warning("PAUSED by user. Press R to resume.");
-                        break;
+                    var key = Console.ReadKey(intercept: true).Key;
 
-                    case ConsoleKey.R when _isPaused:
-                        _isPaused = false;
-                        _pauseCts = new CancellationTokenSource();
-                        Log.Information("RESUMED by user. Reconnecting...");
-                        break;
+                    switch (key)
+                    {
+                        case ConsoleKey.P when !_isPaused:
+                            _isPaused = true;
+                            _pauseCts.Cancel();
+                            Log.Warning("PAUSED by user. Press R to resume.");
+                            break;
 
-                    case ConsoleKey.M:
-                        _isMuted = !_isMuted;
-                        _broker.IsMuted = _isMuted;
-                        Log.Information("Trade logs {State}.", _isMuted ? "MUTED" : "UNMUTED");
-                        break;
+                        case ConsoleKey.R when _isPaused:
+                            _isPaused = false;
+                            _pauseCts = new CancellationTokenSource();
+                            Log.Information("RESUMED by user. Reconnecting...");
+                            break;
 
-                    case ConsoleKey.Q:
-                        _quietMode = !_quietMode;
-                        Log.Information("Quiet mode: {State}", _quietMode ? "ON" : "OFF");
-                        break;
+                        case ConsoleKey.B:
+                            _buyingPaused = !_buyingPaused;
+                            Log.Warning("Buying {State}. Exits for open positions remain active.",
+                                _buyingPaused ? "PAUSED" : "RESUMED");
+                            break;
 
-                    case ConsoleKey.S:
-                        PrintDashboard();
-                        break;
+                        case ConsoleKey.X:
+                            SellAllPositions();
+                            break;
+
+                        case ConsoleKey.M:
+                            _isMuted = !_isMuted;
+                            _broker.IsMuted = _isMuted;
+                            Log.Information("Trade logs {State}.", _isMuted ? "MUTED" : "UNMUTED");
+                            break;
+
+                        case ConsoleKey.Q:
+                            _quietMode = !_quietMode;
+                            Log.Information("Quiet mode: {State}", _quietMode ? "ON" : "OFF");
+                            break;
+
+                        case ConsoleKey.S:
+                            PrintDashboard();
+                            break;
+
+                        case ConsoleKey.D1: // '1' key — edit max bet size
+                            Console.Write("\n[SETTINGS] New max bet size (current: $" + _maxBetSize.ToString("0.00") + "): $");
+                            if (decimal.TryParse(Console.ReadLine()?.Trim(), out decimal newBet) && newBet > 0)
+                            {
+                                _maxBetSize = newBet;
+                                _broker.MaxBetSize = newBet;
+                                Log.Information("Max bet size updated to ${MaxBet:0.00}", newBet);
+                            }
+                            else Log.Warning("Invalid input. Max bet size unchanged.");
+                            break;
+
+                        case ConsoleKey.D2: // '2' key — edit daily loss limit
+                            Console.Write("\n[SETTINGS] New daily loss limit (current: $" + _dailyLossLimit.ToString("0.00") + "): $");
+                            if (decimal.TryParse(Console.ReadLine()?.Trim(), out decimal newLimit) && newLimit > 0)
+                            {
+                                _dailyLossLimit = newLimit;
+                                // If we were locked out but the new limit is higher, re-check
+                                if (_dailyLossTriggered)
+                                {
+                                    decimal dailyPnl = _broker.GetTotalPortfolioValue() - _dayStartEquity;
+                                    if (dailyPnl > -newLimit)
+                                    {
+                                        _dailyLossTriggered = false;
+                                        Log.Information("Daily loss no longer exceeded with new limit. Buying re-enabled.");
+                                    }
+                                }
+                                Log.Information("Daily loss limit updated to ${Limit:0.00}", newLimit);
+                            }
+                            else Log.Warning("Invalid input. Daily loss limit unchanged.");
+                            break;
+                    }
                 }
-            }
-        });
+            });
+        }
 
         // ==========================================
         // 7. MARKET DISCOVERY
@@ -248,7 +327,6 @@ class Program
         // ==========================================
         // 9. WEBSOCKET MAIN LOOP
         // ==========================================
-        var orderBooks = new Dictionary<string, LocalOrderBook>();
         var strategies = new Dictionary<string, ILiveStrategy>();
 
         while (true)
@@ -260,7 +338,7 @@ class Program
             }
 
             // Wipe stale state on reconnect
-            orderBooks.Clear();
+            _orderBooks.Clear();
             strategies.Clear();
 
             try
@@ -321,9 +399,9 @@ class Program
                                 string? assetId = assetIdEl.GetString();
                                 if (string.IsNullOrEmpty(assetId)) continue;
 
-                                if (!orderBooks.ContainsKey(assetId))
+                                if (!_orderBooks.ContainsKey(assetId))
                                 {
-                                    orderBooks[assetId] = new LocalOrderBook(assetId);
+                                    _orderBooks[assetId] = new LocalOrderBook(assetId);
                                     // Single strategy instance per asset — create a fresh one so each asset
                                     // gets its own sliding window of recent asks
                                     strategies[assetId] = new LiveFlashCrashSniperStrategy(
@@ -333,7 +411,7 @@ class Program
                                 }
 
                                 if (root.TryGetProperty("bids", out var bidsEl) && root.TryGetProperty("asks", out var asksEl))
-                                    orderBooks[assetId].ProcessBookUpdate(bidsEl, asksEl);
+                                    _orderBooks[assetId].ProcessBookUpdate(bidsEl, asksEl);
                             }
                             else if (eventType == "price_change" && root.TryGetProperty("price_changes", out var changesEl))
                             {
@@ -341,13 +419,13 @@ class Program
                                 {
                                     if (!change.TryGetProperty("asset_id", out var idEl)) continue;
                                     string? assetId = idEl.GetString();
-                                    if (string.IsNullOrEmpty(assetId) || !orderBooks.ContainsKey(assetId)) continue;
+                                    if (string.IsNullOrEmpty(assetId) || !_orderBooks.ContainsKey(assetId)) continue;
 
                                     decimal price = decimal.Parse(change.GetProperty("price").GetString() ?? "0");
                                     decimal size = decimal.Parse(change.GetProperty("size").GetString() ?? "0");
                                     string side = change.GetProperty("side").GetString() ?? "";
 
-                                    var book = orderBooks[assetId];
+                                    var book = _orderBooks[assetId];
 
                                     if (side == "BUY")
                                     {
@@ -372,9 +450,20 @@ class Program
 
                                     _broker.ResetConsumedLiquidity(assetId);
 
+                                    // Daily loss check — reset at midnight UTC
+                                    CheckDailyLossLimit();
+
                                     // Feed to the single strategy
+                                    // When buying is paused (manually or by daily loss), only run the
+                                    // strategy for assets where we hold a position (exits still fire)
                                     if (strategies.TryGetValue(assetId, out var strat))
-                                        strat.OnBookUpdate(book, _broker);
+                                    {
+                                        bool hasPosition = _broker.GetPositionShares(assetId) > 0
+                                                        || _broker.GetNoPositionShares(assetId) > 0;
+
+                                        if ((!_buyingPaused && !_dailyLossTriggered) || hasPosition)
+                                            strat.OnBookUpdate(book, _broker);
+                                    }
                                 }
                             }
                         }
@@ -511,25 +600,104 @@ class Program
     }
 
     // ==========================================
+    // DAILY LOSS LIMIT
+    // ==========================================
+    private static void CheckDailyLossLimit()
+    {
+        // Reset at midnight UTC — new trading day
+        DateTime today = DateTime.UtcNow.Date;
+        if (today != _currentDay)
+        {
+            _currentDay = today;
+            _dayStartEquity = _broker.GetTotalPortfolioValue();
+            if (_dailyLossTriggered)
+            {
+                _dailyLossTriggered = false;
+                Log.Information("New trading day. Daily loss limit reset. Buying re-enabled.");
+            }
+            return;
+        }
+
+        if (_dailyLossTriggered) return; // Already triggered today
+
+        decimal currentEquity = _broker.GetTotalPortfolioValue();
+        decimal dailyPnl = currentEquity - _dayStartEquity;
+
+        if (dailyPnl <= -_dailyLossLimit)
+        {
+            _dailyLossTriggered = true;
+            Log.Error("DAILY LOSS LIMIT HIT: ${DailyPnl:0.00} (limit: -${Limit:0.00}). Buying auto-paused until midnight UTC. Exits remain active.",
+                dailyPnl, _dailyLossLimit);
+        }
+    }
+
+    // ==========================================
+    // SELL ALL OPEN POSITIONS
+    // ==========================================
+    private static void SellAllPositions()
+    {
+        // Pause buying first so no new entries while we liquidate
+        _buyingPaused = true;
+        Log.Warning("SELL ALL triggered. Buying paused. Liquidating all open positions...");
+
+        int sold = 0;
+        foreach (var kvp in _orderBooks)
+        {
+            string assetId = kvp.Key;
+            var book = kvp.Value;
+
+            decimal yesShares = _broker.GetPositionShares(assetId);
+            if (yesShares > 0)
+            {
+                decimal bestBid = book.GetBestBidPrice();
+                if (bestBid > 0.01m && bestBid < 0.99m)
+                {
+                    _broker.SubmitSellAllOrder(assetId, bestBid, book);
+                    sold++;
+                }
+            }
+
+            // NO positions would use SellAllNo on the base broker, but PolymarketLiveBroker
+            // only overrides SubmitSellAllOrder (YES side). If you hold NO positions, they'll
+            // be resolved at settlement. For now, log them.
+            decimal noShares = _broker.GetNoPositionShares(assetId);
+            if (noShares > 0)
+            {
+                string name = _tokenNames.GetValueOrDefault(assetId, assetId[..8] + "...");
+                Log.Warning("Cannot sell NO position via CLOB: {Name} ({Shares} shares). Will resolve at settlement.", name, noShares);
+            }
+        }
+
+        Log.Warning("Submitted {Count} SELL orders. Buying remains paused — press B to resume.", sold);
+    }
+
+    // ==========================================
     // PERFORMANCE DASHBOARD
     // ==========================================
     private static void PrintDashboard()
     {
         decimal totalEquity = _broker.GetTotalPortfolioValue();
         decimal pnl = totalEquity - _broker.CashBalance; // unrealized
-        decimal realizedPnl = _broker.CashBalance - STARTING_CAPITAL;
+        decimal dailyPnl = totalEquity - _dayStartEquity;
 
         lock (GlobalSimulatedBroker.ConsoleLock)
         {
             Console.WriteLine();
             Console.WriteLine("================= PRODUCTION DASHBOARD =================");
-            Console.ForegroundColor = totalEquity >= STARTING_CAPITAL ? ConsoleColor.Green : ConsoleColor.Red;
+            Console.ForegroundColor = totalEquity >= _dayStartEquity ? ConsoleColor.Green : ConsoleColor.Red;
             Console.WriteLine($"  Equity:     ${totalEquity:0.00}");
             Console.WriteLine($"  Cash:       ${_broker.CashBalance:0.00}");
             Console.WriteLine($"  MTM Value:  ${pnl:0.00}");
+            Console.WriteLine($"  Daily PnL:  ${dailyPnl:0.00} (limit: -${_dailyLossLimit:0.00})");
             Console.WriteLine($"  Actions:    {_broker.TotalActions}");
             Console.WriteLine($"  Exits:      {_broker.TotalTradesExecuted} (W:{_broker.WinningTrades} L:{_broker.LosingTrades})");
             Console.WriteLine($"  Rejected:   {_broker.RejectedOrders}");
+            Console.ResetColor();
+
+            // Status flags
+            string status = _dailyLossTriggered ? "DAILY LOSS LIMIT" : _buyingPaused ? "BUYING PAUSED" : "ACTIVE";
+            Console.ForegroundColor = status == "ACTIVE" ? ConsoleColor.Green : ConsoleColor.Yellow;
+            Console.WriteLine($"  Status:     {status}");
             Console.ResetColor();
             Console.WriteLine("=========================================================");
         }
