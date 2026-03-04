@@ -134,7 +134,7 @@ def analyze_latest_run():
     leaderboard['Hourly_PnL'] = leaderboard['True_PnL'] / leaderboard['Hours']
 
     # Sort and format
-    leaderboard = leaderboard.sort_values('True_PnL', ascending=False)
+    leaderboard = leaderboard.sort_values('True_Total_Equity', ascending=False)
     leaderboard['Total_PnL_fmt'] = leaderboard['Total_PnL'].apply(lambda x: f"${x:,.2f}")
     leaderboard['WinRate%'] = (leaderboard['Sells'] / (leaderboard['Buys'] + leaderboard['Sells']) * 100).fillna(0).apply(lambda x: f"{x:.1f}%")
     leaderboard['Cash_Left'] = leaderboard['Worst_Case_Equity'].apply(lambda x: f"${x:,.2f}")
@@ -145,9 +145,9 @@ def analyze_latest_run():
     leaderboard['Hours_fmt'] = leaderboard['Hours'].apply(lambda x: f"{x:.1f}h")
     leaderboard['PnL_hr'] = leaderboard['Hourly_PnL'].apply(lambda x: f"${x:,.2f}/hr")
 
-    print("\n🏆 STRATEGY LEADERBOARD (Sorted by True PnL)")
+    print("\n🏆 STRATEGY LEADERBOARD (Sorted by Equity)")
     print("-" * 120)
-    print(leaderboard[['StrategyName', 'Total_PnL_fmt', 'Buys', 'Sells', 'Rejects', 'WinRate%', 'Cash_Left', 'MTM_Value', 'Equity', 'True_PnL_fmt', 'Worst_PnL', 'Hours_fmt', 'PnL_hr']].to_string(index=False))
+    print(leaderboard[['StrategyName', 'Equity', 'True_PnL_fmt', 'PnL_hr', 'Cash_Left', 'MTM_Value', 'Worst_PnL', 'Buys', 'Sells', 'Rejects', 'WinRate%', 'Hours_fmt']].to_string(index=False))
 
     # ==========================================
     # DASHBOARD 2: PARAMETER IMPACT ANALYSIS
