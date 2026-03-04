@@ -2,6 +2,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\PredictionBacktester.Engine\PredictionBacktester.Engine.csproj" />
+    <ProjectReference Include="..\PredictionBacktester.Strategies\PredictionBacktester.Strategies.csproj" />
+    <ProjectReference Include="..\PredictionBacktester.Data\PredictionBacktester.Data.csproj" />
   </ItemGroup>
 
   <ItemGroup>
