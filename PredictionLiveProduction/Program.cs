@@ -265,6 +265,13 @@ class Program
         Log.Information("Monitoring {Count} outcome tokens.", _subscribedTokens.Count);
 
         // ==========================================
+        // 7b. ON-CHAIN STATE SYNC (Startup)
+        // ==========================================
+        Log.Information("Running startup on-chain state sync...");
+        await _broker.RunFullSyncAsync(_subscribedTokens, _tokenNames);
+        _dayStartEquity = _broker.GetTotalPortfolioValue();
+
+        // ==========================================
         // 8. SETTLEMENT SWEEPER (Background)
         // ==========================================
         _ = Task.Run(async () =>
@@ -321,6 +328,13 @@ class Program
                     }
                 }
                 catch (Exception ex) { Log.Warning("Market discovery error: {Error}", ex.Message); }
+
+                // Periodic on-chain state reconciliation
+                try
+                {
+                    await _broker.RunFullSyncAsync(_subscribedTokens, _tokenNames);
+                }
+                catch (Exception ex) { Log.Warning("State sync error: {Error}", ex.Message); }
             }
         });
 

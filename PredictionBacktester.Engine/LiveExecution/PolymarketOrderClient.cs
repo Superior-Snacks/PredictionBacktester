@@ -128,7 +128,26 @@ public class PolymarketOrderClient
         return (decimal)rawBalance / (decimal)Math.Pow(10, USDC_DECIMALS);
     }
 
+    // Conditional Token Framework (ERC-1155) on Polygon — holds YES/NO position tokens
+    private const string CTF_CONTRACT = "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045";
+    private const int CTF_DECIMALS = 6;
+
+    /// <summary>
+    /// Queries the on-chain balance of a conditional token (YES/NO position) for the proxy wallet.
+    /// TokenId is the CLOB token ID (a large uint256). Returns shares as a decimal (e.g. 150.50 shares).
+    /// </summary>
+    public async Task<decimal> GetTokenBalanceAsync(string tokenId)
+    {
+        var web3 = new Web3(_config.RpcUrl);
+        var contract = web3.Eth.GetContract(BalanceOfErc1155Abi, CTF_CONTRACT);
+        var balanceOf = contract.GetFunction("balanceOf");
+        var rawBalance = await balanceOf.CallAsync<BigInteger>(_config.ProxyAddress, BigInteger.Parse(tokenId));
+        return (decimal)rawBalance / (decimal)Math.Pow(10, CTF_DECIMALS);
+    }
+
     private static readonly string BalanceOfAbi = @"[{""constant"":true,""inputs"":[{""name"":""account"",""type"":""address""}],""name"":""balanceOf"",""outputs"":[{""name"":"""",""type"":""uint256""}],""type"":""function""}]";
+
+    private static readonly string BalanceOfErc1155Abi = @"[{""constant"":true,""inputs"":[{""name"":""account"",""type"":""address""},{""name"":""id"",""type"":""uint256""}],""name"":""balanceOf"",""outputs"":[{""name"":"""",""type"":""uint256""}],""type"":""function""}]";
 
     private string SignOrder(PolymarketOrder order, string verifyingContract)
     {
