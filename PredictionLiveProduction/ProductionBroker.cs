@@ -129,10 +129,11 @@ public class ProductionBroker : PolymarketLiveBroker
         Log.Information("[SYNC] Starting on-chain state reconciliation...");
 
         // 1. Sync cash
+        decimal oldCash = CashBalance;
         decimal cashDrift = await SyncCashBalanceAsync();
         if (Math.Abs(cashDrift) > 0.01m)
-            Log.Warning("[SYNC] Cash drift: {Drift:+0.00;-0.00} | New balance: ${Balance:0.00}",
-                cashDrift, CashBalance);
+            Log.Warning("[SYNC] Cash drift: {Drift:+0.00;-0.00} | Local: ${Old:0.00} -> On-chain: ${New:0.00}",
+                cashDrift, oldCash, CashBalance);
         else
             Log.Information("[SYNC] Cash OK: ${Balance:0.00}", CashBalance);
 
@@ -143,8 +144,9 @@ public class ProductionBroker : PolymarketLiveBroker
             foreach (var (tokenId, local, onChain) in mismatches)
             {
                 string name = tokenNames?.GetValueOrDefault(tokenId) ?? tokenId[..Math.Min(8, tokenId.Length)] + "...";
-                Log.Warning("[SYNC] Position drift: {Name} | Local: {Local:0.00} -> On-chain: {OnChain:0.00}",
-                    name, local, onChain);
+                decimal drift = onChain - local;
+                Log.Warning("[SYNC] Position drift: {Name} | Local: {Local:0.00} -> On-chain: {OnChain:0.00} | Drift: {Drift:+0.00;-0.00} shares",
+                    name, local, onChain, drift);
             }
         }
         else
