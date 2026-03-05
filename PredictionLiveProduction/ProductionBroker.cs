@@ -52,6 +52,8 @@ public class ProductionBroker : PolymarketLiveBroker
         };
     }
 
+    private const decimal MIN_BET_SIZE = 1.00m; // Polymarket minimum order size
+
     public override void SubmitBuyOrder(string assetId, decimal targetPrice, decimal dollarsToInvest, LocalOrderBook book)
     {
         if (dollarsToInvest > MaxBetSize)
@@ -59,6 +61,13 @@ public class ProductionBroker : PolymarketLiveBroker
             Log.Debug("Bet capped: ${Original:0.00} -> ${Capped:0.00} on {Asset}",
                 dollarsToInvest, MaxBetSize, assetId[..Math.Min(8, assetId.Length)] + "...");
             dollarsToInvest = MaxBetSize;
+        }
+
+        if (dollarsToInvest < MIN_BET_SIZE)
+        {
+            Log.Debug("Bet below minimum: ${Amount:0.00} < ${Min:0.00} on {Asset}",
+                dollarsToInvest, MIN_BET_SIZE, assetId[..Math.Min(8, assetId.Length)] + "...");
+            return;
         }
 
         base.SubmitBuyOrder(assetId, targetPrice, dollarsToInvest, book);
