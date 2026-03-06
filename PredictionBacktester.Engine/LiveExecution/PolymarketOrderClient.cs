@@ -86,13 +86,31 @@ public class PolymarketOrderClient
         string verifyingContract = negRisk ? NEG_RISK_EXCHANGE : CTF_EXCHANGE;
         string signature = SignOrder(order, verifyingContract);
 
-        // 4. Build JSON body
-        var payload = new
+        // 4. Build JSON body — manually serialize to ensure correct field formats
+        //    The API expects all BigInteger/numeric fields as strings, salt as a decimal string,
+        //    and camelCase field names.
+        var saltBigInt = new BigInteger(order.Salt, isUnsigned: true, isBigEndian: true);
+        var orderDict = new Dictionary<string, object>
         {
-            order = order,
-            signature = signature,
-            owner = _config.ProxyAddress,
-            orderType = "GTC"
+            ["salt"] = saltBigInt.ToString(),
+            ["maker"] = order.Maker,
+            ["signer"] = order.Signer,
+            ["taker"] = order.Taker,
+            ["tokenId"] = order.TokenId.ToString(),
+            ["makerAmount"] = order.MakerAmount.ToString(),
+            ["takerAmount"] = order.TakerAmount.ToString(),
+            ["expiration"] = order.Expiration.ToString(),
+            ["nonce"] = order.Nonce.ToString(),
+            ["feeRateBps"] = order.FeeRateBps.ToString(),
+            ["side"] = order.Side.ToString(),
+            ["signatureType"] = order.SignatureType.ToString()
+        };
+        var payload = new Dictionary<string, object>
+        {
+            ["order"] = orderDict,
+            ["signature"] = signature,
+            ["owner"] = _config.ProxyAddress,
+            ["orderType"] = "GTC"
         };
         string jsonBody = JsonSerializer.Serialize(payload);
 
