@@ -25,13 +25,13 @@ class Program
     private const decimal STARTING_CAPITAL = 100m; // Will be overridden by real wallet balance
 
     // Strategy parameters — tune these based on paper trading results
-    private const decimal CRASH_THRESHOLD = 0.25m;
+    private const decimal CRASH_THRESHOLD = 0.10m;
     private const long TIME_WINDOW_SECONDS = 60;
-    private const decimal TAKE_PROFIT = 0.05m;
-    private const decimal STOP_LOSS = 0.15m;
+    private const decimal TAKE_PROFIT = 0.07m;
+    private const decimal STOP_LOSS = 0.25m;
     private const decimal RISK_PERCENTAGE = 0.05m;
     private const decimal ENTRY_SLIPPAGE = 0.03m;
-    private const decimal EXIT_SLIPPAGE = 0.02m;
+    private const decimal EXIT_SLIPPAGE = 0.03m;
 
     // Risk controls (editable at runtime via keyboard)
     private static decimal _maxBetSize = 100.00m;       // Hard cap on dollars per single trade
