@@ -34,8 +34,8 @@ class Program
     private const decimal EXIT_SLIPPAGE = 0.02m;
 
     // Risk controls (editable at runtime via keyboard)
-    private static decimal _maxBetSize = 10.00m;       // Hard cap on dollars per single trade
-    private static decimal _dailyLossLimit = 25.00m;   // Auto-pause buying if daily losses exceed this
+    private static decimal _maxBetSize = 100.00m;       // Hard cap on dollars per single trade
+    private static decimal _dailyLossLimit = 50.00m;   // Auto-pause buying if daily losses exceed this
 
     // Market discovery filter
     private const decimal MIN_VOLUME = 50_000m;
