@@ -47,6 +47,9 @@ public class PolymarketOrderClient
     /// <param name="negRisk">True for multi-outcome (NegRisk) markets</param>
     public async Task<string> SubmitOrderAsync(string tokenId, decimal price, decimal size, int side, bool negRisk = false)
     {
+        // Polymarket requires prices in 0.01 tick increments
+        price = Math.Round(price, 2);
+
         // 1. Convert to BigIntegers (USDC and conditional tokens both use 6 decimals)
         const long DECIMALS = 1_000_000;
         BigInteger makerAmount, takerAmount;
@@ -88,7 +91,8 @@ public class PolymarketOrderClient
         {
             order = order,
             signature = signature,
-            owner = _account.Address
+            owner = _config.ProxyAddress,
+            orderType = "GTC"
         };
         string jsonBody = JsonSerializer.Serialize(payload);
 
