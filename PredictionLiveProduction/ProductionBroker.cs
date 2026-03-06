@@ -131,7 +131,9 @@ public class ProductionBroker : PolymarketLiveBroker
     }
 
     /// <summary>
-    /// Full state sync: cash + all tracked positions. Logs results.
+    /// Full state sync: cash + held positions. Logs results.
+    /// Only queries on-chain balances for tokens where the broker holds a position,
+    /// keeping RPC calls minimal (1 cash + N held positions instead of all 2500 subscribed tokens).
     /// </summary>
     public async Task RunFullSyncAsync(IEnumerable<string> tokenIds, Dictionary<string, string>? tokenNames = null)
     {
@@ -146,8 +148,11 @@ public class ProductionBroker : PolymarketLiveBroker
         else
             Log.Information("[SYNC] Cash OK: ${Balance:0.00}", CashBalance);
 
-        // 2. Sync positions
-        var mismatches = await SyncPositionsAsync(tokenIds);
+        // 2. Sync positions — only query tokens we actually hold to avoid 2500+ RPC calls
+        var heldTokens = tokenIds.Where(t => GetPositionShares(t) > 0 || GetNoPositionShares(t) > 0).ToList();
+        Log.Information("[SYNC] Checking {Count} held position(s)...", heldTokens.Count);
+
+        var mismatches = await SyncPositionsAsync(heldTokens);
         if (mismatches.Count > 0)
         {
             foreach (var (tokenId, local, onChain) in mismatches)
@@ -160,7 +165,7 @@ public class ProductionBroker : PolymarketLiveBroker
         }
         else
         {
-            Log.Information("[SYNC] All positions OK ({Count} checked).", tokenIds.Count());
+            Log.Information("[SYNC] All positions OK ({Count} checked).", heldTokens.Count);
         }
 
         Log.Information("[SYNC] Reconciliation complete.");
