@@ -79,16 +79,18 @@ public class PolymarketOrderClient
             Nonce = GenerateNonce(),
             FeeRateBps = 0,
             Side = side,
-            SignatureType = 0 // EOA
+            SignatureType = 1 // POLY_PROXY (maker is proxy wallet, signer is EOA)
         };
 
         // 3. Sign the order (EIP-712) using the correct exchange contract
         string verifyingContract = negRisk ? NEG_RISK_EXCHANGE : CTF_EXCHANGE;
         string signature = SignOrder(order, verifyingContract);
 
-        // 4. Build JSON body — manually serialize to ensure correct field formats
-        //    The API expects all BigInteger/numeric fields as strings, salt as a decimal string,
-        //    and camelCase field names.
+        // 4. Build JSON body — match the exact format from Polymarket's Python SDK:
+        //    - side: "BUY"/"SELL" strings (not "0"/"1")
+        //    - numeric fields as strings
+        //    - signature INSIDE the order dict
+        //    - owner = API key (not proxy address)
         var saltBigInt = new BigInteger(order.Salt, isUnsigned: true, isBigEndian: true);
         var orderDict = new Dictionary<string, object>
         {
@@ -102,14 +104,14 @@ public class PolymarketOrderClient
             ["expiration"] = order.Expiration.ToString(),
             ["nonce"] = order.Nonce.ToString(),
             ["feeRateBps"] = order.FeeRateBps.ToString(),
-            ["side"] = order.Side.ToString(),
-            ["signatureType"] = order.SignatureType.ToString()
+            ["side"] = side == 0 ? "BUY" : "SELL",
+            ["signatureType"] = order.SignatureType.ToString(),
+            ["signature"] = signature
         };
         var payload = new Dictionary<string, object>
         {
             ["order"] = orderDict,
-            ["signature"] = signature,
-            ["owner"] = _config.ProxyAddress,
+            ["owner"] = _config.ApiKey,
             ["orderType"] = "GTC"
         };
         string jsonBody = JsonSerializer.Serialize(payload);
