@@ -4,6 +4,7 @@ using System.Numerics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Threading.Tasks;
 using Nethereum.ABI.EIP712;
 using Nethereum.ABI.FunctionEncoding.Attributes;
@@ -94,11 +95,11 @@ public class PolymarketOrderClient
         string verifyingContract = negRisk ? NEG_RISK_EXCHANGE : CTF_EXCHANGE;
         string signature = SignOrder(order, verifyingContract);
 
-        // 5. Build JSON body
+        // 5. Build JSON body using JsonNode so salt (BigInteger) serializes as a JSON number
         var saltBigInt = new BigInteger(order.Salt, isUnsigned: true, isBigEndian: true);
-        var orderDict = new Dictionary<string, object>
+        var orderNode = new JsonObject
         {
-            ["salt"] = saltBigInt.ToString(),
+            ["salt"] = JsonValue.Create(saltBigInt),
             ["maker"] = order.Maker,
             ["signer"] = order.Signer,
             ["taker"] = order.Taker,
@@ -109,21 +110,19 @@ public class PolymarketOrderClient
             ["nonce"] = order.Nonce.ToString(),
             ["feeRateBps"] = order.FeeRateBps.ToString(),
             ["side"] = side == 0 ? "BUY" : "SELL",
-            ["signatureType"] = order.SignatureType.ToString(),
+            ["signatureType"] = order.SignatureType,
             ["signature"] = signature
         };
-        
-        // 6. Final Payload (ADDED tickSize and negRisk per the API Docs!)
-        var payload = new Dictionary<string, object>
+
+        // 6. Final Payload (tickSize and negRisk are SDK-level options, NOT part of the POST body)
+        var payloadNode = new JsonObject
         {
-            ["order"] = orderDict,
+            ["order"] = orderNode,
             ["owner"] = _config.ApiKey,
-            ["orderType"] = "GTC",
-            ["tickSize"] = tickSize,   // Per-market tick size from Gamma API
-            ["negRisk"] = negRisk    // Mandatory per Polymarket specs
+            ["orderType"] = "GTC"
         };
-        
-        string jsonBody = JsonSerializer.Serialize(payload);
+
+        string jsonBody = payloadNode.ToJsonString();
 
         // 5. Build request with L2 HMAC auth headers
         var request = new RestRequest("/order", Method.Post);
