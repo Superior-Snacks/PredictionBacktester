@@ -127,7 +127,7 @@ public class PolymarketOrderClient
         // Debug: log the exact payload so we can diagnose API rejections
         Console.ForegroundColor = ConsoleColor.DarkYellow;
         Console.WriteLine($"\n[ORDER DEBUG] POST /order payload:");
-        Console.WriteLine(payloadNode.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+        Console.WriteLine(jsonBody);
         Console.ResetColor();
 
         // 5. Build request with L2 HMAC auth headers
