@@ -42,8 +42,10 @@ class Program
 
     // --- CONTROLS ---
     private static volatile bool _isPaused = false;
-    private static volatile bool _isMuted = false;
-    private static volatile bool _quietMode = false;
+    private static volatile bool _isMuted = false;      // M: mute trade logs only
+    private static volatile bool _quietMode = false;     // Q: silence everything
+    private static volatile bool _verboseMode = false;   // V: show full book update details instead of dots
+    private static volatile bool _tradeMuted = false;    // T: mute/unmute trade-related logs only
     private static volatile bool _buyingPaused = false;
     private static volatile bool _dailyLossTriggered = false;
     private static CancellationTokenSource _pauseCts = new();
@@ -136,7 +138,7 @@ class Program
         Console.WriteLine($"  Wallet:   ${_broker.CashBalance:0.00} USDC");
         Console.WriteLine($"  Params:   Crash={CRASH_THRESHOLD} Window={TIME_WINDOW_SECONDS}s TP={TAKE_PROFIT} SL={STOP_LOSS}");
         Console.WriteLine($"  Limits:   MaxBet=${_maxBetSize} DailyLoss=${_dailyLossLimit}");
-        Console.WriteLine("  Controls: P=Pause R=Resume B=PauseBuying X=SellAll M=Mute Q=Quiet S=Status");
+        Console.WriteLine("  Controls: P=Pause R=Resume B=PauseBuying X=SellAll M=Mute T=Trades Q=Quiet V=Verbose S=Status");
         Console.WriteLine("  Settings: 1=MaxBet 2=DailyLossLimit");
         Console.WriteLine("=========================================");
 
@@ -202,13 +204,23 @@ class Program
 
                         case ConsoleKey.M:
                             _isMuted = !_isMuted;
-                            _broker.IsMuted = _isMuted;
-                            Log.Information("Trade logs {State}.", _isMuted ? "MUTED" : "UNMUTED");
+                            Log.Information("Book dots {State}.", _isMuted ? "MUTED" : "UNMUTED");
                             break;
 
                         case ConsoleKey.Q:
                             _quietMode = !_quietMode;
-                            Log.Information("Quiet mode: {State}", _quietMode ? "ON" : "OFF");
+                            Log.Information("Quiet mode: {State}", _quietMode ? "ON (all output silenced)" : "OFF");
+                            break;
+
+                        case ConsoleKey.V:
+                            _verboseMode = !_verboseMode;
+                            Log.Information("Verbose mode: {State}", _verboseMode ? "ON (full book updates)" : "OFF (dots)");
+                            break;
+
+                        case ConsoleKey.T:
+                            _tradeMuted = !_tradeMuted;
+                            _broker.IsMuted = _tradeMuted;
+                            Log.Information("Trade logs: {State}", _tradeMuted ? "MUTED" : "VISIBLE");
                             break;
 
                         case ConsoleKey.S:
@@ -455,13 +467,26 @@ class Program
                                         else book.Asks[price] = size;
                                     }
 
-                                    if (!_isMuted && !_quietMode)
+                                    if (!_quietMode)
                                     {
-                                        lock (GlobalSimulatedBroker.ConsoleLock)
+                                        if (_verboseMode)
                                         {
-                                            Console.ForegroundColor = ConsoleColor.DarkGray;
-                                            Console.Write(".");
-                                            Console.ResetColor();
+                                            lock (GlobalSimulatedBroker.ConsoleLock)
+                                            {
+                                                string name = _tokenNames.GetValueOrDefault(assetId, assetId[..Math.Min(8, assetId.Length)] + "...");
+                                                Console.ForegroundColor = ConsoleColor.DarkGray;
+                                                Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [BOOK] {side} {size:0.00} @ {price:0.0000} | {name}");
+                                                Console.ResetColor();
+                                            }
+                                        }
+                                        else if (!_isMuted)
+                                        {
+                                            lock (GlobalSimulatedBroker.ConsoleLock)
+                                            {
+                                                Console.ForegroundColor = ConsoleColor.DarkGray;
+                                                Console.Write(".");
+                                                Console.ResetColor();
+                                            }
                                         }
                                     }
 
