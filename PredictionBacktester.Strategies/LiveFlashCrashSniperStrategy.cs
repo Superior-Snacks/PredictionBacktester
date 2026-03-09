@@ -18,6 +18,9 @@ public class LiveFlashCrashSniperStrategy : ILiveStrategy
     private readonly decimal _exitSlippage;
 
     private readonly Queue<(long Timestamp, decimal Price)> _recentAsks;
+    private decimal _lastGap;
+
+    public decimal GetMaxGap() => _lastGap;
 
     public LiveFlashCrashSniperStrategy(
         string strategyName = "FlashCrashSniper",
@@ -90,7 +93,9 @@ public class LiveFlashCrashSniperStrategy : ILiveStrategy
 
         decimal maxAskInWindow = _recentAsks.Max(x => x.Price);
 
-        if (maxAskInWindow - bestAsk >= _crashThreshold && dollarsToInvest >= 1.00m)
+        _lastGap = maxAskInWindow - bestAsk;
+
+        if (_lastGap >= _crashThreshold && dollarsToInvest >= 1.00m)
         {
             decimal maxAffordableShares = dollarsToInvest / bestAsk;
             decimal sharesToBuy = Math.Min(maxAffordableShares, availableAskSize);

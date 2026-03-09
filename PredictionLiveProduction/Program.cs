@@ -46,6 +46,7 @@ class Program
     private static volatile bool _quietMode = false;     // Q: silence everything
     private static volatile bool _verboseMode = false;   // V: show full book update details instead of dots
     private static volatile bool _tradeMuted = false;    // T: mute/unmute trade-related logs only
+    private static volatile bool _debugGap = false;      // G: show crash gap calculations
     private static volatile bool _buyingPaused = false;
     private static volatile bool _dailyLossTriggered = false;
     private static CancellationTokenSource _pauseCts = new();
@@ -221,6 +222,11 @@ class Program
                             _tradeMuted = !_tradeMuted;
                             _broker.IsMuted = _tradeMuted;
                             Log.Information("Trade logs: {State}", _tradeMuted ? "MUTED" : "VISIBLE");
+                            break;
+
+                        case ConsoleKey.G:
+                            _debugGap = !_debugGap;
+                            Log.Information("Gap debug: {State}", _debugGap ? "ON" : "OFF");
                             break;
 
                         case ConsoleKey.S:
@@ -505,6 +511,27 @@ class Program
 
                                         if ((!_buyingPaused && !_dailyLossTriggered) || hasPosition)
                                             strat.OnBookUpdate(book, _broker);
+
+                                        if (_debugGap && !hasPosition && strat is LiveFlashCrashSniperStrategy sniper)
+                                        {
+                                            decimal bestAsk = book.GetBestAskPrice();
+                                            decimal bestBid = book.GetBestBidPrice();
+                                            decimal spread = bestAsk - bestBid;
+                                            decimal askSize = book.GetBestAskSize();
+                                            decimal bidSize = book.GetBestBidSize();
+                                            decimal gap = sniper.GetMaxGap();
+                                            string mktName = _tokenNames.GetValueOrDefault(assetId, assetId[..Math.Min(8, assetId.Length)] + "...");
+
+                                            if (gap > 0.005m) // Only show when there's a meaningful gap
+                                            {
+                                                lock (GlobalSimulatedBroker.ConsoleLock)
+                                                {
+                                                    Console.ForegroundColor = gap >= CRASH_THRESHOLD ? ConsoleColor.Yellow : ConsoleColor.DarkGray;
+                                                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [GAP] {gap:0.0000} / {CRASH_THRESHOLD} | Ask:{bestAsk:0.00} Bid:{bestBid:0.00} Spread:{spread:0.00} AskSz:{askSize:0.0} BidSz:{bidSize:0.0} | {mktName}");
+                                                    Console.ResetColor();
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }
