@@ -15,19 +15,25 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
     public string StrategyName { get; }
     private readonly PolymarketOrderClient _orderClient;
     private readonly Dictionary<string, string> _tokenNames;
-    private readonly bool _negRisk;
+    private readonly Dictionary<string, bool> _tokenNegRisk;
+    private readonly Dictionary<string, string> _tokenTickSizes;
+    private readonly Dictionary<string, decimal> _tokenMinSizes;
 
     public PolymarketLiveBroker(
         string strategyName,
         decimal initialCapital,
         PolymarketApiConfig config,
         Dictionary<string, string> tokenNames,
-        bool negRisk = false) : base(initialCapital)
+        Dictionary<string, bool> tokenNegRisk,
+        Dictionary<string, string> tokenTickSizes,
+        Dictionary<string, decimal> tokenMinSizes) : base(initialCapital)
     {
         StrategyName = strategyName;
         _orderClient = new PolymarketOrderClient(config);
         _tokenNames = tokenNames;
-        _negRisk = negRisk;
+        _tokenNegRisk = tokenNegRisk;
+        _tokenTickSizes = tokenTickSizes;
+        _tokenMinSizes = tokenMinSizes;
         StrategyLabel = strategyName;
         AssetNameResolver = GetMarketName;
     }
@@ -39,7 +45,9 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
         string strategyName,
         PolymarketApiConfig config,
         Dictionary<string, string> tokenNames,
-        bool negRisk = false)
+        Dictionary<string, bool> tokenNegRisk,
+        Dictionary<string, string> tokenTickSizes,
+        Dictionary<string, decimal> tokenMinSizes)
     {
         var client = new PolymarketOrderClient(config);
         decimal balance = await client.GetUsdcBalanceAsync();
@@ -48,8 +56,12 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
         Console.WriteLine($"[LIVE] Wallet USDC balance: ${balance:0.00}");
         Console.ResetColor();
 
-        return new PolymarketLiveBroker(strategyName, balance, config, tokenNames, negRisk);
+        return new PolymarketLiveBroker(strategyName, balance, config, tokenNames, tokenNegRisk, tokenTickSizes, tokenMinSizes);
     }
+
+    private bool GetNegRisk(string assetId) => _tokenNegRisk.GetValueOrDefault(assetId, false);
+    private string GetTickSize(string assetId) => _tokenTickSizes.GetValueOrDefault(assetId, "0.01");
+    public decimal GetMinSize(string assetId) => _tokenMinSizes.GetValueOrDefault(assetId, 1.00m);
 
     private string GetMarketName(string assetId)
     {
@@ -76,7 +88,8 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
 
         // Calculate shares from dollars and price
         decimal shares = dollarsToInvest / targetPrice;
-        if (shares <= 0)
+        decimal minSize = GetMinSize(assetId);
+        if (shares <= 0 || dollarsToInvest < minSize)
         {
             _pendingOrders.TryRemove(assetId, out _);
             return;
@@ -87,7 +100,7 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
             try
             {
                 string result = await _orderClient.SubmitOrderAsync(
-                    assetId, targetPrice, shares, side: 0, _negRisk);
+                    assetId, targetPrice, shares, side: 0, GetNegRisk(assetId), GetTickSize(assetId));
 
                 // If we get here, the order was accepted by the CLOB
                 // Record it locally so position tracking and CSV export work
@@ -180,7 +193,7 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
                 }
 
                 string result = await _orderClient.SubmitOrderAsync(
-                    assetId, targetPrice, sharesToSell, side: 1, _negRisk);
+                    assetId, targetPrice, sharesToSell, side: 1, GetNegRisk(assetId), GetTickSize(assetId));
 
                 // Record locally
                 decimal cashReceived;

@@ -45,12 +45,20 @@ public class PolymarketOrderClient
     /// <param name="size">Number of shares</param>
     /// <param name="side">0 = Buy, 1 = Sell</param>
     /// <param name="negRisk">True for multi-outcome (NegRisk) markets</param>
-    public async Task<string> SubmitOrderAsync(string tokenId, decimal price, decimal size, int side, bool negRisk = false)
+    public async Task<string> SubmitOrderAsync(string tokenId, decimal price, decimal size, int side, bool negRisk = false, string tickSize = "0.01")
     {
-        // Polymarket requires prices in 0.01 tick increments
-        price = Math.Round(price, 2);
+        // 1. ROUND PRICE AND SIZE to match the market's tick size
+        int tickDecimals = tickSize switch
+        {
+            "0.1" => 1,
+            "0.001" => 3,
+            "0.0001" => 4,
+            _ => 2 // "0.01" default
+        };
+        price = Math.Round(price, tickDecimals, MidpointRounding.AwayFromZero);
+        size = Math.Round(size, tickDecimals, MidpointRounding.AwayFromZero);
 
-        // 1. Convert to BigIntegers (USDC and conditional tokens both use 6 decimals)
+        // 2. Convert to BigIntegers (USDC and conditional tokens both use 6 decimals)
         const long DECIMALS = 1_000_000;
         BigInteger makerAmount, takerAmount;
 
@@ -65,7 +73,7 @@ public class PolymarketOrderClient
             takerAmount = new BigInteger((long)(size * price * DECIMALS));
         }
 
-        // 2. Build the Order Struct
+        // 3. Build the Order Struct
         var order = new PolymarketOrder
         {
             Salt = GenerateSalt(),
@@ -82,15 +90,11 @@ public class PolymarketOrderClient
             SignatureType = 1 // POLY_PROXY (maker is proxy wallet, signer is EOA)
         };
 
-        // 3. Sign the order (EIP-712) using the correct exchange contract
+        // 4. Sign the order (EIP-712) using the correct exchange contract
         string verifyingContract = negRisk ? NEG_RISK_EXCHANGE : CTF_EXCHANGE;
         string signature = SignOrder(order, verifyingContract);
 
-        // 4. Build JSON body — match the exact format from Polymarket's Python SDK:
-        //    - side: "BUY"/"SELL" strings (not "0"/"1")
-        //    - numeric fields as strings
-        //    - signature INSIDE the order dict
-        //    - owner = API key (not proxy address)
+        // 5. Build JSON body
         var saltBigInt = new BigInteger(order.Salt, isUnsigned: true, isBigEndian: true);
         var orderDict = new Dictionary<string, object>
         {
@@ -108,12 +112,17 @@ public class PolymarketOrderClient
             ["signatureType"] = order.SignatureType.ToString(),
             ["signature"] = signature
         };
+        
+        // 6. Final Payload (ADDED tickSize and negRisk per the API Docs!)
         var payload = new Dictionary<string, object>
         {
             ["order"] = orderDict,
             ["owner"] = _config.ApiKey,
-            ["orderType"] = "GTC"
+            ["orderType"] = "GTC",
+            ["tickSize"] = tickSize,   // Per-market tick size from Gamma API
+            ["negRisk"] = negRisk    // Mandatory per Polymarket specs
         };
+        
         string jsonBody = JsonSerializer.Serialize(payload);
 
         // 5. Build request with L2 HMAC auth headers

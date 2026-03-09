@@ -22,9 +22,11 @@ public class ProductionBroker : PolymarketLiveBroker
         decimal initialCapital,
         PolymarketApiConfig config,
         Dictionary<string, string> tokenNames,
-        PolymarketOrderClient queryClient,
-        bool negRisk = false)
-        : base(strategyName, initialCapital, config, tokenNames, negRisk)
+        Dictionary<string, bool> tokenNegRisk,
+        Dictionary<string, string> tokenTickSizes,
+        Dictionary<string, decimal> tokenMinSizes,
+        PolymarketOrderClient queryClient)
+        : base(strategyName, initialCapital, config, tokenNames, tokenNegRisk, tokenTickSizes, tokenMinSizes)
     {
         _queryClient = queryClient;
     }
@@ -36,8 +38,10 @@ public class ProductionBroker : PolymarketLiveBroker
         string strategyName,
         PolymarketApiConfig config,
         Dictionary<string, string> tokenNames,
-        decimal maxBetSize,
-        bool negRisk = false)
+        Dictionary<string, bool> tokenNegRisk,
+        Dictionary<string, string> tokenTickSizes,
+        Dictionary<string, decimal> tokenMinSizes,
+        decimal maxBetSize)
     {
         var client = new PolymarketOrderClient(config);
         decimal balance = await client.GetUsdcBalanceAsync();
@@ -46,13 +50,11 @@ public class ProductionBroker : PolymarketLiveBroker
         Console.WriteLine($"[LIVE] Wallet USDC balance: ${balance:0.00}");
         Console.ResetColor();
 
-        return new ProductionBroker(strategyName, balance, config, tokenNames, client, negRisk)
+        return new ProductionBroker(strategyName, balance, config, tokenNames, tokenNegRisk, tokenTickSizes, tokenMinSizes, client)
         {
             MaxBetSize = maxBetSize
         };
     }
-
-    private const decimal MIN_BET_SIZE = 1.00m; // Polymarket minimum order size
 
     public override void SubmitBuyOrder(string assetId, decimal targetPrice, decimal dollarsToInvest, LocalOrderBook book)
     {
@@ -63,10 +65,11 @@ public class ProductionBroker : PolymarketLiveBroker
             dollarsToInvest = MaxBetSize;
         }
 
-        if (dollarsToInvest < MIN_BET_SIZE)
+        decimal minSize = GetMinSize(assetId);
+        if (dollarsToInvest < minSize)
         {
             Log.Debug("Bet below minimum: ${Amount:0.00} < ${Min:0.00} on {Asset}",
-                dollarsToInvest, MIN_BET_SIZE, assetId[..Math.Min(8, assetId.Length)] + "...");
+                dollarsToInvest, minSize, assetId[..Math.Min(8, assetId.Length)] + "...");
             return;
         }
 

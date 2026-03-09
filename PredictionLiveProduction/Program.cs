@@ -55,6 +55,9 @@ class Program
 
     private static ProductionBroker _broker = null!;
     private static Dictionary<string, string> _tokenNames = new();
+    private static Dictionary<string, bool> _tokenNegRisk = new();
+    private static Dictionary<string, string> _tokenTickSize = new();
+    private static Dictionary<string, decimal> _tokenMinSize = new();
     private static readonly HashSet<string> _subscribedTokens = new();
     private static Dictionary<string, LocalOrderBook> _orderBooks = new();
     private static ClientWebSocket? _activeWs;
@@ -111,7 +114,7 @@ class Program
         if (!headless) Console.Clear();
         Log.Information("Initializing live broker...");
 
-        _broker = await ProductionBroker.CreateAsync(STRATEGY_NAME, config, _tokenNames, _maxBetSize);
+        _broker = await ProductionBroker.CreateAsync(STRATEGY_NAME, config, _tokenNames, _tokenNegRisk, _tokenTickSize, _tokenMinSize, _maxBetSize);
         _dayStartEquity = _broker.CashBalance;
         Log.Information("Wallet balance: ${Balance:0.00} | Max bet: ${MaxBet:0.00} | Daily loss limit: ${DailyLimit:0.00}",
             _broker.CashBalance, _maxBetSize, _dailyLossLimit);
@@ -580,6 +583,12 @@ class Program
                     if (_subscribedTokens.Add(yesToken))
                     {
                         _tokenNames.TryAdd(yesToken, market.Question);
+                        _tokenNegRisk.TryAdd(yesToken, ev.NegRisk);
+                        string tickSize = market.OrderPriceMinTickSize > 0
+                            ? market.OrderPriceMinTickSize.ToString("G")
+                            : "0.01";
+                        _tokenTickSize.TryAdd(yesToken, tickSize);
+                        _tokenMinSize.TryAdd(yesToken, market.OrderMinSize > 0 ? market.OrderMinSize : 1.00m);
                         newlyDiscovered.Add(yesToken);
                     }
                 }

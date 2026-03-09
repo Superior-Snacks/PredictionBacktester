@@ -17,6 +17,9 @@ public class PolymarketEventResponse
 
     [JsonPropertyName("markets")]
     public List<PolymarketMarketResponse> Markets { get; set; }
+
+    [JsonPropertyName("negRisk")]
+    public bool NegRisk { get; set; }
 }
 
 public class PolymarketMarketResponse
@@ -54,6 +57,17 @@ public class PolymarketMarketResponse
 
     [JsonPropertyName("startDate")]
     public DateTime? StartDate { get; set; }
+
+    [JsonPropertyName("negRisk")]
+    public bool NegRisk { get; set; }
+
+    [JsonPropertyName("orderPriceMinTickSize")]
+    [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
+    public decimal OrderPriceMinTickSize { get; set; }
+
+    [JsonPropertyName("orderMinSize")]
+    [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
+    public decimal OrderMinSize { get; set; }
 }
 
 public class PolymarketTradeResponse
