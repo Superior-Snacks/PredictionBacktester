@@ -60,7 +60,7 @@ public class ProductionBroker : PolymarketLiveBroker
     {
         if (dollarsToInvest > MaxBetSize)
         {
-            Log.Debug("Bet capped: ${Original:0.00} -> ${Capped:0.00} on {Asset}",
+            Log.Information("[CAP] ${Original:0.00} -> ${Capped:0.00} on {Asset}",
                 dollarsToInvest, MaxBetSize, assetId[..Math.Min(8, assetId.Length)] + "...");
             dollarsToInvest = MaxBetSize;
         }
@@ -68,7 +68,7 @@ public class ProductionBroker : PolymarketLiveBroker
         decimal minSize = GetMinSize(assetId);
         if (dollarsToInvest < minSize)
         {
-            Log.Debug("Bet below minimum: ${Amount:0.00} < ${Min:0.00} on {Asset}",
+            Log.Information("[REJECT] ${Amount:0.00} below market minimum ${Min:0.00} on {Asset}",
                 dollarsToInvest, minSize, assetId[..Math.Min(8, assetId.Length)] + "...");
             return;
         }
