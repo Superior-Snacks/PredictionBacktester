@@ -9,7 +9,7 @@ Usage:  Set env vars then run: python test_order.py
 import os, json
 
 from py_clob_client.client import ClobClient
-from py_clob_client.clob_types import OrderArgs, OrderType, ApiCreds
+from py_clob_client.clob_types import OrderArgs, OrderType, ApiCreds, PartialCreateOrderOptions
 from py_clob_client.order_builder.constants import BUY
 
 # Load credentials from env
@@ -34,7 +34,7 @@ signed_order = client.create_order(
         size=6.82,
         side=BUY,
     ),
-    options={"tick_size": "0.01", "neg_risk": False},
+    options=PartialCreateOrderOptions(tick_size="0.01", neg_risk=False),
 )
 
 # Step 2: Print the EXACT payload that would be sent
