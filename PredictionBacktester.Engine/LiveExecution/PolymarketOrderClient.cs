@@ -83,11 +83,12 @@ public class PolymarketOrderClient
         // 3. Fetch the market's fee rate from the CLOB API
         int feeRateBps = await GetFeeRateBpsAsync(tokenId);
 
-        // 4. Build the Order Struct (matching Python SDK defaults: EOA signing, no expiry, nonce=0)
+        // 4. Build the Order Struct using POLY_PROXY mode (maker=proxy wallet with funds, signer=EOA)
+        bool useProxy = !string.IsNullOrEmpty(_config.ProxyAddress);
         var order = new PolymarketOrder
         {
             Salt = GenerateSalt(),
-            Maker = _account.Address,
+            Maker = useProxy ? _config.ProxyAddress : _account.Address,
             Signer = _account.Address,
             Taker = "0x0000000000000000000000000000000000000000",
             TokenId = BigInteger.Parse(tokenId),
@@ -97,7 +98,7 @@ public class PolymarketOrderClient
             Nonce = BigInteger.Zero,      // uniqueness comes from salt
             FeeRateBps = feeRateBps,
             Side = side,
-            SignatureType = 0 // EOA: maker and signer are the same address
+            SignatureType = useProxy ? 1 : 0 // 1=POLY_PROXY (maker!=signer), 0=EOA (maker==signer)
         };
 
         // 4. Sign the order (EIP-712) using the correct exchange contract

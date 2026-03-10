@@ -49,7 +49,14 @@ payload = {
 print("=== PYTHON SDK PAYLOAD ===")
 print(json.dumps(payload, indent=2))
 
-# Step 3: Actually post it
+# Step 3: Check what signature type the SDK chose
+order_dict = signed_order.dict()
+print(f"\nsignatureType: {order_dict.get('signatureType')}")
+print(f"maker:  {order_dict.get('maker')}")
+print(f"signer: {order_dict.get('signer')}")
+print(f"feeRateBps: {order_dict.get('feeRateBps')}")
+
+# Step 4: Actually post it
 response = client.post_order(signed_order, OrderType.GTC)
 print("\n=== RESPONSE ===")
 print(json.dumps(response, indent=2))
