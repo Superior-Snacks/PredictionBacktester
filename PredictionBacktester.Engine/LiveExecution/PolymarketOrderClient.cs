@@ -96,10 +96,9 @@ public class PolymarketOrderClient
         string signature = SignOrder(order, verifyingContract);
 
         // 5. Build JSON body using JsonNode so salt (BigInteger) serializes as a JSON number
-        var saltBigInt = new BigInteger(order.Salt, isUnsigned: true, isBigEndian: true);
         var orderNode = new JsonObject
         {
-            ["salt"] = JsonNode.Parse(saltBigInt.ToString()),
+            ["salt"] = JsonNode.Parse(order.Salt.ToString()),
             ["maker"] = order.Maker,
             ["signer"] = order.Signer,
             ["taker"] = order.Taker,
@@ -223,11 +222,11 @@ public class PolymarketOrderClient
         return Convert.ToBase64String(hash).Replace('+', '-').Replace('/', '_');
     }
 
-    private static byte[] GenerateSalt()
+    private static BigInteger GenerateSalt()
     {
-        byte[] salt = new byte[32];
-        RandomNumberGenerator.Fill(salt);
-        return salt;
+        byte[] saltBytes = new byte[32];
+        RandomNumberGenerator.Fill(saltBytes);
+        return new BigInteger(saltBytes, isUnsigned: true, isBigEndian: true);
     }
 
     private static BigInteger GetExpirationTimestamp(int secondsFromNow)

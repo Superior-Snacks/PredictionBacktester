@@ -7,8 +7,8 @@ namespace PredictionBacktester.Engine.LiveExecution
     [Struct("Order")]
     public class PolymarketOrder
     {
-        [Parameter("bytes32", "salt", 1)]
-        public byte[] Salt { get; set; }
+        [Parameter("uint256", "salt", 1)]
+        public BigInteger Salt { get; set; }
 
         [Parameter("address", "maker", 2)]
         public string Maker { get; set; }
