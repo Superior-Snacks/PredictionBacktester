@@ -93,6 +93,39 @@ except Exception as e:
     except Exception as e2:
         print(f"  owner() also failed: {e2}")
 
+# Check Polymarket Proxy Factory to find the real owner of this proxy
+# Polymarket uses a ProxyFactory that maps EOA -> proxy via a deterministic deployment
+PROXY_FACTORY = "0xaB45c5A4B0c941a2F231C04C3f49182e1A254052"
+proxy_factory_abi = [
+    {"constant": True, "inputs": [{"name": "", "type": "address"}], "name": "getProxy", "outputs": [{"name": "", "type": "address"}], "type": "function"},
+]
+try:
+    factory = w3.eth.contract(address=Web3.to_checksum_address(PROXY_FACTORY), abi=proxy_factory_abi)
+    # Check: does the factory map our EOA to this proxy?
+    mapped_proxy = factory.functions.getProxy(Web3.to_checksum_address(eoa_address)).call()
+    print(f"\nProxy Factory lookup:")
+    print(f"  Factory maps EOA -> {mapped_proxy}")
+    print(f"  Matches our proxy:  {mapped_proxy.lower() == proxy.lower()}")
+except Exception as e:
+    print(f"\nProxy Factory lookup failed: {e}")
+
+# Also check the CLOB API for the proxy mapping
+import requests
+try:
+    # The CLOB API has a GET /profile endpoint
+    resp = requests.get(f"https://clob.polymarket.com/profile?address={eoa_address}")
+    print(f"\nCLOB API profile for EOA:")
+    print(f"  {resp.json()}")
+except Exception as e:
+    print(f"\nCLOB profile lookup failed: {e}")
+
+try:
+    resp = requests.get(f"https://clob.polymarket.com/profile?address={proxy}")
+    print(f"\nCLOB API profile for Proxy:")
+    print(f"  {resp.json()}")
+except Exception as e:
+    print(f"\nCLOB profile lookup for proxy failed: {e}")
+
 print(f"\n=== DIAGNOSIS ===")
 if proxy_bal > 0 and proxy_allowance_ctf > 0:
     print("Proxy has USDC and CTF Exchange allowance — POLY_PROXY mode should work IF EOA is authorized signer")
