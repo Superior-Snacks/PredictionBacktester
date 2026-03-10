@@ -123,9 +123,13 @@ public class PolymarketOrderClient
 
         string jsonBody = payloadNode.ToJsonString();
 
-        // Debug: log the exact payload so we can diagnose API rejections
+        // Debug: log signing context and payload for diagnosing API rejections
         Console.ForegroundColor = ConsoleColor.DarkYellow;
-        Console.WriteLine($"\n[ORDER DEBUG] POST /order payload:");
+        Console.WriteLine($"\n[ORDER DEBUG] negRisk={negRisk} | tickSize={tickSize} | exchange={verifyingContract}");
+        Console.WriteLine($"[ORDER DEBUG] maker={order.Maker} | signer={order.Signer}");
+        Console.WriteLine($"[ORDER DEBUG] price={price} | size={size} | side={(side == 0 ? "BUY" : "SELL")}");
+        Console.WriteLine($"[ORDER DEBUG] makerAmt={order.MakerAmount} | takerAmt={order.TakerAmount}");
+        Console.WriteLine($"[ORDER DEBUG] POST /order payload:");
         Console.WriteLine(jsonBody);
         Console.ResetColor();
 
@@ -146,6 +150,9 @@ public class PolymarketOrderClient
 
         if (!response.IsSuccessful)
         {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"[ORDER DEBUG] HTTP {(int)response.StatusCode} | Headers: {string.Join(", ", response.Headers?.Select(h => $"{h.Name}={h.Value}") ?? Array.Empty<string>())}");
+            Console.ResetColor();
             throw new Exception($"[Polymarket API Error] {response.StatusCode}: {response.Content ?? "No response body"}");
         }
 
