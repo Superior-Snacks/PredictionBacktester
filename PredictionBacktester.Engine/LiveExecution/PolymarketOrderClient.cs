@@ -60,21 +60,30 @@ public class PolymarketOrderClient
         size = Math.Round(size, tickDecimals, MidpointRounding.AwayFromZero);
 
         // 2. Convert to BigIntegers (USDC and conditional tokens both use 6 decimals)
+        // BUY: makerAmount (USDC) max 5 decimals → round to 10, takerAmount (shares) max 2 decimals → round to 10000
+        // SELL: makerAmount (shares) max 2 decimals → round to 10000, takerAmount (USDC) max 5 decimals → round to 10
         const long DECIMALS = 1_000_000;
         BigInteger makerAmount, takerAmount;
 
         if (side == 0) // BUY: pay USDC (maker), receive shares (taker)
         {
-            takerAmount = new BigInteger((long)(size * DECIMALS));
-            makerAmount = new BigInteger((long)(size * price * DECIMALS));
+            long rawTaker = (long)(size * DECIMALS);
+            long rawMaker = (long)(size * price * DECIMALS);
+            takerAmount = new BigInteger(rawTaker / 10000 * 10000);  // round to 2 decimal places
+            makerAmount = new BigInteger(rawMaker / 10 * 10);        // round to 5 decimal places
         }
         else // SELL: give shares (maker), receive USDC (taker)
         {
-            makerAmount = new BigInteger((long)(size * DECIMALS));
-            takerAmount = new BigInteger((long)(size * price * DECIMALS));
+            long rawMaker = (long)(size * DECIMALS);
+            long rawTaker = (long)(size * price * DECIMALS);
+            makerAmount = new BigInteger(rawMaker / 10000 * 10000);  // round to 2 decimal places
+            takerAmount = new BigInteger(rawTaker / 10 * 10);        // round to 5 decimal places
         }
 
-        // 3. Build the Order Struct (matching Python SDK defaults: EOA signing, no expiry, nonce=0)
+        // 3. Fetch the market's fee rate from the CLOB API
+        int feeRateBps = await GetFeeRateBpsAsync(tokenId);
+
+        // 4. Build the Order Struct (matching Python SDK defaults: EOA signing, no expiry, nonce=0)
         var order = new PolymarketOrder
         {
             Salt = GenerateSalt(),
@@ -86,7 +95,7 @@ public class PolymarketOrderClient
             TakerAmount = takerAmount,
             Expiration = BigInteger.Zero, // GTC: no expiration
             Nonce = BigInteger.Zero,      // uniqueness comes from salt
-            FeeRateBps = 0,
+            FeeRateBps = feeRateBps,
             Side = side,
             SignatureType = 0 // EOA: maker and signer are the same address
         };
@@ -210,6 +219,27 @@ public class PolymarketOrderClient
 
         var signer = new Eip712TypedDataSigner();
         return signer.SignTypedDataV4(order, typedData, new EthECKey(_account.PrivateKey));
+    }
+
+    /// <summary>
+    /// Fetches the current fee rate for a token from the CLOB API.
+    /// </summary>
+    private async Task<int> GetFeeRateBpsAsync(string tokenId)
+    {
+        var request = new RestRequest($"/fee-rate?token_id={tokenId}", Method.Get);
+        var response = await _httpClient.ExecuteAsync(request);
+        if (response.IsSuccessful && !string.IsNullOrEmpty(response.Content))
+        {
+            using var doc = JsonDocument.Parse(response.Content);
+            if (doc.RootElement.TryGetProperty("fee_rate_bps", out var feeElement))
+            {
+                // Handle both string and number values
+                if (feeElement.ValueKind == JsonValueKind.String)
+                    return int.Parse(feeElement.GetString()!);
+                return feeElement.GetInt32();
+            }
+        }
+        return 0; // fallback for fee-free markets
     }
 
     /// <summary>
