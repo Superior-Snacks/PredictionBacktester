@@ -83,7 +83,8 @@ public class PolymarketOrderClient
         // 3. Fetch the market's fee rate from the CLOB API
         int feeRateBps = await GetFeeRateBpsAsync(tokenId);
 
-        // 4. Build the Order Struct using POLY_PROXY mode (maker=proxy wallet with funds, signer=EOA)
+        // 4. Build the Order Struct (maker=proxy wallet with funds, signer=EOA, signatureType=0)
+        // Python SDK uses signatureType=0 even with funder=proxy — match that behavior
         bool useProxy = !string.IsNullOrEmpty(_config.ProxyAddress);
         var order = new PolymarketOrder
         {
@@ -98,7 +99,7 @@ public class PolymarketOrderClient
             Nonce = BigInteger.Zero,      // uniqueness comes from salt
             FeeRateBps = feeRateBps,
             Side = side,
-            SignatureType = useProxy ? 1 : 0 // 1=POLY_PROXY (maker!=signer), 0=EOA (maker==signer)
+            SignatureType = 0
         };
 
         // 4. Sign the order (EIP-712) using the correct exchange contract

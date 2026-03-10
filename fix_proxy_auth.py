@@ -21,7 +21,7 @@ proxy_address = os.environ["POLY_PROXY_ADDRESS"]
 print("=== Step 1: Create client with funder (POLY_PROXY mode) ===")
 client = ClobClient(host, chain_id=chain_id, key=private_key, funder=proxy_address)
 
-print(f"  EOA signer: {client.creds_address}")
+print(f"  EOA signer: {client.get_address()}")
 print(f"  Funder/proxy: {proxy_address}")
 
 # Step 2: Derive API key — this signs a CLOB auth message and registers with the server
