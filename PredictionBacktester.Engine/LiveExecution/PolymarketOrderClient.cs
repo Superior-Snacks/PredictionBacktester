@@ -74,21 +74,21 @@ public class PolymarketOrderClient
             takerAmount = new BigInteger((long)(size * price * DECIMALS));
         }
 
-        // 3. Build the Order Struct
+        // 3. Build the Order Struct (matching Python SDK defaults: EOA signing, no expiry, nonce=0)
         var order = new PolymarketOrder
         {
             Salt = GenerateSalt(),
-            Maker = _config.ProxyAddress,
+            Maker = _account.Address,
             Signer = _account.Address,
             Taker = "0x0000000000000000000000000000000000000000",
             TokenId = BigInteger.Parse(tokenId),
             MakerAmount = makerAmount,
             TakerAmount = takerAmount,
-            Expiration = GetExpirationTimestamp(300), // 5 minutes
-            Nonce = GenerateNonce(),
+            Expiration = BigInteger.Zero, // GTC: no expiration
+            Nonce = BigInteger.Zero,      // uniqueness comes from salt
             FeeRateBps = 0,
             Side = side,
-            SignatureType = 1 // POLY_PROXY (maker is proxy wallet, signer is EOA)
+            SignatureType = 0 // EOA: maker and signer are the same address
         };
 
         // 4. Sign the order (EIP-712) using the correct exchange contract
@@ -98,7 +98,7 @@ public class PolymarketOrderClient
         // 5. Build JSON body using JsonNode so salt (BigInteger) serializes as a JSON number
         var orderNode = new JsonObject
         {
-            ["salt"] = JsonNode.Parse(order.Salt.ToString()),
+            ["salt"] = (long)order.Salt,
             ["maker"] = order.Maker,
             ["signer"] = order.Signer,
             ["taker"] = order.Taker,
@@ -231,9 +231,11 @@ public class PolymarketOrderClient
 
     private static BigInteger GenerateSalt()
     {
-        byte[] saltBytes = new byte[32];
-        RandomNumberGenerator.Fill(saltBytes);
-        return new BigInteger(saltBytes, isUnsigned: true, isBigEndian: true);
+        // Match Python SDK: random int in [0, 10^10 - 1] — fits safely in JSON number
+        byte[] buf = new byte[8];
+        RandomNumberGenerator.Fill(buf);
+        long raw = BitConverter.ToInt64(buf) & long.MaxValue; // ensure positive
+        return new BigInteger(raw % 10_000_000_000L);
     }
 
     private static BigInteger GetExpirationTimestamp(int secondsFromNow)

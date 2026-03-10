@@ -20,8 +20,11 @@ secret = os.environ["POLY_API_SECRET"]
 passphrase = os.environ["POLY_API_PASSPHRASE"]
 private_key = os.environ["POLY_PRIVATE_KEY"]
 
+proxy_address = os.environ["POLY_PROXY_ADDRESS"]
+
 creds = ApiCreds(api_key=key, api_secret=secret, api_passphrase=passphrase)
-client = ClobClient(host, chain_id=chain_id, key=private_key, creds=creds)
+# funder=proxy uses POLY_PROXY mode (signatureType=1, maker=proxy, signer=EOA)
+client = ClobClient(host, chain_id=chain_id, key=private_key, creds=creds, funder=proxy_address)
 
 # Use a known active token ID (replace with one from your bot's logs)
 TOKEN_ID = "23913477838590520829397598255983621021172073199756406567397887821099989290311"
@@ -46,7 +49,7 @@ payload = {
 print("=== PYTHON SDK PAYLOAD ===")
 print(json.dumps(payload, indent=2))
 
-# Step 3: Actually post it (uncomment when ready)
-# response = client.post_order(signed_order, OrderType.GTC)
-# print("\n=== RESPONSE ===")
-# print(json.dumps(response, indent=2))
+# Step 3: Actually post it
+response = client.post_order(signed_order, OrderType.GTC)
+print("\n=== RESPONSE ===")
+print(json.dumps(response, indent=2))
