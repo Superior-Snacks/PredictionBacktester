@@ -99,7 +99,7 @@ public class PolymarketOrderClient
         var saltBigInt = new BigInteger(order.Salt, isUnsigned: true, isBigEndian: true);
         var orderNode = new JsonObject
         {
-            ["salt"] = JsonValue.Create(saltBigInt),
+            ["salt"] = JsonNode.Parse(saltBigInt.ToString()),
             ["maker"] = order.Maker,
             ["signer"] = order.Signer,
             ["taker"] = order.Taker,
