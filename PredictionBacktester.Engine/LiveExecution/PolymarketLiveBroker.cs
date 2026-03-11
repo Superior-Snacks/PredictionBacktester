@@ -119,7 +119,16 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
                         actualDollars = mAmt;
 
                     // If IOC completely missed (0 shares), abort.
-                    if (actualShares <= 0) return;
+                    if (actualShares <= 0) 
+                    {
+                        lock (ConsoleLock)
+                        {
+                            Console.ForegroundColor = ConsoleColor.DarkGray;
+                            Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [IOC KILLED] Buy missed. Liquidity gone @ ${targetPrice:0.00} | {GetMarketName(assetId)}");
+                            Console.ResetColor();
+                        }
+                        return;
+                    }
 
                     // 2. Update memory using the ACTUAL fill amounts
                     lock (BrokerLock)
@@ -193,9 +202,44 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
                 decimal sharesToSell = GetPositionShares(assetId);
                 if (sharesToSell <= 0) return;
 
-                string result = await _orderClient.SubmitOrderAsync(
-                    assetId, targetPrice, sharesToSell, side: 1, GetNegRisk(assetId), GetTickSize(assetId));
+                string result = "";
+                int maxRetries = 10; // Try 10 times
+                
+                // Aggressive rapid-fire retry loop
+                for (int attempt = 1; attempt <= maxRetries; attempt++)
+                {
+                    try
+                    {
+                        result = await _orderClient.SubmitOrderAsync(
+                            assetId, targetPrice, sharesToSell, side: 1, GetNegRisk(assetId), GetTickSize(assetId));
+                        break; // Success! The tokens arrived.
+                    }
+                    catch (Exception ex) when (ex.Message.Contains("not enough balance") && attempt < maxRetries)
+                    {
+                        if (!IsMuted) lock (ConsoleLock)
+                        {
+                            Console.ForegroundColor = ConsoleColor.DarkYellow;
+                            Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [HAMMER] Tokens not here yet. Retrying in 300ms... (Attempt {attempt}/{maxRetries})");
+                            Console.ResetColor();
+                        }
+                        
+                        // Wait just 300ms and immediately slam the API again
+                        await Task.Delay(300); 
+                    }
+                }
 
+                if (string.IsNullOrEmpty(result)) 
+                {
+                    lock (ConsoleLock)
+                    {
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [SELL FAILED] Tokens never arrived after 3 seconds of retrying.");
+                        Console.ResetColor();
+                    }
+                    return;
+                }
+
+                // --- Rest of your exact same IOC parsing logic goes here ---
                 using var doc = System.Text.Json.JsonDocument.Parse(result);
                 var root = doc.RootElement;
 
@@ -211,7 +255,16 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
                     if (root.TryGetProperty("takingAmount", out var takingEl) && decimal.TryParse(takingEl.GetString(), out decimal tAmt))
                         cashReceived = tAmt;
 
-                    if (actualSharesSold <= 0) return;
+                    if (actualSharesSold <= 0) 
+                    {
+                        lock (ConsoleLock)
+                        {
+                            Console.ForegroundColor = ConsoleColor.DarkGray;
+                            Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [IOC KILLED] Sell missed. Retrying next tick... | {GetMarketName(assetId)}");
+                            Console.ResetColor();
+                        }
+                        return;
+                    }
 
                     decimal pnl = 0m;
                     lock (BrokerLock)
