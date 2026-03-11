@@ -288,8 +288,11 @@ class Program
         // ==========================================
         // 7b. ON-CHAIN STATE SYNC (Startup)
         // ==========================================
-        Log.Information("Running startup on-chain state sync...");
-        await _broker.RunFullSyncAsync(_subscribedTokens, _tokenNames);
+        Log.Information("Running startup on-chain state sync (this may take a minute or two)...");
+        
+        // FIX: Pass fullDiscovery: true so it finds your manual web trades
+        await _broker.RunFullSyncAsync(_subscribedTokens, _tokenNames, fullDiscovery: true);
+        
         _dayStartEquity = _broker.GetTotalPortfolioValue();
 
         // ==========================================
@@ -353,7 +356,7 @@ class Program
                 // Periodic on-chain state reconciliation
                 try
                 {
-                    await _broker.RunFullSyncAsync(_subscribedTokens, _tokenNames);
+                    await _broker.RunFullSyncAsync(_subscribedTokens, _tokenNames, fullDiscovery: false);
                 }
                 catch (Exception ex) { Log.Warning("State sync error: {Error}", ex.Message); }
             }

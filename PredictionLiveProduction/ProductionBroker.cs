@@ -135,10 +135,9 @@ public class ProductionBroker : PolymarketLiveBroker
 
     /// <summary>
     /// Full state sync: cash + held positions. Logs results.
-    /// Only queries on-chain balances for tokens where the broker holds a position,
-    /// keeping RPC calls minimal (1 cash + N held positions instead of all 2500 subscribed tokens).
+    /// If fullDiscovery is true, scans ALL tokens to find manual/untracked positions.
     /// </summary>
-    public async Task RunFullSyncAsync(IEnumerable<string> tokenIds, Dictionary<string, string>? tokenNames = null)
+    public async Task RunFullSyncAsync(IEnumerable<string> tokenIds, Dictionary<string, string>? tokenNames = null, bool fullDiscovery = false)
     {
         Log.Information("[SYNC] Starting on-chain state reconciliation...");
 
@@ -151,9 +150,13 @@ public class ProductionBroker : PolymarketLiveBroker
         else
             Log.Information("[SYNC] Cash OK: ${Balance:0.00}", CashBalance);
 
-        // 2. Sync positions — only query tokens we actually hold to avoid 2500+ RPC calls
-        var heldTokens = tokenIds.Where(t => GetPositionShares(t) > 0 || GetNoPositionShares(t) > 0).ToList();
-        Log.Information("[SYNC] Checking {Count} held position(s)...", heldTokens.Count);
+        // 2. Sync positions 
+        // FIX: If fullDiscovery is true, scan everything. Otherwise, optimize.
+        var heldTokens = fullDiscovery 
+            ? tokenIds.ToList() 
+            : tokenIds.Where(t => GetPositionShares(t) > 0 || GetNoPositionShares(t) > 0).ToList();
+
+        Log.Information("[SYNC] Checking {Count} position(s) on-chain...", heldTokens.Count);
 
         var mismatches = await SyncPositionsAsync(heldTokens);
         if (mismatches.Count > 0)
