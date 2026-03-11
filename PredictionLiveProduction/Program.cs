@@ -736,7 +736,8 @@ class Program
                 decimal bestBid = book.GetBestBidPrice();
                 if (bestBid > 0.01m && bestBid < 0.99m)
                 {
-                    _broker.SubmitSellAllOrder(assetId, bestBid, book);
+                    decimal limitPrice = Math.Max(bestBid - 0.05m, 0.001m);
+                    _broker.SubmitSellAllOrder(assetId, limitPrice, book);
                     sold++;
                 }
             }

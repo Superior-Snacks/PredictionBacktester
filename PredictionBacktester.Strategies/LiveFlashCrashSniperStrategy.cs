@@ -86,7 +86,8 @@ public class LiveFlashCrashSniperStrategy : ILiveStrategy
 
             if (isTakeProfit || isStopLoss)
             {
-                broker.SubmitSellAllOrder(assetId, bestBid - _exitSlippage, book);
+                decimal sellLimitPrice = Math.Max(bestBid - _exitSlippage, 0.001m);
+                broker.SubmitSellAllOrder(assetId, sellLimitPrice, book);
             }
             return;
         }
