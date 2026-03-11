@@ -68,10 +68,11 @@ public class ProductionBroker : PolymarketLiveBroker
         }
 
         decimal minSize = GetMinSize(assetId);
-        if (dollarsToInvest < minSize)
+        decimal shares = dollarsToInvest / targetPrice;
+        if (shares < minSize)
         {
-            Log.Information("[REJECT] ${Amount:0.00} below market minimum ${Min:0.00} on {Asset}",
-                dollarsToInvest, minSize, assetId[..Math.Min(8, assetId.Length)] + "...");
+            Log.Information("[REJECT] {Shares:0.00} shares (${Amount:0.00}) below market minimum {Min} shares on {Asset}",
+                shares, dollarsToInvest, minSize, assetId[..Math.Min(8, assetId.Length)] + "...");
             return;
         }
 
