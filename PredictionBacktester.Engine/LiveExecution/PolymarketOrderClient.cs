@@ -84,12 +84,11 @@ public class PolymarketOrderClient
         int feeRateBps = await GetFeeRateBpsAsync(tokenId);
 
         // 4. Build the Order Struct: POLY_PROXY mode (maker=proxy, signer=EOA, signatureType=1)
-        bool useProxy = !string.IsNullOrEmpty(_config.ProxyAddress);
         var order = new PolymarketOrder
         {
             Salt = GenerateSalt(),
-            Maker = useProxy ? _config.ProxyAddress : _account.Address,
-            Signer = _account.Address,
+            Maker = _config.ProxyAddress,  // proxy wallet holds the funds
+            Signer = _account.Address,     // EOA signs the order
             Taker = "0x0000000000000000000000000000000000000000",
             TokenId = BigInteger.Parse(tokenId),
             MakerAmount = makerAmount,
@@ -98,7 +97,7 @@ public class PolymarketOrderClient
             Nonce = BigInteger.Zero,      // uniqueness comes from salt
             FeeRateBps = feeRateBps,
             Side = side,
-            SignatureType = useProxy ? 1 : 0 // 1=POLY_PROXY (maker=proxy, signer=EOA), 0=EOA
+            SignatureType = 1 // POLY_PROXY: maker=proxy, signer=EOA
         };
 
         // 4. Sign the order (EIP-712) using the correct exchange contract
