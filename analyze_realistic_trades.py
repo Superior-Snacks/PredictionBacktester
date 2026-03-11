@@ -112,4 +112,4 @@ def analyze_realistic_trades(csv_path, min_shares_required=5.0):
 
 if __name__ == "__main__":
     # You can change '1.0' to whatever you suspect the general minimum is
-    analyze_realistic_trades('OLDPaperTrades_SNAPSHOT.csv', min_shares_required=1.0)
+    analyze_realistic_trades('OLDLivePaperTrades_SNAPSHOT.csv', min_shares_required=1.0)
