@@ -78,7 +78,7 @@ public class LiveFlashCrashSniperStrategy : ILiveStrategy
         // Fetch positions specifically for THIS asset
         decimal positionShares = broker.GetPositionShares(assetId);
 
-        if (positionShares > 0)
+        if (positionShares >= 1.0m) 
         {
             decimal avgEntry = broker.GetAverageEntryPrice(assetId);
             bool isTakeProfit = bestBid >= avgEntry + _reboundProfitMargin;
@@ -89,7 +89,7 @@ public class LiveFlashCrashSniperStrategy : ILiveStrategy
                 decimal sellLimitPrice = Math.Max(bestBid - _exitSlippage, 0.001m);
                 broker.SubmitSellAllOrder(assetId, sellLimitPrice, book);
             }
-            return;
+            return; // If it's a real position, we stop here and manage the exit.
         }
 
         decimal maxAskInWindow = _recentAsks.Max(x => x.Price);

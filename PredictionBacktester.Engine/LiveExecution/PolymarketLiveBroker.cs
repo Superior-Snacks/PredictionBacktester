@@ -95,7 +95,9 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
         // Calculate shares from dollars and price
         decimal shares = dollarsToInvest / targetPrice;
         decimal minSize = GetMinSize(assetId);
-        if (shares <= 0 || dollarsToInvest < minSize)
+        
+        // FIX: Compare calculated shares against the minimum share size
+        if (shares < minSize)
         {
             _pendingOrders.TryRemove(assetId, out _);
             return;
@@ -189,8 +191,21 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
     /// </summary>
     public override void SubmitSellAllOrder(string assetId, decimal targetPrice, LocalOrderBook book)
     {
-        decimal currentShares = GetPositionShares(assetId);
-        if (currentShares <= 0) return;
+        decimal sharesToSell = GetPositionShares(assetId);
+        if (sharesToSell <= 0) return;
+
+        // NEW: Check for dust before doing anything else
+        decimal minSize = GetMinSize(assetId);
+        if (sharesToSell < minSize)
+        {
+            if (!IsMuted) lock (ConsoleLock)
+            {
+                Console.ForegroundColor = ConsoleColor.DarkGray;
+                Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [DUST] {sharesToSell:0.00} shares is below minimum ({minSize}). Holding to settlement.");
+                Console.ResetColor();
+            }
+            return;
+        }
 
         if (!_pendingOrders.TryAdd(assetId, true)) return;
 
