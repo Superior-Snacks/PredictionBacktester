@@ -102,48 +102,54 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
                 string result = await _orderClient.SubmitOrderAsync(
                     assetId, targetPrice, shares, side: 0, GetNegRisk(assetId), GetTickSize(assetId));
 
-                // If we get here, the order was accepted by the CLOB
-                // Record it locally so position tracking and CSV export work
-                lock (BrokerLock)
-                {
-                    decimal executionPrice = targetPrice;
-                    decimal actualDollars = shares * executionPrice;
+                // 1. Parse the JSON receipt from Polymarket
+                using var doc = System.Text.Json.JsonDocument.Parse(result);
+                var root = doc.RootElement;
 
-                    if (actualDollars > CashBalance)
+                if (root.TryGetProperty("success", out var successEl) && successEl.GetBoolean() == true)
+                {
+                    decimal actualShares = 0m;
+                    decimal actualDollars = 0m;
+
+                    // BUY: Taking Amount = Shares received, Making Amount = USDC spent
+                    if (root.TryGetProperty("takingAmount", out var takingEl) && decimal.TryParse(takingEl.GetString(), out decimal tAmt))
+                        actualShares = tAmt;
+
+                    if (root.TryGetProperty("makingAmount", out var makingEl) && decimal.TryParse(makingEl.GetString(), out decimal mAmt))
+                        actualDollars = mAmt;
+
+                    // If IOC completely missed (0 shares), abort.
+                    if (actualShares <= 0) return;
+
+                    // 2. Update memory using the ACTUAL fill amounts
+                    lock (BrokerLock)
                     {
-                        shares = CashBalance / executionPrice;
-                        actualDollars = shares * executionPrice;
+                        decimal currentShares = GetPositionShares(assetId);
+                        decimal currentAvgPrice = GetAverageEntryPrice(assetId);
+                        decimal totalCost = (currentShares * currentAvgPrice) + actualDollars;
+
+                        SetPositionShares(assetId, currentShares + actualShares);
+                        SetAverageEntryPrice(assetId, totalCost / (currentShares + actualShares));
+                        CashBalance -= actualDollars; // Subtract exact USDC spent
+
+                        TradeLedger.Add(new ExecutedTrade
+                        {
+                            OutcomeId = assetId,
+                            Date = DateTime.Now,
+                            Side = "BUY (IOC)",
+                            Price = actualDollars / actualShares, // Calculate true execution price
+                            Shares = actualShares,
+                            DollarValue = actualDollars
+                        });
+                        TotalActions++;
                     }
 
-                    if (shares <= 0) return;
-
-                    // Update local position tracking
-                    decimal currentShares = GetPositionShares(assetId);
-                    decimal currentAvgPrice = GetAverageEntryPrice(assetId);
-                    decimal totalCost = (currentShares * currentAvgPrice) + actualDollars;
-
-                    SetPositionShares(assetId, currentShares + shares);
-                    SetAverageEntryPrice(assetId, totalCost / (currentShares + shares));
-                    CashBalance -= actualDollars;
-
-                    TradeLedger.Add(new ExecutedTrade
+                    lock (ConsoleLock)
                     {
-                        OutcomeId = assetId,
-                        Date = DateTime.Now,
-                        Side = "BUY",
-                        Price = executionPrice,
-                        Shares = shares,
-                        DollarValue = actualDollars
-                    });
-                    TotalActions++;
-                }
-
-                lock (ConsoleLock)
-                {
-                    Console.ForegroundColor = ConsoleColor.Green;
-                    Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [LIVE BUY] {shares:0.00} shares @ ${targetPrice:0.00} | ${shares * targetPrice:0.00} | {GetMarketName(assetId)}");
-                    Console.WriteLine($"  API Response: {result}");
-                    Console.ResetColor();
+                        Console.ForegroundColor = ConsoleColor.Green;
+                        Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [LIVE BUY IOC] {actualShares:0.00} shares @ ${actualDollars / actualShares:0.00} | ${actualDollars:0.00} | {GetMarketName(assetId)}");
+                        Console.ResetColor();
+                    }
                 }
             }
             catch (Exception ex)
@@ -184,52 +190,67 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
         {
             try
             {
-                // Sell all shares we're holding
                 decimal sharesToSell = GetPositionShares(assetId);
-                if (sharesToSell <= 0)
-                {
-                    _pendingOrders.TryRemove(assetId, out _);
-                    return;
-                }
+                if (sharesToSell <= 0) return;
 
                 string result = await _orderClient.SubmitOrderAsync(
                     assetId, targetPrice, sharesToSell, side: 1, GetNegRisk(assetId), GetTickSize(assetId));
 
-                // Record locally
-                decimal cashReceived;
-                decimal pnl;
-                lock (BrokerLock)
+                using var doc = System.Text.Json.JsonDocument.Parse(result);
+                var root = doc.RootElement;
+
+                if (root.TryGetProperty("success", out var successEl) && successEl.GetBoolean() == true)
                 {
-                    decimal entryPrice = GetAverageEntryPrice(assetId);
-                    cashReceived = sharesToSell * targetPrice;
-                    pnl = (targetPrice - entryPrice) * sharesToSell;
+                    decimal actualSharesSold = 0m;
+                    decimal cashReceived = 0m;
 
-                    if (targetPrice > entryPrice) WinningTrades++;
-                    else LosingTrades++;
+                    // SELL: Making Amount = Shares given, Taking Amount = USDC received
+                    if (root.TryGetProperty("makingAmount", out var makingEl) && decimal.TryParse(makingEl.GetString(), out decimal mAmt))
+                        actualSharesSold = mAmt;
 
-                    TradeLedger.Add(new ExecutedTrade
+                    if (root.TryGetProperty("takingAmount", out var takingEl) && decimal.TryParse(takingEl.GetString(), out decimal tAmt))
+                        cashReceived = tAmt;
+
+                    if (actualSharesSold <= 0) return;
+
+                    decimal pnl = 0m;
+                    lock (BrokerLock)
                     {
-                        OutcomeId = assetId,
-                        Date = DateTime.Now,
-                        Side = "SELL",
-                        Price = targetPrice,
-                        Shares = sharesToSell,
-                        DollarValue = cashReceived
-                    });
+                        decimal entryPrice = GetAverageEntryPrice(assetId);
+                        pnl = cashReceived - (actualSharesSold * entryPrice);
+                        decimal executionPrice = cashReceived / actualSharesSold;
 
-                    CashBalance += cashReceived;
-                    SetPositionShares(assetId, 0);
-                    SetAverageEntryPrice(assetId, 0);
-                    TotalTradesExecuted++;
-                    TotalActions++;
-                }
+                        if (executionPrice > entryPrice) WinningTrades++;
+                        else LosingTrades++;
 
-                lock (ConsoleLock)
-                {
-                    Console.ForegroundColor = pnl >= 0 ? ConsoleColor.Cyan : ConsoleColor.Red;
-                    Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [LIVE SELL] {sharesToSell:0.00} shares @ ${targetPrice:0.00} | PnL: ${pnl:0.00} | ${cashReceived:0.00} | {GetMarketName(assetId)}");
-                    Console.WriteLine($"  API Response: {result}");
-                    Console.ResetColor();
+                        TradeLedger.Add(new ExecutedTrade
+                        {
+                            OutcomeId = assetId,
+                            Date = DateTime.Now,
+                            Side = "SELL (IOC)",
+                            Price = executionPrice,
+                            Shares = actualSharesSold,
+                            DollarValue = cashReceived
+                        });
+
+                        CashBalance += cashReceived; // Add exact USDC received
+                        
+                        // Deduct the exact shares we managed to sell
+                        decimal remainingShares = Math.Max(0, GetPositionShares(assetId) - actualSharesSold);
+                        SetPositionShares(assetId, remainingShares);
+                        
+                        if (remainingShares == 0) SetAverageEntryPrice(assetId, 0);
+                        
+                        TotalTradesExecuted++;
+                        TotalActions++;
+                    }
+
+                    lock (ConsoleLock)
+                    {
+                        Console.ForegroundColor = pnl >= 0 ? ConsoleColor.Cyan : ConsoleColor.Red;
+                        Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [LIVE SELL IOC] {actualSharesSold:0.00} shares | PnL: ${pnl:0.00} | Received: ${cashReceived:0.00} | {GetMarketName(assetId)}");
+                        Console.ResetColor();
+                    }
                 }
             }
             catch (Exception ex)

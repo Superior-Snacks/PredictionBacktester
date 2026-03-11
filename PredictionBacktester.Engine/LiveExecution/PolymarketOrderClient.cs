@@ -121,7 +121,7 @@ public class PolymarketOrderClient
         {
             ["order"] = orderNode,
             ["owner"] = _config.ApiKey,
-            ["orderType"] = "GTC"
+            ["orderType"] = "IOC"
         };
 
         string jsonBody = payloadNode.ToJsonString();
