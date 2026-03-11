@@ -60,24 +60,18 @@ public class PolymarketOrderClient
         size = Math.Round(size, tickDecimals, MidpointRounding.AwayFromZero);
 
         // 2. Convert to BigIntegers (USDC and conditional tokens both use 6 decimals)
-        // BUY: makerAmount (USDC) max 5 decimals → round to 10, takerAmount (shares) max 2 decimals → round to 10000
-        // SELL: makerAmount (shares) max 2 decimals → round to 10000, takerAmount (USDC) max 5 decimals → round to 10
-        const long DECIMALS = 1_000_000;
+        const decimal DECIMALS = 1_000_000m;
         BigInteger makerAmount, takerAmount;
 
         if (side == 0) // BUY: pay USDC (maker), receive shares (taker)
         {
-            long rawTaker = (long)(size * DECIMALS);
-            long rawMaker = (long)(size * price * DECIMALS);
-            takerAmount = new BigInteger(rawTaker / 10000 * 10000);  // round to 2 decimal places
-            makerAmount = new BigInteger(rawMaker / 10 * 10);        // round to 5 decimal places
+            takerAmount = new BigInteger((long)Math.Round(size * DECIMALS));
+            makerAmount = new BigInteger((long)Math.Round(size * price * DECIMALS));
         }
         else // SELL: give shares (maker), receive USDC (taker)
         {
-            long rawMaker = (long)(size * DECIMALS);
-            long rawTaker = (long)(size * price * DECIMALS);
-            makerAmount = new BigInteger(rawMaker / 10000 * 10000);  // round to 2 decimal places
-            takerAmount = new BigInteger(rawTaker / 10 * 10);        // round to 5 decimal places
+            makerAmount = new BigInteger((long)Math.Round(size * DECIMALS));
+            takerAmount = new BigInteger((long)Math.Round(size * price * DECIMALS));
         }
 
         // 3. Fetch the market's fee rate from the CLOB API
