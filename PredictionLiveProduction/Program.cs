@@ -601,12 +601,12 @@ class Program
 
         return new PolymarketApiConfig
         {
-            ApiKey = Environment.GetEnvironmentVariable("POLY_API_KEY")!,
-            ApiSecret = Environment.GetEnvironmentVariable("POLY_API_SECRET")!,
-            ApiPassphrase = Environment.GetEnvironmentVariable("POLY_API_PASSPHRASE")!,
-            PrivateKey = Environment.GetEnvironmentVariable("POLY_PRIVATE_KEY")!,
-            ProxyAddress = Environment.GetEnvironmentVariable("POLY_PROXY_ADDRESS")!,
-            RpcUrl = Environment.GetEnvironmentVariable("POLY_RPC_URL") ?? "https://polygon-rpc.com"
+            ApiKey = Environment.GetEnvironmentVariable("POLY_API_KEY")!.Trim(),
+            ApiSecret = Environment.GetEnvironmentVariable("POLY_API_SECRET")!.Trim(),
+            ApiPassphrase = Environment.GetEnvironmentVariable("POLY_API_PASSPHRASE")!.Trim(),
+            PrivateKey = Environment.GetEnvironmentVariable("POLY_PRIVATE_KEY")!.Trim(),
+            ProxyAddress = Environment.GetEnvironmentVariable("POLY_PROXY_ADDRESS")!.Trim(),
+            RpcUrl = (Environment.GetEnvironmentVariable("POLY_RPC_URL") ?? "https://polygon-rpc.com").Trim()
         };
     }
 
