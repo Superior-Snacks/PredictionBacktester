@@ -11,15 +11,21 @@ import os, json
 from py_clob_client.client import ClobClient
 from py_clob_client.clob_types import ApiCreds
 
+# Import POLY_PROXY signature type constant
+try:
+    from py_clob_client.order_builder.constants import POLY_PROXY
+except ImportError:
+    POLY_PROXY = 1  # fallback
+
 host = "https://clob.polymarket.com"
 chain_id = 137
 private_key = os.environ["POLY_PRIVATE_KEY"]
 proxy_address = os.environ["POLY_PROXY_ADDRESS"]
 
 # Step 1: Create client WITHOUT existing creds, WITH funder (proxy)
-# This tells the SDK to use POLY_PROXY mode
+# Explicitly set signature_type=POLY_PROXY (1) to ensure correct signing
 print("=== Step 1: Create client with funder (POLY_PROXY mode) ===")
-client = ClobClient(host, chain_id=chain_id, key=private_key, funder=proxy_address)
+client = ClobClient(host, chain_id=chain_id, key=private_key, funder=proxy_address, signature_type=POLY_PROXY)
 
 print(f"  EOA signer: {client.get_address()}")
 print(f"  Funder/proxy: {proxy_address}")
@@ -60,15 +66,23 @@ try:
     new_passphrase = api_creds.api_passphrase
 
     new_creds = ApiCreds(api_key=new_key, api_secret=new_secret, api_passphrase=new_passphrase)
-    client2 = ClobClient(host, chain_id=chain_id, key=private_key, creds=new_creds, funder=proxy_address)
+    client2 = ClobClient(host, chain_id=chain_id, key=private_key, creds=new_creds, funder=proxy_address, signature_type=POLY_PROXY)
 
     from py_clob_client.clob_types import OrderArgs, OrderType, PartialCreateOrderOptions
     from py_clob_client.order_builder.constants import BUY
+    import requests as req
 
-    TOKEN_ID = "23913477838590520829397598255983621021172073199756406567397887821099989290311"
+    # Find an active market token ID dynamically
+    print("  Finding active market...")
+    resp = req.get("https://gamma-api.polymarket.com/events?active=true&closed=false&limit=1")
+    events = resp.json()
+    token_id = events[0]["markets"][0]["clobTokenIds"][0]
+    market_name = events[0]["markets"][0]["question"][:50]
+    print(f"  Using: {market_name}...")
+    print(f"  Token: {token_id[:20]}...")
 
     signed_order = client2.create_order(
-        OrderArgs(token_id=TOKEN_ID, price=0.88, size=6.82, side=BUY),
+        OrderArgs(token_id=token_id, price=0.02, size=50, side=BUY),  # tiny price to avoid fill
         options=PartialCreateOrderOptions(tick_size="0.01", neg_risk=False),
     )
 
