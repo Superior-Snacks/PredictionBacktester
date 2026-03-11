@@ -63,6 +63,12 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
     private string GetTickSize(string assetId) => _tokenTickSizes.GetValueOrDefault(assetId, "0.01");
     public decimal GetMinSize(string assetId) => _tokenMinSizes.GetValueOrDefault(assetId, 1.00m);
 
+    public bool OrderDebugMode
+    {
+        get => _orderClient.DebugMode;
+        set => _orderClient.DebugMode = value;
+    }
+
     private string GetMarketName(string assetId)
     {
         if (_tokenNames.TryGetValue(assetId, out var name))

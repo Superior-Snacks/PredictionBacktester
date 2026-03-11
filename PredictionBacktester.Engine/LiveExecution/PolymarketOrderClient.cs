@@ -23,6 +23,9 @@ public class PolymarketOrderClient
     private readonly RestClient _httpClient;
     private readonly Account _account;
 
+    /// <summary>When true, prints [ORDER DEBUG] payload and [EIP712] intermediate hashes.</summary>
+    public volatile bool DebugMode = false;
+
     // CTF Exchange for standard binary markets
     private const string CTF_EXCHANGE = "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E";
     // NegRisk CTF Exchange for multi-outcome markets
@@ -77,7 +80,7 @@ public class PolymarketOrderClient
         // 3. Fetch the market's fee rate from the CLOB API
         int feeRateBps = await GetFeeRateBpsAsync(tokenId);
 
-        // 4. Build the Order Struct: POLY_PROXY mode (maker=proxy, signer=EOA, signatureType=1)
+        // 4. Build the Order Struct: POLY_GNOSIS_SAFE mode (maker=proxy, signer=EOA, signatureType=2)
         var order = new PolymarketOrder
         {
             Salt = GenerateSalt(),
@@ -87,11 +90,11 @@ public class PolymarketOrderClient
             TokenId = BigInteger.Parse(tokenId),
             MakerAmount = makerAmount,
             TakerAmount = takerAmount,
-            Expiration = BigInteger.Zero, // GTC: no expiration
-            Nonce = BigInteger.Zero,      // uniqueness comes from salt
+            Expiration = BigInteger.Zero,
+            Nonce = BigInteger.Zero,
             FeeRateBps = feeRateBps,
             Side = side,
-            SignatureType = 2 // fix?
+            SignatureType = 2 // POLY_GNOSIS_SAFE: maker=proxy, signer=EOA
         };
 
         // 4. Sign the order (EIP-712) using the correct exchange contract
@@ -126,15 +129,17 @@ public class PolymarketOrderClient
 
         string jsonBody = payloadNode.ToJsonString();
 
-        // Debug: log signing context and payload for diagnosing API rejections
-        Console.ForegroundColor = ConsoleColor.DarkYellow;
-        Console.WriteLine($"\n[ORDER DEBUG] negRisk={negRisk} | tickSize={tickSize} | exchange={verifyingContract}");
-        Console.WriteLine($"[ORDER DEBUG] maker={order.Maker} | signer={order.Signer}");
-        Console.WriteLine($"[ORDER DEBUG] price={price} | size={size} | side={(side == 0 ? "BUY" : "SELL")}");
-        Console.WriteLine($"[ORDER DEBUG] makerAmt={order.MakerAmount} | takerAmt={order.TakerAmount}");
-        Console.WriteLine($"[ORDER DEBUG] POST /order payload:");
-        Console.WriteLine(jsonBody);
-        Console.ResetColor();
+        if (DebugMode)
+        {
+            Console.ForegroundColor = ConsoleColor.DarkYellow;
+            Console.WriteLine($"\n[ORDER DEBUG] negRisk={negRisk} | tickSize={tickSize} | exchange={verifyingContract}");
+            Console.WriteLine($"[ORDER DEBUG] maker={order.Maker} | signer={order.Signer}");
+            Console.WriteLine($"[ORDER DEBUG] price={price} | size={size} | side={(side == 0 ? "BUY" : "SELL")}");
+            Console.WriteLine($"[ORDER DEBUG] makerAmt={order.MakerAmount} | takerAmt={order.TakerAmount}");
+            Console.WriteLine($"[ORDER DEBUG] POST /order payload:");
+            Console.WriteLine(jsonBody);
+            Console.ResetColor();
+        }
 
         // 5. Build request with L2 HMAC auth headers
         var request = new RestRequest("/order", Method.Post);
@@ -153,9 +158,12 @@ public class PolymarketOrderClient
 
         if (!response.IsSuccessful)
         {
-            Console.ForegroundColor = ConsoleColor.Red;
-            Console.WriteLine($"[ORDER DEBUG] HTTP {(int)response.StatusCode} | Headers: {string.Join(", ", response.Headers?.Select(h => $"{h.Name}={h.Value}") ?? Array.Empty<string>())}");
-            Console.ResetColor();
+            if (DebugMode)
+            {
+                Console.ForegroundColor = ConsoleColor.Red;
+                Console.WriteLine($"[ORDER DEBUG] HTTP {(int)response.StatusCode} | Headers: {string.Join(", ", response.Headers?.Select(h => $"{h.Name}={h.Value}") ?? Array.Empty<string>())}");
+                Console.ResetColor();
+            }
             throw new Exception($"[Polymarket API Error] {response.StatusCode}: {response.Content ?? "No response body"}");
         }
 
@@ -255,13 +263,15 @@ public class PolymarketOrderClient
         Array.Copy(signature.S, 0, sigBytes, 32, 32);
         sigBytes[64] = (byte)(signature.V[0]);
 
-        // Debug: print intermediate hashes for comparison with Python
-        Console.ForegroundColor = ConsoleColor.DarkGray;
-        Console.WriteLine($"[EIP712] typeHash:   0x{BitConverter.ToString(orderTypeHash).Replace("-", "").ToLower()}");
-        Console.WriteLine($"[EIP712] domainSep:  0x{BitConverter.ToString(domainSeparator).Replace("-", "").ToLower()}");
-        Console.WriteLine($"[EIP712] structHash: 0x{BitConverter.ToString(structHash).Replace("-", "").ToLower()}");
-        Console.WriteLine($"[EIP712] digest:     0x{BitConverter.ToString(digest).Replace("-", "").ToLower()}");
-        Console.ResetColor();
+        if (DebugMode)
+        {
+            Console.ForegroundColor = ConsoleColor.DarkGray;
+            Console.WriteLine($"[EIP712] typeHash:   0x{BitConverter.ToString(orderTypeHash).Replace("-", "").ToLower()}");
+            Console.WriteLine($"[EIP712] domainSep:  0x{BitConverter.ToString(domainSeparator).Replace("-", "").ToLower()}");
+            Console.WriteLine($"[EIP712] structHash: 0x{BitConverter.ToString(structHash).Replace("-", "").ToLower()}");
+            Console.WriteLine($"[EIP712] digest:     0x{BitConverter.ToString(digest).Replace("-", "").ToLower()}");
+            Console.ResetColor();
+        }
 
         return "0x" + BitConverter.ToString(sigBytes).Replace("-", "").ToLower();
     }

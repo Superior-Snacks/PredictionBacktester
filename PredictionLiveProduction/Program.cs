@@ -139,7 +139,7 @@ class Program
         Console.WriteLine($"  Wallet:   ${_broker.CashBalance:0.00} USDC");
         Console.WriteLine($"  Params:   Crash={CRASH_THRESHOLD} Window={TIME_WINDOW_SECONDS}s TP={TAKE_PROFIT} SL={STOP_LOSS}");
         Console.WriteLine($"  Limits:   MaxBet=${_maxBetSize} DailyLoss=${_dailyLossLimit}");
-        Console.WriteLine("  Controls: P=Pause R=Resume B=PauseBuying X=SellAll M=Mute T=Trades Q=Quiet V=Verbose S=Status");
+        Console.WriteLine("  Controls: P=Pause R=Resume N=PauseBuying X=SellAll M=Mute T=Trades Q=Quiet V=Verbose F=Debug S=Status");
         Console.WriteLine("  Settings: 1=MaxBet 2=DailyLossLimit");
         Console.WriteLine("=========================================");
 
@@ -194,7 +194,7 @@ class Program
                             Log.Information("RESUMED by user. Reconnecting...");
                             break;
 
-                        case ConsoleKey.B:
+                        case ConsoleKey.N:
                             _buyingPaused = !_buyingPaused;
                             Log.Warning("Buying {State}. Exits for open positions remain active.",
                                 _buyingPaused ? "PAUSED" : "RESUMED");
@@ -228,6 +228,11 @@ class Program
                         case ConsoleKey.G:
                             _debugGap = !_debugGap;
                             Log.Information("Gap debug: {State}", _debugGap ? "ON" : "OFF");
+                            break;
+
+                        case ConsoleKey.F:
+                            _broker.OrderDebugMode = !_broker.OrderDebugMode;
+                            Log.Information("Order debug (payload + EIP712): {State}", _broker.OrderDebugMode ? "ON" : "OFF");
                             break;
 
                         case ConsoleKey.S:
