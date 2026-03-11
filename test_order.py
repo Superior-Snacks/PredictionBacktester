@@ -24,7 +24,7 @@ api_passphrase = os.environ["POLY_API_PASSPHRASE"]
 
 creds = ApiCreds(api_key=api_key, api_secret=api_secret, api_passphrase=api_passphrase)
 client = ClobClient(host, chain_id=chain_id, key=private_key, creds=creds,
-                    funder=proxy_address, signature_type=POLY_PROXY)
+                    funder=proxy_address, signature_type=2)
 
 print(f"EOA:   {client.get_address()}")
 print(f"Proxy: {proxy_address}")
