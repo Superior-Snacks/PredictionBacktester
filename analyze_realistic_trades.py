@@ -5,7 +5,7 @@ import re
 # ==========================================
 # SIMULATION SETTINGS
 # ==========================================
-TARGET_CSV_FILE = "OLDLivePaperTrades_SNAPSHOT.csv"  # <--- Type your exact filename here!
+TARGET_CSV_FILE = "LivePaperTrades_SNAPSHOT.csv"  # <--- Type your exact filename here!
 MIN_SHARES_REQUIRED = 5.0  # Change this if you want to test stricter limits
 
 def analyze_specific_run():
