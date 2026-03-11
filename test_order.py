@@ -31,7 +31,7 @@ print(f"Proxy: {proxy_address}")
 
 # Get markets from CLOB directly (these definitely have orderbooks)
 print("\n=== Finding markets via CLOB API ===")
-clob_response = requests.get(f"{host}/markets?next_cursor=LQ==").json()
+clob_response = requests.get(f"{host}/markets").json()
 
 # FIX: Extract the list of markets from the "data" key
 markets_list = clob_response.get("data", [])
@@ -95,7 +95,7 @@ print("\nAll attempts failed. Trying one more with manual token from CLOB book e
 # Last resort: get a token we KNOW has a book
 try:
     # Use the sampling endpoint
-    sampling = requests.get(f"{host}/sampling-markets?next_cursor=LQ==").json()
+    sampling = requests.get(f"{host}/sampling-markets").json()
     for s_mkt in sampling.get("data", []):
         tokens = s_mkt.get("tokens", [])
         if not tokens:
