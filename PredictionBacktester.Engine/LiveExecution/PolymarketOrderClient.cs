@@ -87,6 +87,22 @@ public class PolymarketOrderClient
                 takerAmount -= takerAmount * feeRateBps / 10000;
         }
 
+        // 3b. Enforce Polymarket precision rules:
+        //   BUY:  makerAmount (USDC) max 5 decimals → divisible by 10
+        //         takerAmount (shares) max 2 decimals → divisible by 10000
+        //   SELL: makerAmount (shares) max 2 decimals → divisible by 10000
+        //         takerAmount (USDC) max 5 decimals → divisible by 10
+        if (side == 0)
+        {
+            makerAmount = (makerAmount / 10) * 10;
+            takerAmount = (takerAmount / 10000) * 10000;
+        }
+        else
+        {
+            makerAmount = (makerAmount / 10000) * 10000;
+            takerAmount = (takerAmount / 10) * 10;
+        }
+
         // 4. Build the Order Struct: POLY_GNOSIS_SAFE mode (maker=proxy, signer=EOA, signatureType=2)
         var order = new PolymarketOrder
         {
