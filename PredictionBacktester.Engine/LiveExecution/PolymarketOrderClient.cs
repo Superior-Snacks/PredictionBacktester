@@ -97,7 +97,7 @@ public class PolymarketOrderClient
             Nonce = BigInteger.Zero,      // uniqueness comes from salt
             FeeRateBps = feeRateBps,
             Side = side,
-            SignatureType = 1 // POLY_PROXY: maker=proxy, signer=EOA
+            SignatureType = 2 // fix?
         };
 
         // 4. Sign the order (EIP-712) using the correct exchange contract
