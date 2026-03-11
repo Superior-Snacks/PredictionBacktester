@@ -150,6 +150,7 @@ class Program
         {
             Log.Warning("Graceful shutdown initiated...");
             ExportLedgerToCsv(quietMode: false);
+            _broker.SaveState(_subscribedTokens);
             PrintDashboard();
             Log.Information("Engine terminated.");
             Log.CloseAndFlush();
@@ -288,9 +289,12 @@ class Program
         // ==========================================
         // 7b. ON-CHAIN STATE SYNC (Startup)
         // ==========================================
-        Log.Information("Running startup on-chain state sync (this may take a minute or two)...");
+        Log.Information("Loading local state and running startup on-chain sync...");
         
-        // FIX: Pass fullDiscovery: true so it finds your manual web trades
+        // 1. Restore entry prices from memory
+        _broker.LoadState();
+
+        // 2. Validate actual share counts against the blockchain
         await _broker.RunFullSyncAsync(_subscribedTokens, _tokenNames, fullDiscovery: true);
         
         _dayStartEquity = _broker.GetTotalPortfolioValue();
@@ -307,6 +311,8 @@ class Program
 
                 if (!_quietMode) PrintDashboard();
                 ExportLedgerToCsv(quietMode: true);
+
+                _broker.SaveState(_subscribedTokens);
 
                 // Check for settled markets
                 try

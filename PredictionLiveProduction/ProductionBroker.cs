@@ -5,6 +5,8 @@ using System.Threading.Tasks;
 using PredictionBacktester.Engine;
 using PredictionBacktester.Engine.LiveExecution;
 using Serilog;
+using System.IO;
+using System.Text.Json;
 
 namespace PredictionLiveProduction;
 
@@ -176,4 +178,74 @@ public class ProductionBroker : PolymarketLiveBroker
 
         Log.Information("[SYNC] Reconciliation complete.");
     }
+
+    // --- PERSISTENT MEMORY ---
+    public class PositionState
+    {
+        public decimal YesShares { get; set; }
+        public decimal YesEntryPrice { get; set; }
+        public decimal NoShares { get; set; }
+        public decimal NoEntryPrice { get; set; }
+    }
+
+    public void SaveState(IEnumerable<string> tokenIds, string filepath = "bot_state.json")
+    {
+        var state = new Dictionary<string, PositionState>();
+        foreach (var assetId in tokenIds)
+        {
+            decimal yesShares = GetPositionShares(assetId);
+            decimal noShares = GetNoPositionShares(assetId);
+
+            if (yesShares > 0 || noShares > 0)
+            {
+                state[assetId] = new PositionState
+                {
+                    YesShares = yesShares,
+                    YesEntryPrice = GetAverageEntryPrice(assetId),
+                    NoShares = noShares,
+                    NoEntryPrice = GetAverageNoEntryPrice(assetId)
+                };
+            }
+        }
+        
+        string json = JsonSerializer.Serialize(state, new JsonSerializerOptions { WriteIndented = true });
+        File.WriteAllText(filepath, json);
+    }
+
+    public void LoadState(string filepath = "bot_state.json")
+    {
+        if (!File.Exists(filepath)) return;
+
+        try
+        {
+            string json = File.ReadAllText(filepath);
+            var state = JsonSerializer.Deserialize<Dictionary<string, PositionState>>(json);
+
+            if (state != null)
+            {
+                lock (BrokerLock)
+                {
+                    foreach (var kvp in state)
+                    {
+                        if (kvp.Value.YesShares > 0)
+                        {
+                            SetPositionShares(kvp.Key, kvp.Value.YesShares);
+                            SetAverageEntryPrice(kvp.Key, kvp.Value.YesEntryPrice);
+                        }
+                        if (kvp.Value.NoShares > 0)
+                        {
+                            SetNoPositionShares(kvp.Key, kvp.Value.NoShares);
+                            SetAverageNoEntryPrice(kvp.Key, kvp.Value.NoEntryPrice);
+                        }
+                    }
+                }
+                Log.Information("[STATE] Successfully loaded {Count} positions from local memory.", state.Count);
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Error("[STATE] Failed to load bot_state.json: {Error}", ex.Message);
+        }
+    }
 }
+
