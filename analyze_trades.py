@@ -12,20 +12,25 @@ def analyze_latest_run():
     # Filter out our snapshot file so we don't accidentally analyze an old snapshot
     valid_files = [f for f in csv_files if "SNAPSHOT" not in f and "_summary" not in f]
 
-    if not valid_files:
-        print("No CSV files found! Make sure the bot has exported a ledger.")
-        return
-
-    latest_file = max(valid_files, key=os.path.getctime)
-    
-    # 2. THE SAFE CLONE: Copy the live file to a snapshot so C# doesn't get blocked!
-    snapshot_file = "PredictionLiveTrader/LivePaperTrades_SNAPSHOT.csv"
-    try:
-        shutil.copy2(latest_file, snapshot_file)
-        print(f"\n📸 Created safe snapshot: {os.path.basename(latest_file)}")
-    except Exception as e:
-        print(f"Failed to create snapshot: {e}")
-        return
+    if valid_files:
+        latest_file = max(valid_files, key=os.path.getctime)
+        # 2. THE SAFE CLONE: Copy the live file to a snapshot so C# doesn't get blocked!
+        snapshot_file = "PredictionLiveTrader/LivePaperTrades_SNAPSHOT.csv"
+        try:
+            shutil.copy2(latest_file, snapshot_file)
+            print(f"\n📸 Created safe snapshot: {os.path.basename(latest_file)}")
+        except Exception as e:
+            print(f"Failed to create snapshot: {e}")
+            return
+    else:
+        # Fallback: use existing snapshot files directly
+        snapshot_candidates = [f for f in csv_files if "SNAPSHOT" in f and "_summary" not in f]
+        if not snapshot_candidates:
+            print("No CSV files found! Make sure the bot has exported a ledger.")
+            return
+        snapshot_file = max(snapshot_candidates, key=os.path.getctime)
+        latest_file = snapshot_file
+        print(f"\n📸 No live CSV found — using existing snapshot: {os.path.basename(snapshot_file)}")
 
     print("="*80)
     print(f"📊 ANALYZING SNAPSHOT DATA")

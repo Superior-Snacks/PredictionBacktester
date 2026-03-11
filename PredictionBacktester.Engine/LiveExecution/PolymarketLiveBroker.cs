@@ -19,6 +19,8 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
     private readonly Dictionary<string, string> _tokenTickSizes;
     private readonly Dictionary<string, decimal> _tokenMinSizes;
 
+    private readonly Dictionary<string, string> _tokenFeeRates = new();
+
     public PolymarketLiveBroker(
         string strategyName,
         decimal initialCapital,
@@ -54,10 +56,23 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
 
         Console.ForegroundColor = ConsoleColor.Yellow;
         Console.WriteLine($"[LIVE] Wallet USDC balance: ${balance:0.00}");
+        Console.WriteLine($"[LIVE] Pre-fetching fee rates for {tokenNames.Count} markets...");
         Console.ResetColor();
 
-        return new PolymarketLiveBroker(strategyName, balance, config, tokenNames, tokenNegRisk, tokenTickSizes, tokenMinSizes);
+        var broker = new PolymarketLiveBroker(strategyName, balance, config, tokenNames, tokenNegRisk, tokenTickSizes, tokenMinSizes);
+
+        // PRE-FETCH LOOP: Load all fees into memory before trading starts
+        foreach (var assetId in tokenNames.Keys)
+        {
+            string fee = await client.GetTakerFeeAsync(assetId);
+            broker._tokenFeeRates[assetId] = fee;
+        }
+
+        Console.WriteLine($"[LIVE] All fees loaded. Ready to snipe.");
+        return broker;
     }
+
+    private string GetFeeRate(string assetId) => _tokenFeeRates.GetValueOrDefault(assetId, "0");
 
     private bool GetNegRisk(string assetId) => _tokenNegRisk.GetValueOrDefault(assetId, false);
     private string GetTickSize(string assetId) => _tokenTickSizes.GetValueOrDefault(assetId, "0.01");
@@ -108,8 +123,7 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
             try
             {
                 string result = await _orderClient.SubmitOrderAsync(
-                    assetId, targetPrice, shares, side: 0, GetNegRisk(assetId), GetTickSize(assetId));
-
+                    assetId, targetPrice, shares, side: 0, GetNegRisk(assetId), GetTickSize(assetId), GetFeeRate(assetId));
                 // 1. Parse the JSON receipt from Polymarket
                 using var doc = System.Text.Json.JsonDocument.Parse(result);
                 var root = doc.RootElement;

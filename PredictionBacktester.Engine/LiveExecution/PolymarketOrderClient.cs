@@ -365,4 +365,37 @@ public class PolymarketOrderClient
     {
         return new BigInteger(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
     }
+
+    /// <summary>
+        /// Fetches the exact taker fee (in basis points) for a specific token.
+        /// </summary>
+        public async Task<string> GetTakerFeeAsync(string tokenId)
+        {
+            try
+            {
+                // The CLOB API provides market metadata by token ID
+                using var request = new HttpRequestMessage(HttpMethod.Get, $"{_config.Host}/markets/{tokenId}");
+                
+                // Add your standard API headers (from your existing auth logic)
+                request.Headers.Add("POLY_API_KEY", _config.ApiKey);
+                
+                var response = await _httpClient.SendAsync(request);
+                if (response.IsSuccessStatusCode)
+                {
+                    string json = await response.Content.ReadAsStringAsync();
+                    using var doc = System.Text.Json.JsonDocument.Parse(json);
+                    var root = doc.RootElement;
+                    
+                    if (root.TryGetProperty("taker_fee_bps", out var feeEl))
+                    {
+                        return feeEl.GetString() ?? "0";
+                    }
+                }
+            }
+            catch (Exception)
+            {
+                // Silent catch: if it fails, we fall back to "0"
+            }
+            return "0"; // Default to 0 if not found
+        }
 }
