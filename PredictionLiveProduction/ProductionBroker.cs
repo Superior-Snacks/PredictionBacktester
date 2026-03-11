@@ -117,10 +117,10 @@ public class ProductionBroker : PolymarketLiveBroker
                     {
                         SetPositionShares(tokenId, onChainShares);
 
-                        // If we discovered shares on-chain but had no local record,
-                        // set a neutral entry price (we don't know the real one)
-                        if (localShares == 0 && onChainShares > 0)
-                            SetAverageEntryPrice(tokenId, 0.50m);
+                        if (onChainShares == 0)
+                            SetAverageEntryPrice(tokenId, 0); // Position gone — clear entry price
+                        else if (localShares == 0 && onChainShares > 0)
+                            SetAverageEntryPrice(tokenId, 0.50m); // Discovered untracked shares — neutral price
                     }
 
                     mismatches.Add((tokenId, localShares, onChainShares));
