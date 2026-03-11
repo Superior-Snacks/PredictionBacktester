@@ -31,11 +31,14 @@ print(f"Proxy: {proxy_address}")
 
 # Get markets from CLOB directly (these definitely have orderbooks)
 print("\n=== Finding markets via CLOB API ===")
-clob_markets = requests.get(f"{host}/markets?next_cursor=LQ==").json()
-print(f"Got {len(clob_markets)} markets from CLOB")
+clob_response = requests.get(f"{host}/markets?next_cursor=LQ==").json()
+
+# FIX: Extract the list of markets from the "data" key
+markets_list = clob_response.get("data", [])
+print(f"Got {len(markets_list)} markets from CLOB")
 
 attempts = 0
-for mkt in clob_markets:
+for mkt in markets_list:
     if attempts >= 5:
         break
     tokens = mkt.get("tokens", [])
