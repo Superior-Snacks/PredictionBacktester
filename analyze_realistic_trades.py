@@ -1,6 +1,6 @@
 import pandas as pd
 
-def analyze_realistic_trades(csv_path, min_shares_required=1.0):
+def analyze_realistic_trades(csv_path, min_shares_required=5.0):
     print(f"Loading {csv_path}...")
     
     # Load the CSV and ensure it's sorted chronologically
