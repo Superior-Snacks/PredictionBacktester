@@ -10,7 +10,7 @@ using Nethereum.ABI.EIP712;
 using Nethereum.ABI.FunctionEncoding.Attributes;
 using Nethereum.Contracts;
 using Nethereum.Signer;
-using Nethereum.Signer.EIP712;
+using Nethereum.Util;
 using Nethereum.Web3;
 using Nethereum.Web3.Accounts;
 using RestSharp;
@@ -202,23 +202,107 @@ public class PolymarketOrderClient
 
     private static readonly string BalanceOfErc1155Abi = @"[{""constant"":true,""inputs"":[{""name"":""account"",""type"":""address""},{""name"":""id"",""type"":""uint256""}],""name"":""balanceOf"",""outputs"":[{""name"":"""",""type"":""uint256""}],""type"":""function""}]";
 
+    // Manual EIP-712 signing — bypasses Nethereum's SignTypedDataV4 to ensure
+    // the type hash and encoding match Polymarket's on-chain contract exactly.
     private string SignOrder(PolymarketOrder order, string verifyingContract)
     {
-        var typedData = new TypedData<Domain>
-        {
-            Domain = new Domain
-            {
-                Name = "Polymarket CTF Exchange",
-                Version = "1",
-                ChainId = BigInteger.Parse(_config.ChainId),
-                VerifyingContract = verifyingContract
-            },
-            Types = MemberDescriptionFactory.GetTypesMemberDescription(typeof(Domain), typeof(PolymarketOrder)),
-            PrimaryType = "Order"
-        };
+        // 1. ORDER_TYPEHASH = keccak256("Order(uint256 salt,address maker,...)")
+        byte[] orderTypeHash = Sha3Keccack.Current.CalculateHash(
+            Encoding.UTF8.GetBytes(
+                "Order(uint256 salt,address maker,address signer,address taker,uint256 tokenId,uint256 makerAmount,uint256 takerAmount,uint256 expiration,uint256 nonce,uint256 feeRateBps,uint8 side,uint8 signatureType)"
+            ));
 
-        var signer = new Eip712TypedDataSigner();
-        return signer.SignTypedDataV4(order, typedData, new EthECKey(_account.PrivateKey));
+        // 2. DOMAIN_SEPARATOR
+        byte[] domainTypeHash = Sha3Keccack.Current.CalculateHash(
+            Encoding.UTF8.GetBytes(
+                "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"
+            ));
+        byte[] nameHash = Sha3Keccack.Current.CalculateHash(
+            Encoding.UTF8.GetBytes("Polymarket CTF Exchange"));
+        byte[] versionHash = Sha3Keccack.Current.CalculateHash(
+            Encoding.UTF8.GetBytes("1"));
+
+        byte[] domainData = ConcatBytes(
+            domainTypeHash,
+            nameHash,
+            versionHash,
+            PadUint256(BigInteger.Parse(_config.ChainId)),
+            PadAddress(verifyingContract)
+        );
+        byte[] domainSeparator = Sha3Keccack.Current.CalculateHash(domainData);
+
+        // 3. struct hash = keccak256(typeHash || encoded fields)
+        byte[] structData = ConcatBytes(
+            orderTypeHash,
+            PadUint256(order.Salt),
+            PadAddress(order.Maker),
+            PadAddress(order.Signer),
+            PadAddress(order.Taker),
+            PadUint256(order.TokenId),
+            PadUint256(order.MakerAmount),
+            PadUint256(order.TakerAmount),
+            PadUint256(order.Expiration),
+            PadUint256(order.Nonce),
+            PadUint256(order.FeeRateBps),
+            PadUint256(new BigInteger(order.Side)),        // uint8 → abi-encoded as 32 bytes
+            PadUint256(new BigInteger(order.SignatureType)) // uint8 → abi-encoded as 32 bytes
+        );
+        byte[] structHash = Sha3Keccack.Current.CalculateHash(structData);
+
+        // 4. digest = keccak256("\x19\x01" || domainSeparator || structHash)
+        byte[] digest = Sha3Keccack.Current.CalculateHash(
+            ConcatBytes(new byte[] { 0x19, 0x01 }, domainSeparator, structHash));
+
+        // 5. ECDSA sign the digest
+        var ecKey = new EthECKey(_account.PrivateKey);
+        var signature = ecKey.SignAndCalculateV(digest);
+        byte[] sigBytes = new byte[65];
+        Array.Copy(signature.R, 0, sigBytes, 0, 32);
+        Array.Copy(signature.S, 0, sigBytes, 32, 32);
+        sigBytes[64] = (byte)(signature.V[0]);
+
+        // Debug: print intermediate hashes for comparison with Python
+        Console.ForegroundColor = ConsoleColor.DarkGray;
+        Console.WriteLine($"[EIP712] typeHash:   0x{BitConverter.ToString(orderTypeHash).Replace("-", "").ToLower()}");
+        Console.WriteLine($"[EIP712] domainSep:  0x{BitConverter.ToString(domainSeparator).Replace("-", "").ToLower()}");
+        Console.WriteLine($"[EIP712] structHash: 0x{BitConverter.ToString(structHash).Replace("-", "").ToLower()}");
+        Console.WriteLine($"[EIP712] digest:     0x{BitConverter.ToString(digest).Replace("-", "").ToLower()}");
+        Console.ResetColor();
+
+        return "0x" + BitConverter.ToString(sigBytes).Replace("-", "").ToLower();
+    }
+
+    private static byte[] PadUint256(BigInteger value)
+    {
+        // ABI-encode as uint256: big-endian, left-padded to 32 bytes
+        byte[] raw = value.ToByteArray(isUnsigned: true, isBigEndian: true);
+        byte[] padded = new byte[32];
+        Array.Copy(raw, 0, padded, 32 - raw.Length, raw.Length);
+        return padded;
+    }
+
+    private static byte[] PadAddress(string address)
+    {
+        // ABI-encode address: strip 0x, parse hex, left-pad to 32 bytes
+        string hex = address.StartsWith("0x") ? address[2..] : address;
+        byte[] raw = Convert.FromHexString(hex);
+        byte[] padded = new byte[32];
+        Array.Copy(raw, 0, padded, 32 - raw.Length, raw.Length);
+        return padded;
+    }
+
+    private static byte[] ConcatBytes(params byte[][] arrays)
+    {
+        int totalLen = 0;
+        foreach (var a in arrays) totalLen += a.Length;
+        byte[] result = new byte[totalLen];
+        int offset = 0;
+        foreach (var a in arrays)
+        {
+            Array.Copy(a, 0, result, offset, a.Length);
+            offset += a.Length;
+        }
+        return result;
     }
 
     /// <summary>
