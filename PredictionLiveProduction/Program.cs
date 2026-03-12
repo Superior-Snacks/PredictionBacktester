@@ -29,7 +29,7 @@ class Program
     private const long TIME_WINDOW_SECONDS = 20;
     private const decimal TAKE_PROFIT = 0.05m;
     private const decimal STOP_LOSS = 0.10m;
-    private const decimal RISK_PERCENTAGE = 0.05m;
+    private const decimal RISK_PERCENTAGE = 0.10m;
     private const decimal ENTRY_SLIPPAGE = 0.03m;
     private const decimal EXIT_SLIPPAGE = 0.03m;
 
