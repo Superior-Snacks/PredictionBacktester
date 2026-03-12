@@ -518,16 +518,7 @@ class Program
 
                                                 var book = orderBooks[assetId];
 
-                                                if (side == "BUY")
-                                                {
-                                                    if (size == 0) book.Bids.Remove(price);
-                                                    else book.Bids[price] = size;
-                                                }
-                                                else if (side == "SELL")
-                                                {
-                                                    if (size == 0) book.Asks.Remove(price);
-                                                    else book.Asks[price] = size;
-                                                }
+                                                book.UpdatePriceLevel(side, price, size);
 
                                                 if (!_isMuted && !_quietMode) lock (GlobalSimulatedBroker.ConsoleLock)
                                                 {

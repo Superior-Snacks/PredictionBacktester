@@ -96,4 +96,21 @@ public class LocalOrderBook
             else _bids[bestPrice] = remaining;
         }
     }
+
+    public void UpdatePriceLevel(string side, decimal price, decimal size)
+    {
+        lock (_bookLock)
+        {
+            if (side == "BUY")
+            {
+                if (size == 0) _bids.Remove(price);
+                else _bids[price] = size;
+            }
+            else if (side == "SELL")
+            {
+                if (size == 0) _asks.Remove(price);
+                else _asks[price] = size;
+            }
+        }
+    }
 }
