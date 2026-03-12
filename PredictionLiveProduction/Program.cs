@@ -766,8 +766,25 @@ class Program
     // ==========================================
     private static void PrintDashboard()
     {
-        decimal totalEquity = _broker.GetTotalPortfolioValue();
-        decimal pnl = totalEquity - _broker.CashBalance; // unrealized
+        decimal cash = _broker.CashBalance;
+        decimal mtmValue = 0m;
+
+        // THE FIX: Calculate explicit MTM by checking the live order book's best bid!
+        foreach (var assetId in _subscribedTokens)
+        {
+            decimal shares = _broker.GetPositionShares(assetId);
+            if (shares > 0 && _orderBooks.TryGetValue(assetId, out var book))
+            {
+                decimal bestBid = book.GetBestBidPrice();
+                
+                // If the book is completely empty, fallback to our entry price to prevent MTM from flashing $0
+                if (bestBid <= 0.00m) bestBid = _broker.GetAverageEntryPrice(assetId); 
+                
+                mtmValue += (shares * bestBid);
+            }
+        }
+
+        decimal totalEquity = cash + mtmValue;
         decimal dailyPnl = totalEquity - _dayStartEquity;
 
         lock (GlobalSimulatedBroker.ConsoleLock)
@@ -776,8 +793,8 @@ class Program
             Console.WriteLine("================= PRODUCTION DASHBOARD =================");
             Console.ForegroundColor = totalEquity >= _dayStartEquity ? ConsoleColor.Green : ConsoleColor.Red;
             Console.WriteLine($"  Equity:     ${totalEquity:0.00}");
-            Console.WriteLine($"  Cash:       ${_broker.CashBalance:0.00}");
-            Console.WriteLine($"  MTM Value:  ${pnl:0.00}");
+            Console.WriteLine($"  Cash:       ${cash:0.00}");
+            Console.WriteLine($"  MTM Value:  ${mtmValue:0.00}");
             Console.WriteLine($"  Daily PnL:  ${dailyPnl:0.00} (limit: -${_dailyLossLimit:0.00})");
             Console.WriteLine($"  Actions:    {_broker.TotalActions}");
             Console.WriteLine($"  Exits:      {_broker.TotalTradesExecuted} (W:{_broker.WinningTrades} L:{_broker.LosingTrades})");

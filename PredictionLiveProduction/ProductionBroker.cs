@@ -154,14 +154,37 @@ public class ProductionBroker : PolymarketLiveBroker
             Log.Information("[SYNC] Cash OK: ${Balance:0.00}", CashBalance);
 
         // 2. Sync positions 
-        // FIX: If fullDiscovery is true, scan everything. Otherwise, optimize.
         var heldTokens = fullDiscovery 
             ? tokenIds.ToList() 
             : tokenIds.Where(t => GetPositionShares(t) > 0 || GetNoPositionShares(t) > 0).ToList();
 
-        Log.Information("[SYNC] Checking {Count} position(s) on-chain...", heldTokens.Count);
+        if (heldTokens.Count > 0)
+            Log.Information("[SYNC] Checking {Count} position(s) on-chain...", heldTokens.Count);
 
         var mismatches = await SyncPositionsAsync(heldTokens);
+
+        // ==========================================
+        // THE FIX: Explicitly log the open positions!
+        // ==========================================
+        var activePositions = heldTokens.Where(t => GetPositionShares(t) > 0 || GetNoPositionShares(t) > 0).ToList();
+        
+        if (activePositions.Count > 0)
+        {
+            Log.Information("[SYNC] --- CURRENT OPEN POSITIONS ---");
+            foreach (var tokenId in activePositions)
+            {
+                string name = tokenNames?.GetValueOrDefault(tokenId) ?? tokenId[..Math.Min(8, tokenId.Length)] + "...";
+                decimal yesShares = GetPositionShares(tokenId);
+                decimal noShares = GetNoPositionShares(tokenId);
+                
+                if (yesShares > 0)
+                    Log.Information("       -> {Shares:0.00} YES shares | {Name}", yesShares, name);
+                if (noShares > 0)
+                    Log.Information("       -> {Shares:0.00} NO shares  | {Name}", noShares, name);
+            }
+            Log.Information("[SYNC] --------------------------------");
+        }
+
         if (mismatches.Count > 0)
         {
             foreach (var (tokenId, local, onChain) in mismatches)

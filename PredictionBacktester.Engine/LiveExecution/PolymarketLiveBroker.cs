@@ -237,7 +237,7 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
                     try
                     {
                         result = await _orderClient.SubmitOrderAsync(
-                            assetId, targetPrice, sharesToSell, side: 1, GetNegRisk(assetId), GetTickSize(assetId));
+                            assetId, targetPrice, sharesToSell, side: 1, GetNegRisk(assetId), GetTickSize(assetId), GetFeeRate(assetId));
                         break; // Success! The tokens arrived.
                     }
                     catch (Exception ex) when (ex.Message.Contains("not enough balance") && attempt < maxRetries)
