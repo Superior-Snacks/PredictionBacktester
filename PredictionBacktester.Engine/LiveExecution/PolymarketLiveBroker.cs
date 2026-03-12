@@ -92,7 +92,6 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
                 }
                 catch (Exception ex) when (ex.Message.Contains("invalid fee rate") && ex.Message.Contains("taker fee:"))
                 {
-                    // THE FIX: Automatically extract the correct fee from the error message and retry!
                     var match = System.Text.RegularExpressions.Regex.Match(ex.Message, @"taker fee:\s*(\d+)");
                     if (match.Success && int.TryParse(match.Groups[1].Value, out int requiredFee))
                     {
@@ -117,14 +116,12 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
                     decimal actualShares = 0m;
                     decimal actualDollars = 0m;
 
-                    // THE FIX: Use the raw API's snake_case keys and .ToString() for safety
                     if (root.TryGetProperty("taking_amount", out var takingEl) && decimal.TryParse(takingEl.ToString(), out decimal tAmt))
                         actualShares = tAmt;
 
                     if (root.TryGetProperty("making_amount", out var makingEl) && decimal.TryParse(makingEl.ToString(), out decimal mAmt))
                         actualDollars = mAmt;
 
-                    // If IOC completely missed (0 shares), abort.
                     if (actualShares <= 0) 
                     {
                         if (!IsMuted) lock (ConsoleLock)
@@ -136,7 +133,6 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
                         return;
                     }
 
-                    // 2. Update memory using the ACTUAL fill amounts
                     lock (BrokerLock)
                     {
                         decimal currentShares = GetPositionShares(assetId);
@@ -145,7 +141,7 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
 
                         SetPositionShares(assetId, currentShares + actualShares);
                         SetAverageEntryPrice(assetId, totalCost / (currentShares + actualShares));
-                        CashBalance -= actualDollars; // Subtract exact USDC spent
+                        CashBalance -= actualDollars;
 
                         TradeLedger.Add(new ExecutedTrade
                         {
@@ -226,7 +222,6 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
                                 Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [FEE AUTOCORRECT] {GetMarketName(assetId)} requires fee {requiredFee}. Retrying sell...");
                                 Console.ResetColor();
                             }
-                            // Try again on the next loop iteration, but the fee will now be updated!
                         }
                         else throw;
                     }
@@ -252,7 +247,6 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
                     decimal actualSharesSold = 0m;
                     decimal cashReceived = 0m;
 
-                    // THE FIX: SELL means Making = Shares given, Taking = USDC received
                     if (root.TryGetProperty("making_amount", out var makingEl) && decimal.TryParse(makingEl.ToString(), out decimal mAmt))
                         actualSharesSold = mAmt;
 
@@ -286,7 +280,7 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
                             Price = executionPrice, Shares = actualSharesSold, DollarValue = cashReceived
                         });
 
-                        CashBalance += cashReceived; // Add exact USDC received
+                        CashBalance += cashReceived; 
                         
                         decimal remainingShares = Math.Max(0, GetPositionShares(assetId) - actualSharesSold);
                         SetPositionShares(assetId, remainingShares);
@@ -307,11 +301,48 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
             catch (Exception ex)
             {
                 Interlocked.Increment(ref _rejectedOrders);
-                if (!IsMuted) lock (ConsoleLock)
+                
+                // THE MISSING FIX: Emergency On-Demand Sync for balance mismatches
+                if (ex.Message.Contains("balance", StringComparison.OrdinalIgnoreCase) || 
+                    ex.Message.Contains("insufficient", StringComparison.OrdinalIgnoreCase))
                 {
-                    Console.ForegroundColor = ConsoleColor.Red;
-                    Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [LIVE SELL FAILED] {GetMarketName(assetId)}: {ex.Message}");
-                    Console.ResetColor();
+                    if (!IsMuted) lock (ConsoleLock)
+                    {
+                        Console.ForegroundColor = ConsoleColor.Magenta;
+                        Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [EMERGENCY SYNC] Balance mismatch on {GetMarketName(assetId)}. Fetching truth from chain...");
+                        Console.ResetColor();
+                    }
+
+                    try 
+                    {
+                        decimal realShares = await _orderClient.GetTokenBalanceAsync(assetId);
+                        
+                        lock (BrokerLock)
+                        {
+                            SetPositionShares(assetId, realShares);
+                            if (realShares == 0) SetAverageEntryPrice(assetId, 0);
+                        }
+
+                        if (!IsMuted) lock (ConsoleLock)
+                        {
+                            Console.ForegroundColor = ConsoleColor.Magenta;
+                            Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [EMERGENCY SYNC] Corrected memory to {realShares:0.00} shares. Will cleanly exit on next tick.");
+                            Console.ResetColor();
+                        }
+                    }
+                    catch (Exception syncEx)
+                    {
+                        Console.WriteLine($"Emergency sync failed: {syncEx.Message}");
+                    }
+                }
+                else
+                {
+                    if (!IsMuted) lock (ConsoleLock)
+                    {
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [LIVE SELL FAILED] {GetMarketName(assetId)}: {ex.Message}");
+                        Console.ResetColor();
+                    }
                 }
             }
             finally
