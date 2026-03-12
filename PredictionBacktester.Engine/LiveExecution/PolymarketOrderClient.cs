@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Numerics;
 using System.Security.Cryptography;
 using System.Text;
@@ -49,7 +50,9 @@ public class PolymarketOrderClient
     /// <param name="size">Number of shares</param>
     /// <param name="side">0 = Buy, 1 = Sell</param>
     /// <param name="negRisk">True for multi-outcome (NegRisk) markets</param>
-    public async Task<string> SubmitOrderAsync(string tokenId, decimal price, decimal size, int side, bool negRisk = false, string tickSize = "0.01")
+    /// <param name="tickSize">The tick size of the market (e.g. 0.01)</param>
+    /// <param name="feeRateBps">The exact taker fee in basis points</param>
+    public async Task<string> SubmitOrderAsync(string tokenId, decimal price, decimal size, int side, bool negRisk = false, string tickSize = "0.01", int feeRateBps = 0)
     {
         // 1. ROUND PRICE AND SIZE to match the market's tick size
         int tickDecimals = tickSize switch
@@ -77,17 +80,7 @@ public class PolymarketOrderClient
             takerAmount = new BigInteger((long)Math.Round(size * price * DECIMALS));
         }
 
-        // 3. Fetch the market's fee rate and adjust amounts to include the fee
-        int feeRateBps = await GetFeeRateBpsAsync(tokenId);
-        if (feeRateBps > 0)
-        {
-            if (side == 0) // BUY: buyer pays more USDC to cover the fee
-                makerAmount += makerAmount * feeRateBps / 10000;
-            else           // SELL: seller receives less USDC after the fee
-                takerAmount -= takerAmount * feeRateBps / 10000;
-        }
-
-        // 3b. Enforce Polymarket precision rules:
+        // 3. Enforce Polymarket precision rules (DO NOT ALTER AMOUNTS FOR FEES!)
         //   BUY:  makerAmount (USDC) max 5 decimals → divisible by 10
         //         takerAmount (shares) max 2 decimals → divisible by 10000
         //   SELL: makerAmount (shares) max 2 decimals → divisible by 10000
@@ -115,16 +108,16 @@ public class PolymarketOrderClient
             TakerAmount = takerAmount,
             Expiration = BigInteger.Zero,
             Nonce = BigInteger.Zero,
-            FeeRateBps = feeRateBps,
+            FeeRateBps = new BigInteger(feeRateBps),
             Side = side,
             SignatureType = 2 // POLY_GNOSIS_SAFE: maker=proxy, signer=EOA
         };
 
-        // 4. Sign the order (EIP-712) using the correct exchange contract
+        // 5. Sign the order (EIP-712) using the correct exchange contract
         string verifyingContract = negRisk ? NEG_RISK_EXCHANGE : CTF_EXCHANGE;
         string signature = SignOrder(order, verifyingContract);
 
-        // 5. Build JSON body using JsonNode so salt (BigInteger) serializes as a JSON number
+        // 6. Build JSON body using JsonNode so salt (BigInteger) serializes as a JSON number
         var orderNode = new JsonObject
         {
             ["salt"] = (long)order.Salt,
@@ -142,7 +135,6 @@ public class PolymarketOrderClient
             ["signature"] = signature
         };
 
-        // 6. Final Payload (tickSize and negRisk are SDK-level options, NOT part of the POST body)
         var payloadNode = new JsonObject
         {
             ["order"] = orderNode,
@@ -159,12 +151,13 @@ public class PolymarketOrderClient
             Console.WriteLine($"[ORDER DEBUG] maker={order.Maker} | signer={order.Signer}");
             Console.WriteLine($"[ORDER DEBUG] price={price} | size={size} | side={(side == 0 ? "BUY" : "SELL")}");
             Console.WriteLine($"[ORDER DEBUG] makerAmt={order.MakerAmount} | takerAmt={order.TakerAmount}");
+            Console.WriteLine($"[ORDER DEBUG] feeRateBps={feeRateBps}");
             Console.WriteLine($"[ORDER DEBUG] POST /order payload:");
             Console.WriteLine(jsonBody);
             Console.ResetColor();
         }
 
-        // 5. Build request with L2 HMAC auth headers
+        // 7. Build request with L2 HMAC auth headers
         var request = new RestRequest("/order", Method.Post);
         string timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString();
         string hmacSignature = BuildHmacSignature(_config.ApiSecret, timestamp, "POST", "/order", jsonBody);
@@ -176,7 +169,7 @@ public class PolymarketOrderClient
         request.AddHeader("POLY_PASSPHRASE", _config.ApiPassphrase);
         request.AddStringBody(jsonBody, ContentType.Json);
 
-        // 6. Submit
+        // 8. Submit
         var response = await _httpClient.ExecuteAsync(request);
 
         if (!response.IsSuccessful)
@@ -195,7 +188,6 @@ public class PolymarketOrderClient
 
     /// <summary>
     /// Queries the on-chain USDC balance for the proxy wallet.
-    /// Returns the balance as a decimal in dollars (e.g. 250.50).
     /// </summary>
     public async Task<decimal> GetUsdcBalanceAsync()
     {
@@ -206,13 +198,12 @@ public class PolymarketOrderClient
         return (decimal)rawBalance / (decimal)Math.Pow(10, USDC_DECIMALS);
     }
 
-    // Conditional Token Framework (ERC-1155) on Polygon — holds YES/NO position tokens
+    // Conditional Token Framework (ERC-1155) on Polygon
     private const string CTF_CONTRACT = "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045";
     private const int CTF_DECIMALS = 6;
 
     /// <summary>
-    /// Queries the on-chain balance of a conditional token (YES/NO position) for the proxy wallet.
-    /// TokenId is the CLOB token ID (a large uint256). Returns shares as a decimal (e.g. 150.50 shares).
+    /// Queries the on-chain balance of a conditional token for the proxy wallet.
     /// </summary>
     public async Task<decimal> GetTokenBalanceAsync(string tokenId)
     {
@@ -227,17 +218,14 @@ public class PolymarketOrderClient
 
     private static readonly string BalanceOfErc1155Abi = @"[{""constant"":true,""inputs"":[{""name"":""account"",""type"":""address""},{""name"":""id"",""type"":""uint256""}],""name"":""balanceOf"",""outputs"":[{""name"":"""",""type"":""uint256""}],""type"":""function""}]";
 
-    // Manual EIP-712 signing — bypasses Nethereum's SignTypedDataV4 to ensure
-    // the type hash and encoding match Polymarket's on-chain contract exactly.
+    // Manual EIP-712 signing
     private string SignOrder(PolymarketOrder order, string verifyingContract)
     {
-        // 1. ORDER_TYPEHASH = keccak256("Order(uint256 salt,address maker,...)")
         byte[] orderTypeHash = Sha3Keccack.Current.CalculateHash(
             Encoding.UTF8.GetBytes(
                 "Order(uint256 salt,address maker,address signer,address taker,uint256 tokenId,uint256 makerAmount,uint256 takerAmount,uint256 expiration,uint256 nonce,uint256 feeRateBps,uint8 side,uint8 signatureType)"
             ));
 
-        // 2. DOMAIN_SEPARATOR
         byte[] domainTypeHash = Sha3Keccack.Current.CalculateHash(
             Encoding.UTF8.GetBytes(
                 "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"
@@ -256,7 +244,6 @@ public class PolymarketOrderClient
         );
         byte[] domainSeparator = Sha3Keccack.Current.CalculateHash(domainData);
 
-        // 3. struct hash = keccak256(typeHash || encoded fields)
         byte[] structData = ConcatBytes(
             orderTypeHash,
             PadUint256(order.Salt),
@@ -268,17 +255,15 @@ public class PolymarketOrderClient
             PadUint256(order.TakerAmount),
             PadUint256(order.Expiration),
             PadUint256(order.Nonce),
-            PadUint256(order.FeeRateBps),
-            PadUint256(new BigInteger(order.Side)),        // uint8 → abi-encoded as 32 bytes
-            PadUint256(new BigInteger(order.SignatureType)) // uint8 → abi-encoded as 32 bytes
+            PadUint256(order.FeeRateBps), // Properly padded as uint256
+            PadUint256(new BigInteger(order.Side)),
+            PadUint256(new BigInteger(order.SignatureType))
         );
         byte[] structHash = Sha3Keccack.Current.CalculateHash(structData);
 
-        // 4. digest = keccak256("\x19\x01" || domainSeparator || structHash)
         byte[] digest = Sha3Keccack.Current.CalculateHash(
             ConcatBytes(new byte[] { 0x19, 0x01 }, domainSeparator, structHash));
 
-        // 5. ECDSA sign the digest
         var ecKey = new EthECKey(_account.PrivateKey);
         var signature = ecKey.SignAndCalculateV(digest);
         byte[] sigBytes = new byte[65];
@@ -301,7 +286,6 @@ public class PolymarketOrderClient
 
     private static byte[] PadUint256(BigInteger value)
     {
-        // ABI-encode as uint256: big-endian, left-padded to 32 bytes
         byte[] raw = value.ToByteArray(isUnsigned: true, isBigEndian: true);
         byte[] padded = new byte[32];
         Array.Copy(raw, 0, padded, 32 - raw.Length, raw.Length);
@@ -310,7 +294,6 @@ public class PolymarketOrderClient
 
     private static byte[] PadAddress(string address)
     {
-        // ABI-encode address: strip 0x, parse hex, left-pad to 32 bytes
         string hex = address.StartsWith("0x") ? address[2..] : address;
         byte[] raw = Convert.FromHexString(hex);
         byte[] padded = new byte[32];
@@ -333,30 +316,38 @@ public class PolymarketOrderClient
     }
 
     /// <summary>
-    /// Fetches the current fee rate for a token from the CLOB API.
+    /// Fetches the exact taker fee (in basis points) from the CLOB API.
+    /// Call this ONCE during startup per market, not during a live trade!
     /// </summary>
-    private async Task<int> GetFeeRateBpsAsync(string tokenId)
+    public async Task<int> GetTakerFeeAsync(string tokenId)
     {
-        var request = new RestRequest($"/fee-rate?token_id={tokenId}", Method.Get);
-        var response = await _httpClient.ExecuteAsync(request);
-        if (response.IsSuccessful && !string.IsNullOrEmpty(response.Content))
+        try
         {
-            using var doc = JsonDocument.Parse(response.Content);
-            if (doc.RootElement.TryGetProperty("fee_rate_bps", out var feeElement))
+            // The CLOB API provides market metadata by token ID under /markets/{tokenId}
+            var request = new RestRequest($"/markets/{tokenId}", Method.Get);
+            var response = await _httpClient.ExecuteAsync(request);
+            if (response.IsSuccessful && !string.IsNullOrEmpty(response.Content))
             {
-                // Handle both string and number values
-                if (feeElement.ValueKind == JsonValueKind.String)
-                    return int.Parse(feeElement.GetString()!);
-                return feeElement.GetInt32();
+                using var doc = JsonDocument.Parse(response.Content);
+                var root = doc.RootElement;
+                
+                if (root.TryGetProperty("taker_fee_bps", out var feeEl))
+                {
+                    if (feeEl.ValueKind == JsonValueKind.String)
+                        return int.Parse(feeEl.GetString()!);
+                    return feeEl.GetInt32();
+                }
             }
         }
-        return 0; // fallback for fee-free markets
+        catch (Exception)
+        {
+            // Silent catch: if it fails, we fall back to 0
+        }
+        return 0; 
     }
 
     /// <summary>
     /// HMAC-SHA256 signature for L2 API authentication.
-    /// Message = timestamp + method + path + body
-    /// Key = base64url-decoded API secret
     /// </summary>
     private static string BuildHmacSignature(string secret, string timestamp, string method, string requestPath, string? body = null)
     {
@@ -372,10 +363,9 @@ public class PolymarketOrderClient
 
     private static BigInteger GenerateSalt()
     {
-        // Match Python SDK: random int in [0, 10^10 - 1] — fits safely in JSON number
         byte[] buf = new byte[8];
         RandomNumberGenerator.Fill(buf);
-        long raw = BitConverter.ToInt64(buf) & long.MaxValue; // ensure positive
+        long raw = BitConverter.ToInt64(buf) & long.MaxValue; 
         return new BigInteger(raw % 10_000_000_000L);
     }
 
@@ -388,5 +378,4 @@ public class PolymarketOrderClient
     {
         return new BigInteger(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
     }
-
 }

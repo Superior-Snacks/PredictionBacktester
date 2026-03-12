@@ -19,6 +19,12 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
     private readonly Dictionary<string, string> _tokenTickSizes;
     private readonly Dictionary<string, decimal> _tokenMinSizes;
 
+    // The memory bank for storing the fees as integers
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, int> _tokenFeeRates = new();
+
+    // The helper method that the Submit orders use to grab the fee instantly
+    private int GetFeeRate(string assetId) => _tokenFeeRates.TryGetValue(assetId, out var fee) ? fee : 0;
+
     public PolymarketLiveBroker(
         string strategyName,
         decimal initialCapital,
@@ -108,7 +114,7 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
             try
             {
                 string result = await _orderClient.SubmitOrderAsync(
-                    assetId, targetPrice, shares, side: 0, GetNegRisk(assetId), GetTickSize(assetId));
+                    assetId, targetPrice, shares, 0, GetNegRisk(assetId), GetTickSize(assetId), GetFeeRate(assetId));
                 // 1. Parse the JSON receipt from Polymarket
                 using var doc = System.Text.Json.JsonDocument.Parse(result);
                 var root = doc.RootElement;
