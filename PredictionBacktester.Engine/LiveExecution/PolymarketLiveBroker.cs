@@ -5,11 +5,6 @@ using PredictionBacktester.Core.Entities;
 
 namespace PredictionBacktester.Engine.LiveExecution;
 
-/// <summary>
-/// Live broker that places real orders on the Polymarket CLOB API.
-/// Extends GlobalSimulatedBroker so strategies can query positions and the
-/// dashboard/CSV export works identically to paper trading.
-/// </summary>
 public class PolymarketLiveBroker : GlobalSimulatedBroker
 {
     public string StrategyName { get; }
@@ -19,29 +14,16 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
     private readonly IReadOnlyDictionary<string, string> _tokenTickSizes;
     private readonly IReadOnlyDictionary<string, decimal> _tokenMinSizes;
 
-    // The memory bank for storing the fees as integers
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, int> _tokenFeeRates = new();
 
-    // The helper method that the Submit orders use to grab the fee instantly
     private int GetFeeRate(string assetId) => _tokenFeeRates.TryGetValue(assetId, out var fee) ? fee : 0;
-
-    // Expose the client so Program.cs can use it to fetch the fee
     public PolymarketOrderClient OrderClient => _orderClient;
-
-    // A public method to write the fee to memory
-    public void SetTokenFeeRate(string assetId, int feeRate)
-    {
-        _tokenFeeRates[assetId] = feeRate;
-    }
+    public void SetTokenFeeRate(string assetId, int feeRate) => _tokenFeeRates[assetId] = feeRate;
 
     public PolymarketLiveBroker(
-        string strategyName,
-        decimal initialCapital,
-        PolymarketApiConfig config,
-        IReadOnlyDictionary<string, string> tokenNames,
-        IReadOnlyDictionary<string, bool> tokenNegRisk,
-        IReadOnlyDictionary<string, string> tokenTickSizes,
-        IReadOnlyDictionary<string, decimal> tokenMinSizes) : base(initialCapital)
+        string strategyName, decimal initialCapital, PolymarketApiConfig config,
+        IReadOnlyDictionary<string, string> tokenNames, IReadOnlyDictionary<string, bool> tokenNegRisk,
+        IReadOnlyDictionary<string, string> tokenTickSizes, IReadOnlyDictionary<string, decimal> tokenMinSizes) : base(initialCapital)
     {
         StrategyName = strategyName;
         _orderClient = new PolymarketOrderClient(config);
@@ -53,36 +35,23 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
         AssetNameResolver = GetMarketName;
     }
 
-    /// <summary>
-    /// Creates a live broker initialized with the real USDC balance from the wallet.
-    /// </summary>
     public static async Task<PolymarketLiveBroker> CreateAsync(
-        string strategyName,
-        PolymarketApiConfig config,
-        IReadOnlyDictionary<string, string> tokenNames,
-        IReadOnlyDictionary<string, bool> tokenNegRisk,
-        IReadOnlyDictionary<string, string> tokenTickSizes,
+        string strategyName, PolymarketApiConfig config, IReadOnlyDictionary<string, string> tokenNames,
+        IReadOnlyDictionary<string, bool> tokenNegRisk, IReadOnlyDictionary<string, string> tokenTickSizes,
         IReadOnlyDictionary<string, decimal> tokenMinSizes)
     {
         var client = new PolymarketOrderClient(config);
         decimal balance = await client.GetUsdcBalanceAsync();
-
         Console.ForegroundColor = ConsoleColor.Yellow;
         Console.WriteLine($"[LIVE] Wallet USDC balance: ${balance:0.00}");
         Console.ResetColor();
-
         return new PolymarketLiveBroker(strategyName, balance, config, tokenNames, tokenNegRisk, tokenTickSizes, tokenMinSizes);
     }
 
     private bool GetNegRisk(string assetId) => _tokenNegRisk.GetValueOrDefault(assetId, false);
     private string GetTickSize(string assetId) => _tokenTickSizes.GetValueOrDefault(assetId, "0.01");
     public decimal GetMinSize(string assetId) => _tokenMinSizes.GetValueOrDefault(assetId, 1.00m);
-
-    public bool OrderDebugMode
-    {
-        get => _orderClient.DebugMode;
-        set => _orderClient.DebugMode = value;
-    }
+    public bool OrderDebugMode { get => _orderClient.DebugMode; set => _orderClient.DebugMode = value; }
 
     private string GetMarketName(string assetId)
     {
@@ -91,13 +60,8 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
         return assetId.Substring(0, 8) + "...";
     }
 
-    /// <summary>
-    /// Override: Places a real BUY order on the Polymarket CLOB.
-    /// No latency simulation — the real network latency IS the latency.
-    /// </summary>
     public override void SubmitBuyOrder(string assetId, decimal targetPrice, decimal dollarsToInvest, LocalOrderBook book)
     {
-        // Guard: don't queue duplicate orders for the same asset
         if (!_pendingOrders.TryAdd(assetId, true)) return;
 
         decimal bestAsk = book.GetBestAskPrice();
@@ -107,11 +71,9 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
             return;
         }
 
-        // Calculate shares from dollars and price
         decimal shares = dollarsToInvest / targetPrice;
         decimal minSize = GetMinSize(assetId);
         
-        // FIX: Compare calculated shares against the minimum share size
         if (shares < minSize)
         {
             _pendingOrders.TryRemove(assetId, out _);
@@ -122,9 +84,31 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
         {
             try
             {
-                string result = await _orderClient.SubmitOrderAsync(
-                    assetId, targetPrice, shares, 0, GetNegRisk(assetId), GetTickSize(assetId), GetFeeRate(assetId));
-                // 1. Parse the JSON receipt from Polymarket
+                string result = "";
+                try
+                {
+                    result = await _orderClient.SubmitOrderAsync(
+                        assetId, targetPrice, shares, 0, GetNegRisk(assetId), GetTickSize(assetId), GetFeeRate(assetId));
+                }
+                catch (Exception ex) when (ex.Message.Contains("invalid fee rate") && ex.Message.Contains("taker fee:"))
+                {
+                    // THE FIX: Automatically extract the correct fee from the error message and retry!
+                    var match = System.Text.RegularExpressions.Regex.Match(ex.Message, @"taker fee:\s*(\d+)");
+                    if (match.Success && int.TryParse(match.Groups[1].Value, out int requiredFee))
+                    {
+                        SetTokenFeeRate(assetId, requiredFee);
+                        if (!IsMuted) lock (ConsoleLock)
+                        {
+                            Console.ForegroundColor = ConsoleColor.Yellow;
+                            Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [FEE AUTOCORRECT] {GetMarketName(assetId)} requires fee {requiredFee}. Retrying buy...");
+                            Console.ResetColor();
+                        }
+                        result = await _orderClient.SubmitOrderAsync(
+                            assetId, targetPrice, shares, 0, GetNegRisk(assetId), GetTickSize(assetId), requiredFee);
+                    }
+                    else throw;
+                }
+
                 using var doc = System.Text.Json.JsonDocument.Parse(result);
                 var root = doc.RootElement;
 
@@ -133,17 +117,17 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
                     decimal actualShares = 0m;
                     decimal actualDollars = 0m;
 
-                    // BUY: Taking Amount = Shares received, Making Amount = USDC spent
-                    if (root.TryGetProperty("takingAmount", out var takingEl) && decimal.TryParse(takingEl.GetString(), out decimal tAmt))
+                    // THE FIX: Use the raw API's snake_case keys and .ToString() for safety
+                    if (root.TryGetProperty("taking_amount", out var takingEl) && decimal.TryParse(takingEl.ToString(), out decimal tAmt))
                         actualShares = tAmt;
 
-                    if (root.TryGetProperty("makingAmount", out var makingEl) && decimal.TryParse(makingEl.GetString(), out decimal mAmt))
+                    if (root.TryGetProperty("making_amount", out var makingEl) && decimal.TryParse(makingEl.ToString(), out decimal mAmt))
                         actualDollars = mAmt;
 
                     // If IOC completely missed (0 shares), abort.
                     if (actualShares <= 0) 
                     {
-                        lock (ConsoleLock)
+                        if (!IsMuted) lock (ConsoleLock)
                         {
                             Console.ForegroundColor = ConsoleColor.DarkGray;
                             Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [IOC KILLED] Buy missed. Liquidity gone @ ${targetPrice:0.00} | {GetMarketName(assetId)}");
@@ -165,17 +149,13 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
 
                         TradeLedger.Add(new ExecutedTrade
                         {
-                            OutcomeId = assetId,
-                            Date = DateTime.Now,
-                            Side = "BUY (IOC)",
-                            Price = actualDollars / actualShares, // Calculate true execution price
-                            Shares = actualShares,
-                            DollarValue = actualDollars
+                            OutcomeId = assetId, Date = DateTime.Now, Side = "BUY (IOC)",
+                            Price = actualDollars / actualShares, Shares = actualShares, DollarValue = actualDollars
                         });
                         TotalActions++;
                     }
 
-                    lock (ConsoleLock)
+                    if (!IsMuted) lock (ConsoleLock)
                     {
                         Console.ForegroundColor = ConsoleColor.Green;
                         Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [LIVE BUY IOC] {actualShares:0.00} shares @ ${actualDollars / actualShares:0.00} | ${actualDollars:0.00} | {GetMarketName(assetId)}");
@@ -186,7 +166,7 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
             catch (Exception ex)
             {
                 Interlocked.Increment(ref _rejectedOrders);
-                lock (ConsoleLock)
+                if (!IsMuted) lock (ConsoleLock)
                 {
                     Console.ForegroundColor = ConsoleColor.Red;
                     Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [LIVE BUY FAILED] {GetMarketName(assetId)}: {ex.Message}");
@@ -200,15 +180,11 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
         });
     }
 
-    /// <summary>
-    /// Override: Places a real SELL order on the Polymarket CLOB.
-    /// </summary>
     public override void SubmitSellAllOrder(string assetId, decimal targetPrice, LocalOrderBook book)
     {
         decimal sharesToSell = GetPositionShares(assetId);
         if (sharesToSell <= 0) return;
 
-        // NEW: Check for dust before doing anything else
         decimal minSize = GetMinSize(assetId);
         if (sharesToSell < minSize)
         {
@@ -223,31 +199,36 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
 
         if (!_pendingOrders.TryAdd(assetId, true)) return;
 
-        decimal bestBid = book.GetBestBidPrice();
-        if (bestBid >= 0.99m || bestBid <= 0.01m)
-        {
-            _pendingOrders.TryRemove(assetId, out _);
-            return;
-        }
-
         Task.Run(async () =>
         {
             try
             {
-                decimal sharesToSell = GetPositionShares(assetId);
-                if (sharesToSell <= 0) return;
-
                 string result = "";
-                int maxRetries = 10; // Try 10 times
+                int maxRetries = 10;
                 
-                // Aggressive rapid-fire retry loop
                 for (int attempt = 1; attempt <= maxRetries; attempt++)
                 {
                     try
                     {
                         result = await _orderClient.SubmitOrderAsync(
                             assetId, targetPrice, sharesToSell, side: 1, GetNegRisk(assetId), GetTickSize(assetId), GetFeeRate(assetId));
-                        break; // Success! The tokens arrived.
+                        break;
+                    }
+                    catch (Exception ex) when (ex.Message.Contains("invalid fee rate") && ex.Message.Contains("taker fee:"))
+                    {
+                        var match = System.Text.RegularExpressions.Regex.Match(ex.Message, @"taker fee:\s*(\d+)");
+                        if (match.Success && int.TryParse(match.Groups[1].Value, out int requiredFee))
+                        {
+                            SetTokenFeeRate(assetId, requiredFee);
+                            if (!IsMuted) lock (ConsoleLock)
+                            {
+                                Console.ForegroundColor = ConsoleColor.Yellow;
+                                Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [FEE AUTOCORRECT] {GetMarketName(assetId)} requires fee {requiredFee}. Retrying sell...");
+                                Console.ResetColor();
+                            }
+                            // Try again on the next loop iteration, but the fee will now be updated!
+                        }
+                        else throw;
                     }
                     catch (Exception ex) when (ex.Message.Contains("not enough balance") && attempt < maxRetries)
                     {
@@ -257,24 +238,12 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
                             Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [HAMMER] Tokens not here yet. Retrying in 300ms... (Attempt {attempt}/{maxRetries})");
                             Console.ResetColor();
                         }
-                        
-                        // Wait just 300ms and immediately slam the API again
                         await Task.Delay(300); 
                     }
                 }
 
-                if (string.IsNullOrEmpty(result)) 
-                {
-                    lock (ConsoleLock)
-                    {
-                        Console.ForegroundColor = ConsoleColor.Red;
-                        Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [SELL FAILED] Tokens never arrived after 3 seconds of retrying.");
-                        Console.ResetColor();
-                    }
-                    return;
-                }
+                if (string.IsNullOrEmpty(result)) return;
 
-                // --- Rest of your exact same IOC parsing logic goes here ---
                 using var doc = System.Text.Json.JsonDocument.Parse(result);
                 var root = doc.RootElement;
 
@@ -283,16 +252,16 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
                     decimal actualSharesSold = 0m;
                     decimal cashReceived = 0m;
 
-                    // SELL: Making Amount = Shares given, Taking Amount = USDC received
-                    if (root.TryGetProperty("makingAmount", out var makingEl) && decimal.TryParse(makingEl.GetString(), out decimal mAmt))
+                    // THE FIX: SELL means Making = Shares given, Taking = USDC received
+                    if (root.TryGetProperty("making_amount", out var makingEl) && decimal.TryParse(makingEl.ToString(), out decimal mAmt))
                         actualSharesSold = mAmt;
 
-                    if (root.TryGetProperty("takingAmount", out var takingEl) && decimal.TryParse(takingEl.GetString(), out decimal tAmt))
+                    if (root.TryGetProperty("taking_amount", out var takingEl) && decimal.TryParse(takingEl.ToString(), out decimal tAmt))
                         cashReceived = tAmt;
 
                     if (actualSharesSold <= 0) 
                     {
-                        lock (ConsoleLock)
+                        if (!IsMuted) lock (ConsoleLock)
                         {
                             Console.ForegroundColor = ConsoleColor.DarkGray;
                             Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [IOC KILLED] Sell missed. Retrying next tick... | {GetMarketName(assetId)}");
@@ -313,27 +282,21 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
 
                         TradeLedger.Add(new ExecutedTrade
                         {
-                            OutcomeId = assetId,
-                            Date = DateTime.Now,
-                            Side = "SELL (IOC)",
-                            Price = executionPrice,
-                            Shares = actualSharesSold,
-                            DollarValue = cashReceived
+                            OutcomeId = assetId, Date = DateTime.Now, Side = "SELL (IOC)",
+                            Price = executionPrice, Shares = actualSharesSold, DollarValue = cashReceived
                         });
 
                         CashBalance += cashReceived; // Add exact USDC received
                         
-                        // Deduct the exact shares we managed to sell
                         decimal remainingShares = Math.Max(0, GetPositionShares(assetId) - actualSharesSold);
                         SetPositionShares(assetId, remainingShares);
-                        
                         if (remainingShares == 0) SetAverageEntryPrice(assetId, 0);
                         
                         TotalTradesExecuted++;
                         TotalActions++;
                     }
 
-                    lock (ConsoleLock)
+                    if (!IsMuted) lock (ConsoleLock)
                     {
                         Console.ForegroundColor = pnl >= 0 ? ConsoleColor.Cyan : ConsoleColor.Red;
                         Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [LIVE SELL IOC] {actualSharesSold:0.00} shares | PnL: ${pnl:0.00} | Received: ${cashReceived:0.00} | {GetMarketName(assetId)}");
@@ -344,7 +307,7 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
             catch (Exception ex)
             {
                 Interlocked.Increment(ref _rejectedOrders);
-                lock (ConsoleLock)
+                if (!IsMuted) lock (ConsoleLock)
                 {
                     Console.ForegroundColor = ConsoleColor.Red;
                     Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [LIVE SELL FAILED] {GetMarketName(assetId)}: {ex.Message}");

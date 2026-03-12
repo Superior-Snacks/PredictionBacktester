@@ -647,11 +647,21 @@ class Program
                         _tokenTickSize.TryAdd(yesToken, tickSize);
                         _tokenMinSize.TryAdd(yesToken, market.OrderMinSize > 0 ? market.OrderMinSize : 1.00m);
                         
-                        // THE FIX: Fetch the exact fee rate from the CLOB API and save it to the Broker's memory!
+                        // THE FIX: Fetch fees upfront, but strictly throttle to 10 requests/sec to prevent IP bans
                         if (_broker != null)
                         {
-                            int feeRate = await _broker.OrderClient.GetTakerFeeAsync(yesToken);
-                            _broker.SetTokenFeeRate(yesToken, feeRate);
+                            try
+                            {
+                                int feeRate = await _broker.OrderClient.GetTakerFeeAsync(yesToken);
+                                _broker.SetTokenFeeRate(yesToken, feeRate);
+                                
+                                // Sleep for 100ms. If there are 1,000 markets, startup takes ~1.5 minutes.
+                                await Task.Delay(100); 
+                            }
+                            catch (Exception ex)
+                            {
+                                Log.Warning("Failed to fetch fee upfront for {Token}: {Error}", yesToken, ex.Message);
+                            }
                         }
 
                         newlyDiscovered.Add(yesToken);
