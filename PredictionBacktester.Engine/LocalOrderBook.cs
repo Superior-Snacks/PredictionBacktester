@@ -97,6 +97,20 @@ public class LocalOrderBook
         }
     }
 
+    /// <summary>Returns the total bid volume across the top N highest price levels.</summary>
+    public decimal GetTopBidVolume(int levels)
+    {
+        lock (_bookLock)
+            return _bids.OrderByDescending(kv => kv.Key).Take(levels).Sum(kv => kv.Value);
+    }
+
+    /// <summary>Returns the total ask volume across the top N lowest price levels.</summary>
+    public decimal GetTopAskVolume(int levels)
+    {
+        lock (_bookLock)
+            return _asks.OrderBy(kv => kv.Key).Take(levels).Sum(kv => kv.Value);
+    }
+
     public void UpdatePriceLevel(string side, decimal price, decimal size)
     {
         lock (_bookLock)

@@ -64,16 +64,10 @@ public class OrderBookImbalanceStrategy : ILiveStrategy
 
         // --- 2. CALCULATE THE WALLS (The Setup) ---
         // Sum up the total volume of the top N highest buyers
-        decimal bidVolume = book.Bids.Keys
-                                .OrderByDescending(p => p)
-                                .Take(_depthLevelsToScan)
-                                .Sum(p => book.Bids[p]);
+        decimal bidVolume = book.GetTopBidVolume(_depthLevelsToScan);
 
         // Sum up the total volume of the top N lowest sellers
-        decimal askVolume = book.Asks.Keys
-                                .OrderBy(p => p)
-                                .Take(_depthLevelsToScan)
-                                .Sum(p => book.Asks[p]);
+        decimal askVolume = book.GetTopAskVolume(_depthLevelsToScan);
 
         if (askVolume <= 0 || bidVolume <= 0) return;
 
