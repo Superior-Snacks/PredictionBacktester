@@ -57,12 +57,12 @@ class Program
     private static DateTime _currentDay = DateTime.UtcNow.Date;
 
     private static ProductionBroker _broker = null!;
-    private static Dictionary<string, string> _tokenNames = new();
-    private static Dictionary<string, bool> _tokenNegRisk = new();
-    private static Dictionary<string, string> _tokenTickSize = new();
-    private static Dictionary<string, decimal> _tokenMinSize = new();
-    private static readonly HashSet<string> _subscribedTokens = new();
-    private static Dictionary<string, LocalOrderBook> _orderBooks = new();
+    private static System.Collections.Concurrent.ConcurrentDictionary<string, string> _tokenNames = new();
+    private static System.Collections.Concurrent.ConcurrentDictionary<string, bool> _tokenNegRisk = new();
+    private static System.Collections.Concurrent.ConcurrentDictionary<string, string> _tokenTickSize = new();
+    private static System.Collections.Concurrent.ConcurrentDictionary<string, decimal> _tokenMinSize = new();
+    private static System.Collections.Concurrent.ConcurrentDictionary<string, bool> _subscribedTokens = new();
+    private static System.Collections.Concurrent.ConcurrentDictionary<string, LocalOrderBook> _orderBooks = new();
     private static ClientWebSocket? _activeWs;
     private static readonly SemaphoreSlim _wsSendSemaphore = new(1, 1);
 
@@ -150,7 +150,7 @@ class Program
         {
             Log.Warning("Graceful shutdown initiated...");
             ExportLedgerToCsv(quietMode: false);
-            _broker.SaveState(_subscribedTokens);
+            _broker.SaveState(_subscribedTokens.Keys);
             PrintDashboard();
             Log.Information("Engine terminated.");
             Log.CloseAndFlush();
@@ -300,7 +300,7 @@ class Program
         _broker.LoadState();
 
         // 2. Validate actual share counts against the blockchain
-        await _broker.RunFullSyncAsync(_subscribedTokens, _tokenNames, fullDiscovery: true);
+        await _broker.RunFullSyncAsync(_subscribedTokens.Keys, _tokenNames, fullDiscovery: true);
         
         _dayStartEquity = _broker.GetTotalPortfolioValue();
 
@@ -317,7 +317,7 @@ class Program
                 if (!_quietMode) PrintDashboard();
                 ExportLedgerToCsv(quietMode: true);
 
-                _broker.SaveState(_subscribedTokens);
+                _broker.SaveState(_subscribedTokens.Keys);
 
                 // Check for settled markets
                 try
@@ -367,7 +367,7 @@ class Program
                 // Periodic on-chain state reconciliation
                 try
                 {
-                    await _broker.RunFullSyncAsync(_subscribedTokens, _tokenNames, fullDiscovery: false);
+                    await _broker.RunFullSyncAsync(_subscribedTokens.Keys, _tokenNames, fullDiscovery: false);
                 }
                 catch (Exception ex) { Log.Warning("State sync error: {Error}", ex.Message); }
             }
@@ -560,7 +560,7 @@ class Program
                 // Subscribe in chunks
                 int chunkSize = 50;
                 bool isFirstChunk = true;
-                var tokenList = _subscribedTokens.ToList();
+                var tokenList = _subscribedTokens.Keys.ToList();
 
                 for (int i = 0; i < tokenList.Count; i += chunkSize)
                 {
@@ -646,7 +646,7 @@ class Program
                     if (market.IsClosed || market.ClobTokenIds == null || market.ClobTokenIds.Length == 0) continue;
 
                     string yesToken = market.ClobTokenIds[0];
-                    if (_subscribedTokens.Add(yesToken))
+                    if (_subscribedTokens.TryAdd(yesToken, true))
                     {
                         _tokenNames.TryAdd(yesToken, market.Question);
                         _tokenNegRisk.TryAdd(yesToken, ev.NegRisk);
@@ -655,6 +655,14 @@ class Program
                             : "0.01";
                         _tokenTickSize.TryAdd(yesToken, tickSize);
                         _tokenMinSize.TryAdd(yesToken, market.OrderMinSize > 0 ? market.OrderMinSize : 1.00m);
+                        
+                        // THE FIX: Fetch the exact fee rate from the CLOB API and save it to the Broker's memory!
+                        if (_broker != null)
+                        {
+                            int feeRate = await _broker.OrderClient.GetTakerFeeAsync(yesToken);
+                            _broker.SetTokenFeeRate(yesToken, feeRate);
+                        }
+
                         newlyDiscovered.Add(yesToken);
                     }
                 }
@@ -770,7 +778,7 @@ class Program
         decimal mtmValue = 0m;
 
         // THE FIX: Calculate explicit MTM by checking the live order book's best bid!
-        foreach (var assetId in _subscribedTokens)
+        foreach (var assetId in _subscribedTokens.Keys)
         {
             decimal shares = _broker.GetPositionShares(assetId);
             if (shares > 0 && _orderBooks.TryGetValue(assetId, out var book))

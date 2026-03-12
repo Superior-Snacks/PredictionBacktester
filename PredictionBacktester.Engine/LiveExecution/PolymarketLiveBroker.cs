@@ -14,10 +14,10 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
 {
     public string StrategyName { get; }
     private readonly PolymarketOrderClient _orderClient;
-    private readonly Dictionary<string, string> _tokenNames;
-    private readonly Dictionary<string, bool> _tokenNegRisk;
-    private readonly Dictionary<string, string> _tokenTickSizes;
-    private readonly Dictionary<string, decimal> _tokenMinSizes;
+    private readonly IReadOnlyDictionary<string, string> _tokenNames;
+    private readonly IReadOnlyDictionary<string, bool> _tokenNegRisk;
+    private readonly IReadOnlyDictionary<string, string> _tokenTickSizes;
+    private readonly IReadOnlyDictionary<string, decimal> _tokenMinSizes;
 
     // The memory bank for storing the fees as integers
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, int> _tokenFeeRates = new();
@@ -25,14 +25,23 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
     // The helper method that the Submit orders use to grab the fee instantly
     private int GetFeeRate(string assetId) => _tokenFeeRates.TryGetValue(assetId, out var fee) ? fee : 0;
 
+    // Expose the client so Program.cs can use it to fetch the fee
+    public PolymarketOrderClient OrderClient => _orderClient;
+
+    // A public method to write the fee to memory
+    public void SetTokenFeeRate(string assetId, int feeRate)
+    {
+        _tokenFeeRates[assetId] = feeRate;
+    }
+
     public PolymarketLiveBroker(
         string strategyName,
         decimal initialCapital,
         PolymarketApiConfig config,
-        Dictionary<string, string> tokenNames,
-        Dictionary<string, bool> tokenNegRisk,
-        Dictionary<string, string> tokenTickSizes,
-        Dictionary<string, decimal> tokenMinSizes) : base(initialCapital)
+        IReadOnlyDictionary<string, string> tokenNames,
+        IReadOnlyDictionary<string, bool> tokenNegRisk,
+        IReadOnlyDictionary<string, string> tokenTickSizes,
+        IReadOnlyDictionary<string, decimal> tokenMinSizes) : base(initialCapital)
     {
         StrategyName = strategyName;
         _orderClient = new PolymarketOrderClient(config);
@@ -50,10 +59,10 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
     public static async Task<PolymarketLiveBroker> CreateAsync(
         string strategyName,
         PolymarketApiConfig config,
-        Dictionary<string, string> tokenNames,
-        Dictionary<string, bool> tokenNegRisk,
-        Dictionary<string, string> tokenTickSizes,
-        Dictionary<string, decimal> tokenMinSizes)
+        IReadOnlyDictionary<string, string> tokenNames,
+        IReadOnlyDictionary<string, bool> tokenNegRisk,
+        IReadOnlyDictionary<string, string> tokenTickSizes,
+        IReadOnlyDictionary<string, decimal> tokenMinSizes)
     {
         var client = new PolymarketOrderClient(config);
         decimal balance = await client.GetUsdcBalanceAsync();

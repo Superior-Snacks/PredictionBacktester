@@ -23,10 +23,10 @@ public class ProductionBroker : PolymarketLiveBroker
         string strategyName,
         decimal initialCapital,
         PolymarketApiConfig config,
-        Dictionary<string, string> tokenNames,
-        Dictionary<string, bool> tokenNegRisk,
-        Dictionary<string, string> tokenTickSizes,
-        Dictionary<string, decimal> tokenMinSizes,
+        IReadOnlyDictionary<string, string> tokenNames,
+        IReadOnlyDictionary<string, bool> tokenNegRisk,
+        IReadOnlyDictionary<string, string> tokenTickSizes,
+        IReadOnlyDictionary<string, decimal> tokenMinSizes,
         PolymarketOrderClient queryClient)
         : base(strategyName, initialCapital, config, tokenNames, tokenNegRisk, tokenTickSizes, tokenMinSizes)
     {
@@ -39,10 +39,10 @@ public class ProductionBroker : PolymarketLiveBroker
     public static async Task<ProductionBroker> CreateAsync(
         string strategyName,
         PolymarketApiConfig config,
-        Dictionary<string, string> tokenNames,
-        Dictionary<string, bool> tokenNegRisk,
-        Dictionary<string, string> tokenTickSizes,
-        Dictionary<string, decimal> tokenMinSizes,
+        IReadOnlyDictionary<string, string> tokenNames,
+        IReadOnlyDictionary<string, bool> tokenNegRisk,
+        IReadOnlyDictionary<string, string> tokenTickSizes,
+        IReadOnlyDictionary<string, decimal> tokenMinSizes,
         decimal maxBetSize)
     {
         var client = new PolymarketOrderClient(config);
@@ -140,7 +140,7 @@ public class ProductionBroker : PolymarketLiveBroker
     /// Full state sync: cash + held positions. Logs results.
     /// If fullDiscovery is true, scans ALL tokens to find manual/untracked positions.
     /// </summary>
-    public async Task RunFullSyncAsync(IEnumerable<string> tokenIds, Dictionary<string, string>? tokenNames = null, bool fullDiscovery = false)
+    public async Task RunFullSyncAsync(IEnumerable<string> tokenIds, IReadOnlyDictionary<string, string>? tokenNames = null, bool fullDiscovery = false)
     {
         Log.Information("[SYNC] Starting on-chain state reconciliation...");
 

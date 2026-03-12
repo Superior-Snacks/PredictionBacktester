@@ -78,7 +78,7 @@ public class LiveFlashCrashSniperStrategy : ILiveStrategy
         // Fetch positions specifically for THIS asset
         decimal positionShares = broker.GetPositionShares(assetId);
 
-        if (positionShares >= 1.0m) 
+        if (positionShares > 0m) 
         {
             decimal avgEntry = broker.GetAverageEntryPrice(assetId);
             bool isTakeProfit = bestBid >= avgEntry + _reboundProfitMargin;
