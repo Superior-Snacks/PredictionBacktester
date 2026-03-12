@@ -7,6 +7,36 @@ import re
 # ==========================================
 TARGET_CSV_FILE = "LivePaperTrades_SNAPSHOT.csv"  # <--- Type your exact filename here!
 MIN_SHARES_REQUIRED = 5.0  # Change this if you want to test stricter limits
+SPREAD_PENALTY_TO_REFUND = 0.015  # The flat C# penalty we are stripping out
+
+def calculate_crypto_fee(shares, price):
+    """
+    Polymarket Crypto Fee Formula: C * p * feeRate * (p * (1 - p))^exponent
+    Crypto params: feeRate = 0.25, exponent = 2
+    """
+    fee = shares * price * 0.25 * ((price * (1.0 - price)) ** 2)
+    # The smallest fee charged is 0.0001 USDC. Anything smaller rounds to zero.
+    if fee < 0.0001:
+        return 0.0
+    return round(fee, 4)
+
+def strip_penalty(row):
+    """ Refunds the artificial C# slippage penalty to reveal the pure market price """
+    side = str(row['Side']).upper().strip()
+    shares = float(row['Shares'])
+    price = float(row['ExecutionPrice'])
+    
+    if side in ['BUY', 'BUY NO']:
+        pure_price = price - SPREAD_PENALTY_TO_REFUND
+        if pure_price < 0.001: pure_price = 0.001
+    elif side in ['SELL', 'SELL NO']:
+        pure_price = price + SPREAD_PENALTY_TO_REFUND
+        if pure_price > 0.999: pure_price = 0.999
+    else:
+        pure_price = price  # Resolves are exact, no penalty was applied
+        
+    pure_dollars = shares * pure_price
+    return pd.Series([pure_price, pure_dollars])
 
 def analyze_specific_run():
     print("="*80)
@@ -27,11 +57,15 @@ def analyze_specific_run():
     df['Timestamp'] = pd.to_datetime(df['Timestamp'])
     df = df.sort_values('Timestamp').reset_index(drop=True)
 
+    # --- THE REFUND ---
+    print(f"♻️ Refunding {SPREAD_PENALTY_TO_REFUND}c C# Spread Penalty to reveal pure market prices...\n")
+    df[['ExecutionPrice', 'DollarValue']] = df.apply(strip_penalty, axis=1)
+
     # ==========================================
     # THE REALISTIC EXCHANGE SIMULATOR
     # ==========================================
     valid_flags, illegal_buy_flags, ghost_sell_flags = [], [], []
-    real_shares, real_dollars = [], []
+    real_shares, real_dollars, real_fees = [], [], []
     
     # State tracking: (Strategy, Asset, YES/NO) -> {'shares': 0.0, 'cost': 0.0}
     inventory = {} 
@@ -59,15 +93,23 @@ def analyze_specific_run():
                 ghost_sell_flags.append(False)
                 real_shares.append(0)
                 real_dollars.append(0)
+                real_fees.append(0)
             else:
                 # Valid buy
+                fee = calculate_crypto_fee(shares, price)
+                
                 valid_flags.append(True)
                 illegal_buy_flags.append(False)
                 ghost_sell_flags.append(False)
                 real_shares.append(shares)
-                real_dollars.append(dollars)
+                
+                # We pay MORE money to cover the fee
+                total_cost = dollars + fee
+                real_dollars.append(total_cost)
+                real_fees.append(fee)
+                
                 inventory[inv_key]['shares'] += shares
-                inventory[inv_key]['cost'] += dollars
+                inventory[inv_key]['cost'] += total_cost
         else:
             # SELLs and RESOLVEs
             curr_shares = inventory[inv_key]['shares']
@@ -78,6 +120,7 @@ def analyze_specific_run():
                 ghost_sell_flags.append(True)
                 real_shares.append(0)
                 real_dollars.append(0)
+                real_fees.append(0)
             else:
                 # Valid sell - clamp to what we actually own
                 valid_flags.append(True)
@@ -85,12 +128,20 @@ def analyze_specific_run():
                 ghost_sell_flags.append(False)
 
                 actual_sell = min(shares, curr_shares)
+                
+                # Only apply trading fees to actual market SELLs, not smart contract RESOLVEs
+                if side in ['SELL', 'SELL NO']:
+                    fee = calculate_crypto_fee(actual_sell, price)
+                else:
+                    fee = 0.0
+                
                 sell_ratio = actual_sell / curr_shares
                 cost_basis = inventory[inv_key]['cost'] * sell_ratio
-                actual_revenue = actual_sell * price
+                actual_revenue = (actual_sell * price) - fee  # We receive LESS money due to the fee
 
                 real_shares.append(actual_sell)
                 real_dollars.append(actual_revenue)
+                real_fees.append(fee)
 
                 inventory[inv_key]['shares'] -= actual_sell
                 inventory[inv_key]['cost'] -= cost_basis
@@ -99,6 +150,7 @@ def analyze_specific_run():
     df['Illegal_Buy'] = illegal_buy_flags
     df['Ghost_Sell'] = ghost_sell_flags
     df['Valid_Trade'] = valid_flags
+    df['FeePaid'] = real_fees
     
     # Save the error counts per strategy before filtering
     error_counts = df.groupby('StrategyName').agg(
@@ -150,6 +202,7 @@ def analyze_specific_run():
     # ==========================================
     leaderboard = df.groupby('StrategyName').agg(
         Total_PnL=('CashFlow', 'sum'),
+        Total_Fees=('FeePaid', 'sum'),
         Buys=('Side', lambda x: x.isin(buy_sides).sum()),
         Sells=('Side', lambda x: x.isin(sell_sides).sum()),
     ).reset_index()
@@ -211,10 +264,11 @@ def analyze_specific_run():
     leaderboard['Equity'] = leaderboard['True_Total_Equity'].apply(lambda x: f"${x:,.2f}")
     leaderboard['True_PnL_fmt'] = leaderboard['True_PnL'].apply(lambda x: f"${x:,.2f}")
     leaderboard['PnL_hr'] = leaderboard['Hourly_PnL'].apply(lambda x: f"${x:,.2f}/hr")
+    leaderboard['Lost_To_Fee'] = leaderboard['Total_Fees'].apply(lambda x: f"${x:,.2f}")
 
-    print("\n🏆 STRATEGY LEADERBOARD (Filtered for Reality)")
-    print("-" * 130)
-    print(leaderboard[['StrategyName', 'Equity', 'True_PnL_fmt', 'PnL_hr', 'MTM_Value', 'Buys', 'Sells', 'Ill_Buys', 'Gh_Sells', 'WinRate%']].to_string(index=False))
+    print("\n🏆 STRATEGY LEADERBOARD (Filtered for Reality + Taker Fees)")
+    print("-" * 145)
+    print(leaderboard[['StrategyName', 'Equity', 'True_PnL_fmt', 'PnL_hr', 'Lost_To_Fee', 'MTM_Value', 'Buys', 'Sells', 'Ill_Buys', 'Gh_Sells', 'WinRate%']].to_string(index=False))
 
     # ==========================================
     # DASHBOARD 2 & 3
