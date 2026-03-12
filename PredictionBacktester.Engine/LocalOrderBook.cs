@@ -9,104 +9,91 @@ public class LocalOrderBook
 {
     public string AssetId { get; private set; }
 
-    // Dictionaries to hold Price -> Volume
-    // SortedDictionary automatically keeps the prices ordered!
-    public SortedDictionary<decimal, decimal> Bids { get; private set; }
-    public SortedDictionary<decimal, decimal> Asks { get; private set; }
+    // Private dictionaries protected by a lock
+    private readonly SortedDictionary<decimal, decimal> _bids;
+    private readonly SortedDictionary<decimal, decimal> _asks;
+    private readonly object _bookLock = new object();
 
     public LocalOrderBook(string assetId)
     {
         AssetId = assetId;
-        Bids = new SortedDictionary<decimal, decimal>();
-        Asks = new SortedDictionary<decimal, decimal>();
+        _bids = new SortedDictionary<decimal, decimal>();
+        _asks = new SortedDictionary<decimal, decimal>();
     }
 
-    // This method will process the live JSON arrays from the WebSocket
     public void ProcessBookUpdate(JsonElement bidsEl, JsonElement asksEl)
     {
-        // --- PROCESS BIDS (Buyers) ---
-        if (bidsEl.ValueKind == JsonValueKind.Array)
+        lock (_bookLock)
         {
-            foreach (var bid in bidsEl.EnumerateArray())
+            // --- PROCESS BIDS (Buyers) ---
+            if (bidsEl.ValueKind == JsonValueKind.Array)
             {
-                decimal price = decimal.Parse(bid.GetProperty("price").GetString() ?? "0");
-                decimal size = decimal.Parse(bid.GetProperty("size").GetString() ?? "0");
+                foreach (var bid in bidsEl.EnumerateArray())
+                {
+                    decimal price = decimal.Parse(bid.GetProperty("price").GetString() ?? "0");
+                    decimal size = decimal.Parse(bid.GetProperty("size").GetString() ?? "0");
 
-                if (size == 0)
-                {
-                    Bids.Remove(price); // Order was canceled or filled!
-                }
-                else
-                {
-                    Bids[price] = size; // Order was added or updated
+                    if (size == 0) _bids.Remove(price);
+                    else _bids[price] = size;
                 }
             }
-        }
 
-        // --- PROCESS ASKS (Sellers) ---
-        if (asksEl.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var ask in asksEl.EnumerateArray())
+            // --- PROCESS ASKS (Sellers) ---
+            if (asksEl.ValueKind == JsonValueKind.Array)
             {
-                decimal price = decimal.Parse(ask.GetProperty("price").GetString() ?? "0");
-                decimal size = decimal.Parse(ask.GetProperty("size").GetString() ?? "0");
+                foreach (var ask in asksEl.EnumerateArray())
+                {
+                    decimal price = decimal.Parse(ask.GetProperty("price").GetString() ?? "0");
+                    decimal size = decimal.Parse(ask.GetProperty("size").GetString() ?? "0");
 
-                if (size == 0)
-                {
-                    Asks.Remove(price);
-                }
-                else
-                {
-                    Asks[price] = size;
+                    if (size == 0) _asks.Remove(price);
+                    else _asks[price] = size;
                 }
             }
         }
     }
 
-    // Helper to instantly get the highest willing buyer
     public decimal GetBestBidPrice()
     {
-        if (Bids.Count == 0) return 0.00m;
-        return Bids.Keys.Max();
+        lock (_bookLock) return _bids.Count == 0 ? 0.00m : _bids.Keys.Max();
     }
 
-    // Helper to instantly get the lowest willing seller
     public decimal GetBestAskPrice()
     {
-        if (Asks.Count == 0) return 1.00m;
-        return Asks.Keys.Min();
+        lock (_bookLock) return _asks.Count == 0 ? 1.00m : _asks.Keys.Min();
     }
 
-    // Helper to check how many shares buyers actually want
     public decimal GetBestBidSize()
     {
-        if (Bids.Count == 0) return 0.00m;
-        return Bids[GetBestBidPrice()];
+        lock (_bookLock) return _bids.Count == 0 ? 0.00m : _bids[_bids.Keys.Max()];
     }
 
-    // Helper to check how many shares are actually available at the best price
     public decimal GetBestAskSize()
     {
-        if (Asks.Count == 0) return 0.00m;
-        return Asks[GetBestAskPrice()];
+        lock (_bookLock) return _asks.Count == 0 ? 0.00m : _asks[_asks.Keys.Min()];
     }
 
-    // Deduct consumed liquidity after a simulated fill
     public void ConsumeAskLiquidity(decimal shares)
     {
-        if (Asks.Count == 0 || shares <= 0) return;
-        decimal bestPrice = Asks.Keys.Min();
-        decimal remaining = Asks[bestPrice] - shares;
-        if (remaining <= 0) Asks.Remove(bestPrice);
-        else Asks[bestPrice] = remaining;
+        lock (_bookLock)
+        {
+            if (_asks.Count == 0 || shares <= 0) return;
+            decimal bestPrice = _asks.Keys.Min();
+            decimal remaining = _asks[bestPrice] - shares;
+            if (remaining <= 0) _asks.Remove(bestPrice);
+            else _asks[bestPrice] = remaining;
+        }
     }
 
     public void ConsumeBidLiquidity(decimal shares)
     {
-        if (Bids.Count == 0 || shares <= 0) return;
-        decimal bestPrice = Bids.Keys.Max();
-        decimal remaining = Bids[bestPrice] - shares;
-        if (remaining <= 0) Bids.Remove(bestPrice);
-        else Bids[bestPrice] = remaining;
+        lock (_bookLock)
+        {
+            if (_bids.Count == 0 || shares <= 0) return;
+            decimal bestPrice = _bids.Keys.Max();
+            decimal remaining = _bids[bestPrice] - shares;
+            if (remaining <= 0) _bids.Remove(bestPrice);
+            else _bids[bestPrice] = remaining;
+        }
     }
 }

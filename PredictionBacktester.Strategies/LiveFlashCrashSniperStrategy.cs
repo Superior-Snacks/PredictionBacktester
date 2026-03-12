@@ -78,7 +78,16 @@ public class LiveFlashCrashSniperStrategy : ILiveStrategy
         // Fetch positions specifically for THIS asset
         decimal positionShares = broker.GetPositionShares(assetId);
 
-        if (positionShares > 0m) 
+        // Dynamically fetch the minimum size from the live broker (defaults to 1.0 for paper trading)
+        decimal minTradeSize = 1.0m;
+        if (broker is PredictionBacktester.Engine.LiveExecution.PolymarketLiveBroker liveBroker)
+        {
+            minTradeSize = liveBroker.GetMinSize(assetId);
+        }
+
+        // If we have enough shares to actually sell, manage the exit.
+        // If we have LESS than the minimum size (dust), ignore it and let the bot buy again!
+        if (positionShares >= minTradeSize) 
         {
             decimal avgEntry = broker.GetAverageEntryPrice(assetId);
             bool isTakeProfit = bestBid >= avgEntry + _reboundProfitMargin;

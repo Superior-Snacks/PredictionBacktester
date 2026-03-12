@@ -18,6 +18,7 @@ public class ProductionBroker : PolymarketLiveBroker
 {
     public decimal MaxBetSize { get; set; } = decimal.MaxValue;
     private readonly PolymarketOrderClient _queryClient;
+    private readonly object _fileLock = new object();
 
     public ProductionBroker(
         string strategyName,
@@ -233,7 +234,11 @@ public class ProductionBroker : PolymarketLiveBroker
         }
         
         string json = JsonSerializer.Serialize(state, new JsonSerializerOptions { WriteIndented = true });
-        File.WriteAllText(filepath, json);
+        
+        lock (_fileLock) 
+        {
+            File.WriteAllText(filepath, json);
+        }
     }
 
     public void LoadState(string filepath = "bot_state.json")
