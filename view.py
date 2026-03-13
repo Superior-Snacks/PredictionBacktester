@@ -82,13 +82,16 @@ def pair_trades(trades):
     return roundtrips
 
 def main():
-    # Find all CSV files (exclude summary files)
-    csvs = sorted(glob.glob("*.csv") + glob.glob("**/*.csv", recursive=True))
+    # Find the most recent LivePaperTrades CSV (excluding summary files)
+    csvs = sorted(glob.glob("LivePaperTrades*.csv"), key=os.path.getmtime, reverse=True)
     csvs = [f for f in csvs if "_summary" not in f.lower()]
 
     if not csvs:
-        print("No CSV files found.")
+        print("No LivePaperTrades CSV files found.")
         return
+
+    csv_file = csvs[0]
+    print(f"Reading: {csv_file}")
 
     # Get filter
     if len(sys.argv) > 1:
@@ -100,13 +103,8 @@ def main():
         print("No filter provided.")
         return
 
-    # Load and filter trades
-    all_trades = []
-    for f in csvs:
-        try:
-            all_trades.extend(load_trades(f))
-        except Exception:
-            continue
+    # Load trades from the single file
+    all_trades = load_trades(csv_file)
 
     filtered = [t for t in all_trades if query.lower() in t.get("StrategyName", "").lower()]
 
