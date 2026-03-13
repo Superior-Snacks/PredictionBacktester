@@ -21,7 +21,6 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
     public PolymarketOrderClient OrderClient => _orderClient;
     public void SetTokenFeeRate(string assetId, int feeRate) => _tokenFeeRates[assetId] = feeRate;
 
-    // THE IRONCLAD FIX: Expose every single market we are tracking to the Sweeper
     public IEnumerable<string> AllTrackedAssets => _tokenNames.Keys;
 
     public PolymarketLiveBroker(
@@ -75,7 +74,6 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
             return;
         }
 
-        // THE MATH FIX: Force exactly 2 decimal places to prevent API "invalid amounts" errors
         decimal shares = Math.Round(dollarsToInvest / targetPrice, 2);
         
         decimal minSize = GetMinSize(assetId);
@@ -85,7 +83,6 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
             return;
         }
 
-        // RECALCULATE dollarsToInvest strictly based on the rounded shares
         dollarsToInvest = shares * targetPrice;
 
         Task.Run(async () =>
@@ -116,16 +113,25 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
                     else throw;
                 }
 
+                // --- RAW DEBUG LOGGING ---
+                if (OrderDebugMode && !string.IsNullOrEmpty(result))
+                {
+                    if (!IsMuted) lock (ConsoleLock)
+                    {
+                        Console.ForegroundColor = ConsoleColor.DarkMagenta;
+                        Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [ORDER DEBUG] RAW BUY RESPONSE:\n{result}");
+                        Console.ResetColor();
+                    }
+                }
+
                 using var doc = System.Text.Json.JsonDocument.Parse(result);
                 var root = doc.RootElement;
 
                 if (root.TryGetProperty("success", out var successEl) && successEl.GetBoolean() == true)
                 {
-                    // Assume success fallback
                     decimal actualShares = shares;
                     decimal actualDollars = dollarsToInvest;
 
-                    // THE PARANOID PARSER: Check both camelCase and snake_case, and parse strings safely
                     if (root.TryGetProperty("takingAmount", out var takingElC) && decimal.TryParse(takingElC.ToString(), out decimal tAmt))
                         actualShares = tAmt;
                     else if (root.TryGetProperty("taking_amount", out var takingEl) && decimal.TryParse(takingEl.ToString(), out tAmt))
@@ -192,7 +198,6 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
 
     public override void SubmitSellAllOrder(string assetId, decimal targetPrice, LocalOrderBook book)
     {
-        // THE MATH FIX: Strictly round the shares we are trying to sell to 2 decimal places
         decimal sharesToSell = Math.Round(GetPositionShares(assetId), 2);
         if (sharesToSell <= 0) return;
 
@@ -254,6 +259,17 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
 
                 if (string.IsNullOrEmpty(result)) return;
 
+                // --- RAW DEBUG LOGGING ---
+                if (OrderDebugMode)
+                {
+                    if (!IsMuted) lock (ConsoleLock)
+                    {
+                        Console.ForegroundColor = ConsoleColor.DarkMagenta;
+                        Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [ORDER DEBUG] RAW SELL RESPONSE:\n{result}");
+                        Console.ResetColor();
+                    }
+                }
+
                 using var doc = System.Text.Json.JsonDocument.Parse(result);
                 var root = doc.RootElement;
 
@@ -262,7 +278,6 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
                     decimal actualSharesSold = sharesToSell;
                     decimal cashReceived = sharesToSell * targetPrice;
 
-                    // THE PARANOID PARSER: SELL means Making = Shares given, Taking = USDC received
                     if (root.TryGetProperty("makingAmount", out var makingElC) && decimal.TryParse(makingElC.ToString(), out decimal mAmt))
                         actualSharesSold = mAmt;
                     else if (root.TryGetProperty("making_amount", out var makingEl) && decimal.TryParse(makingEl.ToString(), out mAmt))
@@ -322,7 +337,6 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
             {
                 Interlocked.Increment(ref _rejectedOrders);
                 
-                // EMERGENCY SYNC
                 if (ex.Message.Contains("balance", StringComparison.OrdinalIgnoreCase) || 
                     ex.Message.Contains("insufficient", StringComparison.OrdinalIgnoreCase))
                 {
