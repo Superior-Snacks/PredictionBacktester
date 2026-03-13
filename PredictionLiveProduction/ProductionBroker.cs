@@ -139,11 +139,11 @@ public class ProductionBroker : PolymarketLiveBroker
 
     /// <summary>
     /// Full state sync: cash + held positions. Logs results.
-    /// If fullDiscovery is true, scans ALL tokens to find manual/untracked positions.
+    /// THE IRONCLAD FIX: Scans ALL tracked tokens to find manual/untracked orphan positions.
     /// </summary>
-    public async Task RunFullSyncAsync(IEnumerable<string> tokenIds, IReadOnlyDictionary<string, string>? tokenNames = null, bool fullDiscovery = false)
+    public async Task RunFullSyncAsync(IReadOnlyDictionary<string, string>? tokenNames = null)
     {
-        Log.Information("[SYNC] Starting on-chain state reconciliation...");
+        Log.Information("[SYNC] Starting ironclad on-chain state reconciliation...");
 
         // 1. Sync cash
         decimal oldCash = CashBalance;
@@ -155,19 +155,18 @@ public class ProductionBroker : PolymarketLiveBroker
             Log.Information("[SYNC] Cash OK: ${Balance:0.00}", CashBalance);
 
         // 2. Sync positions 
-        var heldTokens = fullDiscovery 
-            ? tokenIds.ToList() 
-            : tokenIds.Where(t => GetPositionShares(t) > 0 || GetNoPositionShares(t) > 0).ToList();
+        // Force the sweeper to look at EVERY market the bot is currently tracking via WebSocket
+        var tokensToScan = AllTrackedAssets.ToList();
 
-        if (heldTokens.Count > 0)
-            Log.Information("[SYNC] Checking {Count} position(s) on-chain...", heldTokens.Count);
+        if (tokensToScan.Count > 0)
+            Log.Information("[SYNC] Scanning all {Count} tracked market(s) on-chain for orphans...", tokensToScan.Count);
 
-        var mismatches = await SyncPositionsAsync(heldTokens);
+        var mismatches = await SyncPositionsAsync(tokensToScan);
 
         // ==========================================
-        // THE FIX: Explicitly log the open positions!
+        // Explicitly log the open positions
         // ==========================================
-        var activePositions = heldTokens.Where(t => GetPositionShares(t) > 0 || GetNoPositionShares(t) > 0).ToList();
+        var activePositions = tokensToScan.Where(t => GetPositionShares(t) > 0 || GetNoPositionShares(t) > 0).ToList();
         
         if (activePositions.Count > 0)
         {
@@ -188,17 +187,26 @@ public class ProductionBroker : PolymarketLiveBroker
 
         if (mismatches.Count > 0)
         {
+            Log.Information("[SYNC] --------------------------------");
             foreach (var (tokenId, local, onChain) in mismatches)
             {
                 string name = tokenNames?.GetValueOrDefault(tokenId) ?? tokenId[..Math.Min(8, tokenId.Length)] + "...";
                 decimal drift = onChain - local;
-                Log.Warning("[SYNC] Position drift: {Name} | Local: {Local:0.00} -> On-chain: {OnChain:0.00} | Drift: {Drift:+0.00;-0.00} shares",
-                    name, local, onChain, drift);
+                
+                if (local == 0 && onChain > 0)
+                {
+                    Log.Warning("[SYNC] 🚨 ORPHAN DISCOVERED: Adopted {OnChain:0.00} shares of {Name}", onChain, name);
+                }
+                else
+                {
+                    Log.Warning("[SYNC] Position drift: {Name} | Local: {Local:0.00} -> On-chain: {OnChain:0.00} | Drift: {Drift:+0.00;-0.00} shares",
+                        name, local, onChain, drift);
+                }
             }
         }
         else
         {
-            Log.Information("[SYNC] All positions OK ({Count} checked).", heldTokens.Count);
+            Log.Information("[SYNC] All positions OK ({Count} checked).", tokensToScan.Count);
         }
 
         Log.Information("[SYNC] Reconciliation complete.");
@@ -277,4 +285,3 @@ public class ProductionBroker : PolymarketLiveBroker
         }
     }
 }
-

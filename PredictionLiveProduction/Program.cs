@@ -92,7 +92,7 @@ class Program
         {
             Console.ForegroundColor = ConsoleColor.Red;
             Console.WriteLine("╔══════════════════════════════════════════════════╗");
-            Console.WriteLine("║     ⚠  LIVE PRODUCTION TRADING ENGINE  ⚠        ║");
+            Console.WriteLine("║    ⚠  LIVE PRODUCTION TRADING ENGINE  ⚠        ║");
             Console.WriteLine("║                                                  ║");
             Console.WriteLine("║  This will place REAL orders with REAL money     ║");
             Console.WriteLine("║  on Polymarket using your connected wallet.      ║");
@@ -299,8 +299,9 @@ class Program
         // 1. Restore entry prices from memory
         _broker.LoadState();
 
+        // THE FIX: Removed tokenIds and fullDiscovery params!
         // 2. Validate actual share counts against the blockchain
-        await _broker.RunFullSyncAsync(_subscribedTokens.Keys, _tokenNames, fullDiscovery: true);
+        await _broker.RunFullSyncAsync(_tokenNames);
         
         _dayStartEquity = _broker.GetTotalPortfolioValue();
 
@@ -364,10 +365,11 @@ class Program
                 }
                 catch (Exception ex) { Log.Warning("Market discovery error: {Error}", ex.Message); }
 
+                // THE FIX: Removed tokenIds and fullDiscovery params!
                 // Periodic on-chain state reconciliation
                 try
                 {
-                    await _broker.RunFullSyncAsync(_subscribedTokens.Keys, _tokenNames, fullDiscovery: false);
+                    await _broker.RunFullSyncAsync(_tokenNames);
                 }
                 catch (Exception ex) { Log.Warning("State sync error: {Error}", ex.Message); }
             }
@@ -647,7 +649,7 @@ class Program
                         _tokenTickSize.TryAdd(yesToken, tickSize);
                         _tokenMinSize.TryAdd(yesToken, market.OrderMinSize > 0 ? market.OrderMinSize : 1.00m);
                         
-                        // THE FIX: Fetch fees upfront, but strictly throttle to 10 requests/sec to prevent IP bans
+                        // Fetch fees upfront, but strictly throttle to 10 requests/sec to prevent IP bans
                         if (_broker != null)
                         {
                             try
@@ -778,7 +780,7 @@ class Program
         decimal cash = _broker.CashBalance;
         decimal mtmValue = 0m;
 
-        // THE FIX: Calculate explicit MTM by checking the live order book's best bid!
+        // Calculate explicit MTM by checking the live order book's best bid!
         foreach (var assetId in _subscribedTokens.Keys)
         {
             decimal shares = _broker.GetPositionShares(assetId);

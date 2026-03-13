@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using PredictionBacktester.Core.Entities;
@@ -19,6 +20,9 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
     private int GetFeeRate(string assetId) => _tokenFeeRates.TryGetValue(assetId, out var fee) ? fee : 0;
     public PolymarketOrderClient OrderClient => _orderClient;
     public void SetTokenFeeRate(string assetId, int feeRate) => _tokenFeeRates[assetId] = feeRate;
+
+    // THE IRONCLAD FIX: Expose every single market we are tracking to the Sweeper
+    public IEnumerable<string> AllTrackedAssets => _tokenNames.Keys;
 
     public PolymarketLiveBroker(
         string strategyName, decimal initialCapital, PolymarketApiConfig config,
@@ -71,7 +75,7 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
             return;
         }
 
-        // THE MATH FIX: Force exactly 2 decimal places for size to prevent API "invalid amounts" errors
+        // THE MATH FIX: Force exactly 2 decimal places to prevent API "invalid amounts" errors
         decimal shares = Math.Round(dollarsToInvest / targetPrice, 2);
         
         decimal minSize = GetMinSize(assetId);
@@ -117,29 +121,27 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
 
                 if (root.TryGetProperty("success", out var successEl) && successEl.GetBoolean() == true)
                 {
-                    // THE KILLED FIX: Polymarket omitted the amounts. We assume requested shares were filled!
-                    // If it was a partial fill, the Emergency Sync will catch it during the sell.
+                    // Assume success fallback
                     decimal actualShares = shares;
                     decimal actualDollars = dollarsToInvest;
 
-                    // Fallbacks just in case the API *does* return them
-                    if (root.TryGetProperty("taking_amount", out var takingEl) && decimal.TryParse(takingEl.ToString(), out decimal tAmt))
+                    // THE PARANOID PARSER: Check both camelCase and snake_case, and parse strings safely
+                    if (root.TryGetProperty("takingAmount", out var takingElC) && decimal.TryParse(takingElC.ToString(), out decimal tAmt))
                         actualShares = tAmt;
-                    else if (root.TryGetProperty("takingAmount", out var takingElC) && decimal.TryParse(takingElC.ToString(), out tAmt))
+                    else if (root.TryGetProperty("taking_amount", out var takingEl) && decimal.TryParse(takingEl.ToString(), out tAmt))
                         actualShares = tAmt;
 
-                    if (root.TryGetProperty("making_amount", out var makingEl) && decimal.TryParse(makingEl.ToString(), out decimal mAmt))
+                    if (root.TryGetProperty("makingAmount", out var makingElC) && decimal.TryParse(makingElC.ToString(), out decimal mAmt))
                         actualDollars = mAmt;
-                    else if (root.TryGetProperty("makingAmount", out var makingElC) && decimal.TryParse(makingElC.ToString(), out mAmt))
+                    else if (root.TryGetProperty("making_amount", out var makingEl) && decimal.TryParse(makingEl.ToString(), out mAmt))
                         actualDollars = mAmt;
 
-                    // Only abort if the API explicitly told us we got 0 shares
                     if (actualShares <= 0) 
                     {
                         if (!IsMuted) lock (ConsoleLock)
                         {
                             Console.ForegroundColor = ConsoleColor.DarkGray;
-                            Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [IOC KILLED] Buy missed. Liquidity gone @ ${targetPrice:0.00} | {GetMarketName(assetId)}");
+                            Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [FAK KILLED] Buy missed. Liquidity gone @ ${targetPrice:0.00} | {GetMarketName(assetId)}");
                             Console.ResetColor();
                         }
                         return;
@@ -157,7 +159,7 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
 
                         TradeLedger.Add(new ExecutedTrade
                         {
-                            OutcomeId = assetId, Date = DateTime.Now, Side = "BUY (IOC)",
+                            OutcomeId = assetId, Date = DateTime.Now, Side = "BUY (FAK)",
                             Price = actualDollars / actualShares, Shares = actualShares, DollarValue = actualDollars
                         });
                         TotalActions++;
@@ -166,7 +168,7 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
                     if (!IsMuted) lock (ConsoleLock)
                     {
                         Console.ForegroundColor = ConsoleColor.Green;
-                        Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [LIVE BUY IOC] {actualShares:0.00} shares @ ${actualDollars / actualShares:0.00} | ${actualDollars:0.00} | {GetMarketName(assetId)}");
+                        Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [LIVE BUY FAK] {actualShares:0.00} shares @ ${actualDollars / actualShares:0.00} | ${actualDollars:0.00} | {GetMarketName(assetId)}");
                         Console.ResetColor();
                     }
                 }
@@ -257,19 +259,18 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
 
                 if (root.TryGetProperty("success", out var successEl) && successEl.GetBoolean() == true)
                 {
-                    // THE KILLED FIX: Assume full execution
                     decimal actualSharesSold = sharesToSell;
                     decimal cashReceived = sharesToSell * targetPrice;
 
-                    // Fallbacks
-                    if (root.TryGetProperty("making_amount", out var makingEl) && decimal.TryParse(makingEl.ToString(), out decimal mAmt))
+                    // THE PARANOID PARSER: SELL means Making = Shares given, Taking = USDC received
+                    if (root.TryGetProperty("makingAmount", out var makingElC) && decimal.TryParse(makingElC.ToString(), out decimal mAmt))
                         actualSharesSold = mAmt;
-                    else if (root.TryGetProperty("makingAmount", out var makingElC) && decimal.TryParse(makingElC.ToString(), out mAmt))
+                    else if (root.TryGetProperty("making_amount", out var makingEl) && decimal.TryParse(makingEl.ToString(), out mAmt))
                         actualSharesSold = mAmt;
 
-                    if (root.TryGetProperty("taking_amount", out var takingEl) && decimal.TryParse(takingEl.ToString(), out decimal tAmt))
+                    if (root.TryGetProperty("takingAmount", out var takingElC) && decimal.TryParse(takingElC.ToString(), out decimal tAmt))
                         cashReceived = tAmt;
-                    else if (root.TryGetProperty("takingAmount", out var takingElC) && decimal.TryParse(takingElC.ToString(), out tAmt))
+                    else if (root.TryGetProperty("taking_amount", out var takingEl) && decimal.TryParse(takingEl.ToString(), out tAmt))
                         cashReceived = tAmt;
 
                     if (actualSharesSold <= 0) 
@@ -277,7 +278,7 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
                         if (!IsMuted) lock (ConsoleLock)
                         {
                             Console.ForegroundColor = ConsoleColor.DarkGray;
-                            Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [IOC KILLED] Sell missed. Retrying next tick... | {GetMarketName(assetId)}");
+                            Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [FAK KILLED] Sell missed. Retrying next tick... | {GetMarketName(assetId)}");
                             Console.ResetColor();
                         }
                         return;
@@ -295,7 +296,7 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
 
                         TradeLedger.Add(new ExecutedTrade
                         {
-                            OutcomeId = assetId, Date = DateTime.Now, Side = "SELL (IOC)",
+                            OutcomeId = assetId, Date = DateTime.Now, Side = "SELL (FAK)",
                             Price = executionPrice, Shares = actualSharesSold, DollarValue = cashReceived
                         });
 
@@ -312,7 +313,7 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
                     if (!IsMuted) lock (ConsoleLock)
                     {
                         Console.ForegroundColor = pnl >= 0 ? ConsoleColor.Cyan : ConsoleColor.Red;
-                        Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [LIVE SELL IOC] {actualSharesSold:0.00} shares | PnL: ${pnl:0.00} | Received: ${cashReceived:0.00} | {GetMarketName(assetId)}");
+                        Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [LIVE SELL FAK] {actualSharesSold:0.00} shares | PnL: ${pnl:0.00} | Received: ${cashReceived:0.00} | {GetMarketName(assetId)}");
                         Console.ResetColor();
                     }
                 }
@@ -321,7 +322,7 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
             {
                 Interlocked.Increment(ref _rejectedOrders);
                 
-                // THE MISSING FIX: Emergency On-Demand Sync for balance mismatches
+                // EMERGENCY SYNC
                 if (ex.Message.Contains("balance", StringComparison.OrdinalIgnoreCase) || 
                     ex.Message.Contains("insufficient", StringComparison.OrdinalIgnoreCase))
                 {
