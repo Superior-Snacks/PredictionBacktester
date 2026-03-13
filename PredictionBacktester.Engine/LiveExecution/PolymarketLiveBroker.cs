@@ -71,14 +71,18 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
             return;
         }
 
-        decimal shares = dollarsToInvest / targetPrice;
-        decimal minSize = GetMinSize(assetId);
+        // THE MATH FIX: Force exactly 2 decimal places for size to prevent API "invalid amounts" errors
+        decimal shares = Math.Round(dollarsToInvest / targetPrice, 2);
         
+        decimal minSize = GetMinSize(assetId);
         if (shares < minSize)
         {
             _pendingOrders.TryRemove(assetId, out _);
             return;
         }
+
+        // RECALCULATE dollarsToInvest strictly based on the rounded shares
+        dollarsToInvest = shares * targetPrice;
 
         Task.Run(async () =>
         {
@@ -113,15 +117,23 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
 
                 if (root.TryGetProperty("success", out var successEl) && successEl.GetBoolean() == true)
                 {
-                    decimal actualShares = 0m;
-                    decimal actualDollars = 0m;
+                    // THE KILLED FIX: Polymarket omitted the amounts. We assume requested shares were filled!
+                    // If it was a partial fill, the Emergency Sync will catch it during the sell.
+                    decimal actualShares = shares;
+                    decimal actualDollars = dollarsToInvest;
 
+                    // Fallbacks just in case the API *does* return them
                     if (root.TryGetProperty("taking_amount", out var takingEl) && decimal.TryParse(takingEl.ToString(), out decimal tAmt))
+                        actualShares = tAmt;
+                    else if (root.TryGetProperty("takingAmount", out var takingElC) && decimal.TryParse(takingElC.ToString(), out tAmt))
                         actualShares = tAmt;
 
                     if (root.TryGetProperty("making_amount", out var makingEl) && decimal.TryParse(makingEl.ToString(), out decimal mAmt))
                         actualDollars = mAmt;
+                    else if (root.TryGetProperty("makingAmount", out var makingElC) && decimal.TryParse(makingElC.ToString(), out mAmt))
+                        actualDollars = mAmt;
 
+                    // Only abort if the API explicitly told us we got 0 shares
                     if (actualShares <= 0) 
                     {
                         if (!IsMuted) lock (ConsoleLock)
@@ -178,7 +190,8 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
 
     public override void SubmitSellAllOrder(string assetId, decimal targetPrice, LocalOrderBook book)
     {
-        decimal sharesToSell = GetPositionShares(assetId);
+        // THE MATH FIX: Strictly round the shares we are trying to sell to 2 decimal places
+        decimal sharesToSell = Math.Round(GetPositionShares(assetId), 2);
         if (sharesToSell <= 0) return;
 
         decimal minSize = GetMinSize(assetId);
@@ -244,13 +257,19 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
 
                 if (root.TryGetProperty("success", out var successEl) && successEl.GetBoolean() == true)
                 {
-                    decimal actualSharesSold = 0m;
-                    decimal cashReceived = 0m;
+                    // THE KILLED FIX: Assume full execution
+                    decimal actualSharesSold = sharesToSell;
+                    decimal cashReceived = sharesToSell * targetPrice;
 
+                    // Fallbacks
                     if (root.TryGetProperty("making_amount", out var makingEl) && decimal.TryParse(makingEl.ToString(), out decimal mAmt))
+                        actualSharesSold = mAmt;
+                    else if (root.TryGetProperty("makingAmount", out var makingElC) && decimal.TryParse(makingElC.ToString(), out mAmt))
                         actualSharesSold = mAmt;
 
                     if (root.TryGetProperty("taking_amount", out var takingEl) && decimal.TryParse(takingEl.ToString(), out decimal tAmt))
+                        cashReceived = tAmt;
+                    else if (root.TryGetProperty("takingAmount", out var takingElC) && decimal.TryParse(takingElC.ToString(), out tAmt))
                         cashReceived = tAmt;
 
                     if (actualSharesSold <= 0) 

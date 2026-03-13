@@ -139,7 +139,7 @@ public class PolymarketOrderClient
         {
             ["order"] = orderNode,
             ["owner"] = _config.ApiKey,
-            ["orderType"] = "IOC"
+            ["orderType"] = "FAK"
         };
 
         string jsonBody = payloadNode.ToJsonString();
