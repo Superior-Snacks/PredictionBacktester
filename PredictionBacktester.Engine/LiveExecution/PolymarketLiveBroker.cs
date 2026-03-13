@@ -199,7 +199,7 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
 
     public override void SubmitSellAllOrder(string assetId, decimal targetPrice, LocalOrderBook book)
     {
-        decimal sharesToSell = Math.Round(GetPositionShares(assetId), 4);
+        decimal sharesToSell = Math.Round(GetPositionShares(assetId), 2);
         if (sharesToSell <= 0) return;
 
         decimal minSize = GetMinSize(assetId);

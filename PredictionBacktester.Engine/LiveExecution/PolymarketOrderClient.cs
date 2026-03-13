@@ -63,23 +63,29 @@ public class PolymarketOrderClient
             _ => 2 // "0.01" default
         };
         price = Math.Round(price, tickDecimals, MidpointRounding.AwayFromZero);
-        size = Math.Round(size, tickDecimals, MidpointRounding.AwayFromZero);
+        
+        // Prevent price from rounding down to absolute zero
+        if (price <= 0) price = decimal.Parse(tickSize);
 
-        // 2. Convert to BigIntegers (USDC and conditional tokens both use 6 decimals)
-        const decimal DECIMALS = 1_000_000m;
-        // 2. THE FAK MATH FIX (Human World: Decimals)
+        // 2. THE FAK MATH FIX (Asymmetrical Decimal Rules)
         decimal makerAmountDec;
         decimal takerAmountDec;
 
         if (side == 0) // BUY: pay USDC (maker), receive shares (taker)
         {
-            makerAmountDec = Math.Round(size * price, 2); // USDC Spent
-            takerAmountDec = Math.Round(size, 4);         // Shares Received
+            makerAmountDec = Math.Round(size * price, 2); // USDC Spent (Max 2)
+            takerAmountDec = Math.Round(size, 4);         // Shares Received (Max 4)
+            
+            // Failsafe: Cannot send 0 USDC
+            if (makerAmountDec <= 0) makerAmountDec = 0.01m; 
         }
         else // SELL: give shares (maker), receive USDC (taker)
         {
-            makerAmountDec = Math.Round(size, 4);         // Shares Given
-            takerAmountDec = Math.Round(size * price, 2); // USDC Received
+            makerAmountDec = Math.Round(size, 2);         // Shares Given (MAX 2 PER API)
+            takerAmountDec = Math.Round(size * price, 5); // USDC Received (MAX 5 PER API)
+            
+            // Failsafe: Cannot expect 0 USDC in return
+            if (takerAmountDec <= 0) takerAmountDec = 0.00001m; 
         }
 
         // 3. Convert to Blockchain Format (BigInteger scale by 10^6)
