@@ -34,27 +34,27 @@ class Program
         // normal hard test
         // ---------------------------------------------------------
         configs.Add(new StrategyConfig(
-            "Sniper_Ultra_Strict_100$", 
-            100m, 
-            () => new LiveFlashCrashSniperStrategy("Sniper_Ultra_Strict_100$", 0.25m, 60)
+            "Sniper_my_capital_10%", 
+            80m, 
+            () => new LiveFlashCrashSniperStrategy("Sniper_my_capital_10%", 0.25m, 20, 0.05m, 0.10m, 0.10m, 0.03m, 0.03m)
         ));
 
         configs.Add(new StrategyConfig(
-            "Sniper_Ultra_Strict_500$",
-            500m,
-            () => new LiveFlashCrashSniperStrategy("Sniper_Ultra_Strict_500$", 0.25m, 60)
+            "Sniper_my_capital_5%",
+            80m,
+            () => new LiveFlashCrashSniperStrategy("Sniper_my_capital_5%", 0.25m, 20, 0.05m, 0.10m, 0.05m, 0.03m, 0.03m)
         ));
 
 
         // ---------------------------------------------------------
         // GRID 1: Live Flash Crash Sniper
         // ---------------------------------------------------------
-        decimal[] sniperThresholds = {0.10m, 0.15m, 0.20m, 0.25m, 0.30m };
-        long[] sniperWindows = {20, 30, 60, 120 };
+        decimal[] sniperThresholds = { 0.15m, 0.20m, 0.25m, 0.30m };
+        long[] sniperWindows = { 20, 30, 60, 120 };
         decimal[] sniperTakeProfit = { 0.03m, 0.05m, 0.07m };
         decimal[] sniperStopLoss = { 0.10m, 0.15m, 0.25m };
-        decimal[] sniperEntrySlippage = { 0.01m, 0.03m, 0.05m };
-        decimal[] sniperExitSlippage = {0.01m, 0.03m, 0.05m }; 
+        decimal[] sniperEntrySlippage = { 0.01m, 0.03m };
+        decimal[] sniperExitSlippage = {0.01m, 0.03m }; 
 
         int sniperVersion = 1;
 
