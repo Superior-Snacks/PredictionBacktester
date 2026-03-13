@@ -446,7 +446,6 @@ class Program
                     while (ws.State == WebSocketState.Open)
                     {
                         WebSocketReceiveResult result;
-                        var sw = Stopwatch.StartNew(); // stop watch
                         do
                         {
                             // Combine user pause token with a stale-connection timeout
@@ -550,6 +549,7 @@ class Program
                                                 {
                                                     MaxDegreeOfParallelism = Environment.ProcessorCount - 1
                                                 };
+                                                var sw = Stopwatch.StartNew();
                                                 Parallel.ForEach(strategies, parallelOptions, strategy =>
                                                 {
                                                     if (_droppedStrategies.Contains(strategy.StrategyName)) return;
