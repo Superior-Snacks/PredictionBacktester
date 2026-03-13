@@ -556,7 +556,7 @@ class Program
                                                     strategy.OnBookUpdate(book, _strategyBrokers[strategy.StrategyName]);
                                                 });
                                                 sw.Stop();
-                                                if (sw.ElapsedMilliseconds > 50)
+                                                if (sw.ElapsedMilliseconds > 200)
                                                 {
                                                     Console.WriteLine($"[WARNING] CPU Bottleneck! Tick processing took {sw.ElapsedMilliseconds}ms");
                                                 }
