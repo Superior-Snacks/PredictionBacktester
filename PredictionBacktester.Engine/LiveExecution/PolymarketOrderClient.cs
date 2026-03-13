@@ -67,34 +67,24 @@ public class PolymarketOrderClient
 
         // 2. Convert to BigIntegers (USDC and conditional tokens both use 6 decimals)
         const decimal DECIMALS = 1_000_000m;
-        BigInteger makerAmount, takerAmount;
+        // 2. THE FAK MATH FIX (Human World: Decimals)
+        decimal makerAmountDec;
+        decimal takerAmountDec;
 
         if (side == 0) // BUY: pay USDC (maker), receive shares (taker)
         {
-            takerAmount = new BigInteger((long)Math.Round(size * DECIMALS));
-            makerAmount = new BigInteger((long)Math.Round(size * price * DECIMALS));
+            makerAmountDec = Math.Round(size * price, 2); // USDC Spent
+            takerAmountDec = Math.Round(size, 4);         // Shares Received
         }
         else // SELL: give shares (maker), receive USDC (taker)
         {
-            makerAmount = new BigInteger((long)Math.Round(size * DECIMALS));
-            takerAmount = new BigInteger((long)Math.Round(size * price * DECIMALS));
+            makerAmountDec = Math.Round(size, 4);         // Shares Given
+            takerAmountDec = Math.Round(size * price, 2); // USDC Received
         }
 
-        // 3. Enforce Polymarket precision rules (DO NOT ALTER AMOUNTS FOR FEES!)
-        //   BUY:  makerAmount (USDC) max 5 decimals → divisible by 10
-        //         takerAmount (shares) max 2 decimals → divisible by 10000
-        //   SELL: makerAmount (shares) max 2 decimals → divisible by 10000
-        //         takerAmount (USDC) max 5 decimals → divisible by 10
-        if (side == 0)
-        {
-            makerAmount = (makerAmount / 10) * 10;
-            takerAmount = (takerAmount / 10000) * 10000;
-        }
-        else
-        {
-            makerAmount = (makerAmount / 10000) * 10000;
-            takerAmount = (takerAmount / 10) * 10;
-        }
+        // 3. Convert to Blockchain Format (BigInteger scale by 10^6)
+        BigInteger makerAmount = new BigInteger((long)(makerAmountDec * 1_000_000m));
+        BigInteger takerAmount = new BigInteger((long)(takerAmountDec * 1_000_000m));
 
         // 4. Build the Order Struct: POLY_GNOSIS_SAFE mode (maker=proxy, signer=EOA, signatureType=2)
         var order = new PolymarketOrder

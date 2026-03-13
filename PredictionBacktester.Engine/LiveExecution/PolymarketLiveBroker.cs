@@ -74,7 +74,7 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
             return;
         }
 
-        decimal shares = Math.Round(dollarsToInvest / targetPrice, 2);
+        decimal shares = Math.Round(dollarsToInvest / targetPrice, 4);
         
         decimal minSize = GetMinSize(assetId);
         if (shares < minSize)
@@ -83,7 +83,8 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
             return;
         }
 
-        dollarsToInvest = shares * targetPrice;
+        // RECALCULATE dollarsToInvest based on the strict 2-decimal API rule
+        dollarsToInvest = Math.Round(shares * targetPrice, 2);
 
         Task.Run(async () =>
         {
@@ -198,7 +199,7 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
 
     public override void SubmitSellAllOrder(string assetId, decimal targetPrice, LocalOrderBook book)
     {
-        decimal sharesToSell = Math.Round(GetPositionShares(assetId), 2);
+        decimal sharesToSell = Math.Round(GetPositionShares(assetId), 4);
         if (sharesToSell <= 0) return;
 
         decimal minSize = GetMinSize(assetId);
