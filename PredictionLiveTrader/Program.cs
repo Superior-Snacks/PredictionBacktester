@@ -91,9 +91,11 @@ class Program
     private static CancellationTokenSource _pauseCts = new CancellationTokenSource();
     private static readonly string _sessionCsvFilename = $"LivePaperTrades_{DateTime.Now:yyyyMMdd_HHmmss}.csv";
 
+    private const decimal MAX_BET_SIZE = 5.00m;
     private static readonly int _maxNameLength = _strategyConfigs.Max(c => c.Name.Length);
     private static Dictionary<string, PaperBroker> _strategyBrokers = new Dictionary<string, PaperBroker>();
     private static Dictionary<string, string> _tokenNames = new Dictionary<string, string>();
+    private static Dictionary<string, decimal> _tokenMinSizes = new Dictionary<string, decimal>();
     private static readonly HashSet<string> _subscribedTokens = new();
     private static readonly HashSet<string> _droppedStrategies = new();
     private static ClientWebSocket? _activeWs;
@@ -110,7 +112,7 @@ class Program
 
         foreach (var config in _strategyConfigs)
         {
-            var broker = new PaperBroker(config.Name, config.StartingCapital, _tokenNames);
+            var broker = new PaperBroker(config.Name, config.StartingCapital, _tokenNames, _tokenMinSizes, MAX_BET_SIZE);
             broker.LatencyMs = _latencyEnabled ? REALISTIC_LATENCY_MS : 0;
             _strategyBrokers[config.Name] = broker;
         }
@@ -657,6 +659,7 @@ class Program
                         if (_subscribedTokens.Add(yesToken))
                         {
                             _tokenNames.TryAdd(yesToken, market.Question);
+                            _tokenMinSizes.TryAdd(yesToken, market.OrderMinSize > 0 ? market.OrderMinSize : 1.00m);
                             newlyDiscovered.Add(yesToken);
                         }
                     }

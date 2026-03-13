@@ -9,12 +9,16 @@ public class PaperBroker : GlobalSimulatedBroker
 {
     public string StrategyName { get; }
     private readonly Dictionary<string, string> _tokenNames;
+    private readonly Dictionary<string, decimal> _tokenMinSizes;
+    private readonly decimal _maxBetSize;
 
-    // THE FIX: Accept the dictionary of token names
-    public PaperBroker(string strategyName, decimal initialCapital, Dictionary<string, string> tokenNames) : base(initialCapital)
+    public PaperBroker(string strategyName, decimal initialCapital, Dictionary<string, string> tokenNames,
+        Dictionary<string, decimal> tokenMinSizes, decimal maxBetSize) : base(initialCapital)
     {
         StrategyName = strategyName;
         _tokenNames = tokenNames;
+        _tokenMinSizes = tokenMinSizes;
+        _maxBetSize = maxBetSize;
         StrategyLabel = strategyName;
         AssetNameResolver = GetMarketName;
     }
@@ -107,6 +111,49 @@ public class PaperBroker : GlobalSimulatedBroker
                 Console.ResetColor();
             }
         }
+    }
+
+    public override void SubmitBuyOrder(string assetId, decimal targetPrice, decimal dollarsToInvest, LocalOrderBook book)
+    {
+        // Max bet cap (mirrors ProductionBroker)
+        if (dollarsToInvest > _maxBetSize)
+            dollarsToInvest = _maxBetSize;
+
+        // Price boundary check (mirrors PolymarketLiveBroker)
+        decimal bestAsk = book.GetBestAskPrice();
+        if (bestAsk >= 0.99m || bestAsk <= 0.01m) return;
+
+        // Share rounding + min size check (mirrors PolymarketLiveBroker)
+        decimal shares = Math.Round(dollarsToInvest / targetPrice, 2);
+        decimal minSize = _tokenMinSizes.GetValueOrDefault(assetId, 1.00m);
+        if (shares < minSize) return;
+
+        // Recalculate dollars after rounding (mirrors PolymarketLiveBroker)
+        dollarsToInvest = shares * targetPrice;
+
+        base.SubmitBuyOrder(assetId, targetPrice, dollarsToInvest, book);
+    }
+
+    public override void SubmitSellAllOrder(string assetId, decimal targetPrice, LocalOrderBook book)
+    {
+        // Share rounding (mirrors PolymarketLiveBroker)
+        decimal sharesToSell = Math.Round(GetPositionShares(assetId), 2);
+        if (sharesToSell <= 0) return;
+
+        // Dust detection — hold to settlement (mirrors PolymarketLiveBroker)
+        decimal minSize = _tokenMinSizes.GetValueOrDefault(assetId, 1.00m);
+        if (sharesToSell < minSize)
+        {
+            if (!IsMuted) lock (ConsoleLock)
+            {
+                Console.ForegroundColor = ConsoleColor.DarkGray;
+                Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [PAPER DUST] {sharesToSell:0.00} shares below min ({minSize}). Holding to settlement.");
+                Console.ResetColor();
+            }
+            return;
+        }
+
+        base.SubmitSellAllOrder(assetId, targetPrice, book);
     }
 
     public override void ResolveMarket(string assetId, decimal outcomePrice)
