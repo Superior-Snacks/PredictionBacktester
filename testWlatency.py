@@ -18,7 +18,7 @@ def main():
 
     if valid_files:
         latest_file = max(valid_files, key=os.path.getctime)
-        snapshot_file = "PredictionLiveTrader/LivePaperTrades_SNAPSHOT.csv"
+        snapshot_file = latest_file.replace(".csv", "_SNAPSHOT.csv")
         try:
             shutil.copy2(latest_file, snapshot_file)
             print(f"\nSnapshot: {os.path.basename(latest_file)}")
@@ -26,11 +26,13 @@ def main():
             print(f"Failed to create snapshot: {e}")
             return
     else:
+        # Fallback: use existing snapshot files directly (check both locations)
         snapshot_candidates = [f for f in csv_files if "SNAPSHOT" in f and "_summary" not in f]
         if not snapshot_candidates:
             print("No CSV files found!")
             return
         snapshot_file = max(snapshot_candidates, key=os.path.getctime)
+        latest_file = snapshot_file
         print(f"\nUsing existing snapshot: {os.path.basename(snapshot_file)}")
 
     df = pd.read_csv(snapshot_file)
