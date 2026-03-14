@@ -65,6 +65,8 @@ public class LiveFlashCrashSniperStrategy : ILiveStrategy
 
         if (bestAsk >= 1.00m || bestAsk <= 0.00m || availableAskSize <= 0 || availableBidSize <= 0) return;
 
+        if (bestAsk - bestBid > 0.05m) return;
+
         // 1. Memory: Always record the price first
         _recentAsks.Enqueue((nowSec, bestAsk));
         while (_recentAsks.Count > 0 && (nowSec - _recentAsks.Peek().Timestamp) > _timeWindowSeconds)
