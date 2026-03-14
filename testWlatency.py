@@ -87,11 +87,13 @@ def main():
         impossible = [t for t in matched if t['hold_time'] < threshold]
         realistic = [t for t in matched if t['hold_time'] >= threshold]
 
-        # Pessimistic view: impossible trades lose their entire buy capital
-        impossible_loss = sum(-t['buy_dollars'] for t in impossible)
+        # Fair pessimistic: losing impossible trades = total loss, winning = $0 (strip profit, return capital)
+        impossible_losers = [t for t in impossible if t['pnl'] <= 0]
+        impossible_penalty = sum(-t['buy_dollars'] for t in impossible_losers)  # total wipeout
+        # winners (pnl > 0): strip the profit but don't destroy capital (pnl contribution = $0)
 
         realistic_pnl = sum(t['pnl'] for t in realistic)
-        pessimistic_pnl = realistic_pnl + impossible_loss
+        pessimistic_pnl = realistic_pnl + impossible_penalty
 
         avg_hold = pd.Timedelta(seconds=sum(t['hold_time'].total_seconds() for t in matched) / total) if total else pd.Timedelta(0)
         min_hold = min(t['hold_time'] for t in matched)
@@ -105,7 +107,7 @@ def main():
             'impossible': len(impossible),
             'pct_impossible': len(impossible) / total * 100,
             'realistic_pnl': realistic_pnl,
-            'impossible_loss': impossible_loss,
+            'impossible_penalty': impossible_penalty,
             'pessimistic_pnl': pessimistic_pnl,
             'capital': capital,
             'pessimistic_roi': pessimistic_pnl / capital * 100,
@@ -121,11 +123,11 @@ def main():
     results.sort(key=lambda r: r['pessimistic_pnl'], reverse=True)
 
     # Summary table
-    print(f"\n  Pessimistic model: impossible trades (<{MIN_HOLD_SECONDS}s) assumed total loss (buy $ -> $0)\n")
+    print(f"\n  Fair pessimistic: impossible losers (<{MIN_HOLD_SECONDS}s) = total loss, impossible winners = profit stripped ($0)\n")
     print(f"  {'Strategy':<55} {'Total':>5} {'Real':>5} {'Fake':>5}  {'Real PnL':>10} {'Fake Loss':>10} {'Net PnL':>10} {'ROI%':>7}  {'Avg Hold':>10}")
     print(f"  {'-'*55} {'-'*5} {'-'*5} {'-'*5}  {'-'*10} {'-'*10} {'-'*10} {'-'*7}  {'-'*10}")
 
-    totals = {'total': 0, 'realistic': 0, 'impossible': 0, 'realistic_pnl': 0, 'impossible_loss': 0, 'pessimistic_pnl': 0}
+    totals = {'total': 0, 'realistic': 0, 'impossible': 0, 'realistic_pnl': 0, 'impossible_penalty': 0, 'pessimistic_pnl': 0}
 
     for r in results:
         name = r['strategy'][:55]
@@ -134,17 +136,17 @@ def main():
         color = "\033[32m" if r['pessimistic_pnl'] > 0 else "\033[31m"
         reset = "\033[0m"
 
-        print(f"  {name:<55} {r['total']:>5} {r['realistic']:>5} {r['impossible']:>5}  ${r['realistic_pnl']:>+9.2f} ${r['impossible_loss']:>+9.2f} {color}${r['pessimistic_pnl']:>+9.2f}{reset} {color}{r['pessimistic_roi']:>+6.1f}%{reset}  {avg_str:>10}")
+        print(f"  {name:<55} {r['total']:>5} {r['realistic']:>5} {r['impossible']:>5}  ${r['realistic_pnl']:>+9.2f} ${r['impossible_penalty']:>+9.2f} {color}${r['pessimistic_pnl']:>+9.2f}{reset} {color}{r['pessimistic_roi']:>+6.1f}%{reset}  {avg_str:>10}")
 
         totals['total'] += r['total']
         totals['realistic'] += r['realistic']
         totals['impossible'] += r['impossible']
         totals['realistic_pnl'] += r['realistic_pnl']
-        totals['impossible_loss'] += r['impossible_loss']
+        totals['impossible_penalty'] += r['impossible_penalty']
         totals['pessimistic_pnl'] += r['pessimistic_pnl']
 
     # Grand totals
-    print(f"\n  {'TOTAL':<55} {totals['total']:>5} {totals['realistic']:>5} {totals['impossible']:>5}  ${totals['realistic_pnl']:>+9.2f} ${totals['impossible_loss']:>+9.2f} ${totals['pessimistic_pnl']:>+9.2f}")
+    print(f"\n  {'TOTAL':<55} {totals['total']:>5} {totals['realistic']:>5} {totals['impossible']:>5}  ${totals['realistic_pnl']:>+9.2f} ${totals['impossible_penalty']:>+9.2f} ${totals['pessimistic_pnl']:>+9.2f}")
 
     # Count profitable strategies
     profitable = sum(1 for r in results if r['pessimistic_pnl'] > 0)

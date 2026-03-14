@@ -151,9 +151,8 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
                         }
 
                         bool settled = false;
-                        int maxRetries = 20; // 10 seconds total
 
-                        for (int i = 0; i < maxRetries; i++)
+                        for (int i = 0; i < 120; i++)
                         {
                             await Task.Delay(500); // 500ms delay between checks
                             
@@ -290,8 +289,17 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
 
         if (!_pendingOrders.TryAdd(assetId, true)) return;
 
-        // Allow 1 cent of negative slippage to dump the bags and guarantee the exit
-        targetPrice = Math.Max(0.01m, targetPrice - 0.01m);
+        // --- NEW SLIPPAGE LOGIC ---
+        // Instead of a hardcoded -0.01, find the actual best buyer on the book.
+        // If the best buyer is way worse than your target price, you still want to get out.
+        decimal bestBid = book.GetBestBidPrice();
+        
+        // If the book is completely empty, default to the lowest possible tick
+        if (bestBid <= 0) bestBid = 0.01m; 
+        
+        // We will accept whichever is worse: our target price - 1 cent, OR the actual best bid.
+        // This guarantees the FAK order will hit existing liquidity immediately.
+        targetPrice = Math.Min(Math.Max(0.01m, targetPrice - 0.01m), bestBid);
 
         Task.Run(async () =>
         {
@@ -370,7 +378,8 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
                         }
 
                         bool settled = false;
-                        for (int i = 0; i < 20; i++) // 10 seconds total
+
+                        for (int i = 0; i < 120; i++)
                         {
                             await Task.Delay(500); 
                             try 
