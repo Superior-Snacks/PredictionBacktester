@@ -45,13 +45,6 @@ public class PolymarketOrderClient
     /// <summary>
     /// Creates, signs, and submits a live order to the Polymarket CLOB.
     /// </summary>
-    /// <param name="tokenId">The CLOB token ID for the outcome</param>
-    /// <param name="price">Price per share (0.01 to 0.99)</param>
-    /// <param name="size">Number of shares</param>
-    /// <param name="side">0 = Buy, 1 = Sell</param>
-    /// <param name="negRisk">True for multi-outcome (NegRisk) markets</param>
-    /// <param name="tickSize">The tick size of the market (e.g. 0.01)</param>
-    /// <param name="feeRateBps">The exact taker fee in basis points</param>
     public async Task<string> SubmitOrderAsync(string tokenId, decimal price, decimal size, int side, bool negRisk = false, string tickSize = "0.01", int feeRateBps = 0)
     {
         // 1. ROUND PRICE AND SIZE to match the market's tick size
@@ -92,12 +85,12 @@ public class PolymarketOrderClient
         BigInteger makerAmount = new BigInteger((long)(makerAmountDec * 1_000_000m));
         BigInteger takerAmount = new BigInteger((long)(takerAmountDec * 1_000_000m));
 
-        // 4. Build the Order Struct: POLY_GNOSIS_SAFE mode (maker=proxy, signer=EOA, signatureType=2)
+        // 4. Build the Order Struct: POLY_GNOSIS_SAFE mode
         var order = new PolymarketOrder
         {
             Salt = GenerateSalt(),
-            Maker = _config.ProxyAddress,  // proxy wallet holds the funds
-            Signer = _account.Address,     // EOA signs the order
+            Maker = _config.ProxyAddress,  
+            Signer = _account.Address,     
             Taker = "0x0000000000000000000000000000000000000000",
             TokenId = BigInteger.Parse(tokenId),
             MakerAmount = makerAmount,
@@ -106,14 +99,14 @@ public class PolymarketOrderClient
             Nonce = BigInteger.Zero,
             FeeRateBps = new BigInteger(feeRateBps),
             Side = side,
-            SignatureType = 2 // POLY_GNOSIS_SAFE: maker=proxy, signer=EOA
+            SignatureType = 2 
         };
 
         // 5. Sign the order (EIP-712) using the correct exchange contract
         string verifyingContract = negRisk ? NEG_RISK_EXCHANGE : CTF_EXCHANGE;
         string signature = SignOrder(order, verifyingContract);
 
-        // 6. Build JSON body using JsonNode so salt (BigInteger) serializes as a JSON number
+        // 6. Build JSON body using JsonNode
         var orderNode = new JsonObject
         {
             ["salt"] = (long)order.Salt,
@@ -180,6 +173,31 @@ public class PolymarketOrderClient
         }
 
         return response.Content ?? "OK";
+    }
+
+    /// <summary>
+    /// Fetches the current status of a specific order by its ID.
+    /// </summary>
+    public async Task<string> GetOrderAsync(string orderId)
+    {
+        var request = new RestRequest($"/order/{orderId}", Method.Get);
+        string timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString();
+        string hmacSignature = BuildHmacSignature(_config.ApiSecret, timestamp, "GET", $"/order/{orderId}");
+
+        request.AddHeader("POLY_ADDRESS", _account.Address);
+        request.AddHeader("POLY_SIGNATURE", hmacSignature);
+        request.AddHeader("POLY_TIMESTAMP", timestamp);
+        request.AddHeader("POLY_API_KEY", _config.ApiKey);
+        request.AddHeader("POLY_PASSPHRASE", _config.ApiPassphrase);
+
+        var response = await _httpClient.ExecuteAsync(request);
+
+        if (!response.IsSuccessful)
+        {
+            throw new Exception($"[Polymarket API Error] {response.StatusCode}: {response.Content}");
+        }
+
+        return response.Content ?? "{}";
     }
 
     /// <summary>
@@ -313,13 +331,11 @@ public class PolymarketOrderClient
 
     /// <summary>
     /// Fetches the exact taker fee (in basis points) from the CLOB API.
-    /// Call this ONCE during startup per market, not during a live trade!
     /// </summary>
     public async Task<int> GetTakerFeeAsync(string tokenId)
     {
         try
         {
-            // The CLOB API provides market metadata by token ID under /markets/{tokenId}
             var request = new RestRequest($"/markets/{tokenId}", Method.Get);
             var response = await _httpClient.ExecuteAsync(request);
             if (response.IsSuccessful && !string.IsNullOrEmpty(response.Content))

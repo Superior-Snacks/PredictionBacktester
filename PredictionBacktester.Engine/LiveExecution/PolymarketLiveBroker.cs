@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Text.Json;
 using PredictionBacktester.Core.Entities;
 
 namespace PredictionBacktester.Engine.LiveExecution;
@@ -74,6 +75,9 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
             return;
         }
 
+        // Allow 1 cent of positive slippage to cross the spread and guarantee the fill
+        targetPrice = Math.Min(0.99m, targetPrice + 0.01m); 
+        
         decimal shares = Math.Round(dollarsToInvest / targetPrice, 4);
         
         decimal minSize = GetMinSize(assetId);
@@ -130,18 +134,87 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
 
                 if (root.TryGetProperty("success", out var successEl) && successEl.GetBoolean() == true)
                 {
+                    string status = root.TryGetProperty("status", out var statusEl) ? statusEl.GetString() : "";
+                    string orderId = root.TryGetProperty("orderID", out var orderIdEl) ? orderIdEl.GetString() : "";
+
                     decimal actualShares = shares;
                     decimal actualDollars = dollarsToInvest;
 
-                    if (root.TryGetProperty("takingAmount", out var takingElC) && decimal.TryParse(takingElC.ToString(), out decimal tAmt))
-                        actualShares = tAmt;
-                    else if (root.TryGetProperty("taking_amount", out var takingEl) && decimal.TryParse(takingEl.ToString(), out tAmt))
-                        actualShares = tAmt;
+                    // --- CONCURRENT-SAFE DELAYED SETTLEMENT LOOP ---
+                    if (status == "delayed" && !string.IsNullOrEmpty(orderId))
+                    {
+                        if (!IsMuted) lock (ConsoleLock)
+                        {
+                            Console.ForegroundColor = ConsoleColor.DarkYellow;
+                            Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [DELAYED] Buy Order {orderId} pending. Polling API...");
+                            Console.ResetColor();
+                        }
 
-                    if (root.TryGetProperty("makingAmount", out var makingElC) && decimal.TryParse(makingElC.ToString(), out decimal mAmt))
-                        actualDollars = mAmt;
-                    else if (root.TryGetProperty("making_amount", out var makingEl) && decimal.TryParse(makingEl.ToString(), out mAmt))
-                        actualDollars = mAmt;
+                        bool settled = false;
+                        int maxRetries = 20; // 10 seconds total
+
+                        for (int i = 0; i < maxRetries; i++)
+                        {
+                            await Task.Delay(500); // 500ms delay between checks
+                            
+                            try 
+                            {
+                                string pollResult = await _orderClient.GetOrderAsync(orderId);
+                                using var pollDoc = System.Text.Json.JsonDocument.Parse(pollResult);
+                                var pollRoot = pollDoc.RootElement;
+
+                                // Handle array or single object response
+                                JsonElement orderData = pollRoot;
+                                if (pollRoot.ValueKind == JsonValueKind.Array && pollRoot.GetArrayLength() > 0)
+                                {
+                                    orderData = pollRoot[0];
+                                }
+
+                                string currentStatus = orderData.TryGetProperty("status", out var currStatusEl) ? currStatusEl.GetString() : "";
+
+                                if (currentStatus == "matched" || currentStatus == "live")
+                                {
+                                    if (orderData.TryGetProperty("taker_amount_matched", out var takerEl) && decimal.TryParse(takerEl.ToString(), out decimal matchedShares))
+                                    {
+                                        actualShares = matchedShares;
+                                    }
+                                    
+                                    if (orderData.TryGetProperty("maker_amount_matched", out var makerEl) && decimal.TryParse(makerEl.ToString(), out decimal matchedUsdc))
+                                    {
+                                        actualDollars = matchedUsdc;
+                                    }
+                                    
+                                    settled = true;
+                                    break;
+                                }
+                                else if (currentStatus == "canceled" || currentStatus == "expired" || currentStatus == "unmatched")
+                                {
+                                    actualShares = 0;
+                                    settled = true;
+                                    break;
+                                }
+                            }
+                            catch { /* Ignore parsing or network timeouts during polling */ }
+                        }
+
+                        if (!settled) 
+                        {
+                            actualShares = 0; // Abort if completely timed out
+                        }
+                    }
+                    else 
+                    {
+                        // Handle instant fills
+                        if (root.TryGetProperty("takingAmount", out var takingElC) && decimal.TryParse(takingElC.ToString(), out decimal tAmt))
+                            actualShares = tAmt;
+                        else if (root.TryGetProperty("taking_amount", out var takingEl) && decimal.TryParse(takingEl.ToString(), out tAmt))
+                            actualShares = tAmt;
+
+                        if (root.TryGetProperty("makingAmount", out var makingElC) && decimal.TryParse(makingElC.ToString(), out decimal mAmt))
+                            actualDollars = mAmt;
+                        else if (root.TryGetProperty("making_amount", out var makingEl) && decimal.TryParse(makingEl.ToString(), out mAmt))
+                            actualDollars = mAmt;
+                    }
 
                     if (actualShares <= 0) 
                     {
@@ -151,7 +224,7 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
                             Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [FAK KILLED] Buy missed. Liquidity gone @ ${targetPrice:0.00} | {GetMarketName(assetId)}");
                             Console.ResetColor();
                         }
-                        return;
+                        return; // Exits safely without touching ledger
                     }
 
                     lock (BrokerLock)
@@ -174,8 +247,9 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
 
                     if (!IsMuted) lock (ConsoleLock)
                     {
+                        decimal exactExecutionPrice = actualDollars / actualShares;
                         Console.ForegroundColor = ConsoleColor.Green;
-                        Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [LIVE BUY FAK] {actualShares:0.00} shares @ ${actualDollars / actualShares:0.00} | ${actualDollars:0.00} | {GetMarketName(assetId)}");
+                        Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [LIVE BUY FAK] {actualShares:0.00} shares @ exactly ${exactExecutionPrice:0.000} | ${actualDollars:0.00} | {GetMarketName(assetId)}");
                         Console.ResetColor();
                     }
                 }
@@ -215,6 +289,9 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
         }
 
         if (!_pendingOrders.TryAdd(assetId, true)) return;
+
+        // Allow 1 cent of negative slippage to dump the bags and guarantee the exit
+        targetPrice = Math.Max(0.01m, targetPrice - 0.01m);
 
         Task.Run(async () =>
         {
@@ -276,18 +353,74 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
 
                 if (root.TryGetProperty("success", out var successEl) && successEl.GetBoolean() == true)
                 {
+                    string status = root.TryGetProperty("status", out var statusEl) ? statusEl.GetString() : "";
+                    string orderId = root.TryGetProperty("orderID", out var orderIdEl) ? orderIdEl.GetString() : "";
+
                     decimal actualSharesSold = sharesToSell;
                     decimal cashReceived = sharesToSell * targetPrice;
 
-                    if (root.TryGetProperty("makingAmount", out var makingElC) && decimal.TryParse(makingElC.ToString(), out decimal mAmt))
-                        actualSharesSold = mAmt;
-                    else if (root.TryGetProperty("making_amount", out var makingEl) && decimal.TryParse(makingEl.ToString(), out mAmt))
-                        actualSharesSold = mAmt;
+                    // --- CONCURRENT-SAFE DELAYED SETTLEMENT LOOP (FOR SELLS) ---
+                    if (status == "delayed" && !string.IsNullOrEmpty(orderId))
+                    {
+                        if (!IsMuted) lock (ConsoleLock)
+                        {
+                            Console.ForegroundColor = ConsoleColor.DarkYellow;
+                            Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [DELAYED] Sell Order {orderId} pending. Polling API...");
+                            Console.ResetColor();
+                        }
 
-                    if (root.TryGetProperty("takingAmount", out var takingElC) && decimal.TryParse(takingElC.ToString(), out decimal tAmt))
-                        cashReceived = tAmt;
-                    else if (root.TryGetProperty("taking_amount", out var takingEl) && decimal.TryParse(takingEl.ToString(), out tAmt))
-                        cashReceived = tAmt;
+                        bool settled = false;
+                        for (int i = 0; i < 20; i++) // 10 seconds total
+                        {
+                            await Task.Delay(500); 
+                            try 
+                            {
+                                string pollResult = await _orderClient.GetOrderAsync(orderId);
+                                using var pollDoc = System.Text.Json.JsonDocument.Parse(pollResult);
+                                var pollRoot = pollDoc.RootElement;
+
+                                JsonElement orderData = pollRoot;
+                                if (pollRoot.ValueKind == JsonValueKind.Array && pollRoot.GetArrayLength() > 0)
+                                    orderData = pollRoot[0];
+
+                                string currentStatus = orderData.TryGetProperty("status", out var currStatusEl) ? currStatusEl.GetString() : "";
+
+                                if (currentStatus == "matched" || currentStatus == "live")
+                                {
+                                    if (orderData.TryGetProperty("maker_amount_matched", out var makerEl) && decimal.TryParse(makerEl.ToString(), out decimal matchedShares))
+                                        actualSharesSold = matchedShares;
+                                        
+                                    if (orderData.TryGetProperty("taker_amount_matched", out var takerEl) && decimal.TryParse(takerEl.ToString(), out decimal matchedUsdc))
+                                        cashReceived = matchedUsdc;
+                                        
+                                    settled = true;
+                                    break;
+                                }
+                                else if (currentStatus == "canceled" || currentStatus == "expired" || currentStatus == "unmatched")
+                                {
+                                    actualSharesSold = 0;
+                                    cashReceived = 0;
+                                    settled = true;
+                                    break;
+                                }
+                            }
+                            catch { /* Ignore polling errors */ }
+                        }
+                        if (!settled) { actualSharesSold = 0; cashReceived = 0; }
+                    }
+                    else
+                    {
+                        // Instant Sell Fill
+                        if (root.TryGetProperty("makingAmount", out var makingElC) && decimal.TryParse(makingElC.ToString(), out decimal mAmt))
+                            actualSharesSold = mAmt;
+                        else if (root.TryGetProperty("making_amount", out var makingEl) && decimal.TryParse(makingEl.ToString(), out mAmt))
+                            actualSharesSold = mAmt;
+
+                        if (root.TryGetProperty("takingAmount", out var takingElC) && decimal.TryParse(takingElC.ToString(), out decimal tAmt))
+                            cashReceived = tAmt;
+                        else if (root.TryGetProperty("taking_amount", out var takingEl) && decimal.TryParse(takingEl.ToString(), out tAmt))
+                            cashReceived = tAmt;
+                    }
 
                     if (actualSharesSold <= 0) 
                     {
@@ -328,8 +461,9 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
 
                     if (!IsMuted) lock (ConsoleLock)
                     {
+                        decimal exactExecutionPrice = cashReceived / actualSharesSold;
                         Console.ForegroundColor = pnl >= 0 ? ConsoleColor.Cyan : ConsoleColor.Red;
-                        Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [LIVE SELL FAK] {actualSharesSold:0.00} shares | PnL: ${pnl:0.00} | Received: ${cashReceived:0.00} | {GetMarketName(assetId)}");
+                        Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [LIVE SELL FAK] {actualSharesSold:0.00} shares @ exactly ${exactExecutionPrice:0.000} | PnL: ${pnl:0.00} | {GetMarketName(assetId)}");
                         Console.ResetColor();
                     }
                 }
