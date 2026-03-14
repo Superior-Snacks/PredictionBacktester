@@ -16,6 +16,10 @@ public class LiveFlashCrashSniperStrategy : ILiveStrategy
     private readonly decimal _riskPercentage;
     private readonly decimal _entrySlippage;
     private readonly decimal _exitSlippage;
+    
+    // NEW: The Anti-Spoofing Stopwatch
+    private readonly long _requiredSustainMs;
+    private long _crashStartTimeMs = 0;
 
     private readonly Queue<(long Timestamp, decimal Price)> _recentAsks;
     private decimal _lastGap;
@@ -24,13 +28,14 @@ public class LiveFlashCrashSniperStrategy : ILiveStrategy
 
     public LiveFlashCrashSniperStrategy(
         string strategyName = "FlashCrashSniper",
-        decimal crashThreshold = 0.15m,
-        long timeWindowSeconds = 60,
+        decimal crashThreshold = 0.25m,
+        long timeWindowSeconds = 20,
         decimal reboundProfitMargin = 0.05m,
-        decimal stopLossMargin = 0.15m,
+        decimal stopLossMargin = 0.10m,
         decimal riskPercentage = 0.05m,
-        decimal entrySlippage = 0.03m,
-        decimal exitSlippage = 0.02m)
+        decimal entrySlippage = 0.01m,
+        decimal exitSlippage = 0.03m,
+        long requiredSustainMs = 800) // NEW: Default to 800ms
     {
         StrategyName = strategyName;
         _crashThreshold = crashThreshold;
@@ -40,13 +45,15 @@ public class LiveFlashCrashSniperStrategy : ILiveStrategy
         _riskPercentage = riskPercentage;
         _entrySlippage = entrySlippage;
         _exitSlippage = exitSlippage;
+        _requiredSustainMs = requiredSustainMs;
 
         _recentAsks = new Queue<(long, decimal)>();
     }
 
     public void OnBookUpdate(LocalOrderBook book, GlobalSimulatedBroker broker)
     {
-        long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        long nowSec = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(); // Needed for the stopwatch
         string assetId = book.AssetId;
 
         decimal bestAsk = book.GetBestAskPrice();
@@ -54,39 +61,30 @@ public class LiveFlashCrashSniperStrategy : ILiveStrategy
         decimal availableAskSize = book.GetBestAskSize();
         decimal availableBidSize = book.GetBestBidSize();
 
-        // Always keep the global broker updated on this asset's latest price!
         broker.UpdateLastKnownPrice(assetId, bestAsk);
 
         if (bestAsk >= 1.00m || bestAsk <= 0.00m || availableAskSize <= 0 || availableBidSize <= 0) return;
 
-        // THE FIX: The Maximum Spread Filter
-        // If the spread is wider than 5 cents, the market makers have pulled liquidity. DO NOT TRADE!
-        if (bestAsk - bestBid > 0.05m) return;
-
-        _recentAsks.Enqueue((now, bestAsk));
-        while (_recentAsks.Count > 0 && (now - _recentAsks.Peek().Timestamp) > _timeWindowSeconds)
+        // 1. Memory: Always record the price first
+        _recentAsks.Enqueue((nowSec, bestAsk));
+        while (_recentAsks.Count > 0 && (nowSec - _recentAsks.Peek().Timestamp) > _timeWindowSeconds)
         {
             _recentAsks.Dequeue();
         }
 
         if (_recentAsks.Count < 2) return;
 
-        // Uses the global portfolio equity across all markets
         decimal currentEquity = broker.GetTotalPortfolioValue();
         decimal dollarsToInvest = Math.Min(currentEquity * _riskPercentage, broker.CashBalance);
-
-        // Fetch positions specifically for THIS asset
         decimal positionShares = broker.GetPositionShares(assetId);
 
-        // Dynamically fetch the minimum size from the live broker (defaults to 1.0 for paper trading)
         decimal minTradeSize = 1.0m;
         if (broker is PredictionBacktester.Engine.LiveExecution.PolymarketLiveBroker liveBroker)
         {
             minTradeSize = liveBroker.GetMinSize(assetId);
         }
 
-        // If we have enough shares to actually sell, manage the exit.
-        // If we have LESS than the minimum size (dust), ignore it and let the bot buy again!
+        // 2. Exit Logic
         if (positionShares >= minTradeSize) 
         {
             decimal avgEntry = broker.GetAverageEntryPrice(assetId);
@@ -98,24 +96,44 @@ public class LiveFlashCrashSniperStrategy : ILiveStrategy
                 decimal sellLimitPrice = Math.Max(bestBid - _exitSlippage, 0.001m);
                 broker.SubmitSellAllOrder(assetId, sellLimitPrice, book);
             }
-            return; // If it's a real position, we stop here and manage the exit.
+            return; 
         }
 
+        // 3. Entry Logic (With Stopwatch)
         decimal maxAskInWindow = _recentAsks.Max(x => x.Price);
-
         _lastGap = maxAskInWindow - bestAsk;
+        bool isFlashCrash = _lastGap >= _crashThreshold;
 
-        if (_lastGap >= _crashThreshold && dollarsToInvest >= 1.00m)
+        if (isFlashCrash)
         {
-            decimal maxAffordableShares = dollarsToInvest / bestAsk;
-            decimal sharesToBuy = Math.Min(maxAffordableShares, availableAskSize);
-            decimal actualDollarsSpent = sharesToBuy * bestAsk;
-
-            if (actualDollarsSpent >= 1.00m)
+            if (_crashStartTimeMs == 0)
             {
-                broker.SubmitBuyOrder(assetId, bestAsk + _entrySlippage, actualDollarsSpent, book);
-                _recentAsks.Clear();
+                // Start the stopwatch!
+                _crashStartTimeMs = nowMs;
+                return; // Wait for the next order book update
             }
+            
+            // The stopwatch is running. How long has it been?
+            long timeInCrash = nowMs - _crashStartTimeMs;
+            
+            if (timeInCrash >= _requiredSustainMs && dollarsToInvest >= 1.00m)
+            {
+                decimal maxAffordableShares = dollarsToInvest / bestAsk;
+                decimal sharesToBuy = Math.Min(maxAffordableShares, availableAskSize);
+                decimal actualDollarsSpent = sharesToBuy * bestAsk;
+
+                if (actualDollarsSpent >= 1.00m)
+                {
+                    broker.SubmitBuyOrder(assetId, bestAsk + _entrySlippage, actualDollarsSpent, book);
+                    _recentAsks.Clear();
+                    _crashStartTimeMs = 0; // Reset after buying
+                }
+            }
+        }
+        else
+        {
+            // Price bounced back! It was a spoof or a micro-dip. Reset the stopwatch.
+            _crashStartTimeMs = 0;
         }
     }
 }

@@ -29,6 +29,43 @@ class Program
     {
         var configs = new List<StrategyConfig>();
 
+        // Lock in the winning parameters from your historical backtest
+        decimal targetDrop = 0.25m;
+        long targetWindow = 20;
+        decimal takeProfit = 0.05m;
+        decimal stopLoss = 0.10m;
+        decimal entrySlip = 0.01m;
+        decimal exitSlip = 0.03m;
+
+        // The Calibration Array: How many milliseconds must the crash survive?
+        long[] sustainTimers = { 100, 300, 500, 800, 1000, 1500 };
+
+        foreach (var timer in sustainTimers)
+        {
+            string name = $"Sniper_Calibration_Delay{timer}ms";
+            configs.Add(new StrategyConfig(
+                name,
+                1000m,
+                () => new LiveFlashCrashSniperStrategy(
+                    name, 
+                    targetDrop, 
+                    targetWindow, 
+                    takeProfit, 
+                    stopLoss, 
+                    riskPercentage: 0.05m, 
+                    entrySlippage: entrySlip, 
+                    exitSlippage: exitSlip, 
+                    requiredSustainMs: timer) // Pass the timer here!
+            ));
+        }
+
+        return configs;
+    }
+
+    /*private static List<StrategyConfig> GenerateStrategyGrid()
+    {
+        var configs = new List<StrategyConfig>();
+
         
         // ---------------------------------------------------------
         // normal hard test
@@ -77,7 +114,7 @@ class Program
             ));
         }
         return configs;
-    }
+    }*/
 
     // --- LATENCY SIMULATION (based on ping to Polymarket CLOB API) ---
     private const int REALISTIC_LATENCY_MS = 50;
