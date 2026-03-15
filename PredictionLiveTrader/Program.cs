@@ -24,7 +24,7 @@ class Program
     // STRATEGY CONFIGURATION (Grid Search / Cartesian Product)
     // ==========================================
     private static readonly List<StrategyConfig> _strategyConfigs = GenerateStrategyGrid();
-
+/*
     private static List<StrategyConfig> GenerateStrategyGrid()
     {
         var configs = new List<StrategyConfig>();
@@ -61,8 +61,8 @@ class Program
 
         return configs;
     }
-
-    /*private static List<StrategyConfig> GenerateStrategyGrid()
+*/
+    private static List<StrategyConfig> GenerateStrategyGrid()
     {
         var configs = new List<StrategyConfig>();
 
@@ -114,7 +114,7 @@ class Program
             ));
         }
         return configs;
-    }*/
+    }
 
     // --- LATENCY SIMULATION (based on ping to Polymarket CLOB API) ---
     private const int REALISTIC_LATENCY_MS = 50;
