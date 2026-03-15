@@ -83,8 +83,11 @@ def pair_trades(trades):
 
 def main():
     # Find the most recent LivePaperTrades CSV (excluding summary files)
-    csvs = sorted(glob.glob("LivePaperTrades*.csv"), key=os.path.getmtime, reverse=True)
+    csvs = (glob.glob("LivePaperTrades*.csv")
+          + glob.glob("PredictionLiveTrader/LivePaperTrades_*.csv")
+          + glob.glob("PredictionLiveTrader/bin/Release/**/LivePaperTrades_*.csv", recursive=True))
     csvs = [f for f in csvs if "_summary" not in f.lower()]
+    csvs = sorted(csvs, key=os.path.getmtime, reverse=True)
 
     if not csvs:
         print("No LivePaperTrades CSV files found.")

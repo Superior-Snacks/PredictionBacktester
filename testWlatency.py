@@ -13,12 +13,14 @@ MIN_HOLD_SECONDS = int(sys.argv[1]) if len(sys.argv) > 1 else 5
 
 def main():
     # Same file discovery as analyze_trades.py
-    csv_files = glob.glob("PredictionLiveTrader/LivePaperTrades_*.csv") + glob.glob("LivePaperTrades_*.csv")
+    csv_files = (glob.glob("PredictionLiveTrader/LivePaperTrades_*.csv")
+               + glob.glob("LivePaperTrades_*.csv")
+               + glob.glob("PredictionLiveTrader/bin/Release/**/LivePaperTrades_*.csv", recursive=True))
     valid_files = [f for f in csv_files if "SNAPSHOT" not in f and "_summary" not in f]
 
     if valid_files:
         latest_file = max(valid_files, key=os.path.getctime)
-        snapshot_file = latest_file.replace(".csv", "_SNAPSHOT.csv")
+        snapshot_file = "LivePaperTrades_SNAPSHOT.csv"
         try:
             shutil.copy2(latest_file, snapshot_file)
             print(f"\nSnapshot: {os.path.basename(latest_file)}")
@@ -27,7 +29,7 @@ def main():
             return
     else:
         # Fallback: use existing snapshot files directly (check both locations)
-        snapshot_candidates = [f for f in csv_files if "SNAPSHOT" in f and "_summary" not in f]
+        snapshot_candidates = glob.glob("LivePaperTrades_SNAPSHOT*.csv") + [f for f in csv_files if "SNAPSHOT" in f and "_summary" not in f]
         if not snapshot_candidates:
             print("No CSV files found!")
             return
