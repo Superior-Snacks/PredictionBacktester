@@ -35,7 +35,7 @@ public class LiveFlashCrashSniperStrategy : ILiveStrategy
         decimal riskPercentage = 0.05m,
         decimal entrySlippage = 0.01m,
         decimal exitSlippage = 0.03m,
-        long requiredSustainMs = 800) // NEW: Default to 800ms
+        long requiredSustainMs = 0) // NEW: Default to 800ms
     {
         StrategyName = strategyName;
         _crashThreshold = crashThreshold;

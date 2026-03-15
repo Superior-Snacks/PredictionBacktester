@@ -38,7 +38,7 @@ class Program
         decimal exitSlip = 0.03m;
 
         // The Calibration Array: How many milliseconds must the crash survive?
-        long[] sustainTimers = { 100, 300, 500, 800, 1000, 1500 };
+        long[] sustainTimers = { 3000, 4000, 5000, 6000, 7000 };
 
         foreach (var timer in sustainTimers)
         {
