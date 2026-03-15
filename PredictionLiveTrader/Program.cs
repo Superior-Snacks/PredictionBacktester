@@ -25,7 +25,7 @@ class Program
     // ==========================================
     private static readonly List<StrategyConfig> _strategyConfigs = GenerateStrategyGrid();
 
-    private static List<StrategyConfig> GenerateStrategyGrid()
+    /*private static List<StrategyConfig> GenerateStrategyGrid()
     {
         var configs = new List<StrategyConfig>();
 
@@ -60,9 +60,9 @@ class Program
         }
 
         return configs;
-    }
+    }*/
 
-    /*private static List<StrategyConfig> GenerateStrategyGrid()
+    private static List<StrategyConfig> GenerateStrategyGrid()
     {
         var configs = new List<StrategyConfig>();
 
@@ -72,13 +72,13 @@ class Program
         // ---------------------------------------------------------
         configs.Add(new StrategyConfig(
             "Sniper_my_capital_10%", 
-            80m, 
+            60m, 
             () => new LiveFlashCrashSniperStrategy("Sniper_my_capital_10%", 0.25m, 20, 0.05m, 0.10m, 0.10m, 0.03m, 0.03m)
         ));
 
         configs.Add(new StrategyConfig(
             "Sniper_my_capital_5%",
-            80m,
+            60m,
             () => new LiveFlashCrashSniperStrategy("Sniper_my_capital_5%", 0.25m, 20, 0.05m, 0.10m, 0.05m, 0.03m, 0.03m)
         ));
 
@@ -86,12 +86,12 @@ class Program
         // ---------------------------------------------------------
         // GRID 1: Live Flash Crash Sniper
         // ---------------------------------------------------------
-        decimal[] sniperThresholds = { 0.15m, 0.20m, 0.25m, 0.30m };
+        decimal[] sniperThresholds = {0.10m, 0.15m, 0.20m, 0.25m, 0.30m };
         long[] sniperWindows = { 20, 30, 60, 120 };
         decimal[] sniperTakeProfit = { 0.03m, 0.05m, 0.07m };
         decimal[] sniperStopLoss = { 0.10m, 0.15m, 0.25m };
-        decimal[] sniperEntrySlippage = { 0.01m, 0.03m };
-        decimal[] sniperExitSlippage = {0.01m, 0.03m }; 
+        decimal[] sniperEntrySlippage = { 0.01m, 0.03m, 0.05m };
+        decimal[] sniperExitSlippage = {0.01m, 0.03m, 0.05m }; 
 
         int sniperVersion = 1;
 
@@ -114,7 +114,7 @@ class Program
             ));
         }
         return configs;
-    }*/
+    }
 
     // --- LATENCY SIMULATION (based on ping to Polymarket CLOB API) ---
     private const int REALISTIC_LATENCY_MS = 50;
