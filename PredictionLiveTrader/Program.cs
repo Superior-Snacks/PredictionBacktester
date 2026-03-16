@@ -33,7 +33,7 @@ class Program
         long targetWindow = 20;
         decimal takeProfit = 0.05m;
         decimal stopLoss = 0.10m;
-        decimal entrySlip = 0.01m;
+        decimal entrySlip = 0.03m;
         decimal exitSlip = 0.03m;
 
         // The Calibration Array: How many milliseconds must the crash survive?
