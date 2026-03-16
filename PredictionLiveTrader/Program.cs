@@ -29,7 +29,7 @@ class Program
         var configs = new List<StrategyConfig>();
 
         // Lock in the winning parameters from your historical backtest
-        decimal targetDrop = 0.25m;
+        decimal targetDrop = 0.02m;
         long targetWindow = 20;
         decimal takeProfit = 0.05m;
         decimal stopLoss = 0.10m;
@@ -54,7 +54,8 @@ class Program
                     riskPercentage: 0.05m, 
                     entrySlippage: entrySlip, 
                     exitSlippage: exitSlip, 
-                    requiredSustainMs: timer) // Pass the timer here!
+                    requiredSustainMs: timer,
+                    settlementLockMs: 5000) // Pass the timer here!
             ));
         }
 
