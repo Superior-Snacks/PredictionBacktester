@@ -11,6 +11,7 @@ public class PaperBroker : GlobalSimulatedBroker
     private readonly Dictionary<string, string> _tokenNames;
     private readonly Dictionary<string, decimal> _tokenMinSizes;
     private readonly decimal _maxBetSize;
+    private readonly HashSet<string> _dustWarned = new();
 
     public PaperBroker(string strategyName, decimal initialCapital, Dictionary<string, string> tokenNames,
         Dictionary<string, decimal> tokenMinSizes, decimal maxBetSize) : base(initialCapital)
@@ -22,6 +23,8 @@ public class PaperBroker : GlobalSimulatedBroker
         StrategyLabel = strategyName;
         AssetNameResolver = GetMarketName;
     }
+
+    public override decimal GetMinSize(string assetId) => _tokenMinSizes.GetValueOrDefault(assetId, 1.00m);
 
     // Helper to format the name cleanly for the console
     private string GetMarketName(string assetId)
@@ -61,6 +64,7 @@ public class PaperBroker : GlobalSimulatedBroker
 
         if (GetPositionShares(assetId) < initialShares)
         {
+            _dustWarned.Remove(assetId);
             var lastTrade = TradeLedger.Last();
             decimal pnl = (lastTrade.Price - entryPrice) * (initialShares - GetPositionShares(assetId));
 
@@ -144,7 +148,7 @@ public class PaperBroker : GlobalSimulatedBroker
         decimal minSize = _tokenMinSizes.GetValueOrDefault(assetId, 1.00m);
         if (sharesToSell < minSize)
         {
-            if (!IsMuted) lock (ConsoleLock)
+            if (!IsMuted && _dustWarned.Add(assetId)) lock (ConsoleLock)
             {
                 Console.ForegroundColor = ConsoleColor.DarkGray;
                 Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [PAPER DUST] {sharesToSell:0.00} shares below min ({minSize}). Holding to settlement.");

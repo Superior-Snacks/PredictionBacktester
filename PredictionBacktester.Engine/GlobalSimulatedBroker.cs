@@ -110,6 +110,8 @@ public class GlobalSimulatedBroker
         _lastKnownPrices[assetId] = price;
     }
 
+    public virtual decimal GetMinSize(string assetId) => 1.0m;
+
     public virtual decimal Buy(string assetId, decimal currentPrice, decimal dollarsToInvest, decimal availableVolumeShares)
     {
         UpdateLastKnownPrice(assetId, currentPrice);

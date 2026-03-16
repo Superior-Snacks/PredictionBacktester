@@ -86,13 +86,9 @@ public class LiveFlashCrashSniperStrategy : ILiveStrategy
         decimal dollarsToInvest = Math.Min(currentEquity * _riskPercentage, broker.CashBalance);
         decimal positionShares = broker.GetPositionShares(assetId);
 
-        decimal minTradeSize = 1.0m;
-        if (broker is PredictionBacktester.Engine.LiveExecution.PolymarketLiveBroker liveBroker)
-        {
-            minTradeSize = liveBroker.GetMinSize(assetId);
-        }
+        decimal minTradeSize = broker.GetMinSize(assetId);
 
-        // 2. Exit Logic
+        // 2. Exit Logic (dust positions are ignored — treat as closed)
         if (positionShares >= minTradeSize)
         {
             // Settlement lock: shares are frozen until the blockchain settles
