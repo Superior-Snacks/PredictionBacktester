@@ -32,7 +32,7 @@ def run_penny_test(token_id: str):
         host=HOST,
         key=private_key,
         chain_id=CHAIN_ID,
-        signature_type=1, # Hardcoded to 1 because you are using POLY_PROXY_ADDRESS
+        signature_type=2, # POLY_GNOSIS_SAFE — matches C# production SignatureType = 2
         funder=proxy_address,
         creds=creds
     )
