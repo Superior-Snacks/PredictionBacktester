@@ -29,7 +29,7 @@ class Program
         var configs = new List<StrategyConfig>();
 
         // Lock in the winning parameters from your historical backtest
-        decimal targetDrop = 0.05m;
+        decimal targetDrop = 0.25m;
         long targetWindow = 20;
         decimal takeProfit = 0.05m;
         decimal stopLoss = 0.10m;
