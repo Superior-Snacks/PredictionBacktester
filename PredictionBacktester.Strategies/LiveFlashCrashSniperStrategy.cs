@@ -21,6 +21,10 @@ public class LiveFlashCrashSniperStrategy : ILiveStrategy
     private readonly long _requiredSustainMs;
     private long _crashStartTimeMs = 0;
 
+    // Settlement lock: blocks sells for N ms after a buy
+    private readonly long _settlementLockMs;
+    private long _settlementUnlockTimeMs = 0;
+
     private readonly Queue<(long Timestamp, decimal Price)> _recentAsks;
     private decimal _lastGap;
 
@@ -35,7 +39,8 @@ public class LiveFlashCrashSniperStrategy : ILiveStrategy
         decimal riskPercentage = 0.05m,
         decimal entrySlippage = 0.01m,
         decimal exitSlippage = 0.03m,
-        long requiredSustainMs = 0) // NEW: Default to 800ms
+        long requiredSustainMs = 0,
+        long settlementLockMs = 0)
     {
         StrategyName = strategyName;
         _crashThreshold = crashThreshold;
@@ -46,6 +51,7 @@ public class LiveFlashCrashSniperStrategy : ILiveStrategy
         _entrySlippage = entrySlippage;
         _exitSlippage = exitSlippage;
         _requiredSustainMs = requiredSustainMs;
+        _settlementLockMs = settlementLockMs;
 
         _recentAsks = new Queue<(long, decimal)>();
     }
@@ -87,8 +93,12 @@ public class LiveFlashCrashSniperStrategy : ILiveStrategy
         }
 
         // 2. Exit Logic
-        if (positionShares >= minTradeSize) 
+        if (positionShares >= minTradeSize)
         {
+            // Settlement lock: shares are frozen until the blockchain settles
+            if (_settlementLockMs > 0 && nowMs < _settlementUnlockTimeMs)
+                return;
+
             decimal avgEntry = broker.GetAverageEntryPrice(assetId);
             bool isTakeProfit = bestBid >= avgEntry + _reboundProfitMargin;
             bool isStopLoss = bestBid <= avgEntry - _stopLossMargin;
@@ -98,7 +108,7 @@ public class LiveFlashCrashSniperStrategy : ILiveStrategy
                 decimal sellLimitPrice = Math.Max(bestBid - _exitSlippage, 0.001m);
                 broker.SubmitSellAllOrder(assetId, sellLimitPrice, book);
             }
-            return; 
+            return;
         }
 
         // 3. Entry Logic (With Stopwatch)
@@ -128,7 +138,8 @@ public class LiveFlashCrashSniperStrategy : ILiveStrategy
                 {
                     broker.SubmitBuyOrder(assetId, bestAsk + _entrySlippage, actualDollarsSpent, book);
                     _recentAsks.Clear();
-                    _crashStartTimeMs = 0; // Reset after buying
+                    _crashStartTimeMs = 0;
+                    _settlementUnlockTimeMs = nowMs + _settlementLockMs;
                 }
             }
         }
