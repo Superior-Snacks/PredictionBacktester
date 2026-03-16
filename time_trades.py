@@ -63,26 +63,45 @@ def run_penny_test(token_id: str):
     
     # 4. Check if we got an instant off-chain fill
     if buy_resp.get("success") and buy_resp.get("status") == "matched":
-        print("\nBuy order filled! Firing SELL Order IMMEDIATELY...")
-        
-        # POST SELL
+        print("\nBuy order filled! Attempting SELL with retry to measure settlement delay...")
+
+        # Retry sell until shares settle or we give up
+        max_attempts = 60
+        retry_interval = 0.5  # seconds between retries
         t2 = time.time()
-        sell_order_args = OrderArgs(price=sell_price, size=size, side=SELL, token_id=token_id)
-        signed_sell = client.create_order(sell_order_args)
-        sell_resp = client.post_order(signed_sell, OrderType.FAK)
-        
-        t3 = time.time()
-        sell_latency = (t3 - t2) * 1000
-        total_turnaround = (t3 - t1) * 1000
-        
-        print(f"-> Sell Response ({sell_latency:.1f}ms): {sell_resp.get('status')} | {sell_resp.get('errorMsg', 'No Errors')}")
-        print("\n================ TEST COMPLETE ================")
-        print(f"Time between Buy Confirmation and Sell Execution: {total_turnaround:.1f}ms")
-        
-        if sell_resp.get("success") and sell_resp.get("status") == "matched":
-             print("✅ VERDICT: SUCCESS. The exchange allowed you to sell instantly. The 5-second Web3 delay is a myth.")
+
+        for attempt in range(1, max_attempts + 1):
+            try:
+                sell_order_args = OrderArgs(price=sell_price, size=size, side=SELL, token_id=token_id)
+                signed_sell = client.create_order(sell_order_args)
+                sell_resp = client.post_order(signed_sell, OrderType.FAK)
+
+                t3 = time.time()
+                sell_latency = (t3 - t2) * 1000
+                settlement_delay = (t3 - t1) * 1000
+
+                print(f"\n-> Sell accepted on attempt {attempt} ({sell_latency:.1f}ms total, {settlement_delay:.1f}ms since buy)")
+                print(f"-> Sell Response: {sell_resp.get('status')} | {sell_resp.get('errorMsg', 'No Errors')}")
+                print("\n================ TEST COMPLETE ================")
+                print(f"Settlement delay (buy confirm -> sell accepted): {settlement_delay:.1f}ms ({settlement_delay/1000:.1f}s)")
+
+                if sell_resp.get("success") and sell_resp.get("status") == "matched":
+                    print(f"VERDICT: Shares settled in {settlement_delay/1000:.1f}s. This is the real minimum turnaround time.")
+                else:
+                    print(f"VERDICT: Sell was accepted but not matched. Status: {sell_resp}")
+                break
+
+            except Exception as e:
+                elapsed = (time.time() - t1) * 1000
+                if "not enough balance" in str(e).lower():
+                    print(f"  Attempt {attempt}: shares not settled yet ({elapsed:.0f}ms since buy)...")
+                    time.sleep(retry_interval)
+                else:
+                    print(f"  Attempt {attempt}: unexpected error: {e}")
+                    break
         else:
-             print("❌ VERDICT: FAILED. The exchange rejected the immediate sell. The 5-second Web3 delay is real.")
+            total_wait = (time.time() - t1) * 1000
+            print(f"\nVERDICT: Shares did NOT settle after {max_attempts} attempts ({total_wait/1000:.1f}s). Settlement takes longer than {total_wait/1000:.1f}s.")
              
     elif buy_resp.get("status") == "delayed":
         print("\n⚠️ VERDICT: HARDCODED DELAY DETECTED.")
