@@ -24,7 +24,6 @@ class Program
     // STRATEGY CONFIGURATION (Grid Search / Cartesian Product)
     // ==========================================
     private static readonly List<StrategyConfig> _strategyConfigs = GenerateStrategyGrid();
-/*
     private static List<StrategyConfig> GenerateStrategyGrid()
     {
         var configs = new List<StrategyConfig>();
@@ -38,7 +37,7 @@ class Program
         decimal exitSlip = 0.03m;
 
         // The Calibration Array: How many milliseconds must the crash survive?
-        long[] sustainTimers = { 3000, 4000, 5000, 6000, 7000 };
+        long[] sustainTimers = { 0, 200, 600, 1000, 1500 };
 
         foreach (var timer in sustainTimers)
         {
@@ -61,7 +60,7 @@ class Program
 
         return configs;
     }
-*/
+/*
     private static List<StrategyConfig> GenerateStrategyGrid()
     {
         var configs = new List<StrategyConfig>();
@@ -114,7 +113,7 @@ class Program
             ));
         }
         return configs;
-    }
+    }*/
 
     // --- LATENCY SIMULATION (based on ping to Polymarket CLOB API) ---
     private const int REALISTIC_LATENCY_MS = 50;
@@ -128,7 +127,7 @@ class Program
     private static CancellationTokenSource _pauseCts = new CancellationTokenSource();
     private static readonly string _sessionCsvFilename = $"LivePaperTrades_{DateTime.Now:yyyyMMdd_HHmmss}.csv";
 
-    private const decimal MAX_BET_SIZE = 5.00m;
+    private const decimal MAX_BET_SIZE = 1000.00m;
     private static readonly int _maxNameLength = _strategyConfigs.Max(c => c.Name.Length);
     private static Dictionary<string, PaperBroker> _strategyBrokers = new Dictionary<string, PaperBroker>();
     private static Dictionary<string, string> _tokenNames = new Dictionary<string, string>();
@@ -593,7 +592,7 @@ class Program
                                                     strategy.OnBookUpdate(book, _strategyBrokers[strategy.StrategyName]);
                                                 });
                                                 sw.Stop();
-                                                if (sw.ElapsedMilliseconds > 200)
+                                                if (sw.ElapsedMilliseconds > 100)
                                                 {
                                                     Console.WriteLine($"[WARNING] CPU Bottleneck! Tick processing took {sw.ElapsedMilliseconds}ms");
                                                 }
