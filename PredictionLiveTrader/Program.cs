@@ -109,7 +109,8 @@ class Program
     private static readonly HashSet<string> _droppedStrategies = new();
     private static ClientWebSocket? _activeWs;
     private static readonly SemaphoreSlim _wsSendSemaphore = new SemaphoreSlim(1, 1);
-    private static readonly MarketReplayLogger _replayLogger = new MarketReplayLogger("MarketData");
+    private static readonly bool _recordMarketData = false;
+    private static readonly MarketReplayLogger? _replayLogger = _recordMarketData ? new MarketReplayLogger("MarketData") : null;
 
     static async Task Main(string[] args)
     {
@@ -138,8 +139,11 @@ class Program
             Console.WriteLine("\n\n[SYSTEM] Graceful shutdown initiated...");
 
             // Flush all buffered market data to disk
-            _replayLogger.StopAsync().GetAwaiter().GetResult();
-            Console.WriteLine("[SYSTEM] Market replay data flushed.");
+            if (_replayLogger != null)
+            {
+                _replayLogger.StopAsync().GetAwaiter().GetResult();
+                Console.WriteLine("[SYSTEM] Market replay data flushed.");
+            }
 
             // Run our export script
             ExportLedgerToCsv(quietMode: true);
@@ -487,7 +491,7 @@ class Program
                         string message = Encoding.UTF8.GetString(ms.GetBuffer(), 0, (int)ms.Length);
                         ms.SetLength(0);
 
-                        _replayLogger.EnqueueTick(message);
+                        _replayLogger?.EnqueueTick(message);
 
                         try
                         {
