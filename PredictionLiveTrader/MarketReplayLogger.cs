@@ -11,7 +11,7 @@ public class MarketReplayLogger
     private readonly string _sessionId;
     private readonly Task _processTask;
     private int _ticksSinceFlush;
-    private const int FlushInterval = 500;
+    private const int FlushInterval = 5000;
 
     public MarketReplayLogger(string directoryPath = "MarketData")
     {
@@ -71,7 +71,7 @@ public class MarketReplayLogger
                     currentDate = today;
                     string filename = Path.Combine(_logDirectory, $"L2_{today}_{_sessionId.Split('_')[1]}.gz");
                     fileStream = new FileStream(filename, FileMode.CreateNew, FileAccess.Write, FileShare.Read);
-                    gzStream = new GZipStream(fileStream, CompressionLevel.Optimal);
+                    gzStream = new GZipStream(fileStream, CompressionLevel.SmallestSize);
                     writer = new StreamWriter(gzStream);
                     _ticksSinceFlush = 0;
                 }

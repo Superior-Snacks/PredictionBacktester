@@ -59,9 +59,14 @@ class Program
             ));
         }
         configs.Add(new StrategyConfig(
-            "take_more_trades", 
+            "take_more_trades_15t", 
             60m, 
             () => new LiveFlashCrashSniperStrategy("take_more_trades", 0.15m, 20, 0.05m, 0.10m, 0.10m, 0.03m, 0.03m, 0, 5000)
+        ));
+        configs.Add(new StrategyConfig(
+            "take_more_trades_60w", 
+            60m, 
+            () => new LiveFlashCrashSniperStrategy("take_more_trades", 0.25m, 60, 0.05m, 0.10m, 0.10m, 0.03m, 0.03m, 0, 5000)
         ));
 
         return configs;
