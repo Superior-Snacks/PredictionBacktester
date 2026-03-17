@@ -37,7 +37,7 @@ class Program
         decimal exitSlip = 0.03m;
 
         // The Calibration Array: How many milliseconds must the crash survive?
-        long[] sustainTimers = { 0, 200, 600, 1000, 1500 };
+        long[] sustainTimers = { 0, 200, 600, 1000, 1500, 2000, 3000 };
 
         foreach (var timer in sustainTimers)
         {
@@ -61,12 +61,12 @@ class Program
         configs.Add(new StrategyConfig(
             "take_more_trades_15t", 
             60m, 
-            () => new LiveFlashCrashSniperStrategy("take_more_trades", 0.15m, 20, 0.05m, 0.10m, 0.10m, 0.03m, 0.03m, 0, 5000)
+            () => new LiveFlashCrashSniperStrategy("take_more_trades", 0.15m, 20, 0.05m, 0.10m, 0.10m, 0.03m, 0.03m, 1000, 5000)
         ));
         configs.Add(new StrategyConfig(
             "take_more_trades_60w", 
             60m, 
-            () => new LiveFlashCrashSniperStrategy("take_more_trades", 0.25m, 60, 0.05m, 0.10m, 0.10m, 0.03m, 0.03m, 0, 5000)
+            () => new LiveFlashCrashSniperStrategy("take_more_trades", 0.25m, 60, 0.05m, 0.10m, 0.10m, 0.03m, 0.03m, 1000, 5000)
         ));
 
         // =========================================================
@@ -635,7 +635,7 @@ class Program
                                                     strategy.OnBookUpdate(book, _strategyBrokers[strategy.StrategyName]);
                                                 });
                                                 sw.Stop();
-                                                if (sw.ElapsedMilliseconds > 100)
+                                                if (sw.ElapsedMilliseconds > 80)
                                                 {
                                                     Console.WriteLine($"[WARNING] CPU Bottleneck! Tick processing took {sw.ElapsedMilliseconds}ms");
                                                 }
