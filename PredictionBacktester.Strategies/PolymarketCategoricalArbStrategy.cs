@@ -91,6 +91,14 @@ namespace PredictionBacktester.Strategies
             if (safeSharesToBuy <= 0.01m)
                 return;
 
+            // Cash check: ensure we can afford ALL legs, not just some
+            decimal totalDollarsNeeded = safeSharesToBuy * totalCost;
+            if (totalDollarsNeeded > broker.CashBalance)
+            {
+                safeSharesToBuy = Math.Floor(broker.CashBalance / totalCost * 100) / 100;
+                if (safeSharesToBuy <= 0.01m) return;
+            }
+
             Console.WriteLine($"\n[ARB DETECTED] Market: {marketId} | Spread: ${totalCost:0.00}");
             Console.WriteLine($"-> Bottleneck Volume: {bottleneckShares} shares. Executing {safeSharesToBuy} shares per leg.");
 
@@ -107,10 +115,7 @@ namespace PredictionBacktester.Strategies
                     decimal bestAsk = book.GetBestAskPrice();
                     decimal requiredDollars = bestAsk * safeSharesToBuy;
 
-                    // Consume the liquidity locally so the bot doesn't spam double-fires
-                    book.ConsumeAskLiquidity(safeSharesToBuy);
-
-                    // Fire the FAK Order to your Simulation Broker
+                    // SubmitBuyOrder handles liquidity consumption internally
                     broker.SubmitBuyOrder(token, bestAsk, requiredDollars, book);
                 }
             }

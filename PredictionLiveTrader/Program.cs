@@ -71,8 +71,8 @@ class Program
             { 
                 "BTC_100K_Merge", // Just a friendly name for your logs
                 new List<string> { 
-                    "0x53327816328744607467617045854736250572622462755461256519812749786485179896124", // Put your YES Token ID here
-                    "0xREPLACE_WITH_NO_TOKEN_ID_HERE"  // Put your NO Token ID here
+                    "60974765689417345927430034672058775275825509011877464696624869557481041716305", // Put your YES Token ID here
+                    "49952899810337186124293994776923696089648665646629994157941657787292952336650"  // Put your NO Token ID here
                 } 
             },
             // You can easily add a 3-way sports arb here later:
