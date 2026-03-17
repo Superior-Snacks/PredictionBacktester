@@ -27,47 +27,39 @@ class Program
     private static List<StrategyConfig> GenerateStrategyGrid()
     {
         var configs = new List<StrategyConfig>();
+        // ---------------------------------------------------------
+        // GRID 1: Live Flash Crash Sniper
+        // ---------------------------------------------------------
+        decimal[] sniperThresholds = { 0.15m, 0.25m, 0.30m };
+        long[] sniperWindows = { 20, 60, 120 };
+        long[] sustainTimers = { 0, 200, 600, 1000, 1500, 2000, 3000 }; 
 
-        // Lock in the winning parameters from your historical backtest
-        decimal targetDrop = 0.25m;
-        long targetWindow = 20;
-        decimal takeProfit = 0.05m;
-        decimal stopLoss = 0.10m;
-        decimal entrySlip = 0.03m;
-        decimal exitSlip = 0.03m;
+        int sniperVersion = 1;
 
-        // The Calibration Array: How many milliseconds must the crash survive?
-        long[] sustainTimers = { 0, 200, 600, 1000, 1500, 2000, 3000 };
+        // This LINQ query creates the Cartesian Product automatically!
+        var sniperGrid = from threshold in sniperThresholds
+                         from window in sniperWindows
+                         from timer in sustainTimers
+                         select new { threshold, window, timer};
 
-        foreach (var timer in sustainTimers)
+        foreach (var param in sniperGrid)
         {
-            string name = $"Sniper_Calibration_Delay{timer}ms";
+            string name = $"Sniper_v{sniperVersion++}_T{param.threshold}_W{param.window}_MS{param.timer}";
             configs.Add(new StrategyConfig(
                 name,
                 1000m,
-                () => new LiveFlashCrashSniperStrategy(
-                    name, 
-                    targetDrop, 
-                    targetWindow, 
-                    takeProfit, 
-                    stopLoss, 
-                    riskPercentage: 0.05m, 
-                    entrySlippage: entrySlip, 
-                    exitSlippage: exitSlip, 
-                    requiredSustainMs: timer,
-                    settlementLockMs: 5000) // Pass the timer here!
+                () => new LiveFlashCrashSniperStrategy(name, 
+                param.threshold, 
+                param.window, 
+                0.05m, 
+                0.10m, 
+                0.03m, 
+                0.03m, 
+                param.timer,
+                settlementLockMs: 5000
+                )
             ));
         }
-        configs.Add(new StrategyConfig(
-            "take_more_trades_15t", 
-            60m, 
-            () => new LiveFlashCrashSniperStrategy("take_more_trades", 0.15m, 20, 0.05m, 0.10m, 0.10m, 0.03m, 0.03m, 1000, 5000)
-        ));
-        configs.Add(new StrategyConfig(
-            "take_more_trades_60w", 
-            60m, 
-            () => new LiveFlashCrashSniperStrategy("take_more_trades", 0.25m, 60, 0.05m, 0.10m, 0.10m, 0.03m, 0.03m, 1000, 5000)
-        ));
 
         // =========================================================
         // NEW: ARBITRAGE STRATEGY CONFIGURATION
@@ -93,63 +85,8 @@ class Program
             1000m, // Starting simulated capital
             () => new PolymarketCategoricalArbStrategy(arbMarkets)
         ));
-
         return configs;
     }
-/*
-    private static List<StrategyConfig> GenerateStrategyGrid()
-    {
-        var configs = new List<StrategyConfig>();
-
-        
-        // ---------------------------------------------------------
-        // normal hard test
-        // ---------------------------------------------------------
-        configs.Add(new StrategyConfig(
-            "Sniper_my_capital_10%", 
-            60m, 
-            () => new LiveFlashCrashSniperStrategy("Sniper_my_capital_10%", 0.25m, 20, 0.05m, 0.10m, 0.10m, 0.03m, 0.03m)
-        ));
-
-        configs.Add(new StrategyConfig(
-            "Sniper_my_capital_5%",
-            60m,
-            () => new LiveFlashCrashSniperStrategy("Sniper_my_capital_5%", 0.25m, 20, 0.05m, 0.10m, 0.05m, 0.03m, 0.03m)
-        ));
-
-
-        // ---------------------------------------------------------
-        // GRID 1: Live Flash Crash Sniper
-        // ---------------------------------------------------------
-        decimal[] sniperThresholds = {0.10m, 0.15m, 0.20m, 0.25m, 0.30m };
-        long[] sniperWindows = { 20, 30, 60, 120 };
-        decimal[] sniperTakeProfit = { 0.03m, 0.05m, 0.07m };
-        decimal[] sniperStopLoss = { 0.10m, 0.15m, 0.25m };
-        decimal[] sniperEntrySlippage = { 0.01m, 0.03m, 0.05m };
-        decimal[] sniperExitSlippage = {0.01m, 0.03m, 0.05m }; 
-
-        int sniperVersion = 1;
-
-        // This LINQ query creates the Cartesian Product automatically!
-        var sniperGrid = from threshold in sniperThresholds
-                         from window in sniperWindows
-                         from Profit in sniperTakeProfit
-                         from stop in sniperStopLoss
-                         from eSlip in sniperEntrySlippage
-                         from xSlip in sniperExitSlippage
-                         select new { threshold, window, Profit, stop, eSlip, xSlip };
-
-        foreach (var param in sniperGrid)
-        {
-            string name = $"Sniper_v{sniperVersion++}_T{param.threshold}_W{param.window}_P{param.Profit}_S{param.stop}_ES{param.eSlip}_XS{param.xSlip}";
-            configs.Add(new StrategyConfig(
-                name,
-                1000m,
-                () => new LiveFlashCrashSniperStrategy(name, param.threshold, param.window, param.Profit, param.stop, entrySlippage: param.eSlip, exitSlippage: param.xSlip)
-            ));
-        }
-        return configs;
-    }*/
 
     // --- LATENCY SIMULATION (based on ping to Polymarket CLOB API) ---
     private const int REALISTIC_LATENCY_MS = 50;
