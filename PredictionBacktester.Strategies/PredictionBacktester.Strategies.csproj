@@ -10,6 +10,7 @@
     <ProjectReference Include="..\PredictionBacktester.Core\PredictionBacktester.Core.csproj" />
     <ProjectReference Include="..\PredictionBacktester.Data\PredictionBacktester.Data.csproj" />
     <ProjectReference Include="..\PredictionBacktester.Engine\PredictionBacktester.Engine.csproj" />
+    <PackageReference Include="Serilog" Version="3.1.1" />
   </ItemGroup>
 
 </Project>

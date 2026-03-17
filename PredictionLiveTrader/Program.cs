@@ -69,6 +69,31 @@ class Program
             () => new LiveFlashCrashSniperStrategy("take_more_trades", 0.25m, 60, 0.05m, 0.10m, 0.10m, 0.03m, 0.03m, 0, 5000)
         ));
 
+        // =========================================================
+        // NEW: ARBITRAGE STRATEGY CONFIGURATION
+        // =========================================================
+        
+        // 1. Define the markets and the tokens you want to arb
+        var arbMarkets = new Dictionary<string, List<string>>
+        {
+            { 
+                "BTC_100K_Merge", // Just a friendly name for your logs
+                new List<string> { 
+                    "0x53327816328744607467617045854736250572622462755461256519812749786485179896124", // Put your YES Token ID here
+                    "0xREPLACE_WITH_NO_TOKEN_ID_HERE"  // Put your NO Token ID here
+                } 
+            },
+            // You can easily add a 3-way sports arb here later:
+            // { "EPL_Chelsea_v_Arsenal", new List<string> { "0xTEAM_A", "0xTEAM_B", "0xDRAW" } }
+        };
+
+        // 2. Add the strategy to your runner!
+        configs.Add(new StrategyConfig(
+            "Categorical_Merge_Arb", 
+            1000m, // Starting simulated capital
+            () => new PolymarketCategoricalArbStrategy(arbMarkets)
+        ));
+
         return configs;
     }
 /*
