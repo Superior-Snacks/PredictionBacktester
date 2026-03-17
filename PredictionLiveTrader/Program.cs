@@ -58,6 +58,11 @@ class Program
                     settlementLockMs: 5000) // Pass the timer here!
             ));
         }
+        configs.Add(new StrategyConfig(
+            "take_more_trades", 
+            60m, 
+            () => new LiveFlashCrashSniperStrategy("take_more_trades", 0.15m, 20, 0.05m, 0.10m, 0.10m, 0.03m, 0.03m, 0, 5000)
+        ));
 
         return configs;
     }
