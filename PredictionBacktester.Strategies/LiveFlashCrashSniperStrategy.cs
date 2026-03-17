@@ -37,7 +37,7 @@ public class LiveFlashCrashSniperStrategy : ILiveStrategy
         decimal reboundProfitMargin = 0.05m,
         decimal stopLossMargin = 0.10m,
         decimal riskPercentage = 0.05m,
-        decimal entrySlippage = 0.01m,
+        decimal entrySlippage = 0.03m,
         decimal exitSlippage = 0.03m,
         long requiredSustainMs = 0,
         long settlementLockMs = 0)
