@@ -30,9 +30,9 @@ class Program
         // ---------------------------------------------------------
         // GRID 1: Live Flash Crash Sniper
         // ---------------------------------------------------------
-        decimal[] sniperThresholds = { 0.15m, 0.25m, 0.30m };
-        long[] sniperWindows = { 20, 60, 120 };
-        long[] sustainTimers = { 0, 200, 600, 1000, 1500, 2000, 3000 }; 
+        decimal[] sniperThresholds = { 0.25m };
+        long[] sniperWindows = { 60 };
+        long[] sustainTimers = { 1000 }; 
 
         int sniperVersion = 1;
 
@@ -60,7 +60,7 @@ class Program
                 )
             ));
         }
-
+        /*
         // =========================================================
         // NEW: ARBITRAGE STRATEGY CONFIGURATION
         // =========================================================
@@ -84,7 +84,7 @@ class Program
             "Categorical_Merge_Arb", 
             1000m, // Starting simulated capital
             () => new PolymarketCategoricalArbStrategy(arbMarkets)
-        ));
+        ));*/
         return configs;
     }
 
