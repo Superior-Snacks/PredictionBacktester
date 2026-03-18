@@ -567,7 +567,7 @@ class Program
                                                 var strategies = activeStrategies[assetId];
                                                 var parallelOptions = new ParallelOptions
                                                 {
-                                                    MaxDegreeOfParallelism = Environment.ProcessorCount - 1
+                                                    MaxDegreeOfParallelism = Math.Max(Environment.ProcessorCount - 1, 1)
                                                 };
                                                 var sw = Stopwatch.StartNew();
                                                 Parallel.ForEach(strategies, parallelOptions, strategy =>
