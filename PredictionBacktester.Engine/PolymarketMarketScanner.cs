@@ -31,7 +31,7 @@ namespace PredictionBacktester.Engine
 
             while (arbConfig.Count < targetMarketCount)
             {
-                string url = $"markets?active=true&closed=false&order=volume_24hr&ascending=false&limit={limit}&offset={offset}";
+                string url = $"markets?active=true&closed=false&order=volume24hr&ascending=false&limit={limit}&offset={offset}";
                 
                 var response = await _httpClient.GetAsync(url);
                 if (!response.IsSuccessStatusCode)

@@ -19,9 +19,11 @@ namespace PredictionBacktester.Strategies
 
         private readonly decimal _arbThreshold = 0.98m; 
 
-        // --- CSV TELEMETRY INFRASTRUCTURE ---
-        private readonly string _csvFilePath;
-        private readonly Channel<string> _csvQueue;
+        // --- CSV TELEMETRY INFRASTRUCTURE (shared across all instances) ---
+        private static readonly string _csvFilePath = $"ArbTelemetry_{DateTime.UtcNow:yyyyMMdd_HHmmss}.csv";
+        private static readonly Channel<string> _csvQueue = Channel.CreateUnbounded<string>();
+        private static bool _csvInitialized = false;
+        private static readonly object _csvInitLock = new();
 
         private class ActiveArbEvent
         {
@@ -44,18 +46,16 @@ namespace PredictionBacktester.Strategies
                 }
             }
 
-            // 1. Initialize the CSV File and Background Queue
-            _csvFilePath = $"ArbTelemetry_{DateTime.UtcNow:yyyyMMdd}.csv";
-            _csvQueue = Channel.CreateUnbounded<string>();
-
-            // 2. Write the CSV Headers if the file is brand new
-            if (!File.Exists(_csvFilePath))
+            // Initialize CSV file and background writer once across all instances
+            lock (_csvInitLock)
             {
-                File.WriteAllText(_csvFilePath, "Timestamp,MarketId,DurationMs,BestCost,SpreadProfit,MaxVolume,TotalPotentialProfit\n");
+                if (!_csvInitialized)
+                {
+                    File.WriteAllText(_csvFilePath, "Timestamp,MarketId,DurationMs,BestCost,SpreadProfit,MaxVolume,TotalPotentialProfit\n");
+                    _ = Task.Run(ProcessCsvQueueAsync);
+                    _csvInitialized = true;
+                }
             }
-
-            // 3. Start the background writer task
-            _ = Task.Run(ProcessCsvQueueAsync);
         }
 
         public void OnBookUpdate(LocalOrderBook book, GlobalSimulatedBroker broker)

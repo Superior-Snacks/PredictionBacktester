@@ -24,14 +24,16 @@ class Program
     private const string STRATEGY_NAME = "FlashCrashSniper_Production";
     private const decimal STARTING_CAPITAL = 100m; // Will be overridden by real wallet balance
 
-    // Strategy parameters — tune these based on paper trading results
+    // Strategy parameters — tuned from paper trading results
     private const decimal CRASH_THRESHOLD = 0.25m;
-    private const long TIME_WINDOW_SECONDS = 20;
+    private const long TIME_WINDOW_SECONDS = 60;
     private const decimal TAKE_PROFIT = 0.05m;
     private const decimal STOP_LOSS = 0.10m;
-    private const decimal RISK_PERCENTAGE = 0.10m;
+    private const decimal RISK_PERCENTAGE = 0.03m;
     private const decimal ENTRY_SLIPPAGE = 0.03m;
     private const decimal EXIT_SLIPPAGE = 0.03m;
+    private const long SUSTAIN_TIMER_MS = 1000;
+    private const long SETTLEMENT_LOCK_MS = 5000;
 
     // Risk controls (editable at runtime via keyboard)
     private static decimal _maxBetSize = 100.00m;       // Hard cap on dollars per single trade
@@ -130,14 +132,16 @@ class Program
             STOP_LOSS,
             RISK_PERCENTAGE,
             ENTRY_SLIPPAGE,
-            EXIT_SLIPPAGE
+            EXIT_SLIPPAGE,
+            SUSTAIN_TIMER_MS,
+            SETTLEMENT_LOCK_MS
         );
 
         Console.WriteLine("=========================================");
         Console.WriteLine("  LIVE PRODUCTION ENGINE INITIALIZED");
         Console.WriteLine($"  Strategy: {STRATEGY_NAME}");
         Console.WriteLine($"  Wallet:   ${_broker.CashBalance:0.00} USDC");
-        Console.WriteLine($"  Params:   Crash={CRASH_THRESHOLD} Window={TIME_WINDOW_SECONDS}s TP={TAKE_PROFIT} SL={STOP_LOSS}");
+        Console.WriteLine($"  Params:   Crash={CRASH_THRESHOLD} Window={TIME_WINDOW_SECONDS}s TP={TAKE_PROFIT} SL={STOP_LOSS} Sustain={SUSTAIN_TIMER_MS}ms Lock={SETTLEMENT_LOCK_MS}ms");
         Console.WriteLine($"  Limits:   MaxBet=${_maxBetSize} DailyLoss=${_dailyLossLimit}");
         Console.WriteLine("  Controls: P=Pause R=Resume N=PauseBuying X=SellAll M=Mute T=Trades Q=Quiet V=Verbose F=Debug S=Status");
         Console.WriteLine("  Settings: 1=MaxBet 2=DailyLossLimit");
@@ -458,7 +462,8 @@ class Program
                                     strategies[assetId] = new LiveFlashCrashSniperStrategy(
                                         STRATEGY_NAME, CRASH_THRESHOLD, TIME_WINDOW_SECONDS,
                                         TAKE_PROFIT, STOP_LOSS, RISK_PERCENTAGE,
-                                        ENTRY_SLIPPAGE, EXIT_SLIPPAGE);
+                                        ENTRY_SLIPPAGE, EXIT_SLIPPAGE,
+                                        SUSTAIN_TIMER_MS, SETTLEMENT_LOCK_MS);
                                 }
 
                                 if (root.TryGetProperty("bids", out var bidsEl) && root.TryGetProperty("asks", out var asksEl))

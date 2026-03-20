@@ -48,13 +48,14 @@ class Program
             configs.Add(new StrategyConfig(
                 name,
                 1000m,
-                () => new LiveFlashCrashSniperStrategy(name, 
-                param.threshold, 
-                param.window, 
-                0.05m, 
-                0.10m, 
-                0.03m, 
-                0.03m, 
+                () => new LiveFlashCrashSniperStrategy(name,
+                param.threshold,
+                param.window,
+                0.05m,
+                0.10m,
+                0.03m,
+                0.03m,
+                0.03m,
                 param.timer,
                 settlementLockMs: 5000
                 )
@@ -120,6 +121,24 @@ class Program
         Console.WriteLine("  Controls: 'P' = Pause | 'R' = Resume | 'M' = Mute | 'Q' = Quiet | 'V' = Verbose | 'L' = Latency | 'D' = Drop | 'K' = Cull");
         Console.WriteLine($"  Latency starst at {REALISTIC_LATENCY_MS}");
         Console.WriteLine("=========================================");
+
+        // --- TELEMETRY MODE: observation-only arb scanning ---
+        bool runTelemetryMode = args.Contains("--telemetry");
+
+        if (runTelemetryMode)
+        {
+            Console.WriteLine("[MODE] TELEMETRY ACTIVE: Suppressing Flash Crash Snipers...");
+
+            var scanner = new PolymarketMarketScanner();
+            var dynamicArbMarkets = await scanner.GetTopLiquidMarketsAsync(500);
+
+            _strategyConfigs.Clear();
+            _strategyConfigs.Add(new StrategyConfig(
+                "Fast_Merge_Arb_Telemetry",
+                1000m,
+                () => new FastMergeArbTelemetryStrategy(dynamicArbMarkets)
+            ));
+        }
 
         foreach (var config in _strategyConfigs)
         {
