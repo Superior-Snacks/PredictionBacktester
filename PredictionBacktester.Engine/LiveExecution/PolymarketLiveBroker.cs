@@ -152,11 +152,11 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
 
                         bool settled = false;
 
-                        for (int i = 0; i < 120; i++)
+                        for (int i = 0; i < 180; i++) // 180 × 500ms = 90 seconds
                         {
-                            await Task.Delay(500); // 500ms delay between checks
-                            
-                            try 
+                            await Task.Delay(500);
+
+                            try
                             {
                                 string pollResult = await _orderClient.GetOrderAsync(orderId);
                                 using var pollDoc = System.Text.Json.JsonDocument.Parse(pollResult);
@@ -177,12 +177,12 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
                                     {
                                         actualShares = matchedShares;
                                     }
-                                    
+
                                     if (orderData.TryGetProperty("maker_amount_matched", out var makerEl) && decimal.TryParse(makerEl.ToString(), out decimal matchedUsdc))
                                     {
                                         actualDollars = matchedUsdc;
                                     }
-                                    
+
                                     settled = true;
                                     break;
                                 }
@@ -196,9 +196,49 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
                             catch { /* Ignore parsing or network timeouts during polling */ }
                         }
 
-                        if (!settled) 
+                        // On timeout: one final poll attempt before giving up
+                        if (!settled)
                         {
-                            actualShares = 0; // Abort if completely timed out
+                            try
+                            {
+                                string finalPoll = await _orderClient.GetOrderAsync(orderId);
+                                using var finalDoc = System.Text.Json.JsonDocument.Parse(finalPoll);
+                                var finalRoot = finalDoc.RootElement;
+                                JsonElement finalData = finalRoot;
+                                if (finalRoot.ValueKind == JsonValueKind.Array && finalRoot.GetArrayLength() > 0)
+                                    finalData = finalRoot[0];
+
+                                string finalStatus = finalData.TryGetProperty("status", out var finalStatusEl) ? finalStatusEl.GetString() : "";
+
+                                if (finalStatus == "matched" || finalStatus == "live")
+                                {
+                                    if (finalData.TryGetProperty("taker_amount_matched", out var takerEl) && decimal.TryParse(takerEl.ToString(), out decimal matchedShares))
+                                        actualShares = matchedShares;
+                                    if (finalData.TryGetProperty("maker_amount_matched", out var makerEl) && decimal.TryParse(makerEl.ToString(), out decimal matchedUsdc))
+                                        actualDollars = matchedUsdc;
+
+                                    if (!IsMuted) lock (ConsoleLock)
+                                    {
+                                        Console.ForegroundColor = ConsoleColor.Yellow;
+                                        Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [LATE FILL] Buy {orderId} filled after timeout! Shares: {actualShares:0.00}");
+                                        Console.ResetColor();
+                                    }
+                                }
+                                else
+                                {
+                                    actualShares = 0;
+                                    if (!IsMuted) lock (ConsoleLock)
+                                    {
+                                        Console.ForegroundColor = ConsoleColor.DarkGray;
+                                        Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [TIMEOUT] Buy {orderId} still '{finalStatus}' after 90s. Treating as killed.");
+                                        Console.ResetColor();
+                                    }
+                                }
+                            }
+                            catch
+                            {
+                                actualShares = 0; // Network error on final check — assume killed
+                            }
                         }
                     }
                     else 
@@ -380,10 +420,10 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
 
                         bool settled = false;
 
-                        for (int i = 0; i < 120; i++)
+                        for (int i = 0; i < 180; i++) // 180 × 500ms = 90 seconds
                         {
-                            await Task.Delay(500); 
-                            try 
+                            await Task.Delay(500);
+                            try
                             {
                                 string pollResult = await _orderClient.GetOrderAsync(orderId);
                                 using var pollDoc = System.Text.Json.JsonDocument.Parse(pollResult);
@@ -399,10 +439,10 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
                                 {
                                     if (orderData.TryGetProperty("maker_amount_matched", out var makerEl) && decimal.TryParse(makerEl.ToString(), out decimal matchedShares))
                                         actualSharesSold = matchedShares;
-                                        
+
                                     if (orderData.TryGetProperty("taker_amount_matched", out var takerEl) && decimal.TryParse(takerEl.ToString(), out decimal matchedUsdc))
                                         cashReceived = matchedUsdc;
-                                        
+
                                     settled = true;
                                     break;
                                 }
@@ -416,7 +456,53 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
                             }
                             catch { /* Ignore polling errors */ }
                         }
-                        if (!settled) { actualSharesSold = 0; cashReceived = 0; }
+
+                        // On timeout: one final poll attempt before giving up
+                        if (!settled)
+                        {
+                            try
+                            {
+                                string finalPoll = await _orderClient.GetOrderAsync(orderId);
+                                using var finalDoc = System.Text.Json.JsonDocument.Parse(finalPoll);
+                                var finalRoot = finalDoc.RootElement;
+                                JsonElement finalData = finalRoot;
+                                if (finalRoot.ValueKind == JsonValueKind.Array && finalRoot.GetArrayLength() > 0)
+                                    finalData = finalRoot[0];
+
+                                string finalStatus = finalData.TryGetProperty("status", out var finalStatusEl) ? finalStatusEl.GetString() : "";
+
+                                if (finalStatus == "matched" || finalStatus == "live")
+                                {
+                                    if (finalData.TryGetProperty("maker_amount_matched", out var makerEl) && decimal.TryParse(makerEl.ToString(), out decimal matchedShares))
+                                        actualSharesSold = matchedShares;
+                                    if (finalData.TryGetProperty("taker_amount_matched", out var takerEl) && decimal.TryParse(takerEl.ToString(), out decimal matchedUsdc))
+                                        cashReceived = matchedUsdc;
+
+                                    if (!IsMuted) lock (ConsoleLock)
+                                    {
+                                        Console.ForegroundColor = ConsoleColor.Yellow;
+                                        Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [LATE FILL] Sell {orderId} filled after timeout! Shares: {actualSharesSold:0.00}");
+                                        Console.ResetColor();
+                                    }
+                                }
+                                else
+                                {
+                                    actualSharesSold = 0;
+                                    cashReceived = 0;
+                                    if (!IsMuted) lock (ConsoleLock)
+                                    {
+                                        Console.ForegroundColor = ConsoleColor.DarkGray;
+                                        Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [TIMEOUT] Sell {orderId} still '{finalStatus}' after 90s. Treating as killed.");
+                                        Console.ResetColor();
+                                    }
+                                }
+                            }
+                            catch
+                            {
+                                actualSharesSold = 0;
+                                cashReceived = 0;
+                            }
+                        }
                     }
                     else
                     {
