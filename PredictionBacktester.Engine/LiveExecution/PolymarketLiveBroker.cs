@@ -215,8 +215,9 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
                             actualDollars = mAmt;
                     }
 
-                    if (actualShares <= 0) 
+                    if (actualShares <= 0)
                     {
+                        Interlocked.Increment(ref _missedBuys);
                         if (!IsMuted) lock (ConsoleLock)
                         {
                             Console.ForegroundColor = ConsoleColor.DarkGray;
@@ -431,8 +432,9 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
                             cashReceived = tAmt;
                     }
 
-                    if (actualSharesSold <= 0) 
+                    if (actualSharesSold <= 0)
                     {
+                        Interlocked.Increment(ref _missedSells);
                         if (!IsMuted) lock (ConsoleLock)
                         {
                             Console.ForegroundColor = ConsoleColor.DarkGray;

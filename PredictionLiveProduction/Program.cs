@@ -815,6 +815,7 @@ class Program
             Console.WriteLine($"  Actions:    {_broker.TotalActions}");
             Console.WriteLine($"  Exits:      {_broker.TotalTradesExecuted} (W:{_broker.WinningTrades} L:{_broker.LosingTrades})");
             Console.WriteLine($"  Rejected:   {_broker.RejectedOrders}");
+            Console.WriteLine($"  Missed:     {_broker.MissedBuys} buys / {_broker.MissedSells} sells (FAK killed)");
             Console.ResetColor();
 
             // Status flags

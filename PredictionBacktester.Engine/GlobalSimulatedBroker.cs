@@ -47,6 +47,10 @@ public class GlobalSimulatedBroker
     public decimal ResolutionFeeRate { get; private set; } = 0.02m;
     protected int _rejectedOrders;
     public int RejectedOrders => _rejectedOrders;
+    protected int _missedBuys;
+    protected int _missedSells;
+    public int MissedBuys => _missedBuys;
+    public int MissedSells => _missedSells;
 
     protected ConcurrentDictionary<string, bool> _pendingOrders = new ConcurrentDictionary<string, bool>();
 
