@@ -179,15 +179,25 @@ namespace PredictionBacktester.Engine.LiveExecution
                     Console.WriteLine($"[USER STREAM DBG] Type: '{eventType}'");
             }
 
-            // Parse "trade" events — MATCHED/CONFIRMED trade lifecycle
-            if (eventType == "trade")
+            // Case-insensitive comparison — Polymarket sends "TRADE" not "trade"
+            string eventLower = eventType.ToLowerInvariant();
+
+            // Parse trade events — MATCHED/CONFIRMED/MINED trade lifecycle
+            if (eventLower == "trade")
             {
-                TryExtractFill(element);
+                // Only fire on MATCHED (first fill notification), skip MINED/CONFIRMED duplicates
+                string status = "";
+                if (element.TryGetProperty("status", out var statusEl))
+                    status = statusEl.GetString() ?? "";
+
+                if (status.Equals("MATCHED", StringComparison.OrdinalIgnoreCase))
+                {
+                    TryExtractFill(element);
+                }
             }
-            // Parse "order" events — may contain fill data for our FAK orders
-            else if (eventType == "order")
+            // Parse order events — may contain fill data for our FAK orders
+            else if (eventLower == "order")
             {
-                // Order events may report status changes with matched amounts
                 string status = "";
                 if (element.TryGetProperty("status", out var statusEl))
                     status = statusEl.GetString() ?? "";
@@ -195,8 +205,8 @@ namespace PredictionBacktester.Engine.LiveExecution
                 if (DebugMode)
                     Console.WriteLine($"[USER STREAM DBG] Order status: '{status}'");
 
-                // If the order was matched, extract fill data
-                if (status == "MATCHED" || status == "matched" || status == "LIVE" || status == "live")
+                if (status.Equals("MATCHED", StringComparison.OrdinalIgnoreCase) ||
+                    status.Equals("LIVE", StringComparison.OrdinalIgnoreCase))
                 {
                     TryExtractFill(element);
                 }

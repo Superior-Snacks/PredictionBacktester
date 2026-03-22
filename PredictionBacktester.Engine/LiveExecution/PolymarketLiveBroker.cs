@@ -309,6 +309,37 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
                         return; // Exits safely without touching ledger
                     }
 
+                    // Fee adjustment: on buys, Polymarket collects fees in SHARES.
+                    // Formula: fee_usdc = C × p × feeRate × (p × (1-p))^exponent
+                    // fee_shares = fee_usdc / p = C × feeRate × (p × (1-p))^exponent
+                    // Crypto: feeRate=0.25, exponent=2 | Sports: feeRate=0.0175, exponent=1
+                    int feeRateBps = GetFeeRate(assetId);
+                    if (feeRateBps > 0 && actualShares > 0 && actualDollars > 0)
+                    {
+                        decimal execPrice = actualDollars / actualShares;
+                        decimal pq = execPrice * (1m - execPrice); // p × (1-p)
+
+                        // Determine fee params from feeRateBps
+                        decimal feeRate;
+                        int exponent;
+                        if (feeRateBps == 1000) { feeRate = 0.25m; exponent = 2; }       // Crypto
+                        else                    { feeRate = 0.0175m; exponent = 1; }      // Sports
+
+                        decimal pqPow = pq;
+                        for (int e = 1; e < exponent; e++) pqPow *= pq;
+
+                        decimal feeShares = actualShares * feeRate * pqPow;
+                        decimal adjustedShares = Math.Floor((actualShares - feeShares) * 100m) / 100m; // Floor to 2dp to match chain
+
+                        if (!IsMuted) lock (ConsoleLock)
+                        {
+                            Console.ForegroundColor = ConsoleColor.DarkYellow;
+                            Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [FEE] {feeRateBps}bps @ p={execPrice:0.00}: {actualShares:0.00} gross - {feeShares:0.0000} fee = {adjustedShares:0.00} net shares");
+                            Console.ResetColor();
+                        }
+                        actualShares = adjustedShares;
+                    }
+
                     lock (BrokerLock)
                     {
                         decimal currentShares = GetPositionShares(assetId);
