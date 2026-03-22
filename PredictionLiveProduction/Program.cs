@@ -64,7 +64,9 @@ class Program
     private static System.Collections.Concurrent.ConcurrentDictionary<string, string> _tokenTickSize = new();
     private static System.Collections.Concurrent.ConcurrentDictionary<string, decimal> _tokenMinSize = new();
     private static System.Collections.Concurrent.ConcurrentDictionary<string, bool> _subscribedTokens = new();
+    private static System.Collections.Concurrent.ConcurrentDictionary<string, string> _tokenConditionIds = new(); // tokenId -> conditionId
     private static System.Collections.Concurrent.ConcurrentDictionary<string, LocalOrderBook> _orderBooks = new();
+    private static PolymarketUserStreamClient? _userStream;
     private static ClientWebSocket? _activeWs;
     private static readonly SemaphoreSlim _wsSendSemaphore = new(1, 1);
 
@@ -153,6 +155,7 @@ class Program
         void Shutdown()
         {
             Log.Warning("Graceful shutdown initiated...");
+            _userStream?.Dispose();
             ExportLedgerToCsv(quietMode: false);
             _broker.SaveState(_subscribedTokens.Keys);
             PrintDashboard();
@@ -310,6 +313,28 @@ class Program
         _dayStartEquity = _broker.GetTotalPortfolioValue();
 
         // ==========================================
+        // 7c. USER STREAM — Real-time fill detection
+        // ==========================================
+        var uniqueConditionIds = _tokenConditionIds.Values.Distinct().ToList();
+        _userStream = new PolymarketUserStreamClient(config, uniqueConditionIds);
+        _userStream.OnTradeMatched += (fill) =>
+        {
+            // FAST PATH: If a polling loop is waiting on this asset, wake it up instantly
+            // The polling loop will confirm via API and handle all the bookkeeping
+            _broker.SignalFill(fill.TokenId);
+
+            // FALLBACK: If polling already timed out (ghost order), reconcile directly
+            bool reconciled = _broker.ReconcileGhostFill(fill);
+            if (reconciled)
+            {
+                // Ghost was caught — save state immediately so we don't lose it on crash
+                _broker.SaveState(_subscribedTokens.Keys);
+            }
+        };
+        await _userStream.StartAsync();
+        Log.Information("User stream started. Monitoring {Count} condition IDs for ghost fills.", uniqueConditionIds.Count);
+
+        // ==========================================
         // 8. SETTLEMENT SWEEPER (Background)
         // ==========================================
         _ = Task.Run(async () =>
@@ -365,11 +390,23 @@ class Program
                     {
                         Log.Information("Discovered {Count} new market(s). Subscribing...", newTokens.Count);
                         await SubscribeNewTokens(newTokens);
+
+                        // Also subscribe new condition IDs to the user stream
+                        var newConditionIds = newTokens
+                            .Where(t => _tokenConditionIds.ContainsKey(t))
+                            .Select(t => _tokenConditionIds[t])
+                            .Distinct()
+                            .ToList();
+                        if (newConditionIds.Count > 0 && _userStream != null)
+                            await _userStream.SubscribeNewMarketsAsync(newConditionIds);
                     }
                 }
                 catch (Exception ex) { Log.Warning("Market discovery error: {Error}", ex.Message); }
 
-                // THE FIX: Removed tokenIds and fullDiscovery params!
+                // Purge ghost orders older than 15 minutes (they're truly dead)
+                int purged = _broker.PurgeStaleGhostOrders(TimeSpan.FromMinutes(15));
+                if (purged > 0) Log.Information("[GHOST] Purged {Count} stale ghost order(s).", purged);
+
                 // Periodic on-chain state reconciliation
                 try
                 {
@@ -653,7 +690,9 @@ class Program
                             : "0.01";
                         _tokenTickSize.TryAdd(yesToken, tickSize);
                         _tokenMinSize.TryAdd(yesToken, market.OrderMinSize > 0 ? market.OrderMinSize : 1.00m);
-                        
+                        if (!string.IsNullOrEmpty(market.ConditionId))
+                            _tokenConditionIds.TryAdd(yesToken, market.ConditionId);
+
                         // Fetch fees upfront, but strictly throttle to 10 requests/sec to prevent IP bans
                         if (_broker != null)
                         {
@@ -816,6 +855,7 @@ class Program
             Console.WriteLine($"  Exits:      {_broker.TotalTradesExecuted} (W:{_broker.WinningTrades} L:{_broker.LosingTrades})");
             Console.WriteLine($"  Rejected:   {_broker.RejectedOrders}");
             Console.WriteLine($"  Missed:     {_broker.MissedBuys} buys / {_broker.MissedSells} sells (FAK killed)");
+            Console.WriteLine($"  Ghosts:     {_broker.GhostOrderCount} pending (watching via UserStream)");
             Console.ResetColor();
 
             // Status flags

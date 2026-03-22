@@ -7,6 +7,11 @@ using PredictionBacktester.Core.Entities;
 
 namespace PredictionBacktester.Engine.LiveExecution;
 
+/// <summary>
+/// Represents an order that the polling loop timed out on — may have filled on-chain.
+/// </summary>
+public record GhostOrder(string AssetId, string OrderId, string Side, decimal TargetPrice, decimal RequestedShares, DateTime CreatedAt);
+
 public class PolymarketLiveBroker : GlobalSimulatedBroker
 {
     public string StrategyName { get; }
@@ -16,11 +21,27 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
     private readonly IReadOnlyDictionary<string, string> _tokenTickSizes;
     private readonly IReadOnlyDictionary<string, decimal> _tokenMinSizes;
 
+    // Ghost orders: polling timed out, but order may have filled on-chain
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, GhostOrder> _ghostOrders = new();
+    public int GhostOrderCount => _ghostOrders.Count;
+
+    // UserStream fill signals — wakes up polling loops instantly instead of waiting 500ms
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, TaskCompletionSource<bool>> _fillSignals = new();
+
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, int> _tokenFeeRates = new();
 
     private int GetFeeRate(string assetId) => _tokenFeeRates.TryGetValue(assetId, out var fee) ? fee : 0;
     public PolymarketOrderClient OrderClient => _orderClient;
     public void SetTokenFeeRate(string assetId, int feeRate) => _tokenFeeRates[assetId] = feeRate;
+
+    /// <summary>
+    /// Called by the UserStream when a fill is detected — wakes up the polling loop instantly.
+    /// </summary>
+    public void SignalFill(string assetId)
+    {
+        if (_fillSignals.TryRemove(assetId, out var tcs))
+            tcs.TrySetResult(true);
+    }
 
     public IEnumerable<string> AllTrackedAssets => _tokenNames.Keys;
 
@@ -152,9 +173,14 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
 
                         bool settled = false;
 
+                        // Register a signal so UserStream can wake us up instantly
+                        var fillSignal = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                        _fillSignals[assetId] = fillSignal;
+
                         for (int i = 0; i < 180; i++) // 180 × 500ms = 90 seconds
                         {
-                            await Task.Delay(500);
+                            // Wait for EITHER 500ms OR an instant signal from UserStream
+                            await Task.WhenAny(Task.Delay(500), fillSignal.Task);
 
                             try
                             {
@@ -196,6 +222,9 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
                             catch { /* Ignore parsing or network timeouts during polling */ }
                         }
 
+                        // Clean up the signal
+                        _fillSignals.TryRemove(assetId, out _);
+
                         // On timeout: one final poll attempt before giving up
                         if (!settled)
                         {
@@ -227,21 +256,25 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
                                 else
                                 {
                                     actualShares = 0;
+                                    // Register as ghost order — UserStream may catch the fill later
+                                    _ghostOrders[assetId] = new GhostOrder(assetId, orderId, "BUY", targetPrice, shares, DateTime.UtcNow);
                                     if (!IsMuted) lock (ConsoleLock)
                                     {
-                                        Console.ForegroundColor = ConsoleColor.DarkGray;
-                                        Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [TIMEOUT] Buy {orderId} still '{finalStatus}' after 90s. Treating as killed.");
+                                        Console.ForegroundColor = ConsoleColor.DarkYellow;
+                                        Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [GHOST] Buy {orderId} still '{finalStatus}' after 90s. Registered as ghost order — UserStream watching.");
                                         Console.ResetColor();
                                     }
                                 }
                             }
                             catch
                             {
-                                actualShares = 0; // Network error on final check — assume killed
+                                // Network error on final check — register ghost rather than assume killed
+                                actualShares = 0;
+                                _ghostOrders[assetId] = new GhostOrder(assetId, orderId, "BUY", targetPrice, shares, DateTime.UtcNow);
                             }
                         }
                     }
-                    else 
+                    else
                     {
                         // Handle instant fills
                         if (root.TryGetProperty("takingAmount", out var takingElC) && decimal.TryParse(takingElC.ToString(), out decimal tAmt))
@@ -420,9 +453,15 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
 
                         bool settled = false;
 
+                        // Register a signal so UserStream can wake us up instantly
+                        var fillSignal = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                        _fillSignals[assetId] = fillSignal;
+
                         for (int i = 0; i < 180; i++) // 180 × 500ms = 90 seconds
                         {
-                            await Task.Delay(500);
+                            // Wait for EITHER 500ms OR an instant signal from UserStream
+                            await Task.WhenAny(Task.Delay(500), fillSignal.Task);
+
                             try
                             {
                                 string pollResult = await _orderClient.GetOrderAsync(orderId);
@@ -457,6 +496,9 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
                             catch { /* Ignore polling errors */ }
                         }
 
+                        // Clean up the signal
+                        _fillSignals.TryRemove(assetId, out _);
+
                         // On timeout: one final poll attempt before giving up
                         if (!settled)
                         {
@@ -489,10 +531,12 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
                                 {
                                     actualSharesSold = 0;
                                     cashReceived = 0;
+                                    // Register as ghost order — UserStream may catch the fill later
+                                    _ghostOrders[assetId] = new GhostOrder(assetId, orderId, "SELL", targetPrice, sharesToSell, DateTime.UtcNow);
                                     if (!IsMuted) lock (ConsoleLock)
                                     {
-                                        Console.ForegroundColor = ConsoleColor.DarkGray;
-                                        Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [TIMEOUT] Sell {orderId} still '{finalStatus}' after 90s. Treating as killed.");
+                                        Console.ForegroundColor = ConsoleColor.DarkYellow;
+                                        Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [GHOST] Sell {orderId} still '{finalStatus}' after 90s. Registered as ghost order — UserStream watching.");
                                         Console.ResetColor();
                                     }
                                 }
@@ -501,6 +545,7 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
                             {
                                 actualSharesSold = 0;
                                 cashReceived = 0;
+                                _ghostOrders[assetId] = new GhostOrder(assetId, orderId, "SELL", targetPrice, sharesToSell, DateTime.UtcNow);
                             }
                         }
                     }
@@ -616,5 +661,97 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
                 _pendingOrders.TryRemove(assetId, out _);
             }
         });
+    }
+
+    /// <summary>
+    /// Called by the UserStream when a trade fill is detected on our account.
+    /// Only reconciles if there's a matching ghost order (polling timed out).
+    /// Returns true if a ghost order was reconciled.
+    /// </summary>
+    public bool ReconcileGhostFill(UserTradeEvent fill)
+    {
+        // Only act if there's a ghost order for this asset
+        if (!_ghostOrders.TryRemove(fill.TokenId, out var ghost))
+            return false; // No ghost order — this fill was already handled by the polling loop
+
+        // Verify the side matches
+        if (!ghost.Side.Equals(fill.Side, StringComparison.OrdinalIgnoreCase))
+        {
+            // Side mismatch — put it back and ignore
+            _ghostOrders.TryAdd(fill.TokenId, ghost);
+            return false;
+        }
+
+        decimal fillDollars = fill.Size * fill.Price;
+
+        lock (BrokerLock)
+        {
+            if (fill.Side.Equals("BUY", StringComparison.OrdinalIgnoreCase))
+            {
+                decimal currentShares = GetPositionShares(fill.TokenId);
+                decimal currentAvgPrice = GetAverageEntryPrice(fill.TokenId);
+                decimal totalCost = (currentShares * currentAvgPrice) + fillDollars;
+
+                SetPositionShares(fill.TokenId, currentShares + fill.Size);
+                SetAverageEntryPrice(fill.TokenId, totalCost / (currentShares + fill.Size));
+                CashBalance -= fillDollars;
+
+                TradeLedger.Add(new ExecutedTrade
+                {
+                    OutcomeId = fill.TokenId, Date = DateTime.Now, Side = "BUY (GHOST)",
+                    Price = fill.Price, Shares = fill.Size, DollarValue = fillDollars
+                });
+                TotalActions++;
+            }
+            else // SELL
+            {
+                decimal entryPrice = GetAverageEntryPrice(fill.TokenId);
+                decimal pnl = fillDollars - (fill.Size * entryPrice);
+
+                if (fill.Price > entryPrice) WinningTrades++;
+                else LosingTrades++;
+
+                CashBalance += fillDollars;
+                decimal remainingShares = Math.Max(0, GetPositionShares(fill.TokenId) - fill.Size);
+                SetPositionShares(fill.TokenId, remainingShares);
+                if (remainingShares == 0) SetAverageEntryPrice(fill.TokenId, 0);
+
+                TradeLedger.Add(new ExecutedTrade
+                {
+                    OutcomeId = fill.TokenId, Date = DateTime.Now, Side = "SELL (GHOST)",
+                    Price = fill.Price, Shares = fill.Size, DollarValue = fillDollars
+                });
+                TotalTradesExecuted++;
+                TotalActions++;
+            }
+        }
+
+        if (!IsMuted) lock (ConsoleLock)
+        {
+            Console.ForegroundColor = ConsoleColor.Magenta;
+            Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [GHOST RECONCILED] {fill.Side} {fill.Size:0.00} shares @ ${fill.Price:0.000} | {GetMarketName(fill.TokenId)} | Order: {ghost.OrderId}");
+            Console.ResetColor();
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Cleans up ghost orders older than the specified age (e.g. stale orders that will never fill).
+    /// Returns count of purged entries.
+    /// </summary>
+    public int PurgeStaleGhostOrders(TimeSpan maxAge)
+    {
+        int purged = 0;
+        var cutoff = DateTime.UtcNow - maxAge;
+        foreach (var kvp in _ghostOrders)
+        {
+            if (kvp.Value.CreatedAt < cutoff)
+            {
+                if (_ghostOrders.TryRemove(kvp.Key, out _))
+                    purged++;
+            }
+        }
+        return purged;
     }
 }

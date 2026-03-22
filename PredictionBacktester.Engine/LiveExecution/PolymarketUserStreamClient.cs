@@ -178,6 +178,31 @@ namespace PredictionBacktester.Engine.LiveExecution
             }
         }
 
+        /// <summary>
+        /// Subscribe to additional markets on an already-connected stream.
+        /// </summary>
+        public async Task SubscribeNewMarketsAsync(List<string> newConditionIds)
+        {
+            if (_ws == null || _ws.State != WebSocketState.Open || newConditionIds.Count == 0) return;
+
+            _conditionIds.AddRange(newConditionIds);
+
+            var subMsg = new
+            {
+                auth = new
+                {
+                    apiKey = _config.ApiKey,
+                    secret = _config.ApiSecret,
+                    passphrase = _config.ApiPassphrase
+                },
+                markets = newConditionIds,
+                type = "user"
+            };
+
+            string json = JsonSerializer.Serialize(subMsg);
+            await _ws.SendAsync(Encoding.UTF8.GetBytes(json), WebSocketMessageType.Text, true, _cts.Token);
+        }
+
         public void Dispose()
         {
             _cts.Cancel();
