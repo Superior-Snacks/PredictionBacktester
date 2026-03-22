@@ -52,7 +52,7 @@ namespace PredictionBacktester.Engine
                     if (arbConfig.Count >= targetMarketCount) break;
 
                     // FIX 2: Use the exact Market ID to prevent duplicate key collisions
-                    string marketId = mkt.GetProperty("id").GetString() ?? Guid.NewGuid().ToString();
+                    string marketId = mkt.GetProperty("conditionId").GetString() ?? Guid.NewGuid().ToString();
                     string question = mkt.GetProperty("question").GetString() ?? "Unknown";
                     
                     List<string> tokenIds = new List<string>();
