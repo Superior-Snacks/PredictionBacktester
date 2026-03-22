@@ -145,7 +145,7 @@ class Program
         Console.WriteLine($"  Wallet:   ${_broker.CashBalance:0.00} USDC");
         Console.WriteLine($"  Params:   Crash={CRASH_THRESHOLD} Window={TIME_WINDOW_SECONDS}s TP={TAKE_PROFIT} SL={STOP_LOSS} Sustain={SUSTAIN_TIMER_MS}ms Lock={SETTLEMENT_LOCK_MS}ms");
         Console.WriteLine($"  Limits:   MaxBet=${_maxBetSize} DailyLoss=${_dailyLossLimit}");
-        Console.WriteLine("  Controls: P=Pause R=Resume N=PauseBuying X=SellAll M=Mute T=Trades Q=Quiet V=Verbose F=Debug S=Status");
+        Console.WriteLine("  Controls: P=Pause R=Resume N=PauseBuying X=SellAll M=Mute T=Trades Q=Quiet V=Verbose F=Debug U=UserStream S=Status");
         Console.WriteLine("  Settings: 1=MaxBet 2=DailyLossLimit");
         Console.WriteLine("=========================================");
 
@@ -240,6 +240,14 @@ class Program
                         case ConsoleKey.F:
                             _broker.OrderDebugMode = !_broker.OrderDebugMode;
                             Log.Information("Order debug (payload + EIP712): {State}", _broker.OrderDebugMode ? "ON" : "OFF");
+                            break;
+
+                        case ConsoleKey.U:
+                            if (_userStream != null)
+                            {
+                                _userStream.DebugMode = !_userStream.DebugMode;
+                                Log.Information("UserStream debug: {State}", _userStream.DebugMode ? "ON" : "OFF");
+                            }
                             break;
 
                         case ConsoleKey.S:

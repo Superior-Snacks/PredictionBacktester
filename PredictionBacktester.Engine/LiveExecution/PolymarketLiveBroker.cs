@@ -214,6 +214,15 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
                                 }
                                 else if (currentStatus == "canceled" || currentStatus == "expired" || currentStatus == "unmatched")
                                 {
+                                    if (!IsMuted) lock (ConsoleLock)
+                                    {
+                                        Console.ForegroundColor = ConsoleColor.DarkYellow;
+                                        Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [POLL] Buy {orderId} API returned '{currentStatus}' at iteration {i}/180 | {GetMarketName(assetId)}");
+                                        Console.ResetColor();
+                                    }
+                                    // API says killed, but Polymarket can deliver shares despite this.
+                                    // Register ghost so UserStream or next sync can catch a phantom fill.
+                                    _ghostOrders[assetId] = new GhostOrder(assetId, orderId, "BUY", targetPrice, shares, DateTime.UtcNow);
                                     actualShares = 0;
                                     settled = true;
                                     break;
@@ -487,6 +496,13 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
                                 }
                                 else if (currentStatus == "canceled" || currentStatus == "expired" || currentStatus == "unmatched")
                                 {
+                                    if (!IsMuted) lock (ConsoleLock)
+                                    {
+                                        Console.ForegroundColor = ConsoleColor.DarkYellow;
+                                        Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [POLL] Sell {orderId} API returned '{currentStatus}' at iteration {i}/180 | {GetMarketName(assetId)}");
+                                        Console.ResetColor();
+                                    }
+                                    _ghostOrders[assetId] = new GhostOrder(assetId, orderId, "SELL", targetPrice, sharesToSell, DateTime.UtcNow);
                                     actualSharesSold = 0;
                                     cashReceived = 0;
                                     settled = true;

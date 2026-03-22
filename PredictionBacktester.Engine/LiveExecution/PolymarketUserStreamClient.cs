@@ -20,6 +20,10 @@ namespace PredictionBacktester.Engine.LiveExecution
         private readonly PolymarketApiConfig _config;
         private readonly List<string> _conditionIds;
         private CancellationTokenSource _cts = new();
+        private int _messagesReceived;
+
+        /// <summary>Toggle verbose logging to see every raw WS message.</summary>
+        public bool DebugMode { get; set; } = true;
 
         public event Action<UserTradeEvent>? OnTradeMatched;
 
@@ -118,6 +122,14 @@ namespace PredictionBacktester.Engine.LiveExecution
                     string msg = Encoding.UTF8.GetString(ms.ToArray());
                     if (msg.Trim() == "PONG") continue;
 
+                    _messagesReceived++;
+                    if (DebugMode)
+                    {
+                        // Show first 500 chars of every non-PONG message
+                        string preview = msg.Length > 500 ? msg[..500] + "..." : msg;
+                        Console.WriteLine($"[USER STREAM DBG] Msg #{_messagesReceived}: {preview}");
+                    }
+
                     ProcessMessage(msg);
                 }
             }
@@ -135,12 +147,12 @@ namespace PredictionBacktester.Engine.LiveExecution
                 {
                     foreach (var element in root.EnumerateArray())
                     {
-                        ParseSingleTradeEvent(element);
+                        ParseSingleEvent(element);
                     }
                 }
                 else
                 {
-                    ParseSingleTradeEvent(root);
+                    ParseSingleEvent(root);
                 }
             }
             catch (Exception ex)
@@ -150,36 +162,105 @@ namespace PredictionBacktester.Engine.LiveExecution
             }
         }
 
-        private void ParseSingleTradeEvent(JsonElement element)
+        private void ParseSingleEvent(JsonElement element)
         {
-            if (element.TryGetProperty("event", out var eventEl) && eventEl.GetString() == "trade")
+            // Log all event types we see
+            string eventType = "";
+            if (element.TryGetProperty("event", out var dbgEventEl))
             {
-                // FIX #6: Defensive property checking (Asset_id vs TokenId)
-                string tokenId = "";
-                if (element.TryGetProperty("asset_id", out var assetEl)) tokenId = assetEl.GetString() ?? "";
-                else if (element.TryGetProperty("tokenId", out var tokenEl)) tokenId = tokenEl.GetString() ?? "";
-                
-                string side = element.TryGetProperty("side", out var sideEl) ? (sideEl.GetString() ?? "") : "";
+                eventType = dbgEventEl.GetString() ?? "";
+                if (DebugMode)
+                    Console.WriteLine($"[USER STREAM DBG] Event type: '{eventType}'");
+            }
+            else if (element.TryGetProperty("type", out var typeEl))
+            {
+                eventType = typeEl.GetString() ?? "";
+                if (DebugMode)
+                    Console.WriteLine($"[USER STREAM DBG] Type: '{eventType}'");
+            }
 
-                // FIX #5: InvariantCulture to prevent European server decimal crashing
-                decimal price = 0m;
-                if (element.TryGetProperty("price", out var priceEl))
-                    decimal.TryParse(priceEl.GetString(), NumberStyles.Any, CultureInfo.InvariantCulture, out price);
+            // Parse "trade" events — MATCHED/CONFIRMED trade lifecycle
+            if (eventType == "trade")
+            {
+                TryExtractFill(element);
+            }
+            // Parse "order" events — may contain fill data for our FAK orders
+            else if (eventType == "order")
+            {
+                // Order events may report status changes with matched amounts
+                string status = "";
+                if (element.TryGetProperty("status", out var statusEl))
+                    status = statusEl.GetString() ?? "";
 
-                decimal size = 0m;
-                if (element.TryGetProperty("size", out var sizeEl))
-                    decimal.TryParse(sizeEl.GetString(), NumberStyles.Any, CultureInfo.InvariantCulture, out size);
+                if (DebugMode)
+                    Console.WriteLine($"[USER STREAM DBG] Order status: '{status}'");
 
-                if (!string.IsNullOrEmpty(tokenId) && size > 0)
+                // If the order was matched, extract fill data
+                if (status == "MATCHED" || status == "matched" || status == "LIVE" || status == "live")
                 {
-                    var tradeEvent = new UserTradeEvent(tokenId, price, size, side);
-                    OnTradeMatched?.Invoke(tradeEvent);
+                    TryExtractFill(element);
                 }
             }
         }
 
+        private void TryExtractFill(JsonElement element)
+        {
+            // Try multiple possible field names for token ID
+            string tokenId = "";
+            foreach (string field in new[] { "asset_id", "tokenId", "token_id", "market" })
+            {
+                if (element.TryGetProperty(field, out var el) && !string.IsNullOrEmpty(el.GetString()))
+                {
+                    tokenId = el.GetString()!;
+                    break;
+                }
+            }
+
+            string side = "";
+            if (element.TryGetProperty("side", out var sideEl))
+                side = sideEl.GetString() ?? "";
+
+            // Try parsing price/size from multiple possible field names and formats
+            decimal price = TryParseDecimalField(element, "price", "match_price", "avgPrice");
+            decimal size = TryParseDecimalField(element, "size", "taker_amount_matched", "matched_amount");
+
+            if (!string.IsNullOrEmpty(tokenId) && size > 0)
+            {
+                if (DebugMode)
+                    Console.WriteLine($"[USER STREAM] FILL DETECTED: {side} {size:0.00} @ ${price:0.000} | Token: {tokenId[..Math.Min(12, tokenId.Length)]}...");
+
+                var tradeEvent = new UserTradeEvent(tokenId, price, size, side);
+                OnTradeMatched?.Invoke(tradeEvent);
+            }
+        }
+
+        private static decimal TryParseDecimalField(JsonElement element, params string[] fieldNames)
+        {
+            foreach (string field in fieldNames)
+            {
+                if (element.TryGetProperty(field, out var el))
+                {
+                    // Handle both string and number JSON values
+                    if (el.ValueKind == JsonValueKind.String)
+                    {
+                        if (decimal.TryParse(el.GetString(), NumberStyles.Any, CultureInfo.InvariantCulture, out decimal val))
+                            return val;
+                    }
+                    else if (el.ValueKind == JsonValueKind.Number)
+                    {
+                        return el.GetDecimal();
+                    }
+                }
+            }
+            return 0m;
+        }
+
         /// <summary>
         /// Subscribe to additional markets on an already-connected stream.
+        /// </summary>
+        /// <summary>
+        /// Subscribe to additional markets on an already-connected stream.
+        /// Per Polymarket docs: dynamic subscription uses "operation":"subscribe", not full auth.
         /// </summary>
         public async Task SubscribeNewMarketsAsync(List<string> newConditionIds)
         {
@@ -187,16 +268,11 @@ namespace PredictionBacktester.Engine.LiveExecution
 
             _conditionIds.AddRange(newConditionIds);
 
+            // Per docs: dynamic subscription format for user channel
             var subMsg = new
             {
-                auth = new
-                {
-                    apiKey = _config.ApiKey,
-                    secret = _config.ApiSecret,
-                    passphrase = _config.ApiPassphrase
-                },
                 markets = newConditionIds,
-                type = "user"
+                operation = "subscribe"
             };
 
             string json = JsonSerializer.Serialize(subMsg);
