@@ -23,6 +23,8 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
 
     // Ghost orders: polling timed out, but order may have filled on-chain
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, GhostOrder> _ghostOrders = new();
+    // Tracks whether we've already logged a BLOCKED message for each asset (prevents log spam)
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> _blockedLogSent = new();
     public int GhostOrderCount => _ghostOrders.Count;
 
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, int> _tokenFeeRates = new();
@@ -86,7 +88,7 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
     {
         if (!_pendingOrders.TryAdd(assetId, true))
         {
-            if (OrderDebugMode && !IsMuted) lock (ConsoleLock)
+            if (OrderDebugMode && !IsMuted && _blockedLogSent.TryAdd(assetId, true)) lock (ConsoleLock)
             {
                 bool hasGhost = _ghostOrders.ContainsKey(assetId);
                 Console.ForegroundColor = ConsoleColor.DarkGray;
@@ -99,7 +101,7 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
         decimal bestAsk = book.GetBestAskPrice();
         if (bestAsk >= 0.99m || bestAsk <= 0.01m)
         {
-            _pendingOrders.TryRemove(assetId, out _);
+            _pendingOrders.TryRemove(assetId, out _); _blockedLogSent.TryRemove(assetId, out _);
             return;
         }
 
@@ -111,7 +113,7 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
         decimal minSize = GetMinSize(assetId);
         if (shares < minSize)
         {
-            _pendingOrders.TryRemove(assetId, out _);
+            _pendingOrders.TryRemove(assetId, out _); _blockedLogSent.TryRemove(assetId, out _);
             return;
         }
 
@@ -405,7 +407,7 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
             {
                 // Only release the pending lock if there's no ghost order for this asset.
                 if (!_ghostOrders.ContainsKey(assetId))
-                    _pendingOrders.TryRemove(assetId, out _);
+                    _pendingOrders.TryRemove(assetId, out _); _blockedLogSent.TryRemove(assetId, out _);
             }
         });
     }
@@ -429,7 +431,7 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
 
         if (!_pendingOrders.TryAdd(assetId, true))
         {
-            if (OrderDebugMode && !IsMuted) lock (ConsoleLock)
+            if (OrderDebugMode && !IsMuted && _blockedLogSent.TryAdd(assetId, true)) lock (ConsoleLock)
             {
                 bool hasGhost = _ghostOrders.ContainsKey(assetId);
                 Console.ForegroundColor = ConsoleColor.DarkGray;
@@ -439,14 +441,17 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
             return;
         }
 
-        // --- NEW SLIPPAGE LOGIC ---
-        // Instead of a hardcoded -0.01, find the actual best buyer on the book.
-        // If the best buyer is way worse than your target price, you still want to get out.
+        // --- SLIPPAGE LOGIC ---
+        // Find the actual best buyer on the book.
         decimal bestBid = book.GetBestBidPrice();
-        
-        // If the book is completely empty, default to the lowest possible tick
-        if (bestBid <= 0) bestBid = 0.01m; 
-        
+
+        // No liquidity — don't sell into an empty book
+        if (bestBid <= 0.01m)
+        {
+            _pendingOrders.TryRemove(assetId, out _); _blockedLogSent.TryRemove(assetId, out _);
+            return;
+        }
+
         // We will accept whichever is worse: our target price - 1 cent, OR the actual best bid.
         // This guarantees the FAK order will hit existing liquidity immediately.
         targetPrice = Math.Min(Math.Max(0.01m, targetPrice - 0.01m), bestBid);
@@ -762,7 +767,7 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
                 // If a ghost sell was registered, keep the lock so the strategy can't
                 // fire another sell before ReconcileGhostFill runs.
                 if (!_ghostOrders.ContainsKey(assetId))
-                    _pendingOrders.TryRemove(assetId, out _);
+                    _pendingOrders.TryRemove(assetId, out _); _blockedLogSent.TryRemove(assetId, out _);
             }
         });
     }
@@ -832,7 +837,7 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
 
         // Release the pending order lock now that the ghost is reconciled.
         // This allows the strategy to submit new orders for this asset.
-        _pendingOrders.TryRemove(fill.TokenId, out _);
+        _pendingOrders.TryRemove(fill.TokenId, out _); _blockedLogSent.TryRemove(fill.TokenId, out _);
 
         if (!IsMuted) lock (ConsoleLock)
         {
@@ -859,7 +864,7 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
                 if (_ghostOrders.TryRemove(kvp.Key, out var staleGhost))
                 {
                     // Release the pending order lock that was held for this ghost
-                    _pendingOrders.TryRemove(kvp.Key, out _);
+                    _pendingOrders.TryRemove(kvp.Key, out _); _blockedLogSent.TryRemove(kvp.Key, out _);
                     purged++;
 
                     if (!IsMuted) lock (ConsoleLock)
