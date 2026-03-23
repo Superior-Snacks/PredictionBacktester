@@ -345,7 +345,11 @@ class Program
                 {
                     await Task.Delay(3000);
                     if (_broker.ReconcileGhostFill(fill))
+                    {
+                        Log.Information("[GHOST RETRY] Reconciled {Side} {Size:0.00} shares on 3s retry | {Token}",
+                            fill.Side, fill.Size, fill.TokenId[..Math.Min(12, fill.TokenId.Length)] + "...");
                         _broker.SaveState(_subscribedTokens.Keys);
+                    }
                 });
             }
         };

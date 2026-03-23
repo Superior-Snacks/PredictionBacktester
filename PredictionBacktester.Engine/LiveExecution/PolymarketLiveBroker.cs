@@ -84,7 +84,17 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
 
     public override void SubmitBuyOrder(string assetId, decimal targetPrice, decimal dollarsToInvest, LocalOrderBook book)
     {
-        if (!_pendingOrders.TryAdd(assetId, true)) return;
+        if (!_pendingOrders.TryAdd(assetId, true))
+        {
+            if (OrderDebugMode && !IsMuted) lock (ConsoleLock)
+            {
+                bool hasGhost = _ghostOrders.ContainsKey(assetId);
+                Console.ForegroundColor = ConsoleColor.DarkGray;
+                Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [BLOCKED] Buy skipped — {(hasGhost ? "ghost order pending" : "order in flight")} | {GetMarketName(assetId)}");
+                Console.ResetColor();
+            }
+            return;
+        }
 
         decimal bestAsk = book.GetBestAskPrice();
         if (bestAsk >= 0.99m || bestAsk <= 0.01m)
@@ -417,7 +427,17 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
             return;
         }
 
-        if (!_pendingOrders.TryAdd(assetId, true)) return;
+        if (!_pendingOrders.TryAdd(assetId, true))
+        {
+            if (OrderDebugMode && !IsMuted) lock (ConsoleLock)
+            {
+                bool hasGhost = _ghostOrders.ContainsKey(assetId);
+                Console.ForegroundColor = ConsoleColor.DarkGray;
+                Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [BLOCKED] Sell skipped — {(hasGhost ? "ghost order pending" : "order in flight")} | {GetMarketName(assetId)}");
+                Console.ResetColor();
+            }
+            return;
+        }
 
         // --- NEW SLIPPAGE LOGIC ---
         // Instead of a hardcoded -0.01, find the actual best buyer on the book.
@@ -836,11 +856,18 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
         {
             if (kvp.Value.CreatedAt < cutoff)
             {
-                if (_ghostOrders.TryRemove(kvp.Key, out _))
+                if (_ghostOrders.TryRemove(kvp.Key, out var staleGhost))
                 {
                     // Release the pending order lock that was held for this ghost
                     _pendingOrders.TryRemove(kvp.Key, out _);
                     purged++;
+
+                    if (!IsMuted) lock (ConsoleLock)
+                    {
+                        Console.ForegroundColor = ConsoleColor.DarkGray;
+                        Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [GHOST PURGED] {staleGhost.Side} ghost for {GetMarketName(kvp.Key)} expired after {maxAge.TotalMinutes:0}m — order lock released.");
+                        Console.ResetColor();
+                    }
                 }
             }
         }
