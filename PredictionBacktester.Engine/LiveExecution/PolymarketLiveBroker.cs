@@ -29,6 +29,10 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
 
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, int> _tokenFeeRates = new();
 
+    // Cooldown after FAK sell failures (no liquidity) — prevents rapid-fire retries into empty books
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, long> _sellCooldownUntil = new();
+    private const int SELL_COOLDOWN_SECONDS = 30;
+
     private int GetFeeRate(string assetId) => _tokenFeeRates.TryGetValue(assetId, out var fee) ? fee : 0;
     public PolymarketOrderClient OrderClient => _orderClient;
     public void SetTokenFeeRate(string assetId, int feeRate) => _tokenFeeRates[assetId] = feeRate;
@@ -417,6 +421,11 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
         decimal sharesToSell = Math.Round(GetPositionShares(assetId), 2);
         if (sharesToSell <= 0) return;
 
+        // Check sell cooldown — after FAK failures (no liquidity), wait before retrying
+        if (_sellCooldownUntil.TryGetValue(assetId, out long cooldownUntil) &&
+            DateTimeOffset.UtcNow.ToUnixTimeSeconds() < cooldownUntil)
+            return;
+
         decimal minSize = GetMinSize(assetId);
         if (sharesToSell < minSize)
         {
@@ -441,8 +450,11 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
             return;
         }
 
-        // --- SLIPPAGE LOGIC ---
-        // Find the actual best buyer on the book.
+        // --- SELL PRICING ---
+        // FAK sell: the limit price is the MINIMUM we'll accept.
+        // Set it to 0.01 (floor) so the order matches any buyer on the book.
+        // The exchange fills at the actual best bid, not our limit — so we won't
+        // get ripped off, we just guarantee the FAK won't be killed for price reasons.
         decimal bestBid = book.GetBestBidPrice();
 
         // No liquidity — don't sell into an empty book
@@ -452,9 +464,8 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
             return;
         }
 
-        // We will accept whichever is worse: our target price - 1 cent, OR the actual best bid.
-        // This guarantees the FAK order will hit existing liquidity immediately.
-        targetPrice = Math.Min(Math.Max(0.01m, targetPrice - 0.01m), bestBid);
+        // Floor the price — we want OUT, especially on stop-loss
+        targetPrice = 0.01m;
 
         Task.Run(async () =>
         {
@@ -671,14 +682,18 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
                     if (actualSharesSold <= 0)
                     {
                         Interlocked.Increment(ref _missedSells);
+                        _sellCooldownUntil[assetId] = DateTimeOffset.UtcNow.ToUnixTimeSeconds() + SELL_COOLDOWN_SECONDS;
                         if (!IsMuted) lock (ConsoleLock)
                         {
                             Console.ForegroundColor = ConsoleColor.DarkGray;
-                            Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [FAK KILLED] Sell missed. Retrying next tick... | {GetMarketName(assetId)}");
+                            Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [FAK KILLED] Sell missed. Cooldown {SELL_COOLDOWN_SECONDS}s | {GetMarketName(assetId)}");
                             Console.ResetColor();
                         }
                         return;
                     }
+
+                    // Sell succeeded — clear any cooldown
+                    _sellCooldownUntil.TryRemove(assetId, out _);
 
                     decimal pnl = 0m;
                     lock (BrokerLock)
@@ -753,10 +768,17 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
                 }
                 else
                 {
+                    // FAK killed (no liquidity) — apply cooldown to prevent rapid-fire retries
+                    if (ex.Message.Contains("no orders found to match", StringComparison.OrdinalIgnoreCase) ||
+                        ex.Message.Contains("FAK", StringComparison.OrdinalIgnoreCase))
+                    {
+                        _sellCooldownUntil[assetId] = DateTimeOffset.UtcNow.ToUnixTimeSeconds() + SELL_COOLDOWN_SECONDS;
+                    }
+
                     if (!IsMuted) lock (ConsoleLock)
                     {
                         Console.ForegroundColor = ConsoleColor.Red;
-                        Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [LIVE SELL FAILED] {GetMarketName(assetId)}: {ex.Message}");
+                        Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [LIVE SELL FAILED] {GetMarketName(assetId)}: {ex.Message} (cooldown {SELL_COOLDOWN_SECONDS}s)");
                         Console.ResetColor();
                     }
                 }
