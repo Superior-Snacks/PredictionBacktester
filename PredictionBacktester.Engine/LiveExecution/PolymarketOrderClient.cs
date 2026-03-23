@@ -281,8 +281,9 @@ public class PolymarketOrderClient
         var ecKey = new EthECKey(_account.PrivateKey);
         var signature = ecKey.SignAndCalculateV(digest);
         byte[] sigBytes = new byte[65];
-        Array.Copy(signature.R, 0, sigBytes, 0, 32);
-        Array.Copy(signature.S, 0, sigBytes, 32, 32);
+        // R and S can be < 32 bytes when they have leading zeros — pad to 32
+        Array.Copy(signature.R, 0, sigBytes, 32 - signature.R.Length, signature.R.Length);
+        Array.Copy(signature.S, 0, sigBytes, 64 - signature.S.Length, signature.S.Length);
         sigBytes[64] = (byte)(signature.V[0]);
 
         return "0x" + BitConverter.ToString(sigBytes).Replace("-", "").ToLower();

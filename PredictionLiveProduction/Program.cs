@@ -720,11 +720,13 @@ class Program
                         {
                             try
                             {
-                                int feeRate = await _broker.OrderClient.GetTakerFeeAsync(yesToken);
+                                int feeRate = await _broker.OrderClient.GetTakerFeeAsync(market.ConditionId);
                                 _broker.SetTokenFeeRate(yesToken, feeRate);
-                                
+                                if (feeRate > 0)
+                                    Log.Debug("[FEE PREFETCH] {Market} -> {Fee}bps", market.Question?[..Math.Min(50, market.Question?.Length ?? 0)], feeRate);
+
                                 // Sleep for 100ms. If there are 1,000 markets, startup takes ~1.5 minutes.
-                                await Task.Delay(100); 
+                                await Task.Delay(100);
                             }
                             catch (Exception ex)
                             {
