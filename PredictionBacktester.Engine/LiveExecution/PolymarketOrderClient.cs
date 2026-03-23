@@ -285,16 +285,6 @@ public class PolymarketOrderClient
         Array.Copy(signature.S, 0, sigBytes, 32, 32);
         sigBytes[64] = (byte)(signature.V[0]);
 
-        if (DebugMode)
-        {
-            Console.ForegroundColor = ConsoleColor.DarkGray;
-            Console.WriteLine($"[EIP712] typeHash:   0x{BitConverter.ToString(orderTypeHash).Replace("-", "").ToLower()}");
-            Console.WriteLine($"[EIP712] domainSep:  0x{BitConverter.ToString(domainSeparator).Replace("-", "").ToLower()}");
-            Console.WriteLine($"[EIP712] structHash: 0x{BitConverter.ToString(structHash).Replace("-", "").ToLower()}");
-            Console.WriteLine($"[EIP712] digest:     0x{BitConverter.ToString(digest).Replace("-", "").ToLower()}");
-            Console.ResetColor();
-        }
-
         return "0x" + BitConverter.ToString(sigBytes).Replace("-", "").ToLower();
     }
 
