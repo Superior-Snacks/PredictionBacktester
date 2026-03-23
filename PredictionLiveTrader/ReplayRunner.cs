@@ -42,6 +42,7 @@ static class ReplayRunner
 
         var orderBooks = new Dictionary<string, LocalOrderBook>();
         var activeStrategies = new Dictionary<string, List<ILiveStrategy>>();
+        bool hasDeferredOrders = false; // Fast check to avoid iterating brokers every tick
 
         // --- Find and sort .gz files ---
         var gzFiles = Directory.GetFiles(dataDirectory, "*.gz").OrderBy(f => f).ToArray();
@@ -90,32 +91,33 @@ static class ReplayRunner
 
                 if (!long.TryParse(line.AsSpan(0, pipeIndex), out long tickTimestampMs)) continue;
 
-                string json = line[(pipeIndex + 1)..];
-                if (string.IsNullOrWhiteSpace(json)) continue;
+                // Fast peek: skip full book snapshot lines (start with '[') — they're huge JSON arrays
+                // that only set initial state. price_change events maintain the book incrementally.
+                int jsonStart = pipeIndex + 1;
+                if (jsonStart >= line.Length) continue;
 
-                fileTicks++;
-                totalTicks++;
+                // Find the first non-whitespace char in the JSON portion
+                char firstChar = line[jsonStart];
+                while (firstChar == ' ' && jsonStart < line.Length - 1) firstChar = line[++jsonStart];
 
-                // Advance the replay clock on all brokers & drain deferred orders
-                foreach (var broker in brokers.Values)
+                if (firstChar == '[')
                 {
-                    broker.ReplayTimeMs = tickTimestampMs;
-                    broker.DrainDeferredOrders(orderBooks);
-                }
+                    // Book snapshot — only process the FIRST snapshot per asset to initialize
+                    // After that, price_change events keep the book current
+                    fileTicks++;
+                    totalTicks++;
 
-                try
-                {
-                    using var doc = JsonDocument.Parse(json);
-                    var root = doc.RootElement;
-
-                    if (root.ValueKind == JsonValueKind.Array)
+                    try
                     {
-                        // Book snapshot: [{market, asset_id, bids, asks, ...}, ...]
-                        foreach (var entry in root.EnumerateArray())
+                        using var doc = JsonDocument.Parse(line.AsMemory(pipeIndex + 1));
+                        foreach (var entry in doc.RootElement.EnumerateArray())
                         {
-                            if (!entry.TryGetProperty("asset_id", out var assetIdEl)) continue;
-                            string? assetId = assetIdEl.GetString();
+                            if (!entry.TryGetProperty("asset_id", out var idEl)) continue;
+                            string? assetId = idEl.GetString();
                             if (string.IsNullOrEmpty(assetId)) continue;
+
+                            // Only process if we haven't seen this asset yet
+                            if (orderBooks.ContainsKey(assetId)) continue;
 
                             EnsureAssetInitialized(assetId, orderBooks, activeStrategies, strategyConfigs, tokenNames);
 
@@ -126,23 +128,71 @@ static class ReplayRunner
                             }
                         }
                     }
-                    else if (root.ValueKind == JsonValueKind.Object)
-                    {
-                        ProcessObjectMessage(root, orderBooks, activeStrategies, strategyConfigs,
-                            tokenNames, brokers, ref totalBookSnapshots, ref totalPriceChanges);
-                    }
-                }
-                catch (JsonException)
-                {
-                    // Skip malformed lines
+                    catch (JsonException) { }
+
+                    goto progressCheck;
                 }
 
+                fileTicks++;
+                totalTicks++;
+
+                // Drain deferred orders only when there are some pending
+                if (hasDeferredOrders)
+                {
+                    hasDeferredOrders = false;
+                    foreach (var broker in brokers.Values)
+                    {
+                        broker.ReplayTimeMs = tickTimestampMs;
+                        broker.DrainDeferredOrders(orderBooks);
+                        if (broker.HasDeferredOrders) hasDeferredOrders = true;
+                    }
+                }
+
+                try
+                {
+                    using var doc = JsonDocument.Parse(line.AsMemory(pipeIndex + 1));
+                    var root = doc.RootElement;
+
+                    if (root.ValueKind == JsonValueKind.Object)
+                    {
+                        if (root.TryGetProperty("event_type", out var eventTypeEl))
+                        {
+                            string? eventType = eventTypeEl.GetString();
+
+                            if (eventType == "book" && root.TryGetProperty("asset_id", out var assetIdEl))
+                            {
+                                string? assetId = assetIdEl.GetString();
+                                if (!string.IsNullOrEmpty(assetId))
+                                {
+                                    EnsureAssetInitialized(assetId, orderBooks, activeStrategies, strategyConfigs, tokenNames);
+                                    if (root.TryGetProperty("bids", out var bidsEl) && root.TryGetProperty("asks", out var asksEl))
+                                    {
+                                        orderBooks[assetId].ProcessBookUpdate(bidsEl, asksEl);
+                                        totalBookSnapshots++;
+                                    }
+                                }
+                            }
+                            else if (eventType == "price_change" && root.TryGetProperty("price_changes", out var changesEl))
+                            {
+                                ProcessPriceChanges(changesEl, tickTimestampMs, orderBooks, activeStrategies, strategyConfigs,
+                                    tokenNames, brokers, ref totalPriceChanges, ref hasDeferredOrders);
+                            }
+                        }
+                        else if (root.TryGetProperty("price_changes", out var changesEl2))
+                        {
+                            ProcessPriceChanges(changesEl2, tickTimestampMs, orderBooks, activeStrategies, strategyConfigs,
+                                tokenNames, brokers, ref totalPriceChanges, ref hasDeferredOrders);
+                        }
+                    }
+                }
+                catch (JsonException) { }
+
+                progressCheck:
                 // Progress bar based on compressed bytes read (updated every ~2MB)
                 long currentPos = fileStream.Position;
                 if (currentPos - lastReportBytes >= 2 * 1024 * 1024)
                 {
                     lastReportBytes = currentPos;
-                    double filePercent = (double)currentPos / fileSize * 100;
                     double overallPercent = (double)(bytesProcessedSoFar + currentPos) / totalCompressedBytes * 100;
                     double elapsedSec = overallSw.Elapsed.TotalSeconds;
                     double bytesPerSec = (bytesProcessedSoFar + currentPos) / Math.Max(elapsedSec, 0.001);
@@ -150,7 +200,6 @@ static class ReplayRunner
                     double etaSec = bytesRemaining / Math.Max(bytesPerSec, 1);
                     TimeSpan eta = TimeSpan.FromSeconds(etaSec);
 
-                    // Build progress bar
                     int barWidth = 30;
                     int filled = (int)(overallPercent / 100 * barWidth);
                     string bar = new string('#', filled) + new string('-', barWidth - filled);
@@ -239,59 +288,25 @@ static class ReplayRunner
         }
     }
 
-    private static void ProcessObjectMessage(
-        JsonElement root,
-        Dictionary<string, LocalOrderBook> orderBooks,
-        Dictionary<string, List<ILiveStrategy>> activeStrategies,
-        List<StrategyConfig> strategyConfigs,
-        Dictionary<string, string> tokenNames,
-        Dictionary<string, ReplayBroker> brokers,
-        ref long totalBookSnapshots,
-        ref long totalPriceChanges)
-    {
-        if (root.TryGetProperty("event_type", out var eventTypeEl))
-        {
-            string? eventType = eventTypeEl.GetString();
-
-            if (eventType == "book" && root.TryGetProperty("asset_id", out var assetIdEl))
-            {
-                string? assetId = assetIdEl.GetString();
-                if (string.IsNullOrEmpty(assetId)) return;
-
-                EnsureAssetInitialized(assetId, orderBooks, activeStrategies, strategyConfigs, tokenNames);
-
-                if (root.TryGetProperty("bids", out var bidsEl) && root.TryGetProperty("asks", out var asksEl))
-                {
-                    orderBooks[assetId].ProcessBookUpdate(bidsEl, asksEl);
-                    totalBookSnapshots++;
-                }
-            }
-            else if (eventType == "price_change" && root.TryGetProperty("price_changes", out var changesEl))
-            {
-                ProcessPriceChanges(changesEl, orderBooks, activeStrategies, strategyConfigs, tokenNames, brokers, ref totalPriceChanges);
-            }
-        }
-        else if (root.TryGetProperty("price_changes", out var changesEl2))
-        {
-            // price_change without event_type wrapper
-            ProcessPriceChanges(changesEl2, orderBooks, activeStrategies, strategyConfigs, tokenNames, brokers, ref totalPriceChanges);
-        }
-    }
-
     private static void ProcessPriceChanges(
         JsonElement changesEl,
+        long tickTimestampMs,
         Dictionary<string, LocalOrderBook> orderBooks,
         Dictionary<string, List<ILiveStrategy>> activeStrategies,
         List<StrategyConfig> strategyConfigs,
         Dictionary<string, string> tokenNames,
         Dictionary<string, ReplayBroker> brokers,
-        ref long totalPriceChanges)
+        ref long totalPriceChanges,
+        ref bool hasDeferredOrders)
     {
         foreach (var change in changesEl.EnumerateArray())
         {
             if (!change.TryGetProperty("asset_id", out var idEl)) continue;
             string? assetId = idEl.GetString();
-            if (string.IsNullOrEmpty(assetId) || !orderBooks.ContainsKey(assetId)) continue;
+            if (string.IsNullOrEmpty(assetId)) continue;
+
+            // Initialize asset on first price_change (not just book snapshots)
+            EnsureAssetInitialized(assetId, orderBooks, activeStrategies, strategyConfigs, tokenNames);
 
             decimal price = decimal.Parse(change.GetProperty("price").GetString() ?? "0");
             decimal size = decimal.Parse(change.GetProperty("size").GetString() ?? "0");
@@ -309,7 +324,17 @@ static class ReplayRunner
             var strategies = activeStrategies[assetId];
             foreach (var strategy in strategies)
             {
+                brokers[strategy.StrategyName].ReplayTimeMs = tickTimestampMs;
                 strategy.OnBookUpdate(book, brokers[strategy.StrategyName]);
+            }
+
+            // Check if any orders were queued
+            if (!hasDeferredOrders)
+            {
+                foreach (var broker in brokers.Values)
+                {
+                    if (broker.HasDeferredOrders) { hasDeferredOrders = true; break; }
+                }
             }
         }
     }
@@ -328,7 +353,6 @@ static class ReplayRunner
             .Select(c => c.Factory())
             .ToList();
 
-        // Use truncated asset ID as name since we don't have API access
         tokenNames.TryAdd(assetId, assetId[..Math.Min(12, assetId.Length)] + "...");
     }
 }

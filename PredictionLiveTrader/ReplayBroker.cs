@@ -37,6 +37,8 @@ public class ReplayBroker : PaperBroker
     private readonly List<DeferredOrder> _deferredOrders = new();
     private readonly HashSet<string> _deferredAssets = new();
 
+    public bool HasDeferredOrders => _deferredOrders.Count > 0;
+
     public ReplayBroker(string strategyName, decimal initialCapital, Dictionary<string, string> tokenNames,
         Dictionary<string, decimal> tokenMinSizes, decimal maxBetSize, int replayLatencyMs)
         : base(strategyName, initialCapital, tokenNames, tokenMinSizes, maxBetSize)
