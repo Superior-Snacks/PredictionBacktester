@@ -2,6 +2,129 @@
 > Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
 > Use this file to discover all available pages before exploring further.
 
+# Polymarket 101
+
+> An intro to Polymarket - the world's largest prediction market
+
+Polymarket is a prediction market platform where users trade on the outcomes of real-world events. Instead of betting against a house, you trade shares with other users in an open, peer-to-peer market. Prices reflect the market's collective belief in the probability of an event occurring.
+
+The platform is non-custodial, meaning you always control your funds. All trades are settled through smart contracts on the blockchain, ensuring transparent and trustless operation.
+
+## Self-Custody
+
+Polymarket operates on a non-custodial model. You maintain full control of your funds at all times.
+
+* **You control your funds** - Assets are held in your wallet, secured by your private key
+* **Smart contract enforcement** - Trades execute automatically through audited smart contracts
+* **No intermediary risk** - Polymarket never takes possession of your funds — you maintain full control through your private key
+* **Full transparency** - All trades and positions are recorded onchain and publicly verifiable
+* **Trustless execution** - Settlement happens automatically based on market resolution
+
+<Warning>
+  Keep your private key safe and never share it with anyone. If you lose your
+  private key, you lose access to your funds. If you signed up via Magic Link
+  or have a proxy wallet, recovery may be possible through
+  [recovery.polymarket.com](https://recovery.polymarket.com).
+</Warning>
+
+## How Polymarket Works
+
+<Frame>
+  <img src="https://mintcdn.com/polymarket-292d1b1b/FOMte3ewbG-LVy3k/images/core-concepts/polymarket-101.png?fit=max&auto=format&n=FOMte3ewbG-LVy3k&q=85&s=059e9831d1c51b99996d9747c0139d49" alt="Polymarket Overview" className="dark:hidden" width="1526" height="952" data-path="images/core-concepts/polymarket-101.png" />
+
+  <img src="https://mintcdn.com/polymarket-292d1b1b/FOMte3ewbG-LVy3k/images/dark/core-concepts/polymarket-101.png?fit=max&auto=format&n=FOMte3ewbG-LVy3k&q=85&s=4e929eca98a2bb83ef7421f7bbaf9f1d" alt="Polymarket Overview" className="hidden dark:block" width="1526" height="952" data-path="images/dark/core-concepts/polymarket-101.png" />
+</Frame>
+
+### Prices Are Probabilities
+
+Every share on Polymarket is priced between `$0.00` and `$1.00`. The price represents the market's belief in the probability of that outcome occurring.
+
+For example, if "Yes" shares for an event are trading at `$0.65`, the market believes there's approximately a `65%` chance the event will happen.
+
+### Collateral and Tokens
+
+Polymarket uses USDC.e (Bridged USDC on Polygon) as collateral. Every Yes/No pair is fully backed:
+
+* `$1 USDC.e` creates one Yes share and one No share
+* Winning shares are redeemable for `$1.00`
+* Losing shares are worth `$0.00`
+
+Shares are represented as tokens using the [Gnosis Conditional Token Framework](https://github.com/gnosis/conditional-tokens-contracts/) (ERC1155 standard), enabling seamless onchain trading and settlement.
+
+### Trading
+
+Polymarket uses a peer-to-peer order book (CLOB) for trading. You trade directly with other users, not against the house.
+
+* **Buy shares** when you think the market underestimates the probability
+* **Sell shares** when you think the market overestimates the probability
+* **Exit anytime** - Sell your position before resolution to lock in profits or cut losses
+
+| Action  | When to Use                           | Profit Scenario           |
+| ------- | ------------------------------------- | ------------------------- |
+| Buy Yes | You think the probability is too low  | Event occurs              |
+| Buy No  | You think the probability is too high | Event does not occur      |
+| Sell    | Lock in gains or limit losses         | Price moves in your favor |
+
+### Resolution
+
+When an event concludes, markets are resolved through the **UMA Optimistic Oracle**:
+
+1. A proposer submits the outcome with a bond
+2. There's a challenge period where anyone can dispute
+3. If disputed, UMA token holders vote on the correct resolution
+4. Winning tokens become redeemable for \$1 USDC.e
+
+This community-driven process ensures fair and accurate market resolution.
+
+## Why Blockchain
+
+Polymarket is built on **Polygon**, a blockchain network, for several key reasons:
+
+* **Global accessibility** - Anyone with an internet connection can participate
+* **Non-custodial** - You control your funds, not a centralized entity
+* **Transparent** - All activity is publicly verifiable onchain
+* **Fast and affordable** - Polygon enables quick, low-cost transactions
+* **Stable value** - USDC.e is pegged 1:1 to the US dollar, avoiding crypto volatility
+
+## Proxy Wallets
+
+When a user first uses Polymarket.com to trade they are prompted to create a wallet. When they do this, a 1 of 1 multisig is deployed to Polygon which is controlled/owned by the accessing EOA (either MetaMask wallet or MagicLink wallet). This proxy wallet is where all the user's positions (ERC1155) and USDC.e (ERC20) are held.
+
+Using proxy wallets allows Polymarket to provide an improved UX where multi-step transactions can be executed atomically and transactions can be relayed by relayers on the gas station network. If you are a developer looking to programmatically access positions you accumulated via the Polymarket.com interface, you can either continue using the smart contract wallet by executing transactions through it from the owner account, or you can transfer these assets to a new address using the owner account.
+
+### Deployments
+
+Each user has their own proxy wallet (and thus proxy wallet address). See [Contract Addresses](/resources/contract-addresses) for all deployed factory and trading contract addresses on Polygon.
+
+<Tip>
+  For details on signature types (`EOA`, `POLY_PROXY`, `GNOSIS_SAFE`) and how to
+  configure your trading client for each wallet type, see [Signature
+  Types](/trading/overview#signature-types).
+</Tip>
+
+***
+
+## Getting Started
+
+Ready to start trading?
+
+<CardGroup cols={2}>
+  <Card title="Quickstart Guide" icon="rocket" href="/quickstart">
+    Set up your account and make your first trade.
+  </Card>
+
+  <Card title="Explore Markets" icon="chart-line" href="https://polymarket.com">
+    Browse active prediction markets on Polymarket.
+  </Card>
+</CardGroup>
+
+
+Built with [Mintlify](https://mintlify.com).
+
+> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
 # Orderbook
 
 > Reading the orderbook, prices, spreads, and midpoints
@@ -1953,376 +2076,6 @@ Built with [Mintlify](https://mintlify.com).
 > Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
 > Use this file to discover all available pages before exploring further.
 
-# Overview
-
-> Real-time market data and trading updates via WebSocket
-
-Polymarket provides WebSocket channels for near real-time streaming of orderbook data, trades, and personal order activity. There are four available channels: `market`, `user`, `sports`, and `RTDS` (Real-Time Data Socket).
-
-## Channels
-
-| Channel                             | Endpoint                                               | Auth     |
-| ----------------------------------- | ------------------------------------------------------ | -------- |
-| Market                              | `wss://ws-subscriptions-clob.polymarket.com/ws/market` | No       |
-| User                                | `wss://ws-subscriptions-clob.polymarket.com/ws/user`   | Yes      |
-| Sports                              | `wss://sports-api.polymarket.com/ws`                   | No       |
-| [RTDS](/market-data/websocket/rtds) | `wss://ws-live-data.polymarket.com`                    | Optional |
-
-### Market Channel
-
-| Type               | Description             | Custom Feature |
-| ------------------ | ----------------------- | -------------- |
-| `book`             | Full orderbook snapshot | No             |
-| `price_change`     | Price level updates     | No             |
-| `tick_size_change` | Tick size changes       | No             |
-| `last_trade_price` | Trade executions        | No             |
-| `best_bid_ask`     | Best prices update      | Yes            |
-| `new_market`       | New market created      | Yes            |
-| `market_resolved`  | Market resolution       | Yes            |
-
-Types marked "Custom Feature" require `custom_feature_enabled: true` in your subscription.
-
-### User Channel
-
-| Type    | Description                                   |
-| ------- | --------------------------------------------- |
-| `trade` | Trade lifecycle updates (MATCHED → CONFIRMED) |
-| `order` | Order placements, updates, and cancellations  |
-
-### Sports
-
-| Type           | Description                           |
-| -------------- | ------------------------------------- |
-| `sport_result` | Live game scores, periods, and status |
-
-## Subscribing
-
-Send a subscription message after connecting to specify which data you want to receive.
-
-### Market Channel
-
-```json  theme={null}
-{
-  "assets_ids": [
-    "21742633143463906290569050155826241533067272736897614950488156847949938836455",
-    "48331043336612883890938759509493159234755048973500640148014422747788308965732"
-  ],
-  "type": "market",
-  "custom_feature_enabled": true
-}
-```
-
-| Field                    | Type      | Description                                                       |
-| ------------------------ | --------- | ----------------------------------------------------------------- |
-| `assets_ids`             | string\[] | Token IDs to subscribe to                                         |
-| `type`                   | string    | Channel identifier                                                |
-| `custom_feature_enabled` | boolean   | Enable `best_bid_ask`, `new_market`, and `market_resolved` events |
-
-### User Channel
-
-```json  theme={null}
-{
-  "auth": {
-    "apiKey": "your-api-key",
-    "secret": "your-api-secret",
-    "passphrase": "your-passphrase"
-  },
-  "markets": ["0x1234...condition_id"],
-  "type": "user"
-}
-```
-
-<Note>
-  The `auth` fields (`apiKey`, `secret`, `passphrase`) are **only required for
-  the user channel**. For the market channel, these fields are optional and can
-  be omitted.
-</Note>
-
-| Field     | Type      | Description                                        |
-| --------- | --------- | -------------------------------------------------- |
-| `auth`    | object    | API credentials (`apiKey`, `secret`, `passphrase`) |
-| `markets` | string\[] | Condition IDs to receive events for                |
-| `type`    | string    | Channel identifier                                 |
-
-<Note>
-  The user channel subscribes by **condition IDs** (market identifiers), not
-  asset IDs. Each market has one condition ID but two asset IDs (Yes and No
-  tokens).
-</Note>
-
-### Sports Channel
-
-No subscription message required. Connect and start receiving data for all active sports events.
-
-## Dynamic Subscription
-
-Modify subscriptions without reconnecting.
-
-### Subscribe to more assets
-
-```json  theme={null}
-{
-  "assets_ids": ["new_asset_id_1", "new_asset_id_2"],
-  "operation": "subscribe",
-  "custom_feature_enabled": true
-}
-```
-
-### Unsubscribe from assets
-
-```json  theme={null}
-{
-  "assets_ids": ["asset_id_to_remove"],
-  "operation": "unsubscribe"
-}
-```
-
-For the user channel, use `markets` instead of `assets_ids`:
-
-```json  theme={null}
-{
-  "markets": ["0x1234...condition_id"],
-  "operation": "subscribe"
-}
-```
-
-## Heartbeats
-
-### Market and User Channels
-
-Send `PING` every 10 seconds. The server responds with `PONG`.
-
-```
-PING
-```
-
-### Sports Channel
-
-The server sends `ping` every 5 seconds. Respond with `pong` within 10 seconds.
-
-```
-pong
-```
-
-<Warning>
-  If you don't respond to the server's ping within 10 seconds, the connection
-  will be closed.
-</Warning>
-
-## Troubleshooting
-
-<Accordion title="Connection closes immediately after opening">
-  Send a valid subscription message immediately after connecting. The server may
-  close connections that don't subscribe within a timeout period.
-</Accordion>
-
-<Accordion title="Connection drops after about 10 seconds">
-  You're not sending heartbeats. Send `PING` every 10 seconds for market/user
-  channels, or respond to server `ping` with `pong` for the sports channel.
-</Accordion>
-
-<Accordion title="Not receiving any messages">
-  1. Verify your asset IDs or condition IDs are correct 2. Check that the
-     markets are active (not resolved) 3. Set `custom_feature_enabled: true` if
-     expecting `best_bid_ask`, `new_market`, or `market_resolved` events
-</Accordion>
-
-<Accordion title="Authentication failed - user channel">
-  Verify your API credentials are correct and haven't expired.
-</Accordion>
-
-
-Built with [Mintlify](https://mintlify.com).
-
-> ## Documentation Index
-> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
-> Use this file to discover all available pages before exploring further.
-
-# Overview
-
-> Real-time market data and trading updates via WebSocket
-
-Polymarket provides WebSocket channels for near real-time streaming of orderbook data, trades, and personal order activity. There are four available channels: `market`, `user`, `sports`, and `RTDS` (Real-Time Data Socket).
-
-## Channels
-
-| Channel                             | Endpoint                                               | Auth     |
-| ----------------------------------- | ------------------------------------------------------ | -------- |
-| Market                              | `wss://ws-subscriptions-clob.polymarket.com/ws/market` | No       |
-| User                                | `wss://ws-subscriptions-clob.polymarket.com/ws/user`   | Yes      |
-| Sports                              | `wss://sports-api.polymarket.com/ws`                   | No       |
-| [RTDS](/market-data/websocket/rtds) | `wss://ws-live-data.polymarket.com`                    | Optional |
-
-### Market Channel
-
-| Type               | Description             | Custom Feature |
-| ------------------ | ----------------------- | -------------- |
-| `book`             | Full orderbook snapshot | No             |
-| `price_change`     | Price level updates     | No             |
-| `tick_size_change` | Tick size changes       | No             |
-| `last_trade_price` | Trade executions        | No             |
-| `best_bid_ask`     | Best prices update      | Yes            |
-| `new_market`       | New market created      | Yes            |
-| `market_resolved`  | Market resolution       | Yes            |
-
-Types marked "Custom Feature" require `custom_feature_enabled: true` in your subscription.
-
-### User Channel
-
-| Type    | Description                                   |
-| ------- | --------------------------------------------- |
-| `trade` | Trade lifecycle updates (MATCHED → CONFIRMED) |
-| `order` | Order placements, updates, and cancellations  |
-
-### Sports
-
-| Type           | Description                           |
-| -------------- | ------------------------------------- |
-| `sport_result` | Live game scores, periods, and status |
-
-## Subscribing
-
-Send a subscription message after connecting to specify which data you want to receive.
-
-### Market Channel
-
-```json  theme={null}
-{
-  "assets_ids": [
-    "21742633143463906290569050155826241533067272736897614950488156847949938836455",
-    "48331043336612883890938759509493159234755048973500640148014422747788308965732"
-  ],
-  "type": "market",
-  "custom_feature_enabled": true
-}
-```
-
-| Field                    | Type      | Description                                                       |
-| ------------------------ | --------- | ----------------------------------------------------------------- |
-| `assets_ids`             | string\[] | Token IDs to subscribe to                                         |
-| `type`                   | string    | Channel identifier                                                |
-| `custom_feature_enabled` | boolean   | Enable `best_bid_ask`, `new_market`, and `market_resolved` events |
-
-### User Channel
-
-```json  theme={null}
-{
-  "auth": {
-    "apiKey": "your-api-key",
-    "secret": "your-api-secret",
-    "passphrase": "your-passphrase"
-  },
-  "markets": ["0x1234...condition_id"],
-  "type": "user"
-}
-```
-
-<Note>
-  The `auth` fields (`apiKey`, `secret`, `passphrase`) are **only required for
-  the user channel**. For the market channel, these fields are optional and can
-  be omitted.
-</Note>
-
-| Field     | Type      | Description                                        |
-| --------- | --------- | -------------------------------------------------- |
-| `auth`    | object    | API credentials (`apiKey`, `secret`, `passphrase`) |
-| `markets` | string\[] | Condition IDs to receive events for                |
-| `type`    | string    | Channel identifier                                 |
-
-<Note>
-  The user channel subscribes by **condition IDs** (market identifiers), not
-  asset IDs. Each market has one condition ID but two asset IDs (Yes and No
-  tokens).
-</Note>
-
-### Sports Channel
-
-No subscription message required. Connect and start receiving data for all active sports events.
-
-## Dynamic Subscription
-
-Modify subscriptions without reconnecting.
-
-### Subscribe to more assets
-
-```json  theme={null}
-{
-  "assets_ids": ["new_asset_id_1", "new_asset_id_2"],
-  "operation": "subscribe",
-  "custom_feature_enabled": true
-}
-```
-
-### Unsubscribe from assets
-
-```json  theme={null}
-{
-  "assets_ids": ["asset_id_to_remove"],
-  "operation": "unsubscribe"
-}
-```
-
-For the user channel, use `markets` instead of `assets_ids`:
-
-```json  theme={null}
-{
-  "markets": ["0x1234...condition_id"],
-  "operation": "subscribe"
-}
-```
-
-## Heartbeats
-
-### Market and User Channels
-
-Send `PING` every 10 seconds. The server responds with `PONG`.
-
-```
-PING
-```
-
-### Sports Channel
-
-The server sends `ping` every 5 seconds. Respond with `pong` within 10 seconds.
-
-```
-pong
-```
-
-<Warning>
-  If you don't respond to the server's ping within 10 seconds, the connection
-  will be closed.
-</Warning>
-
-## Troubleshooting
-
-<Accordion title="Connection closes immediately after opening">
-  Send a valid subscription message immediately after connecting. The server may
-  close connections that don't subscribe within a timeout period.
-</Accordion>
-
-<Accordion title="Connection drops after about 10 seconds">
-  You're not sending heartbeats. Send `PING` every 10 seconds for market/user
-  channels, or respond to server `ping` with `pong` for the sports channel.
-</Accordion>
-
-<Accordion title="Not receiving any messages">
-  1. Verify your asset IDs or condition IDs are correct 2. Check that the
-     markets are active (not resolved) 3. Set `custom_feature_enabled: true` if
-     expecting `best_bid_ask`, `new_market`, or `market_resolved` events
-</Accordion>
-
-<Accordion title="Authentication failed - user channel">
-  Verify your API credentials are correct and haven't expired.
-</Accordion>
-
-
-Built with [Mintlify](https://mintlify.com).
-
-> ## Documentation Index
-> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
-> Use this file to discover all available pages before exploring further.
-
 # Create Order
 
 > Build, sign, and submit orders
@@ -3011,6 +2764,1023 @@ The heartbeat endpoint maintains session liveness. If a valid heartbeat is not r
 
   <Card title="Order Attribution" icon="tag" href="/trading/orders/attribution">
     Attribute orders to your builder account for volume credit
+  </Card>
+</CardGroup>
+
+
+Built with [Mintlify](https://mintlify.com).
+
+> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Order Lifecycle
+
+> Understanding how orders flow from creation to settlement
+
+Every trade on Polymarket follows a specific lifecycle. Orders are created offchain, matched by an operator, and settled onchain through smart contracts. This hybrid approach combines the speed of centralized matching with the security of blockchain settlement.
+
+<Frame>
+  <img src="https://mintcdn.com/polymarket-292d1b1b/FOMte3ewbG-LVy3k/images/core-concepts/order-lifecycle.png?fit=max&auto=format&n=FOMte3ewbG-LVy3k&q=85&s=4db07008193421bfe359afe44b5f604e" alt="" className="dark:hidden" width="2336" height="952" data-path="images/core-concepts/order-lifecycle.png" />
+
+  <img src="https://mintcdn.com/polymarket-292d1b1b/FOMte3ewbG-LVy3k/images/dark/core-concepts/order-lifecycle.png?fit=max&auto=format&n=FOMte3ewbG-LVy3k&q=85&s=5a0f3eba2f20c44471bae05c0670de4a" alt="" className="hidden dark:block" width="2336" height="952" data-path="images/dark/core-concepts/order-lifecycle.png" />
+</Frame>
+
+## How Orders Work
+
+All orders on Polymarket are **limit orders**. A limit order specifies the price you're willing to pay (or accept) and the quantity you want to trade.
+
+<Note>
+  "Market orders" are simply limit orders with a price set to execute
+  immediately against the best available resting orders.
+</Note>
+
+Orders are **EIP712-signed messages**. When you place an order, you sign a structured message with your private key. This signature authorizes the Exchange contract to execute the trade on your behalf—without ever taking custody of your funds.
+
+## Order Types
+
+| Type    | Behavior                                                      | Use Case                 |
+| ------- | ------------------------------------------------------------- | ------------------------ |
+| **GTC** | Good Till Cancelled — rests on book until filled or cancelled | Standard limit orders    |
+| **GTD** | Good Till Date — auto-expires at specified time               | Time-limited orders      |
+| **FOK** | Fill Or Kill — fill entirely or cancel immediately            | All-or-nothing execution |
+| **FAK** | Fill And Kill — fill what's available, cancel the rest        | Partial fills acceptable |
+
+### Post-Only Orders
+
+Post-only orders will only rest on the book. If a post-only order would match immediately (cross the spread), it's rejected instead of executed. This guarantees you're always the maker, never the taker.
+
+<Steps>
+  <Step title="Create and Sign">
+    Your client creates an order object containing:
+
+    * Token ID (which outcome you're trading)
+    * Side (buy or sell)
+    * Price and size
+    * Expiration time
+    * Nonce (for replay protection)
+
+    You sign this order with your private key, creating an EIP712 signature.
+  </Step>
+
+  <Step title="Submit to CLOB">
+    The signed order is submitted to the Central Limit Order Book (CLOB) operator. The operator validates:
+
+    * Signature is valid
+    * You have sufficient balance
+    * You have set the required allowances
+    * Price meets minimum tick size requirements
+  </Step>
+
+  <Step title="Match or Rest">
+    **If the order is marketable** (your buy price ≥ lowest ask, or your sell price ≤ highest bid), it matches immediately against resting orders.
+
+    **If the order is not marketable**, it rests on the book waiting for a counterparty. It remains open until:
+
+    * Another order matches against it
+    * You cancel it
+    * It expires (GTD orders only)
+  </Step>
+
+  <Step title="Settlement">
+    When orders match, the operator submits the trade to the blockchain. The Exchange contract:
+
+    * Verifies both signatures
+    * Transfers tokens from seller to buyer
+    * Transfers USDC.e from buyer to seller
+
+    Settlement is **atomic**—either the entire trade succeeds or nothing happens.
+  </Step>
+
+  <Step title="Confirmation">
+    The trade achieves finality on Polygon. Your token balances update and the trade appears in your history.
+  </Step>
+</Steps>
+
+## Order Statuses
+
+When you place an order, it receives one of these statuses:
+
+| Status      | Description                                                                 |
+| ----------- | --------------------------------------------------------------------------- |
+| `live`      | Order is resting on the book                                                |
+| `matched`   | Order matched immediately                                                   |
+| `delayed`   | Marketable order subject to a 3-second matching delay (sports markets)      |
+| `unmatched` | Marketable order placed on the book after the delay expired without a match |
+
+## Trade Statuses
+
+After matching, trades progress through these statuses:
+
+| Status      | Terminal | Description                                            |
+| ----------- | -------- | ------------------------------------------------------ |
+| `MATCHED`   | No       | Trade matched, sent to executor for onchain submission |
+| `MINED`     | No       | Transaction mined into the blockchain                  |
+| `CONFIRMED` | Yes      | Trade achieved finality, successful                    |
+| `RETRYING`  | No       | Transaction failed, being retried                      |
+| `FAILED`    | Yes      | Trade failed permanently                               |
+
+## Maker vs Taker
+
+| Role      | Description                     | When                                                  |
+| --------- | ------------------------------- | ----------------------------------------------------- |
+| **Maker** | Adds liquidity to the book      | Your order rests and is later matched                 |
+| **Taker** | Removes liquidity from the book | Your order matches immediately against resting orders |
+
+Price improvement always benefits the taker. If you place a buy order at `$0.55` and it matches against a resting sell at `$0.52`, you pay `$0.52`.
+
+## Cancellation
+
+You can cancel orders at any time before they're matched:
+
+* **Via API** — Cancel through the CLOB API (instant)
+* **Onchain** — Cancel directly on the Exchange contract (fallback if API is unavailable)
+
+Partial fills cannot be cancelled—only the unfilled portion of an order can be cancelled.
+
+## Requirements
+
+Before placing orders, ensure:
+
+| Requirement         | Description                                        |
+| ------------------- | -------------------------------------------------- |
+| **Balance**         | Sufficient USDC.e (for buys) or tokens (for sells) |
+| **Allowance**       | Approve the Exchange contract to spend your assets |
+| **API Credentials** | Valid API key for authenticated endpoints          |
+
+<Info>
+  Order size is limited by your available balance minus any amounts reserved by existing open orders.
+
+  $$
+  \text{maxOrderSize} = \text{balance} - \sum(\text{openOrderSize} - \text{filledAmount})
+  $$
+</Info>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Resolution" icon="gavel" href="/concepts/resolution">
+    Learn how markets are resolved and winning tokens redeemed.
+  </Card>
+
+  <Card title="Trading Guide" icon="book" href="/trading/overview">
+    Start placing orders with our step-by-step guide.
+  </Card>
+</CardGroup>
+
+
+Built with [Mintlify](https://mintlify.com).
+
+> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Deposit
+
+> Bridge assets from any supported chain to fund your Polymarket account
+
+Polymarket uses **USDC.e** (Bridged USDC) on Polygon as collateral for all trading. The Bridge API lets you deposit assets from Ethereum, Solana, Bitcoin, and other chains—they're automatically converted to USDC.e on Polygon.
+
+## How It Works
+
+1. Request deposit addresses for your Polymarket wallet
+2. Send assets to the appropriate address for your source chain
+3. Assets are bridged and swapped to USDC.e automatically
+4. USDC.e is credited to your wallet for trading
+
+## Create Deposit Addresses
+
+Generate unique deposit addresses linked to your Polymarket wallet. See the [Bridge API Reference](/api-reference/introduction) for full request and response schemas.
+
+```bash  theme={null}
+curl -X POST https://bridge.polymarket.com/deposit \
+  -H "Content-Type: application/json" \
+  -d '{"address": "0x56687bf447db6ffa42ffe2204a05edaa20f55839"}'
+```
+
+### Address Types
+
+| Address | Use For                                                  |
+| ------- | -------------------------------------------------------- |
+| `evm`   | Ethereum, Arbitrum, Base, Optimism, and other EVM chains |
+| `svm`   | Solana                                                   |
+| `btc`   | Bitcoin                                                  |
+| `tvm`   | Tron                                                     |
+
+<Warning>
+  Each address is unique to your wallet. Only send assets from supported chains
+  to the correct address type.
+</Warning>
+
+## Deposit Flow
+
+<Steps>
+  <Step title="Get Your Deposit Address">
+    Call `POST /deposit` with your Polymarket wallet address to get deposit
+    addresses.
+  </Step>
+
+  <Step title="Check Supported Assets">
+    Verify your token is supported and meets the minimum deposit amount via
+    `/supported-assets`.
+  </Step>
+
+  <Step title="Send Assets">
+    Transfer tokens to the appropriate deposit address from your source chain.
+  </Step>
+
+  <Step title="Track Status">
+    Monitor your deposit progress using `/status/{address}`.
+  </Step>
+</Steps>
+
+## USDC vs USDC.e
+
+You can deposit either USDC (native) or USDC.e (bridged) to your Polymarket wallet. If you deposit native USDC, you will be prompted to "activate funds," which swaps it to USDC.e via the lowest-fee Uniswap pool (less than 10bp slippage).
+
+## Large Deposits
+
+For deposits over \$50,000 originating from a chain other than Polygon, we recommend using a third-party bridge to minimize slippage:
+
+* [DeBridge](https://app.debridge.finance/)
+* [Across](https://app.across.to/bridge)
+* [Portal](https://portalbridge.com/)
+
+Bridge directly to your Polymarket USDC (Polygon) deposit address. Polymarket is not affiliated with or responsible for any third-party bridge.
+
+## Minimum Deposits
+
+Each asset has a minimum deposit amount. Deposits below the minimum will not be processed. Check `/supported-assets` for current minimums.
+
+## Deposit Recovery
+
+If you deposited the wrong token on Ethereum or Polygon, use these tools to recover your funds:
+
+* **Ethereum deposits**: [recovery.polymarket.com](https://recovery.polymarket.com/)
+* **Polygon deposits**: [matic-recovery.polymarket.com](https://matic-recovery.polymarket.com/)
+
+<Warning>
+  Sending unsupported tokens may cause **irrecoverable loss**. Always verify
+  your token is listed in [Supported Assets](/trading/bridge/supported-assets)
+  before depositing.
+</Warning>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Supported Assets" icon="coins" href="/trading/bridge/supported-assets">
+    See all supported chains and tokens with minimum amounts.
+  </Card>
+
+  <Card title="Check Status" icon="clock" href="/trading/bridge/status">
+    Track your deposit progress through completion.
+  </Card>
+</CardGroup>
+
+
+Built with [Mintlify](https://mintlify.com).
+
+> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Market Channel
+
+> Real-time orderbook, price, and trade data
+
+Public channel for market data updates (level 2 price data). Subscribe with asset IDs to receive orderbook snapshots, price changes, trade executions, and market events.
+
+## Endpoint
+
+```
+wss://ws-subscriptions-clob.polymarket.com/ws/market
+```
+
+## Subscription
+
+```json  theme={null}
+{
+  "assets_ids": ["<token_id_1>", "<token_id_2>"],
+  "type": "market",
+  "custom_feature_enabled": true
+}
+```
+
+Set `custom_feature_enabled: true` to receive `best_bid_ask`, `new_market`, and `market_resolved` events.
+
+## Message Types
+
+Each message includes an `event_type` field identifying the type.
+
+### book
+
+Emitted when first subscribed to a market and when there is a trade that affects the book.
+
+```json  theme={null}
+{
+  "event_type": "book",
+  "asset_id": "65818619657568813474341868652308942079804919287380422192892211131408793125422",
+  "market": "0xbd31dc8a20211944f6b70f31557f1001557b59905b7738480ca09bd4532f84af",
+  "bids": [
+    { "price": ".48", "size": "30" },
+    { "price": ".49", "size": "20" },
+    { "price": ".50", "size": "15" }
+  ],
+  "asks": [
+    { "price": ".52", "size": "25" },
+    { "price": ".53", "size": "60" },
+    { "price": ".54", "size": "10" }
+  ],
+  "timestamp": "123456789000",
+  "hash": "0x0...."
+}
+```
+
+### price\_change
+
+Emitted when a new order is placed or an order is cancelled.
+
+```json  theme={null}
+{
+  "market": "0x5f65177b394277fd294cd75650044e32ba009a95022d88a0c1d565897d72f8f1",
+  "price_changes": [
+    {
+      "asset_id": "71321045679252212594626385532706912750332728571942532289631379312455583992563",
+      "price": "0.5",
+      "size": "200",
+      "side": "BUY",
+      "hash": "56621a121a47ed9333273e21c83b660cff37ae50",
+      "best_bid": "0.5",
+      "best_ask": "1"
+    },
+    {
+      "asset_id": "52114319501245915516055106046884209969926127482827954674443846427813813222426",
+      "price": "0.5",
+      "size": "200",
+      "side": "SELL",
+      "hash": "1895759e4df7a796bf4f1c5a5950b748306923e2",
+      "best_bid": "0",
+      "best_ask": "0.5"
+    }
+  ],
+  "timestamp": "1757908892351",
+  "event_type": "price_change"
+}
+```
+
+A `size` of `"0"` means the price level has been removed from the book.
+
+### tick\_size\_change
+
+Emitted when the minimum tick size of a market changes. This happens when the book's price reaches the limits: price > 0.96 or price \< 0.04.
+
+```json  theme={null}
+{
+  "event_type": "tick_size_change",
+  "asset_id": "65818619657568813474341868652308942079804919287380422192892211131408793125422",
+  "market": "0xbd31dc8a20211944f6b70f31557f1001557b59905b7738480ca09bd4532f84af",
+  "old_tick_size": "0.01",
+  "new_tick_size": "0.001",
+  "timestamp": "100000000"
+}
+```
+
+### last\_trade\_price
+
+Emitted when a maker and taker order is matched, creating a trade event.
+
+```json  theme={null}
+{
+  "asset_id": "114122071509644379678018727908709560226618148003371446110114509806601493071694",
+  "event_type": "last_trade_price",
+  "fee_rate_bps": "0",
+  "market": "0x6a67b9d828d53862160e470329ffea5246f338ecfffdf2cab45211ec578b0347",
+  "price": "0.456",
+  "side": "BUY",
+  "size": "219.217767",
+  "timestamp": "1750428146322"
+}
+```
+
+### best\_bid\_ask
+
+<Note>Requires `custom_feature_enabled: true`.</Note>
+
+Emitted when the best bid or ask prices for a market change.
+
+```json  theme={null}
+{
+  "event_type": "best_bid_ask",
+  "market": "0x0005c0d312de0be897668695bae9f32b624b4a1ae8b140c49f08447fcc74f442",
+  "asset_id": "85354956062430465315924116860125388538595433819574542752031640332592237464430",
+  "best_bid": "0.73",
+  "best_ask": "0.77",
+  "spread": "0.04",
+  "timestamp": "1766789469958"
+}
+```
+
+### new\_market
+
+<Note>Requires `custom_feature_enabled: true`.</Note>
+
+Emitted when a new market is created.
+
+The payload also includes market metadata fields such as `tags`,
+`condition_id`, `active`, `clob_token_ids`, `sports_market_type`, `line`,
+`game_start_time`, `order_price_min_tick_size`, and `group_item_title`.
+
+```json  theme={null}
+{
+  "id": "1031769",
+  "question": "Will NVIDIA (NVDA) close above $240 end of January?",
+  "market": "0x311d0c4b6671ab54af4970c06fcf58662516f5168997bdda209ec3db5aa6b0c1",
+  "slug": "nvda-above-240-on-january-30-2026",
+  "description": "This market will resolve to \"Yes\" if the official closing price...",
+  "assets_ids": [
+    "76043073756653678226373981964075571318267289248134717369284518995922789326425",
+    "31690934263385727664202099278545688007799199447969475608906331829650099442770"
+  ],
+  "outcomes": ["Yes", "No"],
+  "event_message": {
+    "id": "125819",
+    "ticker": "nvda-above-in-january-2026",
+    "slug": "nvda-above-in-january-2026",
+    "title": "Will NVIDIA (NVDA) close above ___ end of January?",
+    "description": "This market will resolve to \"Yes\" if the official closing price..."
+  },
+  "timestamp": "1766790415550",
+  "event_type": "new_market",
+  "tags": ["stocks"],
+  "condition_id": "0x311d0c4b6671ab54af4970c06fcf58662516f5168997bdda209ec3db5aa6b0c1",
+  "active": true,
+  "clob_token_ids": [
+    "76043073756653678226373981964075571318267289248134717369284518995922789326425",
+    "31690934263385727664202099278545688007799199447969475608906331829650099442770"
+  ],
+  "sports_market_type": "",
+  "line": "",
+  "game_start_time": "",
+  "order_price_min_tick_size": "0.01",
+  "group_item_title": "NVDA above $240"
+}
+```
+
+### market\_resolved
+
+<Note>Requires `custom_feature_enabled: true`.</Note>
+
+Emitted when a market is resolved.
+
+```json  theme={null}
+{
+  "id": "1031769",
+  "question": "Will NVIDIA (NVDA) close above $240 end of January?",
+  "market": "0x311d0c4b6671ab54af4970c06fcf58662516f5168997bdda209ec3db5aa6b0c1",
+  "slug": "nvda-above-240-on-january-30-2026",
+  "description": "This market will resolve to \"Yes\" if the official closing price...",
+  "assets_ids": [
+    "76043073756653678226373981964075571318267289248134717369284518995922789326425",
+    "31690934263385727664202099278545688007799199447969475608906331829650099442770"
+  ],
+  "outcomes": ["Yes", "No"],
+  "winning_asset_id": "76043073756653678226373981964075571318267289248134717369284518995922789326425",
+  "winning_outcome": "Yes",
+  "event_message": {
+    "id": "125819",
+    "ticker": "nvda-above-in-january-2026",
+    "slug": "nvda-above-in-january-2026",
+    "title": "Will NVIDIA (NVDA) close above ___ end of January?",
+    "description": "This market will resolve to \"Yes\" if the official closing price..."
+  },
+  "timestamp": "1766790415550",
+  "event_type": "market_resolved"
+}
+```
+
+
+Built with [Mintlify](https://mintlify.com).
+
+> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Trading
+
+> Order entry, management, and best practices for market makers
+
+Market makers interact with Polymarket through the CLOB API — posting two-sided quotes, managing inventory across markets, and rebalancing positions. The SDK clients handle order signing and submission, so you can focus on strategy.
+
+<Info>
+  This page covers MM-specific workflows and best practices. For full order
+  mechanics, see [Create Orders](/trading/orders/create) and [Cancel
+  Orders](/trading/orders/cancel).
+</Info>
+
+***
+
+## Two-Sided Quoting
+
+The core market making workflow is posting a bid and ask around your fair value. Use `createAndPostOrder` to place each side:
+
+<CodeGroup>
+  ```typescript TypeScript theme={null}
+  import { ClobClient, Side, OrderType } from "@polymarket/clob-client";
+
+  const client = new ClobClient(
+    "https://clob.polymarket.com",
+    137,
+    wallet,
+    credentials,
+    signatureType,
+    funder,
+  );
+
+  // Bid at 0.48
+  const bid = await client.createAndPostOrder({
+    tokenID: "3409705850427531082723332342151729...",
+    side: Side.BUY,
+    price: 0.48,
+    size: 1000,
+    orderType: OrderType.GTC,
+  });
+
+  // Ask at 0.52
+  const ask = await client.createAndPostOrder({
+    tokenID: "3409705850427531082723332342151729...",
+    side: Side.SELL,
+    price: 0.52,
+    size: 1000,
+    orderType: OrderType.GTC,
+  });
+  ```
+
+  ```python Python theme={null}
+  from py_clob_client.clob_types import OrderArgs, OrderType
+  from py_clob_client.order_builder.constants import BUY, SELL
+
+  token_id = "3409705850427531082723332342151729..."
+
+  # Bid at 0.48
+  bid = client.create_and_post_order(
+      OrderArgs(token_id=token_id, side=BUY, price=0.48, size=1000),
+      order_type=OrderType.GTC,
+  )
+
+  # Ask at 0.52
+  ask = client.create_and_post_order(
+      OrderArgs(token_id=token_id, side=SELL, price=0.52, size=1000),
+      order_type=OrderType.GTC,
+  )
+  ```
+
+  ```rust Rust theme={null}
+  use polymarket_client_sdk::clob::types::Side;
+  use polymarket_client_sdk::types::dec;
+
+  let token_id = "3409705850427531082723332342151729...".parse()?;
+
+  // Bid at 0.48
+  let bid = client.limit_order()
+      .token_id(token_id).price(dec!(0.48)).size(dec!(1000)).side(Side::Buy)
+      .build().await?;
+  let signed = client.sign(&signer, bid).await?;
+  client.post_order(signed).await?;
+
+  // Ask at 0.52
+  let ask = client.limit_order()
+      .token_id(token_id).price(dec!(0.52)).size(dec!(1000)).side(Side::Sell)
+      .build().await?;
+  let signed = client.sign(&signer, ask).await?;
+  client.post_order(signed).await?;
+  ```
+</CodeGroup>
+
+### Batch Orders
+
+For tighter spreads across multiple levels, use `postOrders` to submit up to 15 orders in a single request:
+
+<CodeGroup>
+  ```typescript TypeScript theme={null}
+  const orders = await Promise.all([
+    client.createOrder({ tokenID, side: Side.BUY, price: 0.48, size: 500 }),
+    client.createOrder({ tokenID, side: Side.BUY, price: 0.47, size: 500 }),
+    client.createOrder({ tokenID, side: Side.SELL, price: 0.52, size: 500 }),
+    client.createOrder({ tokenID, side: Side.SELL, price: 0.53, size: 500 }),
+  ]);
+
+  const response = await client.postOrders(
+    orders.map((order) => ({ order, orderType: OrderType.GTC })),
+  );
+  ```
+
+  ```python Python theme={null}
+  from py_clob_client.clob_types import OrderArgs, OrderType, PostOrdersArgs
+  from py_clob_client.order_builder.constants import BUY, SELL
+
+  response = client.post_orders([
+      PostOrdersArgs(
+          order=client.create_order(OrderArgs(
+              price=0.48, size=500, side=BUY, token_id=token_id,
+          )),
+          order_type=OrderType.GTC,
+      ),
+      PostOrdersArgs(
+          order=client.create_order(OrderArgs(
+              price=0.47, size=500, side=BUY, token_id=token_id,
+          )),
+          order_type=OrderType.GTC,
+      ),
+      PostOrdersArgs(
+          order=client.create_order(OrderArgs(
+              price=0.52, size=500, side=SELL, token_id=token_id,
+          )),
+          order_type=OrderType.GTC,
+      ),
+      PostOrdersArgs(
+          order=client.create_order(OrderArgs(
+              price=0.53, size=500, side=SELL, token_id=token_id,
+          )),
+          order_type=OrderType.GTC,
+      ),
+  ])
+  ```
+
+  ```rust Rust theme={null}
+  let mut signed_orders = Vec::new();
+  for (price, side) in [
+      (dec!(0.48), Side::Buy), (dec!(0.47), Side::Buy),
+      (dec!(0.52), Side::Sell), (dec!(0.53), Side::Sell),
+  ] {
+      let order = client.limit_order()
+          .token_id(token_id).price(price).size(dec!(500)).side(side)
+          .build().await?;
+      signed_orders.push(client.sign(&signer, order).await?);
+  }
+  let response = client.post_orders(signed_orders).await?;
+  ```
+</CodeGroup>
+
+<Tip>
+  Batching reduces latency by submitting multiple quotes in a single request.
+  Always prefer `postOrders()` over multiple individual `createAndPostOrder()`
+  calls.
+</Tip>
+
+***
+
+## Choosing Order Types
+
+| Type    | Behavior                                         | When to Use                             |
+| ------- | ------------------------------------------------ | --------------------------------------- |
+| **GTC** | Rests on the book until filled or cancelled      | Default for passive quoting             |
+| **GTD** | Auto-expires at a specified time                 | Expire quotes before known events       |
+| **FOK** | Must fill entirely and immediately, or cancel    | Aggressive rebalancing — all or nothing |
+| **FAK** | Fills what's available immediately, cancels rest | Rebalancing where partial fills are OK  |
+
+**GTC** and **GTD** are your primary tools for passive market making — they rest on the book at your specified price. **FOK** and **FAK** are for rebalancing inventory against resting liquidity.
+
+### Time-Limited Quotes with GTD
+
+Auto-expire quotes before known events like market close or resolution:
+
+<CodeGroup>
+  ```typescript TypeScript theme={null}
+  // Expire in 1 hour
+  const expiringOrder = await client.createOrder({
+    tokenID,
+    side: Side.BUY,
+    price: 0.5,
+    size: 1000,
+    orderType: OrderType.GTD,
+    expiration: Math.floor(Date.now() / 1000) + 3600,
+  });
+  ```
+
+  ```python Python theme={null}
+  import time
+
+  # Expire in 1 hour
+  expiring_order = client.create_order(
+      OrderArgs(
+          token_id=token_id,
+          side=BUY,
+          price=0.50,
+          size=1000,
+          expiration=int(time.time()) + 3600,
+      ),
+      order_type=OrderType.GTD,
+  )
+  ```
+
+  ```rust Rust theme={null}
+  use chrono::{TimeDelta, Utc};
+  use polymarket_client_sdk::clob::types::OrderType;
+
+  // Expire in 1 hour
+  let order = client.limit_order()
+      .token_id(token_id)
+      .price(dec!(0.50))
+      .size(dec!(1000))
+      .side(Side::Buy)
+      .order_type(OrderType::GTD)
+      .expiration(Utc::now() + TimeDelta::hours(1))
+      .build().await?;
+  let signed = client.sign(&signer, order).await?;
+  client.post_order(signed).await?;
+  ```
+</CodeGroup>
+
+***
+
+## Managing Orders
+
+### Cancelling
+
+Cancel individual orders, by market, or everything at once:
+
+<CodeGroup>
+  ```typescript TypeScript theme={null}
+  await client.cancelOrder(orderId); // Single order
+  await client.cancelOrders(orderIds); // Multiple orders
+  await client.cancelMarketOrders(conditionId); // All orders in a market
+  await client.cancelAll(); // Everything
+  ```
+
+  ```python Python theme={null}
+  client.cancel(order_id=order_id)                  # Single order
+  client.cancel_market_orders(market=condition_id)  # All orders in a market
+  client.cancel_all()                               # Everything
+  ```
+
+  ```rust Rust theme={null}
+  client.cancel_order(order_id).await?;           // Single order
+  client.cancel_market_orders(&request).await?;   // All orders in a market
+  client.cancel_all_orders().await?;              // Everything
+  ```
+</CodeGroup>
+
+See [Cancel Orders](/trading/orders/cancel) for full details including onchain cancellation.
+
+### Monitoring Open Orders
+
+<CodeGroup>
+  ```typescript TypeScript theme={null}
+  const order = await client.getOrder(orderId);
+
+  const orders = await client.getOpenOrders({
+    market: "0xbd31dc8a...",
+    asset_id: "52114319501245...",
+  });
+  ```
+
+  ```python Python theme={null}
+  from py_clob_client.clob_types import OpenOrderParams
+
+  order = client.get_order(order_id)
+
+  orders = client.get_orders(
+      OpenOrderParams(market="0xbd31dc8a...")
+  )
+  ```
+
+  ```rust Rust theme={null}
+  use polymarket_client_sdk::clob::types::request::OrdersRequest;
+
+  let order = client.order(order_id).await?;
+
+  let request = OrdersRequest::builder()
+      .market("0xbd31dc8a...".parse()?)
+      .build();
+  let orders = client.orders(&request, None).await?;
+  ```
+</CodeGroup>
+
+***
+
+## Tick Sizes
+
+Your order price must conform to the market's tick size, or it will be rejected. Look it up with the SDK before quoting:
+
+<CodeGroup>
+  ```typescript TypeScript theme={null}
+  const tickSize = await client.getTickSize(tokenID);
+  // Returns: "0.1" | "0.01" | "0.001" | "0.0001"
+  ```
+
+  ```python Python theme={null}
+  tick_size = client.get_tick_size(token_id)
+  # Returns: "0.1" | "0.01" | "0.001" | "0.0001"
+  ```
+
+  ```rust Rust theme={null}
+  let resp = client.tick_size(token_id).await?;
+  // resp.minimum_tick_size: TickSize::Tenth | Hundredth | Thousandth | TenThousandth
+  ```
+</CodeGroup>
+
+***
+
+## Fees
+
+Most markets have **zero fees** for both makers and takers. However, the following market types have taker fees:
+
+* **All crypto markets**
+* **Select sports markets** (e.g., NCAAB, Serie A)
+
+<Note>
+  Fees apply only to markets deployed on or after the activation date. Pre-existing markets are unaffected. Markets with fees enabled have `feesEnabled` set to `true` on the market object.
+</Note>
+
+See [Fees](/trading/fees) for the full fee schedule and calculation details.
+
+***
+
+## Best Practices
+
+### Quote Management
+
+* **Quote both sides** — Post bids and asks to earn maximum [liquidity rewards](/market-makers/liquidity-rewards)
+* **Skew on inventory** — Adjust quote prices based on your current position to manage exposure
+* **Cancel stale quotes** — Pull orders immediately when market conditions change
+* **Use GTD for events** — Auto-expire quotes before known catalysts to avoid stale exposure
+
+### Latency
+
+* **Batch orders** — Use `postOrders()` to submit multiple quotes in a single request
+* **WebSocket for data** — Subscribe to real-time feeds instead of polling REST endpoints
+
+### Risk Controls
+
+* **Size limits** — Check token balances before quoting and don't exceed your available inventory
+* **Price guards** — Validate prices against the book midpoint and reject outliers
+* **Kill switch** — Call `cancelAll()` immediately on errors or position breaches
+* **Monitor fills** — Subscribe to the WebSocket user channel for real-time fill notifications
+
+***
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Inventory" icon="boxes-stacked" href="/market-makers/inventory">
+    Split, merge, and redeem outcome tokens
+  </Card>
+
+  <Card title="Liquidity Rewards" icon="gift" href="/market-makers/liquidity-rewards">
+    Earn rewards for providing two-sided liquidity
+  </Card>
+
+  <Card title="Create Orders" icon="plus" href="/trading/orders/create">
+    Full order creation reference with all options
+  </Card>
+</CardGroup>
+
+
+Built with [Mintlify](https://mintlify.com).
+
+> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Negative Risk Markets
+
+> Capital-efficient trading for multi-outcome events
+
+**Negative risk** is a mechanism for multi-outcome events where only one outcome can win. It enables capital-efficient trading by allowing positions across all outcomes within an event to be related through a **conversion** operation.
+
+## How It Works
+
+In a standard multi-outcome event, each market is independent. If you want to bet against one outcome, you must buy that outcome's No tokens—but those No tokens have no relationship to the other outcomes.
+
+Negative risk changes this. In a neg risk event:
+
+* A **No share** in any market can be converted into **1 Yes share in every other market**
+* This conversion happens through the Neg Risk Adapter contract
+
+### Example
+
+Consider an event: "Who will win the 2024 Presidential Election?" with three outcomes:
+
+| Outcome | Your Position |
+| ------- | ------------- |
+| Trump   | —             |
+| Harris  | —             |
+| Other   | 1 No          |
+
+With negative risk, that 1 No on "Other" can be converted into:
+
+| Outcome | After Conversion |
+| ------- | ---------------- |
+| Trump   | 1 Yes            |
+| Harris  | 1 Yes            |
+| Other   | —                |
+
+This is capital-efficient because betting against one outcome is economically equivalent to betting *for* all other outcomes.
+
+## Identifying Neg Risk Markets
+
+The Gamma API includes a `negRisk` boolean on events and markets:
+
+```json  theme={null}
+{
+  "id": "123",
+  "title": "Who will win the 2024 Presidential Election?",
+  "negRisk": true,
+  "markets": [...]
+}
+```
+
+When placing orders on neg risk markets, you must specify this in your order options:
+
+```typescript  theme={null}
+const response = await client.createAndPostOrder(
+  {
+    tokenID: "TOKEN_ID",
+    price: 0.5,
+    size: 100,
+    side: Side.BUY,
+  },
+  {
+    tickSize: "0.01",
+    negRisk: true, // Required for neg risk markets
+  },
+);
+```
+
+## Contract Addresses
+
+Neg risk markets use different contracts than standard markets:
+
+See [Contract Addresses](/resources/contract-addresses) for the Neg Risk Adapter and Neg Risk CTF Exchange addresses.
+
+## Augmented Negative Risk
+
+Standard negative risk requires the complete set of outcomes to be known at market creation. But sometimes new outcomes emerge after trading begins (e.g., a new candidate enters a race).
+
+**Augmented negative risk** solves this with:
+
+| Outcome Type             | Description                                                   |
+| ------------------------ | ------------------------------------------------------------- |
+| **Named outcomes**       | Known outcomes (e.g., "Trump", "Harris")                      |
+| **Placeholder outcomes** | Reserved slots that can be clarified later (e.g., "Person A") |
+| **Explicit Other**       | Catches any outcome not explicitly named                      |
+
+### How Placeholders Work
+
+1. Event launches with named outcomes + placeholders + "Other"
+2. When a new outcome emerges, a placeholder is clarified via the bulletin board
+3. The "Other" definition narrows as placeholders are assigned
+
+### Trading Rules for Augmented Neg Risk
+
+<Warning>
+  Only trade on **named outcomes**. Placeholder outcomes should be ignored until
+  they are named or until resolution occurs. The Polymarket UI does not display
+  unnamed outcomes.
+</Warning>
+
+* If the correct outcome at resolution is not named, the market resolves to "Other"
+* The "Other" outcome's definition changes as placeholders are clarified—avoid trading it directly
+
+### Identifying Augmented Neg Risk
+
+An event is augmented neg risk when both flags are true:
+
+```json  theme={null}
+{
+  "enableNegRisk": true,
+  "negRiskAugmented": true
+}
+```
+
+<Note>
+  The Gamma API includes a boolean field `negRisk` on events and markets, which indicates whether the event uses negative risk. For augmented neg risk events, an additional `enableNegRisk` field is also `true`. When placing orders, the SDK option is always `negRisk: true` / `neg_risk: True` regardless of whether the market is standard or augmented neg risk.
+</Note>
+
+## Technical Details
+
+### Conversion Mechanics
+
+The conversion operation is atomic and happens through the Neg Risk Adapter:
+
+1. You hold 1 No token for Outcome A
+2. Call the convert function on the adapter
+3. You receive 1 Yes token for every other outcome in the event
+
+## Resources
+
+* [Neg Risk Adapter Source Code](https://github.com/Polymarket/neg-risk-ctf-adapter)
+* [Gamma API Documentation](/market-data/overview)
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Markets & Events" icon="calendar" href="/concepts/markets-events">
+    Understand how multi-market events are structured.
+  </Card>
+
+  <Card title="Positions & Tokens" icon="coins" href="/concepts/positions-tokens">
+    Learn about token operations like split, merge, and redeem.
   </Card>
 </CardGroup>
 
