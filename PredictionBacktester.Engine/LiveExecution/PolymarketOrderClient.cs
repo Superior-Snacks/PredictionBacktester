@@ -166,7 +166,7 @@ public class PolymarketOrderClient
             if (DebugMode)
             {
                 Console.ForegroundColor = ConsoleColor.Red;
-                Console.WriteLine($"[ORDER DEBUG] HTTP {(int)response.StatusCode} | Headers: {string.Join(", ", response.Headers?.Select(h => $"{h.Name}={h.Value}") ?? Array.Empty<string>())}");
+                Console.WriteLine($"[ORDER DEBUG] HTTP {(int)response.StatusCode} | Body: {response.Content ?? "(empty)"}");
                 Console.ResetColor();
             }
             throw new Exception($"[Polymarket API Error] {response.StatusCode}: {response.Content ?? "No response body"}");
