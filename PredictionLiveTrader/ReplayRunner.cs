@@ -63,14 +63,19 @@ static class ReplayRunner
 
         int maxNameLength = strategyConfigs.Max(c => c.Name.Length);
 
+        // Pre-calculate total compressed size for progress bar
+        long totalCompressedBytes = gzFiles.Sum(f => new FileInfo(f).Length);
+        long bytesProcessedSoFar = 0;
+
         foreach (var gzFile in gzFiles)
         {
             string fileName = Path.GetFileName(gzFile);
-            Console.WriteLine($"\n--- Replaying {fileName} ---");
+            long fileSize = new FileInfo(gzFile).Length;
+            Console.WriteLine($"\n--- Replaying {fileName} ({fileSize / (1024.0 * 1024 * 1024):0.1} GB) ---");
 
             long fileTicks = 0;
             var fileSw = Stopwatch.StartNew();
-            long lastReportTick = 0;
+            long lastReportBytes = 0;
 
             using var fileStream = new FileStream(gzFile, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: 1024 * 1024);
             using var gzStream = new GZipStream(fileStream, CompressionMode.Decompress);
@@ -132,18 +137,31 @@ static class ReplayRunner
                     // Skip malformed lines
                 }
 
-                // Progress report every 500k ticks
-                if (fileTicks - lastReportTick >= 500_000)
+                // Progress bar based on compressed bytes read (updated every ~2MB)
+                long currentPos = fileStream.Position;
+                if (currentPos - lastReportBytes >= 2 * 1024 * 1024)
                 {
-                    lastReportTick = fileTicks;
-                    double elapsed = fileSw.Elapsed.TotalSeconds;
-                    double rate = fileTicks / Math.Max(elapsed, 0.001);
-                    Console.Write($"\r  {fileTicks:N0} ticks processed ({rate:N0}/sec)");
+                    lastReportBytes = currentPos;
+                    double filePercent = (double)currentPos / fileSize * 100;
+                    double overallPercent = (double)(bytesProcessedSoFar + currentPos) / totalCompressedBytes * 100;
+                    double elapsedSec = overallSw.Elapsed.TotalSeconds;
+                    double bytesPerSec = (bytesProcessedSoFar + currentPos) / Math.Max(elapsedSec, 0.001);
+                    long bytesRemaining = totalCompressedBytes - bytesProcessedSoFar - currentPos;
+                    double etaSec = bytesRemaining / Math.Max(bytesPerSec, 1);
+                    TimeSpan eta = TimeSpan.FromSeconds(etaSec);
+
+                    // Build progress bar
+                    int barWidth = 30;
+                    int filled = (int)(overallPercent / 100 * barWidth);
+                    string bar = new string('#', filled) + new string('-', barWidth - filled);
+
+                    Console.Write($"\r  [{bar}] {overallPercent:0.1}% | {fileTicks:N0} ticks | ETA: {eta:hh\\:mm\\:ss}   ");
                 }
             }
 
+            bytesProcessedSoFar += fileSize;
             fileSw.Stop();
-            Console.WriteLine($"\r  {fileTicks:N0} ticks in {fileSw.Elapsed.TotalSeconds:0.1}s ({fileTicks / Math.Max(fileSw.Elapsed.TotalSeconds, 0.001):N0}/sec)");
+            Console.WriteLine($"\r  {fileTicks:N0} ticks in {fileSw.Elapsed.TotalSeconds:0.1}s ({fileTicks / Math.Max(fileSw.Elapsed.TotalSeconds, 0.001):N0}/sec)                              ");
         }
 
         // Final drain — execute any remaining deferred orders
