@@ -96,11 +96,20 @@ class Program
     private static readonly HashSet<string> _forceSettled = new();
     private static ClientWebSocket? _activeWs;
     private static readonly SemaphoreSlim _wsSendSemaphore = new SemaphoreSlim(1, 1);
-    private static readonly bool _recordMarketData = false;
+    private static readonly bool _recordMarketData = true;
     private static readonly MarketReplayLogger? _replayLogger = _recordMarketData ? new MarketReplayLogger("MarketData") : null;
 
     static async Task Main(string[] args)
     {
+        // --- REPLAY MODE: offline backtest from recorded .gz data ---
+        int replayIdx = Array.IndexOf(args, "--replay");
+        if (replayIdx >= 0)
+        {
+            string replayDir = replayIdx + 1 < args.Length ? args[replayIdx + 1] : "MarketData1week";
+            ReplayRunner.Run(replayDir, _strategyConfigs);
+            return;
+        }
+
         Console.Clear();
         Console.WriteLine("=========================================");
         Console.WriteLine("  LIVE PAPER TRADING ENGINE INITIALIZED  ");
