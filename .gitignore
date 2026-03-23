@@ -371,3 +371,6 @@ FodyWeavers.xsd
 
 # Generated CSV exports
 *.csv
+
+# huge gz files
+*.gz

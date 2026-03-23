@@ -1,0 +1,89 @@
+// OLD VERSION — exit logic was after entry guards, causing missed sells
+// Reverted from commit on 2026-03-23
+
+    public void OnBookUpdate(LocalOrderBook book, GlobalSimulatedBroker broker)
+    {
+        long nowSec = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(); // Needed for the stopwatch
+        string assetId = book.AssetId;
+
+        decimal bestAsk = book.GetBestAskPrice();
+        decimal bestBid = book.GetBestBidPrice();
+        decimal availableAskSize = book.GetBestAskSize();
+        decimal availableBidSize = book.GetBestBidSize();
+
+        broker.UpdateLastKnownPrice(assetId, bestAsk);
+
+        if (bestAsk >= 1.00m || bestAsk <= 0.00m || availableAskSize <= 0 || availableBidSize <= 0) return;
+
+        if (bestAsk - bestBid > 0.05m) return;
+
+        // 1. Memory: Always record the price first
+        _recentAsks.Enqueue((nowSec, bestAsk));
+        while (_recentAsks.Count > 0 && (nowSec - _recentAsks.Peek().Timestamp) > _timeWindowSeconds)
+        {
+            _recentAsks.Dequeue();
+        }
+
+        if (_recentAsks.Count < 2) return;
+
+        decimal currentEquity = broker.GetTotalPortfolioValue();
+        decimal dollarsToInvest = Math.Min(currentEquity * _riskPercentage, broker.CashBalance);
+        decimal positionShares = broker.GetPositionShares(assetId);
+
+        decimal minTradeSize = broker.GetMinSize(assetId);
+
+        // 2. Exit Logic (dust positions are ignored — treat as closed)
+        if (positionShares >= minTradeSize)
+        {
+            // Settlement lock: shares are frozen until the blockchain settles
+            if (_settlementLockMs > 0 && nowMs < _settlementUnlockTimeMs)
+                return;
+
+            decimal avgEntry = broker.GetAverageEntryPrice(assetId);
+            bool isTakeProfit = bestBid >= avgEntry + _reboundProfitMargin;
+            bool isStopLoss = bestBid <= avgEntry - _stopLossMargin;
+
+            if (isTakeProfit || isStopLoss)
+            {
+                decimal sellLimitPrice = Math.Max(bestBid - _exitSlippage, 0.001m);
+                broker.SubmitSellAllOrder(assetId, sellLimitPrice, book);
+            }
+            return;
+        }
+
+        // 3. Entry Logic (With Stopwatch)
+        decimal maxAskInWindow = _recentAsks.Max(x => x.Price);
+        _lastGap = maxAskInWindow - bestAsk;
+        bool isFlashCrash = _lastGap >= _crashThreshold;
+
+        if (isFlashCrash)
+        {
+            if (_crashStartTimeMs == 0)
+            {
+                _crashStartTimeMs = nowMs;
+                return;
+            }
+
+            long timeInCrash = nowMs - _crashStartTimeMs;
+
+            if (timeInCrash >= _requiredSustainMs && dollarsToInvest >= 1.00m)
+            {
+                decimal maxAffordableShares = dollarsToInvest / bestAsk;
+                decimal sharesToBuy = Math.Min(maxAffordableShares, availableAskSize);
+                decimal actualDollarsSpent = sharesToBuy * bestAsk;
+
+                if (actualDollarsSpent >= 1.00m)
+                {
+                    broker.SubmitBuyOrder(assetId, bestAsk + _entrySlippage, actualDollarsSpent, book);
+                    _recentAsks.Clear();
+                    _crashStartTimeMs = 0;
+                    _settlementUnlockTimeMs = nowMs + _settlementLockMs;
+                }
+            }
+        }
+        else
+        {
+            _crashStartTimeMs = 0;
+        }
+    }

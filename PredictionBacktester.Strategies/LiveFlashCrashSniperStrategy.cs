@@ -69,6 +69,32 @@ public class LiveFlashCrashSniperStrategy : ILiveStrategy
 
         broker.UpdateLastKnownPrice(assetId, bestAsk);
 
+        // Exit logic runs FIRST — must not be blocked by entry-quality guards
+        decimal positionShares = broker.GetPositionShares(assetId);
+        decimal minTradeSize = broker.GetMinSize(assetId);
+
+        if (positionShares >= minTradeSize)
+        {
+            // Settlement lock: shares are frozen until the blockchain settles
+            if (_settlementLockMs > 0 && nowMs < _settlementUnlockTimeMs)
+                return;
+
+            // Need a valid bid to sell into
+            if (bestBid <= 0.01m) return;
+
+            decimal avgEntry = broker.GetAverageEntryPrice(assetId);
+            bool isTakeProfit = bestBid >= avgEntry + _reboundProfitMargin;
+            bool isStopLoss = bestBid <= avgEntry - _stopLossMargin;
+
+            if (isTakeProfit || isStopLoss)
+            {
+                decimal sellLimitPrice = Math.Max(bestBid - _exitSlippage, 0.001m);
+                broker.SubmitSellAllOrder(assetId, sellLimitPrice, book);
+            }
+            return;
+        }
+
+        // Entry guards — only apply when looking for new positions
         if (bestAsk >= 1.00m || bestAsk <= 0.00m || availableAskSize <= 0 || availableBidSize <= 0) return;
 
         if (bestAsk - bestBid > 0.05m) return;
@@ -84,28 +110,6 @@ public class LiveFlashCrashSniperStrategy : ILiveStrategy
 
         decimal currentEquity = broker.GetTotalPortfolioValue();
         decimal dollarsToInvest = Math.Min(currentEquity * _riskPercentage, broker.CashBalance);
-        decimal positionShares = broker.GetPositionShares(assetId);
-
-        decimal minTradeSize = broker.GetMinSize(assetId);
-
-        // 2. Exit Logic (dust positions are ignored — treat as closed)
-        if (positionShares >= minTradeSize)
-        {
-            // Settlement lock: shares are frozen until the blockchain settles
-            if (_settlementLockMs > 0 && nowMs < _settlementUnlockTimeMs)
-                return;
-
-            decimal avgEntry = broker.GetAverageEntryPrice(assetId);
-            bool isTakeProfit = bestBid >= avgEntry + _reboundProfitMargin;
-            bool isStopLoss = bestBid <= avgEntry - _stopLossMargin;
-
-            if (isTakeProfit || isStopLoss)
-            {
-                decimal sellLimitPrice = Math.Max(bestBid - _exitSlippage, 0.001m);
-                broker.SubmitSellAllOrder(assetId, sellLimitPrice, book);
-            }
-            return;
-        }
 
         // 3. Entry Logic (With Stopwatch)
         decimal maxAskInWindow = _recentAsks.Max(x => x.Price);
