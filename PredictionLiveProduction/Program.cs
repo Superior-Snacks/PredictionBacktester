@@ -337,6 +337,17 @@ class Program
                 // Ghost was caught — save state immediately so we don't lose it on crash
                 _broker.SaveState(_subscribedTokens.Keys);
             }
+            else
+            {
+                // Ghost might not exist yet — polling loop may still be running.
+                // Retry once after a short delay to close the timing gap.
+                _ = Task.Run(async () =>
+                {
+                    await Task.Delay(3000);
+                    if (_broker.ReconcileGhostFill(fill))
+                        _broker.SaveState(_subscribedTokens.Keys);
+                });
+            }
         };
         await _userStream.StartAsync();
         Log.Information("User stream started. Monitoring {Count} condition IDs for ghost fills.", uniqueConditionIds.Count);
