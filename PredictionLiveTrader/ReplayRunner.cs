@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
@@ -18,6 +19,7 @@ namespace PredictionLiveTrader;
 static class ReplayRunner
 {
     private const int REPLAY_LATENCY_MS = 250; // Same as live paper trader default
+    private const int WARMUP_SKIP_THRESHOLD = 50; // After this many consecutive []-lines with no new asset, stop parsing them
 
     public static void Run(string dataDirectory, List<StrategyConfig> strategyConfigs)
     {
@@ -60,6 +62,7 @@ static class ReplayRunner
         long totalTicks = 0;
         long totalPriceChanges = 0;
         long totalBookSnapshots = 0;
+        long skippedBookSnapshots = 0;
         var overallSw = Stopwatch.StartNew();
 
         int maxNameLength = strategyConfigs.Max(c => c.Name.Length);
@@ -67,6 +70,10 @@ static class ReplayRunner
         // Pre-calculate total compressed size for progress bar
         long totalCompressedBytes = gzFiles.Sum(f => new FileInfo(f).Length);
         long bytesProcessedSoFar = 0;
+
+        // Track whether all assets are warmed up — after N consecutive [] lines with no new assets, skip parsing them
+        int consecutiveNoNewAsset = 0;
+        bool assetsWarmedUp = false;
 
         foreach (var gzFile in gzFiles)
         {
@@ -92,21 +99,25 @@ static class ReplayRunner
                 if (!long.TryParse(line.AsSpan(0, pipeIndex), out long tickTimestampMs)) continue;
 
                 // Fast peek: skip full book snapshot lines (start with '[') — they're huge JSON arrays
-                // that only set initial state. price_change events maintain the book incrementally.
                 int jsonStart = pipeIndex + 1;
                 if (jsonStart >= line.Length) continue;
 
-                // Find the first non-whitespace char in the JSON portion
                 char firstChar = line[jsonStart];
                 while (firstChar == ' ' && jsonStart < line.Length - 1) firstChar = line[++jsonStart];
 
                 if (firstChar == '[')
                 {
-                    // Book snapshot — only process the FIRST snapshot per asset to initialize
-                    // After that, price_change events keep the book current
                     fileTicks++;
                     totalTicks++;
 
+                    // Once warmed up, skip ALL book snapshot lines without parsing
+                    if (assetsWarmedUp)
+                    {
+                        skippedBookSnapshots++;
+                        goto progressCheck;
+                    }
+
+                    int prevCount = orderBooks.Count;
                     try
                     {
                         using var doc = JsonDocument.Parse(line.AsMemory(pipeIndex + 1));
@@ -116,7 +127,6 @@ static class ReplayRunner
                             string? assetId = idEl.GetString();
                             if (string.IsNullOrEmpty(assetId)) continue;
 
-                            // Only process if we haven't seen this asset yet
                             if (orderBooks.ContainsKey(assetId)) continue;
 
                             EnsureAssetInitialized(assetId, orderBooks, activeStrategies, strategyConfigs, tokenNames);
@@ -129,6 +139,21 @@ static class ReplayRunner
                         }
                     }
                     catch (JsonException) { }
+
+                    // Track consecutive no-new-asset lines
+                    if (orderBooks.Count == prevCount)
+                    {
+                        consecutiveNoNewAsset++;
+                        if (consecutiveNoNewAsset >= WARMUP_SKIP_THRESHOLD)
+                        {
+                            assetsWarmedUp = true;
+                            Console.WriteLine($"\r  Assets warmed up ({orderBooks.Count} assets). Skipping future book snapshots.                    ");
+                        }
+                    }
+                    else
+                    {
+                        consecutiveNoNewAsset = 0;
+                    }
 
                     goto progressCheck;
                 }
@@ -148,6 +173,15 @@ static class ReplayRunner
                     }
                 }
 
+                // Fast string-based extraction instead of full JSON parse for price_change lines
+                // Most lines are price_change events with a known structure
+                if (TryProcessPriceChangeFast(line, pipeIndex + 1, tickTimestampMs, orderBooks, activeStrategies,
+                    strategyConfigs, tokenNames, brokers, ref totalPriceChanges, ref hasDeferredOrders))
+                {
+                    goto progressCheck;
+                }
+
+                // Fallback to full JSON parse for unknown formats
                 try
                 {
                     using var doc = JsonDocument.Parse(line.AsMemory(pipeIndex + 1));
@@ -223,12 +257,13 @@ static class ReplayRunner
         Console.WriteLine("\n\n=========================================");
         Console.WriteLine("  REPLAY COMPLETE");
         Console.WriteLine("=========================================");
-        Console.WriteLine($"  Total ticks:     {totalTicks:N0}");
-        Console.WriteLine($"  Book snapshots:  {totalBookSnapshots:N0}");
-        Console.WriteLine($"  Price changes:   {totalPriceChanges:N0}");
-        Console.WriteLine($"  Unique assets:   {orderBooks.Count:N0}");
-        Console.WriteLine($"  Elapsed:         {overallSw.Elapsed.TotalSeconds:0.1}s");
-        Console.WriteLine($"  Throughput:      {totalTicks / Math.Max(overallSw.Elapsed.TotalSeconds, 0.001):N0} ticks/sec");
+        Console.WriteLine($"  Total ticks:        {totalTicks:N0}");
+        Console.WriteLine($"  Book snapshots:     {totalBookSnapshots:N0}");
+        Console.WriteLine($"  Skipped snapshots:  {skippedBookSnapshots:N0}");
+        Console.WriteLine($"  Price changes:      {totalPriceChanges:N0}");
+        Console.WriteLine($"  Unique assets:      {orderBooks.Count:N0}");
+        Console.WriteLine($"  Elapsed:            {overallSw.Elapsed.TotalSeconds:0.1}s");
+        Console.WriteLine($"  Throughput:         {totalTicks / Math.Max(overallSw.Elapsed.TotalSeconds, 0.001):N0} ticks/sec");
         Console.WriteLine();
 
         // --- Strategy Leaderboard ---
@@ -288,6 +323,96 @@ static class ReplayRunner
         }
     }
 
+    /// <summary>
+    /// Fast string-based parser for price_change lines. Avoids JsonDocument allocation entirely.
+    /// Extracts asset_id, price, size, side via substring search — ~10x faster than JsonDocument.Parse.
+    /// Returns true if the line was successfully handled, false to fall back to full JSON parse.
+    /// </summary>
+    private static bool TryProcessPriceChangeFast(
+        string line, int jsonOffset,
+        long tickTimestampMs,
+        Dictionary<string, LocalOrderBook> orderBooks,
+        Dictionary<string, List<ILiveStrategy>> activeStrategies,
+        List<StrategyConfig> strategyConfigs,
+        Dictionary<string, string> tokenNames,
+        Dictionary<string, ReplayBroker> brokers,
+        ref long totalPriceChanges,
+        ref bool hasDeferredOrders)
+    {
+        // Look for "price_changes" key — if not present, bail to full parser
+        int pcIdx = line.IndexOf("\"price_changes\"", jsonOffset, StringComparison.Ordinal);
+        if (pcIdx < 0) return false;
+
+        // Parse each entry in the price_changes array by scanning for key markers
+        // Format: {"asset_id":"...","price":"0.50","size":"100","side":"BUY"}
+        int searchFrom = pcIdx;
+        while (true)
+        {
+            // Find next asset_id
+            int aidKey = line.IndexOf("\"asset_id\":\"", searchFrom, StringComparison.Ordinal);
+            if (aidKey < 0) break;
+
+            int aidStart = aidKey + 12; // length of "asset_id":"
+            int aidEnd = line.IndexOf('"', aidStart);
+            if (aidEnd < 0) break;
+
+            string assetId = line.Substring(aidStart, aidEnd - aidStart);
+            searchFrom = aidEnd + 1;
+
+            // Find price (search from current position — fields are in order)
+            string? priceStr = ExtractQuotedValue(line, "\"price\":\"", ref searchFrom);
+            if (priceStr == null) break;
+
+            string? sizeStr = ExtractQuotedValue(line, "\"size\":\"", ref searchFrom);
+            if (sizeStr == null) break;
+
+            string? sideStr = ExtractQuotedValue(line, "\"side\":\"", ref searchFrom);
+            if (sideStr == null) break;
+
+            // Process this price change
+            EnsureAssetInitialized(assetId, orderBooks, activeStrategies, strategyConfigs, tokenNames);
+
+            if (!decimal.TryParse(priceStr, NumberStyles.Number, CultureInfo.InvariantCulture, out decimal price)) continue;
+            if (!decimal.TryParse(sizeStr, NumberStyles.Number, CultureInfo.InvariantCulture, out decimal size)) continue;
+
+            orderBooks[assetId].UpdatePriceLevel(sideStr, price, size);
+            totalPriceChanges++;
+
+            foreach (var broker in brokers.Values)
+                broker.ResetConsumedLiquidity(assetId);
+
+            var book = orderBooks[assetId];
+            var strategies = activeStrategies[assetId];
+            foreach (var strategy in strategies)
+            {
+                brokers[strategy.StrategyName].ReplayTimeMs = tickTimestampMs;
+                strategy.OnBookUpdate(book, brokers[strategy.StrategyName]);
+            }
+
+            if (!hasDeferredOrders)
+            {
+                foreach (var broker in brokers.Values)
+                {
+                    if (broker.HasDeferredOrders) { hasDeferredOrders = true; break; }
+                }
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>Extract the quoted value after a key marker like "price":". Advances searchFrom past the closing quote.</summary>
+    private static string? ExtractQuotedValue(string line, string keyMarker, ref int searchFrom)
+    {
+        int keyIdx = line.IndexOf(keyMarker, searchFrom, StringComparison.Ordinal);
+        if (keyIdx < 0) return null;
+        int valStart = keyIdx + keyMarker.Length;
+        int valEnd = line.IndexOf('"', valStart);
+        if (valEnd < 0) return null;
+        searchFrom = valEnd + 1;
+        return line.Substring(valStart, valEnd - valStart);
+    }
+
     private static void ProcessPriceChanges(
         JsonElement changesEl,
         long tickTimestampMs,
@@ -308,8 +433,8 @@ static class ReplayRunner
             // Initialize asset on first price_change (not just book snapshots)
             EnsureAssetInitialized(assetId, orderBooks, activeStrategies, strategyConfigs, tokenNames);
 
-            decimal price = decimal.Parse(change.GetProperty("price").GetString() ?? "0");
-            decimal size = decimal.Parse(change.GetProperty("size").GetString() ?? "0");
+            decimal price = decimal.Parse(change.GetProperty("price").GetString() ?? "0", CultureInfo.InvariantCulture);
+            decimal size = decimal.Parse(change.GetProperty("size").GetString() ?? "0", CultureInfo.InvariantCulture);
             string side = change.GetProperty("side").GetString() ?? "";
 
             orderBooks[assetId].UpdatePriceLevel(side, price, size);
