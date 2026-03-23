@@ -398,20 +398,12 @@ public class GlobalSimulatedBroker
                 return;
             }
 
-            if (currentBid >= targetPrice && availableLiquidity > 0)
+            // Always execute sell at current bid — mirrors production FAK behavior.
+            // On a stop-loss we want OUT regardless of price movement during latency.
+            if (availableLiquidity > 0)
             {
                 decimal filled = SellAll(assetId, currentBid, availableLiquidity);
                 if (filled > 0) ConsumeBid(assetId, filled);
-            }
-            else
-            {
-                Interlocked.Increment(ref _rejectedOrders);
-                if (!IsMuted) lock (ConsoleLock)
-                {
-                    Console.ForegroundColor = ConsoleColor.DarkGray;
-                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [{StrategyLabel}] [LATENCY REJECT] Missed SELL on {ResolveAssetName(assetId)}. Price moved to {currentBid}.");
-                    Console.ResetColor();
-                }
             }
         }
         finally

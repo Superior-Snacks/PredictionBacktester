@@ -37,8 +37,9 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
     public PolymarketOrderClient OrderClient => _orderClient;
     public void SetTokenFeeRate(string assetId, int feeRate) => _tokenFeeRates[assetId] = feeRate;
 
-    // UserStream fill signals — now passes exact execution size and price
+    // UserStream fill signals — primary fill detection path
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, TaskCompletionSource<(decimal Size, decimal Price)>> _fillSignals = new();
+    private const int WS_FILL_TIMEOUT_MS = 5000; // Wait up to 5s for UserStream fill before falling back to REST poll
 
     public void SignalFill(string assetId, decimal size, decimal price)
     {
@@ -128,6 +129,10 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
         {
             try
             {
+                // Register UserStream fill signal BEFORE posting — so WebSocket can signal even during HTTP round-trip
+                var fillSignal = new TaskCompletionSource<(decimal Size, decimal Price)>(TaskCreationOptions.RunContinuationsAsynchronously);
+                _fillSignals[assetId] = fillSignal;
+
                 string result = "";
                 try
                 {
@@ -152,7 +157,6 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
                     else throw;
                 }
 
-                // --- RAW DEBUG LOGGING ---
                 if (OrderDebugMode && !string.IsNullOrEmpty(result))
                 {
                     if (!IsMuted) lock (ConsoleLock)
@@ -171,195 +175,126 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
                     string status = root.TryGetProperty("status", out var statusEl) ? statusEl.GetString() : "";
                     string orderId = root.TryGetProperty("orderID", out var orderIdEl) ? orderIdEl.GetString() : "";
 
-                    decimal actualShares = shares;
-                    decimal actualDollars = dollarsToInvest;
+                    decimal actualShares = 0;
+                    decimal actualDollars = 0;
+                    string fillSource = "";
 
-                    // --- CONCURRENT-SAFE DELAYED SETTLEMENT LOOP ---
-                    if (status == "delayed" && !string.IsNullOrEmpty(orderId))
+                    // --- Step 1: Check if UserStream already delivered the fill during the HTTP round-trip ---
+                    if (fillSignal.Task.IsCompleted)
                     {
-                        if (!IsMuted) lock (ConsoleLock)
+                        var wsData = fillSignal.Task.Result;
+                        actualShares = wsData.Size;
+                        actualDollars = wsData.Size * wsData.Price;
+                        fillSource = "WS-INSTANT";
+                    }
+                    // --- Step 2: Try reading fill data from the POST response ---
+                    else if (TryExtractFillFromResponse(root, out decimal respShares, out decimal respDollars) && respShares > 0)
+                    {
+                        actualShares = respShares;
+                        actualDollars = respDollars > 0 ? respDollars : respShares * targetPrice;
+                        fillSource = "RESPONSE";
+                        _fillSignals.TryRemove(assetId, out _); // Don't need WS anymore
+                    }
+                    // --- Step 3: Wait for UserStream fill (primary path for delayed/matched-without-data) ---
+                    else
+                    {
+                        if (!IsMuted && (status == "delayed" || status == "unmatched")) lock (ConsoleLock)
                         {
                             Console.ForegroundColor = ConsoleColor.DarkYellow;
-                            Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [DELAYED] Buy Order {orderId} pending. Polling API...");
+                            Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [{status.ToUpper()}] Buy {orderId} — waiting for UserStream fill ({WS_FILL_TIMEOUT_MS}ms)...");
                             Console.ResetColor();
                         }
 
-                        bool settled = false;
+                        var completed = await Task.WhenAny(fillSignal.Task, Task.Delay(WS_FILL_TIMEOUT_MS));
 
-                        // Register a signal so UserStream can wake us up instantly
-                        var fillSignal = new TaskCompletionSource<(decimal Size, decimal Price)>(TaskCreationOptions.RunContinuationsAsynchronously);
-                        _fillSignals[assetId] = fillSignal;
-
-                        for (int i = 0; i < 180; i++) // 180 × 500ms = 90 seconds
+                        if (completed == fillSignal.Task)
                         {
-                            var delayTask = Task.Delay(500);
-                            var completedTask = await Task.WhenAny(delayTask, fillSignal.Task);
-
-                            // --- THE PHANTOM REFUND FIX ---
-                            if (completedTask == fillSignal.Task)
-                            {
-                                var wsData = fillSignal.Task.Result;
-                                actualShares = wsData.Size;
-                                actualDollars = wsData.Size * wsData.Price;
-                                settled = true;
-
-                                if (!IsMuted) lock (ConsoleLock)
-                                {
-                                    Console.ForegroundColor = ConsoleColor.Cyan;
-                                    Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [USER STREAM] Buy order confirmed instantly via WebSocket.");
-                                    Console.ResetColor();
-                                }
-                                break; // Skip the REST API entirely!
-                            }
-
-                            try
-                            {
-                                string pollResult = await _orderClient.GetOrderAsync(orderId);
-                                using var pollDoc = System.Text.Json.JsonDocument.Parse(pollResult);
-                                var pollRoot = pollDoc.RootElement;
-
-                                // Handle array or single object response
-                                JsonElement orderData = pollRoot;
-                                if (pollRoot.ValueKind == JsonValueKind.Array && pollRoot.GetArrayLength() > 0)
-                                {
-                                    orderData = pollRoot[0];
-                                }
-
-                                string currentStatus = orderData.TryGetProperty("status", out var currStatusEl) ? currStatusEl.GetString() : "";
-
-                                if (currentStatus == "matched" || currentStatus == "live")
-                                {
-                                    if (orderData.TryGetProperty("taker_amount_matched", out var takerEl) && decimal.TryParse(takerEl.ToString(), out decimal matchedShares))
-                                    {
-                                        actualShares = matchedShares;
-                                    }
-
-                                    if (orderData.TryGetProperty("maker_amount_matched", out var makerEl) && decimal.TryParse(makerEl.ToString(), out decimal matchedUsdc))
-                                    {
-                                        actualDollars = matchedUsdc;
-                                    }
-
-                                    settled = true;
-                                    break;
-                                }
-                                else if (currentStatus == "canceled" || currentStatus == "expired" || currentStatus == "unmatched")
-                                {
-                                    if (!IsMuted) lock (ConsoleLock)
-                                    {
-                                        Console.ForegroundColor = ConsoleColor.DarkYellow;
-                                        Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [POLL] Buy {orderId} API returned '{currentStatus}' at iteration {i}/180 | {GetMarketName(assetId)}");
-                                        Console.ResetColor();
-                                    }
-                                    // API says killed, but Polymarket can deliver shares despite this.
-                                    // Register ghost so UserStream or next sync can catch a phantom fill.
-                                    _ghostOrders[assetId] = new GhostOrder(assetId, orderId, "BUY", targetPrice, shares, DateTime.UtcNow);
-                                    actualShares = 0;
-                                    settled = true;
-                                    break;
-                                }
-                            }
-                            catch { /* Ignore parsing or network timeouts during polling */ }
+                            var wsData = fillSignal.Task.Result;
+                            actualShares = wsData.Size;
+                            actualDollars = wsData.Size * wsData.Price;
+                            fillSource = "WS";
                         }
-
-                        // Clean up the signal
-                        _fillSignals.TryRemove(assetId, out _);
-
-                        // On timeout: one final poll attempt before giving up
-                        if (!settled)
+                        else
                         {
-                            try
+                            // --- Step 4: Single REST poll as last resort ---
+                            _fillSignals.TryRemove(assetId, out _);
+
+                            if (!string.IsNullOrEmpty(orderId))
                             {
-                                string finalPoll = await _orderClient.GetOrderAsync(orderId);
-                                using var finalDoc = System.Text.Json.JsonDocument.Parse(finalPoll);
-                                var finalRoot = finalDoc.RootElement;
-                                JsonElement finalData = finalRoot;
-                                if (finalRoot.ValueKind == JsonValueKind.Array && finalRoot.GetArrayLength() > 0)
-                                    finalData = finalRoot[0];
-
-                                string finalStatus = finalData.TryGetProperty("status", out var finalStatusEl) ? finalStatusEl.GetString() : "";
-
-                                if (finalStatus == "matched" || finalStatus == "live")
+                                try
                                 {
-                                    if (finalData.TryGetProperty("taker_amount_matched", out var takerEl) && decimal.TryParse(takerEl.ToString(), out decimal matchedShares))
-                                        actualShares = matchedShares;
-                                    if (finalData.TryGetProperty("maker_amount_matched", out var makerEl) && decimal.TryParse(makerEl.ToString(), out decimal matchedUsdc))
-                                        actualDollars = matchedUsdc;
+                                    string pollResult = await _orderClient.GetOrderAsync(orderId);
+                                    using var pollDoc = System.Text.Json.JsonDocument.Parse(pollResult);
+                                    var pollRoot = pollDoc.RootElement;
+                                    JsonElement orderData = pollRoot.ValueKind == JsonValueKind.Array && pollRoot.GetArrayLength() > 0
+                                        ? pollRoot[0] : pollRoot;
 
-                                    if (!IsMuted) lock (ConsoleLock)
+                                    string pollStatus = orderData.TryGetProperty("status", out var ps) ? ps.GetString() ?? "" : "";
+
+                                    if (pollStatus == "matched" || pollStatus == "live")
                                     {
-                                        Console.ForegroundColor = ConsoleColor.Yellow;
-                                        Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [LATE FILL] Buy {orderId} filled after timeout! Shares: {actualShares:0.00}");
-                                        Console.ResetColor();
+                                        if (orderData.TryGetProperty("size_matched", out var smEl) && decimal.TryParse(smEl.ToString(), out decimal sm))
+                                            actualShares = sm;
+                                        else if (orderData.TryGetProperty("taker_amount_matched", out var takerEl) && decimal.TryParse(takerEl.ToString(), out sm))
+                                            actualShares = sm;
+
+                                        if (orderData.TryGetProperty("maker_amount_matched", out var makerEl) && decimal.TryParse(makerEl.ToString(), out decimal md))
+                                            actualDollars = md;
+
+                                        fillSource = "POLL";
+                                    }
+                                    else
+                                    {
+                                        // Canceled/expired/unmatched — register ghost, UserStream may still deliver
+                                        _ghostOrders[assetId] = new GhostOrder(assetId, orderId, "BUY", targetPrice, shares, DateTime.UtcNow);
+                                        if (!IsMuted) lock (ConsoleLock)
+                                        {
+                                            Console.ForegroundColor = ConsoleColor.DarkYellow;
+                                            Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [GHOST] Buy {orderId} status='{pollStatus}'. Ghost registered.");
+                                            Console.ResetColor();
+                                        }
                                     }
                                 }
-                                else
+                                catch
                                 {
-                                    actualShares = 0;
-                                    // Register as ghost order — UserStream may catch the fill later
                                     _ghostOrders[assetId] = new GhostOrder(assetId, orderId, "BUY", targetPrice, shares, DateTime.UtcNow);
-                                    if (!IsMuted) lock (ConsoleLock)
-                                    {
-                                        Console.ForegroundColor = ConsoleColor.DarkYellow;
-                                        Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [GHOST] Buy {orderId} still '{finalStatus}' after 90s. Registered as ghost order — UserStream watching.");
-                                        Console.ResetColor();
-                                    }
                                 }
-                            }
-                            catch
-                            {
-                                // Network error on final check — register ghost rather than assume killed
-                                actualShares = 0;
-                                _ghostOrders[assetId] = new GhostOrder(assetId, orderId, "BUY", targetPrice, shares, DateTime.UtcNow);
                             }
                         }
                     }
-                    else
-                    {
-                        // Handle instant fills
-                        if (root.TryGetProperty("takingAmount", out var takingElC) && decimal.TryParse(takingElC.ToString(), out decimal tAmt))
-                            actualShares = tAmt;
-                        else if (root.TryGetProperty("taking_amount", out var takingEl) && decimal.TryParse(takingEl.ToString(), out tAmt))
-                            actualShares = tAmt;
 
-                        if (root.TryGetProperty("makingAmount", out var makingElC) && decimal.TryParse(makingElC.ToString(), out decimal mAmt))
-                            actualDollars = mAmt;
-                        else if (root.TryGetProperty("making_amount", out var makingEl) && decimal.TryParse(makingEl.ToString(), out mAmt))
-                            actualDollars = mAmt;
-                    }
+                    // Clean up signal if still registered
+                    _fillSignals.TryRemove(assetId, out _);
 
                     if (actualShares <= 0)
                     {
                         Interlocked.Increment(ref _missedBuys);
-                        if (!IsMuted) lock (ConsoleLock)
+                        if (!IsMuted && !_ghostOrders.ContainsKey(assetId)) lock (ConsoleLock)
                         {
                             Console.ForegroundColor = ConsoleColor.DarkGray;
                             Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [FAK KILLED] Buy missed. Liquidity gone @ ${targetPrice:0.00} | {GetMarketName(assetId)}");
                             Console.ResetColor();
                         }
-                        return; // Exits safely without touching ledger
+                        return;
                     }
 
-                    // Fee adjustment: on buys, Polymarket collects fees in SHARES.
-                    // Formula: fee_usdc = C × p × feeRate × (p × (1-p))^exponent
-                    // fee_shares = fee_usdc / p = C × feeRate × (p × (1-p))^exponent
-                    // Crypto: feeRate=0.25, exponent=2 | Sports: feeRate=0.0175, exponent=1
+                    // Fee adjustment: on buys, Polymarket collects fees in SHARES
                     int feeRateBps = GetFeeRate(assetId);
                     if (feeRateBps > 0 && actualShares > 0 && actualDollars > 0)
                     {
                         decimal execPrice = actualDollars / actualShares;
-                        decimal pq = execPrice * (1m - execPrice); // p × (1-p)
+                        decimal pq = execPrice * (1m - execPrice);
 
-                        // Determine fee params from feeRateBps
                         decimal feeRate;
                         int exponent;
-                        if (feeRateBps == 1000) { feeRate = 0.25m; exponent = 2; }       // Crypto
-                        else                    { feeRate = 0.0175m; exponent = 1; }      // Sports
+                        if (feeRateBps == 1000) { feeRate = 0.25m; exponent = 2; }
+                        else                    { feeRate = 0.0175m; exponent = 1; }
 
                         decimal pqPow = pq;
                         for (int e = 1; e < exponent; e++) pqPow *= pq;
 
                         decimal feeShares = actualShares * feeRate * pqPow;
-                        decimal adjustedShares = Math.Floor((actualShares - feeShares) * 100m) / 100m; // Floor to 2dp to match chain
+                        decimal adjustedShares = Math.Floor((actualShares - feeShares) * 100m) / 100m;
 
                         if (!IsMuted) lock (ConsoleLock)
                         {
@@ -392,13 +327,14 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
                     {
                         decimal exactExecutionPrice = actualDollars / actualShares;
                         Console.ForegroundColor = ConsoleColor.Green;
-                        Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [LIVE BUY FAK] {actualShares:0.00} shares @ exactly ${exactExecutionPrice:0.000} | ${actualDollars:0.00} | {GetMarketName(assetId)}");
+                        Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [LIVE BUY FAK] {actualShares:0.00} shares @ exactly ${exactExecutionPrice:0.000} | ${actualDollars:0.00} | via {fillSource} | {GetMarketName(assetId)}");
                         Console.ResetColor();
                     }
                 }
             }
             catch (Exception ex)
             {
+                _fillSignals.TryRemove(assetId, out _);
                 Interlocked.Increment(ref _rejectedOrders);
                 if (!IsMuted) lock (ConsoleLock)
                 {
@@ -409,9 +345,9 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
             }
             finally
             {
-                // Only release the pending lock if there's no ghost order for this asset.
                 if (!_ghostOrders.ContainsKey(assetId))
-                    _pendingOrders.TryRemove(assetId, out _); _blockedLogSent.TryRemove(assetId, out _);
+                    _pendingOrders.TryRemove(assetId, out _);
+                _blockedLogSent.TryRemove(assetId, out _);
             }
         });
     }
@@ -471,9 +407,13 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
         {
             try
             {
+                // Register UserStream fill signal BEFORE posting
+                var fillSignal = new TaskCompletionSource<(decimal Size, decimal Price)>(TaskCreationOptions.RunContinuationsAsynchronously);
+                _fillSignals[assetId] = fillSignal;
+
                 string result = "";
                 int maxRetries = 10;
-                
+
                 for (int attempt = 1; attempt <= maxRetries; attempt++)
                 {
                     try
@@ -505,13 +445,12 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
                             Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [HAMMER] Tokens not here yet. Retrying in 300ms... (Attempt {attempt}/{maxRetries})");
                             Console.ResetColor();
                         }
-                        await Task.Delay(300); 
+                        await Task.Delay(300);
                     }
                 }
 
                 if (string.IsNullOrEmpty(result)) return;
 
-                // --- RAW DEBUG LOGGING ---
                 if (OrderDebugMode)
                 {
                     if (!IsMuted) lock (ConsoleLock)
@@ -527,163 +466,106 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
 
                 if (root.TryGetProperty("success", out var successEl) && successEl.GetBoolean() == true)
                 {
-                    string status = root.TryGetProperty("status", out var statusEl) ? statusEl.GetString() : "";
-                    string orderId = root.TryGetProperty("orderID", out var orderIdEl) ? orderIdEl.GetString() : "";
+                    string status = root.TryGetProperty("status", out var statusEl) ? statusEl.GetString() ?? "" : "";
+                    string orderId = root.TryGetProperty("orderID", out var orderIdEl) ? orderIdEl.GetString() ?? "" : "";
 
-                    decimal actualSharesSold = sharesToSell;
-                    decimal cashReceived = sharesToSell * targetPrice;
+                    decimal actualSharesSold = 0;
+                    decimal cashReceived = 0;
+                    string fillSource = "";
 
-                    // --- CONCURRENT-SAFE DELAYED SETTLEMENT LOOP (FOR SELLS) ---
-                    if (status == "delayed" && !string.IsNullOrEmpty(orderId))
+                    // --- Step 1: Check if UserStream already delivered the fill during the HTTP round-trip ---
+                    if (fillSignal.Task.IsCompleted)
                     {
-                        if (!IsMuted) lock (ConsoleLock)
+                        var wsData = fillSignal.Task.Result;
+                        actualSharesSold = wsData.Size;
+                        cashReceived = wsData.Size * wsData.Price;
+                        fillSource = "WS-INSTANT";
+                    }
+                    // --- Step 2: Try reading fill data from the POST response ---
+                    // For sells: makingAmount = shares sold, takingAmount = USDC received
+                    else if (TryExtractFillFromResponse(root, out decimal respShares, out decimal respDollars) && respShares > 0)
+                    {
+                        actualSharesSold = respShares;
+                        cashReceived = respDollars > 0 ? respDollars : respShares * bestBid; // estimate if missing
+                        fillSource = "RESPONSE";
+                        _fillSignals.TryRemove(assetId, out _);
+                    }
+                    // --- Step 3: Wait for UserStream fill ---
+                    else
+                    {
+                        if (!IsMuted && (status == "delayed" || status == "unmatched")) lock (ConsoleLock)
                         {
                             Console.ForegroundColor = ConsoleColor.DarkYellow;
-                            Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [DELAYED] Sell Order {orderId} pending. Polling API...");
+                            Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [{status.ToUpper()}] Sell {orderId} — waiting for UserStream fill ({WS_FILL_TIMEOUT_MS}ms)...");
                             Console.ResetColor();
                         }
 
-                        bool settled = false;
+                        var completed = await Task.WhenAny(fillSignal.Task, Task.Delay(WS_FILL_TIMEOUT_MS));
 
-                        /// Register a signal so UserStream can wake us up instantly
-                        var fillSignal = new TaskCompletionSource<(decimal Size, decimal Price)>(TaskCreationOptions.RunContinuationsAsynchronously);
-                        _fillSignals[assetId] = fillSignal;
-
-                        for (int i = 0; i < 180; i++) // 180 × 500ms = 90 seconds
+                        if (completed == fillSignal.Task)
                         {
-                            var delayTask = Task.Delay(500);
-                            var completedTask = await Task.WhenAny(delayTask, fillSignal.Task);
-
-                            // --- THE PHANTOM REFUND FIX ---
-                            if (completedTask == fillSignal.Task)
-                            {
-                                var wsData = fillSignal.Task.Result;
-                                actualSharesSold = wsData.Size;
-                                cashReceived = wsData.Size * wsData.Price;
-                                settled = true;
-                                
-                                if (!IsMuted) lock (ConsoleLock)
-                                {
-                                    Console.ForegroundColor = ConsoleColor.Cyan;
-                                    Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [USER STREAM] Sell order confirmed instantly via WebSocket.");
-                                    Console.ResetColor();
-                                }
-                                break; // Skip the REST API entirely!
-                            }
-
-                            try
-                            {
-                                string pollResult = await _orderClient.GetOrderAsync(orderId);
-                                using var pollDoc = System.Text.Json.JsonDocument.Parse(pollResult);
-                                var pollRoot = pollDoc.RootElement;
-
-                                JsonElement orderData = pollRoot;
-                                if (pollRoot.ValueKind == JsonValueKind.Array && pollRoot.GetArrayLength() > 0)
-                                    orderData = pollRoot[0];
-
-                                string currentStatus = orderData.TryGetProperty("status", out var currStatusEl) ? currStatusEl.GetString() : "";
-
-                                if (currentStatus == "matched" || currentStatus == "live")
-                                {
-                                    if (orderData.TryGetProperty("maker_amount_matched", out var makerEl) && decimal.TryParse(makerEl.ToString(), out decimal matchedShares))
-                                        actualSharesSold = matchedShares;
-
-                                    if (orderData.TryGetProperty("taker_amount_matched", out var takerEl) && decimal.TryParse(takerEl.ToString(), out decimal matchedUsdc))
-                                        cashReceived = matchedUsdc;
-
-                                    settled = true;
-                                    break;
-                                }
-                                else if (currentStatus == "canceled" || currentStatus == "expired" || currentStatus == "unmatched")
-                                {
-                                    if (!IsMuted) lock (ConsoleLock)
-                                    {
-                                        Console.ForegroundColor = ConsoleColor.DarkYellow;
-                                        Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [POLL] Sell {orderId} API returned '{currentStatus}' at iteration {i}/180 | {GetMarketName(assetId)}");
-                                        Console.ResetColor();
-                                    }
-                                    _ghostOrders[assetId] = new GhostOrder(assetId, orderId, "SELL", targetPrice, sharesToSell, DateTime.UtcNow);
-                                    actualSharesSold = 0;
-                                    cashReceived = 0;
-                                    settled = true;
-                                    break;
-                                }
-                            }
-                            catch { /* Ignore polling errors */ }
+                            var wsData = fillSignal.Task.Result;
+                            actualSharesSold = wsData.Size;
+                            cashReceived = wsData.Size * wsData.Price;
+                            fillSource = "WS";
                         }
-
-                        // Clean up the signal
-                        _fillSignals.TryRemove(assetId, out _);
-
-                        // On timeout: one final poll attempt before giving up
-                        if (!settled)
+                        else
                         {
-                            try
+                            // --- Step 4: Single REST poll as last resort ---
+                            _fillSignals.TryRemove(assetId, out _);
+
+                            if (!string.IsNullOrEmpty(orderId))
                             {
-                                string finalPoll = await _orderClient.GetOrderAsync(orderId);
-                                using var finalDoc = System.Text.Json.JsonDocument.Parse(finalPoll);
-                                var finalRoot = finalDoc.RootElement;
-                                JsonElement finalData = finalRoot;
-                                if (finalRoot.ValueKind == JsonValueKind.Array && finalRoot.GetArrayLength() > 0)
-                                    finalData = finalRoot[0];
-
-                                string finalStatus = finalData.TryGetProperty("status", out var finalStatusEl) ? finalStatusEl.GetString() : "";
-
-                                if (finalStatus == "matched" || finalStatus == "live")
+                                try
                                 {
-                                    if (finalData.TryGetProperty("maker_amount_matched", out var makerEl) && decimal.TryParse(makerEl.ToString(), out decimal matchedShares))
-                                        actualSharesSold = matchedShares;
-                                    if (finalData.TryGetProperty("taker_amount_matched", out var takerEl) && decimal.TryParse(takerEl.ToString(), out decimal matchedUsdc))
-                                        cashReceived = matchedUsdc;
+                                    string pollResult = await _orderClient.GetOrderAsync(orderId);
+                                    using var pollDoc = System.Text.Json.JsonDocument.Parse(pollResult);
+                                    var pollRoot = pollDoc.RootElement;
+                                    JsonElement orderData = pollRoot.ValueKind == JsonValueKind.Array && pollRoot.GetArrayLength() > 0
+                                        ? pollRoot[0] : pollRoot;
 
-                                    if (!IsMuted) lock (ConsoleLock)
+                                    string pollStatus = orderData.TryGetProperty("status", out var ps) ? ps.GetString() ?? "" : "";
+
+                                    if (pollStatus == "matched" || pollStatus == "live")
                                     {
-                                        Console.ForegroundColor = ConsoleColor.Yellow;
-                                        Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [LATE FILL] Sell {orderId} filled after timeout! Shares: {actualSharesSold:0.00}");
-                                        Console.ResetColor();
+                                        if (orderData.TryGetProperty("size_matched", out var smEl) && decimal.TryParse(smEl.ToString(), out decimal sm))
+                                            actualSharesSold = sm;
+                                        else if (orderData.TryGetProperty("maker_amount_matched", out var makerEl) && decimal.TryParse(makerEl.ToString(), out sm))
+                                            actualSharesSold = sm;
+
+                                        if (orderData.TryGetProperty("taker_amount_matched", out var takerEl) && decimal.TryParse(takerEl.ToString(), out decimal md))
+                                            cashReceived = md;
+
+                                        fillSource = "POLL";
+                                    }
+                                    else
+                                    {
+                                        _ghostOrders[assetId] = new GhostOrder(assetId, orderId, "SELL", targetPrice, sharesToSell, DateTime.UtcNow);
+                                        if (!IsMuted) lock (ConsoleLock)
+                                        {
+                                            Console.ForegroundColor = ConsoleColor.DarkYellow;
+                                            Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [GHOST] Sell {orderId} status='{pollStatus}'. Ghost registered.");
+                                            Console.ResetColor();
+                                        }
                                     }
                                 }
-                                else
+                                catch
                                 {
-                                    actualSharesSold = 0;
-                                    cashReceived = 0;
-                                    // Register as ghost order — UserStream may catch the fill later
                                     _ghostOrders[assetId] = new GhostOrder(assetId, orderId, "SELL", targetPrice, sharesToSell, DateTime.UtcNow);
-                                    if (!IsMuted) lock (ConsoleLock)
-                                    {
-                                        Console.ForegroundColor = ConsoleColor.DarkYellow;
-                                        Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [GHOST] Sell {orderId} still '{finalStatus}' after 90s. Registered as ghost order — UserStream watching.");
-                                        Console.ResetColor();
-                                    }
                                 }
-                            }
-                            catch
-                            {
-                                actualSharesSold = 0;
-                                cashReceived = 0;
-                                _ghostOrders[assetId] = new GhostOrder(assetId, orderId, "SELL", targetPrice, sharesToSell, DateTime.UtcNow);
                             }
                         }
                     }
-                    else
-                    {
-                        // Instant Sell Fill
-                        if (root.TryGetProperty("makingAmount", out var makingElC) && decimal.TryParse(makingElC.ToString(), out decimal mAmt))
-                            actualSharesSold = mAmt;
-                        else if (root.TryGetProperty("making_amount", out var makingEl) && decimal.TryParse(makingEl.ToString(), out mAmt))
-                            actualSharesSold = mAmt;
 
-                        if (root.TryGetProperty("takingAmount", out var takingElC) && decimal.TryParse(takingElC.ToString(), out decimal tAmt))
-                            cashReceived = tAmt;
-                        else if (root.TryGetProperty("taking_amount", out var takingEl) && decimal.TryParse(takingEl.ToString(), out tAmt))
-                            cashReceived = tAmt;
-                    }
+                    // Clean up signal if still registered
+                    _fillSignals.TryRemove(assetId, out _);
 
                     if (actualSharesSold <= 0)
                     {
                         Interlocked.Increment(ref _missedSells);
-                        _sellCooldownUntil[assetId] = DateTimeOffset.UtcNow.ToUnixTimeSeconds() + SELL_COOLDOWN_SECONDS;
-                        if (!IsMuted) lock (ConsoleLock)
+                        if (!_ghostOrders.ContainsKey(assetId))
+                            _sellCooldownUntil[assetId] = DateTimeOffset.UtcNow.ToUnixTimeSeconds() + SELL_COOLDOWN_SECONDS;
+                        if (!IsMuted && !_ghostOrders.ContainsKey(assetId)) lock (ConsoleLock)
                         {
                             Console.ForegroundColor = ConsoleColor.DarkGray;
                             Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [FAK KILLED] Sell missed. Cooldown {SELL_COOLDOWN_SECONDS}s | {GetMarketName(assetId)}");
@@ -711,12 +593,12 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
                             Price = executionPrice, Shares = actualSharesSold, DollarValue = cashReceived
                         });
 
-                        CashBalance += cashReceived; 
-                        
+                        CashBalance += cashReceived;
+
                         decimal remainingShares = Math.Max(0, GetPositionShares(assetId) - actualSharesSold);
                         SetPositionShares(assetId, remainingShares);
                         if (remainingShares == 0) SetAverageEntryPrice(assetId, 0);
-                        
+
                         TotalTradesExecuted++;
                         TotalActions++;
                     }
@@ -725,16 +607,17 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
                     {
                         decimal exactExecutionPrice = cashReceived / actualSharesSold;
                         Console.ForegroundColor = pnl >= 0 ? ConsoleColor.Cyan : ConsoleColor.Red;
-                        Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [LIVE SELL FAK] {actualSharesSold:0.00} shares @ exactly ${exactExecutionPrice:0.000} | PnL: ${pnl:0.00} | {GetMarketName(assetId)}");
+                        Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [LIVE SELL FAK] {actualSharesSold:0.00} shares @ exactly ${exactExecutionPrice:0.000} | PnL: ${pnl:0.00} | via {fillSource} | {GetMarketName(assetId)}");
                         Console.ResetColor();
                     }
                 }
             }
             catch (Exception ex)
             {
+                _fillSignals.TryRemove(assetId, out _);
                 Interlocked.Increment(ref _rejectedOrders);
-                
-                if (ex.Message.Contains("balance", StringComparison.OrdinalIgnoreCase) || 
+
+                if (ex.Message.Contains("balance", StringComparison.OrdinalIgnoreCase) ||
                     ex.Message.Contains("insufficient", StringComparison.OrdinalIgnoreCase))
                 {
                     if (!IsMuted) lock (ConsoleLock)
@@ -744,10 +627,10 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
                         Console.ResetColor();
                     }
 
-                    try 
+                    try
                     {
                         decimal realShares = await _orderClient.GetTokenBalanceAsync(assetId);
-                        
+
                         lock (BrokerLock)
                         {
                             SetPositionShares(assetId, realShares);
@@ -768,7 +651,6 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
                 }
                 else
                 {
-                    // FAK killed (no liquidity) — apply cooldown to prevent rapid-fire retries
                     if (ex.Message.Contains("no orders found to match", StringComparison.OrdinalIgnoreCase) ||
                         ex.Message.Contains("FAK", StringComparison.OrdinalIgnoreCase))
                     {
@@ -785,11 +667,9 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
             }
             finally
             {
-                // Only release the pending lock if there's no ghost order for this asset.
-                // If a ghost sell was registered, keep the lock so the strategy can't
-                // fire another sell before ReconcileGhostFill runs.
                 if (!_ghostOrders.ContainsKey(assetId))
-                    _pendingOrders.TryRemove(assetId, out _); _blockedLogSent.TryRemove(assetId, out _);
+                    _pendingOrders.TryRemove(assetId, out _);
+                _blockedLogSent.TryRemove(assetId, out _);
             }
         });
     }
@@ -799,6 +679,31 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
     /// Only reconciles if there's a matching ghost order (polling timed out).
     /// Returns true if a ghost order was reconciled.
     /// </summary>
+    /// <summary>
+    /// Tries to extract fill amounts from the POST /order response.
+    /// Returns true if takingAmount/makingAmount were present and non-empty.
+    /// </summary>
+    private static bool TryExtractFillFromResponse(JsonElement root, out decimal shares, out decimal dollars)
+    {
+        shares = 0;
+        dollars = 0;
+
+        // Try camelCase then snake_case — Polymarket uses both
+        if (root.TryGetProperty("takingAmount", out var takingEl) || root.TryGetProperty("taking_amount", out takingEl))
+        {
+            string? val = takingEl.ValueKind == JsonValueKind.String ? takingEl.GetString() : takingEl.ToString();
+            if (!string.IsNullOrEmpty(val)) decimal.TryParse(val, out shares);
+        }
+
+        if (root.TryGetProperty("makingAmount", out var makingEl) || root.TryGetProperty("making_amount", out makingEl))
+        {
+            string? val = makingEl.ValueKind == JsonValueKind.String ? makingEl.GetString() : makingEl.ToString();
+            if (!string.IsNullOrEmpty(val)) decimal.TryParse(val, out dollars);
+        }
+
+        return shares > 0;
+    }
+
     public bool ReconcileGhostFill(UserTradeEvent fill)
     {
         // Only act if there's a ghost order for this asset

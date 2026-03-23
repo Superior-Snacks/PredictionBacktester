@@ -341,18 +341,23 @@ public class PolymarketOrderClient
     {
         try
         {
-            var request = new RestRequest($"/markets/{tokenId}", Method.Get);
+            // Correct endpoint per Polymarket docs: GET /fee-rate?token_id={token_id}
+            var request = new RestRequest("/fee-rate", Method.Get);
+            request.AddQueryParameter("token_id", tokenId);
             var response = await _httpClient.ExecuteAsync(request);
             if (response.IsSuccessful && !string.IsNullOrEmpty(response.Content))
             {
                 using var doc = JsonDocument.Parse(response.Content);
                 var root = doc.RootElement;
-                
-                if (root.TryGetProperty("taker_fee_bps", out var feeEl))
+
+                // Response contains fee_rate_bps or feeRateBps
+                if (root.TryGetProperty("fee_rate_bps", out var feeEl) ||
+                    root.TryGetProperty("feeRateBps", out feeEl))
                 {
                     if (feeEl.ValueKind == JsonValueKind.String)
                         return int.Parse(feeEl.GetString()!);
-                    return feeEl.GetInt32();
+                    if (feeEl.ValueKind == JsonValueKind.Number)
+                        return feeEl.GetInt32();
                 }
             }
         }
@@ -360,7 +365,7 @@ public class PolymarketOrderClient
         {
             // Silent catch: if it fails, we fall back to 0
         }
-        return 0; 
+        return 0;
     }
 
     /// <summary>

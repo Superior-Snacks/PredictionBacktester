@@ -103,16 +103,9 @@ public class ReplayBroker : PaperBroker
                 decimal currentBid = book.GetBestBidPrice();
                 if (currentBid <= 0.01m || currentBid >= 0.99m) continue;
 
-                if (currentBid >= order.TargetPrice)
-                {
-                    // Price still good — execute via base (PaperBroker constraints apply)
-                    base.SubmitSellAllOrder(order.AssetId, currentBid, book);
-                }
-                else
-                {
-                    // Price moved against us — latency reject
-                    Interlocked.Increment(ref _rejectedOrders);
-                }
+                // Always execute sell at current bid — mirrors production behavior.
+                // On a stop-loss we want OUT regardless of price movement during latency.
+                base.SubmitSellAllOrder(order.AssetId, currentBid, book);
             }
             else
             {
