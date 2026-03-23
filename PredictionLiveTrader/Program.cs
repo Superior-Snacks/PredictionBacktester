@@ -31,7 +31,7 @@ class Program
         // GRID 1: Live Flash Crash Sniper
         // ---------------------------------------------------------
         decimal[] sniperThresholds = { 0.25m };
-        long[] sniperWindows = { 60 };
+        long[] sniperWindows = { 20, 40, 60, 80 };
         long[] sustainTimers = { 1000 }; 
 
         int sniperVersion = 1;
@@ -53,7 +53,7 @@ class Program
                 param.window,
                 0.05m,
                 0.10m,
-                0.03m,
+                0.10m,
                 0.03m,
                 0.03m,
                 param.timer,
@@ -62,24 +62,6 @@ class Program
             ));
         }
         /*
-        // =========================================================
-        // NEW: ARBITRAGE STRATEGY CONFIGURATION
-        // =========================================================
-        
-        // 1. Define the markets and the tokens you want to arb
-        var arbMarkets = new Dictionary<string, List<string>>
-        {
-            { 
-                "BTC_100K_Merge", // Just a friendly name for your logs
-                new List<string> { 
-                    "60974765689417345927430034672058775275825509011877464696624869557481041716305", // Put your YES Token ID here
-                    "49952899810337186124293994776923696089648665646629994157941657787292952336650"  // Put your NO Token ID here
-                } 
-            },
-            // You can easily add a 3-way sports arb here later:
-            // { "EPL_Chelsea_v_Arsenal", new List<string> { "0xTEAM_A", "0xTEAM_B", "0xDRAW" } }
-        };
-
         // 2. Add the strategy to your runner!
         configs.Add(new StrategyConfig(
             "Categorical_Merge_Arb", 
