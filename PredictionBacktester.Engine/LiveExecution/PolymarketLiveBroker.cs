@@ -25,22 +25,19 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, GhostOrder> _ghostOrders = new();
     public int GhostOrderCount => _ghostOrders.Count;
 
-    // UserStream fill signals — wakes up polling loops instantly instead of waiting 500ms
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, TaskCompletionSource<bool>> _fillSignals = new();
-
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, int> _tokenFeeRates = new();
 
     private int GetFeeRate(string assetId) => _tokenFeeRates.TryGetValue(assetId, out var fee) ? fee : 0;
     public PolymarketOrderClient OrderClient => _orderClient;
     public void SetTokenFeeRate(string assetId, int feeRate) => _tokenFeeRates[assetId] = feeRate;
 
-    /// <summary>
-    /// Called by the UserStream when a fill is detected — wakes up the polling loop instantly.
-    /// </summary>
-    public void SignalFill(string assetId)
+    // UserStream fill signals — now passes exact execution size and price
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, TaskCompletionSource<(decimal Size, decimal Price)>> _fillSignals = new();
+
+    public void SignalFill(string assetId, decimal size, decimal price)
     {
         if (_fillSignals.TryRemove(assetId, out var tcs))
-            tcs.TrySetResult(true);
+            tcs.TrySetResult((size, price));
     }
 
     public IEnumerable<string> AllTrackedAssets => _tokenNames.Keys;
@@ -174,13 +171,30 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
                         bool settled = false;
 
                         // Register a signal so UserStream can wake us up instantly
-                        var fillSignal = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                        var fillSignal = new TaskCompletionSource<(decimal Size, decimal Price)>(TaskCreationOptions.RunContinuationsAsynchronously);
                         _fillSignals[assetId] = fillSignal;
 
                         for (int i = 0; i < 180; i++) // 180 × 500ms = 90 seconds
                         {
-                            // Wait for EITHER 500ms OR an instant signal from UserStream
-                            await Task.WhenAny(Task.Delay(500), fillSignal.Task);
+                            var delayTask = Task.Delay(500);
+                            var completedTask = await Task.WhenAny(delayTask, fillSignal.Task);
+
+                            // --- THE PHANTOM REFUND FIX ---
+                            if (completedTask == fillSignal.Task)
+                            {
+                                var wsData = fillSignal.Task.Result;
+                                actualShares = wsData.Size;
+                                actualDollars = wsData.Size * wsData.Price;
+                                settled = true;
+
+                                if (!IsMuted) lock (ConsoleLock)
+                                {
+                                    Console.ForegroundColor = ConsoleColor.Cyan;
+                                    Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [USER STREAM] Buy order confirmed instantly via WebSocket.");
+                                    Console.ResetColor();
+                                }
+                                break; // Skip the REST API entirely!
+                            }
 
                             try
                             {
@@ -379,7 +393,9 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
             }
             finally
             {
-                _pendingOrders.TryRemove(assetId, out _);
+                // Only release the pending lock if there's no ghost order for this asset.
+                if (!_ghostOrders.ContainsKey(assetId))
+                    _pendingOrders.TryRemove(assetId, out _);
             }
         });
     }
@@ -493,14 +509,31 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
 
                         bool settled = false;
 
-                        // Register a signal so UserStream can wake us up instantly
-                        var fillSignal = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                        /// Register a signal so UserStream can wake us up instantly
+                        var fillSignal = new TaskCompletionSource<(decimal Size, decimal Price)>(TaskCreationOptions.RunContinuationsAsynchronously);
                         _fillSignals[assetId] = fillSignal;
 
                         for (int i = 0; i < 180; i++) // 180 × 500ms = 90 seconds
                         {
-                            // Wait for EITHER 500ms OR an instant signal from UserStream
-                            await Task.WhenAny(Task.Delay(500), fillSignal.Task);
+                            var delayTask = Task.Delay(500);
+                            var completedTask = await Task.WhenAny(delayTask, fillSignal.Task);
+
+                            // --- THE PHANTOM REFUND FIX ---
+                            if (completedTask == fillSignal.Task)
+                            {
+                                var wsData = fillSignal.Task.Result;
+                                actualSharesSold = wsData.Size;
+                                cashReceived = wsData.Size * wsData.Price;
+                                settled = true;
+                                
+                                if (!IsMuted) lock (ConsoleLock)
+                                {
+                                    Console.ForegroundColor = ConsoleColor.Cyan;
+                                    Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [USER STREAM] Sell order confirmed instantly via WebSocket.");
+                                    Console.ResetColor();
+                                }
+                                break; // Skip the REST API entirely!
+                            }
 
                             try
                             {
@@ -705,7 +738,11 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
             }
             finally
             {
-                _pendingOrders.TryRemove(assetId, out _);
+                // Only release the pending lock if there's no ghost order for this asset.
+                // If a ghost sell was registered, keep the lock so the strategy can't
+                // fire another sell before ReconcileGhostFill runs.
+                if (!_ghostOrders.ContainsKey(assetId))
+                    _pendingOrders.TryRemove(assetId, out _);
             }
         });
     }
@@ -773,6 +810,10 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
             }
         }
 
+        // Release the pending order lock now that the ghost is reconciled.
+        // This allows the strategy to submit new orders for this asset.
+        _pendingOrders.TryRemove(fill.TokenId, out _);
+
         if (!IsMuted) lock (ConsoleLock)
         {
             Console.ForegroundColor = ConsoleColor.Magenta;
@@ -796,7 +837,11 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
             if (kvp.Value.CreatedAt < cutoff)
             {
                 if (_ghostOrders.TryRemove(kvp.Key, out _))
+                {
+                    // Release the pending order lock that was held for this ghost
+                    _pendingOrders.TryRemove(kvp.Key, out _);
                     purged++;
+                }
             }
         }
         return purged;

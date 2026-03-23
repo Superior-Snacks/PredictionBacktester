@@ -299,12 +299,26 @@ public class PolymarketOrderClient
     }
 
     private static byte[] PadUint256(BigInteger value)
+{
+    byte[] bytes = value.ToByteArray(isUnsigned: true, isBigEndian: true);
+    
+    if (bytes.Length == 32) return bytes;
+    
+    byte[] padded = new byte[32];
+    
+    if (bytes.Length < 32)
     {
-        byte[] raw = value.ToByteArray(isUnsigned: true, isBigEndian: true);
-        byte[] padded = new byte[32];
-        Array.Copy(raw, 0, padded, 32 - raw.Length, raw.Length);
-        return padded;
+        // Pad with leading zeros (Big Endian standard)
+        Buffer.BlockCopy(bytes, 0, padded, 32 - bytes.Length, bytes.Length);
     }
+    else
+    {
+        // Protects against the 33-byte sign-bit crash on massive Token IDs
+        Buffer.BlockCopy(bytes, bytes.Length - 32, padded, 0, 32);
+    }
+    
+    return padded;
+}
 
     private static byte[] PadAddress(string address)
     {

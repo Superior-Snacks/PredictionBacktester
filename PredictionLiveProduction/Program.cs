@@ -327,9 +327,8 @@ class Program
         _userStream = new PolymarketUserStreamClient(config, uniqueConditionIds);
         _userStream.OnTradeMatched += (fill) =>
         {
-            // FAST PATH: If a polling loop is waiting on this asset, wake it up instantly
-            // The polling loop will confirm via API and handle all the bookkeeping
-            _broker.SignalFill(fill.TokenId);
+            // FAST PATH: Passes the exact execution size and price into the waiting polling loop
+            _broker.SignalFill(fill.TokenId, fill.Size, fill.Price);
 
             // FALLBACK: If polling already timed out (ghost order), reconcile directly
             bool reconciled = _broker.ReconcileGhostFill(fill);
