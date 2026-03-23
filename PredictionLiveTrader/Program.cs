@@ -108,6 +108,10 @@ class Program
     private static Dictionary<string, decimal> _tokenMinSizes = new Dictionary<string, decimal>();
     private static readonly HashSet<string> _subscribedTokens = new();
     private static readonly HashSet<string> _droppedStrategies = new();
+    // Tracks the last time each token received a book update (for staleness detection)
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, DateTime> _lastBookUpdate = new();
+    // Markets already force-settled (don't re-check)
+    private static readonly HashSet<string> _forceSettled = new();
     private static ClientWebSocket? _activeWs;
     private static readonly SemaphoreSlim _wsSendSemaphore = new SemaphoreSlim(1, 1);
     private static readonly bool _recordMarketData = false;
@@ -427,6 +431,70 @@ class Program
                 }
                 catch { /* Ignore sweep errors */ }
 
+                // --- STALENESS SWEEP ---
+                // Markets with no book updates for 1 hour are likely settled.
+                // Query the API to confirm and resolve at the correct price.
+                try
+                {
+                    var staleThreshold = DateTime.UtcNow.AddHours(-1);
+                    var staleTokens = _lastBookUpdate
+                        .Where(kvp => kvp.Value < staleThreshold && !_forceSettled.Contains(kvp.Key))
+                        .Select(kvp => kvp.Key)
+                        .ToList();
+
+                    int settled = 0;
+                    foreach (var tokenId in staleTokens)
+                    {
+                        // Only bother checking if any strategy holds a position
+                        bool anyPosition = _strategyBrokers.Values.Any(b => b.GetPositionShares(tokenId) > 0 || b.GetNoPositionShares(tokenId) > 0);
+                        if (!anyPosition)
+                        {
+                            _forceSettled.Add(tokenId);
+                            continue;
+                        }
+
+                        var market = await apiClient.GetMarketByTokenIdAsync(tokenId);
+                        if (market == null) continue;
+
+                        if (market.IsClosed && market.ClobTokenIds != null && market.OutcomePrices != null)
+                        {
+                            // Find our token's index to get the correct payout price
+                            for (int i = 0; i < market.ClobTokenIds.Length; i++)
+                            {
+                                if (market.ClobTokenIds[i] == tokenId)
+                                {
+                                    decimal payoutPrice = 0m;
+                                    if (i < market.OutcomePrices.Length)
+                                        decimal.TryParse(market.OutcomePrices[i], System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out payoutPrice);
+
+                                    foreach (var broker in _strategyBrokers.Values)
+                                    {
+                                        if (broker.GetPositionShares(tokenId) > 0 || broker.GetNoPositionShares(tokenId) > 0)
+                                            broker.ResolveMarket(tokenId, payoutPrice);
+                                    }
+
+                                    string name = _tokenNames.GetValueOrDefault(tokenId, tokenId[..Math.Min(8, tokenId.Length)] + "...");
+                                    if (!_quietMode) lock (GlobalSimulatedBroker.ConsoleLock)
+                                    {
+                                        Console.ForegroundColor = ConsoleColor.Yellow;
+                                        Console.WriteLine($"[STALE SETTLE] {name} — no updates for 1h, API confirmed closed. Settled @ ${payoutPrice:0.00}");
+                                        Console.ResetColor();
+                                    }
+                                    settled++;
+                                    break;
+                                }
+                            }
+                        }
+                        _forceSettled.Add(tokenId);
+
+                        await Task.Delay(100); // Rate limit API calls
+                    }
+
+                    if (settled > 0 && !_quietMode)
+                        Console.WriteLine($"[STALE SETTLE] Force-settled {settled} stale market(s).");
+                }
+                catch { /* Ignore staleness sweep errors */ }
+
                 // --- NEW MARKET DISCOVERY ---
                 try
                 {
@@ -557,6 +625,7 @@ class Program
                                                 string side = change.GetProperty("side").GetString() ?? "";
 
                                                 var book = orderBooks[assetId];
+                                                _lastBookUpdate[assetId] = DateTime.UtcNow;
 
                                                 book.UpdatePriceLevel(side, price, size);
 

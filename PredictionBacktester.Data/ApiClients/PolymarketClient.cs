@@ -84,6 +84,23 @@ public class PolymarketClient
         return newTrades;
     }
 
+    /// <summary>
+    /// Fetches a market by its CLOB token ID. Returns null if not found.
+    /// </summary>
+    public async Task<PolymarketMarketResponse?> GetMarketByTokenIdAsync(string clobTokenId)
+    {
+        var url = $"markets?clob_token_ids={clobTokenId}";
+        try
+        {
+            var markets = await _gammaClient.GetFromJsonAsync<List<PolymarketMarketResponse>>(url);
+            return markets?.FirstOrDefault();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     public async Task<bool> IsMarketClosedAsync(string conditionId)
     {
         // Gamma API allows us to fetch a specific market directly by its Condition ID
