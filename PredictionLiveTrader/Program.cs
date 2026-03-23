@@ -88,6 +88,7 @@ class Program
     private static Dictionary<string, PaperBroker> _strategyBrokers = new Dictionary<string, PaperBroker>();
     private static Dictionary<string, string> _tokenNames = new Dictionary<string, string>();
     private static Dictionary<string, decimal> _tokenMinSizes = new Dictionary<string, decimal>();
+    private static Dictionary<string, int> _tokenFeeRates = new Dictionary<string, int>();
     private static readonly HashSet<string> _subscribedTokens = new();
     private static readonly HashSet<string> _droppedStrategies = new();
     // Tracks the last time each token received a book update (for staleness detection)
@@ -96,6 +97,7 @@ class Program
     private static readonly HashSet<string> _forceSettled = new();
     private static ClientWebSocket? _activeWs;
     private static readonly SemaphoreSlim _wsSendSemaphore = new SemaphoreSlim(1, 1);
+    private static readonly HttpClient _clobHttpClient = new() { BaseAddress = new Uri("https://clob.polymarket.com/") };
     private static readonly bool _recordMarketData = false;
     private static readonly MarketReplayLogger? _replayLogger = _recordMarketData ? new MarketReplayLogger("MarketData") : null;
 
@@ -137,7 +139,7 @@ class Program
 
         foreach (var config in _strategyConfigs)
         {
-            var broker = new PaperBroker(config.Name, config.StartingCapital, _tokenNames, _tokenMinSizes, MAX_BET_SIZE);
+            var broker = new PaperBroker(config.Name, config.StartingCapital, _tokenNames, _tokenMinSizes, MAX_BET_SIZE, _tokenFeeRates);
             broker.LatencyMs = _latencyEnabled ? REALISTIC_LATENCY_MS : 0;
             _strategyBrokers[config.Name] = broker;
         }
@@ -760,6 +762,21 @@ class Program
                             _tokenNames.TryAdd(yesToken, market.Question);
                             _tokenMinSizes.TryAdd(yesToken, market.OrderMinSize > 0 ? market.OrderMinSize : 1.00m);
                             newlyDiscovered.Add(yesToken);
+
+                            // Fetch fee rate from CLOB API (non-blocking best-effort)
+                            try
+                            {
+                                var feeResp = await _clobHttpClient.GetStringAsync($"/fee-rate?token_id={yesToken}");
+                                using var doc = System.Text.Json.JsonDocument.Parse(feeResp);
+                                var root = doc.RootElement;
+                                if ((root.TryGetProperty("fee_rate_bps", out var feeEl) ||
+                                     root.TryGetProperty("feeRateBps", out feeEl)) &&
+                                    feeEl.TryGetInt32(out int bps) && bps > 0)
+                                {
+                                    _tokenFeeRates[yesToken] = bps;
+                                }
+                            }
+                            catch { /* Non-critical — fees default to 0 if fetch fails */ }
                         }
                     }
                 }

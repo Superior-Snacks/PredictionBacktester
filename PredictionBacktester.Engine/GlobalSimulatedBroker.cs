@@ -7,7 +7,7 @@ namespace PredictionBacktester.Engine;
 
 public class GlobalSimulatedBroker
 {
-    public decimal SpreadPenalty { get; private set; } = 0.015m;
+    public decimal SpreadPenalty { get; protected set; } = 0.015m;
 
     // Shared lock for all console output to prevent color interleaving across threads
     public static readonly object ConsoleLock = new object();
