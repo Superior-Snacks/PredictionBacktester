@@ -94,6 +94,50 @@ def analyze_latest_run():
     ).reset_index()
     leaderboard['Rejects'] = leaderboard['StrategyName'].map(reject_counts).fillna(0).astype(int)
 
+    # --- True Win/Loss tracking via round-trip trades ---
+    # A "round trip" starts with a BUY and ends when all shares are sold/resolved.
+    # If the bot buys the same market again, that's a new round trip.
+    # PnL is the sum of cashflows (buy is negative, sell is positive).
+    round_trip_stats = {}
+    for strat, strat_df in df.sort_values('Timestamp').groupby('StrategyName'):
+        wins = 0
+        losses = 0
+        open_trips = 0  # round trips still open (no exit yet)
+        for asset, asset_df in strat_df.groupby('AssetId'):
+            trip_pnl = 0.0
+            in_trip = False
+            for _, row in asset_df.iterrows():
+                if row['Side'] in buy_sides:
+                    if in_trip:
+                        # New buy while already in a trip — close the old one first
+                        if trip_pnl >= 0:
+                            wins += 1
+                        else:
+                            losses += 1
+                    # Start a new round trip
+                    in_trip = True
+                    trip_pnl = row['CashFlow']  # negative (cost of entry)
+                elif row['Side'] in sell_sides:
+                    trip_pnl += row['CashFlow']  # positive (proceeds)
+            # After all trades for this asset: check if trip was closed
+            if in_trip:
+                # Check if position is fully closed (net shares ~ 0)
+                yes_held = asset_df[asset_df['Side'] == 'BUY']['Shares'].sum() - asset_df[asset_df['Side'].isin(['SELL', 'RESOLVE YES'])]['Shares'].sum()
+                no_held = asset_df[asset_df['Side'] == 'BUY NO']['Shares'].sum() - asset_df[asset_df['Side'].isin(['SELL NO', 'RESOLVE NO'])]['Shares'].sum()
+                if abs(yes_held) < 0.01 and abs(no_held) < 0.01:
+                    # Position fully closed — score the round trip
+                    if trip_pnl >= 0:
+                        wins += 1
+                    else:
+                        losses += 1
+                else:
+                    open_trips += 1
+        round_trip_stats[strat] = {'Wins': wins, 'Losses': losses, 'Open': open_trips}
+
+    rt_df = pd.DataFrame(round_trip_stats).T.reset_index().rename(columns={'index': 'StrategyName'})
+    leaderboard = leaderboard.merge(rt_df, on='StrategyName', how='left')
+    leaderboard[['Wins', 'Losses', 'Open']] = leaderboard[['Wins', 'Losses', 'Open']].fillna(0).astype(int)
+
     # --- Mark-to-Market calculations (merged into leaderboard) ---
     last_prices = df.sort_values('Timestamp').groupby('AssetId')['ExecutionPrice'].last().to_dict()
 
@@ -143,7 +187,11 @@ def analyze_latest_run():
     # Sort and format
     leaderboard = leaderboard.sort_values('True_Total_Equity', ascending=False)
     leaderboard['Total_PnL_fmt'] = leaderboard['Total_PnL'].apply(lambda x: f"${x:,.2f}")
-    leaderboard['WinRate%'] = (leaderboard['Sells'] / (leaderboard['Buys'] + leaderboard['Sells']) * 100).fillna(0).apply(lambda x: f"{x:.1f}%")
+    closed_trips = leaderboard['Wins'] + leaderboard['Losses']
+    total_trips = closed_trips + leaderboard['Open']
+    leaderboard['WinRate%'] = (leaderboard['Wins'] / closed_trips.replace(0, 1) * 100).apply(lambda x: f"{x:.0f}%")
+    leaderboard['Closure%'] = (closed_trips / total_trips.replace(0, 1) * 100).apply(lambda x: f"{x:.0f}%")
+    leaderboard['W/L'] = leaderboard.apply(lambda r: f"{r['Wins']}W/{r['Losses']}L/{r['Open']}O", axis=1)
     leaderboard['Cash_Left'] = leaderboard['Worst_Case_Equity'].apply(lambda x: f"${x:,.2f}")
     leaderboard['MTM_Value'] = leaderboard['MarkToMarket_Value'].apply(lambda x: f"${x:,.2f}")
     leaderboard['Equity'] = leaderboard['True_Total_Equity'].apply(lambda x: f"${x:,.2f}")
@@ -154,7 +202,7 @@ def analyze_latest_run():
 
     print("\n🏆 STRATEGY LEADERBOARD (Sorted by Equity)")
     print("-" * 120)
-    print(leaderboard[['StrategyName', 'Equity', 'True_PnL_fmt', 'PnL_hr', 'Cash_Left', 'MTM_Value', 'Worst_PnL', 'Buys', 'Sells', 'Rejects', 'WinRate%', 'Hours_fmt']].to_string(index=False))
+    print(leaderboard[['StrategyName', 'Equity', 'True_PnL_fmt', 'PnL_hr', 'Cash_Left', 'MTM_Value', 'Worst_PnL', 'W/L', 'WinRate%', 'Closure%', 'Rejects', 'Hours_fmt']].to_string(index=False))
 
     # ==========================================
     # DASHBOARD 2: PARAMETER IMPACT ANALYSIS
