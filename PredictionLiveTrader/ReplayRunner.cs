@@ -23,6 +23,15 @@ static class ReplayRunner
 
     public static void Run(string dataDirectory, List<StrategyConfig> strategyConfigs)
     {
+        // Auto-detect binary format
+        string binPath = Path.Combine(dataDirectory, "replay.bin");
+        string idxPath = Path.Combine(dataDirectory, "replay.idx");
+        if (File.Exists(binPath) && File.Exists(idxPath))
+        {
+            RunBinary(binPath, idxPath, strategyConfigs);
+            return;
+        }
+
         Console.Clear();
         Console.WriteLine("=========================================");
         Console.WriteLine("  REPLAY BACKTESTER — LOCAL .GZ DATA     ");
@@ -479,5 +488,178 @@ static class ReplayRunner
             .ToList();
 
         tokenNames.TryAdd(assetId, assetId[..Math.Min(12, assetId.Length)] + "...");
+    }
+
+    /// <summary>
+    /// Fast binary replay path — reads preprocessed .bin + .idx files.
+    /// No JSON parsing, no decompression. Just reads 19-byte records and feeds to strategies.
+    /// </summary>
+    private static void RunBinary(string binPath, string idxPath, List<StrategyConfig> strategyConfigs)
+    {
+        Console.Clear();
+        Console.WriteLine("=========================================");
+        Console.WriteLine("  BINARY REPLAY — PREPROCESSED DATA      ");
+        Console.WriteLine($"  Latency: {REPLAY_LATENCY_MS}ms        ");
+        Console.WriteLine("=========================================");
+
+        var tokenNames = new Dictionary<string, string>();
+        var tokenMinSizes = new Dictionary<string, decimal>();
+        const decimal MAX_BET_SIZE = 1000.00m;
+
+        var brokers = new Dictionary<string, ReplayBroker>();
+        foreach (var config in strategyConfigs)
+        {
+            var broker = new ReplayBroker(config.Name, config.StartingCapital, tokenNames, tokenMinSizes, MAX_BET_SIZE, REPLAY_LATENCY_MS);
+            broker.IsMuted = true;
+            brokers[config.Name] = broker;
+        }
+
+        var orderBooks = new Dictionary<string, LocalOrderBook>();
+        var activeStrategies = new Dictionary<string, List<ILiveStrategy>>();
+        bool hasDeferredOrders = false;
+
+        int maxNameLength = strategyConfigs.Max(c => c.Name.Length);
+
+        using var reader = new BinaryReplayReader(binPath, idxPath);
+        long totalRecords = reader.TotalRecords;
+        long recordsProcessed = 0;
+        long totalPriceChanges = 0;
+        var overallSw = Stopwatch.StartNew();
+        long lastReportRecord = 0;
+
+        Console.WriteLine($"  {totalRecords:N0} records in binary file");
+        Console.WriteLine();
+
+        while (reader.TryReadTick(out long tickTimestampMs, out string assetId, out decimal price, out decimal size, out string side))
+        {
+            recordsProcessed++;
+
+            EnsureAssetInitialized(assetId, orderBooks, activeStrategies, strategyConfigs, tokenNames);
+
+            // Drain deferred orders
+            if (hasDeferredOrders)
+            {
+                hasDeferredOrders = false;
+                foreach (var broker in brokers.Values)
+                {
+                    broker.ReplayTimeMs = tickTimestampMs;
+                    broker.DrainDeferredOrders(orderBooks);
+                    if (broker.HasDeferredOrders) hasDeferredOrders = true;
+                }
+            }
+
+            // Update order book
+            orderBooks[assetId].UpdatePriceLevel(side, price, size);
+            totalPriceChanges++;
+
+            // Reset consumed liquidity
+            foreach (var broker in brokers.Values)
+                broker.ResetConsumedLiquidity(assetId);
+
+            // Feed to strategies
+            var book = orderBooks[assetId];
+            var strategies = activeStrategies[assetId];
+            foreach (var strategy in strategies)
+            {
+                brokers[strategy.StrategyName].ReplayTimeMs = tickTimestampMs;
+                strategy.OnBookUpdate(book, brokers[strategy.StrategyName]);
+            }
+
+            if (!hasDeferredOrders)
+            {
+                foreach (var broker in brokers.Values)
+                {
+                    if (broker.HasDeferredOrders) { hasDeferredOrders = true; break; }
+                }
+            }
+
+            // Progress bar every 500K records
+            if (recordsProcessed - lastReportRecord >= 500_000)
+            {
+                lastReportRecord = recordsProcessed;
+                double percent = (double)recordsProcessed / totalRecords * 100;
+                double elapsedSec = overallSw.Elapsed.TotalSeconds;
+                double recsPerSec = recordsProcessed / Math.Max(elapsedSec, 0.001);
+                long remaining = totalRecords - recordsProcessed;
+                TimeSpan eta = TimeSpan.FromSeconds(remaining / Math.Max(recsPerSec, 1));
+
+                int barWidth = 30;
+                int filled = (int)(percent / 100 * barWidth);
+                string bar = new string('#', filled) + new string('-', barWidth - filled);
+                Console.Write($"\r  [{bar}] {percent:0.1}% | {recordsProcessed:N0}/{totalRecords:N0} | {recsPerSec:N0}/sec | ETA: {eta:hh\\:mm\\:ss}   ");
+            }
+        }
+
+        // Final drain
+        foreach (var broker in brokers.Values)
+            broker.DrainDeferredOrders(orderBooks);
+
+        overallSw.Stop();
+
+        Console.WriteLine($"\n\n=========================================");
+        Console.WriteLine("  BINARY REPLAY COMPLETE");
+        Console.WriteLine("=========================================");
+        Console.WriteLine($"  Records processed:  {recordsProcessed:N0}");
+        Console.WriteLine($"  Price changes:      {totalPriceChanges:N0}");
+        Console.WriteLine($"  Unique assets:      {orderBooks.Count:N0}");
+        Console.WriteLine($"  Elapsed:            {overallSw.Elapsed.TotalSeconds:0.1}s");
+        Console.WriteLine($"  Throughput:         {recordsProcessed / Math.Max(overallSw.Elapsed.TotalSeconds, 0.001):N0} records/sec");
+        Console.WriteLine();
+
+        // --- Strategy Leaderboard ---
+        Console.WriteLine("  STRATEGY LEADERBOARD (Sorted by Equity)");
+        Console.WriteLine("  " + new string('-', 110));
+
+        var results = strategyConfigs
+            .Select(c =>
+            {
+                var b = brokers[c.Name];
+                decimal equity = b.GetTotalPortfolioValue();
+                decimal pnl = equity - c.StartingCapital;
+                decimal realizedPnl = b.CashBalance - c.StartingCapital;
+                decimal mtm = equity - b.CashBalance;
+                return new { c.Name, Equity = equity, PnL = pnl, Realized = realizedPnl, MTM = mtm, b.TotalActions, b.TotalTradesExecuted, b.WinningTrades, b.LosingTrades, b.RejectedOrders };
+            })
+            .OrderByDescending(x => x.Equity)
+            .ToList();
+
+        foreach (var r in results)
+        {
+            Console.ForegroundColor = r.PnL >= 0 ? ConsoleColor.Green : ConsoleColor.Red;
+            Console.WriteLine($"  [{r.Name.PadRight(maxNameLength)}] Equity: ${r.Equity:0.00} | PnL: ${r.PnL:0.00} (Real: ${r.Realized:0.00} + MTM: ${r.MTM:0.00}) | Actions: {r.TotalActions} Exits: {r.TotalTradesExecuted} (W:{r.WinningTrades} L:{r.LosingTrades}) Rej: {r.RejectedOrders}");
+        }
+        Console.ResetColor();
+        Console.WriteLine();
+
+        // --- Export CSV ---
+        string csvFilename = $"ReplayTrades_{DateTime.Now:yyyyMMdd_HHmmss}.csv";
+        try
+        {
+            using var writer = new StreamWriter(csvFilename);
+            writer.WriteLine("Timestamp,StrategyName,StartingCapital,MarketName,AssetId,Side,ExecutionPrice,Shares,DollarValue");
+
+            int totalTrades = 0;
+            foreach (var config in strategyConfigs)
+            {
+                var broker = brokers[config.Name];
+                foreach (var trade in broker.TradeLedger)
+                {
+                    string marketName = tokenNames.GetValueOrDefault(trade.OutcomeId, "Unknown");
+                    marketName = $"\"{marketName.Replace("\"", "\"\"")}\"";
+                    writer.WriteLine($"{trade.Date:O},{config.Name},{config.StartingCapital},{marketName},{trade.OutcomeId},{trade.Side},{trade.Price},{trade.Shares},{trade.DollarValue}");
+                    totalTrades++;
+                }
+            }
+
+            Console.ForegroundColor = ConsoleColor.Green;
+            Console.WriteLine($"  {totalTrades} trades exported to {csvFilename}");
+            Console.ResetColor();
+        }
+        catch (Exception ex)
+        {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"  Export failed: {ex.Message}");
+            Console.ResetColor();
+        }
     }
 }

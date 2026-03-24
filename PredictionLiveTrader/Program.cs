@@ -103,6 +103,15 @@ class Program
 
     static async Task Main(string[] args)
     {
+        // --- PREPROCESS MODE: convert .gz files to compact binary ---
+        int preprocessIdx = Array.IndexOf(args, "--preprocess");
+        if (preprocessIdx >= 0)
+        {
+            string preprocessDir = preprocessIdx + 1 < args.Length ? args[preprocessIdx + 1] : "MarketData1week";
+            ReplayPreprocessor.Run(preprocessDir);
+            return;
+        }
+
         // --- REPLAY MODE: offline backtest from recorded .gz data ---
         int replayIdx = Array.IndexOf(args, "--replay");
         if (replayIdx >= 0)

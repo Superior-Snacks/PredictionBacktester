@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "WebFetch(domain:raw.githubusercontent.com)",
-      "Bash(python3:*)"
+      "Bash(python3:*)",
+      "Bash(zcat /c/Users/jonin/dev/projects/PredictionBacktester/MarketData1week/L2_20260323_165213.gz)",
+      "Bash(dotnet build:*)"
     ]
   }
 }
