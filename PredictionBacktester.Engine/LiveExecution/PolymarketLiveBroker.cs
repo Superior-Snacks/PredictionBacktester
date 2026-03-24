@@ -47,6 +47,11 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
             tcs.TrySetResult((size, price));
     }
 
+    // Optional telemetry callbacks (wired externally for test mode)
+    public Action<decimal, decimal, string>? OnBuyFilled;           // (shares, price, fillSource)
+    public Action? OnSellSubmitted;
+    public Action<decimal, decimal, string, decimal>? OnSellFilled; // (shares, price, fillSource, pnl)
+
     public IEnumerable<string> AllTrackedAssets => _tokenNames.Keys;
 
     public PolymarketLiveBroker(
@@ -106,6 +111,12 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
         decimal bestAsk = book.GetBestAskPrice();
         if (bestAsk >= 0.99m || bestAsk <= 0.01m)
         {
+            if (!IsMuted) lock (ConsoleLock)
+            {
+                Console.ForegroundColor = ConsoleColor.DarkGray;
+                Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [SKIP] Buy rejected — price {bestAsk:0.00} out of range | {GetMarketName(assetId)}");
+                Console.ResetColor();
+            }
             _pendingOrders.TryRemove(assetId, out _); _blockedLogSent.TryRemove(assetId, out _);
             return;
         }
@@ -118,6 +129,12 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
         decimal minSize = GetMinSize(assetId);
         if (shares < minSize)
         {
+            if (!IsMuted) lock (ConsoleLock)
+            {
+                Console.ForegroundColor = ConsoleColor.DarkGray;
+                Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [SKIP] Buy rejected — {shares:0.00} shares below min {minSize} | {GetMarketName(assetId)}");
+                Console.ResetColor();
+            }
             _pendingOrders.TryRemove(assetId, out _); _blockedLogSent.TryRemove(assetId, out _);
             return;
         }
@@ -255,9 +272,15 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
                                         }
                                     }
                                 }
-                                catch
+                                catch (Exception pollEx)
                                 {
                                     _ghostOrders[assetId] = new GhostOrder(assetId, orderId, "BUY", targetPrice, shares, DateTime.UtcNow);
+                                    if (!IsMuted) lock (ConsoleLock)
+                                    {
+                                        Console.ForegroundColor = ConsoleColor.DarkYellow;
+                                        Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [POLL FAILED] Buy poll error for {GetMarketName(assetId)}: {pollEx.Message}. Ghost registered.");
+                                        Console.ResetColor();
+                                    }
                                 }
                             }
                         }
@@ -330,6 +353,21 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
                         Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [LIVE BUY FAK] {actualShares:0.00} shares @ exactly ${exactExecutionPrice:0.000} | ${actualDollars:0.00} | via {fillSource} | {GetMarketName(assetId)}");
                         Console.ResetColor();
                     }
+
+                    OnBuyFilled?.Invoke(actualShares, actualDollars / actualShares, fillSource);
+                }
+                else
+                {
+                    // API returned success=false — log the error
+                    _fillSignals.TryRemove(assetId, out _);
+                    string errorMsg = root.TryGetProperty("errorMsg", out var errEl) ? errEl.GetString() ?? "" : "";
+                    Interlocked.Increment(ref _rejectedOrders);
+                    if (!IsMuted) lock (ConsoleLock)
+                    {
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [BUY REJECTED] {GetMarketName(assetId)}: {errorMsg}");
+                        Console.ResetColor();
+                    }
                 }
             }
             catch (Exception ex)
@@ -360,7 +398,15 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
         // Check sell cooldown — after FAK failures (no liquidity), wait before retrying
         if (_sellCooldownUntil.TryGetValue(assetId, out long cooldownUntil) &&
             DateTimeOffset.UtcNow.ToUnixTimeSeconds() < cooldownUntil)
+        {
+            if (OrderDebugMode && !IsMuted) lock (ConsoleLock)
+            {
+                Console.ForegroundColor = ConsoleColor.DarkGray;
+                Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [COOLDOWN] Sell skipped — {cooldownUntil - DateTimeOffset.UtcNow.ToUnixTimeSeconds()}s remaining | {GetMarketName(assetId)}");
+                Console.ResetColor();
+            }
             return;
+        }
 
         decimal minSize = GetMinSize(assetId);
         if (sharesToSell < minSize)
@@ -396,6 +442,12 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
         // No liquidity — don't sell into an empty book
         if (bestBid <= 0.01m)
         {
+            if (!IsMuted) lock (ConsoleLock)
+            {
+                Console.ForegroundColor = ConsoleColor.DarkGray;
+                Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [SKIP] Sell rejected — no bid liquidity (best bid {bestBid:0.00}) | {GetMarketName(assetId)}");
+                Console.ResetColor();
+            }
             _pendingOrders.TryRemove(assetId, out _); _blockedLogSent.TryRemove(assetId, out _);
             return;
         }
@@ -407,6 +459,8 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
         {
             try
             {
+                OnSellSubmitted?.Invoke();
+
                 // Register UserStream fill signal BEFORE posting
                 var fillSignal = new TaskCompletionSource<(decimal Size, decimal Price)>(TaskCreationOptions.RunContinuationsAsynchronously);
                 _fillSignals[assetId] = fillSignal;
@@ -548,9 +602,15 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
                                         }
                                     }
                                 }
-                                catch
+                                catch (Exception pollEx)
                                 {
                                     _ghostOrders[assetId] = new GhostOrder(assetId, orderId, "SELL", targetPrice, sharesToSell, DateTime.UtcNow);
+                                    if (!IsMuted) lock (ConsoleLock)
+                                    {
+                                        Console.ForegroundColor = ConsoleColor.DarkYellow;
+                                        Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [POLL FAILED] Sell poll error for {GetMarketName(assetId)}: {pollEx.Message}. Ghost registered.");
+                                        Console.ResetColor();
+                                    }
                                 }
                             }
                         }
@@ -607,6 +667,28 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
                         decimal exactExecutionPrice = cashReceived / actualSharesSold;
                         Console.ForegroundColor = pnl >= 0 ? ConsoleColor.Cyan : ConsoleColor.Red;
                         Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [LIVE SELL FAK] {actualSharesSold:0.00} shares @ exactly ${exactExecutionPrice:0.000} | PnL: ${pnl:0.00} | via {fillSource} | {GetMarketName(assetId)}");
+                        Console.ResetColor();
+                    }
+
+                    OnSellFilled?.Invoke(actualSharesSold, cashReceived / actualSharesSold, fillSource, pnl);
+                }
+                else
+                {
+                    // API returned success=false — log the error
+                    _fillSignals.TryRemove(assetId, out _);
+                    string errorMsg = root.TryGetProperty("errorMsg", out var errEl) ? errEl.GetString() ?? "" : "";
+                    Interlocked.Increment(ref _rejectedOrders);
+
+                    if (errorMsg.Contains("no orders found to match", StringComparison.OrdinalIgnoreCase) ||
+                        errorMsg.Contains("FAK", StringComparison.OrdinalIgnoreCase))
+                    {
+                        _sellCooldownUntil[assetId] = DateTimeOffset.UtcNow.ToUnixTimeSeconds() + SELL_COOLDOWN_SECONDS;
+                    }
+
+                    if (!IsMuted) lock (ConsoleLock)
+                    {
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [SELL REJECTED] {GetMarketName(assetId)}: {errorMsg}");
                         Console.ResetColor();
                     }
                 }

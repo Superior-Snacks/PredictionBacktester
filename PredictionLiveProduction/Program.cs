@@ -91,6 +91,13 @@ class Program
         // 3. SAFETY CONFIRMATION
         // ==========================================
         bool headless = args.Contains("--no-confirm");
+        bool testMode = args.Contains("--test");
+        if (testMode)
+        {
+            TestModeTelemetry.IsActive = true;
+            headless = true; // Skip confirmation in test mode
+            Log.Warning("[TEST MODE] Active — will trade 1 market at minimum size, time all stages, then exit.");
+        }
 
         if (!headless)
         {
@@ -138,6 +145,19 @@ class Program
             SUSTAIN_TIMER_MS,
             SETTLEMENT_LOCK_MS
         );
+
+        // Wire test mode callbacks
+        if (testMode)
+        {
+            _broker.TestMode = true;
+            _broker.OnBuyFilled = (shares, price, source) =>
+            {
+                TestModeTelemetry.BuyFilled(shares, price, source);
+                _buyingPaused = true; // Only trade one market in test mode
+            };
+            _broker.OnSellSubmitted = () => TestModeTelemetry.SellSubmitted();
+            _broker.OnSellFilled = (shares, price, source, pnl) => TestModeTelemetry.SellFilled(shares, price, source, pnl);
+        }
 
         Console.WriteLine("=========================================");
         Console.WriteLine("  LIVE PRODUCTION ENGINE INITIALIZED");
@@ -518,11 +538,20 @@ class Program
                                     _orderBooks[assetId] = new LocalOrderBook(assetId);
                                     // Single strategy instance per asset — create a fresh one so each asset
                                     // gets its own sliding window of recent asks
-                                    strategies[assetId] = new LiveFlashCrashSniperStrategy(
+                                    var newStrat = new LiveFlashCrashSniperStrategy(
                                         STRATEGY_NAME, CRASH_THRESHOLD, TIME_WINDOW_SECONDS,
                                         TAKE_PROFIT, STOP_LOSS, RISK_PERCENTAGE,
                                         ENTRY_SLIPPAGE, EXIT_SLIPPAGE,
                                         SUSTAIN_TIMER_MS, SETTLEMENT_LOCK_MS);
+                                    if (TestModeTelemetry.IsActive)
+                                    {
+                                        newStrat.OnCrashSpotted = (id, ask, gap) => TestModeTelemetry.CrashSpotted(id, ask, gap);
+                                        newStrat.OnSustainConfirmed = (ms) => TestModeTelemetry.SustainConfirmed(ms);
+                                        newStrat.OnBuySubmitted = (price, dollars) => TestModeTelemetry.BuySubmitted(price, dollars);
+                                        newStrat.OnSettlementUnlocked = () => TestModeTelemetry.SettlementUnlocked();
+                                        newStrat.OnExitTriggered = (reason, bid, entry) => TestModeTelemetry.ExitTriggered(reason, bid, entry);
+                                    }
+                                    strategies[assetId] = newStrat;
                                 }
 
                                 if (root.TryGetProperty("bids", out var bidsEl) && root.TryGetProperty("asks", out var asksEl))
@@ -582,6 +611,14 @@ class Program
 
                                         if ((!_buyingPaused && !_dailyLossTriggered) || hasPosition)
                                             strat.OnBookUpdate(book, _broker);
+
+                                        // Test mode: auto-shutdown after trade completes
+                                        if (TestModeTelemetry.IsActive && TestModeTelemetry.TestComplete)
+                                        {
+                                            Log.Warning("[TEST] Test trade complete. Shutting down...");
+                                            Shutdown();
+                                            Environment.Exit(0);
+                                        }
 
                                         if (_debugGap && !hasPosition && strat is LiveFlashCrashSniperStrategy sniper)
                                         {

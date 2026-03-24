@@ -25,8 +25,18 @@ public class LiveFlashCrashSniperStrategy : ILiveStrategy
     private readonly long _settlementLockMs;
     private long _settlementUnlockTimeMs = 0;
 
+    // Settlement unlock: fire callback only once after lock expires
+    private bool _settlementUnlockFired = false;
+
     private readonly Queue<(long Timestamp, decimal Price)> _recentAsks;
     private decimal _lastGap;
+
+    // Optional telemetry callbacks (wired externally for test mode)
+    public Action<string, decimal, decimal>? OnCrashSpotted;      // (assetId, bestAsk, gap)
+    public Action<long>? OnSustainConfirmed;                       // (sustainedMs)
+    public Action<decimal, decimal>? OnBuySubmitted;               // (price, dollars)
+    public Action? OnSettlementUnlocked;
+    public Action<string, decimal, decimal>? OnExitTriggered;      // (reason, bidPrice, entryPrice)
 
     public decimal GetMaxGap() => _lastGap;
 
@@ -79,6 +89,13 @@ public class LiveFlashCrashSniperStrategy : ILiveStrategy
             if (_settlementLockMs > 0 && nowMs < _settlementUnlockTimeMs)
                 return;
 
+            // Fire settlement unlock callback once
+            if (!_settlementUnlockFired && _settlementLockMs > 0)
+            {
+                _settlementUnlockFired = true;
+                OnSettlementUnlocked?.Invoke();
+            }
+
             // Need a valid bid to sell into
             if (bestBid <= 0.01m) return;
 
@@ -88,6 +105,8 @@ public class LiveFlashCrashSniperStrategy : ILiveStrategy
 
             if (isTakeProfit || isStopLoss)
             {
+                string reason = isTakeProfit ? "TAKE_PROFIT" : "STOP_LOSS";
+                OnExitTriggered?.Invoke(reason, bestBid, avgEntry);
                 decimal sellLimitPrice = Math.Max(bestBid - _exitSlippage, 0.001m);
                 broker.SubmitSellAllOrder(assetId, sellLimitPrice, book);
             }
@@ -122,6 +141,7 @@ public class LiveFlashCrashSniperStrategy : ILiveStrategy
             {
                 // Start the stopwatch!
                 _crashStartTimeMs = nowMs;
+                OnCrashSpotted?.Invoke(assetId, bestAsk, _lastGap);
                 return; // Wait for the next order book update
             }
             
@@ -130,12 +150,15 @@ public class LiveFlashCrashSniperStrategy : ILiveStrategy
             
             if (timeInCrash >= _requiredSustainMs && dollarsToInvest >= 1.00m)
             {
+                OnSustainConfirmed?.Invoke(timeInCrash);
+
                 decimal maxAffordableShares = dollarsToInvest / bestAsk;
                 decimal sharesToBuy = Math.Min(maxAffordableShares, availableAskSize);
                 decimal actualDollarsSpent = sharesToBuy * bestAsk;
 
                 if (actualDollarsSpent >= 1.00m)
                 {
+                    OnBuySubmitted?.Invoke(bestAsk + _entrySlippage, actualDollarsSpent);
                     broker.SubmitBuyOrder(assetId, bestAsk + _entrySlippage, actualDollarsSpent, book);
                     _recentAsks.Clear();
                     _crashStartTimeMs = 0;

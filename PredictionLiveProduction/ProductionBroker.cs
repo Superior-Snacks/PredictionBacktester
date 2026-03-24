@@ -17,6 +17,7 @@ namespace PredictionLiveProduction;
 public class ProductionBroker : PolymarketLiveBroker
 {
     public decimal MaxBetSize { get; set; } = decimal.MaxValue;
+    public bool TestMode { get; set; }
     private readonly PolymarketOrderClient _queryClient;
     private readonly object _fileLock = new object();
 
@@ -61,14 +62,23 @@ public class ProductionBroker : PolymarketLiveBroker
 
     public override void SubmitBuyOrder(string assetId, decimal targetPrice, decimal dollarsToInvest, LocalOrderBook book)
     {
-        if (dollarsToInvest > MaxBetSize)
+        decimal minSize = GetMinSize(assetId);
+
+        // Test mode: buy exactly the minimum shares
+        if (TestMode)
+        {
+            decimal minDollars = minSize * targetPrice;
+            Log.Information("[TEST] Capping to min size: {MinSize} shares = ${MinDollars:0.00} on {Asset}",
+                minSize, minDollars, assetId[..Math.Min(8, assetId.Length)] + "...");
+            dollarsToInvest = minDollars;
+        }
+        else if (dollarsToInvest > MaxBetSize)
         {
             Log.Information("[CAP] ${Original:0.00} -> ${Capped:0.00} on {Asset}",
                 dollarsToInvest, MaxBetSize, assetId[..Math.Min(8, assetId.Length)] + "...");
             dollarsToInvest = MaxBetSize;
         }
 
-        decimal minSize = GetMinSize(assetId);
         decimal shares = dollarsToInvest / targetPrice;
         if (shares < minSize)
         {
