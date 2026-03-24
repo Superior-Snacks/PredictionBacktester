@@ -12,6 +12,7 @@ public class PaperBroker : GlobalSimulatedBroker
     private readonly Dictionary<string, decimal> _tokenMinSizes;
     private readonly decimal _maxBetSize;
     private readonly HashSet<string> _dustWarned = new();
+    public decimal SlippageCents { get; set; } = 0.01m;
 
     // Per-token fee rates (basis points) and exponents — fetched from Polymarket API
     private readonly Dictionary<string, int> _tokenFeeRates;
@@ -295,7 +296,41 @@ public class PaperBroker : GlobalSimulatedBroker
         // Recalculate dollars after rounding (mirrors PolymarketLiveBroker)
         dollarsToInvest = shares * targetPrice;
 
-        base.SubmitBuyOrder(assetId, targetPrice, dollarsToInvest, book);
+        if (LatencyMs > 0)
+        {
+            if (!_pendingOrders.TryAdd(assetId, true)) return;
+            Task.Run(async () =>
+            {
+                try
+                {
+                    await Task.Delay(LatencyMs);
+                    ExecuteWalkBuy(assetId, targetPrice, dollarsToInvest, book);
+                }
+                finally { _pendingOrders.TryRemove(assetId, out _); }
+            });
+            return;
+        }
+
+        ExecuteWalkBuy(assetId, targetPrice, dollarsToInvest, book);
+    }
+
+    private void ExecuteWalkBuy(string assetId, decimal targetPrice, decimal dollarsToInvest, LocalOrderBook book)
+    {
+        decimal bestAsk = book.GetBestAskPrice();
+        if (bestAsk >= 0.99m || bestAsk <= 0.01m) return;
+
+        decimal maxPrice = Math.Min(targetPrice + SlippageCents, 0.99m);
+        var result = book.WalkAsks(maxPrice, dollarsToInvest, MaxParticipationRate);
+
+        if (result.TotalShares <= 0)
+        {
+            Interlocked.Increment(ref _rejectedOrders);
+            return;
+        }
+
+        // Feed VWAP into base.Buy() for position bookkeeping + fee calculation
+        decimal filled = Buy(assetId, result.Vwap, result.TotalCost, result.TotalShares);
+        if (filled > 0) ConsumeAsk(assetId, filled);
     }
 
     public override void SubmitSellAllOrder(string assetId, decimal targetPrice, LocalOrderBook book)
@@ -317,7 +352,39 @@ public class PaperBroker : GlobalSimulatedBroker
             return;
         }
 
-        base.SubmitSellAllOrder(assetId, targetPrice, book);
+        if (LatencyMs > 0)
+        {
+            if (!_pendingOrders.TryAdd(assetId, true)) return;
+            Task.Run(async () =>
+            {
+                try
+                {
+                    await Task.Delay(LatencyMs);
+                    ExecuteWalkSell(assetId, book);
+                }
+                finally { _pendingOrders.TryRemove(assetId, out _); }
+            });
+            return;
+        }
+
+        ExecuteWalkSell(assetId, book);
+    }
+
+    private void ExecuteWalkSell(string assetId, LocalOrderBook book)
+    {
+        decimal sharesToSell = Math.Round(GetPositionShares(assetId), 2);
+        if (sharesToSell <= 0) return;
+
+        decimal currentBid = book.GetBestBidPrice();
+        if (currentBid <= 0.01m || currentBid >= 0.99m) return;
+
+        // Sell at any price — mirrors production FAK with floor at 0.01
+        var result = book.WalkBids(0.01m, sharesToSell, MaxParticipationRate);
+
+        if (result.TotalShares <= 0) return;
+
+        decimal filled = SellAll(assetId, result.Vwap, result.TotalShares);
+        if (filled > 0) ConsumeBid(assetId, filled);
     }
 
     public override void ResolveMarket(string assetId, decimal outcomePrice)

@@ -5,6 +5,27 @@ using System.Text.Json;
 
 namespace PredictionBacktester.Engine;
 
+public readonly struct BookFill
+{
+    public readonly decimal Price;
+    public readonly decimal Shares;
+    public BookFill(decimal price, decimal shares) { Price = price; Shares = shares; }
+}
+
+public readonly struct WalkResult
+{
+    public readonly decimal TotalShares;
+    public readonly decimal TotalCost;
+    public readonly decimal Vwap;
+
+    public WalkResult(decimal totalShares, decimal totalCost)
+    {
+        TotalShares = totalShares;
+        TotalCost = totalCost;
+        Vwap = totalShares > 0 ? totalCost / totalShares : 0m;
+    }
+}
+
 public class LocalOrderBook
 {
     public string AssetId { get; private set; }
@@ -125,6 +146,79 @@ public class LocalOrderBook
                 if (size == 0) _asks.Remove(price);
                 else _asks[price] = size;
             }
+        }
+    }
+
+    /// <summary>
+    /// Simulates a FAK buy: walks ask levels lowest-to-highest,
+    /// filling up to maxDollars or until price exceeds maxPrice.
+    /// Consumes liquidity from the book.
+    /// </summary>
+    public WalkResult WalkAsks(decimal maxPrice, decimal maxDollars, decimal participationRate)
+    {
+        lock (_bookLock)
+        {
+            decimal totalShares = 0m;
+            decimal totalCost = 0m;
+            decimal dollarsRemaining = maxDollars;
+
+            var levels = _asks.OrderBy(kv => kv.Key).ToList();
+            foreach (var (price, size) in levels)
+            {
+                if (price > maxPrice || dollarsRemaining <= 0.01m) break;
+
+                decimal availableShares = size * participationRate;
+                decimal affordableShares = dollarsRemaining / price;
+                decimal sharesToFill = Math.Min(availableShares, affordableShares);
+
+                if (sharesToFill <= 0) continue;
+
+                totalShares += sharesToFill;
+                totalCost += sharesToFill * price;
+                dollarsRemaining -= sharesToFill * price;
+
+                decimal remaining = size - sharesToFill;
+                if (remaining <= 0) _asks.Remove(price);
+                else _asks[price] = remaining;
+            }
+
+            return new WalkResult(totalShares, totalCost);
+        }
+    }
+
+    /// <summary>
+    /// Simulates a FAK sell: walks bid levels highest-to-lowest,
+    /// filling up to maxShares or until price drops below minPrice.
+    /// Consumes liquidity from the book.
+    /// </summary>
+    public WalkResult WalkBids(decimal minPrice, decimal maxShares, decimal participationRate)
+    {
+        lock (_bookLock)
+        {
+            decimal totalShares = 0m;
+            decimal totalCost = 0m;
+            decimal sharesRemaining = maxShares;
+
+            var levels = _bids.OrderByDescending(kv => kv.Key).ToList();
+            foreach (var (price, size) in levels)
+            {
+                if (price < minPrice || sharesRemaining <= 0) break;
+
+                decimal availableShares = size * participationRate;
+                decimal sharesToFill = Math.Min(availableShares, sharesRemaining);
+
+                if (sharesToFill <= 0) continue;
+
+                totalShares += sharesToFill;
+                totalCost += sharesToFill * price;
+                sharesRemaining -= sharesToFill;
+
+                decimal remaining = size - sharesToFill;
+                if (remaining <= 0) _bids.Remove(price);
+                else _bids[price] = remaining;
+            }
+
+            return new WalkResult(totalShares, totalCost);
         }
     }
 }

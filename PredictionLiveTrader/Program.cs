@@ -72,7 +72,7 @@ class Program
     }
 
     // --- LATENCY SIMULATION (based on ping to Polymarket CLOB API) ---
-    private const int REALISTIC_LATENCY_MS = 50;
+    private const int REALISTIC_LATENCY_MS = 150;
     private static volatile bool _latencyEnabled = true;
 
     // --- PAUSE & RESUME CONTROLS ---

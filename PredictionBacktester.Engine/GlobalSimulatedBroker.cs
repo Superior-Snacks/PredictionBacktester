@@ -72,12 +72,12 @@ public class GlobalSimulatedBroker
         return Math.Max(0, bookSize - consumed);
     }
 
-    private void ConsumeAsk(string assetId, decimal shares)
+    protected void ConsumeAsk(string assetId, decimal shares)
     {
         _consumedAskLiquidity.AddOrUpdate(assetId, shares, (_, existing) => existing + shares);
     }
 
-    private void ConsumeBid(string assetId, decimal shares)
+    protected void ConsumeBid(string assetId, decimal shares)
     {
         _consumedBidLiquidity.AddOrUpdate(assetId, shares, (_, existing) => existing + shares);
     }
