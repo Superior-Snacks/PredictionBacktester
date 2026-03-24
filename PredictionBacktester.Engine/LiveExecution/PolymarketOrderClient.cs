@@ -38,7 +38,7 @@ public class PolymarketOrderClient
     public PolymarketOrderClient(PolymarketApiConfig config)
     {
         _config = config;
-        _httpClient = new RestClient(_config.Endpoint);
+        _httpClient = new RestClient(new RestClientOptions(_config.Endpoint) { Timeout = TimeSpan.FromSeconds(10) });
         _account = new Account(_config.PrivateKey, BigInteger.Parse(_config.ChainId));
     }
 
@@ -55,7 +55,7 @@ public class PolymarketOrderClient
             "0.0001" => 4,
             _ => 2 // "0.01" default
         };
-        price = Math.Round(price, tickDecimals, MidpointRounding.AwayFromZero);
+        price = Math.Round(price, tickDecimals, MidpointRounding.ToEven);
         
         // Prevent price from rounding down to absolute zero
         if (price <= 0) price = decimal.Parse(tickSize);

@@ -31,7 +31,7 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
 
     // Cooldown after FAK sell failures (no liquidity) — prevents rapid-fire retries into empty books
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, long> _sellCooldownUntil = new();
-    private const int SELL_COOLDOWN_SECONDS = 30;
+    private const int SELL_COOLDOWN_SECONDS = 5;
 
     private int GetFeeRate(string assetId) => _tokenFeeRates.TryGetValue(assetId, out var fee) ? fee : 0;
     public PolymarketOrderClient OrderClient => _orderClient;
@@ -188,7 +188,7 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
                         fillSource = "WS-INSTANT";
                     }
                     // --- Step 2: Try reading fill data from the POST response ---
-                    else if (TryExtractFillFromResponse(root, out decimal respShares, out decimal respDollars) && respShares > 0)
+                    else if (TryExtractFillFromResponse(root, isSell: false, out decimal respShares, out decimal respDollars) && respShares > 0)
                     {
                         actualShares = respShares;
                         actualDollars = respDollars > 0 ? respDollars : respShares * targetPrice;
@@ -482,8 +482,7 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
                         fillSource = "WS-INSTANT";
                     }
                     // --- Step 2: Try reading fill data from the POST response ---
-                    // For sells: makingAmount = shares sold, takingAmount = USDC received
-                    else if (TryExtractFillFromResponse(root, out decimal respShares, out decimal respDollars) && respShares > 0)
+                    else if (TryExtractFillFromResponse(root, isSell: true, out decimal respShares, out decimal respDollars) && respShares > 0)
                     {
                         actualSharesSold = respShares;
                         cashReceived = respDollars > 0 ? respDollars : respShares * bestBid; // estimate if missing
@@ -681,24 +680,38 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
     /// </summary>
     /// <summary>
     /// Tries to extract fill amounts from the POST /order response.
-    /// Returns true if takingAmount/makingAmount were present and non-empty.
+    /// Returns true if shares > 0.
+    /// For BUY:  takingAmount = shares received, makingAmount = USDC spent
+    /// For SELL: takingAmount = USDC received,  makingAmount = shares sold
     /// </summary>
-    private static bool TryExtractFillFromResponse(JsonElement root, out decimal shares, out decimal dollars)
+    private static bool TryExtractFillFromResponse(JsonElement root, bool isSell, out decimal shares, out decimal dollars)
     {
         shares = 0;
         dollars = 0;
 
-        // Try camelCase then snake_case — Polymarket uses both
+        decimal takingVal = 0, makingVal = 0;
+
         if (root.TryGetProperty("takingAmount", out var takingEl) || root.TryGetProperty("taking_amount", out takingEl))
         {
             string? val = takingEl.ValueKind == JsonValueKind.String ? takingEl.GetString() : takingEl.ToString();
-            if (!string.IsNullOrEmpty(val)) decimal.TryParse(val, out shares);
+            if (!string.IsNullOrEmpty(val)) decimal.TryParse(val, out takingVal);
         }
 
         if (root.TryGetProperty("makingAmount", out var makingEl) || root.TryGetProperty("making_amount", out makingEl))
         {
             string? val = makingEl.ValueKind == JsonValueKind.String ? makingEl.GetString() : makingEl.ToString();
-            if (!string.IsNullOrEmpty(val)) decimal.TryParse(val, out dollars);
+            if (!string.IsNullOrEmpty(val)) decimal.TryParse(val, out makingVal);
+        }
+
+        if (isSell)
+        {
+            shares = makingVal;  // maker provides shares
+            dollars = takingVal; // taker receives USDC
+        }
+        else
+        {
+            shares = takingVal;  // taker receives shares
+            dollars = makingVal; // maker provides USDC
         }
 
         return shares > 0;
