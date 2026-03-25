@@ -25,7 +25,7 @@ public class PolymarketOrderClient
     private readonly Account _account;
 
     /// <summary>When true, prints [ORDER DEBUG] payload and [EIP712] intermediate hashes.</summary>
-    public volatile bool DebugMode = false;
+    public volatile bool DebugMode = true;
 
     // CTF Exchange for standard binary markets
     private const string CTF_EXCHANGE = "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E";
@@ -210,6 +210,28 @@ public class PolymarketOrderClient
         var balanceOf = contract.GetFunction("balanceOf");
         var rawBalance = await balanceOf.CallAsync<BigInteger>(_config.ProxyAddress);
         return (decimal)rawBalance / (decimal)Math.Pow(10, USDC_DECIMALS);
+    }
+
+    /// <summary>
+    /// Forces the CLOB to refresh its cached balance for a conditional token.
+    /// Call this after a buy fill to speed up settlement recognition for sells.
+    /// </summary>
+    public async Task UpdateBalanceAllowanceAsync(string tokenId)
+    {
+        string jsonBody = $"{{\"asset_type\":\"CONDITIONAL\",\"token_id\":\"{tokenId}\",\"signature_type\":2}}";
+
+        var request = new RestRequest("/update-balance-allowance", Method.Post);
+        string timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString();
+        string hmacSignature = BuildHmacSignature(_config.ApiSecret, timestamp, "POST", "/update-balance-allowance", jsonBody);
+
+        request.AddHeader("POLY_ADDRESS", _account.Address);
+        request.AddHeader("POLY_SIGNATURE", hmacSignature);
+        request.AddHeader("POLY_TIMESTAMP", timestamp);
+        request.AddHeader("POLY_API_KEY", _config.ApiKey);
+        request.AddHeader("POLY_PASSPHRASE", _config.ApiPassphrase);
+        request.AddStringBody(jsonBody, ContentType.Json);
+
+        await _httpClient.ExecuteAsync(request); // Best-effort — don't throw on failure
     }
 
     // Conditional Token Framework (ERC-1155) on Polygon

@@ -28,6 +28,9 @@ public class LiveFlashCrashSniperStrategy : ILiveStrategy
     // Settlement unlock: fire callback only once after lock expires
     private bool _settlementUnlockFired = false;
 
+    // Exit guard: only fire SubmitSellAllOrder once per position (broker handles retries)
+    private bool _exitFired = false;
+
     private readonly Queue<(long Timestamp, decimal Price)> _recentAsks;
     private decimal _lastGap;
 
@@ -101,12 +104,17 @@ public class LiveFlashCrashSniperStrategy : ILiveStrategy
 
             decimal avgEntry = broker.GetAverageEntryPrice(assetId);
             bool isTakeProfit = bestBid >= avgEntry + _reboundProfitMargin;
-            bool isStopLoss = bestBid <= avgEntry - _stopLossMargin;
+            bool isStopLoss = bestBid <= Math.Max(avgEntry - _stopLossMargin, 0.01m);
+            bool isDeadPosition = bestAsk <= 0.05m && bestBid <= 0.05m;
 
-            if (isTakeProfit || isStopLoss)
+            if (isTakeProfit || isStopLoss || isDeadPosition)
             {
-                string reason = isTakeProfit ? "TAKE_PROFIT" : "STOP_LOSS";
-                OnExitTriggered?.Invoke(reason, bestBid, avgEntry);
+                if (!_exitFired)
+                {
+                    _exitFired = true;
+                    string reason = isTakeProfit ? "TAKE_PROFIT" : isDeadPosition ? "DEAD_POSITION" : "STOP_LOSS";
+                    OnExitTriggered?.Invoke(reason, bestBid, avgEntry);
+                }
                 decimal sellLimitPrice = Math.Max(bestBid - _exitSlippage, 0.001m);
                 broker.SubmitSellAllOrder(assetId, sellLimitPrice, book);
             }
@@ -164,6 +172,7 @@ public class LiveFlashCrashSniperStrategy : ILiveStrategy
                     _crashStartTimeMs = 0;
                     _settlementUnlockTimeMs = nowMs + _settlementLockMs;
                     _settlementUnlockFired = false;
+                    _exitFired = false;
                 }
             }
         }

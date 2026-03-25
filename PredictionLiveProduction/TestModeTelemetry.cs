@@ -85,7 +85,7 @@ public static class TestModeTelemetry
 
     public static void ExitTriggered(string reason, decimal bidPrice, decimal entryPrice)
     {
-        if (!IsActive) return;
+        if (!IsActive || _exitTriggeredMs > 0) return; // Only record first exit
         _exitTriggeredMs = _sw.ElapsedMilliseconds;
         _exitReason = reason;
         _exitBidPrice = bidPrice;

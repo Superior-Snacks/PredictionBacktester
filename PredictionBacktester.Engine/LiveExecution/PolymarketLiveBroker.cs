@@ -32,6 +32,7 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
     // Cooldown after FAK sell failures (no liquidity) — prevents rapid-fire retries into empty books
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, long> _sellCooldownUntil = new();
     private const int SELL_COOLDOWN_SECONDS = 5;
+    private const int SETTLEMENT_COOLDOWN_SECONDS = 15; // Cooldown after HAMMER exhaustion — tokens haven't settled on-chain yet
 
     private int GetFeeRate(string assetId) => _tokenFeeRates.TryGetValue(assetId, out var fee) ? fee : 0;
     public PolymarketOrderClient OrderClient => _orderClient;
@@ -355,6 +356,10 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
                     }
 
                     OnBuyFilled?.Invoke(actualShares, actualDollars / actualShares, fillSource);
+
+                    // Immediately tell the CLOB to refresh its cached balance — gives the
+                    // settlement lock window a head start so sells succeed on first attempt
+                    _ = _orderClient.UpdateBalanceAllowanceAsync(assetId);
                 }
                 else
                 {
@@ -461,12 +466,17 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
             {
                 OnSellSubmitted?.Invoke();
 
+                // Force CLOB to refresh its cached balance from on-chain state
+                try { await _orderClient.UpdateBalanceAllowanceAsync(assetId); }
+                catch { /* best-effort */ }
+
                 // Register UserStream fill signal BEFORE posting
                 var fillSignal = new TaskCompletionSource<(decimal Size, decimal Price)>(TaskCreationOptions.RunContinuationsAsynchronously);
                 _fillSignals[assetId] = fillSignal;
 
                 string result = "";
-                int maxRetries = 10;
+                int maxRetries = 20;
+                int retryDelayMs = 500;
 
                 for (int attempt = 1; attempt <= maxRetries; attempt++)
                 {
@@ -493,13 +503,13 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
                     }
                     catch (Exception ex) when (ex.Message.Contains("not enough balance") && attempt < maxRetries)
                     {
-                        if (!IsMuted) lock (ConsoleLock)
+                        if (!IsMuted && (attempt == 1 || attempt % 5 == 0)) lock (ConsoleLock)
                         {
                             Console.ForegroundColor = ConsoleColor.DarkYellow;
-                            Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [HAMMER] Tokens not here yet. Retrying in 300ms... (Attempt {attempt}/{maxRetries})");
+                            Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [HAMMER] Tokens not settled yet. Retrying in {retryDelayMs}ms... (Attempt {attempt}/{maxRetries})");
                             Console.ResetColor();
                         }
-                        await Task.Delay(300);
+                        await Task.Delay(retryDelayMs);
                     }
                 }
 
@@ -698,7 +708,19 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
                 _fillSignals.TryRemove(assetId, out _);
                 Interlocked.Increment(ref _rejectedOrders);
 
-                if (ex.Message.Contains("balance", StringComparison.OrdinalIgnoreCase) ||
+                if (ex.Message.Contains("not enough balance", StringComparison.OrdinalIgnoreCase))
+                {
+                    // Settlement pending — HAMMER retries exhausted but tokens haven't arrived on-chain yet.
+                    // Do NOT emergency sync (would zero out a valid position). Just set a long cooldown.
+                    _sellCooldownUntil[assetId] = DateTimeOffset.UtcNow.ToUnixTimeSeconds() + SETTLEMENT_COOLDOWN_SECONDS;
+                    if (!IsMuted) lock (ConsoleLock)
+                    {
+                        Console.ForegroundColor = ConsoleColor.DarkYellow;
+                        Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [SETTLEMENT PENDING] Tokens not settled. Cooldown {SETTLEMENT_COOLDOWN_SECONDS}s | {GetMarketName(assetId)}");
+                        Console.ResetColor();
+                    }
+                }
+                else if (ex.Message.Contains("balance", StringComparison.OrdinalIgnoreCase) ||
                     ex.Message.Contains("insufficient", StringComparison.OrdinalIgnoreCase))
                 {
                     if (!IsMuted) lock (ConsoleLock)

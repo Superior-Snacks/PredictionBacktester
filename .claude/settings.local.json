@@ -5,7 +5,11 @@
       "Bash(python3:*)",
       "Bash(zcat /c/Users/jonin/dev/projects/PredictionBacktester/MarketData1week/L2_20260323_165213.gz)",
       "Bash(dotnet build:*)",
-      "Bash(grep -n \"class.*Strategy.*ILiveStrategy\\\\|class.*Strategy.*ICandleStrategy\\\\|class.*Strategy.*ITickStrategy\" /c/Users/jonin/dev/projects/PredictionBacktester/PredictionBacktester.Strategies/*.cs)"
+      "Bash(grep -n \"class.*Strategy.*ILiveStrategy\\\\|class.*Strategy.*ICandleStrategy\\\\|class.*Strategy.*ITickStrategy\" /c/Users/jonin/dev/projects/PredictionBacktester/PredictionBacktester.Strategies/*.cs)",
+      "WebSearch",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:docs.polymarket.com)",
+      "WebFetch(domain:rocknblock.io)"
     ]
   }
 }
