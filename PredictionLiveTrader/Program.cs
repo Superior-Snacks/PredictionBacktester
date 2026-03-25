@@ -31,8 +31,8 @@ class Program
         // GRID 1: Live Flash Crash Sniper
         // ---------------------------------------------------------
         decimal[] sniperThresholds = { 0.25m };
-        long[] sniperWindows = { 60 };
-        long[] sustainTimers = { 1000 }; 
+        long[] sniperWindows = { 20, 40, 60, 80 };
+        long[] sustainTimers = { 500, 750, 1000, 1500 }; 
 
         int sniperVersion = 1;
 
