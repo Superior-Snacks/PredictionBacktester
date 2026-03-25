@@ -94,30 +94,6 @@ public class LocalOrderBook
         lock (_bookLock) return _asks.Count == 0 ? 0.00m : _asks[_asks.Keys.Min()];
     }
 
-    public void ConsumeAskLiquidity(decimal shares)
-    {
-        lock (_bookLock)
-        {
-            if (_asks.Count == 0 || shares <= 0) return;
-            decimal bestPrice = _asks.Keys.Min();
-            decimal remaining = _asks[bestPrice] - shares;
-            if (remaining <= 0) _asks.Remove(bestPrice);
-            else _asks[bestPrice] = remaining;
-        }
-    }
-
-    public void ConsumeBidLiquidity(decimal shares)
-    {
-        lock (_bookLock)
-        {
-            if (_bids.Count == 0 || shares <= 0) return;
-            decimal bestPrice = _bids.Keys.Max();
-            decimal remaining = _bids[bestPrice] - shares;
-            if (remaining <= 0) _bids.Remove(bestPrice);
-            else _bids[bestPrice] = remaining;
-        }
-    }
-
     /// <summary>Returns the total bid volume across the top N highest price levels.</summary>
     public decimal GetTopBidVolume(int levels)
     {
@@ -176,10 +152,6 @@ public class LocalOrderBook
                 totalShares += sharesToFill;
                 totalCost += sharesToFill * price;
                 dollarsRemaining -= sharesToFill * price;
-
-                decimal remaining = size - sharesToFill;
-                if (remaining <= 0) _asks.Remove(price);
-                else _asks[price] = remaining;
             }
 
             return new WalkResult(totalShares, totalCost);
@@ -212,10 +184,6 @@ public class LocalOrderBook
                 totalShares += sharesToFill;
                 totalCost += sharesToFill * price;
                 sharesRemaining -= sharesToFill;
-
-                decimal remaining = size - sharesToFill;
-                if (remaining <= 0) _bids.Remove(price);
-                else _bids[price] = remaining;
             }
 
             return new WalkResult(totalShares, totalCost);

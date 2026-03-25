@@ -48,6 +48,7 @@ static class ReplayRunner
         {
             var broker = new ReplayBroker(config.Name, config.StartingCapital, tokenNames, tokenMinSizes, MAX_BET_SIZE, REPLAY_LATENCY_MS);
             broker.IsMuted = true; // Suppress per-trade console output during replay
+            broker.DefaultFeeRateBps = 1000; // Assume crypto fee rate for all markets
             brokers[config.Name] = broker;
         }
 
@@ -511,6 +512,7 @@ static class ReplayRunner
         {
             var broker = new ReplayBroker(config.Name, config.StartingCapital, tokenNames, tokenMinSizes, MAX_BET_SIZE, REPLAY_LATENCY_MS);
             broker.IsMuted = true;
+            broker.DefaultFeeRateBps = 1000; // Assume crypto fee rate for all markets
             brokers[config.Name] = broker;
         }
 
@@ -533,10 +535,13 @@ static class ReplayRunner
         int prevTotalActions = 0;
         var prevBrokerActions = new Dictionary<string, int>();
         foreach (var b in brokers) prevBrokerActions[b.Key] = 0;
+        long firstTimestampMs = 0;
+        long lastSnapshotTimestampMs = 0;
 
         while (reader.TryReadTick(out long tickTimestampMs, out string assetId, out decimal price, out decimal size, out string side))
         {
             recordsProcessed++;
+            if (firstTimestampMs == 0) firstTimestampMs = tickTimestampMs;
 
             EnsureAssetInitialized(assetId, orderBooks, activeStrategies, strategyConfigs, tokenNames);
 
@@ -620,8 +625,11 @@ static class ReplayRunner
             // Periodic equity overview every 25M records
             if (recordsProcessed % 25_000_000 == 0)
             {
-                string ts = DateTimeOffset.FromUnixTimeMilliseconds(tickTimestampMs).ToString("MM/dd HH:mm");
-                Console.WriteLine($"\n  ── Snapshot @ {ts} ({recordsProcessed:N0} records) ──");
+                string tsStart = DateTimeOffset.FromUnixTimeMilliseconds(lastSnapshotTimestampMs > 0 ? lastSnapshotTimestampMs : firstTimestampMs).ToString("MM/dd HH:mm");
+                string tsNow = DateTimeOffset.FromUnixTimeMilliseconds(tickTimestampMs).ToString("MM/dd HH:mm");
+                var simElapsed = TimeSpan.FromMilliseconds(tickTimestampMs - firstTimestampMs);
+                lastSnapshotTimestampMs = tickTimestampMs;
+                Console.WriteLine($"\n  ── Snapshot @ {tsNow} | Window: {tsStart} → {tsNow} | Sim elapsed: {simElapsed.Days}d {simElapsed.Hours}h {simElapsed.Minutes}m ({recordsProcessed:N0} records) ──");
                 foreach (var config in strategyConfigs)
                 {
                     var b = brokers[config.Name];

@@ -16,6 +16,8 @@ public class PaperBroker : GlobalSimulatedBroker
 
     // Per-token fee rates (basis points) and exponents — fetched from Polymarket API
     private readonly Dictionary<string, int> _tokenFeeRates;
+    // Default fee rate when no per-token rate is available (0 = no fee, 1000 = crypto default)
+    public int DefaultFeeRateBps { get; set; } = 0;
     // Default exponent for fee calculation — Polymarket uses 1 for most categories
     private const int DEFAULT_FEE_EXPONENT = 1;
 
@@ -55,6 +57,8 @@ public class PaperBroker : GlobalSimulatedBroker
     private decimal CalculateFeeUsdc(string assetId, decimal shares, decimal price)
     {
         if (!_tokenFeeRates.TryGetValue(assetId, out int feeRateBps) || feeRateBps <= 0)
+            feeRateBps = DefaultFeeRateBps;
+        if (feeRateBps <= 0)
             return 0m;
 
         // feeRateBps from the API is already the raw fee_rate_bps value.
