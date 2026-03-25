@@ -64,6 +64,10 @@ public class GlobalSimulatedBroker
     private ConcurrentDictionary<string, decimal> _consumedAskLiquidity = new();
     private ConcurrentDictionary<string, decimal> _consumedBidLiquidity = new();
 
+    // Per-broker per-level liquidity tracking for walk-the-book (used by PaperBroker)
+    private ConcurrentDictionary<string, Dictionary<decimal, decimal>> _consumedAskByLevel = new();
+    private ConcurrentDictionary<string, Dictionary<decimal, decimal>> _consumedBidByLevel = new();
+
     public decimal GetAvailableAskSize(LocalOrderBook book, string assetId)
     {
         decimal bookSize = book.GetBestAskSize();
@@ -88,11 +92,19 @@ public class GlobalSimulatedBroker
         _consumedBidLiquidity.AddOrUpdate(assetId, shares, (_, existing) => existing + shares);
     }
 
+    public Dictionary<decimal, decimal> GetConsumedAskLevels(string assetId)
+        => _consumedAskByLevel.GetOrAdd(assetId, _ => new Dictionary<decimal, decimal>());
+
+    public Dictionary<decimal, decimal> GetConsumedBidLevels(string assetId)
+        => _consumedBidByLevel.GetOrAdd(assetId, _ => new Dictionary<decimal, decimal>());
+
     /// <summary>Call once per book update cycle to reset consumed liquidity for the asset (fresh WebSocket data arrived).</summary>
     public void ResetConsumedLiquidity(string assetId)
     {
         _consumedAskLiquidity.TryRemove(assetId, out _);
         _consumedBidLiquidity.TryRemove(assetId, out _);
+        _consumedAskByLevel.TryRemove(assetId, out _);
+        _consumedBidByLevel.TryRemove(assetId, out _);
     }
 
     public GlobalSimulatedBroker(decimal startingCash)

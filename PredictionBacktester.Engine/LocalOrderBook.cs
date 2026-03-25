@@ -128,9 +128,13 @@ public class LocalOrderBook
     /// <summary>
     /// Simulates a FAK buy: walks ask levels lowest-to-highest,
     /// filling up to maxDollars or until price exceeds maxPrice.
-    /// Consumes liquidity from the book.
+    /// Book is NOT mutated. Pass consumedByLevel to subtract prior fills.
     /// </summary>
     public WalkResult WalkAsks(decimal maxPrice, decimal maxDollars, decimal participationRate)
+        => WalkAsks(maxPrice, maxDollars, participationRate, null);
+
+    public WalkResult WalkAsks(decimal maxPrice, decimal maxDollars, decimal participationRate,
+        Dictionary<decimal, decimal>? consumedByLevel)
     {
         lock (_bookLock)
         {
@@ -143,7 +147,8 @@ public class LocalOrderBook
             {
                 if (price > maxPrice || dollarsRemaining <= 0.01m) break;
 
-                decimal availableShares = size * participationRate;
+                decimal consumed = consumedByLevel?.GetValueOrDefault(price, 0m) ?? 0m;
+                decimal availableShares = Math.Max(0, size - consumed) * participationRate;
                 decimal affordableShares = dollarsRemaining / price;
                 decimal sharesToFill = Math.Min(availableShares, affordableShares);
 
@@ -152,6 +157,9 @@ public class LocalOrderBook
                 totalShares += sharesToFill;
                 totalCost += sharesToFill * price;
                 dollarsRemaining -= sharesToFill * price;
+
+                if (consumedByLevel != null)
+                    consumedByLevel[price] = consumed + sharesToFill;
             }
 
             return new WalkResult(totalShares, totalCost);
@@ -161,9 +169,13 @@ public class LocalOrderBook
     /// <summary>
     /// Simulates a FAK sell: walks bid levels highest-to-lowest,
     /// filling up to maxShares or until price drops below minPrice.
-    /// Consumes liquidity from the book.
+    /// Book is NOT mutated. Pass consumedByLevel to subtract prior fills.
     /// </summary>
     public WalkResult WalkBids(decimal minPrice, decimal maxShares, decimal participationRate)
+        => WalkBids(minPrice, maxShares, participationRate, null);
+
+    public WalkResult WalkBids(decimal minPrice, decimal maxShares, decimal participationRate,
+        Dictionary<decimal, decimal>? consumedByLevel)
     {
         lock (_bookLock)
         {
@@ -176,7 +188,8 @@ public class LocalOrderBook
             {
                 if (price < minPrice || sharesRemaining <= 0) break;
 
-                decimal availableShares = size * participationRate;
+                decimal consumed = consumedByLevel?.GetValueOrDefault(price, 0m) ?? 0m;
+                decimal availableShares = Math.Max(0, size - consumed) * participationRate;
                 decimal sharesToFill = Math.Min(availableShares, sharesRemaining);
 
                 if (sharesToFill <= 0) continue;
@@ -184,6 +197,9 @@ public class LocalOrderBook
                 totalShares += sharesToFill;
                 totalCost += sharesToFill * price;
                 sharesRemaining -= sharesToFill;
+
+                if (consumedByLevel != null)
+                    consumedByLevel[price] = consumed + sharesToFill;
             }
 
             return new WalkResult(totalShares, totalCost);

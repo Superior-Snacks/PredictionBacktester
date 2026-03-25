@@ -324,7 +324,8 @@ public class PaperBroker : GlobalSimulatedBroker
         if (bestAsk >= 0.99m || bestAsk <= 0.01m) return;
 
         decimal maxPrice = Math.Min(targetPrice + SlippageCents, 0.99m);
-        var result = book.WalkAsks(maxPrice, dollarsToInvest, MaxParticipationRate);
+        var consumed = GetConsumedAskLevels(assetId);
+        var result = book.WalkAsks(maxPrice, dollarsToInvest, MaxParticipationRate, consumed);
 
         if (result.TotalShares <= 0)
         {
@@ -333,8 +334,8 @@ public class PaperBroker : GlobalSimulatedBroker
         }
 
         // Feed VWAP into base.Buy() for position bookkeeping + fee calculation
-        decimal filled = Buy(assetId, result.Vwap, result.TotalCost, result.TotalShares);
-        if (filled > 0) ConsumeAsk(assetId, filled);
+        // consumed dict already updated by WalkAsks — per-level tracking handles it
+        Buy(assetId, result.Vwap, result.TotalCost, result.TotalShares);
     }
 
     public override void SubmitSellAllOrder(string assetId, decimal targetPrice, LocalOrderBook book)
@@ -383,12 +384,13 @@ public class PaperBroker : GlobalSimulatedBroker
         if (currentBid <= 0.01m || currentBid >= 0.99m) return;
 
         // Sell at any price — mirrors production FAK with floor at 0.01
-        var result = book.WalkBids(0.01m, sharesToSell, MaxParticipationRate);
+        var consumed = GetConsumedBidLevels(assetId);
+        var result = book.WalkBids(0.01m, sharesToSell, MaxParticipationRate, consumed);
 
         if (result.TotalShares <= 0) return;
 
-        decimal filled = SellAll(assetId, result.Vwap, result.TotalShares);
-        if (filled > 0) ConsumeBid(assetId, filled);
+        // consumed dict already updated by WalkBids — per-level tracking handles it
+        SellAll(assetId, result.Vwap, result.TotalShares);
     }
 
     public override void ResolveMarket(string assetId, decimal outcomePrice)

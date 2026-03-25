@@ -534,9 +534,29 @@ static class ReplayRunner
 
         int prevTotalActions = 0;
         var prevBrokerActions = new Dictionary<string, int>();
-        foreach (var b in brokers) prevBrokerActions[b.Key] = 0;
+        var prevBrokerWins = new Dictionary<string, int>();
+        var prevBrokerLosses = new Dictionary<string, int>();
+        foreach (var b in brokers)
+        {
+            prevBrokerActions[b.Key] = 0;
+            prevBrokerWins[b.Key] = 0;
+            prevBrokerLosses[b.Key] = 0;
+        }
         long firstTimestampMs = 0;
         long lastSnapshotTimestampMs = 0;
+
+        // Dead market detection
+        var deadMarketTimers = new Dictionary<string, long>(); // assetId → timestamp when price first dropped to ~0
+        const long DEAD_MARKET_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes of replay time
+        const decimal DEAD_PRICE_THRESHOLD = 0.02m;
+        int deadMarketsResolved = 0;
+
+        // Incremental CSV export
+        string csvFilename = $"ReplayTrades_{DateTime.Now:yyyyMMdd_HHmmss}.csv";
+        var csvWriter = new StreamWriter(csvFilename);
+        csvWriter.WriteLine("Timestamp,ReplayTime,StrategyName,StartingCapital,MarketName,AssetId,Side,ExecutionPrice,Shares,DollarValue");
+        csvWriter.Flush();
+        int csvTradesWritten = 0;
 
         while (reader.TryReadTick(out long tickTimestampMs, out string assetId, out decimal price, out decimal size, out string side))
         {
@@ -591,15 +611,89 @@ static class ReplayRunner
                 {
                     if (kvp.Value.TotalActions > prevBrokerActions[kvp.Key])
                     {
-                        var last = kvp.Value.TradeLedger[kvp.Value.TradeLedger.Count - 1];
+                        var b = kvp.Value;
+                        var last = b.TradeLedger[b.TradeLedger.Count - 1];
                         string ts = DateTimeOffset.FromUnixTimeMilliseconds(tickTimestampMs).ToString("MM/dd HH:mm:ss");
-                        Console.ForegroundColor = last.Side.Contains("BUY") ? ConsoleColor.Green : ConsoleColor.Cyan;
+
+                        if (last.Side.Contains("BUY"))
+                        {
+                            Console.ForegroundColor = ConsoleColor.Green;
+                        }
+                        else if (b.LosingTrades > prevBrokerLosses[kvp.Key])
+                        {
+                            Console.ForegroundColor = ConsoleColor.Red;
+                        }
+                        else
+                        {
+                            Console.ForegroundColor = ConsoleColor.Cyan;
+                        }
+
                         Console.WriteLine($"\n  [{ts}] [TRADE] {kvp.Key} | {last.Side} {last.Shares:0.00} @ ${last.Price:0.000} | ${last.DollarValue:0.00} | {tokenNames.GetValueOrDefault(last.OutcomeId, last.OutcomeId[..12])}");
                         Console.ResetColor();
-                        prevBrokerActions[kvp.Key] = kvp.Value.TotalActions;
+
+                        // Write to CSV incrementally
+                        string replayTime = DateTimeOffset.FromUnixTimeMilliseconds(tickTimestampMs).ToString("O");
+                        string marketName = tokenNames.GetValueOrDefault(last.OutcomeId, "Unknown").Replace("\"", "\"\"");
+                        csvWriter.WriteLine($"{last.Date:O},{replayTime},{kvp.Key},{strategyConfigs.First(c => c.Name == kvp.Key).StartingCapital},\"{marketName}\",{last.OutcomeId},{last.Side},{last.Price},{last.Shares},{last.DollarValue}");
+                        csvWriter.Flush();
+                        csvTradesWritten++;
+
+                        prevBrokerActions[kvp.Key] = b.TotalActions;
+                        prevBrokerWins[kvp.Key] = b.WinningTrades;
+                        prevBrokerLosses[kvp.Key] = b.LosingTrades;
                     }
                 }
                 prevTotalActions = currentTotalActions;
+            }
+
+            // Dead market detection — only check the asset that just got updated
+            {
+                decimal bestAsk = orderBooks[assetId].GetBestAskPrice();
+                decimal bestBid = orderBooks[assetId].GetBestBidPrice();
+                if (bestAsk <= DEAD_PRICE_THRESHOLD && bestBid <= DEAD_PRICE_THRESHOLD)
+                {
+                    if (!deadMarketTimers.ContainsKey(assetId))
+                        deadMarketTimers[assetId] = tickTimestampMs;
+                    else if (tickTimestampMs - deadMarketTimers[assetId] >= DEAD_MARKET_TIMEOUT_MS)
+                    {
+                        // Resolve this market as dead on all brokers that hold it
+                        bool anyResolved = false;
+                        foreach (var kvp in brokers)
+                        {
+                            if (kvp.Value.GetPositionShares(assetId) > 0 || kvp.Value.GetNoPositionShares(assetId) > 0)
+                            {
+                                int prevActions = kvp.Value.TotalActions;
+                                kvp.Value.ResolveMarket(assetId, 0.00m);
+                                anyResolved = true;
+
+                                // Write resolution trades to CSV
+                                for (int i = kvp.Value.TradeLedger.Count - 1; i >= 0; i--)
+                                {
+                                    var t = kvp.Value.TradeLedger[i];
+                                    if (!t.Side.StartsWith("RESOLVE")) break;
+                                    string rt = DateTimeOffset.FromUnixTimeMilliseconds(tickTimestampMs).ToString("O");
+                                    string mn = tokenNames.GetValueOrDefault(t.OutcomeId, "Unknown").Replace("\"", "\"\"");
+                                    csvWriter.WriteLine($"{t.Date:O},{rt},{kvp.Key},{strategyConfigs.First(c => c.Name == kvp.Key).StartingCapital},\"{mn}\",{t.OutcomeId},{t.Side},{t.Price},{t.Shares},{t.DollarValue}");
+                                    csvTradesWritten++;
+                                }
+                            }
+                        }
+                        if (anyResolved)
+                        {
+                            string ts = DateTimeOffset.FromUnixTimeMilliseconds(tickTimestampMs).ToString("MM/dd HH:mm:ss");
+                            Console.ForegroundColor = ConsoleColor.DarkRed;
+                            Console.WriteLine($"\n  [{ts}] [MARKET DEAD] {tokenNames.GetValueOrDefault(assetId, assetId[..12])} — resolved at $0.00 after 10min at ~$0");
+                            Console.ResetColor();
+                            csvWriter.Flush();
+                            deadMarketsResolved++;
+                        }
+                        deadMarketTimers.Remove(assetId);
+                    }
+                }
+                else
+                {
+                    deadMarketTimers.Remove(assetId);
+                }
             }
 
             // Progress bar every 500K records
@@ -659,6 +753,7 @@ static class ReplayRunner
         Console.WriteLine($"  Records processed:  {recordsProcessed:N0}");
         Console.WriteLine($"  Price changes:      {totalPriceChanges:N0}");
         Console.WriteLine($"  Unique assets:      {orderBooks.Count:N0}");
+        Console.WriteLine($"  Dead markets:       {deadMarketsResolved:N0}");
         Console.WriteLine($"  Elapsed:            {overallSw.Elapsed.TotalSeconds:0.1}s");
         Console.WriteLine($"  Throughput:         {recordsProcessed / Math.Max(overallSw.Elapsed.TotalSeconds, 0.001):N0} records/sec");
         Console.WriteLine();
@@ -688,35 +783,10 @@ static class ReplayRunner
         Console.ResetColor();
         Console.WriteLine();
 
-        // --- Export CSV ---
-        string csvFilename = $"ReplayTrades_{DateTime.Now:yyyyMMdd_HHmmss}.csv";
-        try
-        {
-            using var writer = new StreamWriter(csvFilename);
-            writer.WriteLine("Timestamp,StrategyName,StartingCapital,MarketName,AssetId,Side,ExecutionPrice,Shares,DollarValue");
-
-            int totalTrades = 0;
-            foreach (var config in strategyConfigs)
-            {
-                var broker = brokers[config.Name];
-                foreach (var trade in broker.TradeLedger)
-                {
-                    string marketName = tokenNames.GetValueOrDefault(trade.OutcomeId, "Unknown");
-                    marketName = $"\"{marketName.Replace("\"", "\"\"")}\"";
-                    writer.WriteLine($"{trade.Date:O},{config.Name},{config.StartingCapital},{marketName},{trade.OutcomeId},{trade.Side},{trade.Price},{trade.Shares},{trade.DollarValue}");
-                    totalTrades++;
-                }
-            }
-
-            Console.ForegroundColor = ConsoleColor.Green;
-            Console.WriteLine($"  {totalTrades} trades exported to {csvFilename}");
-            Console.ResetColor();
-        }
-        catch (Exception ex)
-        {
-            Console.ForegroundColor = ConsoleColor.Red;
-            Console.WriteLine($"  Export failed: {ex.Message}");
-            Console.ResetColor();
-        }
+        // Close incremental CSV
+        csvWriter.Dispose();
+        Console.ForegroundColor = ConsoleColor.Green;
+        Console.WriteLine($"  {csvTradesWritten} trades exported to {csvFilename}");
+        Console.ResetColor();
     }
 }

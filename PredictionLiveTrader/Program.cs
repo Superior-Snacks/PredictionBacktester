@@ -31,8 +31,8 @@ class Program
         // GRID 1: Live Flash Crash Sniper
         // ---------------------------------------------------------
         decimal[] sniperThresholds = { 0.25m };
-        long[] sniperWindows = { 20, 40, 60, 80 };
-        long[] sustainTimers = { 500, 750, 1000, 1500 }; 
+        long[] sniperWindows = { 60};
+        long[] sustainTimers = { 1000 }; 
 
         int sniperVersion = 1;
 
@@ -72,7 +72,7 @@ class Program
     }
 
     // --- LATENCY SIMULATION (based on ping to Polymarket CLOB API) ---
-    private const int REALISTIC_LATENCY_MS = 150;
+    private const int REALISTIC_LATENCY_MS = 250;
     private static volatile bool _latencyEnabled = true;
 
     // --- PAUSE & RESUME CONTROLS ---
@@ -98,7 +98,7 @@ class Program
     private static ClientWebSocket? _activeWs;
     private static readonly SemaphoreSlim _wsSendSemaphore = new SemaphoreSlim(1, 1);
     private static readonly HttpClient _clobHttpClient = new() { BaseAddress = new Uri("https://clob.polymarket.com/") };
-    private static readonly bool _recordMarketData = false;
+    private static readonly bool _recordMarketData = true;
     private static readonly MarketReplayLogger? _replayLogger = _recordMarketData ? new MarketReplayLogger("MarketData") : null;
 
     static async Task Main(string[] args)

@@ -70,7 +70,7 @@ public class ProductionBroker : PolymarketLiveBroker
             decimal minDollars = minSize * targetPrice;
             Log.Information("[TEST] Capping to min size: {MinSize} shares = ${MinDollars:0.00} on {Asset}",
                 minSize, minDollars, assetId[..Math.Min(8, assetId.Length)] + "...");
-            dollarsToInvest = minDollars;
+            dollarsToInvest = minDollars + 2;
         }
         else if (dollarsToInvest > MaxBetSize)
         {
