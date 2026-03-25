@@ -68,8 +68,8 @@ public class LiveFlashCrashSniperStrategy : ILiveStrategy
 
     public void OnBookUpdate(LocalOrderBook book, GlobalSimulatedBroker broker)
     {
-        long nowSec = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-        long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(); // Needed for the stopwatch
+        long nowMs = broker.CurrentTimeMs;
+        long nowSec = nowMs / 1000;
         string assetId = book.AssetId;
 
         decimal bestAsk = book.GetBestAskPrice();

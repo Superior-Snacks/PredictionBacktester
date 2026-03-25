@@ -36,7 +36,7 @@ public class LiveFlashCrashReverseStrategy : ILiveStrategy
 
     public void OnBookUpdate(LocalOrderBook book, GlobalSimulatedBroker broker)
     {
-        long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        long now = broker.CurrentTimeMs / 1000;
         string assetId = book.AssetId;
 
         decimal bestAsk = book.GetBestAskPrice();

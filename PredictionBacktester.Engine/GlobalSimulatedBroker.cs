@@ -23,6 +23,12 @@ public class GlobalSimulatedBroker
 
     public volatile bool IsMuted;
 
+    /// <summary>
+    /// Current time in milliseconds. Defaults to wall-clock.
+    /// Overridden by ReplayBroker to return replay timestamps for deterministic simulation.
+    /// </summary>
+    public virtual long CurrentTimeMs => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
     public string StrategyLabel { get; set; } = "";
     public Func<string, string>? AssetNameResolver { get; set; }
 

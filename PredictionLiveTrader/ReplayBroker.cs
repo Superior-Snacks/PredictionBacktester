@@ -13,6 +13,9 @@ public class ReplayBroker : PaperBroker
     /// <summary>Current replay timestamp in milliseconds (set by ReplayRunner each tick).</summary>
     public long ReplayTimeMs { get; set; }
 
+    /// <summary>Returns replay time so strategies use simulation time, not wall-clock.</summary>
+    public override long CurrentTimeMs => ReplayTimeMs > 0 ? ReplayTimeMs : base.CurrentTimeMs;
+
     /// <summary>Simulated latency in milliseconds.</summary>
     public int ReplayLatencyMs { get; set; }
 
