@@ -134,7 +134,7 @@ public class LocalOrderBook
         => WalkAsks(maxPrice, maxDollars, participationRate, null);
 
     public WalkResult WalkAsks(decimal maxPrice, decimal maxDollars, decimal participationRate,
-        Dictionary<decimal, decimal>? consumedByLevel)
+        Dictionary<decimal, (decimal Consumed, decimal BookSize)>? consumedByLevel)
     {
         lock (_bookLock)
         {
@@ -147,7 +147,11 @@ public class LocalOrderBook
             {
                 if (price > maxPrice || dollarsRemaining <= 0.01m) break;
 
-                decimal consumed = consumedByLevel?.GetValueOrDefault(price, 0m) ?? 0m;
+                // Check prior consumption — reset if the book level size changed (new liquidity arrived)
+                decimal consumed = 0m;
+                if (consumedByLevel != null && consumedByLevel.TryGetValue(price, out var info))
+                    consumed = info.BookSize == size ? info.Consumed : 0m;
+
                 decimal availableShares = Math.Max(0, size - consumed) * participationRate;
                 decimal affordableShares = dollarsRemaining / price;
                 decimal sharesToFill = Math.Min(availableShares, affordableShares);
@@ -159,7 +163,7 @@ public class LocalOrderBook
                 dollarsRemaining -= sharesToFill * price;
 
                 if (consumedByLevel != null)
-                    consumedByLevel[price] = consumed + sharesToFill;
+                    consumedByLevel[price] = (consumed + sharesToFill, size);
             }
 
             return new WalkResult(totalShares, totalCost);
@@ -175,7 +179,7 @@ public class LocalOrderBook
         => WalkBids(minPrice, maxShares, participationRate, null);
 
     public WalkResult WalkBids(decimal minPrice, decimal maxShares, decimal participationRate,
-        Dictionary<decimal, decimal>? consumedByLevel)
+        Dictionary<decimal, (decimal Consumed, decimal BookSize)>? consumedByLevel)
     {
         lock (_bookLock)
         {
@@ -188,7 +192,11 @@ public class LocalOrderBook
             {
                 if (price < minPrice || sharesRemaining <= 0) break;
 
-                decimal consumed = consumedByLevel?.GetValueOrDefault(price, 0m) ?? 0m;
+                // Check prior consumption — reset if the book level size changed (new liquidity arrived)
+                decimal consumed = 0m;
+                if (consumedByLevel != null && consumedByLevel.TryGetValue(price, out var info))
+                    consumed = info.BookSize == size ? info.Consumed : 0m;
+
                 decimal availableShares = Math.Max(0, size - consumed) * participationRate;
                 decimal sharesToFill = Math.Min(availableShares, sharesRemaining);
 
@@ -199,7 +207,7 @@ public class LocalOrderBook
                 sharesRemaining -= sharesToFill;
 
                 if (consumedByLevel != null)
-                    consumedByLevel[price] = consumed + sharesToFill;
+                    consumedByLevel[price] = (consumed + sharesToFill, size);
             }
 
             return new WalkResult(totalShares, totalCost);

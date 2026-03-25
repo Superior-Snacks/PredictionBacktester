@@ -391,6 +391,15 @@ public class PaperBroker : GlobalSimulatedBroker
 
         // consumed dict already updated by WalkBids — per-level tracking handles it
         SellAll(assetId, result.Vwap, result.TotalShares);
+
+        // Dust cleanup: if partial fill left shares below minSize, force-sell the remainder
+        // Uses SellAll (not ResolveMarket) so it logs as a proper SELL trade in the ledger/CSV
+        decimal remaining = Math.Round(GetPositionShares(assetId), 2);
+        decimal minSize = _tokenMinSizes.GetValueOrDefault(assetId, 1.00m);
+        if (remaining > 0 && remaining < minSize)
+        {
+            SellAll(assetId, result.Vwap, remaining);
+        }
     }
 
     public override void ResolveMarket(string assetId, decimal outcomePrice)

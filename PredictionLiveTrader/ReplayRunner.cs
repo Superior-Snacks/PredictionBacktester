@@ -547,7 +547,7 @@ static class ReplayRunner
 
         // Dead market detection
         var deadMarketTimers = new Dictionary<string, long>(); // assetId → timestamp when price first dropped to ~0
-        const long DEAD_MARKET_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes of replay time
+        const long DEAD_MARKET_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes of replay time
         const decimal DEAD_PRICE_THRESHOLD = 0.02m;
         int deadMarketsResolved = 0;
 
@@ -682,7 +682,7 @@ static class ReplayRunner
                         {
                             string ts = DateTimeOffset.FromUnixTimeMilliseconds(tickTimestampMs).ToString("MM/dd HH:mm:ss");
                             Console.ForegroundColor = ConsoleColor.DarkRed;
-                            Console.WriteLine($"\n  [{ts}] [MARKET DEAD] {tokenNames.GetValueOrDefault(assetId, assetId[..12])} — resolved at $0.00 after 10min at ~$0");
+                            Console.WriteLine($"\n  [{ts}] [MARKET DEAD] {tokenNames.GetValueOrDefault(assetId, assetId[..12])} — resolved at $0.00 after 15min at ~$0");
                             Console.ResetColor();
                             csvWriter.Flush();
                             deadMarketsResolved++;

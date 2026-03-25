@@ -163,6 +163,7 @@ public class LiveFlashCrashSniperStrategy : ILiveStrategy
                     _recentAsks.Clear();
                     _crashStartTimeMs = 0;
                     _settlementUnlockTimeMs = nowMs + _settlementLockMs;
+                    _settlementUnlockFired = false;
                 }
             }
         }

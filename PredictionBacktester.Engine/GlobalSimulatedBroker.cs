@@ -65,8 +65,9 @@ public class GlobalSimulatedBroker
     private ConcurrentDictionary<string, decimal> _consumedBidLiquidity = new();
 
     // Per-broker per-level liquidity tracking for walk-the-book (used by PaperBroker)
-    private ConcurrentDictionary<string, Dictionary<decimal, decimal>> _consumedAskByLevel = new();
-    private ConcurrentDictionary<string, Dictionary<decimal, decimal>> _consumedBidByLevel = new();
+    // Value tuple: (Consumed shares, Book size when consumed) — consumption resets when book size changes
+    private ConcurrentDictionary<string, Dictionary<decimal, (decimal Consumed, decimal BookSize)>> _consumedAskByLevel = new();
+    private ConcurrentDictionary<string, Dictionary<decimal, (decimal Consumed, decimal BookSize)>> _consumedBidByLevel = new();
 
     public decimal GetAvailableAskSize(LocalOrderBook book, string assetId)
     {
@@ -92,19 +93,18 @@ public class GlobalSimulatedBroker
         _consumedBidLiquidity.AddOrUpdate(assetId, shares, (_, existing) => existing + shares);
     }
 
-    public Dictionary<decimal, decimal> GetConsumedAskLevels(string assetId)
-        => _consumedAskByLevel.GetOrAdd(assetId, _ => new Dictionary<decimal, decimal>());
+    public Dictionary<decimal, (decimal Consumed, decimal BookSize)> GetConsumedAskLevels(string assetId)
+        => _consumedAskByLevel.GetOrAdd(assetId, _ => new Dictionary<decimal, (decimal, decimal)>());
 
-    public Dictionary<decimal, decimal> GetConsumedBidLevels(string assetId)
-        => _consumedBidByLevel.GetOrAdd(assetId, _ => new Dictionary<decimal, decimal>());
+    public Dictionary<decimal, (decimal Consumed, decimal BookSize)> GetConsumedBidLevels(string assetId)
+        => _consumedBidByLevel.GetOrAdd(assetId, _ => new Dictionary<decimal, (decimal, decimal)>());
 
-    /// <summary>Call once per book update cycle to reset consumed liquidity for the asset (fresh WebSocket data arrived).</summary>
+    /// <summary>Call once per book update cycle to reset flat consumed liquidity for the asset (fresh WebSocket data arrived).
+    /// Per-level dicts are NOT reset here — the walk handles staleness by comparing book size at time of consumption.</summary>
     public void ResetConsumedLiquidity(string assetId)
     {
         _consumedAskLiquidity.TryRemove(assetId, out _);
         _consumedBidLiquidity.TryRemove(assetId, out _);
-        _consumedAskByLevel.TryRemove(assetId, out _);
-        _consumedBidByLevel.TryRemove(assetId, out _);
     }
 
     public GlobalSimulatedBroker(decimal startingCash)
