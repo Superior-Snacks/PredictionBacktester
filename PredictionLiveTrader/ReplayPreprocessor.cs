@@ -14,17 +14,22 @@ namespace PredictionLiveTrader;
 /// Extracts only the fields needed by the strategy (timestamp, asset_id, price, size, side).
 /// Resumable via checkpoint in the .idx file. Output is append-only and readable while running.
 ///
-/// Binary record format (19 bytes):
+/// Binary record format (23 bytes):
 ///   int64  timestamp   (8 bytes, LE) — Unix ms
 ///   uint16 assetIndex  (2 bytes, LE) — index into asset table
 ///   int32  price       (4 bytes, LE) — price * 10000
 ///   int64  size        (8 bytes, LE) — size * 100
 ///   byte   side        (1 byte)      — 0=BUY, 1=SELL
+///
+/// Book snapshots are only processed during warmup (first 50 consecutive snapshot lines
+/// with no new assets). After that they are skipped — same logic as ReplayRunner.
 /// </summary>
 static class ReplayPreprocessor
 {
     private const int RECORD_SIZE = 23;
     private const int FLUSH_INTERVAL = 50_000;
+    private const int WARMUP_SKIP_THRESHOLD = 50;
+    private const long MIN_FREE_BYTES = 500L * 1024 * 1024; // 500 MB safety margin
 
     public static void Run(string inputDir)
     {
@@ -74,7 +79,12 @@ static class ReplayPreprocessor
         long totalCompressedBytes = gzFiles.Sum(f => new FileInfo(f).Length);
         long bytesProcessedSoFar = 0;
         long totalRecords = 0;
+        long skippedSnapshots = 0;
         var overallSw = Stopwatch.StartNew();
+
+        // Book snapshot warmup tracking (same as ReplayRunner)
+        int consecutiveNoNewAsset = 0;
+        bool assetsWarmedUp = false;
 
         // Graceful shutdown
         bool shutdownRequested = false;
@@ -85,6 +95,14 @@ static class ReplayPreprocessor
             Console.WriteLine("\n  Shutdown requested — flushing and saving checkpoint...");
         };
 
+        // Check disk space before starting
+        string outDrive = Path.GetPathRoot(Path.GetFullPath(binPath)) ?? "";
+        if (!string.IsNullOrEmpty(outDrive))
+        {
+            var driveInfo = new DriveInfo(outDrive);
+            Console.WriteLine($"  Disk free: {driveInfo.AvailableFreeSpace / (1024.0 * 1024 * 1024):0.1} GB on {outDrive}");
+        }
+
         // Open output (append mode)
         using var outStream = new FileStream(binPath, FileMode.OpenOrCreate, FileAccess.Write, FileShare.Read, bufferSize: 64 * 1024);
         outStream.Seek(0, SeekOrigin.End);
@@ -93,6 +111,7 @@ static class ReplayPreprocessor
         int recordsSinceFlush = 0;
         string currentFile = "";
         long currentLine = 0;
+        long lastDiskCheck = 0;
 
         foreach (var gzFile in gzFiles)
         {
@@ -144,7 +163,14 @@ static class ReplayPreprocessor
 
                 if (firstChar == '[')
                 {
-                    // Book snapshot — explode into individual price-level records
+                    // Book snapshot — skip after warmup (same as ReplayRunner)
+                    if (assetsWarmedUp)
+                    {
+                        skippedSnapshots++;
+                        goto progressCheck;
+                    }
+
+                    int prevCount = assetMap.Count;
                     try
                     {
                         using var doc = JsonDocument.Parse(line.AsMemory(pipeIndex + 1));
@@ -162,7 +188,7 @@ static class ReplayPreprocessor
                                 {
                                     if (TryParsePriceLevel(level, out decimal price, out decimal size))
                                     {
-                                        WriteRecord(buffer, outStream, timestampMs, assetIdx, price, size, 0); // BUY
+                                        WriteRecord(buffer, outStream, timestampMs, assetIdx, price, size, 0);
                                         totalRecords++;
                                         recordsSinceFlush++;
                                     }
@@ -174,7 +200,7 @@ static class ReplayPreprocessor
                                 {
                                     if (TryParsePriceLevel(level, out decimal price, out decimal size))
                                     {
-                                        WriteRecord(buffer, outStream, timestampMs, assetIdx, price, size, 1); // SELL
+                                        WriteRecord(buffer, outStream, timestampMs, assetIdx, price, size, 1);
                                         totalRecords++;
                                         recordsSinceFlush++;
                                     }
@@ -183,47 +209,78 @@ static class ReplayPreprocessor
                         }
                     }
                     catch (JsonException) { }
-                }
-                else if (TryProcessPriceChangesFast(line, pipeIndex + 1, timestampMs, assetMap, buffer, outStream, ref totalRecords, ref recordsSinceFlush))
-                {
-                    // Handled by fast path
-                }
-                else
-                {
-                    // Fallback: full JSON parse for book events and unknown formats
-                    try
+
+                    if (assetMap.Count == prevCount)
                     {
-                        using var doc = JsonDocument.Parse(line.AsMemory(pipeIndex + 1));
-                        var root = doc.RootElement;
-
-                        if (root.ValueKind == JsonValueKind.Object)
+                        consecutiveNoNewAsset++;
+                        if (consecutiveNoNewAsset >= WARMUP_SKIP_THRESHOLD)
                         {
-                            string? eventType = root.TryGetProperty("event_type", out var etEl) ? etEl.GetString() : null;
-
-                            if (eventType == "book" && root.TryGetProperty("asset_id", out var aidEl))
-                            {
-                                string? assetId = aidEl.GetString();
-                                if (!string.IsNullOrEmpty(assetId))
-                                {
-                                    ushort assetIdx = GetOrAddAsset(assetMap, assetId);
-                                    ExplodeBookLevels(root, timestampMs, assetIdx, buffer, outStream, ref totalRecords, ref recordsSinceFlush);
-                                }
-                            }
-                            else if (root.TryGetProperty("price_changes", out var changesEl))
-                            {
-                                ProcessPriceChangesJson(changesEl, timestampMs, assetMap, buffer, outStream, ref totalRecords, ref recordsSinceFlush);
-                            }
+                            assetsWarmedUp = true;
+                            Console.WriteLine($"\r  Assets warmed up ({assetMap.Count} assets). Skipping future book snapshots.                    ");
                         }
                     }
-                    catch (JsonException) { }
+                    else
+                    {
+                        consecutiveNoNewAsset = 0;
+                    }
+
+                    goto progressCheck;
                 }
 
-                // Periodic flush
+                if (TryProcessPriceChangesFast(line, pipeIndex + 1, timestampMs, assetMap, buffer, outStream, ref totalRecords, ref recordsSinceFlush))
+                {
+                    goto progressCheck;
+                }
+
+                // Fallback: full JSON parse for book events and unknown formats
+                try
+                {
+                    using var doc = JsonDocument.Parse(line.AsMemory(pipeIndex + 1));
+                    var root = doc.RootElement;
+
+                    if (root.ValueKind == JsonValueKind.Object)
+                    {
+                        string? eventType = root.TryGetProperty("event_type", out var etEl) ? etEl.GetString() : null;
+
+                        if (eventType == "book" && root.TryGetProperty("asset_id", out var aidEl))
+                        {
+                            string? assetId = aidEl.GetString();
+                            if (!string.IsNullOrEmpty(assetId))
+                            {
+                                ushort assetIdx = GetOrAddAsset(assetMap, assetId);
+                                ExplodeBookLevels(root, timestampMs, assetIdx, buffer, outStream, ref totalRecords, ref recordsSinceFlush);
+                            }
+                        }
+                        else if (root.TryGetProperty("price_changes", out var changesEl))
+                        {
+                            ProcessPriceChangesJson(changesEl, timestampMs, assetMap, buffer, outStream, ref totalRecords, ref recordsSinceFlush);
+                        }
+                    }
+                }
+                catch (JsonException) { }
+
+                progressCheck:
+                // Periodic flush + disk space check
                 if (recordsSinceFlush >= FLUSH_INTERVAL)
                 {
                     outStream.Flush();
                     SaveIndex(idxPath, assetMap, currentFile, currentLine);
                     recordsSinceFlush = 0;
+
+                    // Check disk space every 5M records
+                    if (totalRecords - lastDiskCheck >= 5_000_000)
+                    {
+                        lastDiskCheck = totalRecords;
+                        if (!string.IsNullOrEmpty(outDrive))
+                        {
+                            var driveInfo = new DriveInfo(outDrive);
+                            if (driveInfo.AvailableFreeSpace < MIN_FREE_BYTES)
+                            {
+                                Console.WriteLine($"\n  ⚠ LOW DISK SPACE: {driveInfo.AvailableFreeSpace / (1024.0 * 1024):0.0} MB remaining. Stopping to prevent disk full.");
+                                shutdownRequested = true;
+                            }
+                        }
+                    }
                 }
 
                 // Progress bar
@@ -231,14 +288,15 @@ static class ReplayPreprocessor
                 if (currentPos - lastReportBytes >= 2 * 1024 * 1024)
                 {
                     lastReportBytes = currentPos;
-                    double overallPercent = (double)(bytesProcessedSoFar + currentPos) / totalCompressedBytes * 100;
+                    long totalBytesProcessed = bytesProcessedSoFar + currentPos;
+                    double overallPercent = (double)totalBytesProcessed / totalCompressedBytes * 100;
                     double elapsedSec = overallSw.Elapsed.TotalSeconds;
-                    double bytesPerSec = (bytesProcessedSoFar + currentPos) / Math.Max(elapsedSec, 0.001);
-                    long bytesRemaining = totalCompressedBytes - bytesProcessedSoFar - currentPos;
+                    double bytesPerSec = totalBytesProcessed / Math.Max(elapsedSec, 0.001);
+                    long bytesRemaining = totalCompressedBytes - totalBytesProcessed;
                     TimeSpan eta = TimeSpan.FromSeconds(bytesRemaining / Math.Max(bytesPerSec, 1));
 
                     int barWidth = 30;
-                    int filled = (int)(overallPercent / 100 * barWidth);
+                    int filled = Math.Min(barWidth, (int)(overallPercent / 100 * barWidth));
                     string bar = new string('#', filled) + new string('-', barWidth - filled);
                     Console.Write($"\r  [{bar}] {overallPercent:0.1}% | {totalRecords:N0} records | ETA: {eta:hh\\:mm\\:ss}   ");
                 }
@@ -260,7 +318,8 @@ static class ReplayPreprocessor
         overallSw.Stop();
         long binSize = new FileInfo(binPath).Length;
         Console.WriteLine($"\n\n  Done! {totalRecords:N0} records in {overallSw.Elapsed.TotalSeconds:0.1}s");
-        Console.WriteLine($"  Output: {binSize / (1024.0 * 1024):0.1} MB ({binSize / RECORD_SIZE:N0} records)");
+        Console.WriteLine($"  Output: {binSize / (1024.0 * 1024 * 1024):0.1} GB ({binSize / RECORD_SIZE:N0} records)");
+        Console.WriteLine($"  Skipped snapshots: {skippedSnapshots:N0}");
         Console.WriteLine($"  Assets: {assetMap.Count}");
         if (shutdownRequested)
             Console.WriteLine($"  Checkpoint saved — run again to resume.");

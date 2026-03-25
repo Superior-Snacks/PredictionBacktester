@@ -530,6 +530,10 @@ static class ReplayRunner
         Console.WriteLine($"  {totalRecords:N0} records in binary file");
         Console.WriteLine();
 
+        int prevTotalActions = 0;
+        var prevBrokerActions = new Dictionary<string, int>();
+        foreach (var b in brokers) prevBrokerActions[b.Key] = 0;
+
         while (reader.TryReadTick(out long tickTimestampMs, out string assetId, out decimal price, out decimal size, out string side))
         {
             recordsProcessed++;
@@ -573,6 +577,26 @@ static class ReplayRunner
                 }
             }
 
+            // Live trade notifications
+            int currentTotalActions = 0;
+            foreach (var b in brokers.Values) currentTotalActions += b.TotalActions;
+            if (currentTotalActions > prevTotalActions)
+            {
+                foreach (var kvp in brokers)
+                {
+                    if (kvp.Value.TotalActions > prevBrokerActions[kvp.Key])
+                    {
+                        var last = kvp.Value.TradeLedger[kvp.Value.TradeLedger.Count - 1];
+                        string ts = DateTimeOffset.FromUnixTimeMilliseconds(tickTimestampMs).ToString("MM/dd HH:mm:ss");
+                        Console.ForegroundColor = last.Side.Contains("BUY") ? ConsoleColor.Green : ConsoleColor.Cyan;
+                        Console.WriteLine($"\n  [{ts}] [TRADE] {kvp.Key} | {last.Side} {last.Shares:0.00} @ ${last.Price:0.000} | ${last.DollarValue:0.00} | {tokenNames.GetValueOrDefault(last.OutcomeId, last.OutcomeId[..12])}");
+                        Console.ResetColor();
+                        prevBrokerActions[kvp.Key] = kvp.Value.TotalActions;
+                    }
+                }
+                prevTotalActions = currentTotalActions;
+            }
+
             // Progress bar every 500K records
             if (recordsProcessed - lastReportRecord >= 500_000)
             {
@@ -583,10 +607,35 @@ static class ReplayRunner
                 long remaining = totalRecords - recordsProcessed;
                 TimeSpan eta = TimeSpan.FromSeconds(remaining / Math.Max(recsPerSec, 1));
 
+                int totalActions = 0;
+                int totalExits = 0;
+                foreach (var b in brokers.Values) { totalActions += b.TotalActions; totalExits += b.TotalTradesExecuted; }
+
                 int barWidth = 30;
                 int filled = (int)(percent / 100 * barWidth);
                 string bar = new string('#', filled) + new string('-', barWidth - filled);
-                Console.Write($"\r  [{bar}] {percent:0.1}% | {recordsProcessed:N0}/{totalRecords:N0} | {recsPerSec:N0}/sec | ETA: {eta:hh\\:mm\\:ss}   ");
+                Console.Write($"\r  [{bar}] {percent:0.1}% | {recordsProcessed:N0}/{totalRecords:N0} | {recsPerSec:N0}/sec | Buys:{totalActions} Exits:{totalExits} | ETA: {eta:hh\\:mm\\:ss}   ");
+            }
+
+            // Periodic equity overview every 25M records
+            if (recordsProcessed % 25_000_000 == 0)
+            {
+                string ts = DateTimeOffset.FromUnixTimeMilliseconds(tickTimestampMs).ToString("MM/dd HH:mm");
+                Console.WriteLine($"\n  ── Snapshot @ {ts} ({recordsProcessed:N0} records) ──");
+                foreach (var config in strategyConfigs)
+                {
+                    var b = brokers[config.Name];
+                    decimal equity = b.GetTotalPortfolioValue();
+                    decimal pnl = equity - config.StartingCapital;
+                    int positions = 0;
+                    foreach (var ob in orderBooks.Keys)
+                        if (b.GetPositionShares(ob) > 0) positions++;
+
+                    Console.ForegroundColor = pnl >= 0 ? ConsoleColor.Green : ConsoleColor.Red;
+                    Console.WriteLine($"  {config.Name.PadRight(maxNameLength)} | Equity: ${equity:0.00} | PnL: ${pnl:0.00} | Cash: ${b.CashBalance:0.00} | Buys:{b.TotalActions} Exits:{b.TotalTradesExecuted} (W:{b.WinningTrades} L:{b.LosingTrades}) | Pos:{positions}");
+                    Console.ResetColor();
+                }
+                Console.WriteLine();
             }
         }
 
