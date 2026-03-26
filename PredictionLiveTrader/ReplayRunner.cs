@@ -18,8 +18,7 @@ namespace PredictionLiveTrader;
 /// </summary>
 static class ReplayRunner
 {
-    private const int REPLAY_LATENCY_MS = 250; // Same as live paper trader default
-    private const int WARMUP_SKIP_THRESHOLD = 50; // After this many consecutive []-lines with no new asset, stop parsing them
+    private const int REPLAY_LATENCY_MS = 500; // Measured from production: ~500ms per order round-trip
 
     public static void Run(string dataDirectory, List<StrategyConfig> strategyConfigs)
     {
@@ -72,7 +71,6 @@ static class ReplayRunner
         long totalTicks = 0;
         long totalPriceChanges = 0;
         long totalBookSnapshots = 0;
-        long skippedBookSnapshots = 0;
         var overallSw = Stopwatch.StartNew();
 
         int maxNameLength = strategyConfigs.Max(c => c.Name.Length);
@@ -81,9 +79,7 @@ static class ReplayRunner
         long totalCompressedBytes = gzFiles.Sum(f => new FileInfo(f).Length);
         long bytesProcessedSoFar = 0;
 
-        // Track whether all assets are warmed up — after N consecutive [] lines with no new assets, skip parsing them
-        int consecutiveNoNewAsset = 0;
-        bool assetsWarmedUp = false;
+        // Per-asset snapshot tracking (no global warmup cutoff — new markets can appear any time)
 
         foreach (var gzFile in gzFiles)
         {
@@ -120,14 +116,7 @@ static class ReplayRunner
                     fileTicks++;
                     totalTicks++;
 
-                    // Once warmed up, skip ALL book snapshot lines without parsing
-                    if (assetsWarmedUp)
-                    {
-                        skippedBookSnapshots++;
-                        goto progressCheck;
-                    }
-
-                    int prevCount = orderBooks.Count;
+                    // Book snapshot — only process new assets (per-asset tracking)
                     try
                     {
                         using var doc = JsonDocument.Parse(line.AsMemory(pipeIndex + 1));
@@ -149,21 +138,6 @@ static class ReplayRunner
                         }
                     }
                     catch (JsonException) { }
-
-                    // Track consecutive no-new-asset lines
-                    if (orderBooks.Count == prevCount)
-                    {
-                        consecutiveNoNewAsset++;
-                        if (consecutiveNoNewAsset >= WARMUP_SKIP_THRESHOLD)
-                        {
-                            assetsWarmedUp = true;
-                            Console.WriteLine($"\r  Assets warmed up ({orderBooks.Count} assets). Skipping future book snapshots.                    ");
-                        }
-                    }
-                    else
-                    {
-                        consecutiveNoNewAsset = 0;
-                    }
 
                     goto progressCheck;
                 }
@@ -269,7 +243,6 @@ static class ReplayRunner
         Console.WriteLine("=========================================");
         Console.WriteLine($"  Total ticks:        {totalTicks:N0}");
         Console.WriteLine($"  Book snapshots:     {totalBookSnapshots:N0}");
-        Console.WriteLine($"  Skipped snapshots:  {skippedBookSnapshots:N0}");
         Console.WriteLine($"  Price changes:      {totalPriceChanges:N0}");
         Console.WriteLine($"  Unique assets:      {orderBooks.Count:N0}");
         Console.WriteLine($"  Elapsed:            {overallSw.Elapsed.TotalSeconds:0.1}s");
@@ -545,6 +518,12 @@ static class ReplayRunner
         long firstTimestampMs = 0;
         long lastSnapshotTimestampMs = 0;
 
+        // Per-asset warmup: skip strategy calls until the book has had time to initialize.
+        // Binary replay explodes snapshot levels into individual records — without warmup,
+        // the strategy sees bestAsk drop as lower levels are added, creating false crash detections.
+        var assetFirstSeenMs = new Dictionary<string, long>(); // assetId → first timestamp seen
+        const long WARMUP_MS = 30_000; // 30 seconds of replay time before strategies fire
+
         // Dead market detection
         var deadMarketTimers = new Dictionary<string, long>(); // assetId → timestamp when price first dropped to ~0
         const long DEAD_MARKET_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes of replay time
@@ -564,6 +543,10 @@ static class ReplayRunner
             if (firstTimestampMs == 0) firstTimestampMs = tickTimestampMs;
 
             EnsureAssetInitialized(assetId, orderBooks, activeStrategies, strategyConfigs, tokenNames);
+
+            // Track first-seen timestamp per asset for warmup
+            if (!assetFirstSeenMs.ContainsKey(assetId))
+                assetFirstSeenMs[assetId] = tickTimestampMs;
 
             // Drain deferred orders
             if (hasDeferredOrders)
@@ -585,13 +568,17 @@ static class ReplayRunner
             foreach (var broker in brokers.Values)
                 broker.ResetConsumedLiquidity(assetId);
 
-            // Feed to strategies
-            var book = orderBooks[assetId];
-            var strategies = activeStrategies[assetId];
-            foreach (var strategy in strategies)
+            // Feed to strategies (skip during warmup to prevent false crash detections from snapshot initialization)
+            bool warmedUp = (tickTimestampMs - assetFirstSeenMs[assetId]) >= WARMUP_MS;
+            if (warmedUp)
             {
-                brokers[strategy.StrategyName].ReplayTimeMs = tickTimestampMs;
-                strategy.OnBookUpdate(book, brokers[strategy.StrategyName]);
+                var book = orderBooks[assetId];
+                var strategies = activeStrategies[assetId];
+                foreach (var strategy in strategies)
+                {
+                    brokers[strategy.StrategyName].ReplayTimeMs = tickTimestampMs;
+                    strategy.OnBookUpdate(book, brokers[strategy.StrategyName]);
+                }
             }
 
             if (!hasDeferredOrders)

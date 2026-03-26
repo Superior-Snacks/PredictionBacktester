@@ -9,7 +9,13 @@
       "WebSearch",
       "WebFetch(domain:github.com)",
       "WebFetch(domain:docs.polymarket.com)",
-      "WebFetch(domain:rocknblock.io)"
+      "WebFetch(domain:rocknblock.io)",
+      "Bash(dotnet publish:*)",
+      "Bash(curl -s \"https://clob.polymarket.com/markets?next_cursor=MA==\")",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); m=d[''''data''''][0]; print\\(json.dumps\\({k:m[k] for k in [''''condition_id'''',''''question'''',''''tokens'''',''''market_slug'''']}, indent=2\\)\\)\")",
+      "Bash(curl -s \"https://clob.polymarket.com/market/24709461503122858665188867964940084934449382280426532086543419668257380266925\")",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(json.dumps\\({k:d.get\\(k\\) for k in [''''question'''',''''tokens'''',''''market_slug'''']}, indent=2\\)\\)\")",
+      "Bash(curl -s \"https://gamma-api.polymarket.com/markets?clob_token_ids=24709461503122858665188867964940084934449382280426532086543419668257380266925&limit=1\")"
     ]
   }
 }

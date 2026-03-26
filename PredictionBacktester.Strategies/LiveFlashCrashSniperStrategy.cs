@@ -31,6 +31,10 @@ public class LiveFlashCrashSniperStrategy : ILiveStrategy
     // Exit guard: only fire SubmitSellAllOrder once per position (broker handles retries)
     private bool _exitFired = false;
 
+    // No-bid timeout: if we hold a position and never see a valid bid for N ms, assume loss
+    private const long NO_BID_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+    private long _lastValidBidMs = 0;
+
     private readonly Queue<(long Timestamp, decimal Price)> _recentAsks;
     private decimal _lastGap;
 
@@ -99,8 +103,26 @@ public class LiveFlashCrashSniperStrategy : ILiveStrategy
                 OnSettlementUnlocked?.Invoke();
             }
 
-            // Need a valid bid to sell into
-            if (bestBid <= 0.01m) return;
+            // Track valid bid availability for no-bid timeout
+            if (bestBid > 0.01m)
+                _lastValidBidMs = nowMs;
+
+            // No-bid timeout: held position but never seen a sellable bid for 5 minutes → assume total loss
+            if (bestBid <= 0.01m)
+            {
+                if (_lastValidBidMs > 0 && (nowMs - _lastValidBidMs) >= NO_BID_TIMEOUT_MS)
+                {
+                    if (!_exitFired)
+                    {
+                        _exitFired = true;
+                        decimal avgEntry2 = broker.GetAverageEntryPrice(assetId);
+                        OnExitTriggered?.Invoke("NO_BID_TIMEOUT", 0m, avgEntry2);
+                    }
+                    // Force resolve at $0 — total loss
+                    broker.SubmitSellAllOrder(assetId, 0.001m, book);
+                }
+                return;
+            }
 
             decimal avgEntry = broker.GetAverageEntryPrice(assetId);
             bool isTakeProfit = bestBid >= avgEntry + _reboundProfitMargin;
@@ -173,6 +195,7 @@ public class LiveFlashCrashSniperStrategy : ILiveStrategy
                     _settlementUnlockTimeMs = nowMs + _settlementLockMs;
                     _settlementUnlockFired = false;
                     _exitFired = false;
+                    _lastValidBidMs = nowMs;
                 }
             }
         }

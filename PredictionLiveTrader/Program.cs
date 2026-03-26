@@ -28,35 +28,43 @@ class Program
     {
         var configs = new List<StrategyConfig>();
         // ---------------------------------------------------------
-        // GRID 1: Live Flash Crash Sniper
+        // GRID 1: Live Flash Crash Sniper — FULL PARAMETER SWEEP
         // ---------------------------------------------------------
         decimal[] sniperThresholds = { 0.25m };
-        long[] sniperWindows = { 60};
-        long[] sustainTimers = { 1000 }; 
+        long[] sniperWindows = { 60, };
+        long[] sustainTimers = { 1000 };
+        decimal[] profitMargins = { 0.05m };
+        decimal[] stopLossMargins = { 0.10m };
+        decimal[] riskPercentages = { 0.05m };            // keep fixed — not a strategy signal
+        decimal[] entrySlippages = { 0.03m };
+        decimal[] exitSlippages = { 0.03m };
 
         int sniperVersion = 1;
 
-        // This LINQ query creates the Cartesian Product automatically!
         var sniperGrid = from threshold in sniperThresholds
                          from window in sniperWindows
                          from timer in sustainTimers
-                         select new { threshold, window, timer};
+                         from profit in profitMargins
+                         from stopLoss in stopLossMargins
+                         from entrySlip in entrySlippages
+                         from exitSlip in exitSlippages
+                         select new { threshold, window, timer, profit, stopLoss, entrySlip, exitSlip };
 
-        foreach (var param in sniperGrid)
+        foreach (var p in sniperGrid)
         {
-            string name = $"Sniper_v{sniperVersion++}_T{param.threshold}_W{param.window}_MS{param.timer}";
+            string name = $"Sniper_v{sniperVersion++}_T{p.threshold}_W{p.window}_MS{p.timer}_P{p.profit}_S{p.stopLoss}_ES{p.entrySlip}_XS{p.exitSlip}";
             configs.Add(new StrategyConfig(
                 name,
                 1000m,
                 () => new LiveFlashCrashSniperStrategy(name,
-                param.threshold,
-                param.window,
+                p.threshold,
+                p.window,
+                p.profit,
+                p.stopLoss,
                 0.05m,
-                0.10m,
-                0.05m,
-                0.03m,
-                0.03m,
-                param.timer,
+                p.entrySlip,
+                p.exitSlip,
+                p.timer,
                 settlementLockMs: 5000
                 )
             ));
@@ -72,7 +80,7 @@ class Program
     }
 
     // --- LATENCY SIMULATION (based on ping to Polymarket CLOB API) ---
-    private const int REALISTIC_LATENCY_MS = 250;
+    private const int REALISTIC_LATENCY_MS = 500; // Measured from production: ~500ms per order round-trip
     private static volatile bool _latencyEnabled = true;
 
     // --- PAUSE & RESUME CONTROLS ---

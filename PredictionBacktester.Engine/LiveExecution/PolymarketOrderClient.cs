@@ -74,7 +74,7 @@ public class PolymarketOrderClient
         }
         else // SELL: give shares (maker), receive USDC (taker)
         {
-            makerAmountDec = Math.Round(size, 2);         // Shares Given (MAX 2 PER API)
+            makerAmountDec = Math.Floor(size * 100m) / 100m; // Shares Given (MAX 2 PER API) — floor to avoid selling more than we own
             takerAmountDec = Math.Round(size * price, 5); // USDC Received (MAX 5 PER API)
             
             // Failsafe: Cannot expect 0 USDC in return

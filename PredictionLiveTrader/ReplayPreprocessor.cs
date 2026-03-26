@@ -28,7 +28,6 @@ static class ReplayPreprocessor
 {
     private const int RECORD_SIZE = 23;
     private const int FLUSH_INTERVAL = 50_000;
-    private const int WARMUP_SKIP_THRESHOLD = 50;
     private const long MIN_FREE_BYTES = 500L * 1024 * 1024; // 500 MB safety margin
 
     public static void Run(string inputDir)
@@ -42,6 +41,7 @@ static class ReplayPreprocessor
 
         // Load existing index + checkpoint
         var assetMap = new Dictionary<string, ushort>();
+        var snapshotInitialized = new HashSet<string>();
         string? checkpointFile = null;
         long checkpointLine = 0;
 
@@ -55,12 +55,17 @@ static class ReplayPreprocessor
                     foreach (var kvp in idx.Assets)
                         assetMap[kvp.Key] = kvp.Value;
                 }
+                if (idx?.SnapshotInitialized != null)
+                {
+                    foreach (var id in idx.SnapshotInitialized)
+                        snapshotInitialized.Add(id);
+                }
                 if (idx?.Checkpoint != null)
                 {
                     checkpointFile = idx.Checkpoint.File;
                     checkpointLine = idx.Checkpoint.Line;
                     Console.WriteLine($"  Resuming from: {checkpointFile} line {checkpointLine:N0}");
-                    Console.WriteLine($"  {assetMap.Count} assets in index, {new FileInfo(binPath).Length / RECORD_SIZE:N0} records in bin");
+                    Console.WriteLine($"  {assetMap.Count} assets in index ({snapshotInitialized.Count} snapshot-initialized), {new FileInfo(binPath).Length / RECORD_SIZE:N0} records in bin");
                 }
             }
             catch { /* Corrupt index — start fresh */ }
@@ -81,10 +86,6 @@ static class ReplayPreprocessor
         long totalRecords = 0;
         long skippedSnapshots = 0;
         var overallSw = Stopwatch.StartNew();
-
-        // Book snapshot warmup tracking (same as ReplayRunner)
-        int consecutiveNoNewAsset = 0;
-        bool assetsWarmedUp = false;
 
         // Graceful shutdown
         bool shutdownRequested = false;
@@ -163,23 +164,23 @@ static class ReplayPreprocessor
 
                 if (firstChar == '[')
                 {
-                    // Book snapshot — skip after warmup (same as ReplayRunner)
-                    if (assetsWarmedUp)
-                    {
-                        skippedSnapshots++;
-                        goto progressCheck;
-                    }
-
-                    int prevCount = assetMap.Count;
+                    // Book snapshot — only process new assets (skip already-initialized ones)
                     try
                     {
                         using var doc = JsonDocument.Parse(line.AsMemory(pipeIndex + 1));
+                        int newAssetsInSnapshot = 0;
                         foreach (var entry in doc.RootElement.EnumerateArray())
                         {
                             if (!entry.TryGetProperty("asset_id", out var idEl)) continue;
                             string? assetId = idEl.GetString();
                             if (string.IsNullOrEmpty(assetId)) continue;
 
+                            // Skip assets whose snapshot has already been written
+                            if (snapshotInitialized.Contains(assetId))
+                                continue;
+
+                            snapshotInitialized.Add(assetId);
+                            newAssetsInSnapshot++;
                             ushort assetIdx = GetOrAddAsset(assetMap, assetId);
 
                             if (entry.TryGetProperty("bids", out var bidsEl))
@@ -207,22 +208,13 @@ static class ReplayPreprocessor
                                 }
                             }
                         }
+
+                        if (newAssetsInSnapshot == 0)
+                            skippedSnapshots++;
+                        else
+                            Console.WriteLine($"\r  Snapshot: {newAssetsInSnapshot} new asset(s) initialized ({snapshotInitialized.Count} total)                    ");
                     }
                     catch (JsonException) { }
-
-                    if (assetMap.Count == prevCount)
-                    {
-                        consecutiveNoNewAsset++;
-                        if (consecutiveNoNewAsset >= WARMUP_SKIP_THRESHOLD)
-                        {
-                            assetsWarmedUp = true;
-                            Console.WriteLine($"\r  Assets warmed up ({assetMap.Count} assets). Skipping future book snapshots.                    ");
-                        }
-                    }
-                    else
-                    {
-                        consecutiveNoNewAsset = 0;
-                    }
 
                     goto progressCheck;
                 }
@@ -264,7 +256,7 @@ static class ReplayPreprocessor
                 if (recordsSinceFlush >= FLUSH_INTERVAL)
                 {
                     outStream.Flush();
-                    SaveIndex(idxPath, assetMap, currentFile, currentLine);
+                    SaveIndex(idxPath, assetMap, snapshotInitialized, currentFile, currentLine);
                     recordsSinceFlush = 0;
 
                     // Check disk space every 5M records
@@ -313,14 +305,14 @@ static class ReplayPreprocessor
 
         // Final flush + save
         outStream.Flush();
-        SaveIndex(idxPath, assetMap, currentFile, currentLine);
+        SaveIndex(idxPath, assetMap, snapshotInitialized, currentFile, currentLine);
 
         overallSw.Stop();
         long binSize = new FileInfo(binPath).Length;
         Console.WriteLine($"\n\n  Done! {totalRecords:N0} records in {overallSw.Elapsed.TotalSeconds:0.1}s");
         Console.WriteLine($"  Output: {binSize / (1024.0 * 1024 * 1024):0.1} GB ({binSize / RECORD_SIZE:N0} records)");
-        Console.WriteLine($"  Skipped snapshots: {skippedSnapshots:N0}");
-        Console.WriteLine($"  Assets: {assetMap.Count}");
+        Console.WriteLine($"  Skipped snapshots (no new assets): {skippedSnapshots:N0}");
+        Console.WriteLine($"  Assets: {assetMap.Count} ({snapshotInitialized.Count} snapshot-initialized)");
         if (shutdownRequested)
             Console.WriteLine($"  Checkpoint saved — run again to resume.");
     }
@@ -471,11 +463,12 @@ static class ReplayPreprocessor
         return idx;
     }
 
-    private static void SaveIndex(string idxPath, Dictionary<string, ushort> assetMap, string currentFile, long currentLine)
+    private static void SaveIndex(string idxPath, Dictionary<string, ushort> assetMap, HashSet<string> snapshotInitialized, string currentFile, long currentLine)
     {
         var idx = new IndexFile
         {
             Assets = assetMap,
+            SnapshotInitialized = snapshotInitialized,
             Checkpoint = new CheckpointInfo { File = currentFile, Line = currentLine }
         };
         string json = JsonSerializer.Serialize(idx, new JsonSerializerOptions { WriteIndented = true });
@@ -486,6 +479,7 @@ static class ReplayPreprocessor
     private class IndexFile
     {
         public Dictionary<string, ushort> Assets { get; set; } = new();
+        public HashSet<string>? SnapshotInitialized { get; set; }
         public CheckpointInfo? Checkpoint { get; set; }
     }
 

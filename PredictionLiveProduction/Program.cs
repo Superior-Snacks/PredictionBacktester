@@ -32,8 +32,8 @@ class Program
     private const decimal RISK_PERCENTAGE = 0.15m;
     private const decimal ENTRY_SLIPPAGE = 0.03m;
     private const decimal EXIT_SLIPPAGE = 0.03m;
-    private const long SUSTAIN_TIMER_MS = 1000;
-    private const long SETTLEMENT_LOCK_MS = 5000;
+    private const long SUSTAIN_TIMER_MS = 1000; //?
+    private const long SETTLEMENT_LOCK_MS = 1000; //?
 
     // Risk controls (editable at runtime via keyboard)
     private static decimal _maxBetSize = 100.00m;       // Hard cap on dollars per single trade

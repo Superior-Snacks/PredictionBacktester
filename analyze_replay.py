@@ -9,6 +9,80 @@ import os
 import re
 import csv
 import sys
+import json
+import requests
+
+MARKET_NAME_CACHE = "market_names_cache.json"
+
+
+def load_market_name_cache():
+    """Load cached token_id → market name mappings from disk."""
+    if os.path.exists(MARKET_NAME_CACHE):
+        try:
+            with open(MARKET_NAME_CACHE, "r") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError):
+            pass
+    return {}
+
+
+def save_market_name_cache(cache):
+    with open(MARKET_NAME_CACHE, "w") as f:
+        json.dump(cache, f, indent=2)
+
+
+def fetch_market_names(token_ids):
+    """Resolve CLOB token IDs to human-readable market names via Gamma API.
+    Results are cached to market_names_cache.json to avoid repeated API calls."""
+    cache = load_market_name_cache()
+    unknown = [tid for tid in token_ids if tid not in cache]
+
+    if not unknown:
+        return cache
+
+    print(f"  Fetching market names for {len(unknown)} token(s)...")
+
+    for i, tid in enumerate(unknown):
+        try:
+            resp = requests.get(
+                "https://gamma-api.polymarket.com/markets",
+                params={"clob_token_ids": tid, "limit": "1"},
+                timeout=10,
+            )
+            resp.raise_for_status()
+            markets = resp.json()
+            if markets:
+                market = markets[0]
+                question = market.get("question", "")
+                outcomes_raw = market.get("outcomes")
+                if isinstance(outcomes_raw, str):
+                    outcomes = json.loads(outcomes_raw)
+                else:
+                    outcomes = outcomes_raw or []
+
+                clob_ids_raw = market.get("clobTokenIds")
+                if isinstance(clob_ids_raw, str):
+                    clob_ids = json.loads(clob_ids_raw)
+                else:
+                    clob_ids = clob_ids_raw or []
+
+                # Map all token IDs from this market (caches the sibling too)
+                for idx, cid in enumerate(clob_ids):
+                    outcome = outcomes[idx] if idx < len(outcomes) else ""
+                    label = f"{question} [{outcome}]" if outcome else question
+                    cache[cid] = label
+            else:
+                cache[tid] = tid[:12] + "..."
+        except Exception as e:
+            cache[tid] = tid[:12] + "..."
+
+        if (i + 1) % 10 == 0 or i == len(unknown) - 1:
+            print(f"  ... {i+1}/{len(unknown)}", end="\r")
+
+    save_market_name_cache(cache)
+    resolved = sum(1 for t in unknown if not cache.get(t, "").endswith("..."))
+    print(f"  Resolved {resolved}/{len(unknown)} token(s) to market names.                    ")
+    return cache
 
 
 def pair_trades(trades):
@@ -150,7 +224,7 @@ def show_strategy_detail(df_strat, strat_name, capital):
     for r in roundtrips:
         pnl_color = "\033[32m" if r["pnl"] > 0 else "\033[31m" if r["pnl"] < 0 else "\033[90m"
         reset = "\033[0m"
-        market = r["market"][:35] if len(r["market"]) > 35 else r["market"]
+        market = r["market"][:55] if len(r["market"]) > 55 else r["market"]
         exit_type = r["side"].replace("RESOLVE YES", "SETTLE").replace("RESOLVE NO", "SETTLE")
 
         print(f"  {pnl_color}${r['pnl']:>+8.2f}{reset}  {r['pnl_pct']:>+6.1f}%  ${r['buy_price']:>5.2f}  ${r['sell_price']:>5.2f}  {r['shares']:>8.2f}  ${r['buy_dollars']:>7.2f}  ${r['sell_dollars']:>7.2f}  {exit_type:>7}  {market}")
@@ -172,6 +246,11 @@ def analyze():
     if df.empty:
         print("  CSV is empty — no trades yet.")
         return
+
+    # Resolve token IDs to real market names
+    unique_tokens = df['AssetId'].unique().tolist()
+    name_map = fetch_market_names(unique_tokens)
+    df['MarketName'] = df['AssetId'].map(name_map).fillna(df['MarketName'])
 
     # Use ReplayTime for time-based analysis (market time)
     df['ReplayTime'] = pd.to_datetime(df['ReplayTime'])

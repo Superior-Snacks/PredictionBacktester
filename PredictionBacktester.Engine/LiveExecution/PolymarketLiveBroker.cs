@@ -31,6 +31,7 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
 
     // Cooldown after FAK sell failures (no liquidity) — prevents rapid-fire retries into empty books
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, long> _sellCooldownUntil = new();
+    private long _lastCooldownLogSec = -1;
     private const int SELL_COOLDOWN_SECONDS = 5;
     private const int SETTLEMENT_COOLDOWN_SECONDS = 15; // Cooldown after HAMMER exhaustion — tokens haven't settled on-chain yet
 
@@ -397,17 +398,19 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
 
     public override void SubmitSellAllOrder(string assetId, decimal targetPrice, LocalOrderBook book)
     {
-        decimal sharesToSell = Math.Round(GetPositionShares(assetId), 2);
+        decimal sharesToSell = Math.Floor(GetPositionShares(assetId) * 100m) / 100m;
         if (sharesToSell <= 0) return;
 
         // Check sell cooldown — after FAK failures (no liquidity), wait before retrying
         if (_sellCooldownUntil.TryGetValue(assetId, out long cooldownUntil) &&
             DateTimeOffset.UtcNow.ToUnixTimeSeconds() < cooldownUntil)
         {
-            if (OrderDebugMode && !IsMuted) lock (ConsoleLock)
+            long remaining = cooldownUntil - DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            if (OrderDebugMode && !IsMuted && remaining != _lastCooldownLogSec) lock (ConsoleLock)
             {
+                _lastCooldownLogSec = remaining;
                 Console.ForegroundColor = ConsoleColor.DarkGray;
-                Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [COOLDOWN] Sell skipped — {cooldownUntil - DateTimeOffset.UtcNow.ToUnixTimeSeconds()}s remaining | {GetMarketName(assetId)}");
+                Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [{StrategyName}] [COOLDOWN] Sell skipped — {remaining}s remaining | {GetMarketName(assetId)}");
                 Console.ResetColor();
             }
             return;
