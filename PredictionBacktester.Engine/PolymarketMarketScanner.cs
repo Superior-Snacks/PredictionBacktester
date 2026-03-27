@@ -74,12 +74,27 @@ namespace PredictionBacktester.Engine
                         }
 
                         // Collect the YES token (Index 0) from each child market
-                        if (mkt.TryGetProperty("clobTokenIds", out var tokensEl) && tokensEl.ValueKind == JsonValueKind.Array)
+                        // clobTokenIds can be a JSON array OR a JSON-encoded string — handle both
+                        if (mkt.TryGetProperty("clobTokenIds", out var tokensEl))
                         {
-                            var tokens = tokensEl.EnumerateArray().Select(x => x.GetString()).ToList();
+                            List<string?> tokens;
+                            if (tokensEl.ValueKind == JsonValueKind.Array)
+                            {
+                                tokens = tokensEl.EnumerateArray().Select(x => x.GetString()).ToList();
+                            }
+                            else if (tokensEl.ValueKind == JsonValueKind.String)
+                            {
+                                // API returns clobTokenIds as a serialized JSON string: "[\"token1\",\"token2\"]"
+                                tokens = JsonSerializer.Deserialize<List<string?>>(tokensEl.GetString()!) ?? new();
+                            }
+                            else
+                            {
+                                continue;
+                            }
+
                             if (tokens.Count > 0 && !string.IsNullOrEmpty(tokens[0]))
                             {
-                                yesTokenIds.Add(tokens[0]!); // Index 0 is the YES token
+                                yesTokenIds.Add(tokens[0]!);
                             }
                         }
                     }

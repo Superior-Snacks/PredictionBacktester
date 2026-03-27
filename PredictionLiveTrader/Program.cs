@@ -35,16 +35,16 @@ class Program
         Console.WriteLine("[SYSTEM] Fetching Top Liquid 3+ Leg Events for Arbitrage...");
         var scanner = new PolymarketMarketScanner();
 
-        // Fetch top liquid 3+ leg events (30s timeout to avoid hanging on API issues)
+        // Fetch top liquid 3+ leg events (120s timeout — pagination is slow)
         Dictionary<string, List<string>> arbEvents;
-        var scanTask = scanner.GetTopLiquidEventsAsync(1000);
-        if (scanTask.Wait(TimeSpan.FromSeconds(30)))
+        var scanTask = scanner.GetTopLiquidEventsAsync(200);
+        if (scanTask.Wait(TimeSpan.FromSeconds(120)))
         {
             arbEvents = scanTask.Result;
         }
         else
         {
-            Console.WriteLine("[SYSTEM] WARNING: Scanner timed out after 30s — starting with 0 arb events.");
+            Console.WriteLine("[SYSTEM] WARNING: Scanner timed out after 120s — starting with 0 arb events.");
             arbEvents = new Dictionary<string, List<string>>();
         }
         
@@ -63,10 +63,9 @@ class Program
         configs.Add(new StrategyConfig(
             Name: "Categorical_Merge_Arb_Execution", 
             StartingCapital: 5000m, 
-            Factory: () => new PolymarketCategoricalArbStrategy(arbEvents) 
-            { 
-                // Enable the lock so the paper trader doesn't spam the same event infinitely
-                LockEventAfterBuy = true 
+            Factory: () => new PolymarketCategoricalArbStrategy(arbEvents, name: "Categorical_Merge_Arb_Execution")
+            {
+                LockEventAfterBuy = true
             }
         ));
         return configs;

@@ -7,7 +7,7 @@ namespace PredictionBacktester.Strategies
 {
     public class PolymarketCategoricalArbStrategy : ILiveStrategy
     {
-        public string StrategyName => "Categorical_Merge_Arb";
+        public string StrategyName { get; }
 
         private readonly Dictionary<string, string> _tokenToEventMap = new();
         private readonly Dictionary<string, List<string>> _eventTokens = new();
@@ -27,11 +27,13 @@ namespace PredictionBacktester.Strategies
 
         public PolymarketCategoricalArbStrategy(
             Dictionary<string, List<string>> configuredEvents,
+            string name = "Categorical_Merge_Arb",
             decimal maxInvestmentPerTrade = 50.00m,
             decimal slippageCents = 0.02m,
             double feeRate = 0.04,
             double feeExponent = 1.0)
         {
+            StrategyName = name;
             _maxInvestmentPerTrade = maxInvestmentPerTrade;
             _slippageCents = slippageCents;
             _feeRate = feeRate;
