@@ -9,7 +9,6 @@ namespace PredictionBacktester.Engine
 {
     public class PolymarketMarketScanner
     {
-        // FIX 1: Static HttpClient prevents socket exhaustion/memory leaks
         private static readonly HttpClient _httpClient = CreateConfiguredClient();
         
         private static HttpClient CreateConfiguredClient()
@@ -20,18 +19,19 @@ namespace PredictionBacktester.Engine
             return client;
         }
 
-        public async Task<Dictionary<string, List<string>>> GetTopLiquidMarketsAsync(int targetMarketCount = 500)
+        public async Task<Dictionary<string, List<string>>> GetTopLiquidEventsAsync(int targetEventCount = 500)
         {
-            Console.WriteLine($"\n[SCANNER] Initializing Gamma API Auto-Discovery...");
-            Console.WriteLine($"[SCANNER] Target: Top {targetMarketCount} highest-volume active markets.");
+            Console.WriteLine($"\n[SCANNER] Initializing Gamma API Auto-Discovery for Events...");
+            Console.WriteLine($"[SCANNER] Target: Top {targetEventCount} highest-volume active events.");
             
             var arbConfig = new Dictionary<string, List<string>>();
             int offset = 0;
             int limit = 100; // API max is 100 per page
 
-            while (arbConfig.Count < targetMarketCount)
+            while (arbConfig.Count < targetEventCount)
             {
-                string url = $"markets?active=true&closed=false&order=volume24hr&ascending=false&limit={limit}&offset={offset}";
+                // Fetch /events sorted by volume
+                string url = $"events?active=true&closed=false&order=volume24hr&ascending=false&limit={limit}&offset={offset}";
                 
                 var response = await _httpClient.GetAsync(url);
                 if (!response.IsSuccessStatusCode)
@@ -47,41 +47,49 @@ namespace PredictionBacktester.Engine
                 if (root.ValueKind != JsonValueKind.Array || root.GetArrayLength() == 0)
                     break; 
 
-                foreach (var mkt in root.EnumerateArray())
+                foreach (var evt in root.EnumerateArray())
                 {
-                    if (arbConfig.Count >= targetMarketCount) break;
+                    if (arbConfig.Count >= targetEventCount) break;
 
-                    string marketId = mkt.GetProperty("conditionId").GetString() ?? Guid.NewGuid().ToString();
-                    string question = mkt.GetProperty("question").GetString() ?? "Unknown";
+                    string eventId = evt.GetProperty("id").GetString() ?? Guid.NewGuid().ToString();
                     
-                    // --- NEW: Parse Negative Risk Flags ---
-                    bool isNegRisk = mkt.TryGetProperty("negRisk", out var nrEl) && nrEl.ValueKind == JsonValueKind.True;
-                    bool isAugmented = mkt.TryGetProperty("negRiskAugmented", out var augEl) && augEl.ValueKind == JsonValueKind.True;
+                    // We need the child markets
+                    if (!evt.TryGetProperty("markets", out var marketsEl) || marketsEl.ValueKind != JsonValueKind.Array)
+                        continue;
 
-                    // Safety: Skip augmented markets entirely so we don't accidentally arb "Placeholder" outcomes
-                    if (isAugmented) continue; 
+                    // Filter out standard binary events (must have 3+ child markets)
+                    if (marketsEl.GetArrayLength() < 3)
+                        continue;
 
-                    List<string> tokenIds = new List<string>();
-                    if (mkt.TryGetProperty("clobTokenIds", out var tokensEl) && tokensEl.ValueKind == JsonValueKind.Array)
+                    List<string> yesTokenIds = new List<string>();
+                    bool isAugmented = false;
+
+                    foreach (var mkt in marketsEl.EnumerateArray())
                     {
-                        tokenIds = tokensEl.EnumerateArray()
-                                        .Select(x => x.GetString())
-                                        .Where(x => !string.IsNullOrEmpty(x))
-                                        .ToList()!;
+                        // Skip if the event has augmented negative risk (placeholder trap)
+                        if (mkt.TryGetProperty("negRiskAugmented", out var augEl) && augEl.ValueKind == JsonValueKind.True)
+                        {
+                            isAugmented = true;
+                            break;
+                        }
+
+                        // Collect the YES token (Index 0) from each child market
+                        if (mkt.TryGetProperty("clobTokenIds", out var tokensEl) && tokensEl.ValueKind == JsonValueKind.Array)
+                        {
+                            var tokens = tokensEl.EnumerateArray().Select(x => x.GetString()).ToList();
+                            if (tokens.Count > 0 && !string.IsNullOrEmpty(tokens[0]))
+                            {
+                                yesTokenIds.Add(tokens[0]!); // Index 0 is the YES token
+                            }
+                        }
                     }
 
-                    // --- NEW: Target ONLY 3+ leg markets ---
-                    if (tokenIds.Count >= 3)
+                    if (isAugmented || yesTokenIds.Count < 3) 
+                        continue;
+
+                    if (!arbConfig.ContainsKey(eventId))
                     {
-                        // Append [NegRisk] tag if applicable so the broker/strategy knows how to route it
-                        string tag = isNegRisk ? "[NegRisk] " : "";
-                        string safeName = question.Length > 30 ? question.Substring(0, 30).Trim() + "..." : question;
-                        string displayKey = $"{tag}[{marketId}] {safeName}";
-                        
-                        if (!arbConfig.ContainsKey(displayKey))
-                        {
-                            arbConfig[displayKey] = tokenIds;
-                        }
+                        arbConfig[eventId] = yesTokenIds;
                     }
                 }
 
@@ -89,17 +97,8 @@ namespace PredictionBacktester.Engine
                 await Task.Delay(200); 
             }
 
-            Console.WriteLine($"[SCANNER] Successfully locked in {arbConfig.Count} highly liquid markets.");
+            Console.WriteLine($"[SCANNER] Successfully locked in {arbConfig.Count} highly liquid 3+ leg events.");
             return arbConfig;
-        }
-        
-        // --- SCAVENGER BOT EXTENSION ---
-        // We add this method now so the Scavenger bot can use it next week
-        public async Task<Dictionary<string, List<string>>> GetLongTailMarketsAsync(int offset, int limit)
-        {
-            // Similar logic, but it allows the Scavenger to "walk" deep into the dead markets
-            // We will flesh this out fully when we build the Scavenger loop.
-            return new Dictionary<string, List<string>>(); 
         }
     }
 }

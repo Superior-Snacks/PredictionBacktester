@@ -7,58 +7,78 @@ namespace PredictionBacktester.Strategies
 {
     public class PolymarketCategoricalArbStrategy : ILiveStrategy
     {
-        // 1. Fixing the Interface Mismatch
         public string StrategyName => "Categorical_Merge_Arb";
 
-        private readonly Dictionary<string, string> _tokenToMarketMap = new();
-        private readonly Dictionary<string, List<string>> _marketTokens = new();
-
-        // 2. State Machine: Cache the real-time OrderBooks so we can cross-reference them
+        private readonly Dictionary<string, string> _tokenToEventMap = new();
+        private readonly Dictionary<string, List<string>> _eventTokens = new();
         private readonly ConcurrentDictionary<string, LocalOrderBook> _books = new();
 
-        private readonly decimal _arbThreshold = 0.98m; // If sum of Asks < $0.98, we execute!
-        private readonly decimal _maxInvestmentPerTrade = 50.00m; // Safety cap on dollars used
+        // --- NEW: Toggleable Lock ---
+        // True = Paper Bot mode (don't spam the same fake arb)
+        // False = Production mode (arb it as many times as profitability allows)
+        public bool LockEventAfterBuy { get; set; } = true;
+        private readonly ConcurrentDictionary<string, bool> _lockedEvents = new();
 
-        public PolymarketCategoricalArbStrategy(Dictionary<string, List<string>> configuredMarkets)
+        private readonly decimal _maxInvestmentPerTrade = 50.00m;
+
+        public PolymarketCategoricalArbStrategy(Dictionary<string, List<string>> configuredEvents)
         {
-            foreach (var market in configuredMarkets)
+            foreach (var evt in configuredEvents)
             {
-                string marketId = market.Key;
-                List<string> tokenIds = market.Value;
+                string eventId = evt.Key;
+                List<string> yesTokenIds = evt.Value;
 
-                _marketTokens[marketId] = tokenIds;
+                _eventTokens[eventId] = yesTokenIds;
 
-                foreach (var token in tokenIds)
+                foreach (var token in yesTokenIds)
                 {
-                    _tokenToMarketMap[token] = marketId;
+                    _tokenToEventMap[token] = eventId;
                 }
             }
         }
 
-        // 3. Implementing the exact Interface signature from your codebase
         public void OnBookUpdate(LocalOrderBook book, GlobalSimulatedBroker broker)
         {
             string asset = book.AssetId;
 
-            // Is this token part of an Arb market we are tracking?
-            if (!_tokenToMarketMap.TryGetValue(asset, out var marketId))
+            if (!_tokenToEventMap.TryGetValue(asset, out var eventId))
                 return;
 
-            // Cache the live order book reference
             _books[asset] = book;
 
-            // Evaluate the Arb for the entire market group
-            EvaluateArbitrage(marketId, broker);
+            EvaluateArbitrage(eventId, broker);
         }
-        
-        private void EvaluateArbitrage(string marketId, GlobalSimulatedBroker broker)
+
+        // --- NEW: Dynamic Fee Polynomial Formula ---
+        // Formula: fee = p * feeRate * (p * (1 - p))^exponent
+        private decimal CalculateFeePerShare(decimal price)
         {
-            var tokenIds = _marketTokens[marketId];
+            double p = (double)price;
             
-            decimal totalCost = 0m;
+            // Using standard Political/Financial/Tech fee parameters as a safe baseline:
+            // Rate: 0.04 (4%), Exponent: 1
+            double feeRate = 0.04; 
+            double exponent = 1.0;
+            
+            double fee = p * feeRate * Math.Pow(p * (1.0 - p), exponent);
+            
+            // Polymarket rounds fees to 4 decimals
+            return Math.Round((decimal)fee, 4);
+        }
+
+        private void EvaluateArbitrage(string eventId, GlobalSimulatedBroker broker)
+        {
+            // Lock Check
+            if (LockEventAfterBuy && _lockedEvents.ContainsKey(eventId))
+                return;
+
+            var yesTokenIds = _eventTokens[eventId];
+            
+            decimal totalGrossCost = 0m;
+            decimal totalFeeCost = 0m;
             decimal bottleneckShares = decimal.MaxValue;
 
-            foreach (var token in tokenIds)
+            foreach (var token in yesTokenIds)
             {
                 if (!_books.TryGetValue(token, out var book)) return;
 
@@ -67,65 +87,66 @@ namespace PredictionBacktester.Strategies
 
                 if (bestAsk >= 1.00m || availableSize <= 0) return;
 
-                totalCost += bestAsk;
+                totalGrossCost += bestAsk;
+                totalFeeCost += CalculateFeePerShare(bestAsk);
                 bottleneckShares = Math.Min(bottleneckShares, availableSize);
             }
 
-            // --- NEW: Dynamic Arbitrage Threshold ---
-            // Assume worst-case taker fee (~0.01 or 1% per leg depending on the market)
-            // Polymarket's max effective fee is ~1.8% per the docs, but averages much lower. 
-            // You should calculate this dynamically, but a safe baseline is 0.005 (0.5%) per leg.
-            decimal estimatedFeePerLeg = 0.005m; 
-            decimal totalEstimatedFees = tokenIds.Count * estimatedFeePerLeg;
-            
-            // We only execute if the total cost + all fees leaves us with a profit (< $1.00)
-            // We add a 0.5% margin of safety
-            decimal dynamicArbThreshold = 1.00m - totalEstimatedFees - 0.005m; 
+            decimal totalCostWithFees = totalGrossCost + totalFeeCost;
 
-            if (totalCost >= dynamicArbThreshold)
+            // We execute if the total cost including ALL polynomial fees leaves a profit
+            // Added a 0.5% (0.005) buffer to account for rounding/dust
+            if (totalCostWithFees >= 0.995m)
                 return;
 
-            // Step 3: Size the trade based on the Bottleneck and your Capital limits
-            // We calculate how many full "Sets" of arb we can afford
-            decimal maxAffordableSets = _maxInvestmentPerTrade / totalCost;
-            
-            // Limit our actual shares to whichever is smaller: the available volume, or our wallet
+            decimal profitPerShare = 1.00m - totalCostWithFees;
+
+            // Size the trade based on the Bottleneck and Capital limits
+            decimal maxAffordableSets = _maxInvestmentPerTrade / totalCostWithFees;
             decimal safeSharesToBuy = Math.Min(bottleneckShares, maxAffordableSets);
-            safeSharesToBuy = Math.Floor(safeSharesToBuy * 100) / 100; // Round down to avoid decimal dust
+            safeSharesToBuy = Math.Floor(safeSharesToBuy * 100) / 100;
 
             if (safeSharesToBuy <= 0.01m)
                 return;
 
-            // Cash check: ensure we can afford ALL legs, not just some
-            decimal totalDollarsNeeded = safeSharesToBuy * totalCost;
+            // Cash check
+            decimal totalDollarsNeeded = safeSharesToBuy * totalCostWithFees;
             if (totalDollarsNeeded > broker.CashBalance)
             {
-                safeSharesToBuy = Math.Floor(broker.CashBalance / totalCost * 100) / 100;
+                safeSharesToBuy = Math.Floor(broker.CashBalance / totalCostWithFees * 100) / 100;
                 if (safeSharesToBuy <= 0.01m) return;
             }
 
-            Console.WriteLine($"\n[ARB DETECTED] Market: {marketId} | Spread: ${totalCost:0.00}");
-            Console.WriteLine($"-> Bottleneck Volume: {bottleneckShares} shares. Executing {safeSharesToBuy} shares per leg.");
+            Console.WriteLine($"\n[ARB DETECTED] Event: {eventId}");
+            Console.WriteLine($"-> Gross Spread: ${totalGrossCost:0.0000} | Fees: ${totalFeeCost:0.0000} | Total Cost: ${totalCostWithFees:0.0000}");
+            Console.WriteLine($"-> Net Profit per set: ${profitPerShare:0.0000} | Executing {safeSharesToBuy} shares per leg.");
 
-            // Step 4: Fire the orders!
-            ExecuteMultiLegArbitrage(tokenIds, safeSharesToBuy, broker);
+            // Lock the event if toggle is enabled
+            if (LockEventAfterBuy)
+            {
+                _lockedEvents.TryAdd(eventId, true);
+            }
+
+            // Fire the orders!
+            ExecuteMultiLegArbitrage(yesTokenIds, safeSharesToBuy, broker);
         }
 
-        private void ExecuteMultiLegArbitrage(List<string> tokenIds, decimal safeSharesToBuy, GlobalSimulatedBroker broker)
+        private void ExecuteMultiLegArbitrage(List<string> yesTokenIds, decimal safeSharesToBuy, GlobalSimulatedBroker broker)
         {
-            foreach (var token in tokenIds)
+            foreach (var token in yesTokenIds)
             {
                 if (_books.TryGetValue(token, out var book))
                 {
                     decimal bestAsk = book.GetBestAskPrice();
-                    decimal requiredDollars = bestAsk * safeSharesToBuy;
+                    
+                    // The investment amount per leg includes the ask price + fees
+                    decimal requiredDollars = (bestAsk + CalculateFeePerShare(bestAsk)) * safeSharesToBuy;
 
-                    // SubmitBuyOrder handles liquidity consumption internally
                     broker.SubmitBuyOrder(token, bestAsk, requiredDollars, book);
                 }
             }
 
-            Console.WriteLine($"[ARB FIRED] Multi-leg FAK orders successfully dispatched.");
+            Console.WriteLine($"[ARB FIRED] Multi-leg YES tokens successfully dispatched.");
         }
     }
 }

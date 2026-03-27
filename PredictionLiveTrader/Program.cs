@@ -27,55 +27,38 @@ class Program
     private static List<StrategyConfig> GenerateStrategyGrid()
     {
         var configs = new List<StrategyConfig>();
+        
         // ---------------------------------------------------------
-        // GRID 1: Live Flash Crash Sniper — FULL PARAMETER SWEEP
+        // 1. Fetch Arb Markets via API
+        // Because this runs in static initialization, we must block synchronously
         // ---------------------------------------------------------
-        decimal[] sniperThresholds = { 0.25m };
-        long[] sniperWindows = { 60, };
-        long[] sustainTimers = { 1000 };
-        decimal[] profitMargins = { 0.05m };
-        decimal[] stopLossMargins = { 0.10m };
-        decimal[] riskPercentages = { 0.05m };            // keep fixed — not a strategy signal
-        decimal[] entrySlippages = { 0.03m };
-        decimal[] exitSlippages = { 0.03m };
-
-        int sniperVersion = 1;
-
-        var sniperGrid = from threshold in sniperThresholds
-                         from window in sniperWindows
-                         from timer in sustainTimers
-                         from profit in profitMargins
-                         from stopLoss in stopLossMargins
-                         from entrySlip in entrySlippages
-                         from exitSlip in exitSlippages
-                         select new { threshold, window, timer, profit, stopLoss, entrySlip, exitSlip };
-
-        foreach (var p in sniperGrid)
-        {
-            string name = $"Sniper_v{sniperVersion++}_T{p.threshold}_W{p.window}_MS{p.timer}_P{p.profit}_S{p.stopLoss}_ES{p.entrySlip}_XS{p.exitSlip}";
-            configs.Add(new StrategyConfig(
-                name,
-                1000m,
-                () => new LiveFlashCrashSniperStrategy(name,
-                p.threshold,
-                p.window,
-                p.profit,
-                p.stopLoss,
-                0.05m,
-                p.entrySlip,
-                p.exitSlip,
-                p.timer,
-                settlementLockMs: 5000
-                )
-            ));
-        }
-        /*
-        // 2. Add the strategy to your runner!
+        Console.WriteLine("[SYSTEM] Fetching Top Liquid 3+ Leg Events for Arbitrage...");
+        var scanner = new PolymarketMarketScanner();
+        
+        // Fetch top 100 most liquid 3+ leg events
+        Dictionary<string, List<string>> arbEvents = scanner.GetTopLiquidEventsAsync(1000).GetAwaiter().GetResult();
+        
+        // ---------------------------------------------------------
+        // 2. Wire the Telemetry Strategy (Logs to CSV)
+        // ---------------------------------------------------------
         configs.Add(new StrategyConfig(
-            "Categorical_Merge_Arb", 
-            1000m, // Starting simulated capital
-            () => new PolymarketCategoricalArbStrategy(arbMarkets)
-        ));*/
+            Name: "Fast_Merge_Arb_Telemetry", 
+            StartingCapital: 5000m, 
+            Factory: () => new FastMergeArbTelemetryStrategy(arbEvents)
+        ));
+
+        // ---------------------------------------------------------
+        // 3. Wire the Execution Strategy (Actually buys the YES tokens)
+        // ---------------------------------------------------------
+        configs.Add(new StrategyConfig(
+            Name: "Categorical_Merge_Arb_Execution", 
+            StartingCapital: 5000m, 
+            Factory: () => new PolymarketCategoricalArbStrategy(arbEvents) 
+            { 
+                // Enable the lock so the paper trader doesn't spam the same event infinitely
+                LockEventAfterBuy = true 
+            }
+        ));
         return configs;
     }
 
@@ -135,24 +118,6 @@ class Program
         Console.WriteLine("  Controls: 'P' = Pause | 'R' = Resume | 'M' = Mute | 'Q' = Quiet | 'V' = Verbose | 'L' = Latency | 'D' = Drop | 'K' = Cull");
         Console.WriteLine($"  Latency starst at {REALISTIC_LATENCY_MS}");
         Console.WriteLine("=========================================");
-
-        // --- TELEMETRY MODE: observation-only arb scanning ---
-        bool runTelemetryMode = args.Contains("--telemetry");
-
-        if (runTelemetryMode)
-        {
-            Console.WriteLine("[MODE] TELEMETRY ACTIVE: Suppressing Flash Crash Snipers...");
-
-            var scanner = new PolymarketMarketScanner();
-            var dynamicArbMarkets = await scanner.GetTopLiquidMarketsAsync(500);
-
-            _strategyConfigs.Clear();
-            _strategyConfigs.Add(new StrategyConfig(
-                "Fast_Merge_Arb_Telemetry",
-                1000m,
-                () => new FastMergeArbTelemetryStrategy(dynamicArbMarkets)
-            ));
-        }
 
         foreach (var config in _strategyConfigs)
         {
