@@ -51,35 +51,33 @@ namespace PredictionBacktester.Engine
                 {
                     if (arbConfig.Count >= targetMarketCount) break;
 
-                    // FIX 2: Use the exact Market ID to prevent duplicate key collisions
                     string marketId = mkt.GetProperty("conditionId").GetString() ?? Guid.NewGuid().ToString();
                     string question = mkt.GetProperty("question").GetString() ?? "Unknown";
                     
+                    // --- NEW: Parse Negative Risk Flags ---
+                    bool isNegRisk = mkt.TryGetProperty("negRisk", out var nrEl) && nrEl.ValueKind == JsonValueKind.True;
+                    bool isAugmented = mkt.TryGetProperty("negRiskAugmented", out var augEl) && augEl.ValueKind == JsonValueKind.True;
+
+                    // Safety: Skip augmented markets entirely so we don't accidentally arb "Placeholder" outcomes
+                    if (isAugmented) continue; 
+
                     List<string> tokenIds = new List<string>();
-                    if (mkt.TryGetProperty("clobTokenIds", out var tokensEl))
+                    if (mkt.TryGetProperty("clobTokenIds", out var tokensEl) && tokensEl.ValueKind == JsonValueKind.Array)
                     {
-                        if (tokensEl.ValueKind == JsonValueKind.String)
-                        {
-                            tokenIds = JsonSerializer.Deserialize<List<string>>(tokensEl.GetString()) ?? new List<string>();
-                        }
-                        else if (tokensEl.ValueKind == JsonValueKind.Array)
-                        {
-                            // FIX 3: Clean null/empty string handling
-                            tokenIds = tokensEl.EnumerateArray()
-                                              .Select(x => x.GetString())
-                                              .Where(x => !string.IsNullOrEmpty(x))
-                                              .ToList()!;
-                        }
+                        tokenIds = tokensEl.EnumerateArray()
+                                        .Select(x => x.GetString())
+                                        .Where(x => !string.IsNullOrEmpty(x))
+                                        .ToList()!;
                     }
 
-                    // We still want Binary (YES/NO) markets for Flash Crash Merge Arbs!
-                    if (tokenIds.Count >= 2)
+                    // --- NEW: Target ONLY 3+ leg markets ---
+                    if (tokenIds.Count >= 3)
                     {
-                        // Clean up the display name for the console logs
+                        // Append [NegRisk] tag if applicable so the broker/strategy knows how to route it
+                        string tag = isNegRisk ? "[NegRisk] " : "";
                         string safeName = question.Length > 30 ? question.Substring(0, 30).Trim() + "..." : question;
-                        string displayKey = $"[{marketId}] {safeName}";
+                        string displayKey = $"{tag}[{marketId}] {safeName}";
                         
-                        // Because we use the actual Polymarket ID, collisions are mathematically impossible
                         if (!arbConfig.ContainsKey(displayKey))
                         {
                             arbConfig[displayKey] = tokenIds;

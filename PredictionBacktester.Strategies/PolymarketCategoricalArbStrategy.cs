@@ -50,7 +50,7 @@ namespace PredictionBacktester.Strategies
             // Evaluate the Arb for the entire market group
             EvaluateArbitrage(marketId, broker);
         }
-
+        
         private void EvaluateArbitrage(string marketId, GlobalSimulatedBroker broker)
         {
             var tokenIds = _marketTokens[marketId];
@@ -58,26 +58,31 @@ namespace PredictionBacktester.Strategies
             decimal totalCost = 0m;
             decimal bottleneckShares = decimal.MaxValue;
 
-            // Step 1: Sum up the best asks and find the weakest volume link
             foreach (var token in tokenIds)
             {
-                if (!_books.TryGetValue(token, out var book))
-                    return; // We haven't received data for all legs yet. Skip.
+                if (!_books.TryGetValue(token, out var book)) return;
 
                 decimal bestAsk = book.GetBestAskPrice();
-                
-                // Using the specific volume tracking from your GlobalSimulatedBroker
                 decimal availableSize = broker.GetAvailableAskSize(book, token);
 
-                if (bestAsk >= 1.00m || availableSize <= 0)
-                    return; // Leg is empty or fully priced
+                if (bestAsk >= 1.00m || availableSize <= 0) return;
 
                 totalCost += bestAsk;
                 bottleneckShares = Math.Min(bottleneckShares, availableSize);
             }
 
-            // Step 2: Check if it's an actual arbitrage!
-            if (totalCost >= _arbThreshold)
+            // --- NEW: Dynamic Arbitrage Threshold ---
+            // Assume worst-case taker fee (~0.01 or 1% per leg depending on the market)
+            // Polymarket's max effective fee is ~1.8% per the docs, but averages much lower. 
+            // You should calculate this dynamically, but a safe baseline is 0.005 (0.5%) per leg.
+            decimal estimatedFeePerLeg = 0.005m; 
+            decimal totalEstimatedFees = tokenIds.Count * estimatedFeePerLeg;
+            
+            // We only execute if the total cost + all fees leaves us with a profit (< $1.00)
+            // We add a 0.5% margin of safety
+            decimal dynamicArbThreshold = 1.00m - totalEstimatedFees - 0.005m; 
+
+            if (totalCost >= dynamicArbThreshold)
                 return;
 
             // Step 3: Size the trade based on the Bottleneck and your Capital limits
