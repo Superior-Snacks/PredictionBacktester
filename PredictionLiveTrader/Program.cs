@@ -89,7 +89,7 @@ class Program
     private static ClientWebSocket? _activeWs;
     private static readonly SemaphoreSlim _wsSendSemaphore = new SemaphoreSlim(1, 1);
     private static readonly HttpClient _clobHttpClient = new() { BaseAddress = new Uri("https://clob.polymarket.com/") };
-    private static readonly bool _recordMarketData = true;
+    private static readonly bool _recordMarketData = false;
     private static readonly MarketReplayLogger? _replayLogger = _recordMarketData ? new MarketReplayLogger("MarketData") : null;
 
     static async Task Main(string[] args)
