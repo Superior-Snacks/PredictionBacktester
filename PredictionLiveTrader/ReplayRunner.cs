@@ -18,7 +18,7 @@ namespace PredictionLiveTrader;
 /// </summary>
 static class ReplayRunner
 {
-    private const int REPLAY_LATENCY_MS = 500; // Measured from production: ~500ms per order round-trip
+    private const int REPLAY_LATENCY_MS = 250; // Measured from production: ~500ms per order round-trip
 
     public static void Run(string dataDirectory, List<StrategyConfig> strategyConfigs)
     {
