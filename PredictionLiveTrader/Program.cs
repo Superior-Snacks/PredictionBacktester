@@ -39,7 +39,7 @@ class Program
         Dictionary<string, List<string>> arbEvents = scanner.GetTopLiquidEventsAsync(1000).GetAwaiter().GetResult();
         
         // ---------------------------------------------------------
-        // 2. Wire the Telemetry Strategy (Logs to CSV)
+        // the Telemetry Strategy (Logs to CSV)
         // ---------------------------------------------------------
         configs.Add(new StrategyConfig(
             Name: "Fast_Merge_Arb_Telemetry", 
@@ -48,7 +48,7 @@ class Program
         ));
 
         // ---------------------------------------------------------
-        // 3. Wire the Execution Strategy (Actually buys the YES tokens)
+        // Execution Strategy (Actually buys the YES tokens)
         // ---------------------------------------------------------
         configs.Add(new StrategyConfig(
             Name: "Categorical_Merge_Arb_Execution", 

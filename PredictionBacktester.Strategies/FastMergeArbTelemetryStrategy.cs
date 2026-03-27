@@ -12,14 +12,12 @@ namespace PredictionBacktester.Strategies
     {
         public string StrategyName => "Fast_Merge_Arb_Telemetry";
 
-        private readonly Dictionary<string, string> _tokenToMarketMap = new();
-        private readonly Dictionary<string, List<string>> _marketTokens = new();
+        private readonly Dictionary<string, string> _tokenToEventMap = new();
+        private readonly Dictionary<string, List<string>> _eventTokens = new();
         private readonly ConcurrentDictionary<string, LocalOrderBook> _books = new();
         private readonly ConcurrentDictionary<string, ActiveArbEvent> _activeArbs = new();
 
-        private readonly decimal _arbThreshold = 0.98m; 
-
-        // --- CSV TELEMETRY INFRASTRUCTURE (shared across all instances) ---
+        // --- CSV TELEMETRY INFRASTRUCTURE ---
         private static readonly string _csvFilePath = $"ArbTelemetry_{DateTime.UtcNow:yyyyMMdd_HHmmss}.csv";
         private static readonly Channel<string> _csvQueue = Channel.CreateUnbounded<string>();
         private static bool _csvInitialized = false;
@@ -28,30 +26,34 @@ namespace PredictionBacktester.Strategies
         private class ActiveArbEvent
         {
             public DateTime StartTime { get; set; }
-            public decimal BestSpreadCost { get; set; }
+            public decimal EntryNetCost { get; set; }
+            public decimal BestGrossCost { get; set; }
+            public decimal BestNetCost { get; set; }
             public decimal MaxVolumeAtBestSpread { get; set; }
+            public int NumLegs { get; set; }
+            public string LegPrices { get; set; }
         }
 
-        public FastMergeArbTelemetryStrategy(Dictionary<string, List<string>> configuredMarkets)
+        public FastMergeArbTelemetryStrategy(Dictionary<string, List<string>> configuredEvents)
         {
-            foreach (var market in configuredMarkets)
+            foreach (var evt in configuredEvents)
             {
-                string marketId = market.Key;
-                List<string> tokenIds = market.Value;
-                _marketTokens[marketId] = tokenIds;
+                string eventId = evt.Key;
+                List<string> yesTokenIds = evt.Value;
+                _eventTokens[eventId] = yesTokenIds;
 
-                foreach (var token in tokenIds)
+                foreach (var token in yesTokenIds)
                 {
-                    _tokenToMarketMap[token] = marketId;
+                    _tokenToEventMap[token] = eventId;
                 }
             }
 
-            // Initialize CSV file and background writer once across all instances
             lock (_csvInitLock)
             {
                 if (!_csvInitialized)
                 {
-                    File.WriteAllText(_csvFilePath, "Timestamp,MarketId,DurationMs,BestCost,SpreadProfit,MaxVolume,TotalPotentialProfit\n");
+                    // Updated CSV Headers with all new quantitative fields
+                    File.WriteAllText(_csvFilePath, "StartTime,EndTime,DurationMs,EventId,NumLegs,LegPrices,EntryNetCost,BestGrossCost,TotalFees,BestNetCost,NetProfitPerShare,MaxVolume,TotalCapitalRequired,TotalPotentialProfit\n");
                     _ = Task.Run(ProcessCsvQueueAsync);
                     _csvInitialized = true;
                 }
@@ -61,19 +63,34 @@ namespace PredictionBacktester.Strategies
         public void OnBookUpdate(LocalOrderBook book, GlobalSimulatedBroker broker)
         {
             string asset = book.AssetId;
-            if (!_tokenToMarketMap.TryGetValue(asset, out var marketId)) return;
+            if (!_tokenToEventMap.TryGetValue(asset, out var eventId)) return;
 
             _books[asset] = book;
-            EvaluateArbitrageTelemetry(marketId);
+            EvaluateArbitrageTelemetry(eventId);
         }
 
-        private void EvaluateArbitrageTelemetry(string marketId)
+        // Polynomial Fee Formula
+        private decimal CalculateFeePerShare(decimal price)
         {
-            var tokenIds = _marketTokens[marketId];
-            decimal totalCost = 0m;
-            decimal bottleneckShares = decimal.MaxValue;
+            double p = (double)price;
+            double feeRate = 0.04; // Baseline Rate
+            double exponent = 1.0; // Baseline Exponent
+            double fee = p * feeRate * Math.Pow(p * (1.0 - p), exponent);
+            return Math.Round((decimal)fee, 4);
+        }
 
-            foreach (var token in tokenIds)
+        private void EvaluateArbitrageTelemetry(string eventId)
+        {
+            var yesTokenIds = _eventTokens[eventId];
+            
+            decimal totalGrossCost = 0m;
+            decimal totalFeeCost = 0m;
+            decimal bottleneckShares = decimal.MaxValue;
+            
+            int legs = 0;
+            string currentLegPrices = "";
+
+            foreach (var token in yesTokenIds)
             {
                 if (!_books.TryGetValue(token, out var book)) return; 
 
@@ -82,65 +99,93 @@ namespace PredictionBacktester.Strategies
 
                 if (bestAsk >= 1.00m || availableSize <= 0)
                 {
-                    totalCost = 1.00m; 
+                    totalGrossCost = 1.00m; 
                     break; 
                 }
 
-                totalCost += bestAsk;
+                totalGrossCost += bestAsk;
+                totalFeeCost += CalculateFeePerShare(bestAsk);
                 bottleneckShares = Math.Min(bottleneckShares, availableSize);
+                
+                legs++;
+                currentLegPrices += $"{bestAsk:0.000}|";
             }
 
-            bool isArbAlive = totalCost > 0 && totalCost <= _arbThreshold && bottleneckShares >= 1.0m;
+            decimal totalNetCost = totalGrossCost + totalFeeCost;
+            
+            // Arb is alive if cost (including fees) is strictly less than $1.00
+            bool isArbAlive = totalGrossCost > 0 && totalNetCost < 1.00m && bottleneckShares >= 1.0m;
 
             if (isArbAlive)
             {
-                if (!_activeArbs.TryGetValue(marketId, out var currentArb))
+                if (!_activeArbs.TryGetValue(eventId, out var currentArb))
                 {
-                    _activeArbs[marketId] = new ActiveArbEvent
+                    // NEW ARB DETECTED
+                    _activeArbs[eventId] = new ActiveArbEvent
                     {
                         StartTime = DateTime.UtcNow,
-                        BestSpreadCost = totalCost,
-                        MaxVolumeAtBestSpread = bottleneckShares
+                        EntryNetCost = totalNetCost,
+                        BestGrossCost = totalGrossCost,
+                        BestNetCost = totalNetCost,
+                        MaxVolumeAtBestSpread = bottleneckShares,
+                        NumLegs = legs,
+                        LegPrices = currentLegPrices.TrimEnd('|')
                     };
                 }
                 else
                 {
-                    if (totalCost < currentArb.BestSpreadCost)
+                    // EXISTING ARB - Update if it deepened
+                    if (totalNetCost < currentArb.BestNetCost)
                     {
-                        currentArb.BestSpreadCost = totalCost;
+                        currentArb.BestGrossCost = totalGrossCost;
+                        currentArb.BestNetCost = totalNetCost;
                         currentArb.MaxVolumeAtBestSpread = bottleneckShares;
+                        currentArb.LegPrices = currentLegPrices.TrimEnd('|'); // Save the prices that formed the peak spread
                     }
                 }
             }
             else
             {
-                if (_activeArbs.TryRemove(marketId, out var closedArb))
+                // ARB CLOSED
+                if (_activeArbs.TryRemove(eventId, out var closedArb))
                 {
-                    TimeSpan duration = DateTime.UtcNow - closedArb.StartTime;
+                    DateTime endTime = DateTime.UtcNow;
+                    TimeSpan duration = endTime - closedArb.StartTime;
                     
+                    // Only log arbs that survived longer than 5ms (filtering out micro-glitches)
                     if (duration.TotalMilliseconds > 5)
                     {
-                        LogArbAutopsy(marketId, closedArb, duration);
+                        LogArbAutopsy(eventId, closedArb, duration, endTime);
                     }
                 }
             }
         }
 
-        private void LogArbAutopsy(string marketId, ActiveArbEvent arbData, TimeSpan duration)
+        private void LogArbAutopsy(string eventId, ActiveArbEvent arbData, TimeSpan duration, DateTime endTime)
         {
-            decimal profitPerShare = 1.00m - arbData.BestSpreadCost;
-            decimal totalPotentialProfit = profitPerShare * arbData.MaxVolumeAtBestSpread;
-
-            // 1. Print to the Console for your live viewing
-            Console.WriteLine($"\n[TELEMETRY] ⚡ ARB CLOSED: {marketId}");
-            Console.WriteLine($"   ├ Duration: {duration.TotalMilliseconds:0} ms");
-            Console.WriteLine($"   ├ Best Cost: ${arbData.BestSpreadCost:0.00} (Spread: ${profitPerShare:0.00})");
-            Console.WriteLine($"   └ Max Vol: {arbData.MaxVolumeAtBestSpread} shares -> Potential Profit: ${totalPotentialProfit:0.00}");
-
-            // 2. Format the CSV row (Use Quotes around the market ID in case it contains commas)
-            string csvRow = $"{DateTime.UtcNow:O},\"{marketId}\",{duration.TotalMilliseconds:0},{arbData.BestSpreadCost:0.000},{profitPerShare:0.000},{arbData.MaxVolumeAtBestSpread:0.00},{totalPotentialProfit:0.00}";
+            // Calculate best fees retrospectively
+            decimal bestFees = arbData.BestNetCost - arbData.BestGrossCost;
             
-            // 3. Toss it into the background queue (Instant execution, zero CPU lag)
+            decimal netProfitPerShare = 1.00m - arbData.BestNetCost;
+            decimal totalPotentialProfit = netProfitPerShare * arbData.MaxVolumeAtBestSpread;
+            decimal capitalRequired = arbData.MaxVolumeAtBestSpread * arbData.BestNetCost;
+
+            // Timestamp formatting
+            string startStr = arbData.StartTime.ToString("HH:mm:ss.fff");
+            string endStr = endTime.ToString("HH:mm:ss.fff");
+
+            // Console output
+            Console.WriteLine($"\n[TELEMETRY] ⚡ ARB CLOSED: {eventId}");
+            Console.WriteLine($"   ├ Time: {startStr} to {endStr} ({duration.TotalMilliseconds:0} ms)");
+            Console.WriteLine($"   ├ Legs: {arbData.NumLegs} [{arbData.LegPrices}]");
+            Console.WriteLine($"   ├ Spread: Entry ${arbData.EntryNetCost:0.0000} -> Peak ${arbData.BestNetCost:0.0000}");
+            Console.WriteLine($"   ├ Peak Cost Breakdown: Gross ${arbData.BestGrossCost:0.0000} + Fees ${bestFees:0.0000}");
+            Console.WriteLine($"   └ Capital Req: ${capitalRequired:0.00} -> Net Profit: ${totalPotentialProfit:0.00} (Vol: {arbData.MaxVolumeAtBestSpread})");
+
+            // Format the CSV row securely (quoting strings with commas or pipes)
+            string csvRow = $"{startStr},{endStr},{duration.TotalMilliseconds:0},\"{eventId}\",{arbData.NumLegs},\"{arbData.LegPrices}\",{arbData.EntryNetCost:0.0000},{arbData.BestGrossCost:0.0000},{bestFees:0.0000},{arbData.BestNetCost:0.0000},{netProfitPerShare:0.0000},{arbData.MaxVolumeAtBestSpread:0.00},{capitalRequired:0.00},{totalPotentialProfit:0.00}";
+            
+            // Toss it into the background queue (Instant execution, zero CPU lag)
             _csvQueue.Writer.TryWrite(csvRow);
         }
 
@@ -154,10 +199,6 @@ namespace PredictionBacktester.Strategies
                 await foreach (var line in _csvQueue.Reader.ReadAllAsync())
                 {
                     await writer.WriteLineAsync(line);
-                    
-                    // Note: Calling Flush here is completely safe!
-                    // Unlike the order book logger (which fired 10,000 times a second),
-                    // this only fires when an actual Arb closes (maybe a few times an hour).
                     await writer.FlushAsync(); 
                 }
             }
