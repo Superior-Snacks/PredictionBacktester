@@ -13,16 +13,30 @@ namespace PredictionBacktester.Strategies
         private readonly Dictionary<string, List<string>> _eventTokens = new();
         private readonly ConcurrentDictionary<string, LocalOrderBook> _books = new();
 
-        // --- NEW: Toggleable Lock ---
-        // True = Paper Bot mode (don't spam the same fake arb)
-        // False = Production mode (arb it as many times as profitability allows)
+        // True = Paper mode (lock after first buy per event)
+        // False = Production mode (re-enter whenever profitable)
         public bool LockEventAfterBuy { get; set; } = true;
         private readonly ConcurrentDictionary<string, bool> _lockedEvents = new();
 
-        private readonly decimal _maxInvestmentPerTrade = 50.00m;
+        private readonly decimal _maxInvestmentPerTrade;
+        private readonly decimal _slippageCents;
 
-        public PolymarketCategoricalArbStrategy(Dictionary<string, List<string>> configuredEvents)
+        // Fee parameters — defaults to Politics/Finance/Tech (feeRate=0.04, exponent=1)
+        private readonly double _feeRate;
+        private readonly double _feeExponent;
+
+        public PolymarketCategoricalArbStrategy(
+            Dictionary<string, List<string>> configuredEvents,
+            decimal maxInvestmentPerTrade = 50.00m,
+            decimal slippageCents = 0.02m,
+            double feeRate = 0.04,
+            double feeExponent = 1.0)
         {
+            _maxInvestmentPerTrade = maxInvestmentPerTrade;
+            _slippageCents = slippageCents;
+            _feeRate = feeRate;
+            _feeExponent = feeExponent;
+
             foreach (var evt in configuredEvents)
             {
                 string eventId = evt.Key;
@@ -49,33 +63,27 @@ namespace PredictionBacktester.Strategies
             EvaluateArbitrage(eventId, broker);
         }
 
-        // --- NEW: Dynamic Fee Polynomial Formula ---
-        // Formula: fee = p * feeRate * (p * (1 - p))^exponent
+        /// <summary>
+        /// Polymarket taker fee per share in USDC.
+        /// Formula: fee = price * feeRate * (price * (1 - price))^exponent
+        /// </summary>
         private decimal CalculateFeePerShare(decimal price)
         {
             double p = (double)price;
-            
-            // Using standard Political/Financial/Tech fee parameters as a safe baseline:
-            // Rate: 0.04 (4%), Exponent: 1
-            double feeRate = 0.04; 
-            double exponent = 1.0;
-            
-            double fee = p * feeRate * Math.Pow(p * (1.0 - p), exponent);
-            
-            // Polymarket rounds fees to 4 decimals
+            double fee = p * _feeRate * Math.Pow(p * (1.0 - p), _feeExponent);
             return Math.Round((decimal)fee, 4);
         }
 
         private void EvaluateArbitrage(string eventId, GlobalSimulatedBroker broker)
         {
-            // Lock Check
             if (LockEventAfterBuy && _lockedEvents.ContainsKey(eventId))
                 return;
 
             var yesTokenIds = _eventTokens[eventId];
-            
-            decimal totalGrossCost = 0m;
-            decimal totalFeeCost = 0m;
+
+            // Walk each leg's book to get accurate VWAP and available depth
+            decimal totalCostPerSet = 0m;
+            decimal totalFeePerSet = 0m;
             decimal bottleneckShares = decimal.MaxValue;
 
             foreach (var token in yesTokenIds)
@@ -83,70 +91,70 @@ namespace PredictionBacktester.Strategies
                 if (!_books.TryGetValue(token, out var book)) return;
 
                 decimal bestAsk = book.GetBestAskPrice();
-                decimal availableSize = broker.GetAvailableAskSize(book, token);
+                if (bestAsk >= 1.00m || bestAsk <= 0.01m) return;
 
-                if (bestAsk >= 1.00m || availableSize <= 0) return;
+                // Walk the full ask side to find real available depth at reasonable prices
+                decimal maxPrice = Math.Min(bestAsk + _slippageCents, 0.99m);
+                var walkResult = book.WalkAsks(maxPrice, _maxInvestmentPerTrade, 1.0m);
 
-                totalGrossCost += bestAsk;
-                totalFeeCost += CalculateFeePerShare(bestAsk);
-                bottleneckShares = Math.Min(bottleneckShares, availableSize);
+                if (walkResult.TotalShares <= 0) return;
+
+                // Use VWAP (not bestAsk) for accurate cost estimation
+                totalCostPerSet += walkResult.Vwap;
+                totalFeePerSet += CalculateFeePerShare(walkResult.Vwap);
+                bottleneckShares = Math.Min(bottleneckShares, walkResult.TotalShares);
             }
 
-            decimal totalCostWithFees = totalGrossCost + totalFeeCost;
+            decimal totalNetCostPerSet = totalCostPerSet + totalFeePerSet;
 
-            // We execute if the total cost including ALL polynomial fees leaves a profit
-            // Added a 0.5% (0.005) buffer to account for rounding/dust
-            if (totalCostWithFees >= 0.995m)
+            // Only execute if total cost per complete set (including fees) leaves profit
+            // 0.005 buffer for rounding/dust
+            if (totalNetCostPerSet >= 0.995m)
                 return;
 
-            decimal profitPerShare = 1.00m - totalCostWithFees;
+            decimal profitPerSet = 1.00m - totalNetCostPerSet;
 
-            // Size the trade based on the Bottleneck and Capital limits
-            decimal maxAffordableSets = _maxInvestmentPerTrade / totalCostWithFees;
-            decimal safeSharesToBuy = Math.Min(bottleneckShares, maxAffordableSets);
-            safeSharesToBuy = Math.Floor(safeSharesToBuy * 100) / 100;
+            // Size: how many complete sets can we afford?
+            decimal maxAffordableSets = _maxInvestmentPerTrade / totalNetCostPerSet;
+            decimal setsToBuy = Math.Min(bottleneckShares, maxAffordableSets);
+            setsToBuy = Math.Floor(setsToBuy * 100m) / 100m;
 
-            if (safeSharesToBuy <= 0.01m)
+            if (setsToBuy <= 0.01m)
                 return;
 
-            // Cash check
-            decimal totalDollarsNeeded = safeSharesToBuy * totalCostWithFees;
+            // Cash check: ensure we can afford ALL legs
+            decimal totalDollarsNeeded = setsToBuy * totalCostPerSet; // gross cost only — fees deducted by broker
             if (totalDollarsNeeded > broker.CashBalance)
             {
-                safeSharesToBuy = Math.Floor(broker.CashBalance / totalCostWithFees * 100) / 100;
-                if (safeSharesToBuy <= 0.01m) return;
+                setsToBuy = Math.Floor(broker.CashBalance / totalCostPerSet * 100m) / 100m;
+                if (setsToBuy <= 0.01m) return;
             }
 
             Console.WriteLine($"\n[ARB DETECTED] Event: {eventId}");
-            Console.WriteLine($"-> Gross Spread: ${totalGrossCost:0.0000} | Fees: ${totalFeeCost:0.0000} | Total Cost: ${totalCostWithFees:0.0000}");
-            Console.WriteLine($"-> Net Profit per set: ${profitPerShare:0.0000} | Executing {safeSharesToBuy} shares per leg.");
+            Console.WriteLine($"-> Cost/set: ${totalCostPerSet:0.0000} + fees ${totalFeePerSet:0.0000} = ${totalNetCostPerSet:0.0000} | Profit/set: ${profitPerSet:0.0000} | Sets: {setsToBuy}");
 
-            // Lock the event if toggle is enabled
             if (LockEventAfterBuy)
-            {
                 _lockedEvents.TryAdd(eventId, true);
-            }
 
-            // Fire the orders!
-            ExecuteMultiLegArbitrage(yesTokenIds, safeSharesToBuy, broker);
+            ExecuteMultiLegArbitrage(eventId, yesTokenIds, setsToBuy, broker);
         }
 
-        private void ExecuteMultiLegArbitrage(List<string> yesTokenIds, decimal safeSharesToBuy, GlobalSimulatedBroker broker)
+        private void ExecuteMultiLegArbitrage(string eventId, List<string> yesTokenIds, decimal setsToBuy, GlobalSimulatedBroker broker)
         {
             foreach (var token in yesTokenIds)
             {
-                if (_books.TryGetValue(token, out var book))
-                {
-                    decimal bestAsk = book.GetBestAskPrice();
-                    
-                    // The investment amount per leg includes the ask price + fees
-                    decimal requiredDollars = (bestAsk + CalculateFeePerShare(bestAsk)) * safeSharesToBuy;
+                if (!_books.TryGetValue(token, out var book)) continue;
 
-                    broker.SubmitBuyOrder(token, bestAsk, requiredDollars, book);
-                }
+                decimal bestAsk = book.GetBestAskPrice();
+                // Target price with slippage so the order doesn't get rejected on tiny price moves
+                decimal targetPrice = Math.Min(bestAsk + _slippageCents, 0.99m);
+                // Gross dollar amount for this leg — broker handles fees internally
+                decimal dollarsForLeg = setsToBuy * bestAsk;
+
+                broker.SubmitBuyOrder(token, targetPrice, dollarsForLeg, book);
             }
 
-            Console.WriteLine($"[ARB FIRED] Multi-leg YES tokens successfully dispatched.");
+            Console.WriteLine($"[ARB FIRED] {yesTokenIds.Count}-leg buy dispatched for {eventId}");
         }
     }
 }

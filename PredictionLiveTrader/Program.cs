@@ -34,9 +34,19 @@ class Program
         // ---------------------------------------------------------
         Console.WriteLine("[SYSTEM] Fetching Top Liquid 3+ Leg Events for Arbitrage...");
         var scanner = new PolymarketMarketScanner();
-        
-        // Fetch top 100 most liquid 3+ leg events
-        Dictionary<string, List<string>> arbEvents = scanner.GetTopLiquidEventsAsync(1000).GetAwaiter().GetResult();
+
+        // Fetch top liquid 3+ leg events (30s timeout to avoid hanging on API issues)
+        Dictionary<string, List<string>> arbEvents;
+        var scanTask = scanner.GetTopLiquidEventsAsync(1000);
+        if (scanTask.Wait(TimeSpan.FromSeconds(30)))
+        {
+            arbEvents = scanTask.Result;
+        }
+        else
+        {
+            Console.WriteLine("[SYSTEM] WARNING: Scanner timed out after 30s — starting with 0 arb events.");
+            arbEvents = new Dictionary<string, List<string>>();
+        }
         
         // ---------------------------------------------------------
         // the Telemetry Strategy (Logs to CSV)
