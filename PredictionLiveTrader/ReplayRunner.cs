@@ -116,7 +116,7 @@ static class ReplayRunner
                     fileTicks++;
                     totalTicks++;
 
-                    // Book snapshot — only process new assets (per-asset tracking)
+                    // Book snapshot — process ALL snapshots (re-snapshots clear stale levels)
                     try
                     {
                         using var doc = JsonDocument.Parse(line.AsMemory(pipeIndex + 1));
@@ -125,8 +125,6 @@ static class ReplayRunner
                             if (!entry.TryGetProperty("asset_id", out var idEl)) continue;
                             string? assetId = idEl.GetString();
                             if (string.IsNullOrEmpty(assetId)) continue;
-
-                            if (orderBooks.ContainsKey(assetId)) continue;
 
                             EnsureAssetInitialized(assetId, orderBooks, activeStrategies, strategyConfigs, tokenNames);
 
@@ -558,6 +556,13 @@ static class ReplayRunner
                     broker.DrainDeferredOrders(orderBooks);
                     if (broker.HasDeferredOrders) hasDeferredOrders = true;
                 }
+            }
+
+            // Snapshot clear marker — reset the book for this asset (re-snapshot incoming)
+            if (side == "SNAPSHOT_CLEAR")
+            {
+                orderBooks[assetId].ClearBook();
+                continue;
             }
 
             // Update order book

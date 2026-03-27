@@ -164,24 +164,34 @@ static class ReplayPreprocessor
 
                 if (firstChar == '[')
                 {
-                    // Book snapshot — only process new assets (skip already-initialized ones)
+                    // Book snapshot — process all snapshots; re-snapshots emit a CLEAR marker first
                     try
                     {
                         using var doc = JsonDocument.Parse(line.AsMemory(pipeIndex + 1));
                         int newAssetsInSnapshot = 0;
+                        int resnapshottedAssets = 0;
                         foreach (var entry in doc.RootElement.EnumerateArray())
                         {
                             if (!entry.TryGetProperty("asset_id", out var idEl)) continue;
                             string? assetId = idEl.GetString();
                             if (string.IsNullOrEmpty(assetId)) continue;
 
-                            // Skip assets whose snapshot has already been written
-                            if (snapshotInitialized.Contains(assetId))
-                                continue;
-
-                            snapshotInitialized.Add(assetId);
-                            newAssetsInSnapshot++;
                             ushort assetIdx = GetOrAddAsset(assetMap, assetId);
+
+                            bool isResnapshot = snapshotInitialized.Contains(assetId);
+                            if (!isResnapshot)
+                            {
+                                snapshotInitialized.Add(assetId);
+                                newAssetsInSnapshot++;
+                            }
+                            else
+                            {
+                                // Re-snapshot: write a CLEAR marker (side=2) so RunBinary clears stale levels
+                                WriteRecord(buffer, outStream, timestampMs, assetIdx, 0m, 0m, 2);
+                                totalRecords++;
+                                recordsSinceFlush++;
+                                resnapshottedAssets++;
+                            }
 
                             if (entry.TryGetProperty("bids", out var bidsEl))
                             {
@@ -209,9 +219,9 @@ static class ReplayPreprocessor
                             }
                         }
 
-                        if (newAssetsInSnapshot == 0)
+                        if (newAssetsInSnapshot == 0 && resnapshottedAssets == 0)
                             skippedSnapshots++;
-                        else
+                        else if (newAssetsInSnapshot > 0)
                             Console.WriteLine($"\r  Snapshot: {newAssetsInSnapshot} new asset(s) initialized ({snapshotInitialized.Count} total)                    ");
                     }
                     catch (JsonException) { }

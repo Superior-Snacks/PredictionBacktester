@@ -49,26 +49,26 @@ public class LocalOrderBook
             // --- PROCESS BIDS (Buyers) ---
             if (bidsEl.ValueKind == JsonValueKind.Array)
             {
+                _bids.Clear(); // Full snapshot replaces all bids — prevents stale phantom levels
                 foreach (var bid in bidsEl.EnumerateArray())
                 {
                     decimal price = decimal.Parse(bid.GetProperty("price").GetString() ?? "0");
                     decimal size = decimal.Parse(bid.GetProperty("size").GetString() ?? "0");
 
-                    if (size == 0) _bids.Remove(price);
-                    else _bids[price] = size;
+                    if (size > 0) _bids[price] = size;
                 }
             }
 
             // --- PROCESS ASKS (Sellers) ---
             if (asksEl.ValueKind == JsonValueKind.Array)
             {
+                _asks.Clear(); // Full snapshot replaces all asks — prevents stale phantom levels
                 foreach (var ask in asksEl.EnumerateArray())
                 {
                     decimal price = decimal.Parse(ask.GetProperty("price").GetString() ?? "0");
                     decimal size = decimal.Parse(ask.GetProperty("size").GetString() ?? "0");
 
-                    if (size == 0) _asks.Remove(price);
-                    else _asks[price] = size;
+                    if (size > 0) _asks[price] = size;
                 }
             }
         }
@@ -106,6 +106,15 @@ public class LocalOrderBook
     {
         lock (_bookLock)
             return _asks.OrderBy(kv => kv.Key).Take(levels).Sum(kv => kv.Value);
+    }
+
+    public void ClearBook()
+    {
+        lock (_bookLock)
+        {
+            _bids.Clear();
+            _asks.Clear();
+        }
     }
 
     public void UpdatePriceLevel(string side, decimal price, decimal size)

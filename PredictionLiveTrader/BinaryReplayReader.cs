@@ -84,7 +84,12 @@ public class BinaryReplayReader : IDisposable
 
         price = priceRaw / 10000m;
         size = sizeRaw / 100m;
-        side = sideByte == 1 ? "SELL" : "BUY";
+        side = sideByte switch
+        {
+            1 => "SELL",
+            2 => "SNAPSHOT_CLEAR",
+            _ => "BUY"
+        };
 
         return true;
     }
