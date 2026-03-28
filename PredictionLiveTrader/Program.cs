@@ -38,7 +38,7 @@ class Program
         var scanner = new PolymarketMarketScanner();
 
         // Fetch top liquid 3+ leg events (120s timeout — pagination is slow)
-        var scanTask = scanner.GetTopLiquidEventsAsync(200);
+        var scanTask = scanner.GetTopLiquidEventsAsync(400);
         if (scanTask.Wait(TimeSpan.FromSeconds(120)))
         {
             _arbEvents = scanTask.Result;
@@ -712,7 +712,7 @@ class Program
                     }
                 }, _pauseCts.Token);
 
-                int chunkSize = 50;
+                int chunkSize = 200;
                 bool isFirstChunk = true;
                 var tokenList = _subscribedTokens.ToList();
 
@@ -737,7 +737,7 @@ class Program
                     var bytes = Encoding.UTF8.GetBytes(subscribeMessage);
                     await ws.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, _pauseCts.Token);
 
-                    await Task.Delay(500);
+                    await Task.Delay(100);
                 }
 
                 await listenTask;
