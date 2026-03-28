@@ -156,10 +156,21 @@ def main():
     if len(sys.argv) > 1:
         path = sys.argv[1]
     else:
-        files = sorted(glob.glob("ArbTelemetry_*.csv"), key=os.path.getmtime, reverse=True)
+        search_paths = [
+            "ArbTelemetry_*.csv",
+            "PredictionLiveTrader/ArbTelemetry_*.csv",
+            "PredictionLiveTrader/bin/Release/**/ArbTelemetry_*.csv",
+            "PredictionLiveProduction/ArbTelemetry_*.csv",
+            "PredictionLiveProduction/bin/Release/**/ArbTelemetry_*.csv",
+            "../ArbTelemetry_*.csv",
+        ]
+        files = []
+        for pattern in search_paths:
+            files.extend(glob.glob(pattern, recursive=True))
         if not files:
             print("No ArbTelemetry_*.csv found. Pass a path as argument.")
             sys.exit(1)
+        files.sort(key=os.path.getmtime, reverse=True)
         path = files[0]
 
     print(f"Analyzing: {path}")
