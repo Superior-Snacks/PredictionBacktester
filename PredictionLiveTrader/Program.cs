@@ -16,7 +16,7 @@ using System.Diagnostics;
 
 namespace PredictionLiveTrader;
 
-record StrategyConfig(string Name, decimal StartingCapital, Func<ILiveStrategy> Factory);
+record StrategyConfig(string Name, decimal StartingCapital, Func<ILiveStrategy> Factory, bool IsShared = false);
 
 class Program
 {
@@ -52,21 +52,23 @@ class Program
         // the Telemetry Strategy (Logs to CSV)
         // ---------------------------------------------------------
         configs.Add(new StrategyConfig(
-            Name: "Fast_Merge_Arb_Telemetry", 
-            StartingCapital: 5000m, 
-            Factory: () => new FastMergeArbTelemetryStrategy(arbEvents)
+            Name: "Fast_Merge_Arb_Telemetry",
+            StartingCapital: 5000m,
+            Factory: () => new FastMergeArbTelemetryStrategy(arbEvents),
+            IsShared: true
         ));
 
         // ---------------------------------------------------------
         // Execution Strategy (Actually buys the YES tokens)
         // ---------------------------------------------------------
         configs.Add(new StrategyConfig(
-            Name: "Categorical_Merge_Arb_Execution", 
-            StartingCapital: 5000m, 
+            Name: "Categorical_Merge_Arb_Execution",
+            StartingCapital: 5000m,
             Factory: () => new PolymarketCategoricalArbStrategy(arbEvents, name: "Categorical_Merge_Arb_Execution")
             {
                 LockEventAfterBuy = true
-            }
+            },
+            IsShared: true
         ));
         return configs;
     }
@@ -77,7 +79,8 @@ class Program
 
     // --- PAUSE & RESUME CONTROLS ---
     private static volatile bool _isPaused = false;
-    private static volatile bool _isMuted = false;
+    private static volatile bool _isMuted = false;      // M: mute book dots only
+    private static volatile bool _tradeMuted = false;    // T: mute trade logs only
     private static volatile bool _verboseDots = false;
     private static volatile bool _quietMode = false;
     private static CancellationTokenSource _pauseCts = new CancellationTokenSource();
@@ -124,7 +127,7 @@ class Program
         Console.Clear();
         Console.WriteLine("=========================================");
         Console.WriteLine("  LIVE PAPER TRADING ENGINE INITIALIZED  ");
-        Console.WriteLine("  Controls: 'P' = Pause | 'R' = Resume | 'M' = Mute | 'Q' = Quiet | 'V' = Verbose | 'L' = Latency | 'D' = Drop | 'K' = Cull");
+        Console.WriteLine("  Controls: P=Pause R=Resume M=Mute(dots) T=Mute(trades) Q=Quiet V=Verbose L=Latency D=Drop K=Cull");
         Console.WriteLine($"  Latency starst at {REALISTIC_LATENCY_MS}");
         Console.WriteLine("=========================================");
 
@@ -164,6 +167,12 @@ class Program
         var activeStrategies = new Dictionary<string, List<ILiveStrategy>>();
         var orderBooks = new Dictionary<string, LocalOrderBook>();
 
+        // Shared strategy instances: multi-leg strategies (arb) need ONE instance
+        // that accumulates books across all assets, not per-asset copies.
+        var sharedInstances = new Dictionary<string, ILiveStrategy>();
+        foreach (var config in _strategyConfigs.Where(c => c.IsShared))
+            sharedInstances[config.Name] = config.Factory();
+
         // ==========================================
         // KEYBOARD LISTENER (Pause / Resume)
         // ==========================================
@@ -191,15 +200,18 @@ class Program
                 else if (keyInfo.Key == ConsoleKey.M)
                 {
                     _isMuted = !_isMuted;
-
-                    // Tell every active broker to update its mute status
+                    Console.ForegroundColor = ConsoleColor.Cyan;
+                    Console.WriteLine($"\n[SYSTEM] Book dots {(_isMuted ? "MUTED" : "UNMUTED")}.");
+                    Console.ResetColor();
+                }
+                else if (keyInfo.Key == ConsoleKey.T)
+                {
+                    _tradeMuted = !_tradeMuted;
                     foreach (var broker in _strategyBrokers.Values)
-                    {
-                        broker.IsMuted = _isMuted;
-                    }
+                        broker.IsMuted = _tradeMuted;
 
                     Console.ForegroundColor = ConsoleColor.Cyan;
-                    Console.WriteLine($"\n[SYSTEM] Trade logs are now {(_isMuted ? "MUTED" : "UNMUTED")}.");
+                    Console.WriteLine($"\n[SYSTEM] Trade logs {(_tradeMuted ? "MUTED" : "VISIBLE")}.");
                     Console.ResetColor();
                 }
                 else if (keyInfo.Key == ConsoleKey.Q)
@@ -371,8 +383,15 @@ class Program
                         }
                     }
                     Console.WriteLine("=================================================================\n");
+
+                    // Print near-miss report from telemetry strategy
+                    if (sharedInstances.TryGetValue("Fast_Merge_Arb_Telemetry", out var telemetryInstance)
+                        && telemetryInstance is FastMergeArbTelemetryStrategy telemetry)
+                    {
+                        telemetry.PrintNearMissReport();
+                    }
                 }
-                
+
                 ExportLedgerToCsv(quietMode: true);
 
                 if (!_quietMode) Console.WriteLine("\n[SYSTEM] Running background settlement sweep...");
@@ -584,7 +603,7 @@ class Program
 
                                             activeStrategies[assetId] = _strategyConfigs
                                                 .Where(c => !_droppedStrategies.Contains(c.Name))
-                                                .Select(c => c.Factory())
+                                                .Select(c => c.IsShared ? sharedInstances[c.Name] : c.Factory())
                                                 .ToList();
                                         }
 

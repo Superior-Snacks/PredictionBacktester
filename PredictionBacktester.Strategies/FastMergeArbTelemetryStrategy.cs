@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading.Channels;
 using System.Threading.Tasks;
 using PredictionBacktester.Engine;
@@ -16,6 +17,12 @@ namespace PredictionBacktester.Strategies
         private readonly Dictionary<string, List<string>> _eventTokens = new();
         private readonly ConcurrentDictionary<string, LocalOrderBook> _books = new();
         private readonly ConcurrentDictionary<string, ActiveArbEvent> _activeArbs = new();
+
+        // --- NEAR-MISS TRACKING ---
+        // Tracks the tightest spread seen per event (closest to arb)
+        private readonly ConcurrentDictionary<string, decimal> _bestNetCostSeen = new();
+        private DateTime _lastNearMissReport = DateTime.MinValue;
+        private const int NEAR_MISS_REPORT_INTERVAL_SEC = 60; // Print top near-misses every 60s
 
         // --- CSV TELEMETRY INFRASTRUCTURE ---
         private static readonly string _csvFilePath = $"ArbTelemetry_{DateTime.UtcNow:yyyyMMdd_HHmmss}.csv";
@@ -112,7 +119,20 @@ namespace PredictionBacktester.Strategies
             }
 
             decimal totalNetCost = totalGrossCost + totalFeeCost;
-            
+
+            // Track tightest spread per event (only for fully-priced events)
+            if (legs == yesTokenIds.Count && totalGrossCost > 0)
+            {
+                _bestNetCostSeen.AddOrUpdate(eventId, totalNetCost, (_, prev) => Math.Min(prev, totalNetCost));
+
+                // Periodic near-miss report
+                if ((DateTime.UtcNow - _lastNearMissReport).TotalSeconds >= NEAR_MISS_REPORT_INTERVAL_SEC)
+                {
+                    _lastNearMissReport = DateTime.UtcNow;
+                    PrintNearMissReport();
+                }
+            }
+
             // Arb is alive if cost (including fees) is strictly less than $1.00
             bool isArbAlive = totalGrossCost > 0 && totalNetCost < 1.00m && bottleneckShares >= 1.0m;
 
@@ -187,6 +207,25 @@ namespace PredictionBacktester.Strategies
             
             // Toss it into the background queue (Instant execution, zero CPU lag)
             _csvQueue.Writer.TryWrite(csvRow);
+        }
+
+        public void PrintNearMissReport()
+        {
+            var sorted = _bestNetCostSeen
+                .OrderBy(kv => kv.Value)
+                .Take(10)
+                .ToList();
+
+            if (sorted.Count == 0) return;
+
+            Console.WriteLine($"\n[TELEMETRY] --- TOP 10 CLOSEST TO ARB (< $1.00 = profit) ---");
+            foreach (var kv in sorted)
+            {
+                decimal gap = kv.Value - 1.00m;
+                string status = gap < 0 ? "ARB!" : $"+${gap:0.0000} away";
+                Console.WriteLine($"  ${kv.Value:0.0000} ({status}) | Event: {kv.Key}");
+            }
+            Console.WriteLine();
         }
 
         // --- BACKGROUND WRITER TASK ---
