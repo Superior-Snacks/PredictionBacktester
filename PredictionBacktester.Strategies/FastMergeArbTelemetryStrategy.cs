@@ -19,8 +19,8 @@ namespace PredictionBacktester.Strategies
         private readonly ConcurrentDictionary<string, ActiveArbEvent> _activeArbs = new();
 
         // --- NEAR-MISS TRACKING ---
-        // Tracks the tightest spread seen per event (closest to arb)
-        private readonly ConcurrentDictionary<string, decimal> _bestNetCostSeen = new();
+        private record NearMissEntry(decimal BestNetCost, int PricedLegs, int TotalLegs);
+        private readonly ConcurrentDictionary<string, NearMissEntry> _bestNetCostSeen = new();
         private DateTime _lastNearMissReport = DateTime.MinValue;
         private const int NEAR_MISS_REPORT_INTERVAL_SEC = 60; // Print top near-misses every 60s
 
@@ -97,35 +97,49 @@ namespace PredictionBacktester.Strategies
             int legs = 0;
             string currentLegPrices = "";
 
+            bool allLegsHaveBooks = true;
+            int pricedLegs = 0;
+
             foreach (var token in yesTokenIds)
             {
-                if (!_books.TryGetValue(token, out var book)) return; 
+                if (!_books.TryGetValue(token, out var book))
+                {
+                    // No book yet — treat as $1.00 for near-miss, but flag as incomplete for arb
+                    allLegsHaveBooks = false;
+                    totalGrossCost += 1.00m;
+                    legs++;
+                    continue;
+                }
 
                 decimal bestAsk = book.GetBestAskPrice();
                 decimal availableSize = book.GetBestAskSize();
 
-                if (bestAsk >= 1.00m || availableSize <= 0)
+                if (bestAsk <= 0 || availableSize <= 0)
                 {
-                    totalGrossCost = 1.00m; 
-                    break; 
+                    // Empty book — treat as $1.00 for near-miss tracking
+                    totalGrossCost += 1.00m;
+                }
+                else
+                {
+                    totalGrossCost += bestAsk;
+                    totalFeeCost += CalculateFeePerShare(bestAsk);
+                    bottleneckShares = Math.Min(bottleneckShares, availableSize);
+                    currentLegPrices += $"{bestAsk:0.000}|";
+                    pricedLegs++;
                 }
 
-                totalGrossCost += bestAsk;
-                totalFeeCost += CalculateFeePerShare(bestAsk);
-                bottleneckShares = Math.Min(bottleneckShares, availableSize);
-                
                 legs++;
-                currentLegPrices += $"{bestAsk:0.000}|";
             }
 
             decimal totalNetCost = totalGrossCost + totalFeeCost;
 
-            // Track tightest spread per event (only for fully-priced events)
-            if (legs == yesTokenIds.Count && totalGrossCost > 0)
+            // Near-miss tracking: always update if we have at least some priced legs
+            if (legs == yesTokenIds.Count && pricedLegs >= 2)
             {
-                _bestNetCostSeen.AddOrUpdate(eventId, totalNetCost, (_, prev) => Math.Min(prev, totalNetCost));
+                var entry = new NearMissEntry(totalNetCost, pricedLegs, yesTokenIds.Count);
+                _bestNetCostSeen.AddOrUpdate(eventId, entry, (_, prev) =>
+                    totalNetCost < prev.BestNetCost ? entry : prev);
 
-                // Periodic near-miss report
                 if ((DateTime.UtcNow - _lastNearMissReport).TotalSeconds >= NEAR_MISS_REPORT_INTERVAL_SEC)
                 {
                     _lastNearMissReport = DateTime.UtcNow;
@@ -133,8 +147,9 @@ namespace PredictionBacktester.Strategies
                 }
             }
 
-            // Arb is alive if cost (including fees) is strictly less than $1.00
-            bool isArbAlive = totalGrossCost > 0 && totalNetCost < 1.00m && bottleneckShares >= 1.0m;
+            // Arb detection: ALL legs must have real books with real asks
+            bool isArbAlive = allLegsHaveBooks && pricedLegs == yesTokenIds.Count
+                && totalGrossCost > 0 && totalNetCost < 1.00m && bottleneckShares >= 1.0m;
 
             if (isArbAlive)
             {
@@ -211,19 +226,35 @@ namespace PredictionBacktester.Strategies
 
         public void PrintNearMissReport()
         {
-            var sorted = _bestNetCostSeen
-                .OrderBy(kv => kv.Value)
+            int totalEvents = _eventTokens.Count;
+            int totalTokens = _tokenToEventMap.Count;
+            int booksLoaded = _books.Count;
+            int eventsTracked = _bestNetCostSeen.Count;
+
+            // Split into fully-priced vs partial
+            var fullyPriced = _bestNetCostSeen
+                .Where(kv => kv.Value.PricedLegs == kv.Value.TotalLegs)
+                .OrderBy(kv => kv.Value.BestNetCost)
                 .Take(10)
                 .ToList();
 
-            if (sorted.Count == 0) return;
+            int partialCount = eventsTracked - fullyPriced.Count;
 
             Console.WriteLine($"\n[TELEMETRY] --- TOP 10 CLOSEST TO ARB (< $1.00 = profit) ---");
-            foreach (var kv in sorted)
+            Console.WriteLine($"  Books: {booksLoaded}/{totalTokens} tokens | Fully priced: {fullyPriced.Count} | Partial: {partialCount} | Total events: {totalEvents}");
+            if (fullyPriced.Count == 0)
             {
-                decimal gap = kv.Value - 1.00m;
-                string status = gap < 0 ? "ARB!" : $"+${gap:0.0000} away";
-                Console.WriteLine($"  ${kv.Value:0.0000} ({status}) | Event: {kv.Key}");
+                Console.WriteLine("  (no events with all legs priced yet)");
+            }
+            else
+            {
+                foreach (var kv in fullyPriced)
+                {
+                    var e = kv.Value;
+                    decimal gap = e.BestNetCost - 1.00m;
+                    string status = gap < 0 ? "ARB!" : $"+${gap:0.0000} away";
+                    Console.WriteLine($"  ${e.BestNetCost:0.0000} ({status}) [{e.TotalLegs}L] | Event: {kv.Key}");
+                }
             }
             Console.WriteLine();
         }

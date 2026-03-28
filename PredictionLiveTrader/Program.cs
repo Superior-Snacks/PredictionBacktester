@@ -23,6 +23,8 @@ class Program
     // ==========================================
     // STRATEGY CONFIGURATION (Grid Search / Cartesian Product)
     // ==========================================
+    private static Dictionary<string, List<string>> _arbEvents = new();
+    private static Dictionary<string, string> _arbTokenNames = new();
     private static readonly List<StrategyConfig> _strategyConfigs = GenerateStrategyGrid();
     private static List<StrategyConfig> GenerateStrategyGrid()
     {
@@ -36,16 +38,16 @@ class Program
         var scanner = new PolymarketMarketScanner();
 
         // Fetch top liquid 3+ leg events (120s timeout — pagination is slow)
-        Dictionary<string, List<string>> arbEvents;
         var scanTask = scanner.GetTopLiquidEventsAsync(200);
         if (scanTask.Wait(TimeSpan.FromSeconds(120)))
         {
-            arbEvents = scanTask.Result;
+            _arbEvents = scanTask.Result;
+            _arbTokenNames = scanner.TokenNames;
         }
         else
         {
             Console.WriteLine("[SYSTEM] WARNING: Scanner timed out after 120s — starting with 0 arb events.");
-            arbEvents = new Dictionary<string, List<string>>();
+            _arbEvents = new Dictionary<string, List<string>>();
         }
         
         // ---------------------------------------------------------
@@ -54,7 +56,7 @@ class Program
         configs.Add(new StrategyConfig(
             Name: "Fast_Merge_Arb_Telemetry",
             StartingCapital: 5000m,
-            Factory: () => new FastMergeArbTelemetryStrategy(arbEvents),
+            Factory: () => new FastMergeArbTelemetryStrategy(_arbEvents),
             IsShared: true
         ));
 
@@ -64,7 +66,7 @@ class Program
         configs.Add(new StrategyConfig(
             Name: "Categorical_Merge_Arb_Execution",
             StartingCapital: 5000m,
-            Factory: () => new PolymarketCategoricalArbStrategy(arbEvents, name: "Categorical_Merge_Arb_Execution")
+            Factory: () => new PolymarketCategoricalArbStrategy(_arbEvents, name: "Categorical_Merge_Arb_Execution")
             {
                 LockEventAfterBuy = true
             },
@@ -347,6 +349,18 @@ class Program
         var serviceProvider = services.BuildServiceProvider();
         var apiClient = serviceProvider.GetRequiredService<PolymarketClient>();
 
+        // Ensure all arb scanner tokens are subscribed to the WebSocket
+        int arbTokenCount = 0;
+        foreach (var evt in _arbEvents)
+            foreach (var token in evt.Value)
+            {
+                if (_subscribedTokens.Add(token)) arbTokenCount++;
+                if (_arbTokenNames.TryGetValue(token, out var name))
+                    _tokenNames.TryAdd(token, name);
+            }
+
+        Console.WriteLine($"[SYSTEM] Registered {arbTokenCount} arb tokens from {_arbEvents.Count} events for WS subscription.");
+
         Console.WriteLine("Fetching active markets from Polymarket API...");
         await DiscoverNewMarkets(apiClient);
         Console.WriteLine($"Found {_subscribedTokens.Count} active outcome tokens to monitor!");
@@ -610,6 +624,15 @@ class Program
                                         if (root.TryGetProperty("bids", out var bidsEl) && root.TryGetProperty("asks", out var asksEl))
                                         {
                                             orderBooks[assetId].ProcessBookUpdate(bidsEl, asksEl);
+
+                                            // Dispatch initial snapshot to strategies so multi-leg
+                                            // strategies register this token's book immediately
+                                            var bookStrategies = activeStrategies[assetId];
+                                            foreach (var strategy in bookStrategies)
+                                            {
+                                                if (_droppedStrategies.Contains(strategy.StrategyName)) continue;
+                                                strategy.OnBookUpdate(orderBooks[assetId], _strategyBrokers[strategy.StrategyName]);
+                                            }
                                         }
                                     }
                                 }

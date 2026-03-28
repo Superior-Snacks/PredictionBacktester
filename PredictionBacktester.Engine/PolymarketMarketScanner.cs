@@ -19,11 +19,14 @@ namespace PredictionBacktester.Engine
             return client;
         }
 
+        /// <summary>Token ID → market question name, populated during scan.</summary>
+        public Dictionary<string, string> TokenNames { get; } = new();
+
         public async Task<Dictionary<string, List<string>>> GetTopLiquidEventsAsync(int targetEventCount = 500)
         {
             Console.WriteLine($"\n[SCANNER] Initializing Gamma API Auto-Discovery for Events...");
             Console.WriteLine($"[SCANNER] Target: Top {targetEventCount} highest-volume active events.");
-            
+
             var arbConfig = new Dictionary<string, List<string>>();
             int offset = 0;
             int limit = 100; // API max is 100 per page
@@ -94,7 +97,12 @@ namespace PredictionBacktester.Engine
 
                             if (tokens.Count > 0 && !string.IsNullOrEmpty(tokens[0]))
                             {
-                                yesTokenIds.Add(tokens[0]!);
+                                string yesToken = tokens[0]!;
+                                yesTokenIds.Add(yesToken);
+
+                                // Store market name for this token
+                                if (mkt.TryGetProperty("question", out var qEl))
+                                    TokenNames.TryAdd(yesToken, qEl.GetString() ?? "");
                             }
                         }
                     }
