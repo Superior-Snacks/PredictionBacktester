@@ -95,20 +95,34 @@ def analyze(rows):
     # and can only deploy up to $50 per arb window
     max_deploy = 50.0
     realistic_profit = 0
+    realistic_capital = 0
     realistic_count = 0
     for r in rows:
         if r["duration_ms"] < 1000:
             continue
         realistic_count += 1
-        # Cap deployment at max_deploy or actual capital required
         deploy_ratio = min(1.0, max_deploy / r["capital_req"]) if r["capital_req"] > 0 else 0
-        # 70% capture rate (slippage, latency, partial fills)
+        realistic_capital += r["capital_req"] * deploy_ratio
         realistic_profit += r["potential"] * deploy_ratio * 0.70
+
+    # Calculate session duration in hours
+    try:
+        t_start = datetime.strptime(rows[0]["start"], "%H:%M:%S.%f")
+        t_end   = datetime.strptime(rows[-1]["end"], "%H:%M:%S.%f")
+        session_hours = (t_end - t_start).total_seconds() / 3600
+        if session_hours <= 0:
+            session_hours = (t_end - t_start + timedelta(days=1)).total_seconds() / 3600
+    except ValueError:
+        session_hours = 0
 
     print("── REALISTIC PnL ESTIMATE ──")
     print(f"  Assumptions: >= 1s windows only, 70% capture rate, ${max_deploy:.0f} max per arb")
     print(f"  Eligible windows:            {realistic_count}/{len(rows)}")
+    print(f"  Capital deployed (total):    ${realistic_capital:,.2f}")
     print(f"  Estimated profit:            ${realistic_profit:,.2f}")
+    if session_hours > 0:
+        print(f"  Session duration:            {session_hours:.1f} hrs")
+        print(f"  Profit per hour:             ${realistic_profit / session_hours:,.2f}/hr")
     print()
 
     # ── Per-Event Breakdown ──
