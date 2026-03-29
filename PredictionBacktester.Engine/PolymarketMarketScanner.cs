@@ -22,16 +22,17 @@ namespace PredictionBacktester.Engine
         /// <summary>Token ID → market question name, populated during scan.</summary>
         public Dictionary<string, string> TokenNames { get; } = new();
 
-        public async Task<Dictionary<string, List<string>>> GetTopLiquidEventsAsync(int targetEventCount = 500)
+        public async Task<Dictionary<string, List<string>>> GetTopLiquidEventsAsync(int targetEventCount = 0)
         {
+            string targetLabel = targetEventCount > 0 ? $"Top {targetEventCount}" : "ALL";
             Console.WriteLine($"\n[SCANNER] Initializing Gamma API Auto-Discovery for Events...");
-            Console.WriteLine($"[SCANNER] Target: Top {targetEventCount} highest-volume active events.");
+            Console.WriteLine($"[SCANNER] Target: {targetLabel} active 3+ leg events.");
 
             var arbConfig = new Dictionary<string, List<string>>();
             int offset = 0;
             int limit = 100; // API max is 100 per page
 
-            while (arbConfig.Count < targetEventCount)
+            while (targetEventCount <= 0 || arbConfig.Count < targetEventCount)
             {
                 // Fetch /events sorted by volume
                 string url = $"events?active=true&closed=false&order=volume24hr&ascending=false&limit={limit}&offset={offset}";
@@ -52,7 +53,7 @@ namespace PredictionBacktester.Engine
 
                 foreach (var evt in root.EnumerateArray())
                 {
-                    if (arbConfig.Count >= targetEventCount) break;
+                    if (targetEventCount > 0 && arbConfig.Count >= targetEventCount) break;
 
                     string eventId = evt.GetProperty("id").GetString() ?? Guid.NewGuid().ToString();
                     

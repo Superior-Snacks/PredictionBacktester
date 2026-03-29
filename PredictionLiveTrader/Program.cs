@@ -37,9 +37,9 @@ class Program
         Console.WriteLine("[SYSTEM] Fetching Top Liquid 3+ Leg Events for Arbitrage...");
         var scanner = new PolymarketMarketScanner();
 
-        // Fetch top liquid 3+ leg events (120s timeout — pagination is slow)
-        var scanTask = scanner.GetTopLiquidEventsAsync(400);
-        if (scanTask.Wait(TimeSpan.FromSeconds(120)))
+        // Fetch ALL active 3+ leg events (no cap)
+        var scanTask = scanner.GetTopLiquidEventsAsync();
+        if (scanTask.Wait(TimeSpan.FromSeconds(300)))
         {
             _arbEvents = scanTask.Result;
             _arbTokenNames = scanner.TokenNames;
@@ -100,6 +100,12 @@ class Program
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, DateTime> _lastBookUpdate = new();
     // Markets already force-settled (don't re-check)
     private static readonly HashSet<string> _forceSettled = new();
+    // --- MESSAGE LAG MONITORING ---
+    private static long _lagSampleCount = 0;
+    private static double _lagSumMs = 0;
+    private static double _lagMaxMs = 0;
+    private static DateTime _lastLagReport = DateTime.MinValue;
+    private static readonly object _lagLock = new();
     private static ClientWebSocket? _activeWs;
     private static readonly SemaphoreSlim _wsSendSemaphore = new SemaphoreSlim(1, 1);
     private static readonly HttpClient _clobHttpClient = new() { BaseAddress = new Uri("https://clob.polymarket.com/") };
@@ -360,10 +366,7 @@ class Program
             }
 
         Console.WriteLine($"[SYSTEM] Registered {arbTokenCount} arb tokens from {_arbEvents.Count} events for WS subscription.");
-
-        Console.WriteLine("Fetching active markets from Polymarket API...");
-        await DiscoverNewMarkets(apiClient);
-        Console.WriteLine($"Found {_subscribedTokens.Count} active outcome tokens to monitor!");
+        Console.WriteLine($"[SYSTEM] Arb-only mode — skipping binary market discovery. Monitoring {_subscribedTokens.Count} arb tokens.");
 
         // ==========================================
         // SETTLEMENT SWEEPER 
@@ -404,6 +407,83 @@ class Program
                     {
                         telemetry.PrintNearMissReport();
                     }
+
+                    // --- MESSAGE LAG REPORT ---
+                    lock (_lagLock)
+                    {
+                        if (_lagSampleCount > 0)
+                        {
+                            double avgLag = _lagSumMs / _lagSampleCount;
+                            var color = _lagMaxMs > 2000 ? ConsoleColor.Red : _lagMaxMs > 500 ? ConsoleColor.Yellow : ConsoleColor.Green;
+                            Console.ForegroundColor = color;
+                            Console.WriteLine($"[LAG] Avg: {avgLag:0}ms | Max: {_lagMaxMs:0}ms | Samples: {_lagSampleCount:N0}");
+                            Console.ResetColor();
+                            _lagSampleCount = 0;
+                            _lagSumMs = 0;
+                            _lagMaxMs = 0;
+                        }
+                    }
+
+                    // --- BOOK AUDIT (compare local books vs REST) ---
+                    _ = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            // Pick up to 5 random arb tokens that have local books
+                            var auditTokens = orderBooks.Keys
+                                .Where(k => _arbEvents.Values.Any(v => v.Contains(k)))
+                                .OrderBy(_ => Random.Shared.Next())
+                                .Take(5)
+                                .ToList();
+
+                            if (auditTokens.Count == 0) return;
+
+                            int matches = 0, mismatches = 0;
+                            foreach (var token in auditTokens)
+                            {
+                                try
+                                {
+                                    string resp = await _clobHttpClient.GetStringAsync($"book?token_id={token}");
+                                    using var bookDoc = JsonDocument.Parse(resp);
+                                    var bookRoot = bookDoc.RootElement;
+
+                                    // Get REST best ask
+                                    decimal restBestAsk = 1.00m;
+                                    if (bookRoot.TryGetProperty("asks", out var asksArr) && asksArr.GetArrayLength() > 0)
+                                    {
+                                        restBestAsk = asksArr.EnumerateArray()
+                                            .Select(a => decimal.Parse(a.GetProperty("price").GetString() ?? "1"))
+                                            .Min();
+                                    }
+
+                                    // Get local best ask
+                                    decimal localBestAsk = orderBooks[token].GetBestAskPrice();
+
+                                    if (Math.Abs(restBestAsk - localBestAsk) < 0.002m)
+                                        matches++;
+                                    else
+                                    {
+                                        mismatches++;
+                                        string name = _tokenNames.GetValueOrDefault(token, token[..Math.Min(8, token.Length)] + "...");
+                                        Console.ForegroundColor = ConsoleColor.Red;
+                                        Console.WriteLine($"[AUDIT MISMATCH] {name}: Local=${localBestAsk:0.000} REST=${restBestAsk:0.000} (diff=${Math.Abs(restBestAsk - localBestAsk):0.000})");
+                                        Console.ResetColor();
+                                    }
+
+                                    await Task.Delay(200); // Don't hammer the API
+                                }
+                                catch { /* skip failed fetches */ }
+                            }
+
+                            Console.ForegroundColor = mismatches > 0 ? ConsoleColor.Yellow : ConsoleColor.Green;
+                            Console.WriteLine($"[AUDIT] Book check: {matches}/{matches + mismatches} match ({mismatches} stale)");
+                            Console.ResetColor();
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"[AUDIT ERROR] {ex.Message}");
+                        }
+                    });
                 }
 
                 ExportLedgerToCsv(quietMode: true);
@@ -512,24 +592,23 @@ class Program
                 }
                 catch { /* Ignore staleness sweep errors */ }
 
-                // --- NEW MARKET DISCOVERY ---
-                try
-                {
-                    List<string> newTokens = await DiscoverNewMarkets(apiClient);
-
-                    if (newTokens.Count > 0)
-                    {
-                        if (!_quietMode) lock (GlobalSimulatedBroker.ConsoleLock)
-                        {
-                            Console.ForegroundColor = ConsoleColor.Green;
-                            Console.WriteLine($"[DISCOVERY] Found {newTokens.Count} new market(s) crossing the $50k threshold! Subscribing...");
-                            Console.ResetColor();
-                        }
-
-                        await SubscribeNewTokens(newTokens);
-                    }
-                }
-                catch { /* Ignore discovery errors */ }
+                // --- NEW MARKET DISCOVERY (disabled — arb-only mode, no binary market overhead) ---
+                // To re-enable: uncomment the block below
+                // try
+                // {
+                //     List<string> newTokens = await DiscoverNewMarkets(apiClient);
+                //     if (newTokens.Count > 0)
+                //     {
+                //         if (!_quietMode) lock (GlobalSimulatedBroker.ConsoleLock)
+                //         {
+                //             Console.ForegroundColor = ConsoleColor.Green;
+                //             Console.WriteLine($"[DISCOVERY] Found {newTokens.Count} new market(s) crossing the $50k threshold! Subscribing...");
+                //             Console.ResetColor();
+                //         }
+                //         await SubscribeNewTokens(newTokens);
+                //     }
+                // }
+                // catch { /* Ignore discovery errors */ }
             }
         });
 
@@ -605,6 +684,21 @@ class Program
                             if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty("event_type", out var eventTypeEl))
                             {
                                 string? eventType = eventTypeEl.GetString();
+
+                                // --- Message lag tracking ---
+                                if (root.TryGetProperty("timestamp", out var tsEl))
+                                {
+                                    if (long.TryParse(tsEl.ToString(), out long msgEpochMs))
+                                    {
+                                        double lagMs = (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - msgEpochMs);
+                                        lock (_lagLock)
+                                        {
+                                            _lagSampleCount++;
+                                            _lagSumMs += lagMs;
+                                            if (lagMs > _lagMaxMs) _lagMaxMs = lagMs;
+                                        }
+                                    }
+                                }
 
                                 if (eventType == "book" && root.TryGetProperty("asset_id", out var assetIdEl))
                                 {
