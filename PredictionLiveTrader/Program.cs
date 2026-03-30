@@ -8,6 +8,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.DependencyInjection;
 using PredictionBacktester.Strategies;
+using PredictionBacktester.Strategies.Sweepers;
 using PredictionBacktester.Core.Entities.Database;
 using PredictionBacktester.Data.ApiClients;
 using System.IO;
@@ -100,12 +101,6 @@ class Program
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, DateTime> _lastBookUpdate = new();
     // Markets already force-settled (don't re-check)
     private static readonly HashSet<string> _forceSettled = new();
-    // --- MESSAGE LAG MONITORING ---
-    private static long _lagSampleCount = 0;
-    private static double _lagSumMs = 0;
-    private static double _lagMaxMs = 0;
-    private static DateTime _lastLagReport = DateTime.MinValue;
-    private static readonly object _lagLock = new();
     private static ClientWebSocket? _activeWs;
     private static readonly SemaphoreSlim _wsSendSemaphore = new SemaphoreSlim(1, 1);
     private static readonly HttpClient _clobHttpClient = new() { BaseAddress = new Uri("https://clob.polymarket.com/") };
@@ -368,8 +363,20 @@ class Program
         Console.WriteLine($"[SYSTEM] Registered {arbTokenCount} arb tokens from {_arbEvents.Count} events for WS subscription.");
         Console.WriteLine($"[SYSTEM] Arb-only mode — skipping binary market discovery. Monitoring {_subscribedTokens.Count} arb tokens.");
 
+        // Create strategy-specific sweeper
+        IStrategySweeper? strategySweeper = null;
+        bool isArbMode = _strategyConfigs.Any(c => c.IsShared && c.Name.Contains("Arb"));
+        if (isArbMode)
+        {
+            strategySweeper = new ArbSweeper(sharedInstances, orderBooks, _arbEvents, _tokenNames, _clobHttpClient);
+        }
+        else
+        {
+            strategySweeper = new FlashCrashSweeper(apiClient, _subscribedTokens, _tokenNames, _tokenMinSizes, _tokenFeeRates, _clobHttpClient, SubscribeNewTokens);
+        }
+
         // ==========================================
-        // SETTLEMENT SWEEPER 
+        // SETTLEMENT SWEEPER
         // ==========================================
         _ = Task.Run(async () =>
         {
@@ -401,89 +408,11 @@ class Program
                     }
                     Console.WriteLine("=================================================================\n");
 
-                    // Print near-miss report from telemetry strategy
-                    if (sharedInstances.TryGetValue("Fast_Merge_Arb_Telemetry", out var telemetryInstance)
-                        && telemetryInstance is FastMergeArbTelemetryStrategy telemetry)
+                    // --- STRATEGY-SPECIFIC SWEEP ---
+                    if (strategySweeper != null)
                     {
-                        telemetry.PrintNearMissReport();
+                        await strategySweeper.RunSweepAsync();
                     }
-
-                    // --- MESSAGE LAG REPORT ---
-                    lock (_lagLock)
-                    {
-                        if (_lagSampleCount > 0)
-                        {
-                            double avgLag = _lagSumMs / _lagSampleCount;
-                            var color = _lagMaxMs > 2000 ? ConsoleColor.Red : _lagMaxMs > 500 ? ConsoleColor.Yellow : ConsoleColor.Green;
-                            Console.ForegroundColor = color;
-                            Console.WriteLine($"[LAG] Avg: {avgLag:0}ms | Max: {_lagMaxMs:0}ms | Samples: {_lagSampleCount:N0}");
-                            Console.ResetColor();
-                            _lagSampleCount = 0;
-                            _lagSumMs = 0;
-                            _lagMaxMs = 0;
-                        }
-                    }
-
-                    // --- BOOK AUDIT (compare local books vs REST) ---
-                    _ = Task.Run(async () =>
-                    {
-                        try
-                        {
-                            // Pick up to 5 random arb tokens that have local books
-                            var auditTokens = orderBooks.Keys
-                                .Where(k => _arbEvents.Values.Any(v => v.Contains(k)))
-                                .OrderBy(_ => Random.Shared.Next())
-                                .Take(5)
-                                .ToList();
-
-                            if (auditTokens.Count == 0) return;
-
-                            int matches = 0, mismatches = 0;
-                            foreach (var token in auditTokens)
-                            {
-                                try
-                                {
-                                    string resp = await _clobHttpClient.GetStringAsync($"book?token_id={token}");
-                                    using var bookDoc = JsonDocument.Parse(resp);
-                                    var bookRoot = bookDoc.RootElement;
-
-                                    // Get REST best ask
-                                    decimal restBestAsk = 1.00m;
-                                    if (bookRoot.TryGetProperty("asks", out var asksArr) && asksArr.GetArrayLength() > 0)
-                                    {
-                                        restBestAsk = asksArr.EnumerateArray()
-                                            .Select(a => decimal.Parse(a.GetProperty("price").GetString() ?? "1"))
-                                            .Min();
-                                    }
-
-                                    // Get local best ask
-                                    decimal localBestAsk = orderBooks[token].GetBestAskPrice();
-
-                                    if (Math.Abs(restBestAsk - localBestAsk) < 0.002m)
-                                        matches++;
-                                    else
-                                    {
-                                        mismatches++;
-                                        string name = _tokenNames.GetValueOrDefault(token, token[..Math.Min(8, token.Length)] + "...");
-                                        Console.ForegroundColor = ConsoleColor.Red;
-                                        Console.WriteLine($"[AUDIT MISMATCH] {name}: Local=${localBestAsk:0.000} REST=${restBestAsk:0.000} (diff=${Math.Abs(restBestAsk - localBestAsk):0.000})");
-                                        Console.ResetColor();
-                                    }
-
-                                    await Task.Delay(200); // Don't hammer the API
-                                }
-                                catch { /* skip failed fetches */ }
-                            }
-
-                            Console.ForegroundColor = mismatches > 0 ? ConsoleColor.Yellow : ConsoleColor.Green;
-                            Console.WriteLine($"[AUDIT] Book check: {matches}/{matches + mismatches} match ({mismatches} stale)");
-                            Console.ResetColor();
-                        }
-                        catch (Exception ex)
-                        {
-                            Console.WriteLine($"[AUDIT ERROR] {ex.Message}");
-                        }
-                    });
                 }
 
                 ExportLedgerToCsv(quietMode: true);
@@ -591,24 +520,6 @@ class Program
                         Console.WriteLine($"[STALE SETTLE] Force-settled {settled} stale market(s).");
                 }
                 catch { /* Ignore staleness sweep errors */ }
-
-                // --- NEW MARKET DISCOVERY (disabled — arb-only mode, no binary market overhead) ---
-                // To re-enable: uncomment the block below
-                // try
-                // {
-                //     List<string> newTokens = await DiscoverNewMarkets(apiClient);
-                //     if (newTokens.Count > 0)
-                //     {
-                //         if (!_quietMode) lock (GlobalSimulatedBroker.ConsoleLock)
-                //         {
-                //             Console.ForegroundColor = ConsoleColor.Green;
-                //             Console.WriteLine($"[DISCOVERY] Found {newTokens.Count} new market(s) crossing the $50k threshold! Subscribing...");
-                //             Console.ResetColor();
-                //         }
-                //         await SubscribeNewTokens(newTokens);
-                //     }
-                // }
-                // catch { /* Ignore discovery errors */ }
             }
         });
 
@@ -691,12 +602,8 @@ class Program
                                     if (long.TryParse(tsEl.ToString(), out long msgEpochMs))
                                     {
                                         double lagMs = (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - msgEpochMs);
-                                        lock (_lagLock)
-                                        {
-                                            _lagSampleCount++;
-                                            _lagSumMs += lagMs;
-                                            if (lagMs > _lagMaxMs) _lagMaxMs = lagMs;
-                                        }
+                                        if (strategySweeper is ArbSweeper arbSweeper)
+                                            arbSweeper.RecordLag(lagMs);
                                     }
                                 }
 
@@ -855,61 +762,6 @@ class Program
                 await Task.Delay(5000);
             }
         }
-    }
-
-    // ==========================================
-    // NEW MARKET DISCOVERY
-    // ==========================================
-    private static async Task<List<string>> DiscoverNewMarkets(PolymarketClient apiClient)
-    {
-        var newlyDiscovered = new List<string>();
-        int limit = 100;
-
-        for (int offset = 0; ; offset += limit)
-        {
-            var events = await apiClient.GetActiveEventsAsync(limit, offset);
-            if (events == null || events.Count == 0) break;
-
-            foreach (var ev in events)
-            {
-                if (ev.Markets == null) continue;
-                foreach (var market in ev.Markets)
-                {
-                    if (market.StartDate.HasValue && market.StartDate.Value > DateTime.UtcNow) continue;
-                    if (market.Volume < 50000m) continue;
-
-                    if (market.ClobTokenIds != null && !market.IsClosed && market.ClobTokenIds.Length > 0)
-                    {
-                        string yesToken = market.ClobTokenIds[0];
-                        
-                        // Add returns 'true' if the item didn't exist before.
-                        // This safely guarantees we only collect truly new tokens!
-                        if (_subscribedTokens.Add(yesToken))
-                        {
-                            _tokenNames.TryAdd(yesToken, market.Question);
-                            _tokenMinSizes.TryAdd(yesToken, market.OrderMinSize > 0 ? market.OrderMinSize : 1.00m);
-                            newlyDiscovered.Add(yesToken);
-
-                            // Fetch fee rate from CLOB API (non-blocking best-effort)
-                            try
-                            {
-                                var feeResp = await _clobHttpClient.GetStringAsync($"/fee-rate?token_id={yesToken}");
-                                using var doc = System.Text.Json.JsonDocument.Parse(feeResp);
-                                var root = doc.RootElement;
-                                if ((root.TryGetProperty("fee_rate_bps", out var feeEl) ||
-                                     root.TryGetProperty("feeRateBps", out feeEl)) &&
-                                    feeEl.TryGetInt32(out int bps) && bps > 0)
-                                {
-                                    _tokenFeeRates[yesToken] = bps;
-                                }
-                            }
-                            catch { /* Non-critical — fees default to 0 if fetch fails */ }
-                        }
-                    }
-                }
-            }
-        }
-        return newlyDiscovered;
     }
 
     private static async Task SubscribeNewTokens(List<string> newTokens)
