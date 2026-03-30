@@ -75,6 +75,20 @@ namespace PredictionBacktester.Strategies
         }
 
         /// <summary>
+        /// Registers a new event discovered at runtime. Thread-safe.
+        /// </summary>
+        public void RegisterEvent(string eventId, List<string> tokenIds)
+        {
+            lock (_eventTokens)
+            {
+                if (_eventTokens.ContainsKey(eventId)) return;
+                _eventTokens[eventId] = tokenIds;
+                foreach (var token in tokenIds)
+                    _tokenToEventMap[token] = eventId;
+            }
+        }
+
+        /// <summary>
         /// Polymarket taker fee per share in USDC.
         /// Formula: fee = price * feeRate * (price * (1 - price))^exponent
         /// </summary>

@@ -87,6 +87,20 @@ namespace PredictionBacktester.Strategies
             _bestNetCostSeen.Clear();
         }
 
+        /// <summary>
+        /// Registers a new event discovered at runtime. Thread-safe.
+        /// </summary>
+        public void RegisterEvent(string eventId, List<string> tokenIds)
+        {
+            lock (_eventTokens)
+            {
+                if (_eventTokens.ContainsKey(eventId)) return;
+                _eventTokens[eventId] = tokenIds;
+                foreach (var token in tokenIds)
+                    _tokenToEventMap[token] = eventId;
+            }
+        }
+
         // Polynomial Fee Formula
         private decimal CalculateFeePerShare(decimal price)
         {
