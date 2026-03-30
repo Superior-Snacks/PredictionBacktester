@@ -106,21 +106,21 @@ def analyze(rows):
         realistic_profit += r["potential"] * deploy_ratio * 0.70
 
     # Calculate session duration in hours (handles multi-day / midnight crossings)
+    # End times are chronologically ordered (rows logged when arb closes).
+    # Walk end times to detect midnight crossings, then measure first start → last end.
     try:
-        times = []
-        for r in rows:
-            times.append(datetime.strptime(r["start"], "%H:%M:%S.%f"))
-            times.append(datetime.strptime(r["end"], "%H:%M:%S.%f"))
+        t_start = datetime.strptime(rows[0]["start"], "%H:%M:%S.%f")
+        end_times = [datetime.strptime(r["end"], "%H:%M:%S.%f") for r in rows]
 
-        # Walk through all timestamps and add a day each time the clock wraps backward
         days_offset = 0
-        adjusted = [times[0]]
-        for i in range(1, len(times)):
-            if times[i] < times[i - 1] and (times[i - 1] - times[i]).total_seconds() > 3600:
+        prev = t_start
+        for et in end_times:
+            if et < prev and (prev - et).total_seconds() > 3600:
                 days_offset += 1
-            adjusted.append(times[i] + timedelta(days=days_offset))
+            prev = et
 
-        session_hours = (adjusted[-1] - adjusted[0]).total_seconds() / 3600
+        t_end_adjusted = end_times[-1] + timedelta(days=days_offset)
+        session_hours = (t_end_adjusted - t_start).total_seconds() / 3600
         if session_hours <= 0:
             session_hours = 0
     except ValueError:

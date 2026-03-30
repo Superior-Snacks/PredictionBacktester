@@ -76,6 +76,17 @@ namespace PredictionBacktester.Strategies
             EvaluateArbitrageTelemetry(eventId);
         }
 
+        /// <summary>
+        /// Clears all transient state after a WebSocket reconnect.
+        /// Prevents phantom arbs with inflated durations from spanning disconnects.
+        /// </summary>
+        public void OnReconnect()
+        {
+            _books.Clear();
+            _activeArbs.Clear();
+            _bestNetCostSeen.Clear();
+        }
+
         // Polynomial Fee Formula
         private decimal CalculateFeePerShare(decimal price)
         {

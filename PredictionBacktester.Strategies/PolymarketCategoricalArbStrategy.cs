@@ -66,6 +66,15 @@ namespace PredictionBacktester.Strategies
         }
 
         /// <summary>
+        /// Clears stale book state after a WebSocket reconnect.
+        /// Does NOT clear _lockedEvents — those represent real executed trades.
+        /// </summary>
+        public void OnReconnect()
+        {
+            _books.Clear();
+        }
+
+        /// <summary>
         /// Polymarket taker fee per share in USDC.
         /// Formula: fee = price * feeRate * (price * (1 - price))^exponent
         /// </summary>

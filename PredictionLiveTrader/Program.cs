@@ -539,6 +539,13 @@ class Program
             orderBooks.Clear();
             activeStrategies.Clear();
 
+            // Reset shared strategy state to prevent phantom arbs spanning disconnects
+            foreach (var instance in sharedInstances.Values)
+            {
+                if (instance is FastMergeArbTelemetryStrategy telemetry) telemetry.OnReconnect();
+                if (instance is PolymarketCategoricalArbStrategy execution) execution.OnReconnect();
+            }
+
             try
             {
                 using var ws = new ClientWebSocket();
