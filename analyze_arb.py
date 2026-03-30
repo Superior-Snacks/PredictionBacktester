@@ -105,13 +105,24 @@ def analyze(rows):
         realistic_capital += r["capital_req"] * deploy_ratio
         realistic_profit += r["potential"] * deploy_ratio * 0.70
 
-    # Calculate session duration in hours
+    # Calculate session duration in hours (handles multi-day / midnight crossings)
     try:
-        t_start = datetime.strptime(rows[0]["start"], "%H:%M:%S.%f")
-        t_end   = datetime.strptime(rows[-1]["end"], "%H:%M:%S.%f")
-        session_hours = (t_end - t_start).total_seconds() / 3600
+        times = []
+        for r in rows:
+            times.append(datetime.strptime(r["start"], "%H:%M:%S.%f"))
+            times.append(datetime.strptime(r["end"], "%H:%M:%S.%f"))
+
+        # Walk through all timestamps and add a day each time the clock wraps backward
+        days_offset = 0
+        adjusted = [times[0]]
+        for i in range(1, len(times)):
+            if times[i] < times[i - 1] and (times[i - 1] - times[i]).total_seconds() > 3600:
+                days_offset += 1
+            adjusted.append(times[i] + timedelta(days=days_offset))
+
+        session_hours = (adjusted[-1] - adjusted[0]).total_seconds() / 3600
         if session_hours <= 0:
-            session_hours = (t_end - t_start + timedelta(days=1)).total_seconds() / 3600
+            session_hours = 0
     except ValueError:
         session_hours = 0
 
