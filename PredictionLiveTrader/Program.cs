@@ -422,6 +422,7 @@ class Program
                 if (instance is PolymarketCategoricalArbStrategy execution) execution.OnReconnect();
             }
 
+            CancellationTokenSource? heartbeatCts = null;
             try
             {
                 using var ws = new ClientWebSocket();
@@ -431,6 +432,30 @@ class Program
                 await ws.ConnectAsync(new Uri("wss://ws-subscriptions-clob.polymarket.com/ws/market"), _pauseCts.Token);
                 _activeWs = ws;
                 if (!_quietMode) Console.WriteLine("[CONNECTED] Listening for live order book updates... (Press CTRL+C to stop)\n");
+
+                // Application-level heartbeat: Polymarket requires literal "PING" every 10s or it drops the connection
+                heartbeatCts = CancellationTokenSource.CreateLinkedTokenSource(_pauseCts.Token);
+                _ = Task.Run(async () =>
+                {
+                    var pingBytes = Encoding.UTF8.GetBytes("PING");
+                    while (!heartbeatCts.Token.IsCancellationRequested && ws.State == WebSocketState.Open)
+                    {
+                        try
+                        {
+                            await Task.Delay(TimeSpan.FromSeconds(10), heartbeatCts.Token);
+                            await _wsSendSemaphore.WaitAsync(heartbeatCts.Token);
+                            try
+                            {
+                                await ws.SendAsync(new ArraySegment<byte>(pingBytes), WebSocketMessageType.Text, true, heartbeatCts.Token);
+                            }
+                            finally
+                            {
+                                _wsSendSemaphore.Release();
+                            }
+                        }
+                        catch { break; }
+                    }
+                });
 
                 var listenTask = Task.Run(async () =>
                 {
@@ -467,6 +492,10 @@ class Program
                         //string message = Encoding.UTF8.GetString(ms.ToArray());
                         string message = Encoding.UTF8.GetString(ms.GetBuffer(), 0, (int)ms.Length);
                         ms.SetLength(0);
+
+                        // Skip heartbeat responses (PONG) — not JSON
+                        if (message == "PONG" || message == "pong")
+                            continue;
 
                         _replayLogger?.EnqueueTick(message);
 
@@ -625,10 +654,12 @@ class Program
                 }
 
                 await listenTask;
+                heartbeatCts.Cancel();
             }
             catch (OperationCanceledException)
             {
                 // We expect this! It means the user pressed 'P'.
+                heartbeatCts?.Cancel();
                 _activeWs = null;
             }
             catch (Exception ex)

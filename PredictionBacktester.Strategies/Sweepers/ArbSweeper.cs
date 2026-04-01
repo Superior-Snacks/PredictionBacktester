@@ -98,21 +98,52 @@ namespace PredictionBacktester.Strategies.Sweepers
 
         private void PrintArbDashboard()
         {
-            int maxNameLen = _brokers.Keys.Where(n => !_droppedStrategies.Contains(n)).Select(n => n.Length).DefaultIfEmpty(20).Max();
-
             Console.WriteLine("\n================= ARB PERFORMANCE OVERVIEW =================");
+
+            // Calculate guaranteed P&L from held arb positions (skip observation-only strategies)
             foreach (var kvp in _brokers)
             {
                 if (_droppedStrategies.Contains(kvp.Key)) continue;
                 string name = kvp.Key;
                 var broker = kvp.Value;
+                if (broker.TotalActions == 0 && broker.CashBalance == _startingCapitals.GetValueOrDefault(name, 5000m))
+                    continue; // Skip strategies that never trade (e.g. telemetry)
                 decimal startCap = _startingCapitals.GetValueOrDefault(name, 5000m);
-                decimal realizedPnl = broker.CashBalance - startCap;
+                decimal capitalDeployed = startCap - broker.CashBalance;
+
+                // Count complete sets: for each event, min shares across all legs = complete sets
+                decimal totalCompleteSets = 0;
+                int eventsWithPositions = 0;
+                foreach (var evt in _arbEvents)
+                {
+                    decimal minShares = decimal.MaxValue;
+                    bool hasAny = false;
+                    foreach (var token in evt.Value)
+                    {
+                        decimal shares = broker.GetPositionShares(token);
+                        if (shares > 0) hasAny = true;
+                        minShares = Math.Min(minShares, shares);
+                    }
+                    if (hasAny && minShares > 0)
+                    {
+                        totalCompleteSets += minShares;
+                        eventsWithPositions++;
+                    }
+                }
+
+                // Each complete set pays $1.00 at settlement
+                decimal guaranteedPayout = totalCompleteSets;
+                decimal guaranteedProfit = guaranteedPayout - capitalDeployed;
 
                 lock (GlobalSimulatedBroker.ConsoleLock)
                 {
-                    Console.ForegroundColor = realizedPnl >= 0 ? ConsoleColor.Green : ConsoleColor.Red;
-                    Console.WriteLine($"[{name.PadRight(maxNameLen)}] Cash: ${broker.CashBalance:0.00} | Realized P&L: ${realizedPnl:0.00} | Buys: {broker.TotalActions} Fills: {broker.TotalTradesExecuted} (W:{broker.WinningTrades} L:{broker.LosingTrades}) Rej: {broker.RejectedOrders}");
+                    Console.ForegroundColor = guaranteedProfit >= 0 ? ConsoleColor.Green : ConsoleColor.Red;
+                    Console.WriteLine($"[{name}]");
+                    Console.ForegroundColor = ConsoleColor.Cyan;
+                    Console.WriteLine($"  Capital: ${capitalDeployed:0.00} deployed | ${broker.CashBalance:0.00} cash | {broker.TotalActions} buys ({broker.RejectedOrders} rejected)");
+                    Console.ForegroundColor = guaranteedProfit >= 0 ? ConsoleColor.Green : ConsoleColor.Red;
+                    Console.WriteLine($"  Positions: {totalCompleteSets:0.00} complete sets across {eventsWithPositions} events");
+                    Console.WriteLine($"  Guaranteed: ${guaranteedPayout:0.00} payout - ${capitalDeployed:0.00} cost = ${guaranteedProfit:0.00} profit");
                     Console.ResetColor();
                 }
             }
