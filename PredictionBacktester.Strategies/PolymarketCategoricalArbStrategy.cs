@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.Linq;
 using PredictionBacktester.Engine;
 
 namespace PredictionBacktester.Strategies
@@ -25,19 +27,33 @@ namespace PredictionBacktester.Strategies
         private readonly double _feeRate;
         private readonly double _feeExponent;
 
+        // Execution safety parameters
+        private readonly long _requiredSustainMs;
+        private readonly decimal _minProfitPerSet;
+        private readonly decimal _depthFloorShares;
+
+        // Sustain timer state: tracks when each event's arb was first detected
+        private readonly ConcurrentDictionary<string, long> _arbFirstSeenMs = new();
+
         public PolymarketCategoricalArbStrategy(
             Dictionary<string, List<string>> configuredEvents,
             string name = "Categorical_Merge_Arb",
             decimal maxInvestmentPerTrade = 50.00m,
             decimal slippageCents = 0.02m,
             double feeRate = 0.04,
-            double feeExponent = 1.0)
+            double feeExponent = 1.0,
+            long requiredSustainMs = 500,
+            decimal minProfitPerSet = 0.02m,
+            decimal depthFloorShares = 5m)
         {
             StrategyName = name;
             _maxInvestmentPerTrade = maxInvestmentPerTrade;
             _slippageCents = slippageCents;
             _feeRate = feeRate;
             _feeExponent = feeExponent;
+            _requiredSustainMs = requiredSustainMs;
+            _minProfitPerSet = minProfitPerSet;
+            _depthFloorShares = depthFloorShares;
 
             foreach (var evt in configuredEvents)
             {
@@ -72,6 +88,7 @@ namespace PredictionBacktester.Strategies
         public void OnReconnect()
         {
             _books.Clear();
+            _arbFirstSeenMs.Clear();
         }
 
         /// <summary>
@@ -105,24 +122,26 @@ namespace PredictionBacktester.Strategies
                 return;
 
             var yesTokenIds = _eventTokens[eventId];
+            long nowMs = Stopwatch.GetTimestamp() / (Stopwatch.Frequency / 1000);
 
             // Walk each leg's book to get accurate VWAP and available depth
             decimal totalCostPerSet = 0m;
             decimal totalFeePerSet = 0m;
             decimal bottleneckShares = decimal.MaxValue;
+            bool allLegsHaveBooks = true;
 
             foreach (var token in yesTokenIds)
             {
-                if (!_books.TryGetValue(token, out var book)) return;
+                if (!_books.TryGetValue(token, out var book)) { allLegsHaveBooks = false; break; }
 
                 decimal bestAsk = book.GetBestAskPrice();
-                if (bestAsk >= 1.00m) return;
+                if (bestAsk >= 1.00m) { allLegsHaveBooks = false; break; }
 
                 // Walk the full ask side to find real available depth at reasonable prices
                 decimal maxPrice = Math.Min(bestAsk + _slippageCents, 0.99m);
                 var walkResult = book.WalkAsks(maxPrice, _maxInvestmentPerTrade, 1.0m);
 
-                if (walkResult.TotalShares <= 0) return;
+                if (walkResult.TotalShares <= 0) { allLegsHaveBooks = false; break; }
 
                 // Use VWAP (not bestAsk) for accurate cost estimation
                 totalCostPerSet += walkResult.Vwap;
@@ -130,14 +149,51 @@ namespace PredictionBacktester.Strategies
                 bottleneckShares = Math.Min(bottleneckShares, walkResult.TotalShares);
             }
 
+            if (!allLegsHaveBooks)
+            {
+                // Arb condition no longer holds — reset sustain timer
+                _arbFirstSeenMs.TryRemove(eventId, out _);
+                return;
+            }
+
             decimal totalNetCostPerSet = totalCostPerSet + totalFeePerSet;
 
             // Only execute if total cost per complete set (including fees) leaves profit
-            // 0.005 buffer for rounding/dust
             if (totalNetCostPerSet >= 0.995m)
+            {
+                _arbFirstSeenMs.TryRemove(eventId, out _);
                 return;
+            }
 
             decimal profitPerSet = 1.00m - totalNetCostPerSet;
+
+            // SAFETY 1: Minimum profit threshold — skip thin arbs
+            if (profitPerSet < _minProfitPerSet)
+            {
+                _arbFirstSeenMs.TryRemove(eventId, out _);
+                return;
+            }
+
+            // SAFETY 2: Depth floor — every leg must have enough shares
+            if (bottleneckShares < _depthFloorShares)
+            {
+                _arbFirstSeenMs.TryRemove(eventId, out _);
+                return;
+            }
+
+            // SAFETY 3: Sustain timer — arb must persist for N ms before entry
+            if (!_arbFirstSeenMs.TryGetValue(eventId, out long firstSeenMs))
+            {
+                _arbFirstSeenMs[eventId] = nowMs;
+                return; // First sighting — wait for next update
+            }
+
+            long sustainedMs = nowMs - firstSeenMs;
+            if (sustainedMs < _requiredSustainMs)
+                return; // Still waiting
+
+            // Arb has sustained — clear timer so it doesn't re-trigger
+            _arbFirstSeenMs.TryRemove(eventId, out _);
 
             // Size: how many complete sets can we afford?
             decimal maxAffordableSets = _maxInvestmentPerTrade / totalNetCostPerSet;
@@ -148,15 +204,15 @@ namespace PredictionBacktester.Strategies
                 return;
 
             // Cash check: ensure we can afford ALL legs
-            decimal totalDollarsNeeded = setsToBuy * totalCostPerSet; // gross cost only — fees deducted by broker
+            decimal totalDollarsNeeded = setsToBuy * totalCostPerSet;
             if (totalDollarsNeeded > broker.CashBalance)
             {
                 setsToBuy = Math.Floor(broker.CashBalance / totalCostPerSet * 100m) / 100m;
                 if (setsToBuy <= 0.01m) return;
             }
 
-            Console.WriteLine($"\n[ARB DETECTED] Event: {eventId}");
-            Console.WriteLine($"-> Cost/set: ${totalCostPerSet:0.0000} + fees ${totalFeePerSet:0.0000} = ${totalNetCostPerSet:0.0000} | Profit/set: ${profitPerSet:0.0000} | Sets: {setsToBuy}");
+            Console.WriteLine($"\n[ARB DETECTED] Event: {eventId} (sustained {sustainedMs}ms)");
+            Console.WriteLine($"-> Cost/set: ${totalCostPerSet:0.0000} + fees ${totalFeePerSet:0.0000} = ${totalNetCostPerSet:0.0000} | Profit/set: ${profitPerSet:0.0000} | Sets: {setsToBuy} | Depth: {bottleneckShares:0.00}");
 
             if (LockEventAfterBuy)
                 _lockedEvents.TryAdd(eventId, true);
@@ -166,6 +222,11 @@ namespace PredictionBacktester.Strategies
 
         private void ExecuteMultiLegArbitrage(string eventId, List<string> yesTokenIds, decimal setsToBuy, GlobalSimulatedBroker broker)
         {
+            // Track shares before execution to detect partial fills
+            var sharesBefore = new Dictionary<string, decimal>();
+            foreach (var token in yesTokenIds)
+                sharesBefore[token] = broker.GetPositionShares(token);
+
             foreach (var token in yesTokenIds)
             {
                 if (!_books.TryGetValue(token, out var book)) continue;
@@ -179,7 +240,40 @@ namespace PredictionBacktester.Strategies
                 broker.SubmitBuyOrder(token, targetPrice, dollarsForLeg, book);
             }
 
-            Console.WriteLine($"[ARB FIRED] {yesTokenIds.Count}-leg buy dispatched for {eventId}");
+            // SAFETY 4: Partial fill protection — check if all legs filled
+            var sharesAfter = new Dictionary<string, decimal>();
+            foreach (var token in yesTokenIds)
+                sharesAfter[token] = broker.GetPositionShares(token);
+
+            var legFills = yesTokenIds
+                .Select(t => sharesAfter[t] - sharesBefore[t])
+                .ToList();
+
+            decimal minFill = legFills.Min();
+            decimal maxFill = legFills.Max();
+
+            if (minFill <= 0 && maxFill > 0)
+            {
+                // At least one leg got zero shares while others filled — unwind
+                Console.WriteLine($"[ARB PARTIAL FILL] Event {eventId}: fills ranged {minFill:0.00}-{maxFill:0.00} shares. Unwinding filled legs.");
+                foreach (var token in yesTokenIds)
+                {
+                    decimal newShares = sharesAfter[token] - sharesBefore[token];
+                    if (newShares > 0 && _books.TryGetValue(token, out var book))
+                    {
+                        decimal bestBid = book.GetBestBidPrice();
+                        broker.SubmitSellAllOrder(token, bestBid, book);
+                    }
+                }
+
+                // Unlock event so it can be retried
+                if (LockEventAfterBuy)
+                    _lockedEvents.TryRemove(eventId, out _);
+            }
+            else
+            {
+                Console.WriteLine($"[ARB FIRED] {yesTokenIds.Count}-leg buy dispatched for {eventId} ({minFill:0.00} shares/leg)");
+            }
         }
     }
 }
