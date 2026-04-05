@@ -2,7 +2,6 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.Linq;
 using PredictionBacktester.Engine;
 
 namespace PredictionBacktester.Strategies
@@ -34,6 +33,10 @@ namespace PredictionBacktester.Strategies
 
         // Sustain timer state: tracks when each event's arb was first detected
         private readonly ConcurrentDictionary<string, long> _arbFirstSeenMs = new();
+
+        // Early exit state: tracks cost basis per event for sell-back evaluation
+        private readonly ConcurrentDictionary<string, decimal> _eventCostBasis = new();
+        private readonly ConcurrentDictionary<string, decimal> _eventSetsBought = new();
 
         public PolymarketCategoricalArbStrategy(
             Dictionary<string, List<string>> configuredEvents,
@@ -77,6 +80,13 @@ namespace PredictionBacktester.Strategies
                 return;
 
             _books[asset] = book;
+
+            // If we hold a position on this event, check for early exit
+            if (_lockedEvents.ContainsKey(eventId))
+            {
+                EvaluateSellBack(eventId, broker);
+                return;
+            }
 
             EvaluateArbitrage(eventId, broker);
         }
@@ -222,58 +232,86 @@ namespace PredictionBacktester.Strategies
 
         private void ExecuteMultiLegArbitrage(string eventId, List<string> yesTokenIds, decimal setsToBuy, GlobalSimulatedBroker broker)
         {
-            // Track shares before execution to detect partial fills
-            var sharesBefore = new Dictionary<string, decimal>();
-            foreach (var token in yesTokenIds)
-                sharesBefore[token] = broker.GetPositionShares(token);
+            decimal totalSpent = 0m;
 
             foreach (var token in yesTokenIds)
             {
                 if (!_books.TryGetValue(token, out var book)) continue;
 
                 decimal bestAsk = book.GetBestAskPrice();
-                // Target price with slippage so the order doesn't get rejected on tiny price moves
                 decimal targetPrice = Math.Min(bestAsk + _slippageCents, 0.99m);
-                // Gross dollar amount for this leg — broker handles fees internally
                 decimal dollarsForLeg = setsToBuy * bestAsk;
 
+                totalSpent += dollarsForLeg + (setsToBuy * CalculateFeePerShare(bestAsk));
                 broker.SubmitBuyOrder(token, targetPrice, dollarsForLeg, book);
             }
 
-            // SAFETY 4: Partial fill protection — check if all legs filled
-            var sharesAfter = new Dictionary<string, decimal>();
+            // Record cost basis for sell-back evaluation
+            _eventCostBasis.AddOrUpdate(eventId, totalSpent, (_, old) => old + totalSpent);
+            _eventSetsBought.AddOrUpdate(eventId, setsToBuy, (_, old) => old + setsToBuy);
+
+            Console.WriteLine($"[ARB FIRED] {yesTokenIds.Count}-leg buy dispatched for {eventId} (cost: ${totalSpent:0.00})");
+        }
+
+        private void EvaluateSellBack(string eventId, GlobalSimulatedBroker broker)
+        {
+            if (!_eventCostBasis.TryGetValue(eventId, out decimal costBasis)) return;
+            if (!_eventSetsBought.TryGetValue(eventId, out decimal setsHeld)) return;
+            if (setsHeld <= 0) return;
+
+            var yesTokenIds = _eventTokens[eventId];
+
+            // Check we still hold positions on all legs
+            decimal minShares = decimal.MaxValue;
             foreach (var token in yesTokenIds)
-                sharesAfter[token] = broker.GetPositionShares(token);
-
-            var legFills = yesTokenIds
-                .Select(t => sharesAfter[t] - sharesBefore[t])
-                .ToList();
-
-            decimal minFill = legFills.Min();
-            decimal maxFill = legFills.Max();
-
-            if (minFill <= 0 && maxFill > 0)
             {
-                // At least one leg got zero shares while others filled — unwind
-                Console.WriteLine($"[ARB PARTIAL FILL] Event {eventId}: fills ranged {minFill:0.00}-{maxFill:0.00} shares. Unwinding filled legs.");
-                foreach (var token in yesTokenIds)
-                {
-                    decimal newShares = sharesAfter[token] - sharesBefore[token];
-                    if (newShares > 0 && _books.TryGetValue(token, out var book))
-                    {
-                        decimal bestBid = book.GetBestBidPrice();
-                        broker.SubmitSellAllOrder(token, bestBid, book);
-                    }
-                }
+                decimal shares = broker.GetPositionShares(token);
+                if (shares <= 0) return; // Missing a leg — can't sell complete sets
+                minShares = Math.Min(minShares, shares);
+            }
 
-                // Unlock event so it can be retried
-                if (LockEventAfterBuy)
-                    _lockedEvents.TryRemove(eventId, out _);
-            }
-            else
+            // Walk bids on all legs to see what we'd get for selling minShares complete sets
+            decimal totalProceeds = 0m;
+            decimal totalSellFees = 0m;
+
+            foreach (var token in yesTokenIds)
             {
-                Console.WriteLine($"[ARB FIRED] {yesTokenIds.Count}-leg buy dispatched for {eventId} ({minFill:0.00} shares/leg)");
+                if (!_books.TryGetValue(token, out var book)) return;
+
+                decimal bestBid = book.GetBestBidPrice();
+                if (bestBid <= 0.01m) return; // No real bid
+
+                var walkResult = book.WalkBids(bestBid - _slippageCents, minShares, 1.0m);
+                if (walkResult.TotalShares <= 0) return;
+
+                totalProceeds += walkResult.Vwap * Math.Min(walkResult.TotalShares, minShares);
+                totalSellFees += CalculateFeePerShare(walkResult.Vwap) * Math.Min(walkResult.TotalShares, minShares);
             }
+
+            decimal netProceeds = totalProceeds - totalSellFees;
+
+            // Only sell back if profit per set meets the minimum threshold
+            decimal profit = netProceeds - costBasis;
+            if (setsHeld > 0 && profit / setsHeld < _minProfitPerSet)
+                return;
+
+            Console.WriteLine($"\n[ARB SELL-BACK] Event: {eventId}");
+            Console.WriteLine($"-> Cost basis: ${costBasis:0.00} | Net proceeds: ${netProceeds:0.00} | Profit: ${profit:0.00}");
+
+            // Sell all legs
+            foreach (var token in yesTokenIds)
+            {
+                if (!_books.TryGetValue(token, out var book)) continue;
+                decimal bestBid = book.GetBestBidPrice();
+                broker.SubmitSellAllOrder(token, bestBid, book);
+            }
+
+            // Clear state — event is no longer locked, can re-enter
+            _lockedEvents.TryRemove(eventId, out _);
+            _eventCostBasis.TryRemove(eventId, out _);
+            _eventSetsBought.TryRemove(eventId, out _);
+
+            Console.WriteLine($"[ARB SELL-BACK COMPLETE] {yesTokenIds.Count} legs sold for {eventId}");
         }
     }
 }
