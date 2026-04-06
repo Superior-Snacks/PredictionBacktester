@@ -45,7 +45,7 @@ namespace PredictionBacktester.Strategies
             decimal slippageCents = 0.02m,
             double feeRate = 0.04,
             double feeExponent = 1.0,
-            long requiredSustainMs = 500,
+            long requiredSustainMs = 0,
             decimal minProfitPerSet = 0.02m,
             decimal depthFloorShares = 5m)
         {
@@ -234,7 +234,12 @@ namespace PredictionBacktester.Strategies
         {
             decimal totalSpent = 0m;
 
-            foreach (var token in yesTokenIds)
+            // Sort by thinnest ask depth first — if a thin leg's FOK rejects, we know sooner
+            var sortedTokens = yesTokenIds
+                .OrderBy(t => _books.TryGetValue(t, out var b) ? b.GetBestAskSize() : decimal.MaxValue)
+                .ToList();
+
+            foreach (var token in sortedTokens)
             {
                 if (!_books.TryGetValue(token, out var book)) continue;
 

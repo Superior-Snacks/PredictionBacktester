@@ -4,8 +4,10 @@ Fetches event metadata, live order books, and trading activity for Polymarket ev
 Used to verify whether telemetry-detected arbs are real or stale-book artifacts.
 
 Usage: python fetch_event_data.py EVENT_ID [EVENT_ID ...]
+       python fetch_event_data.py 325482 --legs 3    (warn if API leg count differs)
 """
 
+import argparse
 import requests
 import json
 import sys
@@ -83,7 +85,7 @@ def sum_book_depth(levels, top_n=5):
     return total
 
 
-def analyze_event(event_id):
+def analyze_event(event_id, expected_legs=None):
     print(f"\nLooking up event {event_id}...")
     evt = fetch_event(event_id)
 
@@ -101,6 +103,13 @@ def analyze_event(event_id):
 
     print(f'\nEvent {event_id}: "{title}"')
     print(f"  Legs: {len(markets)} | Status: {status} | negRisk: {neg_risk}")
+
+    # Leg count mismatch warning (telemetry vs API)
+    if expected_legs is not None and expected_legs != len(markets):
+        print(f"\n  LEG COUNT MISMATCH: Telemetry reported {expected_legs} legs, API shows {len(markets)}")
+        if len(markets) > expected_legs:
+            print(f"    -> Gamma API paginated endpoint likely truncated child markets during scanning.")
+            print(f"    -> This event may be a sports prop bundle, NOT a categorical arb.")
 
     sum_best_asks = 0.0
     sum_fees = 0.0
@@ -218,14 +227,14 @@ def analyze_event(event_id):
 
 
 def main():
-    if len(sys.argv) < 2:
-        print("Usage: python fetch_event_data.py EVENT_ID [EVENT_ID ...]")
-        print("Example: python fetch_event_data.py 325482")
-        print("Example: python fetch_event_data.py 325482 305318")
-        sys.exit(1)
+    parser = argparse.ArgumentParser(description="Arb Event Verifier")
+    parser.add_argument("event_ids", nargs="+", help="Event IDs to look up")
+    parser.add_argument("--legs", type=int, default=None,
+                        help="Expected leg count from telemetry (warns on mismatch)")
+    args = parser.parse_args()
 
-    for event_id in sys.argv[1:]:
-        analyze_event(event_id.strip())
+    for event_id in args.event_ids:
+        analyze_event(event_id.strip(), expected_legs=args.legs)
         print()
 
 
