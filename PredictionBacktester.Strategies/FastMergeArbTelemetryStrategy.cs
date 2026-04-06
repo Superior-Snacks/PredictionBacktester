@@ -18,6 +18,14 @@ namespace PredictionBacktester.Strategies
         private readonly ConcurrentDictionary<string, LocalOrderBook> _books = new();
         private readonly ConcurrentDictionary<string, ActiveArbEvent> _activeArbs = new();
 
+        // --- EXECUTION-ALIGNED PARAMETERS (match PolymarketCategoricalArbStrategy) ---
+        private readonly decimal _maxInvestmentPerTrade;
+        private readonly decimal _slippageCents;
+        private readonly decimal _minProfitPerSet;
+        private readonly decimal _depthFloorShares;
+        private readonly double _feeRate;
+        private readonly double _feeExponent;
+
         // --- NEAR-MISS TRACKING ---
         private record NearMissEntry(decimal BestNetCost, int PricedLegs, int TotalLegs);
         private readonly ConcurrentDictionary<string, NearMissEntry> _bestNetCostSeen = new();
@@ -41,8 +49,22 @@ namespace PredictionBacktester.Strategies
             public string LegPrices { get; set; }
         }
 
-        public FastMergeArbTelemetryStrategy(Dictionary<string, List<string>> configuredEvents)
+        public FastMergeArbTelemetryStrategy(
+            Dictionary<string, List<string>> configuredEvents,
+            decimal maxInvestmentPerTrade = 50.00m,
+            decimal slippageCents = 0.02m,
+            decimal minProfitPerSet = 0.02m,
+            decimal depthFloorShares = 5m,
+            double feeRate = 0.04,
+            double feeExponent = 1.0)
         {
+            _maxInvestmentPerTrade = maxInvestmentPerTrade;
+            _slippageCents = slippageCents;
+            _minProfitPerSet = minProfitPerSet;
+            _depthFloorShares = depthFloorShares;
+            _feeRate = feeRate;
+            _feeExponent = feeExponent;
+
             foreach (var evt in configuredEvents)
             {
                 string eventId = evt.Key;
@@ -101,24 +123,21 @@ namespace PredictionBacktester.Strategies
             }
         }
 
-        // Polynomial Fee Formula
         private decimal CalculateFeePerShare(decimal price)
         {
             double p = (double)price;
-            double feeRate = 0.04; // Baseline Rate
-            double exponent = 1.0; // Baseline Exponent
-            double fee = p * feeRate * Math.Pow(p * (1.0 - p), exponent);
+            double fee = p * _feeRate * Math.Pow(p * (1.0 - p), _feeExponent);
             return Math.Round((decimal)fee, 4);
         }
 
         private void EvaluateArbitrageTelemetry(string eventId)
         {
             var yesTokenIds = _eventTokens[eventId];
-            
+
             decimal totalGrossCost = 0m;
             decimal totalFeeCost = 0m;
             decimal bottleneckShares = decimal.MaxValue;
-            
+
             int legs = 0;
             string currentLegPrices = "";
 
@@ -129,7 +148,6 @@ namespace PredictionBacktester.Strategies
             {
                 if (!_books.TryGetValue(token, out var book))
                 {
-                    // No book yet — treat as $1.00 for near-miss, but flag as incomplete for arb
                     allLegsHaveBooks = false;
                     totalGrossCost += 1.00m;
                     legs++;
@@ -137,19 +155,24 @@ namespace PredictionBacktester.Strategies
                 }
 
                 decimal bestAsk = book.GetBestAskPrice();
-                decimal availableSize = book.GetBestAskSize();
+                if (bestAsk >= 1.00m) { allLegsHaveBooks = false; legs++; continue; }
 
-                if (bestAsk <= 0 || availableSize <= 0)
+                // Walk the ask side with slippage — matches execution strategy
+                decimal maxPrice = Math.Min(bestAsk + _slippageCents, 0.99m);
+                var walkResult = book.WalkAsks(maxPrice, _maxInvestmentPerTrade, 1.0m);
+
+                if (walkResult.TotalShares <= 0)
                 {
-                    // Empty book — treat as $1.00 for near-miss tracking
+                    allLegsHaveBooks = false;
                     totalGrossCost += 1.00m;
                 }
                 else
                 {
-                    totalGrossCost += bestAsk;
-                    totalFeeCost += CalculateFeePerShare(bestAsk);
-                    bottleneckShares = Math.Min(bottleneckShares, availableSize);
-                    currentLegPrices += $"{bestAsk:0.000}|";
+                    // Use VWAP (not bestAsk) for accurate cost — matches execution strategy
+                    totalGrossCost += walkResult.Vwap;
+                    totalFeeCost += CalculateFeePerShare(walkResult.Vwap);
+                    bottleneckShares = Math.Min(bottleneckShares, walkResult.TotalShares);
+                    currentLegPrices += $"{walkResult.Vwap:0.0000}|";
                     pricedLegs++;
                 }
 
@@ -172,9 +195,13 @@ namespace PredictionBacktester.Strategies
                 }
             }
 
-            // Arb detection: ALL legs must have real books with real asks
+            decimal profitPerSet = 1.00m - totalNetCost;
+
+            // Arb detection: aligned with execution strategy thresholds
             bool isArbAlive = allLegsHaveBooks && pricedLegs == yesTokenIds.Count
-                && totalGrossCost > 0 && totalNetCost < 1.00m && bottleneckShares >= 1.0m;
+                && totalNetCost < 0.995m
+                && profitPerSet >= _minProfitPerSet
+                && bottleneckShares >= _depthFloorShares;
 
             if (isArbAlive)
             {
