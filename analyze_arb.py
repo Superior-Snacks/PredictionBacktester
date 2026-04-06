@@ -1,14 +1,17 @@
 """
 Arb Telemetry CSV Analyzer
 Reads ArbTelemetry_*.csv files and computes realistic PnL projections.
-Usage: python analyze_arb.py [path_to_csv]
+Usage: python analyze_arb.py [path_to_csv] [--exclude EVENT_ID ...] [--top N]
        If no path given, uses the most recent ArbTelemetry_*.csv in the current directory.
+       --exclude EVENT_ID   Exclude specific event IDs (can repeat)
+       --top N              Auto-exclude top N events by potential profit
 """
 
 import csv
 import sys
 import glob
 import os
+import argparse
 from collections import defaultdict
 from datetime import datetime, timedelta
 
@@ -39,10 +42,30 @@ def load_csv(path):
     return rows
 
 
-def analyze(rows):
+def analyze(rows, exclude_events=None, exclude_top_n=0):
     if not rows:
         print("No arb records found.")
         return
+
+    excluded = set(exclude_events or [])
+
+    # Auto-exclude top N events by potential profit
+    if exclude_top_n > 0:
+        events_pot = defaultdict(float)
+        for r in rows:
+            events_pot[r["event"]] += r["potential"]
+        top_events = sorted(events_pot, key=events_pot.get, reverse=True)[:exclude_top_n]
+        excluded.update(top_events)
+
+    if excluded:
+        before = len(rows)
+        rows = [r for r in rows if r["event"] not in excluded]
+        print(f"  Excluded {len(excluded)} event(s): {', '.join(sorted(excluded))}")
+        print(f"  Rows: {before} → {len(rows)}")
+        print()
+        if not rows:
+            print("No arb records remaining after exclusion.")
+            return
 
     # ── Overall Summary ──
     total_potential = sum(r["potential"] for r in rows)
@@ -178,8 +201,16 @@ def analyze(rows):
 
 
 def main():
-    if len(sys.argv) > 1:
-        path = sys.argv[1]
+    parser = argparse.ArgumentParser(description="Arb Telemetry CSV Analyzer")
+    parser.add_argument("path", nargs="?", help="Path to ArbTelemetry CSV file")
+    parser.add_argument("--exclude", nargs="+", default=[], metavar="EVENT_ID",
+                        help="Exclude specific event IDs")
+    parser.add_argument("--top", type=int, default=0, metavar="N",
+                        help="Auto-exclude top N events by potential profit")
+    args = parser.parse_args()
+
+    if args.path:
+        path = args.path
     else:
         search_paths = [
             "ArbTelemetry_*.csv",
@@ -201,7 +232,7 @@ def main():
     print(f"Analyzing: {path}")
     print()
     rows = load_csv(path)
-    analyze(rows)
+    analyze(rows, exclude_events=args.exclude, exclude_top_n=args.top)
 
 
 if __name__ == "__main__":
