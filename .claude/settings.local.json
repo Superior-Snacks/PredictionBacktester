@@ -17,7 +17,8 @@
       "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(json.dumps\\({k:d.get\\(k\\) for k in [''''question'''',''''tokens'''',''''market_slug'''']}, indent=2\\)\\)\")",
       "Bash(curl -s \"https://gamma-api.polymarket.com/markets?clob_token_ids=24709461503122858665188867964940084934449382280426532086543419668257380266925&limit=1\")",
       "Bash(curl -s \"https://gamma-api.polymarket.com/events?active=true&closed=false&order=volume24hr&ascending=false&limit=5&offset=0\")",
-      "Bash(curl -s \"https://gamma-api.polymarket.com/events?active=true&closed=false&order=volume24hr&ascending=false&limit=3&offset=0\")"
+      "Bash(curl -s \"https://gamma-api.polymarket.com/events?active=true&closed=false&order=volume24hr&ascending=false&limit=3&offset=0\")",
+      "Bash(python verify_historical_arbs.py)"
     ]
   }
 }
