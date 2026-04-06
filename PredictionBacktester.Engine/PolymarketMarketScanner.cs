@@ -10,7 +10,7 @@ namespace PredictionBacktester.Engine
     public class PolymarketMarketScanner
     {
         private static readonly HttpClient _httpClient = CreateConfiguredClient();
-        
+
         private static HttpClient CreateConfiguredClient()
         {
             var client = new HttpClient();
@@ -22,21 +22,28 @@ namespace PredictionBacktester.Engine
         /// <summary>Token ID → market question name, populated during scan.</summary>
         public Dictionary<string, string> TokenNames { get; } = new();
 
+        /// <summary>
+        /// Scans Gamma API for active categorical arb events (negRisk=true, 3+ legs).
+        /// Only negRisk events have mutually exclusive outcomes where exactly one pays $1.00.
+        /// Filters out: sports prop bundles, timeline events, augmented neg-risk traps.
+        /// </summary>
         public async Task<Dictionary<string, List<string>>> GetTopLiquidEventsAsync(int targetEventCount = 0)
         {
             string targetLabel = targetEventCount > 0 ? $"Top {targetEventCount}" : "ALL";
-            Console.WriteLine($"\n[SCANNER] Initializing Gamma API Auto-Discovery for Events...");
-            Console.WriteLine($"[SCANNER] Target: {targetLabel} active 3+ leg events.");
+            Console.WriteLine($"\n[SCANNER] Initializing Gamma API Auto-Discovery...");
+            Console.WriteLine($"[SCANNER] Target: {targetLabel} active negRisk 3+ leg events.");
 
             var arbConfig = new Dictionary<string, List<string>>();
+            int skippedNotNegRisk = 0;
+            int skippedAugmented = 0;
+            int skippedTooFewLegs = 0;
             int offset = 0;
-            int limit = 100; // API max is 100 per page
+            int limit = 100;
 
             while (targetEventCount <= 0 || arbConfig.Count < targetEventCount)
             {
-                // Fetch /events sorted by volume
                 string url = $"events?active=true&closed=false&order=volume24hr&ascending=false&limit={limit}&offset={offset}";
-                
+
                 var response = await _httpClient.GetAsync(url);
                 if (!response.IsSuccessStatusCode)
                 {
@@ -49,28 +56,38 @@ namespace PredictionBacktester.Engine
                 var root = doc.RootElement;
 
                 if (root.ValueKind != JsonValueKind.Array || root.GetArrayLength() == 0)
-                    break; 
+                    break;
 
                 foreach (var evt in root.EnumerateArray())
                 {
                     if (targetEventCount > 0 && arbConfig.Count >= targetEventCount) break;
 
                     string eventId = evt.GetProperty("id").GetString() ?? Guid.NewGuid().ToString();
-                    
-                    // We need the child markets
+
+                    // Only negRisk events have mutually exclusive outcomes (elections, 3-way sports, Fed decisions).
+                    // Non-negRisk events are prop bundles (NBA spreads+O/U+props) or timelines ("by March?/April?").
+                    bool isNegRisk = evt.TryGetProperty("negRisk", out var nrEl) && nrEl.ValueKind == JsonValueKind.True;
+                    if (!isNegRisk)
+                    {
+                        skippedNotNegRisk++;
+                        continue;
+                    }
+
                     if (!evt.TryGetProperty("markets", out var marketsEl) || marketsEl.ValueKind != JsonValueKind.Array)
                         continue;
 
-                    // Filter out standard binary events (must have 3+ child markets)
                     if (marketsEl.GetArrayLength() < 3)
+                    {
+                        skippedTooFewLegs++;
                         continue;
+                    }
 
                     List<string> yesTokenIds = new List<string>();
                     bool isAugmented = false;
 
                     foreach (var mkt in marketsEl.EnumerateArray())
                     {
-                        // Skip if the event has augmented negative risk (placeholder trap)
+                        // Skip augmented negative risk markets (placeholder traps)
                         if (mkt.TryGetProperty("negRiskAugmented", out var augEl) && augEl.ValueKind == JsonValueKind.True)
                         {
                             isAugmented = true;
@@ -88,7 +105,6 @@ namespace PredictionBacktester.Engine
                             }
                             else if (tokensEl.ValueKind == JsonValueKind.String)
                             {
-                                // API returns clobTokenIds as a serialized JSON string: "[\"token1\",\"token2\"]"
                                 tokens = JsonSerializer.Deserialize<List<string?>>(tokensEl.GetString()!) ?? new();
                             }
                             else
@@ -101,15 +117,23 @@ namespace PredictionBacktester.Engine
                                 string yesToken = tokens[0]!;
                                 yesTokenIds.Add(yesToken);
 
-                                // Store market name for this token
                                 if (mkt.TryGetProperty("question", out var qEl))
                                     TokenNames.TryAdd(yesToken, qEl.GetString() ?? "");
                             }
                         }
                     }
 
-                    if (isAugmented || yesTokenIds.Count < 3) 
+                    if (isAugmented)
+                    {
+                        skippedAugmented++;
                         continue;
+                    }
+
+                    if (yesTokenIds.Count < 3)
+                    {
+                        skippedTooFewLegs++;
+                        continue;
+                    }
 
                     if (!arbConfig.ContainsKey(eventId))
                     {
@@ -118,10 +142,11 @@ namespace PredictionBacktester.Engine
                 }
 
                 offset += limit;
-                await Task.Delay(200); 
+                await Task.Delay(200);
             }
 
-            Console.WriteLine($"[SCANNER] Successfully locked in {arbConfig.Count} highly liquid 3+ leg events.");
+            Console.WriteLine($"[SCANNER] Found {arbConfig.Count} valid categorical arb events.");
+            Console.WriteLine($"[SCANNER] Skipped: {skippedNotNegRisk} non-negRisk (sports/timeline), {skippedAugmented} augmented traps, {skippedTooFewLegs} < 3 legs.");
             return arbConfig;
         }
     }
