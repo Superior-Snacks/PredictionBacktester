@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using PredictionBacktester.Engine;
 
 namespace PredictionBacktester.Strategies
@@ -13,11 +14,6 @@ namespace PredictionBacktester.Strategies
         private readonly Dictionary<string, string> _tokenToEventMap = new();
         private readonly Dictionary<string, List<string>> _eventTokens = new();
         private readonly ConcurrentDictionary<string, LocalOrderBook> _books = new();
-
-        // True = Paper mode (lock after first buy per event)
-        // False = Production mode (re-enter whenever profitable)
-        public bool LockEventAfterBuy { get; set; } = true;
-        private readonly ConcurrentDictionary<string, bool> _lockedEvents = new();
 
         private readonly decimal _maxInvestmentPerTrade;
         private readonly decimal _slippageCents;
@@ -34,9 +30,19 @@ namespace PredictionBacktester.Strategies
         // Sustain timer state: tracks when each event's arb was first detected
         private readonly ConcurrentDictionary<string, long> _arbFirstSeenMs = new();
 
-        // Early exit state: tracks cost basis per event for sell-back evaluation
-        private readonly ConcurrentDictionary<string, decimal> _eventCostBasis = new();
-        private readonly ConcurrentDictionary<string, decimal> _eventSetsBought = new();
+        // Fast-path marker: events where we've dispatched buys (avoids querying all leg positions every tick)
+        private readonly ConcurrentDictionary<string, bool> _eventsWithPositions = new();
+
+        // Guards against new buys while sell-back is in progress
+        private readonly ConcurrentDictionary<string, bool> _sellInProgress = new();
+
+        // Running P&L tracking
+        private decimal _totalRealizedPnL = 0m;
+        private int _totalCompletedSellBacks = 0;
+        private readonly object _pnlLock = new();
+
+        public decimal TotalRealizedPnL => _totalRealizedPnL;
+        public int CompletedSellBacks => _totalCompletedSellBacks;
 
         public PolymarketCategoricalArbStrategy(
             Dictionary<string, List<string>> configuredEvents,
@@ -81,24 +87,24 @@ namespace PredictionBacktester.Strategies
 
             _books[asset] = book;
 
-            // If we hold a position on this event, check for early exit
-            if (_lockedEvents.ContainsKey(eventId))
-            {
+            // If we hold positions on this event, evaluate sell-back
+            if (_eventsWithPositions.ContainsKey(eventId))
                 EvaluateSellBack(eventId, broker);
-                return;
-            }
 
-            EvaluateArbitrage(eventId, broker);
+            // Evaluate re-entry (or first entry) unless a sell is in progress
+            if (!_sellInProgress.ContainsKey(eventId))
+                EvaluateArbitrage(eventId, broker);
         }
 
         /// <summary>
         /// Clears stale book state after a WebSocket reconnect.
-        /// Does NOT clear _lockedEvents — those represent real executed trades.
+        /// Does NOT clear _eventsWithPositions — those represent real executed trades.
         /// </summary>
         public void OnReconnect()
         {
             _books.Clear();
             _arbFirstSeenMs.Clear();
+            _sellInProgress.Clear();
         }
 
         /// <summary>
@@ -128,9 +134,6 @@ namespace PredictionBacktester.Strategies
 
         private void EvaluateArbitrage(string eventId, GlobalSimulatedBroker broker)
         {
-            if (LockEventAfterBuy && _lockedEvents.ContainsKey(eventId))
-                return;
-
             var yesTokenIds = _eventTokens[eventId];
             long nowMs = Stopwatch.GetTimestamp() / (Stopwatch.Frequency / 1000);
 
@@ -153,10 +156,15 @@ namespace PredictionBacktester.Strategies
 
                 if (walkResult.TotalShares <= 0) { allLegsHaveBooks = false; break; }
 
+                // Subtract shares already held — don't double-buy depth we already consumed
+                decimal alreadyHeld = broker.GetPositionShares(token);
+                decimal netAvailable = walkResult.TotalShares - alreadyHeld;
+                if (netAvailable <= 0) { allLegsHaveBooks = false; break; }
+
                 // Use VWAP (not bestAsk) for accurate cost estimation
                 totalCostPerSet += walkResult.Vwap;
                 totalFeePerSet += CalculateFeePerShare(walkResult.Vwap);
-                bottleneckShares = Math.Min(bottleneckShares, walkResult.TotalShares);
+                bottleneckShares = Math.Min(bottleneckShares, netAvailable);
             }
 
             if (!allLegsHaveBooks)
@@ -224,9 +232,6 @@ namespace PredictionBacktester.Strategies
             Console.WriteLine($"\n[ARB DETECTED] Event: {eventId} (sustained {sustainedMs}ms)");
             Console.WriteLine($"-> Cost/set: ${totalCostPerSet:0.0000} + fees ${totalFeePerSet:0.0000} = ${totalNetCostPerSet:0.0000} | Profit/set: ${profitPerSet:0.0000} | Sets: {setsToBuy} | Depth: {bottleneckShares:0.00}");
 
-            if (LockEventAfterBuy)
-                _lockedEvents.TryAdd(eventId, true);
-
             ExecuteMultiLegArbitrage(eventId, yesTokenIds, setsToBuy, broker);
         }
 
@@ -251,28 +256,35 @@ namespace PredictionBacktester.Strategies
                 broker.SubmitBuyOrder(token, targetPrice, dollarsForLeg, book);
             }
 
-            // Record cost basis for sell-back evaluation
-            _eventCostBasis.AddOrUpdate(eventId, totalSpent, (_, old) => old + totalSpent);
-            _eventSetsBought.AddOrUpdate(eventId, setsToBuy, (_, old) => old + setsToBuy);
+            // Mark that we have positions on this event — cost basis derived from broker state
+            _eventsWithPositions[eventId] = true;
 
             Console.WriteLine($"[ARB FIRED] {yesTokenIds.Count}-leg buy dispatched for {eventId} (cost: ${totalSpent:0.00})");
         }
 
         private void EvaluateSellBack(string eventId, GlobalSimulatedBroker broker)
         {
-            if (!_eventCostBasis.TryGetValue(eventId, out decimal costBasis)) return;
-            if (!_eventSetsBought.TryGetValue(eventId, out decimal setsHeld)) return;
-            if (setsHeld <= 0) return;
-
             var yesTokenIds = _eventTokens[eventId];
 
-            // Check we still hold positions on all legs
+            // Derive position and cost basis from broker state (single source of truth)
             decimal minShares = decimal.MaxValue;
+            decimal totalCostBasis = 0m;
+
             foreach (var token in yesTokenIds)
             {
                 decimal shares = broker.GetPositionShares(token);
-                if (shares <= 0) return; // Missing a leg — can't sell complete sets
+                if (shares <= 0) { minShares = 0; break; }
                 minShares = Math.Min(minShares, shares);
+                totalCostBasis += shares * broker.GetAverageEntryPrice(token);
+            }
+
+            if (minShares <= 0)
+            {
+                // Not holding complete sets — check if we hold anything at all
+                bool anyShares = yesTokenIds.Any(t => broker.GetPositionShares(t) > 0);
+                if (!anyShares)
+                    _eventsWithPositions.TryRemove(eventId, out _);
+                return;
             }
 
             // Walk bids on all legs to see what we'd get for selling minShares complete sets
@@ -296,12 +308,15 @@ namespace PredictionBacktester.Strategies
             decimal netProceeds = totalProceeds - totalSellFees;
 
             // Only sell back if profit per set meets the minimum threshold
-            decimal profit = netProceeds - costBasis;
-            if (setsHeld > 0 && profit / setsHeld < _minProfitPerSet)
+            decimal profit = netProceeds - totalCostBasis;
+            if (profit / minShares < _minProfitPerSet)
                 return;
 
+            // Block new buys while selling
+            _sellInProgress[eventId] = true;
+
             Console.WriteLine($"\n[ARB SELL-BACK] Event: {eventId}");
-            Console.WriteLine($"-> Cost basis: ${costBasis:0.00} | Net proceeds: ${netProceeds:0.00} | Profit: ${profit:0.00}");
+            Console.WriteLine($"-> Cost basis: ${totalCostBasis:0.00} | Net proceeds: ${netProceeds:0.00} | Profit: ${profit:0.00}");
 
             // Sell all legs
             foreach (var token in yesTokenIds)
@@ -311,12 +326,18 @@ namespace PredictionBacktester.Strategies
                 broker.SubmitSellAllOrder(token, bestBid, book);
             }
 
-            // Clear state — event is no longer locked, can re-enter
-            _lockedEvents.TryRemove(eventId, out _);
-            _eventCostBasis.TryRemove(eventId, out _);
-            _eventSetsBought.TryRemove(eventId, out _);
+            // Track realized P&L
+            lock (_pnlLock)
+            {
+                _totalRealizedPnL += profit;
+                _totalCompletedSellBacks++;
+            }
 
-            Console.WriteLine($"[ARB SELL-BACK COMPLETE] {yesTokenIds.Count} legs sold for {eventId}");
+            // Clear state
+            _eventsWithPositions.TryRemove(eventId, out _);
+            _sellInProgress.TryRemove(eventId, out _);
+
+            Console.WriteLine($"[ARB SELL-BACK COMPLETE] {yesTokenIds.Count} legs sold for {eventId} | P&L: ${profit:0.00} | Running Total: ${_totalRealizedPnL:0.00} ({_totalCompletedSellBacks} trades)");
         }
     }
 }

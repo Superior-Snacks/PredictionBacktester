@@ -67,17 +67,14 @@ class Program
         configs.Add(new StrategyConfig(
             Name: "Categorical_Merge_Arb_Execution",
             StartingCapital: 5000m,
-            Factory: () => new PolymarketCategoricalArbStrategy(_arbEvents, name: "Categorical_Merge_Arb_Execution")
-            {
-                LockEventAfterBuy = true
-            },
+            Factory: () => new PolymarketCategoricalArbStrategy(_arbEvents, name: "Categorical_Merge_Arb_Execution"),
             IsShared: true
         ));
         return configs;
     }
 
     // --- LATENCY SIMULATION (based on ping to Polymarket CLOB API) ---
-    private const int REALISTIC_LATENCY_MS = 500; // Measured from production: ~500ms per order round-trip
+    private const int REALISTIC_LATENCY_MS = 3500; // Conservative: 3s sports delay + 500ms match latency
     private static volatile bool _latencyEnabled = true;
 
     // --- PAUSE & RESUME CONTROLS ---
