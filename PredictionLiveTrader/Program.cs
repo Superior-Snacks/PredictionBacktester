@@ -74,7 +74,7 @@ class Program
     }
 
     // --- LATENCY SIMULATION (based on ping to Polymarket CLOB API) ---
-    private const int REALISTIC_LATENCY_MS = 3500; // Conservative: 3s sports delay + 500ms match latency
+    private const int REALISTIC_LATENCY_MS = 500; // Non-sports only (sports filtered by scanner): ~500ms match latency
     private static volatile bool _latencyEnabled = true;
 
     // --- PAUSE & RESUME CONTROLS ---

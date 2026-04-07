@@ -33,8 +33,19 @@ namespace PredictionBacktester.Engine
             Console.WriteLine($"\n[SCANNER] Initializing Gamma API Auto-Discovery...");
             Console.WriteLine($"[SCANNER] Target: {targetLabel} active negRisk 3+ leg events.");
 
+            // Sports events have a mandatory 3s matching delay — not viable for arb execution
+            var sportsKeywords = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "soccer", "football", "basketball", "baseball", "hockey", "tennis",
+                "mma", "ufc", "esports", "cricket", "rugby", "golf", "volleyball",
+                "boxing", "cycling", "racing", "motorsport", "swimming", "athletics",
+                "nba", "nfl", "nhl", "mlb", "nba", "ncaa", "epl", "champions-league",
+                "la-liga", "bundesliga", "serie-a", "ligue-1", "sports"
+            };
+
             var arbConfig = new Dictionary<string, List<string>>();
             int skippedNotNegRisk = 0;
+            int skippedSports = 0;
             int skippedAugmented = 0;
             int skippedTooFewLegs = 0;
             int offset = 0;
@@ -70,6 +81,29 @@ namespace PredictionBacktester.Engine
                     if (!isNegRisk)
                     {
                         skippedNotNegRisk++;
+                        continue;
+                    }
+
+                    // Skip sports events — Polymarket imposes a 3s matching delay on sports orders
+                    // making arb execution unviable (prices move before fills land).
+                    bool isSports = false;
+                    if (evt.TryGetProperty("tags", out var tagsEl) && tagsEl.ValueKind == JsonValueKind.Array)
+                    {
+                        foreach (var tag in tagsEl.EnumerateArray())
+                        {
+                            string? slug  = tag.TryGetProperty("slug",  out var s) ? s.GetString() : null;
+                            string? label = tag.TryGetProperty("label", out var l) ? l.GetString() : null;
+                            if ((slug  != null && sportsKeywords.Any(k => slug .Contains(k, StringComparison.OrdinalIgnoreCase))) ||
+                                (label != null && sportsKeywords.Any(k => label.Contains(k, StringComparison.OrdinalIgnoreCase))))
+                            {
+                                isSports = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (isSports)
+                    {
+                        skippedSports++;
                         continue;
                     }
 
@@ -146,7 +180,7 @@ namespace PredictionBacktester.Engine
             }
 
             Console.WriteLine($"[SCANNER] Found {arbConfig.Count} valid categorical arb events.");
-            Console.WriteLine($"[SCANNER] Skipped: {skippedNotNegRisk} non-negRisk (sports/timeline), {skippedAugmented} augmented traps, {skippedTooFewLegs} < 3 legs.");
+            Console.WriteLine($"[SCANNER] Skipped: {skippedNotNegRisk} non-negRisk, {skippedSports} sports (3s delay), {skippedAugmented} augmented traps, {skippedTooFewLegs} < 3 legs.");
             return arbConfig;
         }
     }

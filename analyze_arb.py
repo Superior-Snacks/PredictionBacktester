@@ -96,12 +96,12 @@ def analyze(rows, exclude_events=None, exclude_top_n=0):
     durations_sorted = sorted(durations)
     p50 = durations_sorted[len(durations_sorted) // 2]
     p90 = durations_sorted[int(len(durations_sorted) * 0.9)]
-    executable = [d for d in durations if d >= 3500]  # >= 3.5s (conservative: accounts for sports 3s delay + 500ms match)
+    executable = [d for d in durations if d >= 500]  # >= 500ms (match latency, non-sports only)
     print(f"  Min:                         {min(durations):,.0f} ms")
     print(f"  Median (p50):                {p50:,.0f} ms")
     print(f"  p90:                         {p90:,.0f} ms")
     print(f"  Max:                         {max(durations):,.0f} ms")
-    print(f"  Windows >= 3.5s (executable): {len(executable)}/{len(rows)} ({100*len(executable)/len(rows):.0f}%)")
+    print(f"  Windows >= 500ms (executable): {len(executable)}/{len(rows)} ({100*len(executable)/len(rows):.0f}%)")
     print(f"  Windows >= 5s:               {len([d for d in durations if d >= 5000])}/{len(rows)}")
     print()
 
@@ -114,14 +114,14 @@ def analyze(rows, exclude_events=None, exclude_top_n=0):
     print()
 
     # ── Realistic PnL Estimate ──
-    # Assume: only capture arbs lasting >= 3.5s (sports 3s delay + 500ms match),
+    # Assume: only capture arbs lasting >= 500ms (non-sports: 500ms match latency),
     # capture 70% of peak profit, and can only deploy up to $50 per arb window
     max_deploy = 50.0
     realistic_profit = 0
     realistic_capital = 0
     realistic_count = 0
     for r in rows:
-        if r["duration_ms"] < 3500:
+        if r["duration_ms"] < 500:
             continue
         realistic_count += 1
         deploy_ratio = min(1.0, max_deploy / r["capital_req"]) if r["capital_req"] > 0 else 0
@@ -150,7 +150,7 @@ def analyze(rows, exclude_events=None, exclude_top_n=0):
         session_hours = 0
 
     print("── REALISTIC PnL ESTIMATE ──")
-    print(f"  Assumptions: >= 3.5s windows only, 70% capture rate, ${max_deploy:.0f} max per arb")
+    print(f"  Assumptions: >= 500ms windows, 70% capture rate, ${max_deploy:.0f} max per arb")
     print(f"  Eligible windows:            {realistic_count}/{len(rows)}")
     print(f"  Capital deployed (total):    ${realistic_capital:,.2f}")
     print(f"  Estimated profit:            ${realistic_profit:,.2f}")

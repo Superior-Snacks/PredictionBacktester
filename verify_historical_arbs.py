@@ -244,12 +244,12 @@ def main():
 
     print("  " + "-" * 105)
 
-    # ── Realistic PnL estimate (matching analyze_arb.py methodology) ──
+    # ── Realistic PnL estimate (non-sports only: >= 1s window, 500ms match latency) ──
     max_deploy = 50.0
     realistic_profit = 0
     realistic_count = 0
     for r in valid_rows:
-        if r["duration_ms"] < 3500:
+        if r["duration_ms"] < 500:
             continue
         realistic_count += 1
         deploy_ratio = min(1.0, max_deploy / r["capital_req"]) if r["capital_req"] > 0 else 0
@@ -273,9 +273,9 @@ def main():
 
     print()
     print("  REALISTIC PnL (verified events only)")
-    print(f"  Assumptions: >= 3.5s windows, 70% capture, ${max_deploy:.0f} max per arb")
+    print(f"  Assumptions: >= 500ms windows, 70% capture, ${max_deploy:.0f} max per arb")
     print(f"  Total potential (all windows): ${total_potential:,.2f}")
-    print(f"  Eligible windows (>= 3.5s):    {realistic_count}/{len(valid_rows)}")
+    print(f"  Eligible windows (>= 500ms):   {realistic_count}/{len(valid_rows)}")
     print(f"  Estimated profit:              ${realistic_profit:,.2f}")
     if session_hours > 0:
         print(f"  Session duration:              {session_hours:.1f} hrs")

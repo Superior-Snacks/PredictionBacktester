@@ -36,6 +36,10 @@ namespace PredictionBacktester.Strategies
         // Guards against new buys while sell-back is in progress
         private readonly ConcurrentDictionary<string, bool> _sellInProgress = new();
 
+        // Post-buy cooldown: blocks re-entry for N ms after firing to prevent rapid re-entry spam
+        private readonly long _postBuyCooldownMs;
+        private readonly ConcurrentDictionary<string, long> _lastBuyMs = new();
+
         // Running P&L tracking
         private decimal _totalRealizedPnL = 0m;
         private int _totalCompletedSellBacks = 0;
@@ -53,7 +57,8 @@ namespace PredictionBacktester.Strategies
             double feeExponent = 1.0,
             long requiredSustainMs = 0,
             decimal minProfitPerSet = 0.02m,
-            decimal depthFloorShares = 5m)
+            decimal depthFloorShares = 5m,
+            long postBuyCooldownMs = 60_000)
         {
             StrategyName = name;
             _maxInvestmentPerTrade = maxInvestmentPerTrade;
@@ -63,6 +68,7 @@ namespace PredictionBacktester.Strategies
             _requiredSustainMs = requiredSustainMs;
             _minProfitPerSet = minProfitPerSet;
             _depthFloorShares = depthFloorShares;
+            _postBuyCooldownMs = postBuyCooldownMs;
 
             foreach (var evt in configuredEvents)
             {
@@ -105,6 +111,7 @@ namespace PredictionBacktester.Strategies
             _books.Clear();
             _arbFirstSeenMs.Clear();
             _sellInProgress.Clear();
+            _lastBuyMs.Clear();
         }
 
         /// <summary>
@@ -136,6 +143,10 @@ namespace PredictionBacktester.Strategies
         {
             var yesTokenIds = _eventTokens[eventId];
             long nowMs = Stopwatch.GetTimestamp() / (Stopwatch.Frequency / 1000);
+
+            // Post-buy cooldown: prevent rapid re-entry on the same event
+            if (_lastBuyMs.TryGetValue(eventId, out long lastBuy) && nowMs - lastBuy < _postBuyCooldownMs)
+                return;
 
             // Walk each leg's book to get accurate VWAP and available depth
             decimal totalCostPerSet = 0m;
@@ -258,6 +269,9 @@ namespace PredictionBacktester.Strategies
 
             // Mark that we have positions on this event — cost basis derived from broker state
             _eventsWithPositions[eventId] = true;
+
+            // Record buy time to enforce post-buy cooldown
+            _lastBuyMs[eventId] = Stopwatch.GetTimestamp() / (Stopwatch.Frequency / 1000);
 
             Console.WriteLine($"[ARB FIRED] {yesTokenIds.Count}-leg buy dispatched for {eventId} (cost: ${totalSpent:0.00})");
         }
