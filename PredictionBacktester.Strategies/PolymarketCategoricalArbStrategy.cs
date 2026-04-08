@@ -304,6 +304,23 @@ namespace PredictionBacktester.Strategies
                 return;
             }
 
+            // Orphan trim: sell excess shares on over-filled legs so all legs are balanced
+            // This eliminates unhedged directional exposure from partial fills
+            foreach (var token in yesTokenIds)
+            {
+                decimal held = broker.GetPositionShares(token);
+                decimal excess = held - minShares;
+                if (excess >= 0.01m && _books.TryGetValue(token, out var trimBook))
+                {
+                    decimal bestBid = trimBook.GetBestBidPrice();
+                    if (bestBid > 0.01m)
+                    {
+                        Console.WriteLine($"[ARB TRIM] Selling {excess:0.00} orphan shares on {token[..8]}... (held: {held:0.00}, sets: {minShares:0.00})");
+                        broker.SubmitSellOrder(token, bestBid, excess, trimBook);
+                    }
+                }
+            }
+
             // Walk bids on all legs to see what we'd get for selling minShares complete sets
             decimal totalProceeds = 0m;
             decimal totalSellFees = 0m;

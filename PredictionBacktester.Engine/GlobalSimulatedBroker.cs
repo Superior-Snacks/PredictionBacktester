@@ -388,6 +388,44 @@ public class GlobalSimulatedBroker
     });
 }
 
+    /// <summary>Sell a specific quantity of shares (not necessarily all). Used for orphan trimming.</summary>
+    public virtual void SubmitSellOrder(string assetId, decimal targetPrice, decimal sharesToSell, LocalOrderBook book)
+    {
+        if (sharesToSell <= 0) return;
+
+        if (LatencyMs <= 0)
+        {
+            decimal available = Math.Min(GetAvailableBidSize(book, assetId), sharesToSell);
+            decimal filled = SellAll(assetId, targetPrice, available);
+            if (filled > 0) ConsumeBid(assetId, filled);
+            return;
+        }
+
+        if (!_pendingOrders.TryAdd(assetId, true)) return;
+
+        Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(LatencyMs);
+
+                decimal currentBid = book.GetBestBidPrice();
+                if (currentBid >= 0.99m || currentBid <= 0.01m) return;
+
+                decimal available = Math.Min(GetAvailableBidSize(book, assetId), sharesToSell);
+                if (available > 0)
+                {
+                    decimal filled = SellAll(assetId, currentBid, available);
+                    if (filled > 0) ConsumeBid(assetId, filled);
+                }
+            }
+            finally
+            {
+                _pendingOrders.TryRemove(assetId, out _);
+            }
+        });
+    }
+
     public virtual void SubmitSellAllOrder(string assetId, decimal targetPrice, LocalOrderBook book)
 {
     if (LatencyMs <= 0)

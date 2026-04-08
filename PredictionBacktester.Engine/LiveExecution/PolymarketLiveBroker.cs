@@ -396,9 +396,26 @@ public class PolymarketLiveBroker : GlobalSimulatedBroker
         });
     }
 
-    public override void SubmitSellAllOrder(string assetId, decimal targetPrice, LocalOrderBook book)
+    public override void SubmitSellOrder(string assetId, decimal targetPrice, decimal sharesToSell, LocalOrderBook book)
     {
-        decimal sharesToSell = Math.Floor(GetPositionShares(assetId) * 100m) / 100m;
+        // Trim to actual held shares, then delegate to SubmitSellAllOrder with capped position
+        decimal held = Math.Floor(GetPositionShares(assetId) * 100m) / 100m;
+        decimal capped = Math.Min(sharesToSell, held);
+        if (capped <= 0) return;
+
+        // Temporarily adjust position so SubmitSellAllOrder sells only `capped` shares
+        // We do this by calling the shared sell path directly with the capped amount
+        SubmitSellAllOrder(assetId, targetPrice, book, overrideShares: capped);
+    }
+
+    public override void SubmitSellAllOrder(string assetId, decimal targetPrice, LocalOrderBook book)
+        => SubmitSellAllOrder(assetId, targetPrice, book, overrideShares: null);
+
+    private void SubmitSellAllOrder(string assetId, decimal targetPrice, LocalOrderBook book, decimal? overrideShares)
+    {
+        decimal sharesToSell = overrideShares.HasValue
+            ? Math.Floor(overrideShares.Value * 100m) / 100m
+            : Math.Floor(GetPositionShares(assetId) * 100m) / 100m;
         if (sharesToSell <= 0) return;
 
         // Check sell cooldown — after FAK failures (no liquidity), wait before retrying
