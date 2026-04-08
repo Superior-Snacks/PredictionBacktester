@@ -261,7 +261,10 @@ namespace PredictionBacktester.Strategies
 
                 decimal bestAsk = book.GetBestAskPrice();
                 decimal targetPrice = Math.Min(bestAsk + _slippageCents, 0.99m);
-                decimal dollarsForLeg = setsToBuy * bestAsk;
+
+                // Cap dollars to exactly setsToBuy shares at targetPrice — prevents broker
+                // walk from filling extra shares on deeper legs (orphan shares)
+                decimal dollarsForLeg = setsToBuy * targetPrice;
 
                 totalSpent += dollarsForLeg + (setsToBuy * CalculateFeePerShare(bestAsk));
                 broker.SubmitBuyOrder(token, targetPrice, dollarsForLeg, book);
