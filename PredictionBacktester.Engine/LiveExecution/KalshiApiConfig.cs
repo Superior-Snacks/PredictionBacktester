@@ -7,11 +7,11 @@ public class KalshiApiConfig
 
     // Demo: https://demo-api.kalshi.co/trade-api/v2
     // Prod: https://api.elections.kalshi.com/trade-api/v2
-    public string BaseRestUrl { get; set; } = "https://demo-api.kalshi.co/trade-api/v2";
+    public string BaseRestUrl { get; set; } = "https://api.elections.kalshi.com/trade-api/v2";
 
     // Demo: wss://demo-api.kalshi.co/trade-api/ws/v2
     // Prod: wss://api.elections.kalshi.com/trade-api/ws/v2
-    public string BaseWsUrl { get; set; } = "wss://demo-api.kalshi.co/trade-api/ws/v2";
+    public string BaseWsUrl { get; set; } = "wss://api.elections.kalshi.com/trade-api/ws/v2";
 
     public static KalshiApiConfig FromEnvironment() => new()
     {

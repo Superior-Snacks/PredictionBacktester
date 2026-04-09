@@ -66,13 +66,10 @@ if (catCount + binCount == 0)
 
 Console.WriteLine($"[SCANNER] Categorical: {catCount} events | Binary: {binCount} markets");
 
-// Merge both arb types into a single event map for the strategy.
-// Binary arb events use the "BIN_{ticker}" key and have exactly 2 legs:
-//   [ticker, ticker_NO]
-// The strategy treats them identically — buy all legs, sum < $1.00 = arb.
+// Binary arb disabled: the implied-bid construction produces unrealistic
+// sell-back prices until the book population logic is validated.
+// TODO: re-enable once binary arb book symmetry is verified.
 var allEvents = new Dictionary<string, List<string>>(scan.CategoricalEvents);
-foreach (var kv in scan.BinaryMarkets)
-    allEvents[kv.Key] = kv.Value;
 
 // Real tickers to subscribe to (strip _NO virtual IDs — they share a WS stream)
 var realTickers = allEvents.Values
@@ -267,22 +264,22 @@ static void ProcessMessage(
         if (msgType == "orderbook_snapshot")
         {
             ApplySnapshot(yesBook, noBook, msgEl, yesSizes[ticker], noSizes[ticker]);
-            strategy.OnBookUpdate(yesBook, broker);
+            // strategy.OnBookUpdate(yesBook, broker); // disabled: telemetry-only mode
             telemetry.OnBookUpdate(yesBook, telemetryBroker);
             if (noBook != null)
             {
-                strategy.OnBookUpdate(noBook, broker);
+                // strategy.OnBookUpdate(noBook, broker);
                 telemetry.OnBookUpdate(noBook, telemetryBroker);
             }
         }
         else if (msgType == "orderbook_delta")
         {
             bool noSideChanged = ApplyDelta(yesBook, noBook, msgEl, yesSizes[ticker], noSizes[ticker]);
-            strategy.OnBookUpdate(yesBook, broker);
+            // strategy.OnBookUpdate(yesBook, broker);
             telemetry.OnBookUpdate(yesBook, telemetryBroker);
             if (noBook != null && noSideChanged)
             {
-                strategy.OnBookUpdate(noBook, broker);
+                // strategy.OnBookUpdate(noBook, broker);
                 telemetry.OnBookUpdate(noBook, telemetryBroker);
             }
         }
@@ -330,21 +327,20 @@ static bool ApplyDelta(
     if (side == "no")
     {
         decimal newSize = noSizeMap.GetValueOrDefault(price, 0m) + delta;
-        decimal impliedYesBid = Math.Round(1m - price, 4);
 
         if (newSize <= 0)
         {
             noSizeMap.Remove(price);
-            // Remove implied YES bid from the real book
-            yesBook.UpdatePriceLevel("BUY", impliedYesBid, 0m);
-            // Remove NO ask from the _NO virtual book
             noBook?.UpdatePriceLevel("SELL", price, 0m);
+            if (noBook != null)
+                yesBook.UpdatePriceLevel("BUY", Math.Round(1m - price, 4), 0m);
         }
         else
         {
             noSizeMap[price] = newSize;
-            yesBook.UpdatePriceLevel("BUY", impliedYesBid, newSize);
             noBook?.UpdatePriceLevel("SELL", price, newSize);
+            if (noBook != null)
+                yesBook.UpdatePriceLevel("BUY", Math.Round(1m - price, 4), newSize);
         }
         return true;
     }
@@ -378,19 +374,30 @@ static void ApplySnapshot(
         }
     }
 
-    // NO asks → implied YES BID on real book + SELL level on _NO virtual book
+    // NO asks → SELL level on _NO virtual book + implied YES BID on real book.
+    // The implied YES bid is only valid for binary arb (noBook exists).
+    // For categorical markets (noBook == null), we have no real YES bid data —
+    // adding fake implied bids causes wildly inflated sell-back prices.
     if (msg.TryGetProperty("no_dollars_fp", out var noEl) && noEl.ValueKind == JsonValueKind.Array)
     {
         foreach (var level in noEl.EnumerateArray())
         {
             if (!TryParseLevel(level, out decimal noPrice, out decimal size)) continue;
             noSizeMap[noPrice] = size;
-            decimal impliedYesBid = Math.Round(1m - noPrice, 4);
-            yesBook.UpdatePriceLevel("BUY", impliedYesBid, size);
             noBook?.UpdatePriceLevel("SELL", noPrice, size);
+            if (noBook != null)
+            {
+                decimal impliedYesBid = Math.Round(1m - noPrice, 4);
+                yesBook.UpdatePriceLevel("BUY", impliedYesBid, size);
+            }
         }
     }
 }
+
+// Minimum ask price to accept as a valid book level.
+// Levels below this are phantom/stale orders on dead or settled markets.
+// A $0.01 YES ask + $0.01 NO ask is not a real arb — it's an orphan order.
+const decimal MIN_BOOK_PRICE = 0.03m;
 
 static bool TryParseLevel(JsonElement level, out decimal price, out decimal size)
 {
@@ -398,8 +405,9 @@ static bool TryParseLevel(JsonElement level, out decimal price, out decimal size
     if (level.ValueKind != JsonValueKind.Array) return false;
     var arr = level.EnumerateArray().ToArray();
     if (arr.Length < 2) return false;
-    return decimal.TryParse(arr[0].GetString(), System.Globalization.NumberStyles.Any,
-               System.Globalization.CultureInfo.InvariantCulture, out price) &&
-           decimal.TryParse(arr[1].GetString(), System.Globalization.NumberStyles.Any,
-               System.Globalization.CultureInfo.InvariantCulture, out size);
+    if (!decimal.TryParse(arr[0].GetString(), System.Globalization.NumberStyles.Any,
+               System.Globalization.CultureInfo.InvariantCulture, out price)) return false;
+    if (!decimal.TryParse(arr[1].GetString(), System.Globalization.NumberStyles.Any,
+               System.Globalization.CultureInfo.InvariantCulture, out size)) return false;
+    return price >= MIN_BOOK_PRICE && price <= (1m - MIN_BOOK_PRICE);
 }

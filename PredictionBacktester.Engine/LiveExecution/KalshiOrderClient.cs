@@ -39,8 +39,10 @@ public class KalshiOrderClient : IDisposable
     {
         string ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().ToString();
 
-        // Strip query parameters before signing
-        string pathForSig = (PathPrefix + relPath).Split('?')[0];
+        // Strip query parameters before signing.
+        // If relPath already contains the full path (e.g. WS upgrade), use it as-is.
+        string fullPath = relPath.StartsWith("/trade-api/") ? relPath : PathPrefix + relPath;
+        string pathForSig = fullPath.Split('?')[0];
 
         byte[] msgBytes = Encoding.UTF8.GetBytes(ts + method + pathForSig);
         byte[] sigBytes = _rsa.SignData(msgBytes, HashAlgorithmName.SHA256, RSASignaturePadding.Pss);
@@ -57,7 +59,7 @@ public class KalshiOrderClient : IDisposable
     {
         var (key, ts, sig) = CreateAuthHeaders("GET", relPath);
 
-        using var req = new HttpRequestMessage(HttpMethod.Get, relPath);
+        using var req = new HttpRequestMessage(HttpMethod.Get, _config.BaseRestUrl.TrimEnd('/') + relPath);
         req.Headers.Add("KALSHI-ACCESS-KEY", key);
         req.Headers.Add("KALSHI-ACCESS-TIMESTAMP", ts);
         req.Headers.Add("KALSHI-ACCESS-SIGNATURE", sig);

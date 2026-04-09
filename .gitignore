@@ -377,3 +377,4 @@ FodyWeavers.xsd
 
 #inportant data
 *.env
+*.key

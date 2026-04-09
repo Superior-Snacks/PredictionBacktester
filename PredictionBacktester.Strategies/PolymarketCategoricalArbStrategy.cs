@@ -159,7 +159,7 @@ namespace PredictionBacktester.Strategies
                 if (!_books.TryGetValue(token, out var book)) { allLegsHaveBooks = false; break; }
 
                 decimal bestAsk = book.GetBestAskPrice();
-                if (bestAsk >= 1.00m) { allLegsHaveBooks = false; break; }
+                if (bestAsk <= 0m || bestAsk >= 1.00m) { allLegsHaveBooks = false; break; }
 
                 // Walk the full ask side to find real available depth at reasonable prices
                 decimal maxPrice = Math.Min(bestAsk + _slippageCents, 0.99m);
