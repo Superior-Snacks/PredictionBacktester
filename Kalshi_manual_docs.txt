@@ -1,0 +1,242 @@
+Quick Start: Authenticated Requests (No SDK)
+Three simple steps to make your first authenticated API request to Kalshi
+
+This guide shows you how to make authenticated requests to the Kalshi API in three simple steps.
+​
+Step 1: Get Your API Keys
+Log in to your Kalshi account (demo or production)
+Navigate to Account & security → API Keys
+Click Create Key
+Save both:
+Private Key: Downloaded as a .key file
+API Key ID: Displayed on screen (looks like a952bcbe-ec3b-4b5b-b8f9-11dae589608c)
+Your private key cannot be retrieved after this page is closed. Store it securely!
+​
+Step 2: Set Up Your Request
+Every authenticated request to Kalshi requires three headers:
+Header	Description	Example
+KALSHI-ACCESS-KEY	Your API Key ID	a952bcbe-ec3b-4b5b-b8f9-11dae589608c
+KALSHI-ACCESS-TIMESTAMP	Current time in milliseconds	1703123456789
+KALSHI-ACCESS-SIGNATURE	Request signature (see below)	base64_encoded_signature
+​
+How to Create the Signature
+The signature proves you own the private key. Here’s how it works:
+Create a message string: Concatenate timestamp + HTTP_METHOD + path
+Example: 1703123456789GET/trade-api/v2/portfolio/balance
+Important: Use the path without query parameters. For /portfolio/orders?limit=5, sign only /trade-api/v2/portfolio/orders
+Sign with your private key: Use RSA-PSS with SHA256
+Encode as base64: Convert the signature to base64 string
+Here’s the signing process in Python:
+import base64
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import padding
+
+def sign_request(private_key, timestamp, method, path):
+    # Strip query parameters from path before signing
+    path_without_query = path.split('?')[0]
+
+    # Create the message to sign
+    message = f"{timestamp}{method}{path_without_query}".encode('utf-8')
+
+    # Sign with RSA-PSS
+    signature = private_key.sign(
+        message,
+        padding.PSS(
+            mgf=padding.MGF1(hashes.SHA256()),
+            salt_length=padding.PSS.DIGEST_LENGTH
+        ),
+        hashes.SHA256()
+    )
+
+    # Return base64 encoded
+    return base64.b64encode(signature).decode('utf-8')
+​
+Step 3: Get Your Balance
+Now let’s make your first authenticated request to get your account balance:
+import requests
+import datetime
+
+# Set up the request
+timestamp = str(int(datetime.datetime.now().timestamp() * 1000))
+method = "GET"
+path = "/trade-api/v2/portfolio/balance"
+
+# Create signature (using function from Step 2)
+signature = sign_request(private_key, timestamp, method, path)
+
+# Make the request
+headers = {
+    'KALSHI-ACCESS-KEY': 'your-api-key-id',
+    'KALSHI-ACCESS-SIGNATURE': signature,
+    'KALSHI-ACCESS-TIMESTAMP': timestamp
+}
+
+response = requests.get('https://demo-api.kalshi.co' + path, headers=headers)
+balance = response.json()
+
+print(f"Your balance: ${balance['balance'] / 100:.2f}")
+​
+Complete Working Example
+Here’s the minimal code to get your balance:
+import requests
+import datetime
+import base64
+from urllib.parse import urlparse
+from cryptography.hazmat.primitives import serialization, hashes
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives.asymmetric import padding
+
+# Configuration
+API_KEY_ID = 'your-api-key-id-here'
+PRIVATE_KEY_PATH = 'path/to/your/kalshi-key.key'
+BASE_URL = 'https://demo-api.kalshi.co/trade-api/v2'  # or 'https://api.elections.kalshi.com/trade-api/v2' for production
+
+def load_private_key(key_path):
+    with open(key_path, "rb") as f:
+        return serialization.load_pem_private_key(f.read(), password=None, backend=default_backend())
+
+def create_signature(private_key, timestamp, method, path):
+    """Create the request signature."""
+    # Strip query parameters before signing
+    path_without_query = path.split('?')[0]
+    message = f"{timestamp}{method}{path_without_query}".encode('utf-8')
+    signature = private_key.sign(
+        message,
+        padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=padding.PSS.DIGEST_LENGTH),
+        hashes.SHA256()
+    )
+    return base64.b64encode(signature).decode('utf-8')
+
+def get(private_key, api_key_id, path, base_url=BASE_URL):
+    """Make an authenticated GET request to the Kalshi API."""
+    timestamp = str(int(datetime.datetime.now().timestamp() * 1000))
+    # Signing requires the full URL path from root (e.g. /trade-api/v2/portfolio/balance)
+    sign_path = urlparse(base_url + path).path
+    signature = create_signature(private_key, timestamp, "GET", sign_path)
+
+    headers = {
+        'KALSHI-ACCESS-KEY': api_key_id,
+        'KALSHI-ACCESS-SIGNATURE': signature,
+        'KALSHI-ACCESS-TIMESTAMP': timestamp
+    }
+
+    return requests.get(base_url + path, headers=headers)
+
+# Load private key
+private_key = load_private_key(PRIVATE_KEY_PATH)
+
+# Get balance
+response = get(private_key, API_KEY_ID, "/portfolio/balance")
+print(f"Your balance: ${response.json()['balance'] / 100:.2f}")
+​
+Common Issues
+Problem	Solution
+401 Unauthorized	Check your API Key ID and private key file path
+Signature error	Ensure timestamp is in milliseconds (not seconds)
+Path not found	Path includes /trade-api/v2, pass only the endpoint path (e.g. /portfolio/balance, not /trade-api/v2/portfolio/balance)
+Signature error with query params	Strip query parameters before signing (use path.split('?')[0])
+​
+Next Steps
+Now you can make authenticated requests! Try these endpoints (relative to BASE_URL):
+/portfolio/positions - Get your positions
+/portfolio/orders - View your orders
+/markets - Browse available markets
+For more details, see the Complete Order Lifecycle guide or explore the API Reference.
+
+Fee Rounding
+How the exchange rounds fees to maintain cent-aligned balances.
+
+​
+Overview
+User balances must be exact multiples of $0.01 before and after every fill. When a trade produces a sub-cent balance change, the exchange charges a rounding fee to bring the balance back to cent alignment. A fee accumulator applies rounding across all fills of an order collectively so that the total fee converges to what a single equivalent fill would cost.
+Every fill produces three fee components:
+Component	Description
+Trade fee	Fee from the fee model, rounded up to the nearest $0.0001 (centicent)
+Rounding fee	Sub-cent adjustment that restores cent-alignment ($0.0000 - $0.0099)
+Rebate	Refund from accumulated rounding overpayment (always a multiple of $0.01)
+Net fee = trade fee + rounding fee - rebate (always >= $0.00)
+​
+Rounding Mechanics
+Given a fill’s revenue (signed; negative for buyers) and trade_fee:
+Round trade fee up to the nearest $0.0001
+Compute balance_change = revenue - trade_fee
+Floor balance_change toward negative infinity to the nearest $0.01
+rounding_fee = balance_change - floor(balance_change)
+The user’s balance changes by floor(balance_change), which is always cent-aligned.
+​
+Fee Accumulator
+The fee accumulator tracks cumulative rounding overpayment across all fills of an order. Once the accumulated rounding exceeds $0.01, a whole-cent rebate is issued and the accumulator is reduced by $0.01. This ensures the total fee across many small fills converges to what a single equivalent fill would cost.
+The fee accumulator is maintained per order across all fills regardless of whether the fills are taker or maker. If an order initially takes (matching resting orders) and then becomes a resting maker order, the accumulated rounding carries over to subsequent maker fills.
+​
+When Does Rounding Apply?
+Rounding applies whenever revenue - trade_fee has a sub-cent component. This can happen two ways:
+Subpenny prices (e.g., $0.0550) — sub-cent revenue from the price itself
+Fractional contracts (e.g., 0.30 contracts) — sub-cent revenue from the fractional quantity
+When both apply simultaneously, intermediate values can reach up to 6 decimal places (for example, $0.3301 * 0.03 = $0.009903). The worked examples below show each scenario.
+​
+Settlement Rounding
+Settlement can also create sub-cent balance changes. When that happens, the exchange rounds the posted payout down to the nearest cent and records the fractional remainder as a settlement fee.
+Example: if a user holds 10.60 YES contracts and the market settles at $0.5970, the raw payout is 10.60 * \$0.5970 = \$6.3282. Because posted payouts must be whole-cent amounts, the exchange credits $6.32 and records the remaining $0.0082 as a settlement fee.
+This rounding adjustment is always less than $0.01 on any posted payout and exists only to keep balances in whole-cent increments.
+
+Market Lifecycle
+How markets move from creation to settlement
+
+Markets on Kalshi follow a lifecycle from creation through trading to determination and settlement. This page describes the states a market passes through and what to expect at each stage.
+​
+Statuses
+The REST API returns these statuses on GET /markets and GET /markets/{ticker}:
+Status	Meaning
+initialized	Created but not yet open for trading. Transitions to active when open_time passes.
+active	Open for trading.
+inactive	Temporarily deactivated by the exchange. Trading is paused but the market has not closed.
+closed	Past close_time. No new orders accepted. Awaiting determination.
+determined	Result is known. Settlement timer is running.
+disputed	Result has been challenged. May be re-determined.
+amended	Re-determined after a dispute. Settlement timer restarts.
+finalized	Settlement complete. Positions have been paid out. Terminal state.
+When filtering with GET /markets?status=, the values map as follows:
+Filter value	Matches
+unopened	initialized (before open_time)
+open	active
+paused	inactive
+closed	Any market past close_time that is not yet finalized
+settled	finalized
+​
+Transitions
+Some transitions are implicit (time-based), others are explicit (event-driven).
+Implicit (no WebSocket event):
+initialized → active: when open_time passes. There is no activated WebSocket event for this transition.
+active / inactive → closed: when close_time passes.
+Explicit (WebSocket event emitted):
+active → inactive: exchange deactivates the market. Event: deactivated.
+inactive → active: exchange reactivates a paused market. Event: activated. All resting orders are cancelled on this reactivation.
+closed → reopened active: close_time is moved into the future. Events: close_date_updated, then activated.
+Close time updated: close_time changes. Event: close_date_updated. This can happen when a market is closed ahead of its scheduled close time, including before determination.
+closed → determined: result is set. Event: determined.
+determined / amended → finalized: positions paid out. Event: settled.
+​
+Time fields
+Markets have several time fields:
+Field	Meaning
+open_time	When the market opens for trading.
+close_time	When trading stops. May be moved earlier if can_close_early is true.
+expected_expiration_time	When the outcome is expected to be known.
+latest_expiration_time	Latest possible expiration time.
+expiration_time	Deprecated legacy field. Prefer latest_expiration_time for the legacy expiry semantics; use expected_expiration_time if you want the forecasted time.
+​
+Determination and settlement
+After a market closes and the outcome is known, the market is determined and result is set to yes, no, or scalar.
+A settlement timer then runs for settlement_timer_seconds, which is visible in the REST response. During this window the market remains at determined and the result may be disputed.
+Once settlement completes, positions are paid out. In REST, settled markets end up at finalized rather than a separate settled status, and settlement_ts is populated.
+​
+Orders after close
+Once close_time passes, all order operations, including cancellations, are rejected with MARKET_INACTIVE. Resting orders are cancelled shortly after close, and cancellation updates are published on the usual user channels.
+​
+WebSocket
+Market lifecycle events are delivered on two channels:
+Channel	Markets covered	Event types
+market_lifecycle_v2	All markets except MVE (KXMVE*)	created, activated, deactivated, close_date_updated, determined, settled
+multivariate_market_lifecycle	MVE markets only (KXMVE*)	created, activated, deactivated, close_date_updated, determined, settled
+Both channels also emit event_lifecycle messages when new events are created.
+The WebSocket settled event corresponds to settlement being processed; in REST, settled markets end up at finalized.
