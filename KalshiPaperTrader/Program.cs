@@ -13,7 +13,7 @@ using PredictionBacktester.Strategies;
 const decimal STARTING_CAPITAL      = 1_000.00m;
 const decimal MAX_INVESTMENT        = 50.00m;
 const decimal MIN_PROFIT_PER_SET    = 0.02m;
-const decimal DEPTH_FLOOR_SHARES    = 5m;
+const decimal DEPTH_FLOOR_SHARES    = 50m;
 const decimal SLIPPAGE_CENTS        = 0.02m;
 const double  FEE_RATE              = 0.0;   // Pending Kalshi fee schedule confirmation
 const double  FEE_EXPONENT          = 1.0;
@@ -22,6 +22,7 @@ const long    POST_BUY_COOLDOWN_MS  = 60_000;
 
 const int  SUBSCRIBE_BATCH_SIZE     = 100;
 const decimal MIN_VOLUME_24H        = 10m;   // Min contracts/day to include in binary scan
+const decimal MIN_BOOK_PRICE        = 0.03m; // Reject phantom/stale levels below this price
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  STARTUP
@@ -305,6 +306,9 @@ static bool ApplyDelta(
             System.Globalization.CultureInfo.InvariantCulture, out decimal delta)) return false;
     string side = sideEl.GetString() ?? "";
 
+    // Apply same price floor as snapshots — reject sub-floor levels from deltas too
+    if (price < MIN_BOOK_PRICE || price > (1m - MIN_BOOK_PRICE)) return false;
+
     if (side == "yes")
     {
         decimal newSize = yesSizeMap.GetValueOrDefault(price, 0m) + delta;
@@ -393,11 +397,6 @@ static void ApplySnapshot(
         }
     }
 }
-
-// Minimum ask price to accept as a valid book level.
-// Levels below this are phantom/stale orders on dead or settled markets.
-// A $0.01 YES ask + $0.01 NO ask is not a real arb — it's an orphan order.
-const decimal MIN_BOOK_PRICE = 0.03m;
 
 static bool TryParseLevel(JsonElement level, out decimal price, out decimal size)
 {

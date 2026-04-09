@@ -197,8 +197,11 @@ namespace PredictionBacktester.Strategies
 
             decimal profitPerSet = 1.00m - totalNetCost;
 
-            // Arb detection: aligned with execution strategy thresholds
+            // Arb detection: aligned with execution strategy thresholds.
+            // Minimum cost $0.50: below this the market is near-settled (winning leg's
+            // asks consumed, only stale $0.03 resting orders remain on losing legs).
             bool isArbAlive = allLegsHaveBooks && pricedLegs == yesTokenIds.Count
+                && totalNetCost >= 0.50m
                 && totalNetCost < 0.995m
                 && profitPerSet >= _minProfitPerSet
                 && bottleneckShares >= _depthFloorShares;

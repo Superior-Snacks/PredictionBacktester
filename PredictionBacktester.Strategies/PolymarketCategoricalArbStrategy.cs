@@ -187,6 +187,15 @@ namespace PredictionBacktester.Strategies
 
             decimal totalNetCostPerSet = totalCostPerSet + totalFeePerSet;
 
+            // Reject near-settled markets: if total cost is below $0.50 the market is
+            // almost certainly resolved — the winning leg's asks are gone, leaving only
+            // stale $0.03 resting orders on the losing legs.
+            if (totalNetCostPerSet < 0.50m)
+            {
+                _arbFirstSeenMs.TryRemove(eventId, out _);
+                return;
+            }
+
             // Only execute if total cost per complete set (including fees) leaves profit
             if (totalNetCostPerSet >= 0.995m)
             {
