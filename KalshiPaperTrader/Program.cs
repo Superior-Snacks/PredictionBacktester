@@ -16,17 +16,18 @@ const decimal MIN_PROFIT_PER_SET    = 0.02m;
 const decimal DEPTH_FLOOR_SHARES    = 5m;
 const decimal SLIPPAGE_CENTS        = 0.02m;
 const double  FEE_RATE              = 0.0;   // Pending Kalshi fee schedule confirmation
+const double  FEE_EXPONENT          = 1.0;
 const long    REQUIRED_SUSTAIN_MS   = 0;
 const long    POST_BUY_COOLDOWN_MS  = 60_000;
 
-// Subscription batch size — Kalshi accepts arrays of market_tickers
-const int SUBSCRIBE_BATCH_SIZE = 100;
+const int  SUBSCRIBE_BATCH_SIZE     = 100;
+const decimal MIN_VOLUME_24H        = 10m;   // Min contracts/day to include in binary scan
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  STARTUP
 // ══════════════════════════════════════════════════════════════════════════════
 Console.WriteLine("═══════════════════════════════════════════════════════════");
-Console.WriteLine("  KALSHI PAPER TRADER — Categorical Arb Strategy");
+Console.WriteLine("  KALSHI PAPER TRADER — Categorical + Binary Arb + Telemetry");
 Console.WriteLine("═══════════════════════════════════════════════════════════");
 
 var config = KalshiApiConfig.FromEnvironment();
@@ -38,7 +39,6 @@ if (string.IsNullOrEmpty(config.ApiKeyId) || string.IsNullOrEmpty(config.Private
 
 using var orderClient = new KalshiOrderClient(config);
 
-// Check balance to confirm auth works
 try
 {
     long balanceCents = await orderClient.GetBalanceCentsAsync();
@@ -46,60 +46,93 @@ try
 }
 catch (Exception ex)
 {
-    Console.WriteLine($"[AUTH FAIL] Could not fetch balance: {ex.Message}");
+    Console.WriteLine($"[AUTH FAIL] {ex.Message}");
     Console.WriteLine("Check your API key ID and private key file, then retry.");
     return;
 }
 
-// Scan for arb events
-var scanner = new KalshiMarketScanner(orderClient);
-Dictionary<string, List<string>> arbEvents = await scanner.GetArbitrageEventsAsync();
+// ── SCAN ──────────────────────────────────────────────────────────────────────
+var scanner = new KalshiMarketScanner(orderClient, MIN_VOLUME_24H);
+KalshiScanResult scan = await scanner.ScanAllAsync();
 
-if (arbEvents.Count == 0)
+int catCount = scan.CategoricalEvents.Count;
+int binCount = scan.BinaryMarkets.Count;
+
+if (catCount + binCount == 0)
 {
     Console.WriteLine("[SCANNER] No eligible arb events found. Exiting.");
     return;
 }
 
-int totalTickers = arbEvents.Values.Sum(v => v.Count);
-Console.WriteLine($"[SCANNER] {arbEvents.Count} events, {totalTickers} market tickers to subscribe.");
+Console.WriteLine($"[SCANNER] Categorical: {catCount} events | Binary: {binCount} markets");
 
-// Create order books (one per ticker)
+// Merge both arb types into a single event map for the strategy.
+// Binary arb events use the "BIN_{ticker}" key and have exactly 2 legs:
+//   [ticker, ticker_NO]
+// The strategy treats them identically — buy all legs, sum < $1.00 = arb.
+var allEvents = new Dictionary<string, List<string>>(scan.CategoricalEvents);
+foreach (var kv in scan.BinaryMarkets)
+    allEvents[kv.Key] = kv.Value;
+
+// Real tickers to subscribe to (strip _NO virtual IDs — they share a WS stream)
+var realTickers = allEvents.Values
+    .SelectMany(v => v)
+    .Where(t => !t.EndsWith("_NO", StringComparison.Ordinal))
+    .Distinct()
+    .ToList();
+
+Console.WriteLine($"[SCANNER] {allEvents.Count} total arb events | {realTickers.Count} WS subscriptions");
+
+// ── ORDER BOOKS ───────────────────────────────────────────────────────────────
+// One LocalOrderBook per real ticker AND one per _NO virtual ticker.
+// Real ticker book  → YES asks on SELL side, implied YES bids on BUY side
+// _NO virtual book  → NO asks on SELL side only (used for binary arb entry cost)
 var orderBooks = new ConcurrentDictionary<string, LocalOrderBook>();
-foreach (var ticker in arbEvents.Values.SelectMany(v => v))
+foreach (var ticker in allEvents.Values.SelectMany(v => v))
     orderBooks[ticker] = new LocalOrderBook(ticker);
 
-// Create broker and strategy
-var broker = new KalshiPaperBroker("Kalshi_CategoricalArb", STARTING_CAPITAL, scanner.TokenNames);
+// Per-ticker size maps for delta accumulation (keyed on real ticker only)
+var yesSizes = new ConcurrentDictionary<string, Dictionary<decimal, decimal>>();
+var noSizes  = new ConcurrentDictionary<string, Dictionary<decimal, decimal>>();
+foreach (var ticker in realTickers)
+{
+    yesSizes[ticker] = new Dictionary<decimal, decimal>();
+    noSizes[ticker]  = new Dictionary<decimal, decimal>();
+}
+
+// ── BROKER + STRATEGY ─────────────────────────────────────────────────────────
+var broker = new KalshiPaperBroker("Kalshi_Arb", STARTING_CAPITAL, scan.TokenNames);
 
 var strategy = new PolymarketCategoricalArbStrategy(
-    configuredEvents:       arbEvents,
-    name:                   "Kalshi_CategoricalArb",
+    configuredEvents:       allEvents,
+    name:                   "Kalshi_Arb",
     maxInvestmentPerTrade:  MAX_INVESTMENT,
     slippageCents:          SLIPPAGE_CENTS,
     feeRate:                FEE_RATE,
-    feeExponent:            1.0,
+    feeExponent:            FEE_EXPONENT,
     requiredSustainMs:      REQUIRED_SUSTAIN_MS,
     minProfitPerSet:        MIN_PROFIT_PER_SET,
     depthFloorShares:       DEPTH_FLOOR_SHARES,
     postBuyCooldownMs:      POST_BUY_COOLDOWN_MS
 );
 
-// Per-ticker size tracking for delta accumulation
-// Key: ticker → {price → currentSize}  (separate for yes and no sides)
-var yesSizes = new ConcurrentDictionary<string, Dictionary<decimal, decimal>>();
-var noSizes  = new ConcurrentDictionary<string, Dictionary<decimal, decimal>>();
-foreach (var ticker in arbEvents.Values.SelectMany(v => v))
-{
-    yesSizes[ticker] = new Dictionary<decimal, decimal>();
-    noSizes[ticker]  = new Dictionary<decimal, decimal>();
-}
+// Telemetry strategy — same event map, logs arb windows to ArbTelemetry_*.csv
+// Uses a dummy broker (no real orders) — only reads books, writes CSV
+var telemetryBroker = new KalshiPaperBroker("Kalshi_Telemetry", 0m, scan.TokenNames);
+var telemetry = new FastMergeArbTelemetryStrategy(
+    configuredEvents:       allEvents,
+    maxInvestmentPerTrade:  MAX_INVESTMENT,
+    slippageCents:          SLIPPAGE_CENTS,
+    minProfitPerSet:        MIN_PROFIT_PER_SET,
+    depthFloorShares:       DEPTH_FLOOR_SHARES,
+    feeRate:                FEE_RATE,
+    feeExponent:            FEE_EXPONENT
+);
 
-// CTS for clean shutdown
+// ── SHUTDOWN + STATUS ─────────────────────────────────────────────────────────
 using var cts = new CancellationTokenSource();
 Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
 
-// P&L status ticker
 _ = Task.Run(async () =>
 {
     while (!cts.Token.IsCancellationRequested)
@@ -109,7 +142,7 @@ _ = Task.Run(async () =>
         lock (GlobalSimulatedBroker.ConsoleLock)
         {
             Console.WriteLine($"\n[STATUS] Cash: ${broker.CashBalance:0.00} | " +
-                              $"Realized P&L: ${strategy.TotalRealizedPnL:0.00} | " +
+                              $"P&L: ${strategy.TotalRealizedPnL:0.00} | " +
                               $"Sell-backs: {strategy.CompletedSellBacks}");
         }
     }
@@ -118,15 +151,12 @@ _ = Task.Run(async () =>
 // ══════════════════════════════════════════════════════════════════════════════
 //  WEBSOCKET LOOP (with reconnect)
 // ══════════════════════════════════════════════════════════════════════════════
-var allTickers = arbEvents.Values.SelectMany(v => v).ToList();
-
 while (!cts.Token.IsCancellationRequested)
 {
     try
     {
         using var ws = new ClientWebSocket();
 
-        // Kalshi requires auth headers on the HTTP upgrade request
         var (key, ts, sig) = orderClient.CreateAuthHeaders("GET", "/trade-api/ws/v2");
         ws.Options.SetRequestHeader("KALSHI-ACCESS-KEY", key);
         ws.Options.SetRequestHeader("KALSHI-ACCESS-TIMESTAMP", ts);
@@ -135,28 +165,27 @@ while (!cts.Token.IsCancellationRequested)
         await ws.ConnectAsync(new Uri(config.BaseWsUrl), cts.Token);
         Console.WriteLine($"\n[WS] Connected to {config.BaseWsUrl}");
 
-        // Subscribe to orderbook_delta for all tickers in batches
+        // Subscribe to real tickers in batches
         int msgId = 1;
-        for (int i = 0; i < allTickers.Count; i += SUBSCRIBE_BATCH_SIZE)
+        for (int i = 0; i < realTickers.Count; i += SUBSCRIBE_BATCH_SIZE)
         {
-            var batch = allTickers.Skip(i).Take(SUBSCRIBE_BATCH_SIZE).ToList();
+            var batch = realTickers.Skip(i).Take(SUBSCRIBE_BATCH_SIZE).ToList();
             string tickerArray = string.Join(",", batch.Select(t => $"\"{t}\""));
             string subMsg = $"{{\"id\":{msgId++},\"cmd\":\"subscribe\",\"params\":{{\"channels\":[\"orderbook_delta\"],\"market_tickers\":[{tickerArray}]}}}}";
 
-            byte[] subBytes = Encoding.UTF8.GetBytes(subMsg);
-            await ws.SendAsync(new ArraySegment<byte>(subBytes), WebSocketMessageType.Text, true, cts.Token);
-            await Task.Delay(100, cts.Token); // Polite pacing between batches
+            await ws.SendAsync(Encoding.UTF8.GetBytes(subMsg), WebSocketMessageType.Text, true, cts.Token);
+            await Task.Delay(100, cts.Token);
         }
 
-        Console.WriteLine($"[WS] Subscribed to {allTickers.Count} tickers across {arbEvents.Count} events.");
+        Console.WriteLine($"[WS] Subscribed to {realTickers.Count} tickers.");
 
-        // Clear stale book state on reconnect
+        // Clear stale state on reconnect
         foreach (var book in orderBooks.Values) book.ClearBook();
         foreach (var d in yesSizes.Values) d.Clear();
         foreach (var d in noSizes.Values)  d.Clear();
         strategy.OnReconnect();
+        telemetry.OnReconnect();
 
-        // Message receive loop
         var receiveBuffer = new byte[65536];
         using var ms = new MemoryStream();
 
@@ -165,7 +194,6 @@ while (!cts.Token.IsCancellationRequested)
             ms.SetLength(0);
             WebSocketReceiveResult result;
 
-            // Accumulate frames until end of message
             do
             {
                 result = await ws.ReceiveAsync(new ArraySegment<byte>(receiveBuffer), cts.Token);
@@ -176,8 +204,6 @@ while (!cts.Token.IsCancellationRequested)
                     goto reconnect;
                 }
 
-                // Kalshi sends Ping control frames with body "heartbeat" — .NET handles Pong automatically
-                // but may also send a text "heartbeat" frame — skip it
                 ms.Write(receiveBuffer, 0, result.Count);
             }
             while (!result.EndOfMessage);
@@ -185,10 +211,9 @@ while (!cts.Token.IsCancellationRequested)
             if (ms.Length == 0) continue;
 
             string message = Encoding.UTF8.GetString(ms.GetBuffer(), 0, (int)ms.Length);
-
             if (message is "heartbeat" or "PONG" or "pong") continue;
 
-            ProcessMessage(message, orderBooks, yesSizes, noSizes, strategy, broker);
+            ProcessMessage(message, orderBooks, yesSizes, noSizes, strategy, broker, telemetry, telemetryBroker);
         }
 
         reconnect:;
@@ -203,11 +228,11 @@ while (!cts.Token.IsCancellationRequested)
         await Task.Delay(5_000, cts.Token).ContinueWith(_ => { });
 }
 
-Console.WriteLine("\n[SHUTDOWN] Final P&L summary:");
-Console.WriteLine($"  Cash balance:   ${broker.CashBalance:0.00}");
-Console.WriteLine($"  Realized P&L:   ${strategy.TotalRealizedPnL:0.00}");
-Console.WriteLine($"  Completed arbs: {strategy.CompletedSellBacks}");
-Console.WriteLine($"  Total trades:   {broker.TotalTradesExecuted}");
+Console.WriteLine("\n[SHUTDOWN]");
+Console.WriteLine($"  Cash:         ${broker.CashBalance:0.00}");
+Console.WriteLine($"  Realized P&L: ${strategy.TotalRealizedPnL:0.00}");
+Console.WriteLine($"  Arbs closed:  {strategy.CompletedSellBacks}");
+Console.WriteLine($"  Total trades: {broker.TotalTradesExecuted}");
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  MESSAGE PROCESSING
@@ -218,7 +243,9 @@ static void ProcessMessage(
     ConcurrentDictionary<string, Dictionary<decimal, decimal>> yesSizes,
     ConcurrentDictionary<string, Dictionary<decimal, decimal>> noSizes,
     PolymarketCategoricalArbStrategy strategy,
-    KalshiPaperBroker broker)
+    KalshiPaperBroker broker,
+    FastMergeArbTelemetryStrategy telemetry,
+    KalshiPaperBroker telemetryBroker)
 {
     try
     {
@@ -232,118 +259,147 @@ static void ProcessMessage(
         if (!msgEl.TryGetProperty("market_ticker", out var tickerEl)) return;
         string ticker = tickerEl.GetString() ?? "";
 
-        if (!orderBooks.TryGetValue(ticker, out var book)) return;
+        if (!orderBooks.TryGetValue(ticker, out var yesBook)) return;
+
+        // _NO virtual book: exists only for binary arb markets
+        orderBooks.TryGetValue(ticker + "_NO", out var noBook);
 
         if (msgType == "orderbook_snapshot")
         {
-            ApplySnapshot(book, msgEl, yesSizes[ticker], noSizes[ticker]);
-            strategy.OnBookUpdate(book, broker);
+            ApplySnapshot(yesBook, noBook, msgEl, yesSizes[ticker], noSizes[ticker]);
+            strategy.OnBookUpdate(yesBook, broker);
+            telemetry.OnBookUpdate(yesBook, telemetryBroker);
+            if (noBook != null)
+            {
+                strategy.OnBookUpdate(noBook, broker);
+                telemetry.OnBookUpdate(noBook, telemetryBroker);
+            }
         }
         else if (msgType == "orderbook_delta")
         {
-            ApplyDelta(book, msgEl, yesSizes[ticker], noSizes[ticker]);
-            strategy.OnBookUpdate(book, broker);
+            bool noSideChanged = ApplyDelta(yesBook, noBook, msgEl, yesSizes[ticker], noSizes[ticker]);
+            strategy.OnBookUpdate(yesBook, broker);
+            telemetry.OnBookUpdate(yesBook, telemetryBroker);
+            if (noBook != null && noSideChanged)
+            {
+                strategy.OnBookUpdate(noBook, broker);
+                telemetry.OnBookUpdate(noBook, telemetryBroker);
+            }
         }
     }
-    catch (JsonException)
-    {
-        // Malformed message — skip silently
-    }
+    catch (JsonException) { }
 }
 
-// Applies a full snapshot to the LocalOrderBook and size-tracking dicts
-static void ApplySnapshot(
-    LocalOrderBook book,
+// Returns true if the NO side (and therefore the _NO book) was updated.
+static bool ApplyDelta(
+    LocalOrderBook yesBook,
+    LocalOrderBook? noBook,
     JsonElement msg,
     Dictionary<decimal, decimal> yesSizeMap,
     Dictionary<decimal, decimal> noSizeMap)
 {
-    book.ClearBook();
+    if (!msg.TryGetProperty("price_dollars", out var priceEl)) return false;
+    if (!msg.TryGetProperty("delta_fp",      out var deltaEl)) return false;
+    if (!msg.TryGetProperty("side",          out var sideEl))  return false;
+
+    if (!decimal.TryParse(priceEl.GetString(), System.Globalization.NumberStyles.Any,
+            System.Globalization.CultureInfo.InvariantCulture, out decimal price)) return false;
+    if (!decimal.TryParse(deltaEl.GetString(), System.Globalization.NumberStyles.Any,
+            System.Globalization.CultureInfo.InvariantCulture, out decimal delta)) return false;
+    string side = sideEl.GetString() ?? "";
+
+    if (side == "yes")
+    {
+        decimal newSize = yesSizeMap.GetValueOrDefault(price, 0m) + delta;
+        decimal impliedNoBid = Math.Round(1m - price, 4);
+        if (newSize <= 0)
+        {
+            yesSizeMap.Remove(price);
+            yesBook.UpdatePriceLevel("SELL", price, 0m);
+            noBook?.UpdatePriceLevel("BUY", impliedNoBid, 0m);
+        }
+        else
+        {
+            yesSizeMap[price] = newSize;
+            yesBook.UpdatePriceLevel("SELL", price, newSize);
+            noBook?.UpdatePriceLevel("BUY", impliedNoBid, newSize);
+        }
+        return false;
+    }
+
+    if (side == "no")
+    {
+        decimal newSize = noSizeMap.GetValueOrDefault(price, 0m) + delta;
+        decimal impliedYesBid = Math.Round(1m - price, 4);
+
+        if (newSize <= 0)
+        {
+            noSizeMap.Remove(price);
+            // Remove implied YES bid from the real book
+            yesBook.UpdatePriceLevel("BUY", impliedYesBid, 0m);
+            // Remove NO ask from the _NO virtual book
+            noBook?.UpdatePriceLevel("SELL", price, 0m);
+        }
+        else
+        {
+            noSizeMap[price] = newSize;
+            yesBook.UpdatePriceLevel("BUY", impliedYesBid, newSize);
+            noBook?.UpdatePriceLevel("SELL", price, newSize);
+        }
+        return true;
+    }
+
+    return false;
+}
+
+static void ApplySnapshot(
+    LocalOrderBook yesBook,
+    LocalOrderBook? noBook,
+    JsonElement msg,
+    Dictionary<decimal, decimal> yesSizeMap,
+    Dictionary<decimal, decimal> noSizeMap)
+{
+    yesBook.ClearBook();
+    noBook?.ClearBook();
     yesSizeMap.Clear();
     noSizeMap.Clear();
 
-    // YES offers → ask levels (you can BUY YES at these prices)
+    // YES asks → SELL levels on the real book
+    //           + implied NO BID on the _NO virtual book (YES ask $0.54 → NO bid $0.46)
     if (msg.TryGetProperty("yes_dollars_fp", out var yesEl) && yesEl.ValueKind == JsonValueKind.Array)
     {
         foreach (var level in yesEl.EnumerateArray())
         {
             if (!TryParseLevel(level, out decimal price, out decimal size)) continue;
             yesSizeMap[price] = size;
-            book.UpdatePriceLevel("SELL", price, size);
+            yesBook.UpdatePriceLevel("SELL", price, size);
+            decimal impliedNoBid = Math.Round(1m - price, 4);
+            noBook?.UpdatePriceLevel("BUY", impliedNoBid, size);
         }
     }
 
-    // NO offers → YES bid levels (if NO is offered at $0.46, that implies a YES bid at $0.54)
+    // NO asks → implied YES BID on real book + SELL level on _NO virtual book
     if (msg.TryGetProperty("no_dollars_fp", out var noEl) && noEl.ValueKind == JsonValueKind.Array)
     {
         foreach (var level in noEl.EnumerateArray())
         {
             if (!TryParseLevel(level, out decimal noPrice, out decimal size)) continue;
             noSizeMap[noPrice] = size;
-            decimal yesBidPrice = Math.Round(1m - noPrice, 4);
-            book.UpdatePriceLevel("BUY", yesBidPrice, size);
+            decimal impliedYesBid = Math.Round(1m - noPrice, 4);
+            yesBook.UpdatePriceLevel("BUY", impliedYesBid, size);
+            noBook?.UpdatePriceLevel("SELL", noPrice, size);
         }
     }
 }
 
-// Applies an incremental delta to the LocalOrderBook
-static void ApplyDelta(
-    LocalOrderBook book,
-    JsonElement msg,
-    Dictionary<decimal, decimal> yesSizeMap,
-    Dictionary<decimal, decimal> noSizeMap)
-{
-    if (!msg.TryGetProperty("price_dollars", out var priceEl)) return;
-    if (!msg.TryGetProperty("delta_fp",      out var deltaEl)) return;
-    if (!msg.TryGetProperty("side",          out var sideEl))  return;
-
-    if (!decimal.TryParse(priceEl.GetString(), out decimal price)) return;
-    if (!decimal.TryParse(deltaEl.GetString(), out decimal delta)) return;
-    string side = sideEl.GetString() ?? "";
-
-    if (side == "yes")
-    {
-        decimal current = yesSizeMap.GetValueOrDefault(price, 0m);
-        decimal newSize = current + delta;
-        if (newSize <= 0)
-        {
-            yesSizeMap.Remove(price);
-            book.UpdatePriceLevel("SELL", price, 0m); // size=0 removes the level
-        }
-        else
-        {
-            yesSizeMap[price] = newSize;
-            book.UpdatePriceLevel("SELL", price, newSize);
-        }
-    }
-    else if (side == "no")
-    {
-        decimal current = noSizeMap.GetValueOrDefault(price, 0m);
-        decimal newSize = current + delta;
-        decimal yesBidPrice = Math.Round(1m - price, 4);
-
-        if (newSize <= 0)
-        {
-            noSizeMap.Remove(price);
-            book.UpdatePriceLevel("BUY", yesBidPrice, 0m);
-        }
-        else
-        {
-            noSizeMap[price] = newSize;
-            book.UpdatePriceLevel("BUY", yesBidPrice, newSize);
-        }
-    }
-}
-
-// Parses a [price_string, size_string] array element
 static bool TryParseLevel(JsonElement level, out decimal price, out decimal size)
 {
     price = 0; size = 0;
     if (level.ValueKind != JsonValueKind.Array) return false;
-
     var arr = level.EnumerateArray().ToArray();
     if (arr.Length < 2) return false;
-
-    return decimal.TryParse(arr[0].GetString(), out price) &&
-           decimal.TryParse(arr[1].GetString(), out size);
+    return decimal.TryParse(arr[0].GetString(), System.Globalization.NumberStyles.Any,
+               System.Globalization.CultureInfo.InvariantCulture, out price) &&
+           decimal.TryParse(arr[1].GetString(), System.Globalization.NumberStyles.Any,
+               System.Globalization.CultureInfo.InvariantCulture, out size);
 }
