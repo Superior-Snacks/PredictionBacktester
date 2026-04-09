@@ -42,16 +42,6 @@ public class KalshiMarketScanner
     // Avoids subscribing to thousands of illiquid markets with stale books.
     private readonly decimal _minVolume24h;
 
-    // Sports categories have unpredictable matching delays — skip them
-    private static readonly HashSet<string> SportsKeywords = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "soccer", "football", "basketball", "baseball", "hockey", "tennis",
-        "mma", "ufc", "esports", "cricket", "rugby", "golf", "volleyball",
-        "boxing", "cycling", "racing", "motorsport", "swimming", "athletics",
-        "nba", "nfl", "nhl", "mlb", "ncaa", "epl", "champions-league",
-        "la-liga", "bundesliga", "serie-a", "ligue-1", "sports"
-    };
-
     /// <summary>Backward-compat: all token names from the most recent scan.</summary>
     public Dictionary<string, string> TokenNames { get; private set; } = new();
 
@@ -78,7 +68,6 @@ public class KalshiMarketScanner
         var binary      = new Dictionary<string, List<string>>();
         var names       = new Dictionary<string, string>();
 
-        int skippedSports  = 0;
         int skippedScalar  = 0;
         int catEligible    = 0;
         int binEligible    = 0;
@@ -87,8 +76,6 @@ public class KalshiMarketScanner
         {
             string eventTicker = GetString(ev, "event_ticker");
             if (string.IsNullOrEmpty(eventTicker)) continue;
-
-            if (IsSportsEvent(ev)) { skippedSports++; continue; }
 
             if (!ev.TryGetProperty("markets", out var marketsEl) ||
                 marketsEl.ValueKind != JsonValueKind.Array)
@@ -162,7 +149,7 @@ public class KalshiMarketScanner
 
         Console.WriteLine($"[KALSHI SCANNER] Categorical: {catEligible} events | " +
                           $"Binary: {binEligible} markets | " +
-                          $"Skipped: {skippedSports} sports, {skippedScalar} scalar.");
+                          $"Skipped: {skippedScalar} scalar.");
 
         TokenNames = names;
 
@@ -187,29 +174,6 @@ public class KalshiMarketScanner
     // ──────────────────────────────────────────────────────────────────────────
     //  Helpers
     // ──────────────────────────────────────────────────────────────────────────
-
-    private static bool IsSportsEvent(JsonElement ev)
-    {
-        string cat = GetString(ev, "category");
-        if (!string.IsNullOrEmpty(cat) &&
-            SportsKeywords.Any(k => cat.Contains(k, StringComparison.OrdinalIgnoreCase)))
-            return true;
-
-        if (ev.TryGetProperty("tags", out var tagsEl) && tagsEl.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var tag in tagsEl.EnumerateArray())
-            {
-                string? slug  = tag.TryGetProperty("slug",  out var sEl) ? sEl.GetString() : null;
-                string? label = tag.TryGetProperty("label", out var lEl) ? lEl.GetString() : null;
-
-                if ((slug  != null && SportsKeywords.Any(k => slug.Contains(k,  StringComparison.OrdinalIgnoreCase))) ||
-                    (label != null && SportsKeywords.Any(k => label.Contains(k, StringComparison.OrdinalIgnoreCase))))
-                    return true;
-            }
-        }
-
-        return false;
-    }
 
     private static string GetString(JsonElement el, string key)
         => el.TryGetProperty(key, out var v) ? v.GetString() ?? "" : "";
