@@ -81,13 +81,21 @@ public class KalshiMarketScanner
                 marketsEl.ValueKind != JsonValueKind.Array)
                 continue;
 
-            var activeYesTickers = new List<string>(); // legs for categorical
+            var activeYesTickers  = new List<string>(); // legs for categorical
+            decimal catMaxVol24h  = 0m;                 // highest leg volume — event is live if any leg traded
+            int totalMarketsInEvent = 0;
+            var skippedStatuses = new List<string>();
 
             foreach (var mkt in marketsEl.EnumerateArray())
             {
+                totalMarketsInEvent++;
                 // Skip non-active and scalar (e.g. temperature range) markets
-                if (!string.Equals(GetString(mkt, "status"), "active", StringComparison.OrdinalIgnoreCase))
+                string mktStatus = GetString(mkt, "status");
+                if (!string.Equals(mktStatus, "active", StringComparison.OrdinalIgnoreCase))
+                {
+                    skippedStatuses.Add(mktStatus);
                     continue;
+                }
 
                 string marketType = GetString(mkt, "market_type");
                 if (string.Equals(marketType, "scalar", StringComparison.OrdinalIgnoreCase))
@@ -112,10 +120,12 @@ public class KalshiMarketScanner
                 names[ticker]         = displayYes;
                 names[ticker + "_NO"] = displayNo;
 
+                decimal vol24h = ParseFp(mkt, "volume_24h_fp");
+                catMaxVol24h = Math.Max(catMaxVol24h, vol24h);
+
                 // ── BINARY ARB candidate check ──────────────────────────────
                 // Pre-screen using the snapshot ask prices from the REST response.
                 // This is a hint only — WebSocket books are the ground truth.
-                decimal vol24h = ParseFp(mkt, "volume_24h_fp");
                 if (vol24h >= _minVolume24h)
                 {
                     decimal yesAsk = ParseDollars(mkt, "yes_ask_dollars");
@@ -140,7 +150,15 @@ public class KalshiMarketScanner
             }
 
             // ── CATEGORICAL ARB candidate check ─────────────────────────────
-            if (activeYesTickers.Count >= 3)
+            // Require at least one leg to have traded in the last 24h.
+            // Events where every leg has volume=0 are resolved/stale — only
+            // resting phantom orders remain, which look like arbs but aren't.
+            int dropped = totalMarketsInEvent - activeYesTickers.Count;
+            bool hasPartiallyResolved = skippedStatuses.Any(s =>
+                string.Equals(s, "finalized", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(s, "inactive", StringComparison.OrdinalIgnoreCase));
+
+            if (activeYesTickers.Count >= 3 && catMaxVol24h >= _minVolume24h && !hasPartiallyResolved)
             {
                 categorical[eventTicker] = activeYesTickers;
                 catEligible++;

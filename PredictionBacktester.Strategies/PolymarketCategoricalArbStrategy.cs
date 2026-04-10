@@ -151,6 +151,7 @@ namespace PredictionBacktester.Strategies
             // Walk each leg's book to get accurate VWAP and available depth
             decimal totalCostPerSet = 0m;
             decimal totalFeePerSet = 0m;
+            decimal totalMidSum = 0m;
             decimal bottleneckShares = decimal.MaxValue;
             bool allLegsHaveBooks = true;
 
@@ -162,6 +163,9 @@ namespace PredictionBacktester.Strategies
 
                 decimal bestAsk = book.GetBestAskPrice();
                 if (bestAsk <= 0m || bestAsk >= 1.00m) { allLegsHaveBooks = false; break; }
+
+                decimal bestBid = book.GetBestBidPrice();
+                totalMidSum += bestBid > 0m ? (bestAsk + bestBid) / 2m : bestAsk;
 
                 // Walk the full ask side to find real available depth at reasonable prices
                 decimal maxPrice = Math.Min(bestAsk + _slippageCents, 0.99m);
@@ -182,7 +186,15 @@ namespace PredictionBacktester.Strategies
 
             if (!allLegsHaveBooks)
             {
-                // Arb condition no longer holds — reset sustain timer
+                _arbFirstSeenMs.TryRemove(eventId, out _);
+                return;
+            }
+
+            // Categorical sanity check: sum of midpoints must be near $1.00.
+            // Spread markets (soccer "wins by >1.5" AND ">2.5") are NOT mutually exclusive —
+            // all legs can resolve NO in a 0-0 draw. Their mid-sum is ~0.40-0.60.
+            if (totalMidSum < 0.80m)
+            {
                 _arbFirstSeenMs.TryRemove(eventId, out _);
                 return;
             }

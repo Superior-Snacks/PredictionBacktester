@@ -27,7 +27,7 @@ namespace PredictionBacktester.Strategies
         private readonly double _feeExponent;
 
         // --- NEAR-MISS TRACKING ---
-        private record NearMissEntry(decimal BestNetCost, int PricedLegs, int TotalLegs);
+        private record NearMissEntry(decimal BestNetCost, int PricedLegs, int TotalLegs, decimal BottleneckShares);
         private readonly ConcurrentDictionary<string, NearMissEntry> _bestNetCostSeen = new();
         private DateTime _lastNearMissReport = DateTime.MinValue;
         private const int NEAR_MISS_REPORT_INTERVAL_SEC = 60; // Print top near-misses every 60s
@@ -136,6 +136,7 @@ namespace PredictionBacktester.Strategies
 
             decimal totalGrossCost = 0m;
             decimal totalFeeCost = 0m;
+            decimal totalMidSum = 0m;   // sum of (bid+ask)/2 — must be near $1.00 for true categorical
             decimal bottleneckShares = decimal.MaxValue;
 
             int legs = 0;
@@ -158,6 +159,9 @@ namespace PredictionBacktester.Strategies
 
                 decimal bestAsk = book.GetBestAskPrice();
                 if (bestAsk >= 1.00m) { allLegsHaveBooks = false; legs++; continue; }
+
+                decimal bestBid = book.GetBestBidPrice();
+                totalMidSum += bestBid > 0m ? (bestAsk + bestBid) / 2m : bestAsk;
 
                 // Walk the ask side with slippage — matches execution strategy
                 decimal maxPrice = Math.Min(bestAsk + _slippageCents, 0.99m);
@@ -186,7 +190,8 @@ namespace PredictionBacktester.Strategies
             // Near-miss tracking: always update if we have at least some priced legs
             if (legs == yesTokenIds.Count && pricedLegs >= 2)
             {
-                var entry = new NearMissEntry(totalNetCost, pricedLegs, yesTokenIds.Count);
+                var entry = new NearMissEntry(totalNetCost, pricedLegs, yesTokenIds.Count,
+                    bottleneckShares == decimal.MaxValue ? 0m : bottleneckShares);
                 _bestNetCostSeen.AddOrUpdate(eventId, entry, (_, prev) =>
                     (pricedLegs > prev.PricedLegs ||
                      (pricedLegs == prev.PricedLegs && totalNetCost < prev.BestNetCost))
@@ -205,7 +210,14 @@ namespace PredictionBacktester.Strategies
             // Require average price per leg >= $0.10 to reject near-settled markets
             // where the winner's asks are gone and only stale low-price orders remain.
             decimal avgPricePerLeg = totalNetCost / yesTokenIds.Count;
-            bool isArbAlive = allLegsHaveBooks && pricedLegs == yesTokenIds.Count
+
+            // Categorical sanity check: sum of midpoints must be near $1.00.
+            // Spread/correlated markets (e.g. soccer "wins by >1.5" AND ">2.5") can have
+            // all legs resolve NO (0-0 draw), so they are NOT mutually exclusive.
+            // Their mid-sum will be ~0.40-0.60. True categoricals sum to ~0.95-1.05.
+            bool isCategoricallySound = pricedLegs == yesTokenIds.Count && totalMidSum >= 0.80m;
+
+            bool isArbAlive = allLegsHaveBooks && isCategoricallySound
                 && avgPricePerLeg >= 0.10m
                 && totalNetCost < 0.995m
                 && profitPerSet >= _minProfitPerSet
@@ -226,6 +238,12 @@ namespace PredictionBacktester.Strategies
                         NumLegs = legs,
                         LegPrices = currentLegPrices.TrimEnd('|')
                     };
+                    Console.WriteLine($"[TELEMETRY] ARB OPEN: {eventId} | Cost ${totalNetCost:0.0000} | MidSum ${totalMidSum:0.0000} | {legs}L | Depth {bottleneckShares:0.0}");
+                    foreach (var t in yesTokenIds)
+                    {
+                        if (!_books.TryGetValue(t, out var db)) continue;
+                        Console.WriteLine($"  leg {t[..Math.Min(20,t.Length)],-20} bestAsk={db.GetBestAskPrice():0.0000}  bestBid={db.GetBestBidPrice():0.0000}");
+                    }
                 }
                 else
                 {
@@ -301,8 +319,9 @@ namespace PredictionBacktester.Strategies
 
             int partialCount = eventsTracked - fullyPriced.Count;
 
+            int currentlyOpen = _activeArbs.Count;
             Console.WriteLine($"\n[TELEMETRY] --- TOP 10 CLOSEST TO ARB (< $1.00 = profit) ---");
-            Console.WriteLine($"  Books: {booksLoaded}/{totalTokens} tokens | Fully priced: {fullyPriced.Count} | Partial: {partialCount} | Total events: {totalEvents}");
+            Console.WriteLine($"  Books: {booksLoaded}/{totalTokens} tokens | Fully priced: {fullyPriced.Count} | Partial: {partialCount} | Total events: {totalEvents} | Open arbs: {currentlyOpen}");
             if (fullyPriced.Count == 0)
             {
                 Console.WriteLine("  (no events with all legs priced yet)");
@@ -314,7 +333,11 @@ namespace PredictionBacktester.Strategies
                     var e = kv.Value;
                     decimal gap = e.BestNetCost - 1.00m;
                     string status = gap < 0 ? "ARB!" : $"+${gap:0.0000} away";
-                    Console.WriteLine($"  ${e.BestNetCost:0.0000} ({status}) [{e.TotalLegs}L] | Event: {kv.Key}");
+                    string depthStr = e.BottleneckShares < 1m   ? $"THIN({e.BottleneckShares:0.00})"
+                                    : e.BottleneckShares < 10m  ? $"low({e.BottleneckShares:0.0})"
+                                    : $"{e.BottleneckShares:0.0}";
+                    string liveTag = _activeArbs.ContainsKey(kv.Key) ? " *** LIVE ***" : "";
+                    Console.WriteLine($"  ${e.BestNetCost:0.0000} ({status}) [{e.TotalLegs}L] depth={depthStr}{liveTag} | Event: {kv.Key}");
                 }
             }
             Console.WriteLine();

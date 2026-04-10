@@ -117,12 +117,14 @@ var strategy = new PolymarketCategoricalArbStrategy(
 // Telemetry strategy — same event map, logs arb windows to ArbTelemetry_*.csv
 // Uses a dummy broker (no real orders) — only reads books, writes CSV
 var telemetryBroker = new KalshiPaperBroker("Kalshi_Telemetry", 0m, scan.TokenNames);
+// Telemetry uses a floor of 1 contract so it logs ALL observable arbs,
+// including thin ones. DEPTH_FLOOR_SHARES only gates execution, not observation.
 var telemetry = new FastMergeArbTelemetryStrategy(
     configuredEvents:       allEvents,
     maxInvestmentPerTrade:  MAX_INVESTMENT,
     slippageCents:          SLIPPAGE_CENTS,
     minProfitPerSet:        MIN_PROFIT_PER_SET,
-    depthFloorShares:       DEPTH_FLOOR_SHARES,
+    depthFloorShares:       1m,
     feeRate:                FEE_RATE,
     feeExponent:            FEE_EXPONENT
 );
@@ -311,19 +313,20 @@ static bool ApplyDelta(
 
     if (side == "yes")
     {
+        // YES bid delta → BUY side of YES book
         decimal newSize = yesSizeMap.GetValueOrDefault(price, 0m) + delta;
-        decimal impliedNoBid = Math.Round(1m - price, 4);
+        decimal impliedNoAsk = Math.Round(1m - price, 4);
         if (newSize <= 0)
         {
             yesSizeMap.Remove(price);
-            yesBook.UpdatePriceLevel("SELL", price, 0m);
-            noBook?.UpdatePriceLevel("BUY", impliedNoBid, 0m);
+            yesBook.UpdatePriceLevel("BUY", price, 0m);
+            noBook?.UpdatePriceLevel("SELL", impliedNoAsk, 0m);
         }
         else
         {
             yesSizeMap[price] = newSize;
-            yesBook.UpdatePriceLevel("SELL", price, newSize);
-            noBook?.UpdatePriceLevel("BUY", impliedNoBid, newSize);
+            yesBook.UpdatePriceLevel("BUY", price, newSize);
+            noBook?.UpdatePriceLevel("SELL", impliedNoAsk, newSize);
         }
         yesBook.MarkDeltaReceived();
         return false;
@@ -331,24 +334,23 @@ static bool ApplyDelta(
 
     if (side == "no")
     {
+        // NO bid delta → implied YES ask at (1 - price) on SELL side of YES book
         decimal newSize = noSizeMap.GetValueOrDefault(price, 0m) + delta;
-
+        decimal impliedYesAsk = Math.Round(1m - price, 4);
         if (newSize <= 0)
         {
             noSizeMap.Remove(price);
-            noBook?.UpdatePriceLevel("SELL", price, 0m);
-            if (noBook != null)
-                yesBook.UpdatePriceLevel("BUY", Math.Round(1m - price, 4), 0m);
+            noBook?.UpdatePriceLevel("BUY", price, 0m);
+            yesBook.UpdatePriceLevel("SELL", impliedYesAsk, 0m);
         }
         else
         {
             noSizeMap[price] = newSize;
-            noBook?.UpdatePriceLevel("SELL", price, newSize);
-            if (noBook != null)
-                yesBook.UpdatePriceLevel("BUY", Math.Round(1m - price, 4), newSize);
+            noBook?.UpdatePriceLevel("BUY", price, newSize);
+            yesBook.UpdatePriceLevel("SELL", impliedYesAsk, newSize);
         }
         noBook?.MarkDeltaReceived();
-        yesBook.MarkDeltaReceived(); // NO delta is still live data for this ticker
+        yesBook.MarkDeltaReceived();
         return true;
     }
 
@@ -367,36 +369,33 @@ static void ApplySnapshot(
     yesSizeMap.Clear();
     noSizeMap.Clear();
 
-    // YES asks → SELL levels on the real book
-    //           + implied NO BID on the _NO virtual book (YES ask $0.54 → NO bid $0.46)
+    // yes_dollars_fp = YES bids (orders to BUY YES at this price)
+    // → BUY side of the YES book
+    // Binary arb: YES bid at X implies NO ask at (1-X) on the NO virtual book
     if (msg.TryGetProperty("yes_dollars_fp", out var yesEl) && yesEl.ValueKind == JsonValueKind.Array)
     {
         foreach (var level in yesEl.EnumerateArray())
         {
             if (!TryParseLevel(level, out decimal price, out decimal size)) continue;
             yesSizeMap[price] = size;
-            yesBook.UpdatePriceLevel("SELL", price, size);
-            decimal impliedNoBid = Math.Round(1m - price, 4);
-            noBook?.UpdatePriceLevel("BUY", impliedNoBid, size);
+            yesBook.UpdatePriceLevel("BUY", price, size);
+            noBook?.UpdatePriceLevel("SELL", Math.Round(1m - price, 4), size);
         }
     }
 
-    // NO asks → SELL level on _NO virtual book + implied YES BID on real book.
-    // The implied YES bid is only valid for binary arb (noBook exists).
-    // For categorical markets (noBook == null), we have no real YES bid data —
-    // adding fake implied bids causes wildly inflated sell-back prices.
+    // no_dollars_fp = NO bids (orders to BUY NO at this price)
+    // → implies YES ask at (1 - noPrice): a NO buyer is a functional YES seller
+    // → SELL side of the YES book
+    // Binary arb: also populate NO book BUY side directly
     if (msg.TryGetProperty("no_dollars_fp", out var noEl) && noEl.ValueKind == JsonValueKind.Array)
     {
         foreach (var level in noEl.EnumerateArray())
         {
             if (!TryParseLevel(level, out decimal noPrice, out decimal size)) continue;
             noSizeMap[noPrice] = size;
-            noBook?.UpdatePriceLevel("SELL", noPrice, size);
-            if (noBook != null)
-            {
-                decimal impliedYesBid = Math.Round(1m - noPrice, 4);
-                yesBook.UpdatePriceLevel("BUY", impliedYesBid, size);
-            }
+            noBook?.UpdatePriceLevel("BUY", noPrice, size);
+            decimal impliedYesAsk = Math.Round(1m - noPrice, 4);
+            yesBook.UpdatePriceLevel("SELL", impliedYesAsk, size);
         }
     }
 }
