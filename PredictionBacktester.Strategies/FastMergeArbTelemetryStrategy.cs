@@ -154,6 +154,8 @@ namespace PredictionBacktester.Strategies
                     continue;
                 }
 
+                if (!book.HasReceivedDelta) { allLegsHaveBooks = false; legs++; continue; }
+
                 decimal bestAsk = book.GetBestAskPrice();
                 if (bestAsk >= 1.00m) { allLegsHaveBooks = false; legs++; continue; }
 
@@ -186,7 +188,9 @@ namespace PredictionBacktester.Strategies
             {
                 var entry = new NearMissEntry(totalNetCost, pricedLegs, yesTokenIds.Count);
                 _bestNetCostSeen.AddOrUpdate(eventId, entry, (_, prev) =>
-                    totalNetCost < prev.BestNetCost ? entry : prev);
+                    (pricedLegs > prev.PricedLegs ||
+                     (pricedLegs == prev.PricedLegs && totalNetCost < prev.BestNetCost))
+                        ? entry : prev);
 
                 if ((DateTime.UtcNow - _lastNearMissReport).TotalSeconds >= NEAR_MISS_REPORT_INTERVAL_SEC)
                 {
@@ -198,10 +202,11 @@ namespace PredictionBacktester.Strategies
             decimal profitPerSet = 1.00m - totalNetCost;
 
             // Arb detection: aligned with execution strategy thresholds.
-            // Minimum cost $0.50: below this the market is near-settled (winning leg's
-            // asks consumed, only stale $0.03 resting orders remain on losing legs).
+            // Require average price per leg >= $0.10 to reject near-settled markets
+            // where the winner's asks are gone and only stale low-price orders remain.
+            decimal avgPricePerLeg = totalNetCost / yesTokenIds.Count;
             bool isArbAlive = allLegsHaveBooks && pricedLegs == yesTokenIds.Count
-                && totalNetCost >= 0.50m
+                && avgPricePerLeg >= 0.10m
                 && totalNetCost < 0.995m
                 && profitPerSet >= _minProfitPerSet
                 && bottleneckShares >= _depthFloorShares;
@@ -288,7 +293,8 @@ namespace PredictionBacktester.Strategies
 
             // Split into fully-priced vs partial
             var fullyPriced = _bestNetCostSeen
-                .Where(kv => kv.Value.PricedLegs == kv.Value.TotalLegs)
+                .Where(kv => kv.Value.PricedLegs == kv.Value.TotalLegs
+                          && kv.Value.BestNetCost / kv.Value.TotalLegs >= 0.10m)
                 .OrderBy(kv => kv.Value.BestNetCost)
                 .Take(10)
                 .ToList();

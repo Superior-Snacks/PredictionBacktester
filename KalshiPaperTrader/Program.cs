@@ -325,6 +325,7 @@ static bool ApplyDelta(
             yesBook.UpdatePriceLevel("SELL", price, newSize);
             noBook?.UpdatePriceLevel("BUY", impliedNoBid, newSize);
         }
+        yesBook.MarkDeltaReceived();
         return false;
     }
 
@@ -346,6 +347,8 @@ static bool ApplyDelta(
             if (noBook != null)
                 yesBook.UpdatePriceLevel("BUY", Math.Round(1m - price, 4), newSize);
         }
+        noBook?.MarkDeltaReceived();
+        yesBook.MarkDeltaReceived(); // NO delta is still live data for this ticker
         return true;
     }
 

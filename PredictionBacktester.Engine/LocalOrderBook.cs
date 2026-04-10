@@ -30,6 +30,15 @@ public class LocalOrderBook
 {
     public string AssetId { get; private set; }
 
+    /// <summary>
+    /// True once this book has received at least one delta update from the live WebSocket stream.
+    /// False after construction or ClearBook() — a snapshot alone is not enough.
+    /// Strategies use this to avoid acting on a stale initial snapshot with no real-time confirmation.
+    /// </summary>
+    public bool HasReceivedDelta { get; private set; } = false;
+
+    public void MarkDeltaReceived() { HasReceivedDelta = true; }
+
     // Private dictionaries protected by a lock
     private readonly SortedDictionary<decimal, decimal> _bids;
     private readonly SortedDictionary<decimal, decimal> _asks;
@@ -114,6 +123,7 @@ public class LocalOrderBook
         {
             _bids.Clear();
             _asks.Clear();
+            HasReceivedDelta = false;
         }
     }
 

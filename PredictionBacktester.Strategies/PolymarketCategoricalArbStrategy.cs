@@ -158,6 +158,8 @@ namespace PredictionBacktester.Strategies
             {
                 if (!_books.TryGetValue(token, out var book)) { allLegsHaveBooks = false; break; }
 
+                if (!book.HasReceivedDelta) { allLegsHaveBooks = false; break; }
+
                 decimal bestAsk = book.GetBestAskPrice();
                 if (bestAsk <= 0m || bestAsk >= 1.00m) { allLegsHaveBooks = false; break; }
 
@@ -187,10 +189,12 @@ namespace PredictionBacktester.Strategies
 
             decimal totalNetCostPerSet = totalCostPerSet + totalFeePerSet;
 
-            // Reject near-settled markets: if total cost is below $0.50 the market is
-            // almost certainly resolved — the winning leg's asks are gone, leaving only
-            // stale $0.03 resting orders on the losing legs.
-            if (totalNetCostPerSet < 0.50m)
+            // Reject near-settled markets: require average price per leg >= $0.10.
+            // A 3-leg event needs $0.30 total, a 7-leg needs $0.70, etc.
+            // Markets with most legs at $0.03-$0.05 are resolved — the winner's asks
+            // are gone and only stale resting orders remain on the losing legs.
+            decimal avgPricePerLeg = totalNetCostPerSet / yesTokenIds.Count;
+            if (avgPricePerLeg < 0.10m)
             {
                 _arbFirstSeenMs.TryRemove(eventId, out _);
                 return;
