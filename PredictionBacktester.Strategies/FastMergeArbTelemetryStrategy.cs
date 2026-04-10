@@ -26,6 +26,12 @@ namespace PredictionBacktester.Strategies
         private readonly double _feeRate;
         private readonly double _feeExponent;
 
+        /// <summary>
+        /// Fired when a new arb window opens. Args: (eventId, netCost, legs, depth).
+        /// Subscribers can use this to trigger a live REST depth verification.
+        /// </summary>
+        public event Action<string, decimal, int, decimal>? OnArbOpened;
+
         // --- NEAR-MISS TRACKING ---
         private record NearMissEntry(decimal BestNetCost, int PricedLegs, int TotalLegs, decimal BottleneckShares);
         private readonly ConcurrentDictionary<string, NearMissEntry> _bestNetCostSeen = new();
@@ -244,6 +250,7 @@ namespace PredictionBacktester.Strategies
                         if (!_books.TryGetValue(t, out var db)) continue;
                         Console.WriteLine($"  leg {t[..Math.Min(20,t.Length)],-20} bestAsk={db.GetBestAskPrice():0.0000}  bestBid={db.GetBestBidPrice():0.0000}");
                     }
+                    OnArbOpened?.Invoke(eventId, totalNetCost, legs, bottleneckShares);
                 }
                 else
                 {

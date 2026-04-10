@@ -76,6 +76,14 @@ public class KalshiOrderClient : IDisposable
     //  Public API methods
     // ──────────────────────────────────────────────────────────────────────────
 
+    /// <summary>Returns the event JSON including nested markets.</summary>
+    public async Task<JsonDocument> GetEventAsync(string eventTicker)
+        => await GetAsync($"/events/{eventTicker}?with_nested_markets=true");
+
+    /// <summary>Returns the order book for a single market ticker.</summary>
+    public async Task<JsonDocument> GetMarketOrderBookAsync(string ticker)
+        => await GetAsync($"/markets/{ticker}/orderbook");
+
     /// <summary>Returns available balance in cents (integer).</summary>
     public async Task<long> GetBalanceCentsAsync()
     {

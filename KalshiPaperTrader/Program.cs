@@ -129,6 +129,121 @@ var telemetry = new FastMergeArbTelemetryStrategy(
     feeExponent:            FEE_EXPONENT
 );
 
+// When a new arb opens, fire a background REST check to verify live depth.
+telemetry.OnArbOpened += (eventId, netCost, legs, wsDepth) =>
+{
+    _ = Task.Run(async () =>
+    {
+        try
+        {
+            await Task.Delay(500); // small delay so WS log prints first
+            Console.WriteLine($"[REST CHECK] Verifying {eventId} via REST...");
+
+            using var evDoc = await orderClient.GetEventAsync(eventId);
+            var evRoot = evDoc.RootElement;
+            if (!evRoot.TryGetProperty("event", out var evEl) ||
+                !evEl.TryGetProperty("markets", out var mktsEl))
+            {
+                Console.WriteLine($"[REST CHECK] {eventId}: could not parse event response");
+                return;
+            }
+
+            var markets = mktsEl.EnumerateArray()
+                .Where(m => string.Equals(
+                    m.TryGetProperty("status", out var s) ? s.GetString() : "",
+                    "active", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            if (markets.Count == 0)
+            {
+                Console.WriteLine($"[REST CHECK] {eventId}: NO ACTIVE MARKETS — already resolved!");
+                return;
+            }
+
+            // Sum YES asks from REST snapshot (no_bid_dollars → implied yes_ask)
+            decimal restYesAskSum = 0m;
+            var legLines = new List<string>();
+            foreach (var mkt in markets)
+            {
+                string ticker = mkt.TryGetProperty("ticker", out var t) ? t.GetString() ?? "" : "";
+
+                // Try known price field names
+                static decimal ParseDollarsField(JsonElement el, params string[] keys)
+                {
+                    foreach (var k in keys)
+                        if (el.TryGetProperty(k, out var v))
+                        {
+                            string? s = v.ValueKind == JsonValueKind.String ? v.GetString() : v.ToString();
+                            if (decimal.TryParse(s, System.Globalization.NumberStyles.Any,
+                                System.Globalization.CultureInfo.InvariantCulture, out decimal d)) return d;
+                        }
+                    return 0m;
+                }
+                decimal yesAsk = ParseDollarsField(mkt, "yes_ask_dollars", "yes_ask_price");
+                decimal noBid  = ParseDollarsField(mkt, "no_bid_dollars",  "no_bid_price");
+                decimal impliedAsk = noBid > 0 ? Math.Round(1m - noBid, 4) : yesAsk;
+
+                if (impliedAsk > 0) restYesAskSum += impliedAsk;
+
+                // Fetch real orderbook depth
+                try
+                {
+                    using var bookDoc = await orderClient.GetMarketOrderBookAsync(ticker);
+                    var book = bookDoc.RootElement.TryGetProperty("orderbook", out var ob) ? ob : bookDoc.RootElement;
+
+                    decimal noDepth  = 0m;
+                    decimal yesDepth = 0m;
+                    decimal bestNoAsk = 0m;
+
+                    if (book.TryGetProperty("no", out var noEl))
+                        foreach (var lvl in noEl.EnumerateArray())
+                        {
+                            var arr = lvl.EnumerateArray().ToArray();
+                            if (arr.Length >= 2)
+                            {
+                                decimal sz = decimal.Parse(arr[1].GetString() ?? "0",
+                                    System.Globalization.CultureInfo.InvariantCulture);
+                                decimal pr = decimal.Parse(arr[0].GetString() ?? "0",
+                                    System.Globalization.CultureInfo.InvariantCulture) / 100m;
+                                noDepth  += sz;
+                                if (pr > bestNoAsk) bestNoAsk = pr;
+                            }
+                        }
+                    if (book.TryGetProperty("yes", out var yesEl2))
+                        foreach (var lvl in yesEl2.EnumerateArray())
+                        {
+                            var arr = lvl.EnumerateArray().ToArray();
+                            if (arr.Length >= 2)
+                                yesDepth += decimal.Parse(arr[1].GetString() ?? "0",
+                                    System.Globalization.CultureInfo.InvariantCulture);
+                        }
+
+                    decimal impliedRestAsk = bestNoAsk > 0 ? Math.Round(1m - bestNoAsk, 4) : impliedAsk;
+                    legLines.Add($"  {ticker[..Math.Min(45, ticker.Length)],-45} REST ask=${impliedRestAsk:0.0000}  noDepth={noDepth:0.0}  yesDepth={yesDepth:0.0}");
+                    await Task.Delay(150); // polite rate limiting
+                }
+                catch (Exception ex)
+                {
+                    legLines.Add($"  {ticker[..Math.Min(45, ticker.Length)],-45} [book fetch failed: {ex.Message}]");
+                }
+            }
+
+            string arbStatus = restYesAskSum > 0 && restYesAskSum < 1.0m
+                ? $"*** REST CONFIRMS ARB *** (sum=${restYesAskSum:0.0000})"
+                : restYesAskSum == 0 ? "book empty / prices unavailable"
+                : $"no arb at REST time (sum=${restYesAskSum:0.0000})";
+
+            Console.WriteLine($"[REST CHECK] {eventId}: {markets.Count} active legs | {arbStatus}");
+            Console.WriteLine($"[REST CHECK] WS avg cost=${netCost:0.0000} | WS depth={wsDepth:0.0}");
+            foreach (var line in legLines) Console.WriteLine(line);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[REST CHECK] {eventId}: error — {ex.Message}");
+        }
+    });
+};
+
 // ── SHUTDOWN + STATUS ─────────────────────────────────────────────────────────
 using var cts = new CancellationTokenSource();
 Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
