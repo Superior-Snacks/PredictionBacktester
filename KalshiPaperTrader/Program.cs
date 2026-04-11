@@ -134,6 +134,9 @@ telemetry.OnArbOpened += (eventId, netCost, legs, wsDepth) =>
 {
     _ = Task.Run(async () =>
     {
+        var openedAt = DateTime.UtcNow;
+        decimal restYesAskSum = -1m;
+        decimal restMinDepth  = -1m;
         try
         {
             await Task.Delay(500); // small delay so WS log prints first
@@ -161,7 +164,8 @@ telemetry.OnArbOpened += (eventId, netCost, legs, wsDepth) =>
             }
 
             // Sum YES asks from REST snapshot (no_bid_dollars → implied yes_ask)
-            decimal restYesAskSum = 0m;
+            restYesAskSum = 0m;
+            restMinDepth  = decimal.MaxValue;
             var legLines = new List<string>();
             foreach (var mkt in markets)
             {
@@ -219,6 +223,7 @@ telemetry.OnArbOpened += (eventId, netCost, legs, wsDepth) =>
                         }
 
                     decimal impliedRestAsk = bestNoAsk > 0 ? Math.Round(1m - bestNoAsk, 4) : impliedAsk;
+                    if (noDepth > 0) restMinDepth = Math.Min(restMinDepth, noDepth);
                     legLines.Add($"  {ticker[..Math.Min(45, ticker.Length)],-45} REST ask=${impliedRestAsk:0.0000}  noDepth={noDepth:0.0}  yesDepth={yesDepth:0.0}");
                     await Task.Delay(150); // polite rate limiting
                 }
@@ -236,10 +241,18 @@ telemetry.OnArbOpened += (eventId, netCost, legs, wsDepth) =>
             Console.WriteLine($"[REST CHECK] {eventId}: {markets.Count} active legs | {arbStatus}");
             Console.WriteLine($"[REST CHECK] WS avg cost=${netCost:0.0000} | WS depth={wsDepth:0.0}");
             foreach (var line in legLines) Console.WriteLine(line);
+
+            // Feed results back into strategy so they appear in the closed-arb CSV row
+            if (restMinDepth == decimal.MaxValue) restMinDepth = 0m;
+            long delayMs = (long)(DateTime.UtcNow - openedAt).TotalMilliseconds;
+            bool confirmed = restYesAskSum > 0 && restYesAskSum < 1.0m;
+            telemetry.UpdateRestVerification(eventId, confirmed, restYesAskSum, restMinDepth, delayMs);
         }
         catch (Exception ex)
         {
             Console.WriteLine($"[REST CHECK] {eventId}: error — {ex.Message}");
+            telemetry.UpdateRestVerification(eventId, false, -1m, -1m,
+                (long)(DateTime.UtcNow - openedAt).TotalMilliseconds);
         }
     });
 };

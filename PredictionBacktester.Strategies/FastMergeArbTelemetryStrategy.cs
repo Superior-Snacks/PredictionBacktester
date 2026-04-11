@@ -53,6 +53,31 @@ namespace PredictionBacktester.Strategies
             public decimal MaxVolumeAtBestSpread { get; set; }
             public int NumLegs { get; set; }
             public string LegPrices { get; set; }
+
+            // REST verification — filled in async after arb opens
+            public bool RestChecked { get; set; } = false;
+            public bool RestConfirmed { get; set; } = false;   // REST also showed sum < $1.00
+            public decimal RestYesAskSum { get; set; } = -1m;  // -1 = not yet checked
+            public decimal RestMinDepth { get; set; } = -1m;   // bottleneck from /orderbook
+            public long RestCheckDelayMs { get; set; } = -1;   // ms after open REST check arrived
+        }
+
+        /// <summary>
+        /// Called from Program.cs after the async REST depth check completes.
+        /// Feeds the verification result back into the live arb record so it
+        /// gets included in the CSV when the arb closes.
+        /// </summary>
+        public void UpdateRestVerification(string eventId, bool confirmed,
+            decimal restYesAskSum, decimal restMinDepth, long checkDelayMs)
+        {
+            if (_activeArbs.TryGetValue(eventId, out var arb))
+            {
+                arb.RestChecked    = true;
+                arb.RestConfirmed  = confirmed;
+                arb.RestYesAskSum  = restYesAskSum;
+                arb.RestMinDepth   = restMinDepth;
+                arb.RestCheckDelayMs = checkDelayMs;
+            }
         }
 
         public FastMergeArbTelemetryStrategy(
@@ -88,7 +113,7 @@ namespace PredictionBacktester.Strategies
                 if (!_csvInitialized)
                 {
                     // Updated CSV Headers with all new quantitative fields
-                    File.WriteAllText(_csvFilePath, "StartTime,EndTime,DurationMs,EventId,NumLegs,LegPrices,EntryNetCost,BestGrossCost,TotalFees,BestNetCost,NetProfitPerShare,MaxVolume,TotalCapitalRequired,TotalPotentialProfit\n");
+                    File.WriteAllText(_csvFilePath, "StartTime,EndTime,DurationMs,EventId,NumLegs,LegPrices,EntryNetCost,BestGrossCost,TotalFees,BestNetCost,NetProfitPerShare,MaxVolume,TotalCapitalRequired,TotalPotentialProfit,RestChecked,RestConfirmed,RestYesAskSum,RestMinDepth,RestCheckDelayMs\n");
                     _ = Task.Run(ProcessCsvQueueAsync);
                     _csvInitialized = true;
                 }
@@ -303,7 +328,10 @@ namespace PredictionBacktester.Strategies
             Console.WriteLine($"   └ Capital Req: ${capitalRequired:0.00} -> Net Profit: ${totalPotentialProfit:0.00} (Vol: {arbData.MaxVolumeAtBestSpread})");
 
             // Format the CSV row securely (quoting strings with commas or pipes)
-            string csvRow = $"{startStr},{endStr},{duration.TotalMilliseconds:0},\"{eventId}\",{arbData.NumLegs},\"{arbData.LegPrices}\",{arbData.EntryNetCost:0.0000},{arbData.BestGrossCost:0.0000},{bestFees:0.0000},{arbData.BestNetCost:0.0000},{netProfitPerShare:0.0000},{arbData.MaxVolumeAtBestSpread:0.00},{capitalRequired:0.00},{totalPotentialProfit:0.00}";
+            string restSum   = arbData.RestYesAskSum  >= 0 ? arbData.RestYesAskSum.ToString("0.0000") : "N/A";
+            string restDepth = arbData.RestMinDepth   >= 0 ? arbData.RestMinDepth.ToString("0.0")    : "N/A";
+            string restDelay = arbData.RestCheckDelayMs >= 0 ? arbData.RestCheckDelayMs.ToString()   : "N/A";
+            string csvRow = $"{startStr},{endStr},{duration.TotalMilliseconds:0},\"{eventId}\",{arbData.NumLegs},\"{arbData.LegPrices}\",{arbData.EntryNetCost:0.0000},{arbData.BestGrossCost:0.0000},{bestFees:0.0000},{arbData.BestNetCost:0.0000},{netProfitPerShare:0.0000},{arbData.MaxVolumeAtBestSpread:0.00},{capitalRequired:0.00},{totalPotentialProfit:0.00},{arbData.RestChecked},{arbData.RestConfirmed},{restSum},{restDepth},{restDelay}";
             
             // Toss it into the background queue (Instant execution, zero CPU lag)
             _csvQueue.Writer.TryWrite(csvRow);
