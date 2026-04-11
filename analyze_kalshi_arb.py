@@ -32,7 +32,7 @@ DEFAULT_CAPTURE_RATE    = 0.60  # realistic fill rate
 
 PRICE_SUM_LOW_THRESHOLD  = 0.70   # below this = likely NOT mutually exclusive
 PRICE_SUM_HIGH_THRESHOLD = 1.20   # above this = likely missing legs
-REPEAT_SPAM_THRESHOLD    = 10     # >N windows for same event = spam
+REPEAT_SPAM_THRESHOLD    = 100    # >N windows for same event = spam (100 = ~1 window/5min over 9h)
 THIN_DEPTH_THRESHOLD     = 2.0    # below this = 1-contract resting order noise
 
 # ─── CSV DISCOVERY ────────────────────────────────────────────────────────────
@@ -47,6 +47,23 @@ def find_latest_csv():
     return max(candidates, key=os.path.getctime)
 
 # ─── DATA LOADING ─────────────────────────────────────────────────────────────
+
+def _try_float(r, key, default=None):
+    v = r.get(key, "").strip()
+    if v in ("", "N/A", "n/a"):
+        return default
+    try:
+        return float(v)
+    except ValueError:
+        return default
+
+def _try_bool(r, key, default=None):
+    v = r.get(key, "").strip().lower()
+    if v in ("true", "1"):
+        return True
+    if v in ("false", "0"):
+        return False
+    return default
 
 def load_csv(path):
     rows = []
@@ -72,6 +89,12 @@ def load_csv(path):
                     "max_volume":          float(r["MaxVolume"]),
                     "total_capital_req":   float(r["TotalCapitalRequired"]),
                     "total_potential":     float(r["TotalPotentialProfit"]),
+                    # REST verification columns (None if not in file / not yet checked)
+                    "rest_checked":        _try_bool(r,  "RestChecked"),
+                    "rest_confirmed":      _try_bool(r,  "RestConfirmed"),
+                    "rest_yes_ask_sum":    _try_float(r, "RestYesAskSum"),
+                    "rest_min_depth":      _try_float(r, "RestMinDepth"),
+                    "rest_delay_ms":       _try_float(r, "RestCheckDelayMs"),
                 })
             except (KeyError, ValueError):
                 continue
@@ -79,7 +102,7 @@ def load_csv(path):
 
 # ─── FRAUD FLAGS ──────────────────────────────────────────────────────────────
 
-def compute_flags(rows):
+def compute_flags(rows, spam_threshold=REPEAT_SPAM_THRESHOLD):
     # First pass: per-row flags
     event_counts = defaultdict(int)
     for r in rows:
@@ -101,7 +124,7 @@ def compute_flags(rows):
             flags.append("THIN_DEPTH")
         if r["best_net_cost"] > 1.00:
             flags.append("COST_EXCEEDS_1")
-        if event_counts[r["event"]] > REPEAT_SPAM_THRESHOLD:
+        if event_counts[r["event"]] > spam_threshold:
             flags.append("REPEAT_SPAM")
         r["flags"] = flags
 
@@ -130,7 +153,7 @@ def print_session_summary(rows, path):
 
 # ─── SECTION 2: FRAUD / SANITY CHECKS ────────────────────────────────────────
 
-def print_fraud_checks(rows):
+def print_fraud_checks(rows, spam_threshold=REPEAT_SPAM_THRESHOLD):
     print("=" * 80)
     print("  FRAUD / SANITY CHECKS")
     print("=" * 80)
@@ -152,7 +175,7 @@ def print_fraud_checks(rows):
         "INSTANT_OPEN_CLOSE":   "Duration < 10ms — single-tick glitch",
         "IMPLAUSIBLE_DURATION": "Duration > 1 hour — likely stale book across reconnect",
         "THIN_DEPTH":           f"MaxVolume < {THIN_DEPTH_THRESHOLD} — resting 1-contract order noise",
-        "REPEAT_SPAM":          f"Same EventId appears > {REPEAT_SPAM_THRESHOLD}x — cycling open/close",
+        "REPEAT_SPAM":          f"Same EventId appears > {spam_threshold}x — cycling open/close",
         "COST_EXCEEDS_1":       "BestNetCost > $1.00 — should have been filtered by strategy",
     }
 
@@ -413,6 +436,106 @@ def print_realistic_pnl(rows, min_duration_ms, latency_ms, capital_per_arb, capt
     print("  A US server would expose all windows >= ~50ms (vs ~500ms now).")
     print()
 
+# ─── SECTION 8: REST VERIFICATION ANALYSIS ───────────────────────────────────
+
+def print_rest_verification(rows):
+    print("=" * 80)
+    print("  REST VERIFICATION ANALYSIS")
+    print("=" * 80)
+
+    # Only rows where REST check was attempted
+    checked = [r for r in rows if r.get("rest_checked") is True]
+    not_checked = [r for r in rows if r.get("rest_checked") is False]
+    no_data     = [r for r in rows if r.get("rest_checked") is None]
+
+    total = len(rows)
+    print(f"  Total arb windows:          {total}")
+    print(f"  REST-checked:               {len(checked)}  ({len(checked)/total*100:.1f}%)")
+    print(f"  REST not triggered:         {len(not_checked)}  ({len(not_checked)/total*100:.1f}%)")
+    if no_data:
+        print(f"  No REST column in CSV:      {len(no_data)}  (older CSV, run bot again)")
+    print()
+
+    if not checked:
+        print("  No REST-checked windows to analyze.")
+        print("  (REST verification fires when a new arb OPENS — if the arb was already open")
+        print("   from a previous window, it may not fire again.)")
+        print()
+        return
+
+    confirmed   = [r for r in checked if r.get("rest_confirmed") is True]
+    unconfirmed = [r for r in checked if r.get("rest_confirmed") is False]
+    print(f"  REST-confirmed (sum < $1.00): {len(confirmed)}  ({len(confirmed)/len(checked)*100:.1f}% of checked)")
+    print(f"  REST-unconfirmed:             {len(unconfirmed)}  ({len(unconfirmed)/len(checked)*100:.1f}% of checked)")
+    print()
+
+    # WS vs REST cost comparison for confirmed arbs
+    if confirmed:
+        deltas = []
+        for r in confirmed:
+            if r["rest_yes_ask_sum"] is not None and r["rest_yes_ask_sum"] >= 0:
+                deltas.append(abs(r["rest_yes_ask_sum"] - r["best_net_cost"]))
+
+        if deltas:
+            avg_delta = sum(deltas) / len(deltas)
+            max_delta = max(deltas)
+            close = sum(1 for d in deltas if d < 0.05)
+            print(f"  WS vs REST cost delta (confirmed arbs):")
+            print(f"    Avg delta:   ${avg_delta:.4f}")
+            print(f"    Max delta:   ${max_delta:.4f}")
+            print(f"    Close match (< $0.05):  {close} / {len(deltas)}  ({close/len(deltas)*100:.1f}%)")
+            print()
+
+    # REST check delay distribution
+    delays = [r["rest_delay_ms"] for r in checked if r.get("rest_delay_ms") is not None and r["rest_delay_ms"] >= 0]
+    if delays:
+        delays.sort()
+        median_d = delays[len(delays) // 2]
+        p90_d    = delays[int(len(delays) * 0.90)]
+        max_d    = delays[-1]
+        print(f"  REST check delay (ms from arb open to verification):")
+        print(f"    Median: {median_d:.0f}ms   p90: {p90_d:.0f}ms   Max: {max_d:.0f}ms")
+
+        buckets = [
+            ("< 200ms",     0,      200),
+            ("200-500ms",   200,    500),
+            ("500ms-1s",    500,    1000),
+            ("1s-3s",       1000,   3000),
+            ("> 3s",        3000,   float("inf")),
+        ]
+        print(f"  {'Delay bucket':<16} {'Count':>6}  {'%':>6}")
+        for label, lo, hi in buckets:
+            cnt = sum(1 for d in delays if lo <= d < hi)
+            pct = cnt / len(delays) * 100
+            print(f"  {label:<16} {cnt:>6}  {pct:>5.1f}%")
+    print()
+
+    # Per-event REST confirmation breakdown
+    by_event = defaultdict(list)
+    for r in checked:
+        by_event[r["event"]].append(r)
+
+    if by_event:
+        print(f"  Per-event REST results (events with >= 1 checked window):")
+        print(f"  {'EventId':<42} {'Chk':>4} {'Conf':>4} {'AvgWSCost':>10} {'AvgRESTSum':>11} {'AvgDelay':>9}")
+        print(f"  {'-'*42} {'-'*4} {'-'*4} {'-'*10} {'-'*11} {'-'*9}")
+        rows_by_pot = sorted(by_event.items(),
+                             key=lambda x: sum(r["total_potential"] for r in x[1]), reverse=True)
+        for event, evrows in rows_by_pot[:20]:
+            conf_count = sum(1 for r in evrows if r.get("rest_confirmed") is True)
+            rest_sums  = [r["rest_yes_ask_sum"] for r in evrows
+                          if r["rest_yes_ask_sum"] is not None and r["rest_yes_ask_sum"] >= 0]
+            delays_ev  = [r["rest_delay_ms"] for r in evrows
+                          if r.get("rest_delay_ms") is not None and r["rest_delay_ms"] >= 0]
+            avg_ws   = sum(r["best_net_cost"] for r in evrows) / len(evrows)
+            avg_rest = sum(rest_sums) / len(rest_sums) if rest_sums else -1
+            avg_dly  = sum(delays_ev) / len(delays_ev) if delays_ev else -1
+            rest_str = f"${avg_rest:.4f}" if avg_rest >= 0 else "  N/A  "
+            dly_str  = f"{avg_dly:.0f}ms" if avg_dly >= 0 else "  N/A"
+            print(f"  {event:<42} {len(evrows):>4} {conf_count:>4} ${avg_ws:>8.4f} {rest_str:>11} {dly_str:>9}")
+    print()
+
+
 # ─── MAIN ─────────────────────────────────────────────────────────────────────
 
 def main():
@@ -420,6 +543,8 @@ def main():
     parser.add_argument("--file", default=None, help="Path to CSV (auto-discovers if omitted)")
     parser.add_argument("--min-duration", type=int, default=DEFAULT_MIN_DURATION_MS,
                         help=f"Min ms to count as capturable (default {DEFAULT_MIN_DURATION_MS})")
+    parser.add_argument("--spam-threshold", type=int, default=REPEAT_SPAM_THRESHOLD,
+                        help=f"Windows per event above which REPEAT_SPAM fires (default {REPEAT_SPAM_THRESHOLD})")
     parser.add_argument("--exclude", default="", help="Comma-separated EventIds to exclude")
     parser.add_argument("--clean", action="store_true", help="Only analyze rows with no fraud flags")
     args = parser.parse_args()
@@ -441,7 +566,7 @@ def main():
         print(f"Excluded {len(excluded)} event(s): {', '.join(excluded)}\n")
 
     # Compute flags on full dataset first (REPEAT_SPAM needs full counts)
-    compute_flags(rows)
+    compute_flags(rows, spam_threshold=args.spam_threshold)
 
     # Apply --clean filter after flagging
     analysis_rows = [r for r in rows if not r["flags"]] if args.clean else rows
@@ -449,12 +574,13 @@ def main():
         print(f"[--clean] Analyzing {len(analysis_rows)} / {len(rows)} rows (no fraud flags)\n")
 
     print_session_summary(analysis_rows, path)
-    print_fraud_checks(rows)  # always show fraud report on full dataset
+    print_fraud_checks(rows, spam_threshold=args.spam_threshold)  # always show fraud report on full dataset
     print_duration_analysis(analysis_rows, args.min_duration)
     print_profit_analysis(analysis_rows, args.min_duration, DEFAULT_CAPITAL_PER_ARB, DEFAULT_CAPTURE_RATE)
     print_per_event_breakdown(analysis_rows)
     print_spread_detection(rows)  # always on full dataset
     print_realistic_pnl(rows, args.min_duration, DEFAULT_LATENCY_MS, DEFAULT_CAPITAL_PER_ARB, DEFAULT_CAPTURE_RATE)
+    print_rest_verification(rows)  # always on full dataset (REST fields may be None for old CSVs)
 
 if __name__ == "__main__":
     main()
