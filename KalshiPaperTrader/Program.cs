@@ -73,11 +73,14 @@ Console.WriteLine($"[SCANNER] Categorical: {catCount} events | Binary: {binCount
 var allEvents = new Dictionary<string, List<string>>(scan.CategoricalEvents);
 
 // Real tickers to subscribe to (strip _NO virtual IDs — they share a WS stream)
-var realTickers = allEvents.Values
-    .SelectMany(v => v)
-    .Where(t => !t.EndsWith("_NO", StringComparison.Ordinal))
-    .Distinct()
-    .ToList();
+// ConcurrentDictionary<string,byte> used as a thread-safe set so the rescan task
+// can add new tickers without racing with the WS receive loop.
+var subscribedTickers = new ConcurrentDictionary<string, byte>(
+    allEvents.Values
+        .SelectMany(v => v)
+        .Where(t => !t.EndsWith("_NO", StringComparison.Ordinal))
+        .Select(t => new KeyValuePair<string, byte>(t, 0)));
+var realTickers = subscribedTickers.Keys.ToList();
 
 Console.WriteLine($"[SCANNER] {allEvents.Count} total arb events | {realTickers.Count} WS subscriptions");
 
@@ -129,6 +132,10 @@ var telemetry = new FastMergeArbTelemetryStrategy(
     feeExponent:            FEE_EXPONENT
 );
 
+// Outbound WS messages queued by background tasks (rescan subscriptions).
+// Drained by the WS receive loop after each inbound message.
+var wsSendQueue = new ConcurrentQueue<string>();
+
 // When a new arb opens, fire a background REST check to verify live depth.
 telemetry.OnArbOpened += (eventId, netCost, legs, wsDepth) =>
 {
@@ -163,6 +170,11 @@ telemetry.OnArbOpened += (eventId, netCost, legs, wsDepth) =>
                 return;
             }
 
+            // Partial-leg detection: if REST sees more active markets than we subscribed
+            // to for this event, we are only tracking a subset of legs. The "arb" is
+            // because the unmonitored legs are not priced into our sum — it's NOT real.
+            bool partialLegs = markets.Count > legs + 1;
+
             // Sum YES asks from REST snapshot (no_bid_dollars → implied yes_ask)
             restYesAskSum = 0m;
             restMinDepth  = decimal.MaxValue;
@@ -185,9 +197,9 @@ telemetry.OnArbOpened += (eventId, netCost, legs, wsDepth) =>
                 }
                 decimal yesAsk = ParseDollarsField(mkt, "yes_ask_dollars", "yes_ask_price");
                 decimal noBid  = ParseDollarsField(mkt, "no_bid_dollars",  "no_bid_price");
-                decimal impliedAsk = noBid > 0 ? Math.Round(1m - noBid, 4) : yesAsk;
+                decimal impliedAsk = noBid > 0.01m ? Math.Round(1m - noBid, 4) : yesAsk;
 
-                if (impliedAsk > 0) restYesAskSum += impliedAsk;
+                if (impliedAsk > 0.01m && impliedAsk < 1.0m) restYesAskSum += impliedAsk;
 
                 // Fetch real orderbook depth
                 try
@@ -233,19 +245,26 @@ telemetry.OnArbOpened += (eventId, netCost, legs, wsDepth) =>
                 }
             }
 
-            string arbStatus = restYesAskSum > 0 && restYesAskSum < 1.0m
-                ? $"*** REST CONFIRMS ARB *** (sum=${restYesAskSum:0.0000})"
-                : restYesAskSum == 0 ? "book empty / prices unavailable"
-                : $"no arb at REST time (sum=${restYesAskSum:0.0000})";
+            bool confirmed = !partialLegs && restYesAskSum > 0 && restYesAskSum < 1.0m;
+            string arbStatus = partialLegs
+                ? $"*** PARTIAL LEGS *** REST={markets.Count} active, WS={legs} subscribed — unregistering"
+                : confirmed
+                    ? $"*** REST CONFIRMS ARB *** (sum=${restYesAskSum:0.0000})"
+                    : restYesAskSum == 0 ? "book empty / prices unavailable"
+                    : $"no arb at REST time (sum=${restYesAskSum:0.0000})";
 
-            Console.WriteLine($"[REST CHECK] {eventId}: {markets.Count} active legs | {arbStatus}");
+            Console.WriteLine($"[REST CHECK] {eventId}: {markets.Count} REST legs / {legs} WS legs | {arbStatus}");
             Console.WriteLine($"[REST CHECK] WS avg cost=${netCost:0.0000} | WS depth={wsDepth:0.0}");
             foreach (var line in legLines) Console.WriteLine(line);
+
+            // Partial-leg events produce structurally invalid arbs — remove immediately
+            // so they never fire again for the rest of this session.
+            if (partialLegs)
+                telemetry.UnregisterEvent(eventId);
 
             // Feed results back into strategy so they appear in the closed-arb CSV row
             if (restMinDepth == decimal.MaxValue) restMinDepth = 0m;
             long delayMs = (long)(DateTime.UtcNow - openedAt).TotalMilliseconds;
-            bool confirmed = restYesAskSum > 0 && restYesAskSum < 1.0m;
             telemetry.UpdateRestVerification(eventId, confirmed, restYesAskSum, restMinDepth, delayMs);
         }
         catch (Exception ex)
@@ -261,6 +280,7 @@ telemetry.OnArbOpened += (eventId, netCost, legs, wsDepth) =>
 using var cts = new CancellationTokenSource();
 Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
 
+// Status ticker
 _ = Task.Run(async () =>
 {
     while (!cts.Token.IsCancellationRequested)
@@ -272,6 +292,108 @@ _ = Task.Run(async () =>
             Console.WriteLine($"\n[STATUS] Cash: ${broker.CashBalance:0.00} | " +
                               $"P&L: ${strategy.TotalRealizedPnL:0.00} | " +
                               $"Sell-backs: {strategy.CompletedSellBacks}");
+        }
+    }
+});
+
+// ── PERIODIC RESCAN ───────────────────────────────────────────────────────────
+// Every 15 minutes: re-fetch all open events and reconcile against our current
+// subscription set.
+//
+//  • New events / new legs  → create books, queue WS subscription, register
+//  • Events that disappeared or gained too many legs → unregister from strategy
+//
+// This handles two cases:
+//   1. Kalshi activates new markets for an existing event after session start
+//      (e.g. player-specific HR markets that go live when a game starts).
+//   2. Entirely new events that become scannable mid-session.
+_ = Task.Run(async () =>
+{
+    const int RESCAN_INTERVAL_MS = 15 * 60 * 1000;
+    int subMsgId = 10_000; // avoid colliding with startup msg IDs
+
+    while (!cts.Token.IsCancellationRequested)
+    {
+        await Task.Delay(RESCAN_INTERVAL_MS, cts.Token).ContinueWith(_ => { });
+        if (cts.Token.IsCancellationRequested) break;
+
+        try
+        {
+            Console.WriteLine("\n[RESCAN] Re-fetching open events...");
+            var newScan = await scanner.ScanAllAsync();
+
+            // ── Leg additions / event removal ─────────────────────────────
+            // For every event we currently track, check whether the new scan
+            // still includes it.  If it was dropped (gained too many legs,
+            // became partially resolved, or closed) — unregister it.
+            var currentEventIds = allEvents.Keys.ToList();
+            foreach (var eventId in currentEventIds)
+            {
+                if (!newScan.CategoricalEvents.ContainsKey(eventId))
+                {
+                    Console.WriteLine($"[RESCAN] Event no longer valid — unregistering: {eventId}");
+                    telemetry.UnregisterEvent(eventId);
+                    allEvents.Remove(eventId);
+                }
+            }
+
+            // ── New events ────────────────────────────────────────────────
+            int newEventCount = 0;
+            int newTickerCount = 0;
+            foreach (var (eventId, legs) in newScan.CategoricalEvents)
+            {
+                if (allEvents.ContainsKey(eventId)) continue; // already tracked
+
+                // Create order books for any legs we haven't seen before
+                var newLegs = new List<string>();
+                foreach (var ticker in legs)
+                {
+                    // Register both YES book and _NO virtual book
+                    foreach (var bookId in new[] { ticker, ticker + "_NO" })
+                        orderBooks.TryAdd(bookId, new LocalOrderBook(bookId));
+
+                    // Add to size maps if it's a real ticker
+                    if (!ticker.EndsWith("_NO", StringComparison.Ordinal))
+                    {
+                        yesSizes.TryAdd(ticker, new Dictionary<decimal, decimal>());
+                        noSizes.TryAdd(ticker,  new Dictionary<decimal, decimal>());
+
+                        // Queue a WS subscription if we haven't already subscribed
+                        if (subscribedTickers.TryAdd(ticker, 0))
+                        {
+                            newLegs.Add(ticker);
+                            newTickerCount++;
+                        }
+                    }
+                }
+
+                allEvents[eventId] = legs;
+                telemetry.RegisterEvent(eventId, legs);
+                newEventCount++;
+
+                // Subscribe new tickers in batches of 100
+                for (int i = 0; i < newLegs.Count; i += SUBSCRIBE_BATCH_SIZE)
+                {
+                    var batch = newLegs.Skip(i).Take(SUBSCRIBE_BATCH_SIZE).ToList();
+                    string tickerArray = string.Join(",", batch.Select(t => $"\"{t}\""));
+                    string subMsg = $"{{\"id\":{subMsgId++},\"cmd\":\"subscribe\",\"params\":{{\"channels\":[\"orderbook_delta\"],\"market_tickers\":[{tickerArray}]}}}}";
+                    wsSendQueue.Enqueue(subMsg);
+                }
+
+                // Update display names
+                foreach (var (k, v) in newScan.TokenNames)
+                    scan.TokenNames.TryAdd(k, v);
+            }
+
+            if (newEventCount > 0 || currentEventIds.Count != allEvents.Count)
+                Console.WriteLine($"[RESCAN] +{newEventCount} new events, +{newTickerCount} new tickers | " +
+                                  $"Total: {allEvents.Count} events");
+            else
+                Console.WriteLine($"[RESCAN] No changes. {allEvents.Count} events active.");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[RESCAN ERROR] {ex.Message}");
         }
     }
 });
@@ -342,6 +464,14 @@ while (!cts.Token.IsCancellationRequested)
             if (message is "heartbeat" or "PONG" or "pong") continue;
 
             ProcessMessage(message, orderBooks, yesSizes, noSizes, strategy, broker, telemetry, telemetryBroker);
+
+            // Drain any outbound messages queued by background tasks (new subscriptions).
+            // WS send is safe here because we are the only sender and we're between receives.
+            while (wsSendQueue.TryDequeue(out var outMsg))
+            {
+                try { await ws.SendAsync(Encoding.UTF8.GetBytes(outMsg), WebSocketMessageType.Text, true, cts.Token); }
+                catch { /* reconnect will resubscribe everything */ }
+            }
         }
 
         reconnect:;

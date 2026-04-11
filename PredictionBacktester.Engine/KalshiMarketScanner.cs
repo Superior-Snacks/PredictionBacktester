@@ -83,6 +83,8 @@ public class KalshiMarketScanner
 
             var activeYesTickers  = new List<string>(); // legs for categorical
             decimal catMaxVol24h  = 0m;                 // highest leg volume — event is live if any leg traded
+            decimal catRestAskSum = 0m;                 // sum of REST yes_ask prices across all active legs
+            int     catPricedLegs = 0;                  // legs with a non-zero REST ask price
             int totalMarketsInEvent = 0;
             var skippedStatuses = new List<string>();
 
@@ -123,13 +125,27 @@ public class KalshiMarketScanner
                 decimal vol24h = ParseFp(mkt, "volume_24h_fp");
                 catMaxVol24h = Math.Max(catMaxVol24h, vol24h);
 
+                // Accumulate REST ask prices for mutual-exclusivity check.
+                // For a true categorical market exactly one leg resolves YES,
+                // so sum of YES asks ≈ $1.00. Independent markets (e.g. "will
+                // player X hit a HR?") where multiple legs can resolve YES
+                // simultaneously will have sum >> $1.00.
+                // Use NO bid as the more reliable implied ask when available.
+                decimal yesAsk = ParseDollars(mkt, "yes_ask_dollars");
+                decimal noBid  = ParseDollars(mkt, "no_bid_dollars");
+                decimal impliedAsk = noBid > 0.01m ? Math.Round(1m - noBid, 4) : yesAsk;
+                if (impliedAsk > 0.01m && impliedAsk < 1.0m)
+                {
+                    catRestAskSum += impliedAsk;
+                    catPricedLegs++;
+                }
+
                 // ── BINARY ARB candidate check ──────────────────────────────
                 // Pre-screen using the snapshot ask prices from the REST response.
                 // This is a hint only — WebSocket books are the ground truth.
                 if (vol24h >= _minVolume24h)
                 {
-                    decimal yesAsk = ParseDollars(mkt, "yes_ask_dollars");
-                    decimal noAsk  = ParseDollars(mkt, "no_ask_dollars");
+                    decimal noAsk = ParseDollars(mkt, "no_ask_dollars");
 
                     // Include if:
                     //   a) Sum is already < $0.995 (immediate arb candidate), OR
@@ -158,7 +174,18 @@ public class KalshiMarketScanner
                 string.Equals(s, "finalized", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(s, "inactive", StringComparison.OrdinalIgnoreCase));
 
-            if (activeYesTickers.Count >= 3 && catMaxVol24h >= _minVolume24h && !hasPartiallyResolved)
+            // Mutual-exclusivity guard: for a true categorical market the sum of
+            // YES asks across all legs must sit near $1.00. Skip events where:
+            //   • sum > 1.50 → multiple legs can resolve YES simultaneously
+            //                  (e.g. "will player X hit a HR?" — independent bets)
+            //   • sum < 0.40 → prices are all tiny (event far out or not liquid)
+            // Only apply the guard when we have prices for most legs.
+            bool pricesAvailable = catPricedLegs >= activeYesTickers.Count - 1 && catPricedLegs >= 2;
+            bool sumIsReasonable = !pricesAvailable
+                || (catRestAskSum >= 0.40m && catRestAskSum <= 1.50m);
+
+            if (activeYesTickers.Count >= 3 && catMaxVol24h >= _minVolume24h
+                && !hasPartiallyResolved && sumIsReasonable)
             {
                 categorical[eventTicker] = activeYesTickers;
                 catEligible++;

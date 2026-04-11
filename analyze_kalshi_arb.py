@@ -21,8 +21,10 @@ import csv
 import sys
 import glob
 import os
+import re
 import argparse
 from collections import defaultdict
+from datetime import datetime, timedelta
 
 # ─── CONFIG ───────────────────────────────────────────────────────────────────
 DEFAULT_MIN_DURATION_MS = 500
@@ -45,6 +47,70 @@ def find_latest_csv():
     if not candidates:
         return None
     return max(candidates, key=os.path.getctime)
+
+# ─── SESSION DURATION ─────────────────────────────────────────────────────────
+
+def _hms_to_secs(s):
+    """'HH:MM:SS.fff' → float seconds since midnight."""
+    try:
+        parts = s.replace('.', ':').split(':')
+        h, m, sec = int(parts[0]), int(parts[1]), int(parts[2])
+        ms = int(parts[3]) if len(parts) > 3 else 0
+        return h * 3600 + m * 60 + sec + ms / 1000.0
+    except (ValueError, IndexError):
+        return None
+
+def compute_session_hours(rows, path):
+    """
+    Total elapsed wall-clock time of the session in hours.
+
+    Rows are written in close-time order so start timestamps are NOT monotonic
+    and cannot be used to count midnight crossings reliably.  Anchor on the
+    session-start datetime encoded in the filename and advance the last end-time
+    by whole days until it is past the first row's start time.
+
+    For sessions < 24 h this is exact.  For multi-day sessions it is correct
+    as long as the end time is unambiguous within the expected day-count.
+    Returns 0.0 if timestamps cannot be parsed.
+    """
+    if len(rows) < 2:
+        return 0.0
+
+    t_start = _hms_to_secs(rows[0]["start"])
+    t_end   = _hms_to_secs(rows[-1]["end"])
+    if t_start is None or t_end is None:
+        return 0.0
+
+    # Anchor on the session-start date from the filename when available.
+    m = re.search(r'ArbTelemetry_(\d{8})_(\d{6})', os.path.basename(path))
+    if m:
+        session_start_dt = datetime.strptime(m.group(1) + m.group(2), '%Y%m%d%H%M%S')
+        base = session_start_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+
+        dt_start = base + timedelta(seconds=t_start)
+        dt_end   = base + timedelta(seconds=t_end)
+
+        # Advance dt_end by whole days until it is strictly after dt_start.
+        # Cap at 30 days to guard against malformed data.
+        for _ in range(30):
+            if dt_end > dt_start:
+                break
+            dt_end += timedelta(days=1)
+
+        secs = (dt_end - dt_start).total_seconds()
+    else:
+        # No filename date — assume the session fits within 24 h.
+        secs = t_end - t_start
+        if secs <= 0:
+            secs += 86400   # crossed one midnight
+
+    return max(secs / 3600.0, 1 / 3600.0)  # floor at 1 s to avoid div/0
+
+def _per_hr(amount, hours):
+    """Format 'amount' with a trailing '/hr' annotation."""
+    if hours <= 0:
+        return f"${amount:.4f}"
+    return f"${amount:.4f}  (${amount/hours:.2f}/hr over {hours:.1f}h)"
 
 # ─── DATA LOADING ─────────────────────────────────────────────────────────────
 
@@ -126,11 +192,18 @@ def compute_flags(rows, spam_threshold=REPEAT_SPAM_THRESHOLD):
             flags.append("COST_EXCEEDS_1")
         if event_counts[r["event"]] > spam_threshold:
             flags.append("REPEAT_SPAM")
+        # PARTIAL_LEGS_REST: REST check fetched more active markets than we subscribed to,
+        # meaning our WS "arb" is only a subset of the full event's legs. The event is
+        # NOT a true categorical — buying our tracked legs does not guarantee a $1 payout.
+        if (r.get("rest_checked") is True
+                and r.get("rest_yes_ask_sum") is not None
+                and r["rest_yes_ask_sum"] > 1.50):
+            flags.append("PARTIAL_LEGS_REST")
         r["flags"] = flags
 
 # ─── SECTION 1: SESSION SUMMARY ───────────────────────────────────────────────
 
-def print_session_summary(rows, path):
+def print_session_summary(rows, path, session_hours):
     print("=" * 80)
     print("  KALSHI ARB TELEMETRY ANALYSIS")
     print("=" * 80)
@@ -147,8 +220,8 @@ def print_session_summary(rows, path):
     ends   = [r["end"]   for r in rows]
     print(f"  Events   : {unique_events} unique")
     print(f"  Avg legs : {avg_legs:.1f}")
-    print(f"  Time span: {starts[0]} — {ends[-1]}")
-    print(f"  Total potential profit (all windows): ${total_potential:.2f}")
+    print(f"  Duration : {session_hours:.1f}h  ({starts[0]} — {ends[-1]})")
+    print(f"  Total potential profit (all windows): {_per_hr(total_potential, session_hours)}")
     print()
 
 # ─── SECTION 2: FRAUD / SANITY CHECKS ────────────────────────────────────────
@@ -166,6 +239,7 @@ def print_fraud_checks(rows, spam_threshold=REPEAT_SPAM_THRESHOLD):
         "PRICE_SUM_LOW", "PRICE_SUM_HIGH", "ZERO_PROFIT",
         "INSTANT_OPEN_CLOSE", "IMPLAUSIBLE_DURATION",
         "THIN_DEPTH", "REPEAT_SPAM", "COST_EXCEEDS_1",
+        "PARTIAL_LEGS_REST",
     ]
 
     flag_descriptions = {
@@ -177,6 +251,7 @@ def print_fraud_checks(rows, spam_threshold=REPEAT_SPAM_THRESHOLD):
         "THIN_DEPTH":           f"MaxVolume < {THIN_DEPTH_THRESHOLD} — resting 1-contract order noise",
         "REPEAT_SPAM":          f"Same EventId appears > {spam_threshold}x — cycling open/close",
         "COST_EXCEEDS_1":       "BestNetCost > $1.00 — should have been filtered by strategy",
+        "PARTIAL_LEGS_REST":    "REST confirmed > 1.50 YES-ask sum — WS only tracked a subset of legs (not true categorical)",
     }
 
     total = len(rows)
@@ -259,7 +334,7 @@ def print_duration_analysis(rows, min_duration_ms):
 
 # ─── SECTION 4: PROFIT ANALYSIS ───────────────────────────────────────────────
 
-def print_profit_analysis(rows, min_duration_ms, capital_per_arb, capture_rate):
+def print_profit_analysis(rows, min_duration_ms, capital_per_arb, capture_rate, session_hours):
     print("=" * 80)
     print("  PROFIT ANALYSIS")
     print("=" * 80)
@@ -270,6 +345,7 @@ def print_profit_analysis(rows, min_duration_ms, capital_per_arb, capture_rate):
 
     total_potential = sum(r["total_potential"] for r in rows)
     capturable_rows = [r for r in rows if r["duration_ms"] >= min_duration_ms]
+    cap_potential   = sum(r["total_potential"] for r in capturable_rows)
 
     # Realistic profit: capped capital, capture rate applied
     realistic_profit = 0.0
@@ -284,9 +360,9 @@ def print_profit_analysis(rows, min_duration_ms, capital_per_arb, capture_rate):
     avg_profit_per_share  = sum(r["net_profit_per_share"] for r in rows) / len(rows) if rows else 0
     best_window = max(rows, key=lambda r: r["total_potential"])
 
-    print(f"  Total potential profit (ALL windows):         ${total_potential:.4f}")
-    print(f"  Total potential profit (capturable windows):  ${sum(r['total_potential'] for r in capturable_rows):.4f}")
-    print(f"  Realistic profit (capped ${capital_per_arb:.0f}, {capture_rate*100:.0f}% capture): ${realistic_profit:.4f}")
+    print(f"  Total potential profit (ALL windows):        {_per_hr(total_potential, session_hours)}")
+    print(f"  Total potential profit (capturable windows): {_per_hr(cap_potential,   session_hours)}")
+    print(f"  Realistic (capped ${capital_per_arb:.0f}, {capture_rate*100:.0f}% capture):       {_per_hr(realistic_profit, session_hours)}")
     print()
     print(f"  Avg profit / window:  ${avg_profit_per_window:.4f}")
     print(f"  Avg profit / share:   ${avg_profit_per_share:.4f}")
@@ -390,7 +466,7 @@ def print_spread_detection(rows):
 
 # ─── SECTION 7: REALISTIC PNL ESTIMATE ───────────────────────────────────────
 
-def print_realistic_pnl(rows, min_duration_ms, latency_ms, capital_per_arb, capture_rate):
+def print_realistic_pnl(rows, min_duration_ms, latency_ms, capital_per_arb, capture_rate, session_hours):
     print("=" * 80)
     print("  REALISTIC PnL ESTIMATE")
     print("=" * 80)
@@ -423,7 +499,7 @@ def print_realistic_pnl(rows, min_duration_ms, latency_ms, capital_per_arb, capt
     print(f"  Clean windows (no flags):  {len(clean)}  ({len(clean)/total*100:.1f}%)")
     print(f"  Capturable clean windows:  {len(capturable_clean)}")
     print()
-    print(f"  Expected profit (realistic): ${realistic:.4f}")
+    print(f"  Expected profit (realistic): {_per_hr(realistic, session_hours)}")
 
     if capturable_clean:
         avg_dur = sum(r["duration_ms"] for r in capturable_clean) / len(capturable_clean)
@@ -565,6 +641,9 @@ def main():
         rows = [r for r in rows if r["event"] not in excluded]
         print(f"Excluded {len(excluded)} event(s): {', '.join(excluded)}\n")
 
+    # Compute session duration before flagging (uses raw row timestamps)
+    session_hours = compute_session_hours(rows, path)
+
     # Compute flags on full dataset first (REPEAT_SPAM needs full counts)
     compute_flags(rows, spam_threshold=args.spam_threshold)
 
@@ -573,13 +652,13 @@ def main():
     if args.clean:
         print(f"[--clean] Analyzing {len(analysis_rows)} / {len(rows)} rows (no fraud flags)\n")
 
-    print_session_summary(analysis_rows, path)
+    print_session_summary(analysis_rows, path, session_hours)
     print_fraud_checks(rows, spam_threshold=args.spam_threshold)  # always show fraud report on full dataset
     print_duration_analysis(analysis_rows, args.min_duration)
-    print_profit_analysis(analysis_rows, args.min_duration, DEFAULT_CAPITAL_PER_ARB, DEFAULT_CAPTURE_RATE)
+    print_profit_analysis(analysis_rows, args.min_duration, DEFAULT_CAPITAL_PER_ARB, DEFAULT_CAPTURE_RATE, session_hours)
     print_per_event_breakdown(analysis_rows)
     print_spread_detection(rows)  # always on full dataset
-    print_realistic_pnl(rows, args.min_duration, DEFAULT_LATENCY_MS, DEFAULT_CAPITAL_PER_ARB, DEFAULT_CAPTURE_RATE)
+    print_realistic_pnl(rows, args.min_duration, DEFAULT_LATENCY_MS, DEFAULT_CAPITAL_PER_ARB, DEFAULT_CAPTURE_RATE, session_hours)
     print_rest_verification(rows)  # always on full dataset (REST fields may be None for old CSVs)
 
 if __name__ == "__main__":

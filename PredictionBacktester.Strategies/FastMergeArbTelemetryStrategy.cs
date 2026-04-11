@@ -154,6 +154,37 @@ namespace PredictionBacktester.Strategies
             }
         }
 
+        /// <summary>
+        /// Removes an event from live tracking. Used when:
+        ///   • REST check reveals more active legs than we subscribed to (leg addition)
+        ///   • Periodic rescan finds the event no longer passes mutual-exclusivity check
+        /// Any currently-open arb window for the event is closed and logged before removal.
+        /// </summary>
+        public void UnregisterEvent(string eventId)
+        {
+            lock (_eventTokens)
+            {
+                if (!_eventTokens.TryGetValue(eventId, out var tokens)) return;
+
+                // Close any open arb window so it gets written to CSV
+                if (_activeArbs.TryRemove(eventId, out var openArb))
+                {
+                    var endTime = DateTime.UtcNow;
+                    var duration = endTime - openArb.StartTime;
+                    if (duration.TotalMilliseconds > 5)
+                        LogArbAutopsy(eventId, openArb, duration, endTime);
+                }
+
+                foreach (var token in tokens)
+                    _tokenToEventMap.Remove(token);
+
+                _eventTokens.Remove(eventId);
+                _bestNetCostSeen.TryRemove(eventId, out _);
+            }
+
+            Console.WriteLine($"[TELEMETRY] Unregistered mid-session: {eventId}");
+        }
+
         private decimal CalculateFeePerShare(decimal price)
         {
             double p = (double)price;
@@ -186,7 +217,11 @@ namespace PredictionBacktester.Strategies
                     continue;
                 }
 
-                if (!book.HasReceivedDelta) { allLegsHaveBooks = false; legs++; continue; }
+                // Treat books with no delta OR stale books (no update for >2 min) as missing.
+                // A stale book means the leg has gone silent — it may have been finalized or
+                // halted mid-session. Using its price would produce a phantom arb.
+                if (!book.HasReceivedDelta || book.IsStale(120))
+                { allLegsHaveBooks = false; legs++; continue; }
 
                 decimal bestAsk = book.GetBestAskPrice();
                 if (bestAsk >= 1.00m) { allLegsHaveBooks = false; legs++; continue; }

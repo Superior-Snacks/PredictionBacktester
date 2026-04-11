@@ -37,7 +37,23 @@ public class LocalOrderBook
     /// </summary>
     public bool HasReceivedDelta { get; private set; } = false;
 
-    public void MarkDeltaReceived() { HasReceivedDelta = true; }
+    /// <summary>UTC time of the most recent delta applied to this book.</summary>
+    public DateTime LastDeltaAt { get; private set; } = DateTime.MinValue;
+
+    public void MarkDeltaReceived()
+    {
+        HasReceivedDelta = true;
+        LastDeltaAt = DateTime.UtcNow;
+    }
+
+    /// <summary>
+    /// Returns true when the book has received at least one delta but no update has
+    /// arrived for longer than <paramref name="maxAgeSeconds"/>.  This indicates the
+    /// market may have been finalized, halted, or gone silent.  Treat the book as
+    /// unreliable — do not use its prices for arb evaluation.
+    /// </summary>
+    public bool IsStale(int maxAgeSeconds = 120)
+        => HasReceivedDelta && (DateTime.UtcNow - LastDeltaAt).TotalSeconds > maxAgeSeconds;
 
     // Private dictionaries protected by a lock
     private readonly SortedDictionary<decimal, decimal> _bids;
@@ -124,6 +140,7 @@ public class LocalOrderBook
             _bids.Clear();
             _asks.Clear();
             HasReceivedDelta = false;
+            LastDeltaAt = DateTime.MinValue;
         }
     }
 
