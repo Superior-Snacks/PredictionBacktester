@@ -85,6 +85,7 @@ public class KalshiMarketScanner
             decimal catMaxVol24h  = 0m;                 // highest leg volume — event is live if any leg traded
             decimal catRestAskSum = 0m;                 // sum of REST yes_ask prices across all active legs
             int     catPricedLegs = 0;                  // legs with a non-zero REST ask price
+            bool    hasCumulativeLeg = false;           // true if any leg uses cumulative language ("X or more")
             int totalMarketsInEvent = 0;
             var skippedStatuses = new List<string>();
 
@@ -121,6 +122,16 @@ public class KalshiMarketScanner
 
                 names[ticker]         = displayYes;
                 names[ticker + "_NO"] = displayNo;
+
+                // Detect cumulative/nested language that signals non-mutual-exclusivity.
+                // "wins by 2 or more" and "wins by 3 or more" are NOT exclusive — both
+                // can resolve YES in the same game.  In contrast, "wins by exactly 2" and
+                // "wins by 3+" (final open bucket) ARE exclusive.
+                // We flag on unambiguous cumulative phrases only; bare "+" is left alone
+                // because it legitimately appears on final-bucket titles.
+                if (!hasCumulativeLeg &&
+                    (IsCumulativeTitle(yesTitle) || IsCumulativeTitle(noTitle) || IsCumulativeTitle(baseTitle)))
+                    hasCumulativeLeg = true;
 
                 decimal vol24h = ParseFp(mkt, "volume_24h_fp");
                 catMaxVol24h = Math.Max(catMaxVol24h, vol24h);
@@ -185,7 +196,7 @@ public class KalshiMarketScanner
                 || (catRestAskSum >= 0.40m && catRestAskSum <= 1.50m);
 
             if (activeYesTickers.Count >= 3 && catMaxVol24h >= _minVolume24h
-                && !hasPartiallyResolved && sumIsReasonable)
+                && !hasPartiallyResolved && sumIsReasonable && !hasCumulativeLeg)
             {
                 categorical[eventTicker] = activeYesTickers;
                 catEligible++;
@@ -219,6 +230,23 @@ public class KalshiMarketScanner
     // ──────────────────────────────────────────────────────────────────────────
     //  Helpers
     // ──────────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Returns true if the title contains cumulative/nested language that signals
+    /// non-mutual-exclusivity.  "wins by 2 or more" and "wins by 3 or more" can
+    /// both resolve YES in the same event — they are NOT exclusive outcomes.
+    /// </summary>
+    private static bool IsCumulativeTitle(string title)
+    {
+        if (string.IsNullOrEmpty(title)) return false;
+        string lower = title.ToLowerInvariant();
+        return lower.Contains("or more")
+            || lower.Contains("or higher")
+            || lower.Contains("or greater")
+            || lower.Contains("at least")
+            || lower.Contains("and above")
+            || lower.Contains("or above");
+    }
 
     private static string GetString(JsonElement el, string key)
         => el.TryGetProperty(key, out var v) ? v.GetString() ?? "" : "";
