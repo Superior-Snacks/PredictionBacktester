@@ -8,6 +8,10 @@ Reads ArbTelemetry_*.csv from the Kalshi paper trader and produces:
   5. Per-event breakdown (top 20)
   6. Spread/correlated market detection
   7. Realistic PnL estimate (Iceland -> US latency model)
+  8. REST verification analysis
+  9. Settlement simulation (capital-at-risk vs actual P&L scenarios)
+ 10. Actual resolution check (Kalshi API — win/loss/active per event)
+ 11. Production sim (US server, full depth, clean categoricals only)
 
 Usage:
   python analyze_kalshi_arb.py
@@ -22,6 +26,8 @@ import sys
 import glob
 import os
 import re
+import json
+import time
 import argparse
 from collections import defaultdict
 from datetime import datetime, timedelta
@@ -31,6 +37,8 @@ DEFAULT_MIN_DURATION_MS = 500
 DEFAULT_LATENCY_MS      = 180   # Iceland -> US one-way estimate
 DEFAULT_CAPITAL_PER_ARB = 50.0  # max $ per arb attempt
 DEFAULT_CAPTURE_RATE    = 0.60  # realistic fill rate
+
+PROD_LATENCY_MS         = 100   # US co-location: ~50ms one-way round-trip threshold
 
 PRICE_SUM_LOW_THRESHOLD  = 0.70   # below this = likely NOT mutually exclusive
 PRICE_SUM_HIGH_THRESHOLD = 1.20   # above this = likely missing legs
@@ -111,6 +119,12 @@ def _per_hr(amount, hours):
     if hours <= 0:
         return f"${amount:.4f}"
     return f"${amount:.4f}  (${amount/hours:.2f}/hr over {hours:.1f}h)"
+
+def _hr(amount, hours):
+    """Compact $/hr string for table columns."""
+    if hours <= 0:
+        return f"${amount:+.2f}"
+    return f"${amount/hours:+.2f}/hr"
 
 # ─── DATA LOADING ─────────────────────────────────────────────────────────────
 
@@ -200,6 +214,14 @@ def compute_flags(rows, spam_threshold=REPEAT_SPAM_THRESHOLD):
                 and r["rest_yes_ask_sum"] > 1.50):
             flags.append("PARTIAL_LEGS_REST")
         r["flags"] = flags
+
+    # Second pass: propagate event-level disqualifiers.
+    # If ANY window for an event gets PARTIAL_LEGS_REST, the whole event is
+    # non-exhaustive (WS tracked fewer legs than exist). Flag every row.
+    partial_rest_events = {r["event"] for r in rows if "PARTIAL_LEGS_REST" in r["flags"]}
+    for r in rows:
+        if r["event"] in partial_rest_events and "PARTIAL_LEGS_REST" not in r["flags"]:
+            r["flags"].append("PARTIAL_LEGS_REST")
 
 # ─── SECTION 1: SESSION SUMMARY ───────────────────────────────────────────────
 
@@ -612,6 +634,735 @@ def print_rest_verification(rows):
     print()
 
 
+# ─── SECTION 9+: KALSHI API RESOLUTION ───────────────────────────────────────
+
+KALSHI_API_BASE = "https://api.elections.kalshi.com/trade-api/v2"
+
+
+def _resolution_cache_path(csv_path):
+    return os.path.splitext(csv_path)[0] + "_resolution_cache.json"
+
+
+def _load_resolution_cache(csv_path):
+    try:
+        p = _resolution_cache_path(csv_path)
+        if os.path.exists(p):
+            with open(p) as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return {}
+
+
+def _save_resolution_cache(csv_path, cache):
+    try:
+        with open(_resolution_cache_path(csv_path), "w") as f:
+            json.dump(cache, f, indent=2)
+    except Exception:
+        pass
+
+
+def _fetch_event_resolution(event_ticker, session):
+    """
+    GET /events/{ticker}?with_nested_markets=true
+    Returns a normalised dict:
+      status         : "win" | "loss" | "active" | "not_found" | "error"
+      winning_ticker : ticker of the YES leg (win only)
+      winning_title  : yes_sub_title of the YES leg (win only)
+      all_resolved   : True when every leg is finalized
+      markets        : [{ticker, status, result, yes_sub_title}]
+    """
+    url = f"{KALSHI_API_BASE}/events/{event_ticker}?with_nested_markets=true"
+    try:
+        resp = session.get(url, timeout=8)
+        if resp.status_code == 404:
+            return {"status": "not_found", "all_resolved": False, "markets": []}
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        return {"status": "error", "error": str(e), "all_resolved": False, "markets": []}
+
+    event_data  = data.get("event", data)
+    markets_raw = event_data.get("markets", [])
+    if not markets_raw:
+        return {"status": "not_found", "all_resolved": False, "markets": []}
+
+    mkt_list = [
+        {
+            "ticker":        m.get("ticker", ""),
+            "status":        (m.get("status")  or "").lower(),
+            "result":        (m.get("result")   or "").lower(),
+            "yes_sub_title": m.get("yes_sub_title", ""),
+        }
+        for m in markets_raw
+    ]
+
+    yes_legs   = [m for m in mkt_list if m["result"] == "yes"]
+    all_final  = all(m["status"] == "finalized" for m in mkt_list)
+    any_active = any(m["status"] == "active"    for m in mkt_list)
+
+    if yes_legs:
+        return {
+            "status":         "win",
+            "winning_ticker": yes_legs[0]["ticker"],
+            "winning_title":  yes_legs[0]["yes_sub_title"],
+            "all_resolved":   all_final,
+            "markets":        mkt_list,
+        }
+    elif all_final:
+        # All finalized but no YES → every leg resolved NO (spread zero)
+        return {
+            "status":       "loss",
+            "all_resolved": True,
+            "markets":      mkt_list,
+        }
+    elif any_active:
+        return {"status": "active",  "all_resolved": False, "markets": mkt_list}
+    else:
+        return {"status": "unknown", "all_resolved": False, "markets": mkt_list}
+
+
+def _build_entries(rows, capital_per_arb, min_duration_ms):
+    """One entry per unique event at the best (lowest cost) capturable window."""
+    by_event = defaultdict(list)
+    for r in rows:
+        by_event[r["event"]].append(r)
+
+    entries = []
+    for event, evrows in by_event.items():
+        pool = [r for r in evrows if r["duration_ms"] >= min_duration_ms] or evrows
+        best = min(pool, key=lambda r: r["best_net_cost"])
+        capital  = min(best["total_capital_req"], capital_per_arb) \
+                   if best["total_capital_req"] > 0 else capital_per_arb
+        shares   = capital / best["best_net_cost"] if best["best_net_cost"] > 0 else 0
+        win_pnl  = shares * best["net_profit_per_share"]
+        entries.append({
+            "event":       event,
+            "windows":     len(evrows),
+            "capital":     capital,
+            "best_cost":   best["best_net_cost"],
+            "win_pnl":     win_pnl,
+            "lose_pnl":    -capital,
+            "spread_risk": _is_spread_market(event),
+            "flags":       set().union(*[set(r["flags"]) for r in evrows]),
+        })
+    return entries
+
+
+# ─── SECTION 9: SETTLEMENT SIMULATION ───────────────────────────────────────
+
+# Event ticker substrings that indicate sports spread/total markets.
+# These are NOT true categoricals: all legs can simultaneously resolve $0
+# when the game result falls outside every listed threshold (e.g. a 1-goal
+# win when every leg is "wins by 1.5+" or "wins by 2.5+").
+STRUCTURAL_ZERO_PATTERNS = ("SPREAD", "TOTAL")
+
+def _is_spread_market(event_id):
+    return any(p in event_id.upper() for p in STRUCTURAL_ZERO_PATTERNS)
+
+
+def _is_blocked(event_id, full_blocklist):
+    """Return True if this event's series prefix is in the blocklist."""
+    series = _event_series(event_id)
+    return any(
+        series.upper().startswith(b.upper())
+        for b in full_blocklist
+    )
+
+
+def print_settlement_simulation(rows, capital_per_arb, min_duration_ms, session_hours):
+    """
+    Section 9 — Settlement Simulation.
+
+    Models a single entry per unique event at the best observed window
+    (lowest BestNetCost among capturable windows, or any window if none
+    are capturable).  Then shows two P&L scenarios:
+
+      Scenario A — optimistic: exactly one leg pays $1 for every event.
+      Scenario B — realistic:  spread/total market events resolve to $0
+                                (all legs lose); clean categoricals win.
+    """
+    print("=" * 80)
+    print("  SETTLEMENT SIMULATION")
+    print("=" * 80)
+    print("  Models one entry per unique event at the best observed window.")
+    print("  ZERO_POSSIBLE = ticker contains SPREAD or TOTAL: all legs can resolve $0")
+    print("  if the game result falls outside every listed threshold.")
+    print()
+
+    if not rows:
+        print("  (no data)")
+        print()
+        return
+
+    entries = _build_entries(rows, capital_per_arb, min_duration_ms)
+
+    entries.sort(key=lambda x: x["capital"], reverse=True)
+
+    print(f"  {'EventId':<42} {'Capital':>8} {'WinPnL':>8} {'LosePnL':>9}  Risk")
+    print(f"  {'-'*42} {'-'*8} {'-'*8} {'-'*9}  ----")
+    for e in entries:
+        risk = "ZERO_POSSIBLE" if e["spread_risk"] else "OK"
+        print(f"  {e['event']:<42} ${e['capital']:>7.2f} ${e['win_pnl']:>+7.2f}  ${e['lose_pnl']:>+8.2f}  {risk}")
+
+    print()
+
+    total_capital   = sum(e["capital"]  for e in entries)
+    scenario_a      = sum(e["win_pnl"]  for e in entries)
+
+    spread_entries  = [e for e in entries if e["spread_risk"]]
+    clean_entries   = [e for e in entries if not e["spread_risk"]]
+    clean_profit    = sum(e["win_pnl"]  for e in clean_entries)
+    spread_capital  = sum(e["capital"]  for e in spread_entries)
+    scenario_b      = clean_profit - spread_capital
+
+    print(f"  Events entered:              {len(entries)}")
+    print(f"  Total capital deployed:      ${total_capital:.2f}")
+    print(f"  ZERO_POSSIBLE events:        {len(spread_entries)}  (${spread_capital:.2f} at risk)")
+    print(f"  Clean categorical events:    {len(clean_entries)}  (${clean_profit:.2f} expected profit)")
+    print()
+    print(f"  SCENARIO A — every event resolves with exactly one YES leg (best case):")
+    print(f"    Net P&L: {_per_hr(scenario_a, session_hours)}")
+    print()
+    print(f"  SCENARIO B — ZERO_POSSIBLE events all resolve to $0 (realistic for spreads):")
+    print(f"    Clean profit:           ${clean_profit:+.2f}")
+    print(f"    Lost on spread zeros:  -${spread_capital:.2f}")
+    print(f"    NET P&L:               {_per_hr(scenario_b, session_hours)}")
+    print()
+    if spread_entries:
+        print(f"  *** {len(spread_entries)} spread/total market(s) detected in this session.")
+        print(f"      Scanner fix (cumulativeLegCount >= 2 + half-line spread detection)")
+        print(f"      should exclude these going forward.")
+    print()
+
+
+# ─── SECTION 10: ACTUAL RESOLUTION (Kalshi API) ─────────────────────────────
+
+def print_actual_resolution(rows, capital_per_arb, min_duration_ms, session_hours, csv_path):
+    """
+    Fetches the real resolution status of every event from the Kalshi public API.
+    Caches fully-resolved events so re-runs don't re-fetch them.
+
+    Shows per-event: capital deployed, actual outcome (WIN/LOSS/ACTIVE), real P&L.
+    Summarises spread vs categorical performance separately.
+    """
+    print("=" * 80)
+    print("  ACTUAL RESOLUTION  (Kalshi API)")
+    print("=" * 80)
+
+    try:
+        import requests
+        session = requests.Session()
+        session.headers["User-Agent"] = "kalshi-arb-analyzer/1.0"
+    except ImportError:
+        print("  requests library not installed.  Run: pip install requests")
+        print()
+        return
+
+    if not rows:
+        print("  (no data)")
+        print()
+        return
+
+    entries = _build_entries(rows, capital_per_arb, min_duration_ms)
+    cache   = _load_resolution_cache(csv_path)
+
+    print(f"  Fetching resolution for {len(entries)} events "
+          f"({sum(1 for e in entries if cache.get(e['event'], {}).get('all_resolved'))} cached)...")
+
+    resolved     = {}
+    cache_dirty  = False
+    for i, e in enumerate(entries):
+        eid    = e["event"]
+        cached = cache.get(eid)
+        if cached and cached.get("all_resolved"):
+            resolved[eid] = cached
+        else:
+            if i > 0:
+                time.sleep(0.12)            # ~8 req/s — stay well under rate limits
+            res = _fetch_event_resolution(eid, session)
+            resolved[eid]   = res
+            cache[eid]      = res
+            cache_dirty     = True
+        status_char = {"win": "W", "loss": "L", "active": ".",
+                       "not_found": "?", "error": "!"}.get(
+                       resolved[eid].get("status", "?"), "?")
+        print(f"\r  [{i+1:2d}/{len(entries)}] {status_char}", end="", flush=True)
+
+    if cache_dirty:
+        _save_resolution_cache(csv_path, cache)
+    print(f"\r  {'Done.':<60}")
+    print()
+
+    # ── Per-event table ────────────────────────────────────────────────────────
+    win_events   = []
+    loss_events  = []
+    open_events  = []
+
+    print(f"  {'EventId':<42} {'Capital':>8} {'Result':<14} {'ActualPnL':>10}  Note")
+    print(f"  {'-'*42} {'-'*8} {'-'*14} {'-'*10}  ----")
+
+    for e in sorted(entries, key=lambda x: x["capital"], reverse=True):
+        res    = resolved.get(e["event"], {})
+        status = res.get("status", "unknown")
+
+        if status == "win":
+            actual_pnl = e["win_pnl"]
+            result_str = "WIN"
+            pnl_str    = f"${actual_pnl:+.2f}"
+            note       = (res.get("winning_title") or res.get("winning_ticker", ""))[:38]
+            win_events.append(e)
+        elif status == "loss":
+            actual_pnl = e["lose_pnl"]
+            result_str = "LOSS (all->$0)"
+            pnl_str    = f"${actual_pnl:+.2f}"
+            note       = "all legs resolved NO"
+            loss_events.append(e)
+        elif status == "active":
+            actual_pnl = None
+            result_str = "ACTIVE"
+            pnl_str    = f"(proj ${e['win_pnl']:+.2f})"
+            note       = "still trading"
+            open_events.append(e)
+        elif status == "not_found":
+            actual_pnl = None
+            result_str = "NOT FOUND"
+            pnl_str    = "--"
+            note       = ""
+            open_events.append(e)
+        else:
+            actual_pnl = None
+            result_str = status.upper()[:14]
+            pnl_str    = "--"
+            note       = (res.get("error") or "")[:38]
+            open_events.append(e)
+
+        print(f"  {e['event']:<42} ${e['capital']:>7.2f} {result_str:<14} {pnl_str:>10}  {note}")
+
+    print()
+
+    # ── Summary ────────────────────────────────────────────────────────────────
+    wins_pnl  = sum(e["win_pnl"]  for e in win_events)
+    loss_pnl  = sum(e["lose_pnl"] for e in loss_events)
+    open_proj = sum(e["win_pnl"]  for e in open_events)
+    net_resolved = wins_pnl + loss_pnl
+
+    print("  RESOLUTION SUMMARY:")
+    print(f"    Won  (one leg YES):     {len(win_events):2d} events   ${wins_pnl:+.2f}")
+    print(f"    Lost (all legs NO):     {len(loss_events):2d} events   ${loss_pnl:+.2f}")
+    print(f"    Active / unresolved:    {len(open_events):2d} events   "
+          f"(projected ${open_proj:+.2f} if all win)")
+    print()
+    print(f"    ACTUAL NET P&L (resolved):  ${net_resolved:+.2f}  "
+          f"({_per_hr(net_resolved, session_hours)})")
+    if open_events:
+        best_case = net_resolved + open_proj
+        print(f"    BEST CASE (open all win):   ${best_case:+.2f}")
+    print()
+
+    # ── Spread vs categorical breakdown ───────────────────────────────────────
+    def _group(ev_list):
+        sp = [e for e in ev_list if e["spread_risk"]]
+        cl = [e for e in ev_list if not e["spread_risk"]]
+        return sp, cl
+
+    sp_win,  cl_win  = _group(win_events)
+    sp_loss, cl_loss = _group(loss_events)
+    sp_open, cl_open = _group(open_events)
+
+    sp_net = sum(e["win_pnl"]  for e in sp_win) + sum(e["lose_pnl"] for e in sp_loss)
+    cl_net = sum(e["win_pnl"]  for e in cl_win) + sum(e["lose_pnl"] for e in cl_loss)
+    sp_cnt = len(sp_win) + len(sp_loss) + len(sp_open)
+    cl_cnt = len(cl_win) + len(cl_loss) + len(cl_open)
+
+    print(f"  SPREAD / TOTAL MARKETS  ({sp_cnt} total):")
+    print(f"    Won: {len(sp_win)}   Lost: {len(sp_loss)}   Open: {len(sp_open)}")
+    if sp_win or sp_loss:
+        print(f"    Net on resolved: ${sp_net:+.2f}")
+    print()
+    print(f"  CLEAN CATEGORICAL MARKETS  ({cl_cnt} total):")
+    print(f"    Won: {len(cl_win)}   Lost: {len(cl_loss)}   Open: {len(cl_open)}")
+    if cl_win or cl_loss:
+        print(f"    Net on resolved: ${cl_net:+.2f}")
+    print()
+
+
+# ─── SECTION 11: PRODUCTION SIM ──────────────────────────────────────────────
+
+def _duration_participation(duration_ms):
+    """
+    Duration-tiered participation rate.
+    A window that stays open for a long time implies low competition —
+    no aggressive arb desk would leave free money uncaptured for 60+ seconds.
+    Short windows suggest others are racing; long windows suggest you're alone.
+    """
+    if duration_ms <   500: return 0.15   # < 0.5s  — fast close, others racing
+    if duration_ms <  2000: return 0.30   # 0.5–2s  — moderate competition
+    if duration_ms < 60000: return 0.60   # 2–60s   — slow market, low competition
+    return 0.85                            # > 60s   — likely uncontested
+
+
+def _sim_entries(by_event, participation_rate):
+    """
+    Build per-event entry list.
+    If participation_rate is None, use duration-tiered rates per window.
+    Otherwise apply a flat rate to all entries.
+    """
+    entries = []
+    for event, evrows in by_event.items():
+        pool  = [r for r in evrows if r["duration_ms"] >= PROD_LATENCY_MS] or evrows
+        best  = min(pool, key=lambda r: r["best_net_cost"])
+        cap_w = len([r for r in evrows if r["duration_ms"] >= PROD_LATENCY_MS])
+        rate  = (participation_rate if participation_rate is not None
+                 else _duration_participation(best["duration_ms"]))
+        capital = best["total_capital_req"] * rate
+        shares  = capital / best["best_net_cost"] if best["best_net_cost"] > 0 else 0
+        entries.append({
+            "event":    event,
+            "cap_wins": cap_w,
+            "capital":  capital,
+            "cost":     best["best_net_cost"],
+            "rate":     rate,
+            "win_pnl":  shares * best["net_profit_per_share"],
+            "lose_pnl": -capital,
+        })
+    entries.sort(key=lambda x: x["win_pnl"], reverse=True)
+    return entries
+
+
+def print_production_sim(rows, session_hours, csv_path, participation_rate=None):
+    """
+    Section 11 — Production Sim.
+
+    Models the bot running from a US co-located server:
+      • Min capturable window  : 100ms  (50ms one-way latency)
+      • Participation rate     : fraction of available depth the bot captures.
+                                 Default (None) = duration-tiered: long windows imply
+                                 low competition; short windows imply others are racing.
+      • Entry model            : one entry per event at the best capturable window
+      • Scope                  : clean categorical events only (blocklist + SPREAD/TOTAL excluded)
+
+    P&L shown at the tiered rate (default) or the specified flat rate, plus a
+    competition sensitivity table across flat-rate scenarios.
+    """
+    print("=" * 80)
+    print("  PRODUCTION SIM  (US server · competition-adjusted · clean categoricals)")
+    print("=" * 80)
+    # ── Load blocklist (hardcoded + learned) ─────────────────────────────────
+    dynamic   = _load_blocklist(csv_path) if csv_path else set()
+    blocklist = HARDCODED_BLOCKED | dynamic
+
+    print(f"  Latency model : US co-located  (~50ms one-way, {PROD_LATENCY_MS}ms min window)")
+    if participation_rate is None:
+        print(f"  Participation : duration-tiered  (<0.5s=15%  0.5-2s=30%  2-60s=60%  >60s=85%)")
+        print(f"                  (long windows imply low competition; latency already filters fast closes)")
+    else:
+        print(f"  Participation : {participation_rate*100:.0f}% flat  (override via --participation-rate)")
+    print(f"  Entry model   : one entry per event at best (lowest-cost) capturable window")
+    print(f"  Scope         : clean categoricals — SPREAD/TOTAL + {len(blocklist)} blocklisted series excluded")
+    if blocklist:
+        print(f"  Blocklist     : {', '.join(sorted(blocklist))}")
+    print()
+
+    # ── Build clean categorical rows (blocklist + spread filter) ─────────────
+    clean_cat = [r for r in rows
+                 if not r["flags"]
+                 and not _is_spread_market(r["event"])
+                 and not _is_blocked(r["event"], blocklist)]
+
+    spread_removed  = sum(1 for r in rows if _is_spread_market(r["event"]))
+    blocked_removed = sum(1 for r in rows if _is_blocked(r["event"], blocklist))
+    flagged_removed = sum(1 for r in rows if r["flags"])
+    print(f"  Rows excluded : {flagged_removed} flagged, {spread_removed} SPREAD/TOTAL, {blocked_removed} blocklisted")
+    print()
+
+    if not clean_cat:
+        print("  No clean categorical rows remain after all filters.")
+        print()
+        return
+
+    by_event = defaultdict(list)
+    for r in clean_cat:
+        by_event[r["event"]].append(r)
+
+    entries = _sim_entries(by_event, participation_rate)
+
+    total_capital = sum(e["capital"] for e in entries)
+    total_proj    = sum(e["win_pnl"] for e in entries)
+
+    # Multi-entry: every capturable clean window, each at its own participation rate
+    def _multi(rate_or_none):
+        total = 0.0
+        for r in clean_cat:
+            if r["duration_ms"] < PROD_LATENCY_MS:
+                continue
+            rate = (_duration_participation(r["duration_ms"]) if rate_or_none is None
+                    else rate_or_none)
+            cap = r["total_capital_req"] * rate
+            if r["best_net_cost"] > 0:
+                total += (cap / r["best_net_cost"]) * r["net_profit_per_share"]
+        return total
+
+    multi_proj = _multi(participation_rate)
+
+    # ── Load resolution cache ─────────────────────────────────────────────────
+    cache = _load_resolution_cache(csv_path) if csv_path else {}
+
+    # ── Per-event table ────────────────────────────────────────────────────────
+    rate_hdr = "Part%" if participation_rate is None else f"{participation_rate*100:.0f}%"
+    print(f"  {'EventId':<42} {rate_hdr:>5} {'Capital':>8} {'ProjProfit':>10} {'Settlement':>12}  ActualPnL")
+    print(f"  {'-'*42} {'-'*5} {'-'*8} {'-'*10} {'-'*12}  ---------")
+
+    settled_win_pnl  = 0.0
+    settled_loss_pnl = 0.0
+    open_proj_pnl    = 0.0
+    win_count = loss_count = open_count = 0
+
+    for e in entries:
+        res    = cache.get(e["event"], {})
+        status = res.get("status", "unknown")
+
+        if status == "win":
+            settle_str  = "WIN"
+            actual_str  = f"${e['win_pnl']:+.2f}"
+            settled_win_pnl += e["win_pnl"]
+            win_count += 1
+        elif status == "loss":
+            settle_str  = "LOSS (all->$0)"
+            actual_str  = f"${e['lose_pnl']:+.2f}"
+            settled_loss_pnl += e["lose_pnl"]
+            loss_count += 1
+        elif not cache:
+            settle_str  = "no cache"
+            actual_str  = "--"
+            open_proj_pnl += e["win_pnl"]
+            open_count += 1
+        else:
+            settle_str  = "ACTIVE"
+            actual_str  = f"(proj ${e['win_pnl']:+.2f})"
+            open_proj_pnl += e["win_pnl"]
+            open_count += 1
+
+        rate_str = f"{e['rate']*100:.0f}%" if participation_rate is None else ""
+        print(f"  {e['event']:<42} {rate_str:>5} ${e['capital']:>7.2f} ${e['win_pnl']:>+9.2f} {settle_str:>12}  {actual_str}")
+
+    print()
+
+    net_settled = settled_win_pnl + settled_loss_pnl
+    best_case   = net_settled + open_proj_pnl
+
+    rate_label = "duration-tiered" if participation_rate is None else f"{participation_rate*100:.0f}% flat"
+    print(f"  Events:             {len(entries)}  ({win_count} won, {loss_count} lost, {open_count} open/active)")
+    print(f"  Total capital used: ${total_capital:.2f}  ({rate_label} participation)")
+    print()
+    print(f"  PROJECTED P&L   single entry  :  {_per_hr(total_proj,  session_hours)}")
+    print(f"  PROJECTED P&L   multi-entry   :  {_per_hr(multi_proj,  session_hours)}")
+    print()
+    if win_count + loss_count > 0:
+        # Settled multi-entry: sum all wins/losses across every capturable window
+        # (not just the best-window entry) scaled by participation rate
+        settled_multi = sum(
+            (_duration_participation(r["duration_ms"]) if participation_rate is None
+             else participation_rate)
+            * r["total_capital_req"] / r["best_net_cost"] * r["net_profit_per_share"]
+            if cache.get(r["event"], {}).get("status") == "win" and r["best_net_cost"] > 0
+            else (
+                -(_duration_participation(r["duration_ms"]) if participation_rate is None
+                  else participation_rate) * r["total_capital_req"]
+                if cache.get(r["event"], {}).get("status") == "loss" else 0
+            )
+            for r in clean_cat
+            if r["duration_ms"] >= PROD_LATENCY_MS
+        )
+        print(f"  SETTLED P&L     single entry  ({win_count}W/{loss_count}L):  {_per_hr(net_settled,    session_hours)}")
+        print(f"  SETTLED P&L     multi-entry   ({win_count}W/{loss_count}L):  {_per_hr(settled_multi,  session_hours)}")
+    if open_count > 0:
+        # Multi-entry open projection = multi_proj minus already-settled windows
+        multi_settled_proj = sum(
+            ((_duration_participation(r["duration_ms"]) if participation_rate is None
+              else participation_rate)
+             * r["total_capital_req"] / r["best_net_cost"] * r["net_profit_per_share"])
+            if cache.get(r["event"], {}).get("status") in ("win", "loss") and r["best_net_cost"] > 0
+            else 0
+            for r in clean_cat if r["duration_ms"] >= PROD_LATENCY_MS
+        )
+        multi_best_case = (settled_multi if win_count + loss_count > 0 else 0) + (multi_proj - multi_settled_proj)
+        print(f"  BEST CASE       single entry (settled + all open win):  {_per_hr(best_case,       session_hours)}")
+        print(f"  BEST CASE       multi-entry  (settled + all open win):  {_per_hr(multi_best_case, session_hours)}")
+    print()
+    if not cache:
+        print("  Tip: run without --no-api to fetch resolution data and fill in settled P&L.")
+
+    # ── Competition sensitivity table ─────────────────────────────────────────
+    print()
+    capturable_clean = [r for r in clean_cat if r["duration_ms"] >= PROD_LATENCY_MS]
+    print(f"  COMPETITION SENSITIVITY  ({len(entries)} events · {len(capturable_clean)} capturable windows)")
+    print(f"  {'Model':<16}  {'Assumption':<28}  {'1x Capital':>10}  {'1x /hr':>9}  {'Multi /hr':>10}  {'Settled 1x':>10}  {'Settled Mx':>10}")
+    print(f"  {'-'*16}  {'-'*28}  {'-'*10}  {'-'*9}  {'-'*10}  {'-'*10}  {'-'*10}")
+
+    def _row(rate_or_none, label, marker=""):
+        sc_entries  = _sim_entries(by_event, rate_or_none)
+        sc_capital  = sum(e["capital"] for e in sc_entries)
+        sc_1x       = sum(e["win_pnl"]  for e in sc_entries)
+        sc_multi    = _multi(rate_or_none)
+        sc_net_1x   = sum(
+            e["win_pnl"]  for e in sc_entries if cache.get(e["event"], {}).get("status") == "win"
+        ) + sum(
+            e["lose_pnl"] for e in sc_entries if cache.get(e["event"], {}).get("status") == "loss"
+        )
+        sc_net_multi = sum(
+            ((_duration_participation(r["duration_ms"]) if rate_or_none is None else rate_or_none)
+             * r["total_capital_req"] / r["best_net_cost"] * r["net_profit_per_share"])
+            if cache.get(r["event"], {}).get("status") == "win" and r["best_net_cost"] > 0
+            else (
+                -((_duration_participation(r["duration_ms"]) if rate_or_none is None else rate_or_none)
+                  * r["total_capital_req"])
+                if cache.get(r["event"], {}).get("status") == "loss" else 0
+            )
+            for r in capturable_clean
+        )
+        model_str    = "duration-tiered" if rate_or_none is None else f"flat {rate_or_none*100:.0f}%"
+        settled_1x_s = _hr(sc_net_1x,   session_hours) if (win_count + loss_count > 0) else "n/a"
+        settled_mx_s = _hr(sc_net_multi, session_hours) if (win_count + loss_count > 0) else "n/a"
+        print(f"  {model_str:<16}  {label:<28}  ${sc_capital:>9.2f}  {_hr(sc_1x, session_hours):>9}  "
+              f"{_hr(sc_multi, session_hours):>10}  {settled_1x_s:>10}  {settled_mx_s:>10}{marker}")
+
+    _row(None,  "tiered by duration (default)", " <--" if participation_rate is None else "")
+    _row(1.00,  "sole actor / no competition",  " <--" if participation_rate == 1.0  else "")
+    _row(0.50,  "1 competitor  (~2 desks)",     " <--" if participation_rate == 0.5  else "")
+    _row(0.25,  "3 competitors (~4 desks)",     " <--" if participation_rate == 0.25 else "")
+    _row(0.10,  "9 competitors (~10 desks)",    " <--" if participation_rate == 0.10 else "")
+
+    print()
+    print(f"  Note: multi-entry = every capturable re-entry per event at the same participation rate.")
+    print(f"  Window duration is a proxy for competition — long windows imply fewer competing desks.")
+    print()
+
+
+# ─── SERIES LOSS TRACKER ─────────────────────────────────────────────────────
+
+BLOCKLIST_FILENAME = "event_blocklist.json"
+
+# Hardcoded series that are always blocked regardless of the learned file.
+# These are kept here so the blocklist file only needs to track *new* discoveries.
+HARDCODED_BLOCKED = {"KXUFCVICROUND", "KXMLBHR"}
+
+
+def _event_series(event_id):
+    """
+    Extract the series prefix from an event ticker by stripping the trailing
+    date/matchup slug (everything from the first hyphen-digit pattern onward).
+      "KXUFCVICROUND-26APR11HOLBRO" -> "KXUFCVICROUND"
+      "KXMLSGAME-26APR11DALSTL"     -> "KXMLSGAME"
+      "KXIMPEACH"                   -> "KXIMPEACH"
+    """
+    return re.split(r'-\d', event_id)[0]
+
+
+def _blocklist_path(csv_path):
+    """Place event_blocklist.json alongside the CSV (or cwd if no path)."""
+    folder = os.path.dirname(os.path.abspath(csv_path)) if csv_path else "."
+    return os.path.join(folder, BLOCKLIST_FILENAME)
+
+
+def _load_blocklist(csv_path):
+    """Load the current learned blocklist, return a set of series prefixes."""
+    path = _blocklist_path(csv_path)
+    if not os.path.exists(path):
+        return set()
+    try:
+        with open(path) as f:
+            data = json.load(f)
+        entries = data if isinstance(data, list) else data.get("blocked", [])
+        return set(entries)
+    except Exception:
+        return set()
+
+
+def _save_blocklist(csv_path, blocked_series):
+    """Write the full merged blocklist back to disk."""
+    path = _blocklist_path(csv_path)
+    try:
+        with open(path, "w") as f:
+            json.dump(sorted(blocked_series), f, indent=2)
+    except Exception as e:
+        print(f"  Warning: could not write blocklist: {e}")
+
+
+def print_series_loss_tracker(csv_path):
+    """
+    Groups resolution cache outcomes by event-series prefix.
+
+    Any series with at least one all-NO resolution (LOSS) is automatically
+    written to event_blocklist.json so the C# scanner blocks it on the next
+    startup — no code change or rebuild required.
+    """
+    print("=" * 80)
+    print("  SERIES LOSS TRACKER  (auto-updates event_blocklist.json)")
+    print("=" * 80)
+
+    cache = _load_resolution_cache(csv_path) if csv_path else {}
+    if not cache:
+        print("  No resolution cache — run without --no-api first.")
+        print()
+        return
+
+    by_series = defaultdict(lambda: {"wins": 0, "losses": 0, "active": 0, "events": []})
+    for event_id, res in cache.items():
+        s = _event_series(event_id)
+        status = res.get("status", "unknown")
+        by_series[s]["events"].append(event_id)
+        if status == "win":
+            by_series[s]["wins"] += 1
+        elif status == "loss":
+            by_series[s]["losses"] += 1
+        else:
+            by_series[s]["active"] += 1
+
+    losers  = {s: d for s, d in by_series.items() if d["losses"] > 0}
+    clean   = {s: d for s, d in by_series.items() if d["losses"] == 0 and d["wins"] > 0}
+    unknown = {s: d for s, d in by_series.items() if d["losses"] == 0 and d["wins"] == 0}
+
+    # ── Auto-update the blocklist file ────────────────────────────────────────
+    existing   = _load_blocklist(csv_path)
+    # Exclude hardcoded ones — they're handled in C# code directly
+    learned    = existing - HARDCODED_BLOCKED
+    new_losers = {s for s in losers if s not in HARDCODED_BLOCKED and s not in learned}
+    merged     = learned | {s for s in losers if s not in HARDCODED_BLOCKED}
+
+    if merged != learned:
+        _save_blocklist(csv_path, merged)
+        print(f"  event_blocklist.json updated: {len(merged)} series blocked "
+              f"(+{len(new_losers)} new).")
+    else:
+        print(f"  event_blocklist.json unchanged: {len(merged)} series blocked.")
+    print()
+
+    # ── Report ────────────────────────────────────────────────────────────────
+    if losers:
+        print("  *** SERIES WITH ALL-NO RESOLUTIONS (auto-blocked):")
+        print(f"  {'Series':<35} {'W':>4} {'L':>4} {'Open':>6}  Status")
+        print(f"  {'-'*35} {'-'*4} {'-'*4} {'-'*6}  ------")
+        for s, d in sorted(losers.items(), key=lambda x: -x[1]["losses"]):
+            tag = "hardcoded" if s in HARDCODED_BLOCKED else ("new" if s in new_losers else "known")
+            print(f"  {s:<35} {d['wins']:>4} {d['losses']:>4} {d['active']:>6}  {tag}")
+        print()
+    else:
+        print("  No series losses detected.")
+        print()
+
+    if clean:
+        print(f"  Confirmed clean series ({len(clean)} types, "
+              f"{sum(d['wins'] for d in clean.values())} wins, 0 losses):")
+        for s, d in sorted(clean.items(), key=lambda x: -x[1]["wins"]):
+            print(f"    {s:<35}  {d['wins']}W  {d['active']} open")
+        print()
+
+    if unknown:
+        print(f"  Unresolved (active only): {', '.join(sorted(unknown.keys()))}")
+        print()
+
+
 # ─── MAIN ─────────────────────────────────────────────────────────────────────
 
 def main():
@@ -623,6 +1374,10 @@ def main():
                         help=f"Windows per event above which REPEAT_SPAM fires (default {REPEAT_SPAM_THRESHOLD})")
     parser.add_argument("--exclude", default="", help="Comma-separated EventIds to exclude")
     parser.add_argument("--clean", action="store_true", help="Only analyze rows with no fraud flags")
+    parser.add_argument("--no-api", action="store_true",
+                        help="Skip Kalshi API resolution check (Section 10)")
+    parser.add_argument("--participation-rate", type=float, default=None,
+                        help="Flat participation rate 0.0-1.0 (default: duration-tiered model)")
     args = parser.parse_args()
 
     path = args.file or find_latest_csv()
@@ -660,6 +1415,11 @@ def main():
     print_spread_detection(rows)  # always on full dataset
     print_realistic_pnl(rows, args.min_duration, DEFAULT_LATENCY_MS, DEFAULT_CAPITAL_PER_ARB, DEFAULT_CAPTURE_RATE, session_hours)
     print_rest_verification(rows)  # always on full dataset (REST fields may be None for old CSVs)
+    print_settlement_simulation(rows, DEFAULT_CAPITAL_PER_ARB, args.min_duration, session_hours)
+    if not args.no_api:
+        print_actual_resolution(rows, DEFAULT_CAPITAL_PER_ARB, args.min_duration, session_hours, path)
+    print_production_sim(rows, session_hours, path, participation_rate=args.participation_rate)
+    print_series_loss_tracker(path)
 
 if __name__ == "__main__":
     main()
