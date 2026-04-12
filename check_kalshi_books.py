@@ -22,6 +22,29 @@ from cryptography.hazmat.primitives import serialization, hashes
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.asymmetric import padding
 
+def _load_dotenv(*dirs):
+    for d in dirs:
+        p = os.path.join(d, ".env")
+        if not os.path.isfile(p):
+            continue
+        with open(p) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if line.startswith("export "):
+                    line = line[7:].strip()
+                if "=" not in line:
+                    continue
+                k, _, v = line.partition("=")
+                k = k.strip(); v = v.strip().strip('"').strip("'")
+                if k and k not in os.environ:
+                    os.environ[k] = v
+        return
+
+_sd = os.path.dirname(os.path.abspath(__file__))
+_load_dotenv(_sd, os.path.dirname(_sd), os.getcwd())
+
 BASE_URL         = "https://api.elections.kalshi.com/trade-api/v2"
 API_KEY_ID       = os.environ.get("KALSHI_API_KEY_ID", "")
 PRIVATE_KEY_PATH = os.environ.get("KALSHI_PRIVATE_KEY_PATH", "")
