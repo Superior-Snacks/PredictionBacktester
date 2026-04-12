@@ -7,7 +7,7 @@ Reads ArbTelemetry_*.csv from the Kalshi paper trader and produces:
   4. Profit analysis
   5. Per-event breakdown (top 20)
   6. Spread/correlated market detection
-  7. Realistic PnL estimate (Iceland -> US latency model)
+  7. Realistic PnL estimate (US server latency model)
   8. REST verification analysis
   9. Settlement simulation (capital-at-risk vs actual P&L scenarios)
  10. Actual resolution check (Kalshi API — win/loss/active per event)
@@ -33,12 +33,12 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 
 # ─── CONFIG ───────────────────────────────────────────────────────────────────
-DEFAULT_MIN_DURATION_MS = 500
-DEFAULT_LATENCY_MS      = 180   # Iceland -> US one-way estimate
+DEFAULT_MIN_DURATION_MS = 17    # US server: ~6ms one-way + ~5ms processing = ~17ms floor
+DEFAULT_LATENCY_MS      = 6     # US server (JFK50-P1) → Kalshi origin, one-way
 DEFAULT_CAPITAL_PER_ARB = 50.0  # max $ per arb attempt
 DEFAULT_CAPTURE_RATE    = 0.60  # realistic fill rate
 
-PROD_LATENCY_MS         = 100   # US co-location: ~50ms one-way round-trip threshold
+PROD_LATENCY_MS         = 17    # US server min capturable window (6ms one-way × 2 + 5ms)
 
 PRICE_SUM_LOW_THRESHOLD  = 0.70   # below this = likely NOT mutually exclusive
 PRICE_SUM_HIGH_THRESHOLD = 1.20   # above this = likely missing legs
@@ -58,10 +58,24 @@ def find_latest_csv():
 
 # ─── SESSION DURATION ─────────────────────────────────────────────────────────
 
+_DT_FORMATS = [
+    "%Y-%m-%d %H:%M:%S.%f",   # new: full date  "2026-04-12 14:23:45.123"
+    "%Y-%m-%d %H:%M:%S",      # new: no millis  "2026-04-12 14:23:45"
+]
+
+def _parse_dt(s):
+    """Try to parse s as a full datetime. Returns datetime or None."""
+    for fmt in _DT_FORMATS:
+        try:
+            return datetime.strptime(s.strip(), fmt)
+        except ValueError:
+            pass
+    return None
+
 def _hms_to_secs(s):
-    """'HH:MM:SS.fff' → float seconds since midnight."""
+    """'HH:MM:SS.fff' → float seconds since midnight (legacy time-only format)."""
     try:
-        parts = s.replace('.', ':').split(':')
+        parts = s.strip().replace('.', ':').split(':')
         h, m, sec = int(parts[0]), int(parts[1]), int(parts[2])
         ms = int(parts[3]) if len(parts) > 3 else 0
         return h * 3600 + m * 60 + sec + ms / 1000.0
@@ -72,47 +86,57 @@ def compute_session_hours(rows, path):
     """
     Total elapsed wall-clock time of the session in hours.
 
-    Rows are written in close-time order so start timestamps are NOT monotonic
-    and cannot be used to count midnight crossings reliably.  Anchor on the
-    session-start datetime encoded in the filename and advance the last end-time
-    by whole days until it is past the first row's start time.
+    New CSV format (yyyy-MM-dd HH:mm:ss.fff): parse datetimes directly — exact
+    for any session length including multi-day.
 
-    For sessions < 24 h this is exact.  For multi-day sessions it is correct
-    as long as the end time is unambiguous within the expected day-count.
+    Legacy format (HH:mm:ss.fff): anchor on the filename date and advance the
+    last end-time by whole days until it is past the first start time.
+    Falls back to a 24h assumption if no filename date is available.
+
     Returns 0.0 if timestamps cannot be parsed.
     """
     if len(rows) < 2:
         return 0.0
 
+    # ── New format: full datetime strings ─────────────────────────────────────
+    dt_start = _parse_dt(rows[0]["start"])
+    dt_end   = _parse_dt(rows[-1]["end"])
+    if dt_start is not None and dt_end is not None:
+        secs = (dt_end - dt_start).total_seconds()
+        if secs <= 0:
+            # Rows are in close-time order; if last close < first open the session
+            # wrapped midnight. The end timestamp being < start means we need to
+            # find the actual max end across all rows.
+            all_ends = [_parse_dt(r["end"]) for r in rows]
+            all_ends = [d for d in all_ends if d is not None]
+            if all_ends:
+                dt_end = max(all_ends)
+                secs   = (dt_end - dt_start).total_seconds()
+        return max(secs / 3600.0, 1 / 3600.0)
+
+    # ── Legacy format: time-only strings ──────────────────────────────────────
     t_start = _hms_to_secs(rows[0]["start"])
     t_end   = _hms_to_secs(rows[-1]["end"])
     if t_start is None or t_end is None:
         return 0.0
 
-    # Anchor on the session-start date from the filename when available.
     m = re.search(r'ArbTelemetry_(\d{8})_(\d{6})', os.path.basename(path))
     if m:
         session_start_dt = datetime.strptime(m.group(1) + m.group(2), '%Y%m%d%H%M%S')
-        base = session_start_dt.replace(hour=0, minute=0, second=0, microsecond=0)
-
-        dt_start = base + timedelta(seconds=t_start)
-        dt_end   = base + timedelta(seconds=t_end)
-
-        # Advance dt_end by whole days until it is strictly after dt_start.
-        # Cap at 30 days to guard against malformed data.
-        for _ in range(30):
-            if dt_end > dt_start:
+        base    = session_start_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+        dt_s    = base + timedelta(seconds=t_start)
+        dt_e    = base + timedelta(seconds=t_end)
+        for _ in range(30):          # advance by days until end > start
+            if dt_e > dt_s:
                 break
-            dt_end += timedelta(days=1)
-
-        secs = (dt_end - dt_start).total_seconds()
+            dt_e += timedelta(days=1)
+        secs = (dt_e - dt_s).total_seconds()
     else:
-        # No filename date — assume the session fits within 24 h.
         secs = t_end - t_start
         if secs <= 0:
-            secs += 86400   # crossed one midnight
+            secs += 86400             # single midnight crossing
 
-    return max(secs / 3600.0, 1 / 3600.0)  # floor at 1 s to avoid div/0
+    return max(secs / 3600.0, 1 / 3600.0)
 
 def _per_hr(amount, hours):
     """Format 'amount' with a trailing '/hr' annotation."""
@@ -493,8 +517,9 @@ def print_realistic_pnl(rows, min_duration_ms, latency_ms, capital_per_arb, capt
     print("  REALISTIC PnL ESTIMATE")
     print("=" * 80)
     print(f"  Assumptions:")
-    print(f"    One-way latency (Iceland -> US):  ~{latency_ms}ms")
-    print(f"    Min capturable window:             {min_duration_ms}ms")
+    print(f"    One-way latency (US server → Kalshi):  ~{latency_ms}ms  (JFK50-P1 PoP, measured)")
+    print(f"    Kalshi server processing:              ~86ms  (fixed cost, not reducible)")
+    print(f"    Min capturable window:                 {min_duration_ms}ms")
     print(f"    Capital per arb:                  ${capital_per_arb:.0f}")
     print(f"    Capture rate (slippage/partial):   {capture_rate*100:.0f}%")
     print()
@@ -530,8 +555,8 @@ def print_realistic_pnl(rows, min_duration_ms, latency_ms, capital_per_arb, capt
         print(f"  Avg potential per window:    ${avg_profit:.4f}")
 
     print()
-    print("  Note: Running from Iceland adds ~180ms to detection latency.")
-    print("  A US server would expose all windows >= ~50ms (vs ~500ms now).")
+    print("  Server: US East (JFK50-P1) · TCP RTT 2ms · order arrives at Kalshi in ~6ms")
+    print("  Full order confirmation ~99ms (dominated by Kalshi's ~86ms processing time).")
     print()
 
 # ─── SECTION 8: REST VERIFICATION ANALYSIS ───────────────────────────────────
@@ -1034,8 +1059,8 @@ def print_production_sim(rows, session_hours, csv_path, participation_rate=None)
     """
     Section 11 — Production Sim.
 
-    Models the bot running from a US co-located server:
-      • Min capturable window  : 100ms  (50ms one-way latency)
+    Models the bot running from a US server near the Kalshi datacenter:
+      • Min capturable window  : 17ms  (6ms one-way · measured JFK50-P1)
       • Participation rate     : fraction of available depth the bot captures.
                                  Default (None) = duration-tiered: long windows imply
                                  low competition; short windows imply others are racing.
@@ -1052,7 +1077,7 @@ def print_production_sim(rows, session_hours, csv_path, participation_rate=None)
     dynamic   = _load_blocklist(csv_path) if csv_path else set()
     blocklist = HARDCODED_BLOCKED | dynamic
 
-    print(f"  Latency model : US co-located  (~50ms one-way, {PROD_LATENCY_MS}ms min window)")
+    print(f"  Latency model : US server JFK50-P1  (~6ms one-way, {PROD_LATENCY_MS}ms min window · measured)")
     if participation_rate is None:
         print(f"  Participation : duration-tiered  (<0.5s=15%  0.5-2s=30%  2-60s=60%  >60s=85%)")
         print(f"                  (long windows imply low competition; latency already filters fast closes)")

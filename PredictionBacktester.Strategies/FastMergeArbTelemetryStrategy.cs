@@ -350,9 +350,10 @@ namespace PredictionBacktester.Strategies
             decimal totalPotentialProfit = netProfitPerShare * arbData.MaxVolumeAtBestSpread;
             decimal capitalRequired = arbData.MaxVolumeAtBestSpread * arbData.BestNetCost;
 
-            // Timestamp formatting
-            string startStr = arbData.StartTime.ToString("HH:mm:ss.fff");
-            string endStr = endTime.ToString("HH:mm:ss.fff");
+            // Timestamp formatting — full date included so the analyzer never needs to
+            // guess day boundaries from the filename.
+            string startStr = arbData.StartTime.ToString("yyyy-MM-dd HH:mm:ss.fff");
+            string endStr = endTime.ToString("yyyy-MM-dd HH:mm:ss.fff");
 
             // Console output
             Console.WriteLine($"\n[TELEMETRY] ⚡ ARB CLOSED: {eventId}");

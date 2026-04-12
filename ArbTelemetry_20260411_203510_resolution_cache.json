@@ -1502,31 +1502,33 @@
     ]
   },
   "KXMLBHR-26APR121340ATHNYM": {
-    "status": "active",
-    "all_resolved": false,
+    "status": "win",
+    "winning_ticker": "KXMLBHR-26APR121340ATHNYM-ATHNKURTZ16-1",
+    "winning_title": "Nick Kurtz: 1+",
+    "all_resolved": true,
     "markets": [
       {
         "ticker": "KXMLBHR-26APR121340ATHNYM-NYMBBICHETTE19-1",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Bo Bichette: 1+"
       },
       {
         "ticker": "KXMLBHR-26APR121340ATHNYM-NYMBBICHETTE19-2",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Bo Bichette: 2+"
       },
       {
         "ticker": "KXMLBHR-26APR121340ATHNYM-NYMFLINDOR12-1",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Francisco Lindor: 1+"
       },
       {
         "ticker": "KXMLBHR-26APR121340ATHNYM-NYMFLINDOR12-2",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Francisco Lindor: 2+"
       },
       {
@@ -1543,176 +1545,176 @@
       },
       {
         "ticker": "KXMLBHR-26APR121340ATHNYM-ATHNKURTZ16-1",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "yes",
         "yes_sub_title": "Nick Kurtz: 1+"
       },
       {
         "ticker": "KXMLBHR-26APR121340ATHNYM-ATHNKURTZ16-2",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Nick Kurtz: 2+"
       },
       {
         "ticker": "KXMLBHR-26APR121340ATHNYM-NYMBBATY7-1",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Brett Baty: 1+"
       },
       {
         "ticker": "KXMLBHR-26APR121340ATHNYM-NYMBBATY7-2",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Brett Baty: 2+"
       },
       {
         "ticker": "KXMLBHR-26APR121340ATHNYM-ATHCCORTES26-1",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Carlos Cortes: 1+"
       },
       {
         "ticker": "KXMLBHR-26APR121340ATHNYM-ATHCCORTES26-2",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Carlos Cortes: 2+"
       },
       {
         "ticker": "KXMLBHR-26APR121340ATHNYM-NYMCBENGE93-1",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Carson Benge: 1+"
       },
       {
         "ticker": "KXMLBHR-26APR121340ATHNYM-NYMCBENGE93-2",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Carson Benge: 2+"
       },
       {
         "ticker": "KXMLBHR-26APR121340ATHNYM-ATHDCLARKE1-1",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Denzel Clarke: 1+"
       },
       {
         "ticker": "KXMLBHR-26APR121340ATHNYM-NYMJYOUNG29-1",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Jared Young: 1+"
       },
       {
         "ticker": "KXMLBHR-26APR121340ATHNYM-NYMJYOUNG29-2",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Jared Young: 2+"
       },
       {
         "ticker": "KXMLBHR-26APR121340ATHNYM-ATHJMCNEIL22-1",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Jeff McNeil: 1+"
       },
       {
         "ticker": "KXMLBHR-26APR121340ATHNYM-NYMJPOLANCO11-1",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Jorge Polanco: 1+"
       },
       {
         "ticker": "KXMLBHR-26APR121340ATHNYM-NYMJPOLANCO11-2",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Jorge Polanco: 2+"
       },
       {
         "ticker": "KXMLBHR-26APR121340ATHNYM-ATHLBUTLER4-1",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Lawrence Butler: 1+"
       },
       {
         "ticker": "KXMLBHR-26APR121340ATHNYM-ATHLBUTLER4-2",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Lawrence Butler: 2+"
       },
       {
         "ticker": "KXMLBHR-26APR121340ATHNYM-NYMLTORRENS13-1",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Luis Torrens: 1+"
       },
       {
         "ticker": "KXMLBHR-26APR121340ATHNYM-NYMLTORRENS13-2",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Luis Torrens: 2+"
       },
       {
         "ticker": "KXMLBHR-26APR121340ATHNYM-NYMMSEMIEN10-1",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Marcus Semien: 1+"
       },
       {
         "ticker": "KXMLBHR-26APR121340ATHNYM-NYMMSEMIEN10-2",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Marcus Semien: 2+"
       },
       {
         "ticker": "KXMLBHR-26APR121340ATHNYM-ATHMMUNCY3-1",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Max Muncy: 1+"
       },
       {
         "ticker": "KXMLBHR-26APR121340ATHNYM-ATHMMUNCY3-2",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Max Muncy: 2+"
       },
       {
         "ticker": "KXMLBHR-26APR121340ATHNYM-ATHSLANGELIERS23-1",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Shea Langeliers: 1+"
       },
       {
         "ticker": "KXMLBHR-26APR121340ATHNYM-ATHSLANGELIERS23-2",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Shea Langeliers: 2+"
       },
       {
         "ticker": "KXMLBHR-26APR121340ATHNYM-ATHTSODERSTROM21-1",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Tyler Soderstrom: 1+"
       },
       {
         "ticker": "KXMLBHR-26APR121340ATHNYM-ATHTSODERSTROM21-2",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Tyler Soderstrom: 2+"
       },
       {
         "ticker": "KXMLBHR-26APR121340ATHNYM-NYMTTAYLOR15-1",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Tyrone Taylor: 1+"
       },
       {
         "ticker": "KXMLBHR-26APR121340ATHNYM-NYMTTAYLOR15-2",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Tyrone Taylor: 2+"
       },
       {
         "ticker": "KXMLBHR-26APR121340ATHNYM-ATHDHERNAIZ2-1",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Darell Hernaiz: 1+"
       }
     ]
@@ -2280,199 +2282,201 @@
     ]
   },
   "KXMLBHR-26APR121340NYYTB": {
-    "status": "active",
-    "all_resolved": false,
+    "status": "win",
+    "winning_ticker": "KXMLBHR-26APR121340NYYTB-NYYAJUDGE99-1",
+    "winning_title": "Aaron Judge: 1+",
+    "all_resolved": true,
     "markets": [
       {
         "ticker": "KXMLBHR-26APR121340NYYTB-NYYAJUDGE99-1",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "yes",
         "yes_sub_title": "Aaron Judge: 1+"
       },
       {
         "ticker": "KXMLBHR-26APR121340NYYTB-NYYAJUDGE99-2",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Aaron Judge: 2+"
       },
       {
         "ticker": "KXMLBHR-26APR121340NYYTB-NYYAJUDGE99-3",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Aaron Judge: 3+"
       },
       {
         "ticker": "KXMLBHR-26APR121340NYYTB-NYYCBELLINGER35-1",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Cody Bellinger: 1+"
       },
       {
         "ticker": "KXMLBHR-26APR121340NYYTB-NYYCBELLINGER35-2",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Cody Bellinger: 2+"
       },
       {
         "ticker": "KXMLBHR-26APR121340NYYTB-TBJARANDA8-1",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Jonathan Aranda: 1+"
       },
       {
         "ticker": "KXMLBHR-26APR121340NYYTB-TBJARANDA8-2",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Jonathan Aranda: 2+"
       },
       {
         "ticker": "KXMLBHR-26APR121340NYYTB-TBJCAMINERO13-1",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Junior Caminero: 1+"
       },
       {
         "ticker": "KXMLBHR-26APR121340NYYTB-TBJCAMINERO13-2",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Junior Caminero: 2+"
       },
       {
         "ticker": "KXMLBHR-26APR121340NYYTB-NYYBRICE22-1",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Ben Rice: 1+"
       },
       {
         "ticker": "KXMLBHR-26APR121340NYYTB-NYYBRICE22-2",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Ben Rice: 2+"
       },
       {
         "ticker": "KXMLBHR-26APR121340NYYTB-TBCMULLINS31-1",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Cedric Mullins: 1+"
       },
       {
         "ticker": "KXMLBHR-26APR121340NYYTB-TBCMULLINS31-2",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Cedric Mullins: 2+"
       },
       {
         "ticker": "KXMLBHR-26APR121340NYYTB-TBCSIMPSON14-1",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Chandler Simpson: 1+"
       },
       {
         "ticker": "KXMLBHR-26APR121340NYYTB-TBHFEDUCCIA9-1",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Hunter Feduccia: 1+"
       },
       {
         "ticker": "KXMLBHR-26APR121340NYYTB-TBJFRALEY17-1",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Jake Fraley: 1+"
       },
       {
         "ticker": "KXMLBHR-26APR121340NYYTB-TBJFRALEY17-2",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Jake Fraley: 2+"
       },
       {
         "ticker": "KXMLBHR-26APR121340NYYTB-NYYJCHISHOLM13-1",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Jazz Chisholm Jr.: 1+"
       },
       {
         "ticker": "KXMLBHR-26APR121340NYYTB-NYYJCHISHOLM13-2",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Jazz Chisholm Jr.: 2+"
       },
       {
         "ticker": "KXMLBHR-26APR121340NYYTB-NYYJCABALLERO72-1",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Jos\u00e9 Caballero: 1+"
       },
       {
         "ticker": "KXMLBHR-26APR121340NYYTB-TBRPALACIOS1-1",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Richie Palacios: 1+"
       },
       {
         "ticker": "KXMLBHR-26APR121340NYYTB-TBRPALACIOS1-2",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Richie Palacios: 2+"
       },
       {
         "ticker": "KXMLBHR-26APR121340NYYTB-NYYRMCMAHON19-1",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Ryan McMahon: 1+"
       },
       {
         "ticker": "KXMLBHR-26APR121340NYYTB-NYYRMCMAHON19-2",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Ryan McMahon: 2+"
       },
       {
         "ticker": "KXMLBHR-26APR121340NYYTB-TBTWALLS6-1",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Taylor Walls: 1+"
       },
       {
         "ticker": "KXMLBHR-26APR121340NYYTB-NYYTGRISHAM12-1",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Trent Grisham: 1+"
       },
       {
         "ticker": "KXMLBHR-26APR121340NYYTB-NYYTGRISHAM12-2",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Trent Grisham: 2+"
       },
       {
         "ticker": "KXMLBHR-26APR121340NYYTB-TBYDIAZ2-1",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Yandy D\u00edaz: 1+"
       },
       {
         "ticker": "KXMLBHR-26APR121340NYYTB-TBYDIAZ2-2",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Yandy D\u00edaz: 2+"
       },
       {
         "ticker": "KXMLBHR-26APR121340NYYTB-NYYJESCARRA25-1",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "J.C. Escarra: 1+"
       },
       {
         "ticker": "KXMLBHR-26APR121340NYYTB-NYYRGRICHUK34-1",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Randal Grichuk: 1+"
       },
       {
         "ticker": "KXMLBHR-26APR121340NYYTB-NYYRGRICHUK34-2",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Randal Grichuk: 2+"
       }
     ]
@@ -3312,25 +3316,27 @@
     ]
   },
   "KXARGPREMDIVGAME-26APR12PLAGEM": {
-    "status": "active",
-    "all_resolved": false,
+    "status": "win",
+    "winning_ticker": "KXARGPREMDIVGAME-26APR12PLAGEM-TIE",
+    "winning_title": "Tie",
+    "all_resolved": true,
     "markets": [
       {
         "ticker": "KXARGPREMDIVGAME-26APR12PLAGEM-PLA",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Platense"
       },
       {
         "ticker": "KXARGPREMDIVGAME-26APR12PLAGEM-GEM",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Mendoza"
       },
       {
         "ticker": "KXARGPREMDIVGAME-26APR12PLAGEM-TIE",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "yes",
         "yes_sub_title": "Tie"
       }
     ]
@@ -3362,25 +3368,27 @@
     ]
   },
   "KXLALIGAGAME-26APR12ATHVIL": {
-    "status": "active",
-    "all_resolved": false,
+    "status": "win",
+    "winning_ticker": "KXLALIGAGAME-26APR12ATHVIL-VIL",
+    "winning_title": "Villarreal",
+    "all_resolved": true,
     "markets": [
       {
         "ticker": "KXLALIGAGAME-26APR12ATHVIL-ATH",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Bilbao"
       },
       {
         "ticker": "KXLALIGAGAME-26APR12ATHVIL-VIL",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "yes",
         "yes_sub_title": "Villarreal"
       },
       {
         "ticker": "KXLALIGAGAME-26APR12ATHVIL-TIE",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Tie"
       }
     ]
@@ -3440,23 +3448,263 @@
     ]
   },
   "KXECULPGAME-26APR12CUEIND": {
-    "status": "active",
-    "all_resolved": false,
+    "status": "win",
+    "winning_ticker": "KXECULPGAME-26APR12CUEIND-IND",
+    "winning_title": "Ind. del Valle",
+    "all_resolved": true,
     "markets": [
       {
         "ticker": "KXECULPGAME-26APR12CUEIND-CUE",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Cuenca"
       },
       {
         "ticker": "KXECULPGAME-26APR12CUEIND-IND",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "yes",
         "yes_sub_title": "Ind. del Valle"
       },
       {
         "ticker": "KXECULPGAME-26APR12CUEIND-TIE",
+        "status": "finalized",
+        "result": "no",
+        "yes_sub_title": "Tie"
+      }
+    ]
+  },
+  "KXSERIEAGAME-26APR12COMINT": {
+    "status": "win",
+    "winning_ticker": "KXSERIEAGAME-26APR12COMINT-INT",
+    "winning_title": "Inter",
+    "all_resolved": true,
+    "markets": [
+      {
+        "ticker": "KXSERIEAGAME-26APR12COMINT-COM",
+        "status": "finalized",
+        "result": "no",
+        "yes_sub_title": "Como"
+      },
+      {
+        "ticker": "KXSERIEAGAME-26APR12COMINT-INT",
+        "status": "finalized",
+        "result": "yes",
+        "yes_sub_title": "Inter"
+      },
+      {
+        "ticker": "KXSERIEAGAME-26APR12COMINT-TIE",
+        "status": "finalized",
+        "result": "no",
+        "yes_sub_title": "Tie"
+      }
+    ]
+  },
+  "KXETHMINMON-ETH-26APR30": {
+    "status": "active",
+    "all_resolved": false,
+    "markets": [
+      {
+        "ticker": "KXETHMINMON-ETH-26APR30-200000",
+        "status": "active",
+        "result": "",
+        "yes_sub_title": "Below $2,000.00"
+      },
+      {
+        "ticker": "KXETHMINMON-ETH-26APR30-175000",
+        "status": "active",
+        "result": "",
+        "yes_sub_title": "Below $1,750.00"
+      },
+      {
+        "ticker": "KXETHMINMON-ETH-26APR30-150000",
+        "status": "active",
+        "result": "",
+        "yes_sub_title": "Below $1,500.00"
+      },
+      {
+        "ticker": "KXETHMINMON-ETH-26APR30-125000",
+        "status": "active",
+        "result": "",
+        "yes_sub_title": "Below $1,250.00"
+      },
+      {
+        "ticker": "KXETHMINMON-ETH-26APR30-100000",
+        "status": "active",
+        "result": "",
+        "yes_sub_title": "Below $1,000.00"
+      },
+      {
+        "ticker": "KXETHMINMON-ETH-26APR30-75000",
+        "status": "active",
+        "result": "",
+        "yes_sub_title": "Below $750.00"
+      },
+      {
+        "ticker": "KXETHMINMON-ETH-26APR30-50000",
+        "status": "active",
+        "result": "",
+        "yes_sub_title": "Below $500.00"
+      },
+      {
+        "ticker": "KXETHMINMON-ETH-26APR30-25000",
+        "status": "active",
+        "result": "",
+        "yes_sub_title": "Below $250.00"
+      }
+    ]
+  },
+  "KXBRASILEIROGAME-26APR12BOTCTB": {
+    "status": "win",
+    "winning_ticker": "KXBRASILEIROGAME-26APR12BOTCTB-TIE",
+    "winning_title": "Tie",
+    "all_resolved": true,
+    "markets": [
+      {
+        "ticker": "KXBRASILEIROGAME-26APR12BOTCTB-BOT",
+        "status": "finalized",
+        "result": "no",
+        "yes_sub_title": "Botafogo"
+      },
+      {
+        "ticker": "KXBRASILEIROGAME-26APR12BOTCTB-CTB",
+        "status": "finalized",
+        "result": "no",
+        "yes_sub_title": "Coritiba"
+      },
+      {
+        "ticker": "KXBRASILEIROGAME-26APR12BOTCTB-TIE",
+        "status": "finalized",
+        "result": "yes",
+        "yes_sub_title": "Tie"
+      }
+    ]
+  },
+  "KXVENFUTVEGAME-26APR12CFCUCV": {
+    "status": "active",
+    "all_resolved": false,
+    "markets": [
+      {
+        "ticker": "KXVENFUTVEGAME-26APR12CFCUCV-CFC",
+        "status": "active",
+        "result": "",
+        "yes_sub_title": "Carabobo"
+      },
+      {
+        "ticker": "KXVENFUTVEGAME-26APR12CFCUCV-UCV",
+        "status": "active",
+        "result": "",
+        "yes_sub_title": "UCV"
+      },
+      {
+        "ticker": "KXVENFUTVEGAME-26APR12CFCUCV-TIE",
+        "status": "active",
+        "result": "",
+        "yes_sub_title": "Tie"
+      }
+    ]
+  },
+  "KXHIGHDEN-26APR12": {
+    "status": "active",
+    "all_resolved": false,
+    "markets": [
+      {
+        "ticker": "KXHIGHDEN-26APR12-T73",
+        "status": "active",
+        "result": "",
+        "yes_sub_title": "72\u00b0 or below"
+      },
+      {
+        "ticker": "KXHIGHDEN-26APR12-B73.5",
+        "status": "active",
+        "result": "",
+        "yes_sub_title": "73\u00b0 to 74\u00b0"
+      },
+      {
+        "ticker": "KXHIGHDEN-26APR12-B75.5",
+        "status": "active",
+        "result": "",
+        "yes_sub_title": "75\u00b0 to 76\u00b0"
+      },
+      {
+        "ticker": "KXHIGHDEN-26APR12-B77.5",
+        "status": "active",
+        "result": "",
+        "yes_sub_title": "77\u00b0 to 78\u00b0"
+      },
+      {
+        "ticker": "KXHIGHDEN-26APR12-B79.5",
+        "status": "active",
+        "result": "",
+        "yes_sub_title": "79\u00b0 to 80\u00b0"
+      },
+      {
+        "ticker": "KXHIGHDEN-26APR12-T80",
+        "status": "active",
+        "result": "",
+        "yes_sub_title": "81\u00b0 or above"
+      }
+    ]
+  },
+  "KXHIGHTBOS-26APR13": {
+    "status": "active",
+    "all_resolved": false,
+    "markets": [
+      {
+        "ticker": "KXHIGHTBOS-26APR13-T67",
+        "status": "active",
+        "result": "",
+        "yes_sub_title": "66\u00b0 or below"
+      },
+      {
+        "ticker": "KXHIGHTBOS-26APR13-B67.5",
+        "status": "active",
+        "result": "",
+        "yes_sub_title": "67\u00b0 to 68\u00b0"
+      },
+      {
+        "ticker": "KXHIGHTBOS-26APR13-B69.5",
+        "status": "active",
+        "result": "",
+        "yes_sub_title": "69\u00b0 to 70\u00b0"
+      },
+      {
+        "ticker": "KXHIGHTBOS-26APR13-B71.5",
+        "status": "active",
+        "result": "",
+        "yes_sub_title": "71\u00b0 to 72\u00b0"
+      },
+      {
+        "ticker": "KXHIGHTBOS-26APR13-B73.5",
+        "status": "active",
+        "result": "",
+        "yes_sub_title": "73\u00b0 to 74\u00b0"
+      },
+      {
+        "ticker": "KXHIGHTBOS-26APR13-T74",
+        "status": "active",
+        "result": "",
+        "yes_sub_title": "75\u00b0 or above"
+      }
+    ]
+  },
+  "KXMLBF5-26APR121610TEXLAD": {
+    "status": "active",
+    "all_resolved": false,
+    "markets": [
+      {
+        "ticker": "KXMLBF5-26APR121610TEXLAD-TEX",
+        "status": "active",
+        "result": "",
+        "yes_sub_title": "Texas wins first 5 innings"
+      },
+      {
+        "ticker": "KXMLBF5-26APR121610TEXLAD-LAD",
+        "status": "active",
+        "result": "",
+        "yes_sub_title": "Los Angeles D wins first 5 innings"
+      },
+      {
+        "ticker": "KXMLBF5-26APR121610TEXLAD-TIE",
         "status": "active",
         "result": "",
         "yes_sub_title": "Tie"
