@@ -43,7 +43,7 @@ def _load_dotenv(*dirs):
         return
 
 _sd = os.path.dirname(os.path.abspath(__file__))
-_load_dotenv(_sd, os.path.dirname(_sd), os.getcwd())
+_load_dotenv(_sd, os.path.dirname(_sd), os.path.expanduser("~"), os.getcwd())
 
 BASE_URL         = "https://api.elections.kalshi.com/trade-api/v2"
 API_KEY_ID       = os.environ.get("KALSHI_API_KEY_ID", "")

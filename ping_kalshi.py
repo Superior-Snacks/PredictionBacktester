@@ -83,7 +83,7 @@ def _load_dotenv(*search_dirs):
 # Load .env from script dir then CWD (CWD takes precedence via "not in os.environ" check)
 _script_dir  = os.path.dirname(os.path.abspath(__file__))
 _parent_dir  = os.path.dirname(_script_dir)
-_load_dotenv(_script_dir, _parent_dir, os.getcwd())
+_load_dotenv(_script_dir, _parent_dir, os.path.expanduser("~"), os.getcwd())
 
 try:
     from cryptography.hazmat.primitives import serialization, hashes

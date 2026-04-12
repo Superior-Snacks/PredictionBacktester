@@ -29,7 +29,7 @@ def _load_dotenv(*dirs):
         return
 
 _sd = os.path.dirname(os.path.abspath(__file__))
-_load_dotenv(_sd, os.path.dirname(_sd), os.getcwd())
+_load_dotenv(_sd, os.path.dirname(_sd), os.path.expanduser("~"), os.getcwd())
 
 API_KEY_ID       = os.environ.get("KALSHI_API_KEY_ID", "")
 PRIVATE_KEY_PATH = os.environ.get("KALSHI_PRIVATE_KEY_PATH", "")
