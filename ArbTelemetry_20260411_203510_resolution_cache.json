@@ -3008,25 +3008,27 @@
     ]
   },
   "KXLIGAPORTUGALGAME-26APR12BRAARO": {
-    "status": "active",
-    "all_resolved": false,
+    "status": "win",
+    "winning_ticker": "KXLIGAPORTUGALGAME-26APR12BRAARO-BRA",
+    "winning_title": "Braga",
+    "all_resolved": true,
     "markets": [
       {
         "ticker": "KXLIGAPORTUGALGAME-26APR12BRAARO-BRA",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "yes",
         "yes_sub_title": "Braga"
       },
       {
         "ticker": "KXLIGAPORTUGALGAME-26APR12BRAARO-ARO",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Arouca"
       },
       {
         "ticker": "KXLIGAPORTUGALGAME-26APR12BRAARO-TIE",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Tie"
       }
     ]
@@ -3284,25 +3286,27 @@
     ]
   },
   "KXSUPERLIGGAME-26APR12GALKOC": {
-    "status": "active",
-    "all_resolved": false,
+    "status": "win",
+    "winning_ticker": "KXSUPERLIGGAME-26APR12GALKOC-TIE",
+    "winning_title": "Tie",
+    "all_resolved": true,
     "markets": [
       {
         "ticker": "KXSUPERLIGGAME-26APR12GALKOC-GAL",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Galatasaray"
       },
       {
         "ticker": "KXSUPERLIGGAME-26APR12GALKOC-KOC",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "no",
         "yes_sub_title": "Kocaeli"
       },
       {
         "ticker": "KXSUPERLIGGAME-26APR12GALKOC-TIE",
-        "status": "active",
-        "result": "",
+        "status": "finalized",
+        "result": "yes",
         "yes_sub_title": "Tie"
       }
     ]
@@ -3325,6 +3329,134 @@
       },
       {
         "ticker": "KXARGPREMDIVGAME-26APR12PLAGEM-TIE",
+        "status": "active",
+        "result": "",
+        "yes_sub_title": "Tie"
+      }
+    ]
+  },
+  "KXBUNDESLIGAGAME-26APR12M05SCF": {
+    "status": "win",
+    "winning_ticker": "KXBUNDESLIGAGAME-26APR12M05SCF-SCF",
+    "winning_title": "Freiburg",
+    "all_resolved": true,
+    "markets": [
+      {
+        "ticker": "KXBUNDESLIGAGAME-26APR12M05SCF-M05",
+        "status": "finalized",
+        "result": "no",
+        "yes_sub_title": "Mainz"
+      },
+      {
+        "ticker": "KXBUNDESLIGAGAME-26APR12M05SCF-SCF",
+        "status": "finalized",
+        "result": "yes",
+        "yes_sub_title": "Freiburg"
+      },
+      {
+        "ticker": "KXBUNDESLIGAGAME-26APR12M05SCF-TIE",
+        "status": "finalized",
+        "result": "no",
+        "yes_sub_title": "Tie"
+      }
+    ]
+  },
+  "KXLALIGAGAME-26APR12ATHVIL": {
+    "status": "active",
+    "all_resolved": false,
+    "markets": [
+      {
+        "ticker": "KXLALIGAGAME-26APR12ATHVIL-ATH",
+        "status": "active",
+        "result": "",
+        "yes_sub_title": "Bilbao"
+      },
+      {
+        "ticker": "KXLALIGAGAME-26APR12ATHVIL-VIL",
+        "status": "active",
+        "result": "",
+        "yes_sub_title": "Villarreal"
+      },
+      {
+        "ticker": "KXLALIGAGAME-26APR12ATHVIL-TIE",
+        "status": "active",
+        "result": "",
+        "yes_sub_title": "Tie"
+      }
+    ]
+  },
+  "KXFIDESZKDNPSEATS-26APR12": {
+    "status": "active",
+    "all_resolved": false,
+    "markets": [
+      {
+        "ticker": "KXFIDESZKDNPSEATS-26APR12-A50",
+        "status": "active",
+        "result": "",
+        "yes_sub_title": "Above 50"
+      },
+      {
+        "ticker": "KXFIDESZKDNPSEATS-26APR12-A60",
+        "status": "active",
+        "result": "",
+        "yes_sub_title": "Above 60"
+      },
+      {
+        "ticker": "KXFIDESZKDNPSEATS-26APR12-A70",
+        "status": "active",
+        "result": "",
+        "yes_sub_title": "Above 70"
+      },
+      {
+        "ticker": "KXFIDESZKDNPSEATS-26APR12-A80",
+        "status": "active",
+        "result": "",
+        "yes_sub_title": "Above 80"
+      },
+      {
+        "ticker": "KXFIDESZKDNPSEATS-26APR12-A90",
+        "status": "active",
+        "result": "",
+        "yes_sub_title": "Above 90"
+      },
+      {
+        "ticker": "KXFIDESZKDNPSEATS-26APR12-A100",
+        "status": "active",
+        "result": "",
+        "yes_sub_title": "Above 100"
+      },
+      {
+        "ticker": "KXFIDESZKDNPSEATS-26APR12-A120",
+        "status": "active",
+        "result": "",
+        "yes_sub_title": "Above 120"
+      },
+      {
+        "ticker": "KXFIDESZKDNPSEATS-26APR12-A140",
+        "status": "active",
+        "result": "",
+        "yes_sub_title": "Above 140"
+      }
+    ]
+  },
+  "KXECULPGAME-26APR12CUEIND": {
+    "status": "active",
+    "all_resolved": false,
+    "markets": [
+      {
+        "ticker": "KXECULPGAME-26APR12CUEIND-CUE",
+        "status": "active",
+        "result": "",
+        "yes_sub_title": "Cuenca"
+      },
+      {
+        "ticker": "KXECULPGAME-26APR12CUEIND-IND",
+        "status": "active",
+        "result": "",
+        "yes_sub_title": "Ind. del Valle"
+      },
+      {
+        "ticker": "KXECULPGAME-26APR12CUEIND-TIE",
         "status": "active",
         "result": "",
         "yes_sub_title": "Tie"
