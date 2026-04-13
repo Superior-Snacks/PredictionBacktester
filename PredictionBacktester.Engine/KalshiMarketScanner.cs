@@ -113,13 +113,24 @@ public class KalshiMarketScanner
 
         int skippedScalar        = 0;
         int skippedNonExhaustive = 0;
+        int skippedDateSeries    = 0;
         int catEligible          = 0;
         int binEligible          = 0;
 
+        bool _debugPrinted = false;
         foreach (var ev in events)
         {
             string eventTicker = GetString(ev, "event_ticker");
             if (string.IsNullOrEmpty(eventTicker)) continue;
+
+            // One-time debug: show all event-level field names so we can confirm
+            // which MEE/exhaustiveness metadata Kalshi actually exposes.
+            if (!_debugPrinted)
+            {
+                _debugPrinted = true;
+                var keys = ev.EnumerateObject().Select(p => p.Name).ToList();
+                Console.WriteLine($"[KALSHI SCANNER] Event API fields: {string.Join(", ", keys)}");
+            }
 
             // Skip event types that are structurally non-exhaustive: all legs can
             // simultaneously resolve NO when the underlying event falls outside every
@@ -130,11 +141,22 @@ public class KalshiMarketScanner
             //              every inning leg resolves NO.
             if (IsNonExhaustiveEvent(eventTicker)) { skippedNonExhaustive++; continue; }
 
+            // Kalshi API's own mutually_exclusive flag — the ground-truth MEE signal.
+            // If the API explicitly says false, skip immediately.  If the field is
+            // absent (older API versions) we fall through to heuristic checks.
+            if (ev.TryGetProperty("mutually_exclusive", out var meEl) &&
+                meEl.ValueKind == JsonValueKind.False)
+            {
+                skippedNonExhaustive++;
+                continue;
+            }
+
             if (!ev.TryGetProperty("markets", out var marketsEl) ||
                 marketsEl.ValueKind != JsonValueKind.Array)
                 continue;
 
             var activeYesTickers  = new List<string>(); // legs for categorical
+            var activeYesPrices   = new List<decimal>(); // parallel to activeYesTickers, for date-series detection
             decimal catMaxVol24h  = 0m;                 // highest leg volume — event is live if any leg traded
             decimal catRestAskSum = 0m;                 // sum of REST yes_ask prices across all active legs
             int     catPricedLegs = 0;                  // legs with a non-zero REST ask price
@@ -242,6 +264,7 @@ public class KalshiMarketScanner
 
                 // Collect for categorical check
                 activeYesTickers.Add(ticker);
+                activeYesPrices.Add(impliedAsk > 0.01m && impliedAsk < 1.0m ? impliedAsk : 0m);
             }
 
             // ── CATEGORICAL ARB candidate check ─────────────────────────────
@@ -266,9 +289,21 @@ public class KalshiMarketScanner
             bool sumIsReasonable = !pricesAvailable
                 || (catRestAskSum >= 0.82m && catRestAskSum <= 1.50m);
 
+            // Tier 2+3 date-series guard: "Will X happen before [date]?" markets
+            // form a cumulative series where all legs can simultaneously resolve NO.
+            // Detected by two signals that must both be present:
+            //   Tier 3 — ≥2/3 of tickers end in a YYMONDD date suffix (e.g. -26MAY1)
+            //   Tier 2 — REST ask prices are monotonically non-decreasing sorted by ticker
+            var legPairs = activeYesTickers
+                .Zip(activeYesPrices, (t, p) => (Ticker: t, Price: p))
+                .ToList();
+            bool isDateSeries = IsDateSeriesEvent(legPairs);
+            if (isDateSeries) skippedDateSeries++;
+
             if (activeYesTickers.Count >= 3 && catMaxVol24h >= _minVolume24h
                 && !hasPartiallyResolved && sumIsReasonable
-                && cumulativeLegCount < 2 && episodeLegCount < 2)
+                && cumulativeLegCount < 2 && episodeLegCount < 2
+                && !isDateSeries)
             {
                 categorical[eventTicker] = activeYesTickers;
                 catEligible++;
@@ -278,8 +313,9 @@ public class KalshiMarketScanner
         Console.WriteLine($"[KALSHI SCANNER] Categorical: {catEligible} events | " +
                           $"Binary: {binEligible} markets | " +
                           $"Skipped: {skippedScalar} scalar, " +
-                          $"{skippedNonExhaustive} blocklisted (VICROUND/MLBHR/SPREAD/TOTAL), " +
-                          $"filtered by price-sum/cumulative/episode guards.");
+                          $"{skippedNonExhaustive} blocklisted, " +
+                          $"{skippedDateSeries} date-series (non-exhaustive), " +
+                          $"remainder filtered by price-sum/cumulative/episode guards.");
 
         TokenNames = names;
 
@@ -318,8 +354,19 @@ public class KalshiMarketScanner
     private bool IsNonExhaustiveEvent(string eventTicker)
     {
         string upper = eventTicker.ToUpperInvariant();
-        // Hardcoded known-bad series prefixes
-        if (upper.Contains("VICROUND") || upper.Contains("MLBHR"))
+        // Hardcoded known-bad series prefixes — events where all legs can resolve NO:
+        //   VICROUND        — UFC/boxing round: if fight goes to decision no round leg pays
+        //   MLBHR           — MLB HR by inning: if no HR hit, every inning leg is $0
+        //   HEGSETHANNOUNCE — "Before date" series: Hegseth may never leave
+        //   IMPEACH         — "Will X be impeached?" conditional event
+        //   JUULFLAVOR      — "Will Juul offer flavor X?": flavors may not launch
+        //   MLBSTATCOUNT    — MLB stat cumulative counts: stat might not reach threshold
+        if (upper.Contains("VICROUND")        ||
+            upper.Contains("MLBHR")           ||
+            upper.Contains("HEGSETHANNOUNCE") ||
+            upper.Contains("IMPEACH")         ||
+            upper.Contains("JUULFLAVOR")      ||
+            upper.Contains("MLBSTATCOUNT"))
             return true;
         // Dynamic blocklist: series prefixes detected by the analyzer
         // (any prefix whose events have produced an all-NO resolution)
@@ -372,6 +419,49 @@ public class KalshiMarketScanner
             || lower.Contains("at least")
             || lower.Contains("and above")
             || lower.Contains("or above");
+    }
+
+    /// <summary>
+    /// Returns true when the event's legs form a cumulative date-series rather than
+    /// true mutually-exclusive categorical outcomes — using two signals that must
+    /// both be present:
+    ///
+    ///   Tier 3 — ≥2/3 of tickers end in a Kalshi date suffix (YYMONDD pattern,
+    ///            e.g. -26MAY1, -26APR30).  Pure categorical legs use labels like
+    ///            -REP, -DEM, -TRUMP, not calendar dates.
+    ///
+    ///   Tier 2 — REST ask prices are monotonically non-decreasing when tickers are
+    ///            sorted alphabetically (= chronological order for date suffixes).
+    ///            "Before Jun" YES must price ≥ "Before May" YES because it is a
+    ///            strict superset — a cumulative CDF, not exclusive probabilities.
+    ///
+    /// Either signal alone can appear in a legitimate categorical market; together
+    /// they are a reliable indicator that all legs can simultaneously resolve NO
+    /// (e.g. if the person never leaves office), making the apparent arb unsafe.
+    /// </summary>
+    private static bool IsDateSeriesEvent(List<(string Ticker, decimal Price)> legs)
+    {
+        if (legs.Count < 2) return false;
+
+        // Tier 3 — ticker date-suffix pattern: -YYMONDD  (e.g. -26MAY1, -26APR30)
+        var dateRegex = new System.Text.RegularExpressions.Regex(
+            @"-\d{2}(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\d{1,2}$",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        int dateMatches = legs.Count(l => dateRegex.IsMatch(l.Ticker));
+        if (dateMatches * 3 < legs.Count * 2) return false; // < 2/3 have date suffixes
+
+        // Tier 2 — prices non-decreasing when sorted by ticker (= chronological)
+        var priced = legs
+            .Where(l => l.Price > 0m)
+            .OrderBy(l => l.Ticker)
+            .ToList();
+        if (priced.Count < 2) return false;
+
+        for (int i = 1; i < priced.Count; i++)
+            if (priced[i].Price < priced[i - 1].Price - 0.03m) // 3-cent rounding tolerance
+                return false;
+
+        return true;
     }
 
     private static string GetString(JsonElement el, string key)

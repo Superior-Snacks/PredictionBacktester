@@ -176,14 +176,18 @@ def load_csv(path):
         reader = csv.DictReader(f)
         for r in reader:
             try:
-                raw_prices = r["LegPrices"].strip('"')
-                leg_prices = [float(p) for p in raw_prices.split("|") if p.strip()]
+                raw_prices  = r["LegPrices"].strip('"')
+                leg_prices  = [float(p) for p in raw_prices.split("|") if p.strip()]
+                # LegTickers added in a later version — optional for backward compat
+                raw_tickers = r.get("LegTickers", "").strip('"')
+                leg_tickers = [t.strip() for t in raw_tickers.split("|") if t.strip()]
                 rows.append({
                     "start":               r["StartTime"].strip(),
                     "end":                 r["EndTime"].strip(),
                     "duration_ms":         float(r["DurationMs"]),
                     "event":               r["EventId"].strip('"').strip(),
                     "num_legs":            int(r["NumLegs"]),
+                    "leg_tickers":         leg_tickers,
                     "leg_prices":          leg_prices,
                     "leg_sum":             sum(leg_prices),
                     "entry_net_cost":      float(r["EntryNetCost"]),
@@ -204,6 +208,49 @@ def load_csv(path):
             except (KeyError, ValueError):
                 continue
     return rows
+
+# ─── DATE-SERIES MEE DETECTION ───────────────────────────────────────────────
+
+_DATE_SUFFIX_RE = re.compile(
+    r'-\d{2}(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\d{1,2}$',
+    re.IGNORECASE)
+
+def _is_date_series_monotonic(leg_tickers, leg_prices):
+    """
+    Returns True when the legs appear to form a cumulative date-series rather than
+    true mutually-exclusive outcomes — detected by two signals that must both be
+    present:
+
+      Tier 3 (ticker pattern) — ≥2/3 of tickers end in a Kalshi date suffix
+          (YYMONDD, e.g. -26MAY1).  When leg_tickers is empty (old CSV format),
+          this signal is skipped and only Tier 2 is evaluated.
+
+      Tier 2 (price monotonicity) — prices are non-decreasing when tickers are
+          sorted alphabetically (= chronological for date suffixes).  With no
+          ticker data, checks whether the stored price sequence itself is
+          non-decreasing (weaker but still useful).
+
+    Both signals must pass (or Tier 3 is unavailable and Tier 2 passes alone).
+    """
+    if len(leg_prices) < 2:
+        return False
+
+    if leg_tickers:
+        # Tier 3: check date suffix coverage
+        date_count = sum(1 for t in leg_tickers if _DATE_SUFFIX_RE.search(t))
+        if date_count * 3 < len(leg_tickers) * 2:   # < 2/3 have date suffixes
+            return False
+        # Tier 2: sort by ticker (= chronological), check monotonicity
+        pairs = sorted(zip(leg_tickers, leg_prices), key=lambda x: x[0])
+        prices_ordered = [p for _, p in pairs]
+    else:
+        # No ticker data (old CSV) — Tier 3 unavailable, check Tier 2 only
+        prices_ordered = leg_prices
+
+    return all(
+        prices_ordered[i] >= prices_ordered[i - 1] - 0.03   # 3-cent tolerance
+        for i in range(1, len(prices_ordered))
+    )
 
 # ─── FRAUD FLAGS ──────────────────────────────────────────────────────────────
 
@@ -238,6 +285,12 @@ def compute_flags(rows, spam_threshold=REPEAT_SPAM_THRESHOLD):
                 and r.get("rest_yes_ask_sum") is not None
                 and r["rest_yes_ask_sum"] > 1.50):
             flags.append("PARTIAL_LEGS_REST")
+        # DATE_SERIES_MONOTONIC: legs form a cumulative "before date X" series —
+        # all legs can simultaneously resolve NO, making this structurally unsafe.
+        # Tier 3: ≥2/3 of tickers end in YYMONDD date suffix (e.g. -26MAY1)
+        # Tier 2: prices are monotonically non-decreasing sorted by ticker
+        if _is_date_series_monotonic(r.get("leg_tickers", []), r["leg_prices"]):
+            flags.append("DATE_SERIES_MONOTONIC")
         r["flags"] = flags
 
     # Second pass: propagate event-level disqualifiers.
@@ -1085,7 +1138,8 @@ def print_production_sim(rows, session_hours, csv_path, participation_rate=None)
     else:
         print(f"  Participation : {participation_rate*100:.0f}% flat  (override via --participation-rate)")
     print(f"  Entry model   : one entry per event at best (lowest-cost) capturable window")
-    print(f"  Scope         : clean categoricals — SPREAD/TOTAL + {len(blocklist)} blocklisted series excluded")
+    print(f"  Scope         : clean categoricals — non-exhaustive series excluded")
+    print(f"  Blocklist     : {len(HARDCODED_BLOCKED)} hardcoded + {len(blocklist) - len(HARDCODED_BLOCKED)} learned  ({', '.join(sorted(HARDCODED_BLOCKED)[:3])}...)")
     if blocklist:
         print(f"  Blocklist     : {', '.join(sorted(blocklist))}")
     print()
@@ -1271,7 +1325,14 @@ BLOCKLIST_FILENAME = "event_blocklist.json"
 
 # Hardcoded series that are always blocked regardless of the learned file.
 # These are kept here so the blocklist file only needs to track *new* discoveries.
-HARDCODED_BLOCKED = {"KXUFCVICROUND", "KXMLBHR"}
+HARDCODED_BLOCKED = {
+    "KXUFCVICROUND",       # UFC/boxing round: fight-to-decision → all legs $0
+    "KXMLBHR",             # MLB HR by inning: no HR hit → all legs $0
+    "KXHEGSETHANNOUNCEOUT",# "Before date" series: Hegseth may never leave
+    "KXIMPEACH",           # "Will X be impeached?": conditional, may never happen
+    "KXJUULFLAVOR",        # "Will Juul offer flavor X?": flavors may not launch
+    "KXMLBSTATCOUNT",      # MLB stat cumulative counts: stat may never reach threshold
+}
 
 
 def _event_series(event_id):

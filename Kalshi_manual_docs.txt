@@ -270,3 +270,1435 @@ AmendOrder
 DecreaseOrder
 We reserve the right to downgrade your API rate limit tier from Prime and Premier when you have shown lack of activity in the previous period.
 At any time, any Member that uses FIX or is at the highest possible API tier is eligible for an upgrade to its rate limit upon demonstration that such a tier is necessary for its bona fide market activity.
+
+
+Get Event
+Endpoint for getting data about an event by its ticker. An event represents a real-world occurrence that can be traded on, such as an election, sports game, or economic indicator release. Events contain one or more markets where users can place trades on different outcomes. All events are accessible through this endpoint, even if their associated markets are older than the historical cutoff.
+
+GET
+/
+events
+/
+{event_ticker}
+
+Try it
+Get Event
+
+curl --request GET \
+  --url https://api.elections.kalshi.com/trade-api/v2/events/{event_ticker}
+
+200
+{
+  "event": {
+    "event_ticker": "<string>",
+    "series_ticker": "<string>",
+    "sub_title": "<string>",
+    "title": "<string>",
+    "collateral_return_type": "<string>",
+    "mutually_exclusive": true,
+    "available_on_brokers": true,
+    "product_metadata": {},
+    "category": "<string>",
+    "strike_date": "2023-11-07T05:31:56Z",
+    "strike_period": "<string>",
+    "markets": [
+      {
+        "ticker": "<string>",
+        "event_ticker": "<string>",
+        "market_type": "binary",
+        "yes_sub_title": "<string>",
+        "no_sub_title": "<string>",
+        "created_time": "2023-11-07T05:31:56Z",
+        "updated_time": "2023-11-07T05:31:56Z",
+        "open_time": "2023-11-07T05:31:56Z",
+        "close_time": "2023-11-07T05:31:56Z",
+        "latest_expiration_time": "2023-11-07T05:31:56Z",
+        "settlement_timer_seconds": 123,
+        "status": "initialized",
+        "yes_bid_dollars": "0.5600",
+        "yes_bid_size_fp": "10.00",
+        "yes_ask_dollars": "0.5600",
+        "yes_ask_size_fp": "10.00",
+        "no_bid_dollars": "0.5600",
+        "no_ask_dollars": "0.5600",
+        "last_price_dollars": "0.5600",
+        "volume_fp": "10.00",
+        "volume_24h_fp": "10.00",
+        "result": "yes",
+        "can_close_early": true,
+        "fractional_trading_enabled": true,
+        "open_interest_fp": "10.00",
+        "notional_value_dollars": "0.5600",
+        "previous_yes_bid_dollars": "0.5600",
+        "previous_yes_ask_dollars": "0.5600",
+        "previous_price_dollars": "0.5600",
+        "liquidity_dollars": "0.5600",
+        "expiration_value": "<string>",
+        "rules_primary": "<string>",
+        "rules_secondary": "<string>",
+        "price_level_structure": "<string>",
+        "price_ranges": [
+          {
+            "start": "<string>",
+            "end": "<string>",
+            "step": "<string>"
+          }
+        ],
+        "title": "<string>",
+        "subtitle": "<string>",
+        "expected_expiration_time": "2023-11-07T05:31:56Z",
+        "expiration_time": "2023-11-07T05:31:56Z",
+        "response_price_units": "usd_cent",
+        "settlement_value_dollars": "0.5600",
+        "settlement_ts": "2023-11-07T05:31:56Z",
+        "fee_waiver_expiration_time": "2023-11-07T05:31:56Z",
+        "early_close_condition": "<string>",
+        "tick_size": 123,
+        "strike_type": "greater",
+        "floor_strike": 123,
+        "cap_strike": 123,
+        "functional_strike": "<string>",
+        "custom_strike": {},
+        "mve_collection_ticker": "<string>",
+        "mve_selected_legs": [
+          {
+            "event_ticker": "<string>",
+            "market_ticker": "<string>",
+            "side": "<string>",
+            "yes_settlement_value_dollars": "0.5600"
+          }
+        ],
+        "primary_participant_key": "<string>",
+        "is_provisional": true
+      }
+    ],
+    "last_updated_ts": "2023-11-07T05:31:56Z"
+  },
+  "markets": [
+    {
+      "ticker": "<string>",
+      "event_ticker": "<string>",
+      "market_type": "binary",
+      "yes_sub_title": "<string>",
+      "no_sub_title": "<string>",
+      "created_time": "2023-11-07T05:31:56Z",
+      "updated_time": "2023-11-07T05:31:56Z",
+      "open_time": "2023-11-07T05:31:56Z",
+      "close_time": "2023-11-07T05:31:56Z",
+      "latest_expiration_time": "2023-11-07T05:31:56Z",
+      "settlement_timer_seconds": 123,
+      "status": "initialized",
+      "yes_bid_dollars": "0.5600",
+      "yes_bid_size_fp": "10.00",
+      "yes_ask_dollars": "0.5600",
+      "yes_ask_size_fp": "10.00",
+      "no_bid_dollars": "0.5600",
+      "no_ask_dollars": "0.5600",
+      "last_price_dollars": "0.5600",
+      "volume_fp": "10.00",
+      "volume_24h_fp": "10.00",
+      "result": "yes",
+      "can_close_early": true,
+      "fractional_trading_enabled": true,
+      "open_interest_fp": "10.00",
+      "notional_value_dollars": "0.5600",
+      "previous_yes_bid_dollars": "0.5600",
+      "previous_yes_ask_dollars": "0.5600",
+      "previous_price_dollars": "0.5600",
+      "liquidity_dollars": "0.5600",
+      "expiration_value": "<string>",
+      "rules_primary": "<string>",
+      "rules_secondary": "<string>",
+      "price_level_structure": "<string>",
+      "price_ranges": [
+        {
+          "start": "<string>",
+          "end": "<string>",
+          "step": "<string>"
+        }
+      ],
+      "title": "<string>",
+      "subtitle": "<string>",
+      "expected_expiration_time": "2023-11-07T05:31:56Z",
+      "expiration_time": "2023-11-07T05:31:56Z",
+      "response_price_units": "usd_cent",
+      "settlement_value_dollars": "0.5600",
+      "settlement_ts": "2023-11-07T05:31:56Z",
+      "fee_waiver_expiration_time": "2023-11-07T05:31:56Z",
+      "early_close_condition": "<string>",
+      "tick_size": 123,
+      "strike_type": "greater",
+      "floor_strike": 123,
+      "cap_strike": 123,
+      "functional_strike": "<string>",
+      "custom_strike": {},
+      "mve_collection_ticker": "<string>",
+      "mve_selected_legs": [
+        {
+          "event_ticker": "<string>",
+          "market_ticker": "<string>",
+          "side": "<string>",
+          "yes_settlement_value_dollars": "0.5600"
+        }
+      ],
+      "primary_participant_key": "<string>",
+      "is_provisional": true
+    }
+  ]
+}
+Path Parameters
+​
+event_ticker
+stringrequired
+Event ticker
+
+Query Parameters
+​
+with_nested_markets
+booleandefault:false
+If true, markets are included within the event object. If false (default), markets are returned as a separate top-level field in the response. Historical markets settled before the historical cutoff will not be included.
+
+Response
+
+200
+
+application/json
+Event retrieved successfully
+
+​
+event
+objectrequired
+Data for the event.
+
+Hide child attributes
+
+​
+event.event_ticker
+stringrequired
+Unique identifier for this event.
+
+​
+event.series_ticker
+stringrequired
+Unique identifier for the series this event belongs to.
+
+​
+event.sub_title
+stringrequired
+Shortened descriptive title for the event.
+
+​
+event.title
+stringrequired
+Full title of the event.
+
+​
+event.collateral_return_type
+stringrequired
+Specifies how collateral is returned when markets settle (e.g., 'binary' for standard yes/no markets).
+
+​
+event.mutually_exclusive
+booleanrequired
+If true, only one market in this event can resolve to 'yes'. If false, multiple markets can resolve to 'yes'.
+
+​
+event.available_on_brokers
+booleanrequired
+Whether this event is available to trade on brokers.
+
+​
+event.product_metadata
+objectrequired
+Additional metadata for the event.
+
+​
+event.category
+stringdeprecated
+Event category (deprecated, use series-level category instead).
+
+​
+event.strike_date
+string<date-time> | null
+The specific date this event is based on. Only filled when the event uses a date strike (mutually exclusive with strike_period).
+
+​
+event.strike_period
+string | null
+The time period this event covers (e.g., 'week', 'month'). Only filled when the event uses a period strike (mutually exclusive with strike_date).
+
+​
+event.markets
+object[]
+Array of markets associated with this event. Only populated when 'with_nested_markets=true' is specified in the request.
+
+Hide child attributes
+
+​
+event.markets.ticker
+stringrequired
+​
+event.markets.event_ticker
+stringrequired
+​
+event.markets.market_type
+enum<string>required
+Identifies the type of market
+
+Available options: binary, scalar 
+​
+event.markets.yes_sub_title
+stringrequired
+Shortened title for the yes side of this market
+
+​
+event.markets.no_sub_title
+stringrequired
+Shortened title for the no side of this market
+
+​
+event.markets.created_time
+string<date-time>required
+​
+event.markets.updated_time
+string<date-time>required
+Time of the last non-trading metadata update.
+
+​
+event.markets.open_time
+string<date-time>required
+​
+event.markets.close_time
+string<date-time>required
+​
+event.markets.latest_expiration_time
+string<date-time>required
+Latest possible time for this market to expire
+
+​
+event.markets.settlement_timer_seconds
+integerrequired
+The amount of time after determination that the market settles
+
+​
+event.markets.status
+enum<string>required
+The current status of the market in its lifecycle.
+
+Available options: initialized, inactive, active, closed, determined, disputed, amended, finalized 
+​
+event.markets.yes_bid_dollars
+stringrequired
+Price for the highest YES buy offer on this market in dollars
+
+Example:
+"0.5600"
+
+​
+event.markets.yes_bid_size_fp
+stringrequired
+Total contract size of orders to buy YES at the best bid price (fixed-point count string).
+
+Example:
+"10.00"
+
+​
+event.markets.yes_ask_dollars
+stringrequired
+Price for the lowest YES sell offer on this market in dollars
+
+Example:
+"0.5600"
+
+​
+event.markets.yes_ask_size_fp
+stringrequired
+Total contract size of orders to sell YES at the best ask price (fixed-point count string).
+
+Example:
+"10.00"
+
+​
+event.markets.no_bid_dollars
+stringrequired
+Price for the highest NO buy offer on this market in dollars
+
+Example:
+"0.5600"
+
+​
+event.markets.no_ask_dollars
+stringrequired
+Price for the lowest NO sell offer on this market in dollars
+
+Example:
+"0.5600"
+
+​
+event.markets.last_price_dollars
+stringrequired
+Price for the last traded YES contract on this market in dollars
+
+Example:
+"0.5600"
+
+​
+event.markets.volume_fp
+stringrequired
+String representation of the market volume in contracts
+
+Example:
+"10.00"
+
+​
+event.markets.volume_24h_fp
+stringrequired
+String representation of the 24h market volume in contracts
+
+Example:
+"10.00"
+
+​
+event.markets.result
+enum<string>required
+Available options: yes, no, scalar,  
+​
+event.markets.can_close_early
+booleanrequired
+​
+event.markets.fractional_trading_enabled
+booleanrequired
+​
+event.markets.open_interest_fp
+stringrequired
+String representation of the number of contracts bought on this market disconsidering netting
+
+Example:
+"10.00"
+
+​
+event.markets.notional_value_dollars
+stringrequired
+The total value of a single contract at settlement in dollars
+
+Example:
+"0.5600"
+
+​
+event.markets.previous_yes_bid_dollars
+stringrequired
+Price for the highest YES buy offer on this market a day ago in dollars
+
+Example:
+"0.5600"
+
+​
+event.markets.previous_yes_ask_dollars
+stringrequired
+Price for the lowest YES sell offer on this market a day ago in dollars
+
+Example:
+"0.5600"
+
+​
+event.markets.previous_price_dollars
+stringrequired
+Price for the last traded YES contract on this market a day ago in dollars
+
+Example:
+"0.5600"
+
+​
+event.markets.liquidity_dollars
+stringrequireddeprecated
+DEPRECATED: This field is deprecated and will always return "0.0000".
+
+Example:
+"0.5600"
+
+​
+event.markets.expiration_value
+stringrequired
+The value that was considered for the settlement
+
+​
+event.markets.rules_primary
+stringrequired
+A plain language description of the most important market terms
+
+​
+event.markets.rules_secondary
+stringrequired
+A plain language description of secondary market terms
+
+​
+event.markets.price_level_structure
+stringrequired
+Price level structure for this market, defining price ranges and tick sizes
+
+​
+event.markets.price_ranges
+object[]required
+Valid price ranges for orders on this market
+
+Hide child attributes
+
+​
+event.markets.price_ranges.start
+stringrequired
+Starting price for this range in dollars
+
+​
+event.markets.price_ranges.end
+stringrequired
+Ending price for this range in dollars
+
+​
+event.markets.price_ranges.step
+stringrequired
+Price step/tick size for this range in dollars
+
+​
+event.markets.title
+stringdeprecated
+​
+event.markets.subtitle
+stringdeprecated
+​
+event.markets.expected_expiration_time
+string<date-time> | null
+Time when this market is expected to expire
+
+​
+event.markets.expiration_time
+string<date-time>deprecated
+​
+event.markets.response_price_units
+enum<string>deprecated
+DEPRECATED: Use price_level_structure and price_ranges instead.
+
+Available options: usd_cent 
+​
+event.markets.settlement_value_dollars
+string | null
+The settlement value of the YES/LONG side of the contract in dollars. Only filled after determination
+
+Example:
+"0.5600"
+
+​
+event.markets.settlement_ts
+string<date-time> | null
+Timestamp when the market was settled. Only filled for settled markets
+
+​
+event.markets.fee_waiver_expiration_time
+string<date-time> | null
+Time when this market's fee waiver expires
+
+​
+event.markets.early_close_condition
+string | null
+The condition under which the market can close early
+
+​
+event.markets.tick_size
+integerdeprecated
+DEPRECATED: Use price_level_structure and price_ranges instead.
+
+​
+event.markets.strike_type
+enum<string>
+Strike type defines how the market strike is defined and evaluated
+
+Available options: greater, greater_or_equal, less, less_or_equal, between, functional, custom, structured 
+​
+event.markets.floor_strike
+number<double> | null
+Minimum expiration value that leads to a YES settlement
+
+​
+event.markets.cap_strike
+number<double> | null
+Maximum expiration value that leads to a YES settlement
+
+​
+event.markets.functional_strike
+string | null
+Mapping from expiration values to settlement values
+
+​
+event.markets.custom_strike
+object
+Expiration value for each target that leads to a YES settlement
+
+​
+event.markets.mve_collection_ticker
+string
+The ticker of the multivariate event collection
+
+​
+event.markets.mve_selected_legs
+object[]
+Hide child attributes
+
+​
+event.markets.mve_selected_legs.event_ticker
+string
+Unique identifier for the selected event
+
+​
+event.markets.mve_selected_legs.market_ticker
+string
+Unique identifier for the selected market
+
+​
+event.markets.mve_selected_legs.side
+string
+The side of the selected market
+
+​
+event.markets.mve_selected_legs.yes_settlement_value_dollars
+string | null
+The settlement value of the YES/LONG side of the contract in dollars. Only filled after determination
+
+Example:
+"0.5600"
+
+​
+event.markets.primary_participant_key
+string | null
+​
+event.markets.is_provisional
+boolean
+If true, the market may be removed after determination if there is no activity on it
+
+​
+event.last_updated_ts
+string<date-time>
+Timestamp of when this event's metadata was last updated.
+
+​
+markets
+object[]required
+Data for the markets in this event. This field is deprecated in favour of the "markets" field inside the event. Which will be filled with the same value if you use the query parameter "with_nested_markets=true".
+
+Hide child attributes
+
+​
+markets.ticker
+stringrequired
+​
+markets.event_ticker
+stringrequired
+​
+markets.market_type
+enum<string>required
+Identifies the type of market
+
+Available options: binary, scalar 
+​
+markets.yes_sub_title
+stringrequired
+Shortened title for the yes side of this market
+
+​
+markets.no_sub_title
+stringrequired
+Shortened title for the no side of this market
+
+​
+markets.created_time
+string<date-time>required
+​
+markets.updated_time
+string<date-time>required
+Time of the last non-trading metadata update.
+
+​
+markets.open_time
+string<date-time>required
+​
+markets.close_time
+string<date-time>required
+​
+markets.latest_expiration_time
+string<date-time>required
+Latest possible time for this market to expire
+
+​
+markets.settlement_timer_seconds
+integerrequired
+The amount of time after determination that the market settles
+
+​
+markets.status
+enum<string>required
+The current status of the market in its lifecycle.
+
+Available options: initialized, inactive, active, closed, determined, disputed, amended, finalized 
+​
+markets.yes_bid_dollars
+stringrequired
+Price for the highest YES buy offer on this market in dollars
+
+Example:
+"0.5600"
+
+​
+markets.yes_bid_size_fp
+stringrequired
+Total contract size of orders to buy YES at the best bid price (fixed-point count string).
+
+Example:
+"10.00"
+
+​
+markets.yes_ask_dollars
+stringrequired
+Price for the lowest YES sell offer on this market in dollars
+
+Example:
+"0.5600"
+
+​
+markets.yes_ask_size_fp
+stringrequired
+Total contract size of orders to sell YES at the best ask price (fixed-point count string).
+
+Example:
+"10.00"
+
+​
+markets.no_bid_dollars
+stringrequired
+Price for the highest NO buy offer on this market in dollars
+
+Example:
+"0.5600"
+
+​
+markets.no_ask_dollars
+stringrequired
+Price for the lowest NO sell offer on this market in dollars
+
+Example:
+"0.5600"
+
+​
+markets.last_price_dollars
+stringrequired
+Price for the last traded YES contract on this market in dollars
+
+Example:
+"0.5600"
+
+​
+markets.volume_fp
+stringrequired
+String representation of the market volume in contracts
+
+Example:
+"10.00"
+
+​
+markets.volume_24h_fp
+stringrequired
+String representation of the 24h market volume in contracts
+
+Example:
+"10.00"
+
+​
+markets.result
+enum<string>required
+Available options: yes, no, scalar,  
+​
+markets.can_close_early
+booleanrequired
+​
+markets.fractional_trading_enabled
+booleanrequired
+​
+markets.open_interest_fp
+stringrequired
+String representation of the number of contracts bought on this market disconsidering netting
+
+Example:
+"10.00"
+
+​
+markets.notional_value_dollars
+stringrequired
+The total value of a single contract at settlement in dollars
+
+Example:
+"0.5600"
+
+​
+markets.previous_yes_bid_dollars
+stringrequired
+Price for the highest YES buy offer on this market a day ago in dollars
+
+Example:
+"0.5600"
+
+​
+markets.previous_yes_ask_dollars
+stringrequired
+Price for the lowest YES sell offer on this market a day ago in dollars
+
+Example:
+"0.5600"
+
+​
+markets.previous_price_dollars
+stringrequired
+Price for the last traded YES contract on this market a day ago in dollars
+
+Example:
+"0.5600"
+
+​
+markets.liquidity_dollars
+stringrequireddeprecated
+DEPRECATED: This field is deprecated and will always return "0.0000".
+
+Example:
+"0.5600"
+
+​
+markets.expiration_value
+stringrequired
+The value that was considered for the settlement
+
+​
+markets.rules_primary
+stringrequired
+A plain language description of the most important market terms
+
+​
+markets.rules_secondary
+stringrequired
+A plain language description of secondary market terms
+
+​
+markets.price_level_structure
+stringrequired
+Price level structure for this market, defining price ranges and tick sizes
+
+​
+markets.price_ranges
+object[]required
+Valid price ranges for orders on this market
+
+Hide child attributes
+
+​
+markets.price_ranges.start
+stringrequired
+Starting price for this range in dollars
+
+​
+markets.price_ranges.end
+stringrequired
+Ending price for this range in dollars
+
+​
+markets.price_ranges.step
+stringrequired
+Price step/tick size for this range in dollars
+
+​
+markets.title
+stringdeprecated
+​
+markets.subtitle
+stringdeprecated
+​
+markets.expected_expiration_time
+string<date-time> | null
+Time when this market is expected to expire
+
+​
+markets.expiration_time
+string<date-time>deprecated
+​
+markets.response_price_units
+enum<string>deprecated
+DEPRECATED: Use price_level_structure and price_ranges instead.
+
+Available options: usd_cent 
+​
+markets.settlement_value_dollars
+string | null
+The settlement value of the YES/LONG side of the contract in dollars. Only filled after determination
+
+Example:
+"0.5600"
+
+​
+markets.settlement_ts
+string<date-time> | null
+Timestamp when the market was settled. Only filled for settled markets
+
+​
+markets.fee_waiver_expiration_time
+string<date-time> | null
+Time when this market's fee waiver expires
+
+​
+markets.early_close_condition
+string | null
+The condition under which the market can close early
+
+​
+markets.tick_size
+integerdeprecated
+DEPRECATED: Use price_level_structure and price_ranges instead.
+
+​
+markets.strike_type
+enum<string>
+Strike type defines how the market strike is defined and evaluated
+
+Available options: greater, greater_or_equal, less, less_or_equal, between, functional, custom, structured 
+​
+markets.floor_strike
+number<double> | null
+Minimum expiration value that leads to a YES settlement
+
+​
+markets.cap_strike
+number<double> | null
+Maximum expiration value that leads to a YES settlement
+
+​
+markets.functional_strike
+string | null
+Mapping from expiration values to settlement values
+
+​
+markets.custom_strike
+object
+Expiration value for each target that leads to a YES settlement
+
+​
+markets.mve_collection_ticker
+string
+The ticker of the multivariate event collection
+
+​
+markets.mve_selected_legs
+object[]
+Hide child attributes
+
+​
+markets.mve_selected_legs.event_ticker
+string
+Unique identifier for the selected event
+
+​
+markets.mve_selected_legs.market_ticker
+string
+Unique identifier for the selected market
+
+​
+markets.mve_selected_legs.side
+string
+The side of the selected market
+
+​
+markets.mve_selected_legs.yes_settlement_value_dollars
+string | null
+The settlement value of the YES/LONG side of the contract in dollars. Only filled after determination
+
+Example:
+"0.5600"
+
+​
+markets.primary_participant_key
+string | null
+​
+markets.is_provisional
+boolean
+If true, the market may be removed after determination if there is no activity on it
+
+
+GET
+/
+events
+/
+{event_ticker}
+/
+metadata
+
+Try it
+Get Event Metadata
+
+curl --request GET \
+  --url https://api.elections.kalshi.com/trade-api/v2/events/{event_ticker}/metadata
+
+200
+{
+  "image_url": "<string>",
+  "market_details": [
+    {
+      "market_ticker": "<string>",
+      "image_url": "<string>",
+      "color_code": "<string>"
+    }
+  ],
+  "settlement_sources": [
+    {
+      "name": "<string>",
+      "url": "<string>"
+    }
+  ],
+  "featured_image_url": "<string>",
+  "competition": "<string>",
+  "competition_scope": "<string>"
+}
+Path Parameters
+​
+event_ticker
+stringrequired
+Event ticker
+
+Response
+
+200
+
+application/json
+Event metadata retrieved successfully
+
+​
+image_url
+stringrequired
+A path to an image that represents this event.
+
+​
+market_details
+object[]required
+Metadata for the markets in this event.
+
+Hide child attributes
+
+​
+market_details.market_ticker
+stringrequired
+The ticker of the market.
+
+​
+market_details.image_url
+stringrequired
+A path to an image that represents this market.
+
+​
+market_details.color_code
+stringrequired
+The color code for the market.
+
+​
+settlement_sources
+object[]required
+A list of settlement sources for this event.
+
+Hide child attributes
+
+​
+settlement_sources.name
+string
+Name of the settlement source
+
+​
+settlement_sources.url
+string
+URL to the settlement source
+
+​
+featured_image_url
+string
+A path to an image that represents the image of the featured market.
+
+​
+competition
+string | null
+Event competition.
+
+​
+competition_scope
+string | null
+Event scope, based on the competition.
+
+Get Multivariate Events
+Retrieve multivariate (combo) events. These are dynamically created events from multivariate event collections. Supports filtering by series and collection ticker.
+
+GET
+/
+events
+/
+multivariate
+
+Try it
+Get Multivariate Events
+
+curl --request GET \
+  --url 'https://api.elections.kalshi.com/trade-api/v2/events/multivariate?limit=100'
+
+200
+{
+  "events": [
+    {
+      "event_ticker": "<string>",
+      "series_ticker": "<string>",
+      "sub_title": "<string>",
+      "title": "<string>",
+      "collateral_return_type": "<string>",
+      "mutually_exclusive": true,
+      "available_on_brokers": true,
+      "product_metadata": {},
+      "category": "<string>",
+      "strike_date": "2023-11-07T05:31:56Z",
+      "strike_period": "<string>",
+      "markets": [
+        {
+          "ticker": "<string>",
+          "event_ticker": "<string>",
+          "market_type": "binary",
+          "yes_sub_title": "<string>",
+          "no_sub_title": "<string>",
+          "created_time": "2023-11-07T05:31:56Z",
+          "updated_time": "2023-11-07T05:31:56Z",
+          "open_time": "2023-11-07T05:31:56Z",
+          "close_time": "2023-11-07T05:31:56Z",
+          "latest_expiration_time": "2023-11-07T05:31:56Z",
+          "settlement_timer_seconds": 123,
+          "status": "initialized",
+          "yes_bid_dollars": "0.5600",
+          "yes_bid_size_fp": "10.00",
+          "yes_ask_dollars": "0.5600",
+          "yes_ask_size_fp": "10.00",
+          "no_bid_dollars": "0.5600",
+          "no_ask_dollars": "0.5600",
+          "last_price_dollars": "0.5600",
+          "volume_fp": "10.00",
+          "volume_24h_fp": "10.00",
+          "result": "yes",
+          "can_close_early": true,
+          "fractional_trading_enabled": true,
+          "open_interest_fp": "10.00",
+          "notional_value_dollars": "0.5600",
+          "previous_yes_bid_dollars": "0.5600",
+          "previous_yes_ask_dollars": "0.5600",
+          "previous_price_dollars": "0.5600",
+          "liquidity_dollars": "0.5600",
+          "expiration_value": "<string>",
+          "rules_primary": "<string>",
+          "rules_secondary": "<string>",
+          "price_level_structure": "<string>",
+          "price_ranges": [
+            {
+              "start": "<string>",
+              "end": "<string>",
+              "step": "<string>"
+            }
+          ],
+          "title": "<string>",
+          "subtitle": "<string>",
+          "expected_expiration_time": "2023-11-07T05:31:56Z",
+          "expiration_time": "2023-11-07T05:31:56Z",
+          "response_price_units": "usd_cent",
+          "settlement_value_dollars": "0.5600",
+          "settlement_ts": "2023-11-07T05:31:56Z",
+          "fee_waiver_expiration_time": "2023-11-07T05:31:56Z",
+          "early_close_condition": "<string>",
+          "tick_size": 123,
+          "strike_type": "greater",
+          "floor_strike": 123,
+          "cap_strike": 123,
+          "functional_strike": "<string>",
+          "custom_strike": {},
+          "mve_collection_ticker": "<string>",
+          "mve_selected_legs": [
+            {
+              "event_ticker": "<string>",
+              "market_ticker": "<string>",
+              "side": "<string>",
+              "yes_settlement_value_dollars": "0.5600"
+            }
+          ],
+          "primary_participant_key": "<string>",
+          "is_provisional": true
+        }
+      ],
+      "last_updated_ts": "2023-11-07T05:31:56Z"
+    }
+  ],
+  "cursor": "<string>"
+}
+Query Parameters
+​
+limit
+integerdefault:100
+Number of results per page. Defaults to 100. Maximum value is 200.
+
+Required range: 1 <= x <= 200
+​
+cursor
+string
+Pagination cursor. Use the cursor value returned from the previous response to get the next page of results.
+
+​
+series_ticker
+string
+Filter by series ticker
+
+​
+collection_ticker
+string
+Filter events by collection ticker. Returns only multivariate events belonging to the specified collection. Cannot be used together with series_ticker.
+
+​
+with_nested_markets
+booleandefault:false
+Parameter to specify if nested markets should be included in the response. When true, each event will include a 'markets' field containing a list of Market objects associated with that event.
+
+Response
+
+200
+
+application/json
+Multivariate events retrieved successfully
+
+​
+events
+object[]required
+Array of multivariate events matching the query criteria.
+
+Hide child attributes
+
+​
+events.event_ticker
+stringrequired
+Unique identifier for this event.
+
+​
+events.series_ticker
+stringrequired
+Unique identifier for the series this event belongs to.
+
+​
+events.sub_title
+stringrequired
+Shortened descriptive title for the event.
+
+​
+events.title
+stringrequired
+Full title of the event.
+
+​
+events.collateral_return_type
+stringrequired
+Specifies how collateral is returned when markets settle (e.g., 'binary' for standard yes/no markets).
+
+​
+events.mutually_exclusive
+booleanrequired
+If true, only one market in this event can resolve to 'yes'. If false, multiple markets can resolve to 'yes'.
+
+​
+events.available_on_brokers
+booleanrequired
+Whether this event is available to trade on brokers.
+
+​
+events.product_metadata
+objectrequired
+Additional metadata for the event.
+
+​
+events.category
+stringdeprecated
+Event category (deprecated, use series-level category instead).
+
+​
+events.strike_date
+string<date-time> | null
+The specific date this event is based on. Only filled when the event uses a date strike (mutually exclusive with strike_period).
+
+​
+events.strike_period
+string | null
+The time period this event covers (e.g., 'week', 'month'). Only filled when the event uses a period strike (mutually exclusive with strike_date).
+
+​
+events.markets
+object[]
+Array of markets associated with this event. Only populated when 'with_nested_markets=true' is specified in the request.
+
+Show child attributes
+
+​
+events.last_updated_ts
+string<date-time>
+Timestamp of when this event's metadata was last updated.
+
+​
+cursor
+stringrequired
+Pagination cursor for the next page. Empty if there are no more results.
+
+Get Event Candlesticks
+End-point for returning aggregated data across all markets corresponding to an event.
+
+GET
+/
+series
+/
+{series_ticker}
+/
+events
+/
+{ticker}
+/
+candlesticks
+
+Try it
+Get Event Candlesticks
+
+curl --request GET \
+  --url https://api.elections.kalshi.com/trade-api/v2/series/{series_ticker}/events/{ticker}/candlesticks
+
+200
+{
+  "market_tickers": [
+    "<string>"
+  ],
+  "market_candlesticks": [
+    [
+      {
+        "end_period_ts": 123,
+        "yes_bid": {
+          "open_dollars": "0.5600",
+          "low_dollars": "0.5600",
+          "high_dollars": "0.5600",
+          "close_dollars": "0.5600"
+        },
+        "yes_ask": {
+          "open_dollars": "0.5600",
+          "low_dollars": "0.5600",
+          "high_dollars": "0.5600",
+          "close_dollars": "0.5600"
+        },
+        "price": {
+          "open_dollars": "0.5600",
+          "low_dollars": "0.5600",
+          "high_dollars": "0.5600",
+          "close_dollars": "0.5600",
+          "mean_dollars": "0.5600",
+          "previous_dollars": "0.5600",
+          "min_dollars": "0.5600",
+          "max_dollars": "0.5600"
+        },
+        "volume_fp": "10.00",
+        "open_interest_fp": "10.00"
+      }
+    ]
+  ],
+  "adjusted_end_ts": 123
+}
+Path Parameters
+​
+ticker
+stringrequired
+The event ticker
+
+​
+series_ticker
+stringrequired
+The series ticker
+
+Query Parameters
+​
+start_ts
+integer<int64>required
+Start timestamp for the range
+
+​
+end_ts
+integer<int64>required
+End timestamp for the range
+
+​
+period_interval
+enum<integer>required
+Specifies the length of each candlestick period, in minutes. Must be one minute, one hour, or one day.
+
+Available options: 1, 60, 1440 
+Response
+
+200
+
+application/json
+Event candlesticks retrieved successfully
+
+​
+market_tickers
+string[]required
+Array of market tickers in the event.
+
+​
+market_candlesticks
+object[][]required
+Array of market candlestick arrays, one for each market in the event.
+
+Hide child attributes
+
+​
+market_candlesticks.end_period_ts
+integer<int64>required
+Unix timestamp for the inclusive end of the candlestick period.
+
+​
+market_candlesticks.yes_bid
+objectrequired
+Open, high, low, close (OHLC) data for YES buy offers on the market during the candlestick period.
+
+Show child attributes
+
+​
+market_candlesticks.yes_ask
+objectrequired
+Open, high, low, close (OHLC) data for YES sell offers on the market during the candlestick period.
+
+Show child attributes
+
+​
+market_candlesticks.price
+objectrequired
+Open, high, low, close (OHLC) and more data for trade YES contract prices on the market during the candlestick period.
+
+Show child attributes
+
+​
+market_candlesticks.volume_fp
+stringrequired
+String representation of the number of contracts bought on the market during the candlestick period.
+
+Example:
+"10.00"
+
+​
+market_candlesticks.open_interest_fp
+stringrequired
+String representation of the number of contracts bought on the market by end of the candlestick period (end_period_ts).
+
+Example:
+"10.00"
+
+​
+adjusted_end_ts
+integer<int64>required
+Adjusted end timestamp if the requested candlesticks would be larger than maxAggregateCandidates.

@@ -52,6 +52,7 @@ namespace PredictionBacktester.Strategies
             public decimal BestNetCost { get; set; }
             public decimal MaxVolumeAtBestSpread { get; set; }
             public int NumLegs { get; set; }
+            public string LegTickers { get; set; } = "";
             public string LegPrices { get; set; }
 
             // REST verification — filled in async after arb opens
@@ -113,7 +114,7 @@ namespace PredictionBacktester.Strategies
                 if (!_csvInitialized)
                 {
                     // Updated CSV Headers with all new quantitative fields
-                    File.WriteAllText(_csvFilePath, "StartTime,EndTime,DurationMs,EventId,NumLegs,LegPrices,EntryNetCost,BestGrossCost,TotalFees,BestNetCost,NetProfitPerShare,MaxVolume,TotalCapitalRequired,TotalPotentialProfit,RestChecked,RestConfirmed,RestYesAskSum,RestMinDepth,RestCheckDelayMs\n");
+                    File.WriteAllText(_csvFilePath, "StartTime,EndTime,DurationMs,EventId,NumLegs,LegTickers,LegPrices,EntryNetCost,BestGrossCost,TotalFees,BestNetCost,NetProfitPerShare,MaxVolume,TotalCapitalRequired,TotalPotentialProfit,RestChecked,RestConfirmed,RestYesAskSum,RestMinDepth,RestCheckDelayMs\n");
                     _ = Task.Run(ProcessCsvQueueAsync);
                     _csvInitialized = true;
                 }
@@ -202,6 +203,7 @@ namespace PredictionBacktester.Strategies
             decimal bottleneckShares = decimal.MaxValue;
 
             int legs = 0;
+            string currentLegTickers = "";
             string currentLegPrices = "";
 
             bool allLegsHaveBooks = true;
@@ -244,6 +246,7 @@ namespace PredictionBacktester.Strategies
                     totalGrossCost += walkResult.Vwap;
                     totalFeeCost += CalculateFeePerShare(walkResult.Vwap);
                     bottleneckShares = Math.Min(bottleneckShares, walkResult.TotalShares);
+                    currentLegTickers += $"{token}|";
                     currentLegPrices += $"{walkResult.Vwap:0.0000}|";
                     pricedLegs++;
                 }
@@ -302,6 +305,7 @@ namespace PredictionBacktester.Strategies
                         BestNetCost = totalNetCost,
                         MaxVolumeAtBestSpread = bottleneckShares,
                         NumLegs = legs,
+                        LegTickers = currentLegTickers.TrimEnd('|'),
                         LegPrices = currentLegPrices.TrimEnd('|')
                     };
                     Console.WriteLine($"[TELEMETRY] ARB OPEN: {eventId} | Cost ${totalNetCost:0.0000} | MidSum ${totalMidSum:0.0000} | {legs}L | Depth {bottleneckShares:0.0}");
@@ -320,6 +324,7 @@ namespace PredictionBacktester.Strategies
                         currentArb.BestGrossCost = totalGrossCost;
                         currentArb.BestNetCost = totalNetCost;
                         currentArb.MaxVolumeAtBestSpread = bottleneckShares;
+                        currentArb.LegTickers = currentLegTickers.TrimEnd('|');
                         currentArb.LegPrices = currentLegPrices.TrimEnd('|'); // Save the prices that formed the peak spread
                     }
                 }
@@ -367,7 +372,7 @@ namespace PredictionBacktester.Strategies
             string restSum   = arbData.RestYesAskSum  >= 0 ? arbData.RestYesAskSum.ToString("0.0000") : "N/A";
             string restDepth = arbData.RestMinDepth   >= 0 ? arbData.RestMinDepth.ToString("0.0")    : "N/A";
             string restDelay = arbData.RestCheckDelayMs >= 0 ? arbData.RestCheckDelayMs.ToString()   : "N/A";
-            string csvRow = $"{startStr},{endStr},{duration.TotalMilliseconds:0},\"{eventId}\",{arbData.NumLegs},\"{arbData.LegPrices}\",{arbData.EntryNetCost:0.0000},{arbData.BestGrossCost:0.0000},{bestFees:0.0000},{arbData.BestNetCost:0.0000},{netProfitPerShare:0.0000},{arbData.MaxVolumeAtBestSpread:0.00},{capitalRequired:0.00},{totalPotentialProfit:0.00},{arbData.RestChecked},{arbData.RestConfirmed},{restSum},{restDepth},{restDelay}";
+            string csvRow = $"{startStr},{endStr},{duration.TotalMilliseconds:0},\"{eventId}\",{arbData.NumLegs},\"{arbData.LegTickers}\",\"{arbData.LegPrices}\",{arbData.EntryNetCost:0.0000},{arbData.BestGrossCost:0.0000},{bestFees:0.0000},{arbData.BestNetCost:0.0000},{netProfitPerShare:0.0000},{arbData.MaxVolumeAtBestSpread:0.00},{capitalRequired:0.00},{totalPotentialProfit:0.00},{arbData.RestChecked},{arbData.RestConfirmed},{restSum},{restDepth},{restDelay}";
             
             // Toss it into the background queue (Instant execution, zero CPU lag)
             _csvQueue.Writer.TryWrite(csvRow);
