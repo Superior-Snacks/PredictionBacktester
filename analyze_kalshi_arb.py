@@ -50,7 +50,8 @@ THIN_DEPTH_THRESHOLD     = 2.0    # below this = 1-contract resting order noise
 def find_latest_csv():
     candidates = (
         glob.glob("ArbTelemetry_*.csv") +
-        glob.glob("KalshiPaperTrader/ArbTelemetry_*.csv")
+        glob.glob("KalshiPaperTrader/ArbTelemetry_*.csv") +
+        glob.glob("KalshiPaperTrader/bin/**/ArbTelemetry_*.csv", recursive=True)
     )
     if not candidates:
         return None

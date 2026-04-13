@@ -1129,41 +1129,41 @@
     "status": "win",
     "winning_ticker": "KXHIGHCHI-26APR12-B80.5",
     "winning_title": "80\u00b0 to 81\u00b0",
-    "all_resolved": false,
+    "all_resolved": true,
     "markets": [
       {
         "ticker": "KXHIGHCHI-26APR12-T74",
-        "status": "determined",
+        "status": "finalized",
         "result": "no",
         "yes_sub_title": "73\u00b0 or below"
       },
       {
         "ticker": "KXHIGHCHI-26APR12-B74.5",
-        "status": "determined",
+        "status": "finalized",
         "result": "no",
         "yes_sub_title": "74\u00b0 to 75\u00b0"
       },
       {
         "ticker": "KXHIGHCHI-26APR12-B76.5",
-        "status": "determined",
+        "status": "finalized",
         "result": "no",
         "yes_sub_title": "76\u00b0 to 77\u00b0"
       },
       {
         "ticker": "KXHIGHCHI-26APR12-B78.5",
-        "status": "determined",
+        "status": "finalized",
         "result": "no",
         "yes_sub_title": "78\u00b0 to 79\u00b0"
       },
       {
         "ticker": "KXHIGHCHI-26APR12-B80.5",
-        "status": "determined",
+        "status": "finalized",
         "result": "yes",
         "yes_sub_title": "80\u00b0 to 81\u00b0"
       },
       {
         "ticker": "KXHIGHCHI-26APR12-T81",
-        "status": "determined",
+        "status": "finalized",
         "result": "no",
         "yes_sub_title": "82\u00b0 or above"
       }
