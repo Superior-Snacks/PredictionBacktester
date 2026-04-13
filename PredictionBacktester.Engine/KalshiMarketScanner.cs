@@ -159,11 +159,6 @@ public class KalshiMarketScanner
             //   1 → acceptable: a single "X or more" final catch-all bucket
             //   2+ → non-exclusive: multiple legs can resolve YES simultaneously
             int cumulativeLegCount = 0;
-            // Count legs that describe "X happened in a specific period" (round/inning/set/period).
-            // These are "WHEN did X happen" markets (e.g. "wins in Round 2", "HR in Inning 4").
-            // If 2+ legs have this structure with no covering "it never happened" leg, every leg
-            // can resolve NO simultaneously — the market is structurally non-exhaustive.
-            int episodeLegCount = 0;
             int totalMarketsInEvent = 0;
             var skippedStatuses = new List<string>();
 
@@ -209,13 +204,6 @@ public class KalshiMarketScanner
                 if (IsCumulativeTitle(yesTitle) || IsCumulativeTitle(noTitle) || IsCumulativeTitle(baseTitle)
                     || IsHalfLineSpread(yesTitle) || IsHalfLineSpread(noTitle) || IsHalfLineSpread(baseTitle))
                     cumulativeLegCount++;
-
-                // Count legs that describe "X happened IN a specific period/round/inning".
-                // Two or more such legs means this is a "WHEN did X occur?" market — inherently
-                // non-exhaustive unless a catch-all "it never happened" leg exists.
-                // We don't try to detect the catch-all; the safe default is to reject.
-                if (IsEpisodeLegTitle(yesTitle) || IsEpisodeLegTitle(noTitle) || IsEpisodeLegTitle(baseTitle))
-                    episodeLegCount++;
 
                 decimal vol24h = ParseFp(mkt, "volume_24h_fp");
                 catMaxVol24h = Math.Max(catMaxVol24h, vol24h);
@@ -274,14 +262,14 @@ public class KalshiMarketScanner
             // YES asks across all legs must sit near $1.00. Skip events where:
             //   • sum > 1.50 → multiple legs can resolve YES simultaneously
             //                  (independent bets — "will player X hit a HR?")
-            //   • sum < 0.82 → >18% probability unaccounted for; likely a hidden
-            //                  outcome exists (e.g. "no HR hit", "fight to decision").
-            //                  Floor raised from 0.40 — a true exhaustive categorical
-            //                  should price close to $1.00 once markets are liquid.
+            //   • sum < 0.85 → >15% probability unaccounted for; likely missing a catch-all
+            //                  leg (e.g. "no HR hit", "fight to decision"). A true exhaustive
+            //                  categorical prices close to $1.00 — if an episode market adds a
+            //                  catch-all leg later the sum rises to ~$1 and correctly passes.
             // Only apply when prices are available for all (or all-but-one) legs.
             bool pricesAvailable = catPricedLegs >= activeYesTickers.Count - 1 && catPricedLegs >= 2;
             bool sumIsReasonable = !pricesAvailable
-                || (catRestAskSum >= 0.82m && catRestAskSum <= 1.50m);
+                || (catRestAskSum >= 0.85m && catRestAskSum <= 1.50m);
 
             // Tier 2+3 date-series guard: "Will X happen before [date]?" markets
             // form a cumulative series where all legs can simultaneously resolve NO.
@@ -296,7 +284,7 @@ public class KalshiMarketScanner
 
             if (activeYesTickers.Count >= 3 && catMaxVol24h >= _minVolume24h
                 && !hasPartiallyResolved && sumIsReasonable
-                && cumulativeLegCount < 2 && episodeLegCount < 2
+                && cumulativeLegCount < 2
                 && !isDateSeries)
             {
                 categorical[eventTicker] = activeYesTickers;
@@ -310,7 +298,7 @@ public class KalshiMarketScanner
                           $"{skippedBlocklisted} blocklisted, " +
                           $"{skippedDateSeries} date-series, " +
                           $"{skippedScalar} scalar, " +
-                          $"remainder by price-sum/cumulative/episode guards.");
+                          $"remainder by price-sum (>= 0.85) / cumulative guards.");
 
         TokenNames = names;
 
@@ -369,22 +357,6 @@ public class KalshiMarketScanner
             if (eventTicker.StartsWith(blocked, StringComparison.OrdinalIgnoreCase))
                 return true;
         return false;
-    }
-
-    /// <summary>
-    /// Returns true if the title describes "X happened IN a specific period/round/inning/set".
-    /// Two or more such legs in an event indicates a "WHEN did X occur?" structure that is
-    /// non-exhaustive: if X never occurs (e.g. fight goes to decision, no HR is hit) every
-    /// leg resolves NO simultaneously.  Examples that match:
-    ///   "wins in Round 2"  •  "HR in Inning 4"  •  "scored in the 3rd period"  •  "Set 1"
-    /// </summary>
-    private static bool IsEpisodeLegTitle(string title)
-    {
-        if (string.IsNullOrEmpty(title)) return false;
-        string lower = title.ToLowerInvariant();
-        // "round N", "inning N", "period N", "set N", or ordinal variants ("2nd round", "3rd inning")
-        return System.Text.RegularExpressions.Regex.IsMatch(lower,
-            @"\b(round|inning|period|set)\s*\d+|\b\d+\s*(st|nd|rd|th)\s+(round|inning|period|set)\b");
     }
 
     /// <summary>
