@@ -24,6 +24,12 @@ const int  SUBSCRIBE_BATCH_SIZE     = 100;
 const decimal MIN_VOLUME_24H        = 10m;   // Min contracts/day to include in binary scan
 const decimal MIN_BOOK_PRICE        = 0.03m; // Reject phantom/stale levels below this price
 
+// "categorical" — only multi-leg categorical arbs
+// "binary"      — only single-market YES/NO arbs (top MAX_BINARY_MARKETS by 24h volume)
+// "both"        — categorical + binary together
+const string ARB_MODE          = "binary";
+const int    MAX_BINARY_MARKETS = 10000;
+
 // ══════════════════════════════════════════════════════════════════════════════
 //  STARTUP
 // ══════════════════════════════════════════════════════════════════════════════
@@ -53,7 +59,7 @@ catch (Exception ex)
 }
 
 // ── SCAN ──────────────────────────────────────────────────────────────────────
-var scanner = new KalshiMarketScanner(orderClient, MIN_VOLUME_24H);
+var scanner = new KalshiMarketScanner(orderClient, MIN_VOLUME_24H, maxBinaryMarkets: MAX_BINARY_MARKETS);
 KalshiScanResult scan = await scanner.ScanAllAsync();
 
 int catCount = scan.CategoricalEvents.Count;
@@ -67,10 +73,11 @@ if (catCount + binCount == 0)
 
 Console.WriteLine($"[SCANNER] Categorical: {catCount} events | Binary: {binCount} markets");
 
-// Binary arb disabled: the implied-bid construction produces unrealistic
-// sell-back prices until the book population logic is validated.
-// TODO: re-enable once binary arb book symmetry is verified.
-var allEvents = new Dictionary<string, List<string>>(scan.CategoricalEvents);
+var allEvents = new Dictionary<string, List<string>>();
+if (ARB_MODE is "categorical" or "both")
+    foreach (var kv in scan.CategoricalEvents) allEvents[kv.Key] = kv.Value;
+if (ARB_MODE is "binary" or "both")
+    foreach (var kv in scan.BinaryMarkets)     allEvents[kv.Key] = kv.Value;
 
 // Real tickers to subscribe to (strip _NO virtual IDs — they share a WS stream)
 // ConcurrentDictionary<string,byte> used as a thread-safe set so the rescan task

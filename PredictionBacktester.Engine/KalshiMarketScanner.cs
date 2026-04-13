@@ -54,11 +54,14 @@ public class KalshiMarketScanner
     /// <summary>Backward-compat: all token names from the most recent scan.</summary>
     public Dictionary<string, string> TokenNames { get; private set; } = new();
 
+    private readonly int _maxBinaryMarkets;
+
     public KalshiMarketScanner(KalshiOrderClient client, decimal minVolume24h = 10m,
-        string? blocklistPath = null)
+        string? blocklistPath = null, int maxBinaryMarkets = 1000)
     {
         _client = client;
         _minVolume24h = minVolume24h;
+        _maxBinaryMarkets = maxBinaryMarkets;
         _dynamicBlocklist = LoadBlocklist(blocklistPath ?? BlocklistPath);
     }
 
@@ -107,9 +110,10 @@ public class KalshiMarketScanner
         List<JsonElement> events = await _client.GetOpenEventsWithMarketsAsync();
         Console.WriteLine($"[KALSHI SCANNER] {events.Count} events received.");
 
-        var categorical = new Dictionary<string, List<string>>();
-        var binary      = new Dictionary<string, List<string>>();
-        var names       = new Dictionary<string, string>();
+        var categorical      = new Dictionary<string, List<string>>();
+        var binary           = new Dictionary<string, List<string>>();
+        var binaryCandidates = new List<(string EventId, List<string> Legs, decimal Vol)>();
+        var names            = new Dictionary<string, string>();
 
         int skippedScalar      = 0;
         int skippedNotME       = 0;  // mutually_exclusive: false (Kalshi API)
@@ -237,11 +241,8 @@ public class KalshiMarketScanner
                     bool preScreenArb = hasAskPrices && (yesAsk + noAsk < 1.05m); // generous threshold
 
                     if (preScreenArb)
-                    {
-                        string binEventId = "BIN_" + ticker;
-                        binary[binEventId] = new List<string> { ticker, ticker + "_NO" };
-                        binEligible++;
-                    }
+                        binaryCandidates.Add(("BIN_" + ticker,
+                            new List<string> { ticker, ticker + "_NO" }, vol24h));
                 }
 
                 // Collect for categorical check
@@ -292,8 +293,18 @@ public class KalshiMarketScanner
             }
         }
 
+        // Sort binary candidates by 24h volume descending, cap at limit.
+        // Avoids subscribing to thousands of illiquid markets; keeps WS load manageable.
+        foreach (var (eid, legs, _) in binaryCandidates
+            .OrderByDescending(b => b.Vol)
+            .Take(_maxBinaryMarkets))
+        {
+            binary[eid] = legs;
+            binEligible++;
+        }
+
         Console.WriteLine($"[KALSHI SCANNER] Categorical: {catEligible} events | " +
-                          $"Binary: {binEligible} markets | " +
+                          $"Binary: {binEligible} markets (top {_maxBinaryMarkets} by 24h vol) | " +
                           $"Skipped: {skippedNotME} non-ME (API), " +
                           $"{skippedBlocklisted} blocklisted, " +
                           $"{skippedDateSeries} date-series, " +
