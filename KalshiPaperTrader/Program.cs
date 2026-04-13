@@ -336,7 +336,10 @@ _ = Task.Run(async () =>
             var currentEventIds = allEvents.Keys.ToList();
             foreach (var eventId in currentEventIds)
             {
-                if (!newScan.CategoricalEvents.ContainsKey(eventId))
+                bool isStillValid =
+                    (ARB_MODE is "categorical" or "both") && newScan.CategoricalEvents.ContainsKey(eventId) ||
+                    (ARB_MODE is "binary"      or "both") && newScan.BinaryMarkets.ContainsKey(eventId);
+                if (!isStillValid)
                 {
                     Console.WriteLine($"[RESCAN] Event no longer valid — unregistering: {eventId}");
                     telemetry.UnregisterEvent(eventId);
@@ -345,9 +348,16 @@ _ = Task.Run(async () =>
             }
 
             // ── New events ────────────────────────────────────────────────
+            // Build a combined candidate dictionary respecting ARB_MODE
+            var newCandidates = new Dictionary<string, List<string>>();
+            if (ARB_MODE is "categorical" or "both")
+                foreach (var kv in newScan.CategoricalEvents) newCandidates[kv.Key] = kv.Value;
+            if (ARB_MODE is "binary" or "both")
+                foreach (var kv in newScan.BinaryMarkets)     newCandidates[kv.Key] = kv.Value;
+
             int newEventCount = 0;
             int newTickerCount = 0;
-            foreach (var (eventId, legs) in newScan.CategoricalEvents)
+            foreach (var (eventId, legs) in newCandidates)
             {
                 if (allEvents.ContainsKey(eventId)) continue; // already tracked
 
