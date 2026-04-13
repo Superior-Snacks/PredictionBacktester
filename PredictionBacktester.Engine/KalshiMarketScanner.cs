@@ -111,45 +111,39 @@ public class KalshiMarketScanner
         var binary      = new Dictionary<string, List<string>>();
         var names       = new Dictionary<string, string>();
 
-        int skippedScalar        = 0;
-        int skippedNonExhaustive = 0;
-        int skippedDateSeries    = 0;
-        int catEligible          = 0;
-        int binEligible          = 0;
+        int skippedScalar      = 0;
+        int skippedNotME       = 0;  // mutually_exclusive: false (Kalshi API)
+        int skippedBlocklisted = 0;  // hardcoded / dynamic blocklist
+        int skippedDateSeries  = 0;
+        int catEligible        = 0;
+        int binEligible        = 0;
 
-        bool _debugPrinted = false;
         foreach (var ev in events)
         {
             string eventTicker = GetString(ev, "event_ticker");
             if (string.IsNullOrEmpty(eventTicker)) continue;
 
-            // One-time debug: show all event-level field names so we can confirm
-            // which MEE/exhaustiveness metadata Kalshi actually exposes.
-            if (!_debugPrinted)
-            {
-                _debugPrinted = true;
-                var keys = ev.EnumerateObject().Select(p => p.Name).ToList();
-                Console.WriteLine($"[KALSHI SCANNER] Event API fields: {string.Join(", ", keys)}");
-            }
-
-            // Skip event types that are structurally non-exhaustive: all legs can
-            // simultaneously resolve NO when the underlying event falls outside every
-            // defined bucket, making the apparent "arb" a zero-EV spread trade.
-            //   VICROUND — UFC/boxing Victory Round: legs cover specific rounds only;
-            //              if the fight goes to decision no leg pays $1.
-            //   MLBHR    — MLB Home Run by inning: if no HR is hit the entire game
-            //              every inning leg resolves NO.
-            if (IsNonExhaustiveEvent(eventTicker)) { skippedNonExhaustive++; continue; }
-
-            // Kalshi API's own mutually_exclusive flag — the ground-truth MEE signal.
-            // If the API explicitly says false, skip immediately.  If the field is
-            // absent (older API versions) we fall through to heuristic checks.
+            // Primary MEE filter — Kalshi's own mutually_exclusive field.
+            // Confirmed as a required boolean on every event object per API docs:
+            //   true  → only one market in this event can resolve YES (safe for categorical arb)
+            //   false → multiple markets can resolve YES simultaneously (NOT safe)
+            // Cumulative date-series ("Before May 1", "Before Jun 1"...) and other
+            // non-exclusive structures set this to false since any resolved date
+            // makes ALL later-date legs also resolve YES.
             if (ev.TryGetProperty("mutually_exclusive", out var meEl) &&
                 meEl.ValueKind == JsonValueKind.False)
             {
-                skippedNonExhaustive++;
+                skippedNotME++;
                 continue;
             }
+
+            // Secondary filter — hardcoded / dynamic blocklist for events that ARE
+            // mutually exclusive but NOT exhaustive: all legs can resolve NO if the
+            // underlying event never occurs (e.g. fight goes to decision, no HR hit).
+            //   mutually_exclusive: true handles "which outcome" — only one can win.
+            //   exhaustive requires EXACTLY one wins — the hardcoded list catches
+            //   conditional events where the whole premise might not materialize.
+            if (IsNonExhaustiveEvent(eventTicker)) { skippedBlocklisted++; continue; }
 
             if (!ev.TryGetProperty("markets", out var marketsEl) ||
                 marketsEl.ValueKind != JsonValueKind.Array)
@@ -312,10 +306,11 @@ public class KalshiMarketScanner
 
         Console.WriteLine($"[KALSHI SCANNER] Categorical: {catEligible} events | " +
                           $"Binary: {binEligible} markets | " +
-                          $"Skipped: {skippedScalar} scalar, " +
-                          $"{skippedNonExhaustive} blocklisted, " +
-                          $"{skippedDateSeries} date-series (non-exhaustive), " +
-                          $"remainder filtered by price-sum/cumulative/episode guards.");
+                          $"Skipped: {skippedNotME} non-ME (API), " +
+                          $"{skippedBlocklisted} blocklisted, " +
+                          $"{skippedDateSeries} date-series, " +
+                          $"{skippedScalar} scalar, " +
+                          $"remainder by price-sum/cumulative/episode guards.");
 
         TokenNames = names;
 

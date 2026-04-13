@@ -2,16 +2,14 @@
 Kalshi Arb Telemetry Analyzer
 Reads ArbTelemetry_*.csv from the Kalshi paper trader and produces:
   1. Session summary
-  2. Fraud / sanity checks (flags bad rows)
-  3. Duration histogram
-  4. Profit analysis
-  5. Per-event breakdown (top 20)
-  6. Spread/correlated market detection
-  7. Realistic PnL estimate (US server latency model)
-  8. REST verification analysis
-  9. Settlement simulation (capital-at-risk vs actual P&L scenarios)
- 10. Actual resolution check (Kalshi API — win/loss/active per event)
- 11. Production sim (US server, full depth, clean categoricals only)
+  2. All markets detected (every event — clean and flagged)
+  3. Fraud / sanity checks (flags bad rows)
+  4. Duration histogram
+  5. Profit analysis
+  6. REST verification analysis
+  7. Actual resolution check (Kalshi API — win/loss/active per event)
+  8. Series loss tracker (auto-updates event_blocklist.json)
+  9. Production sim (US server, competition-adjusted, clean categoricals only)
 
 Usage:
   python analyze_kalshi_arb.py
@@ -487,11 +485,16 @@ def print_profit_analysis(rows, min_duration_ms, capital_per_arb, capture_rate, 
         print(f"  {label:<16} {count:>6}  {pct:>5.1f}%")
     print()
 
-# ─── SECTION 5: PER-EVENT BREAKDOWN ──────────────────────────────────────────
+# ─── SECTION 5: ALL MARKETS DETECTED ────────────────────────────────────────
 
-def print_per_event_breakdown(rows):
+def print_all_markets(rows):
+    """
+    Lists every unique event the telemetry observed, clean and flagged alike.
+    Clean events (no flags) are listed first sorted by total potential profit,
+    then flagged events sorted the same way.
+    """
     print("=" * 80)
-    print("  PER-EVENT BREAKDOWN  (top 20 by total potential profit)")
+    print("  ALL MARKETS DETECTED")
     print("=" * 80)
     if not rows:
         print("  (no data)")
@@ -515,105 +518,40 @@ def print_per_event_breakdown(rows):
             "avg_net_cost": sum(r["best_net_cost"] for r in evrows) / len(evrows),
             "avg_depth":    sum(r["max_volume"] for r in evrows) / len(evrows),
             "total_pot":    sum(r["total_potential"] for r in evrows),
-            "flags":        ",".join(sorted(all_flags)) if all_flags else "OK",
+            "flags":        sorted(all_flags),
         })
 
-    summary.sort(key=lambda x: x["total_pot"], reverse=True)
-    top = summary[:20]
+    clean   = sorted([e for e in summary if not e["flags"]],   key=lambda x: -x["total_pot"])
+    flagged = sorted([e for e in summary if     e["flags"]],   key=lambda x: -x["total_pot"])
 
-    hdr = f"  {'EventId':<42} {'L':>2} {'Win':>4} {'AvgMs':>7} {'AvgCost':>8} {'AvgDepth':>9} {'TotProfit':>10}  Flags"
-    print(hdr)
-    print(f"  {'-'*42} {'-'*2} {'-'*4} {'-'*7} {'-'*8} {'-'*9} {'-'*10}  -----")
-    for e in top:
+    print(f"  {len(summary)} total events — {len(clean)} clean, {len(flagged)} flagged\n")
+
+    hdr = f"  {'EventId':<42} {'L':>2} {'Win':>4} {'AvgMs':>7} {'AvgCost':>8} {'TotProfit':>10}  Flags"
+    sep = f"  {'-'*42} {'-'*2} {'-'*4} {'-'*7} {'-'*8} {'-'*10}  -----"
+
+    def _row(e):
+        flag_str = ",".join(e["flags"]) if e["flags"] else "OK"
         print(f"  {e['event']:<42} {e['legs']:>2} {e['windows']:>4} "
               f"{e['avg_duration']:>7.0f} {e['avg_net_cost']:>8.4f} "
-              f"{e['avg_depth']:>9.1f} ${e['total_pot']:>9.4f}  {e['flags']}")
-    print()
+              f"${e['total_pot']:>9.4f}  {flag_str}")
 
-# ─── SECTION 6: SPREAD/CORRELATED MARKET DETECTION ───────────────────────────
-
-def print_spread_detection(rows):
-    print("=" * 80)
-    print("  SPREAD / CORRELATED MARKET DETECTION")
-    print("=" * 80)
-    if not rows:
-        print("  (no data)")
+    if clean:
+        print(f"  CLEAN ({len(clean)})")
+        print(hdr)
+        print(sep)
+        for e in clean:
+            _row(e)
         print()
-        return
 
-    by_event = defaultdict(list)
-    for r in rows:
-        by_event[r["event"]].append(r)
-
-    suspicious = []
-    for event, evrows in by_event.items():
-        low_count = sum(1 for r in evrows if "PRICE_SUM_LOW" in r["flags"])
-        if low_count / len(evrows) > 0.50:
-            avg_sum = sum(r["leg_sum"] for r in evrows) / len(evrows)
-            sample  = evrows[0]["leg_prices"]
-            suspicious.append((event, len(evrows), avg_sum, sample))
-
-    if not suspicious:
-        print("  No spread/correlated events detected.")
-    else:
-        print(f"  {len(suspicious)} event(s) flagged as likely NOT mutually exclusive:\n")
-        for event, count, avg_sum, sample in sorted(suspicious, key=lambda x: x[2]):
-            prices_str = " | ".join(f"${p:.2f}" for p in sample)
-            print(f"  *** {event}")
-            print(f"      Windows: {count}  AvgLegSum: ${avg_sum:.4f}  Sample legs: [{prices_str}]")
-            print(f"      LIKELY NOT MUTUALLY EXCLUSIVE — spread/correlated bets (all can resolve NO)")
+    if flagged:
+        print(f"  FLAGGED ({len(flagged)})")
+        print(hdr)
+        print(sep)
+        for e in flagged:
+            _row(e)
     print()
 
-# ─── SECTION 7: REALISTIC PNL ESTIMATE ───────────────────────────────────────
-
-def print_realistic_pnl(rows, min_duration_ms, latency_ms, capital_per_arb, capture_rate, session_hours):
-    print("=" * 80)
-    print("  REALISTIC PnL ESTIMATE")
-    print("=" * 80)
-    print(f"  Assumptions:")
-    print(f"    One-way latency (US server → Kalshi):  ~{latency_ms}ms  (JFK50-P1 PoP, measured)")
-    print(f"    Kalshi server processing:              ~86ms  (fixed cost, not reducible)")
-    print(f"    Min capturable window:                 {min_duration_ms}ms")
-    print(f"    Capital per arb:                  ${capital_per_arb:.0f}")
-    print(f"    Capture rate (slippage/partial):   {capture_rate*100:.0f}%")
-    print()
-
-    if not rows:
-        print("  (no data)")
-        print()
-        return
-
-    # Clean rows only (no fraud flags)
-    clean = [r for r in rows if not r["flags"]]
-    capturable_clean = [r for r in clean if r["duration_ms"] >= min_duration_ms]
-
-    realistic = 0.0
-    for r in capturable_clean:
-        if r["total_capital_req"] > 0:
-            fill_fraction = min(1.0, capital_per_arb / r["total_capital_req"])
-        else:
-            fill_fraction = 1.0
-        realistic += r["total_potential"] * fill_fraction * capture_rate
-
-    total = len(rows)
-    print(f"  Total windows:             {total}")
-    print(f"  Clean windows (no flags):  {len(clean)}  ({len(clean)/total*100:.1f}%)")
-    print(f"  Capturable clean windows:  {len(capturable_clean)}")
-    print()
-    print(f"  Expected profit (realistic): {_per_hr(realistic, session_hours)}")
-
-    if capturable_clean:
-        avg_dur = sum(r["duration_ms"] for r in capturable_clean) / len(capturable_clean)
-        avg_profit = sum(r["total_potential"] for r in capturable_clean) / len(capturable_clean)
-        print(f"  Avg window duration:         {avg_dur:.0f}ms")
-        print(f"  Avg potential per window:    ${avg_profit:.4f}")
-
-    print()
-    print("  Server: US East (JFK50-P1) · TCP RTT 2ms · order arrives at Kalshi in ~6ms")
-    print("  Full order confirmation ~99ms (dominated by Kalshi's ~86ms processing time).")
-    print()
-
-# ─── SECTION 8: REST VERIFICATION ANALYSIS ───────────────────────────────────
+# ─── SECTION 6: REST VERIFICATION ANALYSIS ───────────────────────────────────
 
 def print_rest_verification(rows):
     print("=" * 80)
@@ -828,7 +766,7 @@ def _build_entries(rows, capital_per_arb, min_duration_ms):
     return entries
 
 
-# ─── SECTION 9: SETTLEMENT SIMULATION ───────────────────────────────────────
+# ─── SECTION 7: ACTUAL RESOLUTION (Kalshi API) ──────────────────────────────
 
 # Event ticker substrings that indicate sports spread/total markets.
 # These are NOT true categoricals: all legs can simultaneously resolve $0
@@ -849,73 +787,6 @@ def _is_blocked(event_id, full_blocklist):
     )
 
 
-def print_settlement_simulation(rows, capital_per_arb, min_duration_ms, session_hours):
-    """
-    Section 9 — Settlement Simulation.
-
-    Models a single entry per unique event at the best observed window
-    (lowest BestNetCost among capturable windows, or any window if none
-    are capturable).  Then shows two P&L scenarios:
-
-      Scenario A — optimistic: exactly one leg pays $1 for every event.
-      Scenario B — realistic:  spread/total market events resolve to $0
-                                (all legs lose); clean categoricals win.
-    """
-    print("=" * 80)
-    print("  SETTLEMENT SIMULATION")
-    print("=" * 80)
-    print("  Models one entry per unique event at the best observed window.")
-    print("  ZERO_POSSIBLE = ticker contains SPREAD or TOTAL: all legs can resolve $0")
-    print("  if the game result falls outside every listed threshold.")
-    print()
-
-    if not rows:
-        print("  (no data)")
-        print()
-        return
-
-    entries = _build_entries(rows, capital_per_arb, min_duration_ms)
-
-    entries.sort(key=lambda x: x["capital"], reverse=True)
-
-    print(f"  {'EventId':<42} {'Capital':>8} {'WinPnL':>8} {'LosePnL':>9}  Risk")
-    print(f"  {'-'*42} {'-'*8} {'-'*8} {'-'*9}  ----")
-    for e in entries:
-        risk = "ZERO_POSSIBLE" if e["spread_risk"] else "OK"
-        print(f"  {e['event']:<42} ${e['capital']:>7.2f} ${e['win_pnl']:>+7.2f}  ${e['lose_pnl']:>+8.2f}  {risk}")
-
-    print()
-
-    total_capital   = sum(e["capital"]  for e in entries)
-    scenario_a      = sum(e["win_pnl"]  for e in entries)
-
-    spread_entries  = [e for e in entries if e["spread_risk"]]
-    clean_entries   = [e for e in entries if not e["spread_risk"]]
-    clean_profit    = sum(e["win_pnl"]  for e in clean_entries)
-    spread_capital  = sum(e["capital"]  for e in spread_entries)
-    scenario_b      = clean_profit - spread_capital
-
-    print(f"  Events entered:              {len(entries)}")
-    print(f"  Total capital deployed:      ${total_capital:.2f}")
-    print(f"  ZERO_POSSIBLE events:        {len(spread_entries)}  (${spread_capital:.2f} at risk)")
-    print(f"  Clean categorical events:    {len(clean_entries)}  (${clean_profit:.2f} expected profit)")
-    print()
-    print(f"  SCENARIO A — every event resolves with exactly one YES leg (best case):")
-    print(f"    Net P&L: {_per_hr(scenario_a, session_hours)}")
-    print()
-    print(f"  SCENARIO B — ZERO_POSSIBLE events all resolve to $0 (realistic for spreads):")
-    print(f"    Clean profit:           ${clean_profit:+.2f}")
-    print(f"    Lost on spread zeros:  -${spread_capital:.2f}")
-    print(f"    NET P&L:               {_per_hr(scenario_b, session_hours)}")
-    print()
-    if spread_entries:
-        print(f"  *** {len(spread_entries)} spread/total market(s) detected in this session.")
-        print(f"      Scanner fix (cumulativeLegCount >= 2 + half-line spread detection)")
-        print(f"      should exclude these going forward.")
-    print()
-
-
-# ─── SECTION 10: ACTUAL RESOLUTION (Kalshi API) ─────────────────────────────
 
 def print_actual_resolution(rows, capital_per_arb, min_duration_ms, session_hours, csv_path):
     """
@@ -926,7 +797,7 @@ def print_actual_resolution(rows, capital_per_arb, min_duration_ms, session_hour
     Summarises spread vs categorical performance separately.
     """
     print("=" * 80)
-    print("  ACTUAL RESOLUTION  (Kalshi API)")
+    print("  ACTUAL RESOLUTION  (Kalshi API — WIN / LOSS / ACTIVE per event)")
     print("=" * 80)
 
     try:
@@ -1066,7 +937,7 @@ def print_actual_resolution(rows, capital_per_arb, min_duration_ms, session_hour
     print()
 
 
-# ─── SECTION 11: PRODUCTION SIM ──────────────────────────────────────────────
+# ─── PRODUCTION SIM ──────────────────────────────────────────────────────────
 
 def _duration_participation(duration_ms):
     """
@@ -1494,19 +1365,20 @@ def main():
     if args.clean:
         print(f"[--clean] Analyzing {len(analysis_rows)} / {len(rows)} rows (no fraud flags)\n")
 
+    # ── Analysis sections ─────────────────────────────────────────────────────
+    # Fraud report always runs on the full (pre-clean-filter) dataset so you see
+    # what was flagged even when --clean is active.
     print_session_summary(analysis_rows, path, session_hours)
-    print_fraud_checks(rows, spam_threshold=args.spam_threshold)  # always show fraud report on full dataset
+    print_all_markets(rows)                                           # ALL events: clean + flagged
+    print_fraud_checks(rows, spam_threshold=args.spam_threshold)
     print_duration_analysis(analysis_rows, args.min_duration)
     print_profit_analysis(analysis_rows, args.min_duration, DEFAULT_CAPITAL_PER_ARB, DEFAULT_CAPTURE_RATE, session_hours)
-    print_per_event_breakdown(analysis_rows)
-    print_spread_detection(rows)  # always on full dataset
-    print_realistic_pnl(rows, args.min_duration, DEFAULT_LATENCY_MS, DEFAULT_CAPITAL_PER_ARB, DEFAULT_CAPTURE_RATE, session_hours)
-    print_rest_verification(rows)  # always on full dataset (REST fields may be None for old CSVs)
-    print_settlement_simulation(rows, DEFAULT_CAPITAL_PER_ARB, args.min_duration, session_hours)
+    print_rest_verification(rows)
     if not args.no_api:
         print_actual_resolution(rows, DEFAULT_CAPITAL_PER_ARB, args.min_duration, session_hours, path)
-    print_production_sim(rows, session_hours, path, participation_rate=args.participation_rate)
     print_series_loss_tracker(path)
+    print_production_sim(rows, session_hours, path,                   # LAST — most important
+                         participation_rate=args.participation_rate)
 
 if __name__ == "__main__":
     main()
