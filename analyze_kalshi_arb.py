@@ -1218,14 +1218,17 @@ def _event_series(event_id):
 
 
 def _blocklist_path(csv_path):
-    """Place event_blocklist.json alongside the CSV (or cwd if no path)."""
+    """Primary blocklist location: alongside the CSV (or cwd if no path)."""
     folder = os.path.dirname(os.path.abspath(csv_path)) if csv_path else "."
     return os.path.join(folder, BLOCKLIST_FILENAME)
 
 
-def _load_blocklist(csv_path):
-    """Load the current learned blocklist, return a set of series prefixes."""
-    path = _blocklist_path(csv_path)
+def _script_blocklist_path():
+    """Secondary blocklist location: alongside this script file."""
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), BLOCKLIST_FILENAME)
+
+
+def _read_one_blocklist(path):
     if not os.path.exists(path):
         return set()
     try:
@@ -1237,8 +1240,15 @@ def _load_blocklist(csv_path):
         return set()
 
 
+def _load_blocklist(csv_path):
+    """Load and merge blocklists from both the CSV folder and the script folder."""
+    csv_side    = _read_one_blocklist(_blocklist_path(csv_path))
+    script_side = _read_one_blocklist(_script_blocklist_path())
+    return csv_side | script_side
+
+
 def _save_blocklist(csv_path, blocked_series):
-    """Write the full merged blocklist back to disk."""
+    """Write the full merged blocklist back to the CSV-side file."""
     path = _blocklist_path(csv_path)
     try:
         with open(path, "w") as f:
