@@ -84,17 +84,59 @@ if (File.Exists(manualPath))
     }
 }
 
-// ── Scan Kalshi binary tickers ────────────────────────────────────────────────
-Console.WriteLine("\n[KALSHI SCANNER] Fetching open markets...");
-var kalshiScanner = new KalshiMarketScanner(orderClient, minVolume24h: 0m);
-var kalshiScan = await kalshiScanner.ScanAllAsync();
+// ── Scan Kalshi binary markets ────────────────────────────────────────────────
+// Simple direct scan: fetch all open markets from the REST API.
+// No events endpoint, no blocklist, no volume cap — we want every binary market.
+Console.WriteLine("\n[KALSHI SCANNER] Fetching all open markets...");
+var kalshiTickers = new List<string>();                               // ticker strings
+var kalshiTokenNames = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase); // ticker → yes_sub_title, ticker_NO → no_sub_title
+var kalshiTitles = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);      // ticker → full market title (question text)
 
-// Collect all binary tickers (strip BIN_ prefix to get the actual ticker)
-var kalshiTickers = kalshiScan.BinaryMarkets.Keys
-    .Select(k => k.StartsWith("BIN_", StringComparison.Ordinal) ? k[4..] : k)
-    .Distinct()
-    .ToList();
-Console.WriteLine($"[KALSHI SCANNER] {kalshiTickers.Count} binary tickers available for matching");
+{
+    using var scanHttp = new HttpClient();
+    string baseRest = kalshiConfig.BaseRestUrl.TrimEnd('/');   // e.g. https://api.elections.kalshi.com/trade-api/v2
+    string cursor = "";
+
+    while (true)
+    {
+        string relPath = cursor == ""
+            ? "/markets?status=open&limit=1000"
+            : $"/markets?status=open&limit=1000&cursor={Uri.EscapeDataString(cursor)}";
+
+        var (key, ts, sig) = orderClient.CreateAuthHeaders("GET", relPath);
+        using var req = new HttpRequestMessage(HttpMethod.Get, baseRest + relPath);
+        req.Headers.Add("KALSHI-ACCESS-KEY", key);
+        req.Headers.Add("KALSHI-ACCESS-TIMESTAMP", ts);
+        req.Headers.Add("KALSHI-ACCESS-SIGNATURE", sig);
+        req.Headers.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("application/json"));
+
+        using var resp = await scanHttp.SendAsync(req);
+        resp.EnsureSuccessStatusCode();
+        using var scanDoc = JsonDocument.Parse(await resp.Content.ReadAsStreamAsync());
+        var root = scanDoc.RootElement;
+
+        if (root.TryGetProperty("markets", out var marketsEl))
+        {
+            foreach (var m in marketsEl.EnumerateArray())
+            {
+                string ticker   = m.TryGetProperty("ticker",        out var tEl)  ? (tEl.GetString()  ?? "") : "";
+                string title    = m.TryGetProperty("title",         out var tiEl) ? (tiEl.GetString() ?? "") : "";
+                string yesSub   = m.TryGetProperty("yes_sub_title", out var ysEl) ? (ysEl.GetString() ?? "") : "";
+                string noSub    = m.TryGetProperty("no_sub_title",  out var nsEl) ? (nsEl.GetString() ?? "") : "";
+                if (string.IsNullOrEmpty(ticker)) continue;
+                kalshiTickers.Add(ticker);
+                if (!string.IsNullOrEmpty(title))  kalshiTitles[ticker]             = title;
+                if (!string.IsNullOrEmpty(yesSub)) kalshiTokenNames[ticker]         = yesSub;
+                if (!string.IsNullOrEmpty(noSub))  kalshiTokenNames[ticker + "_NO"] = noSub;
+            }
+        }
+
+        cursor = root.TryGetProperty("cursor", out var curEl) ? (curEl.GetString() ?? "") : "";
+        if (string.IsNullOrEmpty(cursor)) break;
+        await Task.Delay(150);
+    }
+}
+Console.WriteLine($"[KALSHI SCANNER] {kalshiTickers.Count} open markets fetched");
 
 // ── Fetch Polymarket active markets ───────────────────────────────────────────
 Console.WriteLine("[POLY SCANNER] Fetching active Polymarket markets...");
@@ -147,39 +189,94 @@ catch (Exception ex)
     Console.WriteLine($"[POLY SCANNER ERROR] {ex.Message}");
 }
 
-// ── Auto-match Kalshi titles against Polymarket questions ─────────────────────
-// For each Kalshi binary market:
-//   1. Pull the YES and NO display titles from TokenNames
-//   2. Extract key words (skip stop words, min 3 chars)
-//   3. Score each Polymarket question by how many key words appear in it
-//   4. Keep candidates with score >= MIN_MATCH_WORDS
-// All matches are logged so the user can review and verify them.
-Console.WriteLine($"\n[MATCHING] Auto-matching {kalshiTickers.Count} Kalshi tickers against {polyMarkets.Count} Polymarket questions...");
-Console.WriteLine($"           (min {MIN_MATCH_WORDS} key words required for a candidate match)\n");
+// ── Auto-match: Pass 1 — direct title similarity ─────────────────────────────
+// Compare each Kalshi market's full title (question text) word-for-word against
+// every Polymarket question. This catches markets titled identically or near-
+// identically across platforms before falling back to YES/NO subtitle keywords.
+//
+// Match rule: ≥80% of the Kalshi title's words appear in the Polymarket question
+// (after stripping stop words). This is stricter than keyword matching and will
+// produce very high-confidence pairs.
+Console.WriteLine($"\n[MATCHING] Pass 1 — direct title similarity ({kalshiTickers.Count} Kalshi × {polyMarkets.Count} Poly)...\n");
 
 var autoPairs = new List<CrossPair>();
 var alreadyPaired = new HashSet<string>(manualPairs.Select(p => p.KalshiTicker), StringComparer.OrdinalIgnoreCase);
+int pass1Count = 0;
 
 foreach (var ticker in kalshiTickers)
 {
-    // Combine YES and NO titles to get key words from both sides of the market
-    string yesTitle = kalshiScan.TokenNames.GetValueOrDefault(ticker, "");
-    string noTitle  = kalshiScan.TokenNames.GetValueOrDefault(ticker + "_NO", "");
-    string combined = $"{yesTitle} {noTitle}";
+    if (alreadyPaired.Contains(ticker)) continue;
+    string kTitle = kalshiTitles.GetValueOrDefault(ticker, "");
+    if (string.IsNullOrWhiteSpace(kTitle)) continue;
 
-    var keywords = TitleToKeyWords(combined);
-    if (keywords.Count < MIN_MATCH_WORDS) continue;
+    var kWords = TitleToKeyWords(kTitle);
+    if (kWords.Count < MIN_MATCH_WORDS) continue;
 
-    // Score every Polymarket question
+    // Require all (or almost all) of the Kalshi title words to appear in the Poly question
+    int minRequired = (int)Math.Ceiling(kWords.Count * 0.8);
+
     var candidates = polyMarkets
-        .Select(m => (Market: m, Score: keywords.Count(kw => m.Question.Contains(kw, StringComparison.OrdinalIgnoreCase))))
-        .Where(x => x.Score >= MIN_MATCH_WORDS)
+        .Select(m => (Market: m, Score: kWords.Count(w => m.Question.Contains(w, StringComparison.OrdinalIgnoreCase))))
+        .Where(x => x.Score >= minRequired)
         .OrderByDescending(x => x.Score)
         .ToList();
 
     if (candidates.Count == 0) continue;
 
-    Console.WriteLine($"  K:{ticker}");
+    Console.WriteLine($"  [TITLE MATCH] K:{ticker}");
+    Console.WriteLine($"    Kalshi: \"{kTitle}\"");
+    foreach (var (market, score) in candidates)
+    {
+        string pairId = $"TITLE_{ticker}__{market.YesToken[..Math.Min(8, market.YesToken.Length)]}";
+        string label  = $"{kTitle} | K:{ticker}";
+        autoPairs.Add(new CrossPair(pairId, label, ticker, market.YesToken, market.NoToken));
+        alreadyPaired.Add(ticker);   // skip this ticker in pass 2
+        Console.WriteLine($"    [{score}/{kWords.Count}] \"{market.Question}\"");
+        Console.WriteLine($"          YES={market.YesToken[..Math.Min(16, market.YesToken.Length)]}...");
+        pass1Count++;
+    }
+    Console.WriteLine();
+}
+Console.WriteLine($"[MATCHING] Pass 1 complete: {pass1Count} candidate pair(s) from direct title match\n");
+
+// ── Auto-match: Pass 2 — YES/NO subtitle keywords ────────────────────────────
+// For tickers not matched in pass 1, combine the YES and NO outcome subtitles
+// and score Polymarket questions by keyword overlap. Useful when the Kalshi full
+// title uses different phrasing but the outcome labels (team names, candidate
+// names) are the same words that appear in the Polymarket question.
+Console.WriteLine($"[MATCHING] Pass 2 — YES/NO subtitle keywords (remaining tickers)...\n");
+int pass2Count = 0;
+
+foreach (var ticker in kalshiTickers)
+{
+    if (alreadyPaired.Contains(ticker)) continue;
+
+    string yesTitle = kalshiTokenNames.GetValueOrDefault(ticker, "");
+    string noTitle  = kalshiTokenNames.GetValueOrDefault(ticker + "_NO", "");
+
+    // If YES and NO titles are identical (or one contains the other), the outcome
+    // names don't describe the event — just the team/candidate. We can't distinguish
+    // "OKC wins championship" vs "OKC advances to conference finals" etc.
+    string yesNorm = yesTitle.Trim().ToLowerInvariant();
+    string noNorm  = noTitle.Trim().ToLowerInvariant();
+    if (yesNorm == noNorm || yesNorm.Contains(noNorm) || noNorm.Contains(yesNorm))
+        continue;  // identical subtitles — skip silently (too ambiguous)
+
+    string combined = $"{yesTitle} {noTitle}";
+    var keywords = TitleToKeyWords(combined);
+    if (keywords.Count < MIN_MATCH_WORDS) continue;
+
+    int minRequired = Math.Max(MIN_MATCH_WORDS, (int)Math.Ceiling(keywords.Count * 0.8));
+
+    var candidates = polyMarkets
+        .Select(m => (Market: m, Score: keywords.Count(kw => m.Question.Contains(kw, StringComparison.OrdinalIgnoreCase))))
+        .Where(x => x.Score >= minRequired)
+        .OrderByDescending(x => x.Score)
+        .ToList();
+
+    if (candidates.Count == 0) continue;
+
+    Console.WriteLine($"  [KEYWORD MATCH] K:{ticker}");
     Console.WriteLine($"    YES: \"{yesTitle}\"  NO: \"{noTitle}\"");
     Console.WriteLine($"    Keywords: [{string.Join(", ", keywords)}]");
 
@@ -188,8 +285,9 @@ foreach (var ticker in kalshiTickers)
         string pairId = $"AUTO_{ticker}__{market.YesToken[..Math.Min(8, market.YesToken.Length)]}";
         string label  = $"{yesTitle} | K:{ticker}";
         autoPairs.Add(new CrossPair(pairId, label, ticker, market.YesToken, market.NoToken));
-        Console.WriteLine($"    [{score}/{keywords.Count}] \"{market.Question}\"");
+        Console.WriteLine($"    [{score}/{keywords.Count} need≥{minRequired}] \"{market.Question}\"");
         Console.WriteLine($"          YES={market.YesToken[..Math.Min(16, market.YesToken.Length)]}...");
+        pass2Count++;
     }
     Console.WriteLine();
 }
@@ -200,7 +298,8 @@ foreach (var ap in autoPairs)
     if (!alreadyPaired.Contains(ap.KalshiTicker))
         pairs.Add(ap);
 
-Console.WriteLine($"[MATCHING] {autoPairs.Count} auto-matched + {manualPairs.Count} manual = {pairs.Count} total pairs");
+Console.WriteLine($"[MATCHING] Pass 2 complete: {pass2Count} candidate pair(s) from subtitle keywords");
+Console.WriteLine($"[MATCHING] Total: {pass1Count} title + {pass2Count} keyword + {manualPairs.Count} manual = {pairs.Count} pairs");
 if (pairs.Count == 0)
     Console.WriteLine("[WARN] No pairs found. Add entries to cross_pairs.json or wait for more Kalshi/Poly market overlap.");
 
@@ -608,11 +707,15 @@ static List<string> TitleToKeyWords(string combinedTitle)
 {
     var stopWords = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     {
+        // Common English stop words
         "the","a","an","and","or","of","to","in","at","on","for","by","from",
         "with","will","who","when","what","how","does","did","has","have",
         "was","were","are","is","that","this","be","do","not","but","if",
         "as","it","its","yes","no","get","gets","got","more","than","most",
-        "any","all","into","out","over","under","up","down","per","via"
+        "any","all","into","out","over","under","up","down","per","via",
+        // Domain-generic suffixes that appear in many different team/org names
+        // and would cause false positives if used as match keywords
+        "gaming","esports","sports","team","gg","club","fc"
     };
     return Regex.Split(combinedTitle.ToLowerInvariant(), @"[^a-z0-9]+")
                .Where(w => w.Length >= 3 && !stopWords.Contains(w))
