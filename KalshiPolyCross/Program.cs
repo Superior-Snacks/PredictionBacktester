@@ -20,6 +20,11 @@ const int     NEAR_MISS_INTERVAL_MS = 60_000;
 const string  POLY_GAMMA_URL        = "https://gamma-api.polymarket.com";
 const string  POLY_WS_URL           = "wss://ws-subscriptions-clob.polymarket.com/ws/market";
 
+// Minimum number of key words from a Kalshi title that must appear in a
+// Polymarket question for the pair to be treated as a candidate match.
+// Raise this to reduce false positives; lower it to catch more candidates.
+const int MIN_MATCH_WORDS = 2;
+
 // ══════════════════════════════════════════════════════════════════════════════
 //  STARTUP
 // ══════════════════════════════════════════════════════════════════════════════
@@ -47,30 +52,36 @@ catch (Exception ex)
     return;
 }
 
-// ── Load regex rules ──────────────────────────────────────────────────────────
-string rulesPath = Path.Combine(AppContext.BaseDirectory, "cross_pairs.json");
-if (!File.Exists(rulesPath)) rulesPath = "cross_pairs.json";
-if (!File.Exists(rulesPath))
+// ── Load optional manual pairs (explicit verified matches) ────────────────────
+// cross_pairs.json is optional. If present, each entry is a verified pair:
+//   { "kalshi_ticker": "KXFOO", "poly_yes_token": "abc...", "poly_no_token": "def...", "label": "..." }
+// These are merged with auto-discovered pairs and always included regardless of score.
+var manualPairs = new List<CrossPair>();
+string manualPath = Path.Combine(AppContext.BaseDirectory, "cross_pairs.json");
+if (!File.Exists(manualPath)) manualPath = "cross_pairs.json";
+if (File.Exists(manualPath))
 {
-    Console.WriteLine("[ERROR] cross_pairs.json not found. Place it alongside the executable.");
-    return;
-}
-
-List<(string Name, Regex KalshiRe, Regex PolyRe)> rules;
-try
-{
-    using var ruleDoc = JsonDocument.Parse(File.ReadAllText(rulesPath));
-    rules = ruleDoc.RootElement.EnumerateArray().Select(el => (
-        Name:     el.GetProperty("name").GetString() ?? "",
-        KalshiRe: new Regex(el.GetProperty("kalshi_regex").GetString()     ?? "^$", RegexOptions.IgnoreCase),
-        PolyRe:   new Regex(el.GetProperty("poly_title_regex").GetString()  ?? "^$", RegexOptions.IgnoreCase)
-    )).ToList();
-    Console.WriteLine($"[CONFIG] Loaded {rules.Count} matching rules from cross_pairs.json");
-}
-catch (Exception ex)
-{
-    Console.WriteLine($"[ERROR] Failed to parse cross_pairs.json: {ex.Message}");
-    return;
+    try
+    {
+        using var manDoc = JsonDocument.Parse(File.ReadAllText(manualPath));
+        foreach (var el in manDoc.RootElement.EnumerateArray())
+        {
+            string kTicker  = el.TryGetProperty("kalshi_ticker",  out var kt) ? (kt.GetString()  ?? "") : "";
+            string yesToken = el.TryGetProperty("poly_yes_token", out var yt) ? (yt.GetString()  ?? "") : "";
+            string noToken  = el.TryGetProperty("poly_no_token",  out var nt) ? (nt.GetString()  ?? "") : "";
+            string label    = el.TryGetProperty("label",          out var lb) ? (lb.GetString()  ?? "") : kTicker;
+            if (!string.IsNullOrEmpty(kTicker) && !string.IsNullOrEmpty(yesToken) && !string.IsNullOrEmpty(noToken))
+            {
+                string pairId = $"MANUAL_{kTicker}__{yesToken[..Math.Min(8, yesToken.Length)]}";
+                manualPairs.Add(new CrossPair(pairId, label, kTicker, yesToken, noToken));
+            }
+        }
+        Console.WriteLine($"[CONFIG] {manualPairs.Count} manual pair(s) loaded from cross_pairs.json");
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"[CONFIG WARN] Could not parse cross_pairs.json: {ex.Message}");
+    }
 }
 
 // ── Scan Kalshi binary tickers ────────────────────────────────────────────────
@@ -136,42 +147,62 @@ catch (Exception ex)
     Console.WriteLine($"[POLY SCANNER ERROR] {ex.Message}");
 }
 
-// ── Apply regex rules to build matched pairs ──────────────────────────────────
-Console.WriteLine("\n[MATCHING] Applying regex rules...");
-var pairs = new List<CrossPair>();
+// ── Auto-match Kalshi titles against Polymarket questions ─────────────────────
+// For each Kalshi binary market:
+//   1. Pull the YES and NO display titles from TokenNames
+//   2. Extract key words (skip stop words, min 3 chars)
+//   3. Score each Polymarket question by how many key words appear in it
+//   4. Keep candidates with score >= MIN_MATCH_WORDS
+// All matches are logged so the user can review and verify them.
+Console.WriteLine($"\n[MATCHING] Auto-matching {kalshiTickers.Count} Kalshi tickers against {polyMarkets.Count} Polymarket questions...");
+Console.WriteLine($"           (min {MIN_MATCH_WORDS} key words required for a candidate match)\n");
 
-foreach (var (name, kalshiRe, polyRe) in rules)
+var autoPairs = new List<CrossPair>();
+var alreadyPaired = new HashSet<string>(manualPairs.Select(p => p.KalshiTicker), StringComparer.OrdinalIgnoreCase);
+
+foreach (var ticker in kalshiTickers)
 {
-    var matchedKalshi = kalshiTickers.Where(t => kalshiRe.IsMatch(t)).ToList();
-    var matchedPoly   = polyMarkets.Where(m => polyRe.IsMatch(m.Question)).ToList();
+    // Combine YES and NO titles to get key words from both sides of the market
+    string yesTitle = kalshiScan.TokenNames.GetValueOrDefault(ticker, "");
+    string noTitle  = kalshiScan.TokenNames.GetValueOrDefault(ticker + "_NO", "");
+    string combined = $"{yesTitle} {noTitle}";
 
-    if (matchedKalshi.Count == 0 || matchedPoly.Count == 0)
-    {
-        Console.WriteLine($"  [NO MATCH] {name}  (Kalshi:{matchedKalshi.Count} / Poly:{matchedPoly.Count})");
-        continue;
-    }
+    var keywords = TitleToKeyWords(combined);
+    if (keywords.Count < MIN_MATCH_WORDS) continue;
 
-    foreach (var kTicker in matchedKalshi)
-    foreach (var (question, yesToken, noToken) in matchedPoly)
+    // Score every Polymarket question
+    var candidates = polyMarkets
+        .Select(m => (Market: m, Score: keywords.Count(kw => m.Question.Contains(kw, StringComparison.OrdinalIgnoreCase))))
+        .Where(x => x.Score >= MIN_MATCH_WORDS)
+        .OrderByDescending(x => x.Score)
+        .ToList();
+
+    if (candidates.Count == 0) continue;
+
+    Console.WriteLine($"  K:{ticker}");
+    Console.WriteLine($"    YES: \"{yesTitle}\"  NO: \"{noTitle}\"");
+    Console.WriteLine($"    Keywords: [{string.Join(", ", keywords)}]");
+
+    foreach (var (market, score) in candidates)
     {
-        string pairId = $"CROSS_{kTicker}__{yesToken[..Math.Min(8, yesToken.Length)]}";
-        string label  = $"{name} | K:{kTicker}";
-        pairs.Add(new CrossPair(pairId, label, kTicker, yesToken, noToken));
-        Console.WriteLine($"  [MATCH] {label}");
-        Console.WriteLine($"          Poly: \"{question}\"");
-        Console.WriteLine($"          YES={yesToken[..Math.Min(16, yesToken.Length)]}... NO={noToken[..Math.Min(16, noToken.Length)]}...");
+        string pairId = $"AUTO_{ticker}__{market.YesToken[..Math.Min(8, market.YesToken.Length)]}";
+        string label  = $"{yesTitle} | K:{ticker}";
+        autoPairs.Add(new CrossPair(pairId, label, ticker, market.YesToken, market.NoToken));
+        Console.WriteLine($"    [{score}/{keywords.Count}] \"{market.Question}\"");
+        Console.WriteLine($"          YES={market.YesToken[..Math.Min(16, market.YesToken.Length)]}...");
     }
+    Console.WriteLine();
 }
 
+// Merge: manual pairs take precedence; auto pairs skip tickers already in manual list
+var pairs = new List<CrossPair>(manualPairs);
+foreach (var ap in autoPairs)
+    if (!alreadyPaired.Contains(ap.KalshiTicker))
+        pairs.Add(ap);
+
+Console.WriteLine($"[MATCHING] {autoPairs.Count} auto-matched + {manualPairs.Count} manual = {pairs.Count} total pairs");
 if (pairs.Count == 0)
-{
-    Console.WriteLine("\n[WARN] No pairs matched. Edit cross_pairs.json and restart.");
-    Console.WriteLine("       The bot will continue but no arbs can be detected.");
-}
-else
-{
-    Console.WriteLine($"\n[MATCHING] {pairs.Count} pair(s) ready for monitoring");
-}
+    Console.WriteLine("[WARN] No pairs found. Add entries to cross_pairs.json or wait for more Kalshi/Poly market overlap.");
 
 // ── Build shared order books ──────────────────────────────────────────────────
 var books = new ConcurrentDictionary<string, LocalOrderBook>(StringComparer.Ordinal);
@@ -565,4 +596,26 @@ static void ProcessPolyMessage(
         }
     }
     catch (JsonException) { }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  AUTO-MATCH HELPERS
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Extract meaningful words from a market title.
+// Combines YES and NO titles so both team/candidate names are captured.
+static List<string> TitleToKeyWords(string combinedTitle)
+{
+    var stopWords = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+    {
+        "the","a","an","and","or","of","to","in","at","on","for","by","from",
+        "with","will","who","when","what","how","does","did","has","have",
+        "was","were","are","is","that","this","be","do","not","but","if",
+        "as","it","its","yes","no","get","gets","got","more","than","most",
+        "any","all","into","out","over","under","up","down","per","via"
+    };
+    return Regex.Split(combinedTitle.ToLowerInvariant(), @"[^a-z0-9]+")
+               .Where(w => w.Length >= 3 && !stopWords.Contains(w))
+               .Distinct()
+               .ToList();
 }
