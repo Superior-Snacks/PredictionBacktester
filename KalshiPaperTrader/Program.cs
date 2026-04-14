@@ -27,7 +27,7 @@ const decimal MIN_BOOK_PRICE        = 0.03m; // Reject phantom/stale levels belo
 // "categorical" — only multi-leg categorical arbs
 // "binary"      — only single-market YES/NO arbs (top MAX_BINARY_MARKETS by 24h volume)
 // "both"        — categorical + binary together
-const string ARB_MODE          = "binary";
+const string ARB_MODE          = "categorical";
 const int    MAX_BINARY_MARKETS = 10000;
 
 // ══════════════════════════════════════════════════════════════════════════════
