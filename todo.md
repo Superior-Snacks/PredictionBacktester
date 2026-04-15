@@ -15,3 +15,8 @@
 ## Domain Logic
 - [ ] **Fee Model Mismatch**: `FastMergeArbTelemetryStrategy` uses the Polymarket dynamic fee formula (`fee = p * _feeRate * Math.Pow(...)`). Kalshi uses a different fee structure. Update the fee calculation to accurately reflect Kalshi's quadratic or flat fee schedules.
 - [ ] **Race Condition in Arb Updates**: `FastMergeArbTelemetryStrategy` updates properties directly on instances inside `_activeArbs` (e.g., `currentArb.BestGrossCost = ...`). If two WebSocket threads hit this simultaneously, telemetry can be corrupted. Apply appropriate locking or atomic replacements for these updates.
+
+## Market Matching (LLM Integration)
+- [ ] **Coarse Filtering (C#)**: Replace the current `Pass 1/Pass 2` regex logic in `Program.cs` with a fast keyword-overlap filter to narrow down the 4,000+ markets per platform to a short list of high-probability candidates.
+- [ ] **Semantic Matching (Gemini API)**: Iterate through the coarse-filtered lists and call the Gemini API via Google AI Studio to pick the exact semantic match.
+- [ ] **Rate Limiting & Persistence**: Implement a `Task.Delay(4000)` between API calls to stay within the free tier (15 RPM) and auto-save the high-confidence matches directly to `cross_pairs.json`.
