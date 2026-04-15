@@ -656,6 +656,51 @@ def print_rest_verification(rows):
 KALSHI_API_BASE = "https://api.elections.kalshi.com/trade-api/v2"
 
 
+def extract_series_ticker(event_id):
+    """
+    Extracts the series ticker prefix from a Kalshi event ticker.
+    The series ticker is everything before the first '-{2-digit-year}' segment.
+
+      KXEPL-26APR13MANLEE    →  KXEPL
+      KXNBA-26-OKC           →  KXNBA
+      KXPRES-28-TRUMP        →  KXPRES
+      KXHIGHTSATX-26APR11    →  KXHIGHTSATX
+    """
+    m = re.match(r'^(.+?)(?=-\d{2})', event_id)
+    return m.group(1) if m else event_id
+
+
+def fetch_series_map():
+    """
+    Fetches all series from the Kalshi API (public, no auth required).
+    Returns dict: series_ticker → {"category": str, "tags": [str]} (all lowercase).
+    Returns {} on failure so callers fall back to substring matching gracefully.
+    """
+    try:
+        import requests
+        resp = requests.get(
+            f"{KALSHI_API_BASE}/series",
+            headers={"User-Agent": "kalshi-arb-analyzer/1.0"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        series_list = resp.json().get("series", [])
+        result = {}
+        for s in series_list:
+            ticker = s.get("ticker", "")
+            if not ticker:
+                continue
+            result[ticker] = {
+                "category": (s.get("category") or "").lower(),
+                "tags":     [(t or "").lower() for t in (s.get("tags") or [])],
+            }
+        return result
+    except Exception as e:
+        print(f"[WARN] Could not fetch series list from Kalshi API: {e}")
+        print("       Category/tag filtering will fall back to EventId substring matching.\n")
+        return {}
+
+
 def _resolution_cache_path(csv_path):
     return os.path.splitext(csv_path)[0] + "_resolution_cache.json"
 
@@ -1217,6 +1262,32 @@ def _event_series(event_id):
     return re.split(r'-\d', event_id)[0]
 
 
+_MONTH_MAP = {'JAN':1,'FEB':2,'MAR':3,'APR':4,'MAY':5,'JUN':6,
+              'JUL':7,'AUG':8,'SEP':9,'OCT':10,'NOV':11,'DEC':12}
+
+def parse_event_settlement_date(event_id):
+    """
+    Extracts an approximate settlement date from a Kalshi event ticker string.
+
+    Patterns recognised:
+      26APR13...  →  datetime(2026, 4, 13)   (sports game with full date embedded)
+      -26-        →  datetime(2026, 12, 31)   (season/year only — conservative end-of-year)
+
+    Returns None when no date pattern is found; callers treat None as "keep regardless".
+    """
+    m = re.search(r'(\d{2})(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)(\d{2})',
+                  event_id, re.IGNORECASE)
+    if m:
+        try:
+            return datetime(2000 + int(m.group(1)), _MONTH_MAP[m.group(2).upper()], int(m.group(3)))
+        except ValueError:
+            pass
+    m = re.search(r'-(\d{2})-', event_id)
+    if m:
+        return datetime(2000 + int(m.group(1)), 12, 31)
+    return None
+
+
 def _blocklist_path(csv_path):
     """Primary blocklist location: alongside the CSV (or cwd if no path)."""
     folder = os.path.dirname(os.path.abspath(csv_path)) if csv_path else "."
@@ -1334,13 +1405,28 @@ def print_series_loss_tracker(csv_path):
 # ─── MAIN ─────────────────────────────────────────────────────────────────────
 
 def main():
+    # ── Pre-parse --N month flag (argparse rejects flags starting with a digit) ──
+    months_limit = None
+    clean_argv = []
+    for arg in sys.argv[1:]:
+        m = re.match(r'^--(\d+)$', arg)
+        if m:
+            months_limit = int(m.group(1))
+        else:
+            clean_argv.append(arg)
+    sys.argv = [sys.argv[0]] + clean_argv
+
     parser = argparse.ArgumentParser(description="Analyze Kalshi ArbTelemetry CSV")
     parser.add_argument("--file", default=None, help="Path to CSV (auto-discovers if omitted)")
     parser.add_argument("--min-duration", type=int, default=DEFAULT_MIN_DURATION_MS,
                         help=f"Min ms to count as capturable (default {DEFAULT_MIN_DURATION_MS})")
     parser.add_argument("--spam-threshold", type=int, default=REPEAT_SPAM_THRESHOLD,
                         help=f"Windows per event above which REPEAT_SPAM fires (default {REPEAT_SPAM_THRESHOLD})")
-    parser.add_argument("--exclude", default="", help="Comma-separated EventIds to exclude")
+    parser.add_argument("--exclude", default="",
+                        help="Comma-separated terms; rows whose EventId contains any term are removed "
+                             "(case-insensitive substring match — full EventIds still work)")
+    parser.add_argument("--include", default="",
+                        help="Comma-separated terms; only rows whose EventId contains at least one term are kept")
     parser.add_argument("--clean", action="store_true", help="Only analyze rows with no fraud flags")
     parser.add_argument("--no-api", action="store_true",
                         help="Skip Kalshi API resolution check (Section 10)")
@@ -1358,11 +1444,70 @@ def main():
         print(f"ERROR: No valid rows loaded from {path}")
         sys.exit(1)
 
-    # Apply exclusions
-    excluded = {e.strip() for e in args.exclude.split(",") if e.strip()}
-    if excluded:
-        rows = [r for r in rows if r["event"] not in excluded]
-        print(f"Excluded {len(excluded)} event(s): {', '.join(excluded)}\n")
+    # ── Active filter summary ──────────────────────────────────────────────────
+    exclude_terms = {t.strip().upper() for t in args.exclude.split(",") if t.strip()}
+    include_terms = {t.strip().upper() for t in args.include.split(",") if t.strip()}
+    if months_limit is not None or exclude_terms or include_terms:
+        parts = []
+        if months_limit is not None: parts.append(f"months ≤ {months_limit}")
+        parts.append(f"exclude: [{', '.join(sorted(exclude_terms)) or 'none'}]")
+        parts.append(f"include: [{', '.join(sorted(include_terms)) or 'none'}]")
+        print(f"[FILTERS] {' | '.join(parts)}\n")
+
+    # ── Build series category map for proper filtering ────────────────────────
+    # Fetch once from Kalshi public API; falls back to substring matching on error.
+    series_map = {}
+    if exclude_terms or include_terms:
+        series_map = fetch_series_map()
+        if series_map:
+            print(f"[SERIES] {len(series_map)} series loaded for category/tag matching\n")
+
+    def event_matches_term(event_id, term):
+        """
+        Returns True if the event matches the filter term.
+        Primary:  check category and tags from the series the event belongs to.
+        Fallback: case-insensitive substring match on the EventId itself
+                  (catches specific names like 'trump' that aren't categories).
+        """
+        t = term.lower()
+        if series_map:
+            series_ticker = extract_series_ticker(event_id)
+            info = series_map.get(series_ticker, {})
+            if t in info.get("category", "") or any(t in tag for tag in info.get("tags", [])):
+                return True
+        return t in event_id.lower()
+
+    # ── Apply --exclude ────────────────────────────────────────────────────────
+    if exclude_terms:
+        before = len(rows)
+        rows = [r for r in rows if not any(event_matches_term(r["event"], t) for t in exclude_terms)]
+        print(f"[--exclude] Removed {before - len(rows)} rows  (terms: {', '.join(sorted(exclude_terms))})")
+
+    # ── Apply --include ────────────────────────────────────────────────────────
+    if include_terms:
+        before = len(rows)
+        rows = [r for r in rows if any(event_matches_term(r["event"], t) for t in include_terms)]
+        print(f"[--include] Kept {len(rows)} / {before} rows  (terms: {', '.join(sorted(include_terms))})")
+
+    # ── Apply --N month filter (cutoff relative to each arb's discovery time) ─
+    if months_limit is not None:
+        before = len(rows)
+        kept = []
+        for r in rows:
+            settlement = parse_event_settlement_date(r["event"])
+            if settlement is None:
+                kept.append(r)   # no parseable date in ticker → keep
+                continue
+            row_start = _parse_dt(r["start"])
+            if row_start is None:
+                kept.append(r)   # can't parse start time → keep
+                continue
+            if settlement <= row_start + timedelta(days=30 * months_limit):
+                kept.append(r)
+        rows = kept
+        print(f"[--{months_limit}] Removed {before - len(rows)} rows "
+              f"(events settling >{months_limit} month(s) after arb discovery; "
+              f"events with no parseable date kept)\n")
 
     # Compute session duration before flagging (uses raw row timestamps)
     session_hours = compute_session_hours(rows, path)

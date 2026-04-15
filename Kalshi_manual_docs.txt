@@ -1702,3 +1702,158 @@ Example:
 adjusted_end_ts
 integer<int64>required
 Adjusted end timestamp if the requested candlesticks would be larger than maxAggregateCandidates.
+
+Get Series List
+Endpoint for getting data about multiple series with specified filters. A series represents a template for recurring events that follow the same format and rules (e.g., “Monthly Jobs Report”, “Weekly Initial Jobless Claims”, “Daily Weather in NYC”). This endpoint allows you to browse and discover available series templates by category.
+
+GET
+/
+series
+
+Try it
+Get Series List
+
+curl --request GET \
+  --url https://api.elections.kalshi.com/trade-api/v2/series
+
+200
+
+400
+
+500
+{
+  "series": [
+    {
+      "ticker": "<string>",
+      "frequency": "<string>",
+      "title": "<string>",
+      "category": "<string>",
+      "tags": [
+        "<string>"
+      ],
+      "settlement_sources": [
+        {
+          "name": "<string>",
+          "url": "<string>"
+        }
+      ],
+      "contract_url": "<string>",
+      "contract_terms_url": "<string>",
+      "fee_type": "quadratic",
+      "fee_multiplier": 123,
+      "additional_prohibitions": [
+        "<string>"
+      ],
+      "product_metadata": {},
+      "volume_fp": "10.00",
+      "last_updated_ts": "2023-11-07T05:31:56Z"
+    }
+  ]
+}
+Query Parameters
+​
+category
+string
+​
+tags
+string
+​
+include_product_metadata
+booleandefault:false
+​
+include_volume
+booleandefault:false
+If true, includes the total volume traded across all events in each series.
+
+​
+min_updated_ts
+integer<int64>
+Filter series with metadata updated after this Unix timestamp (in seconds). Use this to efficiently poll for changes.
+
+Response
+
+200
+
+application/json
+Series list retrieved successfully
+
+​
+series
+object[]required
+Hide child attributes
+
+​
+series.ticker
+stringrequired
+Ticker that identifies this series.
+
+​
+series.frequency
+stringrequired
+Description of the frequency of the series. There is no fixed value set here, but will be something human-readable like weekly, daily, one-off.
+
+​
+series.title
+stringrequired
+Title describing the series. For full context use you should use this field with the title field of the events belonging to this series.
+
+​
+series.category
+stringrequired
+Category specifies the category which this series belongs to.
+
+​
+series.tags
+string[]required
+Tags specifies the subjects that this series relates to, multiple series from different categories can have the same tags.
+
+​
+series.settlement_sources
+object[]required
+SettlementSources specifies the official sources used for the determination of markets within the series. Methodology is defined in the rulebook.
+
+Show child attributes
+
+​
+series.contract_url
+stringrequired
+ContractUrl provides a direct link to the original filing of the contract which underlies the series.
+
+​
+series.contract_terms_url
+stringrequired
+ContractTermsUrl is the URL to the current terms of the contract underlying the series.
+
+​
+series.fee_type
+enum<string>required
+FeeType is a string representing the series' fee structure. Fee structures can be found at https://kalshi.com/docs/kalshi-fee-schedule.pdf. 'quadratic' is described by the General Trading Fees Table, 'quadratic_with_maker_fees' is described by the General Trading Fees Table with maker fees described in the Maker Fees section, 'flat' is described by the Specific Trading Fees Table.
+
+Available options: quadratic, quadratic_with_maker_fees, flat 
+​
+series.fee_multiplier
+number<double>required
+FeeMultiplier is a floating point multiplier applied to the fee calculations.
+
+​
+series.additional_prohibitions
+string[]required
+AdditionalProhibitions is a list of additional trading prohibitions for this series.
+
+​
+series.product_metadata
+object
+Internal product metadata of the series.
+
+​
+series.volume_fp
+string
+String representation of the total number of contracts traded across all events in this series.
+
+Example:
+"10.00"
+
+​
+series.last_updated_ts
+string<date-time>
+Timestamp of when this series' metadata was last updated.
