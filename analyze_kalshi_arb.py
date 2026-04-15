@@ -724,6 +724,80 @@ def _save_resolution_cache(csv_path, cache):
         pass
 
 
+def _expiry_cache_path(csv_path):
+    return os.path.splitext(csv_path)[0] + "_expiry_cache.json"
+
+
+def _load_expiry_cache(csv_path):
+    try:
+        p = _expiry_cache_path(csv_path)
+        if os.path.exists(p):
+            with open(p) as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return {}
+
+
+def _save_expiry_cache(csv_path, cache):
+    try:
+        with open(_expiry_cache_path(csv_path), "w") as f:
+            json.dump(cache, f, indent=2)
+    except Exception:
+        pass
+
+
+def fetch_expiry_map(event_ids, session, existing_cache):
+    """
+    Fetches expected_expiration_time for each unique event not already in cache.
+    Uses GET /events/{ticker}?with_nested_markets=true and takes the maximum
+    expected_expiration_time across all nested markets (falling back to
+    latest_expiration_time when expected is absent).
+
+    Returns dict: event_id → ISO datetime string (UTC) or None if unavailable.
+    """
+    result = dict(existing_cache)
+    to_fetch = [e for e in event_ids if e not in result]
+    if not to_fetch:
+        return result
+
+    print(f"[EXPIRY] Fetching expiration dates for {len(to_fetch)} event(s) from Kalshi API...")
+    for i, event_id in enumerate(to_fetch):
+        url = f"{KALSHI_API_BASE}/events/{event_id}?with_nested_markets=true"
+        try:
+            resp = session.get(url, timeout=8)
+            if resp.status_code == 404:
+                result[event_id] = None
+                continue
+            resp.raise_for_status()
+            data = resp.json()
+            event_data  = data.get("event", data)
+            markets_raw = event_data.get("markets", [])
+
+            best_dt = None
+            for mkt in markets_raw:
+                # Prefer expected_expiration_time; fall back to latest_expiration_time
+                val = mkt.get("expected_expiration_time") or mkt.get("latest_expiration_time")
+                if val:
+                    try:
+                        dt = datetime.fromisoformat(val.replace("Z", "+00:00"))
+                        if best_dt is None or dt > best_dt:
+                            best_dt = dt
+                    except ValueError:
+                        pass
+
+            result[event_id] = best_dt.isoformat() if best_dt else None
+        except Exception as e:
+            print(f"[EXPIRY WARN] {event_id}: {e}")
+            result[event_id] = None
+
+        # Gentle rate-limit: brief pause every 20 requests
+        if (i + 1) % 20 == 0:
+            time.sleep(0.2)
+
+    return result
+
+
 def _fetch_event_resolution(event_ticker, session):
     """
     GET /events/{ticker}?with_nested_markets=true
@@ -1282,7 +1356,12 @@ def parse_event_settlement_date(event_id):
             return datetime(2000 + int(m.group(1)), _MONTH_MAP[m.group(2).upper()], int(m.group(3)))
         except ValueError:
             pass
-    m = re.search(r'-(\d{2})-', event_id)
+    # Year-only: -YY- or -YY at end-of-string
+    # e.g. KXNBA-26-OKC, KXMOLDOVAPRES-28, KXGREECEPARLI-27
+    # Requires exactly 2 digits after the dash followed by another dash OR end-of-string,
+    # so day numbers like the "11" in KXHIGHTSATX-26APR11 (which has APR after -26, not a dash
+    # or end) are not matched here — those are caught by the full-date pattern above.
+    m = re.search(r'-(\d{2})(?:-|$)', event_id)
     if m:
         return datetime(2000 + int(m.group(1)), 12, 31)
     return None
@@ -1491,23 +1570,48 @@ def main():
 
     # ── Apply --N month filter (cutoff relative to each arb's discovery time) ─
     if months_limit is not None:
+        import requests as _requests
+        unique_events = list({r["event"] for r in rows})
+        expiry_cache  = _load_expiry_cache(path)
+        with _requests.Session() as _esess:
+            _esess.headers.update({"User-Agent": "kalshi-arb-analyzer/1.0"})
+            expiry_map = fetch_expiry_map(unique_events, _esess, expiry_cache)
+        _save_expiry_cache(path, expiry_map)
+
         before = len(rows)
-        kept = []
+        kept   = []
         for r in rows:
-            settlement = parse_event_settlement_date(r["event"])
+            event_id = r["event"]
+
+            # API date (UTC naive) → preferred
+            settlement = None
+            api_val = expiry_map.get(event_id)
+            if api_val:
+                try:
+                    settlement = datetime.fromisoformat(api_val).replace(tzinfo=None)
+                except ValueError:
+                    pass
+
+            # Ticker-based fallback
             if settlement is None:
-                kept.append(r)   # no parseable date in ticker → keep
+                settlement = parse_event_settlement_date(event_id)
+
+            if settlement is None:
+                kept.append(r)   # no date at all → keep conservatively
                 continue
+
             row_start = _parse_dt(r["start"])
             if row_start is None:
-                kept.append(r)   # can't parse start time → keep
+                kept.append(r)   # unparseable start time → keep
                 continue
+
             if settlement <= row_start + timedelta(days=30 * months_limit):
                 kept.append(r)
+
         rows = kept
         print(f"[--{months_limit}] Removed {before - len(rows)} rows "
               f"(events settling >{months_limit} month(s) after arb discovery; "
-              f"events with no parseable date kept)\n")
+              f"API expiration dates used; ticker fallback for any not found)\n")
 
     # Compute session duration before flagging (uses raw row timestamps)
     session_hours = compute_session_hours(rows, path)
