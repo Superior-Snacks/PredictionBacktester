@@ -88,9 +88,10 @@ if (File.Exists(manualPath))
 // Simple direct scan: fetch all open markets from the REST API.
 // No events endpoint, no blocklist, no volume cap — we want every binary market.
 Console.WriteLine("\n[KALSHI SCANNER] Fetching all open markets...");
-var kalshiTickers = new List<string>();                               // ticker strings
+var kalshiTickers    = new List<string>();
 var kalshiTokenNames = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase); // ticker → yes_sub_title, ticker_NO → no_sub_title
-var kalshiTitles = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);      // ticker → full market title (question text)
+var kalshiTitles     = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase); // ticker → full market title
+var kalshiCategories = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase); // ticker → category
 
 {
     using var scanHttp = new HttpClient();
@@ -123,11 +124,13 @@ var kalshiTitles = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCa
                 string title    = m.TryGetProperty("title",         out var tiEl) ? (tiEl.GetString() ?? "") : "";
                 string yesSub   = m.TryGetProperty("yes_sub_title", out var ysEl) ? (ysEl.GetString() ?? "") : "";
                 string noSub    = m.TryGetProperty("no_sub_title",  out var nsEl) ? (nsEl.GetString() ?? "") : "";
+                string category = m.TryGetProperty("category",      out var cEl)  ? (cEl.GetString()  ?? "") : "";
                 if (string.IsNullOrEmpty(ticker)) continue;
                 kalshiTickers.Add(ticker);
-                if (!string.IsNullOrEmpty(title))  kalshiTitles[ticker]             = title;
-                if (!string.IsNullOrEmpty(yesSub)) kalshiTokenNames[ticker]         = yesSub;
-                if (!string.IsNullOrEmpty(noSub))  kalshiTokenNames[ticker + "_NO"] = noSub;
+                if (!string.IsNullOrEmpty(title))    kalshiTitles[ticker]             = title;
+                if (!string.IsNullOrEmpty(yesSub))   kalshiTokenNames[ticker]         = yesSub;
+                if (!string.IsNullOrEmpty(noSub))    kalshiTokenNames[ticker + "_NO"] = noSub;
+                if (!string.IsNullOrEmpty(category)) kalshiCategories[ticker]         = category;
             }
         }
 
@@ -136,13 +139,17 @@ var kalshiTitles = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCa
         await Task.Delay(150);
     }
 }
-Console.WriteLine($"[KALSHI SCANNER] {kalshiTickers.Count} open markets fetched");
+int kalshiTotal = kalshiTickers.Count;
+kalshiTickers = kalshiTickers
+    .Where(t => kalshiCategories.GetValueOrDefault(t, "").Equals("Sports", StringComparison.OrdinalIgnoreCase))
+    .ToList();
+Console.WriteLine($"[KALSHI SCANNER] {kalshiTotal} open markets fetched → {kalshiTickers.Count} sports markets");
 
 // ── Fetch Polymarket active markets ───────────────────────────────────────────
 Console.WriteLine("[POLY SCANNER] Fetching active Polymarket markets...");
 
 // List of (question, yesTokenId, noTokenId)
-var polyMarkets = new List<(string Question, string YesToken, string NoToken)>();
+List<(string Question, string YesToken, string NoToken)> polyMarkets = [];
 using var httpClient = new HttpClient();
 httpClient.DefaultRequestHeaders.Add("User-Agent", "KalshiPolyCross/1.0");
 
@@ -175,7 +182,17 @@ try
                     catch { }
                 }
             }
-            if (tokens.Count >= 2 && !string.IsNullOrEmpty(question))
+            // Sports filter: keep only markets tagged as sports
+            bool isSports = false;
+            if (mkt.TryGetProperty("tags", out var tagsEl) && tagsEl.ValueKind == JsonValueKind.Array)
+                isSports = tagsEl.EnumerateArray().Any(t =>
+                    (t.TryGetProperty("slug",  out var sl) && (sl.GetString()  ?? "").Contains("sport", StringComparison.OrdinalIgnoreCase)) ||
+                    (t.TryGetProperty("label", out var ll) && (ll.GetString()  ?? "").Contains("sport", StringComparison.OrdinalIgnoreCase)));
+            // Also accept if a top-level category field says Sports
+            if (!isSports && mkt.TryGetProperty("category", out var pcEl))
+                isSports = (pcEl.GetString() ?? "").Contains("sport", StringComparison.OrdinalIgnoreCase);
+
+            if (isSports && tokens.Count >= 2 && !string.IsNullOrEmpty(question))
                 polyMarkets.Add((question, tokens[0], tokens[1]));
         }
         if (count < pageSize) break;
@@ -199,7 +216,8 @@ catch (Exception ex)
 // produce very high-confidence pairs.
 Console.WriteLine($"\n[MATCHING] Pass 1 — direct title similarity ({kalshiTickers.Count} Kalshi × {polyMarkets.Count} Poly)...\n");
 
-var autoPairs = new List<CrossPair>();
+var autoPairs   = new List<CrossPair>();
+var perfectSave = new List<(string Ticker, string Label, string YesToken, string NoToken)>(); // 100% unambiguous matches → auto-save
 var alreadyPaired = new HashSet<string>(manualPairs.Select(p => p.KalshiTicker), StringComparer.OrdinalIgnoreCase);
 int pass1Count = 0;
 
@@ -212,29 +230,36 @@ foreach (var ticker in kalshiTickers)
     var kWords = TitleToKeyWords(kTitle);
     if (kWords.Count < MIN_MATCH_WORDS) continue;
 
-    // Require all (or almost all) of the Kalshi title words to appear in the Poly question
     int minRequired = (int)Math.Ceiling(kWords.Count * 0.8);
 
-    var candidates = polyMarkets
+    var scored = polyMarkets
         .Select(m => (Market: m, Score: kWords.Count(w => m.Question.Contains(w, StringComparison.OrdinalIgnoreCase))))
         .Where(x => x.Score >= minRequired)
         .OrderByDescending(x => x.Score)
         .ToList();
 
-    if (candidates.Count == 0) continue;
+    if (scored.Count == 0) continue;
 
-    Console.WriteLine($"  [TITLE MATCH] K:{ticker}");
+    // A "perfect" match: every Kalshi keyword found in the Poly question, and only
+    // one Poly market qualifies (unambiguous). These are auto-saved to cross_pairs.json.
+    var perfect = scored.Where(x => x.Score == kWords.Count).ToList();
+    bool autosave = perfect.Count == 1;
+
+    Console.WriteLine($"  [TITLE MATCH{(autosave ? " ★" : "")}] K:{ticker}");
     Console.WriteLine($"    Kalshi: \"{kTitle}\"");
-    foreach (var (market, score) in candidates)
+    foreach (var (market, score) in scored)
     {
         string pairId = $"TITLE_{ticker}__{market.YesToken[..Math.Min(8, market.YesToken.Length)]}";
-        string label  = $"{kTitle} | K:{ticker}";
+        string label  = kTitle;
         autoPairs.Add(new CrossPair(pairId, label, ticker, market.YesToken, market.NoToken));
-        alreadyPaired.Add(ticker);   // skip this ticker in pass 2
-        Console.WriteLine($"    [{score}/{kWords.Count}] \"{market.Question}\"");
+        alreadyPaired.Add(ticker);
+        string saveTag = (autosave && score == kWords.Count) ? " [AUTO-SAVE]" : "";
+        Console.WriteLine($"    [{score}/{kWords.Count}]{saveTag} \"{market.Question}\"");
         Console.WriteLine($"          YES={market.YesToken[..Math.Min(16, market.YesToken.Length)]}...");
         pass1Count++;
     }
+    if (autosave)
+        perfectSave.Add((ticker, kTitle, perfect[0].Market.YesToken, perfect[0].Market.NoToken));
     Console.WriteLine();
 }
 Console.WriteLine($"[MATCHING] Pass 1 complete: {pass1Count} candidate pair(s) from direct title match\n");
@@ -302,6 +327,52 @@ Console.WriteLine($"[MATCHING] Pass 2 complete: {pass2Count} candidate pair(s) f
 Console.WriteLine($"[MATCHING] Total: {pass1Count} title + {pass2Count} keyword + {manualPairs.Count} manual = {pairs.Count} pairs");
 if (pairs.Count == 0)
     Console.WriteLine("[WARN] No pairs found. Add entries to cross_pairs.json or wait for more Kalshi/Poly market overlap.");
+
+// ── Auto-save perfect matches to cross_pairs.json ─────────────────────────────
+// Only saves matches where every Kalshi title keyword was found in exactly one
+// Polymarket question — unambiguous enough to skip manual review.
+if (perfectSave.Count > 0)
+{
+    try
+    {
+        // Load existing file to avoid duplicates
+        var existingJson = File.Exists(manualPath) ? File.ReadAllText(manualPath).Trim() : "[]";
+        using var existDoc = JsonDocument.Parse(existingJson);
+        var existingTickers = existDoc.RootElement.EnumerateArray()
+            .Select(el => el.TryGetProperty("kalshi_ticker", out var kt) ? (kt.GetString() ?? "") : "")
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var newEntries = perfectSave.Where(p => !existingTickers.Contains(p.Ticker)).ToList();
+        if (newEntries.Count > 0)
+        {
+            // Append new entries to the existing array
+            var allEntries = existDoc.RootElement.EnumerateArray()
+                .Select(el => el.GetRawText())
+                .ToList();
+            foreach (var (ticker, label, yesToken, noToken) in newEntries)
+                allEntries.Add(JsonSerializer.Serialize(new
+                {
+                    kalshi_ticker  = ticker,
+                    poly_yes_token = yesToken,
+                    poly_no_token  = noToken,
+                    label          = label
+                }));
+
+            File.WriteAllText(manualPath, "[\n  " + string.Join(",\n  ", allEntries) + "\n]");
+            Console.WriteLine($"[AUTO-SAVE] {newEntries.Count} perfect match(es) written to cross_pairs.json");
+            foreach (var (ticker, label, _, _) in newEntries)
+                Console.WriteLine($"  + {ticker}: \"{label}\"");
+        }
+        else
+        {
+            Console.WriteLine($"[AUTO-SAVE] {perfectSave.Count} perfect match(es) already in cross_pairs.json — no update needed");
+        }
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"[AUTO-SAVE WARN] Could not update cross_pairs.json: {ex.Message}");
+    }
+}
 
 // ── Build shared order books ──────────────────────────────────────────────────
 var books = new ConcurrentDictionary<string, LocalOrderBook>(StringComparer.Ordinal);
