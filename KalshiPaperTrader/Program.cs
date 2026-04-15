@@ -15,8 +15,7 @@ const decimal MAX_INVESTMENT        = 50.00m;
 const decimal MIN_PROFIT_PER_SET    = 0.02m;
 const decimal DEPTH_FLOOR_SHARES    = 50m;
 const decimal SLIPPAGE_CENTS        = 0.02m;
-const double  FEE_RATE              = 0.0;   // Pending Kalshi fee schedule confirmation
-const double  FEE_EXPONENT          = 1.0;
+const double  FEE_RATE              = 0.07;  // Kalshi fee: 0.07 × P × (1 - P) per contract
 const long    REQUIRED_SUSTAIN_MS   = 0;
 const long    POST_BUY_COOLDOWN_MS  = 60_000;
 
@@ -117,7 +116,6 @@ var strategy = new PolymarketCategoricalArbStrategy(
     maxInvestmentPerTrade:  MAX_INVESTMENT,
     slippageCents:          SLIPPAGE_CENTS,
     feeRate:                FEE_RATE,
-    feeExponent:            FEE_EXPONENT,
     requiredSustainMs:      REQUIRED_SUSTAIN_MS,
     minProfitPerSet:        MIN_PROFIT_PER_SET,
     depthFloorShares:       DEPTH_FLOOR_SHARES,
@@ -135,8 +133,7 @@ var telemetry = new FastMergeArbTelemetryStrategy(
     slippageCents:          SLIPPAGE_CENTS,
     minProfitPerSet:        MIN_PROFIT_PER_SET,
     depthFloorShares:       1m,
-    feeRate:                FEE_RATE,
-    feeExponent:            FEE_EXPONENT
+    feeRate:                FEE_RATE
 );
 
 // Outbound WS messages queued by background tasks (rescan subscriptions).

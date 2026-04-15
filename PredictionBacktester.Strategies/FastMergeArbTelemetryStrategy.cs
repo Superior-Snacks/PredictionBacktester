@@ -23,8 +23,7 @@ namespace PredictionBacktester.Strategies
         private readonly decimal _slippageCents;
         private readonly decimal _minProfitPerSet;
         private readonly decimal _depthFloorShares;
-        private readonly double _feeRate;
-        private readonly double _feeExponent;
+        private readonly decimal _feeRate;
 
         /// <summary>
         /// Fired when a new arb window opens. Args: (eventId, netCost, legs, depth).
@@ -87,15 +86,13 @@ namespace PredictionBacktester.Strategies
             decimal slippageCents = 0.02m,
             decimal minProfitPerSet = 0.02m,
             decimal depthFloorShares = 5m,
-            double feeRate = 0.04,
-            double feeExponent = 1.0)
+            double feeRate = 0.07)
         {
             _maxInvestmentPerTrade = maxInvestmentPerTrade;
             _slippageCents = slippageCents;
             _minProfitPerSet = minProfitPerSet;
             _depthFloorShares = depthFloorShares;
-            _feeRate = feeRate;
-            _feeExponent = feeExponent;
+            _feeRate = (decimal)feeRate;
 
             foreach (var evt in configuredEvents)
             {
@@ -188,9 +185,8 @@ namespace PredictionBacktester.Strategies
 
         private decimal CalculateFeePerShare(decimal price)
         {
-            double p = (double)price;
-            double fee = p * _feeRate * Math.Pow(p * (1.0 - p), _feeExponent);
-            return Math.Round((decimal)fee, 4);
+            // Kalshi fee: 0.07 × P × (1 - P) per contract
+            return _feeRate * price * (1m - price);
         }
 
         private void EvaluateArbitrageTelemetry(string eventId)
