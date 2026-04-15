@@ -13,7 +13,7 @@
 - [ ] **State Management**: Encapsulate static state dictionaries (`books`, `yesSizes`, `noSizes`) from `Program.cs` into a dedicated `MarketStateTracker` class.
 
 ## Domain Logic
-- [ ] **Fee Model Mismatch**: `FastMergeArbTelemetryStrategy` uses the Polymarket dynamic fee formula (`fee = p * _feeRate * Math.Pow(...)`). Kalshi uses a different fee structure. Update the fee calculation to accurately reflect Kalshi's quadratic or flat fee schedules.
+- [x] **Fee Model Mismatch**: `FastMergeArbTelemetryStrategy` uses the Polymarket dynamic fee formula (`fee = p * _feeRate * Math.Pow(...)`). Kalshi uses a different fee structure. Update the fee calculation to accurately reflect Kalshi's quadratic or flat fee schedules.
 - [ ] **Race Condition in Arb Updates**: `FastMergeArbTelemetryStrategy` updates properties directly on instances inside `_activeArbs` (e.g., `currentArb.BestGrossCost = ...`). If two WebSocket threads hit this simultaneously, telemetry can be corrupted. Apply appropriate locking or atomic replacements for these updates.
 
 ## Market Matching (LLM Integration)
