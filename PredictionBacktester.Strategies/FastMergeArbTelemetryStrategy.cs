@@ -13,8 +13,8 @@ namespace PredictionBacktester.Strategies
     {
         public string StrategyName => "Fast_Merge_Arb_Telemetry";
 
-        private readonly Dictionary<string, string> _tokenToEventMap = new();
-        private readonly Dictionary<string, List<string>> _eventTokens = new();
+        private readonly ConcurrentDictionary<string, string> _tokenToEventMap = new();
+        private readonly ConcurrentDictionary<string, List<string>> _eventTokens = new();
         private readonly ConcurrentDictionary<string, LocalOrderBook> _books = new();
         private readonly ConcurrentDictionary<string, ActiveArbEvent> _activeArbs = new();
 
@@ -98,12 +98,11 @@ namespace PredictionBacktester.Strategies
             {
                 string eventId = evt.Key;
                 List<string> yesTokenIds = evt.Value;
+                // Add _eventTokens first: if a WS update fires mid-loop it will find
+                // the event before any of its tokens are in _tokenToEventMap — safe.
                 _eventTokens[eventId] = yesTokenIds;
-
                 foreach (var token in yesTokenIds)
-                {
                     _tokenToEventMap[token] = eventId;
-                }
             }
 
             lock (_csvInitLock)
@@ -143,13 +142,11 @@ namespace PredictionBacktester.Strategies
         /// </summary>
         public void RegisterEvent(string eventId, List<string> tokenIds)
         {
-            lock (_eventTokens)
-            {
-                if (_eventTokens.ContainsKey(eventId)) return;
-                _eventTokens[eventId] = tokenIds;
-                foreach (var token in tokenIds)
-                    _tokenToEventMap[token] = eventId;
-            }
+            // _eventTokens first so EvaluateArbitrageTelemetry never finds a token
+            // whose event is not yet in _eventTokens.
+            if (!_eventTokens.TryAdd(eventId, tokenIds)) return;
+            foreach (var token in tokenIds)
+                _tokenToEventMap[token] = eventId;
         }
 
         /// <summary>
@@ -160,26 +157,23 @@ namespace PredictionBacktester.Strategies
         /// </summary>
         public void UnregisterEvent(string eventId)
         {
-            lock (_eventTokens)
+            // Remove tokens from _tokenToEventMap first: once a token is gone,
+            // OnBookUpdate returns early and will never reach _eventTokens[eventId].
+            if (!_eventTokens.TryRemove(eventId, out var tokens)) return;
+
+            foreach (var token in tokens)
+                _tokenToEventMap.TryRemove(token, out _);
+
+            // Close any open arb window so it gets written to CSV
+            if (_activeArbs.TryRemove(eventId, out var openArb))
             {
-                if (!_eventTokens.TryGetValue(eventId, out var tokens)) return;
-
-                // Close any open arb window so it gets written to CSV
-                if (_activeArbs.TryRemove(eventId, out var openArb))
-                {
-                    var endTime = DateTime.UtcNow;
-                    var duration = endTime - openArb.StartTime;
-                    if (duration.TotalMilliseconds > 5)
-                        LogArbAutopsy(eventId, openArb, duration, endTime);
-                }
-
-                foreach (var token in tokens)
-                    _tokenToEventMap.Remove(token);
-
-                _eventTokens.Remove(eventId);
-                _bestNetCostSeen.TryRemove(eventId, out _);
+                var endTime = DateTime.UtcNow;
+                var duration = endTime - openArb.StartTime;
+                if (duration.TotalMilliseconds > 5)
+                    LogArbAutopsy(eventId, openArb, duration, endTime);
             }
 
+            _bestNetCostSeen.TryRemove(eventId, out _);
             Console.WriteLine($"[TELEMETRY] Unregistered mid-session: {eventId}");
         }
 
@@ -191,7 +185,7 @@ namespace PredictionBacktester.Strategies
 
         private void EvaluateArbitrageTelemetry(string eventId)
         {
-            var yesTokenIds = _eventTokens[eventId];
+            if (!_eventTokens.TryGetValue(eventId, out var yesTokenIds)) return;
 
             decimal totalGrossCost = 0m;
             decimal totalFeeCost = 0m;
@@ -199,8 +193,8 @@ namespace PredictionBacktester.Strategies
             decimal bottleneckShares = decimal.MaxValue;
 
             int legs = 0;
-            string currentLegTickers = "";
-            string currentLegPrices = "";
+            var currentLegTickers = new List<string>();
+            var currentLegPrices  = new List<string>();
 
             bool allLegsHaveBooks = true;
             int pricedLegs = 0;
@@ -242,8 +236,8 @@ namespace PredictionBacktester.Strategies
                     totalGrossCost += walkResult.Vwap;
                     totalFeeCost += CalculateFeePerShare(walkResult.Vwap);
                     bottleneckShares = Math.Min(bottleneckShares, walkResult.TotalShares);
-                    currentLegTickers += $"{token}|";
-                    currentLegPrices += $"{walkResult.Vwap:0.0000}|";
+                    currentLegTickers.Add(token);
+                    currentLegPrices.Add(walkResult.Vwap.ToString("0.0000"));
                     pricedLegs++;
                 }
 
@@ -301,8 +295,8 @@ namespace PredictionBacktester.Strategies
                         BestNetCost = totalNetCost,
                         MaxVolumeAtBestSpread = bottleneckShares,
                         NumLegs = legs,
-                        LegTickers = currentLegTickers.TrimEnd('|'),
-                        LegPrices = currentLegPrices.TrimEnd('|')
+                        LegTickers = string.Join("|", currentLegTickers),
+                        LegPrices  = string.Join("|", currentLegPrices)
                     };
                     Console.WriteLine($"[TELEMETRY] ARB OPEN: {eventId} | Cost ${totalNetCost:0.0000} | MidSum ${totalMidSum:0.0000} | {legs}L | Depth {bottleneckShares:0.0}");
                     foreach (var t in yesTokenIds)
@@ -315,13 +309,16 @@ namespace PredictionBacktester.Strategies
                 else
                 {
                     // EXISTING ARB - Update if it deepened
-                    if (totalNetCost < currentArb.BestNetCost)
+                    lock (currentArb)
                     {
-                        currentArb.BestGrossCost = totalGrossCost;
-                        currentArb.BestNetCost = totalNetCost;
-                        currentArb.MaxVolumeAtBestSpread = bottleneckShares;
-                        currentArb.LegTickers = currentLegTickers.TrimEnd('|');
-                        currentArb.LegPrices = currentLegPrices.TrimEnd('|'); // Save the prices that formed the peak spread
+                        if (totalNetCost < currentArb.BestNetCost)
+                        {
+                            currentArb.BestGrossCost          = totalGrossCost;
+                            currentArb.BestNetCost            = totalNetCost;
+                            currentArb.MaxVolumeAtBestSpread  = bottleneckShares;
+                            currentArb.LegTickers             = string.Join("|", currentLegTickers);
+                            currentArb.LegPrices              = string.Join("|", currentLegPrices);
+                        }
                     }
                 }
             }
