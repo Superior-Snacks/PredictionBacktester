@@ -71,7 +71,7 @@ public class CrossPlatformArbTelemetryStrategy
     // Kalshi:     fee = KALSHI_FEE_RATE × P × (1 − P)                  per contract
     // Polymarket: fee = P × POLY_FEE_RATE × (P × (1 − P))^EXPONENT     per share
     private const decimal KalshiFeeRate   = 0.07m;
-    private const decimal PolyFeeRate     = 0.02m;
+    private const decimal PolyFeeRate     = 0.03m;
     private const double  PolyFeeExponent = 1.0;
 
     private static decimal KalshiFee(decimal p) => KalshiFeeRate * p * (1m - p);
@@ -92,7 +92,7 @@ public class CrossPlatformArbTelemetryStrategy
     private bool _headerWritten;
 
     // ── Public stats ───────────────────────────────────────────────────────────
-    public int OpenArbs   { get { lock (_windowLock) return _activeWindows.Values.Count(w => w != null); } }
+    public int OpenArbs   => _activeWindows.Values.Count(w => w != null);
     public int TotalPairs => _pairs.Count;
 
     /// <summary>
