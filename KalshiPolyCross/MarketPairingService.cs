@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json.Nodes;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
@@ -12,15 +13,22 @@ public class MarketPairingService
 {
     private readonly string _geminiApiKey;
     private readonly HttpClient _httpClient;
-    private const int MinMatchWords = 2;
+
+    // Similarity score threshold for a pair to be considered a candidate for the AI judge.
+    private const double SimilarityThreshold = 0.75;
+    private const int TopNCandidates = 5; // For each Kalshi market, send the top N most similar Poly markets to the AI judge.
 
     private class CandidatePair
     {
         public string KalshiTicker { get; set; } = "";
         public string KalshiTitle { get; set; } = "";
+        public DateTime? KalshiCloseDate { get; set; }
+        public string KalshiRules { get; set; } = "";
         public string PolyQuestion { get; set; } = "";
         public string PolyYesToken { get; set; } = "";
         public string PolyNoToken { get; set; } = "";
+        public DateTime? PolyCloseDate { get; set; }
+        public string PolyDescription { get; set; } = "";
     }
 
     public MarketPairingService(string geminiApiKey)
@@ -33,17 +41,17 @@ public class MarketPairingService
     /// Main entry point. Orchestrates the entire matching process.
     /// </summary>
     public async Task FindAndSavePairs(
-        Dictionary<string, string> kalshiTitles,
-        List<(string Question, string YesToken, string NoToken)> polyMarkets,
+        Dictionary<string, (string Title, DateTime? CloseDate, string Rules)> kalshiMarkets,
+        List<(string Question, string YesToken, string NoToken, DateTime? EndDate, string Description)> polyMarkets,
         string outputPath)
     {
         Console.WriteLine("\n[PAIRING SERVICE] Starting market pairing process...");
         Console.WriteLine("[PAIRING SERVICE] Ctrl+C at any time — pairs found so far are saved after each batch.");
 
-        // Step 1: Coarse filtering based on keyword overlap.
-        var candidates = CoarseFilter(kalshiTitles, polyMarkets);
+        // Step 1: Advanced filtering based on semantic embeddings.
+        var candidates = await EmbeddingFilter(kalshiMarkets, polyMarkets);
 
-        // Step 2 + 3: Semantic match batch-by-batch, saving after each batch so
+        // Step 2: Final semantic match via AI Judge, saving after each batch so
         // Ctrl+C doesn't lose work already done.
         await SemanticMatchAndSave(candidates, outputPath);
 
@@ -51,46 +59,67 @@ public class MarketPairingService
     }
 
     /// <summary>
-    /// Pass 1: Fast keyword-based filtering to find potential matches.
+    /// Pass 1: Use text embeddings to find the most semantically similar market pairs.
+    /// This is far more accurate than keyword matching.
     /// </summary>
-    private List<CandidatePair> CoarseFilter(
-        Dictionary<string, string> kalshiTitles,
-        List<(string Question, string YesToken, string NoToken)> polyMarkets)
+    private async Task<List<CandidatePair>> EmbeddingFilter(
+        Dictionary<string, (string Title, DateTime? CloseDate, string Rules)> kalshiMarkets,
+        List<(string Question, string YesToken, string NoToken, DateTime? EndDate, string Description)> polyMarkets)
     {
         var candidates = new List<CandidatePair>();
-        Console.WriteLine("[PAIRING SERVICE] Coarse filtering: Finding candidates by keyword overlap...");
+        Console.WriteLine("[PAIRING SERVICE] Embedding filter: Finding candidates by semantic similarity...");
 
-        if (kalshiTitles.Count == 0 || polyMarkets.Count == 0)
+        if (kalshiMarkets.Count == 0 || polyMarkets.Count == 0)
         {
-            Console.WriteLine("[PAIRING SERVICE] No markets from one or both platforms to compare. Skipping coarse filter.");
+            Console.WriteLine("[PAIRING SERVICE] No markets from one or both platforms to compare. Skipping embedding filter.");
             return candidates;
         }
 
+        // 1. Batch-fetch embeddings for ALL titles upfront — two API bursts instead of N.
+        //    Both use the same GetEmbeddingsAsync batching (100/request, 1s between batches)
+        //    which keeps us well within the free-tier 100 RPM limit.
+        var polyQuestions = polyMarkets.Select(p => p.Question).ToList();
+        var kalshiTitles  = kalshiMarkets.Values.Select(v => v.Title).Distinct().ToList();
+
+        var polyEmbeddings  = await GetEmbeddingsAsync(polyQuestions, "Polymarket Questions");
+        var kalshiEmbeddings = await GetEmbeddingsAsync(kalshiTitles, "Kalshi Titles");
+
         int processedCount = 0;
-        foreach (var (kalshiTicker, kalshiTitle) in kalshiTitles)
+        Console.WriteLine($"[PAIRING SERVICE] Comparing {kalshiMarkets.Count} Kalshi markets against {polyMarkets.Count} Polymarket markets...");
+
+        // 2. Pure in-memory loop — no API calls inside here.
+        foreach (var (kalshiTicker, kalshiData) in kalshiMarkets)
         {
-            processedCount++;
-            var kalshiKeywords = TitleToKeyWords(kalshiTitle);
-            if (kalshiKeywords.Count < MinMatchWords) continue;
-
-            // Require at least 50% of the words to match, with a hard floor of MinMatchWords
-            int minRequired = Math.Max(MinMatchWords, (int)Math.Ceiling(kalshiKeywords.Count * 0.5));
-
-            if (processedCount > 0 && processedCount % 250 == 0)
+            if (!kalshiEmbeddings.TryGetValue(kalshiData.Title, out var kalshiEmbedding))
             {
-                Console.WriteLine($"  [Coarse Filter] Processed {processedCount}/{kalshiTitles.Count} Kalshi markets, found {candidates.Count} candidates so far...");
+                processedCount++;
+                continue;
             }
 
-            var scored = polyMarkets
-                .Select(polyMarket => (
-                    polyMarket.Question,
-                    polyMarket.YesToken,
-                    polyMarket.NoToken,
-                    Score: kalshiKeywords.Count(kw => polyMarket.Question.Contains(kw, StringComparison.OrdinalIgnoreCase))
-                ))
-                .Where(x => x.Score >= minRequired)
+            // 3. Apply Coarse Date Filter to eliminate obviously incompatible markets.
+            //    7-day window: Kalshi and Polymarket sometimes express the same deadline differently.
+            var validPolyMarkets = polyMarkets.Where(p =>
+            {
+                if (kalshiData.CloseDate.HasValue && p.EndDate.HasValue)
+                {
+                    if (Math.Abs((kalshiData.CloseDate.Value - p.EndDate.Value).TotalDays) > 7) return false;
+                }
+                return true;
+            }).ToList();
+
+            // 4. Score the Kalshi title against pre-fetched Polymarket embeddings.
+            var scored = validPolyMarkets
+                .Select(polyMarket =>
+                {
+                    polyEmbeddings.TryGetValue(polyMarket.Question, out var polyEmbedding);
+                    return (
+                        polyMarket,
+                        Score: polyEmbedding != null ? CosineSimilarity(kalshiEmbedding, polyEmbedding) : -1.0
+                    );
+                })
+                .Where(x => x.Score > SimilarityThreshold)
                 .OrderByDescending(x => x.Score)
-                .Take(3) // Only keep the top 3 absolute best matches to prevent combinatorial explosion
+                .Take(TopNCandidates)
                 .ToList();
 
             foreach (var s in scored)
@@ -98,19 +127,91 @@ public class MarketPairingService
                 candidates.Add(new CandidatePair
                 {
                     KalshiTicker = kalshiTicker,
-                    KalshiTitle = kalshiTitle,
-                    PolyQuestion = s.Question,
-                    PolyYesToken = s.YesToken,
-                    PolyNoToken = s.NoToken
+                    KalshiTitle = kalshiData.Title,
+                    KalshiCloseDate = kalshiData.CloseDate,
+                    KalshiRules = kalshiData.Rules,
+                    PolyQuestion = s.polyMarket.Question,
+                    PolyYesToken = s.polyMarket.YesToken,
+                    PolyNoToken = s.polyMarket.NoToken,
+                    PolyCloseDate = s.polyMarket.EndDate,
+                    PolyDescription = s.polyMarket.Description
                 });
             }
+
+            processedCount++;
+            if (processedCount % 50 == 0)
+            {
+                Console.WriteLine($"  [Embedding Filter] Processed {processedCount}/{kalshiMarkets.Count} Kalshi markets, found {candidates.Count} candidates so far...");
+            }
         }
-        Console.WriteLine($"[PAIRING SERVICE] Coarse filtering complete: {candidates.Count} potential pairs found.");
+
+        Console.WriteLine($"[PAIRING SERVICE] Embedding filter complete: {candidates.Count} potential pairs found.");
         return candidates;
     }
 
     /// <summary>
-    /// Pass 2+3 combined: evaluate each batch with Gemini and immediately save
+    /// Calls the Gemini `batchEmbedContents` API to get embeddings for a list of texts.
+    /// Handles batching to respect the API's limit of 100 texts per request.
+    /// </summary>
+    private async Task<Dictionary<string, float[]>> GetEmbeddingsAsync(IEnumerable<string> texts, string description)
+    {
+        var embeddings = new Dictionary<string, float[]>();
+        const int ApiBatchSize = 100;
+        var textList = texts.ToList();
+
+        for (int i = 0; i < textList.Count; i += ApiBatchSize)
+        {
+            var batch = textList.Skip(i).Take(ApiBatchSize).ToList();
+            Console.WriteLine($"[EMBEDDING] Getting embeddings for {batch.Count} texts ({description})...");
+
+            var requests = batch.Select(text => new
+            {
+                model = "models/text-embedding-004",
+                content = new { parts = new[] { new { text } } }
+            }).ToList();
+
+            var payload = new { requests };
+            string url = $"https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:batchEmbedContents?key={_geminiApiKey.Trim()}";
+            var content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
+
+            try
+            {
+                var response = await _httpClient.PostAsync(url, content);
+                if (!response.IsSuccessStatusCode)
+                {
+                    string errDetails = await response.Content.ReadAsStringAsync();
+                    Console.WriteLine($"\n[EMBEDDING] Error calling Gemini embedding API: {response.StatusCode} - {errDetails}");
+                    continue; // Skip this batch
+                }
+
+                using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+                if (doc.RootElement.TryGetProperty("embeddings", out var embeddingsArray))
+                {
+                    for (int j = 0; j < embeddingsArray.GetArrayLength(); j++)
+                    {
+                        var embeddingData = embeddingsArray[j];
+                        if (embeddingData.TryGetProperty("value", out var values))
+                        {
+                            var vector = values.EnumerateArray().Select(v => v.GetSingle()).ToArray();
+                            embeddings[batch[j]] = vector;
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"\n[EMBEDDING] Exception during embedding API call: {ex.Message}");
+            }
+
+            if (i + ApiBatchSize < textList.Count)
+                await Task.Delay(1000); // Rate limit between batches
+        }
+
+        return embeddings;
+    }
+
+    /// <summary>
+    /// Pass 2: Evaluate each batch with the AI Judge and immediately save
     /// any matches to disk. This way Ctrl+C never loses already-confirmed pairs.
     /// </summary>
     private async Task SemanticMatchAndSave(List<CandidatePair> candidates, string outputPath)
@@ -135,7 +236,7 @@ public class MarketPairingService
             Console.WriteLine($"  → {matched.Count} matched, {batch.Count - matched.Count} rejected.");
 
             // Save immediately — if the user Ctrl+C's after this line, these pairs are safe.
-            if (matched.Count > 0)
+            if (matched.Any())
                 await SavePairs(matched, outputPath);
 
             totalMatched += matched.Count;
@@ -155,13 +256,27 @@ public class MarketPairingService
     private async Task<List<int>> EvaluateBatch(List<CandidatePair> batch)
     {
         var sb = new StringBuilder();
-        sb.AppendLine("You are evaluating prediction market titles from two platforms (Kalshi and Polymarket).");
-        sb.AppendLine("For each numbered pair below, determine if both titles refer to the EXACT same real-world event and question — same outcome, same time period, same subject.");
+        sb.AppendLine("You are a strict financial compliance officer auditing arbitrage opportunities. You will be given one target Kalshi market and a list of candidate Polymarket markets.");
+        sb.AppendLine("Your job is to find an EXACT MATCH. An exact match means the underlying oracle, the resolution metric, and the expiration date/time are identical.");
+        sb.AppendLine("Pay extreme attention to 'Dead Heat' rules, overtime rules, and timezones.");
+        sb.AppendLine("For each numbered pair below, determine if both titles refer to the EXACT same real-world event and question.");
         sb.AppendLine("Reply ONLY with a JSON array of the 0-based indices of TRUE matches. Example: [0,2,5]. If none match, reply []. Do not include any other text.");
         sb.AppendLine();
 
         for (int i = 0; i < batch.Count; i++)
-            sb.AppendLine($"{i}. Kalshi: \"{batch[i].KalshiTitle}\" | Polymarket: \"{batch[i].PolyQuestion}\"");
+        {
+            var c = batch[i];
+            sb.AppendLine($"[{i}]");
+            sb.AppendLine($"KALSHI MARKET:");
+            sb.AppendLine($"Title: {c.KalshiTitle}");
+            sb.AppendLine($"Close Date: {(c.KalshiCloseDate.HasValue ? c.KalshiCloseDate.Value.ToString("O") : "Unknown")}");
+            sb.AppendLine($"Resolution Rules: {c.KalshiRules}");
+            sb.AppendLine($"POLYMARKET MARKET:");
+            sb.AppendLine($"Title: {c.PolyQuestion}");
+            sb.AppendLine($"Close Date: {(c.PolyCloseDate.HasValue ? c.PolyCloseDate.Value.ToString("O") : "Unknown")}");
+            sb.AppendLine($"Description: {c.PolyDescription}");
+            sb.AppendLine();
+        }
 
         var payload = new
         {
@@ -234,7 +349,7 @@ public class MarketPairingService
         // from accumulating duplicates that cause the bot to monitor the same market twice.
         var outputArray  = new System.Text.Json.Nodes.JsonArray();
         // Key = "kalshi_ticker|poly_yes_token" (case-insensitive) for dedup
-        var existingKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var existingKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase); 
 
         if (System.IO.File.Exists(outputPath))
         {
@@ -292,16 +407,24 @@ public class MarketPairingService
         Console.WriteLine($"[PAIRING SERVICE] Saved {added} new pair(s) to {outputPath}.");
     }
 
-    private static List<string> TitleToKeyWords(string title)
+    /// <summary>
+    /// Calculates the cosine similarity between two vectors.
+    /// </summary>
+    private static double CosineSimilarity(float[] vecA, float[] vecB)
     {
-        // This can be the same helper function from Program.cs
-        var stopWords = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { 
-            "the", "a", "an", "will", "who", "what", "when", "by", "for", "in", "is", "at", "on", "or", "and", "to", "of", "be",
-            "win", "game", "match", "series", "season", "team", "play", "score", "points", "total", "over", "under" 
-        };
-        return Regex.Split(title.ToLowerInvariant(), @"[^a-z0-9]+")
-                   .Where(w => w.Length >= 3 && !stopWords.Contains(w))
-                   .Distinct()
-                   .ToList();
+        if (vecA.Length != vecB.Length)
+            throw new ArgumentException("Vectors must have the same dimension.");
+
+        double dotProduct = 0.0;
+        double normA = 0.0;
+        double normB = 0.0;
+        for (int i = 0; i < vecA.Length; i++)
+        {
+            dotProduct += vecA[i] * vecB[i];
+            normA += vecA[i] * vecA[i];
+            normB += vecB[i] * vecB[i];
+        }
+        double denom = Math.Sqrt(normA) * Math.Sqrt(normB);
+        return denom == 0.0 ? 0.0 : dotProduct / denom;
     }
 }

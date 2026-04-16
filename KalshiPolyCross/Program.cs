@@ -144,7 +144,7 @@ static async Task<Dictionary<string, string>> FetchKalshiSeriesCategories(Kalshi
 Console.WriteLine("\n[KALSHI SCANNER] Fetching all open markets...");
 var kalshiTickers    = new List<string>();
 var kalshiTokenNames = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase); // ticker → yes_sub_title, ticker_NO → no_sub_title
-var kalshiTitles     = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase); // ticker → full market title
+var kalshiMarkets    = new Dictionary<string, (string Title, DateTime? CloseDate, string Rules)>(StringComparer.OrdinalIgnoreCase); 
 
 using var httpClient = new HttpClient();
 httpClient.DefaultRequestHeaders.Add("User-Agent", "KalshiPolyCross/1.0");
@@ -189,9 +189,15 @@ while (true)
                 {
                     string ticker = m.TryGetProperty("ticker", out var tEl) ? (tEl.GetString() ?? "") : "";
                     string title = m.TryGetProperty("title", out var tiEl) ? (tiEl.GetString() ?? "") : "";
+                    string rules = m.TryGetProperty("rules_primary", out var rEl) ? (rEl.GetString() ?? "") : "";
+                    
+                    DateTime? closeDate = null;
+                    if (m.TryGetProperty("expected_expiration_time", out var expEl) && expEl.ValueKind == JsonValueKind.String && DateTime.TryParse(expEl.GetString(), out var dt1)) closeDate = dt1;
+                    else if (m.TryGetProperty("close_time", out var clEl) && clEl.ValueKind == JsonValueKind.String && DateTime.TryParse(clEl.GetString(), out var dt2)) closeDate = dt2;
+
                     if (string.IsNullOrEmpty(ticker)) continue;
                     kalshiTickers.Add(ticker);
-                    if (!string.IsNullOrEmpty(title)) kalshiTitles[ticker] = title;
+                    if (!string.IsNullOrEmpty(title)) kalshiMarkets[ticker] = (title, closeDate, rules);
                 }
             }
         }
@@ -214,8 +220,8 @@ else
 // ── Fetch Polymarket active markets ───────────────────────────────────────────
 Console.WriteLine("[POLY SCANNER] Fetching active Polymarket markets...");
 
-// List of (question, yesTokenId, noTokenId)
-List<(string Question, string YesToken, string NoToken)> polyMarkets = [];
+// List of (question, yesTokenId, noTokenId, endDate, description)
+var polyMarkets = new List<(string Question, string YesToken, string NoToken, DateTime? EndDate, string Description)>();
 
 try
 {
@@ -246,6 +252,10 @@ try
                     includeEvent = (pcEl.GetString() ?? "").Contains(POLY_CATEGORY_FILTER, StringComparison.OrdinalIgnoreCase);
             }
 
+            string description = ev.TryGetProperty("description", out var descEl) ? (descEl.GetString() ?? "") : "";
+            DateTime? endDate = null;
+            if (ev.TryGetProperty("end_date", out var edEl) && edEl.ValueKind == JsonValueKind.String && DateTime.TryParse(edEl.GetString(), out var dt)) endDate = dt;
+
             if (includeEvent && ev.TryGetProperty("markets", out var marketsEl) && marketsEl.ValueKind == JsonValueKind.Array)
             {
                 foreach (var mkt in marketsEl.EnumerateArray())
@@ -266,7 +276,7 @@ try
                     }
 
                     if (tokens.Count >= 2 && !string.IsNullOrEmpty(question))
-                        polyMarkets.Add((question, tokens[0], tokens[1]));
+                        polyMarkets.Add((question, tokens[0], tokens[1], endDate, description));
                 }
             }
         }
@@ -294,7 +304,7 @@ if (isPairingMode)
     // Apply the same category filter used for the live bot so pairing only produces
     // pairs the live bot will actually monitor.
     var pairingService = new MarketPairingService(geminiApiKey!);
-    await pairingService.FindAndSavePairs(kalshiTitles, polyMarkets, manualPath);
+    await pairingService.FindAndSavePairs(kalshiMarkets, polyMarkets, manualPath);
     Console.WriteLine("\n[PAIRING MODE] Process complete. Exiting.");
     return;
 }
