@@ -16,10 +16,13 @@ public record CrossPair(
 
 record ActiveWindow(
     string PairId,
-    string ArbType,           // "K_YES_P_NO" or "K_NO_P_YES"
+    string ArbType,             // "K_YES_P_NO" or "K_NO_P_YES"
     DateTime StartTime,
-    decimal EntryCost,
-    decimal BestCost,
+    decimal EntryGrossCost,
+    decimal EntryNetCost,
+    string  EntryLegPrices,     // "kPrice|pPrice" at window open — stored so close doesn't re-read stale books
+    decimal BestGrossCost,
+    decimal BestNetCost,
     decimal BestDepth
 );
 
@@ -41,8 +44,22 @@ public class CrossPlatformArbTelemetryStrategy
     // Near-miss tracking: pairId → (bestCost, arbType) for console report
     private readonly ConcurrentDictionary<string, (decimal Cost, string Type, decimal Depth)> _nearMiss = new();
 
+    // ── Fee model ─────────────────────────────────────────────────────────────
+    // Kalshi:     fee = KALSHI_FEE_RATE × P × (1 − P)   per contract
+    // Polymarket: fee = P × POLY_FEE_RATE × (P × (1 − P))^POLY_FEE_EXPONENT  per share
+    private const decimal KalshiFeeRate    = 0.07m;
+    private const decimal PolyFeeRate      = 0.02m;
+    private const double  PolyFeeExponent  = 1.0;
+
+    private static decimal KalshiFee(decimal price)
+        => KalshiFeeRate * price * (1m - price);
+
+    private static decimal PolyFee(decimal price)
+        => price * PolyFeeRate * (decimal)Math.Pow((double)(price * (1m - price)), PolyFeeExponent);
+
     private readonly string _csvPath;
-    private readonly object _csvLock = new();
+    private readonly object _csvLock   = new();
+    private readonly object _windowLock = new();   // guards _activeWindows across both WS tasks
     private bool _headerWritten;
 
     // ── Public stats ──────────────────────────────────────────────────────────
@@ -89,7 +106,7 @@ public class CrossPlatformArbTelemetryStrategy
     public void OnReconnect()
     {
         // Close all open windows on reconnect — stale book data
-        lock (_csvLock)
+        lock (_windowLock)
         {
             foreach (var pairId in _activeWindows.Keys.ToList())
             {
@@ -118,12 +135,7 @@ public class CrossPlatformArbTelemetryStrategy
         if (!_books.TryGetValue($"P:{pair.PolyYesTokenId}",  out var pYes)) return;
         if (!_books.TryGetValue($"P:{pair.PolyNoTokenId}",   out var pNo))  return;
 
-        // Both platforms must have received at least one live delta
-        bool kalshiReady = kYes.HasReceivedDelta;
-        bool polyReady   = pYes.HasReceivedDelta && pNo.HasReceivedDelta;
-        if (!kalshiReady || !polyReady) return;
-
-        // Stale guard: no update in 120s
+        if (!kYes.HasReceivedDelta || !pYes.HasReceivedDelta || !pNo.HasReceivedDelta) return;
         if (kYes.IsStale() || pYes.IsStale() || pNo.IsStale()) return;
 
         decimal kYesAsk = kYes.GetBestAskPrice();
@@ -132,56 +144,73 @@ public class CrossPlatformArbTelemetryStrategy
         decimal pNoAsk  = pNo.GetBestAskPrice();
 
         // Type A: buy Kalshi YES + buy Poly NO
-        decimal typeACost = kYesAsk + pNoAsk;
-        // Type B: buy Kalshi NO  + buy Poly YES
-        decimal typeBCost = kNoAsk  + pYesAsk;
-
-        decimal bestCost;
-        string  bestType;
+        decimal typeAGross = kYesAsk + pNoAsk;
+        decimal typeAFees  = KalshiFee(kYesAsk) + PolyFee(pNoAsk);
+        decimal typeANet   = typeAGross + typeAFees;
         decimal typeADepth = Math.Min(kYes.GetTopAskVolume(3), pNo.GetTopAskVolume(3));
-        decimal typeBDepth = Math.Min(kNo.GetTopAskVolume(3),  pYes.GetTopAskVolume(3));
 
-        if (typeACost <= typeBCost) { bestCost = typeACost; bestType = "K_YES_P_NO"; }
-        else                        { bestCost = typeBCost; bestType = "K_NO_P_YES"; }
+        // Type B: buy Kalshi NO + buy Poly YES
+        decimal typeBGross = kNoAsk + pYesAsk;
+        decimal typeBFees  = KalshiFee(kNoAsk) + PolyFee(pYesAsk);
+        decimal typeBNet   = typeBGross + typeBFees;
+        decimal typeBDepth = Math.Min(kNo.GetTopAskVolume(3), pYes.GetTopAskVolume(3));
 
-        decimal bestDepth = bestType == "K_YES_P_NO" ? typeADepth : typeBDepth;
+        decimal bestGross, bestFees, bestNet, bestDepth;
+        string  bestType;
+        decimal kLegPrice, pLegPrice;
 
-        // Update near-miss tracker (always, regardless of threshold)
-        _nearMiss[pair.PairId] = (bestCost, bestType, bestDepth);
-
-        bool isArb = bestCost < _arbThreshold && bestDepth >= _depthFloor;
-        var  existing = _activeWindows[pair.PairId];
-
-        if (isArb)
+        if (typeANet <= typeBNet)
         {
-            if (existing == null)
+            bestGross = typeAGross; bestFees = typeAFees; bestNet = typeANet;
+            bestDepth = typeADepth; bestType = "K_YES_P_NO";
+            kLegPrice = kYesAsk;   pLegPrice = pNoAsk;
+        }
+        else
+        {
+            bestGross = typeBGross; bestFees = typeBFees; bestNet = typeBNet;
+            bestDepth = typeBDepth; bestType = "K_NO_P_YES";
+            kLegPrice = kNoAsk;    pLegPrice = pYesAsk;
+        }
+
+        // Near-miss uses net cost — the true cost after fees
+        _nearMiss[pair.PairId] = (bestNet, bestType, bestDepth);
+
+        bool isArb = bestNet < _arbThreshold && bestDepth >= _depthFloor;
+
+        lock (_windowLock)
+        {
+            var existing = _activeWindows[pair.PairId];
+
+            if (isArb)
             {
-                // Open new window
-                var w = new ActiveWindow(pair.PairId, bestType, DateTime.UtcNow, bestCost, bestCost, bestDepth);
-                _activeWindows[pair.PairId] = w;
-                Console.WriteLine($"[CROSS ARB OPEN] {pair.Label} | {bestType} | cost=${bestCost:0.0000} | depth={bestDepth:0.0}");
-            }
-            else
-            {
-                // Extend: update best cost if improved
-                if (bestCost < existing.BestCost || bestDepth > existing.BestDepth)
+                if (existing == null)
+                {
+                    string entryLegPrices = $"{kLegPrice:0.0000}|{pLegPrice:0.0000}";
+                    var w = new ActiveWindow(pair.PairId, bestType, DateTime.UtcNow,
+                        bestGross, bestNet, entryLegPrices,
+                        bestGross, bestNet, bestDepth);
+                    _activeWindows[pair.PairId] = w;
+                    Console.WriteLine($"[CROSS ARB OPEN] {pair.Label} | {bestType} | gross=${bestGross:0.0000} fees=${bestFees:0.0000} net=${bestNet:0.0000} | depth={bestDepth:0.0}");
+                }
+                else if (bestNet < existing.BestNetCost || bestDepth > existing.BestDepth)
                 {
                     _activeWindows[pair.PairId] = existing with
                     {
-                        BestCost  = Math.Min(existing.BestCost, bestCost),
-                        BestDepth = Math.Max(existing.BestDepth, bestDepth)
+                        BestGrossCost = Math.Min(existing.BestGrossCost, bestGross),
+                        BestNetCost   = Math.Min(existing.BestNetCost,   bestNet),
+                        BestDepth     = Math.Max(existing.BestDepth,     bestDepth)
                     };
                 }
             }
-        }
-        else if (existing != null)
-        {
-            // Arb closed
-            CloseWindow(pair.PairId, existing, DateTime.UtcNow);
-            _activeWindows[pair.PairId] = null;
+            else if (existing != null)
+            {
+                CloseWindow(pair.PairId, existing, DateTime.UtcNow);
+                _activeWindows[pair.PairId] = null;
+            }
         }
     }
 
+    // NOTE: must be called while holding _windowLock
     private void CloseWindow(string pairId, ActiveWindow w, DateTime endTime)
     {
         long durationMs = (long)(endTime - w.StartTime).TotalMilliseconds;
@@ -190,41 +219,36 @@ public class CrossPlatformArbTelemetryStrategy
         var pair = _pairs.FirstOrDefault(p => p.PairId == pairId);
         if (pair == null) return;
 
-        string kLeg = w.ArbType == "K_YES_P_NO" ? $"K:{pair.KalshiTicker}"    : $"K:{pair.KalshiTicker}_NO";
-        string pLeg = w.ArbType == "K_YES_P_NO" ? $"P:{pair.PolyNoTokenId}"   : $"P:{pair.PolyYesTokenId}";
+        string kLeg   = w.ArbType == "K_YES_P_NO" ? $"K:{pair.KalshiTicker}"  : $"K:{pair.KalshiTicker}_NO";
+        string pLeg   = w.ArbType == "K_YES_P_NO" ? $"P:{pair.PolyNoTokenId}" : $"P:{pair.PolyYesTokenId}";
+        decimal fees   = w.BestNetCost - w.BestGrossCost;
+        decimal profit = 1m - w.BestNetCost;
 
-        decimal grossCost  = w.BestCost;
-        decimal fees       = 0m;          // cross-platform fee model TBD
-        decimal netCost    = grossCost + fees;
-        decimal profit     = 1m - netCost;
-        decimal capital    = w.BestDepth * netCost;
-
-        Console.WriteLine($"[CROSS ARB CLOSE] {pair.Label} | {w.ArbType} | {durationMs}ms | profit/share=${profit:0.0000}");
+        Console.WriteLine($"[CROSS ARB CLOSE] {pair.Label} | {w.ArbType} | {durationMs}ms | " +
+                          $"gross=${w.BestGrossCost:0.0000} fees=${fees:0.0000} profit/share=${profit:0.0000}");
 
         WriteRow(
-            startTime:     w.StartTime,
-            endTime:       endTime,
-            durationMs:    durationMs,
-            eventId:       pairId,
-            numLegs:       2,
-            legTickers:    $"{kLeg}|{pLeg}",
-            legPrices:     w.ArbType == "K_YES_P_NO"
-                               ? $"{_books.GetValueOrDefault($"K:{pair.KalshiTicker}")?.GetBestAskPrice():0.0000}|{_books.GetValueOrDefault($"P:{pair.PolyNoTokenId}")?.GetBestAskPrice():0.0000}"
-                               : $"{_books.GetValueOrDefault($"K:{pair.KalshiTicker}_NO")?.GetBestAskPrice():0.0000}|{_books.GetValueOrDefault($"P:{pair.PolyYesTokenId}")?.GetBestAskPrice():0.0000}",
-            entryCost:     w.EntryCost,
-            bestGross:     grossCost,
-            totalFees:     fees,
-            bestNet:       netCost,
+            startTime:      w.StartTime,
+            endTime:        endTime,
+            durationMs:     durationMs,
+            eventId:        pairId,
+            numLegs:        2,
+            legTickers:     $"{kLeg}|{pLeg}",
+            legPrices:      w.EntryLegPrices,
+            entryCost:      w.EntryNetCost,
+            bestGross:      w.BestGrossCost,
+            totalFees:      fees,
+            bestNet:        w.BestNetCost,
             profitPerShare: profit,
-            maxVolume:     w.BestDepth,
-            totalCapital:  capital,
-            totalProfit:   profit * w.BestDepth,
-            restChecked:   false,
-            restConfirmed: false,
-            restSum:       -1m,
-            restDepth:     -1m,
-            restDelayMs:   -1,
-            arbType:       w.ArbType
+            maxVolume:      w.BestDepth,
+            totalCapital:   w.BestDepth * w.BestNetCost,
+            totalProfit:    profit * w.BestDepth,
+            restChecked:    false,
+            restConfirmed:  false,
+            restSum:        -1m,
+            restDepth:      -1m,
+            restDelayMs:    -1,
+            arbType:        w.ArbType
         );
     }
 
