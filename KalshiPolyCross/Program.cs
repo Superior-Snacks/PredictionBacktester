@@ -23,17 +23,21 @@ const int     NEAR_MISS_INTERVAL_MS = 60_000;
 const string  POLY_GAMMA_URL        = "https://gamma-api.polymarket.com";
 const string  POLY_WS_URL           = "wss://ws-subscriptions-clob.polymarket.com/ws/market";
 
-// Minimum number of key words from a Kalshi title that must appear in a
-// Polymarket question for the pair to be treated as a candidate match.
-// Raise this to reduce false positives; lower it to catch more candidates.
-const int MIN_MATCH_WORDS = 2;
-
 // ══════════════════════════════════════════════════════════════════════════════
 //  STARTUP
 // ══════════════════════════════════════════════════════════════════════════════
 Console.WriteLine("═══════════════════════════════════════════════════════════");
 Console.WriteLine("  KALSHI ↔ POLYMARKET CROSS-PLATFORM ARB TELEMETRY");
 Console.WriteLine("═══════════════════════════════════════════════════════════");
+
+// Check for pairing mode
+bool isPairingMode = args.Contains("--pair");
+if (isPairingMode)
+{
+    Console.ForegroundColor = ConsoleColor.Cyan;
+    Console.WriteLine("\n[MODE] Running in AI Market Pairing mode. The bot will not start.");
+    Console.ResetColor();
+}
 
 // ── Kalshi auth ───────────────────────────────────────────────────────────────
 var kalshiConfig = KalshiApiConfig.FromEnvironment();
@@ -42,6 +46,15 @@ if (string.IsNullOrEmpty(kalshiConfig.ApiKeyId) || string.IsNullOrEmpty(kalshiCo
     Console.WriteLine("[ERROR] Set KALSHI_API_KEY_ID and KALSHI_PRIVATE_KEY_PATH environment variables.");
     return;
 }
+
+// ── Gemini auth (for pairing mode) ────────────────────────────────────────────
+string? geminiApiKey = Environment.GetEnvironmentVariable("GEMINI_API_KEY");
+if (isPairingMode && string.IsNullOrEmpty(geminiApiKey))
+{
+    Console.WriteLine("[ERROR] --pair mode requires GEMINI_API_KEY environment variable.");
+    return;
+}
+
 
 using var orderClient = new KalshiOrderClient(kalshiConfig);
 try
@@ -227,172 +240,27 @@ catch (Exception ex)
     Console.WriteLine($"[POLY SCANNER ERROR] {ex.Message}");
 }
 
-// ── Auto-match: Pass 1 — direct title similarity ─────────────────────────────
-// Compare each Kalshi market's full title (question text) word-for-word against
-// every Polymarket question. This catches markets titled identically or near-
-// identically across platforms before falling back to YES/NO subtitle keywords.
-//
-// Match rule: ≥80% of the Kalshi title's words appear in the Polymarket question
-// (after stripping stop words). This is stricter than keyword matching and will
-// produce very high-confidence pairs.
-Console.WriteLine($"\n[MATCHING] Pass 1 — direct title similarity ({kalshiTickers.Count} Kalshi × {polyMarkets.Count} Poly)...\n");
-
-var autoPairs   = new List<CrossPair>();
-var perfectSave = new List<(string Ticker, string Label, string YesToken, string NoToken)>(); // 100% unambiguous matches → auto-save
-var alreadyPaired = new HashSet<string>(manualPairs.Select(p => p.KalshiTicker), StringComparer.OrdinalIgnoreCase);
-int pass1Count = 0;
-
-foreach (var ticker in kalshiTickers)
+// ── AI Market Pairing Mode ────────────────────────────────────────────────────
+if (isPairingMode)
 {
-    if (alreadyPaired.Contains(ticker)) continue;
-    string kTitle = kalshiTitles.GetValueOrDefault(ticker, "");
-    if (string.IsNullOrWhiteSpace(kTitle)) continue;
-
-    var kWords = TitleToKeyWords(kTitle);
-    if (kWords.Count < MIN_MATCH_WORDS) continue;
-
-    int minRequired = (int)Math.Ceiling(kWords.Count * 0.8);
-
-    var scored = polyMarkets
-        .Select(m => (Market: m, Score: kWords.Count(w => m.Question.Contains(w, StringComparison.OrdinalIgnoreCase))))
-        .Where(x => x.Score >= minRequired)
-        .OrderByDescending(x => x.Score)
-        .ToList();
-
-    if (scored.Count == 0) continue;
-
-    // A "perfect" match: every Kalshi keyword found in the Poly question, and only
-    // one Poly market qualifies (unambiguous). These are auto-saved to cross_pairs.json.
-    var perfect = scored.Where(x => x.Score == kWords.Count).ToList();
-    bool autosave = perfect.Count == 1;
-
-    Console.WriteLine($"  [TITLE MATCH{(autosave ? " ★" : "")}] K:{ticker}");
-    Console.WriteLine($"    Kalshi: \"{kTitle}\"");
-    foreach (var (market, score) in scored)
-    {
-        string pairId = $"TITLE_{ticker}__{market.YesToken[..Math.Min(8, market.YesToken.Length)]}";
-        string label  = kTitle;
-        autoPairs.Add(new CrossPair(pairId, label, ticker, market.YesToken, market.NoToken));
-        alreadyPaired.Add(ticker);
-        string saveTag = (autosave && score == kWords.Count) ? " [AUTO-SAVE]" : "";
-        Console.WriteLine($"    [{score}/{kWords.Count}]{saveTag} \"{market.Question}\"");
-        Console.WriteLine($"          YES={market.YesToken[..Math.Min(16, market.YesToken.Length)]}...");
-        pass1Count++;
-    }
-    if (autosave)
-        perfectSave.Add((ticker, kTitle, perfect[0].Market.YesToken, perfect[0].Market.NoToken));
-    Console.WriteLine();
-}
-Console.WriteLine($"[MATCHING] Pass 1 complete: {pass1Count} candidate pair(s) from direct title match\n");
-
-// ── Auto-match: Pass 2 — YES/NO subtitle keywords ────────────────────────────
-// For tickers not matched in pass 1, combine the YES and NO outcome subtitles
-// and score Polymarket questions by keyword overlap. Useful when the Kalshi full
-// title uses different phrasing but the outcome labels (team names, candidate
-// names) are the same words that appear in the Polymarket question.
-Console.WriteLine($"[MATCHING] Pass 2 — YES/NO subtitle keywords (remaining tickers)...\n");
-int pass2Count = 0;
-
-foreach (var ticker in kalshiTickers)
-{
-    if (alreadyPaired.Contains(ticker)) continue;
-
-    string yesTitle = kalshiTokenNames.GetValueOrDefault(ticker, "");
-    string noTitle  = kalshiTokenNames.GetValueOrDefault(ticker + "_NO", "");
-
-    // If YES and NO titles are identical (or one contains the other), the outcome
-    // names don't describe the event — just the team/candidate. We can't distinguish
-    // "OKC wins championship" vs "OKC advances to conference finals" etc.
-    string yesNorm = yesTitle.Trim().ToLowerInvariant();
-    string noNorm  = noTitle.Trim().ToLowerInvariant();
-    if (yesNorm == noNorm || yesNorm.Contains(noNorm) || noNorm.Contains(yesNorm))
-        continue;  // identical subtitles — skip silently (too ambiguous)
-
-    string combined = $"{yesTitle} {noTitle}";
-    var keywords = TitleToKeyWords(combined);
-    if (keywords.Count < MIN_MATCH_WORDS) continue;
-
-    int minRequired = Math.Max(MIN_MATCH_WORDS, (int)Math.Ceiling(keywords.Count * 0.8));
-
-    var candidates = polyMarkets
-        .Select(m => (Market: m, Score: keywords.Count(kw => m.Question.Contains(kw, StringComparison.OrdinalIgnoreCase))))
-        .Where(x => x.Score >= minRequired)
-        .OrderByDescending(x => x.Score)
-        .ToList();
-
-    if (candidates.Count == 0) continue;
-
-    Console.WriteLine($"  [KEYWORD MATCH] K:{ticker}");
-    Console.WriteLine($"    YES: \"{yesTitle}\"  NO: \"{noTitle}\"");
-    Console.WriteLine($"    Keywords: [{string.Join(", ", keywords)}]");
-
-    foreach (var (market, score) in candidates)
-    {
-        string pairId = $"AUTO_{ticker}__{market.YesToken[..Math.Min(8, market.YesToken.Length)]}";
-        string label  = $"{yesTitle} | K:{ticker}";
-        autoPairs.Add(new CrossPair(pairId, label, ticker, market.YesToken, market.NoToken));
-        Console.WriteLine($"    [{score}/{keywords.Count} need≥{minRequired}] \"{market.Question}\"");
-        Console.WriteLine($"          YES={market.YesToken[..Math.Min(16, market.YesToken.Length)]}...");
-        pass2Count++;
-    }
-    Console.WriteLine();
+    var pairingService = new MarketPairingService(geminiApiKey!);
+    await pairingService.FindAndSavePairs(kalshiTitles, polyMarkets, manualPath);
+    Console.WriteLine("\n[PAIRING MODE] Process complete. Exiting.");
+    return;
 }
 
-// Merge: manual pairs take precedence; auto pairs skip tickers already in manual list
+// ══════════════════════════════════════════════════════════════════════════════
+//  BOT EXECUTION (Normal Mode)
+// ══════════════════════════════════════════════════════════════════════════════
+
+// In normal mode, we just use the pairs from the JSON file.
 var pairs = new List<CrossPair>(manualPairs);
-foreach (var ap in autoPairs)
-    if (!alreadyPaired.Contains(ap.KalshiTicker))
-        pairs.Add(ap);
 
-Console.WriteLine($"[MATCHING] Pass 2 complete: {pass2Count} candidate pair(s) from subtitle keywords");
-Console.WriteLine($"[MATCHING] Total: {pass1Count} title + {pass2Count} keyword + {manualPairs.Count} manual = {pairs.Count} pairs");
+Console.WriteLine($"[MATCHING] {pairs.Count} pair(s) loaded from {manualPath}");
 if (pairs.Count == 0)
-    Console.WriteLine("[WARN] No pairs found. Add entries to cross_pairs.json or wait for more Kalshi/Poly market overlap.");
-
-// ── Auto-save perfect matches to cross_pairs.json ─────────────────────────────
-// Only saves matches where every Kalshi title keyword was found in exactly one
-// Polymarket question — unambiguous enough to skip manual review.
-if (perfectSave.Count > 0)
 {
-    try
-    {
-        // Load existing file to avoid duplicates
-        var existingJson = File.Exists(manualPath) ? File.ReadAllText(manualPath).Trim() : "[]";
-        using var existDoc = JsonDocument.Parse(existingJson);
-        var existingTickers = existDoc.RootElement.EnumerateArray()
-            .Select(el => el.TryGetProperty("kalshi_ticker", out var kt) ? (kt.GetString() ?? "") : "")
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-        var newEntries = perfectSave.Where(p => !existingTickers.Contains(p.Ticker)).ToList();
-        if (newEntries.Count > 0)
-        {
-            // Append new entries to the existing array
-            var allEntries = existDoc.RootElement.EnumerateArray()
-                .Select(el => el.GetRawText())
-                .ToList();
-            foreach (var (ticker, label, yesToken, noToken) in newEntries)
-                allEntries.Add(JsonSerializer.Serialize(new
-                {
-                    kalshi_ticker  = ticker,
-                    poly_yes_token = yesToken,
-                    poly_no_token  = noToken,
-                    label          = label
-                }));
-
-            File.WriteAllText(manualPath, "[\n  " + string.Join(",\n  ", allEntries) + "\n]");
-            Console.WriteLine($"[AUTO-SAVE] {newEntries.Count} perfect match(es) written to cross_pairs.json");
-            foreach (var (ticker, label, _, _) in newEntries)
-                Console.WriteLine($"  + {ticker}: \"{label}\"");
-        }
-        else
-        {
-            Console.WriteLine($"[AUTO-SAVE] {perfectSave.Count} perfect match(es) already in cross_pairs.json — no update needed");
-        }
-    }
-    catch (Exception ex)
-    {
-        Console.WriteLine($"[AUTO-SAVE WARN] Could not update cross_pairs.json: {ex.Message}");
-    }
+    Console.WriteLine("[WARN] No pairs found. Add entries to cross_pairs.json or wait for more Kalshi/Poly market overlap.");
+    Console.WriteLine("[INFO] To generate new pairs, run with the --pair argument.");
 }
 
 // ── Build shared order books ──────────────────────────────────────────────────
@@ -787,30 +655,4 @@ static void ProcessPolyMessage(
         }
     }
     catch (JsonException) { }
-}
-
-// ══════════════════════════════════════════════════════════════════════════════
-//  AUTO-MATCH HELPERS
-// ══════════════════════════════════════════════════════════════════════════════
-
-// Extract meaningful words from a market title.
-// Combines YES and NO titles so both team/candidate names are captured.
-static List<string> TitleToKeyWords(string combinedTitle)
-{
-    var stopWords = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-    {
-        // Common English stop words
-        "the","a","an","and","or","of","to","in","at","on","for","by","from",
-        "with","will","who","when","what","how","does","did","has","have",
-        "was","were","are","is","that","this","be","do","not","but","if",
-        "as","it","its","yes","no","get","gets","got","more","than","most",
-        "any","all","into","out","over","under","up","down","per","via",
-        // Domain-generic suffixes that appear in many different team/org names
-        // and would cause false positives if used as match keywords
-        "gaming","esports","sports","team","gg","club","fc"
-    };
-    return Regex.Split(combinedTitle.ToLowerInvariant(), @"[^a-z0-9]+")
-               .Where(w => w.Length >= 3 && !stopWords.Contains(w))
-               .Distinct()
-               .ToList();
 }
