@@ -38,15 +38,14 @@ public class MarketPairingService
         string outputPath)
     {
         Console.WriteLine("\n[PAIRING SERVICE] Starting market pairing process...");
+        Console.WriteLine("[PAIRING SERVICE] Ctrl+C at any time — pairs found so far are saved after each batch.");
 
         // Step 1: Coarse filtering based on keyword overlap.
         var candidates = CoarseFilter(kalshiTitles, polyMarkets);
 
-        // Step 2: Semantic matching using the Gemini API.
-        var confirmedPairs = await SemanticMatch(candidates);
-
-        // Step 3: Persist the new pairs.
-        await SavePairs(confirmedPairs, outputPath);
+        // Step 2 + 3: Semantic match batch-by-batch, saving after each batch so
+        // Ctrl+C doesn't lose work already done.
+        await SemanticMatchAndSave(candidates, outputPath);
 
         Console.WriteLine("[PAIRING SERVICE] Market pairing process complete.");
     }
@@ -94,14 +93,14 @@ public class MarketPairingService
     }
 
     /// <summary>
-    /// Pass 2: Use Gemini API to confirm semantic equivalence of candidate pairs.
-    /// Sends candidates in batches of <see cref="BatchSize"/> to minimize API calls.
+    /// Pass 2+3 combined: evaluate each batch with Gemini and immediately save
+    /// any matches to disk. This way Ctrl+C never loses already-confirmed pairs.
     /// </summary>
-    private async Task<List<CandidatePair>> SemanticMatch(List<CandidatePair> candidates)
+    private async Task SemanticMatchAndSave(List<CandidatePair> candidates, string outputPath)
     {
         const int BatchSize = 15;
-        var confirmed = new List<CandidatePair>();
         int totalBatches = (candidates.Count + BatchSize - 1) / BatchSize;
+        int totalMatched = 0;
         Console.WriteLine($"[PAIRING SERVICE] Semantic matching: {candidates.Count} candidates in {totalBatches} batch(es) of up to {BatchSize}...");
 
         for (int i = 0; i < candidates.Count; i += BatchSize)
@@ -111,21 +110,25 @@ public class MarketPairingService
             Console.Write($"  [Batch {batchNum}/{totalBatches}] Evaluating {batch.Count} pairs... ");
 
             var matchedIndices = await EvaluateBatch(batch);
+            var matched = matchedIndices.Select(idx => batch[idx]).ToList();
 
-            foreach (int idx in matchedIndices)
-            {
-                confirmed.Add(batch[idx]);
-                Console.WriteLine($"\n    ✅ MATCH: K: \"{batch[idx].KalshiTitle}\" ↔ P: \"{batch[idx].PolyQuestion}\"");
-            }
+            foreach (var m in matched)
+                Console.WriteLine($"\n    ✅ MATCH: K: \"{m.KalshiTitle}\" ↔ P: \"{m.PolyQuestion}\"");
 
-            int misses = batch.Count - matchedIndices.Count;
-            Console.WriteLine($"  → {matchedIndices.Count} matched, {misses} rejected.");
+            Console.WriteLine($"  → {matched.Count} matched, {batch.Count - matched.Count} rejected.");
+
+            // Save immediately — if the user Ctrl+C's after this line, these pairs are safe.
+            if (matched.Count > 0)
+                await SavePairs(matched, outputPath);
+
+            totalMatched += matched.Count;
 
             // Rate limit: free tier allows 15 requests/min → wait 4s between batches.
             if (i + BatchSize < candidates.Count)
                 await Task.Delay(4000);
         }
-        return confirmed;
+
+        Console.WriteLine($"[PAIRING SERVICE] Done — {totalMatched} total pair(s) confirmed across {totalBatches} batch(es).");
     }
 
     /// <summary>
