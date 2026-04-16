@@ -104,10 +104,10 @@ if (File.Exists(manualPath))
 /// Fetches all series from the Kalshi API to build a map of series_ticker -> category.
 /// This is the reliable way to get category info, as the market/event objects often have it deprecated.
 /// </summary>
-static async Task<Dictionary<string, string>> FetchKalshiSeriesCategories(KalshiOrderClient orderClient, HttpClient httpClient)
+static async Task<Dictionary<string, string>> FetchKalshiSeriesCategories(KalshiOrderClient orderClient, HttpClient httpClient, KalshiApiConfig config)
 {
     var seriesCategories = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-    string baseRest = orderClient.ApiConfig.BaseRestUrl.TrimEnd('/');
+    string baseRest = config.BaseRestUrl.TrimEnd('/');
     string cursor = "";
 
     Console.WriteLine("[KALSHI SCANNER] Fetching series data for category mapping...");
@@ -149,7 +149,7 @@ var kalshiTitles     = new Dictionary<string, string>(StringComparer.OrdinalIgno
 using var httpClient = new HttpClient();
 httpClient.DefaultRequestHeaders.Add("User-Agent", "KalshiPolyCross/1.0");
 
-var kalshiSeriesCategories = await FetchKalshiSeriesCategories(orderClient, httpClient);
+var kalshiSeriesCategories = await FetchKalshiSeriesCategories(orderClient, httpClient, kalshiConfig);
 
 string baseRest = kalshiConfig.BaseRestUrl.TrimEnd('/');
 string cursor = "";
