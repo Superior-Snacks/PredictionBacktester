@@ -60,10 +60,23 @@ public class MarketPairingService
         var candidates = new List<CandidatePair>();
         Console.WriteLine("[PAIRING SERVICE] Coarse filtering: Finding candidates by keyword overlap...");
 
+        if (kalshiTitles.Count == 0 || polyMarkets.Count == 0)
+        {
+            Console.WriteLine("[PAIRING SERVICE] No markets from one or both platforms to compare. Skipping coarse filter.");
+            return candidates;
+        }
+
+        int processedCount = 0;
         foreach (var (kalshiTicker, kalshiTitle) in kalshiTitles)
         {
+            processedCount++;
             var kalshiKeywords = TitleToKeyWords(kalshiTitle);
             if (kalshiKeywords.Count < MinMatchWords) continue;
+
+            if (processedCount > 0 && processedCount % 250 == 0)
+            {
+                Console.WriteLine($"  [Coarse Filter] Processed {processedCount}/{kalshiTitles.Count} Kalshi markets, found {candidates.Count} candidates so far...");
+            }
 
             var scored = polyMarkets
                 .Select(polyMarket => (

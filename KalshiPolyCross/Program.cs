@@ -204,7 +204,7 @@ while (true)
 
 if (!string.IsNullOrEmpty(KALSHI_CATEGORY_FILTER))
 {
-    Console.WriteLine($"[KALSHI SCANNER] {kalshiTotal} open markets fetched → {kalshiTickers.Count} markets filtered by category '{KALSHI_CATEGORY_FILTER}'");
+    Console.WriteLine($"[KALSHI SCANNER] {kalshiTotal} open events fetched → {kalshiTickers.Count} markets found in category '{KALSHI_CATEGORY_FILTER}'");
 }
 else
 {
