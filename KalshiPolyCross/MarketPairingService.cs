@@ -175,7 +175,7 @@ public class MarketPairingService
         };
 
         // .Trim() removes any invisible newlines from the .env file that would corrupt the URL
-        string url = $"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key={_geminiApiKey.Trim()}";
+        string url = $"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key={_geminiApiKey.Trim()}";
         var content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
 
         try
