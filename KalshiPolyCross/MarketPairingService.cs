@@ -166,12 +166,12 @@ public class MarketPairingService
 
             var requests = batch.Select(text => new
             {
-                model = "models/text-embedding-004",
+                model = "models/gemini-embedding-001",
                 content = new { parts = new[] { new { text } } }
             }).ToList();
 
             var payload = new { requests };
-            string url = $"https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:batchEmbedContents?key={_geminiApiKey.Trim()}";
+            string url = $"https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:batchEmbedContents?key={_geminiApiKey.Trim()}";
             var content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
 
             try
@@ -241,9 +241,9 @@ public class MarketPairingService
 
             totalMatched += matched.Count;
 
-            // Rate limit: free tier allows 15 requests/min → wait 4s between batches.
+            // Rate limit: free tier allows 5 requests/min → wait 13s between batches.
             if (i + BatchSize < candidates.Count)
-                await Task.Delay(4000);
+                await Task.Delay(13000);
         }
 
         Console.WriteLine($"[PAIRING SERVICE] Done — {totalMatched} total pair(s) confirmed across {totalBatches} batch(es).");
