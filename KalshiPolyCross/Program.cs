@@ -312,14 +312,16 @@ _ = Task.Run(async () =>
         Console.WriteLine($"\n[TELEMETRY] --- TOP {Math.Min(10, pairs.Count)} CLOSEST TO CROSS-PLATFORM ARB ---");
         Console.WriteLine($"  Kalshi books: {kalshiReady}/{kalshiTotal} | Poly books: {polyReady}/{polyTotal} | Pairs: {telemetry.TotalPairs} | Open arbs: {telemetry.OpenArbs}");
 
-        foreach (var (cost, label, pairId, arbType, depth) in telemetry.GetNearMissSnapshot().Take(10))
+        var snapshot = telemetry.GetNearMissSnapshot().Take(10).ToList();
+        foreach (var (cost, label, pairId, arbType, depth, isLive) in snapshot)
         {
-            decimal diff = cost - 1.00m;
-            string tag = cost < 1.00m ? "ARB!" : $"+${diff:0.0000} away";
-            Console.WriteLine($"  ${cost:0.0000} ({tag}) {arbType} | depth={depth:0.0} | {label}");
+            decimal diff   = cost - 1.00m;
+            string  tag    = cost < 1.00m ? "ARB!" : $"+${diff:0.0000} away";
+            string  live   = isLive ? " *** LIVE ***" : "";
+            Console.WriteLine($"  ${cost:0.0000} ({tag}) {arbType} | depth={depth:0.0} | {label}{live}");
         }
 
-        if (!telemetry.GetNearMissSnapshot().Any())
+        if (snapshot.Count == 0)
             Console.WriteLine("  (no books priced yet — waiting for WS data)");
     }
 });
@@ -353,7 +355,7 @@ var kalshiWsTask = Task.Run(async () =>
             }
             Console.WriteLine($"[KALSHI WS] Subscribed to {kalshiSubscribeTickers.Count} tickers");
 
-            // Clear books on reconnect
+            // Clear books on reconnect, then notify telemetry (closes open windows)
             foreach (var ticker in kalshiSubscribeTickers)
             {
                 books[$"K:{ticker}"].ClearBook();
@@ -361,7 +363,7 @@ var kalshiWsTask = Task.Run(async () =>
                 yesSizes[ticker].Clear();
                 noSizes[ticker].Clear();
             }
-            telemetry.OnReconnect();
+            telemetry.OnKalshiReconnect();
 
             var buf = new byte[65536];
             using var ms = new MemoryStream();
@@ -442,6 +444,11 @@ var polyWsTask = Task.Run(async () =>
                 await Task.Delay(100, cts.Token);
             }
             Console.WriteLine($"[POLY WS] Subscribed to {polySubscribeTokens.Count} tokens");
+
+            // Clear books on reconnect, then notify telemetry (closes open windows)
+            foreach (var token in polySubscribeTokens)
+                books[$"P:{token}"].ClearBook();
+            telemetry.OnPolyReconnect();
 
             var buf = new byte[65536];
             using var ms = new MemoryStream();
