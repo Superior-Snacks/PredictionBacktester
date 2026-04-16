@@ -203,14 +203,26 @@ public class MarketPairingService
         }
 
         Console.WriteLine($"[PAIRING SERVICE] Saving {newPairs.Count} new pairs to {outputPath}...");
-        
-        var existingPairs = new List<object>();
+
+        // Load existing pairs and build a dedup key set to prevent running --pair twice
+        // from accumulating duplicates that cause the bot to monitor the same market twice.
+        var outputArray  = new System.Text.Json.Nodes.JsonArray();
+        // Key = "kalshi_ticker|poly_yes_token" (case-insensitive) for dedup
+        var existingKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
         if (System.IO.File.Exists(outputPath))
         {
             try
             {
                 string json = await System.IO.File.ReadAllTextAsync(outputPath);
-                existingPairs = JsonSerializer.Deserialize<List<object>>(json) ?? new List<object>();
+                using var doc = JsonDocument.Parse(json);
+                foreach (var el in doc.RootElement.EnumerateArray())
+                {
+                    string kt = el.TryGetProperty("kalshi_ticker",  out var k) ? k.GetString() ?? "" : "";
+                    string pt = el.TryGetProperty("poly_yes_token", out var p) ? p.GetString() ?? "" : "";
+                    existingKeys.Add($"{kt}|{pt}");
+                    outputArray.Add(System.Text.Json.Nodes.JsonNode.Parse(el.GetRawText()));
+                }
             }
             catch (Exception ex)
             {
@@ -218,25 +230,40 @@ public class MarketPairingService
             }
         }
 
-        // Append the new pairs, mapping them to the format expected by Program.cs
+        int added = 0, skipped = 0;
         foreach (var pair in newPairs)
         {
-            existingPairs.Add(new
+            if (!existingKeys.Add($"{pair.KalshiTicker}|{pair.PolyYesToken}"))
             {
-                kalshi_ticker = pair.KalshiTicker,
-                poly_yes_token = pair.PolyYesToken,
-                poly_no_token = pair.PolyNoToken,
-                label = pair.KalshiTitle
+                Console.WriteLine($"[PAIRING SERVICE] Skipping duplicate: {pair.KalshiTicker}");
+                skipped++;
+                continue;
+            }
+            outputArray.Add(new System.Text.Json.Nodes.JsonObject
+            {
+                ["kalshi_ticker"]  = pair.KalshiTicker,
+                ["poly_yes_token"] = pair.PolyYesToken,
+                ["poly_no_token"]  = pair.PolyNoToken,
+                ["label"]          = pair.KalshiTitle
             });
+            added++;
         }
 
-        // Atomic file write using a temporary file
+        if (skipped > 0) Console.WriteLine($"[PAIRING SERVICE] Skipped {skipped} duplicate(s).");
+
+        if (added == 0)
+        {
+            Console.WriteLine("[PAIRING SERVICE] No new unique pairs to save.");
+            return;
+        }
+
+        // Atomic write
         string tempPath = outputPath + ".tmp";
-        string outJson = JsonSerializer.Serialize(existingPairs, new JsonSerializerOptions { WriteIndented = true });
-        await System.IO.File.WriteAllTextAsync(tempPath, outJson);
+        await System.IO.File.WriteAllTextAsync(tempPath,
+            outputArray.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
         System.IO.File.Move(tempPath, outputPath, overwrite: true);
-        
-        Console.WriteLine($"[PAIRING SERVICE] Successfully updated {outputPath}.");
+
+        Console.WriteLine($"[PAIRING SERVICE] Saved {added} new pair(s) to {outputPath}.");
     }
 
     private static List<string> TitleToKeyWords(string title)

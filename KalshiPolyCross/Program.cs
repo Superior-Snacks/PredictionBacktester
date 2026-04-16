@@ -243,8 +243,17 @@ catch (Exception ex)
 // ── AI Market Pairing Mode ────────────────────────────────────────────────────
 if (isPairingMode)
 {
+    // Apply the same category filter used for the live bot so pairing only produces
+    // pairs the live bot will actually monitor.
+    var filteredKalshiTitles = string.IsNullOrEmpty(KALSHI_CATEGORY_FILTER)
+        ? kalshiTitles
+        : kalshiTitles
+            .Where(kv => kalshiCategories.GetValueOrDefault(kv.Key, "")
+                .Equals(KALSHI_CATEGORY_FILTER, StringComparison.OrdinalIgnoreCase))
+            .ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.OrdinalIgnoreCase);
+
     var pairingService = new MarketPairingService(geminiApiKey!);
-    await pairingService.FindAndSavePairs(kalshiTitles, polyMarkets, manualPath);
+    await pairingService.FindAndSavePairs(filteredKalshiTitles, polyMarkets, manualPath);
     Console.WriteLine("\n[PAIRING MODE] Process complete. Exiting.");
     return;
 }

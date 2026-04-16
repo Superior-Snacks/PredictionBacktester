@@ -92,7 +92,7 @@ public class CrossPlatformArbTelemetryStrategy
     private bool _headerWritten;
 
     // ── Public stats ───────────────────────────────────────────────────────────
-    public int OpenArbs   => _activeWindows.Values.Count(w => w != null);
+    public int OpenArbs   { get { lock (_windowLock) return _activeWindows.Values.Count(w => w != null); } }
     public int TotalPairs => _pairs.Count;
 
     /// <summary>
