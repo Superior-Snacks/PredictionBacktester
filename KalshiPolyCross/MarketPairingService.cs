@@ -73,6 +73,9 @@ public class MarketPairingService
             var kalshiKeywords = TitleToKeyWords(kalshiTitle);
             if (kalshiKeywords.Count < MinMatchWords) continue;
 
+            // Require at least 50% of the words to match, with a hard floor of MinMatchWords
+            int minRequired = Math.Max(MinMatchWords, (int)Math.Ceiling(kalshiKeywords.Count * 0.5));
+
             if (processedCount > 0 && processedCount % 250 == 0)
             {
                 Console.WriteLine($"  [Coarse Filter] Processed {processedCount}/{kalshiTitles.Count} Kalshi markets, found {candidates.Count} candidates so far...");
@@ -85,8 +88,9 @@ public class MarketPairingService
                     polyMarket.NoToken,
                     Score: kalshiKeywords.Count(kw => polyMarket.Question.Contains(kw, StringComparison.OrdinalIgnoreCase))
                 ))
-                .Where(x => x.Score >= MinMatchWords)
+                .Where(x => x.Score >= minRequired)
                 .OrderByDescending(x => x.Score)
+                .Take(3) // Only keep the top 3 absolute best matches to prevent combinatorial explosion
                 .ToList();
 
             foreach (var s in scored)
@@ -170,13 +174,19 @@ public class MarketPairingService
             }
         };
 
-        string url = $"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={_geminiApiKey}";
+        // .Trim() removes any invisible newlines from the .env file that would corrupt the URL
+        string url = $"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={_geminiApiKey.Trim()}";
         var content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
 
         try
         {
             var response = await _httpClient.PostAsync(url, content);
-            response.EnsureSuccessStatusCode();
+            if (!response.IsSuccessStatusCode)
+            {
+                string errDetails = await response.Content.ReadAsStringAsync();
+                Console.WriteLine($"\n[PAIRING SERVICE] Error calling Gemini API: {response.StatusCode} - {errDetails}");
+                return [];
+            }
 
             string jsonResponse = await response.Content.ReadAsStringAsync();
             using var doc = JsonDocument.Parse(jsonResponse);
@@ -285,7 +295,10 @@ public class MarketPairingService
     private static List<string> TitleToKeyWords(string title)
     {
         // This can be the same helper function from Program.cs
-        var stopWords = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "the", "a", "an", "will", "who", "what", "when", "by", "for", "in", "is", "at", "on", "or", "and", "to", "of" };
+        var stopWords = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { 
+            "the", "a", "an", "will", "who", "what", "when", "by", "for", "in", "is", "at", "on", "or", "and", "to", "of", "be",
+            "win", "game", "match", "series", "season", "team", "play", "score", "points", "total", "over", "under" 
+        };
         return Regex.Split(title.ToLowerInvariant(), @"[^a-z0-9]+")
                    .Where(w => w.Length >= 3 && !stopWords.Contains(w))
                    .Distinct()
