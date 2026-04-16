@@ -156,7 +156,9 @@ public class MarketPairingService
     private async Task<Dictionary<string, float[]>> GetEmbeddingsAsync(IEnumerable<string> texts, string description)
     {
         var embeddings = new Dictionary<string, float[]>();
-        const int ApiBatchSize = 100;
+        // Free tier counts each individual text as 1 request toward the 100 RPM quota.
+        // Batch of 20 + 15s delay ≈ 80 texts/min — safely under the cap.
+        const int ApiBatchSize = 20;
         var textList = texts.ToList();
 
         for (int i = 0; i < textList.Count; i += ApiBatchSize)
@@ -204,7 +206,7 @@ public class MarketPairingService
             }
 
             if (i + ApiBatchSize < textList.Count)
-                await Task.Delay(1000); // Rate limit between batches
+                await Task.Delay(15000); // 15s between batches → ~80 texts/min under 100 RPM free tier
         }
 
         return embeddings;
