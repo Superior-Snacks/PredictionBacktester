@@ -2,7 +2,7 @@
 
 ## Critical Bugs
 - [x] **Concurrency Crash Risk**: In `FastMergeArbTelemetryStrategy.cs`, `_tokenToEventMap` is a standard `Dictionary` but is read without a lock in `OnBookUpdate` (the hot path). Change to `ConcurrentDictionary<string, string>`.
-- [ ] **State Corruption Risk**: In `ProductionBroker.SaveState`, writing directly to `bot_state.json` can corrupt the file if the bot crashes mid-write. Implement atomic file writes (write to `bot_state.json.tmp` first, then use `File.Move(..., overwrite: true)`).
+- [x] **State Corruption Risk**: In `ProductionBroker.SaveState`, writing directly to `bot_state.json` can corrupt the file if the bot crashes mid-write. Implement atomic file writes (write to `bot_state.json.tmp` first, then use `File.Move(..., overwrite: true)`).
 
 ## Performance & Latency (High Priority)
 - [x] **GC Pressure in Hot Path**: In `FastMergeArbTelemetryStrategy.EvaluateArbitrageTelemetry`, string concatenation (`currentLegTickers += ...`) allocates thousands of short-lived string objects per second. Switch to `List<string>` and `string.Join("|", ...)` to reduce Gen 0 garbage collections and latency spikes.

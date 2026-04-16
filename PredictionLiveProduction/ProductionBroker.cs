@@ -255,7 +255,9 @@ public class ProductionBroker : PolymarketLiveBroker
         
         lock (_fileLock) 
         {
-            File.WriteAllText(filepath, json);
+            string tempPath = filepath + ".tmp";
+            File.WriteAllText(tempPath, json);
+            File.Move(tempPath, filepath, overwrite: true);
         }
     }
 
