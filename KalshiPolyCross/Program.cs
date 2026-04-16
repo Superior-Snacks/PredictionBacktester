@@ -10,6 +10,9 @@ using PredictionBacktester.Engine.LiveExecution;
 // ══════════════════════════════════════════════════════════════════════════════
 //  CONFIGURATION
 // ══════════════════════════════════════════════════════════════════════════════
+const string? KALSHI_CATEGORY_FILTER = "Sports"; // Set to null or empty to include all categories
+const string? POLY_CATEGORY_FILTER   = "Sports"; // Set to null or empty to include all categories
+
 const decimal ARB_THRESHOLD         = 0.995m;
 const decimal DEPTH_FLOOR           = 1m;
 const decimal MIN_BOOK_PRICE        = 0.03m;
@@ -140,10 +143,17 @@ var kalshiCategories = new Dictionary<string, string>(StringComparer.OrdinalIgno
     }
 }
 int kalshiTotal = kalshiTickers.Count;
-kalshiTickers = kalshiTickers
-    .Where(t => kalshiCategories.GetValueOrDefault(t, "").Equals("Sports", StringComparison.OrdinalIgnoreCase))
-    .ToList();
-Console.WriteLine($"[KALSHI SCANNER] {kalshiTotal} open markets fetched → {kalshiTickers.Count} sports markets");
+if (!string.IsNullOrEmpty(KALSHI_CATEGORY_FILTER))
+{
+    kalshiTickers = kalshiTickers
+        .Where(t => kalshiCategories.GetValueOrDefault(t, "").Equals(KALSHI_CATEGORY_FILTER, StringComparison.OrdinalIgnoreCase))
+        .ToList();
+    Console.WriteLine($"[KALSHI SCANNER] {kalshiTotal} open markets fetched → {kalshiTickers.Count} markets filtered by category '{KALSHI_CATEGORY_FILTER}'");
+}
+else
+{
+    Console.WriteLine($"[KALSHI SCANNER] {kalshiTotal} open markets fetched (no category filter)");
+}
 
 // ── Fetch Polymarket active markets ───────────────────────────────────────────
 Console.WriteLine("[POLY SCANNER] Fetching active Polymarket markets...");
@@ -182,24 +192,35 @@ try
                     catch { }
                 }
             }
-            // Sports filter: keep only markets tagged as sports
-            bool isSports = false;
-            if (mkt.TryGetProperty("tags", out var tagsEl) && tagsEl.ValueKind == JsonValueKind.Array)
-                isSports = tagsEl.EnumerateArray().Any(t =>
-                    (t.TryGetProperty("slug",  out var sl) && (sl.GetString()  ?? "").Contains("sport", StringComparison.OrdinalIgnoreCase)) ||
-                    (t.TryGetProperty("label", out var ll) && (ll.GetString()  ?? "").Contains("sport", StringComparison.OrdinalIgnoreCase)));
-            // Also accept if a top-level category field says Sports
-            if (!isSports && mkt.TryGetProperty("category", out var pcEl))
-                isSports = (pcEl.GetString() ?? "").Contains("sport", StringComparison.OrdinalIgnoreCase);
 
-            if (isSports && tokens.Count >= 2 && !string.IsNullOrEmpty(question))
+            // Category filter: keep only markets matching the configured category
+            bool includeMarket = string.IsNullOrEmpty(POLY_CATEGORY_FILTER);
+            if (!includeMarket && POLY_CATEGORY_FILTER != null)
+            {
+                if (mkt.TryGetProperty("tags", out var tagsEl) && tagsEl.ValueKind == JsonValueKind.Array)
+                    includeMarket = tagsEl.EnumerateArray().Any(t =>
+                        (t.TryGetProperty("slug",  out var sl) && (sl.GetString()  ?? "").Contains(POLY_CATEGORY_FILTER, StringComparison.OrdinalIgnoreCase)) ||
+                        (t.TryGetProperty("label", out var ll) && (ll.GetString()  ?? "").Contains(POLY_CATEGORY_FILTER, StringComparison.OrdinalIgnoreCase)));
+                // Also accept if a top-level category field matches
+                if (!includeMarket && mkt.TryGetProperty("category", out var pcEl))
+                    includeMarket = (pcEl.GetString() ?? "").Contains(POLY_CATEGORY_FILTER, StringComparison.OrdinalIgnoreCase);
+            }
+
+            if (includeMarket && tokens.Count >= 2 && !string.IsNullOrEmpty(question))
                 polyMarkets.Add((question, tokens[0], tokens[1]));
         }
         if (count < pageSize) break;
         offset += pageSize;
         await Task.Delay(200);
     }
-    Console.WriteLine($"[POLY SCANNER] {polyMarkets.Count} active markets fetched");
+    if (!string.IsNullOrEmpty(POLY_CATEGORY_FILTER))
+    {
+        Console.WriteLine($"[POLY SCANNER] {polyMarkets.Count} active markets fetched (filtered by category '{POLY_CATEGORY_FILTER}')");
+    }
+    else
+    {
+        Console.WriteLine($"[POLY SCANNER] {polyMarkets.Count} active markets fetched (no category filter)");
+    }
 }
 catch (Exception ex)
 {
