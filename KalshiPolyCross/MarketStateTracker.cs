@@ -11,16 +11,16 @@ namespace KalshiPolyCross;
 public class MarketStateTracker
 {
     public ConcurrentDictionary<string, LocalOrderBook>                Books    { get; } = new(StringComparer.Ordinal);
-    public ConcurrentDictionary<string, Dictionary<decimal, decimal>>  YesSizes { get; } = new();
-    public ConcurrentDictionary<string, Dictionary<decimal, decimal>>  NoSizes  { get; } = new();
+    public ConcurrentDictionary<string, ConcurrentDictionary<decimal, decimal>>  YesSizes { get; } = new(StringComparer.Ordinal);
+    public ConcurrentDictionary<string, ConcurrentDictionary<decimal, decimal>>  NoSizes  { get; } = new(StringComparer.Ordinal);
 
     /// <summary>Creates order books and size maps for a Kalshi YES/NO pair.</summary>
     public void InitKalshiMarket(string ticker)
     {
         Books[$"K:{ticker}"]    = new LocalOrderBook($"K:{ticker}");
         Books[$"K:{ticker}_NO"] = new LocalOrderBook($"K:{ticker}_NO");
-        YesSizes[ticker]        = new Dictionary<decimal, decimal>();
-        NoSizes[ticker]         = new Dictionary<decimal, decimal>();
+        YesSizes[ticker]        = new ConcurrentDictionary<decimal, decimal>();
+        NoSizes[ticker]         = new ConcurrentDictionary<decimal, decimal>();
     }
 
     /// <summary>Creates an order book for a Polymarket token.</summary>

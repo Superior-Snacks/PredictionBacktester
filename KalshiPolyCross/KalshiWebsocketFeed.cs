@@ -86,7 +86,7 @@ public class KalshiWebsocketFeed
                             if (result.MessageType == WebSocketMessageType.Close)
                             {
                                 await ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "", CancellationToken.None);
-                                goto reconnect;
+                                break; // Break inner loop, finally block will execute, outer loop reconnects
                             }
                             ms.Write(buf, 0, result.Count);
                         } while (!result.EndOfMessage);
@@ -102,7 +102,6 @@ public class KalshiWebsocketFeed
                 {
                     ArrayPool<byte>.Shared.Return(buf);
                 }
-                reconnect:;
             }
             catch (OperationCanceledException) { break; }
             catch (Exception ex)
@@ -141,61 +140,58 @@ public class KalshiWebsocketFeed
             {
                 ApplySnapshot(yesBook, noBook, msgEl, ySizeMap, nSizeMap);
                 _telemetry.OnBookUpdate($"K:{ticker}");
-                if (noBook != null) _telemetry.OnBookUpdate($"K:{ticker}_NO");
             }
             else if (msgType == "orderbook_delta")
             {
-                bool noChanged = ApplyDelta(yesBook, noBook, msgEl, ySizeMap, nSizeMap);
+                ApplyDelta(yesBook, noBook, msgEl, ySizeMap, nSizeMap);
                 _telemetry.OnBookUpdate($"K:{ticker}");
-                if (noBook != null && noChanged) _telemetry.OnBookUpdate($"K:{ticker}_NO");
             }
         }
         catch (JsonException) { }
     }
 
-    private bool ApplyDelta(
+    private void ApplyDelta(
         LocalOrderBook yesBook, LocalOrderBook? noBook,
         JsonElement msg,
-        Dictionary<decimal, decimal> yesSizeMap, Dictionary<decimal, decimal> noSizeMap)
+        ConcurrentDictionary<decimal, decimal> yesSizeMap, ConcurrentDictionary<decimal, decimal> noSizeMap)
     {
-        if (!msg.TryGetProperty("price_dollars", out var priceEl)) return false;
-        if (!msg.TryGetProperty("delta_fp",      out var deltaEl)) return false;
-        if (!msg.TryGetProperty("side",          out var sideEl))  return false;
+        if (!msg.TryGetProperty("price_dollars", out var priceEl)) return;
+        if (!msg.TryGetProperty("delta_fp",      out var deltaEl)) return;
+        if (!msg.TryGetProperty("side",          out var sideEl))  return;
 
         if (!decimal.TryParse(priceEl.GetString(), System.Globalization.NumberStyles.Any,
-                System.Globalization.CultureInfo.InvariantCulture, out decimal price)) return false;
+                System.Globalization.CultureInfo.InvariantCulture, out decimal price)) return;
         if (!decimal.TryParse(deltaEl.GetString(), System.Globalization.NumberStyles.Any,
-                System.Globalization.CultureInfo.InvariantCulture, out decimal delta)) return false;
+                System.Globalization.CultureInfo.InvariantCulture, out decimal delta)) return;
         string side = sideEl.GetString() ?? "";
 
-        if (price < _minBookPrice || price > (1m - _minBookPrice)) return false;
+        if (price < _minBookPrice || price > (1m - _minBookPrice)) return;
 
         if (side == "yes")
         {
-            decimal newSize        = yesSizeMap.GetValueOrDefault(price, 0m) + delta;
+            decimal newSize        = (yesSizeMap.TryGetValue(price, out var s) ? s : 0m) + delta;
             decimal impliedNoAsk   = Math.Round(1m - price, 4);
-            if (newSize <= 0) { yesSizeMap.Remove(price); yesBook.UpdatePriceLevel("BUY", price, 0m);     noBook?.UpdatePriceLevel("SELL", impliedNoAsk, 0m); }
+            if (newSize <= 0) { yesSizeMap.TryRemove(price, out _); yesBook.UpdatePriceLevel("BUY", price, 0m);     noBook?.UpdatePriceLevel("SELL", impliedNoAsk, 0m); }
             else              { yesSizeMap[price] = newSize; yesBook.UpdatePriceLevel("BUY", price, newSize); noBook?.UpdatePriceLevel("SELL", impliedNoAsk, newSize); }
             yesBook.MarkDeltaReceived();
-            return false;
+            return;
         }
         if (side == "no")
         {
-            decimal newSize         = noSizeMap.GetValueOrDefault(price, 0m) + delta;
+            decimal newSize         = (noSizeMap.TryGetValue(price, out var s) ? s : 0m) + delta;
             decimal impliedYesAsk   = Math.Round(1m - price, 4);
-            if (newSize <= 0) { noSizeMap.Remove(price); noBook?.UpdatePriceLevel("BUY", price, 0m);     yesBook.UpdatePriceLevel("SELL", impliedYesAsk, 0m); }
+            if (newSize <= 0) { noSizeMap.TryRemove(price, out _); noBook?.UpdatePriceLevel("BUY", price, 0m);     yesBook.UpdatePriceLevel("SELL", impliedYesAsk, 0m); }
             else              { noSizeMap[price] = newSize; noBook?.UpdatePriceLevel("BUY", price, newSize); yesBook.UpdatePriceLevel("SELL", impliedYesAsk, newSize); }
             noBook?.MarkDeltaReceived();
             yesBook.MarkDeltaReceived();
-            return true;
+            return;
         }
-        return false;
     }
 
     private void ApplySnapshot(
         LocalOrderBook yesBook, LocalOrderBook? noBook,
         JsonElement msg,
-        Dictionary<decimal, decimal> yesSizeMap, Dictionary<decimal, decimal> noSizeMap)
+        ConcurrentDictionary<decimal, decimal> yesSizeMap, ConcurrentDictionary<decimal, decimal> noSizeMap)
     {
         yesBook.ClearBook();
         noBook?.ClearBook();

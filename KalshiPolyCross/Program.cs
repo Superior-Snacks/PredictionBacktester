@@ -377,8 +377,19 @@ var kalshiFeed = new KalshiWebsocketFeed(orderClient, kalshiConfig, kalshiSubscr
 var polyFeed   = new PolymarketWebsocketFeed(POLY_WS_URL, polySubscribeTokens,
                                              state, telemetry, POLY_BATCH_SIZE, POLY_PING_INTERVAL_MS);
 
-var kalshiWsTask = Task.Run(() => kalshiFeed.RunAsync(cts.Token));
-var polyWsTask   = Task.Run(() => polyFeed.RunAsync(cts.Token));
+var kalshiWsTask = Task.Run(async () => 
+{
+    try { await kalshiFeed.RunAsync(cts.Token); }
+    catch (Exception ex) { Console.WriteLine($"[FATAL] Kalshi feed crashed: {ex.Message}"); }
+    finally { if (!cts.IsCancellationRequested) cts.Cancel(); }
+});
+
+var polyWsTask   = Task.Run(async () => 
+{
+    try { await polyFeed.RunAsync(cts.Token); }
+    catch (Exception ex) { Console.WriteLine($"[FATAL] Poly feed crashed: {ex.Message}"); }
+    finally { if (!cts.IsCancellationRequested) cts.Cancel(); }
+});
 
 await Task.WhenAll(kalshiWsTask, polyWsTask);
 Console.WriteLine("\n[SHUTDOWN] Cross-platform arb telemetry stopped.");

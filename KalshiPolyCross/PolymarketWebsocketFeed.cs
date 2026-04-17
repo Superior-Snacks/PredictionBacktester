@@ -47,7 +47,7 @@ public class PolymarketWebsocketFeed
                 Console.WriteLine($"[POLY WS] Connected to {_wsUrl}");
 
                 // Keep-alive: Polymarket drops the connection without a PING every ~10s
-                var pingSrc  = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                using var pingSrc = CancellationTokenSource.CreateLinkedTokenSource(ct);
                 var pingBytes = Encoding.UTF8.GetBytes("PING");
                 _ = Task.Run(async () =>
                 {
@@ -97,7 +97,7 @@ public class PolymarketWebsocketFeed
                             if (result.MessageType == WebSocketMessageType.Close)
                             {
                                 await ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "", CancellationToken.None);
-                                goto reconnect;
+                                break; // Break inner loop, finally block will execute, outer loop reconnects
                             }
                             ms.Write(buf, 0, result.Count);
                         } while (!result.EndOfMessage);
@@ -114,8 +114,6 @@ public class PolymarketWebsocketFeed
                     ArrayPool<byte>.Shared.Return(buf);
                     pingSrc.Cancel();
                 }
-                reconnect:
-                pingSrc.Cancel();
             }
             catch (OperationCanceledException) { break; }
             catch (Exception ex)
@@ -150,6 +148,8 @@ public class PolymarketWebsocketFeed
             }
             else if (eventType == "price_change" && root.TryGetProperty("price_changes", out var changesEl))
             {
+                var updatedBooks = new HashSet<string>(StringComparer.Ordinal);
+                
                 foreach (var change in changesEl.EnumerateArray())
                 {
                     if (!change.TryGetProperty("asset_id", out var assetIdEl)) continue;
@@ -167,8 +167,12 @@ public class PolymarketWebsocketFeed
 
                     book.UpdatePriceLevel(side, price, size);
                     book.MarkDeltaReceived();
-                    _telemetry.OnBookUpdate(bookKey);
+                    updatedBooks.Add(bookKey);
                 }
+                
+                // Evaluate telemetry once per unique asset, rather than for every single price level changed
+                foreach (var key in updatedBooks)
+                    _telemetry.OnBookUpdate(key);
             }
         }
         catch (JsonException) { }

@@ -290,6 +290,10 @@ public class CrossPlatformArbTelemetryStrategy
         _nearMiss[pair.PairId] = (bestNet, bestType, bestDepth);
 
         bool isArb = bestNet < _arbThreshold && bestDepth >= _depthFloor;
+        
+        bool invokeOnArbOpened = false;
+        int currentKalshiDrops = Volatile.Read(ref _kalshiWsDrops);
+        int currentPolyDrops   = Volatile.Read(ref _polyWsDrops);
 
         lock (_windowLock)
         {
@@ -322,8 +326,8 @@ public class CrossPlatformArbTelemetryStrategy
                         PolyBookAgeMs:    pAge,
                         KalshiMidSum:     kMidSum,
                         PolyMidSum:       pMidSum,
-                        KalshiDropsAtOpen: _kalshiWsDrops,
-                        PolyDropsAtOpen:   _polyWsDrops,
+                        KalshiDropsAtOpen: currentKalshiDrops,
+                        PolyDropsAtOpen:   currentPolyDrops,
                         UpdateCount:      1
                     );
                     _activeWindows[pair.PairId] = w;
@@ -332,7 +336,7 @@ public class CrossPlatformArbTelemetryStrategy
                                       $"gross=${bestGross:0.0000} fees=${bestKFee + bestPFee:0.0000} net=${bestNet:0.0000} | " +
                                       $"depth={bestDepth:0.0} (K={bestKDepth:0.0}/P={bestPDepth:0.0})");
 
-                    OnArbOpened?.Invoke(pair.PairId, bestNet, bestType, bestDepth);
+                    invokeOnArbOpened = true;
                 }
                 else
                 {
@@ -357,6 +361,9 @@ public class CrossPlatformArbTelemetryStrategy
                 _activeWindows[pair.PairId] = null;
             }
         }
+
+        if (invokeOnArbOpened)
+            OnArbOpened?.Invoke(pair.PairId, bestNet, bestType, bestDepth);
     }
 
     // NOTE: must be called while holding _windowLock
@@ -373,7 +380,7 @@ public class CrossPlatformArbTelemetryStrategy
         decimal fees   = w.KalshiFees + w.PolyFees;
         decimal profit = 1m - w.BestNetCost;
         decimal maxDepth = Math.Min(w.KalshiDepth, w.PolyDepth);
-        bool dropDuring = (_kalshiWsDrops > w.KalshiDropsAtOpen) || (_polyWsDrops > w.PolyDropsAtOpen);
+        bool dropDuring = (Volatile.Read(ref _kalshiWsDrops) > w.KalshiDropsAtOpen) || (Volatile.Read(ref _polyWsDrops) > w.PolyDropsAtOpen);
 
         Console.WriteLine($"[CROSS ARB CLOSE] {pair.Label} | {w.ArbType} | {durationMs}ms | " +
                           $"gross=${w.BestGrossCost:0.0000} fees=${fees:0.0000} profit/share=${profit:0.0000} | " +
