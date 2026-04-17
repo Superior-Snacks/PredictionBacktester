@@ -19,7 +19,7 @@ public class MarketPairingService
     private const int TopNCandidates = 5; // For each Kalshi market, send the top N most similar Poly markets to the AI judge.
 
     // Embedding model — change here if the model name changes.
-    private const string EmbeddingModel = "gemini-embedding-2-preview";
+    private const string EmbeddingModel = "gemini-embedding-001";
 
     // Embeddings are saved to disk after every batch so overnight runs survive
     // daily quota exhaustion and can resume the next day without re-fetching.
@@ -124,17 +124,33 @@ public class MarketPairingService
                       + polyMarkets.Count(p => cache.ContainsKey(p.Question));
         Console.WriteLine($"[PAIRING SERVICE] Embedding cache: {cache.Count} entries loaded ({cacheHits} cover current markets).");
 
-        // 2. Batch-fetch embeddings for ALL titles upfront — two API bursts instead of N.
+        // 2. Keyword pre-filter — eliminates clearly unrelated markets before any API call.
+        //    Reduces ~60k total texts to ~1-3k so 1000 RPD covers a full run in one day.
+        //    Uses significant-word overlap (≥4-char non-stop-words) as a coarse net only;
+        //    the AI judge makes all final match/reject decisions.
+        var kalshiKeywords       = BuildKeywordSet(kalshiMarkets.Values.Select(v => v.Title));
+        var filteredPolyMarkets  = polyMarkets
+            .Where(p => HasKeywordOverlap(p.Question, kalshiKeywords))
+            .ToList();
+        var polyKeywords         = BuildKeywordSet(filteredPolyMarkets.Select(p => p.Question));
+        var filteredKalshiTitles = kalshiMarkets.Values
+            .Select(v => v.Title).Distinct()
+            .Where(t => HasKeywordOverlap(t, polyKeywords))
+            .ToList();
+        Console.WriteLine($"[PAIRING SERVICE] Keyword pre-filter: {polyMarkets.Count} → {filteredPolyMarkets.Count} Polymarket, " +
+                          $"{kalshiMarkets.Count} → {filteredKalshiTitles.Count} Kalshi (distinct titles).");
+
+        // 3. Batch-fetch embeddings for filtered titles only — two API bursts instead of N.
         //    Already-cached texts are skipped; newly fetched ones are saved to disk after
         //    every batch so a daily quota cutoff doesn't lose work already done.
-        var polyQuestions  = polyMarkets.Select(p => p.Question).ToList();
-        var kalshiTitles   = kalshiMarkets.Values.Select(v => v.Title).Distinct().ToList();
+        var polyQuestions  = filteredPolyMarkets.Select(p => p.Question).ToList();
+        var kalshiTitles   = filteredKalshiTitles;
 
         var polyEmbeddings   = await GetEmbeddingsAsync(polyQuestions, "Polymarket Questions", cache);
         var kalshiEmbeddings = await GetEmbeddingsAsync(kalshiTitles,  "Kalshi Titles",        cache);
 
         int processedCount = 0;
-        Console.WriteLine($"[PAIRING SERVICE] Comparing {kalshiMarkets.Count} Kalshi markets against {polyMarkets.Count} Polymarket markets...");
+        Console.WriteLine($"[PAIRING SERVICE] Comparing {filteredKalshiTitles.Count} filtered Kalshi titles against {filteredPolyMarkets.Count} filtered Polymarket markets...");
 
         // 2. Pure in-memory loop — no API calls inside here.
         foreach (var (kalshiTicker, kalshiData) in kalshiMarkets)
@@ -147,9 +163,9 @@ public class MarketPairingService
                 continue;
             }
 
-            // 3. Apply Coarse Date Filter to eliminate obviously incompatible markets.
+            // 4. Apply Coarse Date Filter to eliminate obviously incompatible markets.
             //    7-day window: Kalshi and Polymarket sometimes express the same deadline differently.
-            var validPolyMarkets = polyMarkets.Where(p =>
+            var validPolyMarkets = filteredPolyMarkets.Where(p =>
             {
                 if (kalshiData.CloseDate.HasValue && p.EndDate.HasValue)
                 {
@@ -288,7 +304,7 @@ public class MarketPairingService
                     for (int j = 0; j < embeddingsArray.GetArrayLength(); j++)
                     {
                         var embeddingData = embeddingsArray[j];
-                        if (embeddingData.TryGetProperty("value", out var values))
+                        if (embeddingData.TryGetProperty("values", out var values))
                         {
                             var vector = values.EnumerateArray().Select(v => v.GetSingle()).ToArray();
                             result[batch[j]]  = vector;
@@ -306,7 +322,7 @@ public class MarketPairingService
             }
 
             if (i + ApiBatchSize < uncached.Count)
-                await Task.Delay(12000); // 12s between batches — stays under 30K TPM (covers ~58 tokens/title avg)
+                await Task.Delay(65000); // 65s between batches — RPM is per-text: 100 texts = full quota, need full minute reset
         }
 
         return result;
@@ -600,6 +616,53 @@ public class MarketPairingService
         System.IO.File.Move(tempPath, outputPath, overwrite: true);
 
         Console.WriteLine($"[PAIRING SERVICE] Saved {added} new pair(s) to {outputPath}.");
+    }
+
+    // Stop-words: common English words + generic prediction-market/sports noise that
+    // would create false-positive keyword matches between unrelated markets.
+    private static readonly HashSet<string> StopWords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "will", "does", "make", "take", "have", "been", "being", "going", "come", "came",
+        "the", "and", "or", "but", "not", "for", "with", "from", "that", "this", "they",
+        "them", "then", "than", "there", "these", "those", "their", "some", "such", "each",
+        "both", "into", "onto", "upon", "also", "even", "only", "just", "very", "more",
+        "most", "much", "many", "over", "under", "next", "last", "first", "same",
+        // Generic sports/market noise — too common to be discriminating
+        "game", "games", "match", "matches", "play", "plays", "team", "teams",
+        "season", "series", "score", "title", "round", "week", "home", "away",
+        "point", "points", "total", "final", "time", "half", "year", "place",
+        "winner", "losers", "result", "event", "market", "contract",
+    };
+
+    /// <summary>
+    /// Extracts significant words (≥4 chars, not stop-words) from a collection of titles
+    /// and returns them as a lower-case set for fast O(1) membership tests.
+    /// </summary>
+    private static HashSet<string> BuildKeywordSet(IEnumerable<string> titles)
+    {
+        var keywords = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var title in titles)
+        {
+            foreach (var word in Regex.Split(title, @"[^a-zA-Z]+"))
+            {
+                if (word.Length >= 4 && !StopWords.Contains(word))
+                    keywords.Add(word.ToLowerInvariant());
+            }
+        }
+        return keywords;
+    }
+
+    /// <summary>
+    /// Returns true if the title shares at least one significant word with the keyword set.
+    /// </summary>
+    private static bool HasKeywordOverlap(string title, HashSet<string> keywords)
+    {
+        foreach (var word in Regex.Split(title, @"[^a-zA-Z]+"))
+        {
+            if (word.Length >= 4 && keywords.Contains(word))
+                return true;
+        }
+        return false;
     }
 
     /// <summary>
