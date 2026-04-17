@@ -1,4 +1,4 @@
-﻿using System;
+﻿﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
@@ -30,20 +30,23 @@ public class LocalOrderBook
 {
     public string AssetId { get; private set; }
 
+    private bool _hasReceivedDelta = false;
+    private long _lastDeltaAtTicks = 0;
+
     /// <summary>
     /// True once this book has received at least one delta update from the live WebSocket stream.
     /// False after construction or ClearBook() — a snapshot alone is not enough.
     /// Strategies use this to avoid acting on a stale initial snapshot with no real-time confirmation.
     /// </summary>
-    public bool HasReceivedDelta { get; private set; } = false;
+    public bool HasReceivedDelta => Volatile.Read(ref _hasReceivedDelta);
 
     /// <summary>UTC time of the most recent delta applied to this book.</summary>
-    public DateTime LastDeltaAt { get; private set; } = DateTime.MinValue;
+    public DateTime LastDeltaAt => new DateTime(Volatile.Read(ref _lastDeltaAtTicks), DateTimeKind.Utc);
 
     public void MarkDeltaReceived()
     {
-        HasReceivedDelta = true;
-        LastDeltaAt = DateTime.UtcNow;
+        Volatile.Write(ref _hasReceivedDelta, true);
+        Volatile.Write(ref _lastDeltaAtTicks, DateTime.UtcNow.Ticks);
     }
 
     /// <summary>
@@ -123,14 +126,14 @@ public class LocalOrderBook
     public decimal GetTopBidVolume(int levels)
     {
         lock (_bookLock)
-            return _bids.OrderByDescending(kv => kv.Key).Take(levels).Sum(kv => kv.Value);
+            return _bids.Reverse().Take(levels).Sum(kv => kv.Value);
     }
 
     /// <summary>Returns the total ask volume across the top N lowest price levels.</summary>
     public decimal GetTopAskVolume(int levels)
     {
         lock (_bookLock)
-            return _asks.OrderBy(kv => kv.Key).Take(levels).Sum(kv => kv.Value);
+            return _asks.Take(levels).Sum(kv => kv.Value);
     }
 
     public void ClearBook()
@@ -139,8 +142,8 @@ public class LocalOrderBook
         {
             _bids.Clear();
             _asks.Clear();
-            HasReceivedDelta = false;
-            LastDeltaAt = DateTime.MinValue;
+            Volatile.Write(ref _hasReceivedDelta, false);
+            Volatile.Write(ref _lastDeltaAtTicks, 0);
         }
     }
 
@@ -178,8 +181,7 @@ public class LocalOrderBook
             decimal totalCost = 0m;
             decimal dollarsRemaining = maxDollars;
 
-            var levels = _asks.OrderBy(kv => kv.Key).ToList();
-            foreach (var (price, size) in levels)
+            foreach (var (price, size) in _asks)
             {
                 if (price > maxPrice || dollarsRemaining <= 0.01m) break;
 
@@ -223,8 +225,7 @@ public class LocalOrderBook
             decimal totalCost = 0m;
             decimal sharesRemaining = maxShares;
 
-            var levels = _bids.OrderByDescending(kv => kv.Key).ToList();
-            foreach (var (price, size) in levels)
+            foreach (var (price, size) in _bids.Reverse())
             {
                 if (price < minPrice || sharesRemaining <= 0) break;
 
