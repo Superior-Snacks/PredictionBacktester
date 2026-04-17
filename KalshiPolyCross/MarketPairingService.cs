@@ -19,7 +19,7 @@ public class MarketPairingService
     private const int TopNCandidates = 5; // For each Kalshi market, send the top N most similar Poly markets to the AI judge.
 
     // Embedding model — change here if the model name changes.
-    private const string EmbeddingModel = "gemini-embedding-001";
+    private const string EmbeddingModel = "gemini-embedding-2-preview";
 
     // Embeddings are saved to disk after every batch so overnight runs survive
     // daily quota exhaustion and can resume the next day without re-fetching.
@@ -32,8 +32,6 @@ public class MarketPairingService
     [
         "gemini-3-flash-preview",        // Best reasoning — try first
         "gemini-2.5-flash",              // Fallback 1
-        "gemini-2.5-flash-lite",         // Fallback 2
-        "gemini-3.1-flash-lite-preview"  // Fallback 3 — bulk processor
     ];
 
     private class CandidatePair
@@ -354,8 +352,15 @@ public class MarketPairingService
     {
         try
         {
+            // Merge with on-disk version first — ensures the entry count never goes backwards.
+            // Guards against the scenario where LoadEmbeddingCacheAsync failed (returned []),
+            // causing the in-memory cache to be a subset of what was previously persisted.
+            var merged = await LoadEmbeddingCacheAsync();
+            foreach (var (k, v) in cache)
+                merged[k] = v;
+
             var node = new JsonObject();
-            foreach (var (text, vector) in cache)
+            foreach (var (text, vector) in merged)
             {
                 var arr = new JsonArray();
                 foreach (var v in vector) arr.Add(v);
@@ -364,6 +369,7 @@ public class MarketPairingService
             string tempPath = EmbeddingCachePath + ".tmp";
             await File.WriteAllTextAsync(tempPath, node.ToJsonString());
             File.Move(tempPath, EmbeddingCachePath, overwrite: true);
+            Console.WriteLine($"[EMBEDDING] Cache saved — {merged.Count} total entries.");
         }
         catch (Exception ex)
         {
@@ -456,7 +462,7 @@ public class MarketPairingService
         var payload = new
         {
             contents        = new[] { new { parts = new[] { new { text = sb.ToString() } } } },
-            generationConfig = new { temperature = 0.0, maxOutputTokens = 200, responseMimeType = "application/json" }
+            generationConfig = new { temperature = 0.0, maxOutputTokens = 1024, responseMimeType = "application/json" }
         };
         string body = JsonSerializer.Serialize(payload);
 
@@ -505,35 +511,60 @@ public class MarketPairingService
                 }
 
                 string jsonResponse = await response.Content.ReadAsStringAsync();
-                using var doc = JsonDocument.Parse(jsonResponse);
-                var root = doc.RootElement;
-
-                if (!root.TryGetProperty("candidates", out var geminiCandidates) || geminiCandidates.GetArrayLength() == 0)
-                    return [];
-                if (!geminiCandidates[0].TryGetProperty("content", out var contentEl) ||
-                    !contentEl.TryGetProperty("parts", out var parts) || parts.GetArrayLength() == 0)
-                    return [];
-
-                string text = parts[0].GetProperty("text").GetString()?.Trim() ?? "[]";
-
-                // Strip potential markdown code blocks (e.g. ```json ... ```)
-                if (text.StartsWith("```", StringComparison.OrdinalIgnoreCase))
+                JsonDocument doc;
+                try { doc = JsonDocument.Parse(jsonResponse); }
+                catch
                 {
-                    int firstNewline = text.IndexOf('\n');
-                    if (firstNewline != -1) text = text[(firstNewline + 1)..];
-                    if (text.EndsWith("```")) text = text[..^3];
-                    text = text.Trim();
+                    Console.WriteLine($"\n[JUDGE] {model} returned non-JSON (HTTP {(int)response.StatusCode}) — dropping from waterfall.");
+                    Console.WriteLine($"  Body: {jsonResponse[..Math.Min(500, jsonResponse.Length)]}");
+                    _judgeModels.RemoveAt(0);
+                    continue;
                 }
+                using (doc)
+                {
+                    var root = doc.RootElement;
 
-                using var arrDoc = JsonDocument.Parse(text);
-                if (arrDoc.RootElement.ValueKind != JsonValueKind.Array) return [];
+                    if (!root.TryGetProperty("candidates", out var geminiCandidates) || geminiCandidates.GetArrayLength() == 0)
+                        return [];
+                    if (!geminiCandidates[0].TryGetProperty("content", out var contentEl) ||
+                        !contentEl.TryGetProperty("parts", out var parts) || parts.GetArrayLength() == 0)
+                        return [];
 
-                return [..arrDoc.RootElement
-                    .EnumerateArray()
-                    .Where(el => el.ValueKind == JsonValueKind.Number && el.TryGetInt32(out _))
-                    .Select(el => el.GetInt32())
-                    .Where(idx => idx >= 0 && idx < batch.Count)
-                    .Distinct()];
+                    string text = parts[0].GetProperty("text").GetString()?.Trim() ?? "[]";
+
+                    // Strip potential markdown code blocks (e.g. ```json ... ```)
+                    if (text.StartsWith("```", StringComparison.OrdinalIgnoreCase))
+                    {
+                        int firstNewline = text.IndexOf('\n');
+                        if (firstNewline != -1) text = text[(firstNewline + 1)..];
+                        if (text.EndsWith("```")) text = text[..^3];
+                        text = text.Trim();
+                    }
+
+                    Console.WriteLine($"\n[JUDGE DEBUG] {model} raw text response:\n{text}\n");
+
+                    // If the model wrapped the array in prose, extract the first [...] block.
+                    if (!text.StartsWith('['))
+                    {
+                        var m = Regex.Match(text, @"\[[\d,\s]*\]");
+                        if (m.Success) text = m.Value;
+                        else
+                        {
+                            Console.WriteLine($"[JUDGE] {model} returned unrecoverable prose — skipping batch.");
+                            return [];
+                        }
+                    }
+
+                    using var arrDoc = JsonDocument.Parse(text);
+                    if (arrDoc.RootElement.ValueKind != JsonValueKind.Array) return [];
+
+                    return [..arrDoc.RootElement
+                        .EnumerateArray()
+                        .Where(el => el.ValueKind == JsonValueKind.Number && el.TryGetInt32(out _))
+                        .Select(el => el.GetInt32())
+                        .Where(idx => idx >= 0 && idx < batch.Count)
+                        .Distinct()];
+                }
             }
             catch (Exception ex)
             {
