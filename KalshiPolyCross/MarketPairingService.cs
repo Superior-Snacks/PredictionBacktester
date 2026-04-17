@@ -500,6 +500,15 @@ public class MarketPairingService
 
                 string text = parts[0].GetProperty("text").GetString()?.Trim() ?? "[]";
 
+                // Strip potential markdown code blocks (e.g. ```json ... ```)
+                if (text.StartsWith("```", StringComparison.OrdinalIgnoreCase))
+                {
+                    int firstNewline = text.IndexOf('\n');
+                    if (firstNewline != -1) text = text[(firstNewline + 1)..];
+                    if (text.EndsWith("```")) text = text[..^3];
+                    text = text.Trim();
+                }
+
                 using var arrDoc = JsonDocument.Parse(text);
                 if (arrDoc.RootElement.ValueKind != JsonValueKind.Array) return [];
 
