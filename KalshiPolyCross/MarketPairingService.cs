@@ -19,7 +19,7 @@ public class MarketPairingService
     private const int TopNCandidates = 5; // For each Kalshi market, send the top N most similar Poly markets to the AI judge.
 
     // Embedding model — change here if the model name changes.
-    private const string EmbeddingModel = "gemini-embedding-002";
+    private const string EmbeddingModel = "gemini-embedding-2-preview";
 
     // Embeddings are saved to disk after every batch so overnight runs survive
     // daily quota exhaustion and can resume the next day without re-fetching.
@@ -30,10 +30,10 @@ public class MarketPairingService
     // the same batch with the next model. RPM hits just wait 65s and retry same model.
     private readonly List<string> _judgeModels =
     [
-        "gemini-3-flash",        // Best reasoning — try first
-        "gemini-2.5-flash",      // Fallback 1
-        "gemini-2.5-flash-lite", // Fallback 2
-        "gemini-3.1-flash-lite"  // Fallback 3 — bulk processor
+        "gemini-3-flash-preview",        // Best reasoning — try first
+        "gemini-2.5-flash",              // Fallback 1
+        "gemini-2.5-flash-lite",         // Fallback 2
+        "gemini-3.1-flash-lite-preview"  // Fallback 3 — bulk processor
     ];
 
     private class CandidatePair
