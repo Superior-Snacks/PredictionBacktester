@@ -1,8 +1,4 @@
-using System.Collections.Concurrent;
-using System.Net.WebSockets;
-using System.Text;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using KalshiPolyCross;
 using PredictionBacktester.Engine;
 using PredictionBacktester.Engine.LiveExecution;
@@ -324,30 +320,17 @@ if (pairs.Count == 0)
 }
 
 // ── Build shared order books ──────────────────────────────────────────────────
-var books = new ConcurrentDictionary<string, LocalOrderBook>(StringComparer.Ordinal);
-
-// Kalshi size maps (required by ApplySnapshot / ApplyDelta)
-var yesSizes = new ConcurrentDictionary<string, Dictionary<decimal, decimal>>();
-var noSizes  = new ConcurrentDictionary<string, Dictionary<decimal, decimal>>();
-
-// Collect unique Kalshi tickers and Poly tokens from matched pairs
 var kalshiSubscribeTickers = pairs.Select(p => p.KalshiTicker).Distinct().ToList();
 var polySubscribeTokens    = pairs.SelectMany(p => new[] { p.PolyYesTokenId, p.PolyNoTokenId }).Distinct().ToList();
 
-foreach (var ticker in kalshiSubscribeTickers)
-{
-    books[$"K:{ticker}"]    = new LocalOrderBook($"K:{ticker}");
-    books[$"K:{ticker}_NO"] = new LocalOrderBook($"K:{ticker}_NO");
-    yesSizes[ticker] = new Dictionary<decimal, decimal>();
-    noSizes[ticker]  = new Dictionary<decimal, decimal>();
-}
-foreach (var token in polySubscribeTokens)
-    books[$"P:{token}"] = new LocalOrderBook($"P:{token}");
+var state = new MarketStateTracker();
+foreach (var ticker in kalshiSubscribeTickers) state.InitKalshiMarket(ticker);
+foreach (var token  in polySubscribeTokens)    state.InitPolyToken(token);
 
 // ── Telemetry strategy ────────────────────────────────────────────────────────
-var telemetry = new CrossPlatformArbTelemetryStrategy(pairs, books, ARB_THRESHOLD, DEPTH_FLOOR);
+var telemetry = new CrossPlatformArbTelemetryStrategy(pairs, state.Books, ARB_THRESHOLD, DEPTH_FLOOR);
 
-Console.WriteLine($"\n[BOOKS] {books.Count} order books created");
+Console.WriteLine($"\n[BOOKS] {state.Books.Count} order books created");
 Console.WriteLine($"  Kalshi tickers : {kalshiSubscribeTickers.Count}");
 Console.WriteLine($"  Poly tokens    : {polySubscribeTokens.Count}");
 
@@ -364,10 +347,10 @@ _ = Task.Run(async () =>
         await Task.Delay(NEAR_MISS_INTERVAL_MS, cts.Token).ContinueWith(_ => { });
         if (cts.Token.IsCancellationRequested) break;
 
-        int kalshiReady = books.Count(kv => kv.Key.StartsWith("K:") && kv.Value.HasReceivedDelta);
-        int polyReady   = books.Count(kv => kv.Key.StartsWith("P:") && kv.Value.HasReceivedDelta);
-        int kalshiTotal = books.Count(kv => kv.Key.StartsWith("K:"));
-        int polyTotal   = books.Count(kv => kv.Key.StartsWith("P:"));
+        int kalshiReady = state.Books.Count(kv => kv.Key.StartsWith("K:") && kv.Value.HasReceivedDelta);
+        int polyReady   = state.Books.Count(kv => kv.Key.StartsWith("P:") && kv.Value.HasReceivedDelta);
+        int kalshiTotal = state.Books.Count(kv => kv.Key.StartsWith("K:"));
+        int polyTotal   = state.Books.Count(kv => kv.Key.StartsWith("P:"));
 
         Console.WriteLine($"\n[TELEMETRY] --- TOP {Math.Min(10, pairs.Count)} CLOSEST TO CROSS-PLATFORM ARB ---");
         Console.WriteLine($"  Kalshi books: {kalshiReady}/{kalshiTotal} | Poly books: {polyReady}/{polyTotal} | Pairs: {telemetry.TotalPairs} | Open arbs: {telemetry.OpenArbs}");
@@ -387,339 +370,15 @@ _ = Task.Run(async () =>
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
-//  KALSHI WEBSOCKET TASK
+//  WEBSOCKET FEEDS
 // ══════════════════════════════════════════════════════════════════════════════
-var kalshiWsTask = Task.Run(async () =>
-{
-    while (!cts.Token.IsCancellationRequested)
-    {
-        try
-        {
-            using var ws = new ClientWebSocket();
-            var (key, ts, sig) = orderClient.CreateAuthHeaders("GET", "/trade-api/ws/v2");
-            ws.Options.SetRequestHeader("KALSHI-ACCESS-KEY", key);
-            ws.Options.SetRequestHeader("KALSHI-ACCESS-TIMESTAMP", ts);
-            ws.Options.SetRequestHeader("KALSHI-ACCESS-SIGNATURE", sig);
+var kalshiFeed = new KalshiWebsocketFeed(orderClient, kalshiConfig, kalshiSubscribeTickers,
+                                         state, telemetry, KALSHI_BATCH_SIZE, MIN_BOOK_PRICE);
+var polyFeed   = new PolymarketWebsocketFeed(POLY_WS_URL, polySubscribeTokens,
+                                             state, telemetry, POLY_BATCH_SIZE, POLY_PING_INTERVAL_MS);
 
-            await ws.ConnectAsync(new Uri(kalshiConfig.BaseWsUrl), cts.Token);
-            Console.WriteLine($"[KALSHI WS] Connected to {kalshiConfig.BaseWsUrl}");
-
-            int msgId = 1;
-            for (int i = 0; i < kalshiSubscribeTickers.Count; i += KALSHI_BATCH_SIZE)
-            {
-                var batch = kalshiSubscribeTickers.Skip(i).Take(KALSHI_BATCH_SIZE);
-                string tickerArray = string.Join(",", batch.Select(t => $"\"{t}\""));
-                string subMsg = $"{{\"id\":{msgId++},\"cmd\":\"subscribe\",\"params\":{{\"channels\":[\"orderbook_delta\"],\"market_tickers\":[{tickerArray}]}}}}";
-                await ws.SendAsync(Encoding.UTF8.GetBytes(subMsg), WebSocketMessageType.Text, true, cts.Token);
-                await Task.Delay(100, cts.Token);
-            }
-            Console.WriteLine($"[KALSHI WS] Subscribed to {kalshiSubscribeTickers.Count} tickers");
-
-            // Clear books on reconnect, then notify telemetry (closes open windows)
-            foreach (var ticker in kalshiSubscribeTickers)
-            {
-                books[$"K:{ticker}"].ClearBook();
-                books[$"K:{ticker}_NO"].ClearBook();
-                yesSizes[ticker].Clear();
-                noSizes[ticker].Clear();
-            }
-            telemetry.OnKalshiReconnect();
-
-            var buf = new byte[65536];
-            using var ms = new MemoryStream();
-
-            while (!cts.Token.IsCancellationRequested && ws.State == WebSocketState.Open)
-            {
-                ms.SetLength(0);
-                WebSocketReceiveResult result;
-                do
-                {
-                    result = await ws.ReceiveAsync(new ArraySegment<byte>(buf), cts.Token);
-                    if (result.MessageType == WebSocketMessageType.Close)
-                    {
-                        await ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "", CancellationToken.None);
-                        goto kalshiReconnect;
-                    }
-                    ms.Write(buf, 0, result.Count);
-                } while (!result.EndOfMessage);
-
-                if (ms.Length == 0) continue;
-                string message = Encoding.UTF8.GetString(ms.GetBuffer(), 0, (int)ms.Length);
-                if (message is "heartbeat" or "PONG" or "pong") continue;
-
-                ProcessKalshiMessage(message, books, yesSizes, noSizes, telemetry);
-            }
-            kalshiReconnect:;
-        }
-        catch (OperationCanceledException) { break; }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"[KALSHI WS ERROR] {ex.Message} — reconnecting in 5s...");
-        }
-        if (!cts.Token.IsCancellationRequested)
-            await Task.Delay(5_000, cts.Token).ContinueWith(_ => { });
-    }
-});
-
-// ══════════════════════════════════════════════════════════════════════════════
-//  POLYMARKET WEBSOCKET TASK
-// ══════════════════════════════════════════════════════════════════════════════
-var polyWsTask = Task.Run(async () =>
-{
-    while (!cts.Token.IsCancellationRequested)
-    {
-        try
-        {
-            using var ws = new ClientWebSocket();
-            await ws.ConnectAsync(new Uri(POLY_WS_URL), cts.Token);
-            Console.WriteLine($"[POLY WS] Connected to {POLY_WS_URL}");
-
-            // Ping task (Polymarket drops connection without PING every ~10s)
-            var pingSrc = CancellationTokenSource.CreateLinkedTokenSource(cts.Token);
-            _ = Task.Run(async () =>
-            {
-                var pingBytes = Encoding.UTF8.GetBytes("PING");
-                while (!pingSrc.Token.IsCancellationRequested && ws.State == WebSocketState.Open)
-                {
-                    try
-                    {
-                        await Task.Delay(POLY_PING_INTERVAL_MS, pingSrc.Token);
-                        await ws.SendAsync(new ArraySegment<byte>(pingBytes), WebSocketMessageType.Text, true, pingSrc.Token);
-                    }
-                    catch { break; }
-                }
-            });
-
-            // Subscribe to all YES and NO tokens in batches
-            bool isFirst = true;
-            for (int i = 0; i < polySubscribeTokens.Count; i += POLY_BATCH_SIZE)
-            {
-                var batch = polySubscribeTokens.Skip(i).Take(POLY_BATCH_SIZE);
-                string assetList = string.Join("\",\"", batch);
-                string subMsg = isFirst
-                    ? $"{{\"assets_ids\":[\"{assetList}\"],\"type\":\"market\"}}"
-                    : $"{{\"assets_ids\":[\"{assetList}\"],\"operation\":\"subscribe\"}}";
-                isFirst = false;
-                await ws.SendAsync(Encoding.UTF8.GetBytes(subMsg), WebSocketMessageType.Text, true, cts.Token);
-                await Task.Delay(100, cts.Token);
-            }
-            Console.WriteLine($"[POLY WS] Subscribed to {polySubscribeTokens.Count} tokens");
-
-            // Clear books on reconnect, then notify telemetry (closes open windows)
-            foreach (var token in polySubscribeTokens)
-                books[$"P:{token}"].ClearBook();
-            telemetry.OnPolyReconnect();
-
-            var buf = new byte[65536];
-            using var ms = new MemoryStream();
-
-            while (!cts.Token.IsCancellationRequested && ws.State == WebSocketState.Open)
-            {
-                ms.SetLength(0);
-                WebSocketReceiveResult result;
-                do
-                {
-                    result = await ws.ReceiveAsync(new ArraySegment<byte>(buf), cts.Token);
-                    if (result.MessageType == WebSocketMessageType.Close)
-                    {
-                        await ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "", CancellationToken.None);
-                        goto polyReconnect;
-                    }
-                    ms.Write(buf, 0, result.Count);
-                } while (!result.EndOfMessage);
-
-                if (ms.Length == 0) continue;
-                string message = Encoding.UTF8.GetString(ms.GetBuffer(), 0, (int)ms.Length);
-                if (message is "PONG" or "pong") continue;
-
-                ProcessPolyMessage(message, books, telemetry);
-            }
-            polyReconnect:;
-            pingSrc.Cancel();
-        }
-        catch (OperationCanceledException) { break; }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"[POLY WS ERROR] {ex.Message} — reconnecting in 5s...");
-        }
-        if (!cts.Token.IsCancellationRequested)
-            await Task.Delay(5_000, cts.Token).ContinueWith(_ => { });
-    }
-});
+var kalshiWsTask = Task.Run(() => kalshiFeed.RunAsync(cts.Token));
+var polyWsTask   = Task.Run(() => polyFeed.RunAsync(cts.Token));
 
 await Task.WhenAll(kalshiWsTask, polyWsTask);
 Console.WriteLine("\n[SHUTDOWN] Cross-platform arb telemetry stopped.");
-
-// ══════════════════════════════════════════════════════════════════════════════
-//  KALSHI MESSAGE PROCESSING
-// ══════════════════════════════════════════════════════════════════════════════
-static void ProcessKalshiMessage(
-    string message,
-    ConcurrentDictionary<string, LocalOrderBook> books,
-    ConcurrentDictionary<string, Dictionary<decimal, decimal>> yesSizes,
-    ConcurrentDictionary<string, Dictionary<decimal, decimal>> noSizes,
-    CrossPlatformArbTelemetryStrategy telemetry)
-{
-    try
-    {
-        using var doc = JsonDocument.Parse(message);
-        var root = doc.RootElement;
-
-        if (!root.TryGetProperty("type", out var typeEl)) return;
-        string msgType = typeEl.GetString() ?? "";
-        if (!root.TryGetProperty("msg", out var msgEl)) return;
-        if (!msgEl.TryGetProperty("market_ticker", out var tickerEl)) return;
-        string ticker = tickerEl.GetString() ?? "";
-
-        if (!books.TryGetValue($"K:{ticker}", out var yesBook)) return;
-        books.TryGetValue($"K:{ticker}_NO", out var noBook);
-
-        if (!yesSizes.TryGetValue(ticker, out var ySizeMap) ||
-            !noSizes.TryGetValue(ticker,  out var nSizeMap)) return;
-
-        if (msgType == "orderbook_snapshot")
-        {
-            ApplyKalshiSnapshot(yesBook, noBook, msgEl, ySizeMap, nSizeMap);
-            telemetry.OnBookUpdate($"K:{ticker}");
-            if (noBook != null) telemetry.OnBookUpdate($"K:{ticker}_NO");
-        }
-        else if (msgType == "orderbook_delta")
-        {
-            bool noChanged = ApplyKalshiDelta(yesBook, noBook, msgEl, ySizeMap, nSizeMap);
-            telemetry.OnBookUpdate($"K:{ticker}");
-            if (noBook != null && noChanged) telemetry.OnBookUpdate($"K:{ticker}_NO");
-        }
-    }
-    catch (JsonException) { }
-}
-
-static bool ApplyKalshiDelta(
-    LocalOrderBook yesBook, LocalOrderBook? noBook,
-    JsonElement msg,
-    Dictionary<decimal, decimal> yesSizeMap, Dictionary<decimal, decimal> noSizeMap)
-{
-    if (!msg.TryGetProperty("price_dollars", out var priceEl)) return false;
-    if (!msg.TryGetProperty("delta_fp",      out var deltaEl)) return false;
-    if (!msg.TryGetProperty("side",          out var sideEl))  return false;
-
-    if (!decimal.TryParse(priceEl.GetString(), System.Globalization.NumberStyles.Any,
-            System.Globalization.CultureInfo.InvariantCulture, out decimal price)) return false;
-    if (!decimal.TryParse(deltaEl.GetString(), System.Globalization.NumberStyles.Any,
-            System.Globalization.CultureInfo.InvariantCulture, out decimal delta)) return false;
-    string side = sideEl.GetString() ?? "";
-
-    if (price < MIN_BOOK_PRICE || price > (1m - MIN_BOOK_PRICE)) return false;
-
-    if (side == "yes")
-    {
-        decimal newSize = yesSizeMap.GetValueOrDefault(price, 0m) + delta;
-        decimal impliedNoAsk = Math.Round(1m - price, 4);
-        if (newSize <= 0) { yesSizeMap.Remove(price); yesBook.UpdatePriceLevel("BUY", price, 0m); noBook?.UpdatePriceLevel("SELL", impliedNoAsk, 0m); }
-        else              { yesSizeMap[price] = newSize; yesBook.UpdatePriceLevel("BUY", price, newSize); noBook?.UpdatePriceLevel("SELL", impliedNoAsk, newSize); }
-        yesBook.MarkDeltaReceived();
-        return false;
-    }
-    if (side == "no")
-    {
-        decimal newSize = noSizeMap.GetValueOrDefault(price, 0m) + delta;
-        decimal impliedYesAsk = Math.Round(1m - price, 4);
-        if (newSize <= 0) { noSizeMap.Remove(price); noBook?.UpdatePriceLevel("BUY", price, 0m); yesBook.UpdatePriceLevel("SELL", impliedYesAsk, 0m); }
-        else              { noSizeMap[price] = newSize; noBook?.UpdatePriceLevel("BUY", price, newSize); yesBook.UpdatePriceLevel("SELL", impliedYesAsk, newSize); }
-        noBook?.MarkDeltaReceived();
-        yesBook.MarkDeltaReceived();
-        return true;
-    }
-    return false;
-}
-
-static void ApplyKalshiSnapshot(
-    LocalOrderBook yesBook, LocalOrderBook? noBook,
-    JsonElement msg,
-    Dictionary<decimal, decimal> yesSizeMap, Dictionary<decimal, decimal> noSizeMap)
-{
-    yesBook.ClearBook();
-    noBook?.ClearBook();
-    yesSizeMap.Clear();
-    noSizeMap.Clear();
-
-    if (msg.TryGetProperty("yes_dollars_fp", out var yesEl) && yesEl.ValueKind == JsonValueKind.Array)
-        foreach (var level in yesEl.EnumerateArray())
-            if (TryParseLevel(level, out decimal price, out decimal size))
-            {
-                yesSizeMap[price] = size;
-                yesBook.UpdatePriceLevel("BUY", price, size);
-                noBook?.UpdatePriceLevel("SELL", Math.Round(1m - price, 4), size);
-            }
-
-    if (msg.TryGetProperty("no_dollars_fp", out var noEl) && noEl.ValueKind == JsonValueKind.Array)
-        foreach (var level in noEl.EnumerateArray())
-            if (TryParseLevel(level, out decimal noPrice, out decimal size))
-            {
-                noSizeMap[noPrice] = size;
-                noBook?.UpdatePriceLevel("BUY", noPrice, size);
-                yesBook.UpdatePriceLevel("SELL", Math.Round(1m - noPrice, 4), size);
-            }
-}
-
-static bool TryParseLevel(JsonElement level, out decimal price, out decimal size)
-{
-    price = 0; size = 0;
-    if (level.ValueKind != JsonValueKind.Array) return false;
-    var arr = level.EnumerateArray().ToArray();
-    if (arr.Length < 2) return false;
-    if (!decimal.TryParse(arr[0].GetString(), System.Globalization.NumberStyles.Any,
-            System.Globalization.CultureInfo.InvariantCulture, out price)) return false;
-    if (!decimal.TryParse(arr[1].GetString(), System.Globalization.NumberStyles.Any,
-            System.Globalization.CultureInfo.InvariantCulture, out size)) return false;
-    return price >= MIN_BOOK_PRICE && price <= (1m - MIN_BOOK_PRICE);
-}
-
-// ══════════════════════════════════════════════════════════════════════════════
-//  POLYMARKET MESSAGE PROCESSING
-// ══════════════════════════════════════════════════════════════════════════════
-static void ProcessPolyMessage(
-    string message,
-    ConcurrentDictionary<string, LocalOrderBook> books,
-    CrossPlatformArbTelemetryStrategy telemetry)
-{
-    try
-    {
-        using var doc = JsonDocument.Parse(message);
-        var root = doc.RootElement;
-        if (!root.TryGetProperty("event_type", out var etEl)) return;
-        string eventType = etEl.GetString() ?? "";
-
-        if (eventType == "book" && root.TryGetProperty("asset_id", out var idEl))
-        {
-            string assetId = idEl.GetString() ?? "";
-            string bookKey = $"P:{assetId}";
-            if (!books.TryGetValue(bookKey, out var book)) return;
-            if (root.TryGetProperty("bids", out var bidsEl) && root.TryGetProperty("asks", out var asksEl))
-                book.ProcessBookUpdate(bidsEl, asksEl);
-            // Do NOT call telemetry here: snapshot alone is not live data
-        }
-        else if (eventType == "price_change" && root.TryGetProperty("price_changes", out var changesEl))
-        {
-            foreach (var change in changesEl.EnumerateArray())
-            {
-                if (!change.TryGetProperty("asset_id", out var assetIdEl)) continue;
-                string assetId = assetIdEl.GetString() ?? "";
-                string bookKey = $"P:{assetId}";
-                if (!books.TryGetValue(bookKey, out var book)) continue;
-
-                if (!decimal.TryParse(change.GetProperty("price").GetString(),
-                        System.Globalization.NumberStyles.Any,
-                        System.Globalization.CultureInfo.InvariantCulture, out decimal price)) continue;
-                if (!decimal.TryParse(change.GetProperty("size").GetString(),
-                        System.Globalization.NumberStyles.Any,
-                        System.Globalization.CultureInfo.InvariantCulture, out decimal size)) continue;
-                string side = change.GetProperty("side").GetString() ?? "";
-
-                book.UpdatePriceLevel(side, price, size);
-                book.MarkDeltaReceived();
-                telemetry.OnBookUpdate(bookKey);
-            }
-        }
-    }
-    catch (JsonException) { }
-}

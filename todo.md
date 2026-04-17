@@ -8,9 +8,9 @@
 - [x] **GC Pressure in Hot Path**: In `FastMergeArbTelemetryStrategy.EvaluateArbitrageTelemetry`, string concatenation (`currentLegTickers += ...`) allocates thousands of short-lived string objects per second. Switch to `List<string>` and `string.Join("|", ...)` to reduce Gen 0 garbage collections and latency spikes.
 
 ## Architecture & Maintenance
-- [ ] **Refactor `Program.cs` God Object**: Separate the Polymarket and Kalshi WebSocket client loops into dedicated handler classes (e.g., `KalshiWebsocketFeed`, `PolymarketWebsocketFeed`).
-- [ ] **Improve WebSocket Buffer**: Replace the static 64KB buffer (`new byte[65536]`) in `Program.cs` with `System.Buffers.ArrayPool<byte>.Shared.Rent()` to reduce memory allocation overhead on large orderbook snapshots.
-- [ ] **State Management**: Encapsulate static state dictionaries (`books`, `yesSizes`, `noSizes`) from `Program.cs` into a dedicated `MarketStateTracker` class.
+- [x] **Refactor `Program.cs` God Object**: Separate the Polymarket and Kalshi WebSocket client loops into dedicated handler classes (e.g., `KalshiWebsocketFeed`, `PolymarketWebsocketFeed`).
+- [x] **Improve WebSocket Buffer**: Replace the static 64KB buffer (`new byte[65536]`) in `Program.cs` with `System.Buffers.ArrayPool<byte>.Shared.Rent()` to reduce memory allocation overhead on large orderbook snapshots.
+- [x] **State Management**: Encapsulate static state dictionaries (`books`, `yesSizes`, `noSizes`) from `Program.cs` into a dedicated `MarketStateTracker` class.
 
 ## Domain Logic
 - [x] **Fee Model Mismatch**: `FastMergeArbTelemetryStrategy` uses the Polymarket dynamic fee formula (`fee = p * _feeRate * Math.Pow(...)`). Kalshi uses a different fee structure. Update the fee calculation to accurately reflect Kalshi's quadratic or flat fee schedules.
