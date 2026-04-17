@@ -129,7 +129,7 @@ public class CrossPlatformArbTelemetryStrategy
             _activeWindows[p.PairId] = null;
         }
 
-        _ = Task.Run(RunCsvWriterAsync);
+        _csvWriterTask = Task.Run(RunCsvWriterAsync);
     }
 
     // ── Public interface ───────────────────────────────────────────────────────
@@ -213,8 +213,8 @@ public class CrossPlatformArbTelemetryStrategy
         if (!_books.TryGetValue($"P:{pair.PolyYesTokenId}",  out var pYes)) return;
         if (!_books.TryGetValue($"P:{pair.PolyNoTokenId}",   out var pNo))  return;
 
-        if (!kYes.HasReceivedDelta || !pYes.HasReceivedDelta || !pNo.HasReceivedDelta) return;
-        if (kYes.IsStale() || pYes.IsStale() || pNo.IsStale()) return;
+        if (!kYes.HasReceivedDelta || !kNo.HasReceivedDelta || !pYes.HasReceivedDelta || !pNo.HasReceivedDelta) return;
+        if (kYes.IsStale() || kNo.IsStale() || pYes.IsStale() || pNo.IsStale()) return;
 
         decimal kYesAsk = kYes.GetBestAskPrice();
         decimal kNoAsk  = kNo.GetBestAskPrice();
@@ -340,17 +340,19 @@ public class CrossPlatformArbTelemetryStrategy
                 }
                 else
                 {
-                    // Extend: update best fields if this tick improved them
-                    bool improved = bestNet < existing.BestNetCost || bestDepth > Math.Min(existing.KalshiDepth, existing.PolyDepth);
+                    // Extend: track best cost and best depth independently so the two
+                    // axes don't overwrite each other's snapshot fields.
+                    bool betterCost  = bestNet   < existing.BestNetCost;
+                    bool betterDepth = bestDepth > Math.Min(existing.KalshiDepth, existing.PolyDepth);
                     _activeWindows[pair.PairId] = existing with
                     {
-                        BestGrossCost = improved ? Math.Min(existing.BestGrossCost, bestGross) : existing.BestGrossCost,
-                        BestNetCost   = improved ? Math.Min(existing.BestNetCost,   bestNet)   : existing.BestNetCost,
-                        BestLegPrices = improved ? legPricesNow                                : existing.BestLegPrices,
-                        KalshiDepth   = improved ? bestKDepth                                  : existing.KalshiDepth,
-                        PolyDepth     = improved ? bestPDepth                                  : existing.PolyDepth,
-                        KalshiFees    = improved ? bestKFee                                    : existing.KalshiFees,
-                        PolyFees      = improved ? bestPFee                                    : existing.PolyFees,
+                        BestGrossCost = betterCost  ? bestGross    : existing.BestGrossCost,
+                        BestNetCost   = betterCost  ? bestNet      : existing.BestNetCost,
+                        BestLegPrices = betterCost  ? legPricesNow : existing.BestLegPrices,
+                        KalshiFees    = betterCost  ? bestKFee     : existing.KalshiFees,
+                        PolyFees      = betterCost  ? bestPFee     : existing.PolyFees,
+                        KalshiDepth   = betterDepth ? bestKDepth   : existing.KalshiDepth,
+                        PolyDepth     = betterDepth ? bestPDepth   : existing.PolyDepth,
                         UpdateCount   = existing.UpdateCount + 1
                     };
                 }
@@ -460,6 +462,18 @@ public class CrossPlatformArbTelemetryStrategy
         }
         _csvChannel.Writer.TryWrite(row);
     }
+
+    /// <summary>
+    /// Signals the CSV writer to flush and finish. Call once before process exit
+    /// so queued rows are not lost.
+    /// </summary>
+    public async Task ShutdownAsync()
+    {
+        _csvChannel.Writer.TryComplete();
+        await _csvWriterTask;
+    }
+
+    private readonly Task _csvWriterTask;
 
     private async Task RunCsvWriterAsync()
     {

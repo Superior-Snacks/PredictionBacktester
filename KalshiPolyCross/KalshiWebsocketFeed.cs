@@ -175,6 +175,7 @@ public class KalshiWebsocketFeed
             if (newSize <= 0) { yesSizeMap.TryRemove(price, out _); yesBook.UpdatePriceLevel("BUY", price, 0m);     noBook?.UpdatePriceLevel("SELL", impliedNoAsk, 0m); }
             else              { yesSizeMap[price] = newSize; yesBook.UpdatePriceLevel("BUY", price, newSize); noBook?.UpdatePriceLevel("SELL", impliedNoAsk, newSize); }
             yesBook.MarkDeltaReceived();
+            noBook?.MarkDeltaReceived(); // NO book gets implied SELL levels — mark it live too
             return;
         }
         if (side == "no")

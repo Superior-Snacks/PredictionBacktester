@@ -392,4 +392,5 @@ var polyWsTask   = Task.Run(async () =>
 });
 
 await Task.WhenAll(kalshiWsTask, polyWsTask);
+await telemetry.ShutdownAsync(); // flush and close CSV before exit
 Console.WriteLine("\n[SHUTDOWN] Cross-platform arb telemetry stopped.");
