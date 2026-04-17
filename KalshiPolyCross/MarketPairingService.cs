@@ -18,6 +18,24 @@ public class MarketPairingService
     private const double SimilarityThreshold = 0.75;
     private const int TopNCandidates = 5; // For each Kalshi market, send the top N most similar Poly markets to the AI judge.
 
+    // Embedding model — change here if the model name changes.
+    private const string EmbeddingModel = "gemini-embedding-002";
+
+    // Embeddings are saved to disk after every batch so overnight runs survive
+    // daily quota exhaustion and can resume the next day without re-fetching.
+    private const string EmbeddingCachePath = "embeddings_cache.json";
+
+    // AI judge models ranked by intelligence. The waterfall removes a model from the
+    // front of the list the moment its daily quota (RPD) is exhausted, then retries
+    // the same batch with the next model. RPM hits just wait 65s and retry same model.
+    private readonly List<string> _judgeModels =
+    [
+        "gemini-3-flash",        // Best reasoning — try first
+        "gemini-2.5-flash",      // Fallback 1
+        "gemini-2.5-flash-lite", // Fallback 2
+        "gemini-3.1-flash-lite"  // Fallback 3 — bulk processor
+    ];
+
     private class CandidatePair
     {
         public string KalshiTicker { get; set; } = "";
@@ -29,6 +47,7 @@ public class MarketPairingService
         public string PolyNoToken { get; set; } = "";
         public DateTime? PolyCloseDate { get; set; }
         public string PolyDescription { get; set; } = "";
+        public double Score { get; set; } // Cosine similarity — used to prioritise judge batches
     }
 
     public MarketPairingService(string geminiApiKey)
@@ -48,10 +67,32 @@ public class MarketPairingService
         Console.WriteLine("\n[PAIRING SERVICE] Starting market pairing process...");
         Console.WriteLine("[PAIRING SERVICE] Ctrl+C at any time — pairs found so far are saved after each batch.");
 
-        // Step 1: Advanced filtering based on semantic embeddings.
-        var candidates = await EmbeddingFilter(kalshiMarkets, polyMarkets);
+        // Load already-confirmed pairs so subsequent runs skip Kalshi tickers that
+        // were matched on a previous day — avoids wasting judge RPD budget on them.
+        var alreadyPairedTickers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (File.Exists(outputPath))
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(await File.ReadAllTextAsync(outputPath));
+                foreach (var el in doc.RootElement.EnumerateArray())
+                    if (el.TryGetProperty("kalshi_ticker", out var kt) && kt.GetString() is { } t)
+                        alreadyPairedTickers.Add(t);
+                if (alreadyPairedTickers.Count > 0)
+                    Console.WriteLine($"[PAIRING SERVICE] Skipping {alreadyPairedTickers.Count} already-paired Kalshi ticker(s) from previous run(s).");
+            }
+            catch { /* fresh file or empty — proceed normally */ }
+        }
 
-        // Step 2: Final semantic match via AI Judge, saving after each batch so
+        // Step 1: Advanced filtering based on semantic embeddings.
+        var candidates = await EmbeddingFilter(kalshiMarkets, polyMarkets, alreadyPairedTickers);
+
+        // Step 2: Sort candidates by cosine score descending so the judge evaluates
+        // the highest-probability pairs first — if RPD runs out mid-run, the best
+        // candidates will already have been evaluated.
+        candidates.Sort((a, b) => b.Score.CompareTo(a.Score));
+
+        // Step 3: Final semantic match via AI Judge, saving after each batch so
         // Ctrl+C doesn't lose work already done.
         await SemanticMatchAndSave(candidates, outputPath);
 
@@ -64,7 +105,8 @@ public class MarketPairingService
     /// </summary>
     private async Task<List<CandidatePair>> EmbeddingFilter(
         Dictionary<string, (string Title, DateTime? CloseDate, string Rules)> kalshiMarkets,
-        List<(string Question, string YesToken, string NoToken, DateTime? EndDate, string Description)> polyMarkets)
+        List<(string Question, string YesToken, string NoToken, DateTime? EndDate, string Description)> polyMarkets,
+        HashSet<string> alreadyPairedTickers)
     {
         var candidates = new List<CandidatePair>();
         Console.WriteLine("[PAIRING SERVICE] Embedding filter: Finding candidates by semantic similarity...");
@@ -75,14 +117,21 @@ public class MarketPairingService
             return candidates;
         }
 
-        // 1. Batch-fetch embeddings for ALL titles upfront — two API bursts instead of N.
-        //    Both use the same GetEmbeddingsAsync batching (100/request, 1s between batches)
-        //    which keeps us well within the free-tier 100 RPM limit.
-        var polyQuestions = polyMarkets.Select(p => p.Question).ToList();
-        var kalshiTitles  = kalshiMarkets.Values.Select(v => v.Title).Distinct().ToList();
+        // 1. Load persisted embedding cache — lets overnight runs resume without
+        //    re-spending daily quota on titles already embedded on a previous run.
+        var cache = await LoadEmbeddingCacheAsync();
+        int cacheHits = kalshiMarkets.Values.Count(v => cache.ContainsKey(v.Title))
+                      + polyMarkets.Count(p => cache.ContainsKey(p.Question));
+        Console.WriteLine($"[PAIRING SERVICE] Embedding cache: {cache.Count} entries loaded ({cacheHits} cover current markets).");
 
-        var polyEmbeddings  = await GetEmbeddingsAsync(polyQuestions, "Polymarket Questions");
-        var kalshiEmbeddings = await GetEmbeddingsAsync(kalshiTitles, "Kalshi Titles");
+        // 2. Batch-fetch embeddings for ALL titles upfront — two API bursts instead of N.
+        //    Already-cached texts are skipped; newly fetched ones are saved to disk after
+        //    every batch so a daily quota cutoff doesn't lose work already done.
+        var polyQuestions  = polyMarkets.Select(p => p.Question).ToList();
+        var kalshiTitles   = kalshiMarkets.Values.Select(v => v.Title).Distinct().ToList();
+
+        var polyEmbeddings   = await GetEmbeddingsAsync(polyQuestions, "Polymarket Questions", cache);
+        var kalshiEmbeddings = await GetEmbeddingsAsync(kalshiTitles,  "Kalshi Titles",        cache);
 
         int processedCount = 0;
         Console.WriteLine($"[PAIRING SERVICE] Comparing {kalshiMarkets.Count} Kalshi markets against {polyMarkets.Count} Polymarket markets...");
@@ -90,6 +139,8 @@ public class MarketPairingService
         // 2. Pure in-memory loop — no API calls inside here.
         foreach (var (kalshiTicker, kalshiData) in kalshiMarkets)
         {
+            if (alreadyPairedTickers.Contains(kalshiTicker)) continue;
+
             if (!kalshiEmbeddings.TryGetValue(kalshiData.Title, out var kalshiEmbedding))
             {
                 processedCount++;
@@ -134,7 +185,8 @@ public class MarketPairingService
                     PolyYesToken = s.polyMarket.YesToken,
                     PolyNoToken = s.polyMarket.NoToken,
                     PolyCloseDate = s.polyMarket.EndDate,
-                    PolyDescription = s.polyMarket.Description
+                    PolyDescription = s.polyMarket.Description,
+                    Score = s.Score
                 });
             }
 
@@ -150,30 +202,54 @@ public class MarketPairingService
     }
 
     /// <summary>
-    /// Calls the Gemini `batchEmbedContents` API to get embeddings for a list of texts.
-    /// Handles batching to respect the API's limit of 100 texts per request.
+    /// Calls the Gemini batchEmbedContents API. Skips texts already in the shared
+    /// cache, saves new results to disk after every batch, and stops gracefully on
+    /// a daily quota (RPD) 429 so the run can resume tomorrow with the saved cache.
     /// </summary>
-    private async Task<Dictionary<string, float[]>> GetEmbeddingsAsync(IEnumerable<string> texts, string description)
+    private async Task<Dictionary<string, float[]>> GetEmbeddingsAsync(
+        IEnumerable<string> texts, string description, Dictionary<string, float[]> cache)
     {
-        var embeddings = new Dictionary<string, float[]>();
-        // Free tier counts each individual text as 1 request toward the 100 RPM quota.
-        // Batch of 20 + 15s delay ≈ 80 texts/min — safely under the cap.
-        const int ApiBatchSize = 20;
+        var result   = new Dictionary<string, float[]>();
         var textList = texts.ToList();
 
-        for (int i = 0; i < textList.Count; i += ApiBatchSize)
+        // Serve cached entries immediately.
+        var uncached = new List<string>();
+        foreach (var text in textList)
         {
-            var batch = textList.Skip(i).Take(ApiBatchSize).ToList();
-            Console.WriteLine($"[EMBEDDING] Getting embeddings for {batch.Count} texts ({description})...");
+            if (cache.TryGetValue(text, out var cached))
+                result[text] = cached;
+            else
+                uncached.Add(text);
+        }
+
+        if (uncached.Count == 0)
+        {
+            Console.WriteLine($"[EMBEDDING] All {textList.Count} {description} embeddings served from cache.");
+            return result;
+        }
+
+        Console.WriteLine($"[EMBEDDING] {result.Count} cached / {uncached.Count} to fetch ({description}).");
+
+        // Free tier: 100 RPM, 1 000 RPD (each API call = 1 request regardless of batch size).
+        // Maximise texts per call (100 = API limit) so the 1 000 RPD covers ~100 000 texts/day.
+        // 1s delay between calls stays well under 100 RPM.
+        const int ApiBatchSize = 100;
+        string url = $"https://generativelanguage.googleapis.com/v1beta/models/{EmbeddingModel}:batchEmbedContents?key={_geminiApiKey.Trim()}";
+
+        for (int i = 0; i < uncached.Count; i += ApiBatchSize)
+        {
+            var batch = uncached.Skip(i).Take(ApiBatchSize).ToList();
+            int batchNum   = i / ApiBatchSize + 1;
+            int totalBatches = (uncached.Count + ApiBatchSize - 1) / ApiBatchSize;
+            Console.WriteLine($"[EMBEDDING] [{description}] Batch {batchNum}/{totalBatches} — {batch.Count} texts...");
 
             var requests = batch.Select(text => new
             {
-                model = "models/gemini-embedding-001",
+                model   = $"models/{EmbeddingModel}",
                 content = new { parts = new[] { new { text } } }
             }).ToList();
 
             var payload = new { requests };
-            string url = $"https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:batchEmbedContents?key={_geminiApiKey.Trim()}";
             var content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
 
             try
@@ -182,8 +258,28 @@ public class MarketPairingService
                 if (!response.IsSuccessStatusCode)
                 {
                     string errDetails = await response.Content.ReadAsStringAsync();
-                    Console.WriteLine($"\n[EMBEDDING] Error calling Gemini embedding API: {response.StatusCode} - {errDetails}");
-                    continue; // Skip this batch
+
+                    if ((int)response.StatusCode == 429)
+                    {
+                        // Daily quota (RPD) exhausted — save cache and bail out gracefully.
+                        // The next run will resume from where we left off.
+                        if (errDetails.Contains("day", StringComparison.OrdinalIgnoreCase) ||
+                            errDetails.Contains("PerDay", StringComparison.OrdinalIgnoreCase))
+                        {
+                            Console.WriteLine($"\n[EMBEDDING] Daily quota (RPD) exhausted after {result.Count} embeddings.");
+                            Console.WriteLine("[EMBEDDING] Cache saved — re-run tomorrow to continue from this point.");
+                            return result;
+                        }
+
+                        // Per-minute quota (RPM) — wait 65s and retry the same batch.
+                        Console.WriteLine($"\n[EMBEDDING] Per-minute quota hit, waiting 65s before retry...");
+                        await Task.Delay(65000);
+                        i -= ApiBatchSize; // will be re-incremented by the for loop
+                        continue;
+                    }
+
+                    Console.WriteLine($"\n[EMBEDDING] Error: {response.StatusCode} — {errDetails}");
+                    continue;
                 }
 
                 using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
@@ -195,21 +291,68 @@ public class MarketPairingService
                         if (embeddingData.TryGetProperty("value", out var values))
                         {
                             var vector = values.EnumerateArray().Select(v => v.GetSingle()).ToArray();
-                            embeddings[batch[j]] = vector;
+                            result[batch[j]]  = vector;
+                            cache[batch[j]]   = vector;
                         }
                     }
                 }
+
+                // Persist after every successful batch — quota cutoff mid-run loses nothing.
+                await SaveEmbeddingCacheAsync(cache);
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"\n[EMBEDDING] Exception during embedding API call: {ex.Message}");
+                Console.WriteLine($"\n[EMBEDDING] Exception: {ex.Message}");
             }
 
-            if (i + ApiBatchSize < textList.Count)
-                await Task.Delay(15000); // 15s between batches → ~80 texts/min under 100 RPM free tier
+            if (i + ApiBatchSize < uncached.Count)
+                await Task.Delay(12000); // 12s between batches — stays under 30K TPM (covers ~58 tokens/title avg)
         }
 
-        return embeddings;
+        return result;
+    }
+
+    private static async Task<Dictionary<string, float[]>> LoadEmbeddingCacheAsync()
+    {
+        if (!File.Exists(EmbeddingCachePath)) return [];
+        try
+        {
+            string json = await File.ReadAllTextAsync(EmbeddingCachePath);
+            using var doc = JsonDocument.Parse(json);
+            var cache = new Dictionary<string, float[]>();
+            foreach (var prop in doc.RootElement.EnumerateObject())
+            {
+                var vector = prop.Value.EnumerateArray().Select(v => v.GetSingle()).ToArray();
+                cache[prop.Name] = vector;
+            }
+            return cache;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[EMBEDDING] Warning: could not load cache ({ex.Message}). Starting fresh.");
+            return [];
+        }
+    }
+
+    private static async Task SaveEmbeddingCacheAsync(Dictionary<string, float[]> cache)
+    {
+        try
+        {
+            var node = new JsonObject();
+            foreach (var (text, vector) in cache)
+            {
+                var arr = new JsonArray();
+                foreach (var v in vector) arr.Add(v);
+                node[text] = arr;
+            }
+            string tempPath = EmbeddingCachePath + ".tmp";
+            await File.WriteAllTextAsync(tempPath, node.ToJsonString());
+            File.Move(tempPath, EmbeddingCachePath, overwrite: true);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[EMBEDDING] Warning: could not save cache ({ex.Message}).");
+        }
     }
 
     /// <summary>
@@ -218,7 +361,7 @@ public class MarketPairingService
     /// </summary>
     private async Task SemanticMatchAndSave(List<CandidatePair> candidates, string outputPath)
     {
-        const int BatchSize = 15;
+        const int BatchSize = 25; // Maximise pairs per request — top models have only 20 RPD
         int totalBatches = (candidates.Count + BatchSize - 1) / BatchSize;
         int totalMatched = 0;
         Console.WriteLine($"[PAIRING SERVICE] Semantic matching: {candidates.Count} candidates in {totalBatches} batch(es) of up to {BatchSize}...");
@@ -243,7 +386,9 @@ public class MarketPairingService
 
             totalMatched += matched.Count;
 
-            // Rate limit: free tier allows 5 requests/min → wait 13s between batches.
+            // Proactive safety delay between batches. Conservative enough for the
+            // most restrictive free-tier model (~5 RPM). The reactive 65s wait inside
+            // EvaluateBatch handles any RPM hits that still slip through.
             if (i + BatchSize < candidates.Count)
                 await Task.Delay(13000);
         }
@@ -252,89 +397,128 @@ public class MarketPairingService
     }
 
     /// <summary>
-    /// Sends a batch of candidate pairs to Gemini in a single prompt and returns the
-    /// 0-based indices of pairs that are confirmed matches.
+    /// Sends a batch of candidate pairs to the best available judge model and returns
+    /// the 0-based indices of confirmed matches. Uses a waterfall: on RPD quota exhaustion
+    /// the current model is dropped and the same batch is retried with the next one.
+    /// RPM quota hits wait 65s and retry on the same model.
     /// </summary>
     private async Task<List<int>> EvaluateBatch(List<CandidatePair> batch)
     {
+        // ── Structured step-by-step prompt ────────────────────────────────────────
+        // Written so even a lite model can follow it reliably — no reading between lines.
         var sb = new StringBuilder();
-        sb.AppendLine("You are a strict financial compliance officer auditing arbitrage opportunities. You will be given one target Kalshi market and a list of candidate Polymarket markets.");
-        sb.AppendLine("Your job is to find an EXACT MATCH. An exact match means the underlying oracle, the resolution metric, and the expiration date/time are identical.");
-        sb.AppendLine("Pay extreme attention to 'Dead Heat' rules, overtime rules, and timezones.");
-        sb.AppendLine("For each numbered pair below, determine if both titles refer to the EXACT same real-world event and question.");
-        sb.AppendLine("Reply ONLY with a JSON array of the 0-based indices of TRUE matches. Example: [0,2,5]. If none match, reply []. Do not include any other text.");
+        sb.AppendLine("You are a market matching engine. Identify EXACT matches between prediction markets.");
+        sb.AppendLine("For each numbered pair apply these 4 checks IN ORDER. REJECT the pair the moment any check fails.");
+        sb.AppendLine("If you are unsure about any check, REJECT.");
+        sb.AppendLine();
+        sb.AppendLine("STEP 1 — EXPIRY DATE: Do both markets close within 7 days of each other? If NO → REJECT.");
+        sb.AppendLine("STEP 2 — SUBJECT: Are both markets about the exact same team, player, or named event? If NO → REJECT.");
+        sb.AppendLine("STEP 3 — OUTCOME: Do both markets resolve YES/NO on the exact same question? If NO → REJECT.");
+        sb.AppendLine("STEP 4 — EDGE CASES: Check for any difference in these resolution conditions. If any difference exists → REJECT.");
+        sb.AppendLine("  - Overtime: does one market count overtime and the other not?");
+        sb.AppendLine("  - Ties: does one market refund on a tie and the other not?");
+        sb.AppendLine("  - Cancellation: do the markets handle postponements or cancellations differently?");
+        sb.AppendLine();
+        sb.AppendLine("A pair is a MATCH only if it passes ALL 4 steps.");
+        sb.AppendLine("Reply ONLY with a JSON array of 0-based indices of MATCHING pairs. Examples: [0,2,5] or []");
+        sb.AppendLine("Do not write anything else.");
         sb.AppendLine();
 
         for (int i = 0; i < batch.Count; i++)
         {
             var c = batch[i];
             sb.AppendLine($"[{i}]");
-            sb.AppendLine($"KALSHI MARKET:");
-            sb.AppendLine($"Title: {c.KalshiTitle}");
-            sb.AppendLine($"Close Date: {(c.KalshiCloseDate.HasValue ? c.KalshiCloseDate.Value.ToString("O") : "Unknown")}");
-            sb.AppendLine($"Resolution Rules: {c.KalshiRules}");
-            sb.AppendLine($"POLYMARKET MARKET:");
-            sb.AppendLine($"Title: {c.PolyQuestion}");
-            sb.AppendLine($"Close Date: {(c.PolyCloseDate.HasValue ? c.PolyCloseDate.Value.ToString("O") : "Unknown")}");
-            sb.AppendLine($"Description: {c.PolyDescription}");
+            sb.AppendLine($"KALSHI  | Title: {c.KalshiTitle}");
+            sb.AppendLine($"        | Close: {(c.KalshiCloseDate.HasValue ? c.KalshiCloseDate.Value.ToString("O") : "Unknown")}");
+            sb.AppendLine($"        | Rules: {c.KalshiRules}");
+            sb.AppendLine($"POLY    | Title: {c.PolyQuestion}");
+            sb.AppendLine($"        | Close: {(c.PolyCloseDate.HasValue ? c.PolyCloseDate.Value.ToString("O") : "Unknown")}");
+            sb.AppendLine($"        | Desc:  {c.PolyDescription}");
             sb.AppendLine();
         }
 
         var payload = new
         {
-            contents = new[] { new { parts = new[] { new { text = sb.ToString() } } } },
-            generationConfig = new
-            {
-                temperature = 0.0,
-                maxOutputTokens = 100,
-                responseMimeType = "application/json"
-            }
+            contents        = new[] { new { parts = new[] { new { text = sb.ToString() } } } },
+            generationConfig = new { temperature = 0.0, maxOutputTokens = 200, responseMimeType = "application/json" }
         };
+        string body = JsonSerializer.Serialize(payload);
 
-        // .Trim() removes any invisible newlines from the .env file that would corrupt the URL
-        string url = $"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key={_geminiApiKey.Trim()}";
-        var content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
-
-        try
+        // ── Waterfall loop ─────────────────────────────────────────────────────────
+        while (_judgeModels.Count > 0)
         {
-            var response = await _httpClient.PostAsync(url, content);
-            if (!response.IsSuccessStatusCode)
+            string model = _judgeModels[0];
+            string url   = $"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={_geminiApiKey.Trim()}";
+            var    httpContent = new StringContent(body, Encoding.UTF8, "application/json");
+
+            try
             {
-                string errDetails = await response.Content.ReadAsStringAsync();
-                Console.WriteLine($"\n[PAIRING SERVICE] Error calling Gemini API: {response.StatusCode} - {errDetails}");
+                var response = await _httpClient.PostAsync(url, httpContent);
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    string errDetails = await response.Content.ReadAsStringAsync();
+
+                    if ((int)response.StatusCode == 429)
+                    {
+                        // Daily quota (RPD) → drop this model and fall through to the next.
+                        if (errDetails.Contains("day", StringComparison.OrdinalIgnoreCase) ||
+                            errDetails.Contains("PerDay", StringComparison.OrdinalIgnoreCase))
+                        {
+                            Console.WriteLine($"\n[JUDGE] {model} daily quota exhausted — falling back to next model.");
+                            _judgeModels.RemoveAt(0);
+                            continue; // retry same batch with next model
+                        }
+
+                        // Per-minute quota (RPM) → wait and retry on the same model.
+                        Console.WriteLine($"\n[JUDGE] {model} per-minute quota hit — waiting 65s...");
+                        await Task.Delay(65000);
+                        continue;
+                    }
+
+                    // Model not found or not available — drop it and try the next one.
+                    if ((int)response.StatusCode == 404)
+                    {
+                        Console.WriteLine($"\n[JUDGE] {model} not found (404) — dropping from waterfall.");
+                        _judgeModels.RemoveAt(0);
+                        continue;
+                    }
+
+                    Console.WriteLine($"\n[JUDGE] {model} error: {response.StatusCode} — {errDetails}");
+                    return [];
+                }
+
+                string jsonResponse = await response.Content.ReadAsStringAsync();
+                using var doc = JsonDocument.Parse(jsonResponse);
+                var root = doc.RootElement;
+
+                if (!root.TryGetProperty("candidates", out var geminiCandidates) || geminiCandidates.GetArrayLength() == 0)
+                    return [];
+                if (!geminiCandidates[0].TryGetProperty("content", out var contentEl) ||
+                    !contentEl.TryGetProperty("parts", out var parts) || parts.GetArrayLength() == 0)
+                    return [];
+
+                string text = parts[0].GetProperty("text").GetString()?.Trim() ?? "[]";
+
+                using var arrDoc = JsonDocument.Parse(text);
+                if (arrDoc.RootElement.ValueKind != JsonValueKind.Array) return [];
+
+                return [..arrDoc.RootElement
+                    .EnumerateArray()
+                    .Where(el => el.ValueKind == JsonValueKind.Number && el.TryGetInt32(out _))
+                    .Select(el => el.GetInt32())
+                    .Where(idx => idx >= 0 && idx < batch.Count)
+                    .Distinct()];
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"\n[JUDGE] {model} exception: {ex.Message}");
                 return [];
             }
-
-            string jsonResponse = await response.Content.ReadAsStringAsync();
-            using var doc = JsonDocument.Parse(jsonResponse);
-
-            var root = doc.RootElement;
-            if (!root.TryGetProperty("candidates", out var geminiCandidates) || geminiCandidates.GetArrayLength() == 0)
-                return [];
-
-            if (!geminiCandidates[0].TryGetProperty("content", out var contentEl) ||
-                !contentEl.TryGetProperty("parts", out var parts) || parts.GetArrayLength() == 0)
-                return [];
-
-            string text = parts[0].GetProperty("text").GetString()?.Trim() ?? "[]";
-
-            // Parse the returned JSON int array, clamping to valid batch indices
-            using var arrDoc = JsonDocument.Parse(text);
-            if (arrDoc.RootElement.ValueKind != JsonValueKind.Array) return [];
-
-            return arrDoc.RootElement
-                .EnumerateArray()
-                .Where(el => el.ValueKind == JsonValueKind.Number && el.TryGetInt32(out _))
-                .Select(el => el.GetInt32())
-                .Where(idx => idx >= 0 && idx < batch.Count)
-                .Distinct()
-                .ToList();
         }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"\n[PAIRING SERVICE] Error calling Gemini API: {ex.Message}");
-            return [];
-        }
+
+        Console.WriteLine("\n[JUDGE] All models exhausted — skipping remaining batches.");
+        return [];
     }
 
     private async Task SavePairs(List<CandidatePair> newPairs, string outputPath)
