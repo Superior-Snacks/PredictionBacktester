@@ -38,6 +38,7 @@ public class PolymarketWebsocketFeed
 
     public async Task RunAsync(CancellationToken ct)
     {
+        bool firstConnect = true;
         while (!ct.IsCancellationRequested)
         {
             try
@@ -77,10 +78,14 @@ public class PolymarketWebsocketFeed
                 }
                 Console.WriteLine($"[POLY WS] Subscribed to {_tokens.Count} tokens");
 
-                // Clear books on reconnect, then notify telemetry (closes open windows)
-                foreach (var token in _tokens)
-                    _state.ClearPolyToken(token);
-                _telemetry.OnPolyReconnect();
+                // On reconnect (not first connect): clear stale books and close open telemetry windows
+                if (!firstConnect)
+                {
+                    foreach (var token in _tokens)
+                        _state.ClearPolyToken(token);
+                    _telemetry.OnPolyReconnect();
+                }
+                firstConnect = false;
 
                 // Rent a buffer from the pool — returned in the finally below
                 byte[] buf = ArrayPool<byte>.Shared.Rent(65536);
@@ -134,6 +139,7 @@ public class PolymarketWebsocketFeed
         {
             using var doc = JsonDocument.Parse(message);
             var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object) return;
             if (!root.TryGetProperty("event_type", out var etEl)) return;
             string eventType = etEl.GetString() ?? "";
 
@@ -175,6 +181,6 @@ public class PolymarketWebsocketFeed
                     _telemetry.OnBookUpdate(key);
             }
         }
-        catch (JsonException) { }
+        catch (Exception) { }
     }
 }

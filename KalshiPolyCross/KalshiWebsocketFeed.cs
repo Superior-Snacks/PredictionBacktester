@@ -43,6 +43,7 @@ public class KalshiWebsocketFeed
 
     public async Task RunAsync(CancellationToken ct)
     {
+        bool firstConnect = true;
         while (!ct.IsCancellationRequested)
         {
             try
@@ -67,10 +68,14 @@ public class KalshiWebsocketFeed
                 }
                 Console.WriteLine($"[KALSHI WS] Subscribed to {_tickers.Count} tickers");
 
-                // Clear books on reconnect, then notify telemetry (closes open windows)
-                foreach (var ticker in _tickers)
-                    _state.ClearKalshiMarket(ticker);
-                _telemetry.OnKalshiReconnect();
+                // On reconnect (not first connect): clear stale books and close open telemetry windows
+                if (!firstConnect)
+                {
+                    foreach (var ticker in _tickers)
+                        _state.ClearKalshiMarket(ticker);
+                    _telemetry.OnKalshiReconnect();
+                }
+                firstConnect = false;
 
                 // Rent a buffer from the pool — returned in the finally below
                 byte[] buf = ArrayPool<byte>.Shared.Rent(65536);

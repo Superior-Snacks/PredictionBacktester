@@ -82,10 +82,11 @@ if (File.Exists(manualPath))
             string yesToken = el.TryGetProperty("poly_yes_token", out var yt) ? (yt.GetString()  ?? "") : "";
             string noToken  = el.TryGetProperty("poly_no_token",  out var nt) ? (nt.GetString()  ?? "") : "";
             string label    = el.TryGetProperty("label",          out var lb) ? (lb.GetString()  ?? "") : kTicker;
+            string eventId = el.TryGetProperty("event_id", out var eid) ? (eid.GetString() ?? "") : "";
             if (!string.IsNullOrEmpty(kTicker) && !string.IsNullOrEmpty(yesToken) && !string.IsNullOrEmpty(noToken))
             {
                 string pairId = $"MANUAL_{kTicker}__{yesToken[..Math.Min(8, yesToken.Length)]}";
-                manualPairs.Add(new CrossPair(pairId, label, kTicker, yesToken, noToken));
+                manualPairs.Add(new CrossPair(pairId, label, kTicker, yesToken, noToken, eventId));
             }
         }
         Console.WriteLine($"[CONFIG] {manualPairs.Count} manual pair(s) loaded from cross_pairs.json");
@@ -133,6 +134,10 @@ static async Task<Dictionary<string, string>> FetchKalshiSeriesCategories(Kalshi
     Console.WriteLine($"[KALSHI SCANNER] {seriesCategories.Count} series categories loaded.");
     return seriesCategories;
 }
+
+// ── AI Market Pairing Mode (scanner only needed here) ────────────────────────
+if (isPairingMode)
+{
 
 // ── Scan Kalshi binary markets ────────────────────────────────────────────────
 // Simple direct scan: fetch all open markets from the REST API.
@@ -294,16 +299,12 @@ catch (Exception ex)
     Console.WriteLine($"[POLY SCANNER ERROR] {ex.Message}");
 }
 
-// ── AI Market Pairing Mode ────────────────────────────────────────────────────
-if (isPairingMode)
-{
-    // Apply the same category filter used for the live bot so pairing only produces
-    // pairs the live bot will actually monitor.
     var pairingService = new MarketPairingService(geminiApiKey!);
     await pairingService.FindAndSavePairs(kalshiMarkets, polyMarkets, manualPath);
     Console.WriteLine("\n[PAIRING MODE] Process complete. Exiting.");
     return;
-}
+
+} // end isPairingMode
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  BOT EXECUTION (Normal Mode)
@@ -366,6 +367,19 @@ _ = Task.Run(async () =>
 
         if (snapshot.Count == 0)
             Console.WriteLine("  (no books priced yet — waiting for WS data)");
+
+        var blendedSnapshot = telemetry.GetBlendedNearMissSnapshot().ToList();
+        if (blendedSnapshot.Count > 0)
+        {
+            Console.WriteLine($"  --- BLENDED (pick cheapest YES per leg across both platforms) ---");
+            foreach (var (cost, evId, choices, depth, isLive) in blendedSnapshot)
+            {
+                decimal diff = cost - 1.00m;
+                string  tag  = cost < 1.00m ? "ARB!" : $"+${diff:0.0000} away";
+                string  live = isLive ? " *** LIVE ***" : "";
+                Console.WriteLine($"  ${cost:0.0000} ({tag}) BLENDED({choices}) | depth={depth:0.0} | {evId}{live}");
+            }
+        }
     }
 });
 
