@@ -111,6 +111,7 @@ def fetch_poly(keyword):
     offset  = 0
     limit   = 500
     total   = 0
+    dry_pages = 0  # consecutive pages with no new matches
     kw = keyword.lower()
     print("[POLY] Fetching active markets...", end="", flush=True)
     while True:
@@ -121,6 +122,7 @@ def fetch_poly(keyword):
         events = r.json()
         if not events:
             break
+        page_matches = 0
         for ev in events:
             for mkt in ev.get("markets", []):
                 total += 1
@@ -138,22 +140,124 @@ def fetch_poly(keyword):
                     except Exception:
                         pass
                 results.append({"yes": tokens[0], "no": tokens[1], "question": question, "closes": close})
+                page_matches += 1
         print(f"\r[POLY] Scanned {total} markets, {len(results)} matches...   ", end="", flush=True)
         if len(events) < limit:
             break
+        # Stop early if we already have results and haven't seen a new match in 3 pages
+        if results:
+            dry_pages = 0 if page_matches > 0 else dry_pages + 1
+            if dry_pages >= 3:
+                break
         offset += limit
         time.sleep(0.20)
     print()
+    return results
+
+# ─── cross_pairs.json helpers ────────────────────────────────────────────────
+
+def find_cross_pairs_path():
+    """Locate cross_pairs.json — check bin output dirs first, then script dir."""
+    candidates = [
+        os.path.join(_sd, "KalshiPolyCross", "bin", "Debug",   "net10.0", "cross_pairs.json"),
+        os.path.join(_sd, "KalshiPolyCross", "bin", "Release",  "net10.0", "cross_pairs.json"),
+        os.path.join(_sd, "cross_pairs.json"),
+    ]
+    for p in candidates:
+        if os.path.isfile(p):
+            return p
+    # Default: next to the script (solution root)
+    return candidates[-1]
+
+def load_pairs(path):
+    if not os.path.isfile(path):
+        return []
+    with open(path) as f:
+        return json.load(f)
+
+def save_pairs(path, pairs):
+    with open(path, "w") as f:
+        json.dump(pairs, f, indent=2)
+
+# ─── URL resolution ───────────────────────────────────────────────────────────
+
+def resolve_kalshi_url(private_key, url):
+    """Extract ticker from a kalshi.com URL and fetch market details.
+    Tries /markets/{ticker} first, then /events/{ticker} as fallback
+    (Kalshi URLs sometimes point to an event, not a single market)."""
+    ticker = url.rstrip("/").split("/")[-1].upper()
+    print(f"[KALSHI] Resolving ticker: {ticker}")
+
+    # Try as a single market first
+    r = requests.get(f"{KALSHI_BASE}/markets/{ticker}", headers=_kalshi_headers(private_key, f"/markets/{ticker}"), timeout=10)
+    if r.status_code == 200:
+        mkt = r.json().get("market", r.json())
+        return _parse_kalshi_market(mkt, ticker)
+
+    # Fall back to event (URL may point to an event that contains multiple markets)
+    print(f"[KALSHI] Not a market ticker — trying as event ticker...")
+    r2 = requests.get(f"{KALSHI_BASE}/events/{ticker}",
+                      params={"with_nested_markets": "true"},
+                      headers=_kalshi_headers(private_key, f"/events/{ticker}"), timeout=10)
+    r2.raise_for_status()
+    ev   = r2.json().get("event", r2.json())
+    mkts = ev.get("markets", [])
+    if not mkts:
+        raise ValueError(f"Event {ticker} has no nested markets")
+    return [_parse_kalshi_market(m, ticker) for m in mkts]
+
+def _kalshi_headers(private_key, path):
+    full_path = f"/trade-api/v2{path}"
+    ts  = str(int(datetime.datetime.now().timestamp() * 1000))
+    sig = sign(private_key, ts, "GET", full_path)
+    return {"KALSHI-ACCESS-KEY": API_KEY_ID, "KALSHI-ACCESS-SIGNATURE": sig, "KALSHI-ACCESS-TIMESTAMP": ts}
+
+def _parse_kalshi_market(mkt, fallback_ticker):
+    close = mkt.get("expected_expiration_time") or mkt.get("close_time") or ""
+    if close:
+        try:
+            close = datetime.datetime.fromisoformat(close.replace("Z", "+00:00")).strftime("%Y-%m-%d")
+        except Exception:
+            pass
+    return {"ticker": mkt.get("ticker", fallback_ticker), "title": mkt.get("title", ""), "closes": close}
+
+def resolve_poly_url(url):
+    """Extract slug from a polymarket.com URL and fetch token IDs."""
+    slug = url.rstrip("/").split("/")[-1]
+    print(f"[POLY] Resolving slug: {slug}")
+    r = requests.get(f"{POLY_GAMMA}/events", params={"slug": slug}, timeout=15)
+    r.raise_for_status()
+    events = r.json()
+    if not events:
+        raise ValueError(f"No Polymarket event found for slug '{slug}'")
+    ev = events[0]
+    markets = ev.get("markets", [])
+    if not markets:
+        raise ValueError(f"Event '{slug}' has no markets")
+    # Return all markets in the event (there may be multiple outcomes)
+    results = []
+    for mkt in markets:
+        question = mkt.get("question", "")
+        raw      = mkt.get("clobTokenIds")
+        tokens   = json.loads(raw) if isinstance(raw, str) else (raw or [])
+        if len(tokens) >= 2:
+            close = mkt.get("endDate") or ev.get("end_date") or ""
+            if close:
+                try:
+                    close = datetime.datetime.fromisoformat(close.replace("Z", "+00:00")).strftime("%Y-%m-%d")
+                except Exception:
+                    pass
+            results.append({"yes": tokens[0], "no": tokens[1], "question": question, "closes": close})
     return results
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: python search_markets.py <keyword>")
+        print("Usage:")
+        print("  python search_markets.py <keyword>")
+        print("  python search_markets.py <kalshi-url> <polymarket-url>")
         sys.exit(1)
-
-    keyword = " ".join(sys.argv[1:])
 
     if not API_KEY_ID or not PRIVATE_KEY_PATH:
         print("[ERROR] KALSHI_API_KEY_ID and KALSHI_PRIVATE_KEY_PATH must be set in .env")
@@ -161,6 +265,64 @@ def main():
 
     private_key = load_key(PRIVATE_KEY_PATH)
 
+    # URL mode: resolve both URLs directly and print the snippet
+    args = sys.argv[1:]
+    kalshi_url = next((a for a in args if "kalshi.com" in a), None)
+    poly_url   = next((a for a in args if "polymarket.com" in a), None)
+
+    if kalshi_url or poly_url:
+        W = 55
+        k_list = resolve_kalshi_url(private_key, kalshi_url) if kalshi_url else None
+        if isinstance(k_list, dict):
+            k_list = [k_list]
+        p_list = resolve_poly_url(poly_url) if poly_url else None
+
+        if k_list:
+            print(f"\n{'─' * W}")
+            print(f"  KALSHI — {len(k_list)} outcome(s)")
+            print(f"{'─' * W}")
+            for i, k in enumerate(k_list):
+                print(f"  [{i}] {k['ticker']}")
+                print(f"      {k['title']}  (closes {k['closes']})\n")
+
+        if p_list:
+            print(f"{'─' * W}")
+            print(f"  POLYMARKET — {len(p_list)} outcome(s)")
+            print(f"{'─' * W}")
+            for i, p in enumerate(p_list):
+                print(f"  [{i}] YES: {p['yes']}")
+                print(f"       NO:  {p['no']}")
+                print(f"      {p['question']}  (closes {p['closes']})\n")
+
+        if k_list and p_list:
+            pairs_path = find_cross_pairs_path()
+            pairs      = load_pairs(pairs_path)
+            saved = 0
+            for p in p_list:
+                # Match each Poly outcome to the best Kalshi outcome.
+                # First try ticker-suffix hints (BRI/CFC/TIE etc), then fall back to title word overlap.
+                q = p['question'].lower()
+                def match_score(k):
+                    suffix = k['ticker'].split("-")[-1].lower()  # e.g. "bri", "cfc", "tie"
+                    suffix_hit = suffix in q or any(suffix in w for w in q.split())
+                    word_hits  = sum(w in k['title'].lower() for w in q.split() if len(w) > 3)
+                    return (suffix_hit * 100) + word_hits
+                matched = sorted(k_list, key=match_score, reverse=True)[0]
+                ticker = matched['ticker']
+                if any(pr.get("kalshi_ticker", "").upper() == ticker.upper() for pr in pairs):
+                    print(f"  [SKIP] {ticker} already in file")
+                else:
+                    entry = {"kalshi_ticker": ticker, "poly_yes_token": p['yes'],
+                             "poly_no_token": p['no'], "label": p['question']}
+                    pairs.append(entry)
+                    print(f"  [SAVED] {ticker}  ←→  {p['question']}")
+                    saved += 1
+            if saved:
+                save_pairs(pairs_path, pairs)
+                print(f"\n  {saved} pair(s) added to {pairs_path}  ({len(pairs)} total)\n")
+        return
+
+    keyword = " ".join(args)
     kalshi_results = fetch_kalshi(private_key, keyword)
     poly_results   = fetch_poly(keyword)
 
