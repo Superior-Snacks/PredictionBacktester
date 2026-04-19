@@ -294,43 +294,6 @@ catch (Exception ex)
     Console.WriteLine($"[POLY SCANNER ERROR] {ex.Message}");
 }
 
-// ── Search Mode ───────────────────────────────────────────────────────────────
-int searchIdx = Array.IndexOf(args, "--search");
-if (searchIdx >= 0)
-{
-    string term = searchIdx + 1 < args.Length ? args[searchIdx + 1] : "";
-    if (string.IsNullOrWhiteSpace(term))
-    {
-        Console.WriteLine("Usage: --search <keyword>");
-        return;
-    }
-
-    Console.WriteLine($"\n{'─',60}");
-    Console.WriteLine($"  KALSHI markets matching \"{term}\"");
-    Console.WriteLine($"{'─',60}");
-    var kMatches = kalshiMarkets
-        .Where(kv => kv.Value.Title.Contains(term, StringComparison.OrdinalIgnoreCase))
-        .OrderBy(kv => kv.Value.CloseDate)
-        .ToList();
-    if (kMatches.Count == 0) Console.WriteLine("  (none)");
-    foreach (var (ticker, (title, close, _)) in kMatches)
-        Console.WriteLine($"  Ticker : {ticker}\n  Title  : {title}\n  Closes : {(close.HasValue ? close.Value.ToString("yyyy-MM-dd") : "unknown")}\n");
-
-    Console.WriteLine($"\n{'─',60}");
-    Console.WriteLine($"  POLYMARKET markets matching \"{term}\"");
-    Console.WriteLine($"{'─',60}");
-    var pMatches = polyMarkets
-        .Where(p => p.Question.Contains(term, StringComparison.OrdinalIgnoreCase))
-        .OrderBy(p => p.EndDate)
-        .ToList();
-    if (pMatches.Count == 0) Console.WriteLine("  (none)");
-    foreach (var (question, yes, no, end, _) in pMatches)
-        Console.WriteLine($"  YES token : {yes}\n  NO  token : {no}\n  Question  : {question}\n  Closes    : {(end.HasValue ? end.Value.ToString("yyyy-MM-dd") : "unknown")}\n");
-
-    Console.WriteLine($"Found {kMatches.Count} Kalshi / {pMatches.Count} Polymarket result(s).");
-    return;
-}
-
 // ── AI Market Pairing Mode ────────────────────────────────────────────────────
 if (isPairingMode)
 {
