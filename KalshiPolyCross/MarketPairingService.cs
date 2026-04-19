@@ -19,11 +19,16 @@ public class MarketPairingService
     private const int TopNCandidates = 5; // For each Kalshi market, send the top N most similar Poly markets to the AI judge.
 
     // Embedding model — change here if the model name changes.
-    private const string EmbeddingModel = "gemini-embedding-2-preview";
+    // Available models (switch here as quota/availability changes):
+    //   gemini-embedding-001        — stable, 768-dim, 1000 RPD free tier
+    //   gemini-embedding-2-preview  — preview, 3072-dim, higher quota when available
+    private const string EmbeddingModel = "gemini-embedding-001";
+    private const int    ApiBatchSize   = 100; // max texts per batchEmbedContents call
 
     // Embeddings are saved to disk after every batch so overnight runs survive
     // daily quota exhaustion and can resume the next day without re-fetching.
-    private const string EmbeddingCachePath = "embeddings_cache.json";
+    private static readonly string EmbeddingCachePath =
+        Path.Combine(AppContext.BaseDirectory, "embeddings_cache.json");
 
     // AI judge models ranked by intelligence. The waterfall removes a model from the
     // front of the list the moment its daily quota (RPD) is exhausted, then retries
@@ -120,7 +125,7 @@ public class MarketPairingService
         var cache = await LoadEmbeddingCacheAsync();
         int cacheHits = kalshiMarkets.Values.Count(v => cache.ContainsKey(v.Title))
                       + polyMarkets.Count(p => cache.ContainsKey(p.Question));
-        Console.WriteLine($"[PAIRING SERVICE] Embedding cache: {cache.Count} entries loaded ({cacheHits} cover current markets).");
+        Console.WriteLine($"[PAIRING SERVICE] Embedding cache: {cache.Count} entries loaded ({cacheHits} cover current markets). Path: {EmbeddingCachePath}");
 
         // 2. Keyword pre-filter — eliminates clearly unrelated markets before any API call.
         //    Reduces ~60k total texts to ~1-3k so 1000 RPD covers a full run in one day.
@@ -138,14 +143,22 @@ public class MarketPairingService
         Console.WriteLine($"[PAIRING SERVICE] Keyword pre-filter: {polyMarkets.Count} → {filteredPolyMarkets.Count} Polymarket, " +
                           $"{kalshiMarkets.Count} → {filteredKalshiTitles.Count} Kalshi (distinct titles).");
 
-        // 3. Batch-fetch embeddings for filtered titles only — two API bursts instead of N.
-        //    Already-cached texts are skipped; newly fetched ones are saved to disk after
-        //    every batch so a daily quota cutoff doesn't lose work already done.
-        var polyQuestions  = filteredPolyMarkets.Select(p => p.Question).ToList();
-        var kalshiTitles   = filteredKalshiTitles;
+        // 3. Batch-fetch embeddings — interleaved so each day's quota is split evenly.
+        //    Processing Poly first would burn all 1000 RPD on Poly alone, leaving Kalshi
+        //    with nothing and making cosine comparison useless. Interleaving ensures both
+        //    sides accumulate in parallel: kalshi[0..99], poly[0..99], kalshi[100..199], ...
+        var polyQuestions = filteredPolyMarkets.Select(p => p.Question).ToList();
+        var kalshiTitles  = filteredKalshiTitles;
 
-        var polyEmbeddings   = await GetEmbeddingsAsync(polyQuestions, "Polymarket Questions", cache);
-        var kalshiEmbeddings = await GetEmbeddingsAsync(kalshiTitles,  "Kalshi Titles",        cache);
+        var uncachedKalshi = kalshiTitles.Where(t => !cache.ContainsKey(t)).ToList();
+        var uncachedPoly   = polyQuestions.Where(t => !cache.ContainsKey(t)).ToList();
+        Console.WriteLine($"[EMBEDDING] Interleaved fetch: {uncachedKalshi.Count} Kalshi + {uncachedPoly.Count} Poly uncached.");
+
+        var interleaved = InterleaveByBatch(uncachedKalshi, uncachedPoly, ApiBatchSize).ToList();
+        await GetEmbeddingsAsync(interleaved, "Kalshi+Poly", cache);
+
+        var polyEmbeddings   = polyQuestions.Where(cache.ContainsKey).ToDictionary(t => t, t => cache[t]);
+        var kalshiEmbeddings = kalshiTitles .Where(cache.ContainsKey).ToDictionary(t => t, t => cache[t]);
 
         int processedCount = 0;
         Console.WriteLine($"[PAIRING SERVICE] Comparing {filteredKalshiTitles.Count} filtered Kalshi titles against {filteredPolyMarkets.Count} filtered Polymarket markets...");
@@ -247,7 +260,6 @@ public class MarketPairingService
         // Free tier: 100 RPM, 1 000 RPD (each API call = 1 request regardless of batch size).
         // Maximise texts per call (100 = API limit) so the 1 000 RPD covers ~100 000 texts/day.
         // 1s delay between calls stays well under 100 RPM.
-        const int ApiBatchSize = 100;
         string url = $"https://generativelanguage.googleapis.com/v1beta/models/{EmbeddingModel}:batchEmbedContents?key={_geminiApiKey.Trim()}";
 
         for (int i = 0; i < uncached.Count; i += ApiBatchSize)
@@ -699,6 +711,21 @@ public class MarketPairingService
     /// <summary>
     /// Calculates the cosine similarity between two vectors.
     /// </summary>
+    /// <summary>
+    /// Interleaves two lists in chunks of <paramref name="batchSize"/>.
+    /// Output: a[0..bs-1], b[0..bs-1], a[bs..2bs-1], b[bs..2bs-1], ...
+    /// Ensures the daily quota is split evenly between both sides.
+    /// </summary>
+    private static IEnumerable<string> InterleaveByBatch(IList<string> a, IList<string> b, int batchSize)
+    {
+        int aIdx = 0, bIdx = 0;
+        while (aIdx < a.Count || bIdx < b.Count)
+        {
+            for (int i = 0; i < batchSize && aIdx < a.Count; i++) yield return a[aIdx++];
+            for (int i = 0; i < batchSize && bIdx < b.Count; i++) yield return b[bIdx++];
+        }
+    }
+
     private static double CosineSimilarity(float[] vecA, float[] vecB)
     {
         if (vecA.Length != vecB.Length)
