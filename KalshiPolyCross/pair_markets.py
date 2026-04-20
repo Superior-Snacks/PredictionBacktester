@@ -57,7 +57,7 @@ DATE_WINDOW_DAYS  = 7
 
 JUDGE_BATCH_SIZE  = 25
 JUDGE_DELAY_S     = 13
-JUDGE_MODELS      = ["gemini-2.5-flash-preview-04-17", "gemini-2.5-flash"]
+JUDGE_MODELS      = ["gemini-3-flash-preview", "gemini-2.5-flash", "gemini-2.0-flash"]
 
 SCRIPT_DIR        = Path(__file__).parent
 CACHE_PATH        = SCRIPT_DIR / "embeddings_cache.json"
@@ -357,27 +357,39 @@ def find_candidates(
 
 
 # -- Phase 3: Gemini judge ------------------------------------------------------
-_JUDGE_HEADER = """\
-You are a market matching engine. Identify EXACT matches between prediction markets.
-For each numbered pair apply these 4 checks IN ORDER. REJECT the pair the moment any check fails.
-If you are unsure about any check, REJECT.
+_JUDGE_SYSTEM = """\
+You are a Lead Quantitative Risk Analyst for a high-frequency trading firm.
+Your job is to evaluate if two prediction market rulebooks describe the EXACT SAME underlying mathematical and temporal event for arbitrage purposes.
 
-STEP 1 - EXPIRY DATE: Do both markets close within 7 days of each other? If NO - REJECT.
-STEP 2 - SUBJECT: Are both markets about the exact same team, player, or named event? If NO - REJECT.
-STEP 3 - OUTCOME: Do both markets resolve YES/NO on the exact same question? If NO - REJECT.
-STEP 4 - EDGE CASES: Check for any difference in these resolution conditions. If any difference exists - REJECT.
-  - Overtime: does one market count overtime and the other not?
-  - Ties: does one market refund on a tie and the other not?
-  - Cancellation: do the markets handle postponements or cancellations differently?
+You must be strict, but you must also understand practical equivalence (e.g., "democrats.org" and "Official Democratic Sources" are identical).
 
-A pair is a MATCH only if it passes ALL 4 steps.
-Reply ONLY with a JSON array of 0-based indices of MATCHING pairs. Examples: [0,2,5] or []
-Do not write anything else.
+### EVALUATION RUBRIC:
+1. VALID: The core event, the final deadline, and the resolution conditions are functionally identical.
+2. INVALID (LETHAL TRAPS):
+   - Formula Mismatch: Platform A requires an absolute number (> 1.28C), Platform B requires a rank (#1 hottest).
+   - Overtime/Tie Mismatch: Platform A includes extra time, Platform B strictly ends at regulation.
+3. CONDITIONAL: The core event is the same, but there is a temporal risk that requires gating.
+   - Deadline Mismatch: Platform A closes in July, Platform B closes in December. (This is safe ONLY IF the event resolves before July).
+   - Cancellation/Snap Election: Different rules for postponed or early events.
+
+### RESPONSE FORMAT:
+Respond ONLY with a valid JSON array, one object per pair, in index order. No markdown, no backticks.
+Each object must use this exact schema:
+{
+  "index": <int>,
+  "status": "VALID" | "INVALID" | "CONDITIONAL",
+  "trap_type": "NONE" | "FORMULA_MISMATCH" | "OVERTIME_MISMATCH" | "DEADLINE_MISMATCH" | "CANCELLATION_MISMATCH" | "SNAP_ELECTION",
+  "safe_hours_before_event": <int, use 2 for cancellations, 0 if not applicable>,
+  "earliest_cutoff_date": "<YYYY-MM-DD if DEADLINE_MISMATCH, otherwise NONE>",
+  "explanation": "<one ruthless sentence>"
+}
+
+### MARKETS TO EVALUATE:
 """
 
 
-def _judge_batch(batch: list, gemini_key: str, models: list) -> list:
-    lines = [_JUDGE_HEADER]
+def _build_prompt(batch: list) -> str:
+    lines = [_JUDGE_SYSTEM]
     for i, c in enumerate(batch):
         kc = c["kalshi_close"].isoformat() if c["kalshi_close"] else "Unknown"
         pc = c["poly_close"].isoformat()   if c["poly_close"]   else "Unknown"
@@ -391,11 +403,63 @@ def _judge_batch(batch: list, gemini_key: str, models: list) -> list:
             f"        | Desc:  {c['poly_desc']}",
             "",
         ]
+    return "\n".join(lines)
+
+
+def _parse_judge_response(text: str, batch_size: int) -> list:
+    """Parse the judge JSON array response. Returns list of verdict dicts."""
+    # Strip markdown fences
+    if text.startswith("```"):
+        nl = text.find("\n")
+        text = text[nl + 1:] if nl != -1 else text[3:]
+        if text.endswith("```"):
+            text = text[:-3]
+        text = text.strip()
+    # Ensure it starts with [
+    if not text.startswith("["):
+        m = re.search(r"\[", text)
+        text = text[m.start():] if m else "[]"
+    try:
+        verdicts = json.loads(text)
+    except json.JSONDecodeError:
+        # Truncated — parse whatever complete objects we can
+        verdicts = []
+        for obj_text in re.findall(r'\{[^{}]+\}', text, re.DOTALL):
+            try:
+                verdicts.append(json.loads(obj_text))
+            except json.JSONDecodeError:
+                pass
+        if verdicts:
+            print(f"[JUDGE] Partial response - salvaged {len(verdicts)} verdict(s).")
+    # Validate and normalise
+    result = []
+    for v in verdicts:
+        if not isinstance(v, dict):
+            continue
+        idx = v.get("index")
+        status = str(v.get("status", "INVALID")).upper()
+        if not isinstance(idx, int) or not (0 <= idx < batch_size):
+            continue
+        if status not in ("VALID", "INVALID", "CONDITIONAL"):
+            status = "INVALID"
+        result.append({
+            "index":                  idx,
+            "status":                 status,
+            "trap_type":              v.get("trap_type", "NONE"),
+            "safe_hours_before_event": v.get("safe_hours_before_event", 0),
+            "earliest_cutoff_date":   v.get("earliest_cutoff_date", "NONE"),
+            "explanation":            v.get("explanation", ""),
+        })
+    return result
+
+
+def _judge_batch(batch: list, gemini_key: str, models: list) -> list:
+    """Returns list of verdict dicts (one per evaluated pair, INVALID omitted)."""
     payload = {
-        "contents": [{"parts": [{"text": "\n".join(lines)}]}],
+        "contents": [{"parts": [{"text": _build_prompt(batch)}]}],
         "generationConfig": {
             "temperature": 0.0,
-            "maxOutputTokens": 1024,
+            "maxOutputTokens": 2048,
             "responseMimeType": "application/json",
         },
     }
@@ -415,6 +479,10 @@ def _judge_batch(batch: list, gemini_key: str, models: list) -> list:
                     print(f"\n[JUDGE] {model} per-minute quota hit - waiting 65s...")
                     time.sleep(65)
                     continue
+                if r.status_code == 503:
+                    print(f"\n[JUDGE] {model} overloaded (503) - waiting 15s...")
+                    time.sleep(15)
+                    continue
                 if r.status_code == 404:
                     print(f"\n[JUDGE] {model} not found - dropping.")
                     models.pop(0)
@@ -427,20 +495,14 @@ def _judge_batch(batch: list, gemini_key: str, models: list) -> list:
                        .get("parts", [{}])[0]
                        .get("text", "[]")
                        .strip())
-            # Strip markdown code fences
-            if text.startswith("```"):
-                nl = text.find("\n")
-                text = text[nl + 1:] if nl != -1 else text[3:]
-                if text.endswith("```"):
-                    text = text[:-3]
-                text = text.strip()
-            # Extract first [...] if wrapped in prose
-            if not text.startswith("["):
-                m = re.search(r"\[[\d,\s]*\]", text)
-                text = m.group(0) if m else "[]"
-            print(f"\n[JUDGE] {model} -> {text}")
-            indices = json.loads(text)
-            return [i for i in indices if isinstance(i, int) and 0 <= i < len(batch)]
+            verdicts = _parse_judge_response(text, len(batch))
+            non_invalid = [v for v in verdicts if v["status"] != "INVALID"]
+            for v in non_invalid:
+                c = batch[v["index"]]
+                tag = f"[{v['status']}]" + (f" trap={v['trap_type']}" if v["trap_type"] != "NONE" else "")
+                print(f"\n    {tag} K: \"{c['kalshi_title']}\" <-> P: \"{c['poly_question']}\"")
+                print(f"        {v['explanation']}")
+            return non_invalid
         except Exception as e:
             print(f"\n[JUDGE] {model} exception: {e}")
             return []
@@ -450,19 +512,28 @@ def _judge_batch(batch: list, gemini_key: str, models: list) -> list:
 
 
 def run_judge(candidates: list, gemini_key: str, output_path: Path) -> None:
+    potential_path = output_path.parent / f"potential_{output_path.name}"
     models = list(JUDGE_MODELS)
-    total = (len(candidates) + JUDGE_BATCH_SIZE - 1) // JUDGE_BATCH_SIZE
+    total  = (len(candidates) + JUDGE_BATCH_SIZE - 1) // JUDGE_BATCH_SIZE
     print(f"[JUDGE] {len(candidates)} candidates -> {total} batch(es) of up to {JUDGE_BATCH_SIZE}")
+    print(f"[JUDGE] VALID   -> {output_path}")
+    print(f"[JUDGE] CONDITIONAL -> {potential_path}")
+
     for bi, i in enumerate(range(0, len(candidates), JUDGE_BATCH_SIZE)):
-        batch = candidates[i:i + JUDGE_BATCH_SIZE]
+        batch   = candidates[i:i + JUDGE_BATCH_SIZE]
         print(f"  [Batch {bi+1}/{total}] Evaluating {len(batch)} pairs...", end="", flush=True)
-        indices = _judge_batch(batch, gemini_key, models)
-        matched = [batch[idx] for idx in indices]
-        for m in matched:
-            print(f"\n    MATCH: K: \"{m['kalshi_title']}\" <-> P: \"{m['poly_question']}\"")
-        print(f"  -> {len(matched)} matched, {len(batch)-len(matched)} rejected.")
-        if matched:
-            _save_pairs(matched, output_path)
+        verdicts = _judge_batch(batch, gemini_key, models)
+
+        valid       = [batch[v["index"]] for v in verdicts if v["status"] == "VALID"]
+        conditional = [(batch[v["index"]], v) for v in verdicts if v["status"] == "CONDITIONAL"]
+        n_invalid   = len(batch) - len(verdicts)  # not returned = INVALID or unevaluated
+        print(f"  -> {len(valid)} valid, {len(conditional)} conditional, {n_invalid} invalid/skipped.")
+
+        if valid:
+            _save_pairs(valid, output_path)
+        if conditional:
+            _save_potential_pairs(conditional, potential_path)
+
         if not models:
             print("[JUDGE] All models exhausted - stopping early.")
             break
@@ -515,12 +586,56 @@ def _save_pairs(matched: list, output_path: Path) -> None:
     print(f"[SAVE] {added} new pair(s) saved to {output_path}.")
 
 
+def _save_potential_pairs(conditional: list, output_path: Path) -> None:
+    """Save CONDITIONAL pairs (with verdict metadata) to potential_cross_pairs.json."""
+    existing = []
+    existing_keys: set = set()
+    if output_path.exists():
+        try:
+            existing = json.loads(output_path.read_text(encoding="utf-8-sig"))
+            existing_keys = {
+                f"{e['kalshi_ticker']}|{e['poly_yes_token']}".lower()
+                for e in existing
+            }
+        except Exception as e:
+            print(f"[SAVE] Warning reading potential pairs: {e}")
+
+    added = 0
+    for m, verdict in conditional:
+        key = f"{m['kalshi_ticker']}|{m['poly_yes']}".lower()
+        if key in existing_keys:
+            continue
+        existing_keys.add(key)
+        existing.append({
+            "kalshi_ticker":           m["kalshi_ticker"],
+            "poly_yes_token":          m["poly_yes"],
+            "poly_no_token":           m["poly_no"],
+            "label":                   m["kalshi_title"],
+            "event_id":                _event_root(m["kalshi_ticker"]),
+            "trap_type":               verdict["trap_type"],
+            "safe_hours_before_event": verdict["safe_hours_before_event"],
+            "earliest_cutoff_date":    verdict["earliest_cutoff_date"],
+            "explanation":             verdict["explanation"],
+        })
+        added += 1
+
+    if added == 0:
+        return
+
+    tmp = output_path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+    tmp.replace(output_path)
+    print(f"[SAVE] {added} conditional pair(s) saved to {output_path}.")
+
+
 # -- Main -----------------------------------------------------------------------
 def main() -> None:
     ap = argparse.ArgumentParser(description="Pair Kalshi <-> Polymarket markets.")
     ap.add_argument("--output",   default=str(DEFAULT_OUTPUT))
-    ap.add_argument("--no-cache", action="store_true", help="Ignore embedding cache")
-    ap.add_argument("--dry-run",  action="store_true", help="Print candidates, skip judge")
+    ap.add_argument("--no-cache",    action="store_true", help="Ignore embedding cache")
+    ap.add_argument("--dry-run",     action="store_true", help="Print candidates, skip judge")
+    ap.add_argument("--show-prompt", type=int, default=0, metavar="N",
+                    help="Print the judge prompt for the first N batches and exit")
     args = ap.parse_args()
 
     output_path = Path(args.output)
@@ -560,6 +675,15 @@ def main() -> None:
 
     if not candidates:
         print("[INFO] No candidates found.")
+        return
+
+    if args.show_prompt:
+        for bi in range(min(args.show_prompt, (len(candidates) + JUDGE_BATCH_SIZE - 1) // JUDGE_BATCH_SIZE)):
+            batch = candidates[bi * JUDGE_BATCH_SIZE:(bi + 1) * JUDGE_BATCH_SIZE]
+            print(f"\n{'='*60}")
+            print(f"BATCH {bi+1} (score range {batch[-1]['score']:.3f}-{batch[0]['score']:.3f})")
+            print('='*60)
+            print(_build_prompt(batch))
         return
 
     run_judge(candidates, gemini_key, output_path)
