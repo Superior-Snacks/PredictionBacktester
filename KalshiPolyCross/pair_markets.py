@@ -453,13 +453,13 @@ def _parse_judge_response(text: str, batch_size: int) -> list:
     return result
 
 
-def _judge_batch(batch: list, gemini_key: str, models: list) -> list:
+def _judge_batch(batch: list, gemini_key: str, models: list, verbose: bool = False) -> list:
     """Returns list of verdict dicts (one per evaluated pair, INVALID omitted)."""
     payload = {
         "contents": [{"parts": [{"text": _build_prompt(batch)}]}],
         "generationConfig": {
             "temperature": 0.0,
-            "maxOutputTokens": 2048,
+            "maxOutputTokens": 8192,
             "responseMimeType": "application/json",
         },
     }
@@ -495,7 +495,15 @@ def _judge_batch(batch: list, gemini_key: str, models: list) -> list:
                        .get("parts", [{}])[0]
                        .get("text", "[]")
                        .strip())
+            finish = (data.get("candidates", [{}])[0].get("finishReason", ""))
+            if verbose:
+                print(f"\n[JUDGE RAW] model={model} finish={finish}\n{text}\n")
             verdicts = _parse_judge_response(text, len(batch))
+            counts = {"VALID": 0, "CONDITIONAL": 0, "INVALID": 0}
+            for v in verdicts:
+                counts[v["status"]] = counts.get(v["status"], 0) + 1
+            counts["INVALID"] += len(batch) - len(verdicts)
+            print(f" [V:{counts['VALID']} C:{counts['CONDITIONAL']} X:{counts['INVALID']}]", end="", flush=True)
             non_invalid = [v for v in verdicts if v["status"] != "INVALID"]
             for v in non_invalid:
                 c = batch[v["index"]]
@@ -511,23 +519,22 @@ def _judge_batch(batch: list, gemini_key: str, models: list) -> list:
     return []
 
 
-def run_judge(candidates: list, gemini_key: str, output_path: Path) -> None:
+def run_judge(candidates: list, gemini_key: str, output_path: Path, verbose: bool = False) -> None:
     potential_path = output_path.parent / f"potential_{output_path.name}"
     models = list(JUDGE_MODELS)
     total  = (len(candidates) + JUDGE_BATCH_SIZE - 1) // JUDGE_BATCH_SIZE
     print(f"[JUDGE] {len(candidates)} candidates -> {total} batch(es) of up to {JUDGE_BATCH_SIZE}")
-    print(f"[JUDGE] VALID   -> {output_path}")
+    print(f"[JUDGE] VALID       -> {output_path}")
     print(f"[JUDGE] CONDITIONAL -> {potential_path}")
 
     for bi, i in enumerate(range(0, len(candidates), JUDGE_BATCH_SIZE)):
         batch   = candidates[i:i + JUDGE_BATCH_SIZE]
         print(f"  [Batch {bi+1}/{total}] Evaluating {len(batch)} pairs...", end="", flush=True)
-        verdicts = _judge_batch(batch, gemini_key, models)
+        verdicts = _judge_batch(batch, gemini_key, models, verbose=verbose)
 
         valid       = [batch[v["index"]] for v in verdicts if v["status"] == "VALID"]
         conditional = [(batch[v["index"]], v) for v in verdicts if v["status"] == "CONDITIONAL"]
-        n_invalid   = len(batch) - len(verdicts)  # not returned = INVALID or unevaluated
-        print(f"  -> {len(valid)} valid, {len(conditional)} conditional, {n_invalid} invalid/skipped.")
+        print(f"  -> {len(valid)} valid, {len(conditional)} conditional.")
 
         if valid:
             _save_pairs(valid, output_path)
@@ -636,6 +643,8 @@ def main() -> None:
     ap.add_argument("--dry-run",     action="store_true", help="Print candidates, skip judge")
     ap.add_argument("--show-prompt", type=int, default=0, metavar="N",
                     help="Print the judge prompt for the first N batches and exit")
+    ap.add_argument("--verbose-judge", action="store_true",
+                    help="Print raw judge response for each batch")
     args = ap.parse_args()
 
     output_path = Path(args.output)
@@ -686,7 +695,7 @@ def main() -> None:
             print(_build_prompt(batch))
         return
 
-    run_judge(candidates, gemini_key, output_path)
+    run_judge(candidates, gemini_key, output_path, verbose=args.verbose_judge)
     print("\n[DONE] Pairing complete.")
 
 
