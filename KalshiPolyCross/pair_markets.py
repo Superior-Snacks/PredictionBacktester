@@ -292,42 +292,59 @@ def find_candidates(
     if not poly_vecs:
         print("[EMBED] No Polymarket embeddings - no candidates.")
         return []
-    poly_mat = np.array(poly_vecs, dtype=np.float32)
+    poly_mat = np.array(poly_vecs, dtype=np.float32)  # (N_poly, dim)
 
-    candidates = []
+    # Build Kalshi matrix — one row per ticker that has an embedding
+    k_tickers, k_vecs = [], []
     for ticker, info in kalshi_markets.items():
         if ticker in already_paired:
             continue
         vec = cache.get(info["title"])
-        if vec is None:
-            continue
-        kvec   = np.array(vec, dtype=np.float32)
-        scores = poly_mat @ kvec  # cosine similarities, shape (N_poly,)
-        for idx, score in enumerate(scores):
-            if score < SIMILARITY_THRESH:
-                continue
-            p = poly_valid[idx]
-            # 7-day date window
-            kd, pd = info["close_date"], p["end_date"]
-            if kd and pd:
-                # normalize to same tz-awareness before subtracting
-                if kd.tzinfo is None: kd = kd.replace(tzinfo=timezone.utc)
-                if pd.tzinfo is None: pd = pd.replace(tzinfo=timezone.utc)
-                if abs((kd - pd).total_seconds()) / 86400 > DATE_WINDOW_DAYS:
-                    continue
-            candidates.append({
-                "kalshi_ticker": ticker,
-                "kalshi_title":  info["title"],
-                "kalshi_close":  info["close_date"],
-                "kalshi_rules":  info["rules"],
-                "kalshi_event":  info["event_ticker"],
-                "poly_question": p["question"],
-                "poly_yes":      p["yes_token"],
-                "poly_no":       p["no_token"],
-                "poly_close":    p["end_date"],
-                "poly_desc":     p["description"],
-                "score":         float(score),
-            })
+        if vec is not None:
+            k_tickers.append((ticker, info))
+            k_vecs.append(vec)
+
+    if not k_tickers:
+        return []
+
+    k_mat      = np.array(k_vecs, dtype=np.float32)  # (N_kalshi, dim)
+    CHUNK      = 500
+    total_k    = len(k_tickers)
+    candidates = []
+    print(f"[EMBED] Scoring {total_k} Kalshi tickers against {len(poly_valid)} Poly markets...")
+
+    for chunk_start in range(0, total_k, CHUNK):
+        chunk_end   = min(chunk_start + CHUNK, total_k)
+        chunk_k     = k_mat[chunk_start:chunk_end]          # (CHUNK, dim)
+        scores_mat  = poly_mat @ chunk_k.T                  # (N_poly, CHUNK)
+
+        for ki in range(chunk_end - chunk_start):
+            ticker, info = k_tickers[chunk_start + ki]
+            col  = scores_mat[:, ki]
+            hits = np.where(col >= SIMILARITY_THRESH)[0]
+            for idx in hits:
+                p  = poly_valid[idx]
+                kd, pd = info["close_date"], p["end_date"]
+                if kd and pd:
+                    if kd.tzinfo is None: kd = kd.replace(tzinfo=timezone.utc)
+                    if pd.tzinfo is None: pd = pd.replace(tzinfo=timezone.utc)
+                    if abs((kd - pd).total_seconds()) / 86400 > DATE_WINDOW_DAYS:
+                        continue
+                candidates.append({
+                    "kalshi_ticker": ticker,
+                    "kalshi_title":  info["title"],
+                    "kalshi_close":  info["close_date"],
+                    "kalshi_rules":  info["rules"],
+                    "kalshi_event":  info["event_ticker"],
+                    "poly_question": p["question"],
+                    "poly_yes":      p["yes_token"],
+                    "poly_no":       p["no_token"],
+                    "poly_close":    p["end_date"],
+                    "poly_desc":     p["description"],
+                    "score":         float(col[idx]),
+                })
+
+        print(f"[EMBED] {chunk_end}/{total_k} tickers scored, {len(candidates)} raw hits so far...", flush=True)
 
     # Keep top N per Kalshi ticker, sorted by score descending
     candidates.sort(key=lambda c: (c["kalshi_ticker"], -c["score"]))
