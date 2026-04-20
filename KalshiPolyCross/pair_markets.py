@@ -48,8 +48,8 @@ from sentence_transformers import SentenceTransformer
 # -- Constants -----------------------------------------------------------------
 KALSHI_BASE_URL   = "https://api.elections.kalshi.com/trade-api/v2"
 POLY_GAMMA_URL    = "https://gamma-api.polymarket.com"
-KALSHI_CATEGORY   = "Sports"
-POLY_CATEGORY     = "Sports"
+KALSHI_CATEGORY   = ""
+POLY_CATEGORY     = ""
 
 SIMILARITY_THRESH = 0.75
 TOP_N_CANDIDATES  = 5
