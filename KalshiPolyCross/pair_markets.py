@@ -1,0 +1,553 @@
+#!/usr/bin/env python3
+"""
+pair_markets.py — Fetch open Kalshi + Polymarket sports markets, find semantic
+matches using sentence-transformers (local, free), confirm via Gemini judge,
+and save results to cross_pairs.json.
+
+Usage:
+    python pair_markets.py                          # full run
+    python pair_markets.py --output path/to.json    # custom output path
+    python pair_markets.py --no-cache               # ignore embedding cache
+    python pair_markets.py --dry-run                # print candidates, skip judge
+"""
+
+import argparse, base64, json, os, re, sys, time
+
+def _load_dotenv(*dirs):
+    for d in dirs:
+        p = os.path.join(d, ".env")
+        if not os.path.isfile(p):
+            continue
+        with open(p) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if line.startswith("export "):
+                    line = line[7:].strip()
+                if "=" not in line:
+                    continue
+                k, _, v = line.partition("=")
+                k = k.strip(); v = v.strip().strip('"').strip("'")
+                if k and k not in os.environ:
+                    os.environ[k] = v
+        return
+
+_sd = os.path.dirname(os.path.abspath(__file__))
+_load_dotenv(_sd, os.path.dirname(_sd), os.path.expanduser("~"), os.getcwd())
+from datetime import datetime, timezone, timedelta
+from itertools import groupby
+from pathlib import Path
+
+import numpy as np
+import requests
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding
+from sentence_transformers import SentenceTransformer
+
+# ── Constants ─────────────────────────────────────────────────────────────────
+KALSHI_BASE_URL   = "https://api.elections.kalshi.com/trade-api/v2"
+POLY_GAMMA_URL    = "https://gamma-api.polymarket.com"
+KALSHI_CATEGORY   = "Sports"
+POLY_CATEGORY     = "Sports"
+
+SIMILARITY_THRESH = 0.75
+TOP_N_CANDIDATES  = 5
+DATE_WINDOW_DAYS  = 7
+
+JUDGE_BATCH_SIZE  = 25
+JUDGE_DELAY_S     = 13
+JUDGE_MODELS      = ["gemini-2.5-flash-preview-04-17", "gemini-2.5-flash"]
+
+SCRIPT_DIR        = Path(__file__).parent
+CACHE_PATH        = SCRIPT_DIR / "embeddings_cache.json"
+DEFAULT_OUTPUT    = SCRIPT_DIR / "cross_pairs.json"
+
+STOP_WORDS = {
+    "will", "does", "make", "take", "have", "been", "being", "going", "come", "came",
+    "the", "and", "or", "but", "not", "for", "with", "from", "that", "this", "they",
+    "them", "then", "than", "there", "these", "those", "their", "some", "such", "each",
+    "both", "into", "onto", "upon", "also", "even", "only", "just", "very", "more",
+    "most", "much", "many", "over", "under", "next", "last", "first", "same",
+    "game", "games", "match", "matches", "play", "plays", "team", "teams",
+    "season", "series", "score", "title", "round", "week", "home", "away",
+    "point", "points", "total", "final", "time", "half", "year", "place",
+    "winner", "losers", "result", "event", "market", "contract",
+}
+
+# ── Kalshi auth ───────────────────────────────────────────────────────────────
+def _kalshi_headers(method: str, path: str, api_key_id: str, private_key) -> dict:
+    ts_ms = str(int(time.time() * 1000))
+    msg   = (ts_ms + method.upper() + path).encode()
+    sig   = private_key.sign(
+        msg,
+        padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=hashes.SHA256().digest_size),
+        hashes.SHA256(),
+    )
+    return {
+        "KALSHI-ACCESS-KEY":       api_key_id,
+        "KALSHI-ACCESS-TIMESTAMP": ts_ms,
+        "KALSHI-ACCESS-SIGNATURE": base64.b64encode(sig).decode(),
+    }
+
+
+def _kalshi_get(path: str, api_key_id: str, private_key, params=None) -> dict:
+    r = requests.get(
+        KALSHI_BASE_URL + path,
+        headers=_kalshi_headers("GET", path, api_key_id, private_key),
+        params=params,
+        timeout=30,
+    )
+    r.raise_for_status()
+    return r.json()
+
+
+# ── Keyword helpers ────────────────────────────────────────────────────────────
+def _keywords(text: str) -> set:
+    return {w.lower() for w in re.split(r"[^a-zA-Z]+", text)
+            if len(w) >= 4 and w.lower() not in STOP_WORDS}
+
+
+def _has_overlap(text: str, kw_set: set) -> bool:
+    return bool(_keywords(text) & kw_set)
+
+
+# ── Embedding cache ────────────────────────────────────────────────────────────
+def load_cache() -> dict:
+    if not CACHE_PATH.exists():
+        return {}
+    try:
+        return json.loads(CACHE_PATH.read_text(encoding="utf-8"))
+    except Exception as e:
+        print(f"[CACHE] Warning: could not load ({e}). Starting fresh.")
+        return {}
+
+
+def save_cache(cache: dict) -> None:
+    try:
+        tmp = CACHE_PATH.with_suffix(".tmp")
+        tmp.write_text(json.dumps(cache, separators=(",", ":")), encoding="utf-8")
+        tmp.replace(CACHE_PATH)
+        print(f"[CACHE] Saved — {len(cache)} entries.")
+    except Exception as e:
+        print(f"[CACHE] Warning: could not save ({e}).")
+
+
+# ── Phase 1: Fetch markets ─────────────────────────────────────────────────────
+def fetch_kalshi_markets(api_key_id: str, private_key) -> dict:
+    """Returns ticker → {title, close_date, rules, event_ticker}."""
+    print("[KALSHI] Fetching series categories...")
+    series_cats = {}
+    cursor = ""
+    while True:
+        path = "/series?limit=1000" + (f"&cursor={cursor}" if cursor else "")
+        data = _kalshi_get(path, api_key_id, private_key)
+        for s in data.get("series", []):
+            if s.get("ticker") and s.get("category"):
+                series_cats[s["ticker"]] = s["category"]
+        cursor = data.get("cursor", "")
+        if not cursor:
+            break
+        time.sleep(0.15)
+    print(f"[KALSHI] {len(series_cats)} series categories loaded.")
+
+    print("[KALSHI] Fetching open events...")
+    markets = {}
+    cursor = ""
+    total_events = 0
+    while True:
+        path = "/events?status=open&with_nested_markets=true&limit=200" + (f"&cursor={cursor}" if cursor else "")
+        data = _kalshi_get(path, api_key_id, private_key)
+        for ev in data.get("events", []):
+            total_events += 1
+            cat = series_cats.get(ev.get("series_ticker", ""), "")
+            if KALSHI_CATEGORY and cat.lower() != KALSHI_CATEGORY.lower():
+                continue
+            event_ticker = ev.get("event_ticker", "")
+            for m in ev.get("markets", []):
+                ticker = m.get("ticker", "")
+                if not ticker:
+                    continue
+                close_date = None
+                for field in ("expected_expiration_time", "close_time"):
+                    val = m.get(field)
+                    if val:
+                        try:
+                            close_date = datetime.fromisoformat(val.replace("Z", "+00:00"))
+                            break
+                        except Exception:
+                            pass
+                markets[ticker] = {
+                    "title":        m.get("title", ""),
+                    "close_date":   close_date,
+                    "rules":        m.get("rules_primary", ""),
+                    "event_ticker": event_ticker,
+                }
+        cursor = data.get("cursor", "")
+        if not cursor:
+            break
+        time.sleep(0.15)
+    print(f"[KALSHI] {total_events} events -> {len(markets)} markets in '{KALSHI_CATEGORY}'.")
+    return markets
+
+
+def fetch_poly_markets() -> list:
+    """Returns list of {question, yes_token, no_token, end_date, description}."""
+    print("[POLY] Fetching active markets...")
+    results = []
+    offset, page_size = 0, 500
+    while True:
+        r = requests.get(
+            f"{POLY_GAMMA_URL}/events?active=true&closed=false&limit={page_size}&offset={offset}",
+            timeout=30,
+        )
+        r.raise_for_status()
+        arr = r.json()
+        if not isinstance(arr, list):
+            break
+        for ev in arr:
+            include = not POLY_CATEGORY
+            if not include:
+                for tag in ev.get("tags", []):
+                    if (POLY_CATEGORY.lower() in tag.get("slug",  "").lower() or
+                        POLY_CATEGORY.lower() in tag.get("label", "").lower()):
+                        include = True
+                        break
+                if not include and POLY_CATEGORY.lower() in ev.get("category", "").lower():
+                    include = True
+            if not include:
+                continue
+            end_date = None
+            if ev.get("end_date"):
+                try:
+                    end_date = datetime.fromisoformat(ev["end_date"].replace("Z", "+00:00"))
+                except Exception:
+                    pass
+            description = ev.get("description", "") or ""
+            for mkt in ev.get("markets", []):
+                question = mkt.get("question", "")
+                raw = mkt.get("clobTokenIds", [])
+                if isinstance(raw, str):
+                    try: raw = json.loads(raw)
+                    except Exception: raw = []
+                tokens = [t for t in raw if t]
+                if len(tokens) >= 2 and question:
+                    results.append({
+                        "question":    question,
+                        "yes_token":   tokens[0],
+                        "no_token":    tokens[1],
+                        "end_date":    end_date,
+                        "description": description,
+                    })
+        if len(arr) < page_size:
+            break
+        offset += page_size
+        time.sleep(0.2)
+    print(f"[POLY] {len(results)} markets fetched ('{POLY_CATEGORY}').")
+    return results
+
+
+# ── Phase 2: Embeddings ────────────────────────────────────────────────────────
+def find_candidates(
+    kalshi_markets: dict,
+    poly_markets: list,
+    already_paired: set,
+    use_cache: bool,
+) -> list:
+    cache = load_cache() if use_cache else {}
+
+    # Keyword pre-filter
+    all_k_kw = set()
+    for m in kalshi_markets.values():
+        all_k_kw |= _keywords(m["title"])
+    filtered_poly = [p for p in poly_markets if _has_overlap(p["question"], all_k_kw)]
+    poly_kw = set()
+    for p in filtered_poly:
+        poly_kw |= _keywords(p["question"])
+    k_titles_unique = list({m["title"] for m in kalshi_markets.values()
+                            if _has_overlap(m["title"], poly_kw)})
+    print(f"[EMBED] Pre-filter: Poly {len(poly_markets)}->{len(filtered_poly)}, "
+          f"Kalshi {len(kalshi_markets)}->{len(k_titles_unique)} unique titles.")
+
+    poly_questions = [p["question"] for p in filtered_poly]
+    to_encode = [t for t in dict.fromkeys(k_titles_unique + poly_questions) if t not in cache]
+
+    if to_encode:
+        print(f"[EMBED] Loading model all-MiniLM-L6-v2 ...")
+        model = SentenceTransformer("all-MiniLM-L6-v2")
+        print(f"[EMBED] Encoding {len(to_encode)} texts...")
+        vecs = model.encode(to_encode, batch_size=256, show_progress_bar=True, normalize_embeddings=True)
+        for text, vec in zip(to_encode, vecs):
+            cache[text] = vec.tolist()
+        save_cache(cache)
+    else:
+        print(f"[EMBED] All texts served from cache ({len(cache)} entries).")
+
+    # Build poly matrix (L2-normalized → dot product = cosine similarity)
+    poly_vecs, poly_valid = [], []
+    for p in filtered_poly:
+        if p["question"] in cache:
+            poly_vecs.append(cache[p["question"]])
+            poly_valid.append(p)
+    if not poly_vecs:
+        print("[EMBED] No Polymarket embeddings — no candidates.")
+        return []
+    poly_mat = np.array(poly_vecs, dtype=np.float32)
+
+    candidates = []
+    for ticker, info in kalshi_markets.items():
+        if ticker in already_paired:
+            continue
+        vec = cache.get(info["title"])
+        if vec is None:
+            continue
+        kvec   = np.array(vec, dtype=np.float32)
+        scores = poly_mat @ kvec  # cosine similarities, shape (N_poly,)
+        for idx, score in enumerate(scores):
+            if score < SIMILARITY_THRESH:
+                continue
+            p = poly_valid[idx]
+            # 7-day date window
+            kd, pd = info["close_date"], p["end_date"]
+            if kd and pd:
+                # normalize to same tz-awareness before subtracting
+                if kd.tzinfo is None: kd = kd.replace(tzinfo=timezone.utc)
+                if pd.tzinfo is None: pd = pd.replace(tzinfo=timezone.utc)
+                if abs((kd - pd).total_seconds()) / 86400 > DATE_WINDOW_DAYS:
+                    continue
+            candidates.append({
+                "kalshi_ticker": ticker,
+                "kalshi_title":  info["title"],
+                "kalshi_close":  info["close_date"],
+                "kalshi_rules":  info["rules"],
+                "kalshi_event":  info["event_ticker"],
+                "poly_question": p["question"],
+                "poly_yes":      p["yes_token"],
+                "poly_no":       p["no_token"],
+                "poly_close":    p["end_date"],
+                "poly_desc":     p["description"],
+                "score":         float(score),
+            })
+
+    # Keep top N per Kalshi ticker, sorted by score descending
+    candidates.sort(key=lambda c: (c["kalshi_ticker"], -c["score"]))
+    top = []
+    for _ticker, group in groupby(candidates, key=lambda c: c["kalshi_ticker"]):
+        top.extend(list(group)[:TOP_N_CANDIDATES])
+    top.sort(key=lambda c: -c["score"])
+    print(f"[EMBED] {len(top)} candidate pairs (threshold={SIMILARITY_THRESH}, top-{TOP_N_CANDIDATES}/ticker).")
+    return top
+
+
+# ── Phase 3: Gemini judge ──────────────────────────────────────────────────────
+_JUDGE_HEADER = """\
+You are a market matching engine. Identify EXACT matches between prediction markets.
+For each numbered pair apply these 4 checks IN ORDER. REJECT the pair the moment any check fails.
+If you are unsure about any check, REJECT.
+
+STEP 1 — EXPIRY DATE: Do both markets close within 7 days of each other? If NO → REJECT.
+STEP 2 — SUBJECT: Are both markets about the exact same team, player, or named event? If NO → REJECT.
+STEP 3 — OUTCOME: Do both markets resolve YES/NO on the exact same question? If NO → REJECT.
+STEP 4 — EDGE CASES: Check for any difference in these resolution conditions. If any difference exists → REJECT.
+  - Overtime: does one market count overtime and the other not?
+  - Ties: does one market refund on a tie and the other not?
+  - Cancellation: do the markets handle postponements or cancellations differently?
+
+A pair is a MATCH only if it passes ALL 4 steps.
+Reply ONLY with a JSON array of 0-based indices of MATCHING pairs. Examples: [0,2,5] or []
+Do not write anything else.
+"""
+
+
+def _judge_batch(batch: list, gemini_key: str, models: list) -> list:
+    lines = [_JUDGE_HEADER]
+    for i, c in enumerate(batch):
+        kc = c["kalshi_close"].isoformat() if c["kalshi_close"] else "Unknown"
+        pc = c["poly_close"].isoformat()   if c["poly_close"]   else "Unknown"
+        lines += [
+            f"[{i}]",
+            f"KALSHI  | Title: {c['kalshi_title']}",
+            f"        | Close: {kc}",
+            f"        | Rules: {c['kalshi_rules']}",
+            f"POLY    | Title: {c['poly_question']}",
+            f"        | Close: {pc}",
+            f"        | Desc:  {c['poly_desc']}",
+            "",
+        ]
+    payload = {
+        "contents": [{"parts": [{"text": "\n".join(lines)}]}],
+        "generationConfig": {
+            "temperature": 0.0,
+            "maxOutputTokens": 1024,
+            "responseMimeType": "application/json",
+        },
+    }
+
+    while models:
+        model = models[0]
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={gemini_key}"
+        try:
+            r = requests.post(url, json=payload, timeout=60)
+            if not r.ok:
+                body = r.text
+                if r.status_code == 429:
+                    if "day" in body.lower() or "perday" in body.lower():
+                        print(f"\n[JUDGE] {model} daily quota exhausted — falling back.")
+                        models.pop(0)
+                        continue
+                    print(f"\n[JUDGE] {model} per-minute quota hit — waiting 65s...")
+                    time.sleep(65)
+                    continue
+                if r.status_code == 404:
+                    print(f"\n[JUDGE] {model} not found — dropping.")
+                    models.pop(0)
+                    continue
+                print(f"\n[JUDGE] {model} error {r.status_code}: {body[:300]}")
+                return []
+            data = r.json()
+            text = (data.get("candidates", [{}])[0]
+                       .get("content", {})
+                       .get("parts", [{}])[0]
+                       .get("text", "[]")
+                       .strip())
+            # Strip markdown code fences
+            if text.startswith("```"):
+                nl = text.find("\n")
+                text = text[nl + 1:] if nl != -1 else text[3:]
+                if text.endswith("```"):
+                    text = text[:-3]
+                text = text.strip()
+            # Extract first [...] if wrapped in prose
+            if not text.startswith("["):
+                m = re.search(r"\[[\d,\s]*\]", text)
+                text = m.group(0) if m else "[]"
+            print(f"\n[JUDGE] {model} -> {text}")
+            indices = json.loads(text)
+            return [i for i in indices if isinstance(i, int) and 0 <= i < len(batch)]
+        except Exception as e:
+            print(f"\n[JUDGE] {model} exception: {e}")
+            return []
+
+    print("\n[JUDGE] All models exhausted.")
+    return []
+
+
+def run_judge(candidates: list, gemini_key: str, output_path: Path) -> None:
+    models = list(JUDGE_MODELS)
+    total = (len(candidates) + JUDGE_BATCH_SIZE - 1) // JUDGE_BATCH_SIZE
+    print(f"[JUDGE] {len(candidates)} candidates -> {total} batch(es) of up to {JUDGE_BATCH_SIZE}")
+    for bi, i in enumerate(range(0, len(candidates), JUDGE_BATCH_SIZE)):
+        batch = candidates[i:i + JUDGE_BATCH_SIZE]
+        print(f"  [Batch {bi+1}/{total}] Evaluating {len(batch)} pairs...", end="", flush=True)
+        indices = _judge_batch(batch, gemini_key, models)
+        matched = [batch[idx] for idx in indices]
+        for m in matched:
+            print(f"\n    MATCH: K: \"{m['kalshi_title']}\" ↔ P: \"{m['poly_question']}\"")
+        print(f"  -> {len(matched)} matched, {len(batch)-len(matched)} rejected.")
+        if matched:
+            _save_pairs(matched, output_path)
+        if not models:
+            print("[JUDGE] All models exhausted — stopping early.")
+            break
+        if i + JUDGE_BATCH_SIZE < len(candidates):
+            time.sleep(JUDGE_DELAY_S)
+
+
+# ── Output ─────────────────────────────────────────────────────────────────────
+def _event_root(ticker: str) -> str:
+    """KXFOO-26APR20BAR-YES → KXFOO-26APR20BAR"""
+    return ticker.rsplit("-", 1)[0] if "-" in ticker else ticker
+
+
+def _save_pairs(matched: list, output_path: Path) -> None:
+    existing = []
+    existing_keys: set = set()
+    if output_path.exists():
+        try:
+            existing = json.loads(output_path.read_text(encoding="utf-8-sig"))
+            existing_keys = {
+                f"{e['kalshi_ticker']}|{e['poly_yes_token']}".lower()
+                for e in existing
+            }
+        except Exception as e:
+            print(f"[SAVE] Warning reading existing pairs: {e}")
+
+    added = 0
+    for m in matched:
+        key = f"{m['kalshi_ticker']}|{m['poly_yes']}".lower()
+        if key in existing_keys:
+            print(f"[SAVE] Duplicate skipped: {m['kalshi_ticker']}")
+            continue
+        existing_keys.add(key)
+        existing.append({
+            "kalshi_ticker":  m["kalshi_ticker"],
+            "poly_yes_token": m["poly_yes"],
+            "poly_no_token":  m["poly_no"],
+            "label":          m["kalshi_title"],
+            "event_id":       _event_root(m["kalshi_ticker"]),
+        })
+        added += 1
+
+    if added == 0:
+        print("[SAVE] No new unique pairs.")
+        return
+
+    tmp = output_path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+    tmp.replace(output_path)
+    print(f"[SAVE] {added} new pair(s) saved to {output_path}.")
+
+
+# ── Main ───────────────────────────────────────────────────────────────────────
+def main() -> None:
+    ap = argparse.ArgumentParser(description="Pair Kalshi ↔ Polymarket markets.")
+    ap.add_argument("--output",   default=str(DEFAULT_OUTPUT))
+    ap.add_argument("--no-cache", action="store_true", help="Ignore embedding cache")
+    ap.add_argument("--dry-run",  action="store_true", help="Print candidates, skip judge")
+    args = ap.parse_args()
+
+    output_path = Path(args.output)
+
+    api_key_id = os.environ.get("KALSHI_API_KEY_ID", "")
+    key_path   = os.environ.get("KALSHI_PRIVATE_KEY_PATH", "")
+    gemini_key = os.environ.get("GEMINI_API_KEY", "")
+
+    if not api_key_id or not key_path:
+        sys.exit("[ERROR] Set KALSHI_API_KEY_ID and KALSHI_PRIVATE_KEY_PATH.")
+    if not args.dry_run and not gemini_key:
+        sys.exit("[ERROR] Set GEMINI_API_KEY (needed for judge calls; omit with --dry-run).")
+
+    with open(key_path, "rb") as f:
+        private_key = serialization.load_pem_private_key(f.read(), password=None)
+
+    already_paired: set = set()
+    if output_path.exists():
+        try:
+            for e in json.loads(output_path.read_text(encoding="utf-8-sig")):
+                already_paired.add(e.get("kalshi_ticker", ""))
+            if already_paired:
+                print(f"[INFO] {len(already_paired)} already-paired tickers will be skipped.")
+        except Exception:
+            pass
+
+    kalshi_markets = fetch_kalshi_markets(api_key_id, private_key)
+    poly_markets   = fetch_poly_markets()
+
+    candidates = find_candidates(kalshi_markets, poly_markets, already_paired, not args.no_cache)
+
+    if args.dry_run:
+        print(f"\n[DRY RUN] Top {min(50, len(candidates))} candidates (judge skipped):")
+        for c in candidates[:50]:
+            print(f"  {c['score']:.3f} | K: {c['kalshi_title']} ↔ P: {c['poly_question']}")
+        return
+
+    if not candidates:
+        print("[INFO] No candidates found.")
+        return
+
+    run_judge(candidates, gemini_key, output_path)
+    print("\n[DONE] Pairing complete.")
+
+
+if __name__ == "__main__":
+    main()
