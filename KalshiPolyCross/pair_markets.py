@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-pair_markets.py — Fetch open Kalshi + Polymarket sports markets, find semantic
+pair_markets.py - Fetch open Kalshi + Polymarket sports markets, find semantic
 matches using sentence-transformers (local, free), confirm via Gemini judge,
 and save results to cross_pairs.json.
 
@@ -45,7 +45,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 from sentence_transformers import SentenceTransformer
 
-# ── Constants ─────────────────────────────────────────────────────────────────
+# -- Constants -----------------------------------------------------------------
 KALSHI_BASE_URL   = "https://api.elections.kalshi.com/trade-api/v2"
 POLY_GAMMA_URL    = "https://gamma-api.polymarket.com"
 KALSHI_CATEGORY   = "Sports"
@@ -75,7 +75,7 @@ STOP_WORDS = {
     "winner", "losers", "result", "event", "market", "contract",
 }
 
-# ── Kalshi auth ───────────────────────────────────────────────────────────────
+# -- Kalshi auth ---------------------------------------------------------------
 def _kalshi_headers(method: str, path: str, api_key_id: str, private_key) -> dict:
     ts_ms = str(int(time.time() * 1000))
     msg   = (ts_ms + method.upper() + path).encode()
@@ -102,7 +102,7 @@ def _kalshi_get(path: str, api_key_id: str, private_key, params=None) -> dict:
     return r.json()
 
 
-# ── Keyword helpers ────────────────────────────────────────────────────────────
+# -- Keyword helpers ------------------------------------------------------------
 def _keywords(text: str) -> set:
     return {w.lower() for w in re.split(r"[^a-zA-Z]+", text)
             if len(w) >= 4 and w.lower() not in STOP_WORDS}
@@ -112,7 +112,7 @@ def _has_overlap(text: str, kw_set: set) -> bool:
     return bool(_keywords(text) & kw_set)
 
 
-# ── Embedding cache ────────────────────────────────────────────────────────────
+# -- Embedding cache ------------------------------------------------------------
 def load_cache() -> dict:
     if not CACHE_PATH.exists():
         return {}
@@ -128,14 +128,14 @@ def save_cache(cache: dict) -> None:
         tmp = CACHE_PATH.with_suffix(".tmp")
         tmp.write_text(json.dumps(cache, separators=(",", ":")), encoding="utf-8")
         tmp.replace(CACHE_PATH)
-        print(f"[CACHE] Saved — {len(cache)} entries.")
+        print(f"[CACHE] Saved - {len(cache)} entries.")
     except Exception as e:
         print(f"[CACHE] Warning: could not save ({e}).")
 
 
-# ── Phase 1: Fetch markets ─────────────────────────────────────────────────────
+# -- Phase 1: Fetch markets -----------------------------------------------------
 def fetch_kalshi_markets(api_key_id: str, private_key) -> dict:
-    """Returns ticker → {title, close_date, rules, event_ticker}."""
+    """Returns ticker - {title, close_date, rules, event_ticker}."""
     print("[KALSHI] Fetching series categories...")
     series_cats = {}
     cursor = ""
@@ -247,7 +247,7 @@ def fetch_poly_markets() -> list:
     return results
 
 
-# ── Phase 2: Embeddings ────────────────────────────────────────────────────────
+# -- Phase 2: Embeddings --------------------------------------------------------
 def find_candidates(
     kalshi_markets: dict,
     poly_markets: list,
@@ -283,14 +283,14 @@ def find_candidates(
     else:
         print(f"[EMBED] All texts served from cache ({len(cache)} entries).")
 
-    # Build poly matrix (L2-normalized → dot product = cosine similarity)
+    # Build poly matrix (L2-normalized - dot product = cosine similarity)
     poly_vecs, poly_valid = [], []
     for p in filtered_poly:
         if p["question"] in cache:
             poly_vecs.append(cache[p["question"]])
             poly_valid.append(p)
     if not poly_vecs:
-        print("[EMBED] No Polymarket embeddings — no candidates.")
+        print("[EMBED] No Polymarket embeddings - no candidates.")
         return []
     poly_mat = np.array(poly_vecs, dtype=np.float32)
 
@@ -339,16 +339,16 @@ def find_candidates(
     return top
 
 
-# ── Phase 3: Gemini judge ──────────────────────────────────────────────────────
+# -- Phase 3: Gemini judge ------------------------------------------------------
 _JUDGE_HEADER = """\
 You are a market matching engine. Identify EXACT matches between prediction markets.
 For each numbered pair apply these 4 checks IN ORDER. REJECT the pair the moment any check fails.
 If you are unsure about any check, REJECT.
 
-STEP 1 — EXPIRY DATE: Do both markets close within 7 days of each other? If NO → REJECT.
-STEP 2 — SUBJECT: Are both markets about the exact same team, player, or named event? If NO → REJECT.
-STEP 3 — OUTCOME: Do both markets resolve YES/NO on the exact same question? If NO → REJECT.
-STEP 4 — EDGE CASES: Check for any difference in these resolution conditions. If any difference exists → REJECT.
+STEP 1 - EXPIRY DATE: Do both markets close within 7 days of each other? If NO - REJECT.
+STEP 2 - SUBJECT: Are both markets about the exact same team, player, or named event? If NO - REJECT.
+STEP 3 - OUTCOME: Do both markets resolve YES/NO on the exact same question? If NO - REJECT.
+STEP 4 - EDGE CASES: Check for any difference in these resolution conditions. If any difference exists - REJECT.
   - Overtime: does one market count overtime and the other not?
   - Ties: does one market refund on a tie and the other not?
   - Cancellation: do the markets handle postponements or cancellations differently?
@@ -392,14 +392,14 @@ def _judge_batch(batch: list, gemini_key: str, models: list) -> list:
                 body = r.text
                 if r.status_code == 429:
                     if "day" in body.lower() or "perday" in body.lower():
-                        print(f"\n[JUDGE] {model} daily quota exhausted — falling back.")
+                        print(f"\n[JUDGE] {model} daily quota exhausted - falling back.")
                         models.pop(0)
                         continue
-                    print(f"\n[JUDGE] {model} per-minute quota hit — waiting 65s...")
+                    print(f"\n[JUDGE] {model} per-minute quota hit - waiting 65s...")
                     time.sleep(65)
                     continue
                 if r.status_code == 404:
-                    print(f"\n[JUDGE] {model} not found — dropping.")
+                    print(f"\n[JUDGE] {model} not found - dropping.")
                     models.pop(0)
                     continue
                 print(f"\n[JUDGE] {model} error {r.status_code}: {body[:300]}")
@@ -442,20 +442,20 @@ def run_judge(candidates: list, gemini_key: str, output_path: Path) -> None:
         indices = _judge_batch(batch, gemini_key, models)
         matched = [batch[idx] for idx in indices]
         for m in matched:
-            print(f"\n    MATCH: K: \"{m['kalshi_title']}\" ↔ P: \"{m['poly_question']}\"")
+            print(f"\n    MATCH: K: \"{m['kalshi_title']}\" <-> P: \"{m['poly_question']}\"")
         print(f"  -> {len(matched)} matched, {len(batch)-len(matched)} rejected.")
         if matched:
             _save_pairs(matched, output_path)
         if not models:
-            print("[JUDGE] All models exhausted — stopping early.")
+            print("[JUDGE] All models exhausted - stopping early.")
             break
         if i + JUDGE_BATCH_SIZE < len(candidates):
             time.sleep(JUDGE_DELAY_S)
 
 
-# ── Output ─────────────────────────────────────────────────────────────────────
+# -- Output ---------------------------------------------------------------------
 def _event_root(ticker: str) -> str:
-    """KXFOO-26APR20BAR-YES → KXFOO-26APR20BAR"""
+    """KXFOO-26APR20BAR-YES - KXFOO-26APR20BAR"""
     return ticker.rsplit("-", 1)[0] if "-" in ticker else ticker
 
 
@@ -498,9 +498,9 @@ def _save_pairs(matched: list, output_path: Path) -> None:
     print(f"[SAVE] {added} new pair(s) saved to {output_path}.")
 
 
-# ── Main ───────────────────────────────────────────────────────────────────────
+# -- Main -----------------------------------------------------------------------
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Pair Kalshi ↔ Polymarket markets.")
+    ap = argparse.ArgumentParser(description="Pair Kalshi <-> Polymarket markets.")
     ap.add_argument("--output",   default=str(DEFAULT_OUTPUT))
     ap.add_argument("--no-cache", action="store_true", help="Ignore embedding cache")
     ap.add_argument("--dry-run",  action="store_true", help="Print candidates, skip judge")
@@ -538,7 +538,7 @@ def main() -> None:
     if args.dry_run:
         print(f"\n[DRY RUN] Top {min(50, len(candidates))} candidates (judge skipped):")
         for c in candidates[:50]:
-            print(f"  {c['score']:.3f} | K: {c['kalshi_title']} ↔ P: {c['poly_question']}")
+            print(f"  {c['score']:.3f} | K: {c['kalshi_title']} <-> P: {c['poly_question']}")
         return
 
     if not candidates:

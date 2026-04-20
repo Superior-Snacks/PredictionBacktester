@@ -374,6 +374,7 @@ FodyWeavers.xsd
 
 # huge gz files
 *.gz
+*.json
 
 #inportant data
 *.env
