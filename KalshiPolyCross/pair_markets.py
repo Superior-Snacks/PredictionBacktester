@@ -459,7 +459,6 @@ def _judge_batch(batch: list, gemini_key: str, models: list, verbose: bool = Fal
         "contents": [{"parts": [{"text": _build_prompt(batch)}]}],
         "generationConfig": {
             "temperature": 0.0,
-            "maxOutputTokens": 8192,
             "responseMimeType": "application/json",
         },
     }
