@@ -51,7 +51,7 @@ POLY_GAMMA_URL    = "https://gamma-api.polymarket.com"
 KALSHI_CATEGORY   = ""
 POLY_CATEGORY     = ""
 
-SIMILARITY_THRESH = 0.75
+SIMILARITY_THRESH = 0.82
 TOP_N_CANDIDATES  = 5
 DATE_WINDOW_DAYS  = 7
 
@@ -453,12 +453,15 @@ def _parse_judge_response(text: str, batch_size: int) -> list:
     return result
 
 
+_MAX_RETRIES_PER_MODEL = 3  # 503s or timeouts before dropping to next model
+
 def _judge_batch(batch: list, gemini_key: str, models: list, verbose: bool = False) -> list:
     """Returns list of verdict dicts (one per evaluated pair, INVALID omitted)."""
     payload = {
         "contents": [{"parts": [{"text": _build_prompt(batch)}]}],
         "generationConfig": {
             "temperature": 0.0,
+            "maxOutputTokens": 16384,
             "responseMimeType": "application/json",
         },
     }
@@ -466,53 +469,66 @@ def _judge_batch(batch: list, gemini_key: str, models: list, verbose: bool = Fal
     while models:
         model = models[0]
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={gemini_key}"
-        try:
-            r = requests.post(url, json=payload, timeout=60)
-            if not r.ok:
-                body = r.text
-                if r.status_code == 429:
-                    if "day" in body.lower() or "perday" in body.lower():
-                        print(f"\n[JUDGE] {model} daily quota exhausted - falling back.")
-                        models.pop(0)
+        retries = 0
+        while retries < _MAX_RETRIES_PER_MODEL:
+            try:
+                r = requests.post(url, json=payload, timeout=120)
+                if not r.ok:
+                    body = r.text
+                    if r.status_code == 429:
+                        if "day" in body.lower() or "perday" in body.lower():
+                            print(f"\n[JUDGE] {model} daily quota exhausted - falling back.")
+                            models.pop(0)
+                            break
+                        print(f"\n[JUDGE] {model} per-minute quota hit - waiting 65s...")
+                        time.sleep(65)
                         continue
-                    print(f"\n[JUDGE] {model} per-minute quota hit - waiting 65s...")
-                    time.sleep(65)
-                    continue
-                if r.status_code == 503:
-                    print(f"\n[JUDGE] {model} overloaded (503) - waiting 15s...")
-                    time.sleep(15)
-                    continue
-                if r.status_code == 404:
-                    print(f"\n[JUDGE] {model} not found - dropping.")
+                    if r.status_code == 503:
+                        retries += 1
+                        print(f"\n[JUDGE] {model} overloaded (503) - retry {retries}/{_MAX_RETRIES_PER_MODEL}...")
+                        time.sleep(15)
+                        continue
+                    if r.status_code == 404:
+                        print(f"\n[JUDGE] {model} not found - dropping.")
+                        models.pop(0)
+                        break
+                    print(f"\n[JUDGE] {model} error {r.status_code}: {body[:300]}")
                     models.pop(0)
-                    continue
-                print(f"\n[JUDGE] {model} error {r.status_code}: {body[:300]}")
-                return []
-            data = r.json()
-            text = (data.get("candidates", [{}])[0]
-                       .get("content", {})
-                       .get("parts", [{}])[0]
-                       .get("text", "[]")
-                       .strip())
-            finish = (data.get("candidates", [{}])[0].get("finishReason", ""))
-            if verbose:
-                print(f"\n[JUDGE RAW] model={model} finish={finish}\n{text}\n")
-            verdicts = _parse_judge_response(text, len(batch))
-            counts = {"VALID": 0, "CONDITIONAL": 0, "INVALID": 0}
-            for v in verdicts:
-                counts[v["status"]] = counts.get(v["status"], 0) + 1
-            counts["INVALID"] += len(batch) - len(verdicts)
-            print(f" [V:{counts['VALID']} C:{counts['CONDITIONAL']} X:{counts['INVALID']}]", end="", flush=True)
-            non_invalid = [v for v in verdicts if v["status"] != "INVALID"]
-            for v in non_invalid:
-                c = batch[v["index"]]
-                tag = f"[{v['status']}]" + (f" trap={v['trap_type']}" if v["trap_type"] != "NONE" else "")
-                print(f"\n    {tag} K: \"{c['kalshi_title']}\" <-> P: \"{c['poly_question']}\"")
-                print(f"        {v['explanation']}")
-            return non_invalid
-        except Exception as e:
-            print(f"\n[JUDGE] {model} exception: {e}")
-            return []
+                    break
+                data = r.json()
+                text = (data.get("candidates", [{}])[0]
+                           .get("content", {})
+                           .get("parts", [{}])[0]
+                           .get("text", "[]")
+                           .strip())
+                finish = (data.get("candidates", [{}])[0].get("finishReason", ""))
+                if verbose:
+                    print(f"\n[JUDGE RAW] model={model} finish={finish}\n{text}\n")
+                verdicts = _parse_judge_response(text, len(batch))
+                counts = {"VALID": 0, "CONDITIONAL": 0, "INVALID": 0}
+                for v in verdicts:
+                    counts[v["status"]] = counts.get(v["status"], 0) + 1
+                counts["INVALID"] += len(batch) - len(verdicts)
+                print(f" [V:{counts['VALID']} C:{counts['CONDITIONAL']} X:{counts['INVALID']}]", end="", flush=True)
+                non_invalid = [v for v in verdicts if v["status"] != "INVALID"]
+                for v in non_invalid:
+                    c = batch[v["index"]]
+                    tag = f"[{v['status']}]" + (f" trap={v['trap_type']}" if v["trap_type"] != "NONE" else "")
+                    print(f"\n    {tag} K: \"{c['kalshi_title']}\" <-> P: \"{c['poly_question']}\"")
+                    print(f"        {v['explanation']}")
+                return non_invalid
+            except Exception as e:
+                retries += 1
+                print(f"\n[JUDGE] {model} exception (retry {retries}/{_MAX_RETRIES_PER_MODEL}): {e}")
+                if retries >= _MAX_RETRIES_PER_MODEL:
+                    break
+                time.sleep(5)
+        else:
+            # Exhausted retries for this model
+            pass
+        if models and models[0] == model:
+            print(f"\n[JUDGE] {model} failed {_MAX_RETRIES_PER_MODEL} times - dropping.")
+            models.pop(0)
 
     print("\n[JUDGE] All models exhausted.")
     return []
@@ -541,9 +557,11 @@ def run_judge(candidates: list, gemini_key: str, output_path: Path, verbose: boo
             _save_potential_pairs(conditional, potential_path)
 
         if not models:
-            print("[JUDGE] All models exhausted - stopping early.")
-            break
-        if i + JUDGE_BATCH_SIZE < len(candidates):
+            print("[JUDGE] All models exhausted - waiting 5 min before retry...")
+            time.sleep(300)
+            models[:] = list(JUDGE_MODELS)
+            print("[JUDGE] Models restored, resuming.")
+        elif i + JUDGE_BATCH_SIZE < len(candidates):
             time.sleep(JUDGE_DELAY_S)
 
 
