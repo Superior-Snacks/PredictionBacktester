@@ -104,6 +104,8 @@ Console.WriteLine($"\n[BOOKS] {state.Books.Count} order books created");
 Console.WriteLine($"  Kalshi tickers : {kalshiSubscribeTickers.Count}");
 Console.WriteLine($"  Poly tokens    : {polySubscribeTokens.Count}");
 
+bool showBlended = !args.Contains("--no-blended");
+
 var cts = new CancellationTokenSource();
 Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
 
@@ -137,16 +139,19 @@ _ = Task.Run(async () =>
         if (snapshot.Count == 0)
             Console.WriteLine("  (no books priced yet — waiting for WS data)");
 
-        var blendedSnapshot = telemetry.GetBlendedNearMissSnapshot().ToList();
-        if (blendedSnapshot.Count > 0)
+        if (showBlended)
         {
-            Console.WriteLine($"  --- BLENDED (pick cheapest YES per leg across both platforms) ---");
-            foreach (var (cost, evId, choices, depth, isLive) in blendedSnapshot)
+            var blendedSnapshot = telemetry.GetBlendedNearMissSnapshot().ToList();
+            if (blendedSnapshot.Count > 0)
             {
-                decimal diff = cost - 1.00m;
-                string  tag  = cost < 1.00m ? "ARB!" : $"+${diff:0.0000} away";
-                string  live = isLive ? " *** LIVE ***" : "";
-                Console.WriteLine($"  ${cost:0.0000} ({tag}) BLENDED({choices}) | depth={depth:0.0} | {evId}{live}");
+                Console.WriteLine($"  --- BLENDED (pick cheapest YES per leg across both platforms) ---");
+                foreach (var (cost, evId, choices, depth, isLive) in blendedSnapshot)
+                {
+                    decimal diff = cost - 1.00m;
+                    string  tag  = cost < 1.00m ? "ARB!" : $"+${diff:0.0000} away";
+                    string  live = isLive ? " *** LIVE ***" : "";
+                    Console.WriteLine($"  ${cost:0.0000} ({tag}) BLENDED({choices}) | depth={depth:0.0} | {evId}{live}");
+                }
             }
         }
     }

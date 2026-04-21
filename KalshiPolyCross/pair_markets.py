@@ -652,6 +652,58 @@ def _save_potential_pairs(conditional: list, output_path: Path) -> None:
     print(f"[SAVE] {added} conditional pair(s) saved to {output_path}.")
 
 
+# -- Manual judge --------------------------------------------------------------
+def run_manual_judge(candidates: list, output_path: Path) -> None:
+    potential_path = output_path.parent / f"potential_{output_path.name}"
+    total = len(candidates)
+    print(f"\n[MANUAL] {total} candidates to judge.")
+    print("  Keys: 1=VALID  2=CONDITIONAL  3=INVALID  s=skip  q=quit\n")
+
+    for i, c in enumerate(candidates):
+        kc = c["kalshi_close"].strftime("%Y-%m-%d") if c["kalshi_close"] else "?"
+        pc = c["poly_close"].strftime("%Y-%m-%d")   if c["poly_close"]   else "?"
+        print(f"--- [{i+1}/{total}] score={c['score']:.3f} ---")
+        print(f"  KALSHI  {c['kalshi_ticker']}")
+        print(f"          {c['kalshi_title']}")
+        print(f"          closes: {kc}")
+        if c["kalshi_rules"]:
+            print(f"          rules:  {c['kalshi_rules'][:200]}")
+        print(f"  POLY    {c['poly_question']}")
+        print(f"          closes: {pc}")
+        if c["poly_desc"]:
+            print(f"          desc:   {c['poly_desc'][:200]}")
+
+        while True:
+            try:
+                key = input("  > ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                print("\n[MANUAL] Interrupted.")
+                return
+            if key in ("1", "2", "3", "s", "q"):
+                break
+            print("  Invalid key. Use 1/2/3/s/q.")
+
+        if key == "q":
+            print("[MANUAL] Quit.")
+            break
+        if key == "s":
+            print("  [SKIP]")
+            continue
+        if key == "1":
+            _save_pairs([c], output_path)
+        elif key == "2":
+            verdict = {
+                "trap_type": "MANUAL",
+                "safe_hours_before_event": 0,
+                "earliest_cutoff_date": "NONE",
+                "explanation": "Manually flagged as conditional.",
+            }
+            _save_potential_pairs([(c, verdict)], potential_path)
+        elif key == "3":
+            print("  [INVALID]")
+        print()
+
+
 # -- Main -----------------------------------------------------------------------
 def main() -> None:
     ap = argparse.ArgumentParser(description="Pair Kalshi <-> Polymarket markets.")
@@ -662,6 +714,8 @@ def main() -> None:
                     help="Print the judge prompt for the first N batches and exit")
     ap.add_argument("--verbose-judge", action="store_true",
                     help="Print raw judge response for each batch")
+    ap.add_argument("--manual-judge", action="store_true",
+                    help="Judge pairs interactively instead of calling Gemini")
     args = ap.parse_args()
 
     output_path = Path(args.output)
@@ -672,8 +726,8 @@ def main() -> None:
 
     if not api_key_id or not key_path:
         sys.exit("[ERROR] Set KALSHI_API_KEY_ID and KALSHI_PRIVATE_KEY_PATH.")
-    if not args.dry_run and not gemini_key:
-        sys.exit("[ERROR] Set GEMINI_API_KEY (needed for judge calls; omit with --dry-run).")
+    if not args.dry_run and not args.manual_judge and not gemini_key:
+        sys.exit("[ERROR] Set GEMINI_API_KEY (needed for judge calls; omit with --dry-run or --manual-judge).")
 
     with open(key_path, "rb") as f:
         private_key = serialization.load_pem_private_key(f.read(), password=None)
@@ -712,7 +766,10 @@ def main() -> None:
             print(_build_prompt(batch))
         return
 
-    run_judge(candidates, gemini_key, output_path, verbose=args.verbose_judge)
+    if args.manual_judge:
+        run_manual_judge(candidates, output_path)
+    else:
+        run_judge(candidates, gemini_key, output_path, verbose=args.verbose_judge)
     print("\n[DONE] Pairing complete.")
 
 

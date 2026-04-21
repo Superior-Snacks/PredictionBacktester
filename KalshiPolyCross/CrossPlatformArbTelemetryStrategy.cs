@@ -98,9 +98,11 @@ public class CrossPlatformArbTelemetryStrategy
     // Kalshi:     fee = KALSHI_FEE_RATE × P × (1 − P)                  per contract
     // Polymarket: fee = P × POLY_FEE_RATE × (P × (1 − P))^EXPONENT     per share
     private const decimal KalshiFeeRate   = 0.07m;
-    private const decimal PolyFeeRate     = 0.03m;
+    private const decimal PolyFeeRate     = 0.03m;  // Sports category (effective 2026-03-30)
     private const double  PolyFeeExponent = 1.0;
 
+    // Kalshi:     fee = 0.07 × P × (1 − P) per contract
+    // Polymarket: fee = P × feeRate × (P × (1 − P))^exponent  per share
     private static decimal KalshiFee(decimal p) => KalshiFeeRate * p * (1m - p);
     private static decimal PolyFee(decimal p)
         => p * PolyFeeRate * (decimal)Math.Pow((double)(p * (1m - p)), PolyFeeExponent);
