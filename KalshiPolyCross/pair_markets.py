@@ -13,7 +13,7 @@ Usage:
     python pair_markets.py --w2                     # only markets ending within 2 weeks (not today)
     python pair_markets.py --exclude "NBA,NFL"      # drop candidates containing these terms
     python pair_markets.py --include "EPL,Soccer"   # keep only candidates containing these terms
-    python pair_markets.py --no-games               # drop live game/match markets (keeps MVP, draft, etc.)
+    python pair_markets.py --no-live                # drop markets where Poly secondsDelay > 0 or live=true
     python pair_markets.py --manual-judge           # judge pairs interactively (no Gemini needed)
 """
 
@@ -69,40 +69,6 @@ SCRIPT_DIR        = Path(__file__).parent
 CACHE_PATH        = SCRIPT_DIR / "embeddings_cache.json"
 DEFAULT_OUTPUT    = SCRIPT_DIR / "cross_pairs.json"
 
-# Patterns that indicate a market is tied to a specific live sports game/match.
-# These markets have trade delays during the event and are excluded by --no-games.
-# MVP, draft, season win-totals, championships, awards etc. are NOT matched.
-_LIVE_GAME_RE = re.compile(
-    r'\bvs\.?\s'                    # "vs " / "vs. " between two teams
-    r'|\b@\s+[A-Z]'                 # "@ Lakers" (away-at-home format)
-    r'|\bgame\s+[1-9]\b'            # "Game 1" … "Game 7"
-    r'|\bmatch\s+\d+\b'             # "Match 3"
-    r'|\bleg\s+\d+\b'               # "Leg 2" (used in some football formats)
-    r'|\btonight\b'                 # same-day game reference
-    r'|\bmoneyline\b'               # betting term exclusive to single-game markets
-    r'|\bcover\b.{0,15}\bspread\b'  # "cover the spread"
-    r'|\bover\/under\b'             # "over/under X.5 points" (full form)
-    r'|\bo\/u\b'                    # "O/U 5.5" (short form)
-    r'|\b\d+\.5\b'                  # half-point line (X.5) — always a prop/spread
-    r'|\bfirst\s+half\b'            # half-time markets
-    r'|\bfirst\s+quarter\b'         # quarter markets
-    r'|\bregulation\b'              # "win in regulation"
-    r'|\bprop\b',                   # "player prop"
-    re.IGNORECASE,
-)
-
-STOP_WORDS = {
-    "will", "does", "make", "take", "have", "been", "being", "going", "come", "came",
-    "the", "and", "or", "but", "not", "for", "with", "from", "that", "this", "they",
-    "them", "then", "than", "there", "these", "those", "their", "some", "such", "each",
-    "both", "into", "onto", "upon", "also", "even", "only", "just", "very", "more",
-    "most", "much", "many", "over", "under", "next", "last", "first", "same",
-    "game", "games", "match", "matches", "play", "plays", "team", "teams",
-    "season", "series", "score", "title", "round", "week", "home", "away",
-    "point", "points", "total", "final", "time", "half", "year", "place",
-    "winner", "losers", "result", "event", "market", "contract",
-}
-
 # -- Kalshi auth ---------------------------------------------------------------
 def _kalshi_headers(method: str, path: str, api_key_id: str, private_key) -> dict:
     ts_ms = str(int(time.time() * 1000))
@@ -128,16 +94,6 @@ def _kalshi_get(path: str, api_key_id: str, private_key, params=None) -> dict:
     )
     r.raise_for_status()
     return r.json()
-
-
-# -- Keyword helpers ------------------------------------------------------------
-def _keywords(text: str) -> set:
-    return {w.lower() for w in re.split(r"[^a-zA-Z]+", text)
-            if len(w) >= 4 and w.lower() not in STOP_WORDS}
-
-
-def _has_overlap(text: str, kw_set: set) -> bool:
-    return bool(_keywords(text) & kw_set)
 
 
 # -- Embedding cache ------------------------------------------------------------
@@ -220,10 +176,11 @@ def fetch_kalshi_markets(api_key_id: str, private_key) -> dict:
     return markets
 
 
-def fetch_poly_markets() -> list:
+def fetch_poly_markets(no_live: bool = False) -> list:
     """Returns list of {question, yes_token, no_token, end_date, description}."""
     print("[POLY] Fetching active markets...")
     results = []
+    skipped_live = 0
     offset, page_size = 0, 500
     while True:
         r = requests.get(
@@ -246,6 +203,7 @@ def fetch_poly_markets() -> list:
                     include = True
             if not include:
                 continue
+            ev_live = bool(ev.get("live", False))
             end_date = None
             if ev.get("end_date"):
                 try:
@@ -260,19 +218,28 @@ def fetch_poly_markets() -> list:
                     try: raw = json.loads(raw)
                     except Exception: raw = []
                 tokens = [t for t in raw if t]
-                if len(tokens) >= 2 and question:
-                    results.append({
-                        "question":    question,
-                        "yes_token":   tokens[0],
-                        "no_token":    tokens[1],
-                        "end_date":    end_date,
-                        "description": description,
-                    })
+                if len(tokens) < 2 or not question:
+                    continue
+                if no_live:
+                    seconds_delay = int(mkt.get("secondsDelay", 0) or 0)
+                    mkt_live      = bool(mkt.get("live", False))
+                    if ev_live or mkt_live or seconds_delay > 0:
+                        skipped_live += 1
+                        continue
+                results.append({
+                    "question":    question,
+                    "yes_token":   tokens[0],
+                    "no_token":    tokens[1],
+                    "end_date":    end_date,
+                    "description": description,
+                })
         if len(arr) < page_size:
             break
         offset += page_size
         time.sleep(0.2)
-    print(f"[POLY] {len(results)} markets fetched ('{POLY_CATEGORY}').")
+    if no_live and skipped_live:
+        print(f"[POLY] Skipped {skipped_live} live/delayed markets (--no-live).")
+    print(f"[POLY] {len(results)} markets fetched.")
     return results
 
 
@@ -285,18 +252,9 @@ def find_candidates(
 ) -> list:
     cache = load_cache() if use_cache else {}
 
-    # Keyword pre-filter
-    all_k_kw = set()
-    for m in kalshi_markets.values():
-        all_k_kw |= _keywords(m["title"])
-    filtered_poly = [p for p in poly_markets if _has_overlap(p["question"], all_k_kw)]
-    poly_kw = set()
-    for p in filtered_poly:
-        poly_kw |= _keywords(p["question"])
-    k_titles_unique = list({m["title"] for m in kalshi_markets.values()
-                            if _has_overlap(m["title"], poly_kw)})
-    print(f"[EMBED] Pre-filter: Poly {len(poly_markets)}->{len(filtered_poly)}, "
-          f"Kalshi {len(kalshi_markets)}->{len(k_titles_unique)} unique titles.")
+    filtered_poly   = poly_markets
+    k_titles_unique = list({m["title"] for m in kalshi_markets.values()})
+    print(f"[EMBED] {len(k_titles_unique)} unique Kalshi titles, {len(filtered_poly)} Poly markets.")
 
     poly_questions = [p["question"] for p in filtered_poly]
     to_encode = [t for t in dict.fromkeys(k_titles_unique + poly_questions) if t not in cache]
@@ -827,8 +785,8 @@ def main() -> None:
                     help="Comma-separated terms; candidates whose Kalshi title OR Poly question contains any term are removed (case-insensitive)")
     ap.add_argument("--include", default="",
                     help="Comma-separated terms; only candidates whose Kalshi title OR Poly question contains at least one term are kept")
-    ap.add_argument("--no-games", action="store_true",
-                    help="Drop candidates that look like specific live game/match markets (vs, Game N, moneyline, etc.); keeps MVP, draft, championship, season markets")
+    ap.add_argument("--no-live", action="store_true",
+                    help="Drop Poly markets where secondsDelay > 0 or live=true (games currently in progress)")
     ap.add_argument("--exclude-category", default="",
                     help="Comma-separated Kalshi categories to exclude (e.g. 'Sports'); run once to see available categories")
     ap.add_argument("--include-category", default="",
@@ -867,7 +825,7 @@ def main() -> None:
         print(f"[INFO] {len(already_paired)} tickers already seen (paired/conditional/rejected) — skipping.")
 
     kalshi_markets = fetch_kalshi_markets(api_key_id, private_key)
-    poly_markets   = fetch_poly_markets()
+    poly_markets   = fetch_poly_markets(no_live=args.no_live)
 
     candidates = find_candidates(kalshi_markets, poly_markets, already_paired, not args.no_cache)
 
@@ -923,13 +881,6 @@ def main() -> None:
         before = len(candidates)
         candidates = [c for c in candidates if c.get("kalshi_category", "").lower() in incl_cats]
         print(f"[--include-category] Kept {len(candidates)} / {before} candidates  ({', '.join(incl_cats)})")
-
-    if args.no_games:
-        before = len(candidates)
-        candidates = [c for c in candidates
-                      if not _LIVE_GAME_RE.search(c["kalshi_title"])
-                      and not _LIVE_GAME_RE.search(c["poly_question"])]
-        print(f"[--no-games] Removed {before - len(candidates)} live game markets  ({len(candidates)} remain)")
 
     if args.dry_run:
         print(f"\n[DRY RUN] Top {min(50, len(candidates))} candidates (judge skipped):")
