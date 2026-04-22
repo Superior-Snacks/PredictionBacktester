@@ -11,6 +11,9 @@ Usage:
     python pair_markets.py --dry-run                # print candidates, skip judge
     python pair_markets.py --w1                     # only markets ending within 1 week (not today)
     python pair_markets.py --w2                     # only markets ending within 2 weeks (not today)
+    python pair_markets.py --exclude "NBA,NFL"      # drop candidates containing these terms
+    python pair_markets.py --include "EPL,Soccer"   # keep only candidates containing these terms
+    python pair_markets.py --no-games               # drop live game/match markets (keeps MVP, draft, etc.)
     python pair_markets.py --manual-judge           # judge pairs interactively (no Gemini needed)
 """
 
@@ -65,6 +68,25 @@ JUDGE_MODELS      = ["gemini-3-flash-preview", "gemini-2.5-flash", "gemini-2.0-f
 SCRIPT_DIR        = Path(__file__).parent
 CACHE_PATH        = SCRIPT_DIR / "embeddings_cache.json"
 DEFAULT_OUTPUT    = SCRIPT_DIR / "cross_pairs.json"
+
+# Patterns that indicate a market is tied to a specific live sports game/match.
+# These markets have trade delays during the event and are excluded by --no-games.
+# MVP, draft, season win-totals, championships, awards etc. are NOT matched.
+_LIVE_GAME_RE = re.compile(
+    r'\bvs\.?\s'            # "vs " / "vs. " between two teams
+    r'|\b@\s+[A-Z]'         # "@ Lakers" (away-at-home format)
+    r'|\bgame\s+[1-9]\b'    # "Game 1" … "Game 7"
+    r'|\bmatch\s+\d+\b'     # "Match 3"
+    r'|\bleg\s+\d+\b'       # "Leg 2" (used in some football formats)
+    r'|\btonight\b'         # same-day game reference
+    r'|\bmoneyline\b'       # betting term exclusive to single-game markets
+    r'|\bcover\b.{0,15}\bspread\b'  # "cover the spread"
+    r'|\bover\/under\b'     # "over/under X.5 points"
+    r'|\bfirst\s+half\b'    # half-time markets
+    r'|\bfirst\s+quarter\b' # quarter markets
+    r'|\bregulation\b',     # "win in regulation"
+    re.IGNORECASE,
+)
 
 STOP_WORDS = {
     "will", "does", "make", "take", "have", "been", "being", "going", "come", "came",
@@ -693,6 +715,29 @@ def _save_potential_pairs(conditional: list, output_path: Path) -> None:
 
 
 # -- Manual judge --------------------------------------------------------------
+_GREEN = "\033[92m"
+_RESET = "\033[0m"
+
+def _getch() -> str:
+    """Read one character immediately, no Enter required."""
+    try:
+        import msvcrt
+        ch = msvcrt.getwch()
+        if ch in ('\x00', '\xe0'):   # special/arrow key prefix — discard second byte
+            msvcrt.getwch()
+            return ''
+        return ch.lower()
+    except ImportError:
+        import tty, termios
+        fd = sys.stdin.fileno()
+        old = termios.tcgetattr(fd)
+        try:
+            tty.setraw(fd)
+            return sys.stdin.read(1).lower()
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+
 def run_manual_judge(candidates: list, output_path: Path) -> None:
     potential_path = output_path.parent / f"potential_{output_path.name}"
     rejected_path  = output_path.parent / "rejected_pairs.json"
@@ -705,24 +750,27 @@ def run_manual_judge(candidates: list, output_path: Path) -> None:
         pc = c["poly_close"].strftime("%Y-%m-%d")   if c["poly_close"]   else "?"
         print(f"--- [{i+1}/{total}] score={c['score']:.3f} ---")
         print(f"  KALSHI  {c['kalshi_ticker']}")
-        print(f"          {c['kalshi_title']}")
+        print(f"          {_GREEN}{c['kalshi_title']}{_RESET}")
         print(f"          closes: {kc}")
         if c["kalshi_rules"]:
             print(f"          rules:  {c['kalshi_rules']}")
-        print(f"  POLY    {c['poly_question']}")
+        print(f"  POLY    {_GREEN}{c['poly_question']}{_RESET}")
         print(f"          closes: {pc}")
         if c["poly_desc"]:
             print(f"          desc:   {c['poly_desc']}")
 
         while True:
             try:
-                key = input("  > ").strip().lower()
+                print("  > ", end="", flush=True)
+                key = _getch()
             except (EOFError, KeyboardInterrupt):
                 print("\n[MANUAL] Interrupted.")
                 return
             if key in ("1", "2", "3", "s", "q"):
+                print(key)   # echo the pressed key
                 break
-            print("  Invalid key. Use 1/2/3/s/q.")
+            if key:          # ignore empty (special keys)
+                print(f"\n  Invalid key '{key}'. Use 1/2/3/s/q.")
 
         if key == "q":
             print("[MANUAL] Quit.")
@@ -769,6 +817,12 @@ def main() -> None:
                     help="Print raw judge response for each batch")
     ap.add_argument("--manual-judge", action="store_true",
                     help="Judge pairs interactively instead of calling Gemini")
+    ap.add_argument("--exclude", default="",
+                    help="Comma-separated terms; candidates whose Kalshi title OR Poly question contains any term are removed (case-insensitive)")
+    ap.add_argument("--include", default="",
+                    help="Comma-separated terms; only candidates whose Kalshi title OR Poly question contains at least one term are kept")
+    ap.add_argument("--no-games", action="store_true",
+                    help="Drop candidates that look like specific live game/match markets (vs, Game N, moneyline, etc.); keeps MVP, draft, championship, season markets")
     args = ap.parse_args()
 
     output_path = Path(args.output)
@@ -813,12 +867,39 @@ def main() -> None:
         cutoff   = now + timedelta(weeks=weeks_limit)
         before   = len(candidates)
         def _in_window(dt):
-            if dt is None: return False
+            if dt is None: return True   # date unknown — don't exclude
             if dt.tzinfo is None: dt = dt.replace(tzinfo=timezone.utc)
             return tomorrow <= dt <= cutoff
-        candidates = [c for c in candidates if _in_window(c["kalshi_close"]) and _in_window(c["poly_close"])]
-        print(f"[--w{weeks_limit}] {len(candidates)} / {before} candidates closing "
+        # Require kalshi_close to be in window (reliable); poly_close checked only if present.
+        candidates = [c for c in candidates
+                      if c["kalshi_close"] is not None and _in_window(c["kalshi_close"])
+                      and _in_window(c["poly_close"])]
+        print(f"[--w{weeks_limit}] {len(candidates)} / {before} candidates with Kalshi closing "
               f"{tomorrow.strftime('%Y-%m-%d')} – {cutoff.strftime('%Y-%m-%d')} (today excluded).")
+
+    def _label_match(c, term):
+        t = term.lower()
+        return t in c["kalshi_title"].lower() or t in c["poly_question"].lower()
+
+    exclude_terms = [t.strip() for t in args.exclude.split(",") if t.strip()]
+    include_terms = [t.strip() for t in args.include.split(",") if t.strip()]
+
+    if exclude_terms:
+        before = len(candidates)
+        candidates = [c for c in candidates if not any(_label_match(c, t) for t in exclude_terms)]
+        print(f"[--exclude] Removed {before - len(candidates)} candidates  ({', '.join(exclude_terms)})")
+
+    if include_terms:
+        before = len(candidates)
+        candidates = [c for c in candidates if any(_label_match(c, t) for t in include_terms)]
+        print(f"[--include] Kept {len(candidates)} / {before} candidates  ({', '.join(include_terms)})")
+
+    if args.no_games:
+        before = len(candidates)
+        candidates = [c for c in candidates
+                      if not _LIVE_GAME_RE.search(c["kalshi_title"])
+                      and not _LIVE_GAME_RE.search(c["poly_question"])]
+        print(f"[--no-games] Removed {before - len(candidates)} live game markets  ({len(candidates)} remain)")
 
     if args.dry_run:
         print(f"\n[DRY RUN] Top {min(50, len(candidates))} candidates (judge skipped):")
