@@ -3,7 +3,7 @@ Cross-Platform Arb Telemetry Analyzer
 Reads CrossArbTelemetry_*.csv (and optionally CrossArbBlended_*.csv) from the
 KalshiPolyCross bot and produces:
   1. Session summary
-  2. All pairs detected
+  2. All pairs detected (clean and flagged)
   3. Fraud / sanity checks
   4. Duration analysis
   5. Profit analysis
@@ -11,12 +11,16 @@ KalshiPolyCross bot and produces:
   7. WS reliability
   8. REST verification
   9. Blended arb summary (if CrossArbBlended_*.csv found)
+ 10. Production sim (US server, competition-adjusted — LAST)
 
 Usage:
   python analyze_cross_arb.py
   python analyze_cross_arb.py --file path/to/CrossArbTelemetry_xxx.csv
   python analyze_cross_arb.py --min-duration 50
+  python analyze_cross_arb.py --exclude "TRUMP,NBA"
+  python analyze_cross_arb.py --include "EPL,NFL"
   python analyze_cross_arb.py --clean
+  python analyze_cross_arb.py --participation-rate 0.5
 """
 
 import csv
@@ -34,6 +38,9 @@ DEFAULT_CAPITAL_PER_ARB = 50.0
 DEFAULT_CAPTURE_RATE    = 0.60
 THIN_DEPTH_THRESHOLD    = 2.0
 STALE_BOOK_MS           = 30_000
+REPEAT_SPAM_THRESHOLD   = 100    # >N windows for same pair = spam
+
+PROD_LATENCY_MS         = 17     # US server min capturable window
 
 # ─── FILE DISCOVERY ───────────────────────────────────────────────────────────
 
@@ -49,10 +56,6 @@ def find_latest_csv(pattern):
 
 
 def find_blended_csv(binary_path):
-    """
-    Given the binary CSV path, find the matching blended CSV by timestamp prefix.
-    Falls back to the latest CrossArbBlended_*.csv if no timestamp match found.
-    """
     m = re.search(r'(\d{8}_\d{6})', os.path.basename(binary_path))
     if m:
         ts = m.group(1)
@@ -65,7 +68,7 @@ def find_blended_csv(binary_path):
             return candidates[0]
     return find_latest_csv("CrossArbBlended_*.csv")
 
-# ─── DATETIME HELPERS (identical to analyze_kalshi_arb.py) ───────────────────
+# ─── DATETIME HELPERS ─────────────────────────────────────────────────────────
 
 _DT_FORMATS = [
     "%Y-%m-%d %H:%M:%S.%f",
@@ -80,15 +83,6 @@ def _parse_dt(s):
             pass
     return None
 
-def _hms_to_secs(s):
-    try:
-        parts = s.strip().replace('.', ':').split(':')
-        h, m, sec = int(parts[0]), int(parts[1]), int(parts[2])
-        ms = int(parts[3]) if len(parts) > 3 else 0
-        return h * 3600 + m * 60 + sec + ms / 1000.0
-    except (ValueError, IndexError):
-        return None
-
 def compute_session_hours(rows, path):
     if len(rows) < 2:
         return 0.0
@@ -102,14 +96,7 @@ def compute_session_hours(rows, path):
             if all_ends:
                 secs = (max(all_ends) - dt_start).total_seconds()
         return max(secs / 3600.0, 1 / 3600.0)
-    t_start = _hms_to_secs(rows[0]["start"])
-    t_end   = _hms_to_secs(rows[-1]["end"])
-    if t_start is None or t_end is None:
-        return 0.0
-    secs = t_end - t_start
-    if secs <= 0:
-        secs += 86400
-    return max(secs / 3600.0, 1 / 3600.0)
+    return 0.0
 
 def _per_hr(amount, hours):
     if hours <= 0:
@@ -219,7 +206,11 @@ def load_blended_csv(path):
 
 # ─── FRAUD FLAGS ──────────────────────────────────────────────────────────────
 
-def compute_flags(rows):
+def compute_flags(rows, spam_threshold=REPEAT_SPAM_THRESHOLD):
+    pair_counts = defaultdict(int)
+    for r in rows:
+        pair_counts[r["pair_id"]] += 1
+
     for r in rows:
         flags = []
         if r["duration_ms"] < 10:
@@ -236,6 +227,8 @@ def compute_flags(rows):
             flags.append("DROP_DURING_WINDOW")
         if r["net_profit_per_share"] <= 0:
             flags.append("ZERO_PROFIT")
+        if pair_counts[r["pair_id"]] > spam_threshold:
+            flags.append("REPEAT_SPAM")
         r["flags"] = flags
 
 # ─── SECTION 1: SESSION SUMMARY ───────────────────────────────────────────────
@@ -248,7 +241,7 @@ def print_session_summary(rows, path, session_hours):
     print(f"  Rows     : {len(rows)}")
     if not rows:
         return
-    unique_pairs   = len(set(r["pair_id"] for r in rows))
+    unique_pairs    = len(set(r["pair_id"] for r in rows))
     total_potential = sum(r["total_potential"] for r in rows)
     starts = [r["start"] for r in rows]
     ends   = [r["end"]   for r in rows]
@@ -277,14 +270,14 @@ def print_all_pairs(rows):
         for r in pr:
             all_flags.update(r["flags"])
         summary.append({
-            "pair_id":    pair_id,
-            "label":      pr[0]["label"],
-            "arb_types":  list({r["arb_type"] for r in pr}),
-            "windows":    len(pr),
-            "avg_duration": sum(r["duration_ms"] for r in pr) / len(pr),
-            "avg_net_cost": sum(r["best_net_cost"] for r in pr) / len(pr),
-            "avg_depth":    sum(r["max_depth"] for r in pr) / len(pr),
-            "total_pot":    sum(r["total_potential"] for r in pr),
+            "pair_id":      pair_id,
+            "label":        pr[0]["label"],
+            "arb_types":    list({r["arb_type"] for r in pr}),
+            "windows":      len(pr),
+            "avg_duration": sum(r["duration_ms"]    for r in pr) / len(pr),
+            "avg_net_cost": sum(r["best_net_cost"]   for r in pr) / len(pr),
+            "avg_depth":    sum(r["max_depth"]        for r in pr) / len(pr),
+            "total_pot":    sum(r["total_potential"]  for r in pr),
             "flags":        sorted(all_flags),
         })
 
@@ -297,7 +290,6 @@ def print_all_pairs(rows):
 
     def _row(e):
         flag_str = ",".join(e["flags"]) if e["flags"] else "OK"
-        types    = "/".join(e["arb_types"])
         print(f"  {e['label'][:44]:<44} {e['windows']:>4} "
               f"{e['avg_duration']:>7.0f} {e['avg_net_cost']:>8.4f} "
               f"${e['total_pot']:>9.4f}  {flag_str}")
@@ -318,7 +310,7 @@ def print_all_pairs(rows):
 
 # ─── SECTION 3: FRAUD / SANITY CHECKS ────────────────────────────────────────
 
-def print_fraud_checks(rows):
+def print_fraud_checks(rows, spam_threshold=REPEAT_SPAM_THRESHOLD):
     print("=" * 80)
     print("  FRAUD / SANITY CHECKS")
     print("=" * 80)
@@ -328,7 +320,7 @@ def print_fraud_checks(rows):
 
     all_flag_names = [
         "INSTANT_OPEN_CLOSE", "IMPLAUSIBLE_DURATION", "THIN_DEPTH",
-        "STALE_BOOK_OPEN", "DROP_DURING_WINDOW", "ZERO_PROFIT",
+        "STALE_BOOK_OPEN", "DROP_DURING_WINDOW", "ZERO_PROFIT", "REPEAT_SPAM",
     ]
     descriptions = {
         "INSTANT_OPEN_CLOSE":   "Duration < 10ms — single-tick glitch",
@@ -337,6 +329,7 @@ def print_fraud_checks(rows):
         "STALE_BOOK_OPEN":      f"K or P book age > {STALE_BOOK_MS//1000}s at window open — data may be stale",
         "DROP_DURING_WINDOW":   "WS reconnect happened while arb window was open — price may be ghost",
         "ZERO_PROFIT":          "NetProfitPerShare <= 0 — should not be in file",
+        "REPEAT_SPAM":          f"Same pair appears > {spam_threshold}x — cycling open/close",
     }
 
     total = len(rows)
@@ -391,8 +384,8 @@ def print_duration_analysis(rows, min_duration_ms):
     print(f"  {'Bucket':<16} {'Count':>6}  {'%':>6}")
     print(f"  {'-'*16} {'-'*6}  {'-'*6}")
     for label, lo, hi in buckets:
-        count = sum(1 for d in durations if lo <= d < hi)
-        pct   = count / total * 100 if total else 0
+        count  = sum(1 for d in durations if lo <= d < hi)
+        pct    = count / total * 100 if total else 0
         marker = " <-- capturable threshold" if lo == min_duration_ms or (lo < min_duration_ms <= hi) else ""
         print(f"  {label:<16} {count:>6}  {pct:>5.1f}%{marker}")
 
@@ -471,10 +464,10 @@ def print_arb_type_breakdown(rows):
         subset = [r for r in rows if r["arb_type"] == t]
         if not subset:
             continue
-        avg_cost  = sum(r["best_net_cost"]     for r in subset) / len(subset)
-        avg_depth = sum(r["max_depth"]          for r in subset) / len(subset)
-        tot_pot   = sum(r["total_potential"]    for r in subset)
-        avg_fees  = sum(r["total_fees"]         for r in subset) / len(subset)
+        avg_cost  = sum(r["best_net_cost"]  for r in subset) / len(subset)
+        avg_depth = sum(r["max_depth"]       for r in subset) / len(subset)
+        tot_pot   = sum(r["total_potential"] for r in subset)
+        avg_fees  = sum(r["total_fees"]      for r in subset) / len(subset)
         print(f"  {t:<16} {len(subset):>6}  {avg_cost:>8.4f}  {avg_depth:>9.1f}  ${tot_pot:>9.4f}  {avg_fees:>8.4f}")
     print()
 
@@ -493,7 +486,6 @@ def print_ws_reliability(rows):
     print(f"  Windows with WS drop during window: {len(drop_rows)} / {total}  ({len(drop_rows)/total*100:.1f}%)")
     print()
 
-    # Book age at open
     k_ages = [r["kalshi_book_age_ms"] for r in rows if r.get("kalshi_book_age_ms", -1) >= 0]
     p_ages = [r["poly_book_age_ms"]   for r in rows if r.get("poly_book_age_ms",   -1) >= 0]
 
@@ -557,8 +549,7 @@ def print_rest_verification(rows):
             k = r.get("rest_kalshi_ask")
             p = r.get("rest_poly_ask")
             if k is not None and k >= 0 and p is not None and p >= 0:
-                rest_sum = k + p
-                deltas.append(abs(rest_sum - r["best_net_cost"]))
+                deltas.append(abs((k + p) - r["best_net_cost"]))
         if deltas:
             avg_d = sum(deltas) / len(deltas)
             max_d = max(deltas)
@@ -573,6 +564,19 @@ def print_rest_verification(rows):
         delays.sort()
         print(f"  REST check delay:")
         print(f"    Median: {delays[len(delays)//2]:.0f}ms   p90: {delays[int(len(delays)*0.90)]:.0f}ms   Max: {delays[-1]:.0f}ms")
+
+        buckets = [
+            ("< 200ms",     0,      200),
+            ("200-500ms",   200,    500),
+            ("500ms-1s",    500,    1000),
+            ("1s-3s",       1000,   3000),
+            ("> 3s",        3000,   float("inf")),
+        ]
+        print(f"  {'Delay bucket':<16} {'Count':>6}  {'%':>6}")
+        for label, lo, hi in buckets:
+            cnt = sum(1 for d in delays if lo <= d < hi)
+            pct = cnt / len(delays) * 100
+            print(f"  {label:<16} {cnt:>6}  {pct:>5.1f}%")
         print()
 
     by_pair = defaultdict(list)
@@ -584,8 +588,8 @@ def print_rest_verification(rows):
         print(f"  {'Label':<46} {'Chk':>4} {'Conf':>4} {'AvgWSCost':>10} {'AvgDelay':>9}")
         print(f"  {'-'*46} {'-'*4} {'-'*4} {'-'*10} {'-'*9}")
         for pair_id, pr in sorted(by_pair.items(), key=lambda x: len(x[1]), reverse=True)[:15]:
-            conf   = sum(1 for r in pr if r.get("rest_confirmed") is True)
-            avg_ws = sum(r["best_net_cost"] for r in pr) / len(pr)
+            conf    = sum(1 for r in pr if r.get("rest_confirmed") is True)
+            avg_ws  = sum(r["best_net_cost"] for r in pr) / len(pr)
             dlylist = [r["rest_delay_ms"] for r in pr if r.get("rest_delay_ms") is not None and r["rest_delay_ms"] >= 0]
             avg_dly = sum(dlylist) / len(dlylist) if dlylist else -1
             dly_str = f"{avg_dly:.0f}ms" if avg_dly >= 0 else "N/A"
@@ -604,7 +608,7 @@ def print_blended_summary(blended_rows, session_hours):
         print("  (no blended arb windows found in CrossArbBlended_*.csv)\n")
         return
 
-    total = len(blended_rows)
+    total           = len(blended_rows)
     unique_events   = len(set(r["event_id"] for r in blended_rows))
     total_potential = sum(r["total_potential"] for r in blended_rows)
     capturable      = [r for r in blended_rows if r["duration_ms"] >= DEFAULT_MIN_DURATION_MS]
@@ -614,14 +618,12 @@ def print_blended_summary(blended_rows, session_hours):
     print(f"  Total potential profit: {_per_hr(total_potential, session_hours)}")
     print()
 
-    # Duration quick summary
     durations = sorted(r["duration_ms"] for r in blended_rows)
     median = durations[len(durations)//2]
     p90    = durations[int(len(durations)*0.90)]
     print(f"  Duration — Median: {median:.0f}ms   p90: {p90:.0f}ms   Max: {durations[-1]:.0f}ms")
     print()
 
-    # Per-event table
     by_event = defaultdict(list)
     for r in blended_rows:
         by_event[r["event_id"]].append(r)
@@ -630,13 +632,12 @@ def print_blended_summary(blended_rows, session_hours):
     print(f"  {'-'*42} {'-'*4} {'-'*4} {'-'*7} {'-'*8} {'-'*10}")
     for ev_id, evrows in sorted(by_event.items(), key=lambda x: -sum(r["total_potential"] for r in x[1])):
         legs     = evrows[0]["num_legs"]
-        avg_ms   = sum(r["duration_ms"]   for r in evrows) / len(evrows)
-        avg_cost = sum(r["best_net_cost"] for r in evrows) / len(evrows)
+        avg_ms   = sum(r["duration_ms"]    for r in evrows) / len(evrows)
+        avg_cost = sum(r["best_net_cost"]  for r in evrows) / len(evrows)
         tot_pot  = sum(r["total_potential"] for r in evrows)
         print(f"  {ev_id:<42} {legs:>4} {len(evrows):>4} {avg_ms:>7.0f} {avg_cost:>8.4f} ${tot_pot:>9.4f}")
     print()
 
-    # LegChoices frequency: which platform is cheapest per leg
     all_choices = []
     for r in blended_rows:
         choices = r.get("best_leg_choices", "")
@@ -644,7 +645,6 @@ def print_blended_summary(blended_rows, session_hours):
             all_choices.append(choices.split(","))
 
     if all_choices:
-        # Count K vs P per leg position across all windows
         max_legs = max(len(c) for c in all_choices)
         print(f"  Platform cheapest per leg position (across {len(all_choices)} windows):")
         print(f"  {'Leg':>4}  {'K-wins':>8}  {'P-wins':>8}  {'% K-cheap':>10}")
@@ -658,14 +658,163 @@ def print_blended_summary(blended_rows, session_hours):
             print(f"  {leg_idx+1:>4}  {k_cnt:>8}  {p_cnt:>8}  {pct_k:>9.1f}%")
     print()
 
+# ─── SECTION 10: PRODUCTION SIM ──────────────────────────────────────────────
+
+def _duration_participation(duration_ms):
+    """
+    Duration-tiered participation rate.
+    Short windows imply others are racing; long windows imply you're alone.
+    """
+    if duration_ms <   500: return 0.15
+    if duration_ms <  2000: return 0.30
+    if duration_ms < 60000: return 0.60
+    return 0.85
+
+
+def _sim_entries(by_pair, participation_rate):
+    entries = []
+    for pair_id, pr in by_pair.items():
+        pool  = [r for r in pr if r["duration_ms"] >= PROD_LATENCY_MS] or pr
+        best  = min(pool, key=lambda r: r["best_net_cost"])
+        cap_w = len([r for r in pr if r["duration_ms"] >= PROD_LATENCY_MS])
+        rate  = (participation_rate if participation_rate is not None
+                 else _duration_participation(best["duration_ms"]))
+        capital = best["total_capital_req"] * rate
+        shares  = capital / best["best_net_cost"] if best["best_net_cost"] > 0 else 0
+        entries.append({
+            "pair_id":  pair_id,
+            "label":    best["label"],
+            "cap_wins": cap_w,
+            "capital":  capital,
+            "cost":     best["best_net_cost"],
+            "rate":     rate,
+            "win_pnl":  shares * best["net_profit_per_share"],
+            "arb_type": best["arb_type"],
+        })
+    entries.sort(key=lambda x: x["win_pnl"], reverse=True)
+    return entries
+
+
+def print_production_sim(rows, session_hours, participation_rate=None):
+    """
+    Section 10 — Production Sim (always last).
+
+    Models the bot running from a US server:
+      • Min capturable window  : 17ms  (6ms one-way)
+      • Participation rate     : duration-tiered by default, or flat via --participation-rate
+      • Entry model            : one entry per pair at the best (lowest-cost) capturable window
+      • Scope                  : clean rows only (no fraud flags)
+
+    Note: cross-platform arbs have no external resolution API — P&L is projected only.
+    """
+    print("=" * 80)
+    print("  PRODUCTION SIM  (US server · competition-adjusted · clean pairs only)")
+    print("=" * 80)
+    print(f"  Latency model : US server  (~6ms one-way, {PROD_LATENCY_MS}ms min capturable window)")
+    if participation_rate is None:
+        print(f"  Participation : duration-tiered  (<0.5s=15%  0.5-2s=30%  2-60s=60%  >60s=85%)")
+        print(f"                  (long windows imply low competition; latency already filters fast closes)")
+    else:
+        print(f"  Participation : {participation_rate*100:.0f}% flat  (override via --participation-rate)")
+    print(f"  Entry model   : one entry per pair at best (lowest-cost) capturable window")
+    print(f"  Scope         : clean pairs — flagged rows excluded")
+    print()
+
+    clean_rows = [r for r in rows if not r["flags"]]
+    flagged_n  = len(rows) - len(clean_rows)
+    print(f"  Rows excluded : {flagged_n} flagged")
+    print()
+
+    if not clean_rows:
+        print("  No clean rows remain after filters.")
+        print()
+        return
+
+    by_pair = defaultdict(list)
+    for r in clean_rows:
+        by_pair[r["pair_id"]].append(r)
+
+    entries      = _sim_entries(by_pair, participation_rate)
+    total_capital = sum(e["capital"] for e in entries)
+    total_proj    = sum(e["win_pnl"] for e in entries)
+
+    def _multi(rate_or_none):
+        total = 0.0
+        for r in clean_rows:
+            if r["duration_ms"] < PROD_LATENCY_MS:
+                continue
+            rate = (_duration_participation(r["duration_ms"]) if rate_or_none is None
+                    else rate_or_none)
+            cap = r["total_capital_req"] * rate
+            if r["best_net_cost"] > 0:
+                total += (cap / r["best_net_cost"]) * r["net_profit_per_share"]
+        return total
+
+    multi_proj = _multi(participation_rate)
+
+    rate_hdr = "Part%" if participation_rate is None else f"{participation_rate*100:.0f}%"
+    print(f"  {'Label':<44} {rate_hdr:>5} {'Capital':>8} {'ProjProfit':>10}  ArbType")
+    print(f"  {'-'*44} {'-'*5} {'-'*8} {'-'*10}  -------")
+
+    for e in entries:
+        rate_str = f"{e['rate']*100:.0f}%" if participation_rate is None else ""
+        print(f"  {e['label'][:44]:<44} {rate_str:>5} ${e['capital']:>7.2f} ${e['win_pnl']:>+9.2f}  {e['arb_type']}")
+
+    print()
+    rate_label = "duration-tiered" if participation_rate is None else f"{participation_rate*100:.0f}% flat"
+    print(f"  Pairs:              {len(entries)}")
+    print(f"  Total capital used: ${total_capital:.2f}  ({rate_label} participation)")
+    print()
+    print(f"  PROJECTED P&L   single entry  :  {_per_hr(total_proj,  session_hours)}")
+    print(f"  PROJECTED P&L   multi-entry   :  {_per_hr(multi_proj,  session_hours)}")
+    print()
+    print(f"  Note: cross-platform arbs settle instantly (both legs pay $1 or both pay $0).")
+    print(f"        No external resolution API — run the bot live to measure actual fill rate.")
+    print()
+
+    # ── Competition sensitivity table ─────────────────────────────────────────
+    capturable_clean = [r for r in clean_rows if r["duration_ms"] >= PROD_LATENCY_MS]
+    print(f"  COMPETITION SENSITIVITY  ({len(entries)} pairs · {len(capturable_clean)} capturable windows)")
+    print(f"  {'Model':<16}  {'Assumption':<28}  {'1x Capital':>10}  {'1x /hr':>9}  {'Multi /hr':>10}")
+    print(f"  {'-'*16}  {'-'*28}  {'-'*10}  {'-'*9}  {'-'*10}")
+
+    def _row(rate_or_none, label, marker=""):
+        sc_entries = _sim_entries(by_pair, rate_or_none)
+        sc_capital = sum(e["capital"] for e in sc_entries)
+        sc_1x      = sum(e["win_pnl"] for e in sc_entries)
+        sc_multi   = _multi(rate_or_none)
+        model_str  = "duration-tiered" if rate_or_none is None else f"flat {rate_or_none*100:.0f}%"
+        print(f"  {model_str:<16}  {label:<28}  ${sc_capital:>9.2f}  {_hr(sc_1x, session_hours):>9}  "
+              f"{_hr(sc_multi, session_hours):>10}{marker}")
+
+    _row(None,  "tiered by duration (default)", " <--" if participation_rate is None else "")
+    _row(1.00,  "sole actor / no competition",  " <--" if participation_rate == 1.0  else "")
+    _row(0.50,  "1 competitor  (~2 desks)",     " <--" if participation_rate == 0.5  else "")
+    _row(0.25,  "3 competitors (~4 desks)",     " <--" if participation_rate == 0.25 else "")
+    _row(0.10,  "9 competitors (~10 desks)",    " <--" if participation_rate == 0.10 else "")
+
+    print()
+    print(f"  Note: multi-entry = every capturable re-entry per pair at the same participation rate.")
+    print()
+
 # ─── MAIN ─────────────────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(description="Analyze CrossArbTelemetry CSV")
-    parser.add_argument("--file",         default=None, help="Path to CrossArbTelemetry CSV (auto-discovers if omitted)")
+    parser.add_argument("--file",         default=None,
+                        help="Path to CrossArbTelemetry CSV (auto-discovers if omitted)")
     parser.add_argument("--min-duration", type=int, default=DEFAULT_MIN_DURATION_MS,
                         help=f"Min ms to count as capturable (default {DEFAULT_MIN_DURATION_MS})")
-    parser.add_argument("--clean", action="store_true", help="Only analyze rows with no fraud flags")
+    parser.add_argument("--spam-threshold", type=int, default=REPEAT_SPAM_THRESHOLD,
+                        help=f"Windows per pair above which REPEAT_SPAM fires (default {REPEAT_SPAM_THRESHOLD})")
+    parser.add_argument("--exclude", default="",
+                        help="Comma-separated terms; rows whose Label or PairId contains any term are removed")
+    parser.add_argument("--include", default="",
+                        help="Comma-separated terms; only rows whose Label or PairId contains at least one term are kept")
+    parser.add_argument("--clean", action="store_true",
+                        help="Only analyze rows with no fraud flags")
+    parser.add_argument("--participation-rate", type=float, default=None,
+                        help="Flat participation rate 0.0-1.0 (default: duration-tiered model)")
     args = parser.parse_args()
 
     path = args.file or find_latest_csv("CrossArbTelemetry_*.csv")
@@ -678,23 +827,42 @@ def main():
         print(f"ERROR: No valid rows loaded from {path}")
         sys.exit(1)
 
-    session_hours = compute_session_hours(rows, path)
-    compute_flags(rows)
+    # ── Apply --exclude / --include ───────────────────────────────────────────
+    def _matches(r, term):
+        t = term.lower()
+        return t in r["label"].lower() or t in r["pair_id"].lower()
 
+    exclude_terms = {t.strip() for t in args.exclude.split(",") if t.strip()}
+    include_terms = {t.strip() for t in args.include.split(",") if t.strip()}
+
+    if exclude_terms:
+        before = len(rows)
+        rows = [r for r in rows if not any(_matches(r, t) for t in exclude_terms)]
+        print(f"[--exclude] Removed {before - len(rows)} rows  (terms: {', '.join(sorted(exclude_terms))})")
+
+    if include_terms:
+        before = len(rows)
+        rows = [r for r in rows if any(_matches(r, t) for t in include_terms)]
+        print(f"[--include] Kept {len(rows)} / {before} rows  (terms: {', '.join(sorted(include_terms))})")
+
+    session_hours = compute_session_hours(rows, path)
+    compute_flags(rows, spam_threshold=args.spam_threshold)
+
+    # Fraud report uses full dataset; --clean filter applied for analysis sections
     analysis_rows = [r for r in rows if not r["flags"]] if args.clean else rows
     if args.clean:
         print(f"[--clean] Analyzing {len(analysis_rows)} / {len(rows)} rows (no fraud flags)\n")
 
     print_session_summary(analysis_rows, path, session_hours)
     print_all_pairs(rows)
-    print_fraud_checks(rows)
+    print_fraud_checks(rows, spam_threshold=args.spam_threshold)
     print_duration_analysis(analysis_rows, args.min_duration)
     print_profit_analysis(analysis_rows, args.min_duration, DEFAULT_CAPITAL_PER_ARB, DEFAULT_CAPTURE_RATE, session_hours)
     print_arb_type_breakdown(analysis_rows)
     print_ws_reliability(rows)
     print_rest_verification(rows)
 
-    # Blended section (optional)
+    # Blended section (optional CSV)
     blended_path = find_blended_csv(path)
     if blended_path and os.path.exists(blended_path):
         blended_rows = load_blended_csv(blended_path)
@@ -705,6 +873,9 @@ def main():
         print("  BLENDED CATEGORICAL ARB SUMMARY")
         print("=" * 80)
         print("  (no CrossArbBlended_*.csv found — no blended arb windows recorded yet)\n")
+
+    print_production_sim(rows, session_hours,          # LAST — most important
+                         participation_rate=args.participation_rate)
 
 if __name__ == "__main__":
     main()
