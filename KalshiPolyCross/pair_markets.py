@@ -9,6 +9,9 @@ Usage:
     python pair_markets.py --output path/to.json    # custom output path
     python pair_markets.py --no-cache               # ignore embedding cache
     python pair_markets.py --dry-run                # print candidates, skip judge
+    python pair_markets.py --w1                     # only markets ending within 1 week (not today)
+    python pair_markets.py --w2                     # only markets ending within 2 weeks (not today)
+    python pair_markets.py --manual-judge           # judge pairs interactively (no Gemini needed)
 """
 
 import argparse, base64, json, os, re, sys, time
@@ -610,6 +613,43 @@ def _save_pairs(matched: list, output_path: Path) -> None:
     print(f"[SAVE] {added} new pair(s) saved to {output_path}.")
 
 
+def _save_rejected(rejected: list, output_path: Path) -> None:
+    """Append INVALID/SKIP judgments to rejected_pairs.json so they are never shown again."""
+    existing = []
+    existing_keys: set = set()
+    if output_path.exists():
+        try:
+            existing = json.loads(output_path.read_text(encoding="utf-8-sig"))
+            existing_keys = {
+                f"{e['kalshi_ticker']}|{e['poly_yes_token']}".lower()
+                for e in existing
+            }
+        except Exception as e:
+            print(f"[SAVE] Warning reading rejected pairs: {e}")
+
+    added = 0
+    for m, verdict in rejected:
+        key = f"{m['kalshi_ticker']}|{m['poly_yes']}".lower()
+        if key in existing_keys:
+            continue
+        existing_keys.add(key)
+        existing.append({
+            "kalshi_ticker":  m["kalshi_ticker"],
+            "poly_yes_token": m["poly_yes"],
+            "label":          m["kalshi_title"],
+            "poly_question":  m["poly_question"],
+            "verdict":        verdict,
+        })
+        added += 1
+
+    if added == 0:
+        return
+
+    tmp = output_path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+    tmp.replace(output_path)
+
+
 def _save_potential_pairs(conditional: list, output_path: Path) -> None:
     """Save CONDITIONAL pairs (with verdict metadata) to potential_cross_pairs.json."""
     existing = []
@@ -655,6 +695,7 @@ def _save_potential_pairs(conditional: list, output_path: Path) -> None:
 # -- Manual judge --------------------------------------------------------------
 def run_manual_judge(candidates: list, output_path: Path) -> None:
     potential_path = output_path.parent / f"potential_{output_path.name}"
+    rejected_path  = output_path.parent / "rejected_pairs.json"
     total = len(candidates)
     print(f"\n[MANUAL] {total} candidates to judge.")
     print("  Keys: 1=VALID  2=CONDITIONAL  3=INVALID  s=skip  q=quit\n")
@@ -686,9 +727,6 @@ def run_manual_judge(candidates: list, output_path: Path) -> None:
         if key == "q":
             print("[MANUAL] Quit.")
             break
-        if key == "s":
-            print("  [SKIP]")
-            continue
         if key == "1":
             _save_pairs([c], output_path)
         elif key == "2":
@@ -701,11 +739,26 @@ def run_manual_judge(candidates: list, output_path: Path) -> None:
             _save_potential_pairs([(c, verdict)], potential_path)
         elif key == "3":
             print("  [INVALID]")
+            _save_rejected([(c, "INVALID")], rejected_path)
+        elif key == "s":
+            print("  [SKIP]")
+            _save_rejected([(c, "SKIP")], rejected_path)
         print()
 
 
 # -- Main -----------------------------------------------------------------------
 def main() -> None:
+    # Pre-parse --wN week-window flag (argparse rejects flags starting with a digit after --)
+    weeks_limit = None
+    clean_argv  = []
+    for arg in sys.argv[1:]:
+        m = re.match(r'^--w(\d+)$', arg)
+        if m:
+            weeks_limit = int(m.group(1))
+        else:
+            clean_argv.append(arg)
+    sys.argv = [sys.argv[0]] + clean_argv
+
     ap = argparse.ArgumentParser(description="Pair Kalshi <-> Polymarket markets.")
     ap.add_argument("--output",   default=str(DEFAULT_OUTPUT))
     ap.add_argument("--no-cache",    action="store_true", help="Ignore embedding cache")
@@ -733,19 +786,39 @@ def main() -> None:
         private_key = serialization.load_pem_private_key(f.read(), password=None)
 
     already_paired: set = set()
-    if output_path.exists():
+    _seen_files = [
+        (output_path,                                               "paired"),
+        (output_path.parent / f"potential_{output_path.name}",     "conditional"),
+        (output_path.parent / "rejected_pairs.json",               "rejected"),
+    ]
+    for _p, _ in _seen_files:
+        if not _p.exists():
+            continue
         try:
-            for e in json.loads(output_path.read_text(encoding="utf-8-sig")):
+            for e in json.loads(_p.read_text(encoding="utf-8-sig")):
                 already_paired.add(e.get("kalshi_ticker", ""))
-            if already_paired:
-                print(f"[INFO] {len(already_paired)} already-paired tickers will be skipped.")
         except Exception:
             pass
+    if already_paired:
+        print(f"[INFO] {len(already_paired)} tickers already seen (paired/conditional/rejected) — skipping.")
 
     kalshi_markets = fetch_kalshi_markets(api_key_id, private_key)
     poly_markets   = fetch_poly_markets()
 
     candidates = find_candidates(kalshi_markets, poly_markets, already_paired, not args.no_cache)
+
+    if weeks_limit is not None:
+        now      = datetime.now(timezone.utc)
+        tomorrow = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        cutoff   = now + timedelta(weeks=weeks_limit)
+        before   = len(candidates)
+        def _in_window(dt):
+            if dt is None: return False
+            if dt.tzinfo is None: dt = dt.replace(tzinfo=timezone.utc)
+            return tomorrow <= dt <= cutoff
+        candidates = [c for c in candidates if _in_window(c["kalshi_close"]) and _in_window(c["poly_close"])]
+        print(f"[--w{weeks_limit}] {len(candidates)} / {before} candidates closing "
+              f"{tomorrow.strftime('%Y-%m-%d')} – {cutoff.strftime('%Y-%m-%d')} (today excluded).")
 
     if args.dry_run:
         print(f"\n[DRY RUN] Top {min(50, len(candidates))} candidates (judge skipped):")
