@@ -73,18 +73,21 @@ DEFAULT_OUTPUT    = SCRIPT_DIR / "cross_pairs.json"
 # These markets have trade delays during the event and are excluded by --no-games.
 # MVP, draft, season win-totals, championships, awards etc. are NOT matched.
 _LIVE_GAME_RE = re.compile(
-    r'\bvs\.?\s'            # "vs " / "vs. " between two teams
-    r'|\b@\s+[A-Z]'         # "@ Lakers" (away-at-home format)
-    r'|\bgame\s+[1-9]\b'    # "Game 1" … "Game 7"
-    r'|\bmatch\s+\d+\b'     # "Match 3"
-    r'|\bleg\s+\d+\b'       # "Leg 2" (used in some football formats)
-    r'|\btonight\b'         # same-day game reference
-    r'|\bmoneyline\b'       # betting term exclusive to single-game markets
+    r'\bvs\.?\s'                    # "vs " / "vs. " between two teams
+    r'|\b@\s+[A-Z]'                 # "@ Lakers" (away-at-home format)
+    r'|\bgame\s+[1-9]\b'            # "Game 1" … "Game 7"
+    r'|\bmatch\s+\d+\b'             # "Match 3"
+    r'|\bleg\s+\d+\b'               # "Leg 2" (used in some football formats)
+    r'|\btonight\b'                 # same-day game reference
+    r'|\bmoneyline\b'               # betting term exclusive to single-game markets
     r'|\bcover\b.{0,15}\bspread\b'  # "cover the spread"
-    r'|\bover\/under\b'     # "over/under X.5 points"
-    r'|\bfirst\s+half\b'    # half-time markets
-    r'|\bfirst\s+quarter\b' # quarter markets
-    r'|\bregulation\b',     # "win in regulation"
+    r'|\bover\/under\b'             # "over/under X.5 points" (full form)
+    r'|\bo\/u\b'                    # "O/U 5.5" (short form)
+    r'|\b\d+\.5\b'                  # half-point line (X.5) — always a prop/spread
+    r'|\bfirst\s+half\b'            # half-time markets
+    r'|\bfirst\s+quarter\b'         # quarter markets
+    r'|\bregulation\b'              # "win in regulation"
+    r'|\bprop\b',                   # "player prop"
     re.IGNORECASE,
 )
 
@@ -207,6 +210,7 @@ def fetch_kalshi_markets(api_key_id: str, private_key) -> dict:
                     "close_date":   close_date,
                     "rules":        m.get("rules_primary", ""),
                     "event_ticker": event_ticker,
+                    "category":     cat,
                 }
         cursor = data.get("cursor", "")
         if not cursor:
@@ -356,17 +360,18 @@ def find_candidates(
                     if abs((kd - pd).total_seconds()) / 86400 > DATE_WINDOW_DAYS:
                         continue
                 candidates.append({
-                    "kalshi_ticker": ticker,
-                    "kalshi_title":  info["title"],
-                    "kalshi_close":  info["close_date"],
-                    "kalshi_rules":  info["rules"],
-                    "kalshi_event":  info["event_ticker"],
-                    "poly_question": p["question"],
-                    "poly_yes":      p["yes_token"],
-                    "poly_no":       p["no_token"],
-                    "poly_close":    p["end_date"],
-                    "poly_desc":     p["description"],
-                    "score":         float(col[idx]),
+                    "kalshi_ticker":   ticker,
+                    "kalshi_title":    info["title"],
+                    "kalshi_close":    info["close_date"],
+                    "kalshi_rules":    info["rules"],
+                    "kalshi_event":    info["event_ticker"],
+                    "kalshi_category": info.get("category", ""),
+                    "poly_question":   p["question"],
+                    "poly_yes":        p["yes_token"],
+                    "poly_no":         p["no_token"],
+                    "poly_close":      p["end_date"],
+                    "poly_desc":       p["description"],
+                    "score":           float(col[idx]),
                 })
 
         print(f"[EMBED] {chunk_end}/{total_k} tickers scored, {len(candidates)} raw hits so far...", flush=True)
@@ -748,7 +753,8 @@ def run_manual_judge(candidates: list, output_path: Path) -> None:
     for i, c in enumerate(candidates):
         kc = c["kalshi_close"].strftime("%Y-%m-%d") if c["kalshi_close"] else "?"
         pc = c["poly_close"].strftime("%Y-%m-%d")   if c["poly_close"]   else "?"
-        print(f"--- [{i+1}/{total}] score={c['score']:.3f} ---")
+        cat = c.get("kalshi_category") or "?"
+        print(f"--- [{i+1}/{total}] score={c['score']:.3f}  category={cat} ---")
         print(f"  KALSHI  {c['kalshi_ticker']}")
         print(f"          {_GREEN}{c['kalshi_title']}{_RESET}")
         print(f"          closes: {kc}")
@@ -823,6 +829,10 @@ def main() -> None:
                     help="Comma-separated terms; only candidates whose Kalshi title OR Poly question contains at least one term are kept")
     ap.add_argument("--no-games", action="store_true",
                     help="Drop candidates that look like specific live game/match markets (vs, Game N, moneyline, etc.); keeps MVP, draft, championship, season markets")
+    ap.add_argument("--exclude-category", default="",
+                    help="Comma-separated Kalshi categories to exclude (e.g. 'Sports'); run once to see available categories")
+    ap.add_argument("--include-category", default="",
+                    help="Comma-separated Kalshi categories to keep (e.g. 'Politics,Economics')")
     args = ap.parse_args()
 
     output_path = Path(args.output)
@@ -861,6 +871,13 @@ def main() -> None:
 
     candidates = find_candidates(kalshi_markets, poly_markets, already_paired, not args.no_cache)
 
+    # Print category breakdown so user knows what values to pass
+    if candidates:
+        from collections import Counter
+        cat_counts = Counter(c["kalshi_category"] or "Unknown" for c in candidates)
+        print(f"[CATEGORIES] {len(cat_counts)} Kalshi categories in candidates: "
+              + ", ".join(f"{k}({v})" for k, v in cat_counts.most_common()))
+
     if weeks_limit is not None:
         now      = datetime.now(timezone.utc)
         tomorrow = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
@@ -893,6 +910,19 @@ def main() -> None:
         before = len(candidates)
         candidates = [c for c in candidates if any(_label_match(c, t) for t in include_terms)]
         print(f"[--include] Kept {len(candidates)} / {before} candidates  ({', '.join(include_terms)})")
+
+    excl_cats = [t.strip().lower() for t in args.exclude_category.split(",") if t.strip()]
+    incl_cats = [t.strip().lower() for t in args.include_category.split(",") if t.strip()]
+
+    if excl_cats:
+        before = len(candidates)
+        candidates = [c for c in candidates if c.get("kalshi_category", "").lower() not in excl_cats]
+        print(f"[--exclude-category] Removed {before - len(candidates)} candidates  ({', '.join(excl_cats)})")
+
+    if incl_cats:
+        before = len(candidates)
+        candidates = [c for c in candidates if c.get("kalshi_category", "").lower() in incl_cats]
+        print(f"[--include-category] Kept {len(candidates)} / {before} candidates  ({', '.join(incl_cats)})")
 
     if args.no_games:
         before = len(candidates)
