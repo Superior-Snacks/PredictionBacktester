@@ -106,6 +106,11 @@ Console.WriteLine($"  Poly tokens    : {polySubscribeTokens.Count}");
 
 bool showBlended = !args.Contains("--no-blended");
 
+// Track which tickers/tokens are already subscribed (for hot-reload dedup)
+var knownKalshiTickers = new HashSet<string>(kalshiSubscribeTickers, StringComparer.Ordinal);
+var knownPolyTokens    = new HashSet<string>(polySubscribeTokens,    StringComparer.Ordinal);
+var knownPairIds       = new HashSet<string>(pairs.Select(p => p.PairId), StringComparer.Ordinal);
+
 var cts = new CancellationTokenSource();
 Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
 
@@ -164,6 +169,57 @@ var kalshiFeed = new KalshiWebsocketFeed(orderClient, kalshiConfig, kalshiSubscr
                                          state, telemetry, KALSHI_BATCH_SIZE, MIN_BOOK_PRICE);
 var polyFeed   = new PolymarketWebsocketFeed(POLY_WS_URL, polySubscribeTokens,
                                              state, telemetry, POLY_BATCH_SIZE, POLY_PING_INTERVAL_MS);
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  HOT-RELOAD: watch cross_pairs.json for new pairs every 30s
+// ══════════════════════════════════════════════════════════════════════════════
+_ = Task.Run(async () =>
+{
+    while (!cts.Token.IsCancellationRequested)
+    {
+        await Task.Delay(900_000, cts.Token).ContinueWith(_ => { });
+        if (cts.Token.IsCancellationRequested) break;
+        if (!File.Exists(manualPath)) continue;
+        try
+        {
+            using var doc = JsonDocument.Parse(File.ReadAllText(manualPath));
+            var newPairs    = new List<CrossPair>();
+            var newKTickers = new List<string>();
+            var newPTokens  = new List<string>();
+
+            foreach (var el in doc.RootElement.EnumerateArray())
+            {
+                string kTicker  = el.TryGetProperty("kalshi_ticker",  out var kt)  ? (kt.GetString()  ?? "") : "";
+                string yesToken = el.TryGetProperty("poly_yes_token", out var yt)  ? (yt.GetString()  ?? "") : "";
+                string noToken  = el.TryGetProperty("poly_no_token",  out var nt)  ? (nt.GetString()  ?? "") : "";
+                string label    = el.TryGetProperty("label",          out var lb)  ? (lb.GetString()  ?? "") : kTicker;
+                string eventId  = el.TryGetProperty("event_id",       out var eid) ? (eid.GetString() ?? "") : "";
+                if (string.IsNullOrEmpty(kTicker) || string.IsNullOrEmpty(yesToken) || string.IsNullOrEmpty(noToken)) continue;
+
+                string pairId = $"MANUAL_{kTicker}__{yesToken[..Math.Min(8, yesToken.Length)]}";
+                if (knownPairIds.Contains(pairId)) continue;
+                knownPairIds.Add(pairId);
+
+                newPairs.Add(new CrossPair(pairId, label, kTicker, yesToken, noToken, eventId));
+                if (knownKalshiTickers.Add(kTicker)) newKTickers.Add(kTicker);
+                if (knownPolyTokens.Add(yesToken))   newPTokens.Add(yesToken);
+                if (knownPolyTokens.Add(noToken))    newPTokens.Add(noToken);
+            }
+
+            if (newPairs.Count == 0) continue;
+
+            foreach (var t in newKTickers) state.InitKalshiMarket(t);
+            foreach (var t in newPTokens)  state.InitPolyToken(t);
+            telemetry.AddPairs(newPairs);
+            if (newKTickers.Count > 0) kalshiFeed.EnqueueSubscribe(newKTickers);
+            if (newPTokens.Count  > 0) polyFeed.EnqueueSubscribe(newPTokens);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[HOT-RELOAD] Error reading {manualPath}: {ex.Message}");
+        }
+    }
+});
 
 var kalshiWsTask = Task.Run(async () => 
 {

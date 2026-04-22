@@ -69,13 +69,15 @@ record ActiveWindow(
 
 public class CrossPlatformArbTelemetryStrategy
 {
-    private readonly IReadOnlyList<CrossPair> _pairs;
+    private volatile IReadOnlyList<CrossPair> _pairs;
     private readonly ConcurrentDictionary<string, LocalOrderBook> _books;
     private readonly decimal _arbThreshold;
     private readonly decimal _depthFloor;
 
     // bookKey → pair indices that reference it (fast lookup on every delta)
+    // Protected by _indexLock; values are never mutated in-place (replaced atomically).
     private readonly Dictionary<string, List<int>> _bookKeyToPairs;
+    private readonly ReaderWriterLockSlim _indexLock = new(LockRecursionPolicy.NoRecursion);
 
     // pairId → open window (null = no arb active)
     private readonly Dictionary<string, ActiveWindow?> _activeWindows;
@@ -112,7 +114,7 @@ public class CrossPlatformArbTelemetryStrategy
     private int _polyWsDrops;
 
     // ── Locks ──────────────────────────────────────────────────────────────────
-    private readonly object _windowLock = new(); // guards _activeWindows
+    private readonly object _windowLock = new(); // guards _activeWindows + _blendedWindows
 
     // ── Async CSV channel (single background writer — no lock on hot path) ─────
     private readonly Channel<string> _csvChannel =
@@ -195,13 +197,19 @@ public class CrossPlatformArbTelemetryStrategy
     // Called by both WS tasks after updating a book.
     public void OnBookUpdate(string bookKey)
     {
-        if (_bookKeyToPairs.TryGetValue(bookKey, out var indices))
-            foreach (var idx in indices)
-                EvaluatePair(_pairs[idx]);
+        List<int>?    indices  = null;
+        List<string>? eventIds = null;
+        _indexLock.EnterReadLock();
+        try
+        {
+            _bookKeyToPairs.TryGetValue(bookKey, out indices);
+            _bookKeyToEvents.TryGetValue(bookKey, out eventIds);
+        }
+        finally { _indexLock.ExitReadLock(); }
 
-        if (_bookKeyToEvents.TryGetValue(bookKey, out var eventIds))
-            foreach (var evId in eventIds)
-                EvaluateBlendedGroup(evId, _eventGroups[evId]);
+        var pairsSnap = _pairs; // volatile read — stable reference for this call
+        if (indices  != null) foreach (var idx   in indices)  EvaluatePair(pairsSnap[idx]);
+        if (eventIds != null) foreach (var evId  in eventIds) EvaluateBlendedGroup(evId, _eventGroups[evId]);
     }
 
     /// <summary>Kalshi WS dropped and reconnected. Increments drop counter and closes all open windows.</summary>
@@ -256,6 +264,67 @@ public class CrossPlatformArbTelemetryStrategy
                     RestDelayMs   = delayMs
                 };
         }
+    }
+
+    /// <summary>
+    /// Adds new pairs discovered at runtime (e.g. from a hot-reloaded cross_pairs.json).
+    /// Thread-safe: can be called while WS tasks are running.
+    /// </summary>
+    public void AddPairs(IReadOnlyList<CrossPair> newPairs)
+    {
+        if (newPairs.Count == 0) return;
+
+        _indexLock.EnterWriteLock();
+        try
+        {
+            // Snapshot current list, append, swap atomically via volatile write
+            var merged = new List<CrossPair>(_pairs);
+            int baseIdx = merged.Count;
+            merged.AddRange(newPairs);
+            _pairs = merged.AsReadOnly(); // volatile write — visible to all readers immediately
+
+            for (int i = 0; i < newPairs.Count; i++)
+            {
+                var p   = newPairs[i];
+                int idx = baseIdx + i;
+                foreach (var key in new[] { $"K:{p.KalshiTicker}", $"K:{p.KalshiTicker}_NO",
+                                             $"P:{p.PolyYesTokenId}", $"P:{p.PolyNoTokenId}" })
+                {
+                    if (!_bookKeyToPairs.TryGetValue(key, out var list))
+                        _bookKeyToPairs[key] = list = new List<int>();
+                    list.Add(idx);
+                }
+
+                // Event groups for blended arb
+                if (!string.IsNullOrEmpty(p.EventId))
+                {
+                    if (!_eventGroups.TryGetValue(p.EventId, out var grp))
+                        _eventGroups[p.EventId] = grp = new List<CrossPair>();
+                    grp.Add(p);
+                    foreach (var key in new[] { $"K:{p.KalshiTicker}", $"P:{p.PolyYesTokenId}" })
+                    {
+                        if (!_bookKeyToEvents.TryGetValue(key, out var evList))
+                            _bookKeyToEvents[key] = evList = new List<string>();
+                        if (!evList.Contains(p.EventId)) evList.Add(p.EventId);
+                    }
+                }
+            }
+        }
+        finally { _indexLock.ExitWriteLock(); }
+
+        // Register new active-window slots and blended-window slots under their own lock
+        lock (_windowLock)
+        {
+            foreach (var p in newPairs)
+            {
+                if (!_activeWindows.ContainsKey(p.PairId))
+                    _activeWindows[p.PairId] = null;
+                if (!string.IsNullOrEmpty(p.EventId) && !_blendedWindows.ContainsKey(p.EventId))
+                    _blendedWindows[p.EventId] = null;
+            }
+        }
+
+        Console.WriteLine($"[CROSS] +{newPairs.Count} pair(s) loaded. Total: {_pairs.Count}");
     }
 
     // Near-miss snapshot: sorted by net cost ascending. Marks open arbs as LIVE.

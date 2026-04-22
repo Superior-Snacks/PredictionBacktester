@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Collections.Concurrent;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
@@ -19,6 +20,7 @@ public class PolymarketWebsocketFeed
     private readonly CrossPlatformArbTelemetryStrategy _telemetry;
     private readonly int _batchSize;
     private readonly int _pingIntervalMs;
+    private readonly ConcurrentQueue<List<string>> _pendingSubscriptions = new();
 
     public PolymarketWebsocketFeed(
         string   wsUrl,
@@ -34,6 +36,17 @@ public class PolymarketWebsocketFeed
         _telemetry      = telemetry;
         _batchSize      = batchSize;
         _pingIntervalMs = pingIntervalMs;
+    }
+
+    /// <summary>Queues new tokens to subscribe on the live connection. Safe to call from any thread.</summary>
+    public void EnqueueSubscribe(IEnumerable<string> tokens)
+    {
+        var list = tokens.ToList();
+        if (list.Count > 0)
+        {
+            _tokens.AddRange(list.Where(t => !_tokens.Contains(t))); // keep full list for reconnect
+            _pendingSubscriptions.Enqueue(list);
+        }
     }
 
     public async Task RunAsync(CancellationToken ct)
@@ -57,6 +70,14 @@ public class PolymarketWebsocketFeed
                         try
                         {
                             await Task.Delay(_pingIntervalMs, pingSrc.Token);
+                            // Drain any dynamically-added tokens before the ping
+                            while (_pendingSubscriptions.TryDequeue(out var newTokens))
+                            {
+                                string assetList = string.Join("\",\"", newTokens);
+                                string subMsg = $"{{\"assets_ids\":[\"{assetList}\"],\"operation\":\"subscribe\"}}";
+                                await ws.SendAsync(Encoding.UTF8.GetBytes(subMsg), WebSocketMessageType.Text, true, pingSrc.Token);
+                                Console.WriteLine($"[POLY WS] Subscribed to {newTokens.Count} new token(s)");
+                            }
                             await ws.SendAsync(new ArraySegment<byte>(pingBytes), WebSocketMessageType.Text, true, pingSrc.Token);
                         }
                         catch { break; }

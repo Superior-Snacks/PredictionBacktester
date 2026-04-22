@@ -22,6 +22,8 @@ public class KalshiWebsocketFeed
     private readonly CrossPlatformArbTelemetryStrategy _telemetry;
     private readonly int     _batchSize;
     private readonly decimal _minBookPrice;
+    private readonly ConcurrentQueue<List<string>> _pendingSubscriptions = new();
+    private int _msgId = 1; // shared between initial subscribe + dynamic subscribe
 
     public KalshiWebsocketFeed(
         KalshiOrderClient orderClient,
@@ -41,6 +43,13 @@ public class KalshiWebsocketFeed
         _minBookPrice = minBookPrice;
     }
 
+    /// <summary>Queues new tickers to subscribe on the live connection. Safe to call from any thread.</summary>
+    public void EnqueueSubscribe(IEnumerable<string> tickers)
+    {
+        var list = tickers.ToList();
+        if (list.Count > 0) _pendingSubscriptions.Enqueue(list);
+    }
+
     public async Task RunAsync(CancellationToken ct)
     {
         bool firstConnect = true;
@@ -57,12 +66,11 @@ public class KalshiWebsocketFeed
                 await ws.ConnectAsync(new Uri(_config.BaseWsUrl), ct);
                 Console.WriteLine($"[KALSHI WS] Connected to {_config.BaseWsUrl}");
 
-                int msgId = 1;
                 for (int i = 0; i < _tickers.Count; i += _batchSize)
                 {
                     var batch = _tickers.Skip(i).Take(_batchSize);
                     string tickerArray = string.Join(",", batch.Select(t => $"\"{t}\""));
-                    string subMsg = $"{{\"id\":{msgId++},\"cmd\":\"subscribe\",\"params\":{{\"channels\":[\"orderbook_delta\"],\"market_tickers\":[{tickerArray}]}}}}";
+                    string subMsg = $"{{\"id\":{_msgId++},\"cmd\":\"subscribe\",\"params\":{{\"channels\":[\"orderbook_delta\"],\"market_tickers\":[{tickerArray}]}}}}";
                     await ws.SendAsync(Encoding.UTF8.GetBytes(subMsg), WebSocketMessageType.Text, true, ct);
                     await Task.Delay(100, ct);
                 }
@@ -102,6 +110,15 @@ public class KalshiWebsocketFeed
                         if (message is "heartbeat" or "PONG" or "pong") continue;
 
                         ProcessMessage(message);
+
+                        // Drain any dynamically-added tickers
+                        while (_pendingSubscriptions.TryDequeue(out var newTickers))
+                        {
+                            string tickerArray = string.Join(",", newTickers.Select(t => $"\"{t}\""));
+                            string subMsg = $"{{\"id\":{_msgId++},\"cmd\":\"subscribe\",\"params\":{{\"channels\":[\"orderbook_delta\"],\"market_tickers\":[{tickerArray}]}}}}";
+                            await ws.SendAsync(Encoding.UTF8.GetBytes(subMsg), WebSocketMessageType.Text, true, ct);
+                            Console.WriteLine($"[KALSHI WS] Subscribed to {newTickers.Count} new ticker(s)");
+                        }
                     }
                 }
                 finally

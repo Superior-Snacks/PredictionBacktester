@@ -667,11 +667,11 @@ def run_manual_judge(candidates: list, output_path: Path) -> None:
         print(f"          {c['kalshi_title']}")
         print(f"          closes: {kc}")
         if c["kalshi_rules"]:
-            print(f"          rules:  {c['kalshi_rules'][:200]}")
+            print(f"          rules:  {c['kalshi_rules']}")
         print(f"  POLY    {c['poly_question']}")
         print(f"          closes: {pc}")
         if c["poly_desc"]:
-            print(f"          desc:   {c['poly_desc'][:200]}")
+            print(f"          desc:   {c['poly_desc']}")
 
         while True:
             try:
