@@ -154,6 +154,9 @@ public class CrossPlatformArbTelemetryStrategy
 
     public event Action<string, decimal, string, decimal>? OnArbOpened;
 
+    /// <summary>Returns the CrossPair for a given pairId (thread-safe volatile read).</summary>
+    public CrossPair? GetPair(string pairId) => _pairs.FirstOrDefault(p => p.PairId == pairId);
+
     public CrossPlatformArbTelemetryStrategy(
         IReadOnlyList<CrossPair> pairs,
         ConcurrentDictionary<string, LocalOrderBook> books,

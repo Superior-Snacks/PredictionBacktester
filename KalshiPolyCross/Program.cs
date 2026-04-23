@@ -103,6 +103,10 @@ foreach (var token  in polySubscribeTokens)    state.InitPolyToken(token);
 // ── Telemetry strategy ────────────────────────────────────────────────────────
 var telemetry = new CrossPlatformArbTelemetryStrategy(pairs, state.Books, ARB_THRESHOLD, DEPTH_FLOOR);
 
+// ── REST verifier — confirms arb windows via independent REST calls ───────────
+var restVerifier = new CrossArbRestVerifier(orderClient, telemetry);
+telemetry.OnArbOpened += restVerifier.OnArbOpened;
+
 Console.WriteLine($"\n[BOOKS] {state.Books.Count} order books created");
 Console.WriteLine($"  Kalshi tickers : {kalshiSubscribeTickers.Count}");
 Console.WriteLine($"  Poly tokens    : {polySubscribeTokens.Count}");
