@@ -231,7 +231,15 @@ _ = Task.Run(async () =>
     }
 });
 
-var kalshiWsTask = Task.Run(async () => 
+// ── Book refresher — keeps quiet books alive via periodic REST snapshots ──────
+var bookRefresher = new BookRefresherService(state.Books, orderClient);
+_ = Task.Run(async () =>
+{
+    try { await bookRefresher.RunAsync(cts.Token); }
+    catch (Exception ex) { Console.WriteLine($"[BOOK REFRESH ERROR] {ex.Message}"); }
+});
+
+var kalshiWsTask = Task.Run(async () =>
 {
     try { await kalshiFeed.RunAsync(cts.Token); }
     catch (Exception ex) { Console.WriteLine($"[FATAL] Kalshi feed crashed: {ex.Message}"); }

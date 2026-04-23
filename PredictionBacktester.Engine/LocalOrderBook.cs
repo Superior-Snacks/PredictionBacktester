@@ -50,6 +50,13 @@ public class LocalOrderBook
     }
 
     /// <summary>
+    /// Refreshes the book timestamp after a REST verification confirms the book is still valid.
+    /// Does not modify book levels — use ProcessBookUpdate for a full REST snapshot.
+    /// </summary>
+    public void MarkRestRefreshed()
+        => Volatile.Write(ref _lastDeltaAtTicks, DateTime.UtcNow.Ticks);
+
+    /// <summary>
     /// Returns true when the book has received at least one delta but no update has
     /// arrived for longer than <paramref name="maxAgeSeconds"/>.  This indicates the
     /// market may have been finalized, halted, or gone silent.  Treat the book as
