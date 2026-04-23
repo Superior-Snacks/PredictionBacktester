@@ -57,7 +57,7 @@ POLY_GAMMA_URL    = "https://gamma-api.polymarket.com"
 KALSHI_CATEGORY   = ""
 POLY_CATEGORY     = ""
 
-SIMILARITY_THRESH = 0.82
+SIMILARITY_THRESH = 0.78
 TOP_N_CANDIDATES  = 5
 DATE_WINDOW_DAYS  = 7
 
@@ -66,7 +66,7 @@ JUDGE_DELAY_S     = 13
 JUDGE_MODELS      = ["gemini-3-flash-preview", "gemini-2.5-flash", "gemini-2.0-flash"]
 
 SCRIPT_DIR        = Path(__file__).parent
-CACHE_PATH        = SCRIPT_DIR / "embeddings_cache.json"
+CACHE_PATH        = SCRIPT_DIR / "embeddings_cache_bge.json"
 DEFAULT_OUTPUT    = SCRIPT_DIR / "cross_pairs.json"
 
 # -- Kalshi auth ---------------------------------------------------------------
@@ -260,8 +260,8 @@ def find_candidates(
     to_encode = [t for t in dict.fromkeys(k_titles_unique + poly_questions) if t not in cache]
 
     if to_encode:
-        print(f"[EMBED] Loading model all-MiniLM-L6-v2 ...")
-        model = SentenceTransformer("all-MiniLM-L6-v2")
+        print(f"[EMBED] Loading model BAAI/bge-large-en-v1.5 ...")
+        model = SentenceTransformer("BAAI/bge-large-en-v1.5")
         print(f"[EMBED] Encoding {len(to_encode)} texts...")
         vecs = model.encode(to_encode, batch_size=256, show_progress_bar=True, normalize_embeddings=True)
         for text, vec in zip(to_encode, vecs):
@@ -580,11 +580,12 @@ def _save_pairs(matched: list, output_path: Path) -> None:
             continue
         existing_keys.add(key)
         existing.append({
-            "kalshi_ticker":  m["kalshi_ticker"],
-            "poly_yes_token": m["poly_yes"],
-            "poly_no_token":  m["poly_no"],
-            "label":          m["kalshi_title"],
-            "event_id":       _event_root(m["kalshi_ticker"]),
+            "kalshi_ticker":   m["kalshi_ticker"],
+            "poly_yes_token":  m["poly_yes"],
+            "poly_no_token":   m["poly_no"],
+            "label":           m["kalshi_title"],
+            "event_id":        _event_root(m["kalshi_ticker"]),
+            "settlement_date": m["kalshi_close"].strftime("%Y-%m-%d") if m.get("kalshi_close") else "",
         })
         added += 1
 

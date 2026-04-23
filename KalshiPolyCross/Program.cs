@@ -56,15 +56,18 @@ if (File.Exists(manualPath))
         using var manDoc = JsonDocument.Parse(File.ReadAllText(manualPath));
         foreach (var el in manDoc.RootElement.EnumerateArray())
         {
-            string kTicker  = el.TryGetProperty("kalshi_ticker",  out var kt) ? (kt.GetString()  ?? "") : "";
-            string yesToken = el.TryGetProperty("poly_yes_token", out var yt) ? (yt.GetString()  ?? "") : "";
-            string noToken  = el.TryGetProperty("poly_no_token",  out var nt) ? (nt.GetString()  ?? "") : "";
-            string label    = el.TryGetProperty("label",          out var lb) ? (lb.GetString()  ?? "") : kTicker;
-            string eventId = el.TryGetProperty("event_id", out var eid) ? (eid.GetString() ?? "") : "";
+            string kTicker  = el.TryGetProperty("kalshi_ticker",  out var kt)  ? (kt.GetString()  ?? "") : "";
+            string yesToken = el.TryGetProperty("poly_yes_token", out var yt)  ? (yt.GetString()  ?? "") : "";
+            string noToken  = el.TryGetProperty("poly_no_token",  out var nt)  ? (nt.GetString()  ?? "") : "";
+            string label    = el.TryGetProperty("label",          out var lb)  ? (lb.GetString()  ?? "") : kTicker;
+            string eventId  = el.TryGetProperty("event_id",       out var eid) ? (eid.GetString() ?? "") : "";
+            DateOnly? settlementDate = null;
+            if (el.TryGetProperty("settlement_date", out var sd) && DateOnly.TryParse(sd.GetString(), out var d))
+                settlementDate = d;
             if (!string.IsNullOrEmpty(kTicker) && !string.IsNullOrEmpty(yesToken) && !string.IsNullOrEmpty(noToken))
             {
                 string pairId = $"MANUAL_{kTicker}__{yesToken[..Math.Min(8, yesToken.Length)]}";
-                manualPairs.Add(new CrossPair(pairId, label, kTicker, yesToken, noToken, eventId));
+                manualPairs.Add(new CrossPair(pairId, label, kTicker, yesToken, noToken, eventId, settlementDate));
             }
         }
         Console.WriteLine($"[CONFIG] {manualPairs.Count} manual pair(s) loaded from cross_pairs.json");
@@ -194,13 +197,16 @@ _ = Task.Run(async () =>
                 string noToken  = el.TryGetProperty("poly_no_token",  out var nt)  ? (nt.GetString()  ?? "") : "";
                 string label    = el.TryGetProperty("label",          out var lb)  ? (lb.GetString()  ?? "") : kTicker;
                 string eventId  = el.TryGetProperty("event_id",       out var eid) ? (eid.GetString() ?? "") : "";
+                DateOnly? settlementDate = null;
+                if (el.TryGetProperty("settlement_date", out var sd2) && DateOnly.TryParse(sd2.GetString(), out var d2))
+                    settlementDate = d2;
                 if (string.IsNullOrEmpty(kTicker) || string.IsNullOrEmpty(yesToken) || string.IsNullOrEmpty(noToken)) continue;
 
                 string pairId = $"MANUAL_{kTicker}__{yesToken[..Math.Min(8, yesToken.Length)]}";
                 if (knownPairIds.Contains(pairId)) continue;
                 knownPairIds.Add(pairId);
 
-                newPairs.Add(new CrossPair(pairId, label, kTicker, yesToken, noToken, eventId));
+                newPairs.Add(new CrossPair(pairId, label, kTicker, yesToken, noToken, eventId, settlementDate));
                 if (knownKalshiTickers.Add(kTicker)) newKTickers.Add(kTicker);
                 if (knownPolyTokens.Add(yesToken))   newPTokens.Add(yesToken);
                 if (knownPolyTokens.Add(noToken))    newPTokens.Add(noToken);
