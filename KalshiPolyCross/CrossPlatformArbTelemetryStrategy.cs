@@ -276,15 +276,24 @@ public class CrossPlatformArbTelemetryStrategy
     {
         lock (_windowLock)
         {
-            if (_activeWindows.TryGetValue(pairId, out var w) && w != null)
-                _activeWindows[pairId] = w with
-                {
-                    RestChecked   = true,
-                    RestConfirmed = confirmed,
-                    RestKalshiAsk = kalshiAsk,
-                    RestPolyAsk   = polyAsk,
-                    RestDelayMs   = delayMs
-                };
+            if (!_activeWindows.TryGetValue(pairId, out var w) || w == null) return;
+            _activeWindows[pairId] = w with
+            {
+                RestChecked   = true,
+                RestConfirmed = confirmed,
+                RestKalshiAsk = kalshiAsk,
+                RestPolyAsk   = polyAsk,
+                RestDelayMs   = delayMs
+            };
+            if (!confirmed) return;
+
+            var pair     = _pairs.FirstOrDefault(p => p.PairId == pairId);
+            string label = pair?.Label ?? pairId;
+            decimal depth = Math.Min(w.KalshiDepth, w.PolyDepth);
+            string aprStr = w.AprHoldToSettle >= 0m ? $" APR={w.AprHoldToSettle:P0}" : "";
+            Console.WriteLine($"[CONFIRMED ARB] {label} | {w.ArbType} | " +
+                              $"K={kalshiAsk:0.0000} P={polyAsk:0.0000} net=${kalshiAsk + polyAsk:0.0000} | " +
+                              $"depth={depth:0.0} (K={w.KalshiDepth:0.0}/P={w.PolyDepth:0.0}){aprStr} | verified in {delayMs}ms");
         }
     }
 
@@ -510,11 +519,6 @@ public class CrossPlatformArbTelemetryStrategy
                         UpdateCount:       1
                     );
                     _activeWindows[pair.PairId] = w;
-
-                    string aprStr = aprHoldSettle >= 0m ? $" APR={aprHoldSettle:P0}" : "";
-                    Console.WriteLine($"[CROSS ARB OPEN ] {pair.Label} | {bestType} | " +
-                                      $"gross=${bestGross:0.0000} fees=${bestKFee + bestPFee:0.0000} net=${bestNet:0.0000} | " +
-                                      $"depth={bestDepth:0.0} (K={bestKDepth:0.0}/P={bestPDepth:0.0}){aprStr}");
 
                     invokeOnArbOpened = true;
                 }

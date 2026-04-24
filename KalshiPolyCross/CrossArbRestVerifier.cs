@@ -50,10 +50,13 @@ public class CrossArbRestVerifier
 
             _telemetry.UpdateRestVerification(pairId, confirmed, kAsk, pAsk, sw.ElapsedMilliseconds);
 
-            string verdict = confirmed ? "CONFIRMED" : (kAsk < 0m || pAsk < 0m ? "FETCH_FAIL" : "NO_ARB");
-            Console.WriteLine($"[REST CHECK] {pair.Label} | {arbType} | " +
-                              $"K={kAsk:0.0000} P={pAsk:0.0000} sum={(kAsk + pAsk):0.0000} | " +
-                              $"{verdict} in {sw.ElapsedMilliseconds}ms");
+            if (!confirmed)
+            {
+                string verdict = kAsk < 0m || pAsk < 0m ? "FETCH_FAIL" : "NO_ARB";
+                Console.WriteLine($"[REST CHECK] {pair.Label} | {arbType} | " +
+                                  $"K={kAsk:0.0000} P={pAsk:0.0000} sum={(kAsk + pAsk):0.0000} | " +
+                                  $"{verdict} in {sw.ElapsedMilliseconds}ms");
+            }
         }
         catch (Exception ex)
         {
