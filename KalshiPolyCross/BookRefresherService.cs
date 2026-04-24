@@ -157,9 +157,11 @@ public class BookRefresherService
         {
             var items = lvl.EnumerateArray().ToArray();
             if (items.Length < 2) continue;
-            if (decimal.TryParse(items[0].GetString(), NumberStyles.Any,
-                    CultureInfo.InvariantCulture, out decimal priceCents))
-                best = Math.Max(best, priceCents / 100m);
+            decimal priceCents = items[0].ValueKind == JsonValueKind.Number
+                ? items[0].GetDecimal()
+                : decimal.TryParse(items[0].GetString(), NumberStyles.Any,
+                      CultureInfo.InvariantCulture, out decimal p) ? p : 0m;
+            best = Math.Max(best, priceCents / 100m);
         }
         return best;
     }

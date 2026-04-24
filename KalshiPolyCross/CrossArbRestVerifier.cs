@@ -82,9 +82,11 @@ public class CrossArbRestVerifier
         {
             var items = lvl.EnumerateArray().ToArray();
             if (items.Length < 2) continue;
-            if (decimal.TryParse(items[0].GetString(), NumberStyles.Any,
-                    CultureInfo.InvariantCulture, out decimal priceCents))
-                bestBid = Math.Max(bestBid, priceCents / 100m);
+            decimal priceCents = items[0].ValueKind == JsonValueKind.Number
+                ? items[0].GetDecimal()
+                : decimal.TryParse(items[0].GetString(), NumberStyles.Any,
+                      CultureInfo.InvariantCulture, out decimal p) ? p : 0m;
+            bestBid = Math.Max(bestBid, priceCents / 100m);
         }
         return bestBid > 0m ? Math.Round(1m - bestBid, 4) : -1m;
     }
