@@ -20,11 +20,14 @@ public class BookRefresherService
     private readonly ConcurrentDictionary<string, LocalOrderBook> _books;
     private readonly KalshiOrderClient _kalshi;
     private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(5) };
-    private readonly SemaphoreSlim _kalshiSem = new(2, 2); // Kalshi REST rate-limit guard
-    private readonly SemaphoreSlim _polySem   = new(4, 4); // Poly is less strict
+    private readonly SemaphoreSlim _polySem = new(4, 4); // Poly parallel limit
 
     // Refresh any book whose last delta is older than this
     private const int RefreshAfterSeconds = 20;
+
+    // Kalshi rate-limit: max requests per cycle and ms between each
+    private const int KalshiMaxPerCycle   = 25;
+    private const int KalshiIntervalMs    = 350; // ~2.8 req/s — well under Kalshi's limit
 
     // Kalshi: flag a divergence if REST ask differs from WS ask by more than this
     private const decimal KalshiPriceTolerance = 0.05m;
@@ -43,34 +46,53 @@ public class BookRefresherService
     {
         while (!ct.IsCancellationRequested)
         {
-            // Run slightly under the stale threshold so refreshes land before 30s
             await Task.Delay(TimeSpan.FromSeconds(15), ct).ContinueWith(_ => { });
             if (ct.IsCancellationRequested) break;
 
             var now = DateTime.UtcNow;
-            var tasks = new List<Task>();
+            var polyTasks    = new List<Task>();
+            var kalshiStale  = new List<(LocalOrderBook book, string ticker, DateTime lastDelta)>();
 
             foreach (var (key, book) in _books)
             {
                 if (!book.HasReceivedDelta) continue;
-                if ((now - book.LastDeltaAt).TotalSeconds < RefreshAfterSeconds) continue;
+                var age = now - book.LastDeltaAt;
+                if (age.TotalSeconds < RefreshAfterSeconds) continue;
 
                 if (key.StartsWith("P:", StringComparison.Ordinal))
                 {
-                    string tokenId = key[2..];
-                    tasks.Add(RefreshPolyBookAsync(book, tokenId, ct));
+                    polyTasks.Add(RefreshPolyBookAsync(book, key[2..], ct));
                 }
                 else if (key.StartsWith("K:", StringComparison.Ordinal) && !key.EndsWith("_NO"))
                 {
-                    string ticker = key[2..];
-                    tasks.Add(RefreshKalshiBookAsync(book, ticker, ct));
+                    kalshiStale.Add((book, key[2..], book.LastDeltaAt));
                 }
             }
 
-            if (tasks.Count > 0)
+            // Poly: parallel (Poly rate limits are lenient)
+            if (polyTasks.Count > 0)
+                await Task.WhenAll(polyTasks);
+
+            // Kalshi: serial with inter-request delay, capped per cycle to avoid 429s.
+            // Sort oldest-first so the most overdue books get priority.
+            kalshiStale.Sort((a, b) => a.lastDelta.CompareTo(b.lastDelta));
+            int kalshiCount = 0;
+            foreach (var (book, ticker, _) in kalshiStale.Take(KalshiMaxPerCycle))
             {
-                await Task.WhenAll(tasks);
-                Console.WriteLine($"[BOOK REFRESH] Refreshed {tasks.Count} quiet book(s) via REST");
+                if (ct.IsCancellationRequested) break;
+                await RefreshKalshiBookAsync(book, ticker, ct);
+                kalshiCount++;
+                if (kalshiCount < kalshiStale.Count)
+                    await Task.Delay(KalshiIntervalMs, ct).ContinueWith(_ => { });
+            }
+
+            int total = polyTasks.Count + kalshiCount;
+            if (total > 0)
+            {
+                string kalshiNote = kalshiStale.Count > KalshiMaxPerCycle
+                    ? $" (Kalshi capped at {KalshiMaxPerCycle}/{kalshiStale.Count})"
+                    : "";
+                Console.WriteLine($"[BOOK REFRESH] Refreshed {total} quiet book(s) via REST{kalshiNote}");
             }
         }
     }
@@ -107,7 +129,6 @@ public class BookRefresherService
 
     private async Task RefreshKalshiBookAsync(LocalOrderBook yesBook, string ticker, CancellationToken ct)
     {
-        await _kalshiSem.WaitAsync(ct);
         try
         {
             using var doc = await _kalshi.GetMarketOrderBookAsync(ticker);
@@ -146,7 +167,6 @@ public class BookRefresherService
         {
             Console.WriteLine($"[BOOK REFRESH WARN] Kalshi {ticker}: {ex.Message}");
         }
-        finally { _kalshiSem.Release(); }
     }
 
     private static decimal GetBestBidFromKalshiSide(JsonElement book, string side)

@@ -905,6 +905,31 @@ public class CrossPlatformArbTelemetryStrategy
 
     public async Task ShutdownAsync()
     {
+        // Flush any still-open arb windows to the main CSV
+        lock (_windowLock)
+        {
+            var now = DateTime.UtcNow;
+            foreach (var pairId in _activeWindows.Keys.ToList())
+            {
+                if (_activeWindows[pairId] is { } w)
+                {
+                    CloseWindow(pairId, w, now, "SHUTDOWN");
+                    _activeWindows[pairId] = null;
+                }
+            }
+            if (_blendedEnabled)
+            {
+                foreach (var evId in _blendedWindows.Keys.ToList())
+                {
+                    if (_blendedWindows[evId] is { } bw && _eventGroups.TryGetValue(evId, out var grp))
+                    {
+                        CloseBlendedWindow(evId, bw, grp, now, "SHUTDOWN");
+                        _blendedWindows[evId] = null;
+                    }
+                }
+            }
+        }
+
         // Flush any remaining hypothetical positions to the exit CSV
         foreach (var (pairId, pos) in _hypotheticalPositions)
         {
