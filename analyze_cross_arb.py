@@ -822,8 +822,8 @@ def print_production_sim(rows, session_hours, participation_rate=None):
     # ── Competition sensitivity table ─────────────────────────────────────────
     capturable_clean = [r for r in clean_rows if r["duration_ms"] >= PROD_LATENCY_MS]
     print(f"  COMPETITION SENSITIVITY  ({len(entries)} pairs · {len(capturable_clean)} capturable windows)")
-    print(f"  {'Model':<16}  {'Assumption':<28}  {'1x Capital':>10}  {'1x /hr':>9}  {'Multi /hr':>10}")
-    print(f"  {'-'*16}  {'-'*28}  {'-'*10}  {'-'*9}  {'-'*10}")
+    print(f"  {'Model':<16}  {'Assumption':<28}  {'1x Capital':>10}  {'Profit':>9}  {'1x /hr':>9}  {'Multi /hr':>10}")
+    print(f"  {'-'*16}  {'-'*28}  {'-'*10}  {'-'*9}  {'-'*9}  {'-'*10}")
 
     def _row(rate_or_none, label, marker=""):
         sc_entries = _sim_entries(by_pair, rate_or_none)
@@ -831,7 +831,7 @@ def print_production_sim(rows, session_hours, participation_rate=None):
         sc_1x      = sum(e["win_pnl"] for e in sc_entries)
         sc_multi   = _multi(rate_or_none)
         model_str  = "duration-tiered" if rate_or_none is None else f"flat {rate_or_none*100:.0f}%"
-        print(f"  {model_str:<16}  {label:<28}  ${sc_capital:>9.2f}  {_hr(sc_1x, session_hours):>9}  "
+        print(f"  {model_str:<16}  {label:<28}  ${sc_capital:>9.2f}  ${sc_1x:>+8.2f}  {_hr(sc_1x, session_hours):>9}  "
               f"{_hr(sc_multi, session_hours):>10}{marker}")
 
     _row(None,  "tiered by duration (default)", " <--" if participation_rate is None else "")
@@ -856,7 +856,7 @@ def print_early_exit_sim(exit_rows, session_hours):
         print("  (no CrossArbExitMonitor_*.csv found or no rows loaded)\n")
         return
 
-    signals = [r for r in exit_rows if r["trigger"] == "HURDLE_BREACHED"]
+    signals = [r for r in exit_rows if r["trigger"] == "HURDLE_BREACHED" and r["profit_if_exit"] > 0]
     if not signals:
         print(f"  No HURDLE_BREACHED signals found ({len(exit_rows)} total exit rows).\n")
         return
@@ -888,6 +888,26 @@ def print_early_exit_sim(exit_rows, session_hours):
     print()
     print(f"  Total capital across signals : ${total_capital:.2f}")
     print(f"  Total profit if all exited   : {_per_hr(total_profit, session_hours)}")
+    print()
+
+    # ── Exit competition sensitivity ──────────────────────────────────────────
+    # Participation rate here means: what fraction of entry opportunities
+    # were captured? Each exit profit scales linearly with that assumption.
+    # Duration-tiered doesn't apply cleanly to exits (holding periods are days,
+    # not seconds), so only flat rates are shown.
+    print(f"  COMPETITION SENSITIVITY  ({len(by_pair)} pairs with exit signals)")
+    print(f"  {'Model':<16}  {'Assumption':<28}  {'Capital':>10}  {'Profit':>9}  {'$/hr':>9}")
+    print(f"  {'-'*16}  {'-'*28}  {'-'*10}  {'-'*9}  {'-'*9}")
+
+    def _exit_row(rate, label):
+        cap = sum(r["capital"]        * rate for r in by_pair.values())
+        pnl = sum(r["profit_if_exit"] * rate for r in by_pair.values())
+        print(f"  {'flat '+f'{rate*100:.0f}%':<16}  {label:<28}  ${cap:>9.2f}  ${pnl:>+8.2f}  {_hr(pnl, session_hours):>9}")
+
+    _exit_row(1.00, "sole actor / no competition")
+    _exit_row(0.50, "1 competitor  (~2 desks)")
+    _exit_row(0.25, "3 competitors (~4 desks)")
+    _exit_row(0.10, "9 competitors (~10 desks)")
     print()
 
 

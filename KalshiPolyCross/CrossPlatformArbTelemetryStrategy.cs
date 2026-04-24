@@ -120,15 +120,21 @@ public class CrossPlatformArbTelemetryStrategy
 
     // ── Fee model ──────────────────────────────────────────────────────────────
     private const decimal KalshiFeeRate   = 0.07m;
-    private const decimal PolyFeeRate     = 0.03m;
+    // Post-March-30-2026 fee structure. Politics = 0.04 (most cross-arb pairs);
+    // Sports = 0.03. Exponent = 1 for both. Fee formula: p * feeRate * (p*(1-p))^exponent
+    private const decimal PolyFeeRate     = 0.04m;
     private const double  PolyFeeExponent = 1.0;
 
     private static decimal KalshiFee(decimal p) => KalshiFeeRate * p * (1m - p);
     private static decimal PolyFee(decimal p)
         => p * PolyFeeRate * (decimal)Math.Pow((double)(p * (1m - p)), PolyFeeExponent);
 
-    // Exit decision: if APR_remaining_hold drops below this, log an exit signal.
-    private const decimal HurdleRateApr = 0.20m; // 20% annualised
+    // Exit decision: fire when BOTH conditions hold:
+    //   1. APR remaining from holding < hurdle (remaining profit not worth the capital tie-up)
+    //   2. Profit captured so far >= min ratio of theoretical hold-to-settle profit
+    //      (prevents exiting too early just because settlement is imminent)
+    private const decimal HurdleRateApr        = 0.20m; // 20% annualised
+    private const decimal MinProfitCaptureRatio = 0.70m; // must have captured ≥70% of max profit
 
     // ── WS drop counters ──────────────────────────────────────────────────────
     private int _kalshiWsDrops;
@@ -549,18 +555,22 @@ public class CrossPlatformArbTelemetryStrategy
         if (invokeOnArbOpened)
             OnArbOpened?.Invoke(pair.PairId, bestNet, bestType, bestDepth);
 
-        // Exit monitoring: evaluate open hypothetical positions on every book update
-        if (_hypotheticalPositions.TryGetValue(pair.PairId, out var pos) && pos != null)
+        // Exit monitoring: evaluate ALL open hypothetical positions for this pair.
+        // Each entry is stored under a compound key (pairId + \x00 + entryTicks) so
+        // multiple re-entries on the same pair are tracked independently.
+        var posPrefix = pair.PairId + "\x00";
+        foreach (var kvp in _hypotheticalPositions)
         {
-            decimal kBid = pos.ArbType == "K_YES_P_NO" ? kYesBid : kNoBid;
-            decimal pBid = pos.ArbType == "K_YES_P_NO" ? pNoBid  : pYesBid;
-            EvaluateExit(pair, pos, kBid, pBid);
+            if (kvp.Value == null || !kvp.Key.StartsWith(posPrefix, StringComparison.Ordinal)) continue;
+            decimal kBid = kvp.Value.ArbType == "K_YES_P_NO" ? kYesBid : kNoBid;
+            decimal pBid = kvp.Value.ArbType == "K_YES_P_NO" ? pNoBid  : pYesBid;
+            EvaluateExit(kvp.Key, pair, kvp.Value, kBid, pBid);
         }
     }
 
     // ── Exit position monitoring ──────────────────────────────────────────────
 
-    private void EvaluateExit(CrossPair pair, HypotheticalPosition pos, decimal kBid, decimal pBid)
+    private void EvaluateExit(string posKey, CrossPair pair, HypotheticalPosition pos, decimal kBid, decimal pBid)
     {
         decimal bidSum = kBid + pBid;
         if (bidSum <= 0m) return;
@@ -574,24 +584,36 @@ public class CrossPlatformArbTelemetryStrategy
         decimal profitIfExit   = (bidSum - pos.EntryCostPerShare) * pos.Shares - exitFees;
         decimal realizedApr    = profitIfExit / pos.CapitalRequired * (365m / (decimal)daysElapsed);
         decimal aprRemaining   = (1.00m - bidSum) / bidSum * (365m / (decimal)daysRemaining);
-        bool    exitDecision   = aprRemaining < HurdleRateApr;
+
+        // Profit capture: how much of the theoretical hold-to-settle profit has been realised?
+        // holdProfit excludes exit fees (settlement is free); profitIfExit includes exit fees.
+        decimal holdProfit     = (1.00m - pos.EntryCostPerShare) * pos.Shares;
+        decimal captureRatio   = holdProfit > 0m ? profitIfExit / holdProfit : 0m;
+
+        bool    exitDecision   = profitIfExit > 0m
+                              && aprRemaining  < HurdleRateApr
+                              && captureRatio  >= MinProfitCaptureRatio;
 
         if (exitDecision && !pos.ExitSignalLogged)
         {
-            _hypotheticalPositions[pair.PairId] = pos with { ExitSignalLogged = true };
+            _hypotheticalPositions[posKey] = pos with { ExitSignalLogged = true };
             Console.WriteLine($"[EXIT SIGNAL] {pair.Label} | {pos.ArbType} | " +
-                              $"bid_sum={bidSum:0.0000} profit={profitIfExit:+0.00;-0.00} " +
+                              $"bid_sum={bidSum:0.0000} profit={profitIfExit:+0.00;-0.00} capture={captureRatio:P0} " +
                               $"realized_APR={realizedApr:P1} apr_remaining={aprRemaining:P1} " +
-                              $"(<{HurdleRateApr:P0} hurdle) | {daysElapsed:F1}d elapsed / {daysRemaining:F1}d remaining");
+                              $"(<{HurdleRateApr:P0} hurdle, ≥{MinProfitCaptureRatio:P0} capture) | " +
+                              $"{daysElapsed:F1}d elapsed / {daysRemaining:F1}d remaining");
             EnqueueExitCsvRow(pos, bidSum, exitFees, profitIfExit, realizedApr, aprRemaining,
                               daysElapsed, daysRemaining, "HURDLE_BREACHED");
         }
 
-        // Remove position once settlement is imminent
+        // Remove position once settlement is imminent.
+        // At settlement there are no exit fees — one leg resolves to $1, the other $0.
         if (pos.SettlementDate.HasValue && daysRemaining <= 0.5)
         {
-            _hypotheticalPositions[pair.PairId] = null;
-            EnqueueExitCsvRow(pos, bidSum, exitFees, profitIfExit, realizedApr, aprRemaining,
+            _hypotheticalPositions[posKey] = null;
+            decimal settleProfit    = (1.00m - pos.EntryCostPerShare) * pos.Shares;
+            decimal settleRealApr   = settleProfit / pos.CapitalRequired * (365m / (decimal)daysElapsed);
+            EnqueueExitCsvRow(pos, 1.00m, 0m, settleProfit, settleRealApr, 0m,
                               daysElapsed, daysRemaining, "SETTLEMENT");
         }
     }
@@ -806,10 +828,12 @@ public class CrossPlatformArbTelemetryStrategy
 
         EnqueueCsvRow(row);
 
-        // Create a hypothetical position for exit monitoring if we have settlement data and real depth
+        // Create a hypothetical position for exit monitoring if we have settlement data and real depth.
+        // Key includes entry ticks so multiple arb windows on the same pair are tracked independently.
         if (w.DaysToSettlement > 0 && maxDepth >= _depthFloor && profit > 0m)
         {
-            _hypotheticalPositions[pairId] = new HypotheticalPosition(
+            string posKey = $"{pairId}\x00{w.StartTime.Ticks}";
+            _hypotheticalPositions[posKey] = new HypotheticalPosition(
                 PairId:           pairId,
                 Label:            pair.Label,
                 ArbType:          w.ArbType,
