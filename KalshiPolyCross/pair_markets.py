@@ -339,12 +339,20 @@ def find_candidates(
     top = []
     for _ticker, group in groupby(candidates, key=lambda c: c["kalshi_ticker"]):
         top.extend(list(group)[:TOP_N_CANDIDATES])
-    def _close_sort_key(c):
+    _now = datetime.now(timezone.utc)
+    _MAX_DAYS = 365  # beyond this, date proximity contributes 0
+    def _blend_key(c):
+        score = c["score"]
         dt = c.get("kalshi_close")
         if dt is None:
-            return (1, 0.0, -c["score"])
-        return (0, dt.timestamp(), -c["score"])
-    top.sort(key=_close_sort_key)
+            date_score = 0.0  # unknown close = no date credit
+        else:
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            days = max((dt - _now).days, 0)
+            date_score = 1.0 - min(days, _MAX_DAYS) / _MAX_DAYS  # 1.0 = closes today, 0.0 = ≥365d
+        return -(0.5 * score + 0.5 * date_score)
+    top.sort(key=_blend_key)
     print(f"[EMBED] {len(top)} candidate pairs (threshold={SIMILARITY_THRESH}, top-{TOP_N_CANDIDATES}/ticker).")
     return top
 
