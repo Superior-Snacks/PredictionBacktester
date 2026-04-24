@@ -835,6 +835,19 @@ def main() -> None:
 
     candidates = find_candidates(kalshi_markets, poly_markets, already_paired, not args.no_cache)
 
+    # Always remove markets that have already closed on either platform
+    _now_utc = datetime.now(timezone.utc)
+    before_past = len(candidates)
+    def _is_past(dt):
+        if dt is None: return False
+        if dt.tzinfo is None: dt = dt.replace(tzinfo=timezone.utc)
+        return dt < _now_utc
+    candidates = [c for c in candidates
+                  if not _is_past(c["kalshi_close"]) and not _is_past(c["poly_close"])]
+    removed_past = before_past - len(candidates)
+    if removed_past:
+        print(f"[FILTER] Removed {removed_past} candidates whose Kalshi or Poly market has already closed.")
+
     # Print category breakdown so user knows what values to pass
     if candidates:
         from collections import Counter
