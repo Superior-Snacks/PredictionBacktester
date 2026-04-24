@@ -157,16 +157,20 @@ public class CrossPlatformArbTelemetryStrategy
     /// <summary>Returns the CrossPair for a given pairId (thread-safe volatile read).</summary>
     public CrossPair? GetPair(string pairId) => _pairs.FirstOrDefault(p => p.PairId == pairId);
 
+    private readonly bool _blendedEnabled;
+
     public CrossPlatformArbTelemetryStrategy(
         IReadOnlyList<CrossPair> pairs,
         ConcurrentDictionary<string, LocalOrderBook> books,
-        decimal arbThreshold = 0.995m,
-        decimal depthFloor   = 1m)
+        decimal arbThreshold   = 0.995m,
+        decimal depthFloor     = 1m,
+        bool    blendedEnabled = true)
     {
-        _pairs        = pairs;
-        _books        = books;
-        _arbThreshold = arbThreshold;
-        _depthFloor   = depthFloor;
+        _pairs          = pairs;
+        _books          = books;
+        _arbThreshold   = arbThreshold;
+        _depthFloor     = depthFloor;
+        _blendedEnabled = blendedEnabled;
         string ts     = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
         _csvPath         = $"CrossArbTelemetry_{ts}.csv";
         _blendedCsvPath  = $"CrossArbBlended_{ts}.csv";
@@ -209,7 +213,7 @@ public class CrossPlatformArbTelemetryStrategy
                     if (!evList.Contains(evId)) evList.Add(evId);
                 }
         }
-        if (_eventGroups.Count > 0)
+        if (_blendedEnabled && _eventGroups.Count > 0)
             Console.WriteLine($"[BLENDED] {_eventGroups.Count} event group(s) with " +
                               $"{_eventGroups.Values.Sum(g => g.Count)} total legs registered for blended arb");
 
@@ -234,7 +238,7 @@ public class CrossPlatformArbTelemetryStrategy
 
         var pairsSnap = _pairs;
         if (indices  != null) foreach (var idx   in indices)  EvaluatePair(pairsSnap[idx]);
-        if (eventIds != null) foreach (var evId  in eventIds) EvaluateBlendedGroup(evId, _eventGroups[evId]);
+        if (_blendedEnabled && eventIds != null) foreach (var evId in eventIds) EvaluateBlendedGroup(evId, _eventGroups[evId]);
     }
 
     public void OnKalshiReconnect() => HandlePlatformReconnect(ref _kalshiWsDrops, "KALSHI");
@@ -657,8 +661,9 @@ public class CrossPlatformArbTelemetryStrategy
                         UpdateCount:       1
                     );
                     _blendedWindows[eventId] = w;
-                    Console.WriteLine($"[BLENDED ARB OPEN ] {eventId} ({group.Count} legs) | " +
-                                      $"net=${totalNet:0.0000} choices={choices} prices={prices} | depth={minDepth:0.0}");
+                    if (_blendedEnabled)
+                        Console.WriteLine($"[BLENDED ARB OPEN ] {eventId} ({group.Count} legs) | " +
+                                          $"net=${totalNet:0.0000} choices={choices} prices={prices} | depth={minDepth:0.0}");
                 }
                 else
                 {
@@ -692,9 +697,10 @@ public class CrossPlatformArbTelemetryStrategy
         bool dropDuring  = (Volatile.Read(ref _kalshiWsDrops) > w.KalshiDropsAtOpen) || (Volatile.Read(ref _polyWsDrops) > w.PolyDropsAtOpen);
         string legTickers = string.Join(";", group.Select(p => p.KalshiTicker));
 
-        Console.WriteLine($"[BLENDED ARB CLOSE] {eventId} | {durationMs}ms | " +
-                          $"net=${w.BestNetCost:0.0000} profit/set=${profit:0.0000} | " +
-                          $"depth={w.MinDepth:0.0} closedBy={closedBy}");
+        if (_blendedEnabled)
+            Console.WriteLine($"[BLENDED ARB CLOSE] {eventId} | {durationMs}ms | " +
+                              $"net=${w.BestNetCost:0.0000} profit/set=${profit:0.0000} | " +
+                              $"depth={w.MinDepth:0.0} closedBy={closedBy}");
 
         string row = string.Join(",",
             w.StartTime.ToString("yyyy-MM-dd HH:mm:ss.fff"),

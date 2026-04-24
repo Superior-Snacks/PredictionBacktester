@@ -65,30 +65,37 @@ public class CrossArbRestVerifier
         }
     }
 
-    // Kalshi REST book: prices are in cents, stored as bid arrays.
-    // YES ask  = 1 - best_no_bid   (K_YES_P_NO arb: we want to buy YES)
-    // NO ask   = 1 - best_yes_bid  (K_NO_P_YES arb: we want to buy NO)
+    // Uses /markets/{ticker} convenience price fields (yes_ask_dollars / no_ask_dollars).
+    // K_YES_P_NO: we buy YES on Kalshi → want yes_ask
+    // K_NO_P_YES: we buy NO  on Kalshi → want no_ask
     private async Task<decimal> GetKalshiAskAsync(string ticker, string arbType)
     {
-        using var doc = await _kalshi.GetMarketOrderBookAsync(ticker);
-        var book = doc.RootElement.TryGetProperty("orderbook", out var ob) ? ob : doc.RootElement;
+        using var doc = await _kalshi.GetMarketAsync(ticker);
+        var mkt = doc.RootElement.TryGetProperty("market", out var m) ? m : doc.RootElement;
 
-        // We look at the opposite side bids to derive the implied ask
-        string bidSide = arbType == "K_YES_P_NO" ? "no" : "yes";
-        if (!book.TryGetProperty(bidSide, out var arr)) return -1m;
+        // Dollar-string fields are preferred; fall back to cents-integer fields
+        bool buyYes = arbType == "K_YES_P_NO";
+        string[] dollarKeys = buyYes
+            ? ["yes_ask_dollars", "yes_ask_price"]
+            : ["no_ask_dollars",  "no_ask_price"];
+        string centsKey = buyYes ? "yes_ask" : "no_ask";
 
-        decimal bestBid = 0m;
-        foreach (var lvl in arr.EnumerateArray())
+        foreach (var key in dollarKeys)
         {
-            var items = lvl.EnumerateArray().ToArray();
-            if (items.Length < 2) continue;
-            decimal priceCents = items[0].ValueKind == JsonValueKind.Number
-                ? items[0].GetDecimal()
-                : decimal.TryParse(items[0].GetString(), NumberStyles.Any,
-                      CultureInfo.InvariantCulture, out decimal p) ? p : 0m;
-            bestBid = Math.Max(bestBid, priceCents / 100m);
+            if (!mkt.TryGetProperty(key, out var el)) continue;
+            string? s = el.ValueKind == JsonValueKind.String ? el.GetString() : el.GetRawText();
+            if (decimal.TryParse(s, NumberStyles.Any, CultureInfo.InvariantCulture, out decimal p) && p > 0m)
+                return p;
         }
-        return bestBid > 0m ? Math.Round(1m - bestBid, 4) : -1m;
+
+        // Fallback: cents integer (e.g. yes_ask = 65 → 0.65)
+        if (mkt.TryGetProperty(centsKey, out var centsEl) && centsEl.ValueKind == JsonValueKind.Number)
+        {
+            decimal cents = centsEl.GetDecimal();
+            if (cents > 0m) return Math.Round(cents / 100m, 4);
+        }
+
+        return -1m;
     }
 
     // Polymarket CLOB REST book: asks sorted ascending by price.

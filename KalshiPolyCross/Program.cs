@@ -100,8 +100,11 @@ var state = new MarketStateTracker();
 foreach (var ticker in kalshiSubscribeTickers) state.InitKalshiMarket(ticker);
 foreach (var token  in polySubscribeTokens)    state.InitPolyToken(token);
 
+bool showBlended = !args.Contains("--no-blended");
+
 // ── Telemetry strategy ────────────────────────────────────────────────────────
-var telemetry = new CrossPlatformArbTelemetryStrategy(pairs, state.Books, ARB_THRESHOLD, DEPTH_FLOOR);
+var telemetry = new CrossPlatformArbTelemetryStrategy(pairs, state.Books, ARB_THRESHOLD, DEPTH_FLOOR,
+                                                      blendedEnabled: showBlended);
 
 // ── REST verifier — confirms arb windows via independent REST calls ───────────
 var restVerifier = new CrossArbRestVerifier(orderClient, telemetry);
@@ -111,9 +114,6 @@ Console.WriteLine($"\n[BOOKS] {state.Books.Count} order books created");
 Console.WriteLine($"  Kalshi tickers : {kalshiSubscribeTickers.Count}");
 Console.WriteLine($"  Poly tokens    : {polySubscribeTokens.Count}");
 
-bool showBlended = !args.Contains("--no-blended");
-
-// Track which tickers/tokens are already subscribed (for hot-reload dedup)
 var knownKalshiTickers = new HashSet<string>(kalshiSubscribeTickers, StringComparer.Ordinal);
 var knownPolyTokens    = new HashSet<string>(polySubscribeTokens,    StringComparer.Ordinal);
 var knownPairIds       = new HashSet<string>(pairs.Select(p => p.PairId), StringComparer.Ordinal);

@@ -80,6 +80,10 @@ public class KalshiOrderClient : IDisposable
     public async Task<JsonDocument> GetEventAsync(string eventTicker)
         => await GetAsync($"/events/{eventTicker}?with_nested_markets=true");
 
+    /// <summary>Returns market metadata including top-of-book convenience price fields.</summary>
+    public async Task<JsonDocument> GetMarketAsync(string ticker)
+        => await GetAsync($"/markets/{ticker}");
+
     /// <summary>Returns the order book for a single market ticker.</summary>
     public async Task<JsonDocument> GetMarketOrderBookAsync(string ticker)
         => await GetAsync($"/markets/{ticker}/orderbook");
