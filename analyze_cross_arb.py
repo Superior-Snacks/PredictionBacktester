@@ -55,6 +55,20 @@ def find_latest_csv(pattern):
     return max(candidates, key=os.path.getctime)
 
 
+def find_exit_csv(binary_path):
+    m = re.search(r'(\d{8}_\d{6})', os.path.basename(binary_path))
+    if m:
+        ts = m.group(1)
+        candidates = (
+            glob.glob(f"CrossArbExitMonitor_{ts}.csv") +
+            glob.glob(f"KalshiPolyCross/CrossArbExitMonitor_{ts}.csv") +
+            glob.glob(f"KalshiPolyCross/bin/**/CrossArbExitMonitor_{ts}.csv", recursive=True)
+        )
+        if candidates:
+            return candidates[0]
+    return find_latest_csv("CrossArbExitMonitor_*.csv")
+
+
 def find_blended_csv(binary_path):
     m = re.search(r'(\d{8}_\d{6})', os.path.basename(binary_path))
     if m:
@@ -169,6 +183,38 @@ def load_binary_csv(path):
                     "rest_kalshi_ask":     _try_float(r, "RestKalshiAsk"),
                     "rest_poly_ask":       _try_float(r, "RestPolyAsk"),
                     "rest_delay_ms":       _try_float(r, "RestDelayMs"),
+                })
+            except (KeyError, ValueError):
+                continue
+    return rows
+
+
+def load_exit_csv(path):
+    rows = []
+    with open(path, newline="", encoding="utf-8-sig") as f:
+        reader = csv.DictReader(f)
+        for r in reader:
+            try:
+                rows.append({
+                    "entry_time":          r["EntryTime"].strip(),
+                    "exit_time":           r["ExitSnapshotTime"].strip(),
+                    "pair_id":             r["PairId"].strip('"').strip(),
+                    "label":               r["Label"].strip('"').strip(),
+                    "arb_type":            r["ArbType"].strip(),
+                    "days_to_settlement":  _try_float(r, "DaysToSettlement", -1),
+                    "apr_hold_to_settle":  _try_float(r, "AprHoldToSettle",  -1),
+                    "days_elapsed":        _try_float(r, "DaysElapsed",       0),
+                    "days_remaining":      _try_float(r, "DaysRemaining",     0),
+                    "entry_cost":          float(r["EntryCostPerShare"]),
+                    "shares":              float(r["Shares"]),
+                    "capital":             float(r["CapitalRequired"]),
+                    "bid_sum":             _try_float(r, "BidSum",         0),
+                    "exit_fees":           _try_float(r, "ExitFees",       0),
+                    "profit_if_exit":      _try_float(r, "ProfitIfExit",   0),
+                    "realized_apr":        _try_float(r, "RealizedApr",    0),
+                    "apr_remaining":       _try_float(r, "AprRemaining",   0),
+                    "exit_decision":       r.get("ExitDecision", "0").strip() == "1",
+                    "trigger":             r.get("Trigger", "").strip(),
                 })
             except (KeyError, ValueError):
                 continue
@@ -682,14 +728,15 @@ def _sim_entries(by_pair, participation_rate):
         capital = best["total_capital_req"] * rate
         shares  = capital / best["best_net_cost"] if best["best_net_cost"] > 0 else 0
         entries.append({
-            "pair_id":  pair_id,
-            "label":    best["label"],
-            "cap_wins": cap_w,
-            "capital":  capital,
-            "cost":     best["best_net_cost"],
-            "rate":     rate,
-            "win_pnl":  shares * best["net_profit_per_share"],
-            "arb_type": best["arb_type"],
+            "pair_id":        pair_id,
+            "label":          best["label"],
+            "cap_wins":       cap_w,
+            "capital":        capital,
+            "cost":           best["best_net_cost"],
+            "rate":           rate,
+            "profit_per_shr": best["net_profit_per_share"],
+            "win_pnl":        shares * best["net_profit_per_share"],
+            "arb_type":       best["arb_type"],
         })
     entries.sort(key=lambda x: x["win_pnl"], reverse=True)
     return entries
@@ -753,12 +800,12 @@ def print_production_sim(rows, session_hours, participation_rate=None):
     multi_proj = _multi(participation_rate)
 
     rate_hdr = "Part%" if participation_rate is None else f"{participation_rate*100:.0f}%"
-    print(f"  {'Label':<44} {rate_hdr:>5} {'Capital':>8} {'ProjProfit':>10}  ArbType")
-    print(f"  {'-'*44} {'-'*5} {'-'*8} {'-'*10}  -------")
+    print(f"  {'Label':<44} {rate_hdr:>5} {'Capital':>8} {'$/shr':>6} {'ProjProfit':>10}  ArbType")
+    print(f"  {'-'*44} {'-'*5} {'-'*8} {'-'*6} {'-'*10}  -------")
 
     for e in entries:
         rate_str = f"{e['rate']*100:.0f}%" if participation_rate is None else ""
-        print(f"  {e['label'][:44]:<44} {rate_str:>5} ${e['capital']:>7.2f} ${e['win_pnl']:>+9.2f}  {e['arb_type']}")
+        print(f"  {e['label'][:44]:<44} {rate_str:>5} ${e['capital']:>7.2f} ${e['profit_per_shr']:>5.4f} ${e['win_pnl']:>+9.2f}  {e['arb_type']}")
 
     print()
     rate_label = "duration-tiered" if participation_rate is None else f"{participation_rate*100:.0f}% flat"
@@ -796,6 +843,53 @@ def print_production_sim(rows, session_hours, participation_rate=None):
     print()
     print(f"  Note: multi-entry = every capturable re-entry per pair at the same participation rate.")
     print()
+
+
+# ─── SECTION 11: EARLY EXIT SIM ──────────────────────────────────────────────
+
+def print_early_exit_sim(exit_rows, session_hours):
+    print("=" * 80)
+    print("  EARLY EXIT SIM  (HURDLE_BREACHED signals only)")
+    print("=" * 80)
+
+    if not exit_rows:
+        print("  (no CrossArbExitMonitor_*.csv found or no rows loaded)\n")
+        return
+
+    signals = [r for r in exit_rows if r["trigger"] == "HURDLE_BREACHED"]
+    if not signals:
+        print(f"  No HURDLE_BREACHED signals found ({len(exit_rows)} total exit rows).\n")
+        return
+
+    total_capital = sum(r["capital"]       for r in signals)
+    total_profit  = sum(r["profit_if_exit"] for r in signals)
+    avg_realized  = sum(r["realized_apr"]  for r in signals) / len(signals)
+    avg_elapsed   = sum(r["days_elapsed"]  for r in signals) / len(signals)
+
+    print(f"  {len(signals)} early-exit signals across {len(set(r['pair_id'] for r in signals))} pairs")
+    print(f"  Avg days held before exit signal: {avg_elapsed:.1f}d")
+    print(f"  Avg realized APR at exit:         {avg_realized*100:.1f}%")
+    print()
+    print(f"  {'Label':<44} {'Capital':>8} {'$/shr':>6} {'Profit':>8} {'RealAPR':>8} {'DaysHeld':>9}  ArbType")
+    print(f"  {'-'*44} {'-'*8} {'-'*6} {'-'*8} {'-'*8} {'-'*9}  -------")
+
+    by_pair = {}
+    for r in signals:
+        pid = r["pair_id"]
+        if pid not in by_pair or r["profit_if_exit"] > by_pair[pid]["profit_if_exit"]:
+            by_pair[pid] = r
+
+    sorted_rows = sorted(by_pair.values(), key=lambda r: r["profit_if_exit"], reverse=True)
+    for r in sorted_rows:
+        profit_per_shr = r["profit_if_exit"] / r["shares"] if r["shares"] > 0 else 0
+        print(f"  {r['label'][:44]:<44} ${r['capital']:>7.2f} ${profit_per_shr:>5.4f} ${r['profit_if_exit']:>+7.4f} "
+              f"{r['realized_apr']*100:>7.1f}% {r['days_elapsed']:>8.1f}d  {r['arb_type']}")
+
+    print()
+    print(f"  Total capital across signals : ${total_capital:.2f}")
+    print(f"  Total profit if all exited   : {_per_hr(total_profit, session_hours)}")
+    print()
+
 
 # ─── MAIN ─────────────────────────────────────────────────────────────────────
 
@@ -874,8 +968,16 @@ def main():
         print("=" * 80)
         print("  (no CrossArbBlended_*.csv found — no blended arb windows recorded yet)\n")
 
-    print_production_sim(rows, session_hours,          # LAST — most important
+    print_production_sim(rows, session_hours,
                          participation_rate=args.participation_rate)
+
+    # Early exit sim (CrossArbExitMonitor_*.csv)
+    exit_path = find_exit_csv(path)
+    exit_rows = []
+    if exit_path and os.path.exists(exit_path):
+        exit_rows = load_exit_csv(exit_path)
+        print(f"[EXIT] {exit_path}  ({len(exit_rows)} rows)")
+    print_early_exit_sim(exit_rows, session_hours)
 
 if __name__ == "__main__":
     main()

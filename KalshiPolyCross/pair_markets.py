@@ -339,7 +339,12 @@ def find_candidates(
     top = []
     for _ticker, group in groupby(candidates, key=lambda c: c["kalshi_ticker"]):
         top.extend(list(group)[:TOP_N_CANDIDATES])
-    top.sort(key=lambda c: -c["score"])
+    def _close_sort_key(c):
+        dt = c.get("kalshi_close")
+        if dt is None:
+            return (1, 0.0, -c["score"])
+        return (0, dt.timestamp(), -c["score"])
+    top.sort(key=_close_sort_key)
     print(f"[EMBED] {len(top)} candidate pairs (threshold={SIMILARITY_THRESH}, top-{TOP_N_CANDIDATES}/ticker).")
     return top
 

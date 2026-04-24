@@ -22,12 +22,15 @@ public class BookRefresherService
     private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(5) };
     private readonly SemaphoreSlim _polySem = new(4, 4); // Poly parallel limit
 
-    // Refresh any book whose last delta is older than this
-    private const int RefreshAfterSeconds = 20;
+    // Refresh any book whose last delta is older than this.
+    // LocalOrderBook.IsStale() defaults to 120s — keep a 20s buffer so books
+    // never reach the strategy's stale threshold before we've refreshed them.
+    private const int RefreshAfterSeconds = 100;
 
-    // Kalshi rate-limit: max requests per cycle and ms between each
-    private const int KalshiMaxPerCycle   = 25;
-    private const int KalshiIntervalMs    = 350; // ~2.8 req/s — well under Kalshi's limit
+    // Kalshi rate-limit: max requests per cycle and ms between each.
+    // 50 × 200ms = 10s of Kalshi work per 15s cycle — safe headroom.
+    private const int KalshiMaxPerCycle   = 50;
+    private const int KalshiIntervalMs    = 200; // ~5 req/s
 
     // Kalshi: flag a divergence if REST ask differs from WS ask by more than this
     private const decimal KalshiPriceTolerance = 0.05m;
