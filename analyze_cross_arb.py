@@ -822,8 +822,8 @@ def print_production_sim(rows, session_hours, participation_rate=None):
     # ── Competition sensitivity table ─────────────────────────────────────────
     capturable_clean = [r for r in clean_rows if r["duration_ms"] >= PROD_LATENCY_MS]
     print(f"  COMPETITION SENSITIVITY  ({len(entries)} pairs · {len(capturable_clean)} capturable windows)")
-    print(f"  {'Model':<16}  {'Assumption':<28}  {'1x Capital':>10}  {'Profit':>9}  {'1x /hr':>9}  {'Multi /hr':>10}")
-    print(f"  {'-'*16}  {'-'*28}  {'-'*10}  {'-'*9}  {'-'*9}  {'-'*10}")
+    print(f"  {'Model':<16}  {'Assumption':<28}  {'1x Capital':>10}  {'1x Profit':>10}  {'Multi Profit':>12}  {'1x /hr':>9}  {'Multi /hr':>10}")
+    print(f"  {'-'*16}  {'-'*28}  {'-'*10}  {'-'*10}  {'-'*12}  {'-'*9}  {'-'*10}")
 
     def _row(rate_or_none, label, marker=""):
         sc_entries = _sim_entries(by_pair, rate_or_none)
@@ -831,7 +831,7 @@ def print_production_sim(rows, session_hours, participation_rate=None):
         sc_1x      = sum(e["win_pnl"] for e in sc_entries)
         sc_multi   = _multi(rate_or_none)
         model_str  = "duration-tiered" if rate_or_none is None else f"flat {rate_or_none*100:.0f}%"
-        print(f"  {model_str:<16}  {label:<28}  ${sc_capital:>9.2f}  ${sc_1x:>+8.2f}  {_hr(sc_1x, session_hours):>9}  "
+        print(f"  {model_str:<16}  {label:<28}  ${sc_capital:>9.2f}  ${sc_1x:>+9.2f}  ${sc_multi:>+11.2f}  {_hr(sc_1x, session_hours):>9}  "
               f"{_hr(sc_multi, session_hours):>10}{marker}")
 
     _row(None,  "tiered by duration (default)", " <--" if participation_rate is None else "")
@@ -891,18 +891,23 @@ def print_early_exit_sim(exit_rows, session_hours):
     print()
 
     # ── Exit competition sensitivity ──────────────────────────────────────────
-    # Participation rate here means: what fraction of entry opportunities
-    # were captured? Each exit profit scales linearly with that assumption.
-    # Duration-tiered doesn't apply cleanly to exits (holding periods are days,
-    # not seconds), so only flat rates are shown.
+    base_cap   = sum(r["capital"]        for r in by_pair.values())
+    base_pnl   = sum(r["profit_if_exit"] for r in by_pair.values())
+    base_multi = sum(r["profit_if_exit"] for r in signals)
     print(f"  COMPETITION SENSITIVITY  ({len(by_pair)} pairs with exit signals)")
-    print(f"  {'Model':<16}  {'Assumption':<28}  {'Capital':>10}  {'Profit':>9}  {'$/hr':>9}")
-    print(f"  {'-'*16}  {'-'*28}  {'-'*10}  {'-'*9}  {'-'*9}")
+    print(f"  Each row assumes you captured that % of the original arb entries.")
+    print(f"  Base (100% entry): Capital = ${base_cap:.2f}  |  1x Profit = ${base_pnl:+.2f}"
+          f"  |  Multi Profit = ${base_multi:+.2f}")
+    print()
+    print(f"  {'Model':<16}  {'Assumption':<28}  {'Entry%':>6}  {'Capital':>10}  {'1x Profit':>10}  {'Multi Profit':>12}  {'1x /hr':>9}  {'Multi /hr':>9}")
+    print(f"  {'-'*16}  {'-'*28}  {'-'*6}  {'-'*10}  {'-'*10}  {'-'*12}  {'-'*9}  {'-'*9}")
 
     def _exit_row(rate, label):
-        cap = sum(r["capital"]        * rate for r in by_pair.values())
-        pnl = sum(r["profit_if_exit"] * rate for r in by_pair.values())
-        print(f"  {'flat '+f'{rate*100:.0f}%':<16}  {label:<28}  ${cap:>9.2f}  ${pnl:>+8.2f}  {_hr(pnl, session_hours):>9}")
+        cap   = sum(r["capital"]        * rate for r in by_pair.values())
+        pnl   = sum(r["profit_if_exit"] * rate for r in by_pair.values())
+        multi = sum(r["profit_if_exit"] * rate for r in signals)
+        print(f"  {'flat '+f'{rate*100:.0f}%':<16}  {label:<28}  {rate*100:>5.0f}%  ${cap:>9.2f}"
+              f"  ${pnl:>+9.2f}  ${multi:>+11.2f}  {_hr(pnl, session_hours):>9}  {_hr(multi, session_hours):>9}")
 
     _exit_row(1.00, "sole actor / no competition")
     _exit_row(0.50, "1 competitor  (~2 desks)")
