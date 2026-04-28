@@ -34,7 +34,7 @@ def _load_dotenv(*dirs):
                     os.environ[k] = v
         return
 
-_sd = os.path.dirname(os.path.abspath(__file__))
+_sd = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _load_dotenv(_sd, os.path.dirname(_sd), os.path.expanduser("~"), os.getcwd())
 
 KALSHI_BASE      = "https://api.elections.kalshi.com/trade-api/v2"

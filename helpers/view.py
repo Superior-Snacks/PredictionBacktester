@@ -3,6 +3,9 @@ Filter paper trading CSV logs by strategy name, show trades sorted by profitabil
 Usage: python view.py [strategy_filter]
 """
 import csv, sys, os, glob
+from pathlib import Path
+
+_ROOT = Path(__file__).parent.parent  # PredictionBacktester/
 
 def load_trades(filepath):
     trades = []
@@ -83,9 +86,9 @@ def pair_trades(trades):
 
 def main():
     # Find the most recent LivePaperTrades CSV (excluding summary files)
-    csvs = (glob.glob("LivePaperTrades*.csv")
-          + glob.glob("PredictionLiveTrader/LivePaperTrades_*.csv")
-          + glob.glob("PredictionLiveTrader/bin/Release/**/LivePaperTrades_*.csv", recursive=True))
+    csvs = (glob.glob(str(_ROOT / "LivePaperTrades*.csv"))
+          + glob.glob(str(_ROOT / "PredictionLiveTrader/LivePaperTrades_*.csv"))
+          + glob.glob(str(_ROOT / "PredictionLiveTrader/bin/Release/**/LivePaperTrades_*.csv"), recursive=True))
     csvs = [f for f in csvs if "_summary" not in f.lower()]
     csvs = sorted(csvs, key=os.path.getmtime, reverse=True)
 

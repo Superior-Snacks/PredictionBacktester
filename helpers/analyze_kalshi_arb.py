@@ -29,6 +29,9 @@ import time
 import argparse
 from collections import defaultdict
 from datetime import datetime, timedelta
+from pathlib import Path
+
+_ROOT = Path(__file__).parent.parent  # PredictionBacktester/
 
 # ─── CONFIG ───────────────────────────────────────────────────────────────────
 DEFAULT_MIN_DURATION_MS = 17    # US server: ~6ms one-way + ~5ms processing = ~17ms floor
@@ -47,9 +50,9 @@ THIN_DEPTH_THRESHOLD     = 2.0    # below this = 1-contract resting order noise
 
 def find_latest_csv():
     candidates = (
-        glob.glob("ArbTelemetry_*.csv") +
-        glob.glob("KalshiPaperTrader/ArbTelemetry_*.csv") +
-        glob.glob("KalshiPaperTrader/bin/**/ArbTelemetry_*.csv", recursive=True)
+        glob.glob(str(_ROOT / "ArbTelemetry_*.csv")) +
+        glob.glob(str(_ROOT / "KalshiPaperTrader/ArbTelemetry_*.csv")) +
+        glob.glob(str(_ROOT / "KalshiPaperTrader/bin/**/ArbTelemetry_*.csv"), recursive=True)
     )
     if not candidates:
         return None
@@ -1374,8 +1377,8 @@ def _blocklist_path(csv_path):
 
 
 def _script_blocklist_path():
-    """Secondary blocklist location: alongside this script file."""
-    return os.path.join(os.path.dirname(os.path.abspath(__file__)), BLOCKLIST_FILENAME)
+    """Secondary blocklist location: project root (where the C# bot also reads it)."""
+    return str(Path(__file__).parent.parent / BLOCKLIST_FILENAME)
 
 
 def _read_one_blocklist(path):

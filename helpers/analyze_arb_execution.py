@@ -15,6 +15,9 @@ import os
 import argparse
 from datetime import datetime, timezone
 from collections import defaultdict
+from pathlib import Path
+
+_ROOT = Path(__file__).parent.parent  # PredictionBacktester/
 
 # Trades within this window = same arb attempt
 GROUP_WINDOW_SECONDS = 5
@@ -25,12 +28,11 @@ OVERPAID_THRESHOLD = 0.995
 
 def find_file(pattern, exclude_suffix="_summary.csv"):
     search_paths = [
-        pattern,
-        f"PredictionLiveTrader/{pattern}",
-        f"PredictionLiveTrader/bin/Release/**/{pattern}",
-        f"PredictionLiveProduction/{pattern}",
-        f"PredictionLiveProduction/bin/Release/**/{pattern}",
-        f"../{pattern}",
+        str(_ROOT / pattern),
+        str(_ROOT / "PredictionLiveTrader" / pattern),
+        str(_ROOT / "PredictionLiveTrader/bin/Release/**" / pattern),
+        str(_ROOT / "PredictionLiveProduction" / pattern),
+        str(_ROOT / "PredictionLiveProduction/bin/Release/**" / pattern),
     ]
     files = []
     for p in search_paths:

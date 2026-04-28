@@ -1,6 +1,9 @@
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
+from pathlib import Path
+
+_ROOT = Path(__file__).parent.parent  # PredictionBacktester/
 
 def analyze_strategies(csv_filename):
     print(f"Loading data from {csv_filename}...")
@@ -81,5 +84,5 @@ def analyze_strategies(csv_filename):
 
 if __name__ == "__main__":
     # Ensure this matches the exact name of your CSV file
-    csv_file = "LivePaperTrades_SNAPSHOT.csv" 
+    csv_file = str(_ROOT / "LivePaperTrades_SNAPSHOT.csv")
     analyze_strategies(csv_file)

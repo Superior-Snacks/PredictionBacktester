@@ -1,11 +1,14 @@
 import pandas as pd
 import os
 import re
+from pathlib import Path
+
+_ROOT = Path(__file__).parent.parent  # PredictionBacktester/
 
 # ==========================================
 # SIMULATION SETTINGS
 # ==========================================
-TARGET_CSV_FILE = "LivePaperTrades_SNAPSHOT.csv"  # <--- Type your exact filename here!
+TARGET_CSV_FILE = str(_ROOT / "LivePaperTrades_SNAPSHOT.csv")
 MIN_SHARES_REQUIRED = 5.0  # Change this if you want to test stricter limits
 SPREAD_PENALTY_TO_REFUND = 0.015  # The flat C# penalty we are stripping out
 

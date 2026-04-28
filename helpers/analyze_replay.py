@@ -11,8 +11,10 @@ import csv
 import sys
 import json
 import requests
+from pathlib import Path
 
-MARKET_NAME_CACHE = "market_names_cache.json"
+_ROOT = Path(__file__).parent.parent  # PredictionBacktester/
+MARKET_NAME_CACHE = str(_ROOT / "market_names_cache.json")
 
 
 def load_market_name_cache():
@@ -232,7 +234,8 @@ def show_strategy_detail(df_strat, strat_name, capital):
 
 def analyze():
     # Find the most recent ReplayTrades CSV
-    csv_files = glob.glob("ReplayTrades_*.csv") + glob.glob("PredictionLiveTrader/ReplayTrades_*.csv")
+    csv_files = (glob.glob(str(_ROOT / "ReplayTrades_*.csv"))
+               + glob.glob(str(_ROOT / "PredictionLiveTrader/ReplayTrades_*.csv")))
     csv_files = [f for f in csv_files if os.path.getsize(f) > 0]
 
     if not csv_files:

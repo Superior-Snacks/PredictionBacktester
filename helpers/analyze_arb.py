@@ -14,6 +14,9 @@ import os
 import argparse
 from collections import defaultdict
 from datetime import datetime, timedelta
+from pathlib import Path
+
+_ROOT = Path(__file__).parent.parent  # PredictionBacktester/
 
 def load_csv(path):
     rows = []
@@ -213,12 +216,11 @@ def main():
         path = args.path
     else:
         search_paths = [
-            "ArbTelemetry_*.csv",
-            "PredictionLiveTrader/ArbTelemetry_*.csv",
-            "PredictionLiveTrader/bin/Release/**/ArbTelemetry_*.csv",
-            "PredictionLiveProduction/ArbTelemetry_*.csv",
-            "PredictionLiveProduction/bin/Release/**/ArbTelemetry_*.csv",
-            "../ArbTelemetry_*.csv",
+            str(_ROOT / "ArbTelemetry_*.csv"),
+            str(_ROOT / "PredictionLiveTrader/ArbTelemetry_*.csv"),
+            str(_ROOT / "PredictionLiveTrader/bin/Release/**/ArbTelemetry_*.csv"),
+            str(_ROOT / "PredictionLiveProduction/ArbTelemetry_*.csv"),
+            str(_ROOT / "PredictionLiveProduction/bin/Release/**/ArbTelemetry_*.csv"),
         ]
         files = []
         for pattern in search_paths:

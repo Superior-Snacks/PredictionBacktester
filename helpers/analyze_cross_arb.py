@@ -33,6 +33,9 @@ import time
 import argparse
 from collections import defaultdict
 from datetime import datetime, timedelta
+from pathlib import Path
+
+_ROOT = Path(__file__).parent.parent  # PredictionBacktester/
 
 # ─── CONFIG ───────────────────────────────────────────────────────────────────
 POLY_GAMMA_BASE         = "https://gamma-api.polymarket.com"
@@ -49,9 +52,9 @@ PROD_LATENCY_MS         = 17     # US server min capturable window
 
 def find_latest_csv(pattern):
     candidates = (
-        glob.glob(pattern) +
-        glob.glob(f"KalshiPolyCross/{pattern}") +
-        glob.glob(f"KalshiPolyCross/bin/**/{pattern}", recursive=True)
+        glob.glob(str(_ROOT / pattern)) +
+        glob.glob(str(_ROOT / "KalshiPolyCross" / pattern)) +
+        glob.glob(str(_ROOT / "KalshiPolyCross/bin/**" / pattern), recursive=True)
     )
     if not candidates:
         return None
@@ -63,9 +66,9 @@ def find_exit_csv(binary_path):
     if m:
         ts = m.group(1)
         candidates = (
-            glob.glob(f"CrossArbExitMonitor_{ts}.csv") +
-            glob.glob(f"KalshiPolyCross/CrossArbExitMonitor_{ts}.csv") +
-            glob.glob(f"KalshiPolyCross/bin/**/CrossArbExitMonitor_{ts}.csv", recursive=True)
+            glob.glob(str(_ROOT / f"CrossArbExitMonitor_{ts}.csv")) +
+            glob.glob(str(_ROOT / f"KalshiPolyCross/CrossArbExitMonitor_{ts}.csv")) +
+            glob.glob(str(_ROOT / f"KalshiPolyCross/bin/**/CrossArbExitMonitor_{ts}.csv"), recursive=True)
         )
         if candidates:
             return candidates[0]
@@ -77,9 +80,9 @@ def find_blended_csv(binary_path):
     if m:
         ts = m.group(1)
         candidates = (
-            glob.glob(f"CrossArbBlended_{ts}.csv") +
-            glob.glob(f"KalshiPolyCross/CrossArbBlended_{ts}.csv") +
-            glob.glob(f"KalshiPolyCross/bin/**/CrossArbBlended_{ts}.csv", recursive=True)
+            glob.glob(str(_ROOT / f"CrossArbBlended_{ts}.csv")) +
+            glob.glob(str(_ROOT / f"KalshiPolyCross/CrossArbBlended_{ts}.csv")) +
+            glob.glob(str(_ROOT / f"KalshiPolyCross/bin/**/CrossArbBlended_{ts}.csv"), recursive=True)
         )
         if candidates:
             return candidates[0]
@@ -712,9 +715,9 @@ def print_blended_summary(blended_rows, session_hours):
 def _load_cross_pairs_map():
     """Load cross_pairs.json → dict[pair_id → entry]. Searches common locations."""
     paths = [
-        "KalshiPolyCross/cross_pairs.json",
-        "cross_pairs.json",
-    ] + glob.glob("KalshiPolyCross/bin/**/cross_pairs.json", recursive=True)
+        str(_ROOT / "KalshiPolyCross/cross_pairs.json"),
+        str(_ROOT / "cross_pairs.json"),
+    ] + glob.glob(str(_ROOT / "KalshiPolyCross/bin/**/cross_pairs.json"), recursive=True)
     for p in paths:
         if os.path.exists(p):
             try:

@@ -18,6 +18,9 @@ Usage:
 import os, sys, datetime, base64, glob, csv, time, argparse, json
 import requests
 from collections import defaultdict
+from pathlib import Path
+
+_ROOT = Path(__file__).parent.parent  # PredictionBacktester/
 from cryptography.hazmat.primitives import serialization, hashes
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.asymmetric import padding
@@ -85,8 +88,8 @@ def api_get(private_key, rel_path):
 
 def find_latest_csv():
     candidates = (
-        glob.glob("ArbTelemetry_*.csv") +
-        glob.glob("KalshiPaperTrader/ArbTelemetry_*.csv")
+        glob.glob(str(_ROOT / "ArbTelemetry_*.csv")) +
+        glob.glob(str(_ROOT / "KalshiPaperTrader/ArbTelemetry_*.csv"))
     )
     if not candidates:
         return None
