@@ -15,6 +15,8 @@ Usage:
     python pair_markets.py --include "EPL,Soccer"   # keep only candidates containing these terms
     python pair_markets.py --no-live                # drop markets where Poly secondsDelay > 0 or live=true
     python pair_markets.py --manual-judge           # judge pairs interactively (no Gemini needed)
+    python pair_markets.py --ollama                 # use local Ollama model instead of Gemini
+    python pair_markets.py --sync                   # SCP cross_pairs.json to server after each new valid pair
 """
 
 import argparse, base64, json, os, re, subprocess, sys, time
@@ -549,7 +551,7 @@ def _judge_batch(batch: list, gemini_key: str, models: list, verbose: bool = Fal
     return []
 
 
-def run_judge(candidates: list, gemini_key: str, output_path: Path, verbose: bool = False) -> None:
+def run_judge(candidates: list, gemini_key: str, output_path: Path, verbose: bool = False, sync: bool = False) -> None:
     potential_path = output_path.parent / f"potential_{output_path.name}"
     inverted_path  = output_path.parent / "inverted_cross_pairs.json"
     models = list(JUDGE_MODELS)
@@ -571,6 +573,8 @@ def run_judge(candidates: list, gemini_key: str, output_path: Path, verbose: boo
 
         if valid:
             _save_pairs(valid, output_path)
+            if sync:
+                _scp_sync(output_path)
         if conditional:
             _save_potential_pairs(conditional, potential_path)
         if inverted:
@@ -880,7 +884,7 @@ def _getch() -> str:
             termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
 
-def run_manual_judge(candidates: list, output_path: Path) -> None:
+def run_manual_judge(candidates: list, output_path: Path, sync: bool = False) -> None:
     potential_path = output_path.parent / f"potential_{output_path.name}"
     inverted_path  = output_path.parent / "inverted_cross_pairs.json"
     rejected_path  = output_path.parent / "rejected_pairs.json"
@@ -921,6 +925,8 @@ def run_manual_judge(candidates: list, output_path: Path) -> None:
             break
         if key == "1":
             _save_pairs([c], output_path)
+            if sync:
+                _scp_sync(output_path)
         elif key == "2":
             verdict = {
                 "trap_type": "MANUAL",
@@ -1108,11 +1114,11 @@ def main() -> None:
         return
 
     if args.manual_judge:
-        run_manual_judge(candidates, output_path)
+        run_manual_judge(candidates, output_path, sync=args.sync)
     elif args.ollama:
         run_ollama_judge(candidates, output_path, sync=args.sync)
     else:
-        run_judge(candidates, gemini_key, output_path, verbose=args.verbose_judge)
+        run_judge(candidates, gemini_key, output_path, verbose=args.verbose_judge, sync=args.sync)
     print("\n[DONE] Pairing complete.")
 
 
