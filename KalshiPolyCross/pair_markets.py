@@ -373,24 +373,27 @@ Your job is to evaluate if two prediction market rulebooks describe the EXACT SA
 You must be strict on mathematical traps, but you must understand practical equivalence.
 
 ### EVALUATION RUBRIC:
-1. VALID: The core event, final threshold, and resolution conditions are functionally identical.
+1. VALID: The core event, final threshold, and direction are functionally identical.
    - **Administrative Date Leeway (CRITICAL):** If the platforms list slightly different close dates (e.g., a few days apart), but the actual *real-world event* (e.g., an election, a sports game, a data release) happens on a specific definitive date, treat this as VALID. A platform padding the date by a few days for administrative settlement is NOT a temporal trap.
-2. INVALID (LETHAL TRAPS):
-   - Formula/Subset Mismatch: Platform A requires an absolute number (> 1.28), Platform B requires a rank. Platform A requires 1 win, Platform B requires 4 wins.
+2. INVERTED: The core event and thresholds are mathematically sound, but phrased in exact opposites (e.g., Platform A asks "Will X win?", Platform B asks "Will X lose?").
+   - **CRITICAL BOUNDARY CHECK:** The boundaries must not leave a "dead middle" gap. If A is "> 1.0" and B is "< 1.0", a result of exactly 1.0 resolves both to NO, making it INVALID. If A is "> 1.0" and B is "<= 1.0" (or similar perfect coverage), it is safely INVERTED.
+3. INVALID (LETHAL TRAPS):
+   - Formula/Data Mismatch: Platform A tracks Nominal GDP, Platform B tracks Real GDP. Platform A requires 1 win, Platform B requires 4 wins.
+   - The "Dead Middle" Trap: Inverted boundaries that leave a mathematical gap where both YES shares lose.
    - Overtime/Tie Mismatch: Platform A includes extra time, Platform B strictly ends at regulation.
    - Alphabetical/Dead-Heat: Platform A splits ties evenly, Platform B uses alphabetical order.
-3. CONDITIONAL: The core event is the same, but there is a massive structural or temporal risk.
+4. CONDITIONAL: The core event is the same, but there is a massive structural or temporal risk.
    - True Deadline Mismatch: Platform A measures a single month, Platform B measures the entire year. 
-   - Cancellation Mismatch: One platform voids on cancellation, the other definitively resolves to "No" or "Other".
+   - Cancellation/Asynchronous Mismatch: One platform voids or resolves early, the other forces you to hold to term.
 
 ### RESPONSE FORMAT:
 Respond ONLY with a valid JSON array, one object per pair, in index order. No markdown, no backticks.
 Each object must use this exact schema:
 {
   "index": <int>,
-  "reasoning": "Step 1: Check core event. Step 2: Check if date differences are just administrative padding or true structural mismatches. Step 3: Check for tie-breakers or subsets.",
-  "status": "VALID" | "INVALID" | "CONDITIONAL",
-  "trap_type": "NONE" | "FORMULA_MISMATCH" | "OVERTIME_MISMATCH" | "DEADLINE_MISMATCH" | "CANCELLATION_MISMATCH" | "DEAD_HEAT_MISMATCH",
+  "reasoning": "Step 1: Check core event & data source (e.g. Nominal vs Real). Step 2: Check direction and boundaries (Are there dead middle gaps?). Step 3: Check dates/administrative padding. Step 4: Check tie-breakers/cancellations.",
+  "status": "VALID" | "INVERTED" | "INVALID" | "CONDITIONAL",
+  "trap_type": "NONE" | "FORMULA_MISMATCH" | "OVERTIME_MISMATCH" | "DEADLINE_MISMATCH" | "CANCELLATION_MISMATCH" | "DEAD_HEAT_MISMATCH" | "INVERSION_GAP",
   "safe_hours_before_event": <int, use 2 for cancellations, 0 if not applicable>,
   "earliest_cutoff_date": "<YYYY-MM-DD if True DEADLINE_MISMATCH, otherwise NONE>",
   "explanation": "<one ruthless sentence summarizing the decision>"
@@ -452,7 +455,7 @@ def _parse_judge_response(text: str, batch_size: int) -> list:
         status = str(v.get("status", "INVALID")).upper()
         if not isinstance(idx, int) or not (0 <= idx < batch_size):
             continue
-        if status not in ("VALID", "INVALID", "CONDITIONAL"):
+        if status not in ("VALID", "INVALID", "CONDITIONAL", "INVERTED"):
             status = "INVALID"
         result.append({
             "index":                  idx,
@@ -548,11 +551,13 @@ def _judge_batch(batch: list, gemini_key: str, models: list, verbose: bool = Fal
 
 def run_judge(candidates: list, gemini_key: str, output_path: Path, verbose: bool = False) -> None:
     potential_path = output_path.parent / f"potential_{output_path.name}"
+    inverted_path  = output_path.parent / "inverted_cross_pairs.json"
     models = list(JUDGE_MODELS)
     total  = (len(candidates) + JUDGE_BATCH_SIZE - 1) // JUDGE_BATCH_SIZE
     print(f"[JUDGE] {len(candidates)} candidates -> {total} batch(es) of up to {JUDGE_BATCH_SIZE}")
     print(f"[JUDGE] VALID       -> {output_path}")
     print(f"[JUDGE] CONDITIONAL -> {potential_path}")
+    print(f"[JUDGE] INVERTED    -> {inverted_path}")
 
     for bi, i in enumerate(range(0, len(candidates), JUDGE_BATCH_SIZE)):
         batch   = candidates[i:i + JUDGE_BATCH_SIZE]
@@ -561,12 +566,15 @@ def run_judge(candidates: list, gemini_key: str, output_path: Path, verbose: boo
 
         valid       = [batch[v["index"]] for v in verdicts if v["status"] == "VALID"]
         conditional = [(batch[v["index"]], v) for v in verdicts if v["status"] == "CONDITIONAL"]
-        print(f"  -> {len(valid)} valid, {len(conditional)} conditional.")
+        inverted    = [(batch[v["index"]], v) for v in verdicts if v["status"] == "INVERTED"]
+        print(f"  -> {len(valid)} valid, {len(conditional)} conditional, {len(inverted)} inverted.")
 
         if valid:
             _save_pairs(valid, output_path)
         if conditional:
             _save_potential_pairs(conditional, potential_path)
+        if inverted:
+            _save_inverted_pairs(inverted, inverted_path)
 
         if not models:
             print("[JUDGE] All models exhausted - waiting 5 min before retry...")
@@ -634,11 +642,13 @@ def _scp_sync(local_path: Path) -> None:
 
 def run_ollama_judge(candidates: list, output_path: Path, sync: bool = False) -> None:
     potential_path = output_path.parent / f"potential_{output_path.name}"
+    inverted_path  = output_path.parent / "inverted_cross_pairs.json"
     total = (len(candidates) + OLLAMA_BATCH_SIZE - 1) // OLLAMA_BATCH_SIZE
     print(f"[OLLAMA] {len(candidates)} candidates -> {total} call(s) of {OLLAMA_BATCH_SIZE}")
     print(f"[OLLAMA] Model : {OLLAMA_MODEL}  ({OLLAMA_URL})")
     print(f"[OLLAMA] VALID       -> {output_path}")
     print(f"[OLLAMA] CONDITIONAL -> {potential_path}")
+    print(f"[OLLAMA] INVERTED    -> {inverted_path}")
 
     for bi, i in enumerate(range(0, len(candidates), OLLAMA_BATCH_SIZE)):
         batch = candidates[i:i + OLLAMA_BATCH_SIZE]
@@ -660,6 +670,7 @@ def run_ollama_judge(candidates: list, output_path: Path, sync: bool = False) ->
 
         valid       = [batch[v["index"]] for v in verdicts if v["status"] == "VALID"]
         conditional = [(batch[v["index"]], v) for v in verdicts if v["status"] == "CONDITIONAL"]
+        inverted    = [(batch[v["index"]], v) for v in verdicts if v["status"] == "INVERTED"]
 
         if valid:
             _save_pairs(valid, output_path)
@@ -667,6 +678,8 @@ def run_ollama_judge(candidates: list, output_path: Path, sync: bool = False) ->
                 _scp_sync(output_path)
         if conditional:
             _save_potential_pairs(conditional, potential_path)
+        if inverted:
+            _save_inverted_pairs(inverted, inverted_path)
 
 
 
@@ -796,6 +809,53 @@ def _save_potential_pairs(conditional: list, output_path: Path) -> None:
     print(f"[SAVE] {added} conditional pair(s) saved to {output_path}.")
 
 
+def _save_inverted_pairs(inverted: list, output_path: Path) -> None:
+    """
+    Save INVERTED pairs to inverted_cross_pairs.json.
+    Inverted means the Poly question is the logical opposite of the Kalshi question
+    (e.g. Kalshi: 'Will X win?' / Poly: 'Will X lose?').
+    The 'inverted' flag tells the bot to swap which Poly token it buys.
+    """
+    existing = []
+    existing_keys: set = set()
+    if output_path.exists():
+        try:
+            existing = json.loads(output_path.read_text(encoding="utf-8-sig"))
+            existing_keys = {
+                f"{e['kalshi_ticker']}|{e['poly_yes_token']}".lower()
+                for e in existing
+            }
+        except Exception as e:
+            print(f"[SAVE] Warning reading inverted pairs: {e}")
+
+    added = 0
+    for m, verdict in inverted:
+        key = f"{m['kalshi_ticker']}|{m['poly_yes']}".lower()
+        if key in existing_keys:
+            print(f"[SAVE] Duplicate inverted skipped: {m['kalshi_ticker']}")
+            continue
+        existing_keys.add(key)
+        existing.append({
+            "kalshi_ticker":   m["kalshi_ticker"],
+            "poly_yes_token":  m["poly_yes"],
+            "poly_no_token":   m["poly_no"],
+            "label":           m["kalshi_title"],
+            "event_id":        _event_root(m["kalshi_ticker"]),
+            "settlement_date": m["kalshi_close"].strftime("%Y-%m-%d") if m.get("kalshi_close") else "",
+            "inverted":        True,
+            "explanation":     verdict.get("explanation", ""),
+        })
+        added += 1
+
+    if added == 0:
+        return
+
+    tmp = output_path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+    tmp.replace(output_path)
+    print(f"[SAVE] {added} inverted pair(s) saved to {output_path}.")
+
+
 # -- Manual judge --------------------------------------------------------------
 _GREEN = "\033[92m"
 _RESET = "\033[0m"
@@ -822,10 +882,11 @@ def _getch() -> str:
 
 def run_manual_judge(candidates: list, output_path: Path) -> None:
     potential_path = output_path.parent / f"potential_{output_path.name}"
+    inverted_path  = output_path.parent / "inverted_cross_pairs.json"
     rejected_path  = output_path.parent / "rejected_pairs.json"
     total = len(candidates)
     print(f"\n[MANUAL] {total} candidates to judge.")
-    print("  Keys: 1=VALID  2=CONDITIONAL  3=INVALID  s=skip  q=quit\n")
+    print("  Keys: 1=VALID  2=CONDITIONAL  3=INVALID  4=INVERTED  s=skip  q=quit\n")
 
     for i, c in enumerate(candidates):
         kc = c["kalshi_close"].strftime("%Y-%m-%d") if c["kalshi_close"] else "?"
@@ -849,7 +910,7 @@ def run_manual_judge(candidates: list, output_path: Path) -> None:
             except (EOFError, KeyboardInterrupt):
                 print("\n[MANUAL] Interrupted.")
                 return
-            if key in ("1", "2", "3", "s", "q"):
+            if key in ("1", "2", "3", "4", "s", "q"):
                 print(key)   # echo the pressed key
                 break
             if key:          # ignore empty (special keys)
@@ -871,6 +932,14 @@ def run_manual_judge(candidates: list, output_path: Path) -> None:
         elif key == "3":
             print("  [INVALID]")
             _save_rejected([(c, "INVALID")], rejected_path)
+        elif key == "4":
+            verdict = {
+                "trap_type": "NONE",
+                "safe_hours_before_event": 0,
+                "earliest_cutoff_date": "NONE",
+                "explanation": "Manually flagged as inverted (Poly question is logical opposite of Kalshi).",
+            }
+            _save_inverted_pairs([(c, verdict)], inverted_path)
         elif key == "s":
             print("  [SKIP]")
             _save_rejected([(c, "SKIP")], rejected_path)
@@ -935,6 +1004,7 @@ def main() -> None:
         (output_path,                                               "paired"),
         (output_path.parent / f"potential_{output_path.name}",     "conditional"),
         (output_path.parent / "rejected_pairs.json",               "rejected"),
+        (output_path.parent / "inverted_cross_pairs.json",         "inverted"),
     ]
     for _p, _ in _seen_files:
         if not _p.exists():
