@@ -17,7 +17,7 @@ Usage:
     python pair_markets.py --manual-judge           # judge pairs interactively (no Gemini needed)
 """
 
-import argparse, base64, json, os, re, sys, time
+import argparse, base64, json, os, re, subprocess, sys, time
 
 def _load_dotenv(*dirs):
     for d in dirs:
@@ -64,6 +64,12 @@ DATE_WINDOW_DAYS  = 7
 JUDGE_BATCH_SIZE  = 25
 JUDGE_DELAY_S     = 13
 JUDGE_MODELS      = ["gemini-3-flash-preview", "gemini-2.5-flash", "gemini-2.0-flash"]
+
+OLLAMA_URL        = "http://localhost:11434/api/chat"
+OLLAMA_MODEL      = "qwen3:8b"
+OLLAMA_BATCH_SIZE = 1   # one at a time — local model is slow and small context
+
+SCP_REMOTE        = "jonsi@34.186.121.105:~/PredictionBacktester/KalshiPolyCross/"
 
 SCRIPT_DIR        = Path(__file__).parent
 CACHE_PATH        = SCRIPT_DIR / "embeddings_cache_bge.json"
@@ -204,12 +210,7 @@ def fetch_poly_markets(no_live: bool = False) -> list:
             if not include:
                 continue
             ev_live = bool(ev.get("live", False))
-            end_date = None
-            if ev.get("end_date"):
-                try:
-                    end_date = datetime.fromisoformat(ev["end_date"].replace("Z", "+00:00"))
-                except Exception:
-                    pass
+            ev_end_date_raw = ev.get("end_date")  # event-level fallback
             description = ev.get("description", "") or ""
             for mkt in ev.get("markets", []):
                 question = mkt.get("question", "")
@@ -226,6 +227,13 @@ def fetch_poly_markets(no_live: bool = False) -> list:
                     if ev_live or mkt_live or seconds_delay > 0:
                         skipped_live += 1
                         continue
+                end_date_raw = mkt.get("endDate") or ev_end_date_raw
+                end_date = None
+                if end_date_raw:
+                    try:
+                        end_date = datetime.fromisoformat(str(end_date_raw).replace("Z", "+00:00"))
+                    except Exception:
+                        pass
                 results.append({
                     "question":    question,
                     "yes_token":   tokens[0],
@@ -362,27 +370,30 @@ _JUDGE_SYSTEM = """\
 You are a Lead Quantitative Risk Analyst for a high-frequency trading firm.
 Your job is to evaluate if two prediction market rulebooks describe the EXACT SAME underlying mathematical and temporal event for arbitrage purposes.
 
-You must be strict, but you must also understand practical equivalence (e.g., "democrats.org" and "Official Democratic Sources" are identical).
+You must be strict on mathematical traps, but you must understand practical equivalence.
 
 ### EVALUATION RUBRIC:
-1. VALID: The core event, the final deadline, and the resolution conditions are functionally identical.
+1. VALID: The core event, final threshold, and resolution conditions are functionally identical.
+   - **Administrative Date Leeway (CRITICAL):** If the platforms list slightly different close dates (e.g., a few days apart), but the actual *real-world event* (e.g., an election, a sports game, a data release) happens on a specific definitive date, treat this as VALID. A platform padding the date by a few days for administrative settlement is NOT a temporal trap.
 2. INVALID (LETHAL TRAPS):
-   - Formula Mismatch: Platform A requires an absolute number (> 1.28C), Platform B requires a rank (#1 hottest).
+   - Formula/Subset Mismatch: Platform A requires an absolute number (> 1.28), Platform B requires a rank. Platform A requires 1 win, Platform B requires 4 wins.
    - Overtime/Tie Mismatch: Platform A includes extra time, Platform B strictly ends at regulation.
-3. CONDITIONAL: The core event is the same, but there is a temporal risk that requires gating.
-   - Deadline Mismatch: Platform A closes in July, Platform B closes in December. (This is safe ONLY IF the event resolves before July).
-   - Cancellation/Snap Election: Different rules for postponed or early events.
+   - Alphabetical/Dead-Heat: Platform A splits ties evenly, Platform B uses alphabetical order.
+3. CONDITIONAL: The core event is the same, but there is a massive structural or temporal risk.
+   - True Deadline Mismatch: Platform A measures a single month, Platform B measures the entire year. 
+   - Cancellation Mismatch: One platform voids on cancellation, the other definitively resolves to "No" or "Other".
 
 ### RESPONSE FORMAT:
 Respond ONLY with a valid JSON array, one object per pair, in index order. No markdown, no backticks.
 Each object must use this exact schema:
 {
   "index": <int>,
+  "reasoning": "Step 1: Check core event. Step 2: Check if date differences are just administrative padding or true structural mismatches. Step 3: Check for tie-breakers or subsets.",
   "status": "VALID" | "INVALID" | "CONDITIONAL",
-  "trap_type": "NONE" | "FORMULA_MISMATCH" | "OVERTIME_MISMATCH" | "DEADLINE_MISMATCH" | "CANCELLATION_MISMATCH" | "SNAP_ELECTION",
+  "trap_type": "NONE" | "FORMULA_MISMATCH" | "OVERTIME_MISMATCH" | "DEADLINE_MISMATCH" | "CANCELLATION_MISMATCH" | "DEAD_HEAT_MISMATCH",
   "safe_hours_before_event": <int, use 2 for cancellations, 0 if not applicable>,
-  "earliest_cutoff_date": "<YYYY-MM-DD if DEADLINE_MISMATCH, otherwise NONE>",
-  "explanation": "<one ruthless sentence>"
+  "earliest_cutoff_date": "<YYYY-MM-DD if True DEADLINE_MISMATCH, otherwise NONE>",
+  "explanation": "<one ruthless sentence summarizing the decision>"
 }
 
 ### MARKETS TO EVALUATE:
@@ -398,10 +409,10 @@ def _build_prompt(batch: list) -> str:
             f"[{i}]",
             f"KALSHI  | Title: {c['kalshi_title']}",
             f"        | Close: {kc}",
-            f"        | Rules: {c['kalshi_rules']}",
+            f"        | Rules: {(c['kalshi_rules'] or '')[:300]}",
             f"POLY    | Title: {c['poly_question']}",
             f"        | Close: {pc}",
-            f"        | Desc:  {c['poly_desc']}",
+            f"        | Desc:  {(c['poly_desc'] or '')[:300]}",
             "",
         ]
     return "\n".join(lines)
@@ -564,6 +575,100 @@ def run_judge(candidates: list, gemini_key: str, output_path: Path, verbose: boo
             print("[JUDGE] Models restored, resuming.")
         elif i + JUDGE_BATCH_SIZE < len(candidates):
             time.sleep(JUDGE_DELAY_S)
+
+
+# -- Phase 3b: Ollama judge (local LLM) ----------------------------------------
+
+def _judge_batch_ollama(batch: list) -> list:
+    payload = {
+        "model":   OLLAMA_MODEL,
+        "messages": [{"role": "user", "content": _build_prompt(batch)}],
+        "stream":  False,
+        "think":   False,   # disable qwen3 extended reasoning chain (prevents multi-minute timeouts)
+        "options": {"temperature": 0},
+    }
+    try:
+        r = requests.post(OLLAMA_URL, json=payload, timeout=900)
+        r.raise_for_status()
+        text = r.json().get("message", {}).get("content", "").strip()
+        # qwen3 wraps reasoning in <think>…</think> before the answer
+        if "<think>" in text:
+            end = text.find("</think>")
+            text = text[end + 8:].strip() if end != -1 else text
+        print(f"\n[OLLAMA]\n{text}\n")
+        verdicts = _parse_judge_response(text, len(batch))
+        counts = {"VALID": 0, "CONDITIONAL": 0, "INVALID": 0}
+        for v in verdicts:
+            counts[v["status"]] = counts.get(v["status"], 0) + 1
+        counts["INVALID"] += len(batch) - len(verdicts)
+        print(f" [V:{counts['VALID']} C:{counts['CONDITIONAL']} X:{counts['INVALID']}]", end="", flush=True)
+        non_invalid = [v for v in verdicts if v["status"] != "INVALID"]
+        for v in non_invalid:
+            c = batch[v["index"]]
+            tag = f"[{v['status']}]" + (f" trap={v['trap_type']}" if v["trap_type"] != "NONE" else "")
+            print(f"\n    {tag} K: \"{c['kalshi_title']}\" <-> P: \"{c['poly_question']}\"")
+            print(f"        {v['explanation']}")
+        return non_invalid
+    except requests.exceptions.ConnectionError:
+        print("\n[OLLAMA] Connection refused — is Ollama running? (ollama serve)")
+        return []
+    except Exception as e:
+        print(f"\n[OLLAMA] Error: {e}")
+        return []
+
+
+_scp_proc: subprocess.Popen | None = None
+
+def _scp_sync(local_path: Path) -> None:
+    """Fire-and-forget SCP upload; waits for any in-flight transfer to finish first."""
+    global _scp_proc
+    if _scp_proc is not None:
+        _scp_proc.wait()
+    remote = SCP_REMOTE + local_path.name
+    _scp_proc = subprocess.Popen(
+        ["scp", "-o", "ServerAliveInterval=60", str(local_path), remote],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    print(f"  [SCP] -> {remote}", flush=True)
+
+
+def run_ollama_judge(candidates: list, output_path: Path, sync: bool = False) -> None:
+    potential_path = output_path.parent / f"potential_{output_path.name}"
+    total = (len(candidates) + OLLAMA_BATCH_SIZE - 1) // OLLAMA_BATCH_SIZE
+    print(f"[OLLAMA] {len(candidates)} candidates -> {total} call(s) of {OLLAMA_BATCH_SIZE}")
+    print(f"[OLLAMA] Model : {OLLAMA_MODEL}  ({OLLAMA_URL})")
+    print(f"[OLLAMA] VALID       -> {output_path}")
+    print(f"[OLLAMA] CONDITIONAL -> {potential_path}")
+
+    for bi, i in enumerate(range(0, len(candidates), OLLAMA_BATCH_SIZE)):
+        batch = candidates[i:i + OLLAMA_BATCH_SIZE]
+        print(f"\n{'='*70}")
+        for c in batch:
+            kc = c["kalshi_close"].strftime("%Y-%m-%d") if c["kalshi_close"] else "?"
+            pc = c["poly_close"].strftime("%Y-%m-%d")   if c["poly_close"]   else "?"
+            print(f"  [{bi+1}/{total}] score={c['score']:.3f}")
+            print(f"  KALSHI  {c['kalshi_ticker']}")
+            print(f"          {c['kalshi_title']}")
+            print(f"          closes: {kc}")
+            if c.get("kalshi_rules"):
+                print(f"          rules:  {c['kalshi_rules'][:300]}")
+            print(f"  POLY    {c['poly_question']}")
+            print(f"          closes: {pc}")
+            if c.get("poly_desc"):
+                print(f"          desc:   {c['poly_desc'][:300]}")
+        verdicts = _judge_batch_ollama(batch)
+
+        valid       = [batch[v["index"]] for v in verdicts if v["status"] == "VALID"]
+        conditional = [(batch[v["index"]], v) for v in verdicts if v["status"] == "CONDITIONAL"]
+
+        if valid:
+            _save_pairs(valid, output_path)
+            if sync:
+                _scp_sync(output_path)
+        if conditional:
+            _save_potential_pairs(conditional, potential_path)
+
+
 
 
 # -- Output ---------------------------------------------------------------------
@@ -795,6 +900,10 @@ def main() -> None:
                     help="Print raw judge response for each batch")
     ap.add_argument("--manual-judge", action="store_true",
                     help="Judge pairs interactively instead of calling Gemini")
+    ap.add_argument("--ollama", action="store_true",
+                    help=f"Use local Ollama ({OLLAMA_MODEL}) instead of Gemini (no API key needed)")
+    ap.add_argument("--sync", action="store_true",
+                    help=f"SCP cross_pairs.json to server after each new valid pair ({SCP_REMOTE})")
     ap.add_argument("--exclude", default="",
                     help="Comma-separated terms; candidates whose Kalshi title OR Poly question contains any term are removed (case-insensitive)")
     ap.add_argument("--include", default="",
@@ -815,8 +924,8 @@ def main() -> None:
 
     if not api_key_id or not key_path:
         sys.exit("[ERROR] Set KALSHI_API_KEY_ID and KALSHI_PRIVATE_KEY_PATH.")
-    if not args.dry_run and not args.manual_judge and not gemini_key:
-        sys.exit("[ERROR] Set GEMINI_API_KEY (needed for judge calls; omit with --dry-run or --manual-judge).")
+    if not args.dry_run and not args.manual_judge and not args.ollama and not gemini_key:
+        sys.exit("[ERROR] Set GEMINI_API_KEY (needed for judge calls; omit with --dry-run, --manual-judge, or --ollama).")
 
     with open(key_path, "rb") as f:
         private_key = serialization.load_pem_private_key(f.read(), password=None)
@@ -930,6 +1039,8 @@ def main() -> None:
 
     if args.manual_judge:
         run_manual_judge(candidates, output_path)
+    elif args.ollama:
+        run_ollama_judge(candidates, output_path, sync=args.sync)
     else:
         run_judge(candidates, gemini_key, output_path, verbose=args.verbose_judge)
     print("\n[DONE] Pairing complete.")
