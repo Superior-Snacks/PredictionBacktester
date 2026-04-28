@@ -432,12 +432,14 @@ def _parse_judge_response(text: str, batch_size: int) -> list:
         if text.endswith("```"):
             text = text[:-3]
         text = text.strip()
-    # Ensure it starts with [
-    if not text.startswith("["):
-        m = re.search(r"\[", text)
+    # Ensure it starts with [ or {
+    if not text.startswith("[") and not text.startswith("{"):
+        m = re.search(r"[[{]", text)
         text = text[m.start():] if m else "[]"
     try:
         verdicts = json.loads(text)
+        if isinstance(verdicts, dict):
+            verdicts = [verdicts]
     except json.JSONDecodeError:
         # Truncated — parse whatever complete objects we can
         verdicts = []
