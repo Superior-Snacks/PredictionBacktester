@@ -28,11 +28,14 @@ import sys
 import glob
 import os
 import re
+import json
+import time
 import argparse
 from collections import defaultdict
 from datetime import datetime, timedelta
 
 # ─── CONFIG ───────────────────────────────────────────────────────────────────
+POLY_GAMMA_BASE         = "https://gamma-api.polymarket.com"
 DEFAULT_MIN_DURATION_MS = 17     # US server: ~6ms one-way + ~5ms processing
 DEFAULT_CAPITAL_PER_ARB = 50.0
 DEFAULT_CAPTURE_RATE    = 0.60
@@ -704,7 +707,152 @@ def print_blended_summary(blended_rows, session_hours):
             print(f"  {leg_idx+1:>4}  {k_cnt:>8}  {p_cnt:>8}  {pct_k:>9.1f}%")
     print()
 
-# ─── SECTION 10: PRODUCTION SIM ──────────────────────────────────────────────
+# ─── SECTION 10: ACTUAL RESOLUTION (Polymarket API) ─────────────────────────
+
+def _load_cross_pairs_map():
+    """Load cross_pairs.json → dict[pair_id → entry]. Searches common locations."""
+    paths = [
+        "KalshiPolyCross/cross_pairs.json",
+        "cross_pairs.json",
+    ] + glob.glob("KalshiPolyCross/bin/**/cross_pairs.json", recursive=True)
+    for p in paths:
+        if os.path.exists(p):
+            try:
+                with open(p) as f:
+                    data = json.load(f)
+                result = {}
+                for entry in data:
+                    k = entry.get("kalshi_ticker", "")
+                    y = entry.get("poly_yes_token", "")
+                    if k and y:
+                        pair_id = f"MANUAL_{k}__{y[:8]}"
+                        result[pair_id] = entry
+                return result
+            except Exception:
+                pass
+    return {}
+
+
+def _cross_res_cache_path(csv_path):
+    return os.path.splitext(csv_path)[0] + "_resolution_cache.json"
+
+
+def _load_cross_res_cache(csv_path):
+    try:
+        p = _cross_res_cache_path(csv_path)
+        if os.path.exists(p):
+            with open(p) as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return {}
+
+
+def _save_cross_res_cache(csv_path, cache):
+    try:
+        with open(_cross_res_cache_path(csv_path), "w") as f:
+            json.dump(cache, f, indent=2)
+    except Exception:
+        pass
+
+
+def _fetch_poly_resolution(yes_token, session):
+    """
+    GET /markets?clob_token_ids={yesToken} from Polymarket Gamma API.
+    Returns dict: status ("settled"|"active"|"void"|"not_found"|"error"),
+                  winning_side ("YES"|"NO"|""), resolved (bool), question (str).
+    """
+    try:
+        resp = session.get(
+            f"{POLY_GAMMA_BASE}/markets",
+            params={"clob_token_ids": yes_token},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        if not data or not isinstance(data, list):
+            return {"status": "not_found", "resolved": False, "winning_side": "", "question": ""}
+        mkt = data[0]
+    except Exception as e:
+        return {"status": "error", "error": str(e), "resolved": False, "winning_side": "", "question": ""}
+
+    active   = mkt.get("active", True)
+    closed   = mkt.get("closed", False)
+    winning  = (mkt.get("winning_side") or mkt.get("winningSide") or "").upper().strip()
+    question = mkt.get("question", "")
+
+    if winning in ("YES", "NO"):
+        return {"status": "settled", "resolved": True, "winning_side": winning, "question": question}
+    elif not active and closed:
+        return {"status": "void", "resolved": True, "winning_side": "", "question": question}
+    else:
+        return {"status": "active", "resolved": False, "winning_side": "", "question": question}
+
+
+def _fetch_resolution_map(rows, csv_path):
+    """
+    Fetches Polymarket resolution status for every unique clean pair.
+    Caches resolved pairs in *_resolution_cache.json so re-runs are instant.
+    Returns dict: pair_id → {status, winning_side, resolved}.
+
+    Statuses: "settled" | "active" | "void" | "not_found" | "error"
+    """
+    try:
+        import requests
+        session = requests.Session()
+        session.headers["User-Agent"] = "cross-arb-analyzer/1.0"
+    except ImportError:
+        print("[RESOLUTION] requests not installed — skipping (pip install requests)")
+        return {}
+
+    pairs_map = _load_cross_pairs_map()
+    if not pairs_map:
+        print("[RESOLUTION] cross_pairs.json not found — skipping resolution lookup")
+        return {}
+
+    clean_pair_ids = list({r["pair_id"] for r in rows if not r["flags"]})
+    fetchable      = [(pid, pairs_map[pid]["poly_yes_token"])
+                      for pid in clean_pair_ids if pid in pairs_map]
+    if not fetchable:
+        return {}
+
+    cache     = _load_cross_res_cache(csv_path)
+    resolved  = {}
+    dirty     = False
+
+    cached_n = sum(1 for pid, _ in fetchable if cache.get(pid, {}).get("resolved"))
+    print(f"[RESOLUTION] {len(fetchable)} pairs  ({cached_n} cached) ...", end="", flush=True)
+
+    for i, (pair_id, yes_token) in enumerate(fetchable):
+        cached = cache.get(pair_id)
+        if cached and cached.get("resolved"):
+            resolved[pair_id] = cached
+        else:
+            if i > 0:
+                time.sleep(0.15)
+            res = _fetch_poly_resolution(yes_token, session)
+            resolved[pair_id] = res
+            cache[pair_id]    = res
+            dirty = True
+
+    if dirty:
+        _save_cross_res_cache(csv_path, cache)
+
+    settled = sum(1 for r in resolved.values() if r.get("status") == "settled")
+    active  = sum(1 for r in resolved.values() if r.get("status") == "active")
+    print(f"  {settled} SETTLED  {active} ACTIVE  {len(resolved)-settled-active} other")
+    return resolved
+
+
+def _status_col(resolution_map, pair_id):
+    """Return a 7-char status string for the resolution column, or '' if no data."""
+    if not resolution_map:
+        return ""
+    status = resolution_map.get(pair_id, {}).get("status", "")
+    return {"settled": "SETTLED", "active": "ACTIVE ", "void": "VOID   "}.get(status, "")
+
+
+# ─── SECTION 11: PRODUCTION SIM ──────────────────────────────────────────────
 
 def _duration_participation(duration_ms):
     """
@@ -742,17 +890,15 @@ def _sim_entries(by_pair, participation_rate):
     return entries
 
 
-def print_production_sim(rows, session_hours, participation_rate=None):
+def print_production_sim(rows, session_hours, participation_rate=None, resolution_map=None):
     """
-    Section 10 — Production Sim (always last).
+    Section 11 — Production Sim (always last).
 
     Models the bot running from a US server:
       • Min capturable window  : 17ms  (6ms one-way)
       • Participation rate     : duration-tiered by default, or flat via --participation-rate
       • Entry model            : one entry per pair at the best (lowest-cost) capturable window
       • Scope                  : clean rows only (no fraud flags)
-
-    Note: cross-platform arbs have no external resolution API — P&L is projected only.
     """
     print("=" * 80)
     print("  PRODUCTION SIM  (US server · competition-adjusted · clean pairs only)")
@@ -799,13 +945,16 @@ def print_production_sim(rows, session_hours, participation_rate=None):
 
     multi_proj = _multi(participation_rate)
 
-    rate_hdr = "Part%" if participation_rate is None else f"{participation_rate*100:.0f}%"
-    print(f"  {'Label':<44} {rate_hdr:>5} {'Capital':>8} {'$/shr':>6} {'ProjProfit':>10}  ArbType")
-    print(f"  {'-'*44} {'-'*5} {'-'*8} {'-'*6} {'-'*10}  -------")
+    show_status = bool(resolution_map)
+    rate_hdr    = "Part%" if participation_rate is None else f"{participation_rate*100:.0f}%"
+    status_hdr  = "  Status " if show_status else ""
+    print(f"  {'Label':<44} {rate_hdr:>5} {'Capital':>8} {'$/shr':>6} {'ProjProfit':>10}  ArbType{status_hdr}")
+    print(f"  {'-'*44} {'-'*5} {'-'*8} {'-'*6} {'-'*10}  -------{('  -------' if show_status else '')}")
 
     for e in entries:
-        rate_str = f"{e['rate']*100:.0f}%" if participation_rate is None else ""
-        print(f"  {e['label'][:44]:<44} {rate_str:>5} ${e['capital']:>7.2f} ${e['profit_per_shr']:>5.4f} ${e['win_pnl']:>+9.2f}  {e['arb_type']}")
+        rate_str   = f"{e['rate']*100:.0f}%" if participation_rate is None else ""
+        status_str = (f"  {_status_col(resolution_map, e['pair_id'])}" if show_status else "")
+        print(f"  {e['label'][:44]:<44} {rate_str:>5} ${e['capital']:>7.2f} ${e['profit_per_shr']:>5.4f} ${e['win_pnl']:>+9.2f}  {e['arb_type']}{status_str}")
 
     print()
     rate_label = "duration-tiered" if participation_rate is None else f"{participation_rate*100:.0f}% flat"
@@ -814,9 +963,14 @@ def print_production_sim(rows, session_hours, participation_rate=None):
     print()
     print(f"  PROJECTED P&L   single entry  :  {_per_hr(total_proj,  session_hours)}")
     print(f"  PROJECTED P&L   multi-entry   :  {_per_hr(multi_proj,  session_hours)}")
-    print()
-    print(f"  Note: cross-platform arbs settle instantly (both legs pay $1 or both pay $0).")
-    print(f"        No external resolution API — run the bot live to measure actual fill rate.")
+    if show_status:
+        settled_pnl = sum(e["win_pnl"] for e in entries
+                          if resolution_map.get(e["pair_id"], {}).get("status") == "settled")
+        active_proj = sum(e["win_pnl"] for e in entries
+                          if resolution_map.get(e["pair_id"], {}).get("status") == "active")
+        print()
+        print(f"  ACTUAL P&L (settled pairs only):  ${settled_pnl:+.2f}")
+        print(f"  BEST CASE  (settled + all active): ${settled_pnl + active_proj:+.2f}")
     print()
 
     # ── Competition sensitivity table ─────────────────────────────────────────
@@ -847,7 +1001,7 @@ def print_production_sim(rows, session_hours, participation_rate=None):
 
 # ─── SECTION 11: EARLY EXIT SIM ──────────────────────────────────────────────
 
-def print_early_exit_sim(exit_rows, session_hours):
+def print_early_exit_sim(exit_rows, session_hours, resolution_map=None):
     print("=" * 80)
     print("  EARLY EXIT SIM  (HURDLE_BREACHED signals only)")
     print("=" * 80)
@@ -870,8 +1024,11 @@ def print_early_exit_sim(exit_rows, session_hours):
     print(f"  Avg days held before exit signal: {avg_elapsed:.1f}d")
     print(f"  Avg realized APR at exit:         {avg_realized*100:.1f}%")
     print()
-    print(f"  {'Label':<44} {'Capital':>8} {'$/shr':>6} {'Profit':>8} {'RealAPR':>8} {'DaysHeld':>9}  ArbType")
-    print(f"  {'-'*44} {'-'*8} {'-'*6} {'-'*8} {'-'*8} {'-'*9}  -------")
+
+    show_status = bool(resolution_map)
+    status_hdr  = "  Status " if show_status else ""
+    print(f"  {'Label':<44} {'Capital':>8} {'$/shr':>6} {'Profit':>8} {'RealAPR':>8} {'DaysHeld':>9}  ArbType{status_hdr}")
+    print(f"  {'-'*44} {'-'*8} {'-'*6} {'-'*8} {'-'*8} {'-'*9}  -------{('  -------' if show_status else '')}")
 
     by_pair = {}
     for r in signals:
@@ -882,8 +1039,9 @@ def print_early_exit_sim(exit_rows, session_hours):
     sorted_rows = sorted(by_pair.values(), key=lambda r: r["profit_if_exit"], reverse=True)
     for r in sorted_rows:
         profit_per_shr = r["profit_if_exit"] / r["shares"] if r["shares"] > 0 else 0
+        status_str = (f"  {_status_col(resolution_map, r['pair_id'])}" if show_status else "")
         print(f"  {r['label'][:44]:<44} ${r['capital']:>7.2f} ${profit_per_shr:>5.4f} ${r['profit_if_exit']:>+7.4f} "
-              f"{r['realized_apr']*100:>7.1f}% {r['days_elapsed']:>8.1f}d  {r['arb_type']}")
+              f"{r['realized_apr']*100:>7.1f}% {r['days_elapsed']:>8.1f}d  {r['arb_type']}{status_str}")
 
     print()
     print(f"  Total capital across signals : ${total_capital:.2f}")
@@ -934,6 +1092,8 @@ def main():
                         help="Only analyze rows with no fraud flags")
     parser.add_argument("--participation-rate", type=float, default=None,
                         help="Flat participation rate 0.0-1.0 (default: duration-tiered model)")
+    parser.add_argument("--no-api", action="store_true",
+                        help="Skip Polymarket API resolution check (Section 10)")
     args = parser.parse_args()
 
     path = args.file or find_latest_csv("CrossArbTelemetry_*.csv")
@@ -993,8 +1153,13 @@ def main():
         print("=" * 80)
         print("  (no CrossArbBlended_*.csv found — no blended arb windows recorded yet)\n")
 
+    resolution_map = {}
+    if not args.no_api:
+        resolution_map = _fetch_resolution_map(rows, path)
+
     print_production_sim(rows, session_hours,
-                         participation_rate=args.participation_rate)
+                         participation_rate=args.participation_rate,
+                         resolution_map=resolution_map)
 
     # Early exit sim (CrossArbExitMonitor_*.csv)
     exit_path = find_exit_csv(path)
@@ -1008,7 +1173,7 @@ def main():
         before = len(exit_rows)
         exit_rows = [r for r in exit_rows if r["pair_id"] in clean_pair_ids]
         print(f"[EXIT] {exit_path}  ({before} rows -> {len(exit_rows)} after restricting to {len(clean_pair_ids)} clean pairs)")
-    print_early_exit_sim(exit_rows, session_hours)
+    print_early_exit_sim(exit_rows, session_hours, resolution_map=resolution_map)
 
 if __name__ == "__main__":
     main()
