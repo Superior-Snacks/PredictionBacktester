@@ -56,6 +56,7 @@ public class LocalOrderBook
     {
         Volatile.Write(ref _hasReceivedDelta, true);
         Volatile.Write(ref _lastDeltaAtTicks, DateTime.UtcNow.Ticks);
+        Volatile.Write(ref _isDead, false); // any WS activity proves the market is still live
     }
 
     /// <summary>
