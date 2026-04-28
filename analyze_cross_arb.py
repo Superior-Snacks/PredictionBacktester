@@ -1001,7 +1001,13 @@ def main():
     exit_rows = []
     if exit_path and os.path.exists(exit_path):
         exit_rows = load_exit_csv(exit_path)
-        print(f"[EXIT] {exit_path}  ({len(exit_rows)} rows)")
+        # Restrict to pairs that are clean in the telemetry data — flagged pairs
+        # (STALE_BOOK, DROP_DURING_WINDOW, etc.) produce ghost positions whose
+        # "profit" is fictitious and would inflate the exit sim vs production sim.
+        clean_pair_ids = {r["pair_id"] for r in rows if not r["flags"]}
+        before = len(exit_rows)
+        exit_rows = [r for r in exit_rows if r["pair_id"] in clean_pair_ids]
+        print(f"[EXIT] {exit_path}  ({before} rows -> {len(exit_rows)} after restricting to {len(clean_pair_ids)} clean pairs)")
     print_early_exit_sim(exit_rows, session_hours)
 
 if __name__ == "__main__":

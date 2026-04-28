@@ -829,8 +829,10 @@ public class CrossPlatformArbTelemetryStrategy
         EnqueueCsvRow(row);
 
         // Create a hypothetical position for exit monitoring if we have settlement data and real depth.
+        // Skip stale-book windows — the arb was a ghost and the profit is fictitious.
         // Key includes entry ticks so multiple arb windows on the same pair are tracked independently.
-        if (w.DaysToSettlement > 0 && maxDepth >= _depthFloor && profit > 0m)
+        bool staleAtOpen = (w.KalshiBookAgeMs > 30_000) || (w.PolyBookAgeMs > 30_000);
+        if (w.DaysToSettlement > 0 && maxDepth >= _depthFloor && profit > 0m && !staleAtOpen && !dropDuring)
         {
             string posKey = $"{pairId}\x00{w.StartTime.Ticks}";
             _hypotheticalPositions[posKey] = new HypotheticalPosition(
