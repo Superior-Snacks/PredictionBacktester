@@ -28,9 +28,9 @@ public class BookRefresherService
     private const int RefreshAfterSeconds = 100;
 
     // Kalshi rate-limit: max requests per cycle and ms between each.
-    // 50 × 200ms = 10s of Kalshi work per 15s cycle — safe headroom.
-    private const int KalshiMaxPerCycle   = 50;
-    private const int KalshiIntervalMs    = 200; // ~5 req/s
+    // 75 × 150ms = ~11s of Kalshi work per 15s cycle — safe headroom.
+    private const int KalshiMaxPerCycle   = 75;
+    private const int KalshiIntervalMs    = 150; // ~6.7 req/s
 
     // Kalshi: flag a divergence if REST ask differs from WS ask by more than this
     private const decimal KalshiPriceTolerance = 0.05m;
@@ -59,6 +59,7 @@ public class BookRefresherService
             foreach (var (key, book) in _books)
             {
                 if (!book.HasReceivedDelta) continue;
+                if (book.IsDead) continue; // REST confirmed empty; market resolved/halted
                 var age = now - book.LastDeltaAt;
                 if (age.TotalSeconds < RefreshAfterSeconds) continue;
 
@@ -90,12 +91,17 @@ public class BookRefresherService
             }
 
             int total = polyTasks.Count + kalshiCount;
-            if (total > 0)
+            int dead  = _books.Count(kv => kv.Value.IsDead);
+
+            if (total > 0 || dead > 0)
             {
                 string kalshiNote = kalshiStale.Count > KalshiMaxPerCycle
                     ? $" (Kalshi capped at {KalshiMaxPerCycle}/{kalshiStale.Count})"
                     : "";
-                Console.WriteLine($"[BOOK REFRESH] Refreshed {total} quiet book(s) via REST{kalshiNote}");
+                string deadNote = dead > 0
+                    ? $" · {dead} REST-confirmed dead (resolved/halted)"
+                    : "";
+                Console.WriteLine($"[BOOK REFRESH] Refreshed {total} quiet book(s) via REST{kalshiNote}{deadNote}");
             }
         }
     }
@@ -113,8 +119,17 @@ public class BookRefresherService
 
             if (root.TryGetProperty("bids", out var bids) && root.TryGetProperty("asks", out var asks))
             {
-                book.ProcessBookUpdate(bids, asks);
-                book.MarkDeltaReceived();
+                if (bids.GetArrayLength() > 0 || asks.GetArrayLength() > 0)
+                {
+                    book.ProcessBookUpdate(bids, asks);
+                    book.MarkDeltaReceived();
+                }
+                else
+                {
+                    // REST confirmed empty book — market resolved/halted; stop polling.
+                    // Dead flag resets on WS reconnect via ClearBook().
+                    book.MarkDead();
+                }
             }
         }
         catch (OperationCanceledException) { }
@@ -146,7 +161,11 @@ public class BookRefresherService
 
             if (restYesAsk < 0m)
             {
-                // REST returned empty book — market may have resolved or halted; don't refresh
+                // REST confirmed empty book — mark both YES and NO dead so we stop polling.
+                // Dead flag resets automatically via ClearBook() on WS reconnect.
+                yesBook.MarkDead();
+                if (_books.TryGetValue($"K:{ticker}_NO", out var noBookDead))
+                    noBookDead.MarkDead();
                 return;
             }
 

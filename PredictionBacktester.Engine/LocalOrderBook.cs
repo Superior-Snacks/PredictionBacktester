@@ -32,6 +32,7 @@ public class LocalOrderBook
 
     private bool _hasReceivedDelta = false;
     private long _lastDeltaAtTicks = 0;
+    private bool _isDead = false;
 
     /// <summary>
     /// True once this book has received at least one delta update from the live WebSocket stream.
@@ -39,6 +40,14 @@ public class LocalOrderBook
     /// Strategies use this to avoid acting on a stale initial snapshot with no real-time confirmation.
     /// </summary>
     public bool HasReceivedDelta => Volatile.Read(ref _hasReceivedDelta);
+
+    /// <summary>
+    /// True when REST confirmed the market is gone (empty book).  BookRefresherService stops
+    /// issuing REST calls for dead books.  Reset automatically by ClearBook() on WS reconnect,
+    /// so recovery after an outage re-enables REST verification.
+    /// </summary>
+    public bool IsDead => Volatile.Read(ref _isDead);
+    public void MarkDead() => Volatile.Write(ref _isDead, true);
 
     /// <summary>UTC time of the most recent delta applied to this book.</summary>
     public DateTime LastDeltaAt => new DateTime(Volatile.Read(ref _lastDeltaAtTicks), DateTimeKind.Utc);
@@ -151,6 +160,7 @@ public class LocalOrderBook
             _asks.Clear();
             Volatile.Write(ref _hasReceivedDelta, false);
             Volatile.Write(ref _lastDeltaAtTicks, 0);
+            Volatile.Write(ref _isDead, false);
         }
     }
 
