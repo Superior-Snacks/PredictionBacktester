@@ -383,14 +383,14 @@ When in doubt between VALID and CONDITIONAL, prefer VALID. CONDITIONAL requires 
 
 ### VERDICT CATEGORIES:
 1. **VALID** — Core event, threshold, direction, and resolution methodology are functionally identical.
-   - *Trading close timing is irrelevant.* Different order-book close times do not affect arbitrage validity — only resolution timing matters. If both platforms resolve on the same underlying event outcome, ignore differences in when trading stops.
-   - *Date leeway:* Different listed close dates are OK if the real-world event has a single definitive date.
+   - *Trading close timing is irrelevant:* Different order-book close times do not affect arbitrage validity — only resolution timing matters. If both platforms resolve on the same underlying event outcome, ignore differences in when trading stops.
+   - *Date/Time leeway:* Different listed close dates or intraday time differences are completely OK. Treat as VALID if the real-world event has a single definitive date.
    - *Oracle strictness depends on data type:*
      - Macro/consensus events (elections, court rulings, awards): different tier-1 sources (AP, NYT, Fox) are equivalent.
      - Volatile/sensor data (weather, crypto prices, API feeds): oracles must be IDENTICAL. NOAA ≠ AccuWeather. Mark INVALID if they differ.
-   - *Numerical thresholds must match exactly.* $100,000 ≠ $100,001. "Top 5" ≠ "Top 6". Round numbers are not interchangeable with exact figures.
+   - *Numerical thresholds must match exactly:* $100,000 ≠ $100,001. "Top 5" ≠ "Top 6". Round numbers are not interchangeable with exact figures.
 
-2. **INVERTED** — Same event and thresholds, phrased as exact opposites. Tradeable as YES/NO across venues.
+2. **INVERTED** — Same event and thresholds, phrased as exact opposites. Tradeable as YES/YES across venues.
    - *Dead-middle check:* Boundaries must not leave a gap. "> 1.0" vs "< 1.0" leaves 1.0 resolving both to NO → INVALID, not INVERTED.
 
 3. **INVALID** — A lethal trap exists:
