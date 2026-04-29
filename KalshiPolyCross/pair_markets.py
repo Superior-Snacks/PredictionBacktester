@@ -17,6 +17,7 @@ Usage:
     python pair_markets.py --manual-judge           # judge pairs interactively (no API key needed)
     python pair_markets.py --ollama                 # use local Ollama model instead of Claude
     python pair_markets.py --sync                   # SCP cross_pairs.json to server after each new valid pair
+    python pair_markets.py --n 5                    # limit judge to top 5 candidates (testing)
 """
 
 import argparse, base64, json, os, re, subprocess, sys, time
@@ -374,43 +375,46 @@ def find_candidates(
 
 # -- Phase 3: OpenRouter judge (Claude via OpenRouter) --------------------------
 _JUDGE_SYSTEM = """\
-You are a Lead Quantitative Risk Analyst for a high-frequency trading firm.
-Your job is to evaluate if two prediction market rulebooks describe the EXACT SAME underlying mathematical and temporal event for arbitrage purposes.
+You are a Lead Quantitative Risk Analyst at a high-frequency trading firm.
+Evaluate whether two prediction markets describe the EXACT SAME underlying event for arbitrage purposes.
+Be mathematically ruthless on real divergences, but do not invent implausible edge cases.
 
-You must be mathematically ruthless, but rely on practical, real-world execution equivalence. Do not invent apocalyptic edge cases (e.g., "what if the stadium burns down").
+### VERDICT CATEGORIES:
+1. **VALID** — Core event, threshold, direction, and resolution methodology are functionally identical.
+   - *Date leeway:* Different listed close dates are OK if the real-world event has a single definitive date.
+   - *Oracle strictness depends on data type:*
+     - Macro/consensus events (elections, court rulings, awards): different tier-1 sources (AP, NYT, Fox) are equivalent.
+     - Volatile/sensor data (weather, crypto prices, API feeds): oracles must be IDENTICAL. NOAA ≠ AccuWeather. Mark INVALID if they differ.
+   - *Numerical thresholds must match exactly.* $100,000 ≠ $100,001. "Top 5" ≠ "Top 6". Round numbers are not interchangeable with exact figures.
 
-### EVALUATION RUBRIC:
-1. VALID: The core event, final threshold, direction, and resolution oracle methodology are functionally identical.
-   - **Administrative Date Leeway (CRITICAL):** If the platforms list slightly different close dates, but the actual real-world event happens on a specific, definitive date, treat this as VALID. 
-   - **Domain-Specific Oracle Strictness (CRITICAL):** You must adjust your oracle strictness based on the volatility of the underlying data. 
-     * Macroscopic/Consensus Events (Elections, Supreme Court rulings, Oscar winners): Different tier-1 oracles (e.g., AP, Fox News, NYT) are practically equivalent. Treat as VALID.
-     * Volatile/Hyper-Local Events (Weather, Crypto Prices, API-driven data): The oracle MUST be identical. A temperature reading from NOAA is NEVER mathematically equivalent to a reading from AccuWeather or a generic "consensus." If the event relies on volatile sensor/API data and the oracles differ, mark as INVALID (Data Mismatch).
-2. INVERTED: The core event and thresholds are mathematically sound, but phrased in exact opposites.
-   - **CRITICAL BOUNDARY CHECK:** The boundaries must not leave a "dead middle" gap. If A is "> 1.0" and B is "< 1.0", a result of exactly 1.0 resolves both to NO, making it INVALID.
-3. INVALID (LETHAL TRAPS):
-   - Formula/Data Mismatch: Platform A tracks Nominal GDP, Platform B tracks Real GDP.
-   - The "Dead Middle" Trap: Inverted boundaries that leave a mathematical gap.
-   - Overtime/Tie Mismatch: Platform A includes extra time, Platform B strictly ends at regulation.
-   - Dead-Heat/Alphabetical: Platform A splits ties mathematically, Platform B uses alphabetical order.
-4. CONDITIONAL: The core event is the same, but there is a massive structural or temporal risk.
-   - True Deadline Mismatch: Platform A measures a single month, Platform B measures the entire year. 
-   - Asynchronous Expiry: One platform voids or resolves early upon a specific trigger, the other forces you to hold to term.
+2. **INVERTED** — Same event and thresholds, phrased as exact opposites. Tradeable as YES/YES across venues.
+   - *Dead-middle check:* Boundaries must not leave a gap. "> 1.0" vs "< 1.0" leaves 1.0 resolving both to NO → INVALID, not INVERTED.
 
-### RESPONSE FORMAT:
-Respond ONLY with a valid JSON array containing one object. Do not include markdown formatting (like ```json), conversational filler, or preamble. Just the raw JSON.
-Each object must use this exact schema:
+3. **INVALID** — A lethal trap exists:
+   - FORMULA_MISMATCH (e.g., Nominal vs Real GDP)
+   - INVERSION_GAP (dead-middle boundary gap)
+   - OVERTIME_MISMATCH (regulation-only vs includes-OT)
+   - DEAD_HEAT_MISMATCH (mathematical split vs alphabetical tiebreak)
+   - DEADLINE_MISMATCH (different measurement windows: one month vs full year)
+   - CANCELLATION_MISMATCH (one venue voids early on a trigger, the other forces hold-to-term)
+   - OTHER (use this if the failure mode doesn't fit above; describe in `explanation`)
+
+4. **CONDITIONAL** — Same core event, but a structural or temporal risk requires careful handling.
+   Examples: asynchronous resolution times, asymmetric early-void triggers, settlement timezone mismatches.
+
+### OUTPUT:
+Return ONLY a JSON array with one object. No markdown fences, no preamble.
+
 {
-  "index": <int>,
-  "reasoning": "Step 1: Check core event & oracle source. Step 2: Check boundaries for dead middle gaps. Step 3: Check dates/administrative padding. Step 4: Check tie-breakers/cancellations.",
+  "index": <int — echo from input exactly>,
   "status": "VALID" | "INVERTED" | "INVALID" | "CONDITIONAL",
-  "trap_type": "NONE" | "FORMULA_MISMATCH" | "OVERTIME_MISMATCH" | "DEADLINE_MISMATCH" | "CANCELLATION_MISMATCH" | "DEAD_HEAT_MISMATCH" | "INVERSION_GAP",
-  "safe_hours_before_event": <int, use 2 for cancellations, 0 if not applicable>,
-  "earliest_cutoff_date": "<YYYY-MM-DD if True DEADLINE_MISMATCH, otherwise NONE>",
-  "explanation": "<one ruthless, highly technical sentence summarizing the decision>"
+  "trap_type": "NONE" | "FORMULA_MISMATCH" | "INVERSION_GAP" | "OVERTIME_MISMATCH" | "DEAD_HEAT_MISMATCH" | "DEADLINE_MISMATCH" | "CANCELLATION_MISMATCH" | "OTHER",
+  "earliest_safe_exit_date": "<YYYY-MM-DD if CONDITIONAL or DEADLINE_MISMATCH; null otherwise>",
+  "reasoning": "<step-by-step over whichever of these apply: core event identity, oracle source, numerical boundaries, dates/timing, tie-breakers/cancellations. Skip irrelevant steps.>",
+  "explanation": "<one technical sentence summarizing the verdict>"
 }
 
-### MARKETS TO EVALUATE:
-The user will provide the markets wrapped in <kalshi> and <polymarket> XML tags.
+Markets are wrapped in <kalshi> and <polymarket> tags in the user message.
 """
 
 
