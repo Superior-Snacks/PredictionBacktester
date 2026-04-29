@@ -414,26 +414,30 @@ Return ONLY a JSON array with one object. No markdown fences, no preamble.
   "explanation": "<one technical sentence summarizing the verdict>"
 }
 
-Markets are wrapped in <kalshi> and <polymarket> tags in the user message.
+Each pair is wrapped in <pair index="N"> tags. Use the index value as the "index" field in your response.
 """
 
 
 def _build_user_prompt(batch: list) -> str:
-    lines = []
+    parts = []
     for i, c in enumerate(batch):
         kc = c["kalshi_close"].isoformat() if c["kalshi_close"] else "Unknown"
         pc = c["poly_close"].isoformat()   if c["poly_close"]   else "Unknown"
-        lines += [
-            f"[{i}]",
-            f"KALSHI  | Title: {c['kalshi_title']}",
-            f"        | Close: {kc}",
-            f"        | Rules: {(c['kalshi_rules'] or '')[:300]}",
-            f"POLY    | Title: {c['poly_question']}",
-            f"        | Close: {pc}",
-            f"        | Desc:  {(c['poly_desc'] or '')[:300]}",
-            "",
-        ]
-    return "\n".join(lines)
+        parts.append(
+            f'<pair index="{i}">\n'
+            f'<kalshi>\n'
+            f'Title: {c["kalshi_title"]}\n'
+            f'Close: {kc}\n'
+            f'Rules: {(c["kalshi_rules"] or "")[:300]}\n'
+            f'</kalshi>\n'
+            f'<polymarket>\n'
+            f'Title: {c["poly_question"]}\n'
+            f'Close: {pc}\n'
+            f'Desc:  {(c["poly_desc"] or "")[:300]}\n'
+            f'</polymarket>\n'
+            f'</pair>'
+        )
+    return "\n\n".join(parts)
 
 
 def _build_prompt(batch: list) -> str:
