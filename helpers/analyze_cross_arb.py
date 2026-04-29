@@ -1260,6 +1260,14 @@ def run_pair_check(rows: list) -> None:
     private_key = None
     kalshi_ok   = False
     if api_key_id and key_path:
+        # If the stored path doesn't exist (e.g. Windows path loaded on Linux),
+        # search for the filename in _ROOT and _ROOT.parent.
+        if not os.path.isfile(key_path):
+            fname = Path(key_path).name
+            for candidate in [_ROOT / fname, _ROOT.parent / fname, Path(fname)]:
+                if candidate.is_file():
+                    key_path = str(candidate)
+                    break
         try:
             from cryptography.hazmat.primitives.serialization import load_pem_private_key
             with open(key_path, "rb") as f:
@@ -1427,6 +1435,9 @@ def main():
         before = len(rows)
         rows = [r for r in rows if any(_matches(r, t) for t in include_terms)]
         print(f"[--include] Kept {len(rows)} / {before} rows  (terms: {', '.join(sorted(include_terms))})")
+
+    # ── Compute flags early so run_pair_check can show them ─────────────────
+    compute_flags(rows, spam_threshold=args.spam_threshold)
 
     # ── Pair check (runs first so blocklist is up-to-date before analysis) ────
     if args.check:
