@@ -1173,13 +1173,11 @@ def _getch() -> str:
             termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
 
-_KALSHI_BASE   = "https://api.elections.kalshi.com/trade-api/v2"
-_K_DATE_FIELDS = ("expected_expiration_time", "close_time", "latest_expiration_time", "settlement_time")
-_K_RULE_FIELDS = ("rules_primary", "rules_secondary", "rules")
+_KALSHI_BASE = "https://api.elections.kalshi.com/trade-api/v2"
 
 
-def _kalshi_signed_get(path: str, api_key_id: str, private_key, session):
-    """Signed GET to Kalshi REST. Returns parsed JSON or raises."""
+def _kalshi_get_check(path: str, api_key_id: str, private_key, session):
+    """Signed GET to Kalshi REST — signs path including query params, matching pair_markets.py."""
     from cryptography.hazmat.primitives import hashes
     from cryptography.hazmat.primitives.asymmetric import padding as _pad
     import base64
@@ -1199,88 +1197,53 @@ def _kalshi_signed_get(path: str, api_key_id: str, private_key, session):
     return resp.json()
 
 
-def _k_parse_date(obj: dict):
-    for f in _K_DATE_FIELDS:
-        val = obj.get(f)
-        if val:
-            try:
-                return datetime.fromisoformat(str(val).replace("Z", "+00:00"))
-            except Exception:
-                pass
-    return None
-
-
-def _k_parse_rules(obj: dict) -> str:
-    for f in _K_RULE_FIELDS:
-        v = obj.get(f, "")
-        if v:
-            return v
-    return ""
-
-
 def _fetch_kalshi_market_for_check(ticker: str, event_id: str, api_key_id: str, private_key, session) -> dict:
     """Fetch {title, rules, close_date} for a Kalshi ticker.
 
-    Strategy (per Kalshi API spec):
-    - Market.title is deprecated; canonical title lives on the Event.
-    - Market.close_time IS a required field but may be a Go zero-value for some
-      categorical legs — so we always also fetch the event with nested markets
-      to get the matching market's close_time and the event's title / rules.
+    Mirrors pair_markets.py exactly: fetches the event with nested markets and
+    finds the matching market object — the same source pair_markets.py uses when
+    building candidates. close_time and rules_primary live on the nested market.
     """
-    title      = ticker
-    rules      = ""
-    close_date = None
+    if not event_id:
+        return {"title": ticker, "rules": "", "close_date": None}
 
-    # ── Step 1: market endpoint for rules (title is deprecated but try it too) ─
     try:
-        data  = _kalshi_signed_get(f"/markets/{ticker}", api_key_id, private_key, session)
-        m     = data.get("market", {})
-        title = m.get("title") or ticker
-        rules = _k_parse_rules(m)
-        close_date = _k_parse_date(m)
-    except Exception:
-        pass
+        path = f"/events/{event_id}?with_nested_markets=true"
+        data = _kalshi_get_check(path, api_key_id, private_key, session)
+        ev   = data.get("event", {})
 
-    # ── Step 2: event endpoint with nested markets ────────────────────────────
-    # Always fetch the event — it has the canonical title and the nested market
-    # objects carry close_time even when the top-level /markets/{ticker} doesn't.
-    if event_id:
-        try:
-            data = _kalshi_signed_get(
-                f"/events/{event_id}?with_nested_markets=true",
-                api_key_id, private_key, session,
-            )
-            ev = data.get("event", {})
+        # Event title is the human-readable label for the market group
+        title = ev.get("title") or ev.get("sub_title") or ticker
 
-            # Event title is the full human-readable title for the market group
-            ev_title = ev.get("title") or ev.get("sub_title") or ""
-            if ev_title:
-                title = ev_title
+        # Find this specific market leg in the nested markets list
+        rules      = ""
+        close_date = None
+        for m in ev.get("markets", []):
+            if m.get("ticker") == ticker:
+                # Mirror pair_markets.py field order exactly
+                for field in ("expected_expiration_time", "close_time"):
+                    val = m.get(field)
+                    if val:
+                        try:
+                            close_date = datetime.fromisoformat(val.replace("Z", "+00:00"))
+                            break
+                        except Exception:
+                            pass
+                rules = m.get("rules_primary", "") or m.get("rules_secondary", "")
+                break
 
-            if not rules:
-                rules = _k_parse_rules(ev)
+        # Last resort: event-level strike_date
+        if close_date is None:
+            sd = ev.get("strike_date")
+            if sd:
+                try:
+                    close_date = datetime.fromisoformat(str(sd).replace("Z", "+00:00"))
+                except Exception:
+                    pass
 
-            # Search nested markets for this ticker's close_time
-            if close_date is None:
-                for nm in ev.get("markets", []):
-                    if nm.get("ticker") == ticker:
-                        close_date = _k_parse_date(nm)
-                        if not rules:
-                            rules = _k_parse_rules(nm)
-                        break
-
-            # Last resort: event-level strike_date
-            if close_date is None:
-                sd = ev.get("strike_date")
-                if sd:
-                    try:
-                        close_date = datetime.fromisoformat(str(sd).replace("Z", "+00:00"))
-                    except Exception:
-                        pass
-        except Exception:
-            pass
-
-    return {"title": title, "rules": rules, "close_date": close_date}
+        return {"title": title, "rules": rules, "close_date": close_date}
+    except Exception as e:
+        return {"title": ticker, "rules": "", "close_date": None, "error": str(e)}
 
 
 def _fetch_poly_market_for_check(yes_token: str, session) -> dict:
@@ -1416,6 +1379,8 @@ def run_pair_check(rows: list) -> None:
               f"  REST={p['rest_confirmed']}/{p['rest_checked']} confirmed"
               + (f"  [{_RED}{flag_str}{_RESET}]" if flag_str else "") + "  " + "-" * 10)
         print(f"  KALSHI  {ticker}")
+        if kd.get("error"):
+            print(f"          [fetch error: {kd['error']}]")
         print(f"          {_GREEN}{kd['title']}{_RESET}")
         print(f"          closes: {kc}")
         if kd.get("rules"):
