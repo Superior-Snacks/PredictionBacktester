@@ -1173,44 +1173,79 @@ def _getch() -> str:
             termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
 
-def _fetch_kalshi_market_for_check(ticker: str, api_key_id: str, private_key, session) -> dict:
-    """Fetch {title, rules, close_date} for a Kalshi ticker via REST."""
-    KALSHI_BASE = "https://api.elections.kalshi.com/trade-api/v2"
-    path  = f"/markets/{ticker}"
+_KALSHI_BASE   = "https://api.elections.kalshi.com/trade-api/v2"
+_K_DATE_FIELDS = ("expected_expiration_time", "close_time", "latest_expiration_time", "settlement_time")
+_K_RULE_FIELDS = ("rules_primary", "rules_secondary", "rules")
+
+
+def _kalshi_signed_get(path: str, api_key_id: str, private_key, session):
+    """Signed GET to Kalshi REST. Returns parsed JSON or raises."""
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import padding as _pad
+    import base64
     ts_ms = str(int(time.time() * 1000))
-    msg   = (ts_ms + "GET" + path).encode()
+    sig   = private_key.sign(
+        (ts_ms + "GET" + path).encode(),
+        _pad.PSS(mgf=_pad.MGF1(hashes.SHA256()), salt_length=hashes.SHA256().digest_size),
+        hashes.SHA256(),
+    )
+    hdrs = {
+        "KALSHI-ACCESS-KEY":       api_key_id,
+        "KALSHI-ACCESS-TIMESTAMP": ts_ms,
+        "KALSHI-ACCESS-SIGNATURE": base64.b64encode(sig).decode(),
+    }
+    resp = session.get(_KALSHI_BASE + path, headers=hdrs, timeout=10)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def _k_parse_date(obj: dict):
+    for f in _K_DATE_FIELDS:
+        val = obj.get(f)
+        if val:
+            try:
+                return datetime.fromisoformat(str(val).replace("Z", "+00:00"))
+            except Exception:
+                pass
+    return None
+
+
+def _k_parse_rules(obj: dict) -> str:
+    for f in _K_RULE_FIELDS:
+        v = obj.get(f, "")
+        if v:
+            return v
+    return ""
+
+
+def _fetch_kalshi_market_for_check(ticker: str, event_id: str, api_key_id: str, private_key, session) -> dict:
+    """Fetch {title, rules, close_date} for a Kalshi ticker.
+    Falls back to the event endpoint when the market leg has no close date (common for categorical legs)."""
+    title      = ticker
+    rules      = ""
+    close_date = None
+
     try:
-        from cryptography.hazmat.primitives import hashes
-        from cryptography.hazmat.primitives.asymmetric import padding as _pad
-        import base64
-        sig = private_key.sign(
-            msg,
-            _pad.PSS(mgf=_pad.MGF1(hashes.SHA256()), salt_length=hashes.SHA256().digest_size),
-            hashes.SHA256(),
-        )
-        hdrs = {
-            "KALSHI-ACCESS-KEY":       api_key_id,
-            "KALSHI-ACCESS-TIMESTAMP": ts_ms,
-            "KALSHI-ACCESS-SIGNATURE": base64.b64encode(sig).decode(),
-        }
-    except Exception as e:
-        return {"error": str(e), "title": ticker, "rules": "", "close_date": None}
-    try:
-        resp = session.get(KALSHI_BASE + path, headers=hdrs, timeout=10)
-        resp.raise_for_status()
-        m = resp.json().get("market", {})
-        close_date = None
-        for field in ("expected_expiration_time", "close_time"):
-            val = m.get(field)
-            if val:
-                try:
-                    close_date = datetime.fromisoformat(val.replace("Z", "+00:00"))
-                    break
-                except Exception:
-                    pass
-        return {"title": m.get("title", ticker), "rules": m.get("rules_primary", ""), "close_date": close_date}
-    except Exception as e:
-        return {"error": str(e), "title": ticker, "rules": "", "close_date": None}
+        data  = _kalshi_signed_get(f"/markets/{ticker}", api_key_id, private_key, session)
+        m     = data.get("market", {})
+        title = m.get("title", ticker)
+        rules = _k_parse_rules(m)
+        close_date = _k_parse_date(m)
+    except Exception:
+        pass
+
+    # Categorical legs often have no date on the market itself — fetch the event.
+    if close_date is None and event_id:
+        try:
+            data = _kalshi_signed_get(f"/events/{event_id}", api_key_id, private_key, session)
+            ev   = data.get("event", {})
+            close_date = _k_parse_date(ev)
+            if not rules:
+                rules = _k_parse_rules(ev)
+        except Exception:
+            pass
+
+    return {"title": title, "rules": rules, "close_date": close_date}
 
 
 def _fetch_poly_market_for_check(yes_token: str, session) -> dict:
@@ -1329,7 +1364,8 @@ def run_pair_check(rows: list) -> None:
 
         print(f"  Fetching market details...", end="\r", flush=True)
 
-        kd = (_fetch_kalshi_market_for_check(ticker, api_key_id, private_key, session)
+        event_id  = pair_info.get("event_id", "")
+        kd = (_fetch_kalshi_market_for_check(ticker, event_id, api_key_id, private_key, session)
               if kalshi_ok and ticker
               else {"title": p["label"], "rules": "", "close_date": None})
         pd = (_fetch_poly_market_for_check(yes_token, session)
