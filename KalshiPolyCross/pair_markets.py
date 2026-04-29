@@ -980,6 +980,8 @@ def main() -> None:
                     help="Comma-separated Kalshi categories to exclude (e.g. 'Sports'); run once to see available categories")
     ap.add_argument("--include-category", default="",
                     help="Comma-separated Kalshi categories to keep (e.g. 'Politics,Economics')")
+    ap.add_argument("--n", type=int, default=None, metavar="N",
+                    help="Limit judge to the top N candidates then stop (useful for testing)")
     args = ap.parse_args()
 
     output_path = Path(args.output)
@@ -1084,6 +1086,10 @@ def main() -> None:
         before = len(candidates)
         candidates = [c for c in candidates if c.get("kalshi_category", "").lower() in incl_cats]
         print(f"[--include-category] Kept {len(candidates)} / {before} candidates  ({', '.join(incl_cats)})")
+
+    if args.n is not None:
+        candidates = candidates[:args.n]
+        print(f"[--n] Capped to {len(candidates)} candidate(s) for testing.")
 
     if args.dry_run:
         print(f"\n[DRY RUN] Top {min(50, len(candidates))} candidates (judge skipped):")
