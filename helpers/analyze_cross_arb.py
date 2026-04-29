@@ -1220,28 +1220,63 @@ def _k_parse_rules(obj: dict) -> str:
 
 def _fetch_kalshi_market_for_check(ticker: str, event_id: str, api_key_id: str, private_key, session) -> dict:
     """Fetch {title, rules, close_date} for a Kalshi ticker.
-    Falls back to the event endpoint when the market leg has no close date (common for categorical legs)."""
+
+    Strategy (per Kalshi API spec):
+    - Market.title is deprecated; canonical title lives on the Event.
+    - Market.close_time IS a required field but may be a Go zero-value for some
+      categorical legs — so we always also fetch the event with nested markets
+      to get the matching market's close_time and the event's title / rules.
+    """
     title      = ticker
     rules      = ""
     close_date = None
 
+    # ── Step 1: market endpoint for rules (title is deprecated but try it too) ─
     try:
         data  = _kalshi_signed_get(f"/markets/{ticker}", api_key_id, private_key, session)
         m     = data.get("market", {})
-        title = m.get("title", ticker)
+        title = m.get("title") or ticker
         rules = _k_parse_rules(m)
         close_date = _k_parse_date(m)
     except Exception:
         pass
 
-    # Categorical legs often have no date on the market itself — fetch the event.
-    if close_date is None and event_id:
+    # ── Step 2: event endpoint with nested markets ────────────────────────────
+    # Always fetch the event — it has the canonical title and the nested market
+    # objects carry close_time even when the top-level /markets/{ticker} doesn't.
+    if event_id:
         try:
-            data = _kalshi_signed_get(f"/events/{event_id}", api_key_id, private_key, session)
-            ev   = data.get("event", {})
-            close_date = _k_parse_date(ev)
+            data = _kalshi_signed_get(
+                f"/events/{event_id}?with_nested_markets=true",
+                api_key_id, private_key, session,
+            )
+            ev = data.get("event", {})
+
+            # Event title is the full human-readable title for the market group
+            ev_title = ev.get("title") or ev.get("sub_title") or ""
+            if ev_title:
+                title = ev_title
+
             if not rules:
                 rules = _k_parse_rules(ev)
+
+            # Search nested markets for this ticker's close_time
+            if close_date is None:
+                for nm in ev.get("markets", []):
+                    if nm.get("ticker") == ticker:
+                        close_date = _k_parse_date(nm)
+                        if not rules:
+                            rules = _k_parse_rules(nm)
+                        break
+
+            # Last resort: event-level strike_date
+            if close_date is None:
+                sd = ev.get("strike_date")
+                if sd:
+                    try:
+                        close_date = datetime.fromisoformat(str(sd).replace("Z", "+00:00"))
+                    except Exception:
+                        pass
         except Exception:
             pass
 
