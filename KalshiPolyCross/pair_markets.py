@@ -67,7 +67,7 @@ DATE_WINDOW_DAYS  = 7
 
 JUDGE_BATCH_SIZE   = 25
 JUDGE_DELAY_S      = 5
-OPENROUTER_MODEL   = "anthropic/claude-sonnet-4-5"
+OPENROUTER_MODEL   = "anthropic/claude-haiku-4.5"
 OPENROUTER_HEADERS = {
     "HTTP-Referer": "https://github.com/QuantNightShift",
     "X-Title": "Arbitrage Judge",
