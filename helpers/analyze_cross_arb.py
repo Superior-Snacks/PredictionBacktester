@@ -1212,14 +1212,21 @@ def _fetch_kalshi_market_for_check(ticker: str, event_id: str, api_key_id: str, 
         data = _kalshi_get_check(path, api_key_id, private_key, session)
         ev   = data.get("event", {})
 
-        # Event title is the human-readable label for the market group
-        title = ev.get("title") or ev.get("sub_title") or ticker
+        ev_title = ev.get("title") or ev.get("sub_title") or ticker
 
         # Find this specific market leg in the nested markets list
+        title      = ev_title   # fallback until we find the market
         rules      = ""
         close_date = None
         for m in ev.get("markets", []):
             if m.get("ticker") == ticker:
+                # Mirror pair_markets.py: use market title (deprecated but populated),
+                # fall back to "Event — yes_sub_title" if the field is empty.
+                mkt_title = m.get("title", "").strip()
+                if not mkt_title:
+                    yes_sub = m.get("yes_sub_title", "").strip()
+                    mkt_title = f"{ev_title} — {yes_sub}" if yes_sub else ev_title
+                title = mkt_title
                 # Mirror pair_markets.py field order exactly
                 for field in ("expected_expiration_time", "close_time"):
                     val = m.get(field)
