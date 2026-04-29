@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 pair_markets.py - Fetch open Kalshi + Polymarket sports markets, find semantic
-matches using sentence-transformers (local, free), confirm via Gemini judge,
+matches using sentence-transformers (local, free), confirm via Claude (OpenRouter) judge,
 and save results to cross_pairs.json.
 
 Usage:
@@ -14,8 +14,8 @@ Usage:
     python pair_markets.py --exclude "NBA,NFL"      # drop candidates containing these terms
     python pair_markets.py --include "EPL,Soccer"   # keep only candidates containing these terms
     python pair_markets.py --no-live                # drop markets where Poly secondsDelay > 0 or live=true
-    python pair_markets.py --manual-judge           # judge pairs interactively (no Gemini needed)
-    python pair_markets.py --ollama                 # use local Ollama model instead of Gemini
+    python pair_markets.py --manual-judge           # judge pairs interactively (no API key needed)
+    python pair_markets.py --ollama                 # use local Ollama model instead of Claude
     python pair_markets.py --sync                   # SCP cross_pairs.json to server after each new valid pair
 """
 
@@ -51,6 +51,7 @@ import numpy as np
 import requests
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
+from openai import OpenAI
 from sentence_transformers import SentenceTransformer
 
 # -- Constants -----------------------------------------------------------------
@@ -63,9 +64,13 @@ SIMILARITY_THRESH = 0.78
 TOP_N_CANDIDATES  = 5
 DATE_WINDOW_DAYS  = 7
 
-JUDGE_BATCH_SIZE  = 25
-JUDGE_DELAY_S     = 13
-JUDGE_MODELS      = ["gemini-3-flash-preview", "gemini-2.5-flash", "gemini-2.0-flash"]
+JUDGE_BATCH_SIZE   = 25
+JUDGE_DELAY_S      = 5
+OPENROUTER_MODEL   = "anthropic/claude-sonnet-4-5"
+OPENROUTER_HEADERS = {
+    "HTTP-Referer": "https://github.com/QuantNightShift",
+    "X-Title": "Arbitrage Judge",
+}
 
 OLLAMA_URL        = "http://localhost:11434/api/chat"
 OLLAMA_MODEL      = "qwen3:8b"
@@ -367,7 +372,7 @@ def find_candidates(
     return top
 
 
-# -- Phase 3: Gemini judge ------------------------------------------------------
+# -- Phase 3: OpenRouter judge (Claude via OpenRouter) --------------------------
 _JUDGE_SYSTEM = """\
 You are a Lead Quantitative Risk Analyst for a high-frequency trading firm.
 Your job is to evaluate if two prediction market rulebooks describe the EXACT SAME underlying mathematical and temporal event for arbitrage purposes.
@@ -409,8 +414,8 @@ The user will provide the markets wrapped in <kalshi> and <polymarket> XML tags.
 """
 
 
-def _build_prompt(batch: list) -> str:
-    lines = [_JUDGE_SYSTEM]
+def _build_user_prompt(batch: list) -> str:
+    lines = []
     for i, c in enumerate(batch):
         kc = c["kalshi_close"].isoformat() if c["kalshi_close"] else "Unknown"
         pc = c["poly_close"].isoformat()   if c["poly_close"]   else "Unknown"
@@ -425,6 +430,11 @@ def _build_prompt(batch: list) -> str:
             "",
         ]
     return "\n".join(lines)
+
+
+def _build_prompt(batch: list) -> str:
+    """Combined system+user prompt for Ollama/dry-run (single-message APIs)."""
+    return _JUDGE_SYSTEM + "\n" + _build_user_prompt(batch)
 
 
 def _parse_judge_response(text: str, batch_size: int) -> list:
@@ -476,101 +486,67 @@ def _parse_judge_response(text: str, batch_size: int) -> list:
     return result
 
 
-_MAX_RETRIES_PER_MODEL = 3  # 503s or timeouts before dropping to next model
+_MAX_RETRIES = 3
 
-def _judge_batch(batch: list, gemini_key: str, models: list, verbose: bool = False) -> list:
+def _judge_batch(batch: list, openrouter_key: str, verbose: bool = False) -> list:
     """Returns list of verdict dicts (one per evaluated pair, INVALID omitted)."""
-    payload = {
-        "contents": [{"parts": [{"text": _build_prompt(batch)}]}],
-        "generationConfig": {
-            "temperature": 0.0,
-            "maxOutputTokens": 16384,
-            "responseMimeType": "application/json",
-        },
-    }
+    client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=openrouter_key)
 
-    while models:
-        model = models[0]
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={gemini_key}"
-        retries = 0
-        while retries < _MAX_RETRIES_PER_MODEL:
-            try:
-                r = requests.post(url, json=payload, timeout=120)
-                if not r.ok:
-                    body = r.text
-                    if r.status_code == 429:
-                        if "day" in body.lower() or "perday" in body.lower():
-                            print(f"\n[JUDGE] {model} daily quota exhausted - falling back.")
-                            models.pop(0)
-                            break
-                        print(f"\n[JUDGE] {model} per-minute quota hit - waiting 65s...")
-                        time.sleep(65)
-                        continue
-                    if r.status_code == 503:
-                        retries += 1
-                        print(f"\n[JUDGE] {model} overloaded (503) - retry {retries}/{_MAX_RETRIES_PER_MODEL}...")
-                        time.sleep(15)
-                        continue
-                    if r.status_code == 404:
-                        print(f"\n[JUDGE] {model} not found - dropping.")
-                        models.pop(0)
-                        break
-                    print(f"\n[JUDGE] {model} error {r.status_code}: {body[:300]}")
-                    models.pop(0)
-                    break
-                data = r.json()
-                text = (data.get("candidates", [{}])[0]
-                           .get("content", {})
-                           .get("parts", [{}])[0]
-                           .get("text", "[]")
-                           .strip())
-                finish = (data.get("candidates", [{}])[0].get("finishReason", ""))
-                if verbose:
-                    print(f"\n[JUDGE RAW] model={model} finish={finish}\n{text}\n")
-                verdicts = _parse_judge_response(text, len(batch))
-                counts = {"VALID": 0, "CONDITIONAL": 0, "INVALID": 0}
-                for v in verdicts:
-                    counts[v["status"]] = counts.get(v["status"], 0) + 1
-                counts["INVALID"] += len(batch) - len(verdicts)
-                print(f" [V:{counts['VALID']} C:{counts['CONDITIONAL']} X:{counts['INVALID']}]", end="", flush=True)
-                non_invalid = [v for v in verdicts if v["status"] != "INVALID"]
-                for v in non_invalid:
-                    c = batch[v["index"]]
-                    tag = f"[{v['status']}]" + (f" trap={v['trap_type']}" if v["trap_type"] != "NONE" else "")
-                    print(f"\n    {tag} K: \"{c['kalshi_title']}\" <-> P: \"{c['poly_question']}\"")
-                    print(f"        {v['explanation']}")
-                return non_invalid
-            except Exception as e:
-                retries += 1
-                print(f"\n[JUDGE] {model} exception (retry {retries}/{_MAX_RETRIES_PER_MODEL}): {e}")
-                if retries >= _MAX_RETRIES_PER_MODEL:
-                    break
-                time.sleep(5)
-        else:
-            # Exhausted retries for this model
-            pass
-        if models and models[0] == model:
-            print(f"\n[JUDGE] {model} failed {_MAX_RETRIES_PER_MODEL} times - dropping.")
-            models.pop(0)
+    for attempt in range(1, _MAX_RETRIES + 1):
+        try:
+            response = client.chat.completions.create(
+                model=OPENROUTER_MODEL,
+                messages=[
+                    {"role": "system", "content": _JUDGE_SYSTEM},
+                    {"role": "user",   "content": _build_user_prompt(batch)},
+                ],
+                temperature=0.0,
+                max_tokens=16384,
+                extra_headers=OPENROUTER_HEADERS,
+            )
+            text = response.choices[0].message.content.strip()
+            if verbose:
+                print(f"\n[JUDGE RAW] model={OPENROUTER_MODEL}\n{text}\n")
+            verdicts = _parse_judge_response(text, len(batch))
+            counts = {"VALID": 0, "CONDITIONAL": 0, "INVALID": 0}
+            for v in verdicts:
+                counts[v["status"]] = counts.get(v["status"], 0) + 1
+            counts["INVALID"] += len(batch) - len(verdicts)
+            print(f" [V:{counts['VALID']} C:{counts['CONDITIONAL']} X:{counts['INVALID']}]", end="", flush=True)
+            non_invalid = [v for v in verdicts if v["status"] != "INVALID"]
+            for v in non_invalid:
+                c = batch[v["index"]]
+                tag = f"[{v['status']}]" + (f" trap={v['trap_type']}" if v["trap_type"] != "NONE" else "")
+                print(f"\n    {tag} K: \"{c['kalshi_title']}\" <-> P: \"{c['poly_question']}\"")
+                print(f"        {v['explanation']}")
+            return non_invalid
+        except Exception as e:
+            print(f"\n[JUDGE] {OPENROUTER_MODEL} attempt {attempt}/{_MAX_RETRIES} failed: {e}")
+            if attempt < _MAX_RETRIES:
+                time.sleep(10)
 
-    print("\n[JUDGE] All models exhausted.")
+    print(f"\n[JUDGE] All {_MAX_RETRIES} attempts exhausted.")
     return []
 
 
-def run_judge(candidates: list, gemini_key: str, output_path: Path, verbose: bool = False, sync: bool = False) -> None:
+def run_judge(candidates: list, openrouter_key: str, output_path: Path, verbose: bool = False, sync: bool = False) -> None:
     potential_path = output_path.parent / f"potential_{output_path.name}"
     inverted_path  = output_path.parent / "inverted_cross_pairs.json"
-    models = list(JUDGE_MODELS)
     total  = (len(candidates) + JUDGE_BATCH_SIZE - 1) // JUDGE_BATCH_SIZE
     print(f"[JUDGE] {len(candidates)} candidates -> {total} batch(es) of up to {JUDGE_BATCH_SIZE}")
+    print(f"[JUDGE] Model: {OPENROUTER_MODEL} (via OpenRouter)")
     print(f"[JUDGE] VALID       -> {output_path}")
     print(f"[JUDGE] CONDITIONAL -> {potential_path}")
     print(f"[JUDGE] INVERTED    -> {inverted_path}")
 
     for bi, i in enumerate(range(0, len(candidates), JUDGE_BATCH_SIZE)):
-        batch   = candidates[i:i + JUDGE_BATCH_SIZE]
+        batch    = candidates[i:i + JUDGE_BATCH_SIZE]
         print(f"  [Batch {bi+1}/{total}] Evaluating {len(batch)} pairs...", end="", flush=True)
-        verdicts = _judge_batch(batch, gemini_key, models, verbose=verbose)
+        verdicts = _judge_batch(batch, openrouter_key, verbose=verbose)
+
+        if not verdicts and bi < total - 1:
+            print("[JUDGE] Batch failed - waiting 60s before next batch...")
+            time.sleep(60)
 
         valid       = [batch[v["index"]] for v in verdicts if v["status"] == "VALID"]
         conditional = [(batch[v["index"]], v) for v in verdicts if v["status"] == "CONDITIONAL"]
@@ -586,12 +562,7 @@ def run_judge(candidates: list, gemini_key: str, output_path: Path, verbose: boo
         if inverted:
             _save_inverted_pairs(inverted, inverted_path)
 
-        if not models:
-            print("[JUDGE] All models exhausted - waiting 5 min before retry...")
-            time.sleep(300)
-            models[:] = list(JUDGE_MODELS)
-            print("[JUDGE] Models restored, resuming.")
-        elif i + JUDGE_BATCH_SIZE < len(candidates):
+        if i + JUDGE_BATCH_SIZE < len(candidates):
             time.sleep(JUDGE_DELAY_S)
 
 
@@ -999,14 +970,14 @@ def main() -> None:
 
     output_path = Path(args.output)
 
-    api_key_id = os.environ.get("KALSHI_API_KEY_ID", "")
-    key_path   = os.environ.get("KALSHI_PRIVATE_KEY_PATH", "")
-    gemini_key = os.environ.get("GEMINI_API_KEY", "")
+    api_key_id      = os.environ.get("KALSHI_API_KEY_ID", "")
+    key_path        = os.environ.get("KALSHI_PRIVATE_KEY_PATH", "")
+    openrouter_key  = os.environ.get("OPENROUTER_API_KEY", "")
 
     if not api_key_id or not key_path:
         sys.exit("[ERROR] Set KALSHI_API_KEY_ID and KALSHI_PRIVATE_KEY_PATH.")
-    if not args.dry_run and not args.manual_judge and not args.ollama and not gemini_key:
-        sys.exit("[ERROR] Set GEMINI_API_KEY (needed for judge calls; omit with --dry-run, --manual-judge, or --ollama).")
+    if not args.dry_run and not args.manual_judge and not args.ollama and not openrouter_key:
+        sys.exit("[ERROR] Set OPENROUTER_API_KEY (needed for judge calls; omit with --dry-run, --manual-judge, or --ollama).")
 
     with open(key_path, "rb") as f:
         private_key = serialization.load_pem_private_key(f.read(), password=None)
@@ -1124,7 +1095,7 @@ def main() -> None:
     elif args.ollama:
         run_ollama_judge(candidates, output_path, sync=args.sync)
     else:
-        run_judge(candidates, gemini_key, output_path, verbose=args.verbose_judge, sync=args.sync)
+        run_judge(candidates, openrouter_key, output_path, verbose=args.verbose_judge, sync=args.sync)
     print("\n[DONE] Pairing complete.")
 
 
