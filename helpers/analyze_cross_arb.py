@@ -1145,9 +1145,105 @@ def _getch() -> str:
             termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
 
+def _fetch_kalshi_market_for_check(ticker: str, api_key_id: str, private_key, session) -> dict:
+    """Fetch {title, rules, close_date} for a Kalshi ticker via REST."""
+    KALSHI_BASE = "https://api.elections.kalshi.com/trade-api/v2"
+    path  = f"/markets/{ticker}"
+    ts_ms = str(int(time.time() * 1000))
+    msg   = (ts_ms + "GET" + path).encode()
+    try:
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.asymmetric import padding as _pad
+        import base64
+        sig = private_key.sign(
+            msg,
+            _pad.PSS(mgf=_pad.MGF1(hashes.SHA256()), salt_length=hashes.SHA256().digest_size),
+            hashes.SHA256(),
+        )
+        hdrs = {
+            "KALSHI-ACCESS-KEY":       api_key_id,
+            "KALSHI-ACCESS-TIMESTAMP": ts_ms,
+            "KALSHI-ACCESS-SIGNATURE": base64.b64encode(sig).decode(),
+        }
+    except Exception as e:
+        return {"error": str(e), "title": ticker, "rules": "", "close_date": None}
+    try:
+        resp = session.get(KALSHI_BASE + path, headers=hdrs, timeout=10)
+        resp.raise_for_status()
+        m = resp.json().get("market", {})
+        close_date = None
+        for field in ("expected_expiration_time", "close_time"):
+            val = m.get(field)
+            if val:
+                try:
+                    close_date = datetime.fromisoformat(val.replace("Z", "+00:00"))
+                    break
+                except Exception:
+                    pass
+        return {"title": m.get("title", ticker), "rules": m.get("rules_primary", ""), "close_date": close_date}
+    except Exception as e:
+        return {"error": str(e), "title": ticker, "rules": "", "close_date": None}
+
+
+def _fetch_poly_market_for_check(yes_token: str, session) -> dict:
+    """Fetch {question, description, end_date} for a Polymarket token via Gamma API."""
+    try:
+        resp = session.get(
+            f"{POLY_GAMMA_BASE}/markets",
+            params={"clob_token_ids": yes_token},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        if not data or not isinstance(data, list):
+            return {"question": "", "description": "", "end_date": None}
+        mkt = data[0]
+        end_date = None
+        for field in ("endDate", "end_date_iso", "end_date"):
+            raw = mkt.get(field)
+            if raw:
+                try:
+                    end_date = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+                    break
+                except Exception:
+                    pass
+        return {
+            "question":    mkt.get("question", ""),
+            "description": mkt.get("description", "") or "",
+            "end_date":    end_date,
+        }
+    except Exception as e:
+        return {"error": str(e), "question": "", "description": "", "end_date": None}
+
+
 def run_pair_check(rows: list) -> None:
-    """Interactive pair reviewer — mark pairs invalid to add them to the blocklist."""
-    blocklist = _load_blocklist()
+    """Interactive pair reviewer — fetches live Kalshi + Poly market details, mirrors pair_markets.py manual mode."""
+    try:
+        import requests as _req
+        session = _req.Session()
+        session.headers["User-Agent"] = "cross-arb-analyzer/1.0"
+    except ImportError:
+        print("[CHECK] requests not installed (pip install requests)")
+        return
+
+    # Kalshi auth
+    api_key_id  = os.environ.get("KALSHI_API_KEY_ID", "")
+    key_path    = os.environ.get("KALSHI_PRIVATE_KEY_PATH", "")
+    private_key = None
+    kalshi_ok   = False
+    if api_key_id and key_path:
+        try:
+            from cryptography.hazmat.primitives.serialization import load_pem_private_key
+            with open(key_path, "rb") as f:
+                private_key = load_pem_private_key(f.read(), password=None)
+            kalshi_ok = True
+        except Exception as e:
+            print(f"[CHECK] Kalshi auth failed ({e}) — will show label only")
+    else:
+        print("[CHECK] KALSHI_API_KEY_ID / KALSHI_PRIVATE_KEY_PATH not set — Kalshi details unavailable")
+
+    pairs_map = _load_cross_pairs_map()
+    blocklist  = _load_blocklist()
 
     by_pair: dict = defaultdict(list)
     for r in rows:
@@ -1170,7 +1266,6 @@ def run_pair_check(rows: list) -> None:
             "label":           pr[0]["label"],
             "ticker":          _extract_kalshi_ticker(pair_id),
             "windows":         len(pr),
-            "avg_duration_ms": sum(r["duration_ms"]    for r in pr) / len(pr),
             "best_net_cost":   min(r["best_net_cost"]  for r in pr),
             "max_depth":       max(r["max_depth"]       for r in pr),
             "total_pot":       sum(r["total_potential"] for r in pr),
@@ -1187,21 +1282,42 @@ def run_pair_check(rows: list) -> None:
         print("[CHECK] No pairs to review (all already blocklisted or no data).")
         return
 
-    print(f"\n[CHECK] {total} pair(s) to review.  Blocklist: {BLOCKLIST_PATH}")
-    print("  v / Enter = valid (keep)    x = invalid (blocklist)    s = skip    q = quit\n")
+    print(f"\n[CHECK] {total} pair(s) to review.")
+    print("  Keys: 1 / Enter = VALID    x = INVALID (blocklist)    s = skip    q = quit\n")
 
     blocked_count = 0
     for i, p in enumerate(pairs):
-        arb_str  = "  ".join(f"{t}({n})" for t, n in p["arb_types"].items())
-        flag_sfx = (f"  {_RED}" + "  ".join(p["flags"]) + _RESET) if p["flags"] else ""
+        ticker    = p["ticker"]
+        pair_info = pairs_map.get(p["pair_id"], {})
+        yes_token = pair_info.get("poly_yes_token", "")
 
-        print(f"{'═' * 70}")
-        print(f"  [{i+1}/{total}]  {_GREEN}{p['label']}{_RESET}")
-        print(f"  Ticker   : {p['ticker']}")
-        print(f"  Windows  : {p['windows']}  |  Avg: {p['avg_duration_ms']:.0f}ms  |  Best cost: ${p['best_net_cost']:.4f}")
-        print(f"  Arb type : {arb_str}")
-        print(f"  Max depth: {p['max_depth']:.1f}  |  Total potential: ${p['total_pot']:.4f}")
-        print(f"  REST     : {p['rest_checked']} checked, {p['rest_confirmed']} confirmed{flag_sfx}")
+        print(f"  Fetching market details...", end="\r", flush=True)
+
+        kd = (_fetch_kalshi_market_for_check(ticker, api_key_id, private_key, session)
+              if kalshi_ok and ticker
+              else {"title": p["label"], "rules": "", "close_date": None})
+        pd = (_fetch_poly_market_for_check(yes_token, session)
+              if yes_token
+              else {"question": "(token unknown)", "description": "", "end_date": None})
+
+        kc       = kd["close_date"].strftime("%Y-%m-%d") if kd.get("close_date") else "?"
+        pc       = pd["end_date"].strftime("%Y-%m-%d")   if pd.get("end_date")   else "?"
+        arb_str  = "  ".join(f"{t}({n})" for t, n in p["arb_types"].items())
+        flag_str = ("  ".join(p["flags"])) if p["flags"] else ""
+
+        print(f"--- [{i+1}/{total}]  windows={p['windows']}  best=${p['best_net_cost']:.4f}"
+              f"  REST={p['rest_confirmed']}/{p['rest_checked']} confirmed"
+              + (f"  [{_RED}{flag_str}{_RESET}]" if flag_str else "") + "  " + "-" * 10)
+        print(f"  KALSHI  {ticker}")
+        print(f"          {_GREEN}{kd['title']}{_RESET}")
+        print(f"          closes: {kc}")
+        if kd.get("rules"):
+            print(f"          rules:  {kd['rules'][:300]}")
+        print(f"  POLY    {_GREEN}{pd['question']}{_RESET}")
+        print(f"          closes: {pc}")
+        if pd.get("description"):
+            print(f"          desc:   {pd['description'][:300]}")
+        print(f"  arb     {arb_str}  |  max depth={p['max_depth']:.1f}  |  total pot=${p['total_pot']:.4f}")
 
         while True:
             try:
@@ -1210,11 +1326,11 @@ def run_pair_check(rows: list) -> None:
             except (EOFError, KeyboardInterrupt):
                 print("\n[CHECK] Interrupted.")
                 return
-            if key in ("v", "x", "s", "q", "\r", "\n", ""):
-                print(key if key not in ("\r", "\n", "") else "v")
+            if key in ("1", "v", "x", "s", "q", "\r", "\n", ""):
+                print(key if key not in ("\r", "\n", "") else "1")
                 break
             if key:
-                print(f"\n  Invalid key '{key}'. Use v/Enter=valid  x=invalid  s=skip  q=quit")
+                print(f"\n  Invalid key '{key}'. Use 1/Enter=valid  x=invalid  s=skip  q=quit")
 
         print()
         if key == "q":
@@ -1223,13 +1339,13 @@ def run_pair_check(rows: list) -> None:
         if key == "x":
             _save_to_blocklist(p["pair_id"], p["label"])
             blocked_count += 1
-            print(f"  [BLOCKED] -> {BLOCKLIST_PATH.name}\n")
-        elif key in ("v", "\r", "\n", ""):
+            print(f"  [INVALID] Added to {BLOCKLIST_PATH.name}\n")
+        elif key in ("1", "v", "\r", "\n", ""):
             print(f"  [VALID]\n")
         # s = silent skip
 
     if blocked_count:
-        print(f"[CHECK] {blocked_count} pair(s) added to blocklist.")
+        print(f"[CHECK] {blocked_count} pair(s) added to {BLOCKLIST_PATH.name}")
 
 
 # ─── MAIN ─────────────────────────────────────────────────────────────────────
@@ -1283,6 +1399,10 @@ def main():
         before = len(rows)
         rows = [r for r in rows if any(_matches(r, t) for t in include_terms)]
         print(f"[--include] Kept {len(rows)} / {before} rows  (terms: {', '.join(sorted(include_terms))})")
+
+    # ── Pair check (runs first so blocklist is up-to-date before analysis) ────
+    if args.check:
+        run_pair_check(rows)
 
     # ── Apply blocklist ───────────────────────────────────────────────────────
     blocklist = _load_blocklist()
@@ -1343,9 +1463,6 @@ def main():
         exit_rows = [r for r in exit_rows if r["pair_id"] in clean_pair_ids]
         print(f"[EXIT] {exit_path}  ({before} rows -> {len(exit_rows)} after restricting to {len(clean_pair_ids)} clean pairs)")
     print_early_exit_sim(exit_rows, session_hours, resolution_map=resolution_map)
-
-    if args.check:
-        run_pair_check(rows)
 
 if __name__ == "__main__":
     main()
