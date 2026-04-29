@@ -38,6 +38,34 @@ from pathlib import Path
 
 _ROOT = Path(__file__).parent.parent  # PredictionBacktester/
 
+def _load_dotenv(*dirs):
+    for d in dirs:
+        p = os.path.join(d, ".env")
+        if not os.path.isfile(p):
+            continue
+        with open(p) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if line.startswith("export "):
+                    line = line[7:].strip()
+                if "=" not in line:
+                    continue
+                k, _, v = line.partition("=")
+                k = k.strip(); v = v.strip().strip('"').strip("'")
+                if k and k not in os.environ:
+                    os.environ[k] = v
+        return
+
+_load_dotenv(
+    str(Path(__file__).parent),   # helpers/
+    str(_ROOT),                    # PredictionBacktester/   (local)
+    str(_ROOT.parent),             # one level up            (server)
+    os.path.expanduser("~"),       # home dir
+    os.getcwd(),
+)
+
 # ─── CONFIG ───────────────────────────────────────────────────────────────────
 POLY_GAMMA_BASE         = "https://gamma-api.polymarket.com"
 DEFAULT_MIN_DURATION_MS = 17     # US server: ~6ms one-way + ~5ms processing
