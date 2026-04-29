@@ -21,6 +21,7 @@ Usage:
   python analyze_cross_arb.py --include "EPL,NFL"
   python analyze_cross_arb.py --clean
   python analyze_cross_arb.py --participation-rate 0.5
+  python analyze_cross_arb.py --check                  # interactively review pairs; mark invalid -> blocklist
 """
 
 import csv
@@ -47,6 +48,11 @@ STALE_BOOK_MS           = 30_000
 REPEAT_SPAM_THRESHOLD   = 100    # >N windows for same pair = spam
 
 PROD_LATENCY_MS         = 17     # US server min capturable window
+BLOCKLIST_PATH          = _ROOT / "cross_arb_pair_blocklist.json"
+
+_GREEN = "\033[92m"
+_RED   = "\033[91m"
+_RESET = "\033[0m"
 
 # ─── FILE DISCOVERY ───────────────────────────────────────────────────────────
 
@@ -273,7 +279,8 @@ def compute_flags(rows, spam_threshold=REPEAT_SPAM_THRESHOLD):
             flags.append("THIN_DEPTH")
         k_age = r.get("kalshi_book_age_ms", -1)
         p_age = r.get("poly_book_age_ms",   -1)
-        if (k_age >= 0 and k_age > STALE_BOOK_MS) or (p_age >= 0 and p_age > STALE_BOOK_MS):
+        stale = (k_age >= 0 and k_age > STALE_BOOK_MS) or (p_age >= 0 and p_age > STALE_BOOK_MS)
+        if stale and r.get("rest_confirmed") is not True:
             flags.append("STALE_BOOK_OPEN")
         if r.get("drop_during"):
             flags.append("DROP_DURING_WINDOW")
@@ -1077,6 +1084,154 @@ def print_early_exit_sim(exit_rows, session_hours, resolution_map=None):
     print()
 
 
+# ─── PAIR CHECK / BLOCKLIST ───────────────────────────────────────────────────
+
+def _load_blocklist() -> set:
+    if not BLOCKLIST_PATH.exists():
+        return set()
+    try:
+        data = json.loads(BLOCKLIST_PATH.read_text(encoding="utf-8-sig"))
+        return {e["pair_id"] for e in data if "pair_id" in e}
+    except Exception:
+        return set()
+
+
+def _save_to_blocklist(pair_id: str, label: str) -> None:
+    existing: list = []
+    existing_ids: set = set()
+    if BLOCKLIST_PATH.exists():
+        try:
+            existing = json.loads(BLOCKLIST_PATH.read_text(encoding="utf-8-sig"))
+            existing_ids = {e["pair_id"] for e in existing}
+        except Exception:
+            pass
+    if pair_id in existing_ids:
+        return
+    existing.append({
+        "pair_id":    pair_id,
+        "label":      label,
+        "blocked_at": datetime.utcnow().isoformat(timespec="seconds"),
+    })
+    tmp = BLOCKLIST_PATH.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+    tmp.replace(BLOCKLIST_PATH)
+
+
+def _extract_kalshi_ticker(pair_id: str) -> str:
+    """'MANUAL_KXTICKER__tokenprefix' -> 'KXTICKER'"""
+    if pair_id.startswith("MANUAL_"):
+        rest = pair_id[7:]
+        idx  = rest.find("__")
+        return rest[:idx] if idx != -1 else rest
+    return pair_id
+
+
+def _getch() -> str:
+    try:
+        import msvcrt
+        ch = msvcrt.getwch()
+        if ch in ('\x00', '\xe0'):
+            msvcrt.getwch()
+            return ''
+        return ch.lower()
+    except ImportError:
+        import tty, termios
+        fd  = sys.stdin.fileno()
+        old = termios.tcgetattr(fd)
+        try:
+            tty.setraw(fd)
+            return sys.stdin.read(1).lower()
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+
+def run_pair_check(rows: list) -> None:
+    """Interactive pair reviewer — mark pairs invalid to add them to the blocklist."""
+    blocklist = _load_blocklist()
+
+    by_pair: dict = defaultdict(list)
+    for r in rows:
+        by_pair[r["pair_id"]].append(r)
+
+    pairs = []
+    for pair_id, pr in by_pair.items():
+        if pair_id in blocklist:
+            continue
+        all_flags: set = set()
+        for r in pr:
+            all_flags.update(r["flags"])
+        arb_type_counts: dict = defaultdict(int)
+        for r in pr:
+            arb_type_counts[r["arb_type"]] += 1
+        rest_checked   = sum(1 for r in pr if r.get("rest_checked")   is True)
+        rest_confirmed = sum(1 for r in pr if r.get("rest_confirmed") is True)
+        pairs.append({
+            "pair_id":         pair_id,
+            "label":           pr[0]["label"],
+            "ticker":          _extract_kalshi_ticker(pair_id),
+            "windows":         len(pr),
+            "avg_duration_ms": sum(r["duration_ms"]    for r in pr) / len(pr),
+            "best_net_cost":   min(r["best_net_cost"]  for r in pr),
+            "max_depth":       max(r["max_depth"]       for r in pr),
+            "total_pot":       sum(r["total_potential"] for r in pr),
+            "arb_types":       dict(arb_type_counts),
+            "rest_checked":    rest_checked,
+            "rest_confirmed":  rest_confirmed,
+            "flags":           sorted(all_flags),
+        })
+
+    pairs.sort(key=lambda x: -x["total_pot"])
+
+    total = len(pairs)
+    if total == 0:
+        print("[CHECK] No pairs to review (all already blocklisted or no data).")
+        return
+
+    print(f"\n[CHECK] {total} pair(s) to review.  Blocklist: {BLOCKLIST_PATH}")
+    print("  v / Enter = valid (keep)    x = invalid (blocklist)    s = skip    q = quit\n")
+
+    blocked_count = 0
+    for i, p in enumerate(pairs):
+        arb_str  = "  ".join(f"{t}({n})" for t, n in p["arb_types"].items())
+        flag_sfx = (f"  {_RED}" + "  ".join(p["flags"]) + _RESET) if p["flags"] else ""
+
+        print(f"{'═' * 70}")
+        print(f"  [{i+1}/{total}]  {_GREEN}{p['label']}{_RESET}")
+        print(f"  Ticker   : {p['ticker']}")
+        print(f"  Windows  : {p['windows']}  |  Avg: {p['avg_duration_ms']:.0f}ms  |  Best cost: ${p['best_net_cost']:.4f}")
+        print(f"  Arb type : {arb_str}")
+        print(f"  Max depth: {p['max_depth']:.1f}  |  Total potential: ${p['total_pot']:.4f}")
+        print(f"  REST     : {p['rest_checked']} checked, {p['rest_confirmed']} confirmed{flag_sfx}")
+
+        while True:
+            try:
+                print("  > ", end="", flush=True)
+                key = _getch()
+            except (EOFError, KeyboardInterrupt):
+                print("\n[CHECK] Interrupted.")
+                return
+            if key in ("v", "x", "s", "q", "\r", "\n", ""):
+                print(key if key not in ("\r", "\n", "") else "v")
+                break
+            if key:
+                print(f"\n  Invalid key '{key}'. Use v/Enter=valid  x=invalid  s=skip  q=quit")
+
+        print()
+        if key == "q":
+            print("[CHECK] Quit.")
+            break
+        if key == "x":
+            _save_to_blocklist(p["pair_id"], p["label"])
+            blocked_count += 1
+            print(f"  [BLOCKED] -> {BLOCKLIST_PATH.name}\n")
+        elif key in ("v", "\r", "\n", ""):
+            print(f"  [VALID]\n")
+        # s = silent skip
+
+    if blocked_count:
+        print(f"[CHECK] {blocked_count} pair(s) added to blocklist.")
+
+
 # ─── MAIN ─────────────────────────────────────────────────────────────────────
 
 def main():
@@ -1097,6 +1252,8 @@ def main():
                         help="Flat participation rate 0.0-1.0 (default: duration-tiered model)")
     parser.add_argument("--no-api", action="store_true",
                         help="Skip Polymarket API resolution check (Section 10)")
+    parser.add_argument("--check", action="store_true",
+                        help="Interactively review pairs after analysis; mark invalid pairs to add to blocklist")
     args = parser.parse_args()
 
     path = args.file or find_latest_csv("CrossArbTelemetry_*.csv")
@@ -1126,6 +1283,15 @@ def main():
         before = len(rows)
         rows = [r for r in rows if any(_matches(r, t) for t in include_terms)]
         print(f"[--include] Kept {len(rows)} / {before} rows  (terms: {', '.join(sorted(include_terms))})")
+
+    # ── Apply blocklist ───────────────────────────────────────────────────────
+    blocklist = _load_blocklist()
+    if blocklist:
+        before = len(rows)
+        rows = [r for r in rows if r["pair_id"] not in blocklist]
+        removed = before - len(rows)
+        if removed:
+            print(f"[BLOCKLIST] Filtered {removed} windows from {len(blocklist)} blocked pair(s).")
 
     session_hours = compute_session_hours(rows, path)
     compute_flags(rows, spam_threshold=args.spam_threshold)
@@ -1177,6 +1343,9 @@ def main():
         exit_rows = [r for r in exit_rows if r["pair_id"] in clean_pair_ids]
         print(f"[EXIT] {exit_path}  ({before} rows -> {len(exit_rows)} after restricting to {len(clean_pair_ids)} clean pairs)")
     print_early_exit_sim(exit_rows, session_hours, resolution_map=resolution_map)
+
+    if args.check:
+        run_pair_check(rows)
 
 if __name__ == "__main__":
     main()

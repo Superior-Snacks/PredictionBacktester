@@ -583,10 +583,6 @@ def run_judge(candidates: list, openrouter_key: str, output_path: Path, verbose:
         print(f"  [Batch {bi+1}/{total}] Evaluating {len(batch)} pairs...", end="", flush=True)
         verdicts = _judge_batch(batch, openrouter_key, verbose=verbose)
 
-        if not verdicts and bi < total - 1:
-            print("[JUDGE] Batch failed - waiting 60s before next batch...")
-            time.sleep(60)
-
         valid       = [batch[v["index"]] for v in verdicts if v["status"] == "VALID"]
         conditional = [(batch[v["index"]], v) for v in verdicts if v["status"] == "CONDITIONAL"]
         inverted    = [(batch[v["index"]], v) for v in verdicts if v["status"] == "INVERTED"]
