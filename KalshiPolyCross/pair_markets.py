@@ -51,7 +51,7 @@ import numpy as np
 import requests
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
-from openai import OpenAI
+from openai import OpenAI, APIStatusError
 from sentence_transformers import SentenceTransformer
 
 # -- Constants -----------------------------------------------------------------
@@ -488,6 +488,11 @@ def _parse_judge_response(text: str, batch_size: int) -> list:
 
 _MAX_RETRIES = 3
 
+
+class BalanceExhaustedError(Exception):
+    pass
+
+
 def _judge_batch(batch: list, openrouter_key: str, verbose: bool = False) -> list:
     """Returns list of verdict dicts (one per evaluated pair, INVALID omitted)."""
     client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=openrouter_key)
@@ -520,6 +525,15 @@ def _judge_batch(batch: list, openrouter_key: str, verbose: bool = False) -> lis
                 print(f"\n    {tag} K: \"{c['kalshi_title']}\" <-> P: \"{c['poly_question']}\"")
                 print(f"        {v['explanation']}")
             return non_invalid
+        except APIStatusError as e:
+            if e.status_code == 402:
+                raise BalanceExhaustedError(
+                    f"OpenRouter balance exhausted (HTTP 402). "
+                    f"Top up at openrouter.ai — pairs saved so far are intact."
+                )
+            print(f"\n[JUDGE] {OPENROUTER_MODEL} HTTP {e.status_code} attempt {attempt}/{_MAX_RETRIES}: {e.message}")
+            if attempt < _MAX_RETRIES:
+                time.sleep(10)
         except Exception as e:
             print(f"\n[JUDGE] {OPENROUTER_MODEL} attempt {attempt}/{_MAX_RETRIES} failed: {e}")
             if attempt < _MAX_RETRIES:
@@ -1095,7 +1109,12 @@ def main() -> None:
     elif args.ollama:
         run_ollama_judge(candidates, output_path, sync=args.sync)
     else:
-        run_judge(candidates, openrouter_key, output_path, verbose=args.verbose_judge, sync=args.sync)
+        try:
+            run_judge(candidates, openrouter_key, output_path, verbose=args.verbose_judge, sync=args.sync)
+        except BalanceExhaustedError as e:
+            print(f"\n[JUDGE] {e}")
+            print("[DONE] Stopping early — add credits and re-run to continue.")
+            return
     print("\n[DONE] Pairing complete.")
 
 
