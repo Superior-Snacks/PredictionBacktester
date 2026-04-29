@@ -47,7 +47,14 @@ catch (Exception ex)
 //   { "kalshi_ticker": "KXFOO", "poly_yes_token": "abc...", "poly_no_token": "def...", "label": "..." }
 // These are merged with auto-discovered pairs and always included regardless of score.
 var manualPairs = new List<CrossPair>();
-string manualPath = Path.Combine(AppContext.BaseDirectory, "cross_pairs.json");
+// In dev builds AppContext.BaseDirectory = bin/Debug/net10.0/ — the output copy of
+// cross_pairs.json is stale; pair_markets.py writes to the project source dir 3 levels up.
+// Detect dev by looking for a .csproj file there; production published builds have none.
+string outputDirFile = Path.Combine(AppContext.BaseDirectory, "cross_pairs.json");
+string sourceDir     = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../.."));
+string sourceDirFile = Path.Combine(sourceDir, "cross_pairs.json");
+bool   isDevBuild    = Directory.GetFiles(sourceDir, "*.csproj").Length > 0;
+string manualPath    = isDevBuild && File.Exists(sourceDirFile) ? sourceDirFile : outputDirFile;
 if (!File.Exists(manualPath)) manualPath = "cross_pairs.json";
 if (File.Exists(manualPath))
 {

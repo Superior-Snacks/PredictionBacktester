@@ -395,7 +395,20 @@ public class CrossPlatformArbTelemetryStrategy
         if (!_books.TryGetValue($"P:{pair.PolyNoTokenId}",   out var pNo))  return;
 
         if (!kYes.HasReceivedDelta || !kNo.HasReceivedDelta || !pYes.HasReceivedDelta || !pNo.HasReceivedDelta) return;
-        if (kYes.IsStale() || kNo.IsStale() || pYes.IsStale() || pNo.IsStale()) return;
+        if (kYes.IsStale() || kNo.IsStale() || pYes.IsStale() || pNo.IsStale())
+        {
+            // Close any open window so duration isn't bloated by the stale period.
+            // A new window can only reopen once all 4 books pass the stale check above.
+            lock (_windowLock)
+            {
+                if (_activeWindows.TryGetValue(pair.PairId, out var sw) && sw != null)
+                {
+                    CloseWindow(pair.PairId, sw, DateTime.UtcNow, "STALE_BOOK");
+                    _activeWindows[pair.PairId] = null;
+                }
+            }
+            return;
+        }
 
         decimal kYesAsk = kYes.GetBestAskPrice();
         decimal kNoAsk  = kNo.GetBestAskPrice();
