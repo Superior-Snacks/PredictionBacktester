@@ -508,6 +508,10 @@ class BalanceExhaustedError(Exception):
     pass
 
 
+class JudgeFailedError(Exception):
+    pass
+
+
 def _judge_batch(batch: list, openrouter_key: str, verbose: bool = False) -> list:
     """Returns list of verdict dicts (one per evaluated pair, INVALID omitted)."""
     client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=openrouter_key)
@@ -543,19 +547,25 @@ def _judge_batch(batch: list, openrouter_key: str, verbose: bool = False) -> lis
         except APIStatusError as e:
             if e.status_code == 402:
                 raise BalanceExhaustedError(
-                    f"OpenRouter balance exhausted (HTTP 402). "
-                    f"Top up at openrouter.ai — pairs saved so far are intact."
+                    "OpenRouter balance exhausted (HTTP 402). "
+                    "Top up at openrouter.ai — pairs saved so far are intact."
                 )
-            print(f"\n[JUDGE] {OPENROUTER_MODEL} HTTP {e.status_code} attempt {attempt}/{_MAX_RETRIES}: {e.message}")
-            if attempt < _MAX_RETRIES:
-                time.sleep(10)
+            if e.status_code == 429:
+                wait = int(e.response.headers.get("retry-after", 60))
+                print(f"\n[JUDGE] Rate limited (429) — waiting {wait}s (attempt {attempt}/{_MAX_RETRIES})...")
+                if attempt >= _MAX_RETRIES:
+                    raise JudgeFailedError(f"Rate limited {_MAX_RETRIES} times in a row — stopping.")
+                time.sleep(wait)
+                continue
+            print(f"\n[JUDGE] HTTP {e.status_code} attempt {attempt}/{_MAX_RETRIES}: {e.message}")
+            if attempt >= _MAX_RETRIES:
+                raise JudgeFailedError(f"Judge failed after {_MAX_RETRIES} attempts (HTTP {e.status_code}).")
+            time.sleep(10)
         except Exception as e:
-            print(f"\n[JUDGE] {OPENROUTER_MODEL} attempt {attempt}/{_MAX_RETRIES} failed: {e}")
-            if attempt < _MAX_RETRIES:
-                time.sleep(10)
-
-    print(f"\n[JUDGE] All {_MAX_RETRIES} attempts exhausted.")
-    return []
+            print(f"\n[JUDGE] attempt {attempt}/{_MAX_RETRIES} failed: {e}")
+            if attempt >= _MAX_RETRIES:
+                raise JudgeFailedError(f"Judge failed after {_MAX_RETRIES} attempts: {e}")
+            time.sleep(10)
 
 
 def run_judge(candidates: list, openrouter_key: str, output_path: Path, verbose: bool = False, sync: bool = False) -> None:
@@ -1135,6 +1145,10 @@ def main() -> None:
         except BalanceExhaustedError as e:
             print(f"\n[JUDGE] {e}")
             print("[DONE] Stopping early — add credits and re-run to continue.")
+            return
+        except JudgeFailedError as e:
+            print(f"\n[JUDGE] {e}")
+            print("[DONE] Stopping early — pairs saved so far are intact.")
             return
     print("\n[DONE] Pairing complete.")
 
