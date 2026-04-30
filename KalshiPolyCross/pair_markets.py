@@ -176,11 +176,13 @@ def fetch_kalshi_markets(api_key_id: str, private_key) -> dict:
                         except Exception:
                             pass
                 markets[ticker] = {
-                    "title":        m.get("title", ""),
-                    "close_date":   close_date,
-                    "rules":        m.get("rules_primary", ""),
-                    "event_ticker": event_ticker,
-                    "category":     cat,
+                    "title":         m.get("title", ""),
+                    "close_date":    close_date,
+                    "rules":         m.get("rules_primary", ""),
+                    "event_ticker":  event_ticker,
+                    "category":      cat,
+                    "yes_sub_title": m.get("yes_sub_title", ""),
+                    "no_sub_title":  m.get("no_sub_title",  ""),
                 }
         cursor = data.get("cursor", "")
         if not cursor:
@@ -242,12 +244,19 @@ def fetch_poly_markets(no_live: bool = False) -> list:
                         end_date = datetime.fromisoformat(str(end_date_raw).replace("Z", "+00:00"))
                     except Exception:
                         pass
+                raw_outcomes = mkt.get("outcomes", "[]")
+                if isinstance(raw_outcomes, str):
+                    try:    outcomes = json.loads(raw_outcomes)
+                    except: outcomes = []
+                else:
+                    outcomes = raw_outcomes if isinstance(raw_outcomes, list) else []
                 results.append({
                     "question":    question,
                     "yes_token":   tokens[0],
                     "no_token":    tokens[1],
                     "end_date":    end_date,
                     "description": description,
+                    "outcomes":    outcomes,
                 })
         if len(arr) < page_size:
             break
@@ -334,18 +343,21 @@ def find_candidates(
                     if abs((kd - pd).total_seconds()) / 86400 > DATE_WINDOW_DAYS:
                         continue
                 candidates.append({
-                    "kalshi_ticker":   ticker,
-                    "kalshi_title":    info["title"],
-                    "kalshi_close":    info["close_date"],
-                    "kalshi_rules":    info["rules"],
-                    "kalshi_event":    info["event_ticker"],
-                    "kalshi_category": info.get("category", ""),
-                    "poly_question":   p["question"],
-                    "poly_yes":        p["yes_token"],
-                    "poly_no":         p["no_token"],
-                    "poly_close":      p["end_date"],
-                    "poly_desc":       p["description"],
-                    "score":           float(col[idx]),
+                    "kalshi_ticker":    ticker,
+                    "kalshi_title":     info["title"],
+                    "kalshi_close":     info["close_date"],
+                    "kalshi_rules":     info["rules"],
+                    "kalshi_event":     info["event_ticker"],
+                    "kalshi_category":  info.get("category", ""),
+                    "kalshi_yes_sub":   info.get("yes_sub_title", ""),
+                    "kalshi_no_sub":    info.get("no_sub_title",  ""),
+                    "poly_question":    p["question"],
+                    "poly_yes":         p["yes_token"],
+                    "poly_no":          p["no_token"],
+                    "poly_close":       p["end_date"],
+                    "poly_desc":        p["description"],
+                    "poly_outcomes":    p.get("outcomes", []),
+                    "score":            float(col[idx]),
                 })
 
         print(f"[EMBED] {chunk_end}/{total_k} tickers scored, {len(candidates)} raw hits so far...", flush=True)
@@ -911,10 +923,18 @@ def run_manual_judge(candidates: list, output_path: Path, sync: bool = False) ->
         print(f"--- [{i+1}/{total}] score={c['score']:.3f}  category={cat} ---")
         print(f"  KALSHI  {c['kalshi_ticker']}")
         print(f"          {_GREEN}{c['kalshi_title']}{_RESET}")
+        k_yes = c.get("kalshi_yes_sub", "")
+        k_no  = c.get("kalshi_no_sub",  "")
+        if k_yes or k_no:
+            print(f"          YES: [{k_yes or '?'}]  /  NO: [{k_no or '?'}]")
         print(f"          closes: {kc}")
         if c["kalshi_rules"]:
             print(f"          rules:  {c['kalshi_rules']}")
+        p_outcomes = c.get("poly_outcomes", [])
+        p_yes_lbl  = p_outcomes[0] if len(p_outcomes) > 0 else "Yes"
+        p_no_lbl   = p_outcomes[1] if len(p_outcomes) > 1 else "No"
         print(f"  POLY    {_GREEN}{c['poly_question']}{_RESET}")
+        print(f"          YES: [{p_yes_lbl}]  /  NO: [{p_no_lbl}]")
         print(f"          closes: {pc}")
         if c["poly_desc"]:
             print(f"          desc:   {c['poly_desc']}")

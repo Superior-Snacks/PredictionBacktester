@@ -1218,14 +1218,17 @@ def _fetch_kalshi_market_for_check(ticker: str, event_id: str, api_key_id: str, 
         title      = ev_title   # fallback until we find the market
         rules      = ""
         close_date = None
+        yes_sub_title = ""
+        no_sub_title  = ""
         for m in ev.get("markets", []):
             if m.get("ticker") == ticker:
                 # Mirror pair_markets.py: use market title (deprecated but populated),
                 # fall back to "Event — yes_sub_title" if the field is empty.
                 mkt_title = m.get("title", "").strip()
+                yes_sub_title = m.get("yes_sub_title", "").strip()
+                no_sub_title  = m.get("no_sub_title",  "").strip()
                 if not mkt_title:
-                    yes_sub = m.get("yes_sub_title", "").strip()
-                    mkt_title = f"{ev_title} — {yes_sub}" if yes_sub else ev_title
+                    mkt_title = f"{ev_title} — {yes_sub_title}" if yes_sub_title else ev_title
                 title = mkt_title
                 # Mirror pair_markets.py field order exactly
                 for field in ("expected_expiration_time", "close_time"):
@@ -1248,9 +1251,11 @@ def _fetch_kalshi_market_for_check(ticker: str, event_id: str, api_key_id: str, 
                 except Exception:
                     pass
 
-        return {"title": title, "rules": rules, "close_date": close_date}
+        return {"title": title, "rules": rules, "close_date": close_date,
+                "yes_sub": yes_sub_title, "no_sub": no_sub_title}
     except Exception as e:
-        return {"title": ticker, "rules": "", "close_date": None, "error": str(e)}
+        return {"title": ticker, "rules": "", "close_date": None,
+                "yes_sub": "", "no_sub": "", "error": str(e)}
 
 
 def _fetch_poly_market_for_check(yes_token: str, session) -> dict:
@@ -1275,13 +1280,20 @@ def _fetch_poly_market_for_check(yes_token: str, session) -> dict:
                     break
                 except Exception:
                     pass
+        raw_outcomes = mkt.get("outcomes", "[]")
+        if isinstance(raw_outcomes, str):
+            try:    outcomes = json.loads(raw_outcomes)
+            except: outcomes = []
+        else:
+            outcomes = raw_outcomes if isinstance(raw_outcomes, list) else []
         return {
             "question":    mkt.get("question", ""),
             "description": mkt.get("description", "") or "",
             "end_date":    end_date,
+            "outcomes":    outcomes,
         }
     except Exception as e:
-        return {"error": str(e), "question": "", "description": "", "end_date": None}
+        return {"error": str(e), "question": "", "description": "", "end_date": None, "outcomes": []}
 
 
 def run_pair_check(rows: list) -> None:
@@ -1389,10 +1401,18 @@ def run_pair_check(rows: list) -> None:
         if kd.get("error"):
             print(f"          [fetch error: {kd['error']}]")
         print(f"          {_GREEN}{kd['title']}{_RESET}")
+        k_yes = kd.get("yes_sub", "")
+        k_no  = kd.get("no_sub",  "")
+        if k_yes or k_no:
+            print(f"          YES: [{k_yes or '?'}]  /  NO: [{k_no or '?'}]")
         print(f"          closes: {kc}")
         if kd.get("rules"):
             print(f"          rules:  {kd['rules'][:300]}")
+        p_outcomes = pd.get("outcomes", [])
+        p_yes_lbl  = p_outcomes[0] if len(p_outcomes) > 0 else "Yes"
+        p_no_lbl   = p_outcomes[1] if len(p_outcomes) > 1 else "No"
         print(f"  POLY    {_GREEN}{pd['question']}{_RESET}")
+        print(f"          YES: [{p_yes_lbl}]  /  NO: [{p_no_lbl}]")
         print(f"          closes: {pc}")
         if pd.get("description"):
             print(f"          desc:   {pd['description'][:300]}")
