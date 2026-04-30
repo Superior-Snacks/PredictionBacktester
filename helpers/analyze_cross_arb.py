@@ -1150,20 +1150,23 @@ def print_early_exit_sim(exit_rows, session_hours, resolution_map=None):
     print(f"  Each row scales the deployed capital and realized profit by entry %.")
     print()
     print(f"  {'Model':<16}  {'Assumption':<28}  {'Entry%':>6}  "
-          f"{'Capital':>10}  {'Profit':>10}  {'/hr':>9}")
-    print(f"  {'-'*16}  {'-'*28}  {'-'*6}  {'-'*10}  {'-'*10}  {'-'*9}")
+          f"{'Capital':>10}  {'1x Profit':>10}  {'Multi Profit':>12}  {'1x /hr':>9}  {'Multi /hr':>9}")
+    print(f"  {'-'*16}  {'-'*28}  {'-'*6}  {'-'*10}  {'-'*10}  {'-'*12}  {'-'*9}  {'-'*9}")
 
     def _exit_row(rate, label):
-        cap = sum(r["capital"]        * rate for r in by_pair.values())
-        pnl = sum(r["profit_if_exit"] * rate for r in by_pair.values())
+        cap   = sum(r["capital"]        * rate for r in by_pair.values())
+        pnl   = sum(r["profit_if_exit"] * rate for r in by_pair.values())
+        multi = sum(r["profit_if_exit"] * rate for r in signals)
         print(f"  {'flat '+f'{rate*100:.0f}%':<16}  {label:<28}  "
-              f"{rate*100:>5.0f}%  ${cap:>9.2f}  ${pnl:>+9.2f}  "
-              f"{_hr(pnl, session_hours):>9}")
+              f"{rate*100:>5.0f}%  ${cap:>9.2f}  ${pnl:>+9.2f}  ${multi:>+11.2f}  "
+              f"{_hr(pnl, session_hours):>9}  {_hr(multi, session_hours):>9}")
 
     _exit_row(1.00, "sole actor / no competition")
     _exit_row(0.50, "1 competitor  (~2 desks)")
     _exit_row(0.25, "3 competitors (~4 desks)")
     _exit_row(0.10, "9 competitors (~10 desks)")
+    print()
+    print(f"  Note: multi-entry = every HURDLE_BREACHED signal per pair (not just the best).")
     print()
 
 
