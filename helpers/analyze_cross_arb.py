@@ -71,9 +71,10 @@ POLY_GAMMA_BASE         = "https://gamma-api.polymarket.com"
 DEFAULT_MIN_DURATION_MS = 17     # US server: ~6ms one-way + ~5ms processing
 DEFAULT_CAPITAL_PER_ARB = 50.0
 DEFAULT_CAPTURE_RATE    = 0.60
-THIN_DEPTH_THRESHOLD    = 2.0
-STALE_BOOK_MS           = 30_000
-REPEAT_SPAM_THRESHOLD   = 100    # >N windows for same pair = spam
+THIN_DEPTH_THRESHOLD      = 2.0
+REPEAT_SPAM_THRESHOLD     = 100    # >N windows for same pair = spam
+REST_DELTA_THRESHOLD      = 0.05   # WS-vs-REST cost delta tolerated as "match"
+REST_LEGACY_STALE_BOOK_MS = 30_000  # only used when --legacy-flags enabled
 
 PROD_LATENCY_MS         = 17     # US server min capturable window
 BLOCKLIST_PATH          = _ROOT / "cross_arb_pair_blocklist.json"
@@ -292,31 +293,72 @@ def load_blended_csv(path):
 
 # ─── FRAUD FLAGS ──────────────────────────────────────────────────────────────
 
-def compute_flags(rows, spam_threshold=REPEAT_SPAM_THRESHOLD):
+def compute_flags(rows, spam_threshold=REPEAT_SPAM_THRESHOLD, legacy=False):
+    """
+    Compute per-row flags.
+
+    Default (REST-truth model):
+      - INSTANT_OPEN_CLOSE : duration < 10ms (single-tick glitch)
+      - ZERO_PROFIT        : NetProfitPerShare <= 0
+      - THIN_DEPTH         : insufficient depth to fill meaningful size
+      - REPEAT_SPAM        : same pair appears > N times
+      - REST_UNCONFIRMED   : REST check ran but prices didn't match WS
+      - REST_NOT_RUN       : REST check didn't trigger (soft — not excluded from sim)
+
+    Legacy (--legacy-flags):
+      Adds STALE_BOOK_OPEN, DROP_DURING_WINDOW, IMPLAUSIBLE_DURATION for comparison.
+    """
     pair_counts = defaultdict(int)
     for r in rows:
         pair_counts[r["pair_id"]] += 1
 
     for r in rows:
         flags = []
+
+        # Sanity
         if r["duration_ms"] < 10:
             flags.append("INSTANT_OPEN_CLOSE")
-        if r["duration_ms"] > 3_600_000:
-            flags.append("IMPLAUSIBLE_DURATION")
-        if r["max_depth"] < THIN_DEPTH_THRESHOLD:
-            flags.append("THIN_DEPTH")
-        k_age = r.get("kalshi_book_age_ms", -1)
-        p_age = r.get("poly_book_age_ms",   -1)
-        stale = (k_age >= 0 and k_age > STALE_BOOK_MS) or (p_age >= 0 and p_age > STALE_BOOK_MS)
-        if stale and r.get("rest_confirmed") is not True:
-            flags.append("STALE_BOOK_OPEN")
-        if r.get("drop_during"):
-            flags.append("DROP_DURING_WINDOW")
         if r["net_profit_per_share"] <= 0:
             flags.append("ZERO_PROFIT")
+
+        # Tradeability
+        if r["max_depth"] < THIN_DEPTH_THRESHOLD:
+            flags.append("THIN_DEPTH")
         if pair_counts[r["pair_id"]] > spam_threshold:
             flags.append("REPEAT_SPAM")
+
+        # Reality (REST-based)
+        rest_checked   = r.get("rest_checked")
+        rest_confirmed = r.get("rest_confirmed")
+        if rest_checked is True and rest_confirmed is False:
+            flags.append("REST_UNCONFIRMED")
+        elif rest_checked is False or rest_checked is None:
+            flags.append("REST_NOT_RUN")
+
+        # Legacy proxy flags
+        if legacy:
+            if r["duration_ms"] > 3_600_000:
+                flags.append("IMPLAUSIBLE_DURATION")
+            k_age = r.get("kalshi_book_age_ms", -1)
+            p_age = r.get("poly_book_age_ms",   -1)
+            stale = ((k_age >= 0 and k_age > REST_LEGACY_STALE_BOOK_MS) or
+                     (p_age >= 0 and p_age > REST_LEGACY_STALE_BOOK_MS))
+            if stale:
+                flags.append("STALE_BOOK_OPEN")
+            if r.get("drop_during"):
+                flags.append("DROP_DURING_WINDOW")
+
         r["flags"] = flags
+
+
+def is_hard_flagged(row):
+    """REST_NOT_RUN is soft — stays in sim totals. Everything else is hard."""
+    HARD_FLAGS = {
+        "INSTANT_OPEN_CLOSE", "ZERO_PROFIT", "THIN_DEPTH", "REPEAT_SPAM",
+        "REST_UNCONFIRMED",
+        "IMPLAUSIBLE_DURATION", "STALE_BOOK_OPEN", "DROP_DURING_WINDOW",
+    }
+    return any(f in HARD_FLAGS for f in row.get("flags", []))
 
 # ─── SECTION 1: SESSION SUMMARY ───────────────────────────────────────────────
 
@@ -397,53 +439,64 @@ def print_all_pairs(rows):
 
 # ─── SECTION 3: FRAUD / SANITY CHECKS ────────────────────────────────────────
 
-def print_fraud_checks(rows, spam_threshold=REPEAT_SPAM_THRESHOLD):
+def print_data_quality_checks(rows, spam_threshold=REPEAT_SPAM_THRESHOLD):
     print("=" * 80)
-    print("  FRAUD / SANITY CHECKS")
+    print("  DATA QUALITY CHECKS")
     print("=" * 80)
     if not rows:
         print("  (no data)\n")
         return
 
-    all_flag_names = [
-        "INSTANT_OPEN_CLOSE", "IMPLAUSIBLE_DURATION", "THIN_DEPTH",
-        "STALE_BOOK_OPEN", "DROP_DURING_WINDOW", "ZERO_PROFIT", "REPEAT_SPAM",
-    ]
-    descriptions = {
-        "INSTANT_OPEN_CLOSE":   "Duration < 10ms — single-tick glitch",
-        "IMPLAUSIBLE_DURATION": "Duration > 1 hour — likely stale book across reconnect",
-        "THIN_DEPTH":           f"MaxDepth < {THIN_DEPTH_THRESHOLD} — resting 1-contract noise",
-        "STALE_BOOK_OPEN":      f"K or P book age > {STALE_BOOK_MS//1000}s at window open — data may be stale",
-        "DROP_DURING_WINDOW":   "WS reconnect happened while arb window was open — price may be ghost",
-        "ZERO_PROFIT":          "NetProfitPerShare <= 0 — should not be in file",
-        "REPEAT_SPAM":          f"Same pair appears > {spam_threshold}x — cycling open/close",
-    }
-
     total = len(rows)
+
+    # REST verification headline
+    rest_checked   = [r for r in rows if r.get("rest_checked") is True]
+    rest_confirmed = [r for r in rest_checked if r.get("rest_confirmed") is True]
+    rest_skipped   = [r for r in rows if r.get("rest_checked") is not True]
+
+    print(f"  REST verification (primary reality check):")
+    print(f"    Checked   : {len(rest_checked):>4} / {total} ({len(rest_checked)/total*100:5.1f}%)")
+    if rest_checked:
+        conf_pct = len(rest_confirmed) / len(rest_checked) * 100
+        print(f"    Confirmed : {len(rest_confirmed):>4} / {len(rest_checked)} ({conf_pct:5.1f}% of checked)")
+    if rest_skipped:
+        print(f"    Not run   : {len(rest_skipped):>4} / {total} ({len(rest_skipped)/total*100:5.1f}%)  — soft flag, not excluded from sim")
+    print()
+
+    flag_descriptions = {
+        "INSTANT_OPEN_CLOSE":   "Duration < 10ms — single-tick glitch",
+        "ZERO_PROFIT":          "NetProfitPerShare <= 0 — data integrity issue",
+        "THIN_DEPTH":           f"MaxDepth < {THIN_DEPTH_THRESHOLD} — insufficient size",
+        "REPEAT_SPAM":          f"Same pair appears > {spam_threshold}x — cycling",
+        "REST_UNCONFIRMED":     "REST check ran but prices didn't match WS",
+        "REST_NOT_RUN":         "REST check didn't trigger — uncertainty (soft)",
+        "IMPLAUSIBLE_DURATION": "[legacy] Duration > 1 hour",
+        "STALE_BOOK_OPEN":      "[legacy] Book age > 30s at window open",
+        "DROP_DURING_WINDOW":   "[legacy] WS reconnect during window",
+    }
+    flag_order = list(flag_descriptions.keys())
+
+    print(f"  Flag breakdown:")
     any_flags = False
-    for flag in all_flag_names:
+    for flag in flag_order:
         count = sum(1 for r in rows if flag in r["flags"])
         if count > 0:
             any_flags = True
             pct = count / total * 100
-            print(f"  [{flag:<22}]  {count:4d} rows ({pct:5.1f}%)  — {descriptions[flag]}")
-
+            print(f"    [{flag:<22}]  {count:4d} rows ({pct:5.1f}%)  — {flag_descriptions[flag]}")
     if not any_flags:
-        print("  No fraud flags found.")
+        print("    No flags raised.")
 
-    stale_rows = [r for r in rows if "STALE_BOOK_OPEN" in r["flags"]]
-    if stale_rows:
-        print(f"\n  STALE_BOOK_OPEN detail (first 5):")
-        for r in stale_rows[:5]:
-            k_age = r.get("kalshi_book_age_ms", -1)
-            p_age = r.get("poly_book_age_ms",   -1)
-            print(f"    {r['label'][:48]}  K_age={k_age:.0f}ms  P_age={p_age:.0f}ms")
-
-    drop_rows = [r for r in rows if "DROP_DURING_WINDOW" in r["flags"]]
-    if drop_rows:
-        print(f"\n  DROP_DURING_WINDOW detail (first 5):")
-        for r in drop_rows[:5]:
-            print(f"    {r['label'][:48]}  {r['duration_ms']:.0f}ms  cost=${r['best_net_cost']:.4f}")
+    unconf_rows = [r for r in rows if "REST_UNCONFIRMED" in r["flags"]]
+    if unconf_rows:
+        print(f"\n  REST_UNCONFIRMED detail (first 5):")
+        for r in unconf_rows[:5]:
+            ws  = r.get("best_net_cost", 0)
+            kr  = r.get("rest_kalshi_ask")
+            pr_ = r.get("rest_poly_ask")
+            rest_sum  = (kr + pr_) if (kr is not None and pr_ is not None) else None
+            delta_str = f"delta=${abs(rest_sum - ws):.4f}" if rest_sum is not None else "delta=?"
+            print(f"    {r['label'][:48]:<48}  WS=${ws:.4f}  {delta_str}")
     print()
 
 # ─── SECTION 4: DURATION ANALYSIS ────────────────────────────────────────────
@@ -951,9 +1004,9 @@ def print_production_sim(rows, session_hours, participation_rate=None, resolutio
     print(f"  Scope         : clean pairs — flagged rows excluded")
     print()
 
-    clean_rows = [r for r in rows if not r["flags"]]
+    clean_rows = [r for r in rows if not is_hard_flagged(r)]
     flagged_n  = len(rows) - len(clean_rows)
-    print(f"  Rows excluded : {flagged_n} flagged")
+    print(f"  Rows excluded : {flagged_n} hard-flagged  (REST_NOT_RUN kept — soft flag)")
     print()
 
     if not clean_rows:
@@ -1048,25 +1101,11 @@ def print_early_exit_sim(exit_rows, session_hours, resolution_map=None):
         print("  (no CrossArbExitMonitor_*.csv found or no rows loaded)\n")
         return
 
-    signals = [r for r in exit_rows if r["trigger"] == "HURDLE_BREACHED" and r["profit_if_exit"] > 0]
+    signals = [r for r in exit_rows
+               if r["trigger"] == "HURDLE_BREACHED" and r["profit_if_exit"] > 0]
     if not signals:
         print(f"  No HURDLE_BREACHED signals found ({len(exit_rows)} total exit rows).\n")
         return
-
-    total_capital = sum(r["capital"]       for r in signals)
-    total_profit  = sum(r["profit_if_exit"] for r in signals)
-    avg_realized  = sum(r["realized_apr"]  for r in signals) / len(signals)
-    avg_elapsed   = sum(r["days_elapsed"]  for r in signals) / len(signals)
-
-    print(f"  {len(signals)} early-exit signals across {len(set(r['pair_id'] for r in signals))} pairs")
-    print(f"  Avg days held before exit signal: {avg_elapsed:.1f}d")
-    print(f"  Avg realized APR at exit:         {avg_realized*100:.1f}%")
-    print()
-
-    show_status = bool(resolution_map)
-    status_hdr  = "  Status " if show_status else ""
-    print(f"  {'Label':<44} {'Capital':>8} {'$/shr':>6} {'Profit':>8} {'RealAPR':>8} {'DaysHeld':>9}  ArbType{status_hdr}")
-    print(f"  {'-'*44} {'-'*8} {'-'*6} {'-'*8} {'-'*8} {'-'*9}  -------{('  -------' if show_status else '')}")
 
     by_pair = {}
     for r in signals:
@@ -1074,36 +1113,52 @@ def print_early_exit_sim(exit_rows, session_hours, resolution_map=None):
         if pid not in by_pair or r["profit_if_exit"] > by_pair[pid]["profit_if_exit"]:
             by_pair[pid] = r
 
+    total_capital = sum(r["capital"]        for r in by_pair.values())
+    total_profit  = sum(r["profit_if_exit"] for r in by_pair.values())
+    avg_elapsed   = sum(r["days_elapsed"]   for r in signals) / len(signals)
+
+    print(f"  {len(signals)} early-exit signals across {len(by_pair)} pairs")
+    print(f"  Avg days held before exit signal: {avg_elapsed:.2f}d")
+    print()
+
+    show_status = bool(resolution_map)
+    status_hdr  = "  Status " if show_status else ""
+
+    print(f"  {'Label':<44} {'Capital':>9} {'$/shr':>7} {'Profit':>9} "
+          f"{'ROI':>6} {'Held':>6}  ArbType{status_hdr}")
+    print(f"  {'-'*44} {'-'*9} {'-'*7} {'-'*9} {'-'*6} {'-'*6}  -------"
+          f"{('  -------' if show_status else '')}")
+
     sorted_rows = sorted(by_pair.values(), key=lambda r: r["profit_if_exit"], reverse=True)
     for r in sorted_rows:
         profit_per_shr = r["profit_if_exit"] / r["shares"] if r["shares"] > 0 else 0
-        status_str = (f"  {_status_col(resolution_map, r['pair_id'])}" if show_status else "")
-        print(f"  {r['label'][:44]:<44} ${r['capital']:>7.2f} ${profit_per_shr:>5.4f} ${r['profit_if_exit']:>+7.4f} "
-              f"{r['realized_apr']*100:>7.1f}% {r['days_elapsed']:>8.1f}d  {r['arb_type']}{status_str}")
+        roi            = (r["profit_if_exit"] / r["capital"] * 100) if r["capital"] > 0 else 0
+        held_str       = f"{r['days_elapsed']:.2f}d" if r["days_elapsed"] >= 0.01 else "<1h"
+        status_str     = (f"  {_status_col(resolution_map, r['pair_id'])}" if show_status else "")
+        print(f"  {r['label'][:44]:<44} ${r['capital']:>8.2f} "
+              f"${profit_per_shr:>6.4f} ${r['profit_if_exit']:>+8.2f} "
+              f"{roi:>5.1f}% {held_str:>6}  {r['arb_type']}{status_str}")
 
     print()
-    print(f"  Total capital across signals : ${total_capital:.2f}")
-    print(f"  Total profit if all exited   : {_per_hr(total_profit, session_hours)}")
+    print(f"  Total capital deployed (best signal/pair) : ${total_capital:.2f}")
+    print(f"  Total profit if all exited                : {_per_hr(total_profit, session_hours)}")
+    avg_roi = (total_profit / total_capital * 100) if total_capital > 0 else 0
+    print(f"  Aggregate ROI on deployed capital         : {avg_roi:.2f}%")
     print()
 
-    # ── Exit competition sensitivity ──────────────────────────────────────────
-    base_cap   = sum(r["capital"]        for r in by_pair.values())
-    base_pnl   = sum(r["profit_if_exit"] for r in by_pair.values())
-    base_multi = sum(r["profit_if_exit"] for r in signals)
     print(f"  COMPETITION SENSITIVITY  ({len(by_pair)} pairs with exit signals)")
-    print(f"  Each row assumes you captured that % of the original arb entries.")
-    print(f"  Base (100% entry): Capital = ${base_cap:.2f}  |  1x Profit = ${base_pnl:+.2f}"
-          f"  |  Multi Profit = ${base_multi:+.2f}")
+    print(f"  Each row scales the deployed capital and realized profit by entry %.")
     print()
-    print(f"  {'Model':<16}  {'Assumption':<28}  {'Entry%':>6}  {'Capital':>10}  {'1x Profit':>10}  {'Multi Profit':>12}  {'1x /hr':>9}  {'Multi /hr':>9}")
-    print(f"  {'-'*16}  {'-'*28}  {'-'*6}  {'-'*10}  {'-'*10}  {'-'*12}  {'-'*9}  {'-'*9}")
+    print(f"  {'Model':<16}  {'Assumption':<28}  {'Entry%':>6}  "
+          f"{'Capital':>10}  {'Profit':>10}  {'/hr':>9}")
+    print(f"  {'-'*16}  {'-'*28}  {'-'*6}  {'-'*10}  {'-'*10}  {'-'*9}")
 
     def _exit_row(rate, label):
-        cap   = sum(r["capital"]        * rate for r in by_pair.values())
-        pnl   = sum(r["profit_if_exit"] * rate for r in by_pair.values())
-        multi = sum(r["profit_if_exit"] * rate for r in signals)
-        print(f"  {'flat '+f'{rate*100:.0f}%':<16}  {label:<28}  {rate*100:>5.0f}%  ${cap:>9.2f}"
-              f"  ${pnl:>+9.2f}  ${multi:>+11.2f}  {_hr(pnl, session_hours):>9}  {_hr(multi, session_hours):>9}")
+        cap = sum(r["capital"]        * rate for r in by_pair.values())
+        pnl = sum(r["profit_if_exit"] * rate for r in by_pair.values())
+        print(f"  {'flat '+f'{rate*100:.0f}%':<16}  {label:<28}  "
+              f"{rate*100:>5.0f}%  ${cap:>9.2f}  ${pnl:>+9.2f}  "
+              f"{_hr(pnl, session_hours):>9}")
 
     _exit_row(1.00, "sole actor / no competition")
     _exit_row(0.50, "1 competitor  (~2 desks)")
@@ -1469,6 +1524,9 @@ def main():
                         help="Skip Polymarket API resolution check (Section 10)")
     parser.add_argument("--check", action="store_true",
                         help="Interactively review pairs after analysis; mark invalid pairs to add to blocklist")
+    parser.add_argument("--legacy-flags", action="store_true",
+                        help="Add pre-REST proxy flags (STALE_BOOK_OPEN, DROP_DURING_WINDOW, "
+                             "IMPLAUSIBLE_DURATION) for backwards comparison")
     args = parser.parse_args()
 
     path = args.file or find_latest_csv("CrossArbTelemetry_*.csv")
@@ -1500,7 +1558,7 @@ def main():
         print(f"[--include] Kept {len(rows)} / {before} rows  (terms: {', '.join(sorted(include_terms))})")
 
     # ── Compute flags early so run_pair_check can show them ─────────────────
-    compute_flags(rows, spam_threshold=args.spam_threshold)
+    compute_flags(rows, spam_threshold=args.spam_threshold, legacy=args.legacy_flags)
 
     # ── Pair check (runs first so blocklist is up-to-date before analysis) ────
     if args.check:
@@ -1516,16 +1574,16 @@ def main():
             print(f"[BLOCKLIST] Filtered {removed} windows from {len(blocklist)} blocked pair(s).")
 
     session_hours = compute_session_hours(rows, path)
-    compute_flags(rows, spam_threshold=args.spam_threshold)
+    compute_flags(rows, spam_threshold=args.spam_threshold, legacy=args.legacy_flags)
 
-    # Fraud report uses full dataset; --clean filter applied for analysis sections
-    analysis_rows = [r for r in rows if not r["flags"]] if args.clean else rows
+    # --clean uses is_hard_flagged so REST_NOT_RUN rows are kept
+    analysis_rows = [r for r in rows if not is_hard_flagged(r)] if args.clean else rows
     if args.clean:
-        print(f"[--clean] Analyzing {len(analysis_rows)} / {len(rows)} rows (no fraud flags)\n")
+        print(f"[--clean] Analyzing {len(analysis_rows)} / {len(rows)} rows (hard-flagged excluded)\n")
 
     print_session_summary(analysis_rows, path, session_hours)
     print_all_pairs(rows)
-    print_fraud_checks(rows, spam_threshold=args.spam_threshold)
+    print_data_quality_checks(rows, spam_threshold=args.spam_threshold)
     print_duration_analysis(analysis_rows, args.min_duration)
     print_profit_analysis(analysis_rows, args.min_duration, DEFAULT_CAPITAL_PER_ARB, DEFAULT_CAPTURE_RATE, session_hours)
     print_arb_type_breakdown(analysis_rows)
@@ -1557,10 +1615,9 @@ def main():
     exit_rows = []
     if exit_path and os.path.exists(exit_path):
         exit_rows = load_exit_csv(exit_path)
-        # Restrict to pairs that are clean in the telemetry data — flagged pairs
-        # (STALE_BOOK, DROP_DURING_WINDOW, etc.) produce ghost positions whose
-        # "profit" is fictitious and would inflate the exit sim vs production sim.
-        clean_pair_ids = {r["pair_id"] for r in rows if not r["flags"]}
+        # Restrict to pairs that are not hard-flagged — REST_NOT_RUN is kept
+        # (soft flag); only definitively-broken pairs are excluded.
+        clean_pair_ids = {r["pair_id"] for r in rows if not is_hard_flagged(r)}
         before = len(exit_rows)
         exit_rows = [r for r in exit_rows if r["pair_id"] in clean_pair_ids]
         print(f"[EXIT] {exit_path}  ({before} rows -> {len(exit_rows)} after restricting to {len(clean_pair_ids)} clean pairs)")
