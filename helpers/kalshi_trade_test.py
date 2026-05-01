@@ -7,8 +7,13 @@ polls for fill confirmation, immediately re-fetches the book, then sells the
 same contracts (IOC at best bid).  Every step is timed and printed.
 
 Usage:
-    python kalshi_trade_test.py --ticker KXSOMETHING-25-YES
+    # Find a ticker first:
+    python kalshi_trade_test.py --search "NBA Finals"
+    python kalshi_trade_test.py --search "Lakers"
+
+    # Then trade:
     python kalshi_trade_test.py --ticker KXSOMETHING-25-YES --dry-run
+    python kalshi_trade_test.py --ticker KXSOMETHING-25-YES
     python kalshi_trade_test.py --ticker KXSOMETHING-25-YES --side no
     python kalshi_trade_test.py --ticker KXSOMETHING-25-YES --contracts 2 --poll-ms 25
 
@@ -192,6 +197,69 @@ def _poll_fill(session, private_key, api_key_id, order_id,
         "polls":           polls,
     }
 
+# ─── MARKET SEARCH ───────────────────────────────────────────────────────────
+
+def run_search(session, private_key, api_key_id, term: str) -> None:
+    """
+    Fetch all open Kalshi events with nested markets and print every market
+    whose ticker, event ticker, or title contains `term` (case-insensitive).
+    """
+    term_lo  = term.lower()
+    matches  = []
+    cursor   = ""
+    fetched  = 0
+
+    print(f"  Searching open markets for '{term}' ...", flush=True)
+    while True:
+        path = "/events?status=open&with_nested_markets=true&limit=200"
+        if cursor:
+            path += f"&cursor={cursor}"
+        try:
+            data, _ = _get(session, private_key, api_key_id, path)
+        except Exception as e:
+            sys.exit(f"  ERROR fetching events: {e}")
+
+        for ev in data.get("events", []):
+            ev_ticker = ev.get("event_ticker", "")
+            ev_title  = ev.get("title", "") or ev.get("sub_title", "")
+            for m in ev.get("markets", []):
+                ticker    = m.get("ticker", "")
+                mkt_title = m.get("title", "") or m.get("yes_sub_title", "")
+                close_raw = m.get("expected_expiration_time") or m.get("close_time") or ""
+                close_str = close_raw[:10] if close_raw else "?"
+                yes_ask   = m.get("yes_ask_dollars") or m.get("yes_ask_price") or "?"
+                no_ask    = m.get("no_ask_dollars")  or m.get("no_ask_price")  or "?"
+                display   = mkt_title or ev_title
+
+                haystack = f"{ticker} {ev_ticker} {display}".lower()
+                if term_lo in haystack:
+                    matches.append({
+                        "ticker":    ticker,
+                        "title":     display,
+                        "closes":    close_str,
+                        "yes_ask":   yes_ask,
+                        "no_ask":    no_ask,
+                    })
+            fetched += 1
+
+        cursor = data.get("cursor", "")
+        if not cursor:
+            break
+
+    if not matches:
+        print(f"  No open markets found matching '{term}'.")
+        return
+
+    print(f"  {len(matches)} match(es):\n")
+    print(f"  {'Ticker':<44} {'Closes':>10}  {'YES ask':>7}  {'NO ask':>6}  Title")
+    print(f"  {'-'*44} {'-'*10}  {'-'*7}  {'-'*6}  -----")
+    for m in matches:
+        ya = f"${float(m['yes_ask']):.2f}" if m["yes_ask"] != "?" else "?"
+        na = f"${float(m['no_ask']):.2f}"  if m["no_ask"]  != "?" else "?"
+        print(f"  {m['ticker']:<44} {m['closes']:>10}  {ya:>7}  {na:>6}  {m['title'][:50]}")
+    print()
+
+
 # ─── DISPLAY ──────────────────────────────────────────────────────────────────
 
 _W = 56
@@ -212,7 +280,8 @@ def _ms(v):
 
 def main():
     ap = argparse.ArgumentParser(description="Kalshi real-money round-trip trade test")
-    ap.add_argument("--ticker",    required=True,  help="Market ticker (e.g. KXNBA-25-BOS-YES)")
+    ap.add_argument("--search",    default=None,   help="Search open markets by keyword and exit (e.g. --search 'NBA Finals')")
+    ap.add_argument("--ticker",    default=None,   help="Market ticker (e.g. KXNBA-25-BOS-YES)")
     ap.add_argument("--side",      default="yes",  choices=["yes", "no"], help="Side to trade (default: yes)")
     ap.add_argument("--contracts", type=int, default=1, help="Contracts per leg (default: 1)")
     ap.add_argument("--dry-run",   action="store_true", help="Fetch book only — no orders placed")
@@ -227,6 +296,9 @@ def main():
 
     api_key_id = os.environ.get("KALSHI_API_KEY_ID", "")
     key_path   = os.environ.get("KALSHI_PRIVATE_KEY_PATH", "")
+
+    if not args.search and not args.ticker:
+        ap.error("--ticker is required unless using --search")
 
     if not api_key_id or not key_path:
         sys.exit("ERROR: Set KALSHI_API_KEY_ID and KALSHI_PRIVATE_KEY_PATH in .env")
@@ -245,6 +317,10 @@ def main():
 
     session = _req.Session()
     session.headers["User-Agent"] = "kalshi-trade-test/1.0"
+
+    if args.search:
+        run_search(session, private_key, api_key_id, args.search)
+        return
 
     t_script_start = time.perf_counter()
 
