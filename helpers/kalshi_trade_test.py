@@ -23,9 +23,12 @@ WARNING: --dry-run is strongly recommended first.
 
 import argparse
 import base64
+import json
 import os
 import sys
 import time
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 # ─── .env loader ──────────────────────────────────────────────────────────────
@@ -60,6 +63,20 @@ _load_dotenv(str(_HERE), str(_ROOT), str(_ROOT.parent), os.path.expanduser("~"),
 # ─── CONFIG ───────────────────────────────────────────────────────────────────
 
 KALSHI_BASE = "https://api.elections.kalshi.com/trade-api/v2"
+LOG_PATH    = _ROOT / "kalshi_trade_test.log"
+
+# ─── TRACE LOGGER ─────────────────────────────────────────────────────────────
+
+def _log(trace_id: str, event: str, **fields) -> None:
+    """Append one JSONL line to LOG_PATH. grep <trace_id> to see a full lifecycle."""
+    entry = {
+        "ts":    datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
+        "trace": trace_id,
+        "event": event,
+        **fields,
+    }
+    with open(LOG_PATH, "a", encoding="utf-8") as f:
+        f.write(json.dumps(entry) + "\n")
 
 # ─── AUTH ─────────────────────────────────────────────────────────────────────
 
@@ -117,50 +134,59 @@ def _post(session, private_key, api_key_id, rel_path, body: dict) -> tuple:
         raise
     return r.json(), ms
 
-# ─── ORDERBOOK HELPERS ────────────────────────────────────────────────────────
+# ─── MARKET PRICE HELPERS ─────────────────────────────────────────────────────
 
-def _parse_book(raw) -> tuple:
+def _to_cents(val) -> int | None:
+    """Convert any Kalshi price field (dollars string, decimal float, or cents int) to cents."""
+    if val is None or val == "" or str(val).upper() in ("N/A", "NONE"):
+        return None
+    try:
+        f = float(val)
+        # Kalshi returns dollars as decimals (e.g. 0.56) or sometimes cents (e.g. 56)
+        return int(round(f * 100)) if f <= 1.0 else int(round(f))
+    except (ValueError, TypeError):
+        return None
+
+
+def _parse_market_prices(raw: dict) -> dict:
     """
-    Returns (yes_bids, no_bids) — each is a list of [price_cents, size],
-    sorted descending (highest bid first).
-    Normalises prices to integer cents regardless of whether the API returned
-    integers (e.g. 56) or decimals (e.g. 0.56).
+    Extract best bid/ask from GET /markets/{ticker} response.
+    Returns {'yes_ask', 'yes_bid', 'no_ask', 'no_bid'} as cents ints (or None).
+    Falls back through _dollars → _price → bare field for each price.
     """
-    def _norm(levels):
-        out = []
-        for price, size in (levels or []):
-            p = float(price)
-            p = round(p * 100) if p <= 1.0 else int(round(p))
-            out.append([p, int(size)])
-        return sorted(out, key=lambda x: -x[0])
+    mkt = raw.get("market", raw)
 
-    book = raw.get("orderbook", raw)
-    return _norm(book.get("yes", [])), _norm(book.get("no", []))
+    def _pick(*fields):
+        for f in fields:
+            v = _to_cents(mkt.get(f))
+            if v is not None and 0 < v < 100:
+                return v
+        return None
 
-
-def _best_ask_cents(side: str, yes_bids, no_bids):
-    """Cheapest available ask for `side` in cents, or None if no liquidity."""
-    if side == "yes":
-        return (100 - no_bids[0][0]) if no_bids else None
-    else:
-        return (100 - yes_bids[0][0]) if yes_bids else None
+    return {
+        "yes_ask": _pick("yes_ask_dollars", "yes_ask_price", "yes_ask"),
+        "yes_bid": _pick("yes_bid_dollars", "yes_bid_price", "yes_bid"),
+        "no_ask":  _pick("no_ask_dollars",  "no_ask_price",  "no_ask"),
+        "no_bid":  _pick("no_bid_dollars",  "no_bid_price",  "no_bid"),
+    }
 
 
-def _best_bid_cents(side: str, yes_bids, no_bids):
-    """Best bid for `side` in cents, or None."""
-    if side == "yes":
-        return yes_bids[0][0] if yes_bids else None
-    else:
-        return no_bids[0][0] if no_bids else None
+def _side_ask(side: str, prices: dict) -> int | None:
+    return prices["yes_ask"] if side == "yes" else prices["no_ask"]
+
+
+def _side_bid(side: str, prices: dict) -> int | None:
+    return prices["yes_bid"] if side == "yes" else prices["no_bid"]
 
 # ─── FILL POLLING ─────────────────────────────────────────────────────────────
 
 def _poll_fill(session, private_key, api_key_id, order_id,
-               poll_ms: float, timeout_s: float) -> dict:
+               poll_ms: float, timeout_s: float,
+               trace_id: str = "", leg: str = "") -> dict:
     """
     Polls GET /portfolio/orders/{order_id} until the order resolves.
-    All times are ms elapsed since this function was called (i.e. from POST
-    response receipt, not from POST send).
+    Times are ms elapsed since this function was called (from POST response
+    receipt). Logs FIRST_FILL and FILL_RESOLVED events via _log().
     Returns dict: t_first_fill_ms, t_full_fill_ms, fill_count, status, polls.
     """
     t0              = time.perf_counter()
@@ -172,6 +198,9 @@ def _poll_fill(session, private_key, api_key_id, order_id,
     while True:
         elapsed_ms = (time.perf_counter() - t0) * 1000
         if elapsed_ms >= timeout_s * 1000:
+            if trace_id:
+                _log(trace_id, "POLL_TIMEOUT", leg=leg, order_id=order_id,
+                     polls=polls, fill_count=fill_count, elapsed_ms=round(elapsed_ms, 1))
             break
 
         data, _ = _get(session, private_key, api_key_id, f"/portfolio/orders/{order_id}")
@@ -183,15 +212,24 @@ def _poll_fill(session, private_key, api_key_id, order_id,
 
         if t_first_fill_ms is None and fill_count > 0:
             t_first_fill_ms = (time.perf_counter() - t0) * 1000
+            if trace_id:
+                _log(trace_id, "FIRST_FILL", leg=leg, order_id=order_id,
+                     fill_count=fill_count, elapsed_ms=round(t_first_fill_ms, 1), poll_n=polls)
 
         if status in ("executed", "canceled"):
             break
 
         time.sleep(poll_ms / 1000)
 
+    t_full_ms = (time.perf_counter() - t0) * 1000
+    if trace_id:
+        _log(trace_id, "FILL_RESOLVED", leg=leg, order_id=order_id,
+             status=status, fill_count=fill_count,
+             elapsed_ms=round(t_full_ms, 1), polls=polls)
+
     return {
         "t_first_fill_ms": t_first_fill_ms,
-        "t_full_fill_ms":  (time.perf_counter() - t0) * 1000,
+        "t_full_fill_ms":  t_full_ms,
         "fill_count":      fill_count,
         "status":          status,
         "polls":           polls,
@@ -322,7 +360,12 @@ def main():
         run_search(session, private_key, api_key_id, args.search)
         return
 
+    trace_id       = str(uuid.uuid4())
     t_script_start = time.perf_counter()
+
+    _log(trace_id, "SCRIPT_START",
+         ticker=args.ticker, side=args.side,
+         contracts=args.contracts, dry_run=args.dry_run)
 
     # ── Header ────────────────────────────────────────────────────────────────
     _sep()
@@ -332,6 +375,7 @@ def main():
     _row("Side",      args.side.upper())
     _row("Contracts", args.contracts)
     _row("Mode",      "DRY RUN — no orders" if args.dry_run else "LIVE — real money")
+    _row("Trace ID",  trace_id)
     _sep("─")
 
     # ── T1: Balance ───────────────────────────────────────────────────────────
@@ -339,25 +383,34 @@ def main():
     try:
         bal_data, t1_ms = _get(session, private_key, api_key_id, "/portfolio/balance")
     except Exception as e:
+        _log(trace_id, "BALANCE_FETCH_ERROR", error=str(e))
         sys.exit(f"\n  ERROR: {e}")
     balance_before_cents = bal_data.get("balance", 0)
+    _log(trace_id, "BALANCE_FETCH",
+         balance_cents=balance_before_cents, elapsed_ms=round(t1_ms, 1))
     print(f"  {t1_ms:.1f}ms")
     _row("Balance before", f"${balance_before_cents / 100:.2f}")
 
-    # ── T2: Orderbook ─────────────────────────────────────────────────────────
-    print(f"  [T2] Fetching orderbook ...", end="", flush=True)
+    # ── T2: Market prices ─────────────────────────────────────────────────────
+    print(f"  [T2] Fetching market prices ...", end="", flush=True)
     try:
-        book_data, t2_ms = _get(session, private_key, api_key_id,
-                                 f"/markets/{args.ticker}/orderbook")
+        mkt_data, t2_ms = _get(session, private_key, api_key_id,
+                                f"/markets/{args.ticker}")
     except Exception as e:
+        _log(trace_id, "MARKET_FETCH_ERROR", error=str(e))
         sys.exit(f"\n  ERROR: {e}")
     print(f"  {t2_ms:.1f}ms")
 
-    yes_bids, no_bids = _parse_book(book_data)
-    ask_cents = _best_ask_cents(args.side, yes_bids, no_bids)
-    bid_cents = _best_bid_cents(args.side, yes_bids, no_bids)
+    prices    = _parse_market_prices(mkt_data)
+    ask_cents = _side_ask(args.side, prices)
+    bid_cents = _side_bid(args.side, prices)
+
+    _log(trace_id, "MARKET_FETCH",
+         ticker=args.ticker, yes_ask=prices["yes_ask"], yes_bid=prices["yes_bid"],
+         no_ask=prices["no_ask"], no_bid=prices["no_bid"], elapsed_ms=round(t2_ms, 1))
 
     if ask_cents is None:
+        _log(trace_id, "NO_LIQUIDITY", side=args.side)
         sys.exit(f"  ERROR: No liquidity on {args.side.upper()} ask side — cannot buy.")
 
     spread_cents = ask_cents - (bid_cents or ask_cents)
@@ -367,6 +420,7 @@ def main():
     _row("Est. cost",   f"${ask_cents * args.contracts / 100:.4f}  (excl. fees)")
 
     if args.dry_run:
+        _log(trace_id, "DRY_RUN_COMPLETE")
         _sep("─")
         print("  DRY RUN complete — no orders placed.")
         _sep()
@@ -387,14 +441,21 @@ def main():
         "time_in_force": "immediate_or_cancel",
     }
 
+    _log(trace_id, "ORDER_SUBMIT", leg="buy",
+         ticker=args.ticker, side=args.side,
+         price_cents=ask_cents, count=args.contracts)
     print(f"  [T3] Submitting buy @ {ask_cents}¢ ...", end="", flush=True)
     try:
         buy_resp, t3_ms = _post(session, private_key, api_key_id, "/portfolio/orders", buy_body)
     except Exception as e:
+        _log(trace_id, "ORDER_ERROR", leg="buy", error=str(e))
         sys.exit(f"\n  ERROR placing buy: {e}")
 
     buy_order    = buy_resp.get("order", buy_resp)
     buy_order_id = buy_order.get("order_id", "")
+    _log(trace_id, "ORDER_RESP", leg="buy",
+         order_id=buy_order_id, elapsed_ms=round(t3_ms, 1),
+         status=buy_order.get("status", ""), fill_count=float(buy_order.get("fill_count_fp", 0) or 0))
     print(f"  {t3_ms:.1f}ms")
     _row("Order ID",        buy_order_id)
     _row("Submit→resp",     _ms(t3_ms))
@@ -415,7 +476,8 @@ def main():
     else:
         print(f"  Polling (every {args.poll_ms:.0f}ms, timeout {args.timeout:.0f}s) ...", flush=True)
         buy_fill = _poll_fill(session, private_key, api_key_id,
-                              buy_order_id, args.poll_ms, args.timeout)
+                              buy_order_id, args.poll_ms, args.timeout,
+                              trace_id=trace_id, leg="buy")
         _row("Resp→1st fill",    _ms(buy_fill["t_first_fill_ms"]))
         _row("Resp→full fill",   _ms(buy_fill["t_full_fill_ms"]))
         _row("Poll count",       buy_fill["polls"])
@@ -424,6 +486,8 @@ def main():
 
     filled_count = int(buy_fill["fill_count"])
     if filled_count == 0:
+        _log(trace_id, "NO_FILL_ABORT", leg="buy",
+             order_id=buy_order_id, buy_status=buy_fill["status"])
         print("\n  No fill received — aborting to avoid orphan position.")
         _sep()
         sys.exit(1)
@@ -433,19 +497,21 @@ def main():
     print("  ── SELL")
     _sep("─")
 
-    print(f"  [T4] Re-fetching orderbook ...", end="", flush=True)
+    print(f"  [T4] Re-fetching market prices ...", end="", flush=True)
     try:
-        book_data2, t_rebook_ms = _get(session, private_key, api_key_id,
-                                        f"/markets/{args.ticker}/orderbook")
+        mkt_data2, t_rebook_ms = _get(session, private_key, api_key_id,
+                                       f"/markets/{args.ticker}")
+        _log(trace_id, "PRICE_REFETCH", elapsed_ms=round(t_rebook_ms, 1), stale=False)
     except Exception as e:
-        print(f"  WARNING: re-fetch failed ({e}), using stale book")
+        print(f"  WARNING: re-fetch failed ({e}), using stale prices")
+        _log(trace_id, "PRICE_REFETCH", stale=True, error=str(e))
         t_rebook_ms = 0.0
-        book_data2  = book_data
+        mkt_data2   = mkt_data
     print(f"  {t_rebook_ms:.1f}ms")
-    _row("Book re-fetch", _ms(t_rebook_ms))
+    _row("Price re-fetch", _ms(t_rebook_ms))
 
-    yes_bids2, no_bids2 = _parse_book(book_data2)
-    sell_bid = _best_bid_cents(args.side, yes_bids2, no_bids2)
+    prices2  = _parse_market_prices(mkt_data2)
+    sell_bid = _side_bid(args.side, prices2)
     if sell_bid is None:
         sell_bid = bid_cents or max(1, ask_cents - 1)
         print(f"  WARNING: No {args.side.upper()} bids visible — using fallback {sell_bid}¢")
@@ -460,16 +526,24 @@ def main():
         "time_in_force": "immediate_or_cancel",
     }
 
+    _log(trace_id, "ORDER_SUBMIT", leg="sell",
+         ticker=args.ticker, side=args.side,
+         price_cents=sell_bid, count=filled_count)
     print(f"  [T4] Submitting sell @ {sell_bid}¢ ...", end="", flush=True)
     try:
         sell_resp, t4_ms = _post(session, private_key, api_key_id, "/portfolio/orders", sell_body)
     except Exception as e:
+        _log(trace_id, "SELL_FAILED", error=str(e),
+             open_contracts=filled_count, ticker=args.ticker, side=args.side)
         print(f"\n  ERROR placing sell: {e}")
         print(f"  !!! OPEN POSITION: {filled_count} {args.side.upper()} on {args.ticker}")
         sys.exit(1)
 
     sell_order    = sell_resp.get("order", sell_resp)
     sell_order_id = sell_order.get("order_id", "")
+    _log(trace_id, "ORDER_RESP", leg="sell",
+         order_id=sell_order_id, elapsed_ms=round(t4_ms, 1),
+         status=sell_order.get("status", ""), fill_count=float(sell_order.get("fill_count_fp", 0) or 0))
     print(f"  {t4_ms:.1f}ms")
     _row("Order ID",       sell_order_id)
     _row("Submit→resp",    _ms(t4_ms))
@@ -489,7 +563,8 @@ def main():
     else:
         print(f"  Polling ...", flush=True)
         sell_fill = _poll_fill(session, private_key, api_key_id,
-                               sell_order_id, args.poll_ms, args.timeout)
+                               sell_order_id, args.poll_ms, args.timeout,
+                               trace_id=trace_id, leg="sell")
         _row("Resp→1st fill",   _ms(sell_fill["t_first_fill_ms"]))
         _row("Resp→full fill",  _ms(sell_fill["t_full_fill_ms"]))
         _row("Poll count",      sell_fill["polls"])
@@ -498,6 +573,9 @@ def main():
 
     unfilled = filled_count - int(sell_fill["fill_count"])
     if unfilled > 0:
+        _log(trace_id, "OPEN_POSITION",
+             open_contracts=unfilled, ticker=args.ticker, side=args.side,
+             sell_order_id=sell_order_id, sell_status=sell_fill["status"])
         print(f"\n  WARNING: Sell partially filled — {unfilled} contract(s) remain open.")
         print(f"  !!! OPEN POSITION: {unfilled} {args.side.upper()} on {args.ticker}")
 
@@ -507,8 +585,13 @@ def main():
     try:
         bal_data2, t5_ms = _get(session, private_key, api_key_id, "/portfolio/balance")
         balance_after_cents = bal_data2.get("balance", 0)
+        _log(trace_id, "FINAL_BALANCE",
+             balance_cents=balance_after_cents,
+             delta_cents=balance_after_cents - balance_before_cents,
+             elapsed_ms=round(t5_ms, 1))
         print(f"  {t5_ms:.1f}ms")
     except Exception as e:
+        _log(trace_id, "FINAL_BALANCE_ERROR", error=str(e))
         print(f"  WARNING: {e}")
         balance_after_cents = None
         t5_ms = 0.0
@@ -542,6 +625,16 @@ def main():
         _row("Balance after",       f"${balance_after_cents / 100:.2f}")
         _row("P&L  (spread+fees)",  f"${pnl:+.4f}")
     _sep()
+
+    t_total_end_ms = (time.perf_counter() - t_script_start) * 1000
+    pnl_cents = (balance_after_cents - balance_before_cents) if balance_after_cents is not None else None
+    _log(trace_id, "SCRIPT_END",
+         total_elapsed_ms=round(t_total_end_ms, 1),
+         pnl_cents=pnl_cents,
+         buy_order_id=buy_order_id,
+         sell_order_id=sell_order_id,
+         filled_contracts=filled_count,
+         unfilled_contracts=unfilled)
 
 
 if __name__ == "__main__":
