@@ -6,8 +6,6 @@ Reads wallet balance, buys N contracts of a specified market (IOC at best ask),
 polls for fill confirmation, immediately re-fetches the book, then sells the
 same contracts (IOC at best bid).  Every step is timed and printed.
 
-tester
-
 Usage:
     # Find a ticker first:
     python kalshi_trade_test.py --search "NBA Finals"

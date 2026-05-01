@@ -14,7 +14,7 @@
 
 ## Order Placement
 
-- [ ] All orders are limit orders, never market orders
+- [X] All orders are limit orders, never market orders
 - [ ] Limit price = the price your model evaluated, not a few cents better
 - [ ] Smaller-depth leg sent first (based on pre-trade book snapshot)
 - [ ] First leg uses IOC (Immediate-Or-Cancel) — no partial sits
