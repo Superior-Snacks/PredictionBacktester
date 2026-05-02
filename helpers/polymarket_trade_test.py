@@ -142,22 +142,21 @@ def _get_balance(client) -> tuple:
     """Returns (balance_usd, elapsed_ms)."""
     t0 = time.perf_counter()
     try:
-        # Try with explicit asset_type=0 (USDC) first, then bare call
-        for call in [
-            lambda: client.get_balance_allowance(params={"asset_type": 0}),
-            lambda: client.get_balance_allowance(),
-        ]:
-            try:
-                resp = call()
-                ms   = (time.perf_counter() - t0) * 1000
-                bal  = resp.get("balance") if isinstance(resp, dict) else getattr(resp, "balance", None)
-                if bal is not None:
-                    return float(bal), ms
-            except TypeError:
-                continue
+        from py_clob_client.clob_types import BalanceAllowanceParams, AssetType
+        resp = client.get_balance_allowance(
+            params=BalanceAllowanceParams(asset_type=AssetType.USDC, signature_type=2)
+        )
     except Exception:
-        pass
-    return None, (time.perf_counter() - t0) * 1000
+        try:
+            resp = client.get_balance_allowance()
+        except Exception:
+            return None, (time.perf_counter() - t0) * 1000
+    ms  = (time.perf_counter() - t0) * 1000
+    try:
+        bal = resp.get("balance") if isinstance(resp, dict) else getattr(resp, "balance", None)
+        return (float(bal) if bal is not None else None), ms
+    except Exception:
+        return None, ms
 
 # ─── FILL POLLING ─────────────────────────────────────────────────────────────
 
