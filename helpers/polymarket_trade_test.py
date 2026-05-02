@@ -272,14 +272,29 @@ def run_search(term: str) -> None:
                 else:
                     token_ids = token_ids_raw or []
 
+                raw_prices = mkt.get("outcomePrices")
+                if isinstance(raw_prices, str):
+                    try:
+                        raw_prices = json.loads(raw_prices)
+                    except Exception:
+                        raw_prices = []
+                raw_prices = raw_prices or []
+                try:
+                    yes_price = float(raw_prices[0]) if len(raw_prices) > 0 else None
+                    no_price  = float(raw_prices[1]) if len(raw_prices) > 1 else None
+                except (ValueError, TypeError):
+                    yes_price = no_price = None
+
                 haystack = f"{question} {slug} {ev_title}".lower()
                 if term_lo in haystack and len(token_ids) >= 2:
                     matches.append({
-                        "question": question,
-                        "end_date": end_date,
-                        "neg_risk": neg_risk,
+                        "question":  question,
+                        "end_date":  end_date,
+                        "neg_risk":  neg_risk,
                         "yes_token": token_ids[0],
                         "no_token":  token_ids[1],
+                        "yes_price": yes_price,
+                        "no_price":  no_price,
                     })
 
         fetched += len(events)
@@ -294,8 +309,10 @@ def run_search(term: str) -> None:
 
     print(f"  {len(matches)} match(es):\n")
     for m in matches:
-        nr = "  [use --neg-risk]" if m["neg_risk"] else ""
-        print(f"  Closes: {m['end_date']}{nr}")
+        nr    = "  [use --neg-risk]" if m["neg_risk"] else ""
+        yp    = f"${m['yes_price']:.2f}" if m["yes_price"] is not None else "?"
+        np_   = f"${m['no_price']:.2f}"  if m["no_price"]  is not None else "?"
+        print(f"  Closes: {m['end_date']}   YES: {yp}  NO: {np_}{nr}")
         print(f"  Q:   {m['question'][:80]}")
         print(f"  YES: {m['yes_token']}")
         print(f"  NO:  {m['no_token']}")
