@@ -160,7 +160,7 @@ def _get_balance(client) -> tuple:
             raw = resp.get("balance") or resp.get("availableBalance") or 0
         else:
             raw = 0
-        return float(raw), ms
+        return float(raw) / 1_000_000, ms
     except Exception as exc:
         _dbg(f"balance fetch failed: {type(exc).__name__}: {exc}")
         return None, (time.perf_counter() - t0) * 1000
@@ -213,7 +213,7 @@ def _poll_fill(client, order_id: str,
                      size_matched=size_matched,
                      elapsed_ms=round(t_first_fill_ms, 1), poll_n=polls)
 
-        if status in ("matched", "canceled"):
+        if status in ("matched", "unmatched", "canceled"):
             break
 
         time.sleep(poll_ms / 1000)
@@ -418,7 +418,9 @@ def main():
     _row("Trace ID", trace_id)
     _sep("─")
 
-    order_opts = PartialCreateOrderOptions(tick_size="0.01", neg_risk=args.neg_risk)
+    # tick_size=None → SDK fetches per-market tick size (avoids failure on "0.1" tick markets)
+    # neg_risk=False → SDK auto-detects via get_neg_risk(); True forces it (skips API call)
+    order_opts = PartialCreateOrderOptions(tick_size=None, neg_risk=args.neg_risk or None)
 
     # ── T1: Balance ───────────────────────────────────────────────────────────
     print("  [T1] Fetching balance ...", end="", flush=True)
@@ -500,27 +502,33 @@ def main():
 
     if imm_status == "delayed" and buy_order_id:
         print(f"  Polymarket placement delay (sports market) — polling until resolved ...")
-        buy_fill   = _poll_fill(client, buy_order_id, args.poll_ms, args.timeout,
-                                trace_id=trace_id, leg="buy")
+        buy_fill    = _poll_fill(client, buy_order_id, args.poll_ms, args.timeout,
+                                 trace_id=trace_id, leg="buy")
         filled_size = buy_fill["size_matched"]
         _row("Resp→1st fill",  _ms(buy_fill["t_first_fill_ms"]))
         _row("Resp→full fill", _ms(buy_fill["t_full_fill_ms"]))
         _row("Poll count",     buy_fill["polls"])
         _row("Fill status",    buy_fill["status"])
         _row("Size matched",   f"{filled_size:.4f} shares")
-    elif imm_status in ("matched", "canceled") or imm_matched > 0:
-        if imm_matched > 0:
-            filled_size = imm_matched
-        elif imm_status == "matched":
-            filled_size = args.shares
-        else:
-            filled_size = 0.0
+    elif imm_status in ("matched", "unmatched", "canceled") or imm_matched > 0:
+        # post_order response never includes size_matched; call get_order once to confirm actual fill
+        filled_size = imm_matched  # usually 0; kept as fallback
+        if imm_status == "matched" and buy_order_id:
+            try:
+                detail = client.get_order(buy_order_id)
+                if isinstance(detail, dict):
+                    raw = detail.get("size_matched") or detail.get("sizeFilled") or detail.get("filled") or 0
+                    filled_size = float(raw)
+            except Exception:
+                pass
+            if filled_size <= 0:
+                filled_size = args.shares  # data-API lag fallback; assume full fill
         buy_fill = {
             "t_first_fill_ms": 0.0 if filled_size > 0 else None,
             "t_full_fill_ms":  0.0,
             "size_matched":    filled_size,
             "status":          imm_status,
-            "polls":           0,
+            "polls":           1 if imm_status == "matched" else 0,
         }
         _row("Fill (immediate)", f"{filled_size:.4f} shares  [{imm_status}]")
     else:
@@ -609,19 +617,24 @@ def main():
         _row("Poll count",     sell_fill["polls"])
         _row("Fill status",    sell_fill["status"])
         _row("Size matched",   f"{sell_matched:.4f} shares")
-    elif imm_sell_status in ("matched", "canceled") or imm_sell_matched > 0:
-        if imm_sell_matched > 0:
-            sell_matched = imm_sell_matched
-        elif imm_sell_status == "matched":
-            sell_matched = filled_size
-        else:
-            sell_matched = 0.0
+    elif imm_sell_status in ("matched", "unmatched", "canceled") or imm_sell_matched > 0:
+        sell_matched = imm_sell_matched  # usually 0; kept as fallback
+        if imm_sell_status == "matched" and sell_order_id:
+            try:
+                detail = client.get_order(sell_order_id)
+                if isinstance(detail, dict):
+                    raw = detail.get("size_matched") or detail.get("sizeFilled") or detail.get("filled") or 0
+                    sell_matched = float(raw)
+            except Exception:
+                pass
+            if sell_matched <= 0:
+                sell_matched = filled_size  # data-API lag fallback; assume full fill
         sell_fill = {
             "t_first_fill_ms": 0.0 if sell_matched > 0 else None,
             "t_full_fill_ms":  0.0,
             "size_matched":    sell_matched,
             "status":          imm_sell_status,
-            "polls":           0,
+            "polls":           1 if imm_sell_status == "matched" else 0,
         }
         _row("Fill (immediate)", f"{sell_matched:.4f} shares  [{imm_sell_status}]")
     else:
