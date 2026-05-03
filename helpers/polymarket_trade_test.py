@@ -63,14 +63,17 @@ _load_dotenv(str(_HERE), str(_ROOT), str(_ROOT.parent), os.path.expanduser("~"),
 
 # ─── CONFIG ───────────────────────────────────────────────────────────────────
 
-CLOB_HOST      = "https://clob.polymarket.com"
-GAMMA_HOST     = "https://gamma-api.polymarket.com"
-CHAIN_ID       = 137
-LOG_PATH       = _ROOT / "polymarket_trade_test.log"
-USDC_CONTRACT  = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"  # USDC on Polygon
-USDC_BALANCEOF = [{"constant": True, "inputs": [{"name": "account", "type": "address"}],
-                   "name": "balanceOf", "outputs": [{"name": "", "type": "uint256"}],
-                   "type": "function"}]
+CLOB_HOST = "https://clob.polymarket.com"
+GAMMA_HOST = "https://gamma-api.polymarket.com"
+CHAIN_ID   = 137
+LOG_PATH   = _ROOT / "polymarket_trade_test.log"
+
+_DEBUG = False  # set True via --debug
+
+
+def _dbg(msg: str) -> None:
+    if _DEBUG:
+        print(f"  [DBG] {msg}")
 
 # ─── TRACE LOGGER ─────────────────────────────────────────────────────────────
 
@@ -143,28 +146,23 @@ def _parse_book(book) -> dict:
 
 # ─── BALANCE HELPER ───────────────────────────────────────────────────────────
 
-def _get_balance() -> tuple:
-    """
-    Returns (balance_usd, elapsed_ms).
-    Reads USDC balance on-chain from the proxy wallet — same approach as
-    ProductionBroker.GetUsdcBalanceAsync() and check_proxy.py.
-    """
-    t0         = time.perf_counter()
-    proxy_addr = os.environ.get("POLY_PROXY_ADDRESS", "")
-    if not proxy_addr:
-        return None, (time.perf_counter() - t0) * 1000
+def _get_balance(client) -> tuple:
+    """Returns (balance_usd, elapsed_ms) using CLOB client L2 auth."""
+    from py_clob_client.clob_types import BalanceAllowanceParams, AssetType
+    t0 = time.perf_counter()
     try:
-        from web3 import Web3
-        rpc_url = os.environ.get("POLY_RPC_URL", "https://polygon-rpc.com")
-        w3      = Web3(Web3.HTTPProvider(rpc_url))
-        usdc    = w3.eth.contract(
-            address=Web3.to_checksum_address(USDC_CONTRACT),
-            abi=USDC_BALANCEOF,
-        )
-        raw = usdc.functions.balanceOf(Web3.to_checksum_address(proxy_addr)).call()
-        ms  = (time.perf_counter() - t0) * 1000
-        return float(raw) / 1e6, ms
-    except Exception:
+        params = BalanceAllowanceParams(asset_type=AssetType.COLLATERAL, signature_type=2)
+        _dbg(f"calling get_balance_allowance(asset_type=COLLATERAL, signature_type=2)")
+        resp = client.get_balance_allowance(params=params)
+        _dbg(f"balance response: {resp}")
+        ms = (time.perf_counter() - t0) * 1000
+        if isinstance(resp, dict):
+            raw = resp.get("balance") or resp.get("availableBalance") or 0
+        else:
+            raw = 0
+        return float(raw), ms
+    except Exception as exc:
+        _dbg(f"balance fetch failed: {type(exc).__name__}: {exc}")
         return None, (time.perf_counter() - t0) * 1000
 
 # ─── FILL POLLING ─────────────────────────────────────────────────────────────
@@ -368,7 +366,23 @@ def main():
     ap.add_argument("--timeout",  type=float, default=30,  help="Max seconds to wait for fill (default: 30)")
     ap.add_argument("--neg-risk", action="store_true",
                     help="Use NegRisk exchange signing (required for sports/NegRisk markets)")
+    ap.add_argument("--debug",    action="store_true", help="Print verbose diagnostics")
     args = ap.parse_args()
+
+    global _DEBUG
+    _DEBUG = args.debug
+
+    if _DEBUG:
+        print("  [DBG] ── ENV CHECK ──────────────────────────────────")
+        for var in ["POLY_PRIVATE_KEY", "POLY_PROXY_ADDRESS", "POLY_API_KEY",
+                    "POLY_API_SECRET", "POLY_API_PASSPHRASE", "POLY_RPC_URL"]:
+            val = os.environ.get(var, "")
+            status = f"{val[:6]}...{val[-4:]}" if len(val) > 10 else (f"SET({len(val)})" if val else "MISSING")
+            print(f"  [DBG]   {var:<24} = {status}")
+        dotenv_dirs = [str(_HERE), str(_ROOT), str(_ROOT.parent), os.path.expanduser("~"), os.getcwd()]
+        found = next((d for d in dotenv_dirs if os.path.isfile(os.path.join(d, ".env"))), None)
+        print(f"  [DBG]   .env found at: {found or 'NONE'}")
+        print("  [DBG] ─────────────────────────────────────────────")
 
     if not args.search and not args.token:
         ap.error("--token is required unless using --search")
@@ -408,7 +422,7 @@ def main():
 
     # ── T1: Balance ───────────────────────────────────────────────────────────
     print("  [T1] Fetching balance ...", end="", flush=True)
-    balance_before, t1_ms = _get_balance()
+    balance_before, t1_ms = _get_balance(client)
     _log(trace_id, "BALANCE_FETCH",
          balance_usd=balance_before, elapsed_ms=round(t1_ms, 1))
     print(f"  {t1_ms:.1f}ms")
@@ -632,7 +646,7 @@ def main():
     # ── T5: Final balance ─────────────────────────────────────────────────────
     _sep("─")
     print("  [T5] Fetching final balance ...", end="", flush=True)
-    balance_after, t5_ms = _get_balance()
+    balance_after, t5_ms = _get_balance(client)
     if balance_after is not None:
         _log(trace_id, "FINAL_BALANCE",
              balance_usd=balance_after,
