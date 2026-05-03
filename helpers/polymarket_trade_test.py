@@ -17,6 +17,7 @@ Usage:
     python polymarket_trade_test.py --token <TOKEN_ID> --shares 2 --poll-ms 25
     python polymarket_trade_test.py --token <TOKEN_ID> --neg-risk  # sports / NegRisk markets
 
+    
 WARNING: --dry-run is strongly recommended first.
          A real run costs real money (spread + fees).
          Sports/NegRisk markets require --neg-risk for correct order signing.
