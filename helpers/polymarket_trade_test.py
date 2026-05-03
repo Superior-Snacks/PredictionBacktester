@@ -62,10 +62,14 @@ _load_dotenv(str(_HERE), str(_ROOT), str(_ROOT.parent), os.path.expanduser("~"),
 
 # ─── CONFIG ───────────────────────────────────────────────────────────────────
 
-CLOB_HOST  = "https://clob.polymarket.com"
-GAMMA_HOST = "https://gamma-api.polymarket.com"
-CHAIN_ID   = 137
-LOG_PATH   = _ROOT / "polymarket_trade_test.log"
+CLOB_HOST      = "https://clob.polymarket.com"
+GAMMA_HOST     = "https://gamma-api.polymarket.com"
+CHAIN_ID       = 137
+LOG_PATH       = _ROOT / "polymarket_trade_test.log"
+USDC_CONTRACT  = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"  # USDC on Polygon
+USDC_BALANCEOF = [{"constant": True, "inputs": [{"name": "account", "type": "address"}],
+                   "name": "balanceOf", "outputs": [{"name": "", "type": "uint256"}],
+                   "type": "function"}]
 
 # ─── TRACE LOGGER ─────────────────────────────────────────────────────────────
 
@@ -138,25 +142,29 @@ def _parse_book(book) -> dict:
 
 # ─── BALANCE HELPER ───────────────────────────────────────────────────────────
 
-def _get_balance(client) -> tuple:
-    """Returns (balance_usd, elapsed_ms)."""
-    t0 = time.perf_counter()
+def _get_balance() -> tuple:
+    """
+    Returns (balance_usd, elapsed_ms).
+    Reads USDC balance on-chain from the proxy wallet — same approach as
+    ProductionBroker.GetUsdcBalanceAsync() and check_proxy.py.
+    """
+    t0         = time.perf_counter()
+    proxy_addr = os.environ.get("POLY_PROXY_ADDRESS", "")
+    if not proxy_addr:
+        return None, (time.perf_counter() - t0) * 1000
     try:
-        from py_clob_client.clob_types import BalanceAllowanceParams, AssetType
-        resp = client.get_balance_allowance(
-            params=BalanceAllowanceParams(asset_type=AssetType.USDC, signature_type=2)
+        from web3 import Web3
+        rpc_url = os.environ.get("POLY_RPC_URL", "https://polygon-rpc.com")
+        w3      = Web3(Web3.HTTPProvider(rpc_url))
+        usdc    = w3.eth.contract(
+            address=Web3.to_checksum_address(USDC_CONTRACT),
+            abi=USDC_BALANCEOF,
         )
+        raw = usdc.functions.balanceOf(Web3.to_checksum_address(proxy_addr)).call()
+        ms  = (time.perf_counter() - t0) * 1000
+        return float(raw) / 1e6, ms
     except Exception:
-        try:
-            resp = client.get_balance_allowance()
-        except Exception:
-            return None, (time.perf_counter() - t0) * 1000
-    ms  = (time.perf_counter() - t0) * 1000
-    try:
-        bal = resp.get("balance") if isinstance(resp, dict) else getattr(resp, "balance", None)
-        return (float(bal) if bal is not None else None), ms
-    except Exception:
-        return None, ms
+        return None, (time.perf_counter() - t0) * 1000
 
 # ─── FILL POLLING ─────────────────────────────────────────────────────────────
 
@@ -399,7 +407,7 @@ def main():
 
     # ── T1: Balance ───────────────────────────────────────────────────────────
     print("  [T1] Fetching balance ...", end="", flush=True)
-    balance_before, t1_ms = _get_balance(client)
+    balance_before, t1_ms = _get_balance()
     _log(trace_id, "BALANCE_FETCH",
          balance_usd=balance_before, elapsed_ms=round(t1_ms, 1))
     print(f"  {t1_ms:.1f}ms")
@@ -623,7 +631,7 @@ def main():
     # ── T5: Final balance ─────────────────────────────────────────────────────
     _sep("─")
     print("  [T5] Fetching final balance ...", end="", flush=True)
-    balance_after, t5_ms = _get_balance(client)
+    balance_after, t5_ms = _get_balance()
     if balance_after is not None:
         _log(trace_id, "FINAL_BALANCE",
              balance_usd=balance_after,
