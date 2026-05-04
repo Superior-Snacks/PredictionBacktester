@@ -225,7 +225,11 @@ def _poll_fill(client, order_id: str,
                      size_matched=size_matched,
                      elapsed_ms=round(t_first_fill_ms, 1), poll_n=polls)
 
-        if status in ("matched", "unmatched", "canceled"):
+        # "unmatched"/"canceled" → no fill coming, exit immediately
+        # "matched" → only exit once size_matched is visible (data-API may lag)
+        if status in ("unmatched", "canceled"):
+            break
+        if status == "matched" and size_matched > 0:
             break
 
         time.sleep(poll_ms / 1000)
@@ -514,47 +518,28 @@ def main():
     _row("Submit→resp", _ms(t3_ms))
     _row("Status",      imm_status)
 
-    if imm_status == "delayed" and buy_order_id:
-        print(f"  Polymarket placement delay (sports market) — polling until resolved ...")
-        buy_fill    = _poll_fill(client, buy_order_id, args.poll_ms, args.timeout,
-                                 trace_id=trace_id, leg="buy")
-        filled_size = buy_fill["size_matched"]
-        _row("Resp→1st fill",  _ms(buy_fill["t_first_fill_ms"]))
-        _row("Resp→full fill", _ms(buy_fill["t_full_fill_ms"]))
-        _row("Poll count",     buy_fill["polls"])
-        _row("Fill status",    buy_fill["status"])
-        _row("Size matched",   f"{filled_size:.4f} shares")
-    elif imm_status in ("matched", "unmatched", "canceled") or imm_matched > 0:
-        # post_order response never includes size_matched; call get_order once to confirm actual fill
-        filled_size = imm_matched  # usually 0; kept as fallback
-        if imm_status == "matched" and buy_order_id:
-            try:
-                detail = client.get_order(buy_order_id)
-                if isinstance(detail, dict):
-                    raw = detail.get("size_matched") or detail.get("sizeFilled") or detail.get("filled") or 0
-                    filled_size = float(raw)
-            except Exception:
-                pass
-            if filled_size <= 0:
-                filled_size = args.shares  # data-API lag fallback; assume full fill
-        buy_fill = {
-            "t_first_fill_ms": 0.0 if filled_size > 0 else None,
-            "t_full_fill_ms":  0.0,
-            "size_matched":    filled_size,
-            "status":          imm_status,
-            "polls":           1 if imm_status == "matched" else 0,
-        }
-        _row("Fill (immediate)", f"{filled_size:.4f} shares  [{imm_status}]")
+    if imm_status in ("unmatched", "canceled") and not buy_order_id:
+        # No order placed at all
+        filled_size = 0.0
+        buy_fill = {"t_first_fill_ms": None, "t_full_fill_ms": 0.0,
+                    "size_matched": 0.0, "status": imm_status, "polls": 0}
+        _row("Fill", f"0.0000 shares  [{imm_status}]")
     else:
-        print(f"  Polling (every {args.poll_ms:.0f}ms, timeout {args.timeout:.0f}s) ...", flush=True)
+        # Always poll for fill confirmation regardless of immediate status.
+        # This waits until size_matched is visible in the data API (not just the
+        # matching engine's ack), giving accurate buy→sell timing.
+        if imm_status == "delayed":
+            print(f"  Polymarket placement delay (sports market) — polling ...", flush=True)
+        else:
+            print(f"  Confirming fill (every {args.poll_ms:.0f}ms, timeout {args.timeout:.0f}s) ...", flush=True)
         buy_fill    = _poll_fill(client, buy_order_id, args.poll_ms, args.timeout,
                                  trace_id=trace_id, leg="buy")
         filled_size = buy_fill["size_matched"]
-        _row("Resp→1st fill",  _ms(buy_fill["t_first_fill_ms"]))
-        _row("Resp→full fill", _ms(buy_fill["t_full_fill_ms"]))
-        _row("Poll count",     buy_fill["polls"])
-        _row("Fill status",    buy_fill["status"])
-        _row("Size matched",   f"{filled_size:.4f} shares")
+        _row("Resp→1st confirm",  _ms(buy_fill["t_first_fill_ms"]))
+        _row("Resp→full confirm", _ms(buy_fill["t_full_fill_ms"]))
+        _row("Poll count",        buy_fill["polls"])
+        _row("Fill status",       buy_fill["status"])
+        _row("Size matched",      f"{filled_size:.4f} shares")
 
     if filled_size <= 0:
         _log(trace_id, "NO_FILL_ABORT", leg="buy",
@@ -621,46 +606,24 @@ def main():
     _row("Submit→resp", _ms(t4_ms))
     _row("Status",      imm_sell_status)
 
-    if imm_sell_status == "delayed" and sell_order_id:
-        print(f"  Polymarket placement delay — polling ...")
-        sell_fill    = _poll_fill(client, sell_order_id, args.poll_ms, args.timeout,
-                                  trace_id=trace_id, leg="sell")
-        sell_matched = sell_fill["size_matched"]
-        _row("Resp→1st fill",  _ms(sell_fill["t_first_fill_ms"]))
-        _row("Resp→full fill", _ms(sell_fill["t_full_fill_ms"]))
-        _row("Poll count",     sell_fill["polls"])
-        _row("Fill status",    sell_fill["status"])
-        _row("Size matched",   f"{sell_matched:.4f} shares")
-    elif imm_sell_status in ("matched", "unmatched", "canceled") or imm_sell_matched > 0:
-        sell_matched = imm_sell_matched  # usually 0; kept as fallback
-        if imm_sell_status == "matched" and sell_order_id:
-            try:
-                detail = client.get_order(sell_order_id)
-                if isinstance(detail, dict):
-                    raw = detail.get("size_matched") or detail.get("sizeFilled") or detail.get("filled") or 0
-                    sell_matched = float(raw)
-            except Exception:
-                pass
-            if sell_matched <= 0:
-                sell_matched = filled_size  # data-API lag fallback; assume full fill
-        sell_fill = {
-            "t_first_fill_ms": 0.0 if sell_matched > 0 else None,
-            "t_full_fill_ms":  0.0,
-            "size_matched":    sell_matched,
-            "status":          imm_sell_status,
-            "polls":           1 if imm_sell_status == "matched" else 0,
-        }
-        _row("Fill (immediate)", f"{sell_matched:.4f} shares  [{imm_sell_status}]")
+    if imm_sell_status in ("unmatched", "canceled") and not sell_order_id:
+        sell_matched = 0.0
+        sell_fill = {"t_first_fill_ms": None, "t_full_fill_ms": 0.0,
+                     "size_matched": 0.0, "status": imm_sell_status, "polls": 0}
+        _row("Fill", f"0.0000 shares  [{imm_sell_status}]")
     else:
-        print(f"  Polling ...", flush=True)
+        if imm_sell_status == "delayed":
+            print(f"  Polymarket placement delay — polling ...", flush=True)
+        else:
+            print(f"  Confirming fill ...", flush=True)
         sell_fill    = _poll_fill(client, sell_order_id, args.poll_ms, args.timeout,
                                   trace_id=trace_id, leg="sell")
         sell_matched = sell_fill["size_matched"]
-        _row("Resp→1st fill",  _ms(sell_fill["t_first_fill_ms"]))
-        _row("Resp→full fill", _ms(sell_fill["t_full_fill_ms"]))
-        _row("Poll count",     sell_fill["polls"])
-        _row("Fill status",    sell_fill["status"])
-        _row("Size matched",   f"{sell_matched:.4f} shares")
+        _row("Resp→1st confirm",  _ms(sell_fill["t_first_fill_ms"]))
+        _row("Resp→full confirm", _ms(sell_fill["t_full_fill_ms"]))
+        _row("Poll count",        sell_fill["polls"])
+        _row("Fill status",       sell_fill["status"])
+        _row("Size matched",      f"{sell_matched:.4f} shares")
 
     unfilled = filled_size - sell_matched
     if unfilled > 0.001:
@@ -696,11 +659,11 @@ def main():
     _sep("─")
     _row("T1  Balance fetch",       _ms(t1_ms))
     _row("T2  Book fetch",          _ms(t2_ms))
-    _row("T3  Buy submit→resp",     _ms(t3_ms))
-    _row("T3  Buy resp→full fill",  _ms(buy_fill["t_full_fill_ms"]))
-    _row("T4  Book re-fetch",       _ms(t_rebook_ms))
-    _row("T4  Sell submit→resp",    _ms(t4_ms))
-    _row("T4  Sell resp→full fill", _ms(sell_fill["t_full_fill_ms"]))
+    _row("T3  Buy submit→resp",        _ms(t3_ms))
+    _row("T3  Buy resp→confirmation", _ms(buy_fill["t_full_fill_ms"]))
+    _row("T4  Book re-fetch",          _ms(t_rebook_ms))
+    _row("T4  Sell submit→resp",       _ms(t4_ms))
+    _row("T4  Sell resp→confirmation", _ms(sell_fill["t_full_fill_ms"]))
     _row("T5  Final balance",       _ms(t5_ms))
     _sep("─")
     _row("Total script elapsed",    _ms(t_total_ms))
