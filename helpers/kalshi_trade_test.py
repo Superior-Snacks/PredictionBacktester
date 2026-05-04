@@ -460,29 +460,16 @@ def main():
     _row("Order ID",        buy_order_id)
     _row("Submit→resp",     _ms(t3_ms))
 
-    # Check for immediate fill in POST response
-    imm_fill   = float(buy_order.get("fill_count_fp", 0) or 0)
-    imm_status = buy_order.get("status", "")
-
-    if imm_status in ("executed", "canceled") or imm_fill > 0:
-        buy_fill = {
-            "t_first_fill_ms": 0.0 if imm_fill > 0 else None,
-            "t_full_fill_ms":  0.0,
-            "fill_count":      imm_fill,
-            "status":          imm_status,
-            "polls":           0,
-        }
-        _row("Fill (immediate)",  f"{imm_fill:.0f} contracts  [{imm_status}]")
-    else:
-        print(f"  Polling (every {args.poll_ms:.0f}ms, timeout {args.timeout:.0f}s) ...", flush=True)
-        buy_fill = _poll_fill(session, private_key, api_key_id,
-                              buy_order_id, args.poll_ms, args.timeout,
-                              trace_id=trace_id, leg="buy")
-        _row("Resp→1st fill",    _ms(buy_fill["t_first_fill_ms"]))
-        _row("Resp→full fill",   _ms(buy_fill["t_full_fill_ms"]))
-        _row("Poll count",       buy_fill["polls"])
-        _row("Fill status",      buy_fill["status"])
-        _row("Fill count",       f"{buy_fill['fill_count']:.0f} contracts")
+    # Always poll for fill confirmation — measures resp→data-confirmed timing accurately
+    print(f"  Confirming fill (every {args.poll_ms:.0f}ms, timeout {args.timeout:.0f}s) ...", flush=True)
+    buy_fill = _poll_fill(session, private_key, api_key_id,
+                          buy_order_id, args.poll_ms, args.timeout,
+                          trace_id=trace_id, leg="buy")
+    _row("Resp→1st confirm",  _ms(buy_fill["t_first_fill_ms"]))
+    _row("Resp→full confirm", _ms(buy_fill["t_full_fill_ms"]))
+    _row("Poll count",        buy_fill["polls"])
+    _row("Fill status",       buy_fill["status"])
+    _row("Fill count",        f"{buy_fill['fill_count']:.0f} contracts")
 
     filled_count = int(buy_fill["fill_count"])
     if filled_count == 0:
@@ -548,28 +535,16 @@ def main():
     _row("Order ID",       sell_order_id)
     _row("Submit→resp",    _ms(t4_ms))
 
-    imm_sell_fill   = float(sell_order.get("fill_count_fp", 0) or 0)
-    imm_sell_status = sell_order.get("status", "")
-
-    if imm_sell_status in ("executed", "canceled") or imm_sell_fill > 0:
-        sell_fill = {
-            "t_first_fill_ms": 0.0 if imm_sell_fill > 0 else None,
-            "t_full_fill_ms":  0.0,
-            "fill_count":      imm_sell_fill,
-            "status":          imm_sell_status,
-            "polls":           0,
-        }
-        _row("Fill (immediate)", f"{imm_sell_fill:.0f} contracts  [{imm_sell_status}]")
-    else:
-        print(f"  Polling ...", flush=True)
-        sell_fill = _poll_fill(session, private_key, api_key_id,
-                               sell_order_id, args.poll_ms, args.timeout,
-                               trace_id=trace_id, leg="sell")
-        _row("Resp→1st fill",   _ms(sell_fill["t_first_fill_ms"]))
-        _row("Resp→full fill",  _ms(sell_fill["t_full_fill_ms"]))
-        _row("Poll count",      sell_fill["polls"])
-        _row("Fill status",     sell_fill["status"])
-        _row("Fill count",      f"{sell_fill['fill_count']:.0f} contracts")
+    # Always poll for fill confirmation
+    print(f"  Confirming fill ...", flush=True)
+    sell_fill = _poll_fill(session, private_key, api_key_id,
+                           sell_order_id, args.poll_ms, args.timeout,
+                           trace_id=trace_id, leg="sell")
+    _row("Resp→1st confirm",  _ms(sell_fill["t_first_fill_ms"]))
+    _row("Resp→full confirm", _ms(sell_fill["t_full_fill_ms"]))
+    _row("Poll count",        sell_fill["polls"])
+    _row("Fill status",       sell_fill["status"])
+    _row("Fill count",        f"{sell_fill['fill_count']:.0f} contracts")
 
     unfilled = filled_count - int(sell_fill["fill_count"])
     if unfilled > 0:
@@ -608,11 +583,11 @@ def main():
     _sep("─")
     _row("T1  Balance fetch",       _ms(t1_ms))
     _row("T2  Book fetch",          _ms(t2_ms))
-    _row("T3  Buy submit→resp",     _ms(t3_ms))
-    _row("T3  Buy resp→full fill",  _ms(buy_fill["t_full_fill_ms"]))
-    _row("T4  Book re-fetch",       _ms(t_rebook_ms))
-    _row("T4  Sell submit→resp",    _ms(t4_ms))
-    _row("T4  Sell resp→full fill", _ms(sell_fill["t_full_fill_ms"]))
+    _row("T3  Buy submit→resp",        _ms(t3_ms))
+    _row("T3  Buy resp→confirmation", _ms(buy_fill["t_full_fill_ms"]))
+    _row("T4  Book re-fetch",          _ms(t_rebook_ms))
+    _row("T4  Sell submit→resp",       _ms(t4_ms))
+    _row("T4  Sell resp→confirmation", _ms(sell_fill["t_full_fill_ms"]))
     _row("T5  Final balance",       _ms(t5_ms))
     _sep("─")
     _row("Total script elapsed",    _ms(t_total_ms))
