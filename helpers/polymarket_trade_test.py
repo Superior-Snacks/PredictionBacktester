@@ -68,6 +68,18 @@ GAMMA_HOST = "https://gamma-api.polymarket.com"
 CHAIN_ID   = 137
 LOG_PATH   = _ROOT / "polymarket_trade_test.log"
 
+# ─── PROXY ────────────────────────────────────────────────────────────────────
+# Route all traffic through a SOCKS5 tunnel (e.g. ssh -D 8080 toronto-server).
+# Override via POLY_SOCKS_PROXY env var, or set to "" to disable.
+# Requires: pip install requests[socks] httpx[socks]
+
+_SOCKS_PROXY = os.environ.get("POLY_SOCKS_PROXY", "socks5://127.0.0.1:8080")
+if _SOCKS_PROXY:
+    # Set before any py_clob_client import — its httpx.Client is created at module load
+    os.environ["HTTP_PROXY"]  = _SOCKS_PROXY
+    os.environ["HTTPS_PROXY"] = _SOCKS_PROXY
+    os.environ["ALL_PROXY"]   = _SOCKS_PROXY
+
 _DEBUG = False  # set True via --debug
 
 
@@ -246,13 +258,15 @@ def run_search(term: str) -> None:
     limit   = 100
     fetched = 0
 
+    _proxies = {"http": _SOCKS_PROXY, "https": _SOCKS_PROXY} if _SOCKS_PROXY else None
+
     print(f"  Searching active markets for '{term}' ...", flush=True)
     while True:
         try:
             r = requests.get(f"{GAMMA_HOST}/events", params={
                 "active": "true", "closed": "false",
                 "limit": limit, "offset": offset,
-            }, timeout=15)
+            }, proxies=_proxies, timeout=15)
             r.raise_for_status()
             events = r.json()
         except Exception as e:
