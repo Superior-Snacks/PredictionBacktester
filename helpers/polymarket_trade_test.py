@@ -73,7 +73,7 @@ LOG_PATH   = _ROOT / "polymarket_trade_test.log"
 # Override via POLY_SOCKS_PROXY env var, or set to "" to disable.
 # Requires: pip install requests[socks] httpx[socks]
 
-_SOCKS_PROXY = os.environ.get("POLY_SOCKS_PROXY", "socks5://127.0.0.1:8080")
+_SOCKS_PROXY = os.environ.get("POLY_SOCKS_PROXY", "socks5h://127.0.0.1:8080")
 if _SOCKS_PROXY:
     # Set before any py_clob_client import — its httpx.Client is created at module load
     os.environ["HTTP_PROXY"]  = _SOCKS_PROXY
