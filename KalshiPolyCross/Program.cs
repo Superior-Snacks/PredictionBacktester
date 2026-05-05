@@ -4,6 +4,32 @@ using PredictionBacktester.Engine;
 using PredictionBacktester.Engine.LiveExecution;
 
 // ══════════════════════════════════════════════════════════════════════════════
+//  USAGE
+//
+//  dotnet run --project KalshiPolyCross                  # live execution (requires all env vars)
+//  dotnet run --project KalshiPolyCross -- --dry-run     # detect arbs, log CSV, no real orders
+//  dotnet run --project KalshiPolyCross -- --scan-only   # match markets, update cross_pairs.json, exit
+//
+//  Required env vars (Kalshi):
+//    KALSHI_API_KEY_ID          Kalshi API key ID
+//    KALSHI_PRIVATE_KEY_PATH    Path to RSA private key PEM file
+//
+//  Required env vars (Polymarket execution — omit for telemetry-only mode):
+//    POLY_API_KEY               Polymarket CLOB API key
+//    POLY_API_SECRET            Polymarket CLOB API secret
+//    POLY_API_PASSPHRASE        Polymarket CLOB API passphrase
+//    POLY_PRIVATE_KEY           EOA private key (hex, no 0x prefix)
+//    POLY_PROXY_ADDRESS         Gnosis Safe proxy wallet address (POLY_GNOSIS_SAFE signer)
+//    POLY_RPC_URL               (optional) Polygon RPC — defaults to https://polygon-rpc.com
+//
+//  cross_pairs.json: verified Kalshi↔Polymarket market pairs; auto-populated on scan,
+//                    must be non-empty for arb detection to fire.
+//
+//  Output: CrossArbTelemetry_*.csv   — all detected arb windows (always)
+//          CrossArbExecution_*.csv   — order execution results   (when executor active)
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ══════════════════════════════════════════════════════════════════════════════
 //  CONFIGURATION
 // ══════════════════════════════════════════════════════════════════════════════
 const decimal ARB_THRESHOLD         = 0.995m;
