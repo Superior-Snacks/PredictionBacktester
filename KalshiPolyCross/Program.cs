@@ -117,6 +117,35 @@ var telemetry = new CrossPlatformArbTelemetryStrategy(pairs, state.Books, ARB_TH
 var restVerifier = new CrossArbRestVerifier(orderClient, telemetry);
 telemetry.OnArbOpened += restVerifier.OnArbOpened;
 
+// ── Executor — live order placement on WS-detected arb windows ────────────────
+bool dryRun = args.Contains("--dry-run");
+CrossArbExecutor? executor = null;
+
+var polyConfig = LoadPolymarketConfig();
+if (polyConfig != null)
+{
+    var polyOrderClient = new PredictionBacktester.Engine.LiveExecution.PolymarketOrderClient(polyConfig);
+    executor = new CrossArbExecutor(
+        kalshi:              orderClient,
+        poly:                polyOrderClient,
+        telemetry:           telemetry,
+        books:               state.Books,
+        maxContracts:        1m,
+        maxExposureUsd:      10m,
+        executionThreshold:  0.990m,
+        pairCooldownSeconds: 120,
+        fillTimeoutMs:       5000,
+        dryRun:              dryRun);
+    telemetry.OnArbOpened += executor.OnArbOpened;
+    Console.WriteLine(
+        $"[EXECUTOR] Live execution enabled | maxContracts=1 maxExposure=$10 " +
+        $"threshold=0.990 cooldown=120s {(dryRun ? "(DRY RUN — no real orders)" : "LIVE")}");
+}
+else
+{
+    Console.WriteLine("[EXECUTOR] Poly credentials not set — telemetry-only mode. Add POLY_* env vars to enable execution.");
+}
+
 Console.WriteLine($"\n[BOOKS] {state.Books.Count} order books created");
 Console.WriteLine($"  Kalshi tickers : {kalshiSubscribeTickers.Count}");
 Console.WriteLine($"  Poly tokens    : {polySubscribeTokens.Count}");
@@ -262,4 +291,22 @@ var polyWsTask   = Task.Run(async () =>
 
 await Task.WhenAll(kalshiWsTask, polyWsTask);
 await telemetry.ShutdownAsync(); // flush and close CSV before exit
+if (executor != null) await executor.ShutdownAsync();
 Console.WriteLine("\n[SHUTDOWN] Cross-platform arb telemetry stopped.");
+
+static PredictionBacktester.Engine.LiveExecution.PolymarketApiConfig? LoadPolymarketConfig()
+{
+    string[] required = ["POLY_API_KEY", "POLY_API_SECRET", "POLY_API_PASSPHRASE",
+                         "POLY_PRIVATE_KEY", "POLY_PROXY_ADDRESS"];
+    if (required.Any(k => string.IsNullOrEmpty(Environment.GetEnvironmentVariable(k))))
+        return null;
+    return new PredictionBacktester.Engine.LiveExecution.PolymarketApiConfig
+    {
+        ApiKey        = Environment.GetEnvironmentVariable("POLY_API_KEY")!.Trim(),
+        ApiSecret     = Environment.GetEnvironmentVariable("POLY_API_SECRET")!.Trim(),
+        ApiPassphrase = Environment.GetEnvironmentVariable("POLY_API_PASSPHRASE")!.Trim(),
+        PrivateKey    = Environment.GetEnvironmentVariable("POLY_PRIVATE_KEY")!.Trim(),
+        ProxyAddress  = Environment.GetEnvironmentVariable("POLY_PROXY_ADDRESS")!.Trim(),
+        RpcUrl        = (Environment.GetEnvironmentVariable("POLY_RPC_URL") ?? "https://polygon-rpc.com").Trim(),
+    };
+}

@@ -6,9 +6,8 @@ using System.Text.Json;
 namespace PredictionBacktester.Engine.LiveExecution;
 
 /// <summary>
-/// Thin REST client for the Kalshi API.
-/// Handles RSA-PSS request signing and provides methods used by the scanner and paper trader.
-/// Does NOT place real orders — that is reserved for a future KalshiLiveBroker.
+/// REST client for the Kalshi API. Handles RSA-PSS request signing, market queries,
+/// and live IOC order placement / fill polling.
 /// </summary>
 public class KalshiOrderClient : IDisposable
 {
@@ -72,6 +71,29 @@ public class KalshiOrderClient : IDisposable
         return await JsonDocument.ParseAsync(stream);
     }
 
+    private async Task<JsonDocument> PostAsync(string relPath, object body)
+    {
+        string json = JsonSerializer.Serialize(body);
+        var (key, ts, sig) = CreateAuthHeaders("POST", relPath);
+
+        using var req = new HttpRequestMessage(HttpMethod.Post, _config.BaseRestUrl.TrimEnd('/') + relPath);
+        req.Headers.Add("KALSHI-ACCESS-KEY",       key);
+        req.Headers.Add("KALSHI-ACCESS-TIMESTAMP", ts);
+        req.Headers.Add("KALSHI-ACCESS-SIGNATURE", sig);
+        req.Content = new StringContent(json, Encoding.UTF8, "application/json");
+
+        using var resp = await _http.SendAsync(req);
+        var stream = await resp.Content.ReadAsStreamAsync();
+        if (!resp.IsSuccessStatusCode)
+        {
+            using var sr = new StreamReader(stream);
+            string err = await sr.ReadToEndAsync();
+            throw new HttpRequestException(
+                $"Kalshi POST {relPath} {(int)resp.StatusCode}: {err[..Math.Min(400, err.Length)]}");
+        }
+        return await JsonDocument.ParseAsync(stream);
+    }
+
     // ──────────────────────────────────────────────────────────────────────────
     //  Public API methods
     // ──────────────────────────────────────────────────────────────────────────
@@ -93,6 +115,47 @@ public class KalshiOrderClient : IDisposable
     {
         using var doc = await GetAsync("/portfolio/balance");
         return doc.RootElement.GetProperty("balance").GetInt64();
+    }
+
+    /// <summary>
+    /// Places an IOC order on Kalshi. Returns (orderId, status, fill_count_fp).
+    /// side = "yes" | "no", action = "buy" | "sell".
+    /// priceCents = price in cents (e.g. 65 for $0.65).
+    /// </summary>
+    public async Task<(string OrderId, string Status, decimal FillCount)> PlaceOrderAsync(
+        string ticker, string side, int priceCents, int count, string action = "buy")
+    {
+        string priceField = side == "yes" ? "yes_price" : "no_price";
+        var body = new Dictionary<string, object>
+        {
+            ["ticker"]        = ticker,
+            ["side"]          = side,
+            ["action"]        = action,
+            ["count"]         = count,
+            [priceField]      = priceCents,
+            ["time_in_force"] = "immediate_or_cancel",
+        };
+
+        using var doc = await PostAsync("/portfolio/orders", body);
+        var order = doc.RootElement.TryGetProperty("order", out var o) ? o : doc.RootElement;
+
+        string  orderId = order.TryGetProperty("order_id",      out var id) ? (id.GetString() ?? "") : "";
+        string  status  = order.TryGetProperty("status",        out var st) ? (st.GetString() ?? "") : "";
+        decimal fill    = order.TryGetProperty("fill_count_fp", out var fc) ? fc.GetDecimal()       : 0m;
+
+        return (orderId, status, fill);
+    }
+
+    /// <summary>Polls GET /portfolio/orders/{orderId} once and returns (status, fill_count_fp).</summary>
+    public async Task<(string Status, decimal FillCount)> PollOrderAsync(string orderId)
+    {
+        using var doc = await GetAsync($"/portfolio/orders/{orderId}");
+        var order = doc.RootElement.TryGetProperty("order", out var o) ? o : doc.RootElement;
+
+        string  status = order.TryGetProperty("status",        out var st) ? (st.GetString() ?? "") : "";
+        decimal fill   = order.TryGetProperty("fill_count_fp", out var fc) ? fc.GetDecimal()       : 0m;
+
+        return (status, fill);
     }
 
     /// <summary>
