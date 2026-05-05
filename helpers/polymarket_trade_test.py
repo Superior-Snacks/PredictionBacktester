@@ -70,15 +70,19 @@ LOG_PATH   = _ROOT / "polymarket_trade_test.log"
 
 # ─── PROXY ────────────────────────────────────────────────────────────────────
 # Route all traffic through a SOCKS5 tunnel (e.g. ssh -D 8080 toronto-server).
-# Override via POLY_SOCKS_PROXY env var, or set to "" to disable.
-# Requires: pip install requests[socks] httpx[socks]
+# Override via POLY_SOCKS_PROXY env var, set to "" to disable, or pass --no-proxy.
+# Must be applied before any py_clob_client import (its httpx.Client is module-level).
 
-_SOCKS_PROXY = os.environ.get("POLY_SOCKS_PROXY", "socks5h://127.0.0.1:8080")
+_NO_PROXY    = "--no-proxy" in sys.argv
+_SOCKS_PROXY = "" if _NO_PROXY else os.environ.get("POLY_SOCKS_PROXY", "")
 if _SOCKS_PROXY:
-    # Set before any py_clob_client import — its httpx.Client is created at module load
     os.environ["HTTP_PROXY"]  = _SOCKS_PROXY
     os.environ["HTTPS_PROXY"] = _SOCKS_PROXY
     os.environ["ALL_PROXY"]   = _SOCKS_PROXY
+else:
+    # Clear any pre-existing proxy vars so a stale shell env can't route through a dead tunnel
+    for _pvar in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+        os.environ.pop(_pvar, None)
 
 _DEBUG = False  # set True via --debug
 
@@ -104,10 +108,10 @@ def _log(trace_id: str, event: str, **fields) -> None:
 
 def _build_client():
     try:
-        from py_clob_client.client import ClobClient
-        from py_clob_client.clob_types import ApiCreds
+        from py_clob_client_v2.client import ClobClient
+        from py_clob_client_v2.clob_types import ApiCreds
     except ImportError:
-        sys.exit("ERROR: pip install py_clob_client")
+        sys.exit("ERROR: pip install py_clob_client_v2")
 
     private_key    = os.environ.get("POLY_PRIVATE_KEY", "")
     proxy_address  = os.environ.get("POLY_PROXY_ADDRESS", "")
@@ -143,7 +147,7 @@ def _price_of(entry) -> float | None:
 
 
 def _parse_book(book) -> dict:
-    """Return best_ask and best_bid from get_order_book() response."""
+    """Return best_ask, best_bid, and neg_risk from get_order_book() response."""
     def entries(field):
         if isinstance(book, dict):
             return book.get(field) or []
@@ -151,16 +155,23 @@ def _parse_book(book) -> dict:
 
     ask_prices = [p for e in entries("asks") if (p := _price_of(e)) is not None]
     bid_prices = [p for e in entries("bids") if (p := _price_of(e)) is not None]
+
+    if isinstance(book, dict):
+        neg_risk = book.get("neg_risk")
+    else:
+        neg_risk = getattr(book, "neg_risk", None)
+
     return {
         "best_ask": min(ask_prices) if ask_prices else None,
         "best_bid": max(bid_prices) if bid_prices else None,
+        "neg_risk": neg_risk,
     }
 
 # ─── BALANCE HELPER ───────────────────────────────────────────────────────────
 
 def _get_balance(client) -> tuple:
     """Returns (balance_usd, elapsed_ms) using CLOB client L2 auth."""
-    from py_clob_client.clob_types import BalanceAllowanceParams, AssetType
+    from py_clob_client_v2.clob_types import BalanceAllowanceParams, AssetType
     t0 = time.perf_counter()
     try:
         params = BalanceAllowanceParams(asset_type=AssetType.COLLATERAL, signature_type=2)
@@ -225,11 +236,8 @@ def _poll_fill(client, order_id: str,
                      size_matched=size_matched,
                      elapsed_ms=round(t_first_fill_ms, 1), poll_n=polls)
 
-        # "unmatched"/"canceled" → no fill coming, exit immediately
-        # "matched" → only exit once size_matched is visible (data-API may lag)
-        if status in ("unmatched", "canceled"):
-            break
-        if status == "matched" and size_matched > 0:
+        # FAK semantics: "matched" = fully filled, "unmatched"/"canceled" = no fill
+        if status in ("matched", "unmatched", "canceled"):
             break
 
         time.sleep(poll_ms / 1000)
@@ -384,6 +392,8 @@ def main():
     ap.add_argument("--timeout",  type=float, default=30,  help="Max seconds to wait for fill (default: 30)")
     ap.add_argument("--neg-risk", action="store_true",
                     help="Use NegRisk exchange signing (required for sports/NegRisk markets)")
+    ap.add_argument("--no-sell",  action="store_true", help="Buy only — skip the sell leg (leaves position open)")
+    ap.add_argument("--no-proxy", action="store_true", help="Connect directly, bypassing SOCKS5 proxy")
     ap.add_argument("--debug",    action="store_true", help="Print verbose diagnostics")
     args = ap.parse_args()
 
@@ -410,10 +420,10 @@ def main():
         return
 
     try:
-        from py_clob_client.clob_types import OrderArgs, OrderType, PartialCreateOrderOptions
-        from py_clob_client.order_builder.constants import BUY, SELL
+        from py_clob_client_v2.clob_types import OrderArgsV2, OrderType, PartialCreateOrderOptions
+        from py_clob_client_v2.order_builder.constants import BUY, SELL
     except ImportError:
-        sys.exit("ERROR: pip install py_clob_client")
+        sys.exit("ERROR: pip install py_clob_client_v2")
 
     client = _build_client()
 
@@ -435,10 +445,6 @@ def main():
     _row("Mode",     "DRY RUN — no orders" if args.dry_run else "LIVE — real money")
     _row("Trace ID", trace_id)
     _sep("─")
-
-    # tick_size=None → SDK fetches per-market tick size (avoids failure on "0.1" tick markets)
-    # neg_risk=False → SDK auto-detects via get_neg_risk(); True forces it (skips API call)
-    order_opts = PartialCreateOrderOptions(tick_size=None, neg_risk=args.neg_risk or None)
 
     # ── T1: Balance ───────────────────────────────────────────────────────────
     print("  [T1] Fetching balance ...", end="", flush=True)
@@ -463,9 +469,17 @@ def main():
     ask_price = prices["best_ask"]
     bid_price = prices["best_bid"]
 
+    # Use neg_risk from book; --neg-risk flag overrides if explicitly set
+    detected_neg_risk = prices["neg_risk"]
+    effective_neg_risk = True if args.neg_risk else (
+        detected_neg_risk if detected_neg_risk is not None else None
+    )
+    # tick_size=None → SDK fetches per-market tick size (avoids failure on 0.1-tick markets)
+    order_opts = PartialCreateOrderOptions(tick_size=None, neg_risk=effective_neg_risk)
+
     _log(trace_id, "MARKET_FETCH",
          token=args.token, best_ask=ask_price, best_bid=bid_price,
-         elapsed_ms=round(t2_ms, 1))
+         neg_risk=effective_neg_risk, elapsed_ms=round(t2_ms, 1))
 
     if ask_price is None:
         _log(trace_id, "NO_LIQUIDITY", token=args.token)
@@ -475,6 +489,7 @@ def main():
     _row("Best ask",  f"${ask_price:.4f}")
     _row("Best bid",  f"${bid_price:.4f}" if bid_price else "—")
     _row("Spread",    f"${spread:.4f}")
+    _row("NegRisk",   f"{effective_neg_risk}  (from book)" if detected_neg_risk is not None else f"{args.neg_risk}  (flag)")
     _row("Est. cost", f"${ask_price * args.shares:.4f}  (excl. fees)")
 
     if args.dry_run:
@@ -495,7 +510,7 @@ def main():
 
     try:
         signed_buy = client.create_order(
-            OrderArgs(price=ask_price, size=args.shares, side=BUY, token_id=args.token),
+            OrderArgsV2(price=ask_price, size=args.shares, side=BUY, token_id=args.token),
             options=order_opts,
         )
         t0       = time.perf_counter()
@@ -534,7 +549,10 @@ def main():
             print(f"  Confirming fill (every {args.poll_ms:.0f}ms, timeout {args.timeout:.0f}s) ...", flush=True)
         buy_fill    = _poll_fill(client, buy_order_id, args.poll_ms, args.timeout,
                                  trace_id=trace_id, leg="buy")
-        filled_size = buy_fill["size_matched"]
+        # FAK "matched" = fully filled; size_matched may be 0 if data API lags
+        filled_size = buy_fill["size_matched"] or (
+            args.shares if buy_fill["status"] == "matched" else 0.0
+        )
         _row("Resp→1st confirm",  _ms(buy_fill["t_first_fill_ms"]))
         _row("Resp→full confirm", _ms(buy_fill["t_full_fill_ms"]))
         _row("Poll count",        buy_fill["polls"])
@@ -547,6 +565,18 @@ def main():
         print("\n  No fill received — aborting to avoid orphan position.")
         _sep()
         sys.exit(1)
+
+    if args.no_sell:
+        _log(trace_id, "NO_SELL_FLAG", open_size=filled_size, token=args.token)
+        _sep("─")
+        print(f"  --no-sell set — skipping sell leg.")
+        print(f"  !!! OPEN POSITION: {filled_size:.4f} shares on {args.token}")
+        _sep()
+        _log(trace_id, "SCRIPT_END",
+             total_elapsed_ms=round((time.perf_counter() - t_script_start) * 1000, 1),
+             pnl_usd=None, buy_order_id=buy_order_id,
+             sell_order_id=None, filled_size=filled_size, sell_matched=None)
+        return
 
     # ── T4: Sell ──────────────────────────────────────────────────────────────
     _sep("─")
@@ -580,7 +610,7 @@ def main():
 
     try:
         signed_sell = client.create_order(
-            OrderArgs(price=sell_price, size=filled_size, side=SELL, token_id=args.token),
+            OrderArgsV2(price=sell_price, size=filled_size, side=SELL, token_id=args.token),
             options=order_opts,
         )
         t0        = time.perf_counter()
@@ -618,7 +648,9 @@ def main():
             print(f"  Confirming fill ...", flush=True)
         sell_fill    = _poll_fill(client, sell_order_id, args.poll_ms, args.timeout,
                                   trace_id=trace_id, leg="sell")
-        sell_matched = sell_fill["size_matched"]
+        sell_matched = sell_fill["size_matched"] or (
+            filled_size if sell_fill["status"] == "matched" else 0.0
+        )
         _row("Resp→1st confirm",  _ms(sell_fill["t_first_fill_ms"]))
         _row("Resp→full confirm", _ms(sell_fill["t_full_fill_ms"]))
         _row("Poll count",        sell_fill["polls"])
