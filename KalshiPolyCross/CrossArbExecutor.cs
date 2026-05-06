@@ -44,6 +44,15 @@ public class CrossArbExecutor
     private          decimal _totalExposure = 0m;
     private readonly object  _exposureLock  = new();
 
+    // ── Balance tracking ──────────────────────────────────────────────────────
+    // Live: fetched from APIs at startup, refreshed after each execution.
+    // Dry-run: seeded at $1,000 per side, decremented on each simulated entry.
+    private          decimal _kalshiBalanceUsd;
+    private          decimal _polyBalanceUsd;
+    private readonly object  _balanceLock = new();
+    // Minimum buffer to keep on each platform — never deploy below this amount.
+    private const decimal MinBalanceBufferUsd = 5m;
+
     // ── Fee model (mirrors CrossPlatformArbTelemetryStrategy) ─────────────────
     private static decimal KalshiFee(decimal p) => 0.07m * p * (1m - p);
     private static decimal PolyFee(decimal p)
@@ -82,6 +91,40 @@ public class CrossArbExecutor
         _dryRun              = dryRun;
         _csvPath             = $"CrossArbExecution_{DateTime.UtcNow:yyyyMMdd_HHmmss}.csv";
         _ = Task.Run(RunCsvWriterAsync);
+    }
+
+    /// <summary>
+    /// Fetches real balances from both platforms (live) or seeds simulated $1,000 (dry-run).
+    /// Call once after construction, before the WS feeds start.
+    /// </summary>
+    public async Task InitializeBalancesAsync()
+    {
+        if (_dryRun)
+        {
+            lock (_balanceLock) { _kalshiBalanceUsd = 1000m; _polyBalanceUsd = 1000m; }
+            Console.WriteLine("[BALANCE INIT] Dry-run: simulated $1,000.00 on each platform");
+            return;
+        }
+        await RefreshBalancesAsync(initial: true);
+    }
+
+    private async Task RefreshBalancesAsync(bool initial = false)
+    {
+        try
+        {
+            long    kCents    = await _kalshi.GetBalanceCentsAsync();
+            decimal newKalshi = kCents / 100m;
+            decimal newPoly   = await _poly.GetUsdcBalanceAsync();
+            lock (_balanceLock) { _kalshiBalanceUsd = newKalshi; _polyBalanceUsd = newPoly; }
+            string tag = initial ? "[BALANCE INIT]" : "[BALANCE]";
+            Console.WriteLine($"{tag} Kalshi=${newKalshi:0.00} Poly=${newPoly:0.00}");
+            DebugLog.Write($"RefreshBalancesAsync: K=${newKalshi:0.00} P=${newPoly:0.00} initial={initial}");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[BALANCE WARN] Failed to refresh balance: {ex.Message}");
+            DebugLog.Write($"RefreshBalancesAsync exception: {ex}");
+        }
     }
 
     /// <summary>Wire to telemetry.OnArbOpened — fires on every new WS-detected arb window.</summary>
@@ -169,31 +212,66 @@ public class CrossArbExecutor
 
         int     kPriceCents   = (int)Math.Round(kLegAsk * 100);
         decimal polyShares    = _maxContracts;
-        decimal estimatedCost = kLegAsk * _maxContracts + pLegAsk * polyShares;
+        decimal kalshiCost    = kLegAsk * _maxContracts;
+        decimal polyCost      = pLegAsk * polyShares;
+        decimal estimatedCost = kalshiCost + polyCost;
+
+        // Balance check — applies to both live and dry-run.
+        // Speculatively reserves funds to prevent concurrent entries from double-spending.
+        bool    balanceOk;
+        decimal kBalSnap, pBalSnap;
+        lock (_balanceLock)
+        {
+            kBalSnap  = _kalshiBalanceUsd;
+            pBalSnap  = _polyBalanceUsd;
+            balanceOk = (kBalSnap - kalshiCost >= MinBalanceBufferUsd) &&
+                        (pBalSnap - polyCost   >= MinBalanceBufferUsd);
+            if (balanceOk)
+            {
+                _kalshiBalanceUsd -= kalshiCost;
+                _polyBalanceUsd   -= polyCost;
+            }
+        }
+        if (!balanceOk)
+        {
+            Console.WriteLine(
+                $"[EXEC SKIP] {pair.Label} | Insufficient balance " +
+                $"K=${kBalSnap:0.00} P=${pBalSnap:0.00} needed K=${kalshiCost:0.00} P=${polyCost:0.00} (buffer ${MinBalanceBufferUsd})");
+            DebugLog.Write($"ExecuteAsync {pair.Label}: balance check failed — K=${kBalSnap:0.00} P=${pBalSnap:0.00}");
+            return;
+        }
 
         if (_dryRun)
         {
+            // Speculative deduction above acts as the simulated spend; log and exit.
+            decimal kBalAfter, pBalAfter;
+            lock (_balanceLock) { kBalAfter = _kalshiBalanceUsd; pBalAfter = _polyBalanceUsd; }
             Console.ForegroundColor = ConsoleColor.Yellow;
             Console.WriteLine(
                 $"[DRY RUN] {pair.Label} | {arbType} | K-{kalshiSide}={kLegAsk:0.0000} " +
-                $"P={pLegAsk:0.0000} net=${netNow:0.0000} | {_maxContracts} contracts est.cost=${estimatedCost:0.00}");
+                $"P={pLegAsk:0.0000} net=${netNow:0.0000} | {_maxContracts} contracts est.cost=${estimatedCost:0.00} " +
+                $"| balanceAfter K=${kBalAfter:0.00} P=${pBalAfter:0.00}");
             Console.ResetColor();
             EnqueueCsvRow(pair, arbType, DateTime.UtcNow, kPriceCents, kLegAsk, pLegAsk,
                           0m, 0m, 0m, netNow, "DRY_RUN");
             return;
         }
 
-        // Exposure check (thread-safe)
+        // Exposure check (live only, thread-safe)
+        bool exposureOk;
         lock (_exposureLock)
         {
-            if (_totalExposure + estimatedCost > _maxExposureUsd)
-            {
-                Console.WriteLine(
-                    $"[EXEC SKIP] {pair.Label} | Exposure limit " +
-                    $"${_totalExposure:0.00}+${estimatedCost:0.00} > ${_maxExposureUsd:0.00}");
-                return;
-            }
-            _totalExposure += estimatedCost;
+            exposureOk = _totalExposure + estimatedCost <= _maxExposureUsd;
+            if (exposureOk) _totalExposure += estimatedCost;
+        }
+        if (!exposureOk)
+        {
+            Console.WriteLine(
+                $"[EXEC SKIP] {pair.Label} | Exposure limit " +
+                $"${_totalExposure:0.00}+${estimatedCost:0.00} > ${_maxExposureUsd:0.00}");
+            // Restore speculative balance reservation
+            lock (_balanceLock) { _kalshiBalanceUsd += kalshiCost; _polyBalanceUsd += polyCost; }
+            return;
         }
 
         // Set cooldown before firing to block concurrent execution on the same pair
@@ -245,6 +323,9 @@ public class CrossArbExecutor
         // Release exposure reservation when no position opened
         if (!bothFilled)
             lock (_exposureLock) { _totalExposure -= estimatedCost; }
+
+        // Re-fetch real balances after execution — replaces speculative reservation with actuals.
+        await RefreshBalancesAsync();
 
         EnqueueCsvRow(pair, arbType, t0, kPriceCents, kLegAsk, pLegAsk,
                       kFilled, pFilled, pActualPrice, netNow, kStatus);

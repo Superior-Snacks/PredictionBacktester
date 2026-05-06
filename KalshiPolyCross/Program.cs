@@ -195,6 +195,7 @@ if (isLive || isDryRun)
         fillTimeoutMs:       5000,
         dryRun:              isDryRun);
     telemetry.OnArbOpened += executor.OnArbOpened;
+    await executor.InitializeBalancesAsync();
     string execLabel = isDryRun ? "DRY RUN — no real orders" : "LIVE";
     Console.WriteLine($"[EXECUTOR] {execLabel} | maxContracts=1 maxExposure=$10 threshold=0.990 cooldown=120s");
 }
