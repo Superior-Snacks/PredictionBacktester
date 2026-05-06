@@ -6,11 +6,12 @@ using PredictionBacktester.Engine.LiveExecution;
 // ══════════════════════════════════════════════════════════════════════════════
 //  USAGE
 //
-//  dotnet run --project KalshiPolyCross -- --telemetry   # detect arbs, log CSV, no orders (no POLY_* needed)
-//  dotnet run --project KalshiPolyCross -- --dry-run     # same as --live, log only, no real orders
-//  dotnet run --project KalshiPolyCross -- --live        # full production: real orders on both legs
+//  dotnet run --project KalshiPolyCross -- --telemetry          # detect arbs, log CSV, no orders
+//  dotnet run --project KalshiPolyCross -- --dry-run            # same as --live, log only, no real orders
+//  dotnet run --project KalshiPolyCross -- --live               # full production: real orders on both legs
+//  dotnet run --project KalshiPolyCross -- --telemetry --debug  # any mode can add --debug for verbose logs
 //
-//  Exactly one mode flag is required. Omitting all three prints this usage and exits.
+//  Exactly one mode flag is required. --debug is optional and works with any mode.
 //
 //  Required env vars (Kalshi):
 //    KALSHI_API_KEY_ID          Kalshi API key ID
@@ -53,6 +54,9 @@ if (modeCount > 1)
     return;
 }
 
+bool isDebug = args.Contains("--debug");
+DebugLog.Enabled = isDebug;
+
 // ══════════════════════════════════════════════════════════════════════════════
 //  CONFIGURATION
 // ══════════════════════════════════════════════════════════════════════════════
@@ -69,8 +73,9 @@ const string  POLY_WS_URL           = "wss://ws-subscriptions-clob.polymarket.co
 //  STARTUP
 // ══════════════════════════════════════════════════════════════════════════════
 string modeLabel = isLive ? "LIVE EXECUTION" : isDryRun ? "DRY RUN" : "TELEMETRY";
+string debugTag  = isDebug ? " +DEBUG" : "";
 Console.WriteLine("═══════════════════════════════════════════════════════════");
-Console.WriteLine($"  KALSHI ↔ POLYMARKET CROSS-PLATFORM ARB  [{modeLabel}]");
+Console.WriteLine($"  KALSHI ↔ POLYMARKET CROSS-PLATFORM ARB  [{modeLabel}{debugTag}]");
 Console.WriteLine("═══════════════════════════════════════════════════════════");
 
 // ── Kalshi auth ───────────────────────────────────────────────────────────────
@@ -158,11 +163,8 @@ var state = new MarketStateTracker();
 foreach (var ticker in kalshiSubscribeTickers) state.InitKalshiMarket(ticker);
 foreach (var token  in polySubscribeTokens)    state.InitPolyToken(token);
 
-bool showBlended = !args.Contains("--no-blended");
-
 // ── Telemetry strategy ────────────────────────────────────────────────────────
-var telemetry = new CrossPlatformArbTelemetryStrategy(pairs, state.Books, ARB_THRESHOLD, DEPTH_FLOOR,
-                                                      blendedEnabled: showBlended);
+var telemetry = new CrossPlatformArbTelemetryStrategy(pairs, state.Books, ARB_THRESHOLD, DEPTH_FLOOR);
 
 // ── REST verifier — confirms arb windows via independent REST calls ───────────
 var restVerifier = new CrossArbRestVerifier(orderClient, telemetry);
@@ -217,46 +219,40 @@ Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
 // ══════════════════════════════════════════════════════════════════════════════
 _ = Task.Run(async () =>
 {
-    while (!cts.Token.IsCancellationRequested)
+    try
     {
-        await Task.Delay(NEAR_MISS_INTERVAL_MS, cts.Token).ContinueWith(_ => { });
-        if (cts.Token.IsCancellationRequested) break;
-
-        int kalshiReady = state.Books.Count(kv => kv.Key.StartsWith("K:") && kv.Value.HasReceivedDelta);
-        int polyReady   = state.Books.Count(kv => kv.Key.StartsWith("P:") && kv.Value.HasReceivedDelta);
-        int kalshiTotal = state.Books.Count(kv => kv.Key.StartsWith("K:"));
-        int polyTotal   = state.Books.Count(kv => kv.Key.StartsWith("P:"));
-
-        Console.WriteLine($"\n[TELEMETRY] --- TOP {Math.Min(10, pairs.Count)} CLOSEST TO CROSS-PLATFORM ARB ---");
-        Console.WriteLine($"  Kalshi books: {kalshiReady}/{kalshiTotal} | Poly books: {polyReady}/{polyTotal} | Pairs: {telemetry.TotalPairs} | Open arbs: {telemetry.OpenArbs}");
-
-        var snapshot = telemetry.GetNearMissSnapshot().Take(10).ToList();
-        foreach (var (cost, label, pairId, arbType, depth, isLive) in snapshot)
+        while (!cts.Token.IsCancellationRequested)
         {
-            decimal diff   = cost - 1.00m;
-            string  tag    = cost < 1.00m ? "ARB!" : $"+${diff:0.0000} away";
-            string  live   = isLive ? " *** LIVE ***" : "";
-            Console.WriteLine($"  ${cost:0.0000} ({tag}) {arbType} | depth={depth:0.0} | {label}{live}");
-        }
+            await Task.Delay(NEAR_MISS_INTERVAL_MS, cts.Token).ContinueWith(_ => { });
+            if (cts.Token.IsCancellationRequested) break;
 
-        if (snapshot.Count == 0)
-            Console.WriteLine("  (no books priced yet — waiting for WS data)");
+            int kalshiReady = state.Books.Count(kv => kv.Key.StartsWith("K:") && kv.Value.HasReceivedDelta);
+            int polyReady   = state.Books.Count(kv => kv.Key.StartsWith("P:") && kv.Value.HasReceivedDelta);
+            int kalshiTotal = state.Books.Count(kv => kv.Key.StartsWith("K:"));
+            int polyTotal   = state.Books.Count(kv => kv.Key.StartsWith("P:"));
 
-        if (showBlended)
-        {
-            var blendedSnapshot = telemetry.GetBlendedNearMissSnapshot().ToList();
-            if (blendedSnapshot.Count > 0)
+            DebugLog.Write($"Near-miss reporter: kalshi={kalshiReady}/{kalshiTotal} poly={polyReady}/{polyTotal} pairs={telemetry.TotalPairs} openArbs={telemetry.OpenArbs}");
+
+            Console.WriteLine($"\n[TELEMETRY] --- TOP {Math.Min(10, pairs.Count)} CLOSEST TO CROSS-PLATFORM ARB ---");
+            Console.WriteLine($"  Kalshi books: {kalshiReady}/{kalshiTotal} | Poly books: {polyReady}/{polyTotal} | Pairs: {telemetry.TotalPairs} | Open arbs: {telemetry.OpenArbs}");
+
+            var snapshot = telemetry.GetNearMissSnapshot().Take(10).ToList();
+            foreach (var (cost, label, pairId, arbType, depth, isLiveArb) in snapshot)
             {
-                Console.WriteLine($"  --- BLENDED (pick cheapest YES per leg across both platforms) ---");
-                foreach (var (cost, evId, choices, depth, isLive) in blendedSnapshot)
-                {
-                    decimal diff = cost - 1.00m;
-                    string  tag  = cost < 1.00m ? "ARB!" : $"+${diff:0.0000} away";
-                    string  live = isLive ? " *** LIVE ***" : "";
-                    Console.WriteLine($"  ${cost:0.0000} ({tag}) BLENDED({choices}) | depth={depth:0.0} | {evId}{live}");
-                }
+                decimal diff = cost - 1.00m;
+                string  tag  = cost < 1.00m ? "ARB!" : $"+${diff:0.0000} away";
+                string  live = isLiveArb ? " *** LIVE ***" : "";
+                Console.WriteLine($"  ${cost:0.0000} ({tag}) {arbType} | depth={depth:0.0} | {label}{live}");
             }
+
+            if (snapshot.Count == 0)
+                Console.WriteLine("  (no books priced yet — waiting for WS data)");
         }
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"[NEAR-MISS REPORTER ERROR] {ex.Message}");
+        DebugLog.Write($"Near-miss reporter crashed: {ex}");
     }
 });
 
@@ -277,7 +273,12 @@ _ = Task.Run(async () =>
     {
         await Task.Delay(900_000, cts.Token).ContinueWith(_ => { });
         if (cts.Token.IsCancellationRequested) break;
-        if (!File.Exists(manualPath)) continue;
+        if (!File.Exists(manualPath))
+        {
+            DebugLog.Write($"Hot-reload: {manualPath} not found, skipping");
+            continue;
+        }
+        DebugLog.Write($"Hot-reload: reading {manualPath}");
         try
         {
             using var doc = JsonDocument.Parse(File.ReadAllText(manualPath));
@@ -307,7 +308,12 @@ _ = Task.Run(async () =>
                 if (knownPolyTokens.Add(noToken))    newPTokens.Add(noToken);
             }
 
-            if (newPairs.Count == 0) continue;
+            if (newPairs.Count == 0)
+            {
+                DebugLog.Write("Hot-reload: no new pairs found in file");
+                continue;
+            }
+            DebugLog.Write($"Hot-reload: found {newPairs.Count} new pair(s) — K={newKTickers.Count} new tickers, P={newPTokens.Count} new tokens");
 
             foreach (var t in newKTickers) state.InitKalshiMarket(t);
             foreach (var t in newPTokens)  state.InitPolyToken(t);
@@ -333,21 +339,44 @@ _ = Task.Run(async () =>
 var kalshiWsTask = Task.Run(async () =>
 {
     try { await kalshiFeed.RunAsync(cts.Token); }
-    catch (Exception ex) { Console.WriteLine($"[FATAL] Kalshi feed crashed: {ex.Message}"); }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"[FATAL] Kalshi feed crashed: {ex.Message}");
+        DebugLog.Write($"Kalshi feed exception: {ex}");
+    }
     finally { if (!cts.IsCancellationRequested) cts.Cancel(); }
 });
 
-var polyWsTask   = Task.Run(async () => 
+var polyWsTask = Task.Run(async () =>
 {
     try { await polyFeed.RunAsync(cts.Token); }
-    catch (Exception ex) { Console.WriteLine($"[FATAL] Poly feed crashed: {ex.Message}"); }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"[FATAL] Poly feed crashed: {ex.Message}");
+        DebugLog.Write($"Poly feed exception: {ex}");
+    }
     finally { if (!cts.IsCancellationRequested) cts.Cancel(); }
 });
 
 await Task.WhenAll(kalshiWsTask, polyWsTask);
-await telemetry.ShutdownAsync(); // flush and close CSV before exit
-if (executor != null) await executor.ShutdownAsync();
-Console.WriteLine("\n[SHUTDOWN] Cross-platform arb telemetry stopped.");
+
+DebugLog.Write("WS feeds stopped — beginning shutdown sequence");
+try { await telemetry.ShutdownAsync(); }
+catch (Exception ex)
+{
+    Console.WriteLine($"[SHUTDOWN ERROR] Telemetry flush failed: {ex.Message}");
+    DebugLog.Write($"telemetry.ShutdownAsync exception: {ex}");
+}
+if (executor != null)
+{
+    try { await executor.ShutdownAsync(); }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"[SHUTDOWN ERROR] Executor flush failed: {ex.Message}");
+        DebugLog.Write($"executor.ShutdownAsync exception: {ex}");
+    }
+}
+Console.WriteLine("\n[SHUTDOWN] Cross-platform arb bot stopped.");
 
 static PredictionBacktester.Engine.LiveExecution.PolymarketApiConfig? LoadPolymarketConfig()
 {

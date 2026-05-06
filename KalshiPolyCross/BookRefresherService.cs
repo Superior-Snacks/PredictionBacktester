@@ -136,6 +136,7 @@ public class BookRefresherService
         catch (Exception ex)
         {
             Console.WriteLine($"[BOOK REFRESH WARN] Poly {tokenId[..Math.Min(8, tokenId.Length)]}: {ex.Message}");
+            DebugLog.Write($"RefreshPolyBookAsync {tokenId[..Math.Min(8, tokenId.Length)]}: {ex.GetType().Name}: {ex}");
         }
         finally { _polySem.Release(); }
     }
@@ -162,19 +163,17 @@ public class BookRefresherService
             if (restYesAsk < 0m)
             {
                 // REST confirmed empty book — mark both YES and NO dead so we stop polling.
-                // Dead flag resets automatically via ClearBook() on WS reconnect.
+                DebugLog.Write($"RefreshKalshiBookAsync {ticker}: REST returned no bid — marking dead");
                 yesBook.MarkDead();
                 if (_books.TryGetValue($"K:{ticker}_NO", out var noBookDead))
                     noBookDead.MarkDead();
                 return;
             }
 
+            DebugLog.Write($"RefreshKalshiBookAsync {ticker}: wsAsk={wsYesAsk:0.0000} restAsk={restYesAsk:0.0000} diff={Math.Abs(restYesAsk - wsYesAsk):0.0000}");
             if (Math.Abs(restYesAsk - wsYesAsk) <= KalshiPriceTolerance)
             {
                 yesBook.MarkRestRefreshed();
-
-                // Also refresh the implied NO book if it's tracked
-                // (NO book key = "K:{ticker}_NO" — look it up from the same _books dict)
                 if (_books.TryGetValue($"K:{ticker}_NO", out var noBook))
                     noBook.MarkRestRefreshed();
             }
@@ -188,6 +187,7 @@ public class BookRefresherService
         catch (Exception ex)
         {
             Console.WriteLine($"[BOOK REFRESH WARN] Kalshi {ticker}: {ex.Message}");
+            DebugLog.Write($"RefreshKalshiBookAsync {ticker}: {ex.GetType().Name}: {ex}");
         }
     }
 

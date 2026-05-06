@@ -27,26 +27,45 @@ public class CrossArbRestVerifier
 
     /// <summary>Subscribe to telemetry.OnArbOpened and call this method.</summary>
     public void OnArbOpened(string pairId, decimal netCost, string arbType, decimal depth)
-        => _ = Task.Run(() => VerifyAsync(pairId, arbType));
+    {
+        DebugLog.Write($"CrossArbRestVerifier.OnArbOpened: {pairId} {arbType} — queuing REST check");
+        _ = Task.Run(async () =>
+        {
+            try { await VerifyAsync(pairId, arbType); }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[REST CHECK ERROR] {pairId}: {ex.Message}");
+                DebugLog.Write($"VerifyAsync unhandled exception for {pairId}: {ex}");
+            }
+        });
+    }
 
     private async Task VerifyAsync(string pairId, string arbType)
     {
+        DebugLog.Write($"VerifyAsync {pairId}: waiting for semaphore (current count unknown)");
         await _sem.WaitAsync();
         var sw = Stopwatch.StartNew();
         try
         {
             var pair = _telemetry.GetPair(pairId);
-            if (pair == null) return;
+            if (pair == null)
+            {
+                DebugLog.Write($"VerifyAsync {pairId}: pair not found in telemetry, skipping");
+                return;
+            }
 
-            // Kalshi leg: YES ask = 1 - best NO bid; NO ask = 1 - best YES bid
+            DebugLog.Write($"VerifyAsync {pair.Label}: fetching Kalshi ask for {pair.KalshiTicker}");
             decimal kAsk = await GetKalshiAskAsync(pair.KalshiTicker, arbType);
+            DebugLog.Write($"VerifyAsync {pair.Label}: Kalshi ask={kAsk:0.0000}");
 
-            // Polymarket leg
             string polyToken = arbType == "K_YES_P_NO" ? pair.PolyNoTokenId : pair.PolyYesTokenId;
+            DebugLog.Write($"VerifyAsync {pair.Label}: fetching Poly ask for token {polyToken[..Math.Min(8, polyToken.Length)]}...");
             decimal pAsk = await GetPolyAskAsync(polyToken);
+            DebugLog.Write($"VerifyAsync {pair.Label}: Poly ask={pAsk:0.0000}");
 
             sw.Stop();
             bool confirmed = kAsk > 0m && pAsk > 0m && (kAsk + pAsk) < 1.00m;
+            DebugLog.Write($"VerifyAsync {pair.Label}: sum={kAsk + pAsk:0.0000} confirmed={confirmed} in {sw.ElapsedMilliseconds}ms");
 
             _telemetry.UpdateRestVerification(pairId, confirmed, kAsk, pAsk, sw.ElapsedMilliseconds);
 
@@ -61,10 +80,12 @@ public class CrossArbRestVerifier
         catch (Exception ex)
         {
             Console.WriteLine($"[REST CHECK ERROR] {pairId}: {ex.Message}");
+            DebugLog.Write($"VerifyAsync caught exception for {pairId}: {ex}");
         }
         finally
         {
             _sem.Release();
+            DebugLog.Write($"VerifyAsync {pairId}: semaphore released");
         }
     }
 
@@ -88,16 +109,25 @@ public class CrossArbRestVerifier
             if (!mkt.TryGetProperty(key, out var el)) continue;
             string? s = el.ValueKind == JsonValueKind.String ? el.GetString() : el.GetRawText();
             if (decimal.TryParse(s, NumberStyles.Any, CultureInfo.InvariantCulture, out decimal p) && p > 0m)
+            {
+                DebugLog.Write($"GetKalshiAskAsync {ticker}: found {key}={p:0.0000}");
                 return p;
+            }
         }
 
         // Fallback: cents integer (e.g. yes_ask = 65 → 0.65)
         if (mkt.TryGetProperty(centsKey, out var centsEl) && centsEl.ValueKind == JsonValueKind.Number)
         {
             decimal cents = centsEl.GetDecimal();
-            if (cents > 0m) return Math.Round(cents / 100m, 4);
+            if (cents > 0m)
+            {
+                decimal result = Math.Round(cents / 100m, 4);
+                DebugLog.Write($"GetKalshiAskAsync {ticker}: fallback cents {centsKey}={cents} → {result:0.0000}");
+                return result;
+            }
         }
 
+        DebugLog.Write($"GetKalshiAskAsync {ticker}: no valid ask field found");
         return -1m;
     }
 
@@ -106,16 +136,29 @@ public class CrossArbRestVerifier
     {
         string json = await _http.GetStringAsync(PolyBookUrl + tokenId);
         using var doc = JsonDocument.Parse(json);
-        if (!doc.RootElement.TryGetProperty("asks", out var asks)) return -1m;
+        if (!doc.RootElement.TryGetProperty("asks", out var asks))
+        {
+            DebugLog.Write($"GetPolyAskAsync {tokenId[..Math.Min(8, tokenId.Length)]}: no 'asks' field in response");
+            return -1m;
+        }
 
         decimal bestAsk = decimal.MaxValue;
+        int count = 0;
         foreach (var ask in asks.EnumerateArray())
         {
             if (ask.TryGetProperty("price", out var priceEl) &&
                 decimal.TryParse(priceEl.GetString(), NumberStyles.Any,
                     CultureInfo.InvariantCulture, out decimal price))
-                bestAsk = Math.Min(bestAsk, price);
+            { bestAsk = Math.Min(bestAsk, price); count++; }
         }
-        return bestAsk < decimal.MaxValue ? bestAsk : -1m;
+
+        if (bestAsk < decimal.MaxValue)
+        {
+            DebugLog.Write($"GetPolyAskAsync {tokenId[..Math.Min(8, tokenId.Length)]}: bestAsk={bestAsk:0.0000} from {count} levels");
+            return bestAsk;
+        }
+
+        DebugLog.Write($"GetPolyAskAsync {tokenId[..Math.Min(8, tokenId.Length)]}: no parseable ask levels");
+        return -1m;
     }
 }

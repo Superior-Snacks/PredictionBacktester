@@ -129,7 +129,8 @@ public class KalshiWebsocketFeed
             catch (OperationCanceledException) { break; }
             catch (Exception ex)
             {
-                Console.WriteLine($"[KALSHI WS ERROR] {ex.Message} — reconnecting in 5s...");
+                Console.WriteLine($"[KALSHI WS ERROR] {ex.GetType().Name}: {ex.Message} — reconnecting in 5s...");
+                DebugLog.Write($"KalshiWebsocketFeed exception: {ex}");
             }
 
             if (!ct.IsCancellationRequested)
@@ -153,11 +154,19 @@ public class KalshiWebsocketFeed
             string msgType = typeEl.GetString()  ?? "";
             string ticker  = tickerEl.GetString() ?? "";
 
-            if (!_state.Books.TryGetValue($"K:{ticker}", out var yesBook)) return;
+            if (!_state.Books.TryGetValue($"K:{ticker}", out var yesBook))
+            {
+                DebugLog.Write($"KalshiWS ProcessMessage: no book for K:{ticker}");
+                return;
+            }
             _state.Books.TryGetValue($"K:{ticker}_NO", out var noBook);
 
             if (!_state.YesSizes.TryGetValue(ticker, out var ySizeMap) ||
-                !_state.NoSizes .TryGetValue(ticker, out var nSizeMap)) return;
+                !_state.NoSizes .TryGetValue(ticker, out var nSizeMap))
+            {
+                DebugLog.Write($"KalshiWS ProcessMessage: no size maps for ticker={ticker}");
+                return;
+            }
 
             if (msgType == "orderbook_snapshot")
             {
@@ -170,7 +179,7 @@ public class KalshiWebsocketFeed
                 _telemetry.OnBookUpdate($"K:{ticker}");
             }
         }
-        catch (JsonException) { }
+        catch (JsonException ex) { DebugLog.Write($"KalshiWS ProcessMessage: JSON parse error — {ex.Message}"); }
     }
 
     private void ApplyDelta(

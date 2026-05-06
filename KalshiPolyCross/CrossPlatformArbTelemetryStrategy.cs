@@ -8,60 +8,38 @@ namespace KalshiPolyCross;
 // ── Data types ────────────────────────────────────────────────────────────────
 
 public record CrossPair(
-    string PairId,          // unique key
-    string Label,           // human-readable
+    string PairId,
+    string Label,
     string KalshiTicker,    // book keys: "K:{ticker}" and "K:{ticker}_NO"
     string PolyYesTokenId,  // book key:  "P:{yesToken}"
     string PolyNoTokenId,   // book key:  "P:{noToken}"
-    string EventId = "",     // optional: groups mutually-exclusive legs for blended categorical arb
-    DateOnly? SettlementDate = null  // optional: Kalshi market expiry for APR calculations
-);
-
-record BlendedWindow(
-    string   EventId,
-    DateTime StartTime,
-    decimal  EntryNetCost,
-    string   EntryLegChoices,   // "K,P,K" — which platform was cheapest per leg at open
-    string   EntryLegPrices,    // "0.3200,0.2500,0.4100"
-    decimal  BestNetCost,
-    string   BestLegChoices,
-    string   BestLegPrices,
-    decimal  MinDepth,
-    int      KalshiDropsAtOpen,
-    int      PolyDropsAtOpen,
-    int      UpdateCount
+    string EventId = "",    // retained for JSON compat; not used internally
+    DateOnly? SettlementDate = null
 );
 
 record ActiveWindow(
     string   PairId,
     string   ArbType,             // "K_YES_P_NO" or "K_NO_P_YES"
     DateTime StartTime,
-    // ── Entry snapshot (prices at window open) ────────────────────────────────
     decimal  EntryGrossCost,
     decimal  EntryNetCost,
-    string   EntryLegPrices,      // "kPrice|pPrice" at open
-    // ── Best peak (updated each tick if cost improves) ────────────────────────
+    string   EntryLegPrices,
     decimal  BestGrossCost,
     decimal  BestNetCost,
-    string   BestLegPrices,       // "kPrice|pPrice" at best point
-    decimal  KalshiDepth,         // K-side ask depth (contracts) at best
-    decimal  PolyDepth,           // P-side ask depth (shares)    at best
-    decimal  KalshiFees,          // Kalshi leg fee at best
-    decimal  PolyFees,            // Polymarket leg fee at best
-    // ── Book health at window open ────────────────────────────────────────────
-    long     KalshiBookAgeMs,     // ms since last K delta at open
-    long     PolyBookAgeMs,       // ms since last P delta at open
-    decimal  KalshiMidSum,        // (kYesMid + kNoMid) — should ≈ 1.00 for healthy K book
-    decimal  PolyMidSum,          // (pYesMid + pNoMid) — should ≈ 1.00 for healthy P book
-    // ── WS reliability at window open ─────────────────────────────────────────
+    string   BestLegPrices,
+    decimal  KalshiDepth,
+    decimal  PolyDepth,
+    decimal  KalshiFees,
+    decimal  PolyFees,
+    long     KalshiBookAgeMs,
+    long     PolyBookAgeMs,
+    decimal  KalshiMidSum,
+    decimal  PolyMidSum,
     int      KalshiDropsAtOpen,
     int      PolyDropsAtOpen,
-    // ── Settlement / APR ──────────────────────────────────────────────────────
-    int      DaysToSettlement,    // -1 if unknown
-    decimal  AprHoldToSettle,     // annualised return if held to settlement; -1 if unknown
-    // ── Live tracking ─────────────────────────────────────────────────────────
+    int      DaysToSettlement,
+    decimal  AprHoldToSettle,
     int      UpdateCount,
-    // ── REST verification (filled async after open via UpdateRestVerification) ─
     bool     RestChecked   = false,
     bool     RestConfirmed = false,
     decimal  RestKalshiAsk = -1m,
@@ -69,15 +47,13 @@ record ActiveWindow(
     long     RestDelayMs   = -1
 );
 
-// Represents a hypothetical position entered at a window's best price, tracked
-// after the arb window closes to monitor early-exit opportunities.
 record HypotheticalPosition(
     string    PairId,
     string    Label,
     string    ArbType,
     DateTime  EntryTime,
     DateOnly? SettlementDate,
-    decimal   EntryCostPerShare,  // BestNetCost (includes entry fees)
+    decimal   EntryCostPerShare,
     decimal   Shares,
     decimal   CapitalRequired,
     int       DaysToSettlement,
@@ -85,7 +61,7 @@ record HypotheticalPosition(
     bool      ExitSignalLogged = false
 );
 
-// ── Strategy ─────────────────────────────────────────────────────────────────
+// ── Strategy ──────────────────────────────────────────────────────────────────
 
 public class CrossPlatformArbTelemetryStrategy
 {
@@ -94,34 +70,17 @@ public class CrossPlatformArbTelemetryStrategy
     private readonly decimal _arbThreshold;
     private readonly decimal _depthFloor;
 
-    // bookKey → pair indices that reference it (fast lookup on every delta)
+    // bookKey → pair indices (fast lookup on every delta)
     private readonly Dictionary<string, List<int>> _bookKeyToPairs;
     private readonly ReaderWriterLockSlim _indexLock = new(LockRecursionPolicy.NoRecursion);
 
     // pairId → open window (null = no arb active)
     private readonly Dictionary<string, ActiveWindow?> _activeWindows;
-
-    // pairId → hypothetical position being tracked for exit signals (null = none)
     private readonly ConcurrentDictionary<string, HypotheticalPosition?> _hypotheticalPositions = new();
-
-    // Near-miss: pairId → (netCost, arbType, depth)
     private readonly ConcurrentDictionary<string, (decimal Cost, string Type, decimal Depth)> _nearMiss = new();
 
-    // ── Blended categorical arb ───────────────────────────────────────────────
-    private readonly Dictionary<string, List<CrossPair>> _eventGroups;
-    private readonly Dictionary<string, List<string>>    _bookKeyToEvents;
-    private readonly Dictionary<string, BlendedWindow?>  _blendedWindows;
-    private readonly ConcurrentDictionary<string, (decimal Cost, string LegChoices, decimal Depth)> _blendedNearMiss = new();
-
-    private readonly Channel<string> _blendedCsvChannel =
-        Channel.CreateUnbounded<string>(new UnboundedChannelOptions { SingleReader = true });
-    private readonly string _blendedCsvPath;
-    private bool _blendedHeaderWritten;
-
-    // ── Fee model ──────────────────────────────────────────────────────────────
+    // ── Fee model ─────────────────────────────────────────────────────────────
     private const decimal KalshiFeeRate   = 0.07m;
-    // Post-March-30-2026 fee structure. Politics = 0.04 (most cross-arb pairs);
-    // Sports = 0.03. Exponent = 1 for both. Fee formula: p * feeRate * (p*(1-p))^exponent
     private const decimal PolyFeeRate     = 0.04m;
     private const double  PolyFeeExponent = 1.0;
 
@@ -129,21 +88,16 @@ public class CrossPlatformArbTelemetryStrategy
     private static decimal PolyFee(decimal p)
         => p * PolyFeeRate * (decimal)Math.Pow((double)(p * (1m - p)), PolyFeeExponent);
 
-    // Exit decision: fire when BOTH conditions hold:
-    //   1. APR remaining from holding < hurdle (remaining profit not worth the capital tie-up)
-    //   2. Profit captured so far >= min ratio of theoretical hold-to-settle profit
-    //      (prevents exiting too early just because settlement is imminent)
-    private const decimal HurdleRateApr        = 0.20m; // 20% annualised
-    private const decimal MinProfitCaptureRatio = 0.70m; // must have captured ≥70% of max profit
+    private const decimal HurdleRateApr        = 0.20m;
+    private const decimal MinProfitCaptureRatio = 0.70m;
 
-    // ── WS drop counters ──────────────────────────────────────────────────────
+    // ── WS drop counters ─────────────────────────────────────────────────────
     private int _kalshiWsDrops;
     private int _polyWsDrops;
 
-    // ── Locks ──────────────────────────────────────────────────────────────────
     private readonly object _windowLock = new();
 
-    // ── CSV channels ──────────────────────────────────────────────────────────
+    // ── CSV channels ─────────────────────────────────────────────────────────
     private readonly Channel<string> _csvChannel =
         Channel.CreateUnbounded<string>(new UnboundedChannelOptions { SingleReader = true });
     private readonly string _csvPath;
@@ -154,33 +108,27 @@ public class CrossPlatformArbTelemetryStrategy
     private readonly string _exitCsvPath;
     private bool _exitHeaderWritten;
 
-    // ── Public stats ───────────────────────────────────────────────────────────
+    // ── Public stats ──────────────────────────────────────────────────────────
     public int OpenArbs   => _activeWindows.Values.Count(w => w != null);
     public int TotalPairs => _pairs.Count;
 
     public event Action<string, decimal, string, decimal>? OnArbOpened;
 
-    /// <summary>Returns the CrossPair for a given pairId (thread-safe volatile read).</summary>
     public CrossPair? GetPair(string pairId) => _pairs.FirstOrDefault(p => p.PairId == pairId);
-
-    private readonly bool _blendedEnabled;
 
     public CrossPlatformArbTelemetryStrategy(
         IReadOnlyList<CrossPair> pairs,
         ConcurrentDictionary<string, LocalOrderBook> books,
-        decimal arbThreshold   = 0.995m,
-        decimal depthFloor     = 1m,
-        bool    blendedEnabled = true)
+        decimal arbThreshold = 0.995m,
+        decimal depthFloor   = 1m)
     {
-        _pairs          = pairs;
-        _books          = books;
-        _arbThreshold   = arbThreshold;
-        _depthFloor     = depthFloor;
-        _blendedEnabled = blendedEnabled;
-        string ts     = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
-        _csvPath         = $"CrossArbTelemetry_{ts}.csv";
-        _blendedCsvPath  = $"CrossArbBlended_{ts}.csv";
-        _exitCsvPath     = $"CrossArbExitMonitor_{ts}.csv";
+        _pairs        = pairs;
+        _books        = books;
+        _arbThreshold = arbThreshold;
+        _depthFloor   = depthFloor;
+        string ts    = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
+        _csvPath     = $"CrossArbTelemetry_{ts}.csv";
+        _exitCsvPath = $"CrossArbExitMonitor_{ts}.csv";
 
         _bookKeyToPairs = new Dictionary<string, List<int>>(StringComparer.Ordinal);
         _activeWindows  = new Dictionary<string, ActiveWindow?>(StringComparer.Ordinal);
@@ -198,53 +146,28 @@ public class CrossPlatformArbTelemetryStrategy
             _activeWindows[p.PairId] = null;
         }
 
-        _eventGroups    = new Dictionary<string, List<CrossPair>>(StringComparer.Ordinal);
-        _bookKeyToEvents = new Dictionary<string, List<string>>(StringComparer.Ordinal);
-        _blendedWindows  = new Dictionary<string, BlendedWindow?>(StringComparer.Ordinal);
-
-        foreach (var p in pairs.Where(p => !string.IsNullOrEmpty(p.EventId)))
-        {
-            if (!_eventGroups.TryGetValue(p.EventId, out var grp))
-                _eventGroups[p.EventId] = grp = new List<CrossPair>();
-            grp.Add(p);
-        }
-        foreach (var (evId, grp) in _eventGroups)
-        {
-            _blendedWindows[evId] = null;
-            foreach (var p in grp)
-                foreach (var key in new[] { $"K:{p.KalshiTicker}", $"P:{p.PolyYesTokenId}" })
-                {
-                    if (!_bookKeyToEvents.TryGetValue(key, out var evList))
-                        _bookKeyToEvents[key] = evList = new List<string>();
-                    if (!evList.Contains(evId)) evList.Add(evId);
-                }
-        }
-        if (_blendedEnabled && _eventGroups.Count > 0)
-            Console.WriteLine($"[BLENDED] {_eventGroups.Count} event group(s) with " +
-                              $"{_eventGroups.Values.Sum(g => g.Count)} total legs registered for blended arb");
-
-        _csvWriterTask        = Task.Run(RunCsvWriterAsync);
-        _blendedCsvWriterTask = Task.Run(RunBlendedCsvWriterAsync);
-        _exitCsvWriterTask    = Task.Run(RunExitCsvWriterAsync);
+        _csvWriterTask     = Task.Run(RunCsvWriterAsync);
+        _exitCsvWriterTask = Task.Run(RunExitCsvWriterAsync);
+        DebugLog.Write($"CrossPlatformArbTelemetryStrategy: initialized with {pairs.Count} pairs, threshold={arbThreshold}");
     }
 
-    // ── Public interface ───────────────────────────────────────────────────────
+    // ── Public interface ──────────────────────────────────────────────────────
 
     public void OnBookUpdate(string bookKey)
     {
-        List<int>?    indices  = null;
-        List<string>? eventIds = null;
+        List<int>? indices = null;
         _indexLock.EnterReadLock();
-        try
-        {
-            _bookKeyToPairs.TryGetValue(bookKey, out indices);
-            _bookKeyToEvents.TryGetValue(bookKey, out eventIds);
-        }
+        try { _bookKeyToPairs.TryGetValue(bookKey, out indices); }
         finally { _indexLock.ExitReadLock(); }
 
+        if (indices == null)
+        {
+            DebugLog.Write($"OnBookUpdate: no pairs registered for bookKey={bookKey}");
+            return;
+        }
+
         var pairsSnap = _pairs;
-        if (indices  != null) foreach (var idx   in indices)  EvaluatePair(pairsSnap[idx]);
-        if (_blendedEnabled && eventIds != null) foreach (var evId in eventIds) EvaluateBlendedGroup(evId, _eventGroups[evId]);
+        foreach (var idx in indices) EvaluatePair(pairsSnap[idx]);
     }
 
     public void OnKalshiReconnect() => HandlePlatformReconnect(ref _kalshiWsDrops, "KALSHI");
@@ -260,21 +183,13 @@ public class CrossPlatformArbTelemetryStrategy
             {
                 if (_activeWindows[pairId] is { } w)
                 {
+                    DebugLog.Write($"HandlePlatformReconnect: closing {pairId} ({w.ArbType}) on {platform} reconnect");
                     CloseWindow(pairId, w, DateTime.UtcNow, "RECONNECT");
                     _activeWindows[pairId] = null;
                 }
             }
-            foreach (var evId in _blendedWindows.Keys.ToList())
-            {
-                if (_blendedWindows[evId] is { } bw && _eventGroups.TryGetValue(evId, out var grp))
-                {
-                    CloseBlendedWindow(evId, bw, grp, DateTime.UtcNow, "RECONNECT");
-                    _blendedWindows[evId] = null;
-                }
-            }
         }
         _nearMiss.Clear();
-        _blendedNearMiss.Clear();
     }
 
     public void UpdateRestVerification(string pairId, bool confirmed,
@@ -282,7 +197,11 @@ public class CrossPlatformArbTelemetryStrategy
     {
         lock (_windowLock)
         {
-            if (!_activeWindows.TryGetValue(pairId, out var w) || w == null) return;
+            if (!_activeWindows.TryGetValue(pairId, out var w) || w == null)
+            {
+                DebugLog.Write($"UpdateRestVerification: window for {pairId} already closed, ignoring");
+                return;
+            }
             _activeWindows[pairId] = w with
             {
                 RestChecked   = true,
@@ -291,7 +210,11 @@ public class CrossPlatformArbTelemetryStrategy
                 RestPolyAsk   = polyAsk,
                 RestDelayMs   = delayMs
             };
-            if (!confirmed) return;
+            if (!confirmed)
+            {
+                DebugLog.Write($"UpdateRestVerification: {pairId} not confirmed by REST — K={kalshiAsk:0.0000} P={polyAsk:0.0000} in {delayMs}ms");
+                return;
+            }
 
             var pair     = _pairs.FirstOrDefault(p => p.PairId == pairId);
             string label = pair?.Label ?? pairId;
@@ -326,19 +249,7 @@ public class CrossPlatformArbTelemetryStrategy
                         _bookKeyToPairs[key] = list = new List<int>();
                     list.Add(idx);
                 }
-
-                if (!string.IsNullOrEmpty(p.EventId))
-                {
-                    if (!_eventGroups.TryGetValue(p.EventId, out var grp))
-                        _eventGroups[p.EventId] = grp = new List<CrossPair>();
-                    grp.Add(p);
-                    foreach (var key in new[] { $"K:{p.KalshiTicker}", $"P:{p.PolyYesTokenId}" })
-                    {
-                        if (!_bookKeyToEvents.TryGetValue(key, out var evList))
-                            _bookKeyToEvents[key] = evList = new List<string>();
-                        if (!evList.Contains(p.EventId)) evList.Add(p.EventId);
-                    }
-                }
+                DebugLog.Write($"AddPairs: registered pair {p.PairId} ({p.Label})");
             }
         }
         finally { _indexLock.ExitWriteLock(); }
@@ -346,12 +257,8 @@ public class CrossPlatformArbTelemetryStrategy
         lock (_windowLock)
         {
             foreach (var p in newPairs)
-            {
                 if (!_activeWindows.ContainsKey(p.PairId))
                     _activeWindows[p.PairId] = null;
-                if (!string.IsNullOrEmpty(p.EventId) && !_blendedWindows.ContainsKey(p.EventId))
-                    _blendedWindows[p.EventId] = null;
-            }
         }
 
         Console.WriteLine($"[CROSS] +{newPairs.Count} pair(s) loaded. Total: {_pairs.Count}");
@@ -373,36 +280,44 @@ public class CrossPlatformArbTelemetryStrategy
             .OrderBy(x => x.Cost);
     }
 
-    public IEnumerable<(decimal Cost, string EventId, string LegChoices, decimal Depth, bool IsLive)>
-        GetBlendedNearMissSnapshot()
-    {
-        HashSet<string> liveIds;
-        lock (_windowLock)
-            liveIds = _blendedWindows.Where(kv => kv.Value != null).Select(kv => kv.Key).ToHashSet();
-
-        return _blendedNearMiss
-            .Select(kv => (kv.Value.Cost, kv.Key, kv.Value.LegChoices, kv.Value.Depth, liveIds.Contains(kv.Key)))
-            .OrderBy(x => x.Cost);
-    }
-
-    // ── Core evaluation ────────────────────────────────────────────────────────
+    // ── Core evaluation ───────────────────────────────────────────────────────
 
     private void EvaluatePair(CrossPair pair)
     {
-        if (!_books.TryGetValue($"K:{pair.KalshiTicker}",    out var kYes)) return;
-        if (!_books.TryGetValue($"K:{pair.KalshiTicker}_NO", out var kNo))  return;
-        if (!_books.TryGetValue($"P:{pair.PolyYesTokenId}",  out var pYes)) return;
-        if (!_books.TryGetValue($"P:{pair.PolyNoTokenId}",   out var pNo))  return;
+        if (!_books.TryGetValue($"K:{pair.KalshiTicker}",    out var kYes))
+        {
+            DebugLog.Write($"EvaluatePair {pair.Label}: missing book K:{pair.KalshiTicker}");
+            return;
+        }
+        if (!_books.TryGetValue($"K:{pair.KalshiTicker}_NO", out var kNo))
+        {
+            DebugLog.Write($"EvaluatePair {pair.Label}: missing book K:{pair.KalshiTicker}_NO");
+            return;
+        }
+        if (!_books.TryGetValue($"P:{pair.PolyYesTokenId}",  out var pYes))
+        {
+            DebugLog.Write($"EvaluatePair {pair.Label}: missing book P:{pair.PolyYesTokenId[..Math.Min(8, pair.PolyYesTokenId.Length)]}...");
+            return;
+        }
+        if (!_books.TryGetValue($"P:{pair.PolyNoTokenId}",   out var pNo))
+        {
+            DebugLog.Write($"EvaluatePair {pair.Label}: missing book P:{pair.PolyNoTokenId[..Math.Min(8, pair.PolyNoTokenId.Length)]}...");
+            return;
+        }
 
-        if (!kYes.HasReceivedDelta || !kNo.HasReceivedDelta || !pYes.HasReceivedDelta || !pNo.HasReceivedDelta) return;
+        if (!kYes.HasReceivedDelta || !kNo.HasReceivedDelta || !pYes.HasReceivedDelta || !pNo.HasReceivedDelta)
+        {
+            DebugLog.Write($"EvaluatePair {pair.Label}: waiting for first delta — kYes={kYes.HasReceivedDelta} kNo={kNo.HasReceivedDelta} pYes={pYes.HasReceivedDelta} pNo={pNo.HasReceivedDelta}");
+            return;
+        }
         if (kYes.IsStale() || kNo.IsStale() || pYes.IsStale() || pNo.IsStale())
         {
-            // Close any open window so duration isn't bloated by the stale period.
-            // A new window can only reopen once all 4 books pass the stale check above.
+            DebugLog.Write($"EvaluatePair {pair.Label}: stale book — kYes={kYes.IsStale()} kNo={kNo.IsStale()} pYes={pYes.IsStale()} pNo={pNo.IsStale()}");
             lock (_windowLock)
             {
                 if (_activeWindows.TryGetValue(pair.PairId, out var sw) && sw != null)
                 {
+                    DebugLog.Write($"EvaluatePair {pair.Label}: closing open window due to stale book");
                     CloseWindow(pair.PairId, sw, DateTime.UtcNow, "STALE_BOOK");
                     _activeWindows[pair.PairId] = null;
                 }
@@ -415,7 +330,11 @@ public class CrossPlatformArbTelemetryStrategy
         decimal pYesAsk = pYes.GetBestAskPrice();
         decimal pNoAsk  = pNo.GetBestAskPrice();
 
-        if (kYesAsk < 0.05m || kNoAsk < 0.05m || pYesAsk < 0.05m || pNoAsk < 0.05m) return;
+        if (kYesAsk < 0.05m || kNoAsk < 0.05m || pYesAsk < 0.05m || pNoAsk < 0.05m)
+        {
+            DebugLog.Write($"EvaluatePair {pair.Label}: price below min — kYes={kYesAsk:0.0000} kNo={kNoAsk:0.0000} pYes={pYesAsk:0.0000} pNo={pNoAsk:0.0000}");
+            return;
+        }
 
         decimal kYesBid = kYes.GetBestBidPrice();
         decimal kNoBid  = kNo.GetBestBidPrice();
@@ -429,8 +348,16 @@ public class CrossPlatformArbTelemetryStrategy
         decimal kMidSum = kYesMid + kNoMid;
         decimal pMidSum = pYesMid + pNoMid;
 
-        if (kMidSum < 0.70m || kMidSum > 1.30m) return;
-        if (pMidSum < 0.70m || pMidSum > 1.30m) return;
+        if (kMidSum < 0.70m || kMidSum > 1.30m)
+        {
+            DebugLog.Write($"EvaluatePair {pair.Label}: Kalshi mid-sum sanity fail — kMidSum={kMidSum:0.0000}");
+            return;
+        }
+        if (pMidSum < 0.70m || pMidSum > 1.30m)
+        {
+            DebugLog.Write($"EvaluatePair {pair.Label}: Poly mid-sum sanity fail — pMidSum={pMidSum:0.0000}");
+            return;
+        }
 
         // Type A: buy Kalshi YES + buy Poly NO
         decimal kYesFee    = KalshiFee(kYesAsk);
@@ -479,12 +406,12 @@ public class CrossPlatformArbTelemetryStrategy
         _nearMiss[pair.PairId] = (bestNet, bestType, bestDepth);
 
         bool isArb = bestNet < _arbThreshold && bestDepth >= _depthFloor;
+        DebugLog.Write($"EvaluatePair {pair.Label}: {bestType} net={bestNet:0.0000} depth={bestDepth:0.0} isArb={isArb}");
 
         bool invokeOnArbOpened = false;
         int currentKalshiDrops = Volatile.Read(ref _kalshiWsDrops);
         int currentPolyDrops   = Volatile.Read(ref _polyWsDrops);
 
-        // Settlement / APR at window open
         int     daysToSettle   = -1;
         decimal aprHoldSettle  = -1m;
         if (pair.SettlementDate.HasValue)
@@ -538,7 +465,7 @@ public class CrossPlatformArbTelemetryStrategy
                         UpdateCount:       1
                     );
                     _activeWindows[pair.PairId] = w;
-
+                    DebugLog.Write($"EvaluatePair {pair.Label}: ARB OPEN {bestType} net={bestNet:0.0000} depth={bestDepth:0.0} kAge={kAge}ms pAge={pAge}ms");
                     invokeOnArbOpened = true;
                 }
                 else
@@ -556,10 +483,13 @@ public class CrossPlatformArbTelemetryStrategy
                         PolyDepth     = betterDepth ? bestPDepth   : existing.PolyDepth,
                         UpdateCount   = existing.UpdateCount + 1
                     };
+                    if (betterCost)
+                        DebugLog.Write($"EvaluatePair {pair.Label}: ARB UPDATE better net={bestNet:0.0000} (was {existing.BestNetCost:0.0000})");
                 }
             }
             else if (existing != null)
             {
+                DebugLog.Write($"EvaluatePair {pair.Label}: ARB CLOSE — net={bestNet:0.0000} above threshold, was open {(DateTime.UtcNow - existing.StartTime).TotalMilliseconds:0}ms");
                 CloseWindow(pair.PairId, existing, DateTime.UtcNow, "PRICE");
                 _activeWindows[pair.PairId] = null;
             }
@@ -568,9 +498,6 @@ public class CrossPlatformArbTelemetryStrategy
         if (invokeOnArbOpened)
             OnArbOpened?.Invoke(pair.PairId, bestNet, bestType, bestDepth);
 
-        // Exit monitoring: evaluate ALL open hypothetical positions for this pair.
-        // Each entry is stored under a compound key (pairId + \x00 + entryTicks) so
-        // multiple re-entries on the same pair are tracked independently.
         var posPrefix = pair.PairId + "\x00";
         foreach (var kvp in _hypotheticalPositions)
         {
@@ -588,24 +515,21 @@ public class CrossPlatformArbTelemetryStrategy
         decimal bidSum = kBid + pBid;
         if (bidSum <= 0m) return;
 
-        decimal exitFees   = (KalshiFee(kBid) + PolyFee(pBid)) * pos.Shares;
-        double  daysElapsed  = Math.Max((DateTime.UtcNow - pos.EntryTime).TotalDays, 1.0 / 1440.0);
+        decimal exitFees      = (KalshiFee(kBid) + PolyFee(pBid)) * pos.Shares;
+        double  daysElapsed   = Math.Max((DateTime.UtcNow - pos.EntryTime).TotalDays, 1.0 / 1440.0);
         double  daysRemaining = Math.Max(pos.DaysToSettlement - daysElapsed, 0.001);
 
-        // profit_if_exit_now: gross proceeds minus all-in entry cost minus exit fees
-        // EntryCostPerShare already includes entry fees (BestNetCost = gross + entry fees)
-        decimal profitIfExit   = (bidSum - pos.EntryCostPerShare) * pos.Shares - exitFees;
-        decimal realizedApr    = profitIfExit / pos.CapitalRequired * (365m / (decimal)daysElapsed);
-        decimal aprRemaining   = (1.00m - bidSum) / bidSum * (365m / (decimal)daysRemaining);
+        decimal profitIfExit = (bidSum - pos.EntryCostPerShare) * pos.Shares - exitFees;
+        decimal realizedApr  = profitIfExit / pos.CapitalRequired * (365m / (decimal)daysElapsed);
+        decimal aprRemaining = (1.00m - bidSum) / bidSum * (365m / (decimal)daysRemaining);
+        decimal holdProfit   = (1.00m - pos.EntryCostPerShare) * pos.Shares;
+        decimal captureRatio = holdProfit > 0m ? profitIfExit / holdProfit : 0m;
 
-        // Profit capture: how much of the theoretical hold-to-settle profit has been realised?
-        // holdProfit excludes exit fees (settlement is free); profitIfExit includes exit fees.
-        decimal holdProfit     = (1.00m - pos.EntryCostPerShare) * pos.Shares;
-        decimal captureRatio   = holdProfit > 0m ? profitIfExit / holdProfit : 0m;
+        bool exitDecision = profitIfExit > 0m
+                         && aprRemaining  < HurdleRateApr
+                         && captureRatio  >= MinProfitCaptureRatio;
 
-        bool    exitDecision   = profitIfExit > 0m
-                              && aprRemaining  < HurdleRateApr
-                              && captureRatio  >= MinProfitCaptureRatio;
+        DebugLog.Write($"EvaluateExit {pair.Label}: bidSum={bidSum:0.0000} profit={profitIfExit:+0.0000;-0.0000} aprRemaining={aprRemaining:P1} capture={captureRatio:P0} exit={exitDecision}");
 
         if (exitDecision && !pos.ExitSignalLogged)
         {
@@ -619,151 +543,14 @@ public class CrossPlatformArbTelemetryStrategy
                               daysElapsed, daysRemaining, "HURDLE_BREACHED");
         }
 
-        // Remove position once settlement is imminent.
-        // At settlement there are no exit fees — one leg resolves to $1, the other $0.
         if (pos.SettlementDate.HasValue && daysRemaining <= 0.5)
         {
             _hypotheticalPositions[posKey] = null;
-            decimal settleProfit    = (1.00m - pos.EntryCostPerShare) * pos.Shares;
-            decimal settleRealApr   = settleProfit / pos.CapitalRequired * (365m / (decimal)daysElapsed);
+            decimal settleProfit  = (1.00m - pos.EntryCostPerShare) * pos.Shares;
+            decimal settleRealApr = settleProfit / pos.CapitalRequired * (365m / (decimal)daysElapsed);
             EnqueueExitCsvRow(pos, 1.00m, 0m, settleProfit, settleRealApr, 0m,
                               daysElapsed, daysRemaining, "SETTLEMENT");
         }
-    }
-
-    private void EvaluateBlendedGroup(string eventId, List<CrossPair> group)
-    {
-        decimal totalNet = 0m;
-        decimal minDepth = decimal.MaxValue;
-        var legChoices = new List<string>(group.Count);
-        var legPrices  = new List<string>(group.Count);
-
-        foreach (var pair in group)
-        {
-            if (!_books.TryGetValue($"K:{pair.KalshiTicker}",   out var kYes)) return;
-            if (!_books.TryGetValue($"P:{pair.PolyYesTokenId}", out var pYes)) return;
-            if (!kYes.HasReceivedDelta || !pYes.HasReceivedDelta) return;
-            if (kYes.IsStale() || pYes.IsStale()) return;
-
-            decimal kYesAsk = kYes.GetBestAskPrice();
-            decimal pYesAsk = pYes.GetBestAskPrice();
-            if (kYesAsk < 0.02m || pYesAsk < 0.02m) return;
-
-            decimal kNet = kYesAsk + KalshiFee(kYesAsk);
-            decimal pNet = pYesAsk + PolyFee(pYesAsk);
-
-            if (kNet <= pNet)
-            {
-                totalNet += kNet;
-                minDepth  = Math.Min(minDepth, kYes.GetTopAskVolume(3));
-                legChoices.Add("K");
-                legPrices.Add(kYesAsk.ToString("0.0000"));
-            }
-            else
-            {
-                totalNet += pNet;
-                minDepth  = Math.Min(minDepth, pYes.GetTopAskVolume(3));
-                legChoices.Add("P");
-                legPrices.Add(pYesAsk.ToString("0.0000"));
-            }
-        }
-
-        if (minDepth == decimal.MaxValue) minDepth = 0m;
-        string choices = string.Join(",", legChoices);
-        string prices  = string.Join(",", legPrices);
-        _blendedNearMiss[eventId] = (totalNet, choices, minDepth);
-
-        bool isArb = totalNet < _arbThreshold && minDepth >= _depthFloor;
-        int currentKDrops = Volatile.Read(ref _kalshiWsDrops);
-        int currentPDrops = Volatile.Read(ref _polyWsDrops);
-
-        lock (_windowLock)
-        {
-            var existing = _blendedWindows.TryGetValue(eventId, out var bw) ? bw : null;
-
-            if (isArb)
-            {
-                if (existing == null)
-                {
-                    var w = new BlendedWindow(
-                        EventId:           eventId,
-                        StartTime:         DateTime.UtcNow,
-                        EntryNetCost:      totalNet,
-                        EntryLegChoices:   choices,
-                        EntryLegPrices:    prices,
-                        BestNetCost:       totalNet,
-                        BestLegChoices:    choices,
-                        BestLegPrices:     prices,
-                        MinDepth:          minDepth,
-                        KalshiDropsAtOpen: currentKDrops,
-                        PolyDropsAtOpen:   currentPDrops,
-                        UpdateCount:       1
-                    );
-                    _blendedWindows[eventId] = w;
-                    if (_blendedEnabled)
-                        Console.WriteLine($"[BLENDED ARB OPEN ] {eventId} ({group.Count} legs) | " +
-                                          $"net=${totalNet:0.0000} choices={choices} prices={prices} | depth={minDepth:0.0}");
-                }
-                else
-                {
-                    bool betterCost  = totalNet < existing.BestNetCost;
-                    bool betterDepth = minDepth > existing.MinDepth;
-                    _blendedWindows[eventId] = existing with
-                    {
-                        BestNetCost    = betterCost  ? totalNet : existing.BestNetCost,
-                        BestLegChoices = betterCost  ? choices  : existing.BestLegChoices,
-                        BestLegPrices  = betterCost  ? prices   : existing.BestLegPrices,
-                        MinDepth       = betterDepth ? minDepth : existing.MinDepth,
-                        UpdateCount    = existing.UpdateCount + 1
-                    };
-                }
-            }
-            else if (existing != null)
-            {
-                CloseBlendedWindow(eventId, existing, group, DateTime.UtcNow, "PRICE");
-                _blendedWindows[eventId] = null;
-            }
-        }
-    }
-
-    // NOTE: must be called while holding _windowLock
-    private void CloseBlendedWindow(string eventId, BlendedWindow w, List<CrossPair> group, DateTime endTime, string closedBy)
-    {
-        long durationMs = (long)(endTime - w.StartTime).TotalMilliseconds;
-        if (durationMs < 5) return;
-
-        decimal profit   = 1m - w.BestNetCost;
-        bool dropDuring  = (Volatile.Read(ref _kalshiWsDrops) > w.KalshiDropsAtOpen) || (Volatile.Read(ref _polyWsDrops) > w.PolyDropsAtOpen);
-        string legTickers = string.Join(";", group.Select(p => p.KalshiTicker));
-
-        if (_blendedEnabled)
-            Console.WriteLine($"[BLENDED ARB CLOSE] {eventId} | {durationMs}ms | " +
-                              $"net=${w.BestNetCost:0.0000} profit/set=${profit:0.0000} | " +
-                              $"depth={w.MinDepth:0.0} closedBy={closedBy}");
-
-        string row = string.Join(",",
-            w.StartTime.ToString("yyyy-MM-dd HH:mm:ss.fff"),
-            endTime.ToString("yyyy-MM-dd HH:mm:ss.fff"),
-            durationMs,
-            Quote(eventId),
-            group.Count,
-            Quote(legTickers),
-            w.EntryNetCost.ToString("0.0000"),
-            Quote(w.EntryLegChoices),
-            Quote(w.EntryLegPrices),
-            w.BestNetCost.ToString("0.0000"),
-            Quote(w.BestLegChoices),
-            Quote(w.BestLegPrices),
-            w.MinDepth.ToString("0.00"),
-            (w.MinDepth * w.BestNetCost).ToString("0.00"),
-            (profit * w.MinDepth).ToString("0.0000"),
-            w.KalshiDropsAtOpen,
-            w.PolyDropsAtOpen,
-            dropDuring ? "1" : "0",
-            w.UpdateCount,
-            closedBy
-        );
-        EnqueueBlendedCsvRow(row);
     }
 
     // NOTE: must be called while holding _windowLock
@@ -773,12 +560,17 @@ public class CrossPlatformArbTelemetryStrategy
         if (durationMs < 5) return;
 
         var pair = _pairs.FirstOrDefault(p => p.PairId == pairId);
-        if (pair == null) return;
+        if (pair == null)
+        {
+            DebugLog.Write($"CloseWindow: pair not found for pairId={pairId}, skipping CSV row");
+            return;
+        }
 
         decimal fees     = w.KalshiFees + w.PolyFees;
         decimal profit   = 1m - w.BestNetCost;
         decimal maxDepth = Math.Min(w.KalshiDepth, w.PolyDepth);
-        bool dropDuring  = (Volatile.Read(ref _kalshiWsDrops) > w.KalshiDropsAtOpen) || (Volatile.Read(ref _polyWsDrops) > w.PolyDropsAtOpen);
+        bool dropDuring  = (Volatile.Read(ref _kalshiWsDrops) > w.KalshiDropsAtOpen)
+                        || (Volatile.Read(ref _polyWsDrops)   > w.PolyDropsAtOpen);
 
         string aprStr = w.AprHoldToSettle >= 0m ? $" APR={w.AprHoldToSettle:P0}" : "";
         Console.WriteLine($"[CROSS ARB CLOSE] {pair.Label} | {w.ArbType} | {durationMs}ms | " +
@@ -788,7 +580,7 @@ public class CrossPlatformArbTelemetryStrategy
         string restKalshi = w.RestKalshiAsk >= 0 ? w.RestKalshiAsk.ToString("0.0000") : "";
         string restPoly   = w.RestPolyAsk   >= 0 ? w.RestPolyAsk.ToString("0.0000")   : "";
         string restDelay  = w.RestDelayMs   >= 0 ? w.RestDelayMs.ToString()            : "";
-        string dts        = w.DaysToSettlement >= 0 ? w.DaysToSettlement.ToString() : "";
+        string dts        = w.DaysToSettlement >= 0 ? w.DaysToSettlement.ToString()       : "";
         string apr        = w.AprHoldToSettle  >= 0 ? w.AprHoldToSettle.ToString("0.0000") : "";
 
         string row = string.Join(",",
@@ -798,11 +590,9 @@ public class CrossPlatformArbTelemetryStrategy
             Quote(pairId),
             Quote(pair.Label),
             w.ArbType,
-            // entry
             w.EntryGrossCost.ToString("0.0000"),
             w.EntryNetCost.ToString("0.0000"),
             Quote(w.EntryLegPrices),
-            // best
             w.BestGrossCost.ToString("0.0000"),
             w.BestNetCost.ToString("0.0000"),
             Quote(w.BestLegPrices),
@@ -810,28 +600,22 @@ public class CrossPlatformArbTelemetryStrategy
             w.KalshiFees.ToString("0.0000"),
             w.PolyFees.ToString("0.0000"),
             profit.ToString("0.0000"),
-            // depth
             w.KalshiDepth.ToString("0.00"),
             w.PolyDepth.ToString("0.00"),
             maxDepth.ToString("0.00"),
             (maxDepth * w.BestNetCost).ToString("0.00"),
             (profit * maxDepth).ToString("0.0000"),
-            // book health
             w.KalshiBookAgeMs,
             w.PolyBookAgeMs,
             w.KalshiMidSum.ToString("0.0000"),
             w.PolyMidSum.ToString("0.0000"),
-            // WS reliability
             w.KalshiDropsAtOpen,
             w.PolyDropsAtOpen,
             dropDuring ? "1" : "0",
-            // tracking
             w.UpdateCount,
             closedBy,
-            // settlement / APR
             dts,
             apr,
-            // REST
             w.RestChecked   ? "1" : "0",
             w.RestConfirmed ? "1" : "0",
             restKalshi,
@@ -841,29 +625,27 @@ public class CrossPlatformArbTelemetryStrategy
 
         EnqueueCsvRow(row);
 
-        // Create a hypothetical position for exit monitoring if we have settlement data and real depth.
-        // Skip stale-book windows — the arb was a ghost and the profit is fictitious.
-        // Key includes entry ticks so multiple arb windows on the same pair are tracked independently.
         bool staleAtOpen = (w.KalshiBookAgeMs > 30_000) || (w.PolyBookAgeMs > 30_000);
         if (w.DaysToSettlement > 0 && maxDepth >= _depthFloor && profit > 0m && !staleAtOpen && !dropDuring)
         {
             string posKey = $"{pairId}\x00{w.StartTime.Ticks}";
             _hypotheticalPositions[posKey] = new HypotheticalPosition(
-                PairId:           pairId,
-                Label:            pair.Label,
-                ArbType:          w.ArbType,
-                EntryTime:        w.StartTime,
-                SettlementDate:   pair.SettlementDate,
+                PairId:            pairId,
+                Label:             pair.Label,
+                ArbType:           w.ArbType,
+                EntryTime:         w.StartTime,
+                SettlementDate:    pair.SettlementDate,
                 EntryCostPerShare: w.BestNetCost,
-                Shares:           maxDepth,
-                CapitalRequired:  maxDepth * w.BestNetCost,
-                DaysToSettlement: w.DaysToSettlement,
-                AprHoldToSettle:  w.AprHoldToSettle
+                Shares:            maxDepth,
+                CapitalRequired:   maxDepth * w.BestNetCost,
+                DaysToSettlement:  w.DaysToSettlement,
+                AprHoldToSettle:   w.AprHoldToSettle
             );
+            DebugLog.Write($"CloseWindow {pair.Label}: created hypothetical position dts={w.DaysToSettlement} profit={profit:0.0000} shares={maxDepth:0.0}");
         }
     }
 
-    // ── CSV infrastructure ─────────────────────────────────────────────────────
+    // ── CSV infrastructure ────────────────────────────────────────────────────
 
     private static string Quote(string s) => $"\"{s.Replace("\"", "\"\"")}\"";
 
@@ -885,22 +667,6 @@ public class CrossPlatformArbTelemetryStrategy
             _csvChannel.Writer.TryWrite(header);
         }
         _csvChannel.Writer.TryWrite(row);
-    }
-
-    private void EnqueueBlendedCsvRow(string row)
-    {
-        if (!_blendedHeaderWritten)
-        {
-            _blendedHeaderWritten = true;
-            _blendedCsvChannel.Writer.TryWrite(
-                "StartTime,EndTime,DurationMs,EventId,NumLegs,LegTickers," +
-                "EntryNetCost,EntryLegChoices,EntryLegPrices," +
-                "BestNetCost,BestLegChoices,BestLegPrices," +
-                "MinDepth,TotalCapitalRequired,TotalPotentialProfit," +
-                "KalshiWsDropsAtOpen,PolyWsDropsAtOpen,DropDuringWindow," +
-                "UpdateCount,ClosedBy");
-        }
-        _blendedCsvChannel.Writer.TryWrite(row);
     }
 
     private void EnqueueExitCsvRow(HypotheticalPosition pos, decimal bidSum, decimal exitFees,
@@ -944,7 +710,6 @@ public class CrossPlatformArbTelemetryStrategy
 
     public async Task ShutdownAsync()
     {
-        // Flush any still-open arb windows to the main CSV
         lock (_windowLock)
         {
             var now = DateTime.UtcNow;
@@ -952,42 +717,29 @@ public class CrossPlatformArbTelemetryStrategy
             {
                 if (_activeWindows[pairId] is { } w)
                 {
+                    DebugLog.Write($"ShutdownAsync: flushing open window for {pairId}");
                     CloseWindow(pairId, w, now, "SHUTDOWN");
                     _activeWindows[pairId] = null;
                 }
             }
-            if (_blendedEnabled)
-            {
-                foreach (var evId in _blendedWindows.Keys.ToList())
-                {
-                    if (_blendedWindows[evId] is { } bw && _eventGroups.TryGetValue(evId, out var grp))
-                    {
-                        CloseBlendedWindow(evId, bw, grp, now, "SHUTDOWN");
-                        _blendedWindows[evId] = null;
-                    }
-                }
-            }
         }
 
-        // Flush any remaining hypothetical positions to the exit CSV
-        foreach (var (pairId, pos) in _hypotheticalPositions)
+        foreach (var (_, pos) in _hypotheticalPositions)
         {
             if (pos == null) continue;
             double daysElapsed   = (DateTime.UtcNow - pos.EntryTime).TotalDays;
             double daysRemaining = Math.Max(pos.DaysToSettlement - daysElapsed, 0.0);
-            // Log with zero exit values on shutdown (no live book data available)
             EnqueueExitCsvRow(pos, 0m, 0m, 0m, 0m,
                 pos.AprHoldToSettle, daysElapsed, daysRemaining, "SHUTDOWN");
         }
 
         _csvChannel.Writer.TryComplete();
-        _blendedCsvChannel.Writer.TryComplete();
         _exitCsvChannel.Writer.TryComplete();
-        await Task.WhenAll(_csvWriterTask, _blendedCsvWriterTask, _exitCsvWriterTask);
+        try { await Task.WhenAll(_csvWriterTask, _exitCsvWriterTask); }
+        catch (Exception ex) { DebugLog.Write($"ShutdownAsync: CSV writer task threw — {ex.Message}"); }
     }
 
     private readonly Task _csvWriterTask;
-    private readonly Task _blendedCsvWriterTask;
     private readonly Task _exitCsvWriterTask;
 
     private async Task RunCsvWriterAsync()
@@ -1001,21 +753,11 @@ public class CrossPlatformArbTelemetryStrategy
                 await sw.FlushAsync();
             }
         }
-        catch (Exception ex) { Console.WriteLine($"[CROSS CSV ERROR] {ex.Message}"); }
-    }
-
-    private async Task RunBlendedCsvWriterAsync()
-    {
-        try
+        catch (Exception ex)
         {
-            using var sw = new StreamWriter(_blendedCsvPath, append: false, Encoding.UTF8) { AutoFlush = false };
-            await foreach (var line in _blendedCsvChannel.Reader.ReadAllAsync())
-            {
-                await sw.WriteLineAsync(line);
-                await sw.FlushAsync();
-            }
+            Console.WriteLine($"[CROSS CSV ERROR] {ex.Message}");
+            DebugLog.Write($"RunCsvWriterAsync exception: {ex}");
         }
-        catch (Exception ex) { Console.WriteLine($"[BLENDED CSV ERROR] {ex.Message}"); }
     }
 
     private async Task RunExitCsvWriterAsync()
@@ -1029,6 +771,10 @@ public class CrossPlatformArbTelemetryStrategy
                 await sw.FlushAsync();
             }
         }
-        catch (Exception ex) { Console.WriteLine($"[EXIT CSV ERROR] {ex.Message}"); }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[EXIT CSV ERROR] {ex.Message}");
+            DebugLog.Write($"RunExitCsvWriterAsync exception: {ex}");
+        }
     }
 }

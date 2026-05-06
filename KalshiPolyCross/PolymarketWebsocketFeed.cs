@@ -80,7 +80,11 @@ public class PolymarketWebsocketFeed
                             }
                             await ws.SendAsync(new ArraySegment<byte>(pingBytes), WebSocketMessageType.Text, true, pingSrc.Token);
                         }
-                        catch { break; }
+                        catch (Exception pingEx)
+                        {
+                            DebugLog.Write($"PolyWS ping failed: {pingEx.GetType().Name}: {pingEx.Message}");
+                            break;
+                        }
                     }
                 });
 
@@ -144,7 +148,8 @@ public class PolymarketWebsocketFeed
             catch (OperationCanceledException) { break; }
             catch (Exception ex)
             {
-                Console.WriteLine($"[POLY WS ERROR] {ex.Message} — reconnecting in 5s...");
+                Console.WriteLine($"[POLY WS ERROR] {ex.GetType().Name}: {ex.Message} — reconnecting in 5s...");
+                DebugLog.Write($"PolymarketWebsocketFeed exception: {ex}");
             }
 
             if (!ct.IsCancellationRequested)
@@ -202,6 +207,6 @@ public class PolymarketWebsocketFeed
                     _telemetry.OnBookUpdate(key);
             }
         }
-        catch (Exception) { }
+        catch (Exception ex) { DebugLog.Write($"PolyWS ProcessMessage exception: {ex.GetType().Name}: {ex.Message}"); }
     }
 }
