@@ -6,9 +6,11 @@ using PredictionBacktester.Engine.LiveExecution;
 // ══════════════════════════════════════════════════════════════════════════════
 //  USAGE
 //
-//  dotnet run --project KalshiPolyCross                  # live execution (requires all env vars)
-//  dotnet run --project KalshiPolyCross -- --dry-run     # detect arbs, log CSV, no real orders
-//  dotnet run --project KalshiPolyCross -- --scan-only   # match markets, update cross_pairs.json, exit
+//  dotnet run --project KalshiPolyCross -- --telemetry   # detect arbs, log CSV, no orders (no POLY_* needed)
+//  dotnet run --project KalshiPolyCross -- --dry-run     # same as --live, log only, no real orders
+//  dotnet run --project KalshiPolyCross -- --live        # full production: real orders on both legs
+//
+//  Exactly one mode flag is required. Omitting all three prints this usage and exits.
 //
 //  Required env vars (Kalshi):
 //    KALSHI_API_KEY_ID          Kalshi API key ID
@@ -30,6 +32,28 @@ using PredictionBacktester.Engine.LiveExecution;
 // ══════════════════════════════════════════════════════════════════════════════
 
 // ══════════════════════════════════════════════════════════════════════════════
+//  MODE SELECTION
+// ══════════════════════════════════════════════════════════════════════════════
+bool isLive      = args.Contains("--live");
+bool isDryRun    = args.Contains("--dry-run");
+bool isTelemetry = args.Contains("--telemetry");
+
+int modeCount = (isLive ? 1 : 0) + (isDryRun ? 1 : 0) + (isTelemetry ? 1 : 0);
+if (modeCount == 0)
+{
+    Console.WriteLine("Usage: KalshiPolyCross --telemetry | --dry-run | --live");
+    Console.WriteLine("  --telemetry   detect arbs, log CSV, no orders (no POLY_* env vars needed)");
+    Console.WriteLine("  --dry-run     same as --live but logs instead of placing real orders");
+    Console.WriteLine("  --live        full production — real orders on both legs");
+    return;
+}
+if (modeCount > 1)
+{
+    Console.WriteLine("[ERROR] Specify exactly one mode: --telemetry, --dry-run, or --live");
+    return;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
 //  CONFIGURATION
 // ══════════════════════════════════════════════════════════════════════════════
 const decimal ARB_THRESHOLD         = 0.995m;
@@ -44,8 +68,9 @@ const string  POLY_WS_URL           = "wss://ws-subscriptions-clob.polymarket.co
 // ══════════════════════════════════════════════════════════════════════════════
 //  STARTUP
 // ══════════════════════════════════════════════════════════════════════════════
+string modeLabel = isLive ? "LIVE EXECUTION" : isDryRun ? "DRY RUN" : "TELEMETRY";
 Console.WriteLine("═══════════════════════════════════════════════════════════");
-Console.WriteLine("  KALSHI ↔ POLYMARKET CROSS-PLATFORM ARB TELEMETRY");
+Console.WriteLine($"  KALSHI ↔ POLYMARKET CROSS-PLATFORM ARB  [{modeLabel}]");
 Console.WriteLine("═══════════════════════════════════════════════════════════");
 
 // ── Kalshi auth ───────────────────────────────────────────────────────────────
@@ -144,12 +169,17 @@ var restVerifier = new CrossArbRestVerifier(orderClient, telemetry);
 telemetry.OnArbOpened += restVerifier.OnArbOpened;
 
 // ── Executor — live order placement on WS-detected arb windows ────────────────
-bool dryRun = args.Contains("--dry-run");
 CrossArbExecutor? executor = null;
 
-var polyConfig = LoadPolymarketConfig();
-if (polyConfig != null)
+if (isLive || isDryRun)
 {
+    var polyConfig = LoadPolymarketConfig();
+    if (polyConfig == null)
+    {
+        Console.WriteLine($"[ERROR] --{(isLive ? "live" : "dry-run")} requires POLY_* env vars.");
+        Console.WriteLine("  Required: POLY_API_KEY, POLY_API_SECRET, POLY_API_PASSPHRASE, POLY_PRIVATE_KEY, POLY_PROXY_ADDRESS");
+        return;
+    }
     var polyOrderClient = new PredictionBacktester.Engine.LiveExecution.PolymarketOrderClient(polyConfig);
     executor = new CrossArbExecutor(
         kalshi:              orderClient,
@@ -161,15 +191,14 @@ if (polyConfig != null)
         executionThreshold:  0.990m,
         pairCooldownSeconds: 120,
         fillTimeoutMs:       5000,
-        dryRun:              dryRun);
+        dryRun:              isDryRun);
     telemetry.OnArbOpened += executor.OnArbOpened;
-    Console.WriteLine(
-        $"[EXECUTOR] Live execution enabled | maxContracts=1 maxExposure=$10 " +
-        $"threshold=0.990 cooldown=120s {(dryRun ? "(DRY RUN — no real orders)" : "LIVE")}");
+    string execLabel = isDryRun ? "DRY RUN — no real orders" : "LIVE";
+    Console.WriteLine($"[EXECUTOR] {execLabel} | maxContracts=1 maxExposure=$10 threshold=0.990 cooldown=120s");
 }
-else
+else // --telemetry
 {
-    Console.WriteLine("[EXECUTOR] Poly credentials not set — telemetry-only mode. Add POLY_* env vars to enable execution.");
+    Console.WriteLine("[EXECUTOR] Telemetry-only mode — no orders will be placed.");
 }
 
 Console.WriteLine($"\n[BOOKS] {state.Books.Count} order books created");
