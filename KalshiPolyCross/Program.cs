@@ -13,7 +13,11 @@ using PredictionBacktester.Engine.LiveExecution;
 //
 //  Exactly one mode flag is required. --debug is optional and works with any mode.
 //
-//  --debug runtime key toggles (while the bot is running):
+//  Runtime key toggles (all modes):
+//    N   toggle near-miss top-10 report   (on by default)
+//    S   toggle status dashboard          (on by default; live/dry-run only)
+//
+//  --debug additional key toggles:
 //    D   toggle Discovery logs  — arb window detection events
 //    T   toggle Trades logs     — order execution events
 //    B   toggle Balance logs    — balance fetch / refresh events
@@ -78,8 +82,9 @@ const decimal MIN_BOOK_PRICE        = 0.03m;
 const int     KALSHI_BATCH_SIZE     = 100;
 const int     POLY_BATCH_SIZE       = 200;
 const int     POLY_PING_INTERVAL_MS = 9_000;
-const int     NEAR_MISS_INTERVAL_MS = 60_000;
-const string  POLY_WS_URL           = "wss://ws-subscriptions-clob.polymarket.com/ws/market";
+const int     NEAR_MISS_INTERVAL_MS  = 60_000;
+const int     STATUS_DASH_INTERVAL_MS = 30_000;
+const string  POLY_WS_URL            = "wss://ws-subscriptions-clob.polymarket.com/ws/market";
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  STARTUP
@@ -238,39 +243,40 @@ var knownPairIds       = new HashSet<string>(pairs.Select(p => p.PairId), String
 var cts = new CancellationTokenSource();
 Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
 
-// ── Debug category key toggles ─────────────────────────────────────────────
-// Only active when --debug is enabled. Runs in a background thread so it
-// doesn't block the main async pipeline. Silently no-ops if stdin is not a
-// TTY (e.g. running under screen/tmux without PTY allocation).
-if (isDebug)
+// ── Key toggles ────────────────────────────────────────────────────────────
+// N/S always active. Debug keys (D/T/B/F/R/H) only meaningful with --debug.
+// Silently no-ops if stdin is not a TTY (e.g. screen/tmux without PTY).
+Console.WriteLine("[KEYS] N=NearMiss  S=StatusDash" +
+    (isDebug ? "  │  D=Discovery  T=Trades  B=Balance  F=Feed  R=Books  H=DebugStatus" : ""));
+_ = Task.Run(() =>
 {
-    Console.WriteLine("[DEBUG] Key toggles: D=Discovery  T=Trades  B=Balance  F=Feed  R=Books  H=Status");
-    _ = Task.Run(() =>
+    try
     {
-        try
+        while (!cts.Token.IsCancellationRequested)
         {
-            while (!cts.Token.IsCancellationRequested)
+            if (!Console.KeyAvailable) { Thread.Sleep(50); continue; }
+            var key = Console.ReadKey(intercept: true).Key;
+            switch (key)
             {
-                if (!Console.KeyAvailable) { Thread.Sleep(50); continue; }
-                var key = Console.ReadKey(intercept: true).Key;
-                switch (key)
-                {
-                    case ConsoleKey.D: DebugLog.DiscoveryEnabled = !DebugLog.DiscoveryEnabled; break;
-                    case ConsoleKey.T: DebugLog.TradesEnabled    = !DebugLog.TradesEnabled;    break;
-                    case ConsoleKey.B: DebugLog.BalanceEnabled   = !DebugLog.BalanceEnabled;   break;
-                    case ConsoleKey.F: DebugLog.FeedEnabled      = !DebugLog.FeedEnabled;      break;
-                    case ConsoleKey.R: DebugLog.BooksEnabled     = !DebugLog.BooksEnabled;     break;
-                }
-                if (key is ConsoleKey.D or ConsoleKey.T or ConsoleKey.B or ConsoleKey.F or ConsoleKey.R or ConsoleKey.H)
-                    Console.WriteLine($"[DEBUG] {DebugLog.StatusLine()}");
+                case ConsoleKey.N: DebugLog.NearMissEnabled   = !DebugLog.NearMissEnabled;   break;
+                case ConsoleKey.S: DebugLog.StatusDashEnabled = !DebugLog.StatusDashEnabled; break;
+                case ConsoleKey.D when isDebug: DebugLog.DiscoveryEnabled = !DebugLog.DiscoveryEnabled; break;
+                case ConsoleKey.T when isDebug: DebugLog.TradesEnabled    = !DebugLog.TradesEnabled;    break;
+                case ConsoleKey.B when isDebug: DebugLog.BalanceEnabled   = !DebugLog.BalanceEnabled;   break;
+                case ConsoleKey.F when isDebug: DebugLog.FeedEnabled      = !DebugLog.FeedEnabled;      break;
+                case ConsoleKey.R when isDebug: DebugLog.BooksEnabled     = !DebugLog.BooksEnabled;     break;
             }
+            if (key is ConsoleKey.N or ConsoleKey.S)
+                Console.WriteLine($"[KEYS] {DebugLog.DisplayStatusLine()}");
+            else if (isDebug && key is ConsoleKey.D or ConsoleKey.T or ConsoleKey.B or ConsoleKey.F or ConsoleKey.R or ConsoleKey.H)
+                Console.WriteLine($"[DEBUG] {DebugLog.DebugStatusLine()}");
         }
-        catch (InvalidOperationException)
-        {
-            DebugLog.Write("Key toggle listener unavailable — stdin is not a TTY");
-        }
-    });
-}
+    }
+    catch (InvalidOperationException)
+    {
+        DebugLog.Write("Key toggle listener unavailable — stdin is not a TTY");
+    }
+});
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  NEAR-MISS REPORT TASK
@@ -291,20 +297,23 @@ _ = Task.Run(async () =>
 
             DebugLog.Write($"Near-miss reporter: kalshi={kalshiReady}/{kalshiTotal} poly={polyReady}/{polyTotal} pairs={telemetry.TotalPairs} openArbs={telemetry.OpenArbs}");
 
-            Console.WriteLine($"\n[TELEMETRY] --- TOP {Math.Min(10, pairs.Count)} CLOSEST TO CROSS-PLATFORM ARB ---");
-            Console.WriteLine($"  Kalshi books: {kalshiReady}/{kalshiTotal} | Poly books: {polyReady}/{polyTotal} | Pairs: {telemetry.TotalPairs} | Open arbs: {telemetry.OpenArbs}");
-
-            var snapshot = telemetry.GetNearMissSnapshot().Take(10).ToList();
-            foreach (var (cost, label, pairId, arbType, depth, isLiveArb) in snapshot)
+            if (DebugLog.NearMissEnabled)
             {
-                decimal diff = cost - 1.00m;
-                string  tag  = cost < 1.00m ? "ARB!" : $"+${diff:0.0000} away";
-                string  live = isLiveArb ? " *** LIVE ***" : "";
-                Console.WriteLine($"  ${cost:0.0000} ({tag}) {arbType} | depth={depth:0.0} | {label}{live}");
-            }
+                Console.WriteLine($"\n[TELEMETRY] --- TOP {Math.Min(10, pairs.Count)} CLOSEST TO CROSS-PLATFORM ARB ---");
+                Console.WriteLine($"  Kalshi books: {kalshiReady}/{kalshiTotal} | Poly books: {polyReady}/{polyTotal} | Pairs: {telemetry.TotalPairs} | Open arbs: {telemetry.OpenArbs}");
 
-            if (snapshot.Count == 0)
-                Console.WriteLine("  (no books priced yet — waiting for WS data)");
+                var snapshot = telemetry.GetNearMissSnapshot().Take(10).ToList();
+                foreach (var (cost, label, pairId, arbType, depth, isLiveArb) in snapshot)
+                {
+                    decimal diff = cost - 1.00m;
+                    string  tag  = cost < 1.00m ? "ARB!" : $"+${diff:0.0000} away";
+                    string  live = isLiveArb ? " *** LIVE ***" : "";
+                    Console.WriteLine($"  ${cost:0.0000} ({tag}) {arbType} | depth={depth:0.0} | {label}{live}");
+                }
+
+                if (snapshot.Count == 0)
+                    Console.WriteLine("  (no books priced yet — waiting for WS data)");
+            }
         }
     }
     catch (Exception ex)
@@ -313,6 +322,40 @@ _ = Task.Run(async () =>
         DebugLog.Write($"Near-miss reporter crashed: {ex}");
     }
 });
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  STATUS DASHBOARD  (live / dry-run only)
+// ══════════════════════════════════════════════════════════════════════════════
+if (executor != null)
+{
+    _ = Task.Run(async () =>
+    {
+        try
+        {
+            while (!cts.Token.IsCancellationRequested)
+            {
+                await Task.Delay(STATUS_DASH_INTERVAL_MS, cts.Token).ContinueWith(_ => { });
+                if (cts.Token.IsCancellationRequested || !DebugLog.StatusDashEnabled) continue;
+
+                int kReady = state.Books.Count(kv => kv.Key.StartsWith("K:") && kv.Value.HasReceivedDelta);
+                int pReady = state.Books.Count(kv => kv.Key.StartsWith("P:") && kv.Value.HasReceivedDelta);
+                int kTotal = state.Books.Count(kv => kv.Key.StartsWith("K:"));
+                int pTotal = state.Books.Count(kv => kv.Key.StartsWith("P:"));
+
+                Console.WriteLine(
+                    $"[STATUS {DateTime.UtcNow:HH:mm:ss}] " +
+                    $"K=${executor.KalshiBalanceUsd:0.00}  P=${executor.PolyBalanceUsd:0.00}  │  " +
+                    $"exposure=${executor.TotalExposure:0.00}/${executor.MaxExposureUsd:0.00}  │  " +
+                    $"open={executor.OpenPositionCount}  filled={executor.TotalExecuted}  │  " +
+                    $"books K={kReady}/{kTotal} P={pReady}/{pTotal}");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[STATUS DASH ERROR] {ex.Message}");
+        }
+    });
+}
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  WEBSOCKET FEEDS

@@ -45,6 +45,7 @@ public class CrossArbExecutor
     private          decimal _totalExposure = 0m;
     private readonly object  _exposureLock  = new();
     private readonly CancellationTokenSource _cts           = new();
+    private          int     _totalExecuted = 0;
 
     // ── Balance tracking ──────────────────────────────────────────────────────
     // Live: fetched from APIs at startup, refreshed after each execution.
@@ -66,6 +67,10 @@ public class CrossArbExecutor
 
     public int     OpenPositionCount => _openPositions.Count(kv => kv.Value != null);
     public decimal TotalExposure     => _totalExposure;
+    public decimal MaxExposureUsd    => _maxExposureUsd;
+    public int     TotalExecuted     => Volatile.Read(ref _totalExecuted);
+    public decimal KalshiBalanceUsd  { get { lock (_balanceLock) return _kalshiBalanceUsd; } }
+    public decimal PolyBalanceUsd    { get { lock (_balanceLock) return _polyBalanceUsd;   } }
 
     public CrossArbExecutor(
         KalshiOrderClient               kalshi,
@@ -351,6 +356,7 @@ public class CrossArbExecutor
             decimal actualCost = kLegAsk * kFilled + pActualPrice * pFilled;
             _openPositions[pairId] = new ArbPosition(
                 pairId, arbType, kFilled, pFilled, kLegAsk, pActualPrice, t0);
+            Interlocked.Increment(ref _totalExecuted);
             Console.ForegroundColor = ConsoleColor.Green;
             Console.WriteLine(
                 $"[EXEC OK] {pair.Label} | K={kFilled} @ {kPriceCents}¢ | " +

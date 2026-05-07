@@ -9,12 +9,16 @@ internal static class DebugLog
 {
     internal static bool Enabled { get; set; }
 
-    // ── Per-category toggles ──────────────────────────────────────────────────
-    internal static bool DiscoveryEnabled { get; set; } = false; // D — arb detection events (off by default; high volume)
-    internal static bool TradesEnabled    { get; set; } = true; // T — order execution events
-    internal static bool BalanceEnabled   { get; set; } = true; // B — balance fetch/refresh events
-    internal static bool FeedEnabled      { get; set; } = true; // F — WebSocket feed events
-    internal static bool BooksEnabled     { get; set; } = true; // R — REST book-refresh events
+    // ── Per-category debug toggles ────────────────────────────────────────────
+    internal static bool DiscoveryEnabled { get; set; } = false; // D — arb detection (off by default; high volume)
+    internal static bool TradesEnabled    { get; set; } = true;  // T — order execution events
+    internal static bool BalanceEnabled   { get; set; } = true;  // B — balance fetch/refresh events
+    internal static bool FeedEnabled      { get; set; } = true;  // F — WebSocket feed events
+    internal static bool BooksEnabled     { get; set; } = true;  // R — REST book-refresh events
+
+    // ── Display toggles (all modes) ───────────────────────────────────────────
+    internal static bool NearMissEnabled   { get; set; } = true; // N — top-10 near-miss report
+    internal static bool StatusDashEnabled { get; set; } = true; // S — periodic status dashboard
 
     // ── Category writers ──────────────────────────────────────────────────────
     internal static void Write    (string msg) => Log("GEN",       true,             msg);
@@ -32,8 +36,11 @@ internal static class DebugLog
         Console.ResetColor();
     }
 
-    internal static string StatusLine() =>
+    internal static string DebugStatusLine() =>
         $"Discovery={F(DiscoveryEnabled)} Trades={F(TradesEnabled)} Balance={F(BalanceEnabled)} Feed={F(FeedEnabled)} Books={F(BooksEnabled)}";
+
+    internal static string DisplayStatusLine() =>
+        $"NearMiss={F(NearMissEnabled)} StatusDash={F(StatusDashEnabled)}";
 
     private static string F(bool v) => v ? "ON" : "off";
 }
