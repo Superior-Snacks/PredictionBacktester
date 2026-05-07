@@ -42,10 +42,12 @@ public class CrossArbExecutor
     // ── Runtime state ─────────────────────────────────────────────────────────
     private readonly ConcurrentDictionary<string, long>        _cooldownUntil = new();
     private readonly ConcurrentDictionary<string, ArbPosition> _openPositions = new();
-    private          decimal _totalExposure = 0m;
-    private readonly object  _exposureLock  = new();
-    private readonly CancellationTokenSource _cts           = new();
-    private          int     _totalExecuted = 0;
+    private          decimal _totalExposure        = 0m;
+    private          decimal _totalInvested        = 0m;
+    private          decimal _totalProjectedProfit = 0m;
+    private readonly object  _exposureLock         = new();
+    private readonly CancellationTokenSource _cts  = new();
+    private          int     _totalExecuted        = 0;
 
     // ── Balance tracking ──────────────────────────────────────────────────────
     // Live: fetched from APIs at startup, refreshed after each execution.
@@ -65,12 +67,14 @@ public class CrossArbExecutor
     private readonly string _csvPath;
     private bool _headerWritten;
 
-    public int     OpenPositionCount => _openPositions.Count(kv => kv.Value != null);
-    public decimal TotalExposure     => _totalExposure;
-    public decimal MaxExposureUsd    => _maxExposureUsd;
-    public int     TotalExecuted     => Volatile.Read(ref _totalExecuted);
-    public decimal KalshiBalanceUsd  { get { lock (_balanceLock) return _kalshiBalanceUsd; } }
-    public decimal PolyBalanceUsd    { get { lock (_balanceLock) return _polyBalanceUsd;   } }
+    public int     OpenPositionCount    => _openPositions.Count(kv => kv.Value != null);
+    public decimal MaxExposureUsd       => _maxExposureUsd;
+    public int     TotalExecuted        => Volatile.Read(ref _totalExecuted);
+    public decimal KalshiBalanceUsd     { get { lock (_balanceLock)  return _kalshiBalanceUsd;        } }
+    public decimal PolyBalanceUsd       { get { lock (_balanceLock)  return _polyBalanceUsd;          } }
+    public decimal TotalExposure        { get { lock (_exposureLock) return _totalExposure;           } }
+    public decimal TotalInvested        { get { lock (_exposureLock) return _totalInvested;           } }
+    public decimal TotalProjectedProfit { get { lock (_exposureLock) return _totalProjectedProfit;    } }
 
     public CrossArbExecutor(
         KalshiOrderClient               kalshi,
@@ -353,10 +357,12 @@ public class CrossArbExecutor
 
         if (bothFilled)
         {
-            decimal actualCost = kLegAsk * kFilled + pActualPrice * pFilled;
+            decimal actualCost       = kLegAsk * kFilled + pActualPrice * pFilled;
+            decimal projectedProfit  = kFilled * (1.0m - netNow); // 1 set pays $1; profit = $1 - net_cost_with_fees
             _openPositions[pairId] = new ArbPosition(
                 pairId, arbType, kFilled, pFilled, kLegAsk, pActualPrice, t0);
             Interlocked.Increment(ref _totalExecuted);
+            lock (_exposureLock) { _totalInvested += actualCost; _totalProjectedProfit += projectedProfit; }
             Console.ForegroundColor = ConsoleColor.Green;
             Console.WriteLine(
                 $"[EXEC OK] {pair.Label} | K={kFilled} @ {kPriceCents}¢ | " +
