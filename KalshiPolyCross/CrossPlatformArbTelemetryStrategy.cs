@@ -80,13 +80,18 @@ public class CrossPlatformArbTelemetryStrategy
     private readonly ConcurrentDictionary<string, (decimal Cost, string Type, decimal Depth)> _nearMiss = new();
 
     // ── Fee model ─────────────────────────────────────────────────────────────
-    private const decimal KalshiFeeRate   = 0.07m;
-    private const decimal PolyFeeRate     = 0.04m;
-    private const double  PolyFeeExponent = 1.0;
+    // Kalshi: fee = 0.07 × P × (1-P) per contract.
+    // Poly:   fee = C × p × feeRate × (p×(1-p))^exponent  (Polymarket docs formula).
+    //         Category-dependent. Politics/Finance/Tech (March 30 2026+): feeRate=0.04, exponent=1
+    //         → per share: 0.04 × p² × (1-p). Peak effective rate: ~1% at p=0.50.
+    //         If your pairs are in fee-free geopolitical/world-events markets, set PolyFeeRate=0.
+    private const decimal KalshiFeeRate  = 0.07m;
+    private const decimal PolyFeeRate    = 0.04m; // Politics/Finance/Tech; 0 if fee-free markets
+    private const double  PolyFeeExpnt   = 1.0;
 
     private static decimal KalshiFee(decimal p) => KalshiFeeRate * p * (1m - p);
     private static decimal PolyFee(decimal p)
-        => p * PolyFeeRate * (decimal)Math.Pow((double)(p * (1m - p)), PolyFeeExponent);
+        => p * PolyFeeRate * (decimal)Math.Pow((double)(p * (1m - p)), PolyFeeExpnt);
 
     private const decimal HurdleRateApr        = 0.20m;
     private const decimal MinProfitCaptureRatio = 0.70m;

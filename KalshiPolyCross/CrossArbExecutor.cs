@@ -56,10 +56,10 @@ public class CrossArbExecutor
     private          decimal _polyBalanceUsd;
     private readonly object  _balanceLock = new();
 
-    // ── Fee model (mirrors CrossPlatformArbTelemetryStrategy) ─────────────────
+    // ── Fee model (must mirror CrossPlatformArbTelemetryStrategy) ────────────
+    // Poly: fee = p × feeRate × (p×(1-p))^1 — Politics/Finance/Tech, March 30 2026+
     private static decimal KalshiFee(decimal p) => 0.07m * p * (1m - p);
-    private static decimal PolyFee(decimal p)
-        => p * 0.04m * (decimal)Math.Pow((double)(p * (1m - p)), 1.0);
+    private static decimal PolyFee(decimal p)   => p * 0.04m * p * (1m - p);
 
     // ── CSV ───────────────────────────────────────────────────────────────────
     private readonly Channel<string> _csvChannel =
@@ -456,9 +456,8 @@ public class CrossArbExecutor
         DebugLog.Trades($"PlacePolyLegAsync: token={tokenShort}... price={price:0.0000} shares={shares}");
         try
         {
-            // +1¢ slippage to cross the spread and guarantee the FAK fill (mirrors PolymarketLiveBroker)
-            decimal limitPrice = Math.Min(0.99m, price + 0.01m);
-            DebugLog.Trades($"PlacePolyLegAsync: limitPrice={limitPrice:0.0000} (ask+1¢ slippage)");
+            decimal limitPrice = Math.Min(0.99m, price);
+            DebugLog.Trades($"PlacePolyLegAsync: limitPrice={limitPrice:0.0000} (evaluated arb price)");
 
             string result = "";
             int feeRate = 0;
