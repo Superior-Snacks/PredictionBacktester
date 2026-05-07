@@ -37,9 +37,13 @@ public class PolymarketOrderClient
 
     public PolymarketOrderClient(PolymarketApiConfig config)
     {
-        _config = config;
-        _httpClient = new RestClient(new RestClientOptions(_config.Endpoint) { Timeout = TimeSpan.FromSeconds(10) });
+        _config  = config;
         _account = new Account(_config.PrivateKey, BigInteger.Parse(_config.ChainId));
+
+        var opts = new RestClientOptions(_config.Endpoint) { Timeout = TimeSpan.FromSeconds(10) };
+        if (!string.IsNullOrEmpty(_config.SocksProxy))
+            opts.Proxy = new System.Net.WebProxy(_config.SocksProxy);
+        _httpClient = new RestClient(opts);
     }
 
     /// <summary>
@@ -201,15 +205,43 @@ public class PolymarketOrderClient
     }
 
     /// <summary>
-    /// Queries the on-chain USDC balance for the proxy wallet.
+    /// Returns the deposited USDC collateral balance via the CLOB API.
+    /// Equivalent to Python's get_balance_allowance(asset_type=COLLATERAL, signature_type=2).
+    /// The on-chain balanceOf returns $0 because USDC is held in the CTF exchange contract,
+    /// not in the proxy wallet directly.
     /// </summary>
     public async Task<decimal> GetUsdcBalanceAsync()
     {
-        var web3 = new Web3(_config.RpcUrl);
-        var contract = web3.Eth.GetContract(BalanceOfAbi, USDC_CONTRACT);
-        var balanceOf = contract.GetFunction("balanceOf");
-        var rawBalance = await balanceOf.CallAsync<BigInteger>(_config.ProxyAddress);
-        return (decimal)rawBalance / (decimal)Math.Pow(10, USDC_DECIMALS);
+        var request = new RestRequest("/balance-allowance", Method.Get);
+        request.AddQueryParameter("asset_type",     "COLLATERAL");
+        request.AddQueryParameter("signature_type", "2");
+
+        string timestamp      = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString();
+        string hmacSignature  = BuildHmacSignature(_config.ApiSecret, timestamp, "GET", "/balance-allowance");
+        request.AddHeader("POLY_ADDRESS",    _account.Address);
+        request.AddHeader("POLY_SIGNATURE",  hmacSignature);
+        request.AddHeader("POLY_TIMESTAMP",  timestamp);
+        request.AddHeader("POLY_API_KEY",    _config.ApiKey);
+        request.AddHeader("POLY_PASSPHRASE", _config.ApiPassphrase);
+
+        var response = await _httpClient.ExecuteAsync(request);
+        if (!response.IsSuccessful || string.IsNullOrEmpty(response.Content))
+            throw new HttpRequestException(
+                $"Polymarket balance fetch failed: {response.Content ?? "no body"}",
+                inner: null,
+                statusCode: response.StatusCode);
+
+        using var doc = JsonDocument.Parse(response.Content);
+        var root = doc.RootElement;
+        foreach (var field in new[] { "balance", "availableBalance" })
+        {
+            if (!root.TryGetProperty(field, out var el)) continue;
+            string? raw = el.ValueKind == JsonValueKind.String ? el.GetString() : el.GetRawText();
+            if (decimal.TryParse(raw, System.Globalization.NumberStyles.Any,
+                    System.Globalization.CultureInfo.InvariantCulture, out decimal val) && val >= 0)
+                return val / 1_000_000m; // microUSDC → USD
+        }
+        return 0m;
     }
 
     /// <summary>

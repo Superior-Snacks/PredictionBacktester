@@ -434,6 +434,7 @@ static PredictionBacktester.Engine.LiveExecution.PolymarketApiConfig? LoadPolyma
         ApiPassphrase = Environment.GetEnvironmentVariable("POLY_API_PASSPHRASE")!.Trim(),
         PrivateKey    = Environment.GetEnvironmentVariable("POLY_PRIVATE_KEY")!.Trim(),
         ProxyAddress  = Environment.GetEnvironmentVariable("POLY_PROXY_ADDRESS")!.Trim(),
-        RpcUrl        = (Environment.GetEnvironmentVariable("POLY_RPC_URL") ?? "https://polygon-rpc.com").Trim(),
+        RpcUrl        = (Environment.GetEnvironmentVariable("POLY_RPC_URL")       ?? "https://polygon-rpc.com").Trim(),
+        SocksProxy    = (Environment.GetEnvironmentVariable("POLY_SOCKS_PROXY")   ?? "").Trim(),
     };
 }

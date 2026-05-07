@@ -16,5 +16,10 @@ namespace PredictionBacktester.Engine.LiveExecution
 
         // Polygon RPC endpoint for on-chain balance queries
         public string RpcUrl { get; set; } = "https://polygon-rpc.com";
+
+        // Optional SOCKS5 proxy for REST API calls (balance + order execution).
+        // WS feeds connect directly and do NOT use this proxy.
+        // Format: socks5://localhost:1080  — leave empty to connect directly.
+        public string SocksProxy { get; set; } = "";
     }
 }
