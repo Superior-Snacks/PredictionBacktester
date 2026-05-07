@@ -7,7 +7,7 @@
 - [ ] Persistent trade journal on disk (every trade intent written before order is sent)
 - [ ] Position reconciliation function that queries both venues for ground-truth positions
 - [ ] Reconcile-on-startup: on every bot start, sync local state to venue state before trading
-- [ ] Side mapping derived from validated pair record only — never inferred from titles/rules at runtime
+- [X] Side mapping derived from validated pair record only — never inferred from titles/rules at runtime
 - [ ] Per-trade max loss tripwire (e.g., 3x expected edge) → auto-halt
 - [ ] Per-day max loss tripwire (e.g., 10% of daily target) → auto-halt
 - [ ] Auto-halt requires manual reset to resume
@@ -15,18 +15,18 @@
 ## Order Placement
 
 - [X] All orders are limit orders, never market orders
-- [ ] Limit price = the price your model evaluated, not a few cents better
+- [X] Limit price = the price your model evaluated, not a few cents better
 - [ ] Smaller-depth leg sent first (based on pre-trade book snapshot)
 - [ ] First leg uses IOC (Immediate-Or-Cancel) — no partial sits
 - [ ] Wait for first leg fill confirmation before sizing second leg
 - [ ] Second leg quantity = actual first-leg fill quantity, NOT intended quantity
 - [ ] Client-side order IDs for idempotency (sending same trade twice is safe)
-- [ ] Capital reservation through single capital manager before any order is sent
-- [ ] If capital reservation fails, trade is skipped silently (no order sent)
+- [X] Capital reservation through single capital manager before any order is sent
+- [X] If capital reservation fails, trade is skipped (no order sent)
 
 ## Failure Detection
 
-- [ ] First leg fully fails → no exposure, log and continue
+- [X] First leg fully fails → no exposure, log and continue
 - [ ] First leg partial-fills → size second leg to actual fill
 - [ ] First leg fully fills, second leg fails → trigger hedge-or-reverse decision
 - [ ] First leg fully fills, second leg partial-fills → reverse the unhedged delta
