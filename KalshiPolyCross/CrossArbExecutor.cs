@@ -43,6 +43,7 @@ public class CrossArbExecutor
     private readonly ConcurrentDictionary<string, ArbPosition> _openPositions = new();
     private          decimal _totalExposure = 0m;
     private readonly object  _exposureLock  = new();
+    private readonly CancellationTokenSource _cts           = new();
 
     // ── Balance tracking ──────────────────────────────────────────────────────
     // Live: fetched from APIs at startup, refreshed after each execution.
@@ -106,6 +107,25 @@ public class CrossArbExecutor
             return;
         }
         await RefreshBalancesAsync(initial: true);
+        _ = Task.Run(PeriodicBalanceRefreshLoop);
+    }
+
+    private async Task PeriodicBalanceRefreshLoop()
+    {
+        while (!_cts.Token.IsCancellationRequested)
+        {
+            try
+            {
+                await Task.Delay(TimeSpan.FromMinutes(5), _cts.Token);
+                await RefreshBalancesAsync();
+            }
+            catch (TaskCanceledException) { break; }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[BALANCE WARN] Periodic refresh loop error: {ex.Message}");
+                DebugLog.Write($"PeriodicBalanceRefreshLoop exception: {ex}");
+            }
+        }
     }
 
     private async Task RefreshBalancesAsync(bool initial = false)
@@ -324,8 +344,16 @@ public class CrossArbExecutor
         if (!bothFilled)
             lock (_exposureLock) { _totalExposure -= estimatedCost; }
 
-        // Re-fetch real balances after execution — replaces speculative reservation with actuals.
-        await RefreshBalancesAsync();
+        if (!neitherFilled)
+        {
+            // Re-fetch real balances after execution — replaces speculative reservation with actuals.
+            await RefreshBalancesAsync();
+        }
+        else
+        {
+            // Restore speculative balance reservation
+            lock (_balanceLock) { _kalshiBalanceUsd += kalshiCost; _polyBalanceUsd += polyCost; }
+        }
 
         EnqueueCsvRow(pair, arbType, t0, kPriceCents, kLegAsk, pLegAsk,
                       kFilled, pFilled, pActualPrice, netNow, kStatus);
@@ -518,6 +546,8 @@ public class CrossArbExecutor
 
     public async Task ShutdownAsync()
     {
+        _cts.Cancel();
+        _cts.Dispose();
         _csvChannel.Writer.TryComplete();
         // Allow the writer task to drain
         await Task.Delay(200);
