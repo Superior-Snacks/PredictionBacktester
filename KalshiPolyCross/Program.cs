@@ -32,6 +32,10 @@ using PredictionBacktester.Engine.LiveExecution;
 //    POLY_PRIVATE_KEY           EOA private key (hex, no 0x prefix)
 //    POLY_PROXY_ADDRESS         Gnosis Safe proxy wallet address (POLY_GNOSIS_SAFE signer)
 //    POLY_RPC_URL               (optional) Polygon RPC — defaults to https://polygon-rpc.com
+//    POLY_SOCKS_PROXY           (optional) SOCKS5 proxy for Polymarket REST — socks5://host:port
+//                               Balance fetches + order execution route through this proxy.
+//                               WebSocket feed connects directly (no proxy).
+//                               Omit if running from an unrestricted IP (e.g. US cloud server).
 //
 //  cross_pairs.json: verified Kalshi↔Polymarket market pairs; auto-populated on scan,
 //                    must be non-empty for arb detection to fire.
@@ -64,6 +68,8 @@ if (modeCount > 1)
 
 bool isDebug = args.Contains("--debug");
 DebugLog.Enabled = isDebug;
+// Read proxy early so it can be passed to all REST clients and the IP check.
+string polyProxy = (Environment.GetEnvironmentVariable("POLY_SOCKS_PROXY") ?? "").Trim();
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  CONFIGURATION
@@ -175,7 +181,7 @@ foreach (var token  in polySubscribeTokens)    state.InitPolyToken(token);
 var telemetry = new CrossPlatformArbTelemetryStrategy(pairs, state.Books, ARB_THRESHOLD, DEPTH_FLOOR);
 
 // ── REST verifier — confirms arb windows via independent REST calls ───────────
-var restVerifier = new CrossArbRestVerifier(orderClient, telemetry);
+var restVerifier = new CrossArbRestVerifier(orderClient, telemetry, polyProxy);
 telemetry.OnArbOpened += restVerifier.OnArbOpened;
 
 // ── Executor — live order placement on WS-detected arb windows ────────────────
@@ -211,6 +217,11 @@ else // --telemetry
 {
     Console.WriteLine("[EXECUTOR] Telemetry-only mode — no orders will be placed.");
 }
+
+// ── Proxy IP verification: confirm proxy routes to a different egress ─────────
+// Runs in --debug mode (any mode) and always in --live.
+if (isDebug || isLive)
+    await CheckPolyProxyAsync(polyProxy, isLive);
 
 Console.WriteLine($"\n[BOOKS] {state.Books.Count} order books created");
 Console.WriteLine($"  Kalshi tickers : {kalshiSubscribeTickers.Count}");
@@ -372,7 +383,7 @@ _ = Task.Run(async () =>
 });
 
 // ── Book refresher — keeps quiet books alive via periodic REST snapshots ──────
-var bookRefresher = new BookRefresherService(state.Books, orderClient);
+var bookRefresher = new BookRefresherService(state.Books, orderClient, polyProxy);
 _ = Task.Run(async () =>
 {
     try { await bookRefresher.RunAsync(cts.Token); }
@@ -420,6 +431,53 @@ if (executor != null)
     }
 }
 Console.WriteLine("\n[SHUTDOWN] Cross-platform arb bot stopped.");
+
+static async Task CheckPolyProxyAsync(string socksProxy, bool isLive)
+{
+    const string ipUrl = "https://api.ipify.org?format=text";
+
+    string localIp = "?";
+    try
+    {
+        using var direct = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+        localIp = (await direct.GetStringAsync(ipUrl)).Trim();
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"[PROXY CHECK] Local IP lookup failed: {ex.Message}");
+    }
+
+    if (string.IsNullOrEmpty(socksProxy))
+    {
+        string liveWarn = isLive ? " — WARN: --live mode without proxy; Polymarket may geo-block" : "";
+        Console.WriteLine($"[PROXY CHECK] No POLY_SOCKS_PROXY — Polymarket REST calls will use local IP ({localIp}){liveWarn}");
+        return;
+    }
+
+    string proxyIp = "?";
+    try
+    {
+        var handler = new HttpClientHandler
+        {
+            Proxy    = new System.Net.WebProxy(socksProxy),
+            UseProxy = true
+        };
+        using var proxied = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(8) };
+        proxyIp = (await proxied.GetStringAsync(ipUrl)).Trim();
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"[PROXY CHECK FAIL] Proxy {socksProxy} unreachable: {ApiErrorHelper.ClassifyPoly(ex)}");
+        if (isLive)
+            Console.WriteLine("[PROXY CHECK WARN] --live mode — Polymarket REST calls may fall back to local IP or fail");
+        return;
+    }
+
+    if (proxyIp != localIp && proxyIp != "?")
+        Console.WriteLine($"[PROXY CHECK OK] localIP={localIp} → proxyIP={proxyIp} — different egress confirmed ✓");
+    else
+        Console.WriteLine($"[PROXY CHECK WARN] localIP={localIp} proxyIP={proxyIp} — same IP! Proxy may not be tunneling traffic");
+}
 
 static PredictionBacktester.Engine.LiveExecution.PolymarketApiConfig? LoadPolymarketConfig()
 {

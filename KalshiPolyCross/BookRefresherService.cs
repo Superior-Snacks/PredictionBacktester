@@ -19,7 +19,7 @@ public class BookRefresherService
 {
     private readonly ConcurrentDictionary<string, LocalOrderBook> _books;
     private readonly KalshiOrderClient _kalshi;
-    private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(5) };
+    private readonly HttpClient _http;
     private readonly SemaphoreSlim _polySem = new(4, 4); // Poly parallel limit
 
     // Refresh any book whose last delta is older than this.
@@ -39,10 +39,24 @@ public class BookRefresherService
 
     public BookRefresherService(
         ConcurrentDictionary<string, LocalOrderBook> books,
-        KalshiOrderClient kalshi)
+        KalshiOrderClient kalshi,
+        string? socksProxy = null)
     {
         _books  = books;
         _kalshi = kalshi;
+        if (!string.IsNullOrEmpty(socksProxy))
+        {
+            var handler = new HttpClientHandler
+            {
+                Proxy    = new System.Net.WebProxy(socksProxy),
+                UseProxy = true
+            };
+            _http = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(5) };
+        }
+        else
+        {
+            _http = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+        }
     }
 
     public async Task RunAsync(CancellationToken ct)

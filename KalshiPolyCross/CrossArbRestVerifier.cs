@@ -18,11 +18,23 @@ public class CrossArbRestVerifier
 
     private const string PolyBookUrl = "https://clob.polymarket.com/book?token_id=";
 
-    public CrossArbRestVerifier(KalshiOrderClient kalshi, CrossPlatformArbTelemetryStrategy telemetry)
+    public CrossArbRestVerifier(KalshiOrderClient kalshi, CrossPlatformArbTelemetryStrategy telemetry, string? socksProxy = null)
     {
-        _kalshi   = kalshi;
+        _kalshi    = kalshi;
         _telemetry = telemetry;
-        _http     = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+        if (!string.IsNullOrEmpty(socksProxy))
+        {
+            var handler = new HttpClientHandler
+            {
+                Proxy    = new System.Net.WebProxy(socksProxy),
+                UseProxy = true
+            };
+            _http = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(5) };
+        }
+        else
+        {
+            _http = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+        }
     }
 
     /// <summary>Subscribe to telemetry.OnArbOpened and call this method.</summary>
