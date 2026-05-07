@@ -68,8 +68,6 @@ if (modeCount > 1)
 
 bool isDebug = args.Contains("--debug");
 DebugLog.Enabled = isDebug;
-// Read proxy early so it can be passed to all REST clients and the IP check.
-string polyProxy = (Environment.GetEnvironmentVariable("POLY_SOCKS_PROXY") ?? "").Trim();
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  CONFIGURATION
@@ -93,7 +91,9 @@ Console.WriteLine($"  KALSHI ↔ POLYMARKET CROSS-PLATFORM ARB  [{modeLabel}{deb
 Console.WriteLine("═══════════════════════════════════════════════════════════");
 
 // ── Kalshi auth ───────────────────────────────────────────────────────────────
-var kalshiConfig = KalshiApiConfig.FromEnvironment();
+var kalshiConfig = KalshiApiConfig.FromEnvironment(); // also loads .env into the process environment
+// Read proxy after .env is loaded — it's set by LoadDotEnv() inside FromEnvironment().
+string polyProxy = (Environment.GetEnvironmentVariable("POLY_SOCKS_PROXY") ?? "").Trim();
 if (string.IsNullOrEmpty(kalshiConfig.ApiKeyId) || string.IsNullOrEmpty(kalshiConfig.PrivateKeyPath))
 {
     Console.WriteLine("[ERROR] Set KALSHI_API_KEY_ID and KALSHI_PRIVATE_KEY_PATH environment variables.");
@@ -197,13 +197,17 @@ if (isLive || isDryRun)
         return;
     }
     var polyOrderClient = new PredictionBacktester.Engine.LiveExecution.PolymarketOrderClient(polyConfig);
+    const decimal MAX_BET_USD        = 10m;   // max combined dollar cost per arb entry
+    const decimal BALANCE_BUFFER_PCT = 0.20m; // per-platform reserve (fraction of maxBet)
+    const decimal MAX_EXPOSURE_USD   = 50m;   // total simultaneous exposure cap
     executor = new CrossArbExecutor(
         kalshi:              orderClient,
         poly:                polyOrderClient,
         telemetry:           telemetry,
         books:               state.Books,
-        maxContracts:        1m,
-        maxExposureUsd:      10m,
+        maxBetUsd:           MAX_BET_USD,
+        balanceBufferPct:    BALANCE_BUFFER_PCT,
+        maxExposureUsd:      MAX_EXPOSURE_USD,
         executionThreshold:  0.990m,
         pairCooldownSeconds: 120,
         fillTimeoutMs:       5000,
@@ -211,7 +215,7 @@ if (isLive || isDryRun)
     telemetry.OnArbOpened += executor.OnArbOpened;
     await executor.InitializeBalancesAsync();
     string execLabel = isDryRun ? "DRY RUN — no real orders" : "LIVE";
-    Console.WriteLine($"[EXECUTOR] {execLabel} | maxContracts=1 maxExposure=$10 threshold=0.990 cooldown=120s");
+    Console.WriteLine($"[EXECUTOR] {execLabel} | maxBet=${MAX_BET_USD:0.00} buffer={BALANCE_BUFFER_PCT:P0} maxExposure=${MAX_EXPOSURE_USD:0.00} threshold=0.990 cooldown=120s");
 }
 else // --telemetry
 {

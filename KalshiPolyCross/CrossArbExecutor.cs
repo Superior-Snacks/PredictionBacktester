@@ -31,7 +31,8 @@ public class CrossArbExecutor
     private readonly ConcurrentDictionary<string, LocalOrderBook> _books;
 
     // ── Configuration ─────────────────────────────────────────────────────────
-    private readonly decimal _maxContracts;
+    private readonly decimal _maxBetUsd;           // max combined dollar cost per arb entry
+    private readonly decimal _balanceBufferPct;    // fraction of maxBetUsd kept as per-platform reserve
     private readonly decimal _maxExposureUsd;
     private readonly decimal _executionThreshold;
     private readonly int     _pairCooldownSeconds;
@@ -51,8 +52,6 @@ public class CrossArbExecutor
     private          decimal _kalshiBalanceUsd;
     private          decimal _polyBalanceUsd;
     private readonly object  _balanceLock = new();
-    // Minimum buffer to keep on each platform — never deploy below this amount.
-    private const decimal MinBalanceBufferUsd = 5m;
 
     // ── Fee model (mirrors CrossPlatformArbTelemetryStrategy) ─────────────────
     private static decimal KalshiFee(decimal p) => 0.07m * p * (1m - p);
@@ -73,7 +72,8 @@ public class CrossArbExecutor
         PolymarketOrderClient           poly,
         CrossPlatformArbTelemetryStrategy telemetry,
         ConcurrentDictionary<string, LocalOrderBook> books,
-        decimal maxContracts        = 1m,
+        decimal maxBetUsd           = 10m,
+        decimal balanceBufferPct    = 0.20m,
         decimal maxExposureUsd      = 10m,
         decimal executionThreshold  = 0.990m,
         int     pairCooldownSeconds = 120,
@@ -84,7 +84,8 @@ public class CrossArbExecutor
         _poly                = poly;
         _telemetry           = telemetry;
         _books               = books;
-        _maxContracts        = maxContracts;
+        _maxBetUsd           = maxBetUsd;
+        _balanceBufferPct    = balanceBufferPct;
         _maxExposureUsd      = maxExposureUsd;
         _executionThreshold  = executionThreshold;
         _pairCooldownSeconds = pairCooldownSeconds;
@@ -235,34 +236,59 @@ public class CrossArbExecutor
         }
 
         int     kPriceCents   = (int)Math.Round(kLegAsk * 100);
-        decimal polyShares    = _maxContracts;
-        decimal kalshiCost    = kLegAsk * _maxContracts;
-        decimal polyCost      = pLegAsk * polyShares;
+        decimal pricePerSet   = kLegAsk + pLegAsk;
+        int     contracts     = (int)Math.Floor(_maxBetUsd / pricePerSet);
+        if (contracts < 1)
+        {
+            Console.WriteLine($"[EXEC SKIP] {pair.Label} | pricePerSet=${pricePerSet:0.0000} > maxBet=${_maxBetUsd:0.00}");
+            return;
+        }
+        decimal polyShares    = contracts;
+        decimal kalshiCost    = kLegAsk * contracts;
+        decimal polyCost      = pLegAsk * contracts;
         decimal estimatedCost = kalshiCost + polyCost;
+        decimal minBuffer     = _maxBetUsd * _balanceBufferPct;
 
-        // Balance check — applies to both live and dry-run.
-        // Speculatively reserves funds to prevent concurrent entries from double-spending.
-        bool    balanceOk;
+        // Balance check — scale contracts down to what's affordable if needed.
+        // All sizing and speculative reservation happen inside a single lock to prevent
+        // concurrent executions from double-spending the same balance.
+        int     idealContracts = contracts;
         decimal kBalSnap, pBalSnap;
         lock (_balanceLock)
         {
-            kBalSnap  = _kalshiBalanceUsd;
-            pBalSnap  = _polyBalanceUsd;
-            balanceOk = (kBalSnap - kalshiCost >= MinBalanceBufferUsd) &&
-                        (pBalSnap - polyCost   >= MinBalanceBufferUsd);
-            if (balanceOk)
+            kBalSnap = _kalshiBalanceUsd;
+            pBalSnap = _polyBalanceUsd;
+
+            // Max contracts each side can fund while preserving the buffer reserve.
+            int kAffordable = kLegAsk > 0 ? (int)Math.Floor((kBalSnap - minBuffer) / kLegAsk) : 0;
+            int pAffordable = pLegAsk > 0 ? (int)Math.Floor((pBalSnap - minBuffer) / pLegAsk) : 0;
+            contracts = Math.Min(contracts, Math.Min(kAffordable, pAffordable));
+
+            if (contracts >= 1)
             {
+                // Recompute costs at the (possibly reduced) contract count and reserve.
+                polyShares    = contracts;
+                kalshiCost    = kLegAsk * contracts;
+                polyCost      = pLegAsk * contracts;
+                estimatedCost = kalshiCost + polyCost;
                 _kalshiBalanceUsd -= kalshiCost;
                 _polyBalanceUsd   -= polyCost;
             }
         }
-        if (!balanceOk)
+        if (contracts < 1)
         {
             Console.WriteLine(
-                $"[EXEC SKIP] {pair.Label} | Insufficient balance " +
-                $"K=${kBalSnap:0.00} P=${pBalSnap:0.00} needed K=${kalshiCost:0.00} P=${polyCost:0.00} (buffer ${MinBalanceBufferUsd})");
-            DebugLog.Balance($"ExecuteAsync {pair.Label}: balance check failed — K=${kBalSnap:0.00} P=${pBalSnap:0.00}");
+                $"[EXEC SKIP] {pair.Label} | Balance too low for 1 contract (${pricePerSet:0.0000}/set) " +
+                $"K=${kBalSnap:0.00} P=${pBalSnap:0.00} buffer={_balanceBufferPct:P0}(${minBuffer:0.00})");
+            DebugLog.Balance($"ExecuteAsync {pair.Label}: balance too low — K=${kBalSnap:0.00} P=${pBalSnap:0.00}");
             return;
+        }
+        if (contracts < idealContracts)
+        {
+            Console.WriteLine(
+                $"[EXEC SCALE] {pair.Label} | {idealContracts}→{contracts} contracts (balance limited) " +
+                $"K=${kBalSnap:0.00} P=${pBalSnap:0.00}");
+            DebugLog.Balance($"ExecuteAsync {pair.Label}: scaled {idealContracts}→{contracts} contracts");
         }
 
         if (_dryRun)
@@ -273,7 +299,7 @@ public class CrossArbExecutor
             Console.ForegroundColor = ConsoleColor.Yellow;
             Console.WriteLine(
                 $"[DRY RUN] {pair.Label} | {arbType} | K-{kalshiSide}={kLegAsk:0.0000} " +
-                $"P={pLegAsk:0.0000} net=${netNow:0.0000} | {_maxContracts} contracts est.cost=${estimatedCost:0.00} " +
+                $"P={pLegAsk:0.0000} net=${netNow:0.0000} | {contracts} contracts est.cost=${estimatedCost:0.00} " +
                 $"| balanceAfter K=${kBalAfter:0.00} P=${pBalAfter:0.00}");
             Console.ResetColor();
             EnqueueCsvRow(pair, arbType, DateTime.UtcNow, kPriceCents, kLegAsk, pLegAsk,
@@ -304,13 +330,13 @@ public class CrossArbExecutor
         Console.ForegroundColor = ConsoleColor.Cyan;
         Console.WriteLine(
             $"[EXEC] {pair.Label} | {arbType} | K-{kalshiSide}={kLegAsk:0.0000} " +
-            $"P={pLegAsk:0.0000} net=${netNow:0.0000} | {_maxContracts} contracts");
+            $"P={pLegAsk:0.0000} net=${netNow:0.0000} | {contracts} contracts @ ${estimatedCost:0.00}");
         Console.ResetColor();
 
         var t0 = DateTime.UtcNow;
 
         // Fire both legs simultaneously
-        var kalshiTask = PlaceKalshiLegAsync(pair.KalshiTicker, kalshiSide, kPriceCents, (int)_maxContracts);
+        var kalshiTask = PlaceKalshiLegAsync(pair.KalshiTicker, kalshiSide, kPriceCents, contracts);
         var polyTask   = PlacePolyLegAsync(polyToken, pLegAsk, polyShares);
         await Task.WhenAll(kalshiTask, polyTask);
 
@@ -336,7 +362,7 @@ public class CrossArbExecutor
             Console.ForegroundColor = ConsoleColor.Red;
             Console.WriteLine(
                 $"[EXEC PARTIAL !!! OPEN POSITION !!!] {pair.Label} | " +
-                $"K={kFilled}/{_maxContracts} P={pFilled:0.00}/{polyShares:0.00} k-status={kStatus}");
+                $"K={kFilled}/{contracts} P={pFilled:0.00}/{polyShares:0.00} k-status={kStatus}");
             Console.ResetColor();
         }
         else
