@@ -102,8 +102,11 @@ public class CrossArbExecutor
     {
         if (_dryRun)
         {
+            // Probe real balances so credential/connectivity issues surface in dry-run.
+            // Simulation still starts at $1,000 regardless of actual balance.
+            await RefreshBalancesAsync(initial: true);
             lock (_balanceLock) { _kalshiBalanceUsd = 1000m; _polyBalanceUsd = 1000m; }
-            Console.WriteLine("[BALANCE INIT] Dry-run: simulated $1,000.00 on each platform");
+            Console.WriteLine("[BALANCE INIT] Dry-run: simulation seeded at $1,000.00 on each platform");
             return;
         }
         await RefreshBalancesAsync(initial: true);
@@ -123,7 +126,7 @@ public class CrossArbExecutor
             catch (Exception ex)
             {
                 Console.WriteLine($"[BALANCE WARN] Periodic refresh loop error: {ex.Message}");
-                DebugLog.Write($"PeriodicBalanceRefreshLoop exception: {ex}");
+                DebugLog.Balance($"PeriodicBalanceRefreshLoop exception: {ex}");
             }
         }
     }
@@ -138,26 +141,27 @@ public class CrossArbExecutor
             lock (_balanceLock) { _kalshiBalanceUsd = newKalshi; _polyBalanceUsd = newPoly; }
             string tag = initial ? "[BALANCE INIT]" : "[BALANCE]";
             Console.WriteLine($"{tag} Kalshi=${newKalshi:0.00} Poly=${newPoly:0.00}");
-            DebugLog.Write($"RefreshBalancesAsync: K=${newKalshi:0.00} P=${newPoly:0.00} initial={initial}");
+            DebugLog.Balance($"RefreshBalancesAsync: K=${newKalshi:0.00} P=${newPoly:0.00} initial={initial}");
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[BALANCE WARN] Failed to refresh balance: {ex.Message}");
-            DebugLog.Write($"RefreshBalancesAsync exception: {ex}");
+            string balErr = ex is HttpRequestException ? ApiErrorHelper.ClassifyKalshi(ex) : ex.Message;
+            Console.WriteLine($"[BALANCE WARN] Failed to refresh balance: {balErr}");
+            DebugLog.Balance($"RefreshBalancesAsync exception: {ex}");
         }
     }
 
     /// <summary>Wire to telemetry.OnArbOpened — fires on every new WS-detected arb window.</summary>
     public void OnArbOpened(string pairId, decimal netCost, string arbType, decimal depth)
     {
-        DebugLog.Write($"OnArbOpened: {pairId} {arbType} net={netCost:0.0000} depth={depth:0.0}");
+        DebugLog.Trades($"OnArbOpened: {pairId} {arbType} net={netCost:0.0000} depth={depth:0.0}");
         _ = Task.Run(async () =>
         {
             try { await ExecuteAsync(pairId, arbType); }
             catch (Exception ex)
             {
                 Console.WriteLine($"[EXEC ERROR] {pairId}: {ex.Message}");
-                DebugLog.Write($"ExecuteAsync unhandled exception for {pairId}: {ex}");
+                DebugLog.Trades($"ExecuteAsync unhandled exception for {pairId}: {ex}");
             }
         });
     }
@@ -171,31 +175,31 @@ public class CrossArbExecutor
         // Guard: cooldown or open position on this pair
         if (_cooldownUntil.TryGetValue(pairId, out long cd) && now < cd)
         {
-            DebugLog.Write($"ExecuteAsync {pairId}: skipped — cooldown active for {cd - now}s more");
+            DebugLog.Trades($"ExecuteAsync {pairId}: skipped — cooldown active for {cd - now}s more");
             return;
         }
         if (_openPositions.ContainsKey(pairId))
         {
-            DebugLog.Write($"ExecuteAsync {pairId}: skipped — open position already tracked");
+            DebugLog.Trades($"ExecuteAsync {pairId}: skipped — open position already tracked");
             return;
         }
 
         var pair = _telemetry.GetPair(pairId);
         if (pair == null)
         {
-            DebugLog.Write($"ExecuteAsync {pairId}: pair not found in telemetry");
+            DebugLog.Trades($"ExecuteAsync {pairId}: pair not found in telemetry");
             return;
         }
 
         // Re-read live book prices at execution time
         if (!_books.TryGetValue($"K:{pair.KalshiTicker}",    out var kYes))
-        { DebugLog.Write($"ExecuteAsync {pair.Label}: missing book K:{pair.KalshiTicker}"); return; }
+        { DebugLog.Trades($"ExecuteAsync {pair.Label}: missing book K:{pair.KalshiTicker}"); return; }
         if (!_books.TryGetValue($"K:{pair.KalshiTicker}_NO", out var kNo))
-        { DebugLog.Write($"ExecuteAsync {pair.Label}: missing book K:{pair.KalshiTicker}_NO"); return; }
+        { DebugLog.Trades($"ExecuteAsync {pair.Label}: missing book K:{pair.KalshiTicker}_NO"); return; }
         if (!_books.TryGetValue($"P:{pair.PolyYesTokenId}",  out var pYes))
-        { DebugLog.Write($"ExecuteAsync {pair.Label}: missing book P:yes"); return; }
+        { DebugLog.Trades($"ExecuteAsync {pair.Label}: missing book P:yes"); return; }
         if (!_books.TryGetValue($"P:{pair.PolyNoTokenId}",   out var pNo))
-        { DebugLog.Write($"ExecuteAsync {pair.Label}: missing book P:no"); return; }
+        { DebugLog.Trades($"ExecuteAsync {pair.Label}: missing book P:no"); return; }
 
         decimal kLegAsk, pLegAsk;
         string  kalshiSide, polyToken;
@@ -217,7 +221,7 @@ public class CrossArbExecutor
 
         // Re-validate arb still holds at execution time
         decimal netNow = kLegAsk + pLegAsk + KalshiFee(kLegAsk) + PolyFee(pLegAsk);
-        DebugLog.Write($"ExecuteAsync {pair.Label}: live check — kLeg={kLegAsk:0.0000} pLeg={pLegAsk:0.0000} net={netNow:0.0000} threshold={_executionThreshold:0.000}");
+        DebugLog.Trades($"ExecuteAsync {pair.Label}: live check — kLeg={kLegAsk:0.0000} pLeg={pLegAsk:0.0000} net={netNow:0.0000} threshold={_executionThreshold:0.000}");
         if (netNow >= _executionThreshold)
         {
             Console.WriteLine($"[EXEC SKIP] {pair.Label} | net=${netNow:0.0000} >= threshold {_executionThreshold:0.000}");
@@ -226,7 +230,7 @@ public class CrossArbExecutor
 
         if (kLegAsk <= 0.02m || pLegAsk <= 0.02m)
         {
-            DebugLog.Write($"ExecuteAsync {pair.Label}: price below 2¢ floor — kLeg={kLegAsk:0.0000} pLeg={pLegAsk:0.0000}");
+            DebugLog.Trades($"ExecuteAsync {pair.Label}: price below 2¢ floor — kLeg={kLegAsk:0.0000} pLeg={pLegAsk:0.0000}");
             return;
         }
 
@@ -257,7 +261,7 @@ public class CrossArbExecutor
             Console.WriteLine(
                 $"[EXEC SKIP] {pair.Label} | Insufficient balance " +
                 $"K=${kBalSnap:0.00} P=${pBalSnap:0.00} needed K=${kalshiCost:0.00} P=${polyCost:0.00} (buffer ${MinBalanceBufferUsd})");
-            DebugLog.Write($"ExecuteAsync {pair.Label}: balance check failed — K=${kBalSnap:0.00} P=${pBalSnap:0.00}");
+            DebugLog.Balance($"ExecuteAsync {pair.Label}: balance check failed — K=${kBalSnap:0.00} P=${pBalSnap:0.00}");
             return;
         }
 
@@ -364,18 +368,18 @@ public class CrossArbExecutor
     private async Task<(string OrderId, string Status, decimal FillCount)> PlaceKalshiLegAsync(
         string ticker, string side, int priceCents, int count)
     {
-        DebugLog.Write($"PlaceKalshiLegAsync: {ticker} {side} {priceCents}¢ × {count}");
+        DebugLog.Trades($"PlaceKalshiLegAsync: {ticker} {side} {priceCents}¢ × {count}");
         try
         {
             var (orderId, status, fillImm) = await _kalshi.PlaceOrderAsync(ticker, side, priceCents, count);
-            DebugLog.Write($"PlaceKalshiLegAsync: placed orderId={orderId} status={status} fillImm={fillImm}");
+            DebugLog.Trades($"PlaceKalshiLegAsync: placed orderId={orderId} status={status} fillImm={fillImm}");
 
             if (status == "executed" || fillImm >= count)
                 return (orderId, status, fillImm);
 
             if (string.IsNullOrEmpty(orderId))
             {
-                DebugLog.Write($"PlaceKalshiLegAsync: empty orderId with status={status} — not polling");
+                DebugLog.Trades($"PlaceKalshiLegAsync: empty orderId with status={status} — not polling");
                 return ("", status, 0m);
             }
 
@@ -387,18 +391,18 @@ public class CrossArbExecutor
                 await Task.Delay(50).ConfigureAwait(false);
                 var (pollStatus, pollFill) = await _kalshi.PollOrderAsync(orderId);
                 polls++;
-                DebugLog.Write($"PlaceKalshiLegAsync: poll #{polls} orderId={orderId} status={pollStatus} fill={pollFill}");
+                DebugLog.Trades($"PlaceKalshiLegAsync: poll #{polls} orderId={orderId} status={pollStatus} fill={pollFill}");
                 if (pollStatus == "executed" || pollStatus == "canceled")
                     return (orderId, pollStatus, pollFill);
             }
 
-            DebugLog.Write($"PlaceKalshiLegAsync: timeout after {polls} polls, orderId={orderId} fillImm={fillImm}");
+            DebugLog.Trades($"PlaceKalshiLegAsync: timeout after {polls} polls, orderId={orderId} fillImm={fillImm}");
             return (orderId, "timeout", fillImm);
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[KALSHI LEG ERROR] {ticker}: {ex.Message}");
-            DebugLog.Write($"PlaceKalshiLegAsync exception for {ticker}: {ex}");
+            Console.WriteLine($"[KALSHI LEG ERROR] {ticker}: {ApiErrorHelper.ClassifyKalshi(ex)}");
+            DebugLog.Trades($"PlaceKalshiLegAsync exception for {ticker}: {ex}");
             return ("", "error", 0m);
         }
     }
@@ -411,12 +415,12 @@ public class CrossArbExecutor
         string tokenId, decimal price, decimal shares)
     {
         string tokenShort = tokenId[..Math.Min(12, tokenId.Length)];
-        DebugLog.Write($"PlacePolyLegAsync: token={tokenShort}... price={price:0.0000} shares={shares}");
+        DebugLog.Trades($"PlacePolyLegAsync: token={tokenShort}... price={price:0.0000} shares={shares}");
         try
         {
             // +1¢ slippage to cross the spread and guarantee the FAK fill (mirrors PolymarketLiveBroker)
             decimal limitPrice = Math.Min(0.99m, price + 0.01m);
-            DebugLog.Write($"PlacePolyLegAsync: limitPrice={limitPrice:0.0000} (ask+1¢ slippage)");
+            DebugLog.Trades($"PlacePolyLegAsync: limitPrice={limitPrice:0.0000} (ask+1¢ slippage)");
 
             string result = "";
             int feeRate = 0;
@@ -424,7 +428,7 @@ public class CrossArbExecutor
             {
                 try
                 {
-                    DebugLog.Write($"PlacePolyLegAsync: attempt {attempt + 1} feeRateBps={feeRate}");
+                    DebugLog.Trades($"PlacePolyLegAsync: attempt {attempt + 1} feeRateBps={feeRate}");
                     result = await _poly.SubmitOrderAsync(
                         tokenId, limitPrice, shares, side: 0 /*BUY*/,
                         negRisk: false, feeRateBps: feeRate);
@@ -437,7 +441,7 @@ public class CrossArbExecutor
                     var m = Regex.Match(ex.Message, @"taker fee:\s*(\d+)");
                     if (m.Success && int.TryParse(m.Groups[1].Value, out int fee))
                     {
-                        DebugLog.Write($"PlacePolyLegAsync: fee autocorrect — retrying with feeRateBps={fee}");
+                        DebugLog.Trades($"PlacePolyLegAsync: fee autocorrect — retrying with feeRateBps={fee}");
                         feeRate = fee;
                     }
                     else
@@ -447,7 +451,7 @@ public class CrossArbExecutor
 
             if (string.IsNullOrEmpty(result))
             {
-                DebugLog.Write($"PlacePolyLegAsync: empty result from SubmitOrderAsync");
+                DebugLog.Trades($"PlacePolyLegAsync: empty result from SubmitOrderAsync");
                 return (0m, 0m);
             }
 
@@ -456,7 +460,7 @@ public class CrossArbExecutor
 
             if (!root.TryGetProperty("success", out var sv) || !sv.GetBoolean())
             {
-                DebugLog.Write($"PlacePolyLegAsync: success=false in response — {result[..Math.Min(200, result.Length)]}");
+                DebugLog.Trades($"PlacePolyLegAsync: success=false in response — {result[..Math.Min(200, result.Length)]}");
                 return (0m, 0m);
             }
 
@@ -475,21 +479,21 @@ public class CrossArbExecutor
 
             decimal filledShares = takingVal;
             decimal spentUsdc    = makingVal;
-            DebugLog.Write($"PlacePolyLegAsync: takingAmount={takingVal} makingAmount={makingVal}");
+            DebugLog.Trades($"PlacePolyLegAsync: takingAmount={takingVal} makingAmount={makingVal}");
             if (filledShares <= 0)
             {
-                DebugLog.Write($"PlacePolyLegAsync: filledShares=0 — no fill");
+                DebugLog.Trades($"PlacePolyLegAsync: filledShares=0 — no fill");
                 return (0m, 0m);
             }
 
             decimal avgPrice = spentUsdc > 0 ? spentUsdc / filledShares : price;
-            DebugLog.Write($"PlacePolyLegAsync: filled={filledShares} avgPrice={avgPrice:0.0000}");
+            DebugLog.Trades($"PlacePolyLegAsync: filled={filledShares} avgPrice={avgPrice:0.0000}");
             return (filledShares, avgPrice);
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[POLY LEG ERROR] {tokenShort}...: {ex.Message}");
-            DebugLog.Write($"PlacePolyLegAsync exception for {tokenShort}: {ex}");
+            Console.WriteLine($"[POLY LEG ERROR] {tokenShort}...: {ApiErrorHelper.ClassifyPoly(ex)}");
+            DebugLog.Trades($"PlacePolyLegAsync exception for {tokenShort}: {ex}");
             return (0m, 0m);
         }
     }

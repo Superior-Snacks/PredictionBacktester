@@ -148,7 +148,7 @@ public class CrossPlatformArbTelemetryStrategy
 
         _csvWriterTask     = Task.Run(RunCsvWriterAsync);
         _exitCsvWriterTask = Task.Run(RunExitCsvWriterAsync);
-        DebugLog.Write($"CrossPlatformArbTelemetryStrategy: initialized with {pairs.Count} pairs, threshold={arbThreshold}");
+        DebugLog.Discovery($"CrossPlatformArbTelemetryStrategy: initialized with {pairs.Count} pairs, threshold={arbThreshold}");
     }
 
     // ── Public interface ──────────────────────────────────────────────────────
@@ -162,7 +162,7 @@ public class CrossPlatformArbTelemetryStrategy
 
         if (indices == null)
         {
-            DebugLog.Write($"OnBookUpdate: no pairs registered for bookKey={bookKey}");
+            DebugLog.Discovery($"OnBookUpdate: no pairs registered for bookKey={bookKey}");
             return;
         }
 
@@ -183,7 +183,7 @@ public class CrossPlatformArbTelemetryStrategy
             {
                 if (_activeWindows[pairId] is { } w)
                 {
-                    DebugLog.Write($"HandlePlatformReconnect: closing {pairId} ({w.ArbType}) on {platform} reconnect");
+                    DebugLog.Discovery($"HandlePlatformReconnect: closing {pairId} ({w.ArbType}) on {platform} reconnect");
                     CloseWindow(pairId, w, DateTime.UtcNow, "RECONNECT");
                     _activeWindows[pairId] = null;
                 }
@@ -199,7 +199,7 @@ public class CrossPlatformArbTelemetryStrategy
         {
             if (!_activeWindows.TryGetValue(pairId, out var w) || w == null)
             {
-                DebugLog.Write($"UpdateRestVerification: window for {pairId} already closed, ignoring");
+                DebugLog.Discovery($"UpdateRestVerification: window for {pairId} already closed, ignoring");
                 return;
             }
             _activeWindows[pairId] = w with
@@ -212,7 +212,7 @@ public class CrossPlatformArbTelemetryStrategy
             };
             if (!confirmed)
             {
-                DebugLog.Write($"UpdateRestVerification: {pairId} not confirmed by REST — K={kalshiAsk:0.0000} P={polyAsk:0.0000} in {delayMs}ms");
+                DebugLog.Discovery($"UpdateRestVerification: {pairId} not confirmed by REST — K={kalshiAsk:0.0000} P={polyAsk:0.0000} in {delayMs}ms");
                 return;
             }
 
@@ -249,7 +249,7 @@ public class CrossPlatformArbTelemetryStrategy
                         _bookKeyToPairs[key] = list = new List<int>();
                     list.Add(idx);
                 }
-                DebugLog.Write($"AddPairs: registered pair {p.PairId} ({p.Label})");
+                DebugLog.Discovery($"AddPairs: registered pair {p.PairId} ({p.Label})");
             }
         }
         finally { _indexLock.ExitWriteLock(); }
@@ -286,38 +286,38 @@ public class CrossPlatformArbTelemetryStrategy
     {
         if (!_books.TryGetValue($"K:{pair.KalshiTicker}",    out var kYes))
         {
-            DebugLog.Write($"EvaluatePair {pair.Label}: missing book K:{pair.KalshiTicker}");
+            DebugLog.Discovery($"EvaluatePair {pair.Label}: missing book K:{pair.KalshiTicker}");
             return;
         }
         if (!_books.TryGetValue($"K:{pair.KalshiTicker}_NO", out var kNo))
         {
-            DebugLog.Write($"EvaluatePair {pair.Label}: missing book K:{pair.KalshiTicker}_NO");
+            DebugLog.Discovery($"EvaluatePair {pair.Label}: missing book K:{pair.KalshiTicker}_NO");
             return;
         }
         if (!_books.TryGetValue($"P:{pair.PolyYesTokenId}",  out var pYes))
         {
-            DebugLog.Write($"EvaluatePair {pair.Label}: missing book P:{pair.PolyYesTokenId[..Math.Min(8, pair.PolyYesTokenId.Length)]}...");
+            DebugLog.Discovery($"EvaluatePair {pair.Label}: missing book P:{pair.PolyYesTokenId[..Math.Min(8, pair.PolyYesTokenId.Length)]}...");
             return;
         }
         if (!_books.TryGetValue($"P:{pair.PolyNoTokenId}",   out var pNo))
         {
-            DebugLog.Write($"EvaluatePair {pair.Label}: missing book P:{pair.PolyNoTokenId[..Math.Min(8, pair.PolyNoTokenId.Length)]}...");
+            DebugLog.Discovery($"EvaluatePair {pair.Label}: missing book P:{pair.PolyNoTokenId[..Math.Min(8, pair.PolyNoTokenId.Length)]}...");
             return;
         }
 
         if (!kYes.HasReceivedDelta || !kNo.HasReceivedDelta || !pYes.HasReceivedDelta || !pNo.HasReceivedDelta)
         {
-            DebugLog.Write($"EvaluatePair {pair.Label}: waiting for first delta — kYes={kYes.HasReceivedDelta} kNo={kNo.HasReceivedDelta} pYes={pYes.HasReceivedDelta} pNo={pNo.HasReceivedDelta}");
+            DebugLog.Discovery($"EvaluatePair {pair.Label}: waiting for first delta — kYes={kYes.HasReceivedDelta} kNo={kNo.HasReceivedDelta} pYes={pYes.HasReceivedDelta} pNo={pNo.HasReceivedDelta}");
             return;
         }
         if (kYes.IsStale() || kNo.IsStale() || pYes.IsStale() || pNo.IsStale())
         {
-            DebugLog.Write($"EvaluatePair {pair.Label}: stale book — kYes={kYes.IsStale()} kNo={kNo.IsStale()} pYes={pYes.IsStale()} pNo={pNo.IsStale()}");
+            DebugLog.Discovery($"EvaluatePair {pair.Label}: stale book — kYes={kYes.IsStale()} kNo={kNo.IsStale()} pYes={pYes.IsStale()} pNo={pNo.IsStale()}");
             lock (_windowLock)
             {
                 if (_activeWindows.TryGetValue(pair.PairId, out var sw) && sw != null)
                 {
-                    DebugLog.Write($"EvaluatePair {pair.Label}: closing open window due to stale book");
+                    DebugLog.Discovery($"EvaluatePair {pair.Label}: closing open window due to stale book");
                     CloseWindow(pair.PairId, sw, DateTime.UtcNow, "STALE_BOOK");
                     _activeWindows[pair.PairId] = null;
                 }
@@ -332,7 +332,7 @@ public class CrossPlatformArbTelemetryStrategy
 
         if (kYesAsk < 0.05m || kNoAsk < 0.05m || pYesAsk < 0.05m || pNoAsk < 0.05m)
         {
-            DebugLog.Write($"EvaluatePair {pair.Label}: price below min — kYes={kYesAsk:0.0000} kNo={kNoAsk:0.0000} pYes={pYesAsk:0.0000} pNo={pNoAsk:0.0000}");
+            DebugLog.Discovery($"EvaluatePair {pair.Label}: price below min — kYes={kYesAsk:0.0000} kNo={kNoAsk:0.0000} pYes={pYesAsk:0.0000} pNo={pNoAsk:0.0000}");
             return;
         }
 
@@ -350,12 +350,12 @@ public class CrossPlatformArbTelemetryStrategy
 
         if (kMidSum < 0.70m || kMidSum > 1.30m)
         {
-            DebugLog.Write($"EvaluatePair {pair.Label}: Kalshi mid-sum sanity fail — kMidSum={kMidSum:0.0000}");
+            DebugLog.Discovery($"EvaluatePair {pair.Label}: Kalshi mid-sum sanity fail — kMidSum={kMidSum:0.0000}");
             return;
         }
         if (pMidSum < 0.70m || pMidSum > 1.30m)
         {
-            DebugLog.Write($"EvaluatePair {pair.Label}: Poly mid-sum sanity fail — pMidSum={pMidSum:0.0000}");
+            DebugLog.Discovery($"EvaluatePair {pair.Label}: Poly mid-sum sanity fail — pMidSum={pMidSum:0.0000}");
             return;
         }
 
@@ -406,7 +406,7 @@ public class CrossPlatformArbTelemetryStrategy
         _nearMiss[pair.PairId] = (bestNet, bestType, bestDepth);
 
         bool isArb = bestNet < _arbThreshold && bestDepth >= _depthFloor;
-        DebugLog.Write($"EvaluatePair {pair.Label}: {bestType} net={bestNet:0.0000} depth={bestDepth:0.0} isArb={isArb}");
+        DebugLog.Discovery($"EvaluatePair {pair.Label}: {bestType} net={bestNet:0.0000} depth={bestDepth:0.0} isArb={isArb}");
 
         bool invokeOnArbOpened = false;
         int currentKalshiDrops = Volatile.Read(ref _kalshiWsDrops);
@@ -465,7 +465,7 @@ public class CrossPlatformArbTelemetryStrategy
                         UpdateCount:       1
                     );
                     _activeWindows[pair.PairId] = w;
-                    DebugLog.Write($"EvaluatePair {pair.Label}: ARB OPEN {bestType} net={bestNet:0.0000} depth={bestDepth:0.0} kAge={kAge}ms pAge={pAge}ms");
+                    DebugLog.Discovery($"EvaluatePair {pair.Label}: ARB OPEN {bestType} net={bestNet:0.0000} depth={bestDepth:0.0} kAge={kAge}ms pAge={pAge}ms");
                     invokeOnArbOpened = true;
                 }
                 else
@@ -484,12 +484,12 @@ public class CrossPlatformArbTelemetryStrategy
                         UpdateCount   = existing.UpdateCount + 1
                     };
                     if (betterCost)
-                        DebugLog.Write($"EvaluatePair {pair.Label}: ARB UPDATE better net={bestNet:0.0000} (was {existing.BestNetCost:0.0000})");
+                        DebugLog.Discovery($"EvaluatePair {pair.Label}: ARB UPDATE better net={bestNet:0.0000} (was {existing.BestNetCost:0.0000})");
                 }
             }
             else if (existing != null)
             {
-                DebugLog.Write($"EvaluatePair {pair.Label}: ARB CLOSE — net={bestNet:0.0000} above threshold, was open {(DateTime.UtcNow - existing.StartTime).TotalMilliseconds:0}ms");
+                DebugLog.Discovery($"EvaluatePair {pair.Label}: ARB CLOSE — net={bestNet:0.0000} above threshold, was open {(DateTime.UtcNow - existing.StartTime).TotalMilliseconds:0}ms");
                 CloseWindow(pair.PairId, existing, DateTime.UtcNow, "PRICE");
                 _activeWindows[pair.PairId] = null;
             }
@@ -529,7 +529,7 @@ public class CrossPlatformArbTelemetryStrategy
                          && aprRemaining  < HurdleRateApr
                          && captureRatio  >= MinProfitCaptureRatio;
 
-        DebugLog.Write($"EvaluateExit {pair.Label}: bidSum={bidSum:0.0000} profit={profitIfExit:+0.0000;-0.0000} aprRemaining={aprRemaining:P1} capture={captureRatio:P0} exit={exitDecision}");
+        DebugLog.Discovery($"EvaluateExit {pair.Label}: bidSum={bidSum:0.0000} profit={profitIfExit:+0.0000;-0.0000} aprRemaining={aprRemaining:P1} capture={captureRatio:P0} exit={exitDecision}");
 
         if (exitDecision && !pos.ExitSignalLogged)
         {
@@ -562,7 +562,7 @@ public class CrossPlatformArbTelemetryStrategy
         var pair = _pairs.FirstOrDefault(p => p.PairId == pairId);
         if (pair == null)
         {
-            DebugLog.Write($"CloseWindow: pair not found for pairId={pairId}, skipping CSV row");
+            DebugLog.Discovery($"CloseWindow: pair not found for pairId={pairId}, skipping CSV row");
             return;
         }
 
@@ -641,7 +641,7 @@ public class CrossPlatformArbTelemetryStrategy
                 DaysToSettlement:  w.DaysToSettlement,
                 AprHoldToSettle:   w.AprHoldToSettle
             );
-            DebugLog.Write($"CloseWindow {pair.Label}: created hypothetical position dts={w.DaysToSettlement} profit={profit:0.0000} shares={maxDepth:0.0}");
+            DebugLog.Discovery($"CloseWindow {pair.Label}: created hypothetical position dts={w.DaysToSettlement} profit={profit:0.0000} shares={maxDepth:0.0}");
         }
     }
 
@@ -717,7 +717,7 @@ public class CrossPlatformArbTelemetryStrategy
             {
                 if (_activeWindows[pairId] is { } w)
                 {
-                    DebugLog.Write($"ShutdownAsync: flushing open window for {pairId}");
+                    DebugLog.Discovery($"ShutdownAsync: flushing open window for {pairId}");
                     CloseWindow(pairId, w, now, "SHUTDOWN");
                     _activeWindows[pairId] = null;
                 }
@@ -736,7 +736,7 @@ public class CrossPlatformArbTelemetryStrategy
         _csvChannel.Writer.TryComplete();
         _exitCsvChannel.Writer.TryComplete();
         try { await Task.WhenAll(_csvWriterTask, _exitCsvWriterTask); }
-        catch (Exception ex) { DebugLog.Write($"ShutdownAsync: CSV writer task threw — {ex.Message}"); }
+        catch (Exception ex) { DebugLog.Discovery($"ShutdownAsync: CSV writer task threw — {ex.Message}"); }
     }
 
     private readonly Task _csvWriterTask;
@@ -756,7 +756,7 @@ public class CrossPlatformArbTelemetryStrategy
         catch (Exception ex)
         {
             Console.WriteLine($"[CROSS CSV ERROR] {ex.Message}");
-            DebugLog.Write($"RunCsvWriterAsync exception: {ex}");
+            DebugLog.Discovery($"RunCsvWriterAsync exception: {ex}");
         }
     }
 
@@ -774,7 +774,7 @@ public class CrossPlatformArbTelemetryStrategy
         catch (Exception ex)
         {
             Console.WriteLine($"[EXIT CSV ERROR] {ex.Message}");
-            DebugLog.Write($"RunExitCsvWriterAsync exception: {ex}");
+            DebugLog.Discovery($"RunExitCsvWriterAsync exception: {ex}");
         }
     }
 }

@@ -82,7 +82,7 @@ public class PolymarketWebsocketFeed
                         }
                         catch (Exception pingEx)
                         {
-                            DebugLog.Write($"PolyWS ping failed: {pingEx.GetType().Name}: {pingEx.Message}");
+                            DebugLog.Feed($"PolyWS ping failed: {pingEx.GetType().Name}: {pingEx.Message}");
                             break;
                         }
                     }
@@ -149,7 +149,7 @@ public class PolymarketWebsocketFeed
             catch (Exception ex)
             {
                 Console.WriteLine($"[POLY WS ERROR] {ex.GetType().Name}: {ex.Message} — reconnecting in 5s...");
-                DebugLog.Write($"PolymarketWebsocketFeed exception: {ex}");
+                DebugLog.Feed($"PolymarketWebsocketFeed exception: {ex}");
             }
 
             if (!ct.IsCancellationRequested)
@@ -207,6 +207,6 @@ public class PolymarketWebsocketFeed
                     _telemetry.OnBookUpdate(key);
             }
         }
-        catch (Exception ex) { DebugLog.Write($"PolyWS ProcessMessage exception: {ex.GetType().Name}: {ex.Message}"); }
+        catch (Exception ex) { DebugLog.Feed($"PolyWS ProcessMessage exception: {ex.GetType().Name}: {ex.Message}"); }
     }
 }

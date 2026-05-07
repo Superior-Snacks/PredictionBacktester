@@ -130,7 +130,7 @@ public class KalshiWebsocketFeed
             catch (Exception ex)
             {
                 Console.WriteLine($"[KALSHI WS ERROR] {ex.GetType().Name}: {ex.Message} — reconnecting in 5s...");
-                DebugLog.Write($"KalshiWebsocketFeed exception: {ex}");
+                DebugLog.Feed($"KalshiWebsocketFeed exception: {ex}");
             }
 
             if (!ct.IsCancellationRequested)
@@ -156,7 +156,7 @@ public class KalshiWebsocketFeed
 
             if (!_state.Books.TryGetValue($"K:{ticker}", out var yesBook))
             {
-                DebugLog.Write($"KalshiWS ProcessMessage: no book for K:{ticker}");
+                DebugLog.Feed($"KalshiWS ProcessMessage: no book for K:{ticker}");
                 return;
             }
             _state.Books.TryGetValue($"K:{ticker}_NO", out var noBook);
@@ -164,7 +164,7 @@ public class KalshiWebsocketFeed
             if (!_state.YesSizes.TryGetValue(ticker, out var ySizeMap) ||
                 !_state.NoSizes .TryGetValue(ticker, out var nSizeMap))
             {
-                DebugLog.Write($"KalshiWS ProcessMessage: no size maps for ticker={ticker}");
+                DebugLog.Feed($"KalshiWS ProcessMessage: no size maps for ticker={ticker}");
                 return;
             }
 
@@ -179,7 +179,7 @@ public class KalshiWebsocketFeed
                 _telemetry.OnBookUpdate($"K:{ticker}");
             }
         }
-        catch (JsonException ex) { DebugLog.Write($"KalshiWS ProcessMessage: JSON parse error — {ex.Message}"); }
+        catch (JsonException ex) { DebugLog.Feed($"KalshiWS ProcessMessage: JSON parse error — {ex.Message}"); }
     }
 
     private void ApplyDelta(

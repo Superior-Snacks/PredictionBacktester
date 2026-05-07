@@ -135,8 +135,8 @@ public class BookRefresherService
         catch (OperationCanceledException) { }
         catch (Exception ex)
         {
-            Console.WriteLine($"[BOOK REFRESH WARN] Poly {tokenId[..Math.Min(8, tokenId.Length)]}: {ex.Message}");
-            DebugLog.Write($"RefreshPolyBookAsync {tokenId[..Math.Min(8, tokenId.Length)]}: {ex.GetType().Name}: {ex}");
+            Console.WriteLine($"[BOOK REFRESH WARN] Poly {tokenId[..Math.Min(8, tokenId.Length)]}: {ApiErrorHelper.ClassifyPoly(ex)}");
+            DebugLog.Books($"RefreshPolyBookAsync {tokenId[..Math.Min(8, tokenId.Length)]}: {ex.GetType().Name}: {ex}");
         }
         finally { _polySem.Release(); }
     }
@@ -163,14 +163,14 @@ public class BookRefresherService
             if (restYesAsk < 0m)
             {
                 // REST confirmed empty book — mark both YES and NO dead so we stop polling.
-                DebugLog.Write($"RefreshKalshiBookAsync {ticker}: REST returned no bid — marking dead");
+                DebugLog.Books($"RefreshKalshiBookAsync {ticker}: REST returned no bid — marking dead");
                 yesBook.MarkDead();
                 if (_books.TryGetValue($"K:{ticker}_NO", out var noBookDead))
                     noBookDead.MarkDead();
                 return;
             }
 
-            DebugLog.Write($"RefreshKalshiBookAsync {ticker}: wsAsk={wsYesAsk:0.0000} restAsk={restYesAsk:0.0000} diff={Math.Abs(restYesAsk - wsYesAsk):0.0000}");
+            DebugLog.Books($"RefreshKalshiBookAsync {ticker}: wsAsk={wsYesAsk:0.0000} restAsk={restYesAsk:0.0000} diff={Math.Abs(restYesAsk - wsYesAsk):0.0000}");
             if (Math.Abs(restYesAsk - wsYesAsk) <= KalshiPriceTolerance)
             {
                 yesBook.MarkRestRefreshed();
@@ -186,8 +186,8 @@ public class BookRefresherService
         catch (OperationCanceledException) { }
         catch (Exception ex)
         {
-            Console.WriteLine($"[BOOK REFRESH WARN] Kalshi {ticker}: {ex.Message}");
-            DebugLog.Write($"RefreshKalshiBookAsync {ticker}: {ex.GetType().Name}: {ex}");
+            Console.WriteLine($"[BOOK REFRESH WARN] Kalshi {ticker}: {ApiErrorHelper.ClassifyKalshi(ex)}");
+            DebugLog.Books($"RefreshKalshiBookAsync {ticker}: {ex.GetType().Name}: {ex}");
         }
     }
 

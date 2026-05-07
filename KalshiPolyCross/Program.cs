@@ -215,6 +215,40 @@ var knownPairIds       = new HashSet<string>(pairs.Select(p => p.PairId), String
 var cts = new CancellationTokenSource();
 Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
 
+// ── Debug category key toggles ─────────────────────────────────────────────
+// Only active when --debug is enabled. Runs in a background thread so it
+// doesn't block the main async pipeline. Silently no-ops if stdin is not a
+// TTY (e.g. running under screen/tmux without PTY allocation).
+if (isDebug)
+{
+    Console.WriteLine("[DEBUG] Key toggles: D=Discovery  T=Trades  B=Balance  F=Feed  R=Books  H=Status");
+    _ = Task.Run(() =>
+    {
+        try
+        {
+            while (!cts.Token.IsCancellationRequested)
+            {
+                if (!Console.KeyAvailable) { Thread.Sleep(50); continue; }
+                var key = Console.ReadKey(intercept: true).Key;
+                switch (key)
+                {
+                    case ConsoleKey.D: DebugLog.DiscoveryEnabled = !DebugLog.DiscoveryEnabled; break;
+                    case ConsoleKey.T: DebugLog.TradesEnabled    = !DebugLog.TradesEnabled;    break;
+                    case ConsoleKey.B: DebugLog.BalanceEnabled   = !DebugLog.BalanceEnabled;   break;
+                    case ConsoleKey.F: DebugLog.FeedEnabled      = !DebugLog.FeedEnabled;      break;
+                    case ConsoleKey.R: DebugLog.BooksEnabled     = !DebugLog.BooksEnabled;     break;
+                }
+                if (key is ConsoleKey.D or ConsoleKey.T or ConsoleKey.B or ConsoleKey.F or ConsoleKey.R or ConsoleKey.H)
+                    Console.WriteLine($"[DEBUG] {DebugLog.StatusLine()}");
+            }
+        }
+        catch (InvalidOperationException)
+        {
+            DebugLog.Write("Key toggle listener unavailable — stdin is not a TTY");
+        }
+    });
+}
+
 // ══════════════════════════════════════════════════════════════════════════════
 //  NEAR-MISS REPORT TASK
 // ══════════════════════════════════════════════════════════════════════════════
