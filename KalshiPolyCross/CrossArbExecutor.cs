@@ -352,48 +352,57 @@ public class CrossArbExecutor
         var (kOrderId, kStatus, kFilled) = kalshiTask.Result;
         var (pFilled, pActualPrice)       = polyTask.Result;
 
-        bool bothFilled    = kFilled > 0 && pFilled > 0;
-        bool neitherFilled = kFilled == 0 && pFilled == 0;
+        // Balanced quantity: the portion of each leg that is fully hedged.
+        // Any excess on one side is an unhedged delta requiring recovery.
+        decimal balancedQty  = Math.Min(kFilled, pFilled);
+        decimal kUnhedged    = kFilled - balancedQty;  // excess Kalshi contracts
+        decimal pUnhedged    = pFilled - balancedQty;  // excess Poly shares
+        bool    neitherFilled = kFilled == 0 && pFilled == 0;
 
-        if (bothFilled)
+        if (balancedQty > 0)
         {
-            decimal actualCost       = kLegAsk * kFilled + pActualPrice * pFilled;
-            decimal projectedProfit  = kFilled * (1.0m - netNow); // 1 set pays $1; profit = $1 - net_cost_with_fees
+            decimal actualCost      = kLegAsk * balancedQty + pActualPrice * balancedQty;
+            decimal projectedProfit = balancedQty * (1.0m - netNow);
             _openPositions[pairId] = new ArbPosition(
-                pairId, arbType, kFilled, pFilled, kLegAsk, pActualPrice, t0);
+                pairId, arbType, balancedQty, balancedQty, kLegAsk, pActualPrice, t0);
             Interlocked.Increment(ref _totalExecuted);
             lock (_exposureLock) { _totalInvested += actualCost; _totalProjectedProfit += projectedProfit; }
             Console.ForegroundColor = ConsoleColor.Green;
             Console.WriteLine(
-                $"[EXEC OK] {pair.Label} | K={kFilled} @ {kPriceCents}¢ | " +
-                $"P={pFilled:0.00}sh @ ${pActualPrice:0.0000} | cost=${actualCost:0.00} net=${netNow:0.0000}");
+                $"[EXEC OK] {pair.Label} | K={balancedQty}@{kPriceCents}¢ | " +
+                $"P={balancedQty:0.00}sh@${pActualPrice:0.0000} | cost=${actualCost:0.00} net=${netNow:0.0000}");
             Console.ResetColor();
         }
-        else if (!neitherFilled)
+
+        if (kUnhedged > 0 || pUnhedged > 0)
         {
+            // One side filled more than the other — unhedged delta requires hedge-or-reverse.
+            // TODO: implement hedge-or-reverse recovery (see todo.md)
             Console.ForegroundColor = ConsoleColor.Red;
             Console.WriteLine(
-                $"[EXEC PARTIAL !!! OPEN POSITION !!!] {pair.Label} | " +
-                $"K={kFilled}/{contracts} P={pFilled:0.00}/{polyShares:0.00} k-status={kStatus}");
+                $"[EXEC UNHEDGED] {pair.Label} | " +
+                $"kFilled={kFilled} pFilled={pFilled:0.00} balanced={balancedQty} " +
+                $"kExcess={kUnhedged} pExcess={pUnhedged:0.00} — hedge-or-reverse not yet implemented");
             Console.ResetColor();
         }
-        else
+        else if (neitherFilled)
         {
             Console.WriteLine($"[EXEC MISS] {pair.Label} | Neither leg filled. k-status={kStatus}");
         }
 
-        // Release exposure reservation when no position opened
-        if (!bothFilled)
+        // Release exposure only when nothing filled at all.
+        // Unhedged delta keeps exposure tracked until recovery resolves it.
+        if (neitherFilled)
             lock (_exposureLock) { _totalExposure -= estimatedCost; }
 
         if (!neitherFilled)
         {
-            // Re-fetch real balances after execution — replaces speculative reservation with actuals.
+            // Re-fetch real balances after any execution — replaces speculative reservation with actuals.
             await RefreshBalancesAsync();
         }
         else
         {
-            // Restore speculative balance reservation
+            // Nothing filled — restore speculative balance reservation in full.
             lock (_balanceLock) { _kalshiBalanceUsd += kalshiCost; _polyBalanceUsd += polyCost; }
         }
 

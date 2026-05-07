@@ -16,21 +16,17 @@
 
 - [X] All orders are limit orders, never market orders
 - [X] Limit price = the price your model evaluated, not a few cents better
-- [ ] Smaller-depth leg sent first (based on pre-trade book snapshot)
-- [ ] First leg uses IOC (Immediate-Or-Cancel) — no partial sits
-- [ ] Wait for first leg fill confirmation before sizing second leg
-- [ ] Second leg quantity = actual first-leg fill quantity, NOT intended quantity
+- [X] Both legs fire simultaneously (Kalshi IOC + Poly FAK)
+- [X] Position recorded at min(kFilled, pFilled) — balanced hedged quantity only
 - [ ] Client-side order IDs for idempotency (sending same trade twice is safe)
 - [X] Capital reservation through single capital manager before any order is sent
 - [X] If capital reservation fails, trade is skipped (no order sent)
 
 ## Failure Detection
 
-- [X] First leg fully fails → no exposure, log and continue
-- [ ] First leg partial-fills → size second leg to actual fill
-- [ ] First leg fully fills, second leg fails → trigger hedge-or-reverse decision
-- [ ] First leg fully fills, second leg partial-fills → reverse the unhedged delta
-- [ ] Both legs partial-fill at different rates → reverse the imbalanced portion
+- [X] Neither leg fills → no exposure, log and continue
+- [X] After fills, compute balanced qty and flag any unhedged delta
+- [ ] Unhedged delta > 0 → trigger hedge-or-reverse for the excess
 - [ ] Cancel-fill race condition handled (sleep + reconcile, treat local state as hint only)
 - [ ] Connection loss to either venue → halt new trades, attempt close-out via REST
 - [ ] Watchdog heartbeat that triggers halt if both venues unreachable >N seconds
@@ -38,11 +34,11 @@
 
 ## Hedge-or-Reverse Decision Logic
 
-- [ ] Function exists and is the single entry point for all failure recovery
-- [ ] Inputs: first leg state, current second-venue quote, time elapsed since first fill
-- [ ] Re-snapshot the second venue before deciding (don't trust stale data)
-- [ ] If hedging at current price preserves positive edge minus reverse buffer → retry hedge
-- [ ] If hedging guarantees more loss than reversing → reverse first leg
+- [ ] Function exists and is the single entry point for all unhedged delta recovery
+- [ ] Inputs: unhedged leg + qty, current opposite-venue quote, time elapsed since fill
+- [ ] Re-snapshot the opposite venue before deciding (don't trust stale data)
+- [ ] If completing the hedge at current price still preserves positive edge → retry fill
+- [ ] If completing the hedge guarantees more loss than reversing → reverse the excess
 - [ ] Time-bounded retry (don't loop forever)
 - [ ] Reverse uses higher slippage tolerance than original entry
 - [ ] If reverse also fails → escalate to alert + halt
@@ -79,8 +75,7 @@
 ## Edge Cases to Specifically Handle
 
 - [ ] Self-trade prevention: tag every order with strategy ID
-- [ ] Stale price between detection and arrival: limit price protects you, but log when limits don't fill
-- [ ] Order book moves resting order out of queue: only relevant if you have non-IOC resting orders
+- [ ] Stale price between detection and arrival: log when limit doesn't fill
 - [ ] Time-skew between venues: log timestamp drift, alert if >500ms
 - [ ] Venue maintenance windows: detect via repeated REST failures, halt trading on that venue
 - [ ] API rate limits: rate limiter on outbound requests, never let limit-hit cause leg-fail
