@@ -13,6 +13,14 @@ using PredictionBacktester.Engine.LiveExecution;
 //
 //  Exactly one mode flag is required. --debug is optional and works with any mode.
 //
+//  --debug runtime key toggles (while the bot is running):
+//    D   toggle Discovery logs  — arb window detection events
+//    T   toggle Trades logs     — order execution events
+//    B   toggle Balance logs    — balance fetch / refresh events
+//    F   toggle Feed logs       — WebSocket connect / message events
+//    R   toggle Books logs      — REST book-refresh events
+//    H   print current toggle status
+//
 //  Required env vars (Kalshi):
 //    KALSHI_API_KEY_ID          Kalshi API key ID
 //    KALSHI_PRIVATE_KEY_PATH    Path to RSA private key PEM file
