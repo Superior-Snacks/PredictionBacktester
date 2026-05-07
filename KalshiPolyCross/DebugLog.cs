@@ -9,8 +9,8 @@ internal static class DebugLog
 {
     internal static bool Enabled { get; set; }
 
-    // ── Per-category toggles (all on when --debug is first activated) ─────────
-    internal static bool DiscoveryEnabled { get; set; } = true; // D — arb detection events
+    // ── Per-category toggles ──────────────────────────────────────────────────
+    internal static bool DiscoveryEnabled { get; set; } = false; // D — arb detection events (off by default; high volume)
     internal static bool TradesEnabled    { get; set; } = true; // T — order execution events
     internal static bool BalanceEnabled   { get; set; } = true; // B — balance fetch/refresh events
     internal static bool FeedEnabled      { get; set; } = true; // F — WebSocket feed events
