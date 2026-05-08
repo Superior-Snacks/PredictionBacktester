@@ -362,15 +362,34 @@ public class CrossArbExecutor
         if (balancedQty > 0)
         {
             decimal actualCost      = kLegAsk * balancedQty + pActualPrice * balancedQty;
-            decimal projectedProfit = balancedQty * (1.0m - netNow);
+            // Actual net cost per set using confirmed fill prices + fees.
+            // kLegAsk is the IOC limit price (fills at or below this). pActualPrice is Poly's
+            // reported average fill price and may exceed pLegAsk if the book was walked.
+            decimal actualNetPerSet = kLegAsk + pActualPrice + KalshiFee(kLegAsk) + PolyFee(pActualPrice);
+            bool    arbProfitable   = actualNetPerSet < 1.0m;
+            decimal actualProfit    = balancedQty * (1.0m - actualNetPerSet);
+
             _openPositions[pairId] = new ArbPosition(
                 pairId, arbType, balancedQty, balancedQty, kLegAsk, pActualPrice, t0);
             Interlocked.Increment(ref _totalExecuted);
-            lock (_exposureLock) { _totalInvested += actualCost; _totalProjectedProfit += projectedProfit; }
-            Console.ForegroundColor = ConsoleColor.Green;
-            Console.WriteLine(
-                $"[EXEC OK] {pair.Label} | K={balancedQty}@{kPriceCents}¢ | " +
-                $"P={balancedQty:0.00}sh@${pActualPrice:0.0000} | cost=${actualCost:0.00} net=${netNow:0.0000}");
+            lock (_exposureLock) { _totalInvested += actualCost; _totalProjectedProfit += actualProfit; }
+
+            if (arbProfitable)
+            {
+                Console.ForegroundColor = ConsoleColor.Green;
+                Console.WriteLine(
+                    $"[EXEC OK] {pair.Label} | K={balancedQty}@{kPriceCents}¢ | " +
+                    $"P={balancedQty:0.00}sh@${pActualPrice:0.0000} | cost=${actualCost:0.00} " +
+                    $"actualNet={actualNetPerSet:0.0000} projProfit=${actualProfit:0.00}");
+            }
+            else
+            {
+                Console.ForegroundColor = ConsoleColor.Yellow;
+                Console.WriteLine(
+                    $"[EXEC SLIPPAGE] {pair.Label} | K={balancedQty}@{kPriceCents}¢ | " +
+                    $"P={balancedQty:0.00}sh@${pActualPrice:0.0000} | cost=${actualCost:0.00} " +
+                    $"actualNet={actualNetPerSet:0.0000} detectedNet={netNow:0.0000} — arb eaten by slippage");
+            }
             Console.ResetColor();
         }
 
@@ -458,6 +477,25 @@ public class CrossArbExecutor
     // Routes through POLY_PROXY_ADDRESS (Gnosis Safe) via PolymarketOrderClient —
     // identical EIP-712 POLY_GNOSIS_SAFE signing as PredictionLiveProduction.
 
+    // Mirrors TryExtractFillFromResponse in PolymarketLiveBroker.
+    // BUY:  takingAmount = shares received, makingAmount = USDC spent
+    // SELL: takingAmount = USDC received,  makingAmount = shares sold
+    private static (decimal Shares, decimal Dollars) ExtractPolyFill(JsonElement root, bool isSell)
+    {
+        decimal takingVal = 0m, makingVal = 0m;
+        if (root.TryGetProperty("takingAmount", out var ta) || root.TryGetProperty("taking_amount", out ta))
+        {
+            string? v = ta.ValueKind == JsonValueKind.String ? ta.GetString() : ta.ToString();
+            if (v != null && !decimal.TryParse(v, out takingVal)) takingVal = 0m;
+        }
+        if (root.TryGetProperty("makingAmount", out var ma) || root.TryGetProperty("making_amount", out ma))
+        {
+            string? v = ma.ValueKind == JsonValueKind.String ? ma.GetString() : ma.ToString();
+            if (v != null && !decimal.TryParse(v, out makingVal)) makingVal = 0m;
+        }
+        return isSell ? (makingVal, takingVal) : (takingVal, makingVal);
+    }
+
     private async Task<(decimal FilledShares, decimal AvgPrice)> PlacePolyLegAsync(
         string tokenId, decimal price, decimal shares)
     {
@@ -510,25 +548,56 @@ public class CrossArbExecutor
                 return (0m, 0m);
             }
 
+            string orderId = root.TryGetProperty("orderID", out var oidEl) ? oidEl.GetString() ?? "" : "";
+            string respStatus = root.TryGetProperty("status", out var stEl) ? stEl.GetString() ?? "" : "";
+            DebugLog.Trades($"PlacePolyLegAsync: orderID={orderId} status={respStatus}");
+
             // BUY: takingAmount = shares received, makingAmount = USDC spent
-            decimal takingVal = 0m, makingVal = 0m;
-            if (root.TryGetProperty("takingAmount", out var ta) || root.TryGetProperty("taking_amount", out ta))
+            (decimal filledShares, decimal spentUsdc) = ExtractPolyFill(root, isSell: false);
+            DebugLog.Trades($"PlacePolyLegAsync: response fill — shares={filledShares} spent={spentUsdc}");
+
+            // REST poll fallback — production uses this when the POST response doesn't carry fill
+            // amounts (e.g. status=delayed). FAK should fill immediately, but poll once to be safe.
+            if (filledShares <= 0 && !string.IsNullOrEmpty(orderId))
             {
-                string? v = ta.ValueKind == JsonValueKind.String ? ta.GetString() : ta.ToString();
-                if (v != null) decimal.TryParse(v, out takingVal);
-            }
-            if (root.TryGetProperty("makingAmount", out var ma) || root.TryGetProperty("making_amount", out ma))
-            {
-                string? v = ma.ValueKind == JsonValueKind.String ? ma.GetString() : ma.ToString();
-                if (v != null) decimal.TryParse(v, out makingVal);
+                DebugLog.Trades($"PlacePolyLegAsync: no fill in response — polling orderID={orderId}");
+                try
+                {
+                    string pollResult = await _poly.GetOrderAsync(orderId);
+                    using var pollDoc = JsonDocument.Parse(pollResult);
+                    var pollRoot = pollDoc.RootElement;
+                    JsonElement orderData = pollRoot.ValueKind == JsonValueKind.Array && pollRoot.GetArrayLength() > 0
+                        ? pollRoot[0] : pollRoot;
+
+                    string pollStatus = orderData.TryGetProperty("status", out var ps) ? ps.GetString() ?? "" : "";
+                    DebugLog.Trades($"PlacePolyLegAsync: poll status={pollStatus}");
+
+                    if (pollStatus == "matched" || pollStatus == "live")
+                    {
+                        // Poll response uses size_matched / taker_amount_matched (different field names)
+                        if (orderData.TryGetProperty("size_matched", out var smEl) &&
+                            decimal.TryParse(smEl.ToString(), out decimal sm) && sm > 0)
+                            filledShares = sm;
+                        else if (orderData.TryGetProperty("taker_amount_matched", out var takerEl) &&
+                            decimal.TryParse(takerEl.ToString(), out sm) && sm > 0)
+                            filledShares = sm;
+
+                        if (orderData.TryGetProperty("maker_amount_matched", out var makerEl) &&
+                            decimal.TryParse(makerEl.ToString(), out decimal md) && md > 0)
+                            spentUsdc = md;
+
+                        DebugLog.Trades($"PlacePolyLegAsync: poll fill — shares={filledShares} spent={spentUsdc}");
+                    }
+                }
+                catch (Exception pollEx)
+                {
+                    DebugLog.Trades($"PlacePolyLegAsync: poll failed for orderID={orderId}: {pollEx.Message}");
+                }
             }
 
-            decimal filledShares = takingVal;
-            decimal spentUsdc    = makingVal;
-            DebugLog.Trades($"PlacePolyLegAsync: takingAmount={takingVal} makingAmount={makingVal}");
             if (filledShares <= 0)
             {
-                DebugLog.Trades($"PlacePolyLegAsync: filledShares=0 — no fill");
+                DebugLog.Trades($"PlacePolyLegAsync: filledShares=0 after response+poll — FAK killed or no liquidity");
                 return (0m, 0m);
             }
 
