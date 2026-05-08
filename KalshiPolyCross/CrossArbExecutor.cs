@@ -8,6 +8,10 @@ using PredictionBacktester.Engine.LiveExecution;
 
 namespace KalshiPolyCross;
 
+public record ReconciliationEntry(
+    string PairId, string Label, string Status,
+    decimal KalshiQty, decimal PolyQty, string Notes);
+
 public record ArbPosition(
     string   PairId,
     string   ArbType,
@@ -49,9 +53,14 @@ public class CrossArbExecutor
     private readonly CancellationTokenSource _cts  = new();
     private          int     _totalExecuted        = 0;
     private readonly ConcurrentDictionary<string, byte> _inFlight = new();
-    private volatile bool   _halted               = false; // manual reset required (failed reversal)
+    private volatile bool   _halted               = false; // manual reset required (failed reversal / tripwire)
     private volatile bool   _connectionHalted     = false; // auto-clears when both venues reconnect
     private const    int    ReverseBufferCents     = 2;    // extra slippage tolerance for reversal orders
+    private const  decimal  TradeMaxLossMult       = 3.0m; // halt if actual loss > 3× expected edge
+    private          decimal  _dayLossUsd          = 0m;
+    private          DateOnly _dayStart            = DateOnly.FromDateTime(DateTime.UtcNow);
+    private readonly decimal  _maxDayLossUsd;
+    private readonly object   _dayLossLock         = new();
 
     // ── Balance tracking ──────────────────────────────────────────────────────
     // Live: fetched from APIs at startup, refreshed after each execution.
@@ -65,6 +74,10 @@ public class CrossArbExecutor
     private static decimal KalshiFee(decimal p) => 0.07m * p * (1m - p);
     private static decimal PolyFee(decimal p)   => p * 0.04m * p * (1m - p);
 
+    // ── Trade journal ─────────────────────────────────────────────────────────
+    private readonly string        _journalPath = $"CrossArbJournal_{DateTime.UtcNow:yyyyMMdd}.jsonl";
+    private readonly SemaphoreSlim _journalLock = new(1, 1);
+
     // ── CSV ───────────────────────────────────────────────────────────────────
     private readonly Channel<string> _csvChannel =
         Channel.CreateUnbounded<string>(new UnboundedChannelOptions { SingleReader = true });
@@ -76,6 +89,8 @@ public class CrossArbExecutor
     public int     TotalExecuted        => Volatile.Read(ref _totalExecuted);
     public bool    IsHalted             => _halted;
     public bool    IsConnectionHalted   => _connectionHalted;
+    public decimal DayLossUsd           { get { lock (_dayLossLock) return _dayLossUsd;    } }
+    public decimal MaxDayLossUsd        => _maxDayLossUsd;
     public decimal KalshiBalanceUsd     { get { lock (_balanceLock)  return _kalshiBalanceUsd;        } }
     public decimal PolyBalanceUsd       { get { lock (_balanceLock)  return _polyBalanceUsd;          } }
     public decimal TotalExposure        { get { lock (_exposureLock) return _totalExposure;           } }
@@ -93,6 +108,7 @@ public class CrossArbExecutor
         decimal executionThreshold  = 0.990m,
         int     pairCooldownSeconds = 120,
         int     fillTimeoutMs       = 5000,
+        decimal maxDayLossUsd       = 20m,
         bool    dryRun              = false)
     {
         _kalshi              = kalshi;
@@ -105,6 +121,7 @@ public class CrossArbExecutor
         _executionThreshold  = executionThreshold;
         _pairCooldownSeconds = pairCooldownSeconds;
         _fillTimeoutMs       = fillTimeoutMs;
+        _maxDayLossUsd       = maxDayLossUsd;
         _dryRun              = dryRun;
         _csvPath             = $"CrossArbExecution_{DateTime.UtcNow:yyyyMMdd_HHmmss}.csv";
         _ = Task.Run(RunCsvWriterAsync);
@@ -368,6 +385,14 @@ public class CrossArbExecutor
 
         var t0 = DateTime.UtcNow;
 
+        // Durable intent record — written before any order is sent
+        await JournalAsync(JsonSerializer.Serialize(new {
+            t = t0, @event = "INTENT",
+            pairId, arbType, kSide = kalshiSide,
+            kAsk = kLegAsk, pAsk = pLegAsk, netDetected = netNow,
+            contracts, estCost = estimatedCost
+        }));
+
         // Fire both legs simultaneously
         var kalshiTask = PlaceKalshiLegAsync(pair.KalshiTicker, kalshiSide, kPriceCents, contracts);
         var polyTask   = PlacePolyLegAsync(polyToken, pLegAsk, polyShares);
@@ -415,6 +440,53 @@ public class CrossArbExecutor
                     $"actualNet={actualNetPerSet:0.0000} detectedNet={netNow:0.0000} — arb eaten by slippage");
             }
             Console.ResetColor();
+
+            // ── Per-trade max loss tripwire ───────────────────────────────────
+            if (actualNetPerSet > 1.0m)
+            {
+                decimal expectedEdge = 1.0m - netNow;
+                decimal actualLoss   = actualNetPerSet - 1.0m;
+                if (actualLoss > TradeMaxLossMult * expectedEdge)
+                {
+                    await JournalAsync(JsonSerializer.Serialize(new {
+                        t = DateTime.UtcNow, @event = "HALT_TRIPWIRE",
+                        reason = "per_trade_loss", pairId,
+                        actualNet = actualNetPerSet, detectedNet = netNow,
+                        maxAllowed = 1.0m + TradeMaxLossMult * expectedEdge
+                    }));
+                    Console.ForegroundColor = ConsoleColor.Red;
+                    Console.WriteLine(
+                        $"[HALT] {pair.Label} | Per-trade tripwire: loss={actualLoss:0.0000} > " +
+                        $"{TradeMaxLossMult}× edge={expectedEdge:0.0000}. Manual reset required.");
+                    Console.ResetColor();
+                    _halted = true;
+                }
+
+                // ── Per-day max loss tripwire ─────────────────────────────────
+                decimal tradeLoss = actualLoss * balancedQty;
+                bool dayHalt = false;
+                lock (_dayLossLock)
+                {
+                    DateOnly today = DateOnly.FromDateTime(DateTime.UtcNow);
+                    if (today > _dayStart) { _dayLossUsd = 0m; _dayStart = today; }
+                    _dayLossUsd += tradeLoss;
+                    dayHalt = _dayLossUsd >= _maxDayLossUsd;
+                }
+                if (dayHalt && !_halted)
+                {
+                    await JournalAsync(JsonSerializer.Serialize(new {
+                        t = DateTime.UtcNow, @event = "HALT_TRIPWIRE",
+                        reason = "per_day_loss", pairId,
+                        dayLoss = _dayLossUsd, maxDayLoss = _maxDayLossUsd
+                    }));
+                    Console.ForegroundColor = ConsoleColor.Red;
+                    Console.WriteLine(
+                        $"[HALT] Per-day tripwire: cumulative loss ${_dayLossUsd:0.00} >= " +
+                        $"max ${_maxDayLossUsd:0.00}. Manual reset required.");
+                    Console.ResetColor();
+                    _halted = true;
+                }
+            }
         }
 
         if (kUnhedged > 0 || pUnhedged > 0)
@@ -430,6 +502,13 @@ public class CrossArbExecutor
         {
             Console.WriteLine($"[EXEC MISS] {pair.Label} | Neither leg filled. k-status={kStatus}");
         }
+
+        await JournalAsync(JsonSerializer.Serialize(new {
+            t = DateTime.UtcNow,
+            @event = neitherFilled ? "MISS" : "FILLED",
+            pairId, kFilled, pFilled = (double)pFilled,
+            balanced = balancedQty, kStatus
+        }));
 
         // Release exposure only when nothing filled at all.
         // Unhedged delta keeps exposure tracked until recovery resolves it.
@@ -872,6 +951,68 @@ HaltAfterReverseFailure:
             }
         }
         catch (Exception ex) { Console.WriteLine($"[EXEC CSV ERROR] {ex.Message}"); }
+    }
+
+    // ── Trade journal ─────────────────────────────────────────────────────────
+
+    private async Task JournalAsync(string json)
+    {
+        await _journalLock.WaitAsync();
+        try   { await File.AppendAllTextAsync(_journalPath, json + "\n"); }
+        finally { _journalLock.Release(); }
+    }
+
+    // ── Position reconciliation ───────────────────────────────────────────────
+
+    public async Task<List<ReconciliationEntry>> ReconcilePositionsAsync(IEnumerable<CrossPair> pairs)
+    {
+        var report = new List<ReconciliationEntry>();
+        List<(string Ticker, int Position)> kalshiPos;
+        try   { kalshiPos = await _kalshi.GetPositionsAsync(); }
+        catch { kalshiPos = []; }
+        var kalshiByTicker = kalshiPos.ToDictionary(p => p.Ticker, p => p.Position);
+
+        foreach (var pair in pairs)
+        {
+            try
+            {
+                decimal polyYes = await _poly.GetTokenBalanceAsync(pair.PolyYesTokenId);
+                decimal polyNo  = await _poly.GetTokenBalanceAsync(pair.PolyNoTokenId);
+                kalshiByTicker.TryGetValue(pair.KalshiTicker, out int kPos);
+
+                decimal kQty   = Math.Abs(kPos);
+                decimal pQty   = Math.Max(polyYes, polyNo);
+                string  status = (kQty == 0 && pQty == 0) ? "CLEAN"
+                               : (kQty > 0 && pQty > 0)   ? "MATCHED_POSITION"
+                               : (kQty > 0)                ? "UNHEDGED_KALSHI"
+                               :                             "UNHEDGED_POLY";
+                string notes = $"K={kPos} polyYes={polyYes:0.00} polyNo={polyNo:0.00}";
+                report.Add(new ReconciliationEntry(pair.PairId, pair.Label, status, kQty, pQty, notes));
+            }
+            catch (Exception ex)
+            {
+                report.Add(new ReconciliationEntry(pair.PairId, pair.Label,
+                    "RECONCILE_ERROR", 0, 0, ex.Message));
+            }
+        }
+        return report;
+    }
+
+    public async Task ReconcileOnStartupAsync(IEnumerable<CrossPair> pairs)
+    {
+        Console.WriteLine("[RECONCILE] Checking both venues for open positions from prior runs...");
+        var entries = await ReconcilePositionsAsync(pairs);
+        int issues = 0;
+        foreach (var e in entries)
+        {
+            if (e.Status == "CLEAN") continue;
+            issues++;
+            Console.ForegroundColor = e.Status.StartsWith("UNHEDGED") ? ConsoleColor.Red : ConsoleColor.Yellow;
+            Console.WriteLine($"[RECONCILE] {e.Label} | {e.Status} | K={e.KalshiQty} P={e.PolyQty} | {e.Notes}");
+            Console.ResetColor();
+        }
+        if (issues == 0)
+            Console.WriteLine("[RECONCILE] All pairs clean — no prior positions detected.");
     }
 
     // ── Connection watchdog controls ──────────────────────────────────────────

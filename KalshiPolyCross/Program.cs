@@ -217,9 +217,12 @@ if (isLive || isDryRun)
         executionThreshold:  0.990m,
         pairCooldownSeconds: 120,
         fillTimeoutMs:       5000,
+        maxDayLossUsd:       20m,
         dryRun:              isDryRun);
     telemetry.OnArbOpened += executor.OnArbOpened;
     await executor.InitializeBalancesAsync();
+    if (isLive && pairs.Count > 0)
+        await executor.ReconcileOnStartupAsync(pairs);
     string execLabel = isDryRun ? "DRY RUN — no real orders" : "LIVE";
     Console.WriteLine($"[EXECUTOR] {execLabel} | maxBet=${MAX_BET_USD:0.00} buffer={BALANCE_BUFFER_PCT:P0} maxExposure=${maxExposureUsd:0.00} threshold=0.990 cooldown=120s");
 }
@@ -394,7 +397,9 @@ if (executor != null)
                     $"exposure=${executor.TotalExposure:0.00}/${executor.MaxExposureUsd:0.00}  │  " +
                     $"open={executor.OpenPositionCount}  filled={executor.TotalExecuted}  │  " +
                     $"books K={kReady}/{kTotal} P={pReady}/{pTotal}" +
-                    $"  WS K={kalshiFeed.IsConnected} P={polyFeed.IsConnected}{haltTag}");
+                    $"  WS K={kalshiFeed.IsConnected} P={polyFeed.IsConnected}" +
+                    $"  dayLoss=${executor.DayLossUsd:0.00}/${executor.MaxDayLossUsd:0.00}" +
+                    $"{haltTag}");
             }
         }
         catch (Exception ex)

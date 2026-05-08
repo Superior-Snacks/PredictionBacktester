@@ -4,13 +4,13 @@
 
 ## Pre-Build Foundation
 
-- [ ] Persistent trade journal on disk (every trade intent written before order is sent)
-- [ ] Position reconciliation function that queries both venues for ground-truth positions
-- [ ] Reconcile-on-startup: on every bot start, sync local state to venue state before trading
+- [X] Persistent trade journal on disk (every trade intent written before order is sent)
+- [X] Position reconciliation function that queries both venues for ground-truth positions
+- [X] Reconcile-on-startup: on every bot start, sync local state to venue state before trading
 - [X] Side mapping derived from validated pair record only — never inferred from titles/rules at runtime
-- [ ] Per-trade max loss tripwire (e.g., 3x expected edge) → auto-halt
-- [ ] Per-day max loss tripwire (e.g., 10% of daily target) → auto-halt
-- [ ] Auto-halt requires manual reset to resume
+- [X] Per-trade max loss tripwire (e.g., 3x expected edge) → auto-halt
+- [X] Per-day max loss tripwire (e.g., 10% of daily target) → auto-halt
+- [X] Auto-halt requires manual reset to resume
 
 ## Order Placement
 

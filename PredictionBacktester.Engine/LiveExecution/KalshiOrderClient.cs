@@ -118,6 +118,33 @@ public class KalshiOrderClient : IDisposable
     }
 
     /// <summary>
+    /// Returns all open market positions. Positive position = net YES, negative = net NO.
+    /// Returns empty list on any API failure.
+    /// </summary>
+    public async Task<List<(string Ticker, int Position)>> GetPositionsAsync()
+    {
+        try
+        {
+            using var doc = await GetAsync("/portfolio/positions");
+            var result = new List<(string, int)>();
+            if (!doc.RootElement.TryGetProperty("market_positions", out var arr)) return result;
+            foreach (var el in arr.EnumerateArray())
+            {
+                string ticker = el.TryGetProperty("ticker",   out var t) ? t.GetString() ?? "" : "";
+                int    pos    = el.TryGetProperty("position", out var p) ? p.GetInt32()         : 0;
+                if (!string.IsNullOrEmpty(ticker) && pos != 0)
+                    result.Add((ticker, pos));
+            }
+            return result;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[KALSHI] GetPositionsAsync failed: {ex.Message}");
+            return new List<(string, int)>();
+        }
+    }
+
+    /// <summary>
     /// Places an IOC order on Kalshi. Returns (orderId, status, fill_count_fp).
     /// side = "yes" | "no", action = "buy" | "sell".
     /// priceCents = price in cents (e.g. 65 for $0.65).
