@@ -325,6 +325,45 @@ _ = Task.Run(async () =>
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
+//  WEBSOCKET FEEDS
+// ══════════════════════════════════════════════════════════════════════════════
+var kalshiFeed = new KalshiWebsocketFeed(orderClient, kalshiConfig, kalshiSubscribeTickers,
+                                         state, telemetry, KALSHI_BATCH_SIZE, MIN_BOOK_PRICE);
+var polyFeed   = new PolymarketWebsocketFeed(POLY_WS_URL, polySubscribeTokens,
+                                             state, telemetry, POLY_BATCH_SIZE, POLY_PING_INTERVAL_MS);
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  CONNECTION WATCHDOG  (live / dry-run only)
+// ══════════════════════════════════════════════════════════════════════════════
+if (executor != null)
+{
+    _ = Task.Run(async () =>
+    {
+        const int WATCHDOG_INTERVAL_MS = 5_000;
+        bool lastKOk = true, lastPOk = true;
+        try
+        {
+            while (!cts.Token.IsCancellationRequested)
+            {
+                await Task.Delay(WATCHDOG_INTERVAL_MS, cts.Token).ContinueWith(_ => { });
+                if (cts.Token.IsCancellationRequested) break;
+                bool kOk = kalshiFeed.IsConnected;
+                bool pOk = polyFeed.IsConnected;
+                if (!kOk && lastKOk) Console.WriteLine("[WATCHDOG] Kalshi disconnected — halting new trades");
+                if (!pOk && lastPOk) Console.WriteLine("[WATCHDOG] Polymarket disconnected — halting new trades");
+                if ( kOk && !lastKOk) Console.WriteLine("[WATCHDOG] Kalshi reconnected — resuming trades");
+                if ( pOk && !lastPOk) Console.WriteLine("[WATCHDOG] Polymarket reconnected — resuming trades");
+                lastKOk = kOk;
+                lastPOk = pOk;
+                if (!kOk || !pOk) executor.HaltForConnectionLoss();
+                else              executor.ResumeFromConnectionLoss();
+            }
+        }
+        catch (Exception ex) { Console.WriteLine($"[WATCHDOG ERROR] {ex.Message}"); }
+    });
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
 //  STATUS DASHBOARD  (live / dry-run only)
 // ══════════════════════════════════════════════════════════════════════════════
 if (executor != null)
@@ -345,13 +384,17 @@ if (executor != null)
 
                 decimal proj = executor.TotalProjectedProfit;
                 string projStr = (proj >= 0 ? "+" : "") + $"${proj:0.00}";
+                string haltTag = executor.IsHalted           ? "  [HALTED — manual reset required]"
+                               : executor.IsConnectionHalted ? "  [CONN HALT — waiting for reconnect]"
+                               : "";
                 Console.WriteLine(
                     $"[STATUS {DateTime.UtcNow:HH:mm:ss}] " +
                     $"K=${executor.KalshiBalanceUsd:0.00}  P=${executor.PolyBalanceUsd:0.00}  │  " +
                     $"invested=${executor.TotalInvested:0.00}  proj={projStr}  │  " +
                     $"exposure=${executor.TotalExposure:0.00}/${executor.MaxExposureUsd:0.00}  │  " +
                     $"open={executor.OpenPositionCount}  filled={executor.TotalExecuted}  │  " +
-                    $"books K={kReady}/{kTotal} P={pReady}/{pTotal}");
+                    $"books K={kReady}/{kTotal} P={pReady}/{pTotal}" +
+                    $"  WS K={kalshiFeed.IsConnected} P={polyFeed.IsConnected}{haltTag}");
             }
         }
         catch (Exception ex)
@@ -360,14 +403,6 @@ if (executor != null)
         }
     });
 }
-
-// ══════════════════════════════════════════════════════════════════════════════
-//  WEBSOCKET FEEDS
-// ══════════════════════════════════════════════════════════════════════════════
-var kalshiFeed = new KalshiWebsocketFeed(orderClient, kalshiConfig, kalshiSubscribeTickers,
-                                         state, telemetry, KALSHI_BATCH_SIZE, MIN_BOOK_PRICE);
-var polyFeed   = new PolymarketWebsocketFeed(POLY_WS_URL, polySubscribeTokens,
-                                             state, telemetry, POLY_BATCH_SIZE, POLY_PING_INTERVAL_MS);
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  HOT-RELOAD: watch cross_pairs.json for new pairs every 30s

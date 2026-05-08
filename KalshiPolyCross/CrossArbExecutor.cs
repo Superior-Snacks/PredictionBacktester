@@ -48,6 +48,10 @@ public class CrossArbExecutor
     private readonly object  _exposureLock         = new();
     private readonly CancellationTokenSource _cts  = new();
     private          int     _totalExecuted        = 0;
+    private readonly ConcurrentDictionary<string, byte> _inFlight = new();
+    private volatile bool   _halted               = false; // manual reset required (failed reversal)
+    private volatile bool   _connectionHalted     = false; // auto-clears when both venues reconnect
+    private const    int    ReverseBufferCents     = 2;    // extra slippage tolerance for reversal orders
 
     // ── Balance tracking ──────────────────────────────────────────────────────
     // Live: fetched from APIs at startup, refreshed after each execution.
@@ -70,6 +74,8 @@ public class CrossArbExecutor
     public int     OpenPositionCount    => _openPositions.Count(kv => kv.Value != null);
     public decimal MaxExposureUsd       => _maxExposureUsd;
     public int     TotalExecuted        => Volatile.Read(ref _totalExecuted);
+    public bool    IsHalted             => _halted;
+    public bool    IsConnectionHalted   => _connectionHalted;
     public decimal KalshiBalanceUsd     { get { lock (_balanceLock)  return _kalshiBalanceUsd;        } }
     public decimal PolyBalanceUsd       { get { lock (_balanceLock)  return _polyBalanceUsd;          } }
     public decimal TotalExposure        { get { lock (_exposureLock) return _totalExposure;           } }
@@ -179,6 +185,24 @@ public class CrossArbExecutor
     // ── Core execution ────────────────────────────────────────────────────────
 
     private async Task ExecuteAsync(string pairId, string arbType)
+    {
+        if (_halted || _connectionHalted)
+        {
+            DebugLog.Trades($"ExecuteAsync {pairId}: skipped — {(_halted ? "bot halted (manual reset required)" : "connection halted")}");
+            return;
+        }
+        // Per-pair in-flight guard: prevents two concurrent OnArbOpened callbacks from
+        // both passing the cooldown/open-position check before either one sets the cooldown.
+        if (!_inFlight.TryAdd(pairId, 0))
+        {
+            DebugLog.Trades($"ExecuteAsync {pairId}: skipped — already in-flight");
+            return;
+        }
+        try   { await ExecuteLockedAsync(pairId, arbType); }
+        finally { _inFlight.TryRemove(pairId, out _); }
+    }
+
+    private async Task ExecuteLockedAsync(string pairId, string arbType)
     {
         long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 
@@ -395,14 +419,12 @@ public class CrossArbExecutor
 
         if (kUnhedged > 0 || pUnhedged > 0)
         {
-            // One side filled more than the other — unhedged delta requires hedge-or-reverse.
-            // TODO: implement hedge-or-reverse recovery (see todo.md)
-            Console.ForegroundColor = ConsoleColor.Red;
             Console.WriteLine(
                 $"[EXEC UNHEDGED] {pair.Label} | " +
                 $"kFilled={kFilled} pFilled={pFilled:0.00} balanced={balancedQty} " +
-                $"kExcess={kUnhedged} pExcess={pUnhedged:0.00} — hedge-or-reverse not yet implemented");
-            Console.ResetColor();
+                $"kExcess={kUnhedged} pExcess={pUnhedged:0.00} — starting recovery");
+            await RecoverUnhedgedAsync(pair, arbType, kalshiSide, polyToken,
+                kFilled, pFilled, kLegAsk, pActualPrice);
         }
         else if (neitherFilled)
         {
@@ -462,8 +484,13 @@ public class CrossArbExecutor
                     return (orderId, pollStatus, pollFill);
             }
 
-            DebugLog.Trades($"PlaceKalshiLegAsync: timeout after {polls} polls, orderId={orderId} fillImm={fillImm}");
-            return (orderId, "timeout", fillImm);
+            // Settle window: the IOC may have gained partial fills between our last poll and the
+            // timeout. One final REST check makes the fill count authoritative before returning.
+            await Task.Delay(200).ConfigureAwait(false);
+            var (settleStatus, settleFill) = await _kalshi.PollOrderAsync(orderId);
+            DebugLog.Trades($"PlaceKalshiLegAsync: settle-poll after {polls} polls — status={settleStatus} fill={settleFill}");
+            return (orderId, settleStatus is "executed" or "canceled" ? settleStatus : "timeout",
+                    Math.Max(settleFill, fillImm));
         }
         catch (Exception ex)
         {
@@ -613,6 +640,190 @@ public class CrossArbExecutor
         }
     }
 
+    // ── Poly FAK sell (reversal) ──────────────────────────────────────────────
+
+    private async Task<(decimal SoldShares, decimal AvgPrice)> PlacePolySellAsync(
+        string tokenId, decimal shares)
+    {
+        string tokenShort = tokenId[..Math.Min(12, tokenId.Length)];
+        DebugLog.Trades($"PlacePolySellAsync: token={tokenShort}... shares={shares}");
+        try
+        {
+            // FAK sell: 0.01 floor so it matches any buyer; actual fill is at best bid
+            string result = await _poly.SubmitOrderAsync(
+                tokenId, 0.01m, shares, side: 1 /*SELL*/, negRisk: false, feeRateBps: 0);
+
+            if (string.IsNullOrEmpty(result)) return (0m, 0m);
+
+            using var doc = JsonDocument.Parse(result);
+            var root = doc.RootElement;
+            if (!root.TryGetProperty("success", out var sv) || !sv.GetBoolean())
+            {
+                DebugLog.Trades($"PlacePolySellAsync: success=false — {result[..Math.Min(200, result.Length)]}");
+                return (0m, 0m);
+            }
+
+            // SELL: makingAmount = shares sold, takingAmount = USDC received
+            (decimal soldShares, decimal usdcReceived) = ExtractPolyFill(root, isSell: true);
+            decimal avgPrice = soldShares > 0 && usdcReceived > 0 ? usdcReceived / soldShares : 0m;
+            DebugLog.Trades($"PlacePolySellAsync: soldShares={soldShares} avgPrice={avgPrice:0.0000}");
+            return (soldShares, avgPrice);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[POLY SELL ERROR] {tokenShort}...: {ApiErrorHelper.ClassifyPoly(ex)}");
+            DebugLog.Trades($"PlacePolySellAsync exception for {tokenShort}: {ex}");
+            return (0m, 0m);
+        }
+    }
+
+    // ── Unhedged delta recovery ───────────────────────────────────────────────
+
+    private async Task RecoverUnhedgedAsync(
+        CrossPair pair, string arbType,
+        string kalshiSide, string polyToken,
+        decimal kFilled, decimal pFilled,
+        decimal kLegAsk, decimal pActualPrice)
+    {
+        decimal balancedQty = Math.Min(kFilled, pFilled);
+        decimal kUnhedged   = kFilled - balancedQty;
+        decimal pUnhedged   = pFilled - balancedQty;
+
+        // ── Case A: Kalshi filled more — own excess Kalshi contracts ─────────
+        if (kUnhedged > 0)
+        {
+            if (!_books.TryGetValue($"P:{polyToken}", out var pBook))
+            {
+                DebugLog.Trades($"RecoverUnhedgedAsync {pair.Label}: Poly book missing for {polyToken}");
+                goto HaltOnMissingBook;
+            }
+            decimal currentPolyAsk = pBook.GetBestAskPrice();
+            decimal hedgeNet = kLegAsk + currentPolyAsk + KalshiFee(kLegAsk) + PolyFee(currentPolyAsk);
+            DebugLog.Trades($"RecoverUnhedgedAsync {pair.Label}: kUnhedged={kUnhedged} polyAsk={currentPolyAsk:0.0000} hedgeNet={hedgeNet:0.0000}");
+
+            if (hedgeNet < 1.0m)
+            {
+                Console.ForegroundColor = ConsoleColor.Yellow;
+                Console.WriteLine($"[RECOVER] {pair.Label} | kExcess={kUnhedged} hedgeNet={hedgeNet:0.0000} — completing hedge on Poly");
+                Console.ResetColor();
+
+                var (polyFill2, _) = await PlacePolyLegAsync(polyToken, currentPolyAsk, kUnhedged);
+                if (polyFill2 > 0)
+                {
+                    decimal additional = Math.Min(kUnhedged, polyFill2);
+                    if (_openPositions.TryGetValue(pair.PairId, out var pos))
+                        _openPositions[pair.PairId] = pos with
+                        {
+                            KalshiContracts = pos.KalshiContracts + additional,
+                            PolyShares      = pos.PolyShares      + additional
+                        };
+                    Console.ForegroundColor = ConsoleColor.Green;
+                    Console.WriteLine($"[RECOVER OK] {pair.Label} | hedge completed +{additional} sets via Poly retry");
+                    Console.ResetColor();
+                    return;
+                }
+                Console.WriteLine($"[RECOVER] {pair.Label} | Poly hedge retry failed — reversing Kalshi excess");
+            }
+            else
+            {
+                Console.WriteLine($"[RECOVER] {pair.Label} | hedgeNet={hedgeNet:0.0000} >= 1.0 — reversing {kUnhedged} Kalshi {kalshiSide} directly");
+            }
+
+            // Reverse: sell excess Kalshi contracts back at best bid − buffer
+            string kBookKey = arbType == "K_YES_P_NO" ? $"K:{pair.KalshiTicker}" : $"K:{pair.KalshiTicker}_NO";
+            decimal kBestBid = _books.TryGetValue(kBookKey, out var kBook) ? kBook.GetBestBidPrice() : 0m;
+            int kReverseCents = Math.Max(1, (int)Math.Floor((kBestBid - ReverseBufferCents / 100m) * 100));
+            DebugLog.Trades($"RecoverUnhedgedAsync: selling {kUnhedged} Kalshi {kalshiSide} @ {kReverseCents}¢");
+            try
+            {
+                var (_, revStatus, revFill) = await _kalshi.PlaceOrderAsync(
+                    pair.KalshiTicker, kalshiSide, kReverseCents, (int)kUnhedged, action: "sell");
+                if (revFill > 0)
+                {
+                    Console.ForegroundColor = ConsoleColor.Yellow;
+                    Console.WriteLine($"[RECOVER REVERSED] {pair.Label} | sold {revFill} Kalshi {kalshiSide} @ {kReverseCents}¢");
+                    Console.ResetColor();
+                    return;
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[RECOVER ERROR] {pair.Label} | Kalshi reverse exception: {ApiErrorHelper.ClassifyKalshi(ex)}");
+            }
+            goto HaltAfterReverseFailure;
+        }
+
+        // ── Case B: Poly filled more — own excess Poly shares ────────────────
+        if (pUnhedged > 0)
+        {
+            string kHedgeKey = arbType == "K_YES_P_NO" ? $"K:{pair.KalshiTicker}" : $"K:{pair.KalshiTicker}_NO";
+            if (!_books.TryGetValue(kHedgeKey, out var kHedgeBook))
+            {
+                DebugLog.Trades($"RecoverUnhedgedAsync {pair.Label}: Kalshi book missing for {kHedgeKey}");
+                goto HaltOnMissingBook;
+            }
+            decimal currentKalshiAsk = kHedgeBook.GetBestAskPrice();
+            int currentKCents = (int)Math.Round(currentKalshiAsk * 100);
+            decimal hedgeNet = currentKalshiAsk + pActualPrice + KalshiFee(currentKalshiAsk) + PolyFee(pActualPrice);
+            DebugLog.Trades($"RecoverUnhedgedAsync {pair.Label}: pUnhedged={pUnhedged} kalshiAsk={currentKalshiAsk:0.0000} hedgeNet={hedgeNet:0.0000}");
+
+            if (hedgeNet < 1.0m)
+            {
+                Console.ForegroundColor = ConsoleColor.Yellow;
+                Console.WriteLine($"[RECOVER] {pair.Label} | pExcess={pUnhedged} hedgeNet={hedgeNet:0.0000} — completing hedge on Kalshi");
+                Console.ResetColor();
+
+                var (_, kStatus2, kFill2) = await PlaceKalshiLegAsync(
+                    pair.KalshiTicker, kalshiSide, currentKCents, (int)pUnhedged);
+                if (kFill2 > 0)
+                {
+                    decimal additional = Math.Min(pUnhedged, kFill2);
+                    if (_openPositions.TryGetValue(pair.PairId, out var pos))
+                        _openPositions[pair.PairId] = pos with
+                        {
+                            KalshiContracts = pos.KalshiContracts + additional,
+                            PolyShares      = pos.PolyShares      + additional
+                        };
+                    Console.ForegroundColor = ConsoleColor.Green;
+                    Console.WriteLine($"[RECOVER OK] {pair.Label} | hedge completed +{additional} sets via Kalshi retry");
+                    Console.ResetColor();
+                    return;
+                }
+                Console.WriteLine($"[RECOVER] {pair.Label} | Kalshi hedge retry failed — reversing Poly excess");
+            }
+            else
+            {
+                Console.WriteLine($"[RECOVER] {pair.Label} | hedgeNet={hedgeNet:0.0000} >= 1.0 — reversing {pUnhedged:0.00} Poly shares directly");
+            }
+
+            // Reverse: sell excess Poly shares back
+            var (soldShares, soldPrice) = await PlacePolySellAsync(polyToken, pUnhedged);
+            if (soldShares > 0)
+            {
+                Console.ForegroundColor = ConsoleColor.Yellow;
+                Console.WriteLine($"[RECOVER REVERSED] {pair.Label} | sold {soldShares:0.00} Poly shares @ ${soldPrice:0.0000}");
+                Console.ResetColor();
+                return;
+            }
+            goto HaltAfterReverseFailure;
+        }
+
+        return;
+
+HaltOnMissingBook:
+        Console.ForegroundColor = ConsoleColor.Red;
+        Console.WriteLine($"[HALT] {pair.Label} | Recovery aborted — live book data missing. Manual reset required.");
+        Console.ResetColor();
+        _halted = true;
+        return;
+
+HaltAfterReverseFailure:
+        Console.ForegroundColor = ConsoleColor.Red;
+        Console.WriteLine($"[HALT] {pair.Label} | Reverse order failed — unhedged position open. Manual reset required.");
+        Console.ResetColor();
+        _halted = true;
+    }
+
     // ── CSV ───────────────────────────────────────────────────────────────────
 
     private void EnqueueCsvRow(CrossPair pair, string arbType, DateTime t,
@@ -662,6 +873,11 @@ public class CrossArbExecutor
         }
         catch (Exception ex) { Console.WriteLine($"[EXEC CSV ERROR] {ex.Message}"); }
     }
+
+    // ── Connection watchdog controls ──────────────────────────────────────────
+
+    public void HaltForConnectionLoss()  => _connectionHalted = true;
+    public void ResumeFromConnectionLoss() => _connectionHalted = false;
 
     public async Task ShutdownAsync()
     {

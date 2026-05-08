@@ -22,6 +22,9 @@ public class PolymarketWebsocketFeed
     private readonly int _pingIntervalMs;
     private readonly ConcurrentQueue<List<string>> _pendingSubscriptions = new();
 
+    /// <summary>True while the WS is subscribed and receiving messages. False during disconnect/reconnect window.</summary>
+    public volatile bool IsConnected = false;
+
     public PolymarketWebsocketFeed(
         string   wsUrl,
         List<string> tokens,
@@ -102,6 +105,7 @@ public class PolymarketWebsocketFeed
                     await Task.Delay(100, ct);
                 }
                 Console.WriteLine($"[POLY WS] Subscribed to {_tokens.Count} tokens");
+                IsConnected = true;
 
                 // On reconnect (not first connect): clear stale books and close open telemetry windows
                 if (!firstConnect)
@@ -152,6 +156,7 @@ public class PolymarketWebsocketFeed
                 DebugLog.Feed($"PolymarketWebsocketFeed exception: {ex}");
             }
 
+            IsConnected = false; // Covers both normal socket close and exception paths
             if (!ct.IsCancellationRequested)
                 await Task.Delay(5_000, ct).ContinueWith(_ => { });
         }

@@ -25,6 +25,9 @@ public class KalshiWebsocketFeed
     private readonly ConcurrentQueue<List<string>> _pendingSubscriptions = new();
     private int _msgId = 1; // shared between initial subscribe + dynamic subscribe
 
+    /// <summary>True while the WS is subscribed and receiving messages. False during disconnect/reconnect window.</summary>
+    public volatile bool IsConnected = false;
+
     public KalshiWebsocketFeed(
         KalshiOrderClient orderClient,
         KalshiApiConfig   config,
@@ -75,6 +78,7 @@ public class KalshiWebsocketFeed
                     await Task.Delay(100, ct);
                 }
                 Console.WriteLine($"[KALSHI WS] Subscribed to {_tickers.Count} tickers");
+                IsConnected = true;
 
                 // On reconnect (not first connect): clear stale books and close open telemetry windows
                 if (!firstConnect)
@@ -133,6 +137,7 @@ public class KalshiWebsocketFeed
                 DebugLog.Feed($"KalshiWebsocketFeed exception: {ex}");
             }
 
+            IsConnected = false; // Covers both normal socket close and exception paths
             if (!ct.IsCancellationRequested)
                 await Task.Delay(5_000, ct).ContinueWith(_ => { });
         }

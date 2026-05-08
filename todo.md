@@ -26,23 +26,23 @@
 
 - [X] Neither leg fills → no exposure, log and continue
 - [X] After fills, compute balanced qty and flag any unhedged delta
-- [ ] Unhedged delta > 0 → trigger hedge-or-reverse for the excess
-- [ ] Cancel-fill race condition handled (sleep + reconcile, treat local state as hint only)
-- [ ] Connection loss to either venue → halt new trades, attempt close-out via REST
-- [ ] Watchdog heartbeat that triggers halt if both venues unreachable >N seconds
+- [X] Unhedged delta > 0 → trigger hedge-or-reverse for the excess
+- [X] Cancel-fill race condition handled (sleep + reconcile, treat local state as hint only)
+- [ ] Connection loss to either venue → halt new trades
+- [X] Watchdog heartbeat that triggers halt if both venues unreachable >N seconds
 - [ ] Detect "filled but at unexpected price" (slippage beyond limit tolerance)
 
 ## Hedge-or-Reverse Decision Logic
 
-- [ ] Function exists and is the single entry point for all unhedged delta recovery
+- [X] Function exists and is the single entry point for all unhedged delta recovery
 - [ ] Inputs: unhedged leg + qty, current opposite-venue quote, time elapsed since fill
-- [ ] Re-snapshot the opposite venue before deciding (don't trust stale data)
-- [ ] If completing the hedge at current price still preserves positive edge → retry fill
-- [ ] If completing the hedge guarantees more loss than reversing → reverse the excess
-- [ ] Time-bounded retry (don't loop forever)
-- [ ] Reverse uses higher slippage tolerance than original entry
-- [ ] If reverse also fails → escalate to alert + halt
-- [ ] Reverse buffer is a tunable parameter (start ~1-2¢)
+- [X] Re-snapshot the opposite venue before deciding (don't trust stale data)
+- [X] If completing the hedge at current price still preserves positive edge → retry fill
+- [X] If completing the hedge guarantees more loss than reversing → reverse the excess
+- [X] Time-bounded retry (don't loop forever)
+- [X] Reverse uses higher slippage tolerance than original entry
+- [X] If reverse also fails → escalate to alert + halt
+- [X] Reverse buffer is a tunable parameter (start ~1-2¢)
 
 ## Cleanup Trades (Imbalance Fixes)
 
