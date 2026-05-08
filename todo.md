@@ -28,7 +28,7 @@
 - [X] After fills, compute balanced qty and flag any unhedged delta
 - [X] Unhedged delta > 0 → trigger hedge-or-reverse for the excess
 - [X] Cancel-fill race condition handled (sleep + reconcile, treat local state as hint only)
-- [ ] Connection loss to either venue → halt new trades
+- [X] Connection loss to either venue → halt new trades
 - [X] Watchdog heartbeat that triggers halt if both venues unreachable >N seconds
 - [ ] Detect "filled but at unexpected price" (slippage beyond limit tolerance)
 
