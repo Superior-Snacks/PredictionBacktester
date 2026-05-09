@@ -398,7 +398,17 @@ public class CrossArbExecutor
 
         if (_dryRun)
         {
-            // Speculative deduction above acts as the simulated spend; log and exit.
+            var    t0DryRun = DateTime.UtcNow;
+            string execId   = $"{t0DryRun:yyyyMMddHHmmss}_{pair.KalshiTicker}";
+
+            await JournalAsync(JsonSerializer.Serialize(new {
+                t = t0DryRun, @event = "INTENT",
+                pairId, arbType, kSide = kalshiSide,
+                kAsk = kLegAsk, pAsk = pLegAsk, netDetected = netNow,
+                contracts, estCost = estimatedCost,
+                dryRun = true
+            }));
+
             decimal kBalAfter, pBalAfter;
             lock (_balanceLock) { kBalAfter = _kalshiBalanceUsd; pBalAfter = _polyBalanceUsd; }
             Console.ForegroundColor = ConsoleColor.Yellow;
@@ -407,8 +417,61 @@ public class CrossArbExecutor
                 $"P={pLegAsk:0.0000} net=${netNow:0.0000} | {contracts} contracts est.cost=${estimatedCost:0.00} " +
                 $"| balanceAfter K=${kBalAfter:0.00} P=${pBalAfter:0.00}");
             Console.ResetColor();
-            EnqueueCsvRow(pair, arbType, DateTime.UtcNow, kPriceCents, kLegAsk, pLegAsk,
+            EnqueueCsvRow(pair, arbType, t0DryRun, kPriceCents, kLegAsk, pLegAsk,
                           0m, 0m, 0m, netNow, "DRY_RUN");
+
+            // Simulated fills — perfect fill at detected prices, no slippage
+            decimal simKFilled   = contracts;
+            decimal simPFilled   = contracts;
+            decimal simNetPerSet = netNow;   // kLegAsk + pLegAsk + fees
+            decimal simProfit    = contracts * (1.0m - simNetPerSet);
+
+            await JournalAsync(JsonSerializer.Serialize(new {
+                t = DateTime.UtcNow, @event = "EXECUTION_COMPLETE",
+                execId, pairId, arbType, label = pair.Label, dryRun = true,
+
+                detected = new {
+                    kAsk = kLegAsk, pAsk = pLegAsk,
+                    netCost = Math.Round(netNow, 6),
+                    contracts, estCostUsd = Math.Round(estimatedCost, 4),
+                    venueSkewMs = Math.Round(venueSkewMs, 1)
+                },
+
+                fills = new {
+                    kalshi = new {
+                        ordered = contracts, filled = simKFilled,
+                        limitCents = kPriceCents, fillPrice = kLegAsk,
+                        feePerContract = Math.Round(KalshiFee(kLegAsk), 6),
+                        status = "simulated"
+                    },
+                    poly = new {
+                        ordered = (int)polyShares, filled = Math.Round(simPFilled, 6),
+                        limitPrice = pLegAsk,
+                        avgFillPrice = (object?)Math.Round(pLegAsk, 6),
+                        feePerShare  = (object?)Math.Round(PolyFee(pLegAsk), 6),
+                        slippagePct  = (object?)0.0m
+                    }
+                },
+
+                hedge = new {
+                    balanced = simKFilled, kExcess = 0m, pExcess = 0m,
+                    recovery = (object?)null
+                },
+
+                position = (object?)new {
+                    kHeld = simKFilled, pHeld = simPFilled,
+                    kEntryPrice = kLegAsk,
+                    pAvgPrice   = Math.Round(pLegAsk, 6),
+                    totalCostUsd       = Math.Round(estimatedCost, 4),
+                    modeledNetPerSet   = Math.Round(netNow, 6),
+                    actualNetPerSet    = Math.Round(simNetPerSet, 6),
+                    projectedProfitUsd = Math.Round(simProfit, 4)
+                },
+
+                outcome = "BOTH_FILLED",
+                stalePriceSuspected = false,
+                durationMs = (long)(DateTime.UtcNow - t0DryRun).TotalMilliseconds
+            }));
             return;
         }
 
