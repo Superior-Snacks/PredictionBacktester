@@ -81,6 +81,32 @@
 - [X] API rate limits: rate limiter on outbound requests, never let limit-hit cause leg-fail
 - [X] Daylight savings / timezone bugs in settlement timing comparisons
 
+## Known Bugs — Fix Before First Dry-Run
+
+These were found by static audit; none require a live run to trigger.
+
+- [ ] **Dry-run cooldown missing**: `_cooldownUntil[pairId]` is only set on the live path (after the dry-run early return). The same pair can re-execute on every scan cycle with no throttle — floods the journal. Fix: set `_cooldownUntil[pairId] = now + _pairCooldownSeconds` at the top of the dry-run block.
+- [ ] **Dry-run bypasses per-pair exposure limit**: `_perPairInvested` is only incremented on the live path. Dry-run can simulate unlimited exposure to a single pair. Fix: mirror the per-pair update inside the dry-run block after `simKFilled > 0`.
+- [ ] **Dry-run bypasses total exposure limit**: `_totalExposure` is only incremented on the live path. Fix: same — add `_totalExposure += estimatedCost` inside the dry-run block (inside `_exposureLock`).
+- [ ] **Dry-run bypasses blocklist check**: Blocklist check is after the dry-run return, so blocked pairs get journaled as valid dry-run trades. Fix: move the blocklist check (and the balance restore on block) to before the `if (_dryRun)` block, or add a redundant check inside it.
+- [ ] **Journal directory not created on startup**: `_journalPath` is a bare filename (no directory), relying on the working directory being writable. `File.AppendAllTextAsync` will throw if the parent directory doesn't exist. Verify working directory at startup or use `Directory.CreateDirectory` before first write.
+- [ ] **`PolyFee` formula needs empirical verification**: Formula is `0.04 × p² × (1−p)` — non-standard. At p=0.50 this yields $0.005/share vs Polymarket's ~$0.02/share actual fee on a resolving YES. Verify against real fee receipts before production or the edge model is optimistic.
+
+## Verification Checklist — First Dry-Run Session
+
+Run through these during/after the first dry-run to confirm correct behavior.
+
+- [ ] **Populate `cross_pairs.json` first** — currently empty `[]`; executor idles forever with no pairs and logs nothing. Run `pair_markets.py` or manually add at least one verified pair.
+- [ ] **Journal file is created and parseable**: After first dry-run trade fires, confirm `CrossArbJournal_*.jsonl` exists in the working directory and contains valid JSON lines with `"event":"INTENT"` and `"event":"EXECUTION_COMPLETE"`.
+- [ ] **`prod_cross_arb.py` parses dry-run journal**: Run `python KalshiPolyCross/prod_cross_arb.py --no-api` against the dry-run journal. Confirm it shows non-zero event counts rather than "0 events found".
+- [ ] **`dryRun: true` visible in raw journal**: Grep the JSONL for `"dryRun":true` — confirm all dry-run records are tagged so they can be distinguished from live records if journals are ever merged.
+- [ ] **Balance depletes correctly**: Watch console balance-after values across trades; should decrease monotonically as simulated cost accumulates from $1,000 seed.
+- [ ] **Cooldown respected between pairs** (after bug fix above): Same pair should not fire twice within `_pairCooldownSeconds`.
+- [ ] **TIME_SKEW events fire on skewed books**: If any journal entry shows `"event":"TIME_SKEW"`, verify the `venueSkewMs` field is present and >500.
+- [ ] **Halt path reachable**: Manually block one venue's REST endpoint (firewall rule or kill network) and confirm `[MAINTENANCE]` appears in console after 5 failures and `VENUE_MAINTENANCE` is journaled. Confirm new trades stop.
+- [ ] **`prod_cross_arb.py` settlement section handles dry-run**: Confirm the settlement/blocklist section of the analyzer doesn't crash on `"status":"simulated"` in the fills object.
+- [ ] **429 retry path**: Confirm that if Kalshi returns 429, the log shows `[KALSHI RATE LIMIT]` and the retry fires 1s later (not an immediate leg-fail).
+
 ## Pre-Live Validation
 
 - [ ] Replay last week of telemetry data against the execution bot in dry-run mode
