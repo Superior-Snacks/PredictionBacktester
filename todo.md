@@ -53,10 +53,10 @@
 
 ## Post-Trade Reconciliation
 
-- [ ] After every trade, compare local position state to venue state
-- [ ] Mismatch logs are alerts, not silent corrections
-- [ ] Daily reconciliation report: realized fees vs. modeled fees per trade
-- [ ] Fee model drift >10% triggers fee model audit
+- [X] After every trade, compare local position state to venue state (ReconcileTradeAsync, fire-and-forget after fill)
+- [X] Mismatch logs are alerts, not silent corrections ([RECONCILE ALERT] printed red + journaled as RECONCILE_MISMATCH)
+- [X] Daily reconciliation report: modeled fees vs net cost variance per trade (DAILY_REPORT journal entry on day rollover)
+- [X] Fee model drift >10% triggers fee model audit ([FEE MODEL DRIFT] warning when |netVar|/modeledFees > 10%)
 
 ## Settlement & Post-Mortem
 

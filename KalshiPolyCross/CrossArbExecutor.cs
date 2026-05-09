@@ -65,6 +65,11 @@ public class CrossArbExecutor
     private readonly object   _dayLossLock         = new();
     private          decimal  _totalCleanupCostUsd = 0m;
     private readonly object   _cleanupLock         = new();
+    private          decimal  _dailyModeledFeesUsd = 0m;
+    private          decimal  _dailyNetVarUsd       = 0m;
+    private          int      _dailyTradeCount      = 0;
+    private          DateOnly _feeTrackingDay       = DateOnly.FromDateTime(DateTime.UtcNow);
+    private readonly object   _feeTrackingLock      = new();
 
     // ── Balance tracking ──────────────────────────────────────────────────────
     // Live: fetched from APIs at startup, refreshed after each execution.
@@ -411,15 +416,16 @@ public class CrossArbExecutor
         decimal balancedQty  = Math.Min(kFilled, pFilled);
         decimal kUnhedged    = kFilled - balancedQty;  // excess Kalshi contracts
         decimal pUnhedged    = pFilled - balancedQty;  // excess Poly shares
-        bool    neitherFilled = kFilled == 0 && pFilled == 0;
+        bool    neitherFilled   = kFilled == 0 && pFilled == 0;
+        decimal actualNetPerSet = 0m;
 
         if (balancedQty > 0)
         {
-            decimal actualCost      = kLegAsk * balancedQty + pActualPrice * balancedQty;
+            decimal actualCost  = kLegAsk * balancedQty + pActualPrice * balancedQty;
             // Actual net cost per set using confirmed fill prices + fees.
             // kLegAsk is the IOC limit price (fills at or below this). pActualPrice is Poly's
             // reported average fill price and may exceed pLegAsk if the book was walked.
-            decimal actualNetPerSet = kLegAsk + pActualPrice + KalshiFee(kLegAsk) + PolyFee(pActualPrice);
+            actualNetPerSet = kLegAsk + pActualPrice + KalshiFee(kLegAsk) + PolyFee(pActualPrice);
             bool    arbProfitable   = actualNetPerSet < 1.0m;
             decimal actualProfit    = balancedQty * (1.0m - actualNetPerSet);
 
@@ -492,6 +498,52 @@ public class CrossArbExecutor
                     _halted = true;
                 }
             }
+
+            // ── Fee model tracking ────────────────────────────────────────────────
+            decimal modeledFees = (KalshiFee(kLegAsk) + PolyFee(pLegAsk)) * balancedQty;
+            decimal netVar      = (actualNetPerSet - netNow) * balancedQty;
+            bool emitDailyReport = false;
+            decimal reportModeled = 0m, reportNetVar = 0m;
+            int reportCount = 0;
+            lock (_feeTrackingLock)
+            {
+                DateOnly today = DateOnly.FromDateTime(DateTime.UtcNow);
+                if (today > _feeTrackingDay)
+                {
+                    emitDailyReport      = true;
+                    reportModeled        = _dailyModeledFeesUsd;
+                    reportNetVar         = _dailyNetVarUsd;
+                    reportCount          = _dailyTradeCount;
+                    _dailyModeledFeesUsd = 0m;
+                    _dailyNetVarUsd      = 0m;
+                    _dailyTradeCount     = 0;
+                    _feeTrackingDay      = today;
+                }
+                _dailyModeledFeesUsd += modeledFees;
+                _dailyNetVarUsd      += netVar;
+                _dailyTradeCount++;
+            }
+            if (emitDailyReport)
+            {
+                decimal drift = reportModeled > 0 ? Math.Abs(reportNetVar) / reportModeled : 0m;
+                await JournalAsync(JsonSerializer.Serialize(new {
+                    t = DateTime.UtcNow, @event = "DAILY_REPORT",
+                    trades = reportCount, modeledFeesUsd = reportModeled,
+                    netVarUsd = reportNetVar, driftPct = (double)(drift * 100)
+                }));
+                if (drift > 0.10m)
+                {
+                    Console.ForegroundColor = ConsoleColor.Yellow;
+                    Console.WriteLine(
+                        $"[FEE MODEL DRIFT] Previous day: {reportCount} trades | " +
+                        $"modeled=${reportModeled:0.00} var=${reportNetVar:+0.00;-0.00} drift={drift:0.0%} — audit recommended");
+                    Console.ResetColor();
+                }
+                else
+                    Console.WriteLine(
+                        $"[DAILY REPORT] {reportCount} trades | " +
+                        $"modeled fees=${reportModeled:0.00} cost_var=${reportNetVar:+0.00;-0.00} drift={drift:0.0%}");
+            }
         }
 
         if (kUnhedged > 0 || pUnhedged > 0)
@@ -512,7 +564,9 @@ public class CrossArbExecutor
             t = DateTime.UtcNow,
             @event = neitherFilled ? "MISS" : "FILLED",
             pairId, kFilled, pFilled = (double)pFilled,
-            balanced = balancedQty, kStatus
+            balanced = balancedQty, kStatus,
+            modeledNet = balancedQty > 0 ? (object)Math.Round(netNow, 6)          : null,
+            actualNet  = balancedQty > 0 ? (object)Math.Round(actualNetPerSet, 6) : null
         }));
 
         // Release exposure only when nothing filled at all.
@@ -524,6 +578,9 @@ public class CrossArbExecutor
         {
             // Re-fetch real balances after any execution — replaces speculative reservation with actuals.
             await RefreshBalancesAsync();
+            // Post-trade position check — fire-and-forget; must not block the next arb window.
+            if (balancedQty > 0)
+                _ = Task.Run(async () => await ReconcileTradeAsync(pair, arbType, balancedQty, balancedQty));
         }
         else
         {
@@ -1082,6 +1139,44 @@ HaltAfterReverseFailure:
         }
         if (issues == 0)
             Console.WriteLine("[RECONCILE] All pairs clean — no prior positions detected.");
+    }
+
+    // ── Post-trade reconciliation ─────────────────────────────────────────────
+
+    private async Task ReconcileTradeAsync(CrossPair pair, string arbType, decimal expectedKalshi, decimal expectedPoly)
+    {
+        try
+        {
+            await Task.Delay(2_000); // brief settle window before querying venues
+            var kalshiPositions = await _kalshi.GetPositionsAsync();
+            int kPos = kalshiPositions.FirstOrDefault(p => p.Ticker == pair.KalshiTicker).Position;
+            string polyTokenId = arbType == "K_YES_P_NO" ? pair.PolyNoTokenId : pair.PolyYesTokenId;
+            decimal polyBal    = await _poly.GetTokenBalanceAsync(polyTokenId);
+            decimal kActual    = Math.Abs(kPos);
+            bool kMismatch = Math.Abs(kActual - expectedKalshi) > 0.5m;
+            bool pMismatch = Math.Abs(polyBal  - expectedPoly)  > 0.5m;
+            if (kMismatch || pMismatch)
+            {
+                Console.ForegroundColor = ConsoleColor.Red;
+                Console.WriteLine(
+                    $"[RECONCILE ALERT] {pair.Label} | " +
+                    $"K: local={expectedKalshi} venue={kActual} | " +
+                    $"P: local={expectedPoly:0.00} venue={polyBal:0.00}");
+                Console.ResetColor();
+                await JournalAsync(JsonSerializer.Serialize(new {
+                    t = DateTime.UtcNow, @event = "RECONCILE_MISMATCH",
+                    pair = pair.PairId, arbType,
+                    kExpected = expectedKalshi, kVenue = kActual,
+                    pExpected = expectedPoly,   pVenue = polyBal
+                }));
+            }
+            else
+                DebugLog.Trades($"ReconcileTradeAsync {pair.Label}: confirmed K={kActual} P={polyBal:0.00}");
+        }
+        catch (Exception ex)
+        {
+            DebugLog.Trades($"ReconcileTradeAsync {pair.Label}: {ex.GetType().Name}: {ex.Message}");
+        }
     }
 
     // ── Connection watchdog controls ──────────────────────────────────────────
