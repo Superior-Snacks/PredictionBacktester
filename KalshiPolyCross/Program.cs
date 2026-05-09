@@ -399,6 +399,7 @@ if (executor != null)
                     $"books K={kReady}/{kTotal} P={pReady}/{pTotal}" +
                     $"  WS K={kalshiFeed.IsConnected} P={polyFeed.IsConnected}" +
                     $"  dayLoss=${executor.DayLossUsd:0.00}/${executor.MaxDayLossUsd:0.00}" +
+                    $"  cleanup=${executor.TotalCleanupCostUsd:0.00}" +
                     $"{haltTag}");
             }
         }

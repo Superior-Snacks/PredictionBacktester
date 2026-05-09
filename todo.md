@@ -18,7 +18,7 @@
 - [X] Limit price = the price your model evaluated, not a few cents better
 - [X] Both legs fire simultaneously (Kalshi IOC + Poly FAK)
 - [X] Position recorded at min(kFilled, pFilled) — balanced hedged quantity only
-- [ ] Client-side order IDs for idempotency (sending same trade twice is safe)
+- [~] Client-side order IDs for idempotency — covered by _inFlight guard + journal + reconcile-on-startup
 - [X] Capital reservation through single capital manager before any order is sent
 - [X] If capital reservation fails, trade is skipped (no order sent)
 
@@ -30,12 +30,12 @@
 - [X] Cancel-fill race condition handled (sleep + reconcile, treat local state as hint only)
 - [x] Connection loss to either venue → halt new trades
 - [X] Watchdog heartbeat that triggers halt if both venues unreachable >N seconds
-- [ ] Detect "filled but at unexpected price" (slippage beyond limit tolerance)
+- [N/A] Detect "filled but at unexpected price" — impossible with FAK/IOC limit orders; venue enforces price ceiling
 
 ## Hedge-or-Reverse Decision Logic
 
 - [X] Function exists and is the single entry point for all unhedged delta recovery
-- [ ] Inputs: unhedged leg + qty, current opposite-venue quote, time elapsed since fill
+- [N/A] Inputs: time elapsed since fill — no retry loop; hedge-or-reverse is immediate and price-based
 - [X] Re-snapshot the opposite venue before deciding (don't trust stale data)
 - [X] If completing the hedge at current price still preserves positive edge → retry fill
 - [X] If completing the hedge guarantees more loss than reversing → reverse the excess
@@ -46,10 +46,10 @@
 
 ## Cleanup Trades (Imbalance Fixes)
 
-- [ ] Imbalance smaller than fee-to-edge threshold → reverse rather than chase hedge
-- [ ] Cleanup trade also uses IOC + limit
-- [ ] Cleanup failure escalates (don't infinite-retry on small dust)
-- [ ] Track cumulative cleanup cost separately from main P&L
+- [X] Imbalance smaller than fee-to-edge threshold → reverse rather than chase hedge (skip hedge if value < $1.00)
+- [X] Cleanup trade also uses IOC + limit (Kalshi sell = IOC, Poly sell = FAK — already true)
+- [X] Cleanup failure escalates (dust < $0.25 absorbed silently; larger positions still halt)
+- [X] Track cumulative cleanup cost separately from main P&L (TotalCleanupCostUsd in status dashboard)
 
 ## Post-Trade Reconciliation
 
