@@ -59,13 +59,16 @@ public class CrossArbExecutor
     private readonly object  _exposureLock         = new();
     private readonly CancellationTokenSource _cts  = new();
     private          int     _totalExecuted        = 0;
-    private readonly ConcurrentDictionary<string, byte> _inFlight = new();
+    private readonly ConcurrentDictionary<string, byte>    _inFlight        = new();
+    private readonly ConcurrentDictionary<string, decimal> _perPairInvested = new();
+    private readonly HashSet<string>                        _blocklist       = new(StringComparer.OrdinalIgnoreCase);
     private volatile bool   _halted               = false; // manual reset required (failed reversal / tripwire)
     private volatile bool   _connectionHalted     = false; // auto-clears when both venues reconnect
     private const    int    ReverseBufferCents     = 2;    // extra slippage tolerance for reversal orders
     private const  decimal  TradeMaxLossMult       = 3.0m; // halt if actual loss > 3× expected edge
     private const  decimal  CleanupHedgeSkipUsd   = 1.00m; // skip hedge attempt if unhedged value < $1.00
     private const  decimal  CleanupDustUsd         = 0.25m; // absorb silently (no halt) if reversal fails and value < $0.25
+    private const  decimal  MaxPerPairExposureUsd  = 200m;  // max total cost invested per pair across all fills
     private          decimal  _dayLossUsd          = 0m;
     private          DateOnly _dayStart            = DateOnly.FromDateTime(DateTime.UtcNow);
     private readonly decimal  _maxDayLossUsd;
@@ -142,6 +145,18 @@ public class CrossArbExecutor
         _dryRun              = dryRun;
         _csvPath             = $"CrossArbExecution_{DateTime.UtcNow:yyyyMMdd_HHmmss}.csv";
         _ = Task.Run(RunCsvWriterAsync);
+
+        // Load pair blocklist written by prod_cross_arb.py (pair-mismatch settlements)
+        string blPath = Path.Combine(AppContext.BaseDirectory, "cross_pair_blocklist.json");
+        if (!File.Exists(blPath))
+            blPath = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "cross_pair_blocklist.json");
+        if (File.Exists(blPath))
+        {
+            var tickers = JsonSerializer.Deserialize<List<string>>(File.ReadAllText(blPath)) ?? [];
+            foreach (var t in tickers) _blocklist.Add(t);
+            if (_blocklist.Count > 0)
+                Console.WriteLine($"[BLOCKLIST] {_blocklist.Count} pair(s) blocked (cross_pair_blocklist.json)");
+        }
     }
 
     /// <summary>
@@ -374,6 +389,24 @@ public class CrossArbExecutor
             return;
         }
 
+        // Blocklist check — pairs flagged by prod_cross_arb.py for pair mismatch at settlement
+        if (_blocklist.Contains(pair.KalshiTicker))
+        {
+            lock (_balanceLock) { _kalshiBalanceUsd += kalshiCost; _polyBalanceUsd += polyCost; }
+            return;
+        }
+
+        // Per-pair position limit — prevent a single bad pair from dominating bankroll
+        decimal pairInvested = _perPairInvested.GetOrAdd(pairId, 0m);
+        if (pairInvested + estimatedCost > MaxPerPairExposureUsd)
+        {
+            Console.WriteLine(
+                $"[EXEC SKIP] {pair.Label} | Per-pair limit " +
+                $"${pairInvested:0.00}+${estimatedCost:0.00} > ${MaxPerPairExposureUsd:0.00}");
+            lock (_balanceLock) { _kalshiBalanceUsd += kalshiCost; _polyBalanceUsd += polyCost; }
+            return;
+        }
+
         // Exposure check (live only, thread-safe)
         bool exposureOk;
         lock (_exposureLock)
@@ -440,6 +473,7 @@ public class CrossArbExecutor
                 pairId, arbType, balancedQty, balancedQty, kLegAsk, pActualPrice, t0);
             Interlocked.Increment(ref _totalExecuted);
             lock (_exposureLock) { _totalInvested += actualCost; _totalProjectedProfit += actualProfit; }
+            _perPairInvested.AddOrUpdate(pairId, actualCost, (_, old) => old + actualCost);
 
             if (arbProfitable)
             {

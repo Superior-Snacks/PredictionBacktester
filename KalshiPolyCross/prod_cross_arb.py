@@ -32,6 +32,10 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
+# Ensure UTF-8 output on Windows (box-drawing chars in separators)
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 _HERE = Path(__file__).parent   # KalshiPolyCross/
 
 KALSHI_BASE    = "https://api.elections.kalshi.com/trade-api/v2"
