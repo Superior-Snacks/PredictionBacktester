@@ -148,9 +148,11 @@ public class KalshiOrderClient : IDisposable
     /// Places an IOC order on Kalshi. Returns (orderId, status, fill_count_fp).
     /// side = "yes" | "no", action = "buy" | "sell".
     /// priceCents = price in cents (e.g. 65 for $0.65).
+    /// clientOrderId tags the order for idempotency / self-trade prevention.
     /// </summary>
     public async Task<(string OrderId, string Status, decimal FillCount)> PlaceOrderAsync(
-        string ticker, string side, int priceCents, int count, string action = "buy")
+        string ticker, string side, int priceCents, int count,
+        string action = "buy", string? clientOrderId = null)
     {
         string priceField = side == "yes" ? "yes_price" : "no_price";
         var body = new Dictionary<string, object>
@@ -162,6 +164,8 @@ public class KalshiOrderClient : IDisposable
             [priceField]      = priceCents,
             ["time_in_force"] = "immediate_or_cancel",
         };
+        if (!string.IsNullOrEmpty(clientOrderId))
+            body["client_order_id"] = clientOrderId;
 
         using var doc = await PostAsync("/portfolio/orders", body);
         var order = doc.RootElement.TryGetProperty("order", out var o) ? o : doc.RootElement;

@@ -60,26 +60,26 @@
 
 ## Settlement & Post-Mortem
 
-- [ ] On settlement, compute expected payout (shares × $1.00) vs actual payout
-- [ ] Categorize each settled position:
-    - [ ] PAIR_MISMATCH_BOTH_LOST (both legs lost — pair was wrong)
-    - [ ] PAIR_MISMATCH_BOTH_WON (both legs won — pair was wrong)
-    - [ ] EXECUTION_LOSS (pair was right, slippage/fees ate edge)
-    - [ ] FEE_MODEL_LOSS (pair right, execution right, fees higher than modeled)
-    - [ ] CLEAN_WIN (everything as expected)
-- [ ] Pair-mismatch cases automatically blocklist the pair from future trades
-- [ ] Execution-loss cases trigger review of execution code
-- [ ] Fee-model-loss cases trigger fee model update
-- [ ] Per-pair position limits so a single bad pair can't blow up bankroll
+- [X] On settlement, compute expected payout (shares × $1.00) vs actual payout
+- [X] Categorize each settled position:
+    - [X] PAIR_MISMATCH_BOTH_LOST (both legs lost — pair was wrong)
+    - [X] PAIR_MISMATCH_BOTH_WON (both legs won — pair was wrong)
+    - [X] EXECUTION_LOSS (pair was right, slippage/fees ate edge)
+    - [X] FEE_MODEL_LOSS (pair right, execution right, fees higher than modeled)
+    - [X] CLEAN_WIN (everything as expected)
+- [X] Pair-mismatch cases automatically blocklist the pair from future trades
+- [X] Execution-loss cases trigger review of execution code
+- [X] Fee-model-loss cases trigger fee model update
+- [X] Per-pair position limits so a single bad pair can't blow up bankroll
 
 ## Edge Cases to Specifically Handle
 
-- [ ] Self-trade prevention: tag every order with strategy ID
-- [ ] Stale price between detection and arrival: log when limit doesn't fill
-- [ ] Time-skew between venues: log timestamp drift, alert if >500ms
-- [ ] Venue maintenance windows: detect via repeated REST failures, halt trading on that venue
-- [ ] API rate limits: rate limiter on outbound requests, never let limit-hit cause leg-fail
-- [ ] Daylight savings / timezone bugs in settlement timing comparisons
+- [X] Self-trade prevention: tag every order with strategy ID
+- [X] Stale price between detection and arrival: log when limit doesn't fill
+- [X] Time-skew between venues: log timestamp drift, alert if >500ms
+- [X] Venue maintenance windows: detect via repeated REST failures, halt trading on that venue
+- [X] API rate limits: rate limiter on outbound requests, never let limit-hit cause leg-fail
+- [X] Daylight savings / timezone bugs in settlement timing comparisons
 
 ## Pre-Live Validation
 

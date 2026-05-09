@@ -62,6 +62,9 @@ public class CrossArbExecutor
     private readonly ConcurrentDictionary<string, byte>    _inFlight        = new();
     private readonly ConcurrentDictionary<string, decimal> _perPairInvested = new();
     private readonly HashSet<string>                        _blocklist       = new(StringComparer.OrdinalIgnoreCase);
+    private          int _kalshiConsecErrors = 0;
+    private          int _polyConsecErrors   = 0;
+    private const    int MaintenanceErrorThreshold = 5;
     private volatile bool   _halted               = false; // manual reset required (failed reversal / tripwire)
     private volatile bool   _connectionHalted     = false; // auto-clears when both venues reconnect
     private const    int    ReverseBufferCents     = 2;    // extra slippage tolerance for reversal orders
@@ -286,6 +289,7 @@ public class CrossArbExecutor
 
         decimal kLegAsk, pLegAsk;
         string  kalshiSide, polyToken;
+        double  venueSkewMs = 0;
 
         if (arbType == "K_YES_P_NO")
         {
@@ -300,6 +304,25 @@ public class CrossArbExecutor
             pLegAsk    = pYes.GetBestAskPrice();
             kalshiSide = "no";
             polyToken  = pair.PolyYesTokenId;
+        }
+
+        // Venue time-skew: significant drift means one book is stale — log and journal
+        {
+            DateTime kLastDelta = (arbType == "K_YES_P_NO" ? kYes : kNo).LastDeltaAt;
+            DateTime pLastDelta = (arbType == "K_YES_P_NO" ? pNo  : pYes).LastDeltaAt;
+            venueSkewMs = Math.Abs((kLastDelta - pLastDelta).TotalMilliseconds);
+            if (venueSkewMs > 500 && kLastDelta.Ticks > 0 && pLastDelta.Ticks > 0)
+            {
+                Console.WriteLine(
+                    $"[TIME SKEW] {pair.Label} | K last={kLastDelta:HH:mm:ss.fff} " +
+                    $"P last={pLastDelta:HH:mm:ss.fff} skew={venueSkewMs:0}ms — stale book may distort arb");
+                await JournalAsync(JsonSerializer.Serialize(new {
+                    t = DateTime.UtcNow, @event = "TIME_SKEW",
+                    pairId, arbType,
+                    venueSkewMs = Math.Round(venueSkewMs, 1),
+                    kLastDelta, pLastDelta
+                }));
+            }
         }
 
         // Re-validate arb still holds at execution time
@@ -458,6 +481,22 @@ public class CrossArbExecutor
         decimal pUnhedged    = pFilled - balancedQty;  // excess Poly shares
         bool    neitherFilled   = kFilled == 0 && pFilled == 0;
         decimal actualNetPerSet = 0m;
+
+        // Stale price: pre-check passed but one leg's limit wasn't met — price moved in flight
+        bool staleSuspected = !neitherFilled && (kFilled == 0 || pFilled == 0);
+        if (staleSuspected)
+        {
+            Console.ForegroundColor = ConsoleColor.DarkYellow;
+            Console.WriteLine(
+                $"[STALE PRICE] {pair.Label} | detectedNet={netNow:0.0000} " +
+                $"kFilled={kFilled} pFilled={pFilled:0.00} — one leg missed limit, price may have moved");
+            Console.ResetColor();
+            await JournalAsync(JsonSerializer.Serialize(new {
+                t = DateTime.UtcNow, @event = "STALE_PRICE",
+                pairId, arbType, detectedNet = netNow,
+                kFilled, pFilled = (double)pFilled
+            }));
+        }
 
         if (balancedQty > 0)
         {
@@ -632,7 +671,8 @@ public class CrossArbExecutor
                 detected = new {
                     kAsk = kLegAsk, pAsk = pLegAsk,
                     netCost = Math.Round(netNow, 6),
-                    contracts, estCostUsd = Math.Round(estimatedCost, 4)
+                    contracts, estCostUsd = Math.Round(estimatedCost, 4),
+                    venueSkewMs = Math.Round(venueSkewMs, 1)
                 },
 
                 fills = new {
@@ -672,6 +712,7 @@ public class CrossArbExecutor
                 } : null,
 
                 outcome = execOutcome,
+                stalePriceSuspected = staleSuspected,
                 durationMs = (long)(DateTime.UtcNow - t0).TotalMilliseconds
             }));
         }
@@ -704,10 +745,13 @@ public class CrossArbExecutor
     private async Task<(string OrderId, string Status, decimal FillCount)> PlaceKalshiLegAsync(
         string ticker, string side, int priceCents, int count)
     {
-        DebugLog.Trades($"PlaceKalshiLegAsync: {ticker} {side} {priceCents}¢ × {count}");
+        string clientId = $"CAXARB_{ticker}_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}";
+        DebugLog.Trades($"PlaceKalshiLegAsync: {ticker} {side} {priceCents}¢ × {count} clientId={clientId}");
         try
         {
-            var (orderId, status, fillImm) = await _kalshi.PlaceOrderAsync(ticker, side, priceCents, count);
+            var (orderId, status, fillImm) = await _kalshi.PlaceOrderAsync(
+                ticker, side, priceCents, count, clientOrderId: clientId);
+            Interlocked.Exchange(ref _kalshiConsecErrors, 0);
             DebugLog.Trades($"PlaceKalshiLegAsync: placed orderId={orderId} status={status} fillImm={fillImm}");
 
             if (status == "executed" || fillImm >= count)
@@ -740,10 +784,33 @@ public class CrossArbExecutor
             return (orderId, settleStatus is "executed" or "canceled" ? settleStatus : "timeout",
                     Math.Max(settleFill, fillImm));
         }
+        catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
+        {
+            Console.WriteLine($"[KALSHI RATE LIMIT] {ticker} — 429, retrying in 1s");
+            DebugLog.Trades($"PlaceKalshiLegAsync: 429 on {ticker}, backing off 1s");
+            await Task.Delay(1_000);
+            try
+            {
+                string retryId = $"CAXARB_{ticker}_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}R";
+                var (oid2, st2, fi2) = await _kalshi.PlaceOrderAsync(
+                    ticker, side, priceCents, count, clientOrderId: retryId);
+                Interlocked.Exchange(ref _kalshiConsecErrors, 0);
+                DebugLog.Trades($"PlaceKalshiLegAsync: 429-retry placed oid={oid2} status={st2} fill={fi2}");
+                return (oid2, st2, fi2);
+            }
+            catch (Exception retryEx)
+            {
+                Console.WriteLine($"[KALSHI LEG ERROR] {ticker} (after 429): {ApiErrorHelper.ClassifyKalshi(retryEx)}");
+                DebugLog.Trades($"PlaceKalshiLegAsync: 429 retry failed for {ticker}: {retryEx.Message}");
+                await CheckMaintenanceThresholdAsync("kalshi", Interlocked.Increment(ref _kalshiConsecErrors));
+                return ("", "error", 0m);
+            }
+        }
         catch (Exception ex)
         {
             Console.WriteLine($"[KALSHI LEG ERROR] {ticker}: {ApiErrorHelper.ClassifyKalshi(ex)}");
             DebugLog.Trades($"PlaceKalshiLegAsync exception for {ticker}: {ex}");
+            await CheckMaintenanceThresholdAsync("kalshi", Interlocked.Increment(ref _kalshiConsecErrors));
             return ("", "error", 0m);
         }
     }
@@ -813,6 +880,7 @@ public class CrossArbExecutor
                 DebugLog.Trades($"PlacePolyLegAsync: empty result from SubmitOrderAsync");
                 return (0m, 0m);
             }
+            Interlocked.Exchange(ref _polyConsecErrors, 0);
 
             using var doc = JsonDocument.Parse(result);
             var root = doc.RootElement;
@@ -880,10 +948,45 @@ public class CrossArbExecutor
             DebugLog.Trades($"PlacePolyLegAsync: filled={filledShares} avgPrice={avgPrice:0.0000}");
             return (filledShares, avgPrice);
         }
+        catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
+        {
+            Console.WriteLine($"[POLY RATE LIMIT] {tokenShort}... — 429, retrying in 1s");
+            DebugLog.Trades($"PlacePolyLegAsync: 429 on {tokenShort}, backing off 1s");
+            await Task.Delay(1_000);
+            try
+            {
+                string result2 = await _poly.SubmitOrderAsync(
+                    tokenId, Math.Min(0.99m, price), shares, side: 0, negRisk: false, feeRateBps: 0);
+                if (!string.IsNullOrEmpty(result2))
+                {
+                    Interlocked.Exchange(ref _polyConsecErrors, 0);
+                    using var doc2 = JsonDocument.Parse(result2);
+                    var root2 = doc2.RootElement;
+                    if (root2.TryGetProperty("success", out var sv2) && sv2.GetBoolean())
+                    {
+                        (decimal fs2, decimal su2) = ExtractPolyFill(root2, isSell: false);
+                        if (fs2 > 0)
+                        {
+                            decimal avg2 = su2 > 0 ? su2 / fs2 : price;
+                            DebugLog.Trades($"PlacePolyLegAsync: 429-retry filled={fs2} avg={avg2:0.0000}");
+                            return (fs2, avg2);
+                        }
+                    }
+                }
+            }
+            catch (Exception retryEx)
+            {
+                Console.WriteLine($"[POLY LEG ERROR] {tokenShort}... (after 429): {ApiErrorHelper.ClassifyPoly(retryEx)}");
+                DebugLog.Trades($"PlacePolyLegAsync: 429 retry failed for {tokenShort}: {retryEx.Message}");
+            }
+            await CheckMaintenanceThresholdAsync("poly", Interlocked.Increment(ref _polyConsecErrors));
+            return (0m, 0m);
+        }
         catch (Exception ex)
         {
             Console.WriteLine($"[POLY LEG ERROR] {tokenShort}...: {ApiErrorHelper.ClassifyPoly(ex)}");
             DebugLog.Trades($"PlacePolyLegAsync exception for {tokenShort}: {ex}");
+            await CheckMaintenanceThresholdAsync("poly", Interlocked.Increment(ref _polyConsecErrors));
             return (0m, 0m);
         }
     }
@@ -1286,6 +1389,24 @@ public class CrossArbExecutor
         catch (Exception ex)
         {
             DebugLog.Trades($"ReconcileTradeAsync {pair.Label}: {ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    // ── Venue maintenance detection ───────────────────────────────────────────
+
+    private async Task CheckMaintenanceThresholdAsync(string venue, int consec)
+    {
+        if (consec >= MaintenanceErrorThreshold && !_connectionHalted)
+        {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine(
+                $"[MAINTENANCE] {venue}: {consec} consecutive REST failures — halting new trades");
+            Console.ResetColor();
+            _connectionHalted = true;
+            await JournalAsync(JsonSerializer.Serialize(new {
+                t = DateTime.UtcNow, @event = "VENUE_MAINTENANCE",
+                venue, consecutiveErrors = consec
+            }));
         }
     }
 
