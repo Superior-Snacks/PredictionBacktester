@@ -22,6 +22,13 @@ public record ArbPosition(
     DateTime EntryTime
 );
 
+// Summary of what RecoverUnhedgedAsync did with the unhedged delta.
+public record RecoveryResult(
+    string  Outcome,        // HEDGE_COMPLETED | REVERSED_KALSHI | REVERSED_POLY | DUST_ABSORBED_KALSHI | DUST_ABSORBED_POLY | HALT
+    decimal RecoveredQty,   // contracts/shares successfully hedged or reversed
+    decimal LossUsd         // realized loss from the cleanup action
+);
+
 /// <summary>
 /// Fires simultaneous IOC/FAK orders on both legs when CrossPlatformArbTelemetryStrategy
 /// detects a cross-platform arb window. Kalshi leg uses IOC via PlaceOrderAsync;
@@ -546,13 +553,14 @@ public class CrossArbExecutor
             }
         }
 
+        RecoveryResult? recovery = null;
         if (kUnhedged > 0 || pUnhedged > 0)
         {
             Console.WriteLine(
                 $"[EXEC UNHEDGED] {pair.Label} | " +
                 $"kFilled={kFilled} pFilled={pFilled:0.00} balanced={balancedQty} " +
                 $"kExcess={kUnhedged} pExcess={pUnhedged:0.00} — starting recovery");
-            await RecoverUnhedgedAsync(pair, arbType, kalshiSide, polyToken,
+            recovery = await RecoverUnhedgedAsync(pair, arbType, kalshiSide, polyToken,
                 kFilled, pFilled, kLegAsk, pActualPrice);
         }
         else if (neitherFilled)
@@ -568,6 +576,71 @@ public class CrossArbExecutor
             modeledNet = balancedQty > 0 ? (object)Math.Round(netNow, 6)          : null,
             actualNet  = balancedQty > 0 ? (object)Math.Round(actualNetPerSet, 6) : null
         }));
+
+        // ── Execution complete — single comprehensive record of the full trade ──
+        {
+            string execOutcome = neitherFilled                           ? "MISS"
+                : recovery?.Outcome.StartsWith("HALT") == true          ? "HALTED"
+                : recovery != null && recovery.Outcome != "NONE"        ? "FILLED_WITH_CLEANUP"
+                : "FILLED";
+
+            string execId = $"{t0:yyyyMMddHHmmss}_{pair.KalshiTicker}";
+
+            // True final position after all cleanup (hedge add or reversal may have changed qty)
+            var finalPos  = _openPositions.TryGetValue(pairId, out var fp) ? fp : null;
+            decimal kHeld = finalPos?.KalshiContracts ?? 0m;
+            decimal pHeld = finalPos?.PolyShares      ?? 0m;
+
+            await JournalAsync(JsonSerializer.Serialize(new {
+                t = DateTime.UtcNow, @event = "EXECUTION_COMPLETE",
+                execId, pairId, arbType, label = pair.Label, dryRun = _dryRun,
+
+                detected = new {
+                    kAsk = kLegAsk, pAsk = pLegAsk,
+                    netCost = Math.Round(netNow, 6),
+                    contracts, estCostUsd = Math.Round(estimatedCost, 4)
+                },
+
+                fills = new {
+                    kalshi = new {
+                        ordered = contracts, filled = kFilled,
+                        limitCents = kPriceCents, fillPrice = kLegAsk,
+                        feePerContract = Math.Round(KalshiFee(kLegAsk), 6),
+                        status = kStatus
+                    },
+                    poly = new {
+                        ordered = polyShares, filled = Math.Round(pFilled, 6),
+                        limitPrice = pLegAsk,
+                        avgFillPrice = pFilled > 0 ? Math.Round(pActualPrice, 6) : (object?)null,
+                        feePerShare  = pFilled > 0 ? (object?)Math.Round(PolyFee(pActualPrice), 6) : null,
+                        slippagePct  = pFilled > 0 && pLegAsk > 0
+                            ? (object?)Math.Round((pActualPrice - pLegAsk) / pLegAsk * 100m, 4) : null
+                    }
+                },
+
+                hedge = new {
+                    balanced = balancedQty, kExcess = kUnhedged, pExcess = pUnhedged,
+                    recovery = recovery == null || recovery.Outcome == "NONE" ? null : (object?)new {
+                        outcome = recovery.Outcome,
+                        qty     = Math.Round(recovery.RecoveredQty, 6),
+                        lossUsd = Math.Round(recovery.LossUsd, 6)
+                    }
+                },
+
+                position = kHeld > 0 ? (object?)new {
+                    kHeld, pHeld,
+                    kEntryPrice = kLegAsk,
+                    pAvgPrice   = Math.Round(pActualPrice, 6),
+                    totalCostUsd       = Math.Round(kLegAsk * kHeld + pActualPrice * pHeld, 4),
+                    modeledNetPerSet   = Math.Round(netNow, 6),
+                    actualNetPerSet    = Math.Round(actualNetPerSet, 6),
+                    projectedProfitUsd = Math.Round(kHeld * (1.0m - actualNetPerSet), 4)
+                } : null,
+
+                outcome = execOutcome,
+                durationMs = (long)(DateTime.UtcNow - t0).TotalMilliseconds
+            }));
+        }
 
         // Release exposure only when nothing filled at all.
         // Unhedged delta keeps exposure tracked until recovery resolves it.
@@ -820,7 +893,7 @@ public class CrossArbExecutor
 
     // ── Unhedged delta recovery ───────────────────────────────────────────────
 
-    private async Task RecoverUnhedgedAsync(
+    private async Task<RecoveryResult> RecoverUnhedgedAsync(
         CrossPair pair, string arbType,
         string kalshiSide, string polyToken,
         decimal kFilled, decimal pFilled,
@@ -841,7 +914,11 @@ public class CrossArbExecutor
                 if (!_books.TryGetValue($"P:{polyToken}", out var pBook))
                 {
                     DebugLog.Trades($"RecoverUnhedgedAsync {pair.Label}: Poly book missing for {polyToken}");
-                    goto HaltOnMissingBook;
+                    Console.ForegroundColor = ConsoleColor.Red;
+                    Console.WriteLine($"[HALT] {pair.Label} | Recovery aborted — live book data missing. Manual reset required.");
+                    Console.ResetColor();
+                    _halted = true;
+                    return new RecoveryResult("HALT", 0, kUnhedgedValue);
                 }
                 decimal currentPolyAsk = pBook.GetBestAskPrice();
                 decimal hedgeNet = kLegAsk + currentPolyAsk + KalshiFee(kLegAsk) + PolyFee(currentPolyAsk);
@@ -866,7 +943,7 @@ public class CrossArbExecutor
                         Console.ForegroundColor = ConsoleColor.Green;
                         Console.WriteLine($"[RECOVER OK] {pair.Label} | hedge completed +{additional} sets via Poly retry");
                         Console.ResetColor();
-                        return;
+                        return new RecoveryResult("HEDGE_COMPLETED", additional, 0);
                     }
                     Console.WriteLine($"[RECOVER] {pair.Label} | Poly hedge retry failed — reversing Kalshi excess");
                 }
@@ -903,7 +980,7 @@ public class CrossArbExecutor
                     Console.ForegroundColor = ConsoleColor.Yellow;
                     Console.WriteLine($"[RECOVER REVERSED] {pair.Label} | sold {revFill} Kalshi {kalshiSide} @ {kReverseCents}¢");
                     Console.ResetColor();
-                    return;
+                    return new RecoveryResult("REVERSED_KALSHI", revFill, Math.Max(0m, reversalLoss));
                 }
             }
             catch (Exception ex)
@@ -921,9 +998,13 @@ public class CrossArbExecutor
                 Console.ForegroundColor = ConsoleColor.DarkYellow;
                 Console.WriteLine($"[CLEANUP DUST] {pair.Label} | Absorbing {kUnhedged} Kalshi dust (${kUnhedgedValue:0.00}) — no halt");
                 Console.ResetColor();
-                return;
+                return new RecoveryResult("DUST_ABSORBED_KALSHI", kUnhedged, kUnhedgedValue);
             }
-            goto HaltAfterReverseFailure;
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"[HALT] {pair.Label} | Reverse order failed — unhedged position open. Manual reset required.");
+            Console.ResetColor();
+            _halted = true;
+            return new RecoveryResult("HALT", 0, kUnhedgedValue);
         }
 
         // ── Case B: Poly filled more — own excess Poly shares ────────────────
@@ -938,7 +1019,11 @@ public class CrossArbExecutor
                 if (!_books.TryGetValue(kHedgeKey, out var kHedgeBook))
                 {
                     DebugLog.Trades($"RecoverUnhedgedAsync {pair.Label}: Kalshi book missing for {kHedgeKey}");
-                    goto HaltOnMissingBook;
+                    Console.ForegroundColor = ConsoleColor.Red;
+                    Console.WriteLine($"[HALT] {pair.Label} | Recovery aborted — live book data missing. Manual reset required.");
+                    Console.ResetColor();
+                    _halted = true;
+                    return new RecoveryResult("HALT", 0, pUnhedgedValue);
                 }
                 decimal currentKalshiAsk = kHedgeBook.GetBestAskPrice();
                 int currentKCents = (int)Math.Round(currentKalshiAsk * 100);
@@ -965,7 +1050,7 @@ public class CrossArbExecutor
                         Console.ForegroundColor = ConsoleColor.Green;
                         Console.WriteLine($"[RECOVER OK] {pair.Label} | hedge completed +{additional} sets via Kalshi retry");
                         Console.ResetColor();
-                        return;
+                        return new RecoveryResult("HEDGE_COMPLETED", additional, 0);
                     }
                     Console.WriteLine($"[RECOVER] {pair.Label} | Kalshi hedge retry failed — reversing Poly excess");
                 }
@@ -995,7 +1080,7 @@ public class CrossArbExecutor
                 Console.ForegroundColor = ConsoleColor.Yellow;
                 Console.WriteLine($"[RECOVER REVERSED] {pair.Label} | sold {soldShares:0.00} Poly shares @ ${soldPrice:0.0000}");
                 Console.ResetColor();
-                return;
+                return new RecoveryResult("REVERSED_POLY", soldShares, Math.Max(0m, reversalLoss));
             }
 
             if (pUnhedgedValue < CleanupDustUsd)
@@ -1008,25 +1093,16 @@ public class CrossArbExecutor
                 Console.ForegroundColor = ConsoleColor.DarkYellow;
                 Console.WriteLine($"[CLEANUP DUST] {pair.Label} | Absorbing {pUnhedged:0.00} Poly dust (${pUnhedgedValue:0.00}) — no halt");
                 Console.ResetColor();
-                return;
+                return new RecoveryResult("DUST_ABSORBED_POLY", pUnhedged, pUnhedgedValue);
             }
-            goto HaltAfterReverseFailure;
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"[HALT] {pair.Label} | Reverse order failed — unhedged position open. Manual reset required.");
+            Console.ResetColor();
+            _halted = true;
+            return new RecoveryResult("HALT", 0, pUnhedgedValue);
         }
 
-        return;
-
-HaltOnMissingBook:
-        Console.ForegroundColor = ConsoleColor.Red;
-        Console.WriteLine($"[HALT] {pair.Label} | Recovery aborted — live book data missing. Manual reset required.");
-        Console.ResetColor();
-        _halted = true;
-        return;
-
-HaltAfterReverseFailure:
-        Console.ForegroundColor = ConsoleColor.Red;
-        Console.WriteLine($"[HALT] {pair.Label} | Reverse order failed — unhedged position open. Manual reset required.");
-        Console.ResetColor();
-        _halted = true;
+        return new RecoveryResult("NONE", 0, 0);
     }
 
     // ── CSV ───────────────────────────────────────────────────────────────────
