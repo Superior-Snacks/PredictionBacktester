@@ -85,11 +85,11 @@
 
 These were found by static audit; none require a live run to trigger.
 
-- [ ] **Dry-run cooldown missing**: `_cooldownUntil[pairId]` is only set on the live path (after the dry-run early return). The same pair can re-execute on every scan cycle with no throttle — floods the journal. Fix: set `_cooldownUntil[pairId] = now + _pairCooldownSeconds` at the top of the dry-run block.
-- [ ] **Dry-run bypasses per-pair exposure limit**: `_perPairInvested` is only incremented on the live path. Dry-run can simulate unlimited exposure to a single pair. Fix: mirror the per-pair update inside the dry-run block after `simKFilled > 0`.
-- [ ] **Dry-run bypasses total exposure limit**: `_totalExposure` is only incremented on the live path. Fix: same — add `_totalExposure += estimatedCost` inside the dry-run block (inside `_exposureLock`).
-- [ ] **Dry-run bypasses blocklist check**: Blocklist check is after the dry-run return, so blocked pairs get journaled as valid dry-run trades. Fix: move the blocklist check (and the balance restore on block) to before the `if (_dryRun)` block, or add a redundant check inside it.
-- [ ] **Journal directory not created on startup**: `_journalPath` is a bare filename (no directory), relying on the working directory being writable. `File.AppendAllTextAsync` will throw if the parent directory doesn't exist. Verify working directory at startup or use `Directory.CreateDirectory` before first write.
+- [X] **Dry-run cooldown missing**: `_cooldownUntil[pairId]` is only set on the live path (after the dry-run early return). The same pair can re-execute on every scan cycle with no throttle — floods the journal. Fix: set `_cooldownUntil[pairId] = now + _pairCooldownSeconds` at the top of the dry-run block.
+- [X] **Dry-run bypasses per-pair exposure limit**: `_perPairInvested` is only incremented on the live path. Dry-run can simulate unlimited exposure to a single pair. Fix: mirror the per-pair update inside the dry-run block after `simKFilled > 0`.
+- [X] **Dry-run bypasses total exposure limit**: `_totalExposure` is only incremented on the live path. Fix: same — add `_totalExposure += estimatedCost` inside the dry-run block (inside `_exposureLock`).
+- [X] **Dry-run bypasses blocklist check**: Blocklist check is after the dry-run return, so blocked pairs get journaled as valid dry-run trades. Fix: move the blocklist check (and the balance restore on block) to before the `if (_dryRun)` block, or add a redundant check inside it.
+- [X] **Journal directory not created on startup**: `_journalPath` is a bare filename (no directory), relying on the working directory being writable. `File.AppendAllTextAsync` will throw if the parent directory doesn't exist. Verify working directory at startup or use `Directory.CreateDirectory` before first write.
 - [ ] **`PolyFee` formula needs empirical verification**: Formula is `0.04 × p² × (1−p)` — non-standard. At p=0.50 this yields $0.005/share vs Polymarket's ~$0.02/share actual fee on a resolving YES. Verify against real fee receipts before production or the edge model is optimistic.
 
 ## Verification Checklist — First Dry-Run Session

@@ -148,6 +148,8 @@ public class CrossArbExecutor
         _dryRun              = dryRun;
         _csvPath             = $"CrossArbExecution_{DateTime.UtcNow:yyyyMMdd_HHmmss}.csv";
         _ = Task.Run(RunCsvWriterAsync);
+        var journalDir = Path.GetDirectoryName(Path.GetFullPath(_journalPath));
+        if (journalDir != null) Directory.CreateDirectory(journalDir);
 
         // Load pair blocklist written by prod_cross_arb.py (pair-mismatch settlements)
         string blPath = Path.Combine(AppContext.BaseDirectory, "cross_pair_blocklist.json");
@@ -398,6 +400,41 @@ public class CrossArbExecutor
 
         if (_dryRun)
         {
+            // Apply the same bankroll guards as the live path so dry-run faithfully models constraints.
+            if (_blocklist.Contains(pair.KalshiTicker))
+            {
+                lock (_balanceLock) { _kalshiBalanceUsd += kalshiCost; _polyBalanceUsd += polyCost; }
+                return;
+            }
+
+            decimal pairInvestedDry = _perPairInvested.GetOrAdd(pairId, 0m);
+            if (pairInvestedDry + estimatedCost > MaxPerPairExposureUsd)
+            {
+                Console.WriteLine(
+                    $"[EXEC SKIP] {pair.Label} | Per-pair limit " +
+                    $"${pairInvestedDry:0.00}+${estimatedCost:0.00} > ${MaxPerPairExposureUsd:0.00}");
+                lock (_balanceLock) { _kalshiBalanceUsd += kalshiCost; _polyBalanceUsd += polyCost; }
+                return;
+            }
+
+            bool exposureOkDry;
+            lock (_exposureLock)
+            {
+                exposureOkDry = _totalExposure + estimatedCost <= _maxExposureUsd;
+                if (exposureOkDry) _totalExposure += estimatedCost;
+            }
+            if (!exposureOkDry)
+            {
+                Console.WriteLine(
+                    $"[EXEC SKIP] {pair.Label} | Exposure limit " +
+                    $"${_totalExposure:0.00}+${estimatedCost:0.00} > ${_maxExposureUsd:0.00}");
+                lock (_balanceLock) { _kalshiBalanceUsd += kalshiCost; _polyBalanceUsd += polyCost; }
+                return;
+            }
+
+            // Set cooldown before journaling (mirrors live path)
+            _cooldownUntil[pairId] = now + _pairCooldownSeconds;
+
             var    t0DryRun = DateTime.UtcNow;
             string execId   = $"{t0DryRun:yyyyMMddHHmmss}_{pair.KalshiTicker}";
 
@@ -425,6 +462,9 @@ public class CrossArbExecutor
             decimal simPFilled   = contracts;
             decimal simNetPerSet = netNow;   // kLegAsk + pLegAsk + fees
             decimal simProfit    = contracts * (1.0m - simNetPerSet);
+
+            // Track per-pair exposure so the limit is enforced across repeated dry-run trades
+            _perPairInvested.AddOrUpdate(pairId, estimatedCost, (_, old) => old + estimatedCost);
 
             await JournalAsync(JsonSerializer.Serialize(new {
                 t = DateTime.UtcNow, @event = "EXECUTION_COMPLETE",
