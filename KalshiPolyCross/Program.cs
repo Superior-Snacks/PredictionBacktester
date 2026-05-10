@@ -10,8 +10,10 @@ using PredictionBacktester.Engine.LiveExecution;
 //  dotnet run --project KalshiPolyCross -- --dry-run            # same as --live, log only, no real orders
 //  dotnet run --project KalshiPolyCross -- --live               # full production: real orders on both legs
 //  dotnet run --project KalshiPolyCross -- --telemetry --debug  # any mode can add --debug for verbose logs
+//  dotnet run --project KalshiPolyCross -- --dry-run --try 5    # execute exactly 5 arbs then exit cleanly
 //
-//  Exactly one mode flag is required. --debug is optional and works with any mode.
+//  Exactly one mode flag is required. --debug and --try N are optional and work with any mode.
+//  --try N  execute exactly N complete arbs then shut down; works with --dry-run or --live.
 //
 //  Runtime key toggles (all modes):
 //    N   toggle near-miss top-10 report   (on by default)
@@ -72,6 +74,14 @@ if (modeCount > 1)
 
 bool isDebug = args.Contains("--debug");
 DebugLog.Enabled = isDebug;
+
+// --try N: execute exactly N arbs then shut down cleanly (dry-run or live)
+int? tryN = null;
+int tryIdx = Array.IndexOf(args, "--try");
+if (tryIdx >= 0 && tryIdx + 1 < args.Length && int.TryParse(args[tryIdx + 1], out int parsedN) && parsedN > 0)
+    tryN = parsedN;
+
+var cts = new CancellationTokenSource();
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  CONFIGURATION
@@ -218,7 +228,9 @@ if (isLive || isDryRun)
         pairCooldownSeconds: 120,
         fillTimeoutMs:       5000,
         maxDayLossUsd:       20m,
-        dryRun:              isDryRun);
+        dryRun:              isDryRun,
+        tryN:                tryN,
+        outerCts:            cts);
     telemetry.OnArbOpened += executor.OnArbOpened;
     await executor.InitializeBalancesAsync();
     if (isLive && pairs.Count > 0)
@@ -244,7 +256,6 @@ var knownKalshiTickers = new HashSet<string>(kalshiSubscribeTickers, StringCompa
 var knownPolyTokens    = new HashSet<string>(polySubscribeTokens,    StringComparer.Ordinal);
 var knownPairIds       = new HashSet<string>(pairs.Select(p => p.PairId), StringComparer.Ordinal);
 
-var cts = new CancellationTokenSource();
 Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
 
 // ── Key toggles ────────────────────────────────────────────────────────────
@@ -390,6 +401,7 @@ if (executor != null)
                 string haltTag = executor.IsHalted           ? "  [HALTED — manual reset required]"
                                : executor.IsConnectionHalted ? "  [CONN HALT — waiting for reconnect]"
                                : "";
+                string tryTag  = executor.TriesRemaining >= 0 ? $"  triesLeft={executor.TriesRemaining}" : "";
                 Console.WriteLine(
                     $"[STATUS {DateTime.UtcNow:HH:mm:ss}] " +
                     $"K=${executor.KalshiBalanceUsd:0.00}  P=${executor.PolyBalanceUsd:0.00}  │  " +
@@ -400,7 +412,7 @@ if (executor != null)
                     $"  WS K={kalshiFeed.IsConnected} P={polyFeed.IsConnected}" +
                     $"  dayLoss=${executor.DayLossUsd:0.00}/${executor.MaxDayLossUsd:0.00}" +
                     $"  cleanup=${executor.TotalCleanupCostUsd:0.00}" +
-                    $"{haltTag}");
+                    $"{tryTag}{haltTag}");
             }
         }
         catch (Exception ex)

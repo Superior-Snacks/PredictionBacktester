@@ -59,6 +59,9 @@ public class CrossArbExecutor
     private readonly object  _exposureLock         = new();
     private readonly CancellationTokenSource _cts  = new();
     private          int     _totalExecuted        = 0;
+    private          int     _triesRemaining       = -1;  // -1 = unlimited
+    private          int     _tryLimit             = -1;  // original N, for display
+    private          CancellationTokenSource? _outerCts;
     private readonly ConcurrentDictionary<string, byte>    _inFlight        = new();
     private readonly ConcurrentDictionary<string, decimal> _perPairInvested = new();
     private readonly HashSet<string>                        _blocklist       = new(StringComparer.OrdinalIgnoreCase);
@@ -109,6 +112,7 @@ public class CrossArbExecutor
     public int     OpenPositionCount    => _openPositions.Count(kv => kv.Value != null);
     public decimal MaxExposureUsd       => _maxExposureUsd;
     public int     TotalExecuted        => Volatile.Read(ref _totalExecuted);
+    public int     TriesRemaining       => Volatile.Read(ref _triesRemaining);  // -1 = unlimited
     public bool    IsHalted             => _halted;
     public bool    IsConnectionHalted   => _connectionHalted;
     public decimal DayLossUsd           { get { lock (_dayLossLock) return _dayLossUsd;    } }
@@ -132,7 +136,9 @@ public class CrossArbExecutor
         int     pairCooldownSeconds = 120,
         int     fillTimeoutMs       = 5000,
         decimal maxDayLossUsd       = 20m,
-        bool    dryRun              = false)
+        bool    dryRun              = false,
+        int?    tryN                = null,
+        CancellationTokenSource? outerCts = null)
     {
         _kalshi              = kalshi;
         _poly                = poly;
@@ -146,6 +152,9 @@ public class CrossArbExecutor
         _fillTimeoutMs       = fillTimeoutMs;
         _maxDayLossUsd       = maxDayLossUsd;
         _dryRun              = dryRun;
+        _triesRemaining      = tryN ?? -1;
+        _tryLimit            = tryN ?? -1;
+        _outerCts            = outerCts;
         _csvPath             = $"CrossArbExecution_{DateTime.UtcNow:yyyyMMdd_HHmmss}.csv";
         _ = Task.Run(RunCsvWriterAsync);
         var journalDir = Path.GetDirectoryName(Path.GetFullPath(_journalPath));
@@ -512,6 +521,7 @@ public class CrossArbExecutor
                 stalePriceSuspected = false,
                 durationMs = (long)(DateTime.UtcNow - t0DryRun).TotalMilliseconds
             }));
+            DecrementTryLimit();
             return;
         }
 
@@ -614,6 +624,7 @@ public class CrossArbExecutor
             _openPositions[pairId] = new ArbPosition(
                 pairId, arbType, balancedQty, balancedQty, kLegAsk, pActualPrice, t0);
             Interlocked.Increment(ref _totalExecuted);
+            DecrementTryLimit();
             lock (_exposureLock) { _totalInvested += actualCost; _totalProjectedProfit += actualProfit; }
             _perPairInvested.AddOrUpdate(pairId, actualCost, (_, old) => old + actualCost);
 
@@ -1517,6 +1528,19 @@ public class CrossArbExecutor
 
     public void HaltForConnectionLoss()  => _connectionHalted = true;
     public void ResumeFromConnectionLoss() => _connectionHalted = false;
+
+    private void DecrementTryLimit()
+    {
+        if (_triesRemaining < 0) return;
+        int left = Interlocked.Decrement(ref _triesRemaining);
+        if (left == 0)
+        {
+            Console.ForegroundColor = ConsoleColor.Cyan;
+            Console.WriteLine($"[TRY LIMIT] All {_tryLimit} arb(s) completed — shutting down cleanly.");
+            Console.ResetColor();
+            _outerCts?.Cancel();
+        }
+    }
 
     public async Task ShutdownAsync()
     {
