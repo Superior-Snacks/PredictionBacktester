@@ -1173,20 +1173,17 @@ public class CrossArbExecutor
                 return new RecoveryResult("DUST_ABSORBED_KALSHI", kUnhedged, kUnhedgedValue);
             }
 
-            bool skipHedgeA = kUnhedgedValue < CleanupHedgeSkipUsd;
+            bool hasPolyBook = _books.TryGetValue($"P:{polyToken}", out var pBook);
+            if (!hasPolyBook)
+            {
+                DebugLog.Trades($"RecoverUnhedgedAsync {pair.Label}: Poly book missing for {polyToken} — skipping hedge, falling through to reverse");
+                Console.WriteLine($"[RECOVER] {pair.Label} | Poly book missing — skipping hedge, falling through to reverse");
+            }
+            bool skipHedgeA = kUnhedgedValue < CleanupHedgeSkipUsd || !hasPolyBook;
 
             if (!skipHedgeA)
             {
-                if (!_books.TryGetValue($"P:{polyToken}", out var pBook))
-                {
-                    DebugLog.Trades($"RecoverUnhedgedAsync {pair.Label}: Poly book missing for {polyToken}");
-                    Console.ForegroundColor = ConsoleColor.Red;
-                    Console.WriteLine($"[HALT] {pair.Label} | Recovery aborted — live book data missing. Manual reset required.");
-                    Console.ResetColor();
-                    _halted = true;
-                    return new RecoveryResult("HALT", 0, kUnhedgedValue);
-                }
-                decimal currentPolyAsk = pBook.GetBestAskPrice();
+                decimal currentPolyAsk = pBook!.GetBestAskPrice();
                 decimal hedgeNet = kLegAsk + currentPolyAsk + KalshiFee(kLegAsk) + PolyFee(currentPolyAsk);
                 DebugLog.Trades($"RecoverUnhedgedAsync {pair.Label}: kUnhedged={kUnhedged} polyAsk={currentPolyAsk:0.0000} hedgeNet={hedgeNet:0.0000}");
 
@@ -1219,7 +1216,7 @@ public class CrossArbExecutor
                     Console.WriteLine($"[RECOVER] {pair.Label} | hedgeNet={hedgeNet:0.0000} >= 1.0 — reversing {kUnhedged} Kalshi {kalshiSide} directly");
                 }
             }
-            else
+            else if (kUnhedgedValue < CleanupHedgeSkipUsd)
             {
                 Console.WriteLine($"[CLEANUP SKIP HEDGE] {pair.Label} | kExcess={kUnhedged} value=${kUnhedgedValue:0.00} < ${CleanupHedgeSkipUsd:0.00} — reversing directly");
             }
@@ -1287,21 +1284,18 @@ public class CrossArbExecutor
                 return new RecoveryResult("DUST_ABSORBED_POLY", pUnhedged, pUnhedgedValue);
             }
 
-            bool skipHedgeB = pUnhedgedValue < CleanupHedgeSkipUsd;
+            string kHedgeKey = arbType == "K_YES_P_NO" ? $"K:{pair.KalshiTicker}" : $"K:{pair.KalshiTicker}_NO";
+            bool hasKalshiBook = _books.TryGetValue(kHedgeKey, out var kHedgeBook);
+            if (!hasKalshiBook)
+            {
+                DebugLog.Trades($"RecoverUnhedgedAsync {pair.Label}: Kalshi book missing for {kHedgeKey} — skipping hedge, falling through to reverse");
+                Console.WriteLine($"[RECOVER] {pair.Label} | Kalshi book missing — skipping hedge, falling through to reverse");
+            }
+            bool skipHedgeB = pUnhedgedValue < CleanupHedgeSkipUsd || !hasKalshiBook;
 
             if (!skipHedgeB)
             {
-                string kHedgeKey = arbType == "K_YES_P_NO" ? $"K:{pair.KalshiTicker}" : $"K:{pair.KalshiTicker}_NO";
-                if (!_books.TryGetValue(kHedgeKey, out var kHedgeBook))
-                {
-                    DebugLog.Trades($"RecoverUnhedgedAsync {pair.Label}: Kalshi book missing for {kHedgeKey}");
-                    Console.ForegroundColor = ConsoleColor.Red;
-                    Console.WriteLine($"[HALT] {pair.Label} | Recovery aborted — live book data missing. Manual reset required.");
-                    Console.ResetColor();
-                    _halted = true;
-                    return new RecoveryResult("HALT", 0, pUnhedgedValue);
-                }
-                decimal currentKalshiAsk = kHedgeBook.GetBestAskPrice();
+                decimal currentKalshiAsk = kHedgeBook!.GetBestAskPrice();
                 int currentKCents = Math.Max(1, (int)Math.Ceiling(currentKalshiAsk * 100) + RecoveryHedgeSlippageCents);
                 decimal hedgeNet = currentKalshiAsk + pActualPrice + KalshiFee(currentKalshiAsk) + PolyFee(pActualPrice);
                 DebugLog.Trades($"RecoverUnhedgedAsync {pair.Label}: pUnhedged={pUnhedged} kalshiAsk={currentKalshiAsk:0.0000} hedgeNet={hedgeNet:0.0000}");
@@ -1335,7 +1329,7 @@ public class CrossArbExecutor
                     Console.WriteLine($"[RECOVER] {pair.Label} | hedgeNet={hedgeNet:0.0000} >= 1.0 — reversing {pUnhedged:0.00} Poly shares directly");
                 }
             }
-            else
+            else if (pUnhedgedValue < CleanupHedgeSkipUsd)
             {
                 Console.WriteLine($"[CLEANUP SKIP HEDGE] {pair.Label} | pExcess={pUnhedged:0.00} value=${pUnhedgedValue:0.00} < ${CleanupHedgeSkipUsd:0.00} — reversing directly");
             }

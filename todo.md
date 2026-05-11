@@ -139,7 +139,7 @@ int currentKCents = Math.Max(1, (int)Math.Ceiling(currentKalshiAsk * 100));
 **Fix:** Check `kBestBid <= 0m` explicitly before posting the reverse order. If no bid side exists, skip directly to the dust/halt branch.
 **Why important:** Avoids one wasted REST call and simplifies the post-reverse logic by not having to handle the "reverse posted but didn't fill" subcase separately from the dust case.
 
-### [ ] 7. Skip hedge phase (don't halt) when opposite-side book is missing
+### [X] 7. Skip hedge phase (don't halt) when opposite-side book is missing
 **Location:** Both halt branches in `RecoverUnhedgedAsync` (lines ~1165, ~1270)
 **Problem:** If the opposite-side book is missing from `_books`, you halt immediately. Overkill — you can still reverse the filled side without needing the opposite book.
 **Fix:** Missing opposite-side book → skip the hedge attempt, fall through to reverse on the leg you can act on. Halt only if reverse *also* can't proceed.
