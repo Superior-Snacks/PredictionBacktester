@@ -200,8 +200,6 @@ Auto-update `cross_pair_blocklist.json` on PAIR_MISMATCH detections.
 
 ### [ ] 13. Build early-exit monitoring for open positions
 **Status:** Not visible in the files reviewed (might exist elsewhere)
-**Suggestion:** A loop over `_openPositions` that periodically checks `bid_YES + bid_NO` against the position's entry cost. When current exit value exceeds a hurdle (e.g., `(1 - currentExitValue) / daysRemaining` falls below your APR threshold), sell both legs.
-**Why strategic:** Without this, every position is held to settlement, leaving the early-exit edge from your telemetry on the table. This was a meaningful portion of projected PnL in your simulations.
 
 ---
 
