@@ -109,6 +109,7 @@ public class CrossArbExecutor
         Channel.CreateUnbounded<string>(new UnboundedChannelOptions { SingleReader = true });
     private readonly string _csvPath;
     private bool _headerWritten;
+    private Task _csvWriterTask = Task.CompletedTask;
 
     public int     OpenPositionCount    => _openPositions.Count(kv => kv.Value != null);
     public decimal MaxExposureUsd       => _maxExposureUsd;
@@ -157,7 +158,7 @@ public class CrossArbExecutor
         _tryLimit            = tryN ?? -1;
         _outerCts            = outerCts;
         _csvPath             = $"CrossArbExecution_{DateTime.UtcNow:yyyyMMdd_HHmmss}.csv";
-        _ = Task.Run(RunCsvWriterAsync);
+        _csvWriterTask = Task.Run(RunCsvWriterAsync);
         var journalDir = Path.GetDirectoryName(Path.GetFullPath(_journalPath));
         if (journalDir != null) Directory.CreateDirectory(journalDir);
 
@@ -1425,16 +1426,35 @@ public class CrossArbExecutor
 
     private async Task RunCsvWriterAsync()
     {
-        try
+        const int MaxRetries = 3;
+        for (int attempt = 0; attempt < MaxRetries; attempt++)
         {
-            using var sw = new StreamWriter(_csvPath, append: false, Encoding.UTF8) { AutoFlush = false };
-            await foreach (var line in _csvChannel.Reader.ReadAllAsync())
+            try
             {
-                await sw.WriteLineAsync(line);
-                await sw.FlushAsync();
+                using var sw = new StreamWriter(_csvPath, append: attempt > 0, Encoding.UTF8) { AutoFlush = false };
+                await foreach (var line in _csvChannel.Reader.ReadAllAsync())
+                {
+                    await sw.WriteLineAsync(line);
+                    await sw.FlushAsync();
+                }
+                return; // channel completed cleanly
+            }
+            catch (OperationCanceledException) { return; }
+            catch (Exception ex)
+            {
+                Console.ForegroundColor = ConsoleColor.Red;
+                Console.WriteLine($"[CSV WRITER ERROR] Attempt {attempt + 1}/{MaxRetries}: {ex.GetType().Name}: {ex.Message}");
+                Console.ResetColor();
+                if (attempt + 1 >= MaxRetries)
+                {
+                    Console.ForegroundColor = ConsoleColor.Red;
+                    Console.WriteLine($"[CSV WRITER DEAD] CSV writer failed after {MaxRetries} attempts — execution data will NOT be saved to {_csvPath}. Check disk/permissions.");
+                    Console.ResetColor();
+                    return;
+                }
+                await Task.Delay(5_000);
             }
         }
-        catch (Exception ex) { Console.WriteLine($"[EXEC CSV ERROR] {ex.Message}"); }
     }
 
     // ── Trade journal ─────────────────────────────────────────────────────────
@@ -1589,7 +1609,7 @@ public class CrossArbExecutor
         _cts.Cancel();
         _cts.Dispose();
         _csvChannel.Writer.TryComplete();
-        // Allow the writer task to drain
-        await Task.Delay(200);
+        // Wait for the CSV writer to drain all buffered rows (5s timeout in case it's stuck)
+        await Task.WhenAny(_csvWriterTask, Task.Delay(5_000));
     }
 }

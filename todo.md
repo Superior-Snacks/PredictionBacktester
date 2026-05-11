@@ -160,7 +160,7 @@ if (hedgeQty == 0) {
 ```
 **Why important:** Tiny but accumulating leakage. Every cross-venue partial fill on Polymarket can leave sub-share residue that's currently invisible to the recovery logic.
 
-### [ ] 9. CSV writer task failure should be detectable
+### [X] 9. CSV writer task failure should be detectable
 **Location:** Constructor (line ~159) and `RunCsvWriterAsync` (line ~1395)
 **Problem:** `_ = Task.Run(RunCsvWriterAsync)` discards the task. If the writer fails on startup (file permissions, disk full) or dies mid-run, you'll silently lose CSV data. The `_csvChannel.Writer.TryWrite(row)` calls continue to succeed because the channel is unbounded — the data just goes nowhere.
 **Fix:** Either keep a reference to the writer task and check its status periodically, add a watchdog that verifies the channel reader is alive, or restart the writer on exception. At minimum, the `catch` in `RunCsvWriterAsync` should log loudly (red console) so a writer death is noticed.
