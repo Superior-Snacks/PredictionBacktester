@@ -147,6 +147,13 @@ public class BookRefresherService
             }
         }
         catch (OperationCanceledException) { }
+        catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            // Token no longer exists — market resolved or delisted. Stop polling.
+            book.MarkDead();
+            Console.WriteLine($"[BOOK DEAD] Poly {tokenId}: 404 — market resolved/delisted, stopped polling");
+            DebugLog.Books($"RefreshPolyBookAsync {tokenId}: 404 Not Found — marked dead");
+        }
         catch (Exception ex)
         {
             Console.WriteLine($"[BOOK REFRESH WARN] Poly {tokenId[..Math.Min(8, tokenId.Length)]}: {ApiErrorHelper.ClassifyPoly(ex)}");
