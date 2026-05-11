@@ -59,6 +59,7 @@ public class CrossArbExecutor
     private readonly object  _exposureLock         = new();
     private readonly CancellationTokenSource _cts  = new();
     private          int     _totalExecuted        = 0;
+    private          int     _earlyExitsCompleted  = 0;
     private          int     _triesRemaining       = -1;  // -1 = unlimited
     private          int     _tryLimit             = -1;  // original N, for display
     private          CancellationTokenSource? _outerCts;
@@ -82,6 +83,14 @@ public class CrossArbExecutor
     //                       up to MaxPerPairExposureUsd total across all fills.
     private const  bool     AllowScaleIn           = false;
     private const  decimal  MaxPerPairExposureUsd  = 200m;
+
+    // ── Early exit monitoring ─────────────────────────────────────────────────
+    // Close a position before settlement when unrealized PnL ≥ this fraction of
+    // the expected settlement profit (computed at entry, after entry fees).
+    // Set to 0 to never exit early; 1.0 to require full settlement value before exiting.
+    private static decimal  EarlyExitThreshold      = 0.50m;  // 50 % of expected profit
+    private const  int      EarlyExitCheckIntervalMs = 30_000; // check every 30 s
+    private const  decimal  EarlyExitMinProfitUsd    = 0.05m;  // skip micro-exits below this
     private          decimal  _dayLossUsd          = 0m;
     private          DateOnly _dayStart            = DateOnly.FromDateTime(DateTime.UtcNow);
     private readonly decimal  _maxDayLossUsd;
@@ -120,6 +129,7 @@ public class CrossArbExecutor
     public int     OpenPositionCount    => _openPositions.Count(kv => kv.Value != null);
     public decimal MaxExposureUsd       => _maxExposureUsd;
     public int     TotalExecuted        => Volatile.Read(ref _totalExecuted);
+    public int     EarlyExitsCompleted  => Volatile.Read(ref _earlyExitsCompleted);
     public int     TriesRemaining       => Volatile.Read(ref _triesRemaining);  // -1 = unlimited
     public bool    IsHalted             => _halted;
     public bool    IsConnectionHalted   => _connectionHalted;
@@ -194,10 +204,12 @@ public class CrossArbExecutor
             await RefreshBalancesAsync(initial: true);
             lock (_balanceLock) { _kalshiBalanceUsd = 1000m; _polyBalanceUsd = 1000m; }
             Console.WriteLine("[BALANCE INIT] Dry-run: simulation seeded at $1,000.00 on each platform");
+            _ = Task.Run(RunEarlyExitMonitorAsync);
             return;
         }
         await RefreshBalancesAsync(initial: true);
         _ = Task.Run(PeriodicBalanceRefreshLoop);
+        _ = Task.Run(RunEarlyExitMonitorAsync);
     }
 
     private async Task PeriodicBalanceRefreshLoop()
@@ -1607,6 +1619,182 @@ public class CrossArbExecutor
             Console.WriteLine($"[TRY LIMIT] All {_tryLimit} arb(s) completed — shutting down cleanly.");
             Console.ResetColor();
             _outerCts?.Cancel();
+        }
+    }
+
+    // ── Early exit monitor ────────────────────────────────────────────────────
+
+    private async Task RunEarlyExitMonitorAsync()
+    {
+        while (!_cts.Token.IsCancellationRequested)
+        {
+            try { await Task.Delay(EarlyExitCheckIntervalMs, _cts.Token); }
+            catch (TaskCanceledException) { break; }
+
+            if (_halted || _connectionHalted || _openPositions.IsEmpty) continue;
+
+            foreach (var (pairId, pos) in _openPositions.ToArray())
+            {
+                if (_cts.Token.IsCancellationRequested) break;
+                try { await CheckEarlyExitAsync(pairId, pos); }
+                catch (Exception ex)
+                {
+                    DebugLog.Trades($"RunEarlyExitMonitorAsync {pairId}: {ex.GetType().Name}: {ex.Message}");
+                }
+            }
+        }
+    }
+
+    private async Task CheckEarlyExitAsync(string pairId, ArbPosition pos)
+    {
+        if (EarlyExitThreshold <= 0m) return;
+
+        var pair = _telemetry.GetPair(pairId);
+        if (pair == null) return;
+
+        string kBidKey    = pos.ArbType == "K_YES_P_NO" ? $"K:{pair.KalshiTicker}" : $"K:{pair.KalshiTicker}_NO";
+        string pBidKey    = pos.ArbType == "K_YES_P_NO" ? $"P:{pair.PolyNoTokenId}" : $"P:{pair.PolyYesTokenId}";
+        string kalshiSide = pos.ArbType == "K_YES_P_NO" ? "yes" : "no";
+        string polyToken  = pos.ArbType == "K_YES_P_NO" ? pair.PolyNoTokenId : pair.PolyYesTokenId;
+
+        if (!_books.TryGetValue(kBidKey, out var kBook) || !_books.TryGetValue(pBidKey, out var pBook)) return;
+
+        decimal kBid = kBook.GetBestBidPrice();
+        decimal pBid = pBook.GetBestBidPrice();
+        if (kBid <= 0m || pBid <= 0m) return;
+
+        decimal entryCostPerSet      = pos.KalshiEntryPrice + pos.PolyEntryPrice;
+        decimal expectedProfitPerSet = 1.0m - entryCostPerSet
+            - KalshiFee(pos.KalshiEntryPrice) - PolyFee(pos.PolyEntryPrice);
+        if (expectedProfitPerSet <= 0m) return;
+
+        decimal unrealizedPnlPerSet = (kBid + pBid) - entryCostPerSet;
+        decimal unrealizedPnlTotal  = unrealizedPnlPerSet * pos.KalshiContracts;
+
+        DebugLog.Trades(
+            $"EarlyExit {pair.Label}: kBid={kBid:0.0000} pBid={pBid:0.0000} " +
+            $"unrealizedPnl/set={unrealizedPnlPerSet:0.0000} " +
+            $"hurdle={EarlyExitThreshold * expectedProfitPerSet:0.0000} " +
+            $"total=${unrealizedPnlTotal:0.00}");
+
+        if (unrealizedPnlPerSet < EarlyExitThreshold * expectedProfitPerSet) return;
+        if (unrealizedPnlTotal  < EarlyExitMinProfitUsd) return;
+
+        // Guard: reuse _inFlight so an OnArbOpened callback can't race with our exit.
+        if (!_inFlight.TryAdd(pairId, 0))
+        {
+            DebugLog.Trades($"CheckEarlyExitAsync {pairId}: already in-flight, skipping this cycle");
+            return;
+        }
+        try
+        {
+            // Re-read position — it may have been removed by a concurrent fill or recovery.
+            if (!_openPositions.TryGetValue(pairId, out var currentPos)) return;
+
+            Console.ForegroundColor = ConsoleColor.Cyan;
+            Console.WriteLine(
+                $"[EARLY EXIT] {pair.Label} | unrealizedPnl=${unrealizedPnlTotal:0.00} ≥ " +
+                $"{EarlyExitThreshold:P0} × expected=${(expectedProfitPerSet * currentPos.KalshiContracts):0.00} " +
+                $"— closing early (kBid={kBid:0.0000} pBid={pBid:0.0000})");
+            Console.ResetColor();
+
+            await JournalAsync(JsonSerializer.Serialize(new {
+                t = DateTime.UtcNow, @event = "EARLY_EXIT_INTENT",
+                pairId, label = pair.Label, arbType = pos.ArbType,
+                kalshiContracts = currentPos.KalshiContracts, polyShares = currentPos.PolyShares,
+                kBid, pBid, unrealizedPnlPerSet, unrealizedPnlTotal,
+                expectedProfitTotal = expectedProfitPerSet * currentPos.KalshiContracts,
+                threshold = EarlyExitThreshold, dryRun = _dryRun
+            }));
+
+            if (_dryRun)
+            {
+                _openPositions.TryRemove(pairId, out _);
+                Interlocked.Increment(ref _earlyExitsCompleted);
+                Console.ForegroundColor = ConsoleColor.Cyan;
+                Console.WriteLine($"[EARLY EXIT DRY-RUN] {pair.Label} | position closed (simulated)");
+                Console.ResetColor();
+                await JournalAsync(JsonSerializer.Serialize(new {
+                    t = DateTime.UtcNow, @event = "EARLY_EXIT_COMPLETE",
+                    pairId, outcome = "DRY_RUN",
+                    kSold = currentPos.KalshiContracts, pSold = currentPos.PolyShares,
+                    unrealizedPnlTotal, dryRun = true
+                }));
+                return;
+            }
+
+            // Live: simultaneously sell both legs
+            int kSellCents = Math.Max(1, (int)Math.Floor(kBid * 100));
+            var kSellTask = Task.Run(async () =>
+            {
+                try
+                {
+                    return await _kalshi.PlaceOrderAsync(
+                        pair.KalshiTicker, kalshiSide, kSellCents, (int)currentPos.KalshiContracts, action: "sell");
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[EARLY EXIT ERROR] {pair.Label} Kalshi sell: {ApiErrorHelper.ClassifyKalshi(ex)}");
+                    DebugLog.Trades($"CheckEarlyExitAsync {pairId} Kalshi sell ex: {ex}");
+                    return ("", "error", 0m);
+                }
+            });
+            var pSellTask = PlacePolySellAsync(polyToken, currentPos.PolyShares);
+            await Task.WhenAll(kSellTask, pSellTask);
+
+            var (_, kStatus, kSold) = kSellTask.Result;
+            var (pSold, pAvgPrice)  = pSellTask.Result;
+
+            bool kOk = kSold > 0;
+            bool pOk = pSold > 0;
+
+            if (kOk && pOk)
+            {
+                _openPositions.TryRemove(pairId, out _);
+                Interlocked.Increment(ref _earlyExitsCompleted);
+                decimal kProceeds  = kSold * (kSellCents / 100m);
+                decimal pProceeds  = pSold * pAvgPrice;
+                decimal realizedPnl = (kProceeds + pProceeds)
+                    - (currentPos.KalshiContracts * currentPos.KalshiEntryPrice
+                    +  currentPos.PolyShares      * currentPos.PolyEntryPrice);
+                Console.ForegroundColor = ConsoleColor.Cyan;
+                Console.WriteLine(
+                    $"[EARLY EXIT OK] {pair.Label} | sold K={kSold}@{kSellCents}¢ P={pSold:0.00}sh@${pAvgPrice:0.0000} " +
+                    $"realizedPnl=${realizedPnl:0.00}");
+                Console.ResetColor();
+                await JournalAsync(JsonSerializer.Serialize(new {
+                    t = DateTime.UtcNow, @event = "EARLY_EXIT_COMPLETE",
+                    pairId, outcome = "FILLED",
+                    kSold, kSellCents, pSold, pAvgPrice, realizedPnl
+                }));
+            }
+            else if (!kOk && !pOk)
+            {
+                // Neither leg filled — books may have moved. Leave position intact; monitor will retry.
+                Console.WriteLine($"[EARLY EXIT MISSED] {pair.Label} | both legs unfilled — leaving open, will retry");
+                await JournalAsync(JsonSerializer.Serialize(new {
+                    t = DateTime.UtcNow, @event = "EARLY_EXIT_MISSED",
+                    pairId, kStatus, kSold, pSold
+                }));
+            }
+            else
+            {
+                // One leg sold, the other did not — this creates an unhedged position. Halt to prevent compounding.
+                Console.ForegroundColor = ConsoleColor.Red;
+                Console.WriteLine(
+                    $"[EARLY EXIT PARTIAL] {pair.Label} | kOk={kOk} pOk={pOk} " +
+                    $"— one leg sold, other did not. Halting for manual review.");
+                Console.ResetColor();
+                _halted = true;
+                await JournalAsync(JsonSerializer.Serialize(new {
+                    t = DateTime.UtcNow, @event = "EARLY_EXIT_PARTIAL",
+                    pairId, kOk, pOk, kSold, kSellCents, pSold, pAvgPrice, halted = true
+                }));
+            }
+        }
+        finally
+        {
+            _inFlight.TryRemove(pairId, out _);
         }
     }
 

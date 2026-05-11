@@ -198,8 +198,8 @@ Auto-update `cross_pair_blocklist.json` on PAIR_MISMATCH detections.
 
 **Why strategic:** Without this, you'll know *that* trades lost but not *why*. Categorization tells you whether to fix the LLM (pair issues), the execution code (slippage), or the fee model.
 
-### [ ] 13. Build early-exit monitoring for open positions
-**Status:** Not visible in the files reviewed (might exist elsewhere)
+### [X] 13. Build early-exit monitoring for open positions
+**Status:** Implemented — `RunEarlyExitMonitorAsync` checks every 30s; exits when unrealizedPnl ≥ EarlyExitThreshold (50%) × expectedProfit. EarlyExitThreshold is a mutable static field. Status dashboard shows earlyExit count.
 
 ---
 

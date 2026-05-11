@@ -407,7 +407,7 @@ if (executor != null)
                     $"K=${executor.KalshiBalanceUsd:0.00}  P=${executor.PolyBalanceUsd:0.00}  │  " +
                     $"invested=${executor.TotalInvested:0.00}  proj={projStr}  │  " +
                     $"exposure=${executor.TotalExposure:0.00}/${executor.MaxExposureUsd:0.00}  │  " +
-                    $"open={executor.OpenPositionCount}  filled={executor.TotalExecuted}  │  " +
+                    $"open={executor.OpenPositionCount}  filled={executor.TotalExecuted}  earlyExit={executor.EarlyExitsCompleted}  │  " +
                     $"books K={kReady}/{kTotal} P={pReady}/{pTotal}" +
                     $"  WS K={kalshiFeed.IsConnected} P={polyFeed.IsConnected}" +
                     $"  dayLoss=${executor.DayLossUsd:0.00}/${executor.MaxDayLossUsd:0.00}" +
