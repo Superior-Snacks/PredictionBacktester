@@ -184,7 +184,7 @@ if (hedgeQty == 0) {
 **Suggestion:** A `--confirm` or `--interactive` flag where the bot finds arbs, prints them, and waits for keyboard input (Y/n) before firing each one. Useful for the first day or two of live trading to catch obvious bugs without risking automated execution at 3am.
 **Why strategic:** This isn't a bug, it's a deployment-safety feature. Could save you from a bad first day if there's some failure mode that only appears in live.
 
-### [ ] 12. Build settlement post-mortem categorization script
+### [X] 12. Build settlement post-mortem categorization script
 **Status:** Not present in current code
 **Suggestion:** A separate script that walks the journal after settlement and categorizes each closed position:
 - `CLEAN_WIN` — both legs settled, total payout = $1.00 × shares, profit ≈ expected

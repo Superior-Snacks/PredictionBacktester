@@ -181,15 +181,21 @@ def categorize_settlement(exec_ev, k_result, k_resolved, p_token_wins, p_resolve
              (arb_type == "K_NO_P_YES" and k_result == "no")
     p_pays = bool(p_token_wins)
 
-    if k_pays and p_pays:      return "PAIR_MISMATCH_BOTH_WON"
+    if k_pays and p_pays:         return "PAIR_MISMATCH_BOTH_WON"
     if not k_pays and not p_pays: return "PAIR_MISMATCH_BOTH_LOST"
-    # Exactly one pays — correct hedge
+    # Exactly one pays — correct hedge; determine P&L quality
     pos         = exec_ev.get("position") or {}
-    actual_net  = pos.get("actualNetPerSet",  1.0)
-    modeled_net = pos.get("modeledNetPerSet", actual_net)
+    actual_net  = float(pos.get("actualNetPerSet",  1.0))
+    modeled_net = float(pos.get("modeledNetPerSet", actual_net))
     if actual_net >= 1.0:
-        return "FEE_MODEL_LOSS" if (actual_net - modeled_net) > 0.005 else "EXECUTION_LOSS"
-    return "CLEAN_WIN"
+        base = "FEE_MODEL_LOSS" if (actual_net - modeled_net) > 0.005 else "EXECUTION_LOSS"
+    else:
+        base = "CLEAN_WIN"
+    # Positions that required cleanup/recovery at entry get a RECOVERED_ prefix so
+    # they can be tracked separately from clean fills with the same settlement outcome.
+    if exec_ev.get("outcome") == "FILLED_WITH_CLEANUP":
+        return f"RECOVERED_{base}"
+    return base
 
 # ─── Section 1: Session Summary ───────────────────────────────────────────────
 
@@ -586,7 +592,7 @@ def section_settlement(events, pairs_by_ticker, no_api):
     print(f"\n  Settled: {total_settled} of {len(filled)} positions  |  Pending: {total_pending}")
     print()
 
-    cat_order = [
+    base_cats = [
         "CLEAN_WIN",
         "EXECUTION_LOSS",
         "FEE_MODEL_LOSS",
@@ -594,7 +600,11 @@ def section_settlement(events, pairs_by_ticker, no_api):
         "PAIR_MISMATCH_BOTH_LOST",
         "PENDING",
     ]
-    realized_pnl = 0.0
+    # Append any RECOVERED_* categories that actually appeared in this journal
+    recovered_cats = sorted(c for c in categories if c.startswith("RECOVERED_"))
+    cat_order = base_cats + recovered_cats
+
+    realized_pnl  = 0.0
     action_needed = []
 
     for cat in cat_order:
@@ -608,17 +618,21 @@ def section_settlement(events, pairs_by_ticker, no_api):
         ) if cat != "PENDING" else 0.0
         realized_pnl += cat_pnl
 
-        pnl_str  = f"  P&L {cat_pnl:+.4f}" if cat != "PENDING" else ""
-        flag_str = ""
-        if cat == "EXECUTION_LOSS"         and evs:
-            flag_str = "  ← [ACTION REQUIRED] review execution code"
+        pnl_str    = f"  P&L {cat_pnl:+.4f}" if cat != "PENDING" else ""
+        flag_parts = []
+        base_cat   = cat.replace("RECOVERED_", "")
+        if base_cat == "EXECUTION_LOSS" and evs:
+            flag_parts.append("[ACTION REQUIRED] review execution code")
             action_needed.append("execution")
-        if cat == "FEE_MODEL_LOSS"         and evs:
-            flag_str = "  ← [ACTION REQUIRED] update fee model"
+        if base_cat == "FEE_MODEL_LOSS" and evs:
+            flag_parts.append("[ACTION REQUIRED] update fee model")
             action_needed.append("fee_model")
-        if cat.startswith("PAIR_MISMATCH") and evs:
-            flag_str = "  ← [ACTION REQUIRED] BLOCKLISTING"
+        if base_cat.startswith("PAIR_MISMATCH") and evs:
+            flag_parts.append("[ACTION REQUIRED] BLOCKLISTING")
             action_needed.append("blocklist")
+        if cat.startswith("RECOVERED_"):
+            flag_parts.append("cleanup required at entry")
+        flag_str = ("  ← " + " + ".join(flag_parts)) if flag_parts else ""
 
         print(f"  {cat:<32}  {len(evs):>3}{pnl_str}{flag_str}")
 
