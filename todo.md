@@ -170,7 +170,7 @@ if (hedgeQty == 0) {
 
 ## STRATEGIC (not bugs, but worth deciding explicitly)
 
-### [ ] 10. Document or change the "one position per pair" constraint
+### [X] 10. Document or change the "one position per pair" constraint
 **Location:** `ExecuteLockedAsync` (line ~278)
 **Problem:** `_openPositions.ContainsKey(pairId)` blocks new entries on a pair while *any* position is open. This prevents scaling into a position when prices drop further — the "go deeper on a dip" strategy we discussed previously.
 **Decision needed:**
@@ -179,7 +179,7 @@ if (hedgeQty == 0) {
 
 **Why strategic:** Either is defensible. The first is safer; the second can capture more edge. Worth being explicit about which you've chosen.
 
-### [ ] 11. Add manual-approval mode for first live week
+### [N/A] 11. Add manual-approval mode for first live week
 **Status:** Not present in current code (only `_dryRun` exists)
 **Suggestion:** A `--confirm` or `--interactive` flag where the bot finds arbs, prints them, and waits for keyboard input (Y/n) before firing each one. Useful for the first day or two of live trading to catch obvious bugs without risking automated execution at 3am.
 **Why strategic:** This isn't a bug, it's a deployment-safety feature. Could save you from a bad first day if there's some failure mode that only appears in live.

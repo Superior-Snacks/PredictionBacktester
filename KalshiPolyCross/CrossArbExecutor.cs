@@ -75,7 +75,13 @@ public class CrossArbExecutor
     private const  decimal  TradeMaxLossMult       = 3.0m; // halt if actual loss > 3× expected edge
     private const  decimal  CleanupHedgeSkipUsd   = 1.00m; // skip hedge attempt if unhedged value < $1.00
     private const  decimal  CleanupDustUsd         = 0.25m; // absorb silently (no halt) if reversal fails and value < $0.25
-    private const  decimal  MaxPerPairExposureUsd  = 200m;  // max total cost invested per pair across all fills
+
+    // ── Position scaling ──────────────────────────────────────────────────────
+    // AllowScaleIn = false: one position per pair (hold to settlement/exit).
+    // AllowScaleIn = true:  allow additional entries while a position is open,
+    //                       up to MaxPerPairExposureUsd total across all fills.
+    private const  bool     AllowScaleIn           = false;
+    private const  decimal  MaxPerPairExposureUsd  = 200m;
     private          decimal  _dayLossUsd          = 0m;
     private          DateOnly _dayStart            = DateOnly.FromDateTime(DateTime.UtcNow);
     private readonly decimal  _maxDayLossUsd;
@@ -277,9 +283,9 @@ public class CrossArbExecutor
             DebugLog.Trades($"ExecuteAsync {pairId}: skipped — cooldown active for {cd - now}s more");
             return;
         }
-        if (_openPositions.ContainsKey(pairId))
+        if (!AllowScaleIn && _openPositions.ContainsKey(pairId))
         {
-            DebugLog.Trades($"ExecuteAsync {pairId}: skipped — open position already tracked");
+            DebugLog.Trades($"ExecuteAsync {pairId}: skipped — open position already tracked (AllowScaleIn=false)");
             return;
         }
 
