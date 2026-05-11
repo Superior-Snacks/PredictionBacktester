@@ -211,7 +211,7 @@ After running halt-on-mismatch for a while, you'll see the patterns of what mism
 ### [ ] 15. Add a watchdog that periodically pings both venues' REST
 If WS feeds go silent for unrelated reasons (network glitch, your end), you want to know whether the venues are actually up or whether you're cut off. A 60-second REST ping to each, comparing to the WS last-message timestamps, would distinguish "venue is quiet" from "we're disconnected."
 
-### [ ] 16. Per-trade trace IDs for log correlation
+### [X] 16. Per-trade trace IDs for log correlation
 Every order should log a unique trace ID that ties together submit, fill confirmation, any cancel attempts, recovery actions, and reconciliation. Grep-friendly debugging when something weird happens at 3am.
 
 ### [ ] 17. Daily summary report at midnight UTC

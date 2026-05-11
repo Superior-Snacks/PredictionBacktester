@@ -19,7 +19,8 @@ public record ArbPosition(
     decimal  PolyShares,
     decimal  KalshiEntryPrice,
     decimal  PolyEntryPrice,
-    DateTime EntryTime
+    DateTime EntryTime,
+    string   ExecId           // trace ID — correlates all journal events for this trade
 );
 
 // Summary of what RecoverUnhedgedAsync did with the unhedged delta.
@@ -427,6 +428,8 @@ public class CrossArbExecutor
             DebugLog.Balance($"ExecuteAsync {pair.Label}: scaled {idealContracts}→{contracts} contracts");
         }
 
+        string execId = string.Empty; // set in dry-run or live branch below
+
         if (_dryRun)
         {
             // Apply the same bankroll guards as the live path so dry-run faithfully models constraints.
@@ -464,11 +467,11 @@ public class CrossArbExecutor
             // Set cooldown before journaling (mirrors live path)
             _cooldownUntil[pairId] = now + _pairCooldownSeconds;
 
-            var    t0DryRun = DateTime.UtcNow;
-            string execId   = $"{t0DryRun:yyyyMMddHHmmss}_{pair.KalshiTicker}";
+            var t0DryRun = DateTime.UtcNow;
+            execId = $"AX_{t0DryRun:yyyyMMddHHmmss}_{pair.KalshiTicker}";
 
             await JournalAsync(JsonSerializer.Serialize(new {
-                t = t0DryRun, @event = "INTENT",
+                t = t0DryRun, @event = "INTENT", execId,
                 pairId, arbType, kSide = kalshiSide,
                 kAsk = kLegAsk, pAsk = pLegAsk, netDetected = netNow,
                 contracts, estCost = estimatedCost,
@@ -590,17 +593,18 @@ public class CrossArbExecutor
         Console.ResetColor();
 
         var t0 = DateTime.UtcNow;
+        execId = $"AX_{t0:yyyyMMddHHmmss}_{pair.KalshiTicker}";
 
         // Durable intent record — written before any order is sent
         await JournalAsync(JsonSerializer.Serialize(new {
-            t = t0, @event = "INTENT",
+            t = t0, @event = "INTENT", execId,
             pairId, arbType, kSide = kalshiSide,
             kAsk = kLegAsk, pAsk = pLegAsk, netDetected = netNow,
             contracts, estCost = estimatedCost
         }));
 
         // Fire both legs simultaneously
-        var kalshiTask = PlaceKalshiLegAsync(pair.KalshiTicker, kalshiSide, kPriceCents, contracts);
+        var kalshiTask = PlaceKalshiLegAsync(pair.KalshiTicker, kalshiSide, kPriceCents, contracts, execId);
         var polyTask   = PlacePolyLegAsync(polyToken, pLegAsk, polyShares);
         await Task.WhenAll(kalshiTask, polyTask);
 
@@ -642,7 +646,7 @@ public class CrossArbExecutor
             decimal actualProfit    = balancedQty * (1.0m - actualNetPerSet);
 
             _openPositions[pairId] = new ArbPosition(
-                pairId, arbType, balancedQty, balancedQty, kLegAsk, pActualPrice, t0);
+                pairId, arbType, balancedQty, balancedQty, kLegAsk, pActualPrice, t0, execId);
             Interlocked.Increment(ref _totalExecuted);
             DecrementTryLimit();
             lock (_exposureLock) { _totalInvested += actualCost; _totalProjectedProfit += actualProfit; }
@@ -768,7 +772,7 @@ public class CrossArbExecutor
                 $"kFilled={kFilled} pFilled={pFilled:0.00} balanced={balancedQty} " +
                 $"kExcess={kUnhedged} pExcess={pUnhedged:0.00} — starting recovery");
             recovery = await RecoverUnhedgedAsync(pair, arbType, kalshiSide, polyToken,
-                kFilled, pFilled, kLegAsk, pActualPrice);
+                kFilled, pFilled, kLegAsk, pActualPrice, execId);
         }
         else if (neitherFilled)
         {
@@ -790,8 +794,6 @@ public class CrossArbExecutor
                 : recovery?.Outcome.StartsWith("HALT") == true          ? "HALTED"
                 : recovery != null && recovery.Outcome != "NONE"        ? "FILLED_WITH_CLEANUP"
                 : "FILLED";
-
-            string execId = $"{t0:yyyyMMddHHmmss}_{pair.KalshiTicker}";
 
             // True final position after all cleanup (hedge add or reversal may have changed qty)
             var finalPos  = _openPositions.TryGetValue(pairId, out var fp) ? fp : null;
@@ -862,7 +864,7 @@ public class CrossArbExecutor
             await RefreshBalancesAsync();
             // Post-trade position check — fire-and-forget; must not block the next arb window.
             if (balancedQty > 0)
-                _ = Task.Run(async () => await ReconcileTradeAsync(pair, arbType, balancedQty, balancedQty));
+                _ = Task.Run(async () => await ReconcileTradeAsync(pair, arbType, balancedQty, balancedQty, execId));
         }
         else
         {
@@ -877,9 +879,11 @@ public class CrossArbExecutor
     // ── Kalshi IOC leg ────────────────────────────────────────────────────────
 
     private async Task<(string OrderId, string Status, decimal FillCount)> PlaceKalshiLegAsync(
-        string ticker, string side, int priceCents, int count)
+        string ticker, string side, int priceCents, int count, string execId = "")
     {
-        string clientId = $"CAXARB_{ticker}_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}";
+        string clientId = string.IsNullOrEmpty(execId)
+            ? $"CAXARB_{ticker}_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}"
+            : $"CAXARB_{execId}";
         DebugLog.Trades($"PlaceKalshiLegAsync: {ticker} {side} {priceCents}¢ × {count} clientId={clientId}");
         try
         {
@@ -1168,7 +1172,8 @@ public class CrossArbExecutor
         CrossPair pair, string arbType,
         string kalshiSide, string polyToken,
         decimal kFilled, decimal pFilled,
-        decimal kLegAsk, decimal pActualPrice)
+        decimal kLegAsk, decimal pActualPrice,
+        string execId = "")
     {
         decimal balancedQty = Math.Min(kFilled, pFilled);
         decimal kUnhedged   = kFilled - balancedQty;
@@ -1183,7 +1188,7 @@ public class CrossArbExecutor
             {
                 lock (_cleanupLock) { _totalCleanupCostUsd += kUnhedgedValue; }
                 await JournalAsync(JsonSerializer.Serialize(new {
-                    t = DateTime.UtcNow, @event = "CLEANUP_DUST",
+                    t = DateTime.UtcNow, @event = "CLEANUP_DUST", execId,
                     pair = pair.PairId, leg = "kalshi", qty = kUnhedged, absorbedUsd = kUnhedgedValue
                 }));
                 Console.ForegroundColor = ConsoleColor.DarkYellow;
@@ -1257,7 +1262,7 @@ public class CrossArbExecutor
                         if (reversalLoss > 0)
                             lock (_cleanupLock) { _totalCleanupCostUsd += reversalLoss; }
                         await JournalAsync(JsonSerializer.Serialize(new {
-                            t = DateTime.UtcNow, @event = "CLEANUP_REVERSED",
+                            t = DateTime.UtcNow, @event = "CLEANUP_REVERSED", execId,
                             pair = pair.PairId, leg = "kalshi", qty = kUnhedged,
                             entryPrice = kLegAsk, reversalPrice = kReverseCents / 100m,
                             loss = Math.Max(0m, reversalLoss)
@@ -1294,7 +1299,7 @@ public class CrossArbExecutor
             {
                 lock (_cleanupLock) { _totalCleanupCostUsd += pUnhedgedValue; }
                 await JournalAsync(JsonSerializer.Serialize(new {
-                    t = DateTime.UtcNow, @event = "CLEANUP_DUST",
+                    t = DateTime.UtcNow, @event = "CLEANUP_DUST", execId,
                     pair = pair.PairId, leg = "poly", qty = pUnhedged, absorbedUsd = pUnhedgedValue
                 }));
                 Console.ForegroundColor = ConsoleColor.DarkYellow;
@@ -1328,7 +1333,7 @@ public class CrossArbExecutor
                         decimal fracValue = pUnhedged * pActualPrice;
                         lock (_cleanupLock) { _totalCleanupCostUsd += fracValue; }
                         await JournalAsync(JsonSerializer.Serialize(new {
-                            t = DateTime.UtcNow, @event = "CLEANUP_DUST",
+                            t = DateTime.UtcNow, @event = "CLEANUP_DUST", execId,
                             pair = pair.PairId, leg = "poly_fractional", qty = pUnhedged, absorbedUsd = fracValue
                         }));
                         Console.ForegroundColor = ConsoleColor.DarkYellow;
@@ -1342,7 +1347,7 @@ public class CrossArbExecutor
                     Console.ResetColor();
 
                     var (_, _, kFill2) = await PlaceKalshiLegAsync(
-                        pair.KalshiTicker, kalshiSide, currentKCents, hedgeQty);
+                        pair.KalshiTicker, kalshiSide, currentKCents, hedgeQty, execId);
                     if (kFill2 > 0)
                     {
                         decimal additional = Math.Min((decimal)hedgeQty, kFill2);
@@ -1385,7 +1390,7 @@ public class CrossArbExecutor
                 if (reversalLoss > 0)
                     lock (_cleanupLock) { _totalCleanupCostUsd += reversalLoss; }
                 await JournalAsync(JsonSerializer.Serialize(new {
-                    t = DateTime.UtcNow, @event = "CLEANUP_REVERSED",
+                    t = DateTime.UtcNow, @event = "CLEANUP_REVERSED", execId,
                     pair = pair.PairId, leg = "poly", qty = pUnhedged,
                     entryPrice = pActualPrice, reversalPrice = soldPrice,
                     loss = Math.Max(0m, reversalLoss)
@@ -1539,7 +1544,7 @@ public class CrossArbExecutor
 
     // ── Post-trade reconciliation ─────────────────────────────────────────────
 
-    private async Task ReconcileTradeAsync(CrossPair pair, string arbType, decimal expectedKalshi, decimal expectedPoly)
+    private async Task ReconcileTradeAsync(CrossPair pair, string arbType, decimal expectedKalshi, decimal expectedPoly, string execId = "")
     {
         try
         {
@@ -1562,7 +1567,7 @@ public class CrossArbExecutor
                 Console.WriteLine("[RECONCILE ALERT] Bot halted — manual reset required. Verify positions before resuming.");
                 Console.ResetColor();
                 await JournalAsync(JsonSerializer.Serialize(new {
-                    t = DateTime.UtcNow, @event = "RECONCILE_MISMATCH",
+                    t = DateTime.UtcNow, @event = "RECONCILE_MISMATCH", execId,
                     pair = pair.PairId, arbType,
                     kExpected = expectedKalshi, kVenue = kActual,
                     pExpected = expectedPoly,   pVenue = polyBal,
@@ -1579,7 +1584,7 @@ public class CrossArbExecutor
             Console.ResetColor();
             _halted = true;
             await JournalAsync(JsonSerializer.Serialize(new {
-                t = DateTime.UtcNow, @event = "RECONCILE_ERROR",
+                t = DateTime.UtcNow, @event = "RECONCILE_ERROR", execId,
                 pair = pair.PairId, exType = ex.GetType().Name, message = ex.Message,
                 halted = true
             }));
@@ -1699,7 +1704,7 @@ public class CrossArbExecutor
             Console.ResetColor();
 
             await JournalAsync(JsonSerializer.Serialize(new {
-                t = DateTime.UtcNow, @event = "EARLY_EXIT_INTENT",
+                t = DateTime.UtcNow, @event = "EARLY_EXIT_INTENT", execId = currentPos.ExecId,
                 pairId, label = pair.Label, arbType = pos.ArbType,
                 kalshiContracts = currentPos.KalshiContracts, polyShares = currentPos.PolyShares,
                 kBid, pBid, unrealizedPnlPerSet, unrealizedPnlTotal,
@@ -1715,7 +1720,7 @@ public class CrossArbExecutor
                 Console.WriteLine($"[EARLY EXIT DRY-RUN] {pair.Label} | position closed (simulated)");
                 Console.ResetColor();
                 await JournalAsync(JsonSerializer.Serialize(new {
-                    t = DateTime.UtcNow, @event = "EARLY_EXIT_COMPLETE",
+                    t = DateTime.UtcNow, @event = "EARLY_EXIT_COMPLETE", execId = currentPos.ExecId,
                     pairId, outcome = "DRY_RUN",
                     kSold = currentPos.KalshiContracts, pSold = currentPos.PolyShares,
                     unrealizedPnlTotal, dryRun = true
@@ -1763,7 +1768,7 @@ public class CrossArbExecutor
                     $"realizedPnl=${realizedPnl:0.00}");
                 Console.ResetColor();
                 await JournalAsync(JsonSerializer.Serialize(new {
-                    t = DateTime.UtcNow, @event = "EARLY_EXIT_COMPLETE",
+                    t = DateTime.UtcNow, @event = "EARLY_EXIT_COMPLETE", execId = currentPos.ExecId,
                     pairId, outcome = "FILLED",
                     kSold, kSellCents, pSold, pAvgPrice, realizedPnl
                 }));
@@ -1773,7 +1778,7 @@ public class CrossArbExecutor
                 // Neither leg filled — books may have moved. Leave position intact; monitor will retry.
                 Console.WriteLine($"[EARLY EXIT MISSED] {pair.Label} | both legs unfilled — leaving open, will retry");
                 await JournalAsync(JsonSerializer.Serialize(new {
-                    t = DateTime.UtcNow, @event = "EARLY_EXIT_MISSED",
+                    t = DateTime.UtcNow, @event = "EARLY_EXIT_MISSED", execId = currentPos.ExecId,
                     pairId, kStatus, kSold, pSold
                 }));
             }
@@ -1787,7 +1792,7 @@ public class CrossArbExecutor
                 Console.ResetColor();
                 _halted = true;
                 await JournalAsync(JsonSerializer.Serialize(new {
-                    t = DateTime.UtcNow, @event = "EARLY_EXIT_PARTIAL",
+                    t = DateTime.UtcNow, @event = "EARLY_EXIT_PARTIAL", execId = currentPos.ExecId,
                     pairId, kOk, pOk, kSold, kSellCents, pSold, pAvgPrice, halted = true
                 }));
             }
