@@ -353,16 +353,22 @@ if (executor != null)
 {
     _ = Task.Run(async () =>
     {
-        const int WATCHDOG_INTERVAL_MS = 5_000;
-        bool lastKOk = true, lastPOk = true;
+        const int WATCHDOG_INTERVAL_MS   = 5_000;
+        const int WS_SILENCE_THRESHOLD_S = 60;   // REST-ping when WS connected but silent this long
+        bool     lastKOk     = true, lastPOk = true;
+        DateTime lastKPingAt = DateTime.MinValue;
+        DateTime lastPPingAt = DateTime.MinValue;
         try
         {
             while (!cts.Token.IsCancellationRequested)
             {
                 await Task.Delay(WATCHDOG_INTERVAL_MS, cts.Token).ContinueWith(_ => { });
                 if (cts.Token.IsCancellationRequested) break;
+
                 bool kOk = kalshiFeed.IsConnected;
                 bool pOk = polyFeed.IsConnected;
+
+                // ── WS connect/disconnect transitions ──────────────────────────
                 if (!kOk && lastKOk) Console.WriteLine("[WATCHDOG] Kalshi disconnected — halting new trades");
                 if (!pOk && lastPOk) Console.WriteLine("[WATCHDOG] Polymarket disconnected — halting new trades");
                 if ( kOk && !lastKOk) Console.WriteLine("[WATCHDOG] Kalshi reconnected — resuming trades");
@@ -371,6 +377,46 @@ if (executor != null)
                 lastPOk = pOk;
                 if (!kOk || !pOk) executor.HaltForConnectionLoss();
                 else              executor.ResumeFromConnectionLoss();
+
+                // ── Silence detection: WS connected but no messages for 60s ───
+                // Distinguish "venue is quiet" (REST succeeds) from "we're cut off" (REST fails).
+                var nowDt    = DateTime.UtcNow;
+                double kSilS = (nowDt - kalshiFeed.LastMessageAt).TotalSeconds;
+                double pSilS = (nowDt - polyFeed  .LastMessageAt).TotalSeconds;
+
+                if (kOk && kSilS >= WS_SILENCE_THRESHOLD_S
+                        && (nowDt - lastKPingAt).TotalSeconds >= WS_SILENCE_THRESHOLD_S)
+                {
+                    lastKPingAt = nowDt;
+                    bool kRestOk = await executor.PingKalshiAsync();
+                    if (kRestOk)
+                        Console.WriteLine($"[WATCHDOG] Kalshi WS silent {kSilS:0}s — REST OK (venue quiet, no arb activity)");
+                    else
+                    {
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.WriteLine($"[WATCHDOG ALERT] Kalshi WS silent {kSilS:0}s — REST unreachable. " +
+                                          "Possible network cut-off — halting until reconnect.");
+                        Console.ResetColor();
+                        executor.HaltForConnectionLoss();
+                    }
+                }
+
+                if (pOk && pSilS >= WS_SILENCE_THRESHOLD_S
+                        && (nowDt - lastPPingAt).TotalSeconds >= WS_SILENCE_THRESHOLD_S)
+                {
+                    lastPPingAt = nowDt;
+                    bool pRestOk = await executor.PingPolyAsync();
+                    if (pRestOk)
+                        Console.WriteLine($"[WATCHDOG] Poly WS silent {pSilS:0}s — REST OK (venue quiet, no arb activity)");
+                    else
+                    {
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.WriteLine($"[WATCHDOG ALERT] Poly WS silent {pSilS:0}s — REST unreachable. " +
+                                          "Possible network cut-off — halting until reconnect.");
+                        Console.ResetColor();
+                        executor.HaltForConnectionLoss();
+                    }
+                }
             }
         }
         catch (Exception ex) { Console.WriteLine($"[WATCHDOG ERROR] {ex.Message}"); }

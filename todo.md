@@ -208,7 +208,7 @@ Auto-update `cross_pair_blocklist.json` on PAIR_MISMATCH detections.
 ### [ ] 14. Consider auto-correct vs halt on reconcile mismatch (later)
 After running halt-on-mismatch for a while, you'll see the patterns of what mismatches actually look like. Some categories might be safely auto-correctable (e.g., venue eventually-consistent lag). Don't enable auto-correct until you have data on what's actually happening.
 
-### [ ] 15. Add a watchdog that periodically pings both venues' REST
+### [X] 15. Add a watchdog that periodically pings both venues' REST
 If WS feeds go silent for unrelated reasons (network glitch, your end), you want to know whether the venues are actually up or whether you're cut off. A 60-second REST ping to each, comparing to the WS last-message timestamps, would distinguish "venue is quiet" from "we're disconnected."
 
 ### [X] 16. Per-trade trace IDs for log correlation

@@ -26,6 +26,10 @@ public class PolymarketWebsocketFeed
     /// <summary>True while the WS is subscribed and receiving messages. False during disconnect/reconnect window.</summary>
     public volatile bool IsConnected = false;
 
+    private long _lastMessageTicks = DateTime.UtcNow.Ticks;
+    /// <summary>UTC timestamp of the last received WS message (any type). Used by the watchdog to detect silent connections.</summary>
+    public DateTime LastMessageAt => new DateTime(Volatile.Read(ref _lastMessageTicks), DateTimeKind.Utc);
+
     public PolymarketWebsocketFeed(
         string   wsUrl,
         List<string> tokens,
@@ -143,6 +147,7 @@ public class PolymarketWebsocketFeed
                         string message = Encoding.UTF8.GetString(ms.GetBuffer(), 0, (int)ms.Length);
                         if (message is "PONG" or "pong") continue;
 
+                        Volatile.Write(ref _lastMessageTicks, DateTime.UtcNow.Ticks);
                         ProcessMessage(message);
                     }
                 }

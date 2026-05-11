@@ -1614,6 +1614,19 @@ public class CrossArbExecutor
     public void HaltForConnectionLoss()  => _connectionHalted = true;
     public void ResumeFromConnectionLoss() => _connectionHalted = false;
 
+    /// <summary>Lightweight REST liveness check. Returns true if the venue is reachable.</summary>
+    public async Task<bool> PingKalshiAsync()
+    {
+        try { await _kalshi.GetBalanceCentsAsync(); return true; }
+        catch { return false; }
+    }
+
+    public async Task<bool> PingPolyAsync()
+    {
+        try { await _poly.GetUsdcBalanceAsync(); return true; }
+        catch { return false; }
+    }
+
     private void DecrementTryLimit()
     {
         if (_triesRemaining < 0) return;
