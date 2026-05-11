@@ -127,7 +127,7 @@ int currentKCents = Math.Max(1, (int)Math.Ceiling(currentKalshiAsk * 100));
 
 ## IMPORTANT (fix in the first week of live operation)
 
-### [ ] 5. Add recovery hedge slippage tolerance
+### [X] 5. Add recovery hedge slippage tolerance
 **Location:** `RecoverUnhedgedAsync` hedge retry paths (Cases A and B)
 **Problem:** Recovery hedge retries use the freshly-fetched best ask as the limit price. If the book moves 1¢ between fetch and order arrival, the retry fails for the same reason the original did — leading to unnecessary reverse + loss.
 **Fix:** Add a `RecoveryHedgeSlippageCents = 2` constant (parallel to your existing `ReverseBufferCents`) and apply it to hedge retries. The whole point of recovery is being willing to pay slightly worse than entry-time prices to actually fill.

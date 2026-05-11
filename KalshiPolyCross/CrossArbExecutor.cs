@@ -70,7 +70,8 @@ public class CrossArbExecutor
     private const    int MaintenanceErrorThreshold = 5;
     private volatile bool   _halted               = false; // manual reset required (failed reversal / tripwire)
     private volatile bool   _connectionHalted     = false; // auto-clears when both venues reconnect
-    private const    int    ReverseBufferCents     = 2;    // extra slippage tolerance for reversal orders
+    private const    int    ReverseBufferCents           = 2;  // extra slippage tolerance for reversal orders
+    private const    int    RecoveryHedgeSlippageCents   = 2;  // extra slippage tolerance for recovery hedge retries
     private const  decimal  TradeMaxLossMult       = 3.0m; // halt if actual loss > 3× expected edge
     private const  decimal  CleanupHedgeSkipUsd   = 1.00m; // skip hedge attempt if unhedged value < $1.00
     private const  decimal  CleanupDustUsd         = 0.25m; // absorb silently (no halt) if reversal fails and value < $0.25
@@ -1195,7 +1196,8 @@ public class CrossArbExecutor
                     Console.WriteLine($"[RECOVER] {pair.Label} | kExcess={kUnhedged} hedgeNet={hedgeNet:0.0000} — completing hedge on Poly");
                     Console.ResetColor();
 
-                    var (polyFill2, _) = await PlacePolyLegAsync(polyToken, currentPolyAsk, kUnhedged);
+                    decimal polyHedgeLimit = Math.Min(1.0m, currentPolyAsk + RecoveryHedgeSlippageCents / 100m);
+                    var (polyFill2, _) = await PlacePolyLegAsync(polyToken, polyHedgeLimit, kUnhedged);
                     if (polyFill2 > 0)
                     {
                         decimal additional = Math.Min(kUnhedged, polyFill2);
@@ -1293,7 +1295,7 @@ public class CrossArbExecutor
                     return new RecoveryResult("HALT", 0, pUnhedgedValue);
                 }
                 decimal currentKalshiAsk = kHedgeBook.GetBestAskPrice();
-                int currentKCents = Math.Max(1, (int)Math.Ceiling(currentKalshiAsk * 100));
+                int currentKCents = Math.Max(1, (int)Math.Ceiling(currentKalshiAsk * 100) + RecoveryHedgeSlippageCents);
                 decimal hedgeNet = currentKalshiAsk + pActualPrice + KalshiFee(currentKalshiAsk) + PolyFee(pActualPrice);
                 DebugLog.Trades($"RecoverUnhedgedAsync {pair.Label}: pUnhedged={pUnhedged} kalshiAsk={currentKalshiAsk:0.0000} hedgeNet={hedgeNet:0.0000}");
 
