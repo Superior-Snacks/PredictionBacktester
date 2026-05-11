@@ -1293,7 +1293,7 @@ public class CrossArbExecutor
                     return new RecoveryResult("HALT", 0, pUnhedgedValue);
                 }
                 decimal currentKalshiAsk = kHedgeBook.GetBestAskPrice();
-                int currentKCents = (int)Math.Round(currentKalshiAsk * 100);
+                int currentKCents = Math.Max(1, (int)Math.Ceiling(currentKalshiAsk * 100));
                 decimal hedgeNet = currentKalshiAsk + pActualPrice + KalshiFee(currentKalshiAsk) + PolyFee(pActualPrice);
                 DebugLog.Trades($"RecoverUnhedgedAsync {pair.Label}: pUnhedged={pUnhedged} kalshiAsk={currentKalshiAsk:0.0000} hedgeNet={hedgeNet:0.0000}");
 

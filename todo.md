@@ -108,7 +108,7 @@ else → try hedge, fall back to reverse on failure
 ```
 **Why critical:** Without this, you're systematically losing money on every small partial-fill cleanup.
 
-### [ ] 3. Use Math.Ceiling for hedge limit prices, Math.Floor for reverse limit prices
+### [X] 3. Use Math.Ceiling for hedge limit prices, Math.Floor for reverse limit prices
 **Location:** `RecoverUnhedgedAsync` Case B (line ~1280)
 **Problem:** Current code uses `Math.Round` for hedge bid prices. At half-cent boundaries this can round *down*, producing a bid below the current ask — which won't fill. Your reverse code correctly uses `Math.Floor` already; the hedge path needs the symmetric `Math.Ceiling`.
 **Fix:**
