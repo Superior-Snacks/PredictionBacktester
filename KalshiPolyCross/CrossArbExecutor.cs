@@ -46,6 +46,7 @@ public class CrossArbExecutor
     private readonly decimal _maxBetUsd;           // max combined dollar cost per arb entry
     private readonly decimal _balanceBufferPct;    // fraction of maxBetUsd kept as per-platform reserve
     private readonly decimal _maxExposureUsd;
+    private readonly bool    _minBuy;              // --min-buy: cap every arb to exactly 1 contract
     private readonly decimal _executionThreshold;
     private readonly int     _pairCooldownSeconds;
     private readonly int     _fillTimeoutMs;
@@ -156,6 +157,7 @@ public class CrossArbExecutor
         int     fillTimeoutMs       = 5000,
         decimal maxDayLossUsd       = 20m,
         bool    dryRun              = false,
+        bool    minBuy              = false,
         int?    tryN                = null,
         CancellationTokenSource? outerCts = null)
     {
@@ -166,6 +168,7 @@ public class CrossArbExecutor
         _maxBetUsd           = maxBetUsd;
         _balanceBufferPct    = balanceBufferPct;
         _maxExposureUsd      = maxExposureUsd;
+        _minBuy              = minBuy;
         _executionThreshold  = executionThreshold;
         _pairCooldownSeconds = pairCooldownSeconds;
         _fillTimeoutMs       = fillTimeoutMs;
@@ -375,6 +378,7 @@ public class CrossArbExecutor
         int     kPriceCents   = (int)Math.Round(kLegAsk * 100);
         decimal pricePerSet   = kLegAsk + pLegAsk;
         int     contracts     = (int)Math.Floor(_maxBetUsd / pricePerSet);
+        if (_minBuy && contracts > 1) contracts = 1;  // --min-buy: trade bare minimum regardless of maxBet
         if (contracts < 1)
         {
             Console.WriteLine($"[EXEC SKIP] {pair.Label} | pricePerSet=${pricePerSet:0.0000} > maxBet=${_maxBetUsd:0.00}");

@@ -11,9 +11,11 @@ using PredictionBacktester.Engine.LiveExecution;
 //  dotnet run --project KalshiPolyCross -- --live               # full production: real orders on both legs
 //  dotnet run --project KalshiPolyCross -- --telemetry --debug  # any mode can add --debug for verbose logs
 //  dotnet run --project KalshiPolyCross -- --dry-run --try 5    # execute exactly 5 arbs then exit cleanly
+//  dotnet run --project KalshiPolyCross -- --live --min-buy     # live: always 1 contract, ignore maxBet sizing
 //
-//  Exactly one mode flag is required. --debug and --try N are optional and work with any mode.
-//  --try N  execute exactly N complete arbs then shut down; works with --dry-run or --live.
+//  Exactly one mode flag is required. --debug, --try N, and --min-buy are optional.
+//  --try N    execute exactly N complete arbs then shut down; works with --dry-run or --live.
+//  --min-buy  cap every arb to exactly 1 contract regardless of maxBet (useful for initial live shakedown).
 //
 //  Runtime key toggles (all modes):
 //    N   toggle near-miss top-10 report   (on by default)
@@ -80,6 +82,9 @@ int? tryN = null;
 int tryIdx = Array.IndexOf(args, "--try");
 if (tryIdx >= 0 && tryIdx + 1 < args.Length && int.TryParse(args[tryIdx + 1], out int parsedN) && parsedN > 0)
     tryN = parsedN;
+
+// --min-buy: cap every arb to 1 contract regardless of maxBet sizing
+bool minBuy = args.Contains("--min-buy");
 
 var cts = new CancellationTokenSource();
 
@@ -229,14 +234,16 @@ if (isLive || isDryRun)
         fillTimeoutMs:       5000,
         maxDayLossUsd:       20m,
         dryRun:              isDryRun,
+        minBuy:              minBuy,
         tryN:                tryN,
         outerCts:            cts);
     telemetry.OnArbOpened += executor.OnArbOpened;
     await executor.InitializeBalancesAsync();
     if (isLive && pairs.Count > 0)
         await executor.ReconcileOnStartupAsync(pairs);
-    string execLabel = isDryRun ? "DRY RUN — no real orders" : "LIVE";
-    Console.WriteLine($"[EXECUTOR] {execLabel} | maxBet=${MAX_BET_USD:0.00} buffer={BALANCE_BUFFER_PCT:P0} maxExposure=${maxExposureUsd:0.00} threshold=0.990 cooldown=120s");
+    string execLabel  = isDryRun ? "DRY RUN — no real orders" : "LIVE";
+    string minBuyTag  = minBuy ? "  MIN-BUY=1" : $"  maxBet=${MAX_BET_USD:0.00}";
+    Console.WriteLine($"[EXECUTOR] {execLabel} |{minBuyTag} buffer={BALANCE_BUFFER_PCT:P0} maxExposure=${maxExposureUsd:0.00} threshold=0.990 cooldown=120s");
 }
 else // --telemetry
 {
