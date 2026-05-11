@@ -1227,32 +1227,39 @@ public class CrossArbExecutor
             // Reverse: sell excess Kalshi contracts back at best bid − buffer
             string kBookKey = arbType == "K_YES_P_NO" ? $"K:{pair.KalshiTicker}" : $"K:{pair.KalshiTicker}_NO";
             decimal kBestBid = _books.TryGetValue(kBookKey, out var kBook) ? kBook.GetBestBidPrice() : 0m;
-            int kReverseCents = Math.Max(1, (int)Math.Floor((kBestBid - ReverseBufferCents / 100m) * 100));
-            DebugLog.Trades($"RecoverUnhedgedAsync: selling {kUnhedged} Kalshi {kalshiSide} @ {kReverseCents}¢");
-            try
+            if (kBestBid > 0m)
             {
-                var (_, _, revFill) = await _kalshi.PlaceOrderAsync(
-                    pair.KalshiTicker, kalshiSide, kReverseCents, (int)kUnhedged, action: "sell");
-                if (revFill > 0)
+                int kReverseCents = Math.Max(1, (int)Math.Floor((kBestBid - ReverseBufferCents / 100m) * 100));
+                DebugLog.Trades($"RecoverUnhedgedAsync: selling {kUnhedged} Kalshi {kalshiSide} @ {kReverseCents}¢");
+                try
                 {
-                    decimal reversalLoss = revFill * (kLegAsk - kReverseCents / 100m);
-                    if (reversalLoss > 0)
-                        lock (_cleanupLock) { _totalCleanupCostUsd += reversalLoss; }
-                    await JournalAsync(JsonSerializer.Serialize(new {
-                        t = DateTime.UtcNow, @event = "CLEANUP_REVERSED",
-                        pair = pair.PairId, leg = "kalshi", qty = kUnhedged,
-                        entryPrice = kLegAsk, reversalPrice = kReverseCents / 100m,
-                        loss = Math.Max(0m, reversalLoss)
-                    }));
-                    Console.ForegroundColor = ConsoleColor.Yellow;
-                    Console.WriteLine($"[RECOVER REVERSED] {pair.Label} | sold {revFill} Kalshi {kalshiSide} @ {kReverseCents}¢");
-                    Console.ResetColor();
-                    return new RecoveryResult("REVERSED_KALSHI", revFill, Math.Max(0m, reversalLoss));
+                    var (_, _, revFill) = await _kalshi.PlaceOrderAsync(
+                        pair.KalshiTicker, kalshiSide, kReverseCents, (int)kUnhedged, action: "sell");
+                    if (revFill > 0)
+                    {
+                        decimal reversalLoss = revFill * (kLegAsk - kReverseCents / 100m);
+                        if (reversalLoss > 0)
+                            lock (_cleanupLock) { _totalCleanupCostUsd += reversalLoss; }
+                        await JournalAsync(JsonSerializer.Serialize(new {
+                            t = DateTime.UtcNow, @event = "CLEANUP_REVERSED",
+                            pair = pair.PairId, leg = "kalshi", qty = kUnhedged,
+                            entryPrice = kLegAsk, reversalPrice = kReverseCents / 100m,
+                            loss = Math.Max(0m, reversalLoss)
+                        }));
+                        Console.ForegroundColor = ConsoleColor.Yellow;
+                        Console.WriteLine($"[RECOVER REVERSED] {pair.Label} | sold {revFill} Kalshi {kalshiSide} @ {kReverseCents}¢");
+                        Console.ResetColor();
+                        return new RecoveryResult("REVERSED_KALSHI", revFill, Math.Max(0m, reversalLoss));
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[RECOVER ERROR] {pair.Label} | Kalshi reverse exception: {ApiErrorHelper.ClassifyKalshi(ex)}");
                 }
             }
-            catch (Exception ex)
+            else
             {
-                Console.WriteLine($"[RECOVER ERROR] {pair.Label} | Kalshi reverse exception: {ApiErrorHelper.ClassifyKalshi(ex)}");
+                Console.WriteLine($"[RECOVER] {pair.Label} | Kalshi bid side empty — skipping doomed reverse");
             }
 
             Console.ForegroundColor = ConsoleColor.Red;

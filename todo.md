@@ -133,7 +133,7 @@ int currentKCents = Math.Max(1, (int)Math.Ceiling(currentKalshiAsk * 100));
 **Fix:** Add a `RecoveryHedgeSlippageCents = 2` constant (parallel to your existing `ReverseBufferCents`) and apply it to hedge retries. The whole point of recovery is being willing to pay slightly worse than entry-time prices to actually fill.
 **Why important:** Increases recovery success rate, which is exactly when you most want hedges to succeed.
 
-### [ ] 6. Detect empty bid side before sending doomed reverse orders
+### [X] 6. Detect empty bid side before sending doomed reverse orders
 **Location:** Kalshi reverse path (line ~1213)
 **Problem:** If `kBestBid` is 0 (no bids on the book), the reverse limit ends up at 1¢ via the `Math.Max(1, ...)` floor. You send a 1¢ sell that won't fill, pay no fee but waste a request, then fall through.
 **Fix:** Check `kBestBid <= 0m` explicitly before posting the reverse order. If no bid side exists, skip directly to the dust/halt branch.
