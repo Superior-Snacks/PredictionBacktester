@@ -1158,6 +1158,20 @@ public class CrossArbExecutor
         if (kUnhedged > 0)
         {
             decimal kUnhedgedValue = kUnhedged * kLegAsk;
+
+            if (kUnhedgedValue < CleanupDustUsd)
+            {
+                lock (_cleanupLock) { _totalCleanupCostUsd += kUnhedgedValue; }
+                await JournalAsync(JsonSerializer.Serialize(new {
+                    t = DateTime.UtcNow, @event = "CLEANUP_DUST",
+                    pair = pair.PairId, leg = "kalshi", qty = kUnhedged, absorbedUsd = kUnhedgedValue
+                }));
+                Console.ForegroundColor = ConsoleColor.DarkYellow;
+                Console.WriteLine($"[CLEANUP DUST] {pair.Label} | Absorbing {kUnhedged} Kalshi dust (${kUnhedgedValue:0.00}) — no halt");
+                Console.ResetColor();
+                return new RecoveryResult("DUST_ABSORBED_KALSHI", kUnhedged, kUnhedgedValue);
+            }
+
             bool skipHedgeA = kUnhedgedValue < CleanupHedgeSkipUsd;
 
             if (!skipHedgeA)
@@ -1239,18 +1253,6 @@ public class CrossArbExecutor
                 Console.WriteLine($"[RECOVER ERROR] {pair.Label} | Kalshi reverse exception: {ApiErrorHelper.ClassifyKalshi(ex)}");
             }
 
-            if (kUnhedgedValue < CleanupDustUsd)
-            {
-                lock (_cleanupLock) { _totalCleanupCostUsd += kUnhedgedValue; }
-                await JournalAsync(JsonSerializer.Serialize(new {
-                    t = DateTime.UtcNow, @event = "CLEANUP_DUST",
-                    pair = pair.PairId, leg = "kalshi", qty = kUnhedged, absorbedUsd = kUnhedgedValue
-                }));
-                Console.ForegroundColor = ConsoleColor.DarkYellow;
-                Console.WriteLine($"[CLEANUP DUST] {pair.Label} | Absorbing {kUnhedged} Kalshi dust (${kUnhedgedValue:0.00}) — no halt");
-                Console.ResetColor();
-                return new RecoveryResult("DUST_ABSORBED_KALSHI", kUnhedged, kUnhedgedValue);
-            }
             Console.ForegroundColor = ConsoleColor.Red;
             Console.WriteLine($"[HALT] {pair.Label} | Reverse order failed — unhedged position open. Manual reset required.");
             Console.ResetColor();
@@ -1262,6 +1264,20 @@ public class CrossArbExecutor
         if (pUnhedged > 0)
         {
             decimal pUnhedgedValue = pUnhedged * pActualPrice;
+
+            if (pUnhedgedValue < CleanupDustUsd)
+            {
+                lock (_cleanupLock) { _totalCleanupCostUsd += pUnhedgedValue; }
+                await JournalAsync(JsonSerializer.Serialize(new {
+                    t = DateTime.UtcNow, @event = "CLEANUP_DUST",
+                    pair = pair.PairId, leg = "poly", qty = pUnhedged, absorbedUsd = pUnhedgedValue
+                }));
+                Console.ForegroundColor = ConsoleColor.DarkYellow;
+                Console.WriteLine($"[CLEANUP DUST] {pair.Label} | Absorbing {pUnhedged:0.00} Poly dust (${pUnhedgedValue:0.00}) — no halt");
+                Console.ResetColor();
+                return new RecoveryResult("DUST_ABSORBED_POLY", pUnhedged, pUnhedgedValue);
+            }
+
             bool skipHedgeB = pUnhedgedValue < CleanupHedgeSkipUsd;
 
             if (!skipHedgeB)
@@ -1334,18 +1350,6 @@ public class CrossArbExecutor
                 return new RecoveryResult("REVERSED_POLY", soldShares, Math.Max(0m, reversalLoss));
             }
 
-            if (pUnhedgedValue < CleanupDustUsd)
-            {
-                lock (_cleanupLock) { _totalCleanupCostUsd += pUnhedgedValue; }
-                await JournalAsync(JsonSerializer.Serialize(new {
-                    t = DateTime.UtcNow, @event = "CLEANUP_DUST",
-                    pair = pair.PairId, leg = "poly", qty = pUnhedged, absorbedUsd = pUnhedgedValue
-                }));
-                Console.ForegroundColor = ConsoleColor.DarkYellow;
-                Console.WriteLine($"[CLEANUP DUST] {pair.Label} | Absorbing {pUnhedged:0.00} Poly dust (${pUnhedgedValue:0.00}) — no halt");
-                Console.ResetColor();
-                return new RecoveryResult("DUST_ABSORBED_POLY", pUnhedged, pUnhedgedValue);
-            }
             Console.ForegroundColor = ConsoleColor.Red;
             Console.WriteLine($"[HALT] {pair.Label} | Reverse order failed — unhedged position open. Manual reset required.");
             Console.ResetColor();
@@ -1484,17 +1488,20 @@ public class CrossArbExecutor
             bool pMismatch = Math.Abs(polyBal  - expectedPoly)  > 0.5m;
             if (kMismatch || pMismatch)
             {
+                _halted = true;
                 Console.ForegroundColor = ConsoleColor.Red;
                 Console.WriteLine(
                     $"[RECONCILE ALERT] {pair.Label} | " +
                     $"K: local={expectedKalshi} venue={kActual} | " +
                     $"P: local={expectedPoly:0.00} venue={polyBal:0.00}");
+                Console.WriteLine("[RECONCILE ALERT] Bot halted — manual reset required. Verify positions before resuming.");
                 Console.ResetColor();
                 await JournalAsync(JsonSerializer.Serialize(new {
                     t = DateTime.UtcNow, @event = "RECONCILE_MISMATCH",
                     pair = pair.PairId, arbType,
                     kExpected = expectedKalshi, kVenue = kActual,
-                    pExpected = expectedPoly,   pVenue = polyBal
+                    pExpected = expectedPoly,   pVenue = polyBal,
+                    halted = true
                 }));
             }
             else
@@ -1502,7 +1509,15 @@ public class CrossArbExecutor
         }
         catch (Exception ex)
         {
-            DebugLog.Trades($"ReconcileTradeAsync {pair.Label}: {ex.GetType().Name}: {ex.Message}");
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"[RECONCILE ERROR] {pair.Label}: reconciliation threw {ex.GetType().Name}: {ex.Message} — halting bot");
+            Console.ResetColor();
+            _halted = true;
+            await JournalAsync(JsonSerializer.Serialize(new {
+                t = DateTime.UtcNow, @event = "RECONCILE_ERROR",
+                pair = pair.PairId, exType = ex.GetType().Name, message = ex.Message,
+                halted = true
+            }));
         }
     }
 

@@ -91,13 +91,13 @@ Line numbers reference the version of the file reviewed; verify against current 
 
 ## CRITICAL (fix before any live trading)
 
-### [ ] 1. Reconciliation mismatch should halt, not just log
+### [X] 1. Reconciliation mismatch should halt, not just log
 **Location:** `ReconcileTradeAsync` (line ~1485)
 **Problem:** When venue position differs from local `_openPositions` state, you log an alert and continue. Local state stays wrong, and every subsequent `_openPositions` check uses the wrong number. The fire-and-forget `Task.Run` wrapper also means any exception in the reconciliation lambda is silently lost.
 **Fix:** On any meaningful mismatch (`kMismatch || pMismatch`), set `_halted = true` and require manual intervention. Wrap the lambda body in try/catch and journal exceptions so reconciliation errors don't disappear silently.
 **Why critical:** This is the one issue that can compound losses silently. If the bot thinks it holds 5 contracts but actually holds 10, it'll mis-size the next 50 trades before you notice.
 
-### [ ] 2. Dust absorption check should come before reverse attempts
+### [X] 2. Dust absorption check should come before reverse attempts
 **Location:** `RecoverUnhedgedAsync`, both Case A and Case B (lines ~1242, ~1337)
 **Problem:** A $0.20 unhedged position attempts reverse first (paying fees often larger than $0.20), then falls through to dust absorption only if the reverse fails. You're guaranteed to lose fees on tiny positions that should have been absorbed immediately.
 **Fix:** Restructure the recovery flow so dust absorption is the *first* check:
