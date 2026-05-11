@@ -81,6 +81,154 @@
 - [X] API rate limits: rate limiter on outbound requests, never let limit-hit cause leg-fail
 - [X] Daylight savings / timezone bugs in settlement timing comparisons
 
+
+# CrossArbExecutor — Pre-Live Fix List
+
+Generated from code review of `CrossArbExecutor.cs` and supporting files.
+Line numbers reference the version of the file reviewed; verify against current code before editing.
+
+---
+
+## CRITICAL (fix before any live trading)
+
+### [ ] 1. Reconciliation mismatch should halt, not just log
+**Location:** `ReconcileTradeAsync` (line ~1485)
+**Problem:** When venue position differs from local `_openPositions` state, you log an alert and continue. Local state stays wrong, and every subsequent `_openPositions` check uses the wrong number. The fire-and-forget `Task.Run` wrapper also means any exception in the reconciliation lambda is silently lost.
+**Fix:** On any meaningful mismatch (`kMismatch || pMismatch`), set `_halted = true` and require manual intervention. Wrap the lambda body in try/catch and journal exceptions so reconciliation errors don't disappear silently.
+**Why critical:** This is the one issue that can compound losses silently. If the bot thinks it holds 5 contracts but actually holds 10, it'll mis-size the next 50 trades before you notice.
+
+### [ ] 2. Dust absorption check should come before reverse attempts
+**Location:** `RecoverUnhedgedAsync`, both Case A and Case B (lines ~1242, ~1337)
+**Problem:** A $0.20 unhedged position attempts reverse first (paying fees often larger than $0.20), then falls through to dust absorption only if the reverse fails. You're guaranteed to lose fees on tiny positions that should have been absorbed immediately.
+**Fix:** Restructure the recovery flow so dust absorption is the *first* check:
+```
+if (unhedgedValue < CleanupDustUsd) → absorb, journal, return
+else if (skipHedge) → reverse directly
+else → try hedge, fall back to reverse on failure
+```
+**Why critical:** Without this, you're systematically losing money on every small partial-fill cleanup.
+
+### [ ] 3. Use Math.Ceiling for hedge limit prices, Math.Floor for reverse limit prices
+**Location:** `RecoverUnhedgedAsync` Case B (line ~1280)
+**Problem:** Current code uses `Math.Round` for hedge bid prices. At half-cent boundaries this can round *down*, producing a bid below the current ask — which won't fill. Your reverse code correctly uses `Math.Floor` already; the hedge path needs the symmetric `Math.Ceiling`.
+**Fix:**
+```csharp
+int currentKCents = Math.Max(1, (int)Math.Ceiling(currentKalshiAsk * 100));
+```
+**Why critical:** Will cause silent hedge failures intermittently. Cheap to fix preemptively.
+
+### [ ] 4. Thread safety in `_tokens.AddRange` (PolymarketWebsocketFeed)
+**Location:** `PolymarketWebsocketFeed.EnqueueSubscribe`
+**Problem:** `_tokens` is a plain `List<string>` being mutated by `EnqueueSubscribe` while the reconnect loop iterates `_tokens` to resubscribe. Concurrent mutation will eventually throw `InvalidOperationException` or corrupt the list silently.
+**Fix:** Either wrap all `_tokens` access in a lock, switch to `ImmutableList<string>` with atomic replacement, or use a `ConcurrentBag`. Verify the same pattern in `KalshiWebsocketFeed` if it exists there too.
+**Why critical:** Will cause reconnect failures and silent token-loss when timing happens to be unlucky. Race conditions are the hardest bugs to diagnose after the fact.
+
+---
+
+## IMPORTANT (fix in the first week of live operation)
+
+### [ ] 5. Add recovery hedge slippage tolerance
+**Location:** `RecoverUnhedgedAsync` hedge retry paths (Cases A and B)
+**Problem:** Recovery hedge retries use the freshly-fetched best ask as the limit price. If the book moves 1¢ between fetch and order arrival, the retry fails for the same reason the original did — leading to unnecessary reverse + loss.
+**Fix:** Add a `RecoveryHedgeSlippageCents = 2` constant (parallel to your existing `ReverseBufferCents`) and apply it to hedge retries. The whole point of recovery is being willing to pay slightly worse than entry-time prices to actually fill.
+**Why important:** Increases recovery success rate, which is exactly when you most want hedges to succeed.
+
+### [ ] 6. Detect empty bid side before sending doomed reverse orders
+**Location:** Kalshi reverse path (line ~1213)
+**Problem:** If `kBestBid` is 0 (no bids on the book), the reverse limit ends up at 1¢ via the `Math.Max(1, ...)` floor. You send a 1¢ sell that won't fill, pay no fee but waste a request, then fall through.
+**Fix:** Check `kBestBid <= 0m` explicitly before posting the reverse order. If no bid side exists, skip directly to the dust/halt branch.
+**Why important:** Avoids one wasted REST call and simplifies the post-reverse logic by not having to handle the "reverse posted but didn't fill" subcase separately from the dust case.
+
+### [ ] 7. Skip hedge phase (don't halt) when opposite-side book is missing
+**Location:** Both halt branches in `RecoverUnhedgedAsync` (lines ~1165, ~1270)
+**Problem:** If the opposite-side book is missing from `_books`, you halt immediately. Overkill — you can still reverse the filled side without needing the opposite book.
+**Fix:** Missing opposite-side book → skip the hedge attempt, fall through to reverse on the leg you can act on. Halt only if reverse *also* can't proceed.
+**Why important:** Reduces unnecessary halts that require manual intervention. The book might be missing for benign reasons (just-added pair, transient state).
+
+### [ ] 8. Explicit fractional-to-integer conversion for cross-venue hedges
+**Location:** Hedge retry on Case B (line ~1291)
+**Problem:** `(int)pUnhedged` truncates silently. If Polymarket filled 7.99 shares, the cast becomes 7 and you leave 0.99 unhedged with no explicit handling. Polymarket supports fractional shares; Kalshi doesn't.
+**Fix:**
+```csharp
+int hedgeQty = (int)Math.Floor(pUnhedged);
+if (hedgeQty == 0) {
+    // remaining is sub-1-share fractional dust, route to dust absorption
+} else {
+    var (_, _, kFill2) = await PlaceKalshiLegAsync(..., hedgeQty);
+    // any pUnhedged - hedgeQty remainder still needs handling
+}
+```
+**Why important:** Tiny but accumulating leakage. Every cross-venue partial fill on Polymarket can leave sub-share residue that's currently invisible to the recovery logic.
+
+### [ ] 9. CSV writer task failure should be detectable
+**Location:** Constructor (line ~159) and `RunCsvWriterAsync` (line ~1395)
+**Problem:** `_ = Task.Run(RunCsvWriterAsync)` discards the task. If the writer fails on startup (file permissions, disk full) or dies mid-run, you'll silently lose CSV data. The `_csvChannel.Writer.TryWrite(row)` calls continue to succeed because the channel is unbounded — the data just goes nowhere.
+**Fix:** Either keep a reference to the writer task and check its status periodically, add a watchdog that verifies the channel reader is alive, or restart the writer on exception. At minimum, the `catch` in `RunCsvWriterAsync` should log loudly (red console) so a writer death is noticed.
+**Why important:** Operational silence is dangerous in financial systems. You want to know immediately if your audit trail stops being written.
+
+---
+
+## STRATEGIC (not bugs, but worth deciding explicitly)
+
+### [ ] 10. Document or change the "one position per pair" constraint
+**Location:** `ExecuteLockedAsync` (line ~278)
+**Problem:** `_openPositions.ContainsKey(pairId)` blocks new entries on a pair while *any* position is open. This prevents scaling into a position when prices drop further — the "go deeper on a dip" strategy we discussed previously.
+**Decision needed:**
+- Keep as-is (one position per pair, hold to settlement/exit) — add a comment explaining this is intentional
+- Allow scale-in when current price beats average entry price by some threshold — requires position-averaging logic and likely a per-pair max-investment cap (you have `MaxPerPairExposureUsd = 200` already, but it doesn't gate scale-in)
+
+**Why strategic:** Either is defensible. The first is safer; the second can capture more edge. Worth being explicit about which you've chosen.
+
+### [ ] 11. Add manual-approval mode for first live week
+**Status:** Not present in current code (only `_dryRun` exists)
+**Suggestion:** A `--confirm` or `--interactive` flag where the bot finds arbs, prints them, and waits for keyboard input (Y/n) before firing each one. Useful for the first day or two of live trading to catch obvious bugs without risking automated execution at 3am.
+**Why strategic:** This isn't a bug, it's a deployment-safety feature. Could save you from a bad first day if there's some failure mode that only appears in live.
+
+### [ ] 12. Build settlement post-mortem categorization script
+**Status:** Not present in current code
+**Suggestion:** A separate script that walks the journal after settlement and categorizes each closed position:
+- `CLEAN_WIN` — both legs settled, total payout = $1.00 × shares, profit ≈ expected
+- `PAIR_MISMATCH_BOTH_LOST` — both legs paid $0 → pair was wrong
+- `PAIR_MISMATCH_BOTH_WON` — both legs paid $1 → pair was wrong
+- `EXECUTION_LOSS` — pair right but slippage ate edge
+- `FEE_MODEL_LOSS` — pair right, slippage right, fees higher than modeled
+- `RECOVERED_*` — went through cleanup, final outcome
+
+Auto-update `cross_pair_blocklist.json` on PAIR_MISMATCH detections.
+
+**Why strategic:** Without this, you'll know *that* trades lost but not *why*. Categorization tells you whether to fix the LLM (pair issues), the execution code (slippage), or the fee model.
+
+### [ ] 13. Build early-exit monitoring for open positions
+**Status:** Not visible in the files reviewed (might exist elsewhere)
+**Suggestion:** A loop over `_openPositions` that periodically checks `bid_YES + bid_NO` against the position's entry cost. When current exit value exceeds a hurdle (e.g., `(1 - currentExitValue) / daysRemaining` falls below your APR threshold), sell both legs.
+**Why strategic:** Without this, every position is held to settlement, leaving the early-exit edge from your telemetry on the table. This was a meaningful portion of projected PnL in your simulations.
+
+---
+
+## NICE-TO-HAVE (polish, defer until first month of live data)
+
+### [ ] 14. Consider auto-correct vs halt on reconcile mismatch (later)
+After running halt-on-mismatch for a while, you'll see the patterns of what mismatches actually look like. Some categories might be safely auto-correctable (e.g., venue eventually-consistent lag). Don't enable auto-correct until you have data on what's actually happening.
+
+### [ ] 15. Add a watchdog that periodically pings both venues' REST
+If WS feeds go silent for unrelated reasons (network glitch, your end), you want to know whether the venues are actually up or whether you're cut off. A 60-second REST ping to each, comparing to the WS last-message timestamps, would distinguish "venue is quiet" from "we're disconnected."
+
+### [ ] 16. Per-trade trace IDs for log correlation
+Every order should log a unique trace ID that ties together submit, fill confirmation, any cancel attempts, recovery actions, and reconciliation. Grep-friendly debugging when something weird happens at 3am.
+
+### [ ] 17. Daily summary report at midnight UTC
+Trades attempted, filled, partial, reversed, dust-absorbed, halted. Realized vs simulated P&L. Fee model drift. Send to Telegram/email so you see it on your phone.
+
+---
+
+## Usage Notes
+
+- **Items 1-4 are the actual pre-live blockers.** Fix these before pointing the bot at real money.
+- **Items 5-9 are first-week priorities.** None will lose you money catastrophically, but each will accumulate friction over time. Plan a second-pass session in the first week of live.
+- **Items 10-13 are strategic decisions, not bugs.** Item 10 is the most important to think about now — it determines whether your bot can scale into deepening arbs or whether each pair gets one shot per cooldown window.
+- **Items 14-17 are post-shakedown improvements.** Don't build them now. After a month of live data, you'll know which ones matter for your actual operation.
+
+
 ## Known Bugs — Fix Before First Dry-Run
 
 These were found by static audit; none require a live run to trigger.
