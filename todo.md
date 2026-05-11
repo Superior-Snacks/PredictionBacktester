@@ -145,7 +145,7 @@ int currentKCents = Math.Max(1, (int)Math.Ceiling(currentKalshiAsk * 100));
 **Fix:** Missing opposite-side book → skip the hedge attempt, fall through to reverse on the leg you can act on. Halt only if reverse *also* can't proceed.
 **Why important:** Reduces unnecessary halts that require manual intervention. The book might be missing for benign reasons (just-added pair, transient state).
 
-### [ ] 8. Explicit fractional-to-integer conversion for cross-venue hedges
+### [X] 8. Explicit fractional-to-integer conversion for cross-venue hedges
 **Location:** Hedge retry on Case B (line ~1291)
 **Problem:** `(int)pUnhedged` truncates silently. If Polymarket filled 7.99 shares, the cast becomes 7 and you leave 0.99 unhedged with no explicit handling. Polymarket supports fractional shares; Kalshi doesn't.
 **Fix:**

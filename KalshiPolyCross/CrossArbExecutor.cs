@@ -1302,15 +1302,39 @@ public class CrossArbExecutor
 
                 if (hedgeNet < 1.0m)
                 {
+                    int hedgeQty = (int)Math.Floor(pUnhedged);
+                    if (hedgeQty == 0)
+                    {
+                        // Entire position is sub-1-share — Kalshi min is 1 contract, can't hedge
+                        decimal fracValue = pUnhedged * pActualPrice;
+                        lock (_cleanupLock) { _totalCleanupCostUsd += fracValue; }
+                        await JournalAsync(JsonSerializer.Serialize(new {
+                            t = DateTime.UtcNow, @event = "CLEANUP_DUST",
+                            pair = pair.PairId, leg = "poly_fractional", qty = pUnhedged, absorbedUsd = fracValue
+                        }));
+                        Console.ForegroundColor = ConsoleColor.DarkYellow;
+                        Console.WriteLine($"[CLEANUP DUST] {pair.Label} | Absorbing {pUnhedged:0.0000} fractional Poly dust (${fracValue:0.00}) — sub-1-share, can't hedge on Kalshi");
+                        Console.ResetColor();
+                        return new RecoveryResult("DUST_ABSORBED_POLY", pUnhedged, fracValue);
+                    }
+
                     Console.ForegroundColor = ConsoleColor.Yellow;
-                    Console.WriteLine($"[RECOVER] {pair.Label} | pExcess={pUnhedged} hedgeNet={hedgeNet:0.0000} — completing hedge on Kalshi");
+                    Console.WriteLine($"[RECOVER] {pair.Label} | pExcess={pUnhedged:0.0000} hedgeQty={hedgeQty} hedgeNet={hedgeNet:0.0000} — completing hedge on Kalshi");
                     Console.ResetColor();
 
                     var (_, _, kFill2) = await PlaceKalshiLegAsync(
-                        pair.KalshiTicker, kalshiSide, currentKCents, (int)pUnhedged);
+                        pair.KalshiTicker, kalshiSide, currentKCents, hedgeQty);
                     if (kFill2 > 0)
                     {
-                        decimal additional = Math.Min(pUnhedged, kFill2);
+                        decimal additional = Math.Min((decimal)hedgeQty, kFill2);
+                        // Absorb any sub-1-share fractional remainder that can't be hedged on Kalshi
+                        decimal fracRemainder = pUnhedged - additional;
+                        if (fracRemainder > 0)
+                        {
+                            decimal fracValue = fracRemainder * pActualPrice;
+                            lock (_cleanupLock) { _totalCleanupCostUsd += fracValue; }
+                            DebugLog.Trades($"RecoverUnhedgedAsync {pair.Label}: absorbing {fracRemainder:0.0000} fractional remainder (${fracValue:0.00})");
+                        }
                         if (_openPositions.TryGetValue(pair.PairId, out var pos))
                             _openPositions[pair.PairId] = pos with
                             {
