@@ -117,7 +117,7 @@ int currentKCents = Math.Max(1, (int)Math.Ceiling(currentKalshiAsk * 100));
 ```
 **Why critical:** Will cause silent hedge failures intermittently. Cheap to fix preemptively.
 
-### [ ] 4. Thread safety in `_tokens.AddRange` (PolymarketWebsocketFeed)
+### [X] 4. Thread safety in `_tokens.AddRange` (PolymarketWebsocketFeed)
 **Location:** `PolymarketWebsocketFeed.EnqueueSubscribe`
 **Problem:** `_tokens` is a plain `List<string>` being mutated by `EnqueueSubscribe` while the reconnect loop iterates `_tokens` to resubscribe. Concurrent mutation will eventually throw `InvalidOperationException` or corrupt the list silently.
 **Fix:** Either wrap all `_tokens` access in a lock, switch to `ImmutableList<string>` with atomic replacement, or use a `ConcurrentBag`. Verify the same pattern in `KalshiWebsocketFeed` if it exists there too.

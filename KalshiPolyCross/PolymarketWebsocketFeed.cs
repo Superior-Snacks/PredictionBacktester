@@ -16,6 +16,7 @@ public class PolymarketWebsocketFeed
 {
     private readonly string  _wsUrl;
     private readonly List<string> _tokens;
+    private readonly object  _tokensLock = new();
     private readonly MarketStateTracker _state;
     private readonly CrossPlatformArbTelemetryStrategy _telemetry;
     private readonly int _batchSize;
@@ -47,7 +48,7 @@ public class PolymarketWebsocketFeed
         var list = tokens.ToList();
         if (list.Count > 0)
         {
-            _tokens.AddRange(list.Where(t => !_tokens.Contains(t))); // keep full list for reconnect
+            lock (_tokensLock) { _tokens.AddRange(list.Where(t => !_tokens.Contains(t))); } // keep full list for reconnect
             _pendingSubscriptions.Enqueue(list);
         }
     }
@@ -92,10 +93,12 @@ public class PolymarketWebsocketFeed
                 });
 
                 // Subscribe to all YES and NO tokens in batches
+                List<string> tokenSnapshot;
+                lock (_tokensLock) { tokenSnapshot = _tokens.ToList(); }
                 bool isFirst = true;
-                for (int i = 0; i < _tokens.Count; i += _batchSize)
+                for (int i = 0; i < tokenSnapshot.Count; i += _batchSize)
                 {
-                    var batch = _tokens.Skip(i).Take(_batchSize);
+                    var batch = tokenSnapshot.Skip(i).Take(_batchSize);
                     string assetList = string.Join("\",\"", batch);
                     string subMsg = isFirst
                         ? $"{{\"assets_ids\":[\"{assetList}\"],\"type\":\"market\"}}"
@@ -104,13 +107,13 @@ public class PolymarketWebsocketFeed
                     await ws.SendAsync(Encoding.UTF8.GetBytes(subMsg), WebSocketMessageType.Text, true, ct);
                     await Task.Delay(100, ct);
                 }
-                Console.WriteLine($"[POLY WS] Subscribed to {_tokens.Count} tokens");
+                Console.WriteLine($"[POLY WS] Subscribed to {tokenSnapshot.Count} tokens");
                 IsConnected = true;
 
                 // On reconnect (not first connect): clear stale books and close open telemetry windows
                 if (!firstConnect)
                 {
-                    foreach (var token in _tokens)
+                    foreach (var token in tokenSnapshot)
                         _state.ClearPolyToken(token);
                     _telemetry.OnPolyReconnect();
                 }
