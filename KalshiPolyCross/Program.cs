@@ -12,10 +12,12 @@ using PredictionBacktester.Engine.LiveExecution;
 //  dotnet run --project KalshiPolyCross -- --telemetry --debug  # any mode can add --debug for verbose logs
 //  dotnet run --project KalshiPolyCross -- --dry-run --try 5    # execute exactly 5 arbs then exit cleanly
 //  dotnet run --project KalshiPolyCross -- --live --min-buy     # live: always 1 contract, ignore maxBet sizing
+//  dotnet run --project KalshiPolyCross -- --dry-run --seed 42  # reproducible dry-run (same fills every time)
 //
-//  Exactly one mode flag is required. --debug, --try N, and --min-buy are optional.
+//  Exactly one mode flag is required. --debug, --try N, --min-buy, and --seed N are optional.
 //  --try N    execute exactly N complete arbs then shut down; works with --dry-run or --live.
 //  --min-buy  cap every arb to exactly 1 contract regardless of maxBet (useful for initial live shakedown).
+//  --seed N   seed the dry-run fill RNG for reproducible results; omit for non-deterministic simulation.
 //
 //  Runtime key toggles (all modes):
 //    N   toggle near-miss top-10 report   (on by default)
@@ -85,6 +87,12 @@ if (tryIdx >= 0 && tryIdx + 1 < args.Length && int.TryParse(args[tryIdx + 1], ou
 
 // --min-buy: cap every arb to 1 contract regardless of maxBet sizing
 bool minBuy = args.Contains("--min-buy");
+
+// --seed N: seed the dry-run fill RNG for reproducible simulated outcomes
+int? fillSeed = null;
+int seedIdx = Array.IndexOf(args, "--seed");
+if (seedIdx >= 0 && seedIdx + 1 < args.Length && int.TryParse(args[seedIdx + 1], out int parsedSeed))
+    fillSeed = parsedSeed;
 
 var cts = new CancellationTokenSource();
 
@@ -235,6 +243,7 @@ if (isLive || isDryRun)
         maxDayLossUsd:       20m,
         dryRun:              isDryRun,
         minBuy:              minBuy,
+        fillProfile:         isDryRun ? new SimulatedFillProfile(fillSeed) : null,
         tryN:                tryN,
         outerCts:            cts);
     telemetry.OnArbOpened += executor.OnArbOpened;

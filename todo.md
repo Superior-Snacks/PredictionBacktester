@@ -235,14 +235,14 @@ What dry-run already tests:
 - Try-limit decrement
 
 What dry-run currently does NOT test (the gap to close):
-- [ ] Fill latency (both legs return instantly in dry-run)
-- [ ] Slippage (fills always at detected price)
-- [ ] Partial fills
-- [ ] Leg failures (full)
-- [ ] Stale-price scenarios
-- [ ] Per-trade max-loss tripwire
-- [ ] Per-day max-loss tripwire
-- [ ] Fee model drift detection
+- [X] Fill latency (both legs return instantly in dry-run)
+- [X] Slippage (fills always at detected price)
+- [X] Partial fills
+- [X] Leg failures (full)
+- [X] Stale-price scenarios
+- [X] Per-trade max-loss tripwire
+- [X] Per-day max-loss tripwire
+- [X] Fee model drift detection
 - [ ] `RecoverUnhedgedAsync` (entire function never called)
 - [ ] Hedge retry logic (Cases A and B)
 - [ ] Reverse logic (Kalshi and Poly)
@@ -257,7 +257,7 @@ What dry-run currently does NOT test (the gap to close):
 
 ## STAGE 1 — Realistic fill simulation (foundation)
 
-### [ ] Build `SimulatedFillProfile` class
+### [X] Build `SimulatedFillProfile` class
 Configurable parameters that control how simulated fills behave:
 - `FillLatencyMsKalshi` (default 100ms)
 - `FillLatencyMsPoly` (default 80ms)
@@ -267,19 +267,19 @@ Configurable parameters that control how simulated fills behave:
 - `LegFailRate` (0-1 chance of full leg fail)
 - `Random Rng` (with optional seed for reproducibility)
 
-### [ ] Replace perfect-fill block in current dry-run path
+### [X] Replace perfect-fill block in current dry-run path
 Lines 469-473 in `CrossArbExecutor.cs` currently produce perfect fills. Replace with logic that consults `SimulatedFillProfile` and produces realistic simulated outcomes.
 
-### [ ] Add latency simulation
+### [X] Add latency simulation
 `await Task.Delay((int)profile.FillLatencyMsKalshi)` before returning the simulated fill. Matters for testing time-skew detection and ensuring async ordering behaves correctly.
 
-### [ ] Add slippage simulation
+### [X] Add slippage simulation
 Simulated fill price = limit price + slippage (cents for Kalshi, % for Poly). This activates the `[EXEC SLIPPAGE]` branch and the per-trade tripwire when slippage is large enough.
 
-### [ ] Add partial-fill simulation
+### [X] Add partial-fill simulation
 When `Rng.NextDouble() < PartialFillRate`, fill 20-90% of intended quantity. Activates the recovery logic for partial fills (the most common real-world failure mode).
 
-### [ ] Add leg-failure simulation
+### [X] Add leg-failure simulation
 When `Rng.NextDouble() < LegFailRate`, return 0 fill. Activates the "neither leg filled" and "single leg unhedged" recovery paths.
 
 **Pass criteria for Stage 1:** Dry-run produces realistic execution journals with a mix of clean fills, slippage events, partial fills, and full failures. Each `EXECUTION_COMPLETE` event should have plausible values matching what live data would look like.
@@ -377,7 +377,7 @@ Add `--replay <csv-path>` flag that reads detected arb windows from a CrossArbTe
 ### [ ] Add `--speedup <factor>` flag
 Compress real time by a factor (e.g. 10x means 1 hour of real arb activity replays in 6 minutes). Lets you run multi-day simulations quickly.
 
-### [ ] Add deterministic seed support
+### [X] Add deterministic seed support
 `--seed <int>` makes Random reproducible. Same replay + same seed + same profile = same outcome. Critical for regression testing.
 
 ### [ ] Build the pre-live test matrix
