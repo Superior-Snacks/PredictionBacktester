@@ -30,11 +30,10 @@ public class SimulatedFillProfile
     /// Exercises RecoverUnhedgedAsync and the hedge/reverse decision tree.
     /// </summary>
     public double PartialFillRate { get; init; } = 0.0;
-    /// <summary>
-    /// 0–1 probability that a leg fills 0 (IOC/FAK missed entirely).
-    /// Exercises the "neither leg filled" and single-leg unhedged paths.
-    /// </summary>
-    public double LegFailRate { get; init; } = 0.0;
+    /// <summary>0–1 probability that a Kalshi IOC leg fills 0.</summary>
+    public double KalshiLegFailRate { get; init; } = 0.0;
+    /// <summary>0–1 probability that a Polymarket FAK leg fills 0.</summary>
+    public double PolyLegFailRate   { get; init; } = 0.0;
 
     // ── RNG ───────────────────────────────────────────────────────────────────
     private readonly Random _rng;
@@ -78,7 +77,7 @@ public class SimulatedFillProfile
         if (requested <= 0) return 0;
         lock (_rngLock)
         {
-            if (_rng.NextDouble() < LegFailRate)    return 0;
+            if (_rng.NextDouble() < KalshiLegFailRate) return 0;
             if (_rng.NextDouble() < PartialFillRate)
             {
                 // Fill 20–90% of the requested quantity, at least 1 contract.
@@ -100,7 +99,7 @@ public class SimulatedFillProfile
         if (requested <= 0m) return 0m;
         lock (_rngLock)
         {
-            if (_rng.NextDouble() < LegFailRate)    return 0m;
+            if (_rng.NextDouble() < PolyLegFailRate) return 0m;
             if (_rng.NextDouble() < PartialFillRate)
             {
                 double pct = 0.20 + _rng.NextDouble() * 0.70;

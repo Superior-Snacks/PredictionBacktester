@@ -310,7 +310,7 @@ Once dry-run goes through the live execution path, the parallel dry-run block at
 
 ## STAGE 3 — Named scenario library
 
-### [ ] Build `FailureScenarios` static class with named profiles
+### [X] Build `FailureScenarios` static class with named profiles
 Each profile is a preset `SimulatedFillProfile` for a specific failure pattern:
 - `HappyPath()` — baseline, no failures
 - `FlakyKalshi()` — 20% leg fail rate, 300ms latency
