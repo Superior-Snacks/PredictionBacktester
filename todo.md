@@ -298,10 +298,10 @@ Implementations of the interfaces that:
 - Return simulated order IDs, statuses, and fill counts in the same shape as the real clients
 - Update simulated positions internally so `GetPositionsAsync` returns sensible values
 
-### [ ] Inject the simulated clients in dry-run mode
+### [X] Inject the simulated clients in dry-run mode
 At startup, when `--dry-run` is specified, construct the executor with simulated clients instead of real ones. The rest of `ExecuteLockedAsync` runs unchanged.
 
-### [ ] Remove the dual `if (_dryRun)` code path
+### [X] Remove the dual `if (_dryRun)` code path
 Once dry-run goes through the live execution path, the parallel dry-run block at lines 410-526 becomes unnecessary. Delete it. Dry-run vs live is now a startup-time decision, not an in-flow branch.
 
 **Pass criteria for Stage 2:** A dry-run trade goes through the exact same code as live, including `RecoverUnhedgedAsync` when fills are imbalanced. No code path is exclusive to live mode anymore.

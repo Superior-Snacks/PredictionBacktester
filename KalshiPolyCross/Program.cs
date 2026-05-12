@@ -227,11 +227,36 @@ if (isLive || isDryRun)
     var polyOrderClient = new PredictionBacktester.Engine.LiveExecution.PolymarketOrderClient(polyConfig);
     const decimal MAX_BET_USD        = 10m;    // max combined dollar cost per arb entry
     const decimal BALANCE_BUFFER_PCT = 0.20m;  // per-platform reserve (fraction of maxBet)
+
+    // In dry-run, probe real credentials before swapping in simulated clients.
+    // This surfaces auth/connectivity issues without risking any orders.
+    if (isDryRun)
+    {
+        try
+        {
+            long    kBal = await orderClient.GetBalanceCentsAsync();
+            decimal pBal = await polyOrderClient.GetUsdcBalanceAsync();
+            Console.WriteLine($"[CRED CHECK] Kalshi=${kBal / 100m:0.00} Poly=${pBal:0.00} — credentials OK");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[ERROR] Credential check failed: {ex.Message}");
+            Console.WriteLine("[INFO] Fix credentials or use --telemetry for credential-free mode.");
+            return;
+        }
+    }
+
+    // Order execution clients — simulated in dry-run, real in live.
+    var fillProfile = isDryRun ? new SimulatedFillProfile(fillSeed) : null;
+    PredictionBacktester.Engine.LiveExecution.IKalshiOrderExecutor    kalshiExec =
+        isDryRun ? new SimulatedKalshiClient(fillProfile!) : orderClient;
+    PredictionBacktester.Engine.LiveExecution.IPolymarketOrderExecutor polyExec   =
+        isDryRun ? new SimulatedPolymarketClient(fillProfile!, state.Books) : polyOrderClient;
     // Dry-run mirrors the full simulated $1,000 balance; live caps concurrent risk tightly.
     decimal       maxExposureUsd     = isDryRun ? 1000m : 50m;
     executor = new CrossArbExecutor(
-        kalshi:              orderClient,
-        poly:                polyOrderClient,
+        kalshi:              kalshiExec,
+        poly:                polyExec,
         telemetry:           telemetry,
         books:               state.Books,
         maxBetUsd:           MAX_BET_USD,
@@ -243,7 +268,6 @@ if (isLive || isDryRun)
         maxDayLossUsd:       20m,
         dryRun:              isDryRun,
         minBuy:              minBuy,
-        fillProfile:         isDryRun ? new SimulatedFillProfile(fillSeed) : null,
         tryN:                tryN,
         outerCts:            cts);
     telemetry.OnArbOpened += executor.OnArbOpened;

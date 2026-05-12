@@ -47,7 +47,6 @@ public class CrossArbExecutor
     private readonly decimal _balanceBufferPct;    // fraction of maxBetUsd kept as per-platform reserve
     private readonly decimal _maxExposureUsd;
     private readonly bool    _minBuy;              // --min-buy: cap every arb to exactly 1 contract
-    private readonly SimulatedFillProfile _fillProfile; // dry-run fill simulation (latency/slippage/failures)
     private readonly decimal _executionThreshold;
     private readonly int     _pairCooldownSeconds;
     private readonly int     _fillTimeoutMs;
@@ -159,7 +158,6 @@ public class CrossArbExecutor
         decimal maxDayLossUsd            = 20m,
         bool    dryRun                   = false,
         bool    minBuy                   = false,
-        SimulatedFillProfile? fillProfile = null,
         int?    tryN                = null,
         CancellationTokenSource? outerCts = null)
     {
@@ -171,7 +169,6 @@ public class CrossArbExecutor
         _balanceBufferPct    = balanceBufferPct;
         _maxExposureUsd      = maxExposureUsd;
         _minBuy              = minBuy;
-        _fillProfile         = fillProfile ?? new SimulatedFillProfile();
         _executionThreshold  = executionThreshold;
         _pairCooldownSeconds = pairCooldownSeconds;
         _fillTimeoutMs       = fillTimeoutMs;
@@ -435,321 +432,7 @@ public class CrossArbExecutor
             DebugLog.Balance($"ExecuteAsync {pair.Label}: scaled {idealContracts}→{contracts} contracts");
         }
 
-        string execId = string.Empty; // set in dry-run or live branch below
-
-        if (_dryRun)
-        {
-            // Apply the same bankroll guards as the live path so dry-run faithfully models constraints.
-            if (_blocklist.Contains(pair.KalshiTicker))
-            {
-                lock (_balanceLock) { _kalshiBalanceUsd += kalshiCost; _polyBalanceUsd += polyCost; }
-                return;
-            }
-
-            decimal pairInvestedDry = _perPairInvested.GetOrAdd(pairId, 0m);
-            if (pairInvestedDry + estimatedCost > MaxPerPairExposureUsd)
-            {
-                Console.WriteLine(
-                    $"[EXEC SKIP] {pair.Label} | Per-pair limit " +
-                    $"${pairInvestedDry:0.00}+${estimatedCost:0.00} > ${MaxPerPairExposureUsd:0.00}");
-                lock (_balanceLock) { _kalshiBalanceUsd += kalshiCost; _polyBalanceUsd += polyCost; }
-                return;
-            }
-
-            bool exposureOkDry;
-            lock (_exposureLock)
-            {
-                exposureOkDry = _totalExposure + estimatedCost <= _maxExposureUsd;
-                if (exposureOkDry) _totalExposure += estimatedCost;
-            }
-            if (!exposureOkDry)
-            {
-                Console.WriteLine(
-                    $"[EXEC SKIP] {pair.Label} | Exposure limit " +
-                    $"${_totalExposure:0.00}+${estimatedCost:0.00} > ${_maxExposureUsd:0.00}");
-                lock (_balanceLock) { _kalshiBalanceUsd += kalshiCost; _polyBalanceUsd += polyCost; }
-                return;
-            }
-
-            // Set cooldown before journaling (mirrors live path)
-            _cooldownUntil[pairId] = now + _pairCooldownSeconds;
-
-            var t0DryRun = DateTime.UtcNow;
-            execId = $"AX_{t0DryRun:yyyyMMddHHmmss}_{pair.KalshiTicker}";
-
-            await JournalAsync(JsonSerializer.Serialize(new {
-                t = t0DryRun, @event = "INTENT", execId,
-                pairId, arbType, kSide = kalshiSide,
-                kAsk = kLegAsk, pAsk = pLegAsk, netDetected = netNow,
-                contracts, estCost = estimatedCost,
-                dryRun = true
-            }));
-
-            Console.ForegroundColor = ConsoleColor.Yellow;
-            Console.WriteLine(
-                $"[DRY RUN EXEC] {pair.Label} | {arbType} | K-{kalshiSide}={kLegAsk:0.0000} " +
-                $"P={pLegAsk:0.0000} net=${netNow:0.0000} | {contracts} contracts est.${estimatedCost:0.00}");
-            Console.ResetColor();
-
-            // ── Simulate both legs in parallel (mirrors live Task.WhenAll) ────────
-            var kSimTask = Task.Run(async () =>
-            {
-                if (_fillProfile.FillLatencyMsKalshi > 0)
-                    await Task.Delay(_fillProfile.FillLatencyMsKalshi);
-                int kFillQty = _fillProfile.SimulateKalshiFill(contracts);
-                return (qty: (decimal)kFillQty, price: kFillQty > 0 ? _fillProfile.GetKalshiFillPrice(kLegAsk) : 0m);
-            });
-            var pSimTask = Task.Run(async () =>
-            {
-                if (_fillProfile.FillLatencyMsPoly > 0)
-                    await Task.Delay(_fillProfile.FillLatencyMsPoly);
-                decimal pFillQty = _fillProfile.SimulatePolyFill(polyShares);
-                return (qty: pFillQty, price: pFillQty > 0 ? _fillProfile.GetPolyFillPrice(pLegAsk) : 0m);
-            });
-            await Task.WhenAll(kSimTask, pSimTask);
-
-            decimal simKFilled   = kSimTask.Result.qty;
-            decimal kSimPrice    = kSimTask.Result.price;
-            decimal simPFilled   = pSimTask.Result.qty;
-            decimal pSimPrice    = pSimTask.Result.price;
-
-            decimal dryBalancedQty  = Math.Min(simKFilled, simPFilled);
-            decimal kUnhedgedDry = simKFilled - dryBalancedQty;
-            decimal pUnhedgedDry = simPFilled - dryBalancedQty;
-            bool dryNeitherFilled   = simKFilled == 0 && simPFilled == 0;
-
-            // Refund speculative balance reservation for unfilled/unspent portions
-            decimal kActualCost = kSimPrice * simKFilled;
-            decimal pActualCost = pSimPrice * simPFilled;
-            lock (_balanceLock)
-            {
-                _kalshiBalanceUsd += kalshiCost - kActualCost;
-                _polyBalanceUsd   += polyCost   - pActualCost;
-            }
-
-            decimal dryActualNetPerSet = 0m;
-
-            if (dryBalancedQty > 0)
-            {
-                dryActualNetPerSet = kSimPrice + pSimPrice + KalshiFee(kSimPrice) + PolyFee(pSimPrice);
-                bool    arbProfitable = dryActualNetPerSet < 1.0m;
-                decimal actualProfit  = dryBalancedQty * (1.0m - dryActualNetPerSet);
-                decimal positionCost  = kSimPrice * dryBalancedQty + pSimPrice * dryBalancedQty;
-
-                _openPositions[pairId] = new ArbPosition(
-                    pairId, arbType, dryBalancedQty, dryBalancedQty, kSimPrice, pSimPrice, t0DryRun, execId);
-                Interlocked.Increment(ref _totalExecuted);
-                DecrementTryLimit();
-                lock (_exposureLock) { _totalInvested += positionCost; _totalProjectedProfit += actualProfit; }
-                _perPairInvested.AddOrUpdate(pairId, positionCost, (_, old) => old + positionCost);
-
-                if (arbProfitable)
-                {
-                    Console.ForegroundColor = ConsoleColor.Green;
-                    Console.WriteLine(
-                        $"[DRY RUN OK] {pair.Label} | K={dryBalancedQty}@${kSimPrice:0.0000} " +
-                        $"P={dryBalancedQty:0.00}sh@${pSimPrice:0.0000} | cost=${positionCost:0.00} " +
-                        $"actualNet={dryActualNetPerSet:0.0000} proj=${actualProfit:0.00}");
-                }
-                else
-                {
-                    Console.ForegroundColor = ConsoleColor.Yellow;
-                    Console.WriteLine(
-                        $"[DRY RUN SLIPPAGE] {pair.Label} | K={dryBalancedQty}@${kSimPrice:0.0000} " +
-                        $"P={dryBalancedQty:0.00}sh@${pSimPrice:0.0000} | cost=${positionCost:0.00} " +
-                        $"actualNet={dryActualNetPerSet:0.0000} — arb eaten by slippage");
-                }
-                Console.ResetColor();
-
-                // ── Per-trade max loss tripwire ───────────────────────────────────
-                if (dryActualNetPerSet > 1.0m)
-                {
-                    decimal expectedEdge = 1.0m - netNow;
-                    decimal actualLoss   = dryActualNetPerSet - 1.0m;
-                    if (actualLoss > TradeMaxLossMult * expectedEdge)
-                    {
-                        await JournalAsync(JsonSerializer.Serialize(new {
-                            t = DateTime.UtcNow, @event = "HALT_TRIPWIRE",
-                            reason = "per_trade_loss", pairId, dryRun = true,
-                            actualNet = dryActualNetPerSet, detectedNet = netNow,
-                            maxAllowed = 1.0m + TradeMaxLossMult * expectedEdge
-                        }));
-                        Console.ForegroundColor = ConsoleColor.Red;
-                        Console.WriteLine(
-                            $"[HALT] {pair.Label} | Per-trade tripwire: loss={actualLoss:0.0000} > " +
-                            $"{TradeMaxLossMult}× edge={expectedEdge:0.0000}. Manual reset required.");
-                        Console.ResetColor();
-                        _halted = true;
-                    }
-
-                    // ── Per-day max loss tripwire ─────────────────────────────────
-                    decimal tradeLoss = actualLoss * dryBalancedQty;
-                    bool dayHalt = false;
-                    lock (_dayLossLock)
-                    {
-                        DateOnly today = DateOnly.FromDateTime(DateTime.UtcNow);
-                        if (today > _dayStart) { _dayLossUsd = 0m; _dayStart = today; }
-                        _dayLossUsd += tradeLoss;
-                        dayHalt = _dayLossUsd >= _maxDayLossUsd;
-                    }
-                    if (dayHalt && !_halted)
-                    {
-                        await JournalAsync(JsonSerializer.Serialize(new {
-                            t = DateTime.UtcNow, @event = "HALT_TRIPWIRE",
-                            reason = "per_day_loss", pairId, dryRun = true,
-                            dayLoss = _dayLossUsd, maxDayLoss = _maxDayLossUsd
-                        }));
-                        Console.ForegroundColor = ConsoleColor.Red;
-                        Console.WriteLine(
-                            $"[HALT] Per-day tripwire: cumulative loss ${_dayLossUsd:0.00} >= " +
-                            $"max ${_maxDayLossUsd:0.00}. Manual reset required.");
-                        Console.ResetColor();
-                        _halted = true;
-                    }
-                }
-
-                // ── Fee model tracking ────────────────────────────────────────────
-                decimal modeledFees = (KalshiFee(kLegAsk) + PolyFee(pLegAsk)) * dryBalancedQty;
-                decimal netVar      = (dryActualNetPerSet - netNow) * dryBalancedQty;
-                bool emitDailyReport = false;
-                decimal reportModeled = 0m, reportNetVar = 0m;
-                int reportCount = 0;
-                lock (_feeTrackingLock)
-                {
-                    DateOnly today = DateOnly.FromDateTime(DateTime.UtcNow);
-                    if (today > _feeTrackingDay)
-                    {
-                        emitDailyReport      = true;
-                        reportModeled        = _dailyModeledFeesUsd;
-                        reportNetVar         = _dailyNetVarUsd;
-                        reportCount          = _dailyTradeCount;
-                        _dailyModeledFeesUsd = 0m;
-                        _dailyNetVarUsd      = 0m;
-                        _dailyTradeCount     = 0;
-                        _feeTrackingDay      = today;
-                    }
-                    _dailyModeledFeesUsd += modeledFees;
-                    _dailyNetVarUsd      += netVar;
-                    _dailyTradeCount++;
-                }
-                if (emitDailyReport)
-                {
-                    decimal drift = reportModeled > 0 ? Math.Abs(reportNetVar) / reportModeled : 0m;
-                    await JournalAsync(JsonSerializer.Serialize(new {
-                        t = DateTime.UtcNow, @event = "DAILY_REPORT", dryRun = true,
-                        trades = reportCount, modeledFeesUsd = reportModeled,
-                        netVarUsd = reportNetVar, driftPct = (double)(drift * 100)
-                    }));
-                    if (drift > 0.10m)
-                    {
-                        Console.ForegroundColor = ConsoleColor.Yellow;
-                        Console.WriteLine(
-                            $"[FEE MODEL DRIFT] Previous day: {reportCount} trades | " +
-                            $"modeled=${reportModeled:0.00} var=${reportNetVar:+0.00;-0.00} drift={drift:0.0%} — audit recommended");
-                        Console.ResetColor();
-                    }
-                    else
-                        Console.WriteLine(
-                            $"[DAILY REPORT] {reportCount} trades | " +
-                            $"modeled fees=${reportModeled:0.00} cost_var=${reportNetVar:+0.00;-0.00} drift={drift:0.0%}");
-                }
-            }
-            else
-            {
-                // Nothing balanced — release reserved exposure. Balance refund already handled above.
-                lock (_exposureLock) { _totalExposure -= estimatedCost; }
-            }
-
-            // Log unhedged delta — Stage 1: journal only; Stage 2 will call RecoverUnhedgedAsync
-            if (kUnhedgedDry > 0 || pUnhedgedDry > 0)
-            {
-                Console.ForegroundColor = ConsoleColor.DarkYellow;
-                Console.WriteLine(
-                    $"[DRY RUN UNHEDGED] {pair.Label} | " +
-                    $"kFilled={simKFilled} pFilled={simPFilled:0.00} balanced={dryBalancedQty} " +
-                    $"kExcess={kUnhedgedDry} pExcess={pUnhedgedDry:0.00}");
-                Console.ResetColor();
-                await JournalAsync(JsonSerializer.Serialize(new {
-                    t = DateTime.UtcNow, @event = "DRY_RUN_UNHEDGED",
-                    execId, pairId, arbType, dryRun = true,
-                    kFilled = (double)simKFilled, pFilled = (double)simPFilled,
-                    balanced = (double)dryBalancedQty,
-                    kExcess = (double)kUnhedgedDry, pExcess = (double)pUnhedgedDry
-                }));
-            }
-            else if (dryNeitherFilled)
-            {
-                Console.WriteLine($"[DRY RUN MISS] {pair.Label} | Neither leg simulated filled");
-            }
-
-            // ── EXECUTION_COMPLETE — mirrors live record structure ─────────────────
-            {
-                string simOutcome = dryNeitherFilled                          ? "MISS"
-                    : (kUnhedgedDry > 0 || pUnhedgedDry > 0)                 ? "PARTIAL_UNHEDGED"
-                    : "BOTH_FILLED";
-
-                var finalPosDry  = _openPositions.TryGetValue(pairId, out var fpDry) ? fpDry : null;
-                decimal kHeldDry = finalPosDry?.KalshiContracts ?? 0m;
-                decimal pHeldDry = finalPosDry?.PolyShares      ?? 0m;
-
-                await JournalAsync(JsonSerializer.Serialize(new {
-                    t = DateTime.UtcNow, @event = "EXECUTION_COMPLETE",
-                    execId, pairId, arbType, label = pair.Label, dryRun = true,
-
-                    detected = new {
-                        kAsk = kLegAsk, pAsk = pLegAsk,
-                        netCost = Math.Round(netNow, 6),
-                        contracts, estCostUsd = Math.Round(estimatedCost, 4),
-                        venueSkewMs = Math.Round(venueSkewMs, 1)
-                    },
-
-                    fills = new {
-                        kalshi = new {
-                            ordered = contracts, filled = simKFilled,
-                            limitCents = kPriceCents, fillPrice = kSimPrice,
-                            feePerContract = simKFilled > 0 ? Math.Round(KalshiFee(kSimPrice), 6) : (object?)0m,
-                            slippageCents  = simKFilled > 0 ? (object?)Math.Round((kSimPrice - kLegAsk) * 100m, 4) : null,
-                            status = simKFilled == 0 ? "simulated_miss" : "simulated_fill"
-                        },
-                        poly = new {
-                            ordered = polyShares, filled = Math.Round(simPFilled, 6),
-                            limitPrice   = pLegAsk,
-                            avgFillPrice = simPFilled > 0 ? (object?)Math.Round(pSimPrice, 6) : null,
-                            feePerShare  = simPFilled > 0 ? (object?)Math.Round(PolyFee(pSimPrice), 6) : null,
-                            slippagePct  = simPFilled > 0 && pLegAsk > 0
-                                ? (object?)Math.Round((pSimPrice - pLegAsk) / pLegAsk * 100m, 4) : null
-                        }
-                    },
-
-                    hedge = new {
-                        balanced = dryBalancedQty, kExcess = kUnhedgedDry, pExcess = pUnhedgedDry,
-                        recovery = (kUnhedgedDry > 0 || pUnhedgedDry > 0)
-                            ? (object?)new { outcome = "NOT_SIMULATED_STAGE1" } : null
-                    },
-
-                    position = dryBalancedQty > 0 ? (object?)new {
-                        kHeld = kHeldDry, pHeld = pHeldDry,
-                        kEntryPrice        = kSimPrice,
-                        pAvgPrice          = Math.Round(pSimPrice, 6),
-                        totalCostUsd       = Math.Round(kSimPrice * kHeldDry + pSimPrice * pHeldDry, 4),
-                        modeledNetPerSet   = Math.Round(netNow, 6),
-                        actualNetPerSet    = Math.Round(dryActualNetPerSet, 6),
-                        projectedProfitUsd = Math.Round(kHeldDry * (1.0m - dryActualNetPerSet), 4)
-                    } : null,
-
-                    outcome = simOutcome,
-                    stalePriceSuspected = !dryNeitherFilled && (simKFilled == 0 || simPFilled == 0),
-                    durationMs = (long)(DateTime.UtcNow - t0DryRun).TotalMilliseconds
-                }));
-            }
-
-            EnqueueCsvRow(pair, arbType, t0DryRun, kPriceCents, kLegAsk, pLegAsk,
-                simKFilled, simPFilled, pSimPrice,
-                dryActualNetPerSet > 0 ? dryActualNetPerSet : netNow,
-                dryNeitherFilled ? "SIM_MISS" : simKFilled == 0 ? "SIM_P_ONLY"
-                              : simPFilled == 0 ? "SIM_K_ONLY" : "SIM_FILLED");
-            return;
-        }
+        string execId = string.Empty;
 
         // Blocklist check — pairs flagged by prod_cross_arb.py for pair mismatch at settlement
         if (_blocklist.Contains(pair.KalshiTicker))
@@ -769,7 +452,7 @@ public class CrossArbExecutor
             return;
         }
 
-        // Exposure check (live only, thread-safe)
+        // Exposure check (thread-safe)
         bool exposureOk;
         lock (_exposureLock)
         {
@@ -790,9 +473,11 @@ public class CrossArbExecutor
         _cooldownUntil[pairId] = now + _pairCooldownSeconds;
 
         Console.ForegroundColor = ConsoleColor.Cyan;
-        Console.WriteLine(
-            $"[EXEC] {pair.Label} | {arbType} | K-{kalshiSide}={kLegAsk:0.0000} " +
-            $"P={pLegAsk:0.0000} net=${netNow:0.0000} | {contracts} contracts @ ${estimatedCost:0.00}");
+        Console.WriteLine(_dryRun
+            ? $"[DRY RUN EXEC] {pair.Label} | {arbType} | K-{kalshiSide}={kLegAsk:0.0000} " +
+              $"P={pLegAsk:0.0000} net=${netNow:0.0000} | {contracts} contracts est.${estimatedCost:0.00}"
+            : $"[EXEC] {pair.Label} | {arbType} | K-{kalshiSide}={kLegAsk:0.0000} " +
+              $"P={pLegAsk:0.0000} net=${netNow:0.0000} | {contracts} contracts @ ${estimatedCost:0.00}");
         Console.ResetColor();
 
         var t0 = DateTime.UtcNow;
@@ -803,7 +488,8 @@ public class CrossArbExecutor
             t = t0, @event = "INTENT", execId,
             pairId, arbType, kSide = kalshiSide,
             kAsk = kLegAsk, pAsk = pLegAsk, netDetected = netNow,
-            contracts, estCost = estimatedCost
+            contracts, estCost = estimatedCost,
+            dryRun = _dryRun
         }));
 
         // Fire both legs simultaneously
@@ -834,7 +520,7 @@ public class CrossArbExecutor
             await JournalAsync(JsonSerializer.Serialize(new {
                 t = DateTime.UtcNow, @event = "STALE_PRICE",
                 pairId, arbType, detectedNet = netNow,
-                kFilled, pFilled = (double)pFilled
+                kFilled, pFilled = (double)pFilled, dryRun = _dryRun
             }));
         }
 
@@ -882,7 +568,7 @@ public class CrossArbExecutor
                 {
                     await JournalAsync(JsonSerializer.Serialize(new {
                         t = DateTime.UtcNow, @event = "HALT_TRIPWIRE",
-                        reason = "per_trade_loss", pairId,
+                        reason = "per_trade_loss", pairId, dryRun = _dryRun,
                         actualNet = actualNetPerSet, detectedNet = netNow,
                         maxAllowed = 1.0m + TradeMaxLossMult * expectedEdge
                     }));
@@ -908,7 +594,7 @@ public class CrossArbExecutor
                 {
                     await JournalAsync(JsonSerializer.Serialize(new {
                         t = DateTime.UtcNow, @event = "HALT_TRIPWIRE",
-                        reason = "per_day_loss", pairId,
+                        reason = "per_day_loss", pairId, dryRun = _dryRun,
                         dayLoss = _dayLossUsd, maxDayLoss = _maxDayLossUsd
                     }));
                     Console.ForegroundColor = ConsoleColor.Red;
@@ -948,7 +634,7 @@ public class CrossArbExecutor
             {
                 decimal drift = reportModeled > 0 ? Math.Abs(reportNetVar) / reportModeled : 0m;
                 await JournalAsync(JsonSerializer.Serialize(new {
-                    t = DateTime.UtcNow, @event = "DAILY_REPORT",
+                    t = DateTime.UtcNow, @event = "DAILY_REPORT", dryRun = _dryRun,
                     trades = reportCount, modeledFeesUsd = reportModeled,
                     netVarUsd = reportNetVar, driftPct = (double)(drift * 100)
                 }));
@@ -986,7 +672,7 @@ public class CrossArbExecutor
             t = DateTime.UtcNow,
             @event = neitherFilled ? "MISS" : "FILLED",
             pairId, kFilled, pFilled = (double)pFilled,
-            balanced = balancedQty, kStatus,
+            balanced = balancedQty, kStatus, dryRun = _dryRun,
             modeledNet = balancedQty > 0 ? (object)Math.Round(netNow, 6)          : null,
             actualNet  = balancedQty > 0 ? (object)Math.Round(actualNetPerSet, 6) : null
         }));
@@ -1063,10 +749,12 @@ public class CrossArbExecutor
 
         if (!neitherFilled)
         {
-            // Re-fetch real balances after any execution — replaces speculative reservation with actuals.
-            await RefreshBalancesAsync();
-            // Post-trade position check — fire-and-forget; must not block the next arb window.
-            if (balancedQty > 0)
+            // Re-fetch real balances after execution — not needed in dry-run (simulated clients
+            // return dummy values that would overwrite the executor's tracked simulation balances).
+            if (!_dryRun) await RefreshBalancesAsync();
+            // Post-trade position reconciliation — skipped in dry-run because the simulated client
+            // tracks total fills while the executor tracks balanced fills, causing spurious mismatches.
+            if (!_dryRun && balancedQty > 0)
                 _ = Task.Run(async () => await ReconcileTradeAsync(pair, arbType, balancedQty, balancedQty, execId));
         }
         else
