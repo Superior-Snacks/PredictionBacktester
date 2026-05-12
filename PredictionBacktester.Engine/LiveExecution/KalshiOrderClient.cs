@@ -9,7 +9,7 @@ namespace PredictionBacktester.Engine.LiveExecution;
 /// REST client for the Kalshi API. Handles RSA-PSS request signing, market queries,
 /// and live IOC order placement / fill polling.
 /// </summary>
-public class KalshiOrderClient : IDisposable
+public class KalshiOrderClient : IKalshiOrderExecutor, IDisposable
 {
     private readonly KalshiApiConfig _config;
     private readonly RSA _rsa;

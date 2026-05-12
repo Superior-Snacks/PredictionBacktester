@@ -288,7 +288,7 @@ When `Rng.NextDouble() < LegFailRate`, return 0 fill. Activates the "neither leg
 
 ## STAGE 2 — Wire dry-run through full execution path
 
-### [ ] Introduce `IKalshiOrderExecutor` and `IPolymarketOrderExecutor` interfaces
+### [X] Introduce `IKalshiOrderExecutor` and `IPolymarketOrderExecutor` interfaces
 Extract the order-placement methods from the concrete clients into interfaces. The real clients implement them; simulated clients implement them differently.
 
 ### [ ] Build `SimulatedKalshiClient` and `SimulatedPolymarketClient`

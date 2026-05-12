@@ -18,7 +18,7 @@ using RestSharp;
 
 namespace PredictionBacktester.Engine.LiveExecution;
 
-public class PolymarketOrderClient
+public class PolymarketOrderClient : IPolymarketOrderExecutor
 {
     private readonly PolymarketApiConfig _config;
     private readonly RestClient _httpClient;

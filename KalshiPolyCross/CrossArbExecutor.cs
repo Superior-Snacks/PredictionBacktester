@@ -37,8 +37,8 @@ public record RecoveryResult(
 /// </summary>
 public class CrossArbExecutor
 {
-    private readonly KalshiOrderClient _kalshi;
-    private readonly PolymarketOrderClient _poly;
+    private readonly IKalshiOrderExecutor _kalshi;
+    private readonly IPolymarketOrderExecutor _poly;
     private readonly CrossPlatformArbTelemetryStrategy _telemetry;
     private readonly ConcurrentDictionary<string, LocalOrderBook> _books;
 
@@ -146,8 +146,8 @@ public class CrossArbExecutor
     public decimal TotalProjectedProfit { get { lock (_exposureLock) return _totalProjectedProfit;    } }
 
     public CrossArbExecutor(
-        KalshiOrderClient               kalshi,
-        PolymarketOrderClient           poly,
+        IKalshiOrderExecutor            kalshi,
+        IPolymarketOrderExecutor        poly,
         CrossPlatformArbTelemetryStrategy telemetry,
         ConcurrentDictionary<string, LocalOrderBook> books,
         decimal maxBetUsd           = 10m,
