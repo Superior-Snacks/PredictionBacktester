@@ -320,7 +320,7 @@ Each profile is a preset `SimulatedFillProfile` for a specific failure pattern:
 - `BothVenuesFlaky()` — moderate failures on both sides
 - `LatencyStorm()` — high latency, no failures (tests timing logic)
 
-### [ ] Add `--scenario <name>` CLI flag
+### [X] Add `--scenario <name>` CLI flag
 Allows running dry-run with a specific failure profile. Defaults to `HappyPath` if not specified.
 
 ### [ ] Run each scenario against fresh telemetry data

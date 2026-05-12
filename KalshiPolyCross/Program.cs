@@ -13,11 +13,15 @@ using PredictionBacktester.Engine.LiveExecution;
 //  dotnet run --project KalshiPolyCross -- --dry-run --try 5    # execute exactly 5 arbs then exit cleanly
 //  dotnet run --project KalshiPolyCross -- --live --min-buy     # live: always 1 contract, ignore maxBet sizing
 //  dotnet run --project KalshiPolyCross -- --dry-run --seed 42  # reproducible dry-run (same fills every time)
+//  dotnet run --project KalshiPolyCross -- --dry-run --scenario FlakyKalshi  # named failure profile
 //
-//  Exactly one mode flag is required. --debug, --try N, --min-buy, and --seed N are optional.
-//  --try N    execute exactly N complete arbs then shut down; works with --dry-run or --live.
-//  --min-buy  cap every arb to exactly 1 contract regardless of maxBet (useful for initial live shakedown).
-//  --seed N   seed the dry-run fill RNG for reproducible results; omit for non-deterministic simulation.
+//  Exactly one mode flag is required. --debug, --try N, --min-buy, --seed N, and --scenario are optional.
+//  --try N         execute exactly N complete arbs then shut down; works with --dry-run or --live.
+//  --min-buy       cap every arb to exactly 1 contract regardless of maxBet (useful for initial live shakedown).
+//  --seed N        seed the dry-run fill RNG for reproducible results; omit for non-deterministic simulation.
+//  --scenario Name named failure profile for dry-run (default: HappyPath).
+//                  Valid: HappyPath, FlakyKalshi, FlakyPoly, ChronicSlippage,
+//                         PartialFillSwamp, BothVenuesFlaky, LatencyStorm
 //
 //  Runtime key toggles (all modes):
 //    N   toggle near-miss top-10 report   (on by default)
@@ -93,6 +97,14 @@ int? fillSeed = null;
 int seedIdx = Array.IndexOf(args, "--seed");
 if (seedIdx >= 0 && seedIdx + 1 < args.Length && int.TryParse(args[seedIdx + 1], out int parsedSeed))
     fillSeed = parsedSeed;
+
+// --scenario <name>: pick a named failure profile for dry-run (default: HappyPath)
+string scenarioName = "HappyPath";
+int scenIdx = Array.IndexOf(args, "--scenario");
+if (scenIdx >= 0 && scenIdx + 1 < args.Length)
+    scenarioName = args[scenIdx + 1];
+if (scenIdx >= 0 && !isDryRun)
+    Console.WriteLine("[WARN] --scenario is only meaningful with --dry-run; ignored in this mode.");
 
 var cts = new CancellationTokenSource();
 
@@ -247,7 +259,12 @@ if (isLive || isDryRun)
     }
 
     // Order execution clients — simulated in dry-run, real in live.
-    var fillProfile = isDryRun ? new SimulatedFillProfile(fillSeed) : null;
+    SimulatedFillProfile? fillProfile = null;
+    if (isDryRun)
+    {
+        try   { fillProfile = FailureScenarios.FromName(scenarioName, fillSeed); }
+        catch (ArgumentException ex) { Console.WriteLine($"[ERROR] {ex.Message}"); return; }
+    }
     PredictionBacktester.Engine.LiveExecution.IKalshiOrderExecutor    kalshiExec =
         isDryRun ? new SimulatedKalshiClient(fillProfile!) : orderClient;
     PredictionBacktester.Engine.LiveExecution.IPolymarketOrderExecutor polyExec   =
@@ -274,7 +291,7 @@ if (isLive || isDryRun)
     await executor.InitializeBalancesAsync();
     if (isLive && pairs.Count > 0)
         await executor.ReconcileOnStartupAsync(pairs);
-    string execLabel  = isDryRun ? "DRY RUN — no real orders" : "LIVE";
+    string execLabel  = isDryRun ? $"DRY RUN [{scenarioName}] — no real orders" : "LIVE";
     string minBuyTag  = minBuy ? "  MIN-BUY=1" : $"  maxBet=${MAX_BET_USD:0.00}";
     Console.WriteLine($"[EXECUTOR] {execLabel} |{minBuyTag} buffer={BALANCE_BUFFER_PCT:P0} maxExposure=${maxExposureUsd:0.00} threshold=0.990 cooldown=120s");
 }
