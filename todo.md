@@ -219,13 +219,232 @@ Trades attempted, filled, partial, reversed, dust-absorbed, halted. Realized vs 
 
 ---
 
-## Usage Notes
+# Dry-Run Enhancement Plan
 
-- **Items 1-4 are the actual pre-live blockers.** Fix these before pointing the bot at real money.
-- **Items 5-9 are first-week priorities.** None will lose you money catastrophically, but each will accumulate friction over time. Plan a second-pass session in the first week of live.
-- **Items 10-13 are strategic decisions, not bugs.** Item 10 is the most important to think about now — it determines whether your bot can scale into deepening arbs or whether each pair gets one shot per cooldown window.
-- **Items 14-17 are post-shakedown improvements.** Don't build them now. After a month of live data, you'll know which ones matter for your actual operation.
+Goal: exercise as much of the live execution path in dry-run as possible before risking real capital. Current dry-run tests bookkeeping but skips ~80% of the failure-handling code.
 
+---
+
+## Current dry-run coverage
+
+What dry-run already tests:
+- Bankroll guards (blocklist, per-pair limit, exposure limit, balance reservation)
+- Cooldown management
+- Journal events (INTENT, EXECUTION_COMPLETE)
+- CSV output
+- Try-limit decrement
+
+What dry-run currently does NOT test (the gap to close):
+- [ ] Fill latency (both legs return instantly in dry-run)
+- [ ] Slippage (fills always at detected price)
+- [ ] Partial fills
+- [ ] Leg failures (full)
+- [ ] Stale-price scenarios
+- [ ] Per-trade max-loss tripwire
+- [ ] Per-day max-loss tripwire
+- [ ] Fee model drift detection
+- [ ] `RecoverUnhedgedAsync` (entire function never called)
+- [ ] Hedge retry logic (Cases A and B)
+- [ ] Reverse logic (Kalshi and Poly)
+- [ ] Dust absorption (< CleanupDustUsd branches)
+- [ ] Recovery halt paths (book-missing, reverse-failed)
+- [ ] `ReconcileTradeAsync` against simulated mismatches
+- [ ] Connection-loss halt (`_connectionHalted`) and resume
+- [ ] Maintenance threshold (consecutive REST errors)
+- [ ] `ReconcileOnStartupAsync` with simulated pre-existing positions
+
+---
+
+## STAGE 1 — Realistic fill simulation (foundation)
+
+### [ ] Build `SimulatedFillProfile` class
+Configurable parameters that control how simulated fills behave:
+- `FillLatencyMsKalshi` (default 100ms)
+- `FillLatencyMsPoly` (default 80ms)
+- `KalshiSlippageCents` (cents above limit)
+- `PolySlippagePct` (% above limit)
+- `PartialFillRate` (0-1 chance of partial)
+- `LegFailRate` (0-1 chance of full leg fail)
+- `Random Rng` (with optional seed for reproducibility)
+
+### [ ] Replace perfect-fill block in current dry-run path
+Lines 469-473 in `CrossArbExecutor.cs` currently produce perfect fills. Replace with logic that consults `SimulatedFillProfile` and produces realistic simulated outcomes.
+
+### [ ] Add latency simulation
+`await Task.Delay((int)profile.FillLatencyMsKalshi)` before returning the simulated fill. Matters for testing time-skew detection and ensuring async ordering behaves correctly.
+
+### [ ] Add slippage simulation
+Simulated fill price = limit price + slippage (cents for Kalshi, % for Poly). This activates the `[EXEC SLIPPAGE]` branch and the per-trade tripwire when slippage is large enough.
+
+### [ ] Add partial-fill simulation
+When `Rng.NextDouble() < PartialFillRate`, fill 20-90% of intended quantity. Activates the recovery logic for partial fills (the most common real-world failure mode).
+
+### [ ] Add leg-failure simulation
+When `Rng.NextDouble() < LegFailRate`, return 0 fill. Activates the "neither leg filled" and "single leg unhedged" recovery paths.
+
+**Pass criteria for Stage 1:** Dry-run produces realistic execution journals with a mix of clean fills, slippage events, partial fills, and full failures. Each `EXECUTION_COMPLETE` event should have plausible values matching what live data would look like.
+
+---
+
+## STAGE 2 — Wire dry-run through full execution path
+
+### [ ] Introduce `IKalshiOrderExecutor` and `IPolymarketOrderExecutor` interfaces
+Extract the order-placement methods from the concrete clients into interfaces. The real clients implement them; simulated clients implement them differently.
+
+### [ ] Build `SimulatedKalshiClient` and `SimulatedPolymarketClient`
+Implementations of the interfaces that:
+- Apply `SimulatedFillProfile` to determine fill outcomes
+- Read current book state from the live `LocalOrderBook` (so simulated fills react to real market state)
+- Return simulated order IDs, statuses, and fill counts in the same shape as the real clients
+- Update simulated positions internally so `GetPositionsAsync` returns sensible values
+
+### [ ] Inject the simulated clients in dry-run mode
+At startup, when `--dry-run` is specified, construct the executor with simulated clients instead of real ones. The rest of `ExecuteLockedAsync` runs unchanged.
+
+### [ ] Remove the dual `if (_dryRun)` code path
+Once dry-run goes through the live execution path, the parallel dry-run block at lines 410-526 becomes unnecessary. Delete it. Dry-run vs live is now a startup-time decision, not an in-flow branch.
+
+**Pass criteria for Stage 2:** A dry-run trade goes through the exact same code as live, including `RecoverUnhedgedAsync` when fills are imbalanced. No code path is exclusive to live mode anymore.
+
+---
+
+## STAGE 3 — Named scenario library
+
+### [ ] Build `FailureScenarios` static class with named profiles
+Each profile is a preset `SimulatedFillProfile` for a specific failure pattern:
+- `HappyPath()` — baseline, no failures
+- `FlakyKalshi()` — 20% leg fail rate, 300ms latency
+- `FlakyPoly()` — 20% leg fail rate on Poly side
+- `ChronicSlippage()` — 1¢ Kalshi slippage, 2% Poly slippage
+- `PartialFillSwamp()` — 40% partial fill rate
+- `BothVenuesFlaky()` — moderate failures on both sides
+- `LatencyStorm()` — high latency, no failures (tests timing logic)
+
+### [ ] Add `--scenario <name>` CLI flag
+Allows running dry-run with a specific failure profile. Defaults to `HappyPath` if not specified.
+
+### [ ] Run each scenario against fresh telemetry data
+For each named scenario, run a dry-run session of at least 1 hour. Log results to a comparison table.
+
+**Pass criteria for Stage 3:** Each scenario produces expected behaviors. Recovery succeeds at appropriate rates. Tripwires fire when expected. No silent failures in any scenario.
+
+---
+
+## STAGE 4 — Targeted scenarios for critical fixes
+
+### [ ] Reconciliation mismatch injection
+Add `SimulatedVenuePositionClient` that can return positions different from local state. Allows manually injecting a mismatch to verify halt-on-mismatch behavior (CRITICAL fix #1).
+
+**Test:** Run dry-run, inject mismatch on next reconciliation tick, verify bot halts and requires manual reset.
+
+### [ ] Dust-threshold scenario
+Construct a scenario that produces unhedged positions just under `CleanupDustUsd` ($0.25). Verify dust absorption fires first, before any reverse attempt is made (CRITICAL fix #2).
+
+**Test:** Run dry-run with profile that produces ~$0.20 unhedged positions consistently. Verify no reverse orders are attempted; dust is absorbed and journaled correctly.
+
+### [ ] Half-cent boundary scenario
+Construct a scenario where the recovery hedge price would land exactly on a half-cent. Verify Math.Ceiling is used (CRITICAL fix #3) and the hedge order is at a fillable price.
+
+**Test:** Set up a market state where the opposite-side ask is at e.g. $0.475. Run dry-run, force recovery, verify the hedge limit price is 48¢ (Ceiling), not 47¢ (Round/Floor).
+
+### [ ] Connection-loss simulation
+Add a command (keyboard shortcut or CLI signal) that forces `OnKalshiReconnect()` and `OnPolyReconnect()` events without an actual disconnect. Tests telemetry window closure and `_connectionHalted` flag.
+
+**Test:** Trigger simulated reconnect during an active arb. Verify telemetry windows close correctly, in-flight orders complete or are reconciled, and the bot resumes trading after the reconnect.
+
+### [ ] Maintenance threshold simulation
+Force `_kalshiConsecErrors` to climb past `MaintenanceErrorThreshold` (5). Verify `_connectionHalted` fires and prevents new trades. Verify it auto-clears when errors stop.
+
+**Test:** Inject 5+ consecutive REST failures. Verify halt fires. Then inject successful REST calls. Verify halt clears.
+
+### [ ] Book-missing during recovery
+Construct a scenario where the opposite-side book disappears mid-recovery. Verify the bot skips the hedge phase but attempts reverse (per fix #7), and only halts if reverse also fails.
+
+**Test:** Manually clear the opposite-side book entry in `_books` during an active recovery. Verify reverse is still attempted on the filled side.
+
+### [ ] Cancel-race simulation
+Add a `SimulatedKalshiClient` mode where cancel requests sometimes return "filled" instead of "cancelled". Tests that local state stays consistent with venue state in race conditions.
+
+**Test:** Submit and immediately cancel 20 orders. Verify final position state matches what the simulated venue reports, with no orphan tracking errors.
+
+---
+
+## STAGE 5 — Statistical replay against real telemetry (optional, high-value)
+
+### [ ] Build telemetry CSV replay mode
+Add `--replay <csv-path>` flag that reads detected arb windows from a CrossArbTelemetry CSV and fires `OnArbOpened` callbacks at the timestamps recorded in the CSV.
+
+### [ ] Add `--speedup <factor>` flag
+Compress real time by a factor (e.g. 10x means 1 hour of real arb activity replays in 6 minutes). Lets you run multi-day simulations quickly.
+
+### [ ] Add deterministic seed support
+`--seed <int>` makes Random reproducible. Same replay + same seed + same profile = same outcome. Critical for regression testing.
+
+### [ ] Build the pre-live test matrix
+Run each combination and record outcomes:
+
+| Scenario | Duration | Pass criteria |
+|----------|----------|---------------|
+| HappyPath | 24h replay | 100% fills, projected ≈ realized, 0 halts |
+| 5% LegFail | 24h replay | 95%+ recover correctly, 0 unbounded losses |
+| 20% LegFail | 24h replay | High recovery rate, some dust-absorbed, 0 halts unless reverse genuinely failed |
+| ChronicSlippage | 24h replay | Per-trade tripwire fires when expected, day tripwire if drift compounds |
+| 30% PartialFill | 24h replay | All partials handled, no orphan unhedged positions in journal |
+| ConnectionStorm | 24h replay | Maintenance halt fires and clears, telemetry windows handle reconnects correctly |
+| ReconcileMismatch | Single arb | Bot halts on detection, requires manual reset |
+| BookMissing | Multiple injected | Skips hedge, attempts reverse |
+| DustThreshold | Manual setup | Dust absorbed without reverse attempt |
+
+### [ ] Document outcomes
+Write up the results in a `DryRunResults.md` file. For each scenario, record:
+- Number of arbs processed
+- Realized P&L vs projected P&L
+- Recovery success rate
+- Any unexpected halts or behaviors
+- Notable patterns (e.g. "PartialFillSwamp produced 12% more cleanup cost than expected")
+
+**Pass criteria for Stage 5:** All scenarios complete with expected behavior. Any unexpected outcomes are investigated and either fixed in code or documented as known limitations.
+
+---
+
+## Implementation order recommendation
+
+For a pre-live deployment with limited time:
+
+1. **Stages 1 + 2** (1-3 days of work) — foundation; enables everything else
+2. **Stage 3** with 3-4 named profiles (half day) — exercises items 1-9 in the gap list above
+3. **Stage 4 targeted scenarios** for the critical fixes you just made (1 day)
+4. **Stage 5 replay** (optional, 1-2 days) — gold-standard pre-live validation
+
+Stages 1-3 give you most of the value. Stage 4 specifically validates the critical bug fixes. Stage 5 is the comprehensive test if time allows.
+
+---
+
+## What simulation still can't catch
+
+Even with comprehensive dry-run simulation, these only show up in live:
+
+- Real network jitter and packet loss patterns (simulated latency is uniform; real has fat tails)
+- Venue-specific undocumented behaviors (Polymarket and Kalshi each have quirks not in docs)
+- Real fee schedule changes (venues sometimes update without notice)
+- Real KYC/compliance edge cases (might trip only when actual money is at stake)
+- Behavioral fingerprinting (venues may treat live trading accounts differently than read-only API access)
+
+Strategy: go live with the smallest possible position size for the first 48 hours regardless of how clean simulation results are. Watch the journal in real time. Simulation reduces unknowns; it doesn't eliminate them.
+
+---
+
+## Architectural benefits beyond testing
+
+The interface-based refactor (Stage 2) has secondary benefits:
+- Eliminates the dual dry-run/live code paths (a known bug source)
+- Makes future strategy changes easier to test in isolation
+- Enables A/B testing of execution strategies later (e.g. compare two recovery approaches against the same telemetry replay)
+- Simplifies onboarding new venues — implement the interface, drop in the new client
+
+Worth doing even setting aside the testing motivation.
+
+---
 
 ## Known Bugs — Fix Before First Dry-Run
 
