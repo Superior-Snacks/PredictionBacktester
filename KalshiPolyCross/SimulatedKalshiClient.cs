@@ -1,0 +1,68 @@
+using System.Collections.Concurrent;
+using PredictionBacktester.Engine.LiveExecution;
+
+namespace KalshiPolyCross;
+
+/// <summary>
+/// Dry-run implementation of IKalshiOrderExecutor. Applies SimulatedFillProfile to
+/// produce realistic fill outcomes (latency, partial fills, leg failures) without
+/// sending any real orders. Maintains internal position state so GetPositionsAsync
+/// returns values consistent with what was simulated.
+/// </summary>
+public class SimulatedKalshiClient : IKalshiOrderExecutor
+{
+    private readonly SimulatedFillProfile _profile;
+    private readonly ConcurrentDictionary<string, int> _positions = new();
+    private readonly ConcurrentDictionary<string, (string Status, decimal Fill)> _completedOrders = new();
+
+    public SimulatedKalshiClient(SimulatedFillProfile profile)
+    {
+        _profile = profile;
+    }
+
+    public async Task<(string OrderId, string Status, decimal FillCount)> PlaceOrderAsync(
+        string ticker, string side, int priceCents, int count,
+        string action = "buy", string? clientOrderId = null)
+    {
+        if (_profile.FillLatencyMsKalshi > 0)
+            await Task.Delay(_profile.FillLatencyMsKalshi);
+
+        int filled = _profile.SimulateKalshiFill(Math.Abs(count));
+        string status = filled > 0 ? "executed" : "canceled";
+
+        if (filled > 0)
+        {
+            bool isSell = string.Equals(action, "sell", StringComparison.OrdinalIgnoreCase);
+            _positions.AddOrUpdate(ticker,
+                isSell ? -filled : filled,
+                (_, old) => old + (isSell ? -filled : filled));
+        }
+
+        string orderId = clientOrderId is { Length: > 0 }
+            ? $"SIM_{clientOrderId}"
+            : $"SIM_K_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}_{ticker}";
+
+        _completedOrders[orderId] = (status, filled);
+        return (orderId, status, filled);
+    }
+
+    public Task<(string Status, decimal FillCount)> PollOrderAsync(string orderId)
+    {
+        // Simulated orders resolve in PlaceOrderAsync — poll always returns the stored result.
+        if (_completedOrders.TryGetValue(orderId, out var r))
+            return Task.FromResult((r.Status, r.Fill));
+        return Task.FromResult(("executed", 0m));
+    }
+
+    public Task<List<(string Ticker, int Position)>> GetPositionsAsync()
+    {
+        var result = _positions
+            .Where(kv => kv.Value != 0)
+            .Select(kv => (kv.Key, kv.Value))
+            .ToList();
+        return Task.FromResult(result);
+    }
+
+    // Executor overrides this to $1,000 immediately after calling it in dry-run mode.
+    public Task<long> GetBalanceCentsAsync() => Task.FromResult(100_000_00L);
+}

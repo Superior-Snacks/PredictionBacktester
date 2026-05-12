@@ -291,7 +291,7 @@ When `Rng.NextDouble() < LegFailRate`, return 0 fill. Activates the "neither leg
 ### [X] Introduce `IKalshiOrderExecutor` and `IPolymarketOrderExecutor` interfaces
 Extract the order-placement methods from the concrete clients into interfaces. The real clients implement them; simulated clients implement them differently.
 
-### [ ] Build `SimulatedKalshiClient` and `SimulatedPolymarketClient`
+### [X] Build `SimulatedKalshiClient` and `SimulatedPolymarketClient`
 Implementations of the interfaces that:
 - Apply `SimulatedFillProfile` to determine fill outcomes
 - Read current book state from the live `LocalOrderBook` (so simulated fills react to real market state)
