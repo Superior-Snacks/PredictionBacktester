@@ -52,6 +52,31 @@ public static class FailureScenarios
         FillLatencyMsPoly   = 1500,
     };
 
+    // ── Stage 4: targeted critical-fix scenarios ──────────────────────────────
+
+    /// <summary>
+    /// Poly always fails, Kalshi always fills. Every trade leaves an unhedged Kalshi position.
+    /// Triggers dust absorption (CleanupDustUsd=$0.25) when contracts × legAsk &lt; $0.25,
+    /// otherwise exercises RecoverUnhedgedAsync. Run against cheap markets (ask &lt; $0.25/contract)
+    /// for reliable dust coverage.
+    /// </summary>
+    public static SimulatedFillProfile DustUnhedged(int? seed = null) => new(seed)
+    {
+        PolyLegFailRate = 1.0,
+    };
+
+    /// <summary>
+    /// 40% Kalshi leg failures; 25% of those are misreported as phantom 1-contract fills.
+    /// The phantom fills are NOT tracked in venue positions, guaranteeing a mismatch on the
+    /// next ReconcileTradeAsync call → executor halts. Use with SimulatedVenuePositionClient
+    /// for additional runtime-injected mismatches via the M key.
+    /// </summary>
+    public static SimulatedFillProfile CancelRace(int? seed = null) => new(seed)
+    {
+        KalshiLegFailRate = 0.40,
+        CancelRaceRate    = 0.25,
+    };
+
     /// <summary>
     /// Looks up a profile by case-insensitive name. Used by the --scenario CLI flag.
     /// Throws <see cref="ArgumentException"/> for unknown names.
@@ -66,8 +91,11 @@ public static class FailureScenarios
             "partialfillswamp" => PartialFillSwamp(seed),
             "bothvenuesflaky"  => BothVenuesFlaky(seed),
             "latencystorm"     => LatencyStorm(seed),
+            "dustunhedged"     => DustUnhedged(seed),
+            "cancelrace"       => CancelRace(seed),
             _ => throw new ArgumentException(
                 $"Unknown scenario '{name}'. Valid: HappyPath, FlakyKalshi, FlakyPoly, " +
-                $"ChronicSlippage, PartialFillSwamp, BothVenuesFlaky, LatencyStorm")
+                $"ChronicSlippage, PartialFillSwamp, BothVenuesFlaky, LatencyStorm, " +
+                $"DustUnhedged, CancelRace")
         };
 }

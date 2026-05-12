@@ -34,6 +34,12 @@ public class SimulatedFillProfile
     public double KalshiLegFailRate { get; init; } = 0.0;
     /// <summary>0–1 probability that a Polymarket FAK leg fills 0.</summary>
     public double PolyLegFailRate   { get; init; } = 0.0;
+    /// <summary>
+    /// 0–1 probability that a genuinely-canceled Kalshi IOC is misreported as "executed"
+    /// with a phantom 1-contract fill. The phantom fill is NOT written to venue positions,
+    /// so the next ReconcileTradeAsync call detects a mismatch and halts.
+    /// </summary>
+    public double CancelRaceRate    { get; init; } = 0.0;
 
     // ── RNG ───────────────────────────────────────────────────────────────────
     private readonly Random _rng;
@@ -49,6 +55,13 @@ public class SimulatedFillProfile
     }
 
     // ── Price helpers ──────────────────────────────────────────────────────────
+
+    /// <summary>Returns true if this canceled order should be misreported as a phantom fill.</summary>
+    public bool ShouldCancelRace()
+    {
+        if (CancelRaceRate <= 0.0) return false;
+        lock (_rngLock) return _rng.NextDouble() < CancelRaceRate;
+    }
 
     /// <summary>
     /// Returns the simulated Kalshi fill price in dollars:

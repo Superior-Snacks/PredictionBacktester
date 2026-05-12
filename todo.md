@@ -332,7 +332,7 @@ For each named scenario, run a dry-run session of at least 1 hour. Log results t
 
 ## STAGE 4 — Targeted scenarios for critical fixes
 
-### [ ] Reconciliation mismatch injection
+### [X] Reconciliation mismatch injection
 Add `SimulatedVenuePositionClient` that can return positions different from local state. Allows manually injecting a mismatch to verify halt-on-mismatch behavior (CRITICAL fix #1).
 
 **Test:** Run dry-run, inject mismatch on next reconciliation tick, verify bot halts and requires manual reset.
@@ -362,7 +362,7 @@ Construct a scenario where the opposite-side book disappears mid-recovery. Verif
 
 **Test:** Manually clear the opposite-side book entry in `_books` during an active recovery. Verify reverse is still attempted on the filled side.
 
-### [ ] Cancel-race simulation
+### [X] Cancel-race simulation
 Add a `SimulatedKalshiClient` mode where cancel requests sometimes return "filled" instead of "cancelled". Tests that local state stays consistent with venue state in race conditions.
 
 **Test:** Submit and immediately cancel 20 orders. Verify final position state matches what the simulated venue reports, with no orphan tracking errors.

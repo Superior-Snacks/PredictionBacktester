@@ -28,9 +28,16 @@ public class SimulatedKalshiClient : IKalshiOrderExecutor
             await Task.Delay(_profile.FillLatencyMsKalshi);
 
         int filled = _profile.SimulateKalshiFill(Math.Abs(count));
+
+        // Cancel-race: a missed IOC is misreported as "executed" with a phantom 1-contract
+        // fill. Venue position (_positions) is NOT updated — executor records a fill the venue
+        // doesn't have, guaranteeing a mismatch on the next ReconcileTradeAsync call.
+        bool phantomFill = filled == 0 && _profile.ShouldCancelRace();
+        if (phantomFill) filled = 1;
+
         string status = filled > 0 ? "executed" : "canceled";
 
-        if (filled > 0)
+        if (filled > 0 && !phantomFill)
         {
             bool isSell = string.Equals(action, "sell", StringComparison.OrdinalIgnoreCase);
             _positions.AddOrUpdate(ticker,

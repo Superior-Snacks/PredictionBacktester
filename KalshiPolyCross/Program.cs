@@ -26,6 +26,7 @@ using PredictionBacktester.Engine.LiveExecution;
 //  Runtime key toggles (all modes):
 //    N   toggle near-miss top-10 report   (on by default)
 //    S   toggle status dashboard          (on by default; live/dry-run only)
+//    M   inject +1 position mismatch      (dry-run only; fires on next ReconcileTradeAsync → halt)
 //
 //  --debug additional key toggles:
 //    D   toggle Discovery logs  — arb window detection events
@@ -225,7 +226,10 @@ var restVerifier = new CrossArbRestVerifier(orderClient, telemetry, polyProxy);
 telemetry.OnArbOpened += restVerifier.OnArbOpened;
 
 // ── Executor — live order placement on WS-detected arb windows ────────────────
-CrossArbExecutor? executor = null;
+CrossArbExecutor?            executor    = null;
+// Concrete dry-run refs kept outside the if-block so the M key handler can reach them.
+SimulatedVenuePositionClient? venueClient = null;
+SimulatedPolymarketClient?    simPoly     = null;
 
 if (isLive || isDryRun)
 {
@@ -264,11 +268,14 @@ if (isLive || isDryRun)
     {
         try   { fillProfile = FailureScenarios.FromName(scenarioName, fillSeed); }
         catch (ArgumentException ex) { Console.WriteLine($"[ERROR] {ex.Message}"); return; }
+        var simKalshi = new SimulatedKalshiClient(fillProfile);
+        venueClient   = new SimulatedVenuePositionClient(simKalshi);
+        simPoly       = new SimulatedPolymarketClient(fillProfile, state.Books);
     }
     PredictionBacktester.Engine.LiveExecution.IKalshiOrderExecutor    kalshiExec =
-        isDryRun ? new SimulatedKalshiClient(fillProfile!) : orderClient;
+        isDryRun ? venueClient! : orderClient;
     PredictionBacktester.Engine.LiveExecution.IPolymarketOrderExecutor polyExec   =
-        isDryRun ? new SimulatedPolymarketClient(fillProfile!, state.Books) : polyOrderClient;
+        isDryRun ? simPoly!     : polyOrderClient;
     // Dry-run mirrors the full simulated $1,000 balance; live caps concurrent risk tightly.
     decimal       maxExposureUsd     = isDryRun ? 1000m : 50m;
     executor = new CrossArbExecutor(
@@ -319,7 +326,8 @@ Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
 // N/S always active. Debug keys (D/T/B/F/R/H) only meaningful with --debug.
 // Silently no-ops if stdin is not a TTY (e.g. screen/tmux without PTY).
 Console.WriteLine("[KEYS] N=NearMiss  S=StatusDash" +
-    (isDebug ? "  │  D=Discovery  T=Trades  B=Balance  F=Feed  R=Books  H=DebugStatus" : ""));
+    (isDryRun ? "  M=InjectMismatch" : "") +
+    (isDebug  ? "  │  D=Discovery  T=Trades  B=Balance  F=Feed  R=Books  H=DebugStatus" : ""));
 _ = Task.Run(() =>
 {
     try
@@ -337,6 +345,18 @@ _ = Task.Run(() =>
                 case ConsoleKey.B when isDebug: DebugLog.BalanceEnabled   = !DebugLog.BalanceEnabled;   break;
                 case ConsoleKey.F when isDebug: DebugLog.FeedEnabled      = !DebugLog.FeedEnabled;      break;
                 case ConsoleKey.R when isDebug: DebugLog.BooksEnabled     = !DebugLog.BooksEnabled;     break;
+                case ConsoleKey.M when isDryRun:
+                {
+                    var firstP = pairs.FirstOrDefault();
+                    if (firstP != null && venueClient != null)
+                    {
+                        venueClient.InjectMismatch(firstP.KalshiTicker, +1);
+                        simPoly?.InjectTokenBalanceMismatch(firstP.PolyYesTokenId, +1m);
+                        Console.WriteLine($"[KEYS] Mismatch queued for {firstP.Label} — fires on next ReconcileTradeAsync");
+                    }
+                    else Console.WriteLine("[KEYS] No pairs loaded or venueClient inactive");
+                    break;
+                }
             }
             if (key is ConsoleKey.N or ConsoleKey.S)
                 Console.WriteLine($"[KEYS] {DebugLog.DisplayStatusLine()}");

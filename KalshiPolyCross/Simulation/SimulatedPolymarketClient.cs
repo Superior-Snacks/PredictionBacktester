@@ -23,8 +23,9 @@ public class SimulatedPolymarketClient : IPolymarketOrderExecutor
 {
     private readonly SimulatedFillProfile _profile;
     private readonly ConcurrentDictionary<string, LocalOrderBook> _books;
-    private readonly ConcurrentDictionary<string, decimal> _balances = new();
-    private readonly ConcurrentDictionary<string, string> _completedOrders = new();
+    private readonly ConcurrentDictionary<string, decimal> _balances        = new();
+    private readonly ConcurrentDictionary<string, decimal> _balanceMismatch = new();
+    private readonly ConcurrentDictionary<string, string>  _completedOrders = new();
 
     public SimulatedPolymarketClient(
         SimulatedFillProfile profile,
@@ -104,9 +105,24 @@ public class SimulatedPolymarketClient : IPolymarketOrderExecutor
         return Task.FromResult("{\"success\":false,\"status\":\"canceled\"}");
     }
 
+    /// <summary>
+    /// Schedules a fire-once balance offset for <paramref name="tokenId"/>.
+    /// On the next GetTokenBalanceAsync call, balance += offset (floored at 0).
+    /// Positive offset adds phantom shares; negative hides real ones.
+    /// </summary>
+    public void InjectTokenBalanceMismatch(string tokenId, decimal offset)
+    {
+        _balanceMismatch[tokenId] = offset;
+        Console.ForegroundColor = ConsoleColor.Magenta;
+        Console.WriteLine($"[MISMATCH INJECT] Poly {tokenId[..Math.Min(8, tokenId.Length)]}: offset {offset:+0.####;-0.####;0} queued for next reconcile");
+        Console.ResetColor();
+    }
+
     public Task<decimal> GetTokenBalanceAsync(string tokenId)
     {
         decimal bal = _balances.TryGetValue(tokenId, out var b) ? Math.Max(0m, b) : 0m;
+        if (_balanceMismatch.TryRemove(tokenId, out decimal off))
+            bal = Math.Max(0m, bal + off);
         return Task.FromResult(bal);
     }
 
