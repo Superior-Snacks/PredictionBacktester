@@ -66,6 +66,28 @@ public static class FailureScenarios
     };
 
     /// <summary>
+    /// Kalshi entry always fails, Poly hedge fills. Every trade leaves an unhedged Poly position,
+    /// driving RecoverUnhedgedAsync Case B (hedge on Kalshi). The Kalshi hedge uses
+    /// Math.Ceiling(ask × 100) + slippage for priceCents. Run with a Kalshi book ask at a
+    /// half-cent (e.g. $0.475) to verify ceiling gives 48¢, not 47¢.
+    /// </summary>
+    public static SimulatedFillProfile HalfCentBoundary(int? seed = null) => new(seed)
+    {
+        KalshiLegFailRate = 1.0,
+    };
+
+    /// <summary>
+    /// Pre-injects 6 consecutive Kalshi REST failures at startup. CheckMaintenanceThresholdAsync
+    /// fires at 5 consecutive errors, setting _connectionHalted=true and journaling VENUE_MAINTENANCE.
+    /// Verify: (1) halt fires after the 5th error, (2) successful calls auto-clear _connectionHalted.
+    /// Press E at runtime to inject additional error batches.
+    /// </summary>
+    public static SimulatedFillProfile MaintenanceThreshold(int? seed = null) => new(seed)
+    {
+        KalshiErrorsOnStartup = 6,
+    };
+
+    /// <summary>
     /// 40% Kalshi leg failures; 25% of those are misreported as phantom 1-contract fills.
     /// The phantom fills are NOT tracked in venue positions, guaranteeing a mismatch on the
     /// next ReconcileTradeAsync call → executor halts. Use with SimulatedVenuePositionClient
@@ -84,18 +106,20 @@ public static class FailureScenarios
     public static SimulatedFillProfile FromName(string name, int? seed = null) =>
         name.ToLowerInvariant() switch
         {
-            "happypath"        => HappyPath(seed),
-            "flakykalshi"      => FlakyKalshi(seed),
-            "flakypoly"        => FlakyPoly(seed),
-            "chronicslippage"  => ChronicSlippage(seed),
-            "partialfillswamp" => PartialFillSwamp(seed),
-            "bothvenuesflaky"  => BothVenuesFlaky(seed),
-            "latencystorm"     => LatencyStorm(seed),
-            "dustunhedged"     => DustUnhedged(seed),
-            "cancelrace"       => CancelRace(seed),
+            "happypath"           => HappyPath(seed),
+            "flakykalshi"         => FlakyKalshi(seed),
+            "flakypoly"           => FlakyPoly(seed),
+            "chronicslippage"     => ChronicSlippage(seed),
+            "partialfillswamp"    => PartialFillSwamp(seed),
+            "bothvenuesflaky"     => BothVenuesFlaky(seed),
+            "latencystorm"        => LatencyStorm(seed),
+            "dustunhedged"        => DustUnhedged(seed),
+            "halfcentboundary"    => HalfCentBoundary(seed),
+            "maintenancethreshold"=> MaintenanceThreshold(seed),
+            "cancelrace"          => CancelRace(seed),
             _ => throw new ArgumentException(
                 $"Unknown scenario '{name}'. Valid: HappyPath, FlakyKalshi, FlakyPoly, " +
                 $"ChronicSlippage, PartialFillSwamp, BothVenuesFlaky, LatencyStorm, " +
-                $"DustUnhedged, CancelRace")
+                $"DustUnhedged, HalfCentBoundary, MaintenanceThreshold, CancelRace")
         };
 }

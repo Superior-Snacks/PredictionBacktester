@@ -14,16 +14,36 @@ public class SimulatedKalshiClient : IKalshiOrderExecutor
     private readonly SimulatedFillProfile _profile;
     private readonly ConcurrentDictionary<string, int> _positions = new();
     private readonly ConcurrentDictionary<string, (string Status, decimal Fill)> _completedOrders = new();
+    private int _pendingErrors;
 
     public SimulatedKalshiClient(SimulatedFillProfile profile)
     {
-        _profile = profile;
+        _profile       = profile;
+        _pendingErrors = profile.KalshiErrorsOnStartup;
+    }
+
+    /// <summary>
+    /// Injects <paramref name="count"/> consecutive simulated REST failures.
+    /// The next <paramref name="count"/> PlaceOrderAsync calls will throw, incrementing
+    /// _kalshiConsecErrors in the executor until CheckMaintenanceThresholdAsync fires.
+    /// Threshold in CrossArbExecutor is 5 consecutive errors.
+    /// </summary>
+    public void InjectMaintenanceErrors(int count)
+    {
+        Interlocked.Add(ref _pendingErrors, count);
+        Console.ForegroundColor = ConsoleColor.Yellow;
+        Console.WriteLine($"[SIM] Injected {count} Kalshi REST error(s) — threshold is 5 consecutive; VENUE_MAINTENANCE fires at 5+");
+        Console.ResetColor();
     }
 
     public async Task<(string OrderId, string Status, decimal FillCount)> PlaceOrderAsync(
         string ticker, string side, int priceCents, int count,
         string action = "buy", string? clientOrderId = null)
     {
+        // Maintenance error injection: throws to exercise CheckMaintenanceThresholdAsync in executor.
+        if (_pendingErrors > 0 && Interlocked.Decrement(ref _pendingErrors) >= 0)
+            throw new Exception("simulated Kalshi REST failure (maintenance injection)");
+
         if (_profile.FillLatencyMsKalshi > 0)
             await Task.Delay(_profile.FillLatencyMsKalshi);
 

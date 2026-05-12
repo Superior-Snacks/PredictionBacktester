@@ -56,6 +56,13 @@ public class SimulatedFillProfile
 
     // ── Price helpers ──────────────────────────────────────────────────────────
 
+    /// <summary>
+    /// Number of PlaceOrderAsync calls that should throw instead of simulating a fill.
+    /// Applied in order: first N calls fail, then normal simulation resumes.
+    /// Use to pre-seed the MaintenanceThreshold scenario at startup.
+    /// </summary>
+    public int KalshiErrorsOnStartup { get; init; } = 0;
+
     /// <summary>Returns true if this canceled order should be misreported as a phantom fill.</summary>
     public bool ShouldCancelRace()
     {

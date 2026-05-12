@@ -27,6 +27,9 @@ using PredictionBacktester.Engine.LiveExecution;
 //    N   toggle near-miss top-10 report   (on by default)
 //    S   toggle status dashboard          (on by default; live/dry-run only)
 //    M   inject +1 position mismatch      (dry-run only; fires on next ReconcileTradeAsync → halt)
+//    C   simulate WS reconnect            (dry-run only; closes arb windows, resumes after 500ms)
+//    E   inject 6 Kalshi REST errors      (dry-run only; triggers VENUE_MAINTENANCE halt at 5+)
+//    X   drop first pair's Poly YES book  (dry-run only; simulates book-missing during recovery)
 //
 //  --debug additional key toggles:
 //    D   toggle Discovery logs  — arb window detection events
@@ -227,7 +230,8 @@ telemetry.OnArbOpened += restVerifier.OnArbOpened;
 
 // ── Executor — live order placement on WS-detected arb windows ────────────────
 CrossArbExecutor?            executor    = null;
-// Concrete dry-run refs kept outside the if-block so the M key handler can reach them.
+// Concrete dry-run refs kept outside the if-block so key handlers (M/C/E/X) can reach them.
+SimulatedKalshiClient?       simKalshi   = null;
 SimulatedVenuePositionClient? venueClient = null;
 SimulatedPolymarketClient?    simPoly     = null;
 
@@ -268,9 +272,9 @@ if (isLive || isDryRun)
     {
         try   { fillProfile = FailureScenarios.FromName(scenarioName, fillSeed); }
         catch (ArgumentException ex) { Console.WriteLine($"[ERROR] {ex.Message}"); return; }
-        var simKalshi = new SimulatedKalshiClient(fillProfile);
-        venueClient   = new SimulatedVenuePositionClient(simKalshi);
-        simPoly       = new SimulatedPolymarketClient(fillProfile, state.Books);
+        simKalshi   = new SimulatedKalshiClient(fillProfile);
+        venueClient = new SimulatedVenuePositionClient(simKalshi);
+        simPoly     = new SimulatedPolymarketClient(fillProfile, state.Books);
     }
     PredictionBacktester.Engine.LiveExecution.IKalshiOrderExecutor    kalshiExec =
         isDryRun ? venueClient! : orderClient;
@@ -326,7 +330,7 @@ Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
 // N/S always active. Debug keys (D/T/B/F/R/H) only meaningful with --debug.
 // Silently no-ops if stdin is not a TTY (e.g. screen/tmux without PTY).
 Console.WriteLine("[KEYS] N=NearMiss  S=StatusDash" +
-    (isDryRun ? "  M=InjectMismatch" : "") +
+    (isDryRun ? "  M=InjectMismatch  C=SimReconnect  E=InjectErrors  X=DropPolyBook" : "") +
     (isDebug  ? "  │  D=Discovery  T=Trades  B=Balance  F=Feed  R=Books  H=DebugStatus" : ""));
 _ = Task.Run(() =>
 {
@@ -355,6 +359,36 @@ _ = Task.Run(() =>
                         Console.WriteLine($"[KEYS] Mismatch queued for {firstP.Label} — fires on next ReconcileTradeAsync");
                     }
                     else Console.WriteLine("[KEYS] No pairs loaded or venueClient inactive");
+                    break;
+                }
+                case ConsoleKey.C when isDryRun:
+                {
+                    // Simulate a WS reconnect event: halt, close open telemetry windows, then resume.
+                    executor?.HaltForConnectionLoss();
+                    telemetry.OnKalshiReconnect();
+                    telemetry.OnPolyReconnect();
+                    Console.WriteLine("[KEYS] Simulated reconnect — telemetry windows closed, resuming in 500ms");
+                    _ = Task.Run(async () =>
+                    {
+                        await Task.Delay(500);
+                        executor?.ResumeFromConnectionLoss();
+                        Console.WriteLine("[KEYS] Connection halt cleared — trading resumed");
+                    });
+                    break;
+                }
+                case ConsoleKey.E when isDryRun:
+                {
+                    simKalshi?.InjectMaintenanceErrors(6);
+                    Console.WriteLine("[KEYS] Injected 6 Kalshi REST errors — VENUE_MAINTENANCE fires after 5 consecutive");
+                    break;
+                }
+                case ConsoleKey.X when isDryRun:
+                {
+                    var firstP = pairs.FirstOrDefault();
+                    if (firstP != null && state.Books.TryRemove($"P:{firstP.PolyYesTokenId}", out _))
+                        Console.WriteLine($"[KEYS] Removed Poly YES book for {firstP.Label} — recovery will see missing book");
+                    else
+                        Console.WriteLine("[KEYS] No pair loaded or Poly YES book not found in state.Books");
                     break;
                 }
             }

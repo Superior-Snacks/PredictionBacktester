@@ -337,27 +337,27 @@ Add `SimulatedVenuePositionClient` that can return positions different from loca
 
 **Test:** Run dry-run, inject mismatch on next reconciliation tick, verify bot halts and requires manual reset.
 
-### [ ] Dust-threshold scenario
+### [X] Dust-threshold scenario
 Construct a scenario that produces unhedged positions just under `CleanupDustUsd` ($0.25). Verify dust absorption fires first, before any reverse attempt is made (CRITICAL fix #2).
 
 **Test:** Run dry-run with profile that produces ~$0.20 unhedged positions consistently. Verify no reverse orders are attempted; dust is absorbed and journaled correctly.
 
-### [ ] Half-cent boundary scenario
+### [X] Half-cent boundary scenario
 Construct a scenario where the recovery hedge price would land exactly on a half-cent. Verify Math.Ceiling is used (CRITICAL fix #3) and the hedge order is at a fillable price.
 
 **Test:** Set up a market state where the opposite-side ask is at e.g. $0.475. Run dry-run, force recovery, verify the hedge limit price is 48¢ (Ceiling), not 47¢ (Round/Floor).
 
-### [ ] Connection-loss simulation
+### [X] Connection-loss simulation
 Add a command (keyboard shortcut or CLI signal) that forces `OnKalshiReconnect()` and `OnPolyReconnect()` events without an actual disconnect. Tests telemetry window closure and `_connectionHalted` flag.
 
 **Test:** Trigger simulated reconnect during an active arb. Verify telemetry windows close correctly, in-flight orders complete or are reconciled, and the bot resumes trading after the reconnect.
 
-### [ ] Maintenance threshold simulation
+### [X] Maintenance threshold simulation
 Force `_kalshiConsecErrors` to climb past `MaintenanceErrorThreshold` (5). Verify `_connectionHalted` fires and prevents new trades. Verify it auto-clears when errors stop.
 
 **Test:** Inject 5+ consecutive REST failures. Verify halt fires. Then inject successful REST calls. Verify halt clears.
 
-### [ ] Book-missing during recovery
+### [X] Book-missing during recovery
 Construct a scenario where the opposite-side book disappears mid-recovery. Verify the bot skips the hedge phase but attempts reverse (per fix #7), and only halts if reverse also fails.
 
 **Test:** Manually clear the opposite-side book entry in `_books` during an active recovery. Verify reverse is still attempted on the filled side.
