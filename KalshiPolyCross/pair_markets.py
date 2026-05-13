@@ -58,6 +58,7 @@ from sentence_transformers import SentenceTransformer
 # -- Constants -----------------------------------------------------------------
 KALSHI_BASE_URL   = "https://api.elections.kalshi.com/trade-api/v2"
 POLY_GAMMA_URL    = "https://gamma-api.polymarket.com"
+POLY_CLOB_URL     = "https://clob.polymarket.com"
 KALSHI_CATEGORY   = ""
 POLY_CATEGORY     = ""
 
@@ -877,48 +878,61 @@ def _getch() -> str:
 
 def _lookup_poly_token_info(yes_token: str, no_token: str = "") -> dict | None:
     """
-    Look up a Polymarket market by its CLOB token IDs via the Gamma API.
-    Passes both YES and NO tokens as repeated params so the API can match on either.
-    Handles both plain-list and dict-wrapped ({data: [...]}) response shapes.
+    Two-step lookup:
+    1. CLOB GET /book?token_id=YES_TOKEN  — documented, no auth, returns neg_risk + condition_id
+    2. Gamma GET /markets?conditionId=COND_ID — volume, liquidity, resolution_source, siblings
     """
-    tokens = [t for t in [yes_token, no_token] if t]
-    if not tokens:
+    token_id = yes_token or no_token
+    if not token_id:
         return None
+
+    result: dict = {}
+
+    # Step 1: CLOB book — always works, no auth required
     try:
-        params = [("clob_token_ids", t) for t in tokens]
-        r = requests.get(f"{POLY_GAMMA_URL}/markets", params=params, timeout=15)
+        r = requests.get(f"{POLY_CLOB_URL}/book", params={"token_id": token_id}, timeout=15)
         r.raise_for_status()
-        data = r.json()
-        markets = data if isinstance(data, list) else data.get("data", data.get("markets", []))
-        if not markets:
-            return {"error": "no market returned for token(s) — API filter may not be supported"}
-        mkt = markets[0]
-        clob_ids_raw = mkt.get("clobTokenIds", "[]")
-        clob_ids = json.loads(clob_ids_raw) if isinstance(clob_ids_raw, str) else clob_ids_raw
-        side = "YES" if (clob_ids and clob_ids[0] == yes_token) else "NO"
-        event = (mkt.get("events") or [{}])[0]
-        siblings = [
-            {"group_item": m.get("groupItemTitle", "") or "", "question": m.get("question", "") or ""}
-            for m in event.get("markets", [])
-        ]
-        return {
-            "side":              side,
-            "question":          mkt.get("question", "") or "",
-            "group_item_title":  mkt.get("groupItemTitle", "") or "",
-            "market_desc":       mkt.get("description", "") or "",
-            "condition_id":      mkt.get("conditionId", "") or "",
-            "outcomes":          mkt.get("outcomes", "") or "",
-            "end_date":          mkt.get("endDate", "") or "",
-            "volume":            mkt.get("volumeNum", 0) or 0,
-            "liquidity":         mkt.get("liquidityNum", 0) or 0,
-            "resolution_source": mkt.get("resolutionSource", "") or "",
-            "event_title":       event.get("title", "") or "",
-            "event_slug":        event.get("slug", "") or "",
-            "neg_risk":          bool(event.get("negRisk", False)),
-            "siblings":          siblings,
-        }
+        book = r.json()
+        result["neg_risk"]    = bool(book.get("neg_risk", False))
+        result["condition_id"] = book.get("market", "")
+        result["tick_size"]   = book.get("tick_size", "")
     except Exception as ex:
-        return {"error": f"{type(ex).__name__}: {ex}"}
+        return {"error": f"CLOB lookup failed: {type(ex).__name__}: {ex}"}
+
+    # Step 2: Gamma by conditionId — optional, best-effort
+    if result.get("condition_id"):
+        try:
+            r = requests.get(
+                f"{POLY_GAMMA_URL}/markets",
+                params={"conditionId": result["condition_id"]},
+                timeout=15,
+            )
+            r.raise_for_status()
+            data = r.json()
+            markets = data if isinstance(data, list) else data.get("data", data.get("markets", []))
+            if markets:
+                mkt = markets[0]
+                event = (mkt.get("events") or [{}])[0]
+                result.update({
+                    "question":          mkt.get("question", "") or "",
+                    "group_item_title":  mkt.get("groupItemTitle", "") or "",
+                    "market_desc":       mkt.get("description", "") or "",
+                    "volume":            mkt.get("volumeNum", 0) or 0,
+                    "liquidity":         mkt.get("liquidityNum", 0) or 0,
+                    "resolution_source": mkt.get("resolutionSource", "") or "",
+                    "event_title":       event.get("title", "") or "",
+                    "event_slug":        event.get("slug", "") or "",
+                    "neg_risk":          result["neg_risk"] or bool(event.get("negRisk", False)),
+                    "siblings": [
+                        {"group_item": m.get("groupItemTitle", "") or "",
+                         "question":   m.get("question", "") or ""}
+                        for m in event.get("markets", [])
+                    ],
+                })
+        except Exception:
+            pass  # metadata is supplemental; CLOB data is already in result
+
+    return result
 
 
 def _print_poly_token_info(c: dict) -> None:
@@ -946,21 +960,29 @@ def _print_poly_token_info(c: dict) -> None:
         print()
         return
     if "error" in info:
-        print(f"  API note:    {info['error']}")
+        print(f"  API error:   {info['error']}")
         print()
         return
-    print(f"  condition_id:     {info['condition_id']}")
-    print(f"  group_item_title: {info['group_item_title'] or '(none)'}")
-    print(f"  volume:           {info['volume']}")
-    print(f"  liquidity:        {info['liquidity']}")
-    print(f"  resolution_src:   {info['resolution_source'] or '(none)'}")
-    print(f"  neg_risk:         {info['neg_risk']}")
-    print(f"  ── event ──")
-    print(f"  event_title:      {info['event_title']}")
-    print(f"  event_slug:       {info['event_slug']}")
-    if info["siblings"]:
-        print(f"  siblings ({len(info['siblings'])}):")
-        for s in info["siblings"]:
+    # CLOB fields (always present on success)
+    print(f"  condition_id:     {info.get('condition_id', '?')}")
+    print(f"  neg_risk:         {info.get('neg_risk', '?')}")
+    print(f"  tick_size:        {info.get('tick_size', '?')}")
+    # Gamma fields (present if conditionId lookup succeeded)
+    if info.get("volume") is not None:
+        print(f"  volume:           {info['volume']}")
+        print(f"  liquidity:        {info['liquidity']}")
+    if info.get("resolution_source"):
+        print(f"  resolution_src:   {info['resolution_source']}")
+    if info.get("group_item_title"):
+        print(f"  group_item_title: {info['group_item_title']}")
+    if info.get("event_title"):
+        print(f"  ── event ──")
+        print(f"  event_title:      {info['event_title']}")
+        print(f"  event_slug:       {info.get('event_slug', '')}")
+    siblings = info.get("siblings", [])
+    if siblings:
+        print(f"  siblings ({len(siblings)}):")
+        for s in siblings:
             gi = s["group_item"] or "(no group_item)"
             q  = s["question"][:80]
             print(f"    - [{gi}] {q}")
