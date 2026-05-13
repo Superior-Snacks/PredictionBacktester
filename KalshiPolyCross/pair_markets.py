@@ -875,12 +875,107 @@ def _getch() -> str:
             termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
 
+def _lookup_poly_token_info(yes_token: str, no_token: str = "") -> dict | None:
+    """
+    Look up a Polymarket market by its CLOB token IDs via the Gamma API.
+    Passes both YES and NO tokens as repeated params so the API can match on either.
+    Handles both plain-list and dict-wrapped ({data: [...]}) response shapes.
+    """
+    tokens = [t for t in [yes_token, no_token] if t]
+    if not tokens:
+        return None
+    try:
+        params = [("clob_token_ids", t) for t in tokens]
+        r = requests.get(f"{POLY_GAMMA_URL}/markets", params=params, timeout=15)
+        r.raise_for_status()
+        data = r.json()
+        markets = data if isinstance(data, list) else data.get("data", data.get("markets", []))
+        if not markets:
+            return {"error": "no market returned for token(s) — API filter may not be supported"}
+        mkt = markets[0]
+        clob_ids_raw = mkt.get("clobTokenIds", "[]")
+        clob_ids = json.loads(clob_ids_raw) if isinstance(clob_ids_raw, str) else clob_ids_raw
+        side = "YES" if (clob_ids and clob_ids[0] == yes_token) else "NO"
+        event = (mkt.get("events") or [{}])[0]
+        siblings = [
+            {"group_item": m.get("groupItemTitle", "") or "", "question": m.get("question", "") or ""}
+            for m in event.get("markets", [])
+        ]
+        return {
+            "side":              side,
+            "question":          mkt.get("question", "") or "",
+            "group_item_title":  mkt.get("groupItemTitle", "") or "",
+            "market_desc":       mkt.get("description", "") or "",
+            "condition_id":      mkt.get("conditionId", "") or "",
+            "outcomes":          mkt.get("outcomes", "") or "",
+            "end_date":          mkt.get("endDate", "") or "",
+            "volume":            mkt.get("volumeNum", 0) or 0,
+            "liquidity":         mkt.get("liquidityNum", 0) or 0,
+            "resolution_source": mkt.get("resolutionSource", "") or "",
+            "event_title":       event.get("title", "") or "",
+            "event_slug":        event.get("slug", "") or "",
+            "neg_risk":          bool(event.get("negRisk", False)),
+            "siblings":          siblings,
+        }
+    except Exception as ex:
+        return {"error": f"{type(ex).__name__}: {ex}"}
+
+
+def _print_poly_token_info(c: dict) -> None:
+    """
+    Print Poly market info for a candidate during manual review.
+    Always shows candidate-level data; supplements with API call for volume/liquidity/etc.
+    """
+    yes_token = c.get("poly_yes", "")
+    no_token  = c.get("poly_no",  "")
+    outcomes  = c.get("poly_outcomes", [])
+
+    print(f"\n  --- POLY MARKET INFO ---")
+    print(f"  question:    {c.get('poly_question', '(unknown)')}")
+    if outcomes:
+        print(f"  YES label:   {outcomes[0] if len(outcomes) > 0 else 'Yes'}")
+        print(f"  NO label:    {outcomes[1] if len(outcomes) > 1 else 'No'}")
+    print(f"  YES token:   {yes_token}")
+    print(f"  NO token:    {no_token}")
+    if c.get("poly_close"):
+        print(f"  closes:      {c['poly_close'].strftime('%Y-%m-%d')}")
+
+    info = _lookup_poly_token_info(yes_token, no_token)
+    if not info:
+        print("  (no token ids available)")
+        print()
+        return
+    if "error" in info:
+        print(f"  API note:    {info['error']}")
+        print()
+        return
+    print(f"  condition_id:     {info['condition_id']}")
+    print(f"  group_item_title: {info['group_item_title'] or '(none)'}")
+    print(f"  volume:           {info['volume']}")
+    print(f"  liquidity:        {info['liquidity']}")
+    print(f"  resolution_src:   {info['resolution_source'] or '(none)'}")
+    print(f"  neg_risk:         {info['neg_risk']}")
+    print(f"  ── event ──")
+    print(f"  event_title:      {info['event_title']}")
+    print(f"  event_slug:       {info['event_slug']}")
+    if info["siblings"]:
+        print(f"  siblings ({len(info['siblings'])}):")
+        for s in info["siblings"]:
+            gi = s["group_item"] or "(no group_item)"
+            q  = s["question"][:80]
+            print(f"    - [{gi}] {q}")
+    if info.get("market_desc"):
+        desc = info["market_desc"][:300]
+        print(f"  market_desc:      {desc}{'...' if len(info['market_desc']) > 300 else ''}")
+    print()
+
+
 def run_manual_judge(candidates: list, output_path: Path, sync: bool = False) -> None:
     potential_path = output_path.parent / f"potential_{output_path.name}"
     rejected_path  = output_path.parent / "rejected_pairs.json"
     total = len(candidates)
     print(f"\n[MANUAL] {total} candidates to judge.")
-    print("  Keys: 1=VALID  2=CONDITIONAL  3=INVALID  4=INVERTED  s=skip  q=quit\n")
+    print("  Keys: 1=VALID  2=CONDITIONAL  3=INVALID  4=INVERTED  i=info  s=skip  q=quit\n")
 
     for i, c in enumerate(candidates):
         kc = c["kalshi_close"].strftime("%Y-%m-%d") if c["kalshi_close"] else "?"
@@ -912,11 +1007,15 @@ def run_manual_judge(candidates: list, output_path: Path, sync: bool = False) ->
             except (EOFError, KeyboardInterrupt):
                 print("\n[MANUAL] Interrupted.")
                 return
+            if key == "i":
+                print("i")
+                _print_poly_token_info(c)
+                continue
             if key in ("1", "2", "3", "4", "s", "q"):
                 print(key)   # echo the pressed key
                 break
             if key:          # ignore empty (special keys)
-                print(f"\n  Invalid key '{key}'. Use 1/2/3/s/q.")
+                print(f"\n  Invalid key '{key}'. Use 1/2/3/4/i/s/q.")
 
         if key == "q":
             print("[MANUAL] Quit.")
