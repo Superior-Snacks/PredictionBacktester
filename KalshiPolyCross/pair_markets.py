@@ -77,7 +77,7 @@ OLLAMA_URL        = "http://localhost:11434/api/chat"
 OLLAMA_MODEL      = "qwen3:8b"
 OLLAMA_BATCH_SIZE = 1   # one at a time — local model is slow and small context
 
-SCP_REMOTE        = "jonsi@34.186.121.105:~/PredictionBacktester/KalshiPolyCross/"
+SCP_REMOTE        = "jonsi@35.245.182.71:~/PredictionBacktester/KalshiPolyCross/"
 
 SCRIPT_DIR        = Path(__file__).parent
 CACHE_PATH        = SCRIPT_DIR / "embeddings_cache_bge.json"
@@ -662,7 +662,7 @@ def _scp_sync(local_path: Path) -> None:
         _scp_proc.wait()
     remote = SCP_REMOTE + local_path.name
     _scp_proc = subprocess.Popen(
-        ["scp", "-o", "ServerAliveInterval=60", str(local_path), remote],
+        ["scp", "-o", "ServerAliveInterval=60", "-o", "ConnectTimeout=10", str(local_path), remote],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
     print(f"  [SCP] -> {remote}", flush=True)
