@@ -110,6 +110,15 @@ def _kalshi_get(path: str, api_key_id: str, private_key, params=None) -> dict:
     return r.json()
 
 
+def _safe_replace(tmp: Path, target: Path) -> None:
+    """Atomic replace with a fallback copy for Windows file-lock edge cases."""
+    try:
+        tmp.replace(target)
+    except PermissionError:
+        target.write_bytes(tmp.read_bytes())
+        tmp.unlink(missing_ok=True)
+
+
 # -- Embedding cache ------------------------------------------------------------
 def load_cache() -> dict:
     if not CACHE_PATH.exists():
@@ -125,7 +134,7 @@ def save_cache(cache: dict) -> None:
     try:
         tmp = CACHE_PATH.with_suffix(".tmp")
         tmp.write_text(json.dumps(cache, separators=(",", ":")), encoding="utf-8")
-        tmp.replace(CACHE_PATH)
+        _safe_replace(tmp, CACHE_PATH)
         print(f"[CACHE] Saved - {len(cache)} entries.")
     except Exception as e:
         print(f"[CACHE] Warning: could not save ({e}).")
@@ -754,7 +763,7 @@ def _save_pairs(matched: list, output_path: Path) -> None:
 
     tmp = output_path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(existing, indent=2), encoding="utf-8")
-    tmp.replace(output_path)
+    _safe_replace(tmp, output_path)
     print(f"[SAVE] {added} new pair(s) saved to {output_path}.")
 
 
@@ -792,7 +801,7 @@ def _save_rejected(rejected: list, output_path: Path) -> None:
 
     tmp = output_path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(existing, indent=2), encoding="utf-8")
-    tmp.replace(output_path)
+    _safe_replace(tmp, output_path)
 
 
 def _save_potential_pairs(conditional: list, output_path: Path) -> None:
@@ -833,7 +842,7 @@ def _save_potential_pairs(conditional: list, output_path: Path) -> None:
 
     tmp = output_path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(existing, indent=2), encoding="utf-8")
-    tmp.replace(output_path)
+    _safe_replace(tmp, output_path)
     print(f"[SAVE] {added} conditional pair(s) saved to {output_path}.")
 
 
