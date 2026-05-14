@@ -494,7 +494,7 @@ public class CrossArbExecutor
 
         // Fire both legs simultaneously
         var kalshiTask = PlaceKalshiLegAsync(pair.KalshiTicker, kalshiSide, kPriceCents, contracts, execId);
-        var polyTask   = PlacePolyLegAsync(polyToken, pLegAsk, polyShares);
+        var polyTask   = PlacePolyLegAsync(polyToken, pLegAsk, polyShares, pair.IsNegRisk);
         await Task.WhenAll(kalshiTask, polyTask);
 
         var (kOrderId, kStatus, kFilled) = kalshiTask.Result;
@@ -868,7 +868,7 @@ public class CrossArbExecutor
     }
 
     private async Task<(decimal FilledShares, decimal AvgPrice)> PlacePolyLegAsync(
-        string tokenId, decimal price, decimal shares)
+        string tokenId, decimal price, decimal shares, bool negRisk = false)
     {
         string tokenShort = tokenId[..Math.Min(12, tokenId.Length)];
         DebugLog.Trades($"PlacePolyLegAsync: token={tokenShort}... price={price:0.0000} shares={shares}");
@@ -886,7 +886,7 @@ public class CrossArbExecutor
                     DebugLog.Trades($"PlacePolyLegAsync: attempt {attempt + 1} feeRateBps={feeRate}");
                     result = await _poly.SubmitOrderAsync(
                         tokenId, limitPrice, shares, side: 0 /*BUY*/,
-                        negRisk: false, feeRateBps: feeRate);
+                        negRisk: negRisk, feeRateBps: feeRate);
                     break;
                 }
                 catch (Exception ex) when (
@@ -985,7 +985,7 @@ public class CrossArbExecutor
             try
             {
                 string result2 = await _poly.SubmitOrderAsync(
-                    tokenId, Math.Min(0.99m, price), shares, side: 0, negRisk: false, feeRateBps: 0);
+                    tokenId, Math.Min(0.99m, price), shares, side: 0, negRisk: negRisk, feeRateBps: 0);
                 if (!string.IsNullOrEmpty(result2))
                 {
                     Interlocked.Exchange(ref _polyConsecErrors, 0);
@@ -1023,7 +1023,7 @@ public class CrossArbExecutor
     // ── Poly FAK sell (reversal) ──────────────────────────────────────────────
 
     private async Task<(decimal SoldShares, decimal AvgPrice)> PlacePolySellAsync(
-        string tokenId, decimal shares)
+        string tokenId, decimal shares, bool negRisk = false)
     {
         string tokenShort = tokenId[..Math.Min(12, tokenId.Length)];
         DebugLog.Trades($"PlacePolySellAsync: token={tokenShort}... shares={shares}");
@@ -1031,7 +1031,7 @@ public class CrossArbExecutor
         {
             // FAK sell: 0.01 floor so it matches any buyer; actual fill is at best bid
             string result = await _poly.SubmitOrderAsync(
-                tokenId, 0.01m, shares, side: 1 /*SELL*/, negRisk: false, feeRateBps: 0);
+                tokenId, 0.01m, shares, side: 1 /*SELL*/, negRisk: negRisk, feeRateBps: 0);
 
             if (string.IsNullOrEmpty(result)) return (0m, 0m);
 
@@ -1109,7 +1109,7 @@ public class CrossArbExecutor
                     Console.ResetColor();
 
                     decimal polyHedgeLimit = Math.Min(1.0m, currentPolyAsk + RecoveryHedgeSlippageCents / 100m);
-                    var (polyFill2, _) = await PlacePolyLegAsync(polyToken, polyHedgeLimit, kUnhedged);
+                    var (polyFill2, _) = await PlacePolyLegAsync(polyToken, polyHedgeLimit, kUnhedged, pair.IsNegRisk);
                     if (polyFill2 > 0)
                     {
                         decimal additional = Math.Min(kUnhedged, polyFill2);
@@ -1274,7 +1274,7 @@ public class CrossArbExecutor
             }
 
             // Reverse: sell excess Poly shares back
-            var (soldShares, soldPrice) = await PlacePolySellAsync(polyToken, pUnhedged);
+            var (soldShares, soldPrice) = await PlacePolySellAsync(polyToken, pUnhedged, pair.IsNegRisk);
             if (soldShares > 0)
             {
                 decimal reversalLoss = soldShares * (pActualPrice - soldPrice);
@@ -1648,7 +1648,7 @@ public class CrossArbExecutor
                     return ("", "error", 0m);
                 }
             });
-            var pSellTask = PlacePolySellAsync(polyToken, currentPos.PolyShares);
+            var pSellTask = PlacePolySellAsync(polyToken, currentPos.PolyShares, pair.IsNegRisk);
             await Task.WhenAll(kSellTask, pSellTask);
 
             var (_, kStatus, kSold) = kSellTask.Result;

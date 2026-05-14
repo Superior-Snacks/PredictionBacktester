@@ -185,10 +185,11 @@ if (File.Exists(manualPath))
             DateOnly? settlementDate = null;
             if (el.TryGetProperty("settlement_date", out var sd) && DateOnly.TryParse(sd.GetString(), out var d))
                 settlementDate = d;
+            bool isNegRisk = el.TryGetProperty("is_neg_risk", out var nr) && nr.ValueKind == JsonValueKind.True;
             if (!string.IsNullOrEmpty(kTicker) && !string.IsNullOrEmpty(yesToken) && !string.IsNullOrEmpty(noToken))
             {
                 string pairId = $"MANUAL_{kTicker}__{yesToken[..Math.Min(8, yesToken.Length)]}";
-                manualPairs.Add(new CrossPair(pairId, label, kTicker, yesToken, noToken, eventId, settlementDate));
+                manualPairs.Add(new CrossPair(pairId, label, kTicker, yesToken, noToken, eventId, settlementDate, isNegRisk));
             }
         }
         Console.WriteLine($"[CONFIG] {manualPairs.Count} manual pair(s) loaded from cross_pairs.json");
@@ -613,11 +614,12 @@ _ = Task.Run(async () =>
                     settlementDate = d2;
                 if (string.IsNullOrEmpty(kTicker) || string.IsNullOrEmpty(yesToken) || string.IsNullOrEmpty(noToken)) continue;
 
+                bool isNegRiskHot = el.TryGetProperty("is_neg_risk", out var nrHot) && nrHot.ValueKind == JsonValueKind.True;
                 string pairId = $"MANUAL_{kTicker}__{yesToken[..Math.Min(8, yesToken.Length)]}";
                 if (knownPairIds.Contains(pairId)) continue;
                 knownPairIds.Add(pairId);
 
-                newPairs.Add(new CrossPair(pairId, label, kTicker, yesToken, noToken, eventId, settlementDate));
+                newPairs.Add(new CrossPair(pairId, label, kTicker, yesToken, noToken, eventId, settlementDate, isNegRiskHot));
                 if (knownKalshiTickers.Add(kTicker)) newKTickers.Add(kTicker);
                 if (knownPolyTokens.Add(yesToken))   newPTokens.Add(yesToken);
                 if (knownPolyTokens.Add(noToken))    newPTokens.Add(noToken);

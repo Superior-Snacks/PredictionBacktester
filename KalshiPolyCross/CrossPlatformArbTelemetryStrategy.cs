@@ -14,7 +14,8 @@ public record CrossPair(
     string PolyYesTokenId,  // book key:  "P:{yesToken}"
     string PolyNoTokenId,   // book key:  "P:{noToken}"
     string EventId = "",    // retained for JSON compat; not used internally
-    DateOnly? SettlementDate = null
+    DateOnly? SettlementDate = null,
+    bool IsNegRisk = false  // passed to CLOB negRisk flag on Poly order submission
 );
 
 record ActiveWindow(
