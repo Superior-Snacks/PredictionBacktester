@@ -302,6 +302,84 @@ def fetch_poly_markets(no_live: bool = False) -> list:
     return results
 
 
+# -- Data check (--check-data) -------------------------------------------------
+def _run_check_data(kalshi_markets: dict, poly_markets: list) -> None:
+    """Print embed-text samples and neg-risk stats without loading the embedding model."""
+    sep = "-" * 60
+
+    # ── Polymarket stats ──────────────────────────────────────────────────────
+    neg_risk_all  = [p for p in poly_markets if p.get("is_neg_risk")]
+    neg_with_git  = [p for p in neg_risk_all  if p.get("group_item_title")]
+    normal_poly   = [p for p in poly_markets  if not p.get("is_neg_risk")]
+
+    print(f"\n{'='*60}")
+    print(f"POLYMARKET DATA CHECK")
+    print(f"{'='*60}")
+    print(f"  Total markets   : {len(poly_markets)}")
+    print(f"  neg-risk        : {len(neg_risk_all)}  ({len(neg_with_git)} with group_item_title)")
+    print(f"  normal          : {len(normal_poly)}")
+
+    print(f"\n{sep}")
+    print("SAMPLE: 5 neg-risk embed texts  (should be distinct siblings)")
+    print(sep)
+    for p in neg_with_git[:5]:
+        text = _poly_embed_text(p)
+        print(f"  siblings: {p.get('sibling_count',1)}  |  slug: {p.get('event_slug','')[:40]}")
+        for line in text.splitlines():
+            print(f"    {line}")
+        print()
+
+    # check distinctness: group siblings of first neg-risk event
+    if neg_with_git:
+        first_slug = neg_with_git[0].get("event_slug", "")
+        siblings = [p for p in neg_with_git if p.get("event_slug") == first_slug]
+        if len(siblings) > 1:
+            print(f"{sep}")
+            print(f"SIBLING DISTINCTNESS CHECK: event '{first_slug}' — {len(siblings)} siblings")
+            print(sep)
+            for s in siblings:
+                print(f"  git: {s.get('group_item_title',''):<30}  embed_excerpt: {_poly_embed_text(s).splitlines()[1] if len(_poly_embed_text(s).splitlines()) > 1 else _poly_embed_text(s)[:60]}")
+
+    print(f"\n{sep}")
+    print("SAMPLE: 3 normal poly embed texts")
+    print(sep)
+    for p in normal_poly[:3]:
+        print(f"  {_poly_embed_text(p)[:100]}")
+
+    # ── Kalshi stats ──────────────────────────────────────────────────────────
+    k_with_sub  = {t: i for t, i in kalshi_markets.items() if i.get("yes_sub_title")}
+    k_plain     = {t: i for t, i in kalshi_markets.items() if not i.get("yes_sub_title")}
+
+    print(f"\n{'='*60}")
+    print(f"KALSHI DATA CHECK")
+    print(f"{'='*60}")
+    print(f"  Total markets      : {len(kalshi_markets)}")
+    print(f"  with yes_sub_title : {len(k_with_sub)}")
+    print(f"  plain title only   : {len(k_plain)}")
+
+    print(f"\n{sep}")
+    print("SAMPLE: 5 Kalshi embed texts with yes_sub_title  (Event+Outcome format)")
+    print(sep)
+    for ticker, info in list(k_with_sub.items())[:5]:
+        text = _kalshi_embed_text(info)
+        print(f"  {ticker}")
+        for line in text.splitlines():
+            print(f"    {line}")
+        print()
+
+    print(f"{sep}")
+    print("SAMPLE: 3 plain Kalshi embed texts")
+    print(sep)
+    for ticker, info in list(k_plain.items())[:3]:
+        print(f"  {ticker:<30}  {_kalshi_embed_text(info)[:80]}")
+
+    print(f"\n{'='*60}")
+    print("DATA CHECK DONE — no embedding model loaded.")
+    print("If neg-risk siblings look distinct and Kalshi sub-title markets show Event+Outcome,")
+    print("the data pipeline is correct. Run without --check-data to embed and pair.")
+    print('='*60)
+
+
 # -- Embed-text helpers --------------------------------------------------------
 def _poly_embed_text(p: dict) -> str:
     """For neg-risk markets, lead with event+outcome to differentiate siblings."""
@@ -1168,6 +1246,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="Pair Kalshi <-> Polymarket markets.")
     ap.add_argument("--output",   default=str(DEFAULT_OUTPUT))
     ap.add_argument("--no-cache",    action="store_true", help="Ignore embedding cache")
+    ap.add_argument("--check-data",  action="store_true", help="Fetch markets, print embed texts and neg-risk stats, exit before embedding")
     ap.add_argument("--dry-run",     action="store_true", help="Print candidates, skip judge")
     ap.add_argument("--show-prompt", type=int, default=0, metavar="N",
                     help="Print the judge prompt for the first N batches and exit")
@@ -1226,6 +1305,10 @@ def main() -> None:
 
     kalshi_markets = fetch_kalshi_markets(api_key_id, private_key)
     poly_markets   = fetch_poly_markets(no_live=args.no_live)
+
+    if args.check_data:
+        _run_check_data(kalshi_markets, poly_markets)
+        return
 
     candidates = find_candidates(kalshi_markets, poly_markets, already_paired, not args.no_cache)
 
