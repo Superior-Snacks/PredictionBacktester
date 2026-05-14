@@ -80,9 +80,10 @@ OLLAMA_BATCH_SIZE = 1   # one at a time — local model is slow and small contex
 
 SCP_REMOTE        = "jonsi@35.245.182.71:~/PredictionBacktester/KalshiPolyCross/"
 
-SCRIPT_DIR        = Path(__file__).parent
-CACHE_PATH        = SCRIPT_DIR / "embeddings_cache_bge.json"
-DEFAULT_OUTPUT    = SCRIPT_DIR / "cross_pairs.json"
+SCRIPT_DIR          = Path(__file__).parent
+CACHE_PATH          = SCRIPT_DIR / "embeddings_cache_bge.json"
+DEFAULT_OUTPUT      = SCRIPT_DIR / "cross_pairs.json"
+EMBED_CACHE_VERSION = 2
 
 # -- Kalshi auth ---------------------------------------------------------------
 def _kalshi_headers(method: str, path: str, api_key_id: str, private_key) -> dict:
@@ -125,18 +126,26 @@ def load_cache() -> dict:
     if not CACHE_PATH.exists():
         return {}
     try:
-        return json.loads(CACHE_PATH.read_text(encoding="utf-8"))
+        data = json.loads(CACHE_PATH.read_text(encoding="utf-8"))
     except Exception as e:
         print(f"[CACHE] Warning: could not load ({e}). Starting fresh.")
         return {}
+    if data.get("__version__") != EMBED_CACHE_VERSION:
+        print(
+            f"[CACHE] Old format detected (version {data.get('__version__', 'none')} "
+            f"!= {EMBED_CACHE_VERSION}). Clearing cache — embeddings will be re-encoded."
+        )
+        return {}
+    return data
 
 
 def save_cache(cache: dict) -> None:
     try:
+        cache["__version__"] = EMBED_CACHE_VERSION
         tmp = CACHE_PATH.with_suffix(".tmp")
         tmp.write_text(json.dumps(cache, separators=(",", ":")), encoding="utf-8")
         _safe_replace(tmp, CACHE_PATH)
-        print(f"[CACHE] Saved - {len(cache)} entries.")
+        print(f"[CACHE] Saved - {len(cache) - 1} entries.")
     except Exception as e:
         print(f"[CACHE] Warning: could not save ({e}).")
 
@@ -229,9 +238,18 @@ def fetch_poly_markets(no_live: bool = False) -> list:
                     include = True
             if not include:
                 continue
-            ev_live = bool(ev.get("live", False))
+            ev_live         = bool(ev.get("live", False))
             ev_end_date_raw = ev.get("end_date")  # event-level fallback
-            description = ev.get("description", "") or ""
+            description     = ev.get("description", "") or ""
+            ev_title        = ev.get("title", "") or ""
+            ev_slug         = ev.get("slug",  "") or ""
+            is_neg_risk     = bool(ev.get("negRisk", False))
+            ev_markets_raw  = ev.get("markets", [])
+            sibling_count   = len(ev_markets_raw)
+            sibling_labels  = [
+                (m.get("groupItemTitle") or m.get("question", ""))
+                for m in ev_markets_raw
+            ]
             for mkt in ev.get("markets", []):
                 question = mkt.get("question", "")
                 raw = mkt.get("clobTokenIds", [])
@@ -261,12 +279,18 @@ def fetch_poly_markets(no_live: bool = False) -> list:
                 else:
                     outcomes = raw_outcomes if isinstance(raw_outcomes, list) else []
                 results.append({
-                    "question":    question,
-                    "yes_token":   tokens[0],
-                    "no_token":    tokens[1],
-                    "end_date":    end_date,
-                    "description": description,
-                    "outcomes":    outcomes,
+                    "question":         question,
+                    "yes_token":        tokens[0],
+                    "no_token":         tokens[1],
+                    "end_date":         end_date,
+                    "description":      description,
+                    "outcomes":         outcomes,
+                    "event_title":      ev_title,
+                    "event_slug":       ev_slug,
+                    "is_neg_risk":      is_neg_risk,
+                    "group_item_title": mkt.get("groupItemTitle", "") or "",
+                    "sibling_count":    sibling_count,
+                    "sibling_labels":   sibling_labels,
                 })
         if len(arr) < page_size:
             break
@@ -278,6 +302,27 @@ def fetch_poly_markets(no_live: bool = False) -> list:
     return results
 
 
+# -- Embed-text helpers --------------------------------------------------------
+def _poly_embed_text(p: dict) -> str:
+    """For neg-risk markets, lead with event+outcome to differentiate siblings."""
+    if p.get("is_neg_risk") and p.get("group_item_title"):
+        return (
+            f"Event: {p['event_title']}\n"
+            f"Outcome: {p['group_item_title']}\n"
+            f"Question: {p['question']}"
+        )
+    return p.get("question") or p.get("event_title", "")
+
+
+def _kalshi_embed_text(info: dict) -> str:
+    """For Kalshi sub-outcome markets, lead with event+outcome."""
+    title   = info.get("title", "")
+    yes_sub = info.get("yes_sub_title", "")
+    if yes_sub:
+        return f"Event: {title}\nOutcome: {yes_sub}"
+    return title
+
+
 # -- Phase 2: Embeddings --------------------------------------------------------
 def find_candidates(
     kalshi_markets: dict,
@@ -287,12 +332,14 @@ def find_candidates(
 ) -> list:
     cache = load_cache() if use_cache else {}
 
-    filtered_poly   = poly_markets
-    k_titles_unique = list({m["title"] for m in kalshi_markets.values()})
-    print(f"[EMBED] {len(k_titles_unique)} unique Kalshi titles, {len(filtered_poly)} Poly markets.")
+    filtered_poly = poly_markets
 
-    poly_questions = [p["question"] for p in filtered_poly]
-    to_encode = [t for t in dict.fromkeys(k_titles_unique + poly_questions) if t not in cache]
+    kalshi_embed_texts = {ticker: _kalshi_embed_text(info) for ticker, info in kalshi_markets.items()}
+    k_texts_unique     = list(dict.fromkeys(kalshi_embed_texts.values()))
+    poly_embed_texts   = [_poly_embed_text(p) for p in filtered_poly]
+    print(f"[EMBED] {len(k_texts_unique)} unique Kalshi embed texts, {len(filtered_poly)} Poly markets.")
+
+    to_encode = [t for t in dict.fromkeys(k_texts_unique + poly_embed_texts) if t not in cache]
 
     if to_encode:
         print(f"[EMBED] Loading model BAAI/bge-large-en-v1.5 ...")
@@ -307,9 +354,9 @@ def find_candidates(
 
     # Build poly matrix (L2-normalized - dot product = cosine similarity)
     poly_vecs, poly_valid = [], []
-    for p in filtered_poly:
-        if p["question"] in cache:
-            poly_vecs.append(cache[p["question"]])
+    for p, embed_text in zip(filtered_poly, poly_embed_texts):
+        if embed_text in cache:
+            poly_vecs.append(cache[embed_text])
             poly_valid.append(p)
     if not poly_vecs:
         print("[EMBED] No Polymarket embeddings - no candidates.")
@@ -321,7 +368,8 @@ def find_candidates(
     for ticker, info in kalshi_markets.items():
         if ticker in already_paired:
             continue
-        vec = cache.get(info["title"])
+        embed_text = kalshi_embed_texts[ticker]
+        vec = cache.get(embed_text)
         if vec is not None:
             k_tickers.append((ticker, info))
             k_vecs.append(vec)
@@ -362,12 +410,17 @@ def find_candidates(
                     "kalshi_yes_sub":   info.get("yes_sub_title", ""),
                     "kalshi_no_sub":    info.get("no_sub_title",  ""),
                     "poly_question":    p["question"],
-                    "poly_yes":         p["yes_token"],
-                    "poly_no":          p["no_token"],
-                    "poly_close":       p["end_date"],
-                    "poly_desc":        p["description"],
-                    "poly_outcomes":    p.get("outcomes", []),
-                    "score":            float(col[idx]),
+                    "poly_yes":           p["yes_token"],
+                    "poly_no":            p["no_token"],
+                    "poly_close":         p["end_date"],
+                    "poly_desc":          p["description"],
+                    "poly_outcomes":      p.get("outcomes", []),
+                    "is_neg_risk":        p.get("is_neg_risk", False),
+                    "group_item_title":   p.get("group_item_title", ""),
+                    "sibling_count":      p.get("sibling_count", 1),
+                    "sibling_labels":     p.get("sibling_labels", []),
+                    "poly_event_slug":    p.get("event_slug", ""),
+                    "score":              float(col[idx]),
                 })
 
         print(f"[EMBED] {chunk_end}/{total_k} tickers scored, {len(candidates)} raw hits so far...", flush=True)
@@ -452,6 +505,22 @@ def _build_user_prompt(batch: list) -> str:
     for i, c in enumerate(batch):
         kc = c["kalshi_close"].isoformat() if c["kalshi_close"] else "Unknown"
         pc = c["poly_close"].isoformat()   if c["poly_close"]   else "Unknown"
+        neg_risk_block = ""
+        if c.get("is_neg_risk"):
+            sibling_count = c.get("sibling_count", 1)
+            group_item    = c.get("group_item_title", "")
+            sib_labels    = c.get("sibling_labels", [])
+            other_siblings = [s for s in sib_labels if s != group_item][:5]
+            others_str = "; ".join(other_siblings) if other_siblings else "(none)"
+            neg_risk_block = (
+                f'\n<neg_risk_context>\n'
+                f'This Polymarket market is 1 of {sibling_count} markets in a neg-risk event '
+                f'(mutually exclusive outcomes).\n'
+                f'The specific Poly outcome: "{group_item}"\n'
+                f'Other outcomes in this event: {others_str}\n'
+                f'For VALID/INVERTED the Kalshi market must resolve on this EXACT same named outcome.\n'
+                f'</neg_risk_context>'
+            )
         parts.append(
             f'<pair index="{i}">\n'
             f'<kalshi>\n'
@@ -463,7 +532,8 @@ def _build_user_prompt(batch: list) -> str:
             f'Title: {c["poly_question"]}\n'
             f'Close: {pc}\n'
             f'Desc:  {(c["poly_desc"] or "")[:300]}\n'
-            f'</polymarket>\n'
+            f'</polymarket>'
+            f'{neg_risk_block}\n'
             f'</pair>'
         )
     return "\n\n".join(parts)
@@ -749,12 +819,15 @@ def _save_pairs(matched: list, output_path: Path) -> None:
             continue
         existing_keys.add(key)
         existing.append({
-            "kalshi_ticker":   m["kalshi_ticker"],
-            "poly_yes_token":  m["poly_yes"],
-            "poly_no_token":   m["poly_no"],
-            "label":           m["kalshi_title"],
-            "event_id":        _event_root(m["kalshi_ticker"]),
-            "settlement_date": m["kalshi_close"].strftime("%Y-%m-%d") if m.get("kalshi_close") else "",
+            "kalshi_ticker":    m["kalshi_ticker"],
+            "poly_yes_token":   m["poly_yes"],
+            "poly_no_token":    m["poly_no"],
+            "label":            m["kalshi_title"],
+            "event_id":         _event_root(m["kalshi_ticker"]),
+            "settlement_date":  m["kalshi_close"].strftime("%Y-%m-%d") if m.get("kalshi_close") else "",
+            "is_neg_risk":      m.get("is_neg_risk", False),
+            "group_item_title": m.get("group_item_title", ""),
+            "poly_event_slug":  m.get("poly_event_slug", ""),
         })
         added += 1
 
@@ -835,6 +908,9 @@ def _save_potential_pairs(conditional: list, output_path: Path) -> None:
             "safe_hours_before_event": verdict["safe_hours_before_event"],
             "earliest_cutoff_date":    verdict["earliest_cutoff_date"],
             "explanation":             verdict["explanation"],
+            "is_neg_risk":             m.get("is_neg_risk", False),
+            "group_item_title":        m.get("group_item_title", ""),
+            "poly_event_slug":         m.get("poly_event_slug", ""),
         })
         added += 1
 
@@ -1021,6 +1097,15 @@ def run_manual_judge(candidates: list, output_path: Path, sync: bool = False) ->
         print(f"          closes: {pc}")
         if c["poly_desc"]:
             print(f"          desc:   {c['poly_desc']}")
+        if c.get("is_neg_risk"):
+            sibling_count = c.get("sibling_count", 1)
+            git  = c.get("group_item_title", "")
+            sibs = c.get("sibling_labels", [])
+            print(f"          [NEG-RISK event — {sibling_count} siblings]")
+            print(f"          group_item_title: {git}")
+            first_five = sibs[:5]
+            if first_five:
+                print(f"          siblings (first {len(first_five)}): " + " | ".join(first_five))
 
         while True:
             try:
