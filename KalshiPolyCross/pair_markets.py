@@ -83,7 +83,7 @@ SCP_REMOTE        = "jonsi@35.245.182.71:~/PredictionBacktester/KalshiPolyCross/
 SCRIPT_DIR          = Path(__file__).parent
 CACHE_PATH          = SCRIPT_DIR / "embeddings_cache_bge.json"
 DEFAULT_OUTPUT      = SCRIPT_DIR / "cross_pairs.json"
-EMBED_CACHE_VERSION = 3
+EMBED_CACHE_VERSION = 4
 
 # -- Kalshi auth ---------------------------------------------------------------
 def _kalshi_headers(method: str, path: str, api_key_id: str, private_key) -> dict:
@@ -382,13 +382,6 @@ def _run_check_data(kalshi_markets: dict, poly_markets: list) -> None:
 
 # -- Embed-text helpers --------------------------------------------------------
 def _poly_embed_text(p: dict) -> str:
-    """For neg-risk markets, lead with event+outcome to differentiate siblings."""
-    if p.get("is_neg_risk") and p.get("group_item_title"):
-        return (
-            f"Event: {p['event_title']}\n"
-            f"Outcome: {p['group_item_title']}\n"
-            f"Question: {p['question']}"
-        )
     return p.get("question") or p.get("event_title", "")
 
 
