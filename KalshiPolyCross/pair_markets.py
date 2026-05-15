@@ -393,10 +393,17 @@ def _poly_embed_text(p: dict) -> str:
 
 
 def _kalshi_embed_text(info: dict) -> str:
-    """For Kalshi sub-outcome markets, lead with event+outcome."""
+    """For Kalshi multi-outcome markets, lead with event+outcome to distinguish siblings.
+    For binary markets (sub_title is 'Yes'/'No' or already contained in the title),
+    use plain title so it stays in the same embedding space as Poly binary questions."""
     title   = info.get("title", "")
     yes_sub = info.get("yes_sub_title", "")
-    if yes_sub:
+    # Only use structured format when sub_title adds distinct named-outcome info.
+    # Skip when: trivial binary indicator, OR sub_title already appears in the title
+    # (meaning the title is already specific enough, e.g. "Will the Lakers win?" + "Lakers").
+    if (yes_sub
+            and yes_sub.lower() not in {"yes", "no"}
+            and yes_sub.lower() not in title.lower()):
         return f"Event: {title}\nOutcome: {yes_sub}"
     return title
 
