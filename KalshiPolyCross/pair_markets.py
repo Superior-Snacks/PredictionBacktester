@@ -83,7 +83,7 @@ SCP_REMOTE        = "jonsi@35.245.182.71:~/PredictionBacktester/KalshiPolyCross/
 SCRIPT_DIR          = Path(__file__).parent
 CACHE_PATH          = SCRIPT_DIR / "embeddings_cache_bge.json"
 DEFAULT_OUTPUT      = SCRIPT_DIR / "cross_pairs.json"
-EMBED_CACHE_VERSION = 2
+EMBED_CACHE_VERSION = 3
 
 # -- Kalshi auth ---------------------------------------------------------------
 def _kalshi_headers(method: str, path: str, api_key_id: str, private_key) -> dict:
@@ -393,19 +393,7 @@ def _poly_embed_text(p: dict) -> str:
 
 
 def _kalshi_embed_text(info: dict) -> str:
-    """For Kalshi multi-outcome markets, lead with event+outcome to distinguish siblings.
-    For binary markets (sub_title is 'Yes'/'No' or already contained in the title),
-    use plain title so it stays in the same embedding space as Poly binary questions."""
-    title   = info.get("title", "")
-    yes_sub = info.get("yes_sub_title", "")
-    # Only use structured format when sub_title adds distinct named-outcome info.
-    # Skip when: trivial binary indicator, OR sub_title already appears in the title
-    # (meaning the title is already specific enough, e.g. "Will the Lakers win?" + "Lakers").
-    if (yes_sub
-            and yes_sub.lower() not in {"yes", "no"}
-            and yes_sub.lower() not in title.lower()):
-        return f"Event: {title}\nOutcome: {yes_sub}"
-    return title
+    return info.get("title", "")
 
 
 # -- Phase 2: Embeddings --------------------------------------------------------
