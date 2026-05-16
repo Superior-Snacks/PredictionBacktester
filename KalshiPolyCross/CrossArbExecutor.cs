@@ -76,7 +76,8 @@ public class CrossArbExecutor
     private          int     _triesRemaining       = -1;  // -1 = unlimited
     private          int     _tryLimit             = -1;  // original N, for display
     private          CancellationTokenSource? _outerCts;
-    private readonly ConcurrentDictionary<string, byte>    _inFlight        = new();
+    private readonly ConcurrentDictionary<string, byte>    _inFlight          = new();
+    private readonly ConcurrentDictionary<string, byte>    _earlyExitScheduled = new();
     private readonly ConcurrentDictionary<string, decimal> _perPairInvested = new();
     private readonly HashSet<string>                        _blocklist       = new(StringComparer.OrdinalIgnoreCase);
     private          int _kalshiConsecErrors = 0;
@@ -1559,9 +1560,13 @@ public class CrossArbExecutor
                 : $"P:{pair.PolyYesTokenId}";
 
             if (bookKey != kBidKey && bookKey != pBidKey) continue;
-            if (_inFlight.ContainsKey(pairId)) continue;
+            if (!_earlyExitScheduled.TryAdd(pairId, 0)) continue;
 
-            _ = Task.Run(() => CheckEarlyExitAsync(pairId, pos));
+            _ = Task.Run(async () =>
+            {
+                try   { await CheckEarlyExitAsync(pairId, pos); }
+                finally { _earlyExitScheduled.TryRemove(pairId, out _); }
+            });
         }
     }
 
