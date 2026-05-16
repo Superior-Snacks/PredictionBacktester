@@ -409,7 +409,7 @@ def find_candidates(
         print(f"[EMBED] Loading model jinaai/jina-embeddings-v5-text-small ...")
         model = SentenceTransformer("jinaai/jina-embeddings-v5-text-small", trust_remote_code=True)
         print(f"[EMBED] Encoding {len(to_encode)} texts...")
-        vecs = model.encode(to_encode, batch_size=256, show_progress_bar=True, normalize_embeddings=True)
+        vecs = model.encode(to_encode, batch_size=256, show_progress_bar=True, normalize_embeddings=True, task="text-matching")
         for text, vec in zip(to_encode, vecs):
             cache[text] = vec.tolist()
         save_cache(cache)
