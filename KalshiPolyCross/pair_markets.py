@@ -398,14 +398,12 @@ def find_candidates(
 ) -> list:
     cache = load_cache() if use_cache else {}
 
-    filtered_poly = poly_markets
+    filtered_poly   = poly_markets
+    k_titles_unique = list({m["title"] for m in kalshi_markets.values()})
+    print(f"[EMBED] {len(k_titles_unique)} unique Kalshi titles, {len(filtered_poly)} Poly markets.")
 
-    kalshi_embed_texts = {ticker: _kalshi_embed_text(info) for ticker, info in kalshi_markets.items()}
-    k_texts_unique     = list(dict.fromkeys(kalshi_embed_texts.values()))
-    poly_embed_texts   = [_poly_embed_text(p) for p in filtered_poly]
-    print(f"[EMBED] {len(k_texts_unique)} unique Kalshi embed texts, {len(filtered_poly)} Poly markets.")
-
-    to_encode = [t for t in dict.fromkeys(k_texts_unique + poly_embed_texts) if t not in cache]
+    poly_questions = [p["question"] for p in filtered_poly]
+    to_encode = [t for t in dict.fromkeys(k_titles_unique + poly_questions) if t not in cache]
 
     if to_encode:
         print(f"[EMBED] Loading model BAAI/bge-large-en-v1.5 ...")
@@ -420,9 +418,9 @@ def find_candidates(
 
     # Build poly matrix (L2-normalized - dot product = cosine similarity)
     poly_vecs, poly_valid = [], []
-    for p, embed_text in zip(filtered_poly, poly_embed_texts):
-        if embed_text in cache:
-            poly_vecs.append(cache[embed_text])
+    for p in filtered_poly:
+        if p["question"] in cache:
+            poly_vecs.append(cache[p["question"]])
             poly_valid.append(p)
     if not poly_vecs:
         print("[EMBED] No Polymarket embeddings - no candidates.")
@@ -434,8 +432,7 @@ def find_candidates(
     for ticker, info in kalshi_markets.items():
         if ticker in already_paired:
             continue
-        embed_text = kalshi_embed_texts[ticker]
-        vec = cache.get(embed_text)
+        vec = cache.get(info["title"])
         if vec is not None:
             k_tickers.append((ticker, info))
             k_vecs.append(vec)

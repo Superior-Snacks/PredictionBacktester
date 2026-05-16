@@ -9,11 +9,11 @@ Stage 3 (fill behavior) first, Stage 4 (critical fix verification) second.
 
 Before running any scenario, verify:
 
-- [ ] `cross_pairs.json` has at least 1 verified pair
-- [ ] `KALSHI_API_KEY_ID` and `KALSHI_PRIVATE_KEY_PATH` env vars are set
-- [ ] `POLY_API_KEY`, `POLY_API_SECRET`, `POLY_API_PASSPHRASE`, `POLY_PRIVATE_KEY`, `POLY_PROXY_ADDRESS` are set
+- [X] `cross_pairs.json` has at least 1 verified pair
+- [X] `KALSHI_API_KEY_ID` and `KALSHI_PRIVATE_KEY_PATH` env vars are set
+- [X] `POLY_API_KEY`, `POLY_API_SECRET`, `POLY_API_PASSPHRASE`, `POLY_PRIVATE_KEY`, `POLY_PROXY_ADDRESS` are set
 - [ ] At least one matched Kalshi + Polymarket market is actively trading (books have bid/ask prices)
-- [ ] A previous run's journal CSV is not still open in Excel (file lock will silently drop events)
+- [X] A previous run's journal CSV is not still open in Excel (file lock will silently drop events)
 
 Base command for all dry-run tests:
 ```
