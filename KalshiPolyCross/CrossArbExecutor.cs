@@ -42,6 +42,17 @@ public class CrossArbExecutor
     private readonly CrossPlatformArbTelemetryStrategy _telemetry;
     private readonly ConcurrentDictionary<string, LocalOrderBook> _books;
 
+    // ── Early exit tuning ─────────────────────────────────────────────────────
+    // Triggered on every book update for pairs with an open position (event-driven),
+    // with a 60 s fallback timer in case a book update is missed.
+    // EarlyExitThreshold: fraction of expected settlement profit required to exit early.
+    //   0   = never exit early (hold to settlement)
+    //   0.5 = exit when unrealized PnL ≥ 50 % of expected profit   ← default
+    //   1.0 = only exit when full settlement value is available on the bid
+    private static decimal  EarlyExitThreshold         = 0.50m;
+    private const  decimal  EarlyExitMinProfitUsd      = 0.05m;  // skip micro-exits below this
+    private const  int      EarlyExitFallbackIntervalMs = 60_000; // fallback poll if a book update was missed
+
     // ── Configuration ─────────────────────────────────────────────────────────
     private readonly decimal _maxBetUsd;           // max combined dollar cost per arb entry
     private readonly decimal _balanceBufferPct;    // fraction of maxBetUsd kept as per-platform reserve
@@ -86,13 +97,6 @@ public class CrossArbExecutor
     private const  bool     AllowScaleIn           = false;
     private const  decimal  MaxPerPairExposureUsd  = 200m;
 
-    // ── Early exit monitoring ─────────────────────────────────────────────────
-    // Close a position before settlement when unrealized PnL ≥ this fraction of
-    // the expected settlement profit (computed at entry, after entry fees).
-    // Set to 0 to never exit early; 1.0 to require full settlement value before exiting.
-    private static decimal  EarlyExitThreshold      = 0.50m;  // 50 % of expected profit
-    private const  int      EarlyExitCheckIntervalMs = 30_000; // check every 30 s
-    private const  decimal  EarlyExitMinProfitUsd    = 0.05m;  // skip micro-exits below this
     private          decimal  _dayLossUsd          = 0m;
     private          DateOnly _dayStart            = DateOnly.FromDateTime(DateTime.UtcNow);
     private readonly decimal  _maxDayLossUsd;
@@ -1533,11 +1537,39 @@ public class CrossArbExecutor
 
     // ── Early exit monitor ────────────────────────────────────────────────────
 
+    /// <summary>
+    /// Called on every book update — same path as arb detection.
+    /// Fires CheckEarlyExitAsync as a background task when the updated book belongs
+    /// to a pair with an open position and the exit threshold may be met.
+    /// </summary>
+    public void OnBookUpdate(string bookKey)
+    {
+        if (_halted || _connectionHalted || _openPositions.IsEmpty) return;
+
+        foreach (var (pairId, pos) in _openPositions.ToArray())
+        {
+            var pair = _telemetry.GetPair(pairId);
+            if (pair == null) continue;
+
+            string kBidKey = pos.ArbType == "K_YES_P_NO"
+                ? $"K:{pair.KalshiTicker}"
+                : $"K:{pair.KalshiTicker}_NO";
+            string pBidKey = pos.ArbType == "K_YES_P_NO"
+                ? $"P:{pair.PolyNoTokenId}"
+                : $"P:{pair.PolyYesTokenId}";
+
+            if (bookKey != kBidKey && bookKey != pBidKey) continue;
+            if (_inFlight.ContainsKey(pairId)) continue;
+
+            _ = Task.Run(() => CheckEarlyExitAsync(pairId, pos));
+        }
+    }
+
     private async Task RunEarlyExitMonitorAsync()
     {
         while (!_cts.Token.IsCancellationRequested)
         {
-            try { await Task.Delay(EarlyExitCheckIntervalMs, _cts.Token); }
+            try { await Task.Delay(EarlyExitFallbackIntervalMs, _cts.Token); }
             catch (TaskCanceledException) { break; }
 
             if (_halted || _connectionHalted || _openPositions.IsEmpty) continue;

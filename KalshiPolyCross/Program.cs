@@ -299,7 +299,8 @@ if (isLive || isDryRun)
         minBuy:              minBuy,
         tryN:                tryN,
         outerCts:            cts);
-    telemetry.OnArbOpened += executor.OnArbOpened;
+    telemetry.OnArbOpened  += executor.OnArbOpened;
+    telemetry.BookUpdated  += executor.OnBookUpdate;  // event-driven early exit checks
     await executor.InitializeBalancesAsync();
     if (isLive && pairs.Count > 0)
         await executor.ReconcileOnStartupAsync(pairs);

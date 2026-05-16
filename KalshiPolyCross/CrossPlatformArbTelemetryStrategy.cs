@@ -120,6 +120,9 @@ public class CrossPlatformArbTelemetryStrategy
 
     public event Action<string, decimal, string, decimal>? OnArbOpened;
 
+    /// <summary>Fires after every book update — subscribers (e.g. executor) use this for event-driven exit checks.</summary>
+    public event Action<string>? BookUpdated;
+
     public CrossPair? GetPair(string pairId) => _pairs.FirstOrDefault(p => p.PairId == pairId);
 
     public CrossPlatformArbTelemetryStrategy(
@@ -174,6 +177,7 @@ public class CrossPlatformArbTelemetryStrategy
 
         var pairsSnap = _pairs;
         foreach (var idx in indices) EvaluatePair(pairsSnap[idx]);
+        BookUpdated?.Invoke(bookKey);
     }
 
     public void OnKalshiReconnect() => HandlePlatformReconnect(ref _kalshiWsDrops, "KALSHI");
