@@ -83,7 +83,7 @@ SCP_REMOTE        = "jonsi@35.245.182.71:~/PredictionBacktester/KalshiPolyCross/
 SCRIPT_DIR          = Path(__file__).parent
 CACHE_PATH          = SCRIPT_DIR / "embeddings_cache_bge.json"
 DEFAULT_OUTPUT      = SCRIPT_DIR / "cross_pairs.json"
-EMBED_CACHE_VERSION = 4
+EMBED_CACHE_VERSION = 5
 
 # -- Kalshi auth ---------------------------------------------------------------
 def _kalshi_headers(method: str, path: str, api_key_id: str, private_key) -> dict:
@@ -406,8 +406,8 @@ def find_candidates(
     to_encode = [t for t in dict.fromkeys(k_titles_unique + poly_questions) if t not in cache]
 
     if to_encode:
-        print(f"[EMBED] Loading model BAAI/bge-large-en-v1.5 ...")
-        model = SentenceTransformer("BAAI/bge-large-en-v1.5")
+        print(f"[EMBED] Loading model jinaai/jina-embeddings-v5-text-small ...")
+        model = SentenceTransformer("jinaai/jina-embeddings-v5-text-small", trust_remote_code=True)
         print(f"[EMBED] Encoding {len(to_encode)} texts...")
         vecs = model.encode(to_encode, batch_size=256, show_progress_bar=True, normalize_embeddings=True)
         for text, vec in zip(to_encode, vecs):
