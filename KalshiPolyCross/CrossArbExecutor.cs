@@ -1614,7 +1614,9 @@ public class CrossArbExecutor
             - KalshiFee(pos.KalshiEntryPrice) - PolyFee(pos.PolyEntryPrice);
         if (expectedProfitPerSet <= 0m) return;
 
-        decimal unrealizedPnlPerSet = (kBid + pBid) - entryCostPerSet;
+        decimal exitFeesPerSet       = KalshiFee(kBid) + PolyFee(pBid);
+        decimal entryFeesPerSet      = KalshiFee(pos.KalshiEntryPrice) + PolyFee(pos.PolyEntryPrice);
+        decimal unrealizedPnlPerSet  = (kBid + pBid) - exitFeesPerSet - entryCostPerSet - entryFeesPerSet;
         decimal unrealizedPnlTotal  = unrealizedPnlPerSet * pos.KalshiContracts;
 
         DebugLog.Trades(
@@ -1698,11 +1700,17 @@ public class CrossArbExecutor
             {
                 _openPositions.TryRemove(pairId, out _);
                 Interlocked.Increment(ref _earlyExitsCompleted);
-                decimal kProceeds  = kSold * (kSellCents / 100m);
-                decimal pProceeds  = pSold * pAvgPrice;
-                decimal realizedPnl = (kProceeds + pProceeds)
+                decimal kProceeds    = kSold * (kSellCents / 100m);
+                decimal pProceeds    = pSold * pAvgPrice;
+                decimal kExitFee     = KalshiFee(kSellCents / 100m) * kSold;
+                decimal pExitFee     = PolyFee(pAvgPrice) * pSold;
+                decimal kEntryFee    = KalshiFee(currentPos.KalshiEntryPrice) * currentPos.KalshiContracts;
+                decimal pEntryFee    = PolyFee(currentPos.PolyEntryPrice) * currentPos.PolyShares;
+                decimal realizedPnl  = (kProceeds + pProceeds)
+                    - (kExitFee + pExitFee)
                     - (currentPos.KalshiContracts * currentPos.KalshiEntryPrice
-                    +  currentPos.PolyShares      * currentPos.PolyEntryPrice);
+                    +  currentPos.PolyShares      * currentPos.PolyEntryPrice)
+                    - (kEntryFee + pEntryFee);
                 Console.ForegroundColor = ConsoleColor.Cyan;
                 Console.WriteLine(
                     $"[EARLY EXIT OK] {pair.Label} | sold K={kSold}@{kSellCents}¢ P={pSold:0.00}sh@${pAvgPrice:0.0000} " +
