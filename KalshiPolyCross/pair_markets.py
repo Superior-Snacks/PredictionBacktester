@@ -58,7 +58,6 @@ from sentence_transformers import SentenceTransformer
 # -- Constants -----------------------------------------------------------------
 KALSHI_BASE_URL   = "https://api.elections.kalshi.com/trade-api/v2"
 POLY_GAMMA_URL    = "https://gamma-api.polymarket.com"
-POLY_CLOB_URL     = "https://clob.polymarket.com"
 KALSHI_CATEGORY   = ""
 POLY_CATEGORY     = ""
 
@@ -80,10 +79,9 @@ OLLAMA_BATCH_SIZE = 1   # one at a time — local model is slow and small contex
 
 SCP_REMOTE        = "jonsi@35.245.182.71:~/PredictionBacktester/KalshiPolyCross/"
 
-SCRIPT_DIR          = Path(__file__).parent
-CACHE_PATH          = SCRIPT_DIR / "embeddings_cache_bge.json"
-DEFAULT_OUTPUT      = SCRIPT_DIR / "cross_pairs.json"
-EMBED_CACHE_VERSION = 4
+SCRIPT_DIR        = Path(__file__).parent
+CACHE_PATH        = SCRIPT_DIR / "embeddings_cache_bge.json"
+DEFAULT_OUTPUT    = SCRIPT_DIR / "cross_pairs.json"
 
 # -- Kalshi auth ---------------------------------------------------------------
 def _kalshi_headers(method: str, path: str, api_key_id: str, private_key) -> dict:
@@ -126,26 +124,18 @@ def load_cache() -> dict:
     if not CACHE_PATH.exists():
         return {}
     try:
-        data = json.loads(CACHE_PATH.read_text(encoding="utf-8"))
+        return json.loads(CACHE_PATH.read_text(encoding="utf-8"))
     except Exception as e:
         print(f"[CACHE] Warning: could not load ({e}). Starting fresh.")
         return {}
-    if data.get("__version__") != EMBED_CACHE_VERSION:
-        print(
-            f"[CACHE] Old format detected (version {data.get('__version__', 'none')} "
-            f"!= {EMBED_CACHE_VERSION}). Clearing cache — embeddings will be re-encoded."
-        )
-        return {}
-    return data
 
 
 def save_cache(cache: dict) -> None:
     try:
-        cache["__version__"] = EMBED_CACHE_VERSION
         tmp = CACHE_PATH.with_suffix(".tmp")
         tmp.write_text(json.dumps(cache, separators=(",", ":")), encoding="utf-8")
         _safe_replace(tmp, CACHE_PATH)
-        print(f"[CACHE] Saved - {len(cache) - 1} entries.")
+        print(f"[CACHE] Saved - {len(cache)} entries.")
     except Exception as e:
         print(f"[CACHE] Warning: could not save ({e}).")
 
@@ -238,18 +228,9 @@ def fetch_poly_markets(no_live: bool = False) -> list:
                     include = True
             if not include:
                 continue
-            ev_live         = bool(ev.get("live", False))
+            ev_live = bool(ev.get("live", False))
             ev_end_date_raw = ev.get("end_date")  # event-level fallback
-            description     = ev.get("description", "") or ""
-            ev_title        = ev.get("title", "") or ""
-            ev_slug         = ev.get("slug",  "") or ""
-            is_neg_risk     = bool(ev.get("negRisk", False))
-            ev_markets_raw  = ev.get("markets", [])
-            sibling_count   = len(ev_markets_raw)
-            sibling_labels  = [
-                (m.get("groupItemTitle") or m.get("question", ""))
-                for m in ev_markets_raw
-            ]
+            description = ev.get("description", "") or ""
             for mkt in ev.get("markets", []):
                 question = mkt.get("question", "")
                 raw = mkt.get("clobTokenIds", [])
@@ -279,18 +260,12 @@ def fetch_poly_markets(no_live: bool = False) -> list:
                 else:
                     outcomes = raw_outcomes if isinstance(raw_outcomes, list) else []
                 results.append({
-                    "question":         question,
-                    "yes_token":        tokens[0],
-                    "no_token":         tokens[1],
-                    "end_date":         end_date,
-                    "description":      description,
-                    "outcomes":         outcomes,
-                    "event_title":      ev_title,
-                    "event_slug":       ev_slug,
-                    "is_neg_risk":      is_neg_risk,
-                    "group_item_title": mkt.get("groupItemTitle", "") or "",
-                    "sibling_count":    sibling_count,
-                    "sibling_labels":   sibling_labels,
+                    "question":    question,
+                    "yes_token":   tokens[0],
+                    "no_token":    tokens[1],
+                    "end_date":    end_date,
+                    "description": description,
+                    "outcomes":    outcomes,
                 })
         if len(arr) < page_size:
             break
@@ -300,93 +275,6 @@ def fetch_poly_markets(no_live: bool = False) -> list:
         print(f"[POLY] Skipped {skipped_live} live/delayed markets (--no-live).")
     print(f"[POLY] {len(results)} markets fetched.")
     return results
-
-
-# -- Data check (--check-data) -------------------------------------------------
-def _run_check_data(kalshi_markets: dict, poly_markets: list) -> None:
-    """Print embed-text samples and neg-risk stats without loading the embedding model."""
-    sep = "-" * 60
-
-    # ── Polymarket stats ──────────────────────────────────────────────────────
-    neg_risk_all  = [p for p in poly_markets if p.get("is_neg_risk")]
-    neg_with_git  = [p for p in neg_risk_all  if p.get("group_item_title")]
-    normal_poly   = [p for p in poly_markets  if not p.get("is_neg_risk")]
-
-    print(f"\n{'='*60}")
-    print(f"POLYMARKET DATA CHECK")
-    print(f"{'='*60}")
-    print(f"  Total markets   : {len(poly_markets)}")
-    print(f"  neg-risk        : {len(neg_risk_all)}  ({len(neg_with_git)} with group_item_title)")
-    print(f"  normal          : {len(normal_poly)}")
-
-    print(f"\n{sep}")
-    print("SAMPLE: 5 neg-risk embed texts  (should be distinct siblings)")
-    print(sep)
-    for p in neg_with_git[:5]:
-        text = _poly_embed_text(p)
-        print(f"  siblings: {p.get('sibling_count',1)}  |  slug: {p.get('event_slug','')[:40]}")
-        for line in text.splitlines():
-            print(f"    {line}")
-        print()
-
-    # check distinctness: group siblings of first neg-risk event
-    if neg_with_git:
-        first_slug = neg_with_git[0].get("event_slug", "")
-        siblings = [p for p in neg_with_git if p.get("event_slug") == first_slug]
-        if len(siblings) > 1:
-            print(f"{sep}")
-            print(f"SIBLING DISTINCTNESS CHECK: event '{first_slug}' — {len(siblings)} siblings")
-            print(sep)
-            for s in siblings:
-                print(f"  git: {s.get('group_item_title',''):<30}  embed_excerpt: {_poly_embed_text(s).splitlines()[1] if len(_poly_embed_text(s).splitlines()) > 1 else _poly_embed_text(s)[:60]}")
-
-    print(f"\n{sep}")
-    print("SAMPLE: 3 normal poly embed texts")
-    print(sep)
-    for p in normal_poly[:3]:
-        print(f"  {_poly_embed_text(p)[:100]}")
-
-    # ── Kalshi stats ──────────────────────────────────────────────────────────
-    k_with_sub  = {t: i for t, i in kalshi_markets.items() if i.get("yes_sub_title")}
-    k_plain     = {t: i for t, i in kalshi_markets.items() if not i.get("yes_sub_title")}
-
-    print(f"\n{'='*60}")
-    print(f"KALSHI DATA CHECK")
-    print(f"{'='*60}")
-    print(f"  Total markets      : {len(kalshi_markets)}")
-    print(f"  with yes_sub_title : {len(k_with_sub)}")
-    print(f"  plain title only   : {len(k_plain)}")
-
-    print(f"\n{sep}")
-    print("SAMPLE: 5 Kalshi embed texts with yes_sub_title  (Event+Outcome format)")
-    print(sep)
-    for ticker, info in list(k_with_sub.items())[:5]:
-        text = _kalshi_embed_text(info)
-        print(f"  {ticker}")
-        for line in text.splitlines():
-            print(f"    {line}")
-        print()
-
-    print(f"{sep}")
-    print("SAMPLE: 3 plain Kalshi embed texts")
-    print(sep)
-    for ticker, info in list(k_plain.items())[:3]:
-        print(f"  {ticker:<30}  {_kalshi_embed_text(info)[:80]}")
-
-    print(f"\n{'='*60}")
-    print("DATA CHECK DONE — no embedding model loaded.")
-    print("If neg-risk siblings look distinct and Kalshi sub-title markets show Event+Outcome,")
-    print("the data pipeline is correct. Run without --check-data to embed and pair.")
-    print('='*60)
-
-
-# -- Embed-text helpers --------------------------------------------------------
-def _poly_embed_text(p: dict) -> str:
-    return p.get("question") or p.get("event_title", "")
-
-
-def _kalshi_embed_text(info: dict) -> str:
-    return info.get("title", "")
 
 
 # -- Phase 2: Embeddings --------------------------------------------------------
@@ -473,17 +361,12 @@ def find_candidates(
                     "kalshi_yes_sub":   info.get("yes_sub_title", ""),
                     "kalshi_no_sub":    info.get("no_sub_title",  ""),
                     "poly_question":    p["question"],
-                    "poly_yes":           p["yes_token"],
-                    "poly_no":            p["no_token"],
-                    "poly_close":         p["end_date"],
-                    "poly_desc":          p["description"],
-                    "poly_outcomes":      p.get("outcomes", []),
-                    "is_neg_risk":        p.get("is_neg_risk", False),
-                    "group_item_title":   p.get("group_item_title", ""),
-                    "sibling_count":      p.get("sibling_count", 1),
-                    "sibling_labels":     p.get("sibling_labels", []),
-                    "poly_event_slug":    p.get("event_slug", ""),
-                    "score":              float(col[idx]),
+                    "poly_yes":         p["yes_token"],
+                    "poly_no":          p["no_token"],
+                    "poly_close":       p["end_date"],
+                    "poly_desc":        p["description"],
+                    "poly_outcomes":    p.get("outcomes", []),
+                    "score":            float(col[idx]),
                 })
 
         print(f"[EMBED] {chunk_end}/{total_k} tickers scored, {len(candidates)} raw hits so far...", flush=True)
@@ -493,7 +376,20 @@ def find_candidates(
     top = []
     for _ticker, group in groupby(candidates, key=lambda c: c["kalshi_ticker"]):
         top.extend(list(group)[:TOP_N_CANDIDATES])
-    top.sort(key=lambda c: -c["score"])
+    _now = datetime.now(timezone.utc)
+    _MAX_DAYS = 365  # beyond this, date proximity contributes 0
+    def _blend_key(c):
+        score = c["score"]
+        dt = c.get("kalshi_close")
+        if dt is None:
+            date_score = 0.0  # unknown close = no date credit
+        else:
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            days = max((dt - _now).days, 0)
+            date_score = 1.0 - min(days, _MAX_DAYS) / _MAX_DAYS  # 1.0 = closes today, 0.0 = ≥365d
+        return -(0.5 * score + 0.5 * date_score)
+    top.sort(key=_blend_key)
     print(f"[EMBED] {len(top)} candidate pairs (threshold={SIMILARITY_THRESH}, top-{TOP_N_CANDIDATES}/ticker).")
     return top
 
@@ -555,22 +451,6 @@ def _build_user_prompt(batch: list) -> str:
     for i, c in enumerate(batch):
         kc = c["kalshi_close"].isoformat() if c["kalshi_close"] else "Unknown"
         pc = c["poly_close"].isoformat()   if c["poly_close"]   else "Unknown"
-        neg_risk_block = ""
-        if c.get("is_neg_risk"):
-            sibling_count = c.get("sibling_count", 1)
-            group_item    = c.get("group_item_title", "")
-            sib_labels    = c.get("sibling_labels", [])
-            other_siblings = [s for s in sib_labels if s != group_item][:5]
-            others_str = "; ".join(other_siblings) if other_siblings else "(none)"
-            neg_risk_block = (
-                f'\n<neg_risk_context>\n'
-                f'This Polymarket market is 1 of {sibling_count} markets in a neg-risk event '
-                f'(mutually exclusive outcomes).\n'
-                f'The specific Poly outcome: "{group_item}"\n'
-                f'Other outcomes in this event: {others_str}\n'
-                f'For VALID/INVERTED the Kalshi market must resolve on this EXACT same named outcome.\n'
-                f'</neg_risk_context>'
-            )
         parts.append(
             f'<pair index="{i}">\n'
             f'<kalshi>\n'
@@ -582,8 +462,7 @@ def _build_user_prompt(batch: list) -> str:
             f'Title: {c["poly_question"]}\n'
             f'Close: {pc}\n'
             f'Desc:  {(c["poly_desc"] or "")[:300]}\n'
-            f'</polymarket>'
-            f'{neg_risk_block}\n'
+            f'</polymarket>\n'
             f'</pair>'
         )
     return "\n\n".join(parts)
@@ -869,15 +748,12 @@ def _save_pairs(matched: list, output_path: Path) -> None:
             continue
         existing_keys.add(key)
         existing.append({
-            "kalshi_ticker":    m["kalshi_ticker"],
-            "poly_yes_token":   m["poly_yes"],
-            "poly_no_token":    m["poly_no"],
-            "label":            m["kalshi_title"],
-            "event_id":         _event_root(m["kalshi_ticker"]),
-            "settlement_date":  m["kalshi_close"].strftime("%Y-%m-%d") if m.get("kalshi_close") else "",
-            "is_neg_risk":      m.get("is_neg_risk", False),
-            "group_item_title": m.get("group_item_title", ""),
-            "poly_event_slug":  m.get("poly_event_slug", ""),
+            "kalshi_ticker":   m["kalshi_ticker"],
+            "poly_yes_token":  m["poly_yes"],
+            "poly_no_token":   m["poly_no"],
+            "label":           m["kalshi_title"],
+            "event_id":        _event_root(m["kalshi_ticker"]),
+            "settlement_date": m["kalshi_close"].strftime("%Y-%m-%d") if m.get("kalshi_close") else "",
         })
         added += 1
 
@@ -958,9 +834,6 @@ def _save_potential_pairs(conditional: list, output_path: Path) -> None:
             "safe_hours_before_event": verdict["safe_hours_before_event"],
             "earliest_cutoff_date":    verdict["earliest_cutoff_date"],
             "explanation":             verdict["explanation"],
-            "is_neg_risk":             m.get("is_neg_risk", False),
-            "group_item_title":        m.get("group_item_title", ""),
-            "poly_event_slug":         m.get("poly_event_slug", ""),
         })
         added += 1
 
@@ -1004,61 +877,48 @@ def _getch() -> str:
 
 def _lookup_poly_token_info(yes_token: str, no_token: str = "") -> dict | None:
     """
-    Two-step lookup:
-    1. CLOB GET /book?token_id=YES_TOKEN  — documented, no auth, returns neg_risk + condition_id
-    2. Gamma GET /markets?conditionId=COND_ID — volume, liquidity, resolution_source, siblings
+    Look up a Polymarket market by its CLOB token IDs via the Gamma API.
+    Passes both YES and NO tokens as repeated params so the API can match on either.
+    Handles both plain-list and dict-wrapped ({data: [...]}) response shapes.
     """
-    token_id = yes_token or no_token
-    if not token_id:
+    tokens = [t for t in [yes_token, no_token] if t]
+    if not tokens:
         return None
-
-    result: dict = {}
-
-    # Step 1: CLOB book — always works, no auth required
     try:
-        r = requests.get(f"{POLY_CLOB_URL}/book", params={"token_id": token_id}, timeout=15)
+        params = [("clob_token_ids", t) for t in tokens]
+        r = requests.get(f"{POLY_GAMMA_URL}/markets", params=params, timeout=15)
         r.raise_for_status()
-        book = r.json()
-        result["neg_risk"]    = bool(book.get("neg_risk", False))
-        result["condition_id"] = book.get("market", "")
-        result["tick_size"]   = book.get("tick_size", "")
+        data = r.json()
+        markets = data if isinstance(data, list) else data.get("data", data.get("markets", []))
+        if not markets:
+            return {"error": "no market returned for token(s) — API filter may not be supported"}
+        mkt = markets[0]
+        clob_ids_raw = mkt.get("clobTokenIds", "[]")
+        clob_ids = json.loads(clob_ids_raw) if isinstance(clob_ids_raw, str) else clob_ids_raw
+        side = "YES" if (clob_ids and clob_ids[0] == yes_token) else "NO"
+        event = (mkt.get("events") or [{}])[0]
+        siblings = [
+            {"group_item": m.get("groupItemTitle", "") or "", "question": m.get("question", "") or ""}
+            for m in event.get("markets", [])
+        ]
+        return {
+            "side":              side,
+            "question":          mkt.get("question", "") or "",
+            "group_item_title":  mkt.get("groupItemTitle", "") or "",
+            "market_desc":       mkt.get("description", "") or "",
+            "condition_id":      mkt.get("conditionId", "") or "",
+            "outcomes":          mkt.get("outcomes", "") or "",
+            "end_date":          mkt.get("endDate", "") or "",
+            "volume":            mkt.get("volumeNum", 0) or 0,
+            "liquidity":         mkt.get("liquidityNum", 0) or 0,
+            "resolution_source": mkt.get("resolutionSource", "") or "",
+            "event_title":       event.get("title", "") or "",
+            "event_slug":        event.get("slug", "") or "",
+            "neg_risk":          bool(event.get("negRisk", False)),
+            "siblings":          siblings,
+        }
     except Exception as ex:
-        return {"error": f"CLOB lookup failed: {type(ex).__name__}: {ex}"}
-
-    # Step 2: Gamma by conditionId — optional, best-effort
-    if result.get("condition_id"):
-        try:
-            r = requests.get(
-                f"{POLY_GAMMA_URL}/markets",
-                params={"conditionId": result["condition_id"]},
-                timeout=15,
-            )
-            r.raise_for_status()
-            data = r.json()
-            markets = data if isinstance(data, list) else data.get("data", data.get("markets", []))
-            if markets:
-                mkt = markets[0]
-                event = (mkt.get("events") or [{}])[0]
-                result.update({
-                    "question":          mkt.get("question", "") or "",
-                    "group_item_title":  mkt.get("groupItemTitle", "") or "",
-                    "market_desc":       mkt.get("description", "") or "",
-                    "volume":            mkt.get("volumeNum", 0) or 0,
-                    "liquidity":         mkt.get("liquidityNum", 0) or 0,
-                    "resolution_source": mkt.get("resolutionSource", "") or "",
-                    "event_title":       event.get("title", "") or "",
-                    "event_slug":        event.get("slug", "") or "",
-                    "neg_risk":          result["neg_risk"] or bool(event.get("negRisk", False)),
-                    "siblings": [
-                        {"group_item": m.get("groupItemTitle", "") or "",
-                         "question":   m.get("question", "") or ""}
-                        for m in event.get("markets", [])
-                    ],
-                })
-        except Exception:
-            pass  # metadata is supplemental; CLOB data is already in result
-
-    return result
+        return {"error": f"{type(ex).__name__}: {ex}"}
 
 
 def _print_poly_token_info(c: dict) -> None:
@@ -1086,29 +946,21 @@ def _print_poly_token_info(c: dict) -> None:
         print()
         return
     if "error" in info:
-        print(f"  API error:   {info['error']}")
+        print(f"  API note:    {info['error']}")
         print()
         return
-    # CLOB fields (always present on success)
-    print(f"  condition_id:     {info.get('condition_id', '?')}")
-    print(f"  neg_risk:         {info.get('neg_risk', '?')}")
-    print(f"  tick_size:        {info.get('tick_size', '?')}")
-    # Gamma fields (present if conditionId lookup succeeded)
-    if info.get("volume") is not None:
-        print(f"  volume:           {info['volume']}")
-        print(f"  liquidity:        {info['liquidity']}")
-    if info.get("resolution_source"):
-        print(f"  resolution_src:   {info['resolution_source']}")
-    if info.get("group_item_title"):
-        print(f"  group_item_title: {info['group_item_title']}")
-    if info.get("event_title"):
-        print(f"  ── event ──")
-        print(f"  event_title:      {info['event_title']}")
-        print(f"  event_slug:       {info.get('event_slug', '')}")
-    siblings = info.get("siblings", [])
-    if siblings:
-        print(f"  siblings ({len(siblings)}):")
-        for s in siblings:
+    print(f"  condition_id:     {info['condition_id']}")
+    print(f"  group_item_title: {info['group_item_title'] or '(none)'}")
+    print(f"  volume:           {info['volume']}")
+    print(f"  liquidity:        {info['liquidity']}")
+    print(f"  resolution_src:   {info['resolution_source'] or '(none)'}")
+    print(f"  neg_risk:         {info['neg_risk']}")
+    print(f"  ── event ──")
+    print(f"  event_title:      {info['event_title']}")
+    print(f"  event_slug:       {info['event_slug']}")
+    if info["siblings"]:
+        print(f"  siblings ({len(info['siblings'])}):")
+        for s in info["siblings"]:
             gi = s["group_item"] or "(no group_item)"
             q  = s["question"][:80]
             print(f"    - [{gi}] {q}")
@@ -1147,15 +999,6 @@ def run_manual_judge(candidates: list, output_path: Path, sync: bool = False) ->
         print(f"          closes: {pc}")
         if c["poly_desc"]:
             print(f"          desc:   {c['poly_desc']}")
-        if c.get("is_neg_risk"):
-            sibling_count = c.get("sibling_count", 1)
-            git  = c.get("group_item_title", "")
-            sibs = c.get("sibling_labels", [])
-            print(f"          [NEG-RISK event — {sibling_count} siblings]")
-            print(f"          group_item_title: {git}")
-            first_five = sibs[:5]
-            if first_five:
-                print(f"          siblings (first {len(first_five)}): " + " | ".join(first_five))
 
         while True:
             try:
@@ -1218,7 +1061,6 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="Pair Kalshi <-> Polymarket markets.")
     ap.add_argument("--output",   default=str(DEFAULT_OUTPUT))
     ap.add_argument("--no-cache",    action="store_true", help="Ignore embedding cache")
-    ap.add_argument("--check-data",  action="store_true", help="Fetch markets, print embed texts and neg-risk stats, exit before embedding")
     ap.add_argument("--dry-run",     action="store_true", help="Print candidates, skip judge")
     ap.add_argument("--show-prompt", type=int, default=0, metavar="N",
                     help="Print the judge prompt for the first N batches and exit")
@@ -1277,10 +1119,6 @@ def main() -> None:
 
     kalshi_markets = fetch_kalshi_markets(api_key_id, private_key)
     poly_markets   = fetch_poly_markets(no_live=args.no_live)
-
-    if args.check_data:
-        _run_check_data(kalshi_markets, poly_markets)
-        return
 
     candidates = find_candidates(kalshi_markets, poly_markets, already_paired, not args.no_cache)
 
