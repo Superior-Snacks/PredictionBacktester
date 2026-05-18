@@ -1,0 +1,442 @@
+## ============================================================================
+## UPGRADED MARKET DISCOVERY PIPELINE — PSEUDO-CODE
+## ============================================================================
+##
+## Purpose: replace the embedding-only candidate-generation flow with a
+## multi-signal discovery pipeline that catches markets the embedding misses
+## (international elections, niche entities, rephrased questions, etc.).
+##
+## The pseudo-code below shows structure and intent, not exact syntax.
+## ============================================================================
+
+
+## ── STAGE 1: UNIFIED INDEX ───────────────────────────────────────────────────
+
+class MarketRecord:
+    venue              # "kalshi" | "poly"
+    id                 # ticker or token-prefix
+    title              # the question
+    event_title        # parent event name (or empty)
+    event_id           # event_ticker / event_slug
+    group_item_title   # named outcome for neg-risk / sub-markets
+    sibling_outcomes   # list of other outcomes in same event
+    rules_text         # rules_primary / description
+    category           # Politics / Sports / Crypto / ...
+    close_date         # datetime
+    is_neg_risk        # boolean
+    raw_record         # original venue record
+
+
+function build_unified_index(kalshi_markets, poly_markets):
+    index = []
+    
+    # Normalize Kalshi
+    for ticker, market in kalshi_markets:
+        index.append(MarketRecord(
+            venue:           "kalshi",
+            id:              ticker,
+            title:           market.title,
+            event_title:     get_event_title_from_ticker(ticker),
+            event_id:        market.event_ticker,
+            group_item_title: market.yes_sub_title,
+            sibling_outcomes: get_siblings_in_event(market.event_ticker),
+            rules_text:      market.rules_primary,
+            category:        market.category,
+            close_date:      parse_datetime(market.close_time),
+            is_neg_risk:     count_siblings > 1,
+            raw_record:      market,
+        ))
+    
+    # Normalize Polymarket
+    for poly_market in poly_markets:
+        index.append(MarketRecord(
+            venue:           "poly",
+            id:              poly_market.yes_token[:16],
+            title:           poly_market.question,
+            event_title:     poly_market.event_title,
+            event_id:        poly_market.event_slug,
+            group_item_title: poly_market.group_item_title,
+            sibling_outcomes: poly_market.sibling_labels,
+            rules_text:      poly_market.description,
+            category:        derive_category_from_tags(poly_market.tags),
+            close_date:      parse_datetime(poly_market.end_date),
+            is_neg_risk:     poly_market.is_neg_risk,
+            raw_record:      poly_market,
+        ))
+    
+    return index
+
+
+function persist_index(index, path="unified_index.parquet"):
+    save to disk with timestamp metadata
+    
+
+function load_or_build_index(force_rebuild=False):
+    if not force_rebuild and index_file_exists() and index_age_hours() < 24:
+        return load_persisted_index()
+    
+    kalshi_markets = fetch_kalshi_markets()
+    poly_markets   = fetch_poly_markets()
+    index = build_unified_index(kalshi_markets, poly_markets)
+    persist_index(index)
+    return index
+
+
+## ── STAGE 2: MULTI-SIGNAL SEARCH ─────────────────────────────────────────────
+
+function search_keyword_and(index, keywords, venue=None, limit=20):
+    """All keywords must appear somewhere in title + rules."""
+    kws_lower = [k.lower() for k in keywords]
+    results = []
+    for entry in index:
+        if venue and entry.venue != venue:
+            continue
+        haystack = (entry.title + " " + entry.rules_text).lower()
+        if all(kw in haystack for kw in kws_lower):
+            hit_count = sum(haystack.count(kw) for kw in kws_lower)
+            results.append((hit_count, entry))
+    sort by hit_count descending
+    return top `limit`
+
+
+function search_bm25(index, query, venue=None, limit=20):
+    """Natural-language ranking via BM25."""
+    if bm25_index_not_built_yet:
+        corpus = [tokenize(e.title*3 + " " + e.group_item_title*2 + " " 
+                          + e.event_title + " " + e.rules_text[:500]) 
+                  for e in index]
+        bm25 = BM25Okapi(corpus)
+    
+    query_tokens = tokenize(query.lower())
+    scores = bm25.get_scores(query_tokens)
+    
+    ranked = sort by score descending
+    results = []
+    for idx, score in ranked:
+        if score <= 0: continue
+        if venue and index[idx].venue != venue: continue
+        results.append((score, index[idx]))
+        if len(results) >= limit: break
+    return results
+
+
+function search_phrase(index, phrase, venue=None, limit=20):
+    """Substring match — useful for entity names."""
+    phrase = phrase.lower()
+    matches = []
+    for entry in index:
+        if venue and entry.venue != venue: continue
+        if phrase in entry.title.lower() or phrase in entry.rules_text.lower():
+            matches.append(entry)
+    return matches[:limit]
+
+
+function search_by_entity(index, entities, venue=None):
+    """Match by extracted named entities."""
+    if entity_cache_not_built_yet:
+        for entry in index:
+            entry.extracted_entities = extract_entities_spacy(entry.title + " " + entry.rules_text)
+    
+    target_entities = normalize_entities(entities)
+    results = []
+    for entry in index:
+        if venue and entry.venue != venue: continue
+        overlap = target_entities & entry.extracted_entities
+        if overlap:
+            score = len(overlap) / max(len(target_entities), len(entry.extracted_entities))
+            results.append((score, entry))
+    sort by score descending
+    return results
+
+
+function search_by_date_range(index, target_date, tolerance_days=30, venue=None):
+    """Filter to markets closing near a target date."""
+    results = []
+    for entry in index:
+        if venue and entry.venue != venue: continue
+        if not entry.close_date: continue
+        delta = abs(entry.close_date - target_date).days
+        if delta <= tolerance_days:
+            score = 1.0 - (delta / tolerance_days)  # closer = higher score
+            results.append((score, entry))
+    sort by score descending
+    return results
+
+
+function extract_entities_spacy(text):
+    doc = spacy_nlp(text)
+    entities = set()
+    for ent in doc.ents:
+        if ent.label_ in ["PERSON", "ORG", "GPE", "MONEY", "DATE"]:
+            entities.add(normalize_entity(ent.text))
+    return entities
+
+
+function normalize_entity(text):
+    return text.lower().strip().replace(".", "").replace(",", "")
+
+
+## ── STAGE 3: TWIN SEARCH ─────────────────────────────────────────────────────
+
+function twin_search(source_market, target_venue, index, limit=20):
+    """
+    Given a market on one venue, find candidates on the other venue
+    using multiple signals in parallel.
+    """
+    # Extract search inputs from source
+    keywords = extract_search_keywords(source_market.title)
+    entities = extract_entities_spacy(source_market.title + " " + source_market.rules_text)
+    target_date = source_market.close_date
+    category = source_market.category
+    
+    # Run signals in parallel
+    bm25_hits     = search_bm25(index, " ".join(keywords), venue=target_venue, limit=50)
+    entity_hits   = search_by_entity(index, entities, venue=target_venue)
+    date_hits     = search_by_date_range(index, target_date, tolerance_days=30, venue=target_venue)
+    category_hits = [e for e in index if e.venue == target_venue and e.category == category]
+    
+    # Combine: each candidate gets a weighted score from each signal
+    candidate_scores = {}  # entry.id → combined score
+    
+    for score, entry in bm25_hits:
+        candidate_scores[entry.id] += W_BM25 * normalize(score)
+    
+    for score, entry in entity_hits:
+        candidate_scores[entry.id] += W_ENTITY * score
+    
+    for score, entry in date_hits:
+        candidate_scores[entry.id] += W_DATE * score
+    
+    for entry in category_hits:
+        candidate_scores[entry.id] += W_CATEGORY * 1.0
+    
+    # Return top candidates with provenance info
+    ranked = sorted by combined score descending
+    return [
+        {
+            entry: entry,
+            combined_score: score,
+            signals_fired: [bm25/entity/date/category that contributed],
+        }
+        for entry, score in ranked[:limit]
+    ]
+
+
+function extract_search_keywords(text):
+    """Tokenize, drop stopwords, keep distinctive words."""
+    tokens = tokenize(text.lower())
+    return [t for t in tokens if t not in STOPWORDS and len(t) > 2]
+
+
+## ── STAGE 4: COVERAGE REPORTING ──────────────────────────────────────────────
+
+function compute_coverage_report(index, pairs_file, rejected_file):
+    pairs    = load_json(pairs_file)
+    rejected = load_json(rejected_file)
+    paired_kalshi_ids = set(p.kalshi_ticker for p in pairs)
+    paired_poly_ids   = set(p.poly_yes_token for p in pairs)
+    
+    # Group by event
+    events = {}  # event_id → {venue, sub_markets, paired_count, ...}
+    for entry in index:
+        key = (entry.venue, entry.event_id)
+        if key not in events:
+            events[key] = {sub_markets: [], paired: 0, rejected: 0, ...}
+        events[key].sub_markets.append(entry.id)
+        if entry.id in paired_set:
+            events[key].paired += 1
+        elif entry.id in rejected_set:
+            events[key].rejected += 1
+    
+    # Identify silent misses: events with zero attempted candidates
+    silent_misses = []
+    for event_key, info in events.items():
+        if info.paired == 0 and info.rejected == 0:
+            silent_misses.append(event_key)
+    
+    return {
+        per_event_stats: events,
+        silent_misses: silent_misses,
+        coverage_by_category: aggregate_by_category(events),
+        total_paired_pct: paired_count / total_count,
+    }
+
+
+function print_coverage_summary(report):
+    print "─" * 80
+    print "COVERAGE REPORT"
+    print f"  Total markets indexed:     {report.total_markets}"
+    print f"  Paired:                    {report.paired_count}    ({report.paired_pct}%)"
+    print f"  Rejected:                  {report.rejected_count}  ({report.rejected_pct}%)"
+    print f"  Silent (no candidates):    {report.silent_count}    ({report.silent_pct}%)"
+    print ""
+    print "Top 20 untouched events (sorted by sub-market count):"
+    for event in top_20_untouched:
+        print f"  {event.venue} {event.event_id}  ({event.sub_count} markets, {event.category})"
+
+
+## ── STAGE 5: WORKFLOW INTEGRATION ────────────────────────────────────────────
+
+function manual_review_session():
+    index = load_or_build_index()
+    candidates = compute_embedding_candidates(index)  # existing flow
+    
+    for candidate in candidates:
+        display_candidate(candidate)
+        
+        while True:
+            key = read_key()
+            
+            if key in ["1", "2", "3", "4"]:
+                save_verdict(candidate, key_to_verdict(key))
+                break
+            
+            elif key == "i":
+                print_poly_token_info(candidate)
+                continue
+            
+            elif key == "/":
+                # Free-text search
+                query = prompt("Search query: ")
+                results = search_bm25(index, query, venue="poly")
+                chosen = display_and_select(results)
+                if chosen:
+                    candidate = manual_override_candidate(candidate.kalshi, chosen)
+                    re-display and re-prompt
+                continue
+            
+            elif key == "t":
+                # Twin search on the current Kalshi market
+                results = twin_search(candidate.kalshi, target_venue="poly", index)
+                display_two_column(candidate.kalshi, results)
+                chosen = prompt_select(results)
+                if chosen:
+                    candidate = manual_override_candidate(candidate.kalshi, chosen)
+                continue
+            
+            elif key == "c":
+                # Coverage report mode
+                report = compute_coverage_report(index, "cross_pairs.json", "rejected_pairs.json")
+                print_coverage_summary(report)
+                
+                # Drop into "explore uncovered events" mode
+                chosen_event = prompt_select_from_silent_misses(report)
+                if chosen_event:
+                    enter_event_pairing_mode(chosen_event, index)
+                continue
+            
+            elif key == "e":
+                # Event-level pairing
+                event_id = prompt("Event ID: ")
+                enter_event_pairing_mode(event_id, index)
+                continue
+
+
+function enter_event_pairing_mode(source_event_id, index):
+    """Pair all sub-markets of an event at once."""
+    source_subs = [e for e in index if e.event_id == source_event_id]
+    
+    # Find matching event on other venue via twin search
+    if source_subs[0].venue == "kalshi":
+        target_event_candidates = find_matching_event_on_poly(source_subs[0], index)
+    else:
+        target_event_candidates = find_matching_event_on_kalshi(source_subs[0], index)
+    
+    target_event = prompt_select(target_event_candidates)
+    if not target_event:
+        return
+    
+    target_subs = [e for e in index if e.event_id == target_event.event_id]
+    
+    # Auto-suggest pairings by group_item_title similarity
+    suggested_pairings = []
+    for src in source_subs:
+        best_match = find_best_target_by_outcome_name(src, target_subs)
+        suggested_pairings.append((src, best_match))
+    
+    # Show side-by-side for confirmation
+    display_event_pairings(suggested_pairings)
+    
+    if prompt_confirm("Confirm all pairings?"):
+        for src, tgt in suggested_pairings:
+            save_pair_to_json(src, tgt)
+
+
+## ── STAGE 6: LLM JUDGE INTEGRATION ───────────────────────────────────────────
+
+function llm_judge_candidate(candidate, context):
+    """
+    Send a candidate to the LLM with rich context for judging.
+    Context includes:
+      - source market full details
+      - candidate market full details
+      - signals that fired in twin search (BM25, entity, date, category)
+      - sibling outcomes on both sides (for neg-risk awareness)
+    """
+    prompt = build_judge_prompt(candidate, context)
+    response = llm_call(prompt, model="claude-haiku-4.5")
+    
+    return parse_verdict(response)
+    # Returns: {status: VALID|INVERTED|INVALID|CONDITIONAL,
+    #           confidence: 0.0-1.0,
+    #           reasoning: "...",
+    #           trap_type: "..."}
+
+
+function batch_judge_new_discoveries(index, pairs_file):
+    """Run nightly: judge candidate pairs the discovery layer surfaced."""
+    paired_set = load_paired_set(pairs_file)
+    
+    discoveries = []
+    for entry in index:
+        if entry.id in paired_set:
+            continue
+        if entry.venue != "kalshi":
+            continue  # iterate Kalshi side as source
+        
+        candidates = twin_search(entry, target_venue="poly", index, limit=10)
+        
+        for c in candidates:
+            if c.combined_score < MIN_DISCOVERY_THRESHOLD:
+                continue
+            verdict = llm_judge_candidate(c.entry, {source: entry, signals: c.signals_fired})
+            discoveries.append({source: entry, candidate: c.entry, verdict: verdict})
+    
+    # Route by confidence
+    auto_accepted = [d for d in discoveries 
+                     if d.verdict.status == "VALID" and d.verdict.confidence >= 0.95]
+    auto_rejected = [d for d in discoveries 
+                     if d.verdict.status == "INVALID" and d.verdict.confidence >= 0.95]
+    human_queue   = [d for d in discoveries 
+                     if d not in auto_accepted and d not in auto_rejected]
+    
+    # Persist
+    for d in auto_accepted:
+        save_pair_to_json(d.source, d.candidate, source_tag="llm_auto")
+    for d in human_queue:
+        save_to_review_queue(d, source_tag="llm_uncertain")
+    
+    # Daily summary
+    send_summary({
+        new_auto_pairs: len(auto_accepted),
+        queued_for_review: len(human_queue),
+        rejected: len(auto_rejected),
+        cost: total_llm_tokens_used,
+    })
+
+
+## ── STAGE 7: OPERATIONS ──────────────────────────────────────────────────────
+
+function daily_refresh_pipeline():
+    """Run once per day via cron or scheduler."""
+    index = load_or_build_index(force_rebuild=True)
+    
+    print_coverage_summary(compute_coverage_report(index, ...))
+    
+    batch_judge_new_discoveries(index, "cross_pairs.json")
+    
+    # Audit: spot-check LLM verdicts against settled outcomes
+    audit_recent_llm_verdicts(days_back=7)
+    
+    # Notify
+    send_telegram_summary(...)
