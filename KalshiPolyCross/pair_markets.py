@@ -160,11 +160,14 @@ def fetch_kalshi_markets(api_key_id: str, private_key) -> dict:
         series_page += 1
         path = "/series?limit=1000" + (f"&cursor={cursor}" if cursor else "")
         data = _kalshi_get(path, api_key_id, private_key, _label=f"series page={series_page}")
-        for s in data.get("series", []):
+        page_series = data.get("series", [])
+        for s in page_series:
             if s.get("ticker") and s.get("category"):
                 series_cats[s["ticker"]] = s["category"]
         cursor = data.get("cursor", "")
+        print(f"[KALSHI] series page={series_page} series_in_page={len(page_series)} cursor={'yes' if cursor else 'none'} total_so_far={len(series_cats)}", flush=True)
         if not cursor:
+            print(f"[KALSHI] Series pagination complete.", flush=True)
             break
         time.sleep(0.15)
     print(f"[KALSHI] {len(series_cats)} series categories loaded.")
@@ -288,7 +291,9 @@ def fetch_poly_markets(no_live: bool = False) -> list:
                     "description": description,
                     "outcomes":    outcomes,
                 })
+        print(f"[POLY] page={page} events_in_page={len(arr)} markets_so_far={len(results)}", flush=True)
         if len(arr) < page_size:
+            print(f"[POLY] Last page ({len(arr)} < {page_size}) — pagination complete.", flush=True)
             break
         offset += page_size
         time.sleep(0.2)
