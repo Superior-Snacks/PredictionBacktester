@@ -99,15 +99,24 @@ def _kalshi_headers(method: str, path: str, api_key_id: str, private_key) -> dic
     }
 
 
-def _kalshi_get(path: str, api_key_id: str, private_key, params=None) -> dict:
-    r = requests.get(
-        KALSHI_BASE_URL + path,
-        headers=_kalshi_headers("GET", path, api_key_id, private_key),
-        params=params,
-        timeout=30,
-    )
-    r.raise_for_status()
-    return r.json()
+def _kalshi_get(path: str, api_key_id: str, private_key, params=None, _label: str = "") -> dict:
+    for attempt in range(1, 6):
+        r = requests.get(
+            KALSHI_BASE_URL + path,
+            headers=_kalshi_headers("GET", path, api_key_id, private_key),
+            params=params,
+            timeout=30,
+        )
+        label = f" ({_label})" if _label else ""
+        print(f"[KALSHI] GET {path[:60]}{label} status={r.status_code} attempt={attempt}", flush=True)
+        if r.status_code == 429:
+            wait = int(r.headers.get("retry-after", 10))
+            print(f"[KALSHI] Rate limited (429) — waiting {wait}s before retry...", flush=True)
+            time.sleep(wait)
+            continue
+        r.raise_for_status()
+        return r.json()
+    r.raise_for_status()  # final raise after exhausting retries
 
 
 def _safe_replace(tmp: Path, target: Path) -> None:
@@ -146,9 +155,11 @@ def fetch_kalshi_markets(api_key_id: str, private_key) -> dict:
     print("[KALSHI] Fetching series categories...")
     series_cats = {}
     cursor = ""
+    series_page = 0
     while True:
+        series_page += 1
         path = "/series?limit=1000" + (f"&cursor={cursor}" if cursor else "")
-        data = _kalshi_get(path, api_key_id, private_key)
+        data = _kalshi_get(path, api_key_id, private_key, _label=f"series page={series_page}")
         for s in data.get("series", []):
             if s.get("ticker") and s.get("category"):
                 series_cats[s["ticker"]] = s["category"]
@@ -162,9 +173,11 @@ def fetch_kalshi_markets(api_key_id: str, private_key) -> dict:
     markets = {}
     cursor = ""
     total_events = 0
+    events_page = 0
     while True:
+        events_page += 1
         path = "/events?status=open&with_nested_markets=true&limit=200" + (f"&cursor={cursor}" if cursor else "")
-        data = _kalshi_get(path, api_key_id, private_key)
+        data = _kalshi_get(path, api_key_id, private_key, _label=f"events page={events_page}")
         for ev in data.get("events", []):
             total_events += 1
             cat = series_cats.get(ev.get("series_ticker", ""), "")
@@ -207,12 +220,20 @@ def fetch_poly_markets(no_live: bool = False) -> list:
     results = []
     skipped_live = 0
     offset, page_size = 0, 500
+    page = 0
     while True:
-        r = requests.get(
-            f"{POLY_GAMMA_URL}/events?active=true&closed=false&limit={page_size}&offset={offset}",
-            timeout=30,
-        )
-        r.raise_for_status()
+        page += 1
+        url = f"{POLY_GAMMA_URL}/events?active=true&closed=false&limit={page_size}&offset={offset}"
+        for attempt in range(1, 6):
+            r = requests.get(url, timeout=30)
+            print(f"[POLY] page={page} offset={offset} status={r.status_code} attempt={attempt}", flush=True)
+            if r.status_code == 429:
+                wait = int(r.headers.get("retry-after", 10))
+                print(f"[POLY] Rate limited (429) — waiting {wait}s before retry...", flush=True)
+                time.sleep(wait)
+                continue
+            r.raise_for_status()
+            break
         arr = r.json()
         if not isinstance(arr, list):
             break
