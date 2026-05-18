@@ -222,7 +222,7 @@ def fetch_poly_markets(no_live: bool = False) -> list:
     print("[POLY] Fetching active markets...")
     results = []
     skipped_live = 0
-    offset, page_size = 0, 500
+    offset, page_size = 0, 100
     page = 0
     while True:
         page += 1
@@ -292,8 +292,8 @@ def fetch_poly_markets(no_live: bool = False) -> list:
                     "outcomes":    outcomes,
                 })
         print(f"[POLY] page={page} events_in_page={len(arr)} markets_so_far={len(results)}", flush=True)
-        if len(arr) < page_size:
-            print(f"[POLY] Last page ({len(arr)} < {page_size}) — pagination complete.", flush=True)
+        if len(arr) == 0:
+            print(f"[POLY] Empty page — pagination complete.", flush=True)
             break
         offset += page_size
         time.sleep(0.2)
