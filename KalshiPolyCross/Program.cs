@@ -329,11 +329,12 @@ var knownPairIds       = new HashSet<string>(pairs.Select(p => p.PairId), String
 Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
 
 // ── Key toggles ────────────────────────────────────────────────────────────
-// N/S always active. Debug keys (D/T/B/F/R/H) only meaningful with --debug.
-// Silently no-ops if stdin is not a TTY (e.g. screen/tmux without PTY).
-Console.WriteLine("[KEYS] N=NearMiss  S=StatusDash" +
-    (isDryRun ? "  M=InjectMismatch  C=SimReconnect  E=InjectErrors  X=DropPolyBook" : "") +
-    (isDebug  ? "  │  D=Discovery  T=Trades  B=Balance  F=Feed  R=Books  H=DebugStatus" : ""));
+// All keys require Ctrl to avoid conflicts with bare-key tmux bindings.
+// Avoided: Ctrl+B (tmux prefix), Ctrl+C (SIGINT), Ctrl+D (EOF),
+//          Ctrl+H (backspace), Ctrl+M (Enter), Ctrl+S (XOFF/freeze).
+Console.WriteLine("[KEYS] ^N=NearMiss  ^A=StatusDash" +
+    (isDryRun ? "  ^U=InjectMismatch  ^K=SimReconnect  ^E=InjectErrors  ^X=DropPolyBook" : "") +
+    (isDebug  ? "  │  ^G=Discovery  ^T=Trades  ^W=Balance  ^F=Feed  ^R=Books  ^P=DebugStatus" : ""));
 _ = Task.Run(() =>
 {
     try
@@ -341,17 +342,20 @@ _ = Task.Run(() =>
         while (!cts.Token.IsCancellationRequested)
         {
             if (!Console.KeyAvailable) { Thread.Sleep(50); continue; }
-            var key = Console.ReadKey(intercept: true).Key;
+            var info = Console.ReadKey(intercept: true);
+            var key  = info.Key;
+            bool ctrl = (info.Modifiers & ConsoleModifiers.Control) != 0;
+            if (!ctrl) continue;   // bare keystrokes ignored — only Ctrl+<key> accepted
             switch (key)
             {
                 case ConsoleKey.N: DebugLog.NearMissEnabled   = !DebugLog.NearMissEnabled;   break;
-                case ConsoleKey.S: DebugLog.StatusDashEnabled = !DebugLog.StatusDashEnabled; break;
-                case ConsoleKey.D when isDebug: DebugLog.DiscoveryEnabled = !DebugLog.DiscoveryEnabled; break;
+                case ConsoleKey.A: DebugLog.StatusDashEnabled = !DebugLog.StatusDashEnabled; break;
+                case ConsoleKey.G when isDebug: DebugLog.DiscoveryEnabled = !DebugLog.DiscoveryEnabled; break;
                 case ConsoleKey.T when isDebug: DebugLog.TradesEnabled    = !DebugLog.TradesEnabled;    break;
-                case ConsoleKey.B when isDebug: DebugLog.BalanceEnabled   = !DebugLog.BalanceEnabled;   break;
+                case ConsoleKey.W when isDebug: DebugLog.BalanceEnabled   = !DebugLog.BalanceEnabled;   break;
                 case ConsoleKey.F when isDebug: DebugLog.FeedEnabled      = !DebugLog.FeedEnabled;      break;
                 case ConsoleKey.R when isDebug: DebugLog.BooksEnabled     = !DebugLog.BooksEnabled;     break;
-                case ConsoleKey.M when isDryRun:
+                case ConsoleKey.U when isDryRun:
                 {
                     var firstP = pairs.FirstOrDefault();
                     if (firstP != null && venueClient != null)
@@ -363,7 +367,7 @@ _ = Task.Run(() =>
                     else Console.WriteLine("[KEYS] No pairs loaded or venueClient inactive");
                     break;
                 }
-                case ConsoleKey.C when isDryRun:
+                case ConsoleKey.K when isDryRun:
                 {
                     // Simulate a WS reconnect event: halt, close open telemetry windows, then resume.
                     executor?.HaltForConnectionLoss();
@@ -394,9 +398,9 @@ _ = Task.Run(() =>
                     break;
                 }
             }
-            if (key is ConsoleKey.N or ConsoleKey.S)
+            if (key is ConsoleKey.N or ConsoleKey.A)
                 Console.WriteLine($"[KEYS] {DebugLog.DisplayStatusLine()}");
-            else if (isDebug && key is ConsoleKey.D or ConsoleKey.T or ConsoleKey.B or ConsoleKey.F or ConsoleKey.R or ConsoleKey.H)
+            else if (isDebug && key is ConsoleKey.G or ConsoleKey.T or ConsoleKey.W or ConsoleKey.F or ConsoleKey.R or ConsoleKey.P)
                 Console.WriteLine($"[DEBUG] {DebugLog.DebugStatusLine()}");
         }
     }
