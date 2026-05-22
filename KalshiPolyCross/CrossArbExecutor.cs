@@ -543,7 +543,6 @@ public class CrossArbExecutor
             _openPositions[pairId] = new ArbPosition(
                 pairId, arbType, balancedQty, balancedQty, kLegAsk, pActualPrice, t0, execId);
             Interlocked.Increment(ref _totalExecuted);
-            DecrementTryLimit();
             lock (_exposureLock) { _totalInvested += actualCost; _totalProjectedProfit += actualProfit; }
             _perPairInvested.AddOrUpdate(pairId, actualCost, (_, old) => old + actualCost);
 
@@ -695,6 +694,7 @@ public class CrossArbExecutor
             decimal kHeld = finalPos?.KalshiContracts ?? 0m;
             decimal pHeld = finalPos?.PolyShares      ?? 0m;
 
+            DecrementTryLimit();
             await JournalAsync(JsonSerializer.Serialize(new {
                 t = DateTime.UtcNow, @event = "EXECUTION_COMPLETE",
                 execId, pairId, arbType, label = pair.Label, dryRun = _dryRun,
@@ -1134,16 +1134,48 @@ public class CrossArbExecutor
                     var (polyFill2, _) = await PlacePolyLegAsync(polyToken, polyHedgeLimit, kUnhedged, pair.IsNegRisk);
                     if (polyFill2 > 0)
                     {
-                        decimal additional = Math.Min(kUnhedged, polyFill2);
+                        decimal additional   = Math.Min(kUnhedged, polyFill2);
+                        decimal remainderQty = kUnhedged - additional;
                         if (_openPositions.TryGetValue(pair.PairId, out var pos))
                             _openPositions[pair.PairId] = pos with
                             {
                                 KalshiContracts = pos.KalshiContracts + additional,
                                 PolyShares      = pos.PolyShares      + additional
                             };
+                        await JournalAsync(JsonSerializer.Serialize(new {
+                            t = DateTime.UtcNow, @event = "CLEANUP_HEDGE_COMPLETED", execId,
+                            pair = pair.PairId, leg = "poly",
+                            hedgedQty = additional, remainderQty = Math.Round(remainderQty, 6)
+                        }));
                         Console.ForegroundColor = ConsoleColor.Green;
                         Console.WriteLine($"[RECOVER OK] {pair.Label} | hedge completed +{additional} sets via Poly retry");
                         Console.ResetColor();
+                        if (remainderQty > 0m)
+                        {
+                            decimal remValue = remainderQty * kLegAsk;
+                            if (remValue < CleanupDustUsd)
+                            {
+                                lock (_cleanupLock) { _totalCleanupCostUsd += remValue; }
+                                await JournalAsync(JsonSerializer.Serialize(new {
+                                    t = DateTime.UtcNow, @event = "CLEANUP_DUST", execId,
+                                    pair = pair.PairId, leg = "kalshi_partial_hedge_remainder",
+                                    qty = Math.Round(remainderQty, 6), absorbedUsd = Math.Round(remValue, 4)
+                                }));
+                            }
+                            else
+                            {
+                                await JournalAsync(JsonSerializer.Serialize(new {
+                                    t = DateTime.UtcNow, @event = "CLEANUP_HALT", execId,
+                                    pair = pair.PairId, leg = "kalshi_partial_hedge_remainder",
+                                    unresolvedQty = Math.Round(remainderQty, 6), unresolvedValueUsd = Math.Round(remValue, 4)
+                                }));
+                                Console.ForegroundColor = ConsoleColor.Red;
+                                Console.WriteLine($"[HALT] {pair.Label} | Partial Poly hedge left {remainderQty} Kalshi contracts unhedged — manual reset required.");
+                                Console.ResetColor();
+                                _halted = true;
+                                return new RecoveryResult("HALT", remainderQty, remValue);
+                            }
+                        }
                         return new RecoveryResult("HEDGE_COMPLETED", additional, 0);
                     }
                     Console.WriteLine($"[RECOVER] {pair.Label} | Poly hedge retry failed — reversing Kalshi excess");
@@ -1185,10 +1217,20 @@ public class CrossArbExecutor
                         Console.ResetColor();
                         return new RecoveryResult("REVERSED_KALSHI", revFill, Math.Max(0m, reversalLoss));
                     }
+                    await JournalAsync(JsonSerializer.Serialize(new {
+                        t = DateTime.UtcNow, @event = "CLEANUP_REVERSE_FAILED", execId,
+                        pair = pair.PairId, leg = "kalshi",
+                        qty = kUnhedged, reason = "zero_fill", reversalCents = kReverseCents
+                    }));
                 }
                 catch (Exception ex)
                 {
                     Console.WriteLine($"[RECOVER ERROR] {pair.Label} | Kalshi reverse exception: {ApiErrorHelper.ClassifyKalshi(ex)}");
+                    await JournalAsync(JsonSerializer.Serialize(new {
+                        t = DateTime.UtcNow, @event = "CLEANUP_REVERSE_ERROR", execId,
+                        pair = pair.PairId, leg = "kalshi",
+                        qty = kUnhedged, exType = ex.GetType().Name, message = ex.Message
+                    }));
                 }
             }
             else
@@ -1196,6 +1238,11 @@ public class CrossArbExecutor
                 Console.WriteLine($"[RECOVER] {pair.Label} | Kalshi bid side empty — skipping doomed reverse");
             }
 
+            await JournalAsync(JsonSerializer.Serialize(new {
+                t = DateTime.UtcNow, @event = "CLEANUP_HALT", execId,
+                pair = pair.PairId, leg = "kalshi",
+                unresolvedQty = Math.Round(kUnhedged, 6), unresolvedValueUsd = Math.Round(kUnhedgedValue, 4)
+            }));
             Console.ForegroundColor = ConsoleColor.Red;
             Console.WriteLine($"[HALT] {pair.Label} | Reverse order failed — unhedged position open. Manual reset required.");
             Console.ResetColor();
@@ -1263,21 +1310,48 @@ public class CrossArbExecutor
                         pair.KalshiTicker, kalshiSide, currentKCents, hedgeQty, execId);
                     if (kFill2 > 0)
                     {
-                        decimal additional = Math.Min((decimal)hedgeQty, kFill2);
-                        // Absorb any sub-1-share fractional remainder that can't be hedged on Kalshi
-                        decimal fracRemainder = pUnhedged - additional;
-                        if (fracRemainder > 0)
-                        {
-                            decimal fracValue = fracRemainder * pActualPrice;
-                            lock (_cleanupLock) { _totalCleanupCostUsd += fracValue; }
-                            DebugLog.Trades($"RecoverUnhedgedAsync {pair.Label}: absorbing {fracRemainder:0.0000} fractional remainder (${fracValue:0.00})");
-                        }
+                        decimal additional    = Math.Min((decimal)hedgeQty, kFill2);
+                        decimal remainderQty  = pUnhedged - additional;
                         if (_openPositions.TryGetValue(pair.PairId, out var pos))
                             _openPositions[pair.PairId] = pos with
                             {
                                 KalshiContracts = pos.KalshiContracts + additional,
                                 PolyShares      = pos.PolyShares      + additional
                             };
+                        await JournalAsync(JsonSerializer.Serialize(new {
+                            t = DateTime.UtcNow, @event = "CLEANUP_HEDGE_COMPLETED", execId,
+                            pair = pair.PairId, leg = "kalshi",
+                            hedgedQty = additional, remainderQty = Math.Round(remainderQty, 6)
+                        }));
+                        if (remainderQty > 0m)
+                        {
+                            decimal remValue = remainderQty * pActualPrice;
+                            // Sub-1-share or negligible value: genuinely can't hedge on Kalshi (min 1 contract)
+                            if (remainderQty < 1.0m || remValue < CleanupDustUsd)
+                            {
+                                lock (_cleanupLock) { _totalCleanupCostUsd += remValue; }
+                                await JournalAsync(JsonSerializer.Serialize(new {
+                                    t = DateTime.UtcNow, @event = "CLEANUP_DUST", execId,
+                                    pair = pair.PairId, leg = "poly_partial_hedge_remainder",
+                                    qty = Math.Round(remainderQty, 6), absorbedUsd = Math.Round(remValue, 4)
+                                }));
+                                DebugLog.Trades($"RecoverUnhedgedAsync {pair.Label}: absorbing {remainderQty:0.0000} remainder (${remValue:0.00})");
+                            }
+                            else
+                            {
+                                // Substantial Poly remainder — partial Kalshi fill left ≥1 share unhedged
+                                await JournalAsync(JsonSerializer.Serialize(new {
+                                    t = DateTime.UtcNow, @event = "CLEANUP_HALT", execId,
+                                    pair = pair.PairId, leg = "poly_partial_hedge_remainder",
+                                    unresolvedQty = Math.Round(remainderQty, 6), unresolvedValueUsd = Math.Round(remValue, 4)
+                                }));
+                                Console.ForegroundColor = ConsoleColor.Red;
+                                Console.WriteLine($"[HALT] {pair.Label} | Partial Kalshi hedge left {remainderQty:0.00} Poly shares unhedged — manual reset required.");
+                                Console.ResetColor();
+                                _halted = true;
+                                return new RecoveryResult("HALT", remainderQty, remValue);
+                            }
+                        }
                         Console.ForegroundColor = ConsoleColor.Green;
                         Console.WriteLine($"[RECOVER OK] {pair.Label} | hedge completed +{additional} sets via Kalshi retry");
                         Console.ResetColor();
@@ -1313,7 +1387,17 @@ public class CrossArbExecutor
                 Console.ResetColor();
                 return new RecoveryResult("REVERSED_POLY", soldShares, Math.Max(0m, reversalLoss));
             }
+            await JournalAsync(JsonSerializer.Serialize(new {
+                t = DateTime.UtcNow, @event = "CLEANUP_REVERSE_FAILED", execId,
+                pair = pair.PairId, leg = "poly",
+                qty = pUnhedged, reason = "zero_fill"
+            }));
 
+            await JournalAsync(JsonSerializer.Serialize(new {
+                t = DateTime.UtcNow, @event = "CLEANUP_HALT", execId,
+                pair = pair.PairId, leg = "poly",
+                unresolvedQty = Math.Round(pUnhedged, 6), unresolvedValueUsd = Math.Round(pUnhedgedValue, 4)
+            }));
             Console.ForegroundColor = ConsoleColor.Red;
             Console.WriteLine($"[HALT] {pair.Label} | Reverse order failed — unhedged position open. Manual reset required.");
             Console.ResetColor();
