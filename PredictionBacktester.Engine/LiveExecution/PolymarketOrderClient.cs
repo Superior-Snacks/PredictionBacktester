@@ -27,6 +27,19 @@ public class PolymarketOrderClient : IPolymarketOrderExecutor
     /// <summary>When true, prints [ORDER DEBUG] payload and [EIP712] intermediate hashes.</summary>
     public volatile bool DebugMode = true;
 
+    /// <summary>
+    /// Optional hook invoked with (resource, responseBody) for every REST response.
+    /// Set this in callers that need raw-response logging (e.g. KalshiPolyCross --debug).
+    /// </summary>
+    public Action<string, string>? RawResponseLogger { get; set; }
+
+    private async Task<RestResponse> ExecuteAndLogAsync(RestRequest request)
+    {
+        var response = await ExecuteAndLogAsync(request);
+        RawResponseLogger?.Invoke(request.Resource ?? request.Method.ToString(), response.Content ?? "");
+        return response;
+    }
+
     // CTF Exchange for standard binary markets
     private const string CTF_EXCHANGE = "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E";
     // NegRisk CTF Exchange for multi-outcome markets
@@ -163,7 +176,7 @@ public class PolymarketOrderClient : IPolymarketOrderExecutor
         request.AddStringBody(jsonBody, ContentType.Json);
 
         // 8. Submit
-        var response = await _httpClient.ExecuteAsync(request);
+        var response = await ExecuteAndLogAsync(request);
 
         if (!response.IsSuccessful)
         {
@@ -194,7 +207,7 @@ public class PolymarketOrderClient : IPolymarketOrderExecutor
         request.AddHeader("POLY_API_KEY", _config.ApiKey);
         request.AddHeader("POLY_PASSPHRASE", _config.ApiPassphrase);
 
-        var response = await _httpClient.ExecuteAsync(request);
+        var response = await ExecuteAndLogAsync(request);
 
         if (!response.IsSuccessful)
         {
@@ -224,7 +237,7 @@ public class PolymarketOrderClient : IPolymarketOrderExecutor
         request.AddHeader("POLY_API_KEY",    _config.ApiKey);
         request.AddHeader("POLY_PASSPHRASE", _config.ApiPassphrase);
 
-        var response = await _httpClient.ExecuteAsync(request);
+        var response = await ExecuteAndLogAsync(request);
         if (!response.IsSuccessful || string.IsNullOrEmpty(response.Content))
             throw new HttpRequestException(
                 $"Polymarket balance fetch failed: {response.Content ?? "no body"}",
@@ -263,7 +276,7 @@ public class PolymarketOrderClient : IPolymarketOrderExecutor
         request.AddHeader("POLY_PASSPHRASE", _config.ApiPassphrase);
         request.AddStringBody(jsonBody, ContentType.Json);
 
-        await _httpClient.ExecuteAsync(request); // Best-effort — don't throw on failure
+        await ExecuteAndLogAsync(request); // Best-effort — don't throw on failure
     }
 
     // Conditional Token Framework (ERC-1155) on Polygon
@@ -398,7 +411,7 @@ public class PolymarketOrderClient : IPolymarketOrderExecutor
             // Correct endpoint per Polymarket docs: GET /fee-rate?token_id={token_id}
             var request = new RestRequest("/fee-rate", Method.Get);
             request.AddQueryParameter("token_id", tokenId);
-            var response = await _httpClient.ExecuteAsync(request);
+            var response = await ExecuteAndLogAsync(request);
             if (response.IsSuccessful && !string.IsNullOrEmpty(response.Content))
             {
                 using var doc = JsonDocument.Parse(response.Content);

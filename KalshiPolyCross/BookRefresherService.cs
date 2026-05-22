@@ -128,6 +128,7 @@ public class BookRefresherService
         try
         {
             string json = await _http.GetStringAsync(PolyBookUrl + tokenId, ct);
+            DebugLog.Books($"[POLY BOOK] {json}");
             using var doc = JsonDocument.Parse(json);
             var root = doc.RootElement;
 

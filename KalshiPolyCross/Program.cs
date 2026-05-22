@@ -145,6 +145,8 @@ if (string.IsNullOrEmpty(kalshiConfig.ApiKeyId) || string.IsNullOrEmpty(kalshiCo
 }
 
 using var orderClient = new KalshiOrderClient(kalshiConfig);
+if (isDebug)
+    orderClient.RawResponseLogger = (path, body) => DebugLog.Books($"[KALSHI REST] {path}\n{body}");
 try
 {
     long bal = await orderClient.GetBalanceCentsAsync();
@@ -246,6 +248,8 @@ if (isLive || isDryRun)
         return;
     }
     var polyOrderClient = new PredictionBacktester.Engine.LiveExecution.PolymarketOrderClient(polyConfig);
+    if (isDebug)
+        polyOrderClient.RawResponseLogger = (path, body) => DebugLog.Books($"[POLY REST] {path}\n{body}");
     const decimal MAX_BET_USD        = 10m;    // max combined dollar cost per arb entry
     const decimal BALANCE_BUFFER_PCT = 0.20m;  // per-platform reserve (fraction of maxBet)
 

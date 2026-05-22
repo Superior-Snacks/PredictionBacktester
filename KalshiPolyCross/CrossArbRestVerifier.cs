@@ -147,6 +147,7 @@ public class CrossArbRestVerifier
     private async Task<decimal> GetPolyAskAsync(string tokenId)
     {
         string json = await _http.GetStringAsync(PolyBookUrl + tokenId);
+        DebugLog.Books($"[POLY REST /book] {json}");
         using var doc = JsonDocument.Parse(json);
         if (!doc.RootElement.TryGetProperty("asks", out var asks))
         {

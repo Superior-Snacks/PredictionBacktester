@@ -148,6 +148,7 @@ public class PolymarketWebsocketFeed
                         if (message is "PONG" or "pong") continue;
 
                         Volatile.Write(ref _lastMessageTicks, DateTime.UtcNow.Ticks);
+                        DebugLog.Feed($"[P WS] {message}");
                         ProcessMessage(message);
                     }
                 }

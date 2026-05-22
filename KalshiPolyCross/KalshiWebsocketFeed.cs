@@ -118,6 +118,7 @@ public class KalshiWebsocketFeed
                         if (message is "heartbeat" or "PONG" or "pong") continue;
 
                         Volatile.Write(ref _lastMessageTicks, DateTime.UtcNow.Ticks);
+                        DebugLog.Feed($"[K WS] {message}");
                         ProcessMessage(message);
 
                         // Drain any dynamically-added tickers

@@ -19,6 +19,12 @@ public class KalshiOrderClient : IKalshiOrderExecutor, IDisposable
     // Signing requires the complete path from root: /trade-api/v2/...
     private const string PathPrefix = "/trade-api/v2";
 
+    /// <summary>
+    /// Optional hook invoked with (relPath, responseBody) for every REST response.
+    /// Set this in callers that need raw-response logging (e.g. KalshiPolyCross --debug).
+    /// </summary>
+    public Action<string, string>? RawResponseLogger { get; set; }
+
     public KalshiOrderClient(KalshiApiConfig config)
     {
         _config = config;
@@ -65,10 +71,10 @@ public class KalshiOrderClient : IKalshiOrderExecutor, IDisposable
         req.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
 
         using var resp = await _http.SendAsync(req);
+        string body = await resp.Content.ReadAsStringAsync();
+        RawResponseLogger?.Invoke(relPath, body);
         resp.EnsureSuccessStatusCode();
-
-        var stream = await resp.Content.ReadAsStreamAsync();
-        return await JsonDocument.ParseAsync(stream);
+        return JsonDocument.Parse(body);
     }
 
     private async Task<JsonDocument> PostAsync(string relPath, object body)
@@ -83,15 +89,12 @@ public class KalshiOrderClient : IKalshiOrderExecutor, IDisposable
         req.Content = new StringContent(json, Encoding.UTF8, "application/json");
 
         using var resp = await _http.SendAsync(req);
-        var stream = await resp.Content.ReadAsStreamAsync();
+        string respBody = await resp.Content.ReadAsStringAsync();
+        RawResponseLogger?.Invoke(relPath, respBody);
         if (!resp.IsSuccessStatusCode)
-        {
-            using var sr = new StreamReader(stream);
-            string err = await sr.ReadToEndAsync();
             throw new HttpRequestException(
-                $"Kalshi POST {relPath} {(int)resp.StatusCode}: {err[..Math.Min(400, err.Length)]}");
-        }
-        return await JsonDocument.ParseAsync(stream);
+                $"Kalshi POST {relPath} {(int)resp.StatusCode}: {respBody[..Math.Min(400, respBody.Length)]}");
+        return JsonDocument.Parse(respBody);
     }
 
     // ──────────────────────────────────────────────────────────────────────────
