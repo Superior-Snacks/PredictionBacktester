@@ -1530,9 +1530,18 @@ public class CrossArbExecutor
         {
             try
             {
+                kalshiByTicker.TryGetValue(pair.KalshiTicker, out int kPos);
+
+                // Fast-path: no Kalshi position → can't have an unhedged Poly position.
+                // Skip the 2 eth_calls — this avoids 2000+ RPC calls on a clean start.
+                if (kPos == 0)
+                {
+                    report.Add(new ReconciliationEntry(pair.PairId, pair.Label, "CLEAN", 0, 0, ""));
+                    continue;
+                }
+
                 decimal polyYes = await _poly.GetTokenBalanceAsync(pair.PolyYesTokenId);
                 decimal polyNo  = await _poly.GetTokenBalanceAsync(pair.PolyNoTokenId);
-                kalshiByTicker.TryGetValue(pair.KalshiTicker, out int kPos);
 
                 decimal kQty   = Math.Abs(kPos);
                 decimal pQty   = Math.Max(polyYes, polyNo);
