@@ -85,6 +85,7 @@ public class CrossArbExecutor
     private const    int MaintenanceErrorThreshold = 5;
     private volatile bool   _halted               = false; // manual reset required (failed reversal / tripwire)
     private volatile bool   _connectionHalted     = false; // auto-clears when both venues reconnect
+    private volatile bool   _injectMismatchOnNextTrade = false; // test harness: inject mismatch on next fill
     private const    int    ReverseBufferCents           = 2;  // extra slippage tolerance for reversal orders
     private const    int    RecoveryHedgeSlippageCents   = 2;  // extra slippage tolerance for recovery hedge retries
     private const  decimal  TradeMaxLossMult       = 3.0m; // halt if actual loss > 3× expected edge
@@ -747,6 +748,21 @@ public class CrossArbExecutor
             }));
         }
 
+        // Test harness: if QueueMismatchOnNextTrade() was called, inject +1 mismatch on this pair
+        // and force reconciliation to run even in dry-run so the halt path can be verified.
+        bool reconcileInDryRun = false;
+        if (_injectMismatchOnNextTrade && !neitherFilled && balancedQty > 0)
+        {
+            _injectMismatchOnNextTrade = false;
+            reconcileInDryRun = true;
+            string injectTokenId = arbType == "K_YES_P_NO" ? pair.PolyNoTokenId : pair.PolyYesTokenId;
+            if (_kalshi is SimulatedVenuePositionClient kSim) kSim.InjectMismatch(pair.KalshiTicker, +1);
+            if (_poly   is SimulatedPolymarketClient    pSim) pSim.InjectTokenBalanceMismatch(injectTokenId, +1m);
+            Console.ForegroundColor = ConsoleColor.Magenta;
+            Console.WriteLine($"[MISMATCH INJECT] Firing on {pair.Label} — reconcile will run to verify halt");
+            Console.ResetColor();
+        }
+
         // Release exposure only when nothing filled at all.
         // Unhedged delta keeps exposure tracked until recovery resolves it.
         if (neitherFilled)
@@ -757,9 +773,10 @@ public class CrossArbExecutor
             // Re-fetch real balances after execution — not needed in dry-run (simulated clients
             // return dummy values that would overwrite the executor's tracked simulation balances).
             if (!_dryRun) await RefreshBalancesAsync();
-            // Post-trade position reconciliation — skipped in dry-run because the simulated client
-            // tracks total fills while the executor tracks balanced fills, causing spurious mismatches.
-            if (!_dryRun && balancedQty > 0)
+            // Post-trade position reconciliation — skipped in dry-run normally (simulated client
+            // tracks total fills while the executor tracks balanced fills, causing spurious mismatches).
+            // reconcileInDryRun overrides this when QueueMismatchOnNextTrade() was pending.
+            if ((!_dryRun || reconcileInDryRun) && balancedQty > 0)
                 _ = Task.Run(async () => await ReconcileTradeAsync(pair, arbType, balancedQty, balancedQty, execId));
         }
         else
@@ -1509,6 +1526,19 @@ public class CrossArbExecutor
 
     public void HaltForConnectionLoss()  => _connectionHalted = true;
     public void ResumeFromConnectionLoss() => _connectionHalted = false;
+
+    /// <summary>
+    /// Test harness (dry-run only): injects a +1 position mismatch on the NEXT trade that fills,
+    /// regardless of which pair it is. The mismatch fires after the fills are confirmed and forces
+    /// ReconcileTradeAsync to run, letting you verify the halt-on-mismatch path deterministically.
+    /// </summary>
+    public void QueueMismatchOnNextTrade()
+    {
+        _injectMismatchOnNextTrade = true;
+        Console.ForegroundColor = ConsoleColor.Magenta;
+        Console.WriteLine("[MISMATCH INJECT] Flag queued — fires on the next trade that fills, any pair");
+        Console.ResetColor();
+    }
 
     /// <summary>Lightweight REST liveness check. Returns true if the venue is reachable.</summary>
     public async Task<bool> PingKalshiAsync()

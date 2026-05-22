@@ -357,14 +357,10 @@ _ = Task.Run(() =>
                 case ConsoleKey.R when isDebug: DebugLog.BooksEnabled     = !DebugLog.BooksEnabled;     break;
                 case ConsoleKey.U when isDryRun:
                 {
-                    var firstP = pairs.FirstOrDefault();
-                    if (firstP != null && venueClient != null)
-                    {
-                        venueClient.InjectMismatch(firstP.KalshiTicker, +1);
-                        simPoly?.InjectTokenBalanceMismatch(firstP.PolyYesTokenId, +1m);
-                        Console.WriteLine($"[KEYS] Mismatch queued for {firstP.Label} — fires on next ReconcileTradeAsync");
-                    }
-                    else Console.WriteLine("[KEYS] No pairs loaded or venueClient inactive");
+                    if (executor != null)
+                        executor.QueueMismatchOnNextTrade();
+                    else
+                        Console.WriteLine("[KEYS] Executor not active — start --dry-run first");
                     break;
                 }
                 case ConsoleKey.K when isDryRun:
