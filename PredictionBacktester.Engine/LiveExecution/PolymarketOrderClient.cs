@@ -35,7 +35,7 @@ public class PolymarketOrderClient : IPolymarketOrderExecutor
 
     private async Task<RestResponse> ExecuteAndLogAsync(RestRequest request)
     {
-        var response = await ExecuteAndLogAsync(request);
+        var response = await _httpClient.ExecuteAsync(request);
         RawResponseLogger?.Invoke(request.Resource ?? request.Method.ToString(), response.Content ?? "");
         return response;
     }
