@@ -13,7 +13,7 @@ internal static class DebugLog
     internal static bool DiscoveryEnabled { get; set; } = false; // D — arb detection (off by default; high volume)
     internal static bool TradesEnabled    { get; set; } = true;  // T — order execution events
     internal static bool BalanceEnabled   { get; set; } = true;  // B — balance fetch/refresh events
-    internal static bool FeedEnabled      { get; set; } = true;  // F — WebSocket feed events
+    internal static bool FeedEnabled      { get; set; } = false; // F — WebSocket feed events (off by default: very high volume)
     internal static bool BooksEnabled     { get; set; } = true;  // R — REST book-refresh events
 
     // ── Display toggles (all modes) ───────────────────────────────────────────

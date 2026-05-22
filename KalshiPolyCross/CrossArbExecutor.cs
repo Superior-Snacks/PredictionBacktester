@@ -797,12 +797,16 @@ public class CrossArbExecutor
         string clientId = string.IsNullOrEmpty(execId)
             ? $"CAXARB_{ticker}_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}"
             : $"CAXARB_{execId}";
+        Console.WriteLine($"[ORDER K] {ticker} {side.ToUpper()} {priceCents}¢ × {count}  clientId={clientId}");
         DebugLog.Trades($"PlaceKalshiLegAsync: {ticker} {side} {priceCents}¢ × {count} clientId={clientId}");
         try
         {
             var (orderId, status, fillImm) = await _kalshi.PlaceOrderAsync(
                 ticker, side, priceCents, count, clientOrderId: clientId);
             Interlocked.Exchange(ref _kalshiConsecErrors, 0);
+            Console.ForegroundColor = ConsoleColor.Green;
+            Console.WriteLine($"[FILL K]  {ticker} placed orderId={orderId} status={status} fillImm={fillImm}");
+            Console.ResetColor();
             DebugLog.Trades($"PlaceKalshiLegAsync: placed orderId={orderId} status={status} fillImm={fillImm}");
 
             if (status == "executed" || fillImm >= count)
@@ -810,6 +814,7 @@ public class CrossArbExecutor
 
             if (string.IsNullOrEmpty(orderId))
             {
+                Console.WriteLine($"[FILL K WARN] {ticker} empty orderId with status={status} — not polling");
                 DebugLog.Trades($"PlaceKalshiLegAsync: empty orderId with status={status} — not polling");
                 return ("", status, 0m);
             }
@@ -831,6 +836,9 @@ public class CrossArbExecutor
             // timeout. One final REST check makes the fill count authoritative before returning.
             await Task.Delay(200).ConfigureAwait(false);
             var (settleStatus, settleFill) = await _kalshi.PollOrderAsync(orderId);
+            Console.ForegroundColor = settleStatus == "executed" ? ConsoleColor.Green : ConsoleColor.Yellow;
+            Console.WriteLine($"[FILL K]  {ticker} settle-poll after {polls} polls — status={settleStatus} fill={settleFill}");
+            Console.ResetColor();
             DebugLog.Trades($"PlaceKalshiLegAsync: settle-poll after {polls} polls — status={settleStatus} fill={settleFill}");
             return (orderId, settleStatus is "executed" or "canceled" ? settleStatus : "timeout",
                     Math.Max(settleFill, fillImm));
@@ -846,6 +854,9 @@ public class CrossArbExecutor
                 var (oid2, st2, fi2) = await _kalshi.PlaceOrderAsync(
                     ticker, side, priceCents, count, clientOrderId: retryId);
                 Interlocked.Exchange(ref _kalshiConsecErrors, 0);
+                Console.ForegroundColor = ConsoleColor.Green;
+                Console.WriteLine($"[FILL K]  {ticker} 429-retry placed oid={oid2} status={st2} fill={fi2}");
+                Console.ResetColor();
                 DebugLog.Trades($"PlaceKalshiLegAsync: 429-retry placed oid={oid2} status={st2} fill={fi2}");
                 return (oid2, st2, fi2);
             }
@@ -893,6 +904,7 @@ public class CrossArbExecutor
         string tokenId, decimal price, decimal shares, bool negRisk = false)
     {
         string tokenShort = tokenId[..Math.Min(12, tokenId.Length)];
+        Console.WriteLine($"[ORDER P] BUY token={tokenShort}... price={price:0.0000} shares={shares}");
         DebugLog.Trades($"PlacePolyLegAsync: token={tokenShort}... price={price:0.0000} shares={shares}");
         try
         {
@@ -928,6 +940,7 @@ public class CrossArbExecutor
 
             if (string.IsNullOrEmpty(result))
             {
+                Console.WriteLine($"[FILL P WARN] {tokenShort}... empty result from SubmitOrderAsync");
                 DebugLog.Trades($"PlacePolyLegAsync: empty result from SubmitOrderAsync");
                 return (0m, 0m);
             }
@@ -938,12 +951,16 @@ public class CrossArbExecutor
 
             if (!root.TryGetProperty("success", out var sv) || !sv.GetBoolean())
             {
+                Console.WriteLine($"[FILL P WARN] {tokenShort}... success=false — {result[..Math.Min(200, result.Length)]}");
                 DebugLog.Trades($"PlacePolyLegAsync: success=false in response — {result[..Math.Min(200, result.Length)]}");
                 return (0m, 0m);
             }
 
             string orderId = root.TryGetProperty("orderID", out var oidEl) ? oidEl.GetString() ?? "" : "";
             string respStatus = root.TryGetProperty("status", out var stEl) ? stEl.GetString() ?? "" : "";
+            Console.ForegroundColor = ConsoleColor.Green;
+            Console.WriteLine($"[FILL P]  {tokenShort}... placed orderID={orderId} status={respStatus}");
+            Console.ResetColor();
             DebugLog.Trades($"PlacePolyLegAsync: orderID={orderId} status={respStatus}");
 
             // BUY: takingAmount = shares received, makingAmount = USDC spent
@@ -985,17 +1002,22 @@ public class CrossArbExecutor
                 }
                 catch (Exception pollEx)
                 {
+                    Console.WriteLine($"[FILL P WARN] {tokenShort}... poll failed for orderID={orderId}: {pollEx.Message}");
                     DebugLog.Trades($"PlacePolyLegAsync: poll failed for orderID={orderId}: {pollEx.Message}");
                 }
             }
 
             if (filledShares <= 0)
             {
+                Console.WriteLine($"[FILL P WARN] {tokenShort}... filledShares=0 after response+poll — FAK killed or no liquidity");
                 DebugLog.Trades($"PlacePolyLegAsync: filledShares=0 after response+poll — FAK killed or no liquidity");
                 return (0m, 0m);
             }
 
             decimal avgPrice = spentUsdc > 0 ? spentUsdc / filledShares : price;
+            Console.ForegroundColor = ConsoleColor.Green;
+            Console.WriteLine($"[FILL P]  {tokenShort}... filled={filledShares} avgPrice={avgPrice:0.0000}");
+            Console.ResetColor();
             DebugLog.Trades($"PlacePolyLegAsync: filled={filledShares} avgPrice={avgPrice:0.0000}");
             return (filledShares, avgPrice);
         }
@@ -1019,6 +1041,9 @@ public class CrossArbExecutor
                         if (fs2 > 0)
                         {
                             decimal avg2 = su2 > 0 ? su2 / fs2 : price;
+                            Console.ForegroundColor = ConsoleColor.Green;
+                            Console.WriteLine($"[FILL P]  {tokenShort}... 429-retry filled={fs2} avg={avg2:0.0000}");
+                            Console.ResetColor();
                             DebugLog.Trades($"PlacePolyLegAsync: 429-retry filled={fs2} avg={avg2:0.0000}");
                             return (fs2, avg2);
                         }
@@ -1048,6 +1073,7 @@ public class CrossArbExecutor
         string tokenId, decimal shares, bool negRisk = false)
     {
         string tokenShort = tokenId[..Math.Min(12, tokenId.Length)];
+        Console.WriteLine($"[ORDER P] SELL token={tokenShort}... shares={shares}");
         DebugLog.Trades($"PlacePolySellAsync: token={tokenShort}... shares={shares}");
         try
         {
@@ -1061,6 +1087,7 @@ public class CrossArbExecutor
             var root = doc.RootElement;
             if (!root.TryGetProperty("success", out var sv) || !sv.GetBoolean())
             {
+                Console.WriteLine($"[FILL P WARN] {tokenShort}... sell success=false — {result[..Math.Min(200, result.Length)]}");
                 DebugLog.Trades($"PlacePolySellAsync: success=false — {result[..Math.Min(200, result.Length)]}");
                 return (0m, 0m);
             }
@@ -1068,6 +1095,9 @@ public class CrossArbExecutor
             // SELL: makingAmount = shares sold, takingAmount = USDC received
             (decimal soldShares, decimal usdcReceived) = ExtractPolyFill(root, isSell: true);
             decimal avgPrice = soldShares > 0 && usdcReceived > 0 ? usdcReceived / soldShares : 0m;
+            Console.ForegroundColor = ConsoleColor.Green;
+            Console.WriteLine($"[FILL P]  {tokenShort}... sold={soldShares} avgPrice={avgPrice:0.0000}");
+            Console.ResetColor();
             DebugLog.Trades($"PlacePolySellAsync: soldShares={soldShares} avgPrice={avgPrice:0.0000}");
             return (soldShares, avgPrice);
         }
