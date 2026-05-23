@@ -79,6 +79,7 @@ public class CrossArbExecutor
     private readonly ConcurrentDictionary<string, byte>    _inFlight          = new();
     private readonly ConcurrentDictionary<string, byte>    _earlyExitScheduled = new();
     private readonly ConcurrentDictionary<string, decimal> _perPairInvested = new();
+    private readonly ConcurrentDictionary<string, int>     _polyFeeRates    = new();
     private readonly HashSet<string>                        _blocklist       = new(StringComparer.OrdinalIgnoreCase);
     private          int _kalshiConsecErrors = 0;
     private          int _polyConsecErrors   = 0;
@@ -935,7 +936,11 @@ public class CrossArbExecutor
             DebugLog.Trades($"PlacePolyLegAsync: limitPrice={limitPrice:0.0000} (evaluated arb price)");
 
             string result = "";
-            int feeRate = 0;
+            // Lazy-fetch fee rate once per token; cache for all subsequent calls.
+            // Polymarket requires feeRateBps to match the market's rate exactly when non-zero.
+            if (!_polyFeeRates.ContainsKey(tokenId))
+                _polyFeeRates[tokenId] = await _poly.GetTakerFeeAsync(tokenId);
+            int feeRate = _polyFeeRates[tokenId];
             for (int attempt = 0; attempt < 3; attempt++)
             {
                 try
@@ -962,6 +967,7 @@ public class CrossArbExecutor
                     if (m.Success && int.TryParse(m.Groups[1].Value, out int fee))
                     {
                         DebugLog.Trades($"PlacePolyLegAsync: fee autocorrect — retrying with feeRateBps={fee}");
+                        _polyFeeRates[tokenId] = fee;
                         feeRate = fee;
                     }
                     else
@@ -1050,6 +1056,7 @@ public class CrossArbExecutor
             Console.WriteLine($"[FILL P]  {tokenShort}... filled={filledShares} avgPrice={avgPrice:0.0000}");
             Console.ResetColor();
             DebugLog.Trades($"PlacePolyLegAsync: filled={filledShares} avgPrice={avgPrice:0.0000}");
+            _ = _poly.UpdateBalanceAllowanceAsync(tokenId); // give CLOB a head start on settlement
             return (filledShares, avgPrice);
         }
         catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
@@ -1076,6 +1083,7 @@ public class CrossArbExecutor
                             Console.WriteLine($"[FILL P]  {tokenShort}... 429-retry filled={fs2} avg={avg2:0.0000}");
                             Console.ResetColor();
                             DebugLog.Trades($"PlacePolyLegAsync: 429-retry filled={fs2} avg={avg2:0.0000}");
+                            _ = _poly.UpdateBalanceAllowanceAsync(tokenId);
                             return (fs2, avg2);
                         }
                     }
@@ -1108,14 +1116,21 @@ public class CrossArbExecutor
         DebugLog.Trades($"PlacePolySellAsync: token={tokenShort}... shares={shares}");
         try
         {
+            // Force CLOB to refresh its cached token balance from on-chain state.
+            // Required — tokens may not be settled yet after the buy leg.
+            try { await _poly.UpdateBalanceAllowanceAsync(tokenId); } catch { /* best-effort */ }
+
             // FAK sell: 0.01 floor so it matches any buyer; actual fill is at best bid
             string result = "";
-            for (int attempt = 0; attempt < 2; attempt++)
+            int feeRate = _polyFeeRates.GetValueOrDefault(tokenId, 0);
+            const int maxSellRetries = 10;
+
+            for (int attempt = 1; attempt <= maxSellRetries; attempt++)
             {
                 try
                 {
                     result = await _poly.SubmitOrderAsync(
-                        tokenId, 0.01m, shares, side: 1 /*SELL*/, negRisk: negRisk, feeRateBps: 0);
+                        tokenId, 0.01m, shares, side: 1 /*SELL*/, negRisk: negRisk, feeRateBps: feeRate);
                     break;
                 }
                 catch (Exception ex) when (
@@ -1125,6 +1140,28 @@ public class CrossArbExecutor
                     Console.WriteLine($"[FILL P WARN] {tokenShort}... order_version_mismatch on sell — retrying with NEG_RISK_EXCHANGE");
                     Console.ResetColor();
                     negRisk = true;
+                }
+                catch (Exception ex) when (
+                    ex.Message.Contains("invalid fee rate") &&
+                    ex.Message.Contains("taker fee:"))
+                {
+                    var m = Regex.Match(ex.Message, @"taker fee:\s*(\d+)");
+                    if (m.Success && int.TryParse(m.Groups[1].Value, out int fee))
+                    {
+                        DebugLog.Trades($"PlacePolySellAsync: fee autocorrect — retrying with feeRateBps={fee}");
+                        _polyFeeRates[tokenId] = fee;
+                        feeRate = fee;
+                    }
+                    else throw;
+                }
+                catch (Exception ex) when (
+                    ex.Message.Contains("not enough balance", StringComparison.OrdinalIgnoreCase) &&
+                    attempt < maxSellRetries)
+                {
+                    if (attempt == 1 || attempt % 3 == 0)
+                        Console.WriteLine($"[SELL HAMMER] {tokenShort}... tokens not settled yet. Retrying in 500ms... ({attempt}/{maxSellRetries})");
+                    await Task.Delay(500);
+                    try { await _poly.UpdateBalanceAllowanceAsync(tokenId); } catch { /* best-effort */ }
                 }
             }
 

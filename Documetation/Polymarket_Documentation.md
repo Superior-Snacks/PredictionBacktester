@@ -2,4755 +2,28701 @@
 > Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
 > Use this file to discover all available pages before exploring further.
 
-# Fetching Markets
+# Introduction
 
-> Three strategies for discovering and querying markets
+> Overview of the Polymarket APIs
 
-<Tip>
-  Both the events and markets endpoints are paginated. See
-  [pagination](#pagination) for details.
-</Tip>
-
-There are three main strategies for retrieving market data, each optimized for different use cases:
-
-1. **By Slug** — Best for fetching specific individual markets or events
-2. **By Tags** — Ideal for filtering markets by category or sport
-3. **Via Events Endpoint** — Most efficient for retrieving all active markets
+The Polymarket API provides programmatic access to the world's largest prediction market. The platform is served by three separate APIs, each handling a different domain.
 
 ***
 
-## Fetch by Slug
+## APIs
 
-**Use case:** When you need to retrieve a specific market or event that you already know about.
+<CardGroup cols={1}>
+  <Card title="Gamma API" icon="database">
+    **`https://gamma-api.polymarket.com`**
 
-Individual markets and events are best fetched using their unique slug identifier. The slug can be found directly in the Polymarket frontend URL.
+    Markets, events, tags, series, comments, sports, search, and public profiles. This is the primary API for discovering and browsing market data.
+  </Card>
 
-### How to Extract the Slug
+  <Card title="Data API" icon="chart-line">
+    **`https://data-api.polymarket.com`**
 
-From any Polymarket URL, the slug is the path segment after `/event/`:
+    User positions, trades, activity, holder data, open interest, leaderboards, and builder analytics.
+  </Card>
 
-```
-https://polymarket.com/event/fed-decision-in-october
-                                ↑
-                      Slug: fed-decision-in-october
-```
+  <Card title="CLOB API" icon="arrows-rotate">
+    **`https://clob.polymarket.com`**
 
-### Examples
+    Orderbook data, pricing, midpoints, spreads, and price history. Also handles order placement, cancellation, and other trading operations. Trading endpoints require [authentication](/api-reference/authentication).
+  </Card>
+</CardGroup>
 
-```bash  theme={null}
-# Fetch an event by slug (query parameter)
-curl "https://gamma-api.polymarket.com/events?slug=fed-decision-in-october"
-
-# Or use the path endpoint
-curl "https://gamma-api.polymarket.com/events/slug/fed-decision-in-october"
-```
-
-```bash  theme={null}
-# Fetch a market by slug (query parameter)
-curl "https://gamma-api.polymarket.com/markets?slug=fed-decision-in-october"
-
-# Or use the path endpoint
-curl "https://gamma-api.polymarket.com/markets/slug/fed-decision-in-october"
-```
+<Info>
+  A separate **Bridge API** (`https://bridge.polymarket.com`) handles deposits and withdrawals. Bridges are not handled by Polymarket, it is a proxy of fun.xyz service.
+</Info>
 
 ***
 
-## Fetch by Tags
+## Authentication
 
-**Use case:** When you want to filter markets by category, sport, or topic.
+The Gamma API and Data API are fully public — no authentication required.
 
-Tags provide a way to categorize and filter markets. You can discover available tags and then use them to filter your requests.
-
-### Discover Available Tags
-
-**General tags:** `GET /tags` (Gamma API)
-
-**Sports tags and metadata:** `GET /sports` (Gamma API)
-
-The `/sports` endpoint returns metadata for sports including tag IDs, images, resolution sources, and series information.
-
-### Filter by Tag
-
-Once you have tag IDs, use the `tag_id` parameter in both events and markets endpoints:
-
-```bash  theme={null}
-# Fetch events for a specific tag
-curl "https://gamma-api.polymarket.com/events?tag_id=100381&limit=10&active=true&closed=false"
-```
-
-### Additional Tag Filtering
-
-You can also:
-
-* Use `related_tags=true` to include related tag markets
-* Exclude specific tags with `exclude_tag_id`
-
-```bash  theme={null}
-# Include related tags
-curl "https://gamma-api.polymarket.com/events?tag_id=100381&related_tags=true&active=true&closed=false"
-```
-
-***
-
-## Fetch All Active Markets
-
-**Use case:** When you need to retrieve all available active markets, typically for broader analysis or market discovery.
-
-The most efficient approach is to use the events endpoint with `active=true&closed=false`, as events contain their associated markets.
-
-```bash  theme={null}
-curl "https://gamma-api.polymarket.com/events?active=true&closed=false&limit=100"
-```
-
-### Key Parameters
-
-| Parameter   | Description                                                                                                      |
-| ----------- | ---------------------------------------------------------------------------------------------------------------- |
-| `order`     | Field to order by (`volume_24hr`, `volume`, `liquidity`, `start_date`, `end_date`, `competitive`, `closed_time`) |
-| `ascending` | Sort direction (`true` for ascending, `false` for descending). Default: `false`                                  |
-| `active`    | Filter by active status (`true` for live tradable events)                                                        |
-| `closed`    | Filter by closed status                                                                                          |
-| `limit`     | Results per page                                                                                                 |
-| `offset`    | Number of results to skip for pagination                                                                         |
-
-```bash  theme={null}
-# Get the highest volume active events
-curl "https://gamma-api.polymarket.com/events?active=true&closed=false&order=volume_24hr&ascending=false&limit=100"
-```
-
-***
-
-## Pagination
-
-All list endpoints return paginated responses with `limit` and `offset` parameters:
-
-```bash  theme={null}
-# Page 1: First 50 results
-curl "https://gamma-api.polymarket.com/events?active=true&closed=false&limit=50&offset=0"
-
-# Page 2: Next 50 results
-curl "https://gamma-api.polymarket.com/events?active=true&closed=false&limit=50&offset=50"
-
-# Page 3: Next 50 results
-curl "https://gamma-api.polymarket.com/events?active=true&closed=false&limit=50&offset=100"
-```
-
-***
-
-## Best Practices
-
-1. **For individual markets:** Use the slug method for direct lookups
-2. **For category browsing:** Use tag filtering to reduce API calls
-3. **For complete market discovery:** Use the events endpoint with pagination
-4. **Always include `active=true&closed=false`** unless you specifically need historical data
-5. **Use the events endpoint** and work backwards — events contain their associated markets, reducing the number of API calls needed
+The CLOB API has both public endpoints (orderbook, prices) and authenticated endpoints (order management). See [Authentication](/api-reference/authentication) for details.
 
 ***
 
 ## Next Steps
 
 <CardGroup cols={2}>
-  <Card title="API Reference" icon="code" href="/api-reference/introduction">
-    Full endpoint documentation with parameters and response schemas.
+  <Card title="Authentication" icon="key" href="/api-reference/authentication">
+    Learn how to authenticate requests for trading endpoints.
   </Card>
 
-  <Card title="Subgraph" icon="share-nodes" href="/market-data/subgraph">
-    Query onchain data directly from the Polymarket subgraph.
+  <Card title="Clients & SDKs" icon="cube" href="/api-reference/clients-sdks">
+    Official TypeScript, Python, and Rust libraries.
   </Card>
 </CardGroup>
-
-
-Built with [Mintlify](https://mintlify.com).> 
-
-## Documentation Index
-> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
-> Use this file to discover all available pages before exploring further.
-
-# Polymarket 101
-
-> An intro to Polymarket - the world's largest prediction market
-
-Polymarket is a prediction market platform where users trade on the outcomes of real-world events. Instead of betting against a house, you trade shares with other users in an open, peer-to-peer market. Prices reflect the market's collective belief in the probability of an event occurring.
-
-The platform is non-custodial, meaning you always control your funds. All trades are settled through smart contracts on the blockchain, ensuring transparent and trustless operation.
-
-## Self-Custody
 > ## Documentation Index
 > Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
 > Use this file to discover all available pages before exploring further.
 
-# Markets & Events
+# Authentication
 
-> Understanding the fundamental building blocks of Polymarket
+> How to authenticate requests to the CLOB API
 
-Every prediction on Polymarket is structured around two core concepts: **markets** and **events**. Understanding how they relate is essential for building on the platform.
+The CLOB API uses two levels of authentication: **L1 (Private Key)** and **L2 (API Key)**. Either can be accomplished using the CLOB client or REST API.
 
-<Frame>
-  <img src="https://mintcdn.com/polymarket-292d1b1b/FOMte3ewbG-LVy3k/images/core-concepts/event-market.png?fit=max&auto=format&n=FOMte3ewbG-LVy3k&q=85&s=4c62bd08a405868307cdd6799b368ca5" alt="" className="dark:hidden" width="1540" height="952" data-path="images/core-concepts/event-market.png" />
+## Public vs Authenticated
 
-  <img src="https://mintcdn.com/polymarket-292d1b1b/FOMte3ewbG-LVy3k/images/dark/core-concepts/event-market.png?fit=max&auto=format&n=FOMte3ewbG-LVy3k&q=85&s=2eb5c9b0f8a2afe52bc2e717b7b796a2" alt="" className="hidden dark:block" width="1540" height="952" data-path="images/dark/core-concepts/event-market.png" />
-</Frame>
-
-## Markets
-
-A **market** is the fundamental tradable unit on Polymarket. Each market represents a single binary question with Yes/No outcomes.
-
-<Frame>
-  <img src="https://mintcdn.com/polymarket-292d1b1b/FOMte3ewbG-LVy3k/images/core-concepts/event.png?fit=max&auto=format&n=FOMte3ewbG-LVy3k&q=85&s=0c9a264aec9a22ce5a20c4cc7980806d" alt="" className="dark:hidden" width="1540" height="952" data-path="images/core-concepts/event.png" />
-
-  <img src="https://mintcdn.com/polymarket-292d1b1b/FOMte3ewbG-LVy3k/images/dark/core-concepts/event.png?fit=max&auto=format&n=FOMte3ewbG-LVy3k&q=85&s=912e41bebfe8c1a43ef53b89685ca3d2" alt="" className="hidden dark:block" width="1540" height="952" data-path="images/dark/core-concepts/event.png" />
-</Frame>
-
-Every market has:
-
-| Identifier       | Description                                                              |
-| ---------------- | ------------------------------------------------------------------------ |
-| **Condition ID** | Unique identifier for the market's condition in the CTF contracts        |
-| **Question ID**  | Hash of the market question used for resolution                          |
-| **Token IDs**    | ERC1155 token IDs used for trading on the CLOB — one for Yes, one for No |
-
-<Note>
-  Markets can only be traded via the CLOB if `enableOrderBook` is `true`. Some
-  markets may exist onchain but not be available for order book trading.
-</Note>
-
-### Market Example
-
-A simple market might be:
-
-> **"Will Bitcoin reach \$150,000 by December 2026?"**
-
-This creates two outcome tokens:
-
-* **Yes token** - Redeemable for `$1` if Bitcoin reaches `$150k`
-* **No token** - Redeemable for `$1` if Bitcoin doesn't reach `$100k`
-
-## Events
-
-An **event** is a container that groups one or more related markets together. Events provide organizational structure and enable multi-outcome predictions.
-
-### Single-Market Events
-
-When an event contains just one market, it creates a simple market pair. The event and market are essentially equivalent.
-
-```
-Event: Will Bitcoin reach $100,000 by December 2024?
-└── Market: Will Bitcoin reach $100,000 by December 2024? (Yes/No)
-```
-
-### Multi-Market Events
-
-When an event contains two or more markets, it creates a grouped market pair. This enables mutually exclusive multi-outcome predictions.
-
-```
-Event: Who will win the 2024 Presidential Election?
-├── Market: Donald Trump? (Yes/No)
-├── Market: Joe Biden? (Yes/No)
-├── Market: Kamala Harris? (Yes/No)
-└── Market: Other? (Yes/No)
-```
-
-## Identifying Markets
-
-Every market and event has a unique **slug** that appears in the Polymarket URL:
-
-```
-https://polymarket.com/event/fed-decision-in-october
-                              └── slug: fed-decision-in-october
-```
-
-You can use slugs to fetch specific markets or events from the API:
-
-```bash  theme={null}
-# Fetch event by slug
-curl "https://gamma-api.polymarket.com/events?slug=fed-decision-in-october"
-```
-
-## Sports Markets
-
-Specifically for sports markets, outstanding limit orders are **automatically cancelled** once the game begins, clearing the order book at the official start time. However, game start times can shift — if a game starts earlier than scheduled, orders may not be cleared in time. Always monitor your orders closely around game start times.
-
-***
-
-## Next Steps
-
-<CardGroup cols={2}>
-  <Card title="Prices & Orderbook" icon="chart-line" href="/concepts/prices-orderbook">
-    Learn how prices are determined and how the order book works.
+<CardGroup cols={1}>
+  <Card title="Public (No Auth)" icon="unlock">
+    The **Gamma API**, **Data API**, and CLOB read endpoints (orderbook, prices, spreads) require no authentication.
   </Card>
 
-  <Card title="Fetching Market Data" icon="code" href="/market-data/overview">
-    Start querying markets and events from the API.
+  <Card title="Authenticated (CLOB)" icon="lock">
+    CLOB trading endpoints (placing orders, cancellations, heartbeat) require all 5 `POLY_*` L2 HTTP headers.
   </Card>
 </CardGroup>
 
+***
 
-Built with [Mintlify](https://mintlify.com).
-Polymarket operates on a non-custodial model. You maintain full control of your funds at all times.
+## Two-Level Authentication Model
 
-* **You control your funds** - Assets are held in your wallet, secured by your private key
-* **Smart contract enforcement** - Trades execute automatically through audited smart contracts
-* **No intermediary risk** - Polymarket never takes possession of your funds — you maintain full control through your private key
-* **Full transparency** - All trades and positions are recorded onchain and publicly verifiable
-* **Trustless execution** - Settlement happens automatically based on market resolution
+The CLOB uses two levels of authentication: L1 (Private Key) and L2 (API Key). Either can be accomplished using the CLOB client or REST API
 
-<Warning>
-  Keep your private key safe and never share it with anyone. If you lose your
-  private key, you lose access to your funds. If you signed up via Magic Link
-  or have a proxy wallet, recovery may be possible through
-  [recovery.polymarket.com](https://recovery.polymarket.com).
-</Warning>
+### L1 Authentication
 
-## How Polymarket Works
+L1 authentication uses the wallet's private key to sign an EIP-712 message used in the request header. It proves ownership and control over the private key. The private key stays in control of the user and all trading activity remains non-custodial.
 
-<Frame>
-  <img src="https://mintcdn.com/polymarket-292d1b1b/FOMte3ewbG-LVy3k/images/core-concepts/polymarket-101.png?fit=max&auto=format&n=FOMte3ewbG-LVy3k&q=85&s=059e9831d1c51b99996d9747c0139d49" alt="Polymarket Overview" className="dark:hidden" width="1526" height="952" data-path="images/core-concepts/polymarket-101.png" />
+**Used for:**
 
-  <img src="https://mintcdn.com/polymarket-292d1b1b/FOMte3ewbG-LVy3k/images/dark/core-concepts/polymarket-101.png?fit=max&auto=format&n=FOMte3ewbG-LVy3k&q=85&s=4e929eca98a2bb83ef7421f7bbaf9f1d" alt="Polymarket Overview" className="hidden dark:block" width="1526" height="952" data-path="images/dark/core-concepts/polymarket-101.png" />
-</Frame>
+* Creating API credentials
+* Deriving existing API credentials
+* Signing and creating user's orders locally
 
-### Prices Are Probabilities
+### L2 Authentication
 
-Every share on Polymarket is priced between `$0.00` and `$1.00`. The price represents the market's belief in the probability of that outcome occurring.
+L2 uses API credentials (apiKey, secret, passphrase) generated from L1 authentication. These are used solely to authenticate requests made to the CLOB API. Requests are signed using HMAC-SHA256.
 
-For example, if "Yes" shares for an event are trading at `$0.65`, the market believes there's approximately a `65%` chance the event will happen.
+**Used for:**
 
-### Collateral and Tokens
+* Cancel or get user's open orders
+* Check user's balances and allowances
+* Post user's signed orders
 
-Polymarket uses USDC.e (Bridged USDC on Polygon) as collateral. Every Yes/No pair is fully backed:
-
-* `$1 USDC.e` creates one Yes share and one No share
-* Winning shares are redeemable for `$1.00`
-* Losing shares are worth `$0.00`
-
-Shares are represented as tokens using the [Gnosis Conditional Token Framework](https://github.com/gnosis/conditional-tokens-contracts/) (ERC1155 standard), enabling seamless onchain trading and settlement.
-
-### Trading
-
-Polymarket uses a peer-to-peer order book (CLOB) for trading. You trade directly with other users, not against the house.
-
-* **Buy shares** when you think the market underestimates the probability
-* **Sell shares** when you think the market overestimates the probability
-* **Exit anytime** - Sell your position before resolution to lock in profits or cut losses
-
-| Action  | When to Use                           | Profit Scenario           |
-| ------- | ------------------------------------- | ------------------------- |
-| Buy Yes | You think the probability is too low  | Event occurs              |
-| Buy No  | You think the probability is too high | Event does not occur      |
-| Sell    | Lock in gains or limit losses         | Price moves in your favor |
-
-### Resolution
-
-When an event concludes, markets are resolved through the **UMA Optimistic Oracle**:
-
-1. A proposer submits the outcome with a bond
-2. There's a challenge period where anyone can dispute
-3. If disputed, UMA token holders vote on the correct resolution
-4. Winning tokens become redeemable for \$1 USDC.e
-
-This community-driven process ensures fair and accurate market resolution.
-
-## Why Blockchain
-
-Polymarket is built on **Polygon**, a blockchain network, for several key reasons:
-
-* **Global accessibility** - Anyone with an internet connection can participate
-* **Non-custodial** - You control your funds, not a centralized entity
-* **Transparent** - All activity is publicly verifiable onchain
-* **Fast and affordable** - Polygon enables quick, low-cost transactions
-* **Stable value** - USDC.e is pegged 1:1 to the US dollar, avoiding crypto volatility
-
-## Proxy Wallets
-
-When a user first uses Polymarket.com to trade they are prompted to create a wallet. When they do this, a 1 of 1 multisig is deployed to Polygon which is controlled/owned by the accessing EOA (either MetaMask wallet or MagicLink wallet). This proxy wallet is where all the user's positions (ERC1155) and USDC.e (ERC20) are held.
-
-Using proxy wallets allows Polymarket to provide an improved UX where multi-step transactions can be executed atomically and transactions can be relayed by relayers on the gas station network. If you are a developer looking to programmatically access positions you accumulated via the Polymarket.com interface, you can either continue using the smart contract wallet by executing transactions through it from the owner account, or you can transfer these assets to a new address using the owner account.
-
-### Deployments
-
-Each user has their own proxy wallet (and thus proxy wallet address). See [Contract Addresses](/resources/contract-addresses) for all deployed factory and trading contract addresses on Polygon.
-
-<Tip>
-  For details on signature types (`EOA`, `POLY_PROXY`, `GNOSIS_SAFE`) and how to
-  configure your trading client for each wallet type, see [Signature
-  Types](/trading/overview#signature-types).
-</Tip>
+<Info>
+  Even with L2 authentication headers, methods that create user orders still
+  require the user to sign the order payload.
+</Info>
 
 ***
 
-## Getting Started
+## Getting API Credentials
 
-Ready to start trading?
+Before making authenticated requests, you need to obtain API credentials using L1 authentication.
 
-<CardGroup cols={2}>
-  <Card title="Quickstart Guide" icon="rocket" href="/quickstart">
-    Set up your account and make your first trade.
-  </Card>
-
-  <Card title="Explore Markets" icon="chart-line" href="https://polymarket.com">
-    Browse active prediction markets on Polymarket.
-  </Card>
-</CardGroup>
-
-
-Built with [Mintlify](https://mintlify.com).
-
-> ## Documentation Index
-> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
-> Use this file to discover all available pages before exploring further.
-
-# Orderbook
-
-> Reading the orderbook, prices, spreads, and midpoints
-
-The orderbook is a public endpoint — no authentication required. You can read prices and liquidity using the SDK or REST API directly.
-
-<CodeGroup>
-  ```typescript TypeScript theme={null}
-  import { ClobClient } from "@polymarket/clob-client";
-
-  const client = new ClobClient("https://clob.polymarket.com", 137);
-  ```
-
-  ```python Python theme={null}
-  from py_clob_client.client import ClobClient
-
-  client = ClobClient("https://clob.polymarket.com", chain_id=137)
-  ```
-
-  ```rust Rust theme={null}
-  use polymarket_client_sdk::clob::Client;
-
-  let client = Client::default(); // https://clob.polymarket.com
-  ```
-
-  ```bash REST theme={null}
-  # Base URL for all orderbook endpoints
-  https://clob.polymarket.com
-  ```
-</CodeGroup>
-
-***
-
-## Get the Orderbook
-
-Fetch the full orderbook for a token, including all resting bid and ask levels:
-
-<CodeGroup>
-  ```typescript TypeScript theme={null}
-  const book = await client.getOrderBook("TOKEN_ID");
-
-  console.log("Best bid:", book.bids[0]);
-  console.log("Best ask:", book.asks[0]);
-  console.log("Tick size:", book.tick_size);
-  ```
-
-  ```python Python theme={null}
-  book = client.get_order_book("TOKEN_ID")
-
-  print("Best bid:", book["bids"][0])
-  print("Best ask:", book["asks"][0])
-  print("Tick size:", book["tick_size"])
-  ```
-
-  ```rust Rust theme={null}
-  use polymarket_client_sdk::clob::types::request::OrderBookSummaryRequest;
-
-  let token_id = "TOKEN_ID".parse()?;
-  let request = OrderBookSummaryRequest::builder().token_id(token_id).build();
-  let book = client.order_book(&request).await?;
-
-  println!("Best bid: {:?}", book.bids[0]);
-  println!("Best ask: {:?}", book.asks[0]);
-  println!("Tick size: {:?}", book.tick_size);
-  ```
-
-  ```bash REST theme={null}
-  curl "https://clob.polymarket.com/book?token_id=TOKEN_ID"
-  ```
-</CodeGroup>
-
-### Response
-
-```json  theme={null}
-{
-  "market": "0xbd31dc8a...",
-  "asset_id": "52114319501245...",
-  "timestamp": "2023-10-21T08:00:00Z",
-  "bids": [
-    { "price": "0.48", "size": "1000" },
-    { "price": "0.47", "size": "2500" }
-  ],
-  "asks": [
-    { "price": "0.52", "size": "800" },
-    { "price": "0.53", "size": "1500" }
-  ],
-  "min_order_size": "5",
-  "tick_size": "0.01",
-  "neg_risk": false,
-  "hash": "0xabc123..."
-}
-```
-
-| Field            | Description                                         |
-| ---------------- | --------------------------------------------------- |
-| `market`         | Condition ID of the market                          |
-| `asset_id`       | Token ID                                            |
-| `bids`           | Buy orders sorted by price (highest first)          |
-| `asks`           | Sell orders sorted by price (lowest first)          |
-| `tick_size`      | Minimum price increment for this market             |
-| `min_order_size` | Minimum order size for this market                  |
-| `neg_risk`       | Whether this is a multi-outcome (neg risk) market   |
-| `hash`           | Hash of the orderbook state — use to detect changes |
-
-***
-
-## Prices
-
-Get the best available price for buying or selling a token:
-
-<CodeGroup>
-  ```typescript TypeScript theme={null}
-  const buyPrice = await client.getPrice("TOKEN_ID", "BUY");
-  console.log("Best ask:", buyPrice.price); // Price you'd pay to buy
-
-  const sellPrice = await client.getPrice("TOKEN_ID", "SELL");
-  console.log("Best bid:", sellPrice.price); // Price you'd receive to sell
-  ```
-
-  ```python Python theme={null}
-  buy_price = client.get_price("TOKEN_ID", "BUY")
-  print("Best ask:", buy_price["price"])
-
-  sell_price = client.get_price("TOKEN_ID", "SELL")
-  print("Best bid:", sell_price["price"])
-  ```
-
-  ```rust Rust theme={null}
-  use polymarket_client_sdk::clob::types::{Side, request::PriceRequest};
-
-  let token_id = "TOKEN_ID".parse()?;
-
-  let buy_req = PriceRequest::builder().token_id(token_id).side(Side::Buy).build();
-  let buy_price = client.price(&buy_req).await?;
-  println!("Best ask: {}", buy_price.price);
-
-  let sell_req = PriceRequest::builder().token_id(token_id).side(Side::Sell).build();
-  let sell_price = client.price(&sell_req).await?;
-  println!("Best bid: {}", sell_price.price);
-  ```
-
-  ```bash REST theme={null}
-  # Best price for buying (lowest ask)
-  curl "https://clob.polymarket.com/price?token_id=TOKEN_ID&side=BUY"
-
-  # Best price for selling (highest bid)
-  curl "https://clob.polymarket.com/price?token_id=TOKEN_ID&side=SELL"
-  ```
-</CodeGroup>
-
-***
-
-## Midpoints
-
-The midpoint is the average of the best bid and best ask. This is the price displayed on Polymarket as the market's implied probability.
-
-<CodeGroup>
-  ```typescript TypeScript theme={null}
-  const midpoint = await client.getMidpoint("TOKEN_ID");
-  console.log("Midpoint:", midpoint.mid); // e.g., "0.50"
-  ```
-
-  ```python Python theme={null}
-  midpoint = client.get_midpoint("TOKEN_ID")
-  print("Midpoint:", midpoint["mid"])
-  ```
-
-  ```rust Rust theme={null}
-  use polymarket_client_sdk::clob::types::request::MidpointRequest;
-
-  let token_id = "TOKEN_ID".parse()?;
-  let request = MidpointRequest::builder().token_id(token_id).build();
-  let midpoint = client.midpoint(&request).await?;
-  println!("Midpoint: {}", midpoint.mid);
-  ```
-
-  ```bash REST theme={null}
-  curl "https://clob.polymarket.com/midpoint?token_id=TOKEN_ID"
-  ```
-</CodeGroup>
-
-<Note>
-  If the bid-ask spread is wider than \$0.10, Polymarket displays the last traded
-  price instead of the midpoint.
-</Note>
-
-***
-
-## Spreads
-
-The spread is the difference between the best ask and the best bid. Tighter spreads indicate more liquid markets.
-
-<CodeGroup>
-  ```typescript TypeScript theme={null}
-  const spread = await client.getSpread("TOKEN_ID");
-  console.log("Spread:", spread.spread); // e.g., "0.04"
-  ```
-
-  ```python Python theme={null}
-  spread = client.get_spread("TOKEN_ID")
-  print("Spread:", spread["spread"])
-  ```
-
-  ```rust Rust theme={null}
-  use polymarket_client_sdk::clob::types::request::SpreadRequest;
-
-  let token_id = "TOKEN_ID".parse()?;
-  let request = SpreadRequest::builder().token_id(token_id).build();
-  let spread = client.spread(&request).await?;
-  println!("Spread: {}", spread.spread);
-  ```
-
-  ```bash REST theme={null}
-  # Spreads use POST for batch requests
-  curl -X POST "https://clob.polymarket.com/spreads" \
-    -H "Content-Type: application/json" \
-    -d '[{"token_id": "TOKEN_ID"}]'
-  ```
-</CodeGroup>
-
-***
-
-## Price History
-
-Fetch historical price data for a token over various time intervals:
-
-<CodeGroup>
-  ```typescript TypeScript theme={null}
-  import { PriceHistoryInterval } from "@polymarket/clob-client";
-
-  const history = await client.getPricesHistory({
-    market: "TOKEN_ID", // Note: this param is named "market" but takes a token ID
-    interval: PriceHistoryInterval.ONE_DAY,
-    fidelity: 60, // Data points every 60 minutes
-  });
-
-  // Each entry: { t: timestamp, p: price }
-  history.forEach((point) => {
-    console.log(`${new Date(point.t * 1000).toISOString()}: ${point.p}`);
-  });
-  ```
-
-  ```python Python theme={null}
-  history = client.get_prices_history(
-      market="TOKEN_ID",  # Note: this param is named "market" but takes a token ID
-      interval="1d",
-      fidelity=60,  # Data points every 60 minutes
-  )
-
-  for point in history:
-      print(f"{point['t']}: {point['p']}")
-  ```
-
-  ```rust Rust theme={null}
-  use polymarket_client_sdk::clob::types::{Interval, TimeRange, request::PriceHistoryRequest};
-
-  let token_id = "TOKEN_ID".parse()?;
-  let request = PriceHistoryRequest::builder()
-      .market(token_id) // Note: this param is named "market" but takes a token ID
-      .time_range(TimeRange::Interval { interval: Interval::OneDay })
-      .fidelity(60) // Data points every 60 minutes
-      .build();
-  let history = client.price_history(&request).await?;
-
-  for point in &history.history {
-      println!("{}: {}", point.t, point.p);
-  }
-  ```
-
-  ```bash REST theme={null}
-  # By interval (relative to now)
-  curl "https://clob.polymarket.com/prices-history?market=TOKEN_ID&interval=1d&fidelity=60"
-
-  # By timestamp range
-  curl "https://clob.polymarket.com/prices-history?market=TOKEN_ID&startTs=1697875200&endTs=1697961600"
-  ```
-</CodeGroup>
-
-| Interval | Description        |
-| -------- | ------------------ |
-| `1h`     | Last hour          |
-| `6h`     | Last 6 hours       |
-| `1d`     | Last day           |
-| `1w`     | Last week          |
-| `1m`     | Last month         |
-| `max`    | All available data |
-
-<Note>
-  `interval` is relative to the current time. Use `startTs` / `endTs` for
-  absolute time ranges. They are mutually exclusive — don't combine them.
-</Note>
-
-***
-
-## Estimate Fill Price
-
-Calculate the effective price you'd pay for a market order of a given size, accounting for orderbook depth:
-
-<CodeGroup>
-  ```typescript TypeScript theme={null}
-  import { Side, OrderType } from "@polymarket/clob-client";
-
-  // What price would I pay to buy $500 worth?
-  const price = await client.calculateMarketPrice(
-    "TOKEN_ID",
-    Side.BUY,
-    500, // dollar amount
-    OrderType.FOK,
-  );
-
-  console.log("Estimated fill price:", price);
-  ```
-
-  ```python Python theme={null}
-  from py_clob_client.clob_types import OrderType
-
-  price = client.calculate_market_price(
-      token_id="TOKEN_ID",
-      side="BUY",
-      amount=500,
-      order_type=OrderType.FOK,
-  )
-
-  print("Estimated fill price:", price)
-  ```
-
-  ```rust Rust theme={null}
-  // The Rust SDK handles market price calculation automatically
-  // inside the market_order() builder when no price is specified.
-  // It walks the orderbook to determine the fill price for you.
-  let order = client
-      .market_order()
-      .token_id("TOKEN_ID".parse()?)
-      .amount(Amount::usdc(dec!(500))?)
-      .side(Side::Buy)
-      .order_type(OrderType::FOK)
-      .build()
-      .await?; // Price auto-calculated from orderbook depth
-  ```
-</CodeGroup>
-
-This walks the orderbook to estimate slippage. Useful for sizing market orders before submitting them.
-
-***
-
-## Batch Requests
-
-All orderbook queries have batch variants for fetching data across multiple tokens in a single request (up to 500 tokens):
-
-| Single                | Batch                   | REST              |
-| --------------------- | ----------------------- | ----------------- |
-| `getOrderBook()`      | `getOrderBooks()`       | `POST /books`     |
-| `getPrice()`          | `getPrices()`           | `POST /prices`    |
-| `getMidpoint()`       | `getMidpoints()`        | `POST /midpoints` |
-| `getSpread()`         | `getSpreads()`          | `POST /spreads`   |
-| `getLastTradePrice()` | `getLastTradesPrices()` | —                 |
-
-<Note>
-  `BookParams` for batch orderbook requests accepts a `token_id` and an optional
-  `side` parameter to filter by bid or ask side.
-</Note>
-
-<CodeGroup>
-  ```typescript TypeScript theme={null}
-  import { Side } from "@polymarket/clob-client";
-
-  // Fetch prices for multiple tokens
-  const prices = await client.getPrices([
-    { token_id: "TOKEN_A", side: Side.BUY },
-    { token_id: "TOKEN_B", side: Side.BUY },
-  ]);
-  // Returns: { "TOKEN_A": { "BUY": "0.52" }, "TOKEN_B": { "BUY": "0.74" } }
-  ```
-
-  ```python Python theme={null}
-  prices = client.get_prices([
-      {"token_id": "TOKEN_A", "side": "BUY"},
-      {"token_id": "TOKEN_B", "side": "BUY"},
-  ])
-  ```
-
-  ```rust Rust theme={null}
-  use polymarket_client_sdk::clob::types::{Side, request::PriceRequest};
-
-  let token_a = "TOKEN_A".parse()?;
-  let token_b = "TOKEN_B".parse()?;
-  let requests = vec![
-      PriceRequest::builder().token_id(token_a).side(Side::Buy).build(),
-      PriceRequest::builder().token_id(token_b).side(Side::Buy).build(),
-  ];
-  let prices = client.prices(&requests).await?;
-  ```
-
-  ```bash REST theme={null}
-  curl -X POST "https://clob.polymarket.com/prices" \
-    -H "Content-Type: application/json" \
-    -d '[
-      {"token_id": "TOKEN_A", "side": "BUY"},
-      {"token_id": "TOKEN_B", "side": "BUY"}
-    ]'
-  ```
-</CodeGroup>
-
-***
-
-## Last Trade Price
-
-Get the price and side of the most recent trade for a token:
-
-<CodeGroup>
-  ```typescript TypeScript theme={null}
-  const lastTrade = await client.getLastTradePrice("TOKEN_ID");
-  console.log(lastTrade.price, lastTrade.side);
-  // e.g., "0.52", "BUY"
-  ```
-
-  ```python Python theme={null}
-  last_trade = client.get_last_trade_price("TOKEN_ID")
-  print(last_trade["price"], last_trade["side"])
-  ```
-
-  ```rust Rust theme={null}
-  use polymarket_client_sdk::clob::types::request::LastTradePriceRequest;
-
-  let token_id = "TOKEN_ID".parse()?;
-  let request = LastTradePriceRequest::builder().token_id(token_id).build();
-  let last_trade = client.last_trade_price(&request).await?;
-  println!("{} {:?}", last_trade.price, last_trade.side);
-  ```
-</CodeGroup>
-
-***
-
-## Real-Time Updates
-
-For live orderbook data, use the WebSocket API instead of polling. The `market` channel streams orderbook changes, price updates, and trade events in real time.
-
-### Connecting
-
-```typescript  theme={null}
-const ws = new WebSocket(
-  "wss://ws-subscriptions-clob.polymarket.com/ws/market",
-);
-
-ws.onopen = () => {
-  ws.send(
-    JSON.stringify({
-      type: "market",
-      assets_ids: ["TOKEN_ID"],
-      custom_feature_enabled: true, // enables best_bid_ask, new_market, market_resolved events
-    }),
-  );
-};
-
-ws.onmessage = (event) => {
-  const data = JSON.parse(event.data);
-  switch (data.event_type) {
-    case "book": // full orderbook snapshot
-    case "price_change": // individual price level update
-    case "last_trade_price": // new trade executed
-    case "tick_size_change": // market tick size changed
-    case "best_bid_ask": // top-of-book update (requires custom_feature_enabled)
-    case "new_market": // new market created (requires custom_feature_enabled)
-    case "market_resolved": // market resolved (requires custom_feature_enabled)
-  }
-};
-```
-
-### Dynamic Subscribe and Unsubscribe
-
-After connecting, you can change your subscriptions without reconnecting:
-
-```typescript  theme={null}
-// Subscribe to additional tokens
-ws.send(
-  JSON.stringify({
-    assets_ids: ["NEW_TOKEN_ID"],
-    operation: "subscribe",
-  }),
-);
-
-// Unsubscribe from tokens
-ws.send(
-  JSON.stringify({
-    assets_ids: ["OLD_TOKEN_ID"],
-    operation: "unsubscribe",
-  }),
-);
-```
-
-### Event Types
-
-| Event              | Trigger                                      | Key Fields                                                             |
-| ------------------ | -------------------------------------------- | ---------------------------------------------------------------------- |
-| `book`             | On subscribe + when a trade affects the book | `bids[]`, `asks[]`, `hash`, `timestamp`                                |
-| `price_change`     | New order placed or order cancelled          | `price_changes[]` with `price`, `size`, `side`, `best_bid`, `best_ask` |
-| `last_trade_price` | Trade executed                               | `price`, `side`, `size`, `fee_rate_bps`                                |
-| `tick_size_change` | Price hits >0.96 or \< 0.04                  | `old_tick_size`, `new_tick_size`                                       |
-| `best_bid_ask`     | Top-of-book changes                          | `best_bid`, `best_ask`, `spread`                                       |
-| `new_market`       | Market created                               | `question`, `assets_ids`, `outcomes`                                   |
-| `market_resolved`  | Market resolved                              | `winning_asset_id`, `winning_outcome`                                  |
-
-<Note>
-  `best_bid_ask`, `new_market`, and `market_resolved` require
-  `custom_feature_enabled: true` in your subscription message.
-</Note>
-
-<Warning>
-  The `tick_size_change` event is critical for trading bots. If the tick size
-  changes and you continue using the old tick size, your orders will be
-  rejected.
-</Warning>
-
-***
-
-## Next Steps
-
-<CardGroup cols={2}>
-  <Card title="Place Orders" icon="plus" href="/trading/orders/create">
-    Create and submit orders using the orderbook data
-  </Card>
-
-  <Card title="Fetching Markets" icon="magnifying-glass" href="/market-data/fetching-markets">
-    Find token IDs for markets you want to trade
-  </Card>
-</CardGroup>
-
-
-Built with [Mintlify](https://mintlify.com).
-
-> ## Documentation Index
-> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
-> Use this file to discover all available pages before exploring further.
-
-# L2 Methods
-
-> These methods require user API credentials (L2 headers). Use these for placing trades and managing your positions.
-
-## Client Initialization
-
-L2 methods require the client to initialize with a signer, signature type, API credentials, and funder address.
+### Using the SDK
 
 <Tabs>
   <Tab title="TypeScript">
-    ```typescript  theme={null}
-    import { ClobClient } from "@polymarket/clob-client";
-    import { Wallet } from "ethers";
+    ```typescript theme={null}
+    import { ClobClient } from "@polymarket/clob-client-v2";
+    import { createWalletClient, http } from "viem";
+    import { privateKeyToAccount } from "viem/accounts";
 
-    const signer = new Wallet(process.env.PRIVATE_KEY);
+    const account = privateKeyToAccount(process.env.PRIVATE_KEY as `0x${string}`);
+    const signer = createWalletClient({ account, transport: http() });
 
-    const apiCreds = {
-      apiKey: process.env.API_KEY,
-      secret: process.env.SECRET,
-      passphrase: process.env.PASSPHRASE,
-    };
-
-    const client = new ClobClient(
-      "https://clob.polymarket.com",
-      137,
+    const client = new ClobClient({
+      host: "https://clob.polymarket.com",
+      chain: 137, // Polygon mainnet
       signer,
-      apiCreds,
-      2, // GNOSIS_SAFE
-      process.env.FUNDER_ADDRESS
-    );
+    });
 
-    // Ready to send authenticated requests
-    const order = await client.postOrder(signedOrder);
+    // Creates new credentials or derives existing ones
+    const credentials = await client.createOrDeriveApiKey();
+
+    console.log(credentials);
+    // {
+    //   key: "550e8400-e29b-41d4-a716-446655440000",
+    //   secret: "base64EncodedSecretString",
+    //   passphrase: "randomPassphraseString"
+    // }
     ```
   </Tab>
 
   <Tab title="Python">
-    ```python  theme={null}
-    from py_clob_client.client import ClobClient
-    from py_clob_client.clob_types import ApiCreds
+    ```python theme={null}
+    from py_clob_client_v2 import ClobClient
     import os
 
-    api_creds = ApiCreds(
-        api_key=os.getenv("API_KEY"),
-        api_secret=os.getenv("SECRET"),
-        api_passphrase=os.getenv("PASSPHRASE")
+    client = ClobClient(
+        host="https://clob.polymarket.com",
+        chain_id=137,  # Polygon mainnet
+        key=os.getenv("PRIVATE_KEY")
     )
+
+    # Creates new credentials or derives existing ones
+    credentials = client.create_or_derive_api_key()
+
+    print(credentials)
+    # {
+    #     "apiKey": "550e8400-e29b-41d4-a716-446655440000",
+    #     "secret": "base64EncodedSecretString",
+    #     "passphrase": "randomPassphraseString"
+    # }
+    ```
+  </Tab>
+
+  <Tab title="Rust">
+    ```rust theme={null}
+    use std::str::FromStr;
+    use polymarket_client_sdk_v2::POLYGON;
+    use polymarket_client_sdk_v2::auth::{LocalSigner, Signer};
+    use polymarket_client_sdk_v2::clob::{Client, Config};
+
+    let private_key = std::env::var("POLYMARKET_PRIVATE_KEY")?;
+    let signer = LocalSigner::from_str(&private_key)?
+        .with_chain_id(Some(POLYGON));
+
+    // Creates new credentials or derives existing ones,
+    // then initializes the authenticated client — all in one step
+    let client = Client::new("https://clob.polymarket.com", Config::default())?
+        .authentication_builder(&signer)
+        .authenticate()
+        .await?;
+
+    let credentials = client.credentials();
+    println!("API Key: {}", credentials.key());
+    ```
+  </Tab>
+</Tabs>
+
+<Warning>
+  **Never commit private keys to version control.** Always use environment
+  variables or secure key management systems.
+</Warning>
+
+### Using the REST API
+
+While we highly recommend using our provided clients to handle signing and authentication, the following is for developers who choose NOT to use our [Python](https://github.com/Polymarket/py-clob-client-v2) or [TypeScript](https://github.com/Polymarket/clob-client-v2) clients.
+
+**Create API Credentials**
+
+```bash theme={null}
+POST https://clob.polymarket.com/auth/api-key
+```
+
+**Derive API Credentials**
+
+```bash theme={null}
+GET https://clob.polymarket.com/auth/derive-api-key
+```
+
+Required L1 headers:
+
+| Header           | Description            |
+| ---------------- | ---------------------- |
+| `POLY_ADDRESS`   | Polygon signer address |
+| `POLY_SIGNATURE` | CLOB EIP-712 signature |
+| `POLY_TIMESTAMP` | Current UNIX timestamp |
+| `POLY_NONCE`     | Nonce (default: 0)     |
+
+The `POLY_SIGNATURE` is generated by signing the following EIP-712 struct:
+
+<Accordion title="EIP-712 Signing Example">
+  <CodeGroup>
+    ```typescript TypeScript theme={null}
+    const domain = {
+      name: "ClobAuthDomain",
+      version: "1",
+      chainId: chainId, // Polygon Chain ID 137
+    };
+
+    const types = {
+      ClobAuth: [
+        { name: "address", type: "address" },
+        { name: "timestamp", type: "string" },
+        { name: "nonce", type: "uint256" },
+        { name: "message", type: "string" },
+      ],
+    };
+
+    const value = {
+      address: signingAddress, // The Signing address
+      timestamp: ts,            // The CLOB API server timestamp
+      nonce: nonce,             // The nonce used
+      message: "This message attests that I control the given wallet",
+    };
+
+    const sig = await signer._signTypedData(domain, types, value);
+    ```
+
+    ```python Python theme={null}
+    domain = {
+        "name": "ClobAuthDomain",
+        "version": "1",
+        "chainId": chainId,  # Polygon Chain ID 137
+    }
+
+    types = {
+        "ClobAuth": [
+            {"name": "address", "type": "address"},
+            {"name": "timestamp", "type": "string"},
+            {"name": "nonce", "type": "uint256"},
+            {"name": "message", "type": "string"},
+        ]
+    }
+
+    value = {
+        "address": signingAddress,  # The signing address
+        "timestamp": ts,            # The CLOB API server timestamp
+        "nonce": nonce,             # The nonce used
+        "message": "This message attests that I control the given wallet",
+    }
+
+    sig = signer.sign_typed_data(domain, types, value)
+    ```
+  </CodeGroup>
+</Accordion>
+
+Reference implementations:
+
+* [TypeScript](https://github.com/Polymarket/clob-client-v2/blob/main/src/signing/eip712.ts)
+* [Python](https://github.com/Polymarket/py-clob-client-v2/blob/main/py_clob_client_v2/signing/eip712.py)
+
+Response:
+
+```json theme={null}
+{
+  "apiKey": "550e8400-e29b-41d4-a716-446655440000",
+  "secret": "base64EncodedSecretString",
+  "passphrase": "randomPassphraseString"
+}
+```
+
+**You'll need all three values for L2 authentication.**
+
+***
+
+## L2 Authentication Headers
+
+All trading endpoints require these 5 headers:
+
+| Header            | Description                   |
+| ----------------- | ----------------------------- |
+| `POLY_ADDRESS`    | Polygon signer address        |
+| `POLY_SIGNATURE`  | HMAC signature for request    |
+| `POLY_TIMESTAMP`  | Current UNIX timestamp        |
+| `POLY_API_KEY`    | User's API `apiKey` value     |
+| `POLY_PASSPHRASE` | User's API `passphrase` value |
+
+The `POLY_SIGNATURE` for L2 is an HMAC-SHA256 signature created using the user's API credentials `secret` value. Reference implementations can be found in the [TypeScript](https://github.com/Polymarket/clob-client-v2/blob/main/src/signing/hmac.ts) and [Python](https://github.com/Polymarket/py-clob-client-v2/blob/main/py_clob_client_v2/signing/hmac.py) clients.
+
+### CLOB Client
+
+<Tabs>
+  <Tab title="TypeScript">
+    ```typescript theme={null}
+    import { ClobClient, Side } from "@polymarket/clob-client-v2";
+    import { createWalletClient, http } from "viem";
+    import { privateKeyToAccount } from "viem/accounts";
+
+    const account = privateKeyToAccount(process.env.PRIVATE_KEY as `0x${string}`);
+    const signer = createWalletClient({ account, transport: http() });
+    const depositWalletAddress = process.env.DEPOSIT_WALLET_ADDRESS!;
+
+    const client = new ClobClient({
+      host: "https://clob.polymarket.com",
+      chain: 137,
+      signer,
+      creds: apiCreds, // Generated from L1 auth, API credentials enable L2 methods
+      signatureType: 3, // POLY_1271, explained below
+      funderAddress: depositWalletAddress, // deposit wallet funder
+    });
+
+    // Now you can trade!
+    const order = await client.createAndPostOrder(
+      { tokenID: "123456", price: 0.65, size: 100, side: Side.BUY },
+      { tickSize: "0.01", negRisk: false }
+    );
+    ```
+  </Tab>
+
+  <Tab title="Python">
+    ```python theme={null}
+    from py_clob_client_v2 import ClobClient, OrderArgs, PartialCreateOrderOptions
+    from py_clob_client_v2.order_builder.constants import BUY
+    import os
 
     client = ClobClient(
         host="https://clob.polymarket.com",
         chain_id=137,
         key=os.getenv("PRIVATE_KEY"),
-        creds=api_creds,
-        signature_type=2,  # GNOSIS_SAFE
-        funder=os.getenv("FUNDER_ADDRESS")
+        creds=api_creds,  # Generated from L1 auth, API credentials enable L2 methods
+        signature_type=3,  # POLY_1271, explained below
+        funder=os.getenv("DEPOSIT_WALLET_ADDRESS")
     )
 
-    # Ready to send authenticated requests
-    order = client.post_order(signed_order)
+    # Now you can trade!
+    order = client.create_and_post_order(
+        OrderArgs(token_id="123456", price=0.65, size=100, side=BUY),
+        options=PartialCreateOrderOptions(tick_size="0.01", neg_risk=False),
+    )
+    ```
+  </Tab>
+
+  <Tab title="Rust">
+    ```rust theme={null}
+    use polymarket_client_sdk_v2::clob::types::{Side, SignatureType};
+    use polymarket_client_sdk_v2::types::dec;
+
+    let deposit_wallet = std::env::var("DEPOSIT_WALLET_ADDRESS")?.parse()?;
+
+    let client = Client::new("https://clob.polymarket.com", Config::default())?
+        .authentication_builder(&signer)
+        .funder(deposit_wallet)
+        .signature_type(SignatureType::Poly1271)
+        .authenticate()
+        .await?;
+
+    // Now you can trade!
+    let order = client.limit_order()
+        .token_id("123456".parse()?)
+        .price(dec!(0.65))
+        .size(dec!(100))
+        .side(Side::Buy)
+        .build().await?;
+    let signed = client.sign(&signer, order).await?;
+    let response = client.post_order(signed).await?;
     ```
   </Tab>
 </Tabs>
 
-***
-
-## Order Creation and Management
-
-***
-
-### createAndPostOrder
-
-Convenience method that creates, signs, and posts a limit order in a single call. Use when you want to buy or sell at a specific price.
-
-```typescript Signature theme={null}
-async createAndPostOrder(
-  userOrder: UserOrder,
-  options?: Partial<CreateOrderOptions>,
-  orderType?: OrderType.GTC | OrderType.GTD, // Defaults to GTC
-): Promise<OrderResponse>
-```
-
-**Params**
-
-<ResponseField name="tokenID" type="string">
-  The token ID of the outcome to trade.
-</ResponseField>
-
-<ResponseField name="price" type="number">
-  The limit price for the order.
-</ResponseField>
-
-<ResponseField name="size" type="number">
-  The size of the order.
-</ResponseField>
-
-<ResponseField name="side" type="Side">
-  The side of the order (buy or sell).
-</ResponseField>
-
-<ResponseField name="feeRateBps" type="number">
-  Optional fee rate in basis points.
-</ResponseField>
-
-<ResponseField name="nonce" type="number">
-  Optional nonce for the order.
-</ResponseField>
-
-<ResponseField name="expiration" type="number">
-  Optional expiration timestamp for the order.
-</ResponseField>
-
-<ResponseField name="taker" type="string">
-  Optional taker address.
-</ResponseField>
-
-<ResponseField name="tickSize" type="TickSize">
-  Tick size for the order. One of `"0.1"`, `"0.01"`, `"0.001"`, `"0.0001"`.
-</ResponseField>
-
-<ResponseField name="negRisk" type="boolean">
-  Optional. Whether the market uses negative risk.
-</ResponseField>
-
-**Response**
-
-<ResponseField name="success" type="boolean">
-  Whether the order was successfully placed.
-</ResponseField>
-
-<ResponseField name="errorMsg" type="string">
-  Error message if the order was not successful.
-</ResponseField>
-
-<ResponseField name="orderID" type="string">
-  The ID of the placed order.
-</ResponseField>
-
-<ResponseField name="transactionsHashes" type="string[]">
-  Array of transaction hashes associated with the order.
-</ResponseField>
-
-<ResponseField name="status" type="string">
-  The current status of the order.
-</ResponseField>
-
-<ResponseField name="takingAmount" type="string">
-  The amount being taken in the order.
-</ResponseField>
-
-<ResponseField name="makingAmount" type="string">
-  The amount being made in the order.
-</ResponseField>
+<Info>
+  Even with L2 authentication headers, methods that create user orders still
+  require the user to sign the order payload.
+</Info>
 
 ***
 
-### createAndPostMarketOrder
+## Signature Types and Funder
 
-Convenience method that creates, signs, and posts a market order in a single call. Use when you want to buy or sell at the current market price.
+When initializing the L2 client, you must specify your wallet **signatureType** and the **funder** address which holds the funds:
 
-```typescript Signature theme={null}
-async createAndPostMarketOrder(
-  userMarketOrder: UserMarketOrder,
-  options?: Partial<CreateOrderOptions>,
-  orderType?: OrderType.FOK | OrderType.FAK, // Defaults to FOK
-): Promise<OrderResponse>
-```
+| Signature Type | Value | Description                                                                                                                |
+| -------------- | ----- | -------------------------------------------------------------------------------------------------------------------------- |
+| EOA            | `0`   | Standard Ethereum wallet (MetaMask). Funder is the EOA address and will need POL to pay gas on transactions.               |
+| POLY\_PROXY    | `1`   | Existing Polymarket proxy wallet flow, commonly used by users who logged in via Magic Link email/Google.                   |
+| GNOSIS\_SAFE   | `2`   | Existing Gnosis Safe wallet flow. Existing Safe users can continue using this type.                                        |
+| POLY\_1271     | `3`   | Deposit wallet flow for new API users. The funder is the deposit wallet address and orders are validated through ERC-1271. |
 
-**Params**
-
-<ResponseField name="tokenID" type="string">
-  The token ID of the outcome to trade.
-</ResponseField>
-
-<ResponseField name="amount" type="number">
-  The amount for the market order.
-</ResponseField>
-
-<ResponseField name="side" type="Side">
-  The side of the order (buy or sell).
-</ResponseField>
-
-<ResponseField name="price" type="number">
-  Optional price hint for the market order.
-</ResponseField>
-
-<ResponseField name="feeRateBps" type="number">
-  Optional fee rate in basis points.
-</ResponseField>
-
-<ResponseField name="nonce" type="number">
-  Optional nonce for the order.
-</ResponseField>
-
-<ResponseField name="taker" type="string">
-  Optional taker address.
-</ResponseField>
-
-<ResponseField name="orderType" type="OrderType.FOK | OrderType.FAK">
-  Optional order type override. Defaults to FOK.
-</ResponseField>
-
-**Response**
-
-<ResponseField name="success" type="boolean">
-  Whether the order was successfully placed.
-</ResponseField>
-
-<ResponseField name="errorMsg" type="string">
-  Error message if the order was not successful.
-</ResponseField>
-
-<ResponseField name="orderID" type="string">
-  The ID of the placed order.
-</ResponseField>
-
-<ResponseField name="transactionsHashes" type="string[]">
-  Array of transaction hashes associated with the order.
-</ResponseField>
-
-<ResponseField name="status" type="string">
-  The current status of the order.
-</ResponseField>
-
-<ResponseField name="takingAmount" type="string">
-  The amount being taken in the order.
-</ResponseField>
-
-<ResponseField name="makingAmount" type="string">
-  The amount being made in the order.
-</ResponseField>
+<Tip>
+  New API users should use deposit wallets with `POLY_1271`. Existing Safe and
+  Proxy users are unaffected and can keep using their current funder address and
+  signature type. See the [Deposit Wallet Guide](/trading/deposit-wallets) for
+  setup details.
+</Tip>
 
 ***
 
-### postOrder
+## Security Best Practices
 
-Posts a pre-signed order to the CLOB. Use with [`createOrder()`](/trading/clients/l1#createorder) or [`createMarketOrder()`](/trading/clients/l1#createmarketorder) from L1 methods.
+<AccordionGroup>
+  <Accordion title="Never expose private keys">
+    Store private keys in environment variables or secure key management systems. Never commit them to version control.
 
-```typescript Signature theme={null}
-async postOrder(
-  order: SignedOrder,
-  orderType?: OrderType, // Defaults to GTC
-  postOnly?: boolean,    // Defaults to false
-): Promise<OrderResponse>
-```
+    ```bash theme={null}
+    # .env (never commit this file)
+    PRIVATE_KEY=0x...
+    ```
+  </Accordion>
 
-***
-
-### postOrders
-
-Posts up to 15 pre-signed orders in a single batch.
-
-```typescript Signature theme={null}
-async postOrders(
-  args: PostOrdersArgs[],
-): Promise<OrderResponse[]>
-```
-
-**Params**
-
-<ResponseField name="order" type="SignedOrder">
-  The pre-signed order to post.
-</ResponseField>
-
-<ResponseField name="orderType" type="OrderType">
-  The order type (e.g. GTC, FOK, FAK).
-</ResponseField>
-
-<ResponseField name="postOnly" type="boolean">
-  Optional. Whether to post the order as post-only. Defaults to false.
-</ResponseField>
+  <Accordion title="Implement request signing on the server">
+    Never expose your API secret in client-side code. All authenticated requests should originate from your backend.
+  </Accordion>
+</AccordionGroup>
 
 ***
 
-### cancelOrder
+## Troubleshooting
 
-Cancels a single open order.
+<AccordionGroup>
+  <Accordion title="Error - INVALID_SIGNATURE">
+    Your wallet's private key is incorrect or improperly formatted.
 
-```typescript Signature theme={null}
-async cancelOrder(orderID: string): Promise<CancelOrdersResponse>
-```
+    **Solutions:**
 
-**Response**
+    * Verify your private key is a valid hex string (starts with "0x")
+    * Ensure you're using the correct key for the intended address
+    * Check that the key has proper permissions
+  </Accordion>
 
-<ResponseField name="canceled" type="string[]">
-  Array of order IDs that were successfully canceled.
-</ResponseField>
+  <Accordion title="Error - NONCE_ALREADY_USED">
+    The nonce you provided has already been used to create an API key.
 
-<ResponseField name="not_canceled" type="Record<string, any>">
-  Map of order IDs to reasons why they could not be canceled.
-</ResponseField>
+    **Solutions:**
 
-***
+    * Use `deriveApiKey()` with the same nonce to retrieve existing credentials
+    * Or use a different nonce with `createApiKey()`
+  </Accordion>
 
-### cancelOrders
+  <Accordion title="Error - Invalid Funder Address">
+    Your funder address is incorrect or doesn't match your wallet.
 
-Cancels multiple orders in a single batch.
+    **Solution:** Check your Polymarket profile address at [polymarket.com/settings](https://polymarket.com/settings).
 
-```typescript Signature theme={null}
-async cancelOrders(orderIDs: string[]): Promise<CancelOrdersResponse>
-```
+    If it does not exist or user has never logged into Polymarket.com, deploy it first before creating L2 authentication.
+  </Accordion>
 
-***
+  <Accordion title="Lost both credentials and nonce">
+    Unfortunately, there's no way to recover lost API credentials without the nonce. You'll need to create new credentials:
 
-### cancelAll
-
-Cancels all open orders.
-
-```typescript Signature theme={null}
-async cancelAll(): Promise<CancelOrdersResponse>
-```
-
-***
-
-### cancelMarketOrders
-
-Cancels all open orders for a specific market.
-
-```typescript Signature theme={null}
-async cancelMarketOrders(
-  payload: OrderMarketCancelParams
-): Promise<CancelOrdersResponse>
-```
-
-**Params**
-
-<ResponseField name="market" type="string">
-  Optional. The market condition ID to cancel orders for.
-</ResponseField>
-
-<ResponseField name="asset_id" type="string">
-  Optional. The token ID to cancel orders for.
-</ResponseField>
-
-***
-
-## Order and Trade Queries
-
-***
-
-### getOrder
-
-Get details for a specific order by ID.
-
-```typescript Signature theme={null}
-async getOrder(orderID: string): Promise<OpenOrder>
-```
-
-**Response**
-
-<ResponseField name="id" type="string">
-  The unique order ID.
-</ResponseField>
-
-<ResponseField name="status" type="string">
-  The current status of the order.
-</ResponseField>
-
-<ResponseField name="owner" type="string">
-  The API key of the order owner.
-</ResponseField>
-
-<ResponseField name="maker_address" type="string">
-  The on-chain address of the order maker.
-</ResponseField>
-
-<ResponseField name="market" type="string">
-  The market condition ID the order belongs to.
-</ResponseField>
-
-<ResponseField name="asset_id" type="string">
-  The token ID the order is for.
-</ResponseField>
-
-<ResponseField name="side" type="string">
-  The side of the order (BUY or SELL).
-</ResponseField>
-
-<ResponseField name="original_size" type="string">
-  The original size of the order when it was placed.
-</ResponseField>
-
-<ResponseField name="size_matched" type="string">
-  The amount of the order that has been matched so far.
-</ResponseField>
-
-<ResponseField name="price" type="string">
-  The limit price of the order.
-</ResponseField>
-
-<ResponseField name="associate_trades" type="string[]">
-  Array of trade IDs associated with this order.
-</ResponseField>
-
-<ResponseField name="outcome" type="string">
-  The outcome label for the order's token.
-</ResponseField>
-
-<ResponseField name="created_at" type="number">
-  Unix timestamp of when the order was created.
-</ResponseField>
-
-<ResponseField name="expiration" type="string">
-  The expiration time of the order.
-</ResponseField>
-
-<ResponseField name="order_type" type="string">
-  The order type (e.g. GTC, FOK, FAK, GTD).
-</ResponseField>
-
-***
-
-### getOpenOrders
-
-Get all your open orders.
-
-```typescript Signature theme={null}
-async getOpenOrders(
-  params?: OpenOrderParams,
-  only_first_page?: boolean,
-): Promise<OpenOrder[]>
-```
-
-**Params**
-
-<ResponseField name="id" type="string">
-  Optional. Filter by order ID.
-</ResponseField>
-
-<ResponseField name="market" type="string">
-  Optional. Filter by market condition ID.
-</ResponseField>
-
-<ResponseField name="asset_id" type="string">
-  Optional. Filter by token ID.
-</ResponseField>
-
-***
-
-### getTrades
-
-Get your trade history (filled orders).
-
-```typescript Signature theme={null}
-async getTrades(
-  params?: TradeParams,
-  only_first_page?: boolean,
-): Promise<Trade[]>
-```
-
-**Params**
-
-<ResponseField name="id" type="string">
-  Optional. Filter by trade ID.
-</ResponseField>
-
-<ResponseField name="maker_address" type="string">
-  Optional. Filter by maker address.
-</ResponseField>
-
-<ResponseField name="market" type="string">
-  Optional. Filter by market condition ID.
-</ResponseField>
-
-<ResponseField name="asset_id" type="string">
-  Optional. Filter by token ID.
-</ResponseField>
-
-<ResponseField name="before" type="string">
-  Optional. Return trades before this timestamp.
-</ResponseField>
-
-<ResponseField name="after" type="string">
-  Optional. Return trades after this timestamp.
-</ResponseField>
-
-**Response**
-
-<ResponseField name="id" type="string">
-  The unique trade ID.
-</ResponseField>
-
-<ResponseField name="taker_order_id" type="string">
-  The order ID of the taker side.
-</ResponseField>
-
-<ResponseField name="market" type="string">
-  The market condition ID for the trade.
-</ResponseField>
-
-<ResponseField name="asset_id" type="string">
-  The token ID for the trade.
-</ResponseField>
-
-<ResponseField name="side" type="Side">
-  The side of the trade (BUY or SELL).
-</ResponseField>
-
-<ResponseField name="size" type="string">
-  The size of the trade.
-</ResponseField>
-
-<ResponseField name="fee_rate_bps" type="string">
-  The fee rate in basis points.
-</ResponseField>
-
-<ResponseField name="price" type="string">
-  The price at which the trade was matched.
-</ResponseField>
-
-<ResponseField name="status" type="string">
-  The current status of the trade.
-</ResponseField>
-
-<ResponseField name="match_time" type="string">
-  The time at which the trade was matched.
-</ResponseField>
-
-<ResponseField name="last_update" type="string">
-  The time of the last update to this trade.
-</ResponseField>
-
-<ResponseField name="outcome" type="string">
-  The outcome label for the traded token.
-</ResponseField>
-
-<ResponseField name="bucket_index" type="number">
-  The bucket index for the trade.
-</ResponseField>
-
-<ResponseField name="owner" type="string">
-  The API key of the trade owner.
-</ResponseField>
-
-<ResponseField name="maker_address" type="string">
-  The on-chain address of the maker.
-</ResponseField>
-
-<ResponseField name="maker_orders" type="MakerOrder[]">
-  Array of maker order objects that participated in this trade. Each `MakerOrder` contains the following fields:
-</ResponseField>
-
-<ResponseField name="maker_orders[].order_id" type="string">
-  The maker order ID.
-</ResponseField>
-
-<ResponseField name="maker_orders[].owner" type="string">
-  The API key of the maker order owner.
-</ResponseField>
-
-<ResponseField name="maker_orders[].maker_address" type="string">
-  The on-chain address of the maker order maker.
-</ResponseField>
-
-<ResponseField name="maker_orders[].matched_amount" type="string">
-  The amount matched for this maker order.
-</ResponseField>
-
-<ResponseField name="maker_orders[].price" type="string">
-  The price of the maker order.
-</ResponseField>
-
-<ResponseField name="maker_orders[].fee_rate_bps" type="string">
-  The fee rate in basis points for the maker order.
-</ResponseField>
-
-<ResponseField name="maker_orders[].asset_id" type="string">
-  The token ID for the maker order.
-</ResponseField>
-
-<ResponseField name="maker_orders[].outcome" type="string">
-  The outcome label for the maker order's token.
-</ResponseField>
-
-<ResponseField name="maker_orders[].side" type="Side">
-  The side of the maker order (BUY or SELL).
-</ResponseField>
-
-<ResponseField name="transaction_hash" type="string">
-  The on-chain transaction hash for the trade.
-</ResponseField>
-
-<ResponseField name="trader_side" type="&#x22;TAKER&#x22; | &#x22;MAKER&#x22;">
-  Whether the authenticated user is the taker or a maker in this trade.
-</ResponseField>
-
-***
-
-### getTradesPaginated
-
-Get trade history with pagination for large result sets.
-
-```typescript Signature theme={null}
-async getTradesPaginated(
-  params?: TradeParams,
-): Promise<TradesPaginatedResponse>
-```
-
-**Response**
-
-<ResponseField name="trades" type="Trade[]">
-  Array of trade objects for the current page.
-</ResponseField>
-
-<ResponseField name="limit" type="number">
-  The maximum number of trades returned per page.
-</ResponseField>
-
-<ResponseField name="count" type="number">
-  The total number of trades matching the query.
-</ResponseField>
-
-***
-
-## Balance and Allowances
-
-***
-
-### getBalanceAllowance
-
-Get your balance and allowance for specific tokens.
-
-```typescript Signature theme={null}
-async getBalanceAllowance(
-  params?: BalanceAllowanceParams
-): Promise<BalanceAllowanceResponse>
-```
-
-**Params**
-
-<ResponseField name="asset_type" type="AssetType">
-  The type of asset to query. One of `"COLLATERAL"` or `"CONDITIONAL"`.
-</ResponseField>
-
-<ResponseField name="token_id" type="string">
-  Optional. The token ID to query (required when `asset_type` is `CONDITIONAL`).
-</ResponseField>
-
-**Response**
-
-<ResponseField name="balance" type="string">
-  The current balance for the specified asset.
-</ResponseField>
-
-<ResponseField name="allowance" type="string">
-  The current allowance for the specified asset.
-</ResponseField>
-
-***
-
-### updateBalanceAllowance
-
-Updates the cached balance and allowance for specific tokens.
-
-```typescript Signature theme={null}
-async updateBalanceAllowance(
-  params?: BalanceAllowanceParams
-): Promise<void>
-```
-
-***
-
-## API Key Management
-
-***
-
-### getApiKeys
-
-Get all API keys associated with your account.
-
-```typescript Signature theme={null}
-async getApiKeys(): Promise<ApiKeysResponse>
-```
-
-**Response**
-
-<ResponseField name="apiKeys" type="ApiKeyCreds[]">
-  Array of API key credential objects associated with the account.
-</ResponseField>
-
-***
-
-### deleteApiKey
-
-Deletes (revokes) the currently authenticated API key.
-
-```typescript Signature theme={null}
-async deleteApiKey(): Promise<any>
-```
-
-***
-
-## Notifications
-
-***
-
-### getNotifications
-
-Retrieves all event notifications for the authenticated user. Records are automatically removed after 48 hours.
-
-```typescript Signature theme={null}
-async getNotifications(): Promise<Notification[]>
-```
-
-**Response**
-
-<ResponseField name="id" type="number">
-  Unique notification ID.
-</ResponseField>
-
-<ResponseField name="owner" type="string">
-  The user's API key, or an empty string for global notifications.
-</ResponseField>
-
-<ResponseField name="payload" type="any">
-  Type-specific payload data for the notification.
-</ResponseField>
-
-<ResponseField name="timestamp" type="number">
-  Optional Unix timestamp of when the notification was created.
-</ResponseField>
-
-<ResponseField name="type" type="number">
-  Notification type (see below).
-</ResponseField>
-
-| Name               | Value | Description                              |
-| ------------------ | ----- | ---------------------------------------- |
-| Order Cancellation | `1`   | User's order was canceled                |
-| Order Fill         | `2`   | User's order was filled (maker or taker) |
-| Market Resolved    | `4`   | Market was resolved                      |
-
-***
-
-### dropNotifications
-
-Mark notifications as read/dismissed.
-
-```typescript Signature theme={null}
-async dropNotifications(params?: DropNotificationParams): Promise<void>
-```
-
-**Params**
-
-<ResponseField name="ids" type="string[]">
-  Array of notification IDs to dismiss.
-</ResponseField>
-
-***
-
-## See Also
-
-<CardGroup cols={2}>
-  <Card title="Authentication" icon="shield" href="/api-reference/authentication">
-    Deep dive into L1 and L2 authentication.
-  </Card>
-
-  <Card title="L1 Methods" icon="key" href="/trading/clients/l1">
-    Sign orders and derive API credentials with your private key.
-  </Card>
-
-  <Card title="Public Methods" icon="globe" href="/trading/clients/public">
-    Read market data and orderbooks without auth.
-  </Card>
-
-  <Card title="WebSocket" icon="bolt" href="/market-data/websocket/overview">
-    Real-time market data streaming.
-  </Card>
-</CardGroup>
-
-
-Built with [Mintlify](https://mintlify.com).
-
-> ## Documentation Index
-> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
-> Use this file to discover all available pages before exploring further.
-
-# Fees
-
-> Understanding trading fees on Polymarket
-
-Polymarket charges a small taker fee on certain markets. These fees fund the [Maker Rebates Program](/market-makers/maker-rebates), which redistributes fees daily to market makers to incentivize deeper liquidity and tighter spreads.
-
-**Geopolitical and world events markets are fee-free.** Polymarket does not charge fees or profit from trading activity on these markets. There are also no Polymarket fees to deposit or withdraw USDC (though intermediaries like Coinbase or MoonPay may charge their own fees).
-
-<Note>
-  Fees apply only to markets deployed on or after the activation date. Pre-existing markets are unaffected. Markets with fees enabled have `feesEnabled` set to `true` on the market object.
-</Note>
-
-***
-
-## Current Fee Structure
-
-The following fee parameters are currently live. **New fee parameters will take effect on March 30, 2026** — see [Upcoming Fee Structure](#upcoming-fee-structure) below.
-
-Currently, only **Crypto** and **Sports** markets have taker fees enabled.
-
-| Category | Fee Rate | Exponent | Maker Rebate | Peak Effective Rate |
-| -------- | -------- | -------- | ------------ | ------------------- |
-| Crypto   | 0.25     | 2        | 20%          | 1.56%               |
-| Sports   | 0.0175   | 1        | 25%          | 0.44%               |
-
-<Frame>
-  <div className="p-3 bg-white rounded-xl">
-    <iframe title="Fee Curves (Current)" aria-label="Line chart" id="datawrapper-chart-Z7OnS" src="https://datawrapper.dwcdn.net/Z7OnS/" scrolling="no" frameborder="0" width={700} style={{ width: "0", minWidth: "100% !important", border: "none" }} height="450" data-external="1" />
-  </div>
-</Frame>
-
-<Tabs>
-  <Tab title="Crypto">
-    | Price  | Trade Value | Fee (USDC) | Effective Rate |
-    | ------ | ----------- | ---------- | -------------- |
-    | \$0.01 | \$1         | \$0.00     | 0.00%          |
-    | \$0.05 | \$5         | \$0.003    | 0.06%          |
-    | \$0.10 | \$10        | \$0.02     | 0.20%          |
-    | \$0.15 | \$15        | \$0.06     | 0.41%          |
-    | \$0.20 | \$20        | \$0.13     | 0.64%          |
-    | \$0.25 | \$25        | \$0.22     | 0.88%          |
-    | \$0.30 | \$30        | \$0.33     | 1.10%          |
-    | \$0.35 | \$35        | \$0.45     | 1.29%          |
-    | \$0.40 | \$40        | \$0.58     | 1.44%          |
-    | \$0.45 | \$45        | \$0.69     | 1.53%          |
-    | \$0.50 | \$50        | \$0.78     | **1.56%**      |
-    | \$0.55 | \$55        | \$0.84     | 1.53%          |
-    | \$0.60 | \$60        | \$0.86     | 1.44%          |
-    | \$0.65 | \$65        | \$0.84     | 1.29%          |
-    | \$0.70 | \$70        | \$0.77     | 1.10%          |
-    | \$0.75 | \$75        | \$0.66     | 0.88%          |
-    | \$0.80 | \$80        | \$0.51     | 0.64%          |
-    | \$0.85 | \$85        | \$0.35     | 0.41%          |
-    | \$0.90 | \$90        | \$0.18     | 0.20%          |
-    | \$0.95 | \$95        | \$0.05     | 0.06%          |
-    | \$0.99 | \$99        | \$0.00     | 0.00%          |
-  </Tab>
-
-  <Tab title="Sports">
-    | Price  | Trade Value | Fee (USDC) | Effective Rate |
-    | ------ | ----------- | ---------- | -------------- |
-    | \$0.01 | \$1         | \$0.00     | 0.02%          |
-    | \$0.05 | \$5         | \$0.00     | 0.08%          |
-    | \$0.10 | \$10        | \$0.02     | 0.16%          |
-    | \$0.15 | \$15        | \$0.03     | 0.22%          |
-    | \$0.20 | \$20        | \$0.06     | 0.28%          |
-    | \$0.25 | \$25        | \$0.08     | 0.33%          |
-    | \$0.30 | \$30        | \$0.11     | 0.37%          |
-    | \$0.35 | \$35        | \$0.14     | 0.40%          |
-    | \$0.40 | \$40        | \$0.17     | 0.42%          |
-    | \$0.45 | \$45        | \$0.19     | 0.43%          |
-    | \$0.50 | \$50        | \$0.22     | **0.44%**      |
-    | \$0.55 | \$55        | \$0.24     | 0.43%          |
-    | \$0.60 | \$60        | \$0.25     | 0.42%          |
-    | \$0.65 | \$65        | \$0.26     | 0.40%          |
-    | \$0.70 | \$70        | \$0.26     | 0.37%          |
-    | \$0.75 | \$75        | \$0.25     | 0.33%          |
-    | \$0.80 | \$80        | \$0.22     | 0.28%          |
-    | \$0.85 | \$85        | \$0.19     | 0.22%          |
-    | \$0.90 | \$90        | \$0.14     | 0.16%          |
-    | \$0.95 | \$95        | \$0.08     | 0.08%          |
-    | \$0.99 | \$99        | \$0.02     | 0.02%          |
-  </Tab>
-</Tabs>
-
-***
-
-## Upcoming Fee Structure
-
-**Effective March 30, 2026**, fee parameters are expanding to cover more market categories with updated rates.
-
-Fees are calculated using the following formula:
-
-```text  theme={null}
-fee = C × p × feeRate × (p × (1 - p))^exponent
-```
-
-Where **C** = number of shares traded and **p** = price of the shares. The fee parameters differ by market category:
-
-| Category        | Fee Rate | Exponent | Maker Rebate | Peak Effective Rate |
-| --------------- | -------- | -------- | ------------ | ------------------- |
-| Crypto          | 0.072    | 1        | 20%          | 1.80%               |
-| Sports          | 0.03     | 1        | 25%          | 0.75%               |
-| Finance         | 0.04     | 1        | 50%          | 1.00%               |
-| Politics        | 0.04     | 1        | 25%          | 1.00%               |
-| Economics       | 0.03     | 0.5      | 25%          | 1.50%               |
-| Culture         | 0.05     | 1        | 25%          | 1.25%               |
-| Weather         | 0.025    | 0.5      | 25%          | 1.25%               |
-| Other / General | 0.2      | 2        | 25%          | 1.25%               |
-| Mentions        | 0.25     | 2        | 25%          | 1.56%               |
-| Tech            | 0.04     | 1        | 25%          | 1.00%               |
-
-Taker fees are calculated in USDC and vary based on the share price. However, fees are collected in shares on buy orders and USDC on sell orders. The effective rate **peaks at 50%** probability and decreases symmetrically toward the extremes.
-
-<Frame>
-  <div className="p-3 bg-white rounded-xl">
-    <iframe title="Fee Curves" aria-label="Line chart" id="datawrapper-chart-qTzMH" src="https://datawrapper.dwcdn.net/qTzMH/1/" scrolling="no" frameborder="0" width={700} style={{ width: "0", minWidth: "100% !important", border: "none" }} height="450" data-external="1" />
-  </div>
-</Frame>
-
-### Fee Tables (100 Shares)
-
-<Tabs>
-  <Tab title="Crypto">
-    | Price  | Trade Value | Fee (USDC) | Effective Rate |
-    | ------ | ----------- | ---------- | -------------- |
-    | \$0.01 | \$1         | \$0.00     | 0.07%          |
-    | \$0.05 | \$5         | \$0.02     | 0.34%          |
-    | \$0.10 | \$10        | \$0.06     | 0.65%          |
-    | \$0.15 | \$15        | \$0.14     | 0.92%          |
-    | \$0.20 | \$20        | \$0.23     | 1.15%          |
-    | \$0.25 | \$25        | \$0.34     | 1.35%          |
-    | \$0.30 | \$30        | \$0.45     | 1.51%          |
-    | \$0.35 | \$35        | \$0.57     | 1.64%          |
-    | \$0.40 | \$40        | \$0.69     | 1.73%          |
-    | \$0.45 | \$45        | \$0.80     | 1.78%          |
-    | \$0.50 | \$50        | \$0.90     | **1.80%**      |
-    | \$0.55 | \$55        | \$0.98     | 1.78%          |
-    | \$0.60 | \$60        | \$1.04     | 1.73%          |
-    | \$0.65 | \$65        | \$1.06     | 1.64%          |
-    | \$0.70 | \$70        | \$1.06     | 1.51%          |
-    | \$0.75 | \$75        | \$1.01     | 1.35%          |
-    | \$0.80 | \$80        | \$0.92     | 1.15%          |
-    | \$0.85 | \$85        | \$0.78     | 0.92%          |
-    | \$0.90 | \$90        | \$0.58     | 0.65%          |
-    | \$0.95 | \$95        | \$0.32     | 0.34%          |
-    | \$0.99 | \$99        | \$0.07     | 0.07%          |
-
-    The maximum effective fee rate is **1.80%** at 50% probability. Fees decrease symmetrically toward both extremes.
-  </Tab>
-
-  <Tab title="Sports">
-    | Price  | Trade Value | Fee (USDC) | Effective Rate |
-    | ------ | ----------- | ---------- | -------------- |
-    | \$0.01 | \$1         | \$0.00     | 0.03%          |
-    | \$0.05 | \$5         | \$0.01     | 0.14%          |
-    | \$0.10 | \$10        | \$0.03     | 0.27%          |
-    | \$0.15 | \$15        | \$0.06     | 0.38%          |
-    | \$0.20 | \$20        | \$0.10     | 0.48%          |
-    | \$0.25 | \$25        | \$0.14     | 0.56%          |
-    | \$0.30 | \$30        | \$0.19     | 0.63%          |
-    | \$0.35 | \$35        | \$0.24     | 0.68%          |
-    | \$0.40 | \$40        | \$0.29     | 0.72%          |
-    | \$0.45 | \$45        | \$0.33     | 0.74%          |
-    | \$0.50 | \$50        | \$0.38     | **0.75%**      |
-    | \$0.55 | \$55        | \$0.41     | 0.74%          |
-    | \$0.60 | \$60        | \$0.43     | 0.72%          |
-    | \$0.65 | \$65        | \$0.44     | 0.68%          |
-    | \$0.70 | \$70        | \$0.44     | 0.63%          |
-    | \$0.75 | \$75        | \$0.42     | 0.56%          |
-    | \$0.80 | \$80        | \$0.38     | 0.48%          |
-    | \$0.85 | \$85        | \$0.33     | 0.38%          |
-    | \$0.90 | \$90        | \$0.24     | 0.27%          |
-    | \$0.95 | \$95        | \$0.14     | 0.14%          |
-    | \$0.99 | \$99        | \$0.03     | 0.03%          |
-
-    The maximum effective fee rate is **0.75%** at 50% probability. Fees decrease symmetrically toward both extremes.
-  </Tab>
-
-  <Tab title="Finance / Politics / Tech">
-    | Price  | Trade Value | Fee (USDC) | Effective Rate |
-    | ------ | ----------- | ---------- | -------------- |
-    | \$0.01 | \$1         | \$0.00     | 0.04%          |
-    | \$0.05 | \$5         | \$0.01     | 0.19%          |
-    | \$0.10 | \$10        | \$0.04     | 0.36%          |
-    | \$0.15 | \$15        | \$0.08     | 0.51%          |
-    | \$0.20 | \$20        | \$0.13     | 0.64%          |
-    | \$0.25 | \$25        | \$0.19     | 0.75%          |
-    | \$0.30 | \$30        | \$0.25     | 0.84%          |
-    | \$0.35 | \$35        | \$0.32     | 0.91%          |
-    | \$0.40 | \$40        | \$0.38     | 0.96%          |
-    | \$0.45 | \$45        | \$0.45     | 0.99%          |
-    | \$0.50 | \$50        | \$0.50     | **1.00%**      |
-    | \$0.55 | \$55        | \$0.54     | 0.99%          |
-    | \$0.60 | \$60        | \$0.58     | 0.96%          |
-    | \$0.65 | \$65        | \$0.59     | 0.91%          |
-    | \$0.70 | \$70        | \$0.59     | 0.84%          |
-    | \$0.75 | \$75        | \$0.56     | 0.75%          |
-    | \$0.80 | \$80        | \$0.51     | 0.64%          |
-    | \$0.85 | \$85        | \$0.43     | 0.51%          |
-    | \$0.90 | \$90        | \$0.32     | 0.36%          |
-    | \$0.95 | \$95        | \$0.18     | 0.19%          |
-    | \$0.99 | \$99        | \$0.04     | 0.04%          |
-
-    The maximum effective fee rate is **1.00%** at 50% probability. Fees decrease symmetrically toward both extremes.
-  </Tab>
-
-  <Tab title="Culture">
-    | Price  | Trade Value | Fee (USDC) | Effective Rate |
-    | ------ | ----------- | ---------- | -------------- |
-    | \$0.01 | \$1         | \$0.00     | 0.05%          |
-    | \$0.05 | \$5         | \$0.01     | 0.24%          |
-    | \$0.10 | \$10        | \$0.05     | 0.45%          |
-    | \$0.15 | \$15        | \$0.10     | 0.64%          |
-    | \$0.20 | \$20        | \$0.16     | 0.80%          |
-    | \$0.25 | \$25        | \$0.23     | 0.94%          |
-    | \$0.30 | \$30        | \$0.32     | 1.05%          |
-    | \$0.35 | \$35        | \$0.40     | 1.14%          |
-    | \$0.40 | \$40        | \$0.48     | 1.20%          |
-    | \$0.45 | \$45        | \$0.56     | 1.24%          |
-    | \$0.50 | \$50        | \$0.62     | **1.25%**      |
-    | \$0.55 | \$55        | \$0.68     | 1.24%          |
-    | \$0.60 | \$60        | \$0.72     | 1.20%          |
-    | \$0.65 | \$65        | \$0.74     | 1.14%          |
-    | \$0.70 | \$70        | \$0.74     | 1.05%          |
-    | \$0.75 | \$75        | \$0.70     | 0.94%          |
-    | \$0.80 | \$80        | \$0.64     | 0.80%          |
-    | \$0.85 | \$85        | \$0.54     | 0.64%          |
-    | \$0.90 | \$90        | \$0.40     | 0.45%          |
-    | \$0.95 | \$95        | \$0.23     | 0.24%          |
-    | \$0.99 | \$99        | \$0.05     | 0.05%          |
-
-    The maximum effective fee rate is **1.25%** at 50% probability. Fees decrease symmetrically toward both extremes.
-  </Tab>
-
-  <Tab title="Economics">
-    | Price  | Trade Value | Fee (USDC) | Effective Rate |
-    | ------ | ----------- | ---------- | -------------- |
-    | \$0.01 | \$1         | \$0.00     | 0.30%          |
-    | \$0.05 | \$5         | \$0.03     | 0.65%          |
-    | \$0.10 | \$10        | \$0.09     | 0.90%          |
-    | \$0.15 | \$15        | \$0.16     | 1.07%          |
-    | \$0.20 | \$20        | \$0.24     | 1.20%          |
-    | \$0.25 | \$25        | \$0.32     | 1.30%          |
-    | \$0.30 | \$30        | \$0.41     | 1.37%          |
-    | \$0.35 | \$35        | \$0.50     | 1.43%          |
-    | \$0.40 | \$40        | \$0.59     | 1.47%          |
-    | \$0.45 | \$45        | \$0.67     | 1.49%          |
-    | \$0.50 | \$50        | \$0.75     | **1.50%**      |
-    | \$0.55 | \$55        | \$0.82     | 1.49%          |
-    | \$0.60 | \$60        | \$0.88     | 1.47%          |
-    | \$0.65 | \$65        | \$0.93     | 1.43%          |
-    | \$0.70 | \$70        | \$0.96     | 1.37%          |
-    | \$0.75 | \$75        | \$0.97     | 1.30%          |
-    | \$0.80 | \$80        | \$0.96     | 1.20%          |
-    | \$0.85 | \$85        | \$0.91     | 1.07%          |
-    | \$0.90 | \$90        | \$0.81     | 0.90%          |
-    | \$0.95 | \$95        | \$0.62     | 0.65%          |
-    | \$0.99 | \$99        | \$0.30     | 0.30%          |
-
-    The maximum effective fee rate is **1.50%** at 50% probability. Fees decrease symmetrically toward both extremes.
-  </Tab>
-
-  <Tab title="Weather">
-    | Price  | Trade Value | Fee (USDC) | Effective Rate |
-    | ------ | ----------- | ---------- | -------------- |
-    | \$0.01 | \$1         | \$0.00     | 0.25%          |
-    | \$0.05 | \$5         | \$0.03     | 0.54%          |
-    | \$0.10 | \$10        | \$0.08     | 0.75%          |
-    | \$0.15 | \$15        | \$0.13     | 0.89%          |
-    | \$0.20 | \$20        | \$0.20     | 1.00%          |
-    | \$0.25 | \$25        | \$0.27     | 1.08%          |
-    | \$0.30 | \$30        | \$0.34     | 1.15%          |
-    | \$0.35 | \$35        | \$0.42     | 1.19%          |
-    | \$0.40 | \$40        | \$0.49     | 1.22%          |
-    | \$0.45 | \$45        | \$0.56     | 1.24%          |
-    | \$0.50 | \$50        | \$0.62     | **1.25%**      |
-    | \$0.55 | \$55        | \$0.68     | 1.24%          |
-    | \$0.60 | \$60        | \$0.73     | 1.22%          |
-    | \$0.65 | \$65        | \$0.78     | 1.19%          |
-    | \$0.70 | \$70        | \$0.80     | 1.15%          |
-    | \$0.75 | \$75        | \$0.81     | 1.08%          |
-    | \$0.80 | \$80        | \$0.80     | 1.00%          |
-    | \$0.85 | \$85        | \$0.76     | 0.89%          |
-    | \$0.90 | \$90        | \$0.67     | 0.75%          |
-    | \$0.95 | \$95        | \$0.52     | 0.54%          |
-    | \$0.99 | \$99        | \$0.25     | 0.25%          |
-
-    The maximum effective fee rate is **1.25%** at 50% probability. Fees decrease symmetrically toward both extremes.
-  </Tab>
-
-  <Tab title="Other / General">
-    | Price  | Trade Value | Fee (USDC) | Effective Rate |
-    | ------ | ----------- | ---------- | -------------- |
-    | \$0.01 | \$1         | \$0.00     | 0.00%          |
-    | \$0.05 | \$5         | \$0.00     | 0.05%          |
-    | \$0.10 | \$10        | \$0.02     | 0.16%          |
-    | \$0.15 | \$15        | \$0.05     | 0.33%          |
-    | \$0.20 | \$20        | \$0.10     | 0.51%          |
-    | \$0.25 | \$25        | \$0.18     | 0.70%          |
-    | \$0.30 | \$30        | \$0.26     | 0.88%          |
-    | \$0.35 | \$35        | \$0.36     | 1.04%          |
-    | \$0.40 | \$40        | \$0.46     | 1.15%          |
-    | \$0.45 | \$45        | \$0.55     | 1.23%          |
-    | \$0.50 | \$50        | \$0.62     | **1.25%**      |
-    | \$0.55 | \$55        | \$0.67     | 1.23%          |
-    | \$0.60 | \$60        | \$0.69     | 1.15%          |
-    | \$0.65 | \$65        | \$0.67     | 1.04%          |
-    | \$0.70 | \$70        | \$0.62     | 0.88%          |
-    | \$0.75 | \$75        | \$0.53     | 0.70%          |
-    | \$0.80 | \$80        | \$0.41     | 0.51%          |
-    | \$0.85 | \$85        | \$0.28     | 0.33%          |
-    | \$0.90 | \$90        | \$0.15     | 0.16%          |
-    | \$0.95 | \$95        | \$0.04     | 0.05%          |
-    | \$0.99 | \$99        | \$0.00     | 0.00%          |
-
-    The maximum effective fee rate is **1.25%** at 50% probability. Fees decrease symmetrically toward both extremes.
-  </Tab>
-
-  <Tab title="Mentions">
-    | Price  | Trade Value | Fee (USDC) | Effective Rate |
-    | ------ | ----------- | ---------- | -------------- |
-    | \$0.01 | \$1         | \$0.00     | 0.00%          |
-    | \$0.05 | \$5         | \$0.00     | 0.06%          |
-    | \$0.10 | \$10        | \$0.02     | 0.20%          |
-    | \$0.15 | \$15        | \$0.06     | 0.41%          |
-    | \$0.20 | \$20        | \$0.13     | 0.64%          |
-    | \$0.25 | \$25        | \$0.22     | 0.88%          |
-    | \$0.30 | \$30        | \$0.33     | 1.10%          |
-    | \$0.35 | \$35        | \$0.45     | 1.29%          |
-    | \$0.40 | \$40        | \$0.58     | 1.44%          |
-    | \$0.45 | \$45        | \$0.69     | 1.53%          |
-    | \$0.50 | \$50        | \$0.78     | **1.56%**      |
-    | \$0.55 | \$55        | \$0.84     | 1.53%          |
-    | \$0.60 | \$60        | \$0.86     | 1.44%          |
-    | \$0.65 | \$65        | \$0.84     | 1.29%          |
-    | \$0.70 | \$70        | \$0.77     | 1.10%          |
-    | \$0.75 | \$75        | \$0.66     | 0.88%          |
-    | \$0.80 | \$80        | \$0.51     | 0.64%          |
-    | \$0.85 | \$85        | \$0.35     | 0.41%          |
-    | \$0.90 | \$90        | \$0.18     | 0.20%          |
-    | \$0.95 | \$95        | \$0.05     | 0.06%          |
-    | \$0.99 | \$99        | \$0.00     | 0.00%          |
-
-    The maximum effective fee rate is **1.56%** at 50% probability. Fees decrease symmetrically toward both extremes.
-  </Tab>
-</Tabs>
-
-### Fee Precision
-
-Fees are rounded to 4 decimal places. The smallest fee charged is **0.0001 USDC**. Anything smaller rounds to zero, so very small trades near the extremes may incur no fee at all.
-
-***
-
-## Identifying Fee-Enabled Markets
-
-Markets with fees have `feesEnabled` set to `true` on the market object. You can also query the fee-rate endpoint to check any specific market. See the [API Reference](/api-reference/introduction) for full endpoint documentation.
-
-```bash  theme={null}
-GET https://clob.polymarket.com/fee-rate?token_id={token_id}
-```
-
-***
-
-## Fee Handling for API Users
-
-### Using the SDK
-
-The official CLOB clients **automatically handle fees** for you — they fetch the fee rate and include it in the signed order payload.
-
-<CardGroup cols={3}>
-  <Card title="TypeScript" icon="js" href="https://github.com/Polymarket/clob-client">
-    npm install @polymarket/clob-client\@latest
-  </Card>
-
-  <Card title="Python" icon="python" href="https://github.com/Polymarket/py-clob-client">
-    pip install --upgrade py-clob-client
-  </Card>
-
-  <Card title="Rust" icon="rust" href="https://github.com/Polymarket/rs-clob-client">
-    cargo add polymarket-client-sdk
-  </Card>
-</CardGroup>
-
-**What the client does automatically:**
-
-1. Fetches the fee rate for the market's token ID
-2. Includes `feeRateBps` in the order structure
-3. Signs the order with the fee rate included
-
-**You don't need to do anything extra.** Your orders will work on fee-enabled markets.
-
-### Using the REST API
-
-If you're calling the REST API directly or building your own order signing, you must manually include the fee rate in your signed order payload.
-
-**Step 1:** Fetch the fee rate for the token ID before creating your order:
-
-```bash  theme={null}
-GET https://clob.polymarket.com/fee-rate?token_id={token_id}
-```
-
-See the [fee-rate API Reference](/api-reference/introduction) for full response details. Fee-enabled markets return a non-zero value; fee-free markets return `0`.
-
-**Step 2:** Add the `feeRateBps` field to your order object. This value is part of the signed payload — the CLOB validates your signature against it.
-
-```json  theme={null}
-{
-  "salt": "12345",
-  "maker": "0x...",
-  "signer": "0x...",
-  "taker": "0x...",
-  "tokenId": "71321045679252212594626385532706912750332728571942532289631379312455583992563",
-  "makerAmount": "50000000",
-  "takerAmount": "100000000",
-  "expiration": "0",
-  "nonce": "0",
-  "feeRateBps": "1000",
-  "side": "0",
-  "signatureType": 2,
-  "signature": "0x..."
-}
-```
-
-**Step 3:** Sign and submit:
-
-1. Include `feeRateBps` in the order object **before signing**
-2. Sign the complete order
-3. POST to the order endpoint
-
-<Note>
-  Always fetch `fee_rate_bps` dynamically — do not hardcode. The fee rate varies
-  by market type and may change over time. You only need to pass `feeRateBps`.
-</Note>
+    ```typescript theme={null}
+    // Create fresh credentials with a new nonce
+    const newCreds = await client.createApiKey();
+    // Save the nonce this time!
+    ```
+  </Accordion>
+</AccordionGroup>
 
 ***
 
 ## Next Steps
 
 <CardGroup cols={2}>
-  <Card title="Maker Rebates Program" icon="coins" href="/market-makers/maker-rebates">
-    Learn how taker fees fund daily USDC rebates for liquidity providers.
+  <Card title="Place Your First Order" icon="plus" href="/trading/quickstart">
+    Learn how to create and submit orders.
   </Card>
 
-  <Card title="Place Orders" icon="plus" href="/trading/quickstart">
-    Start placing orders on Polymarket.
+  <Card title="Geographic Restrictions" icon="globe" href="/api-reference/geoblock">
+    Check trading availability by region.
+  </Card>
+</CardGroup>
+> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Authentication
+
+> How to authenticate requests to the CLOB API
+
+The CLOB API uses two levels of authentication: **L1 (Private Key)** and **L2 (API Key)**. Either can be accomplished using the CLOB client or REST API.
+
+## Public vs Authenticated
+
+<CardGroup cols={1}>
+  <Card title="Public (No Auth)" icon="unlock">
+    The **Gamma API**, **Data API**, and CLOB read endpoints (orderbook, prices, spreads) require no authentication.
+  </Card>
+
+  <Card title="Authenticated (CLOB)" icon="lock">
+    CLOB trading endpoints (placing orders, cancellations, heartbeat) require all 5 `POLY_*` L2 HTTP headers.
   </Card>
 </CardGroup>
 
+***
 
-Built with [Mintlify](https://mintlify.com).
+## Two-Level Authentication Model
 
+The CLOB uses two levels of authentication: L1 (Private Key) and L2 (API Key). Either can be accomplished using the CLOB client or REST API
+
+### L1 Authentication
+
+L1 authentication uses the wallet's private key to sign an EIP-712 message used in the request header. It proves ownership and control over the private key. The private key stays in control of the user and all trading activity remains non-custodial.
+
+**Used for:**
+
+* Creating API credentials
+* Deriving existing API credentials
+* Signing and creating user's orders locally
+
+### L2 Authentication
+
+L2 uses API credentials (apiKey, secret, passphrase) generated from L1 authentication. These are used solely to authenticate requests made to the CLOB API. Requests are signed using HMAC-SHA256.
+
+**Used for:**
+
+* Cancel or get user's open orders
+* Check user's balances and allowances
+* Post user's signed orders
+
+<Info>
+  Even with L2 authentication headers, methods that create user orders still
+  require the user to sign the order payload.
+</Info>
+
+***
+
+## Getting API Credentials
+
+Before making authenticated requests, you need to obtain API credentials using L1 authentication.
+
+### Using the SDK
+
+<Tabs>
+  <Tab title="TypeScript">
+    ```typescript theme={null}
+    import { ClobClient } from "@polymarket/clob-client-v2";
+    import { createWalletClient, http } from "viem";
+    import { privateKeyToAccount } from "viem/accounts";
+
+    const account = privateKeyToAccount(process.env.PRIVATE_KEY as `0x${string}`);
+    const signer = createWalletClient({ account, transport: http() });
+
+    const client = new ClobClient({
+      host: "https://clob.polymarket.com",
+      chain: 137, // Polygon mainnet
+      signer,
+    });
+
+    // Creates new credentials or derives existing ones
+    const credentials = await client.createOrDeriveApiKey();
+
+    console.log(credentials);
+    // {
+    //   key: "550e8400-e29b-41d4-a716-446655440000",
+    //   secret: "base64EncodedSecretString",
+    //   passphrase: "randomPassphraseString"
+    // }
+    ```
+  </Tab>
+
+  <Tab title="Python">
+    ```python theme={null}
+    from py_clob_client_v2 import ClobClient
+    import os
+
+    client = ClobClient(
+        host="https://clob.polymarket.com",
+        chain_id=137,  # Polygon mainnet
+        key=os.getenv("PRIVATE_KEY")
+    )
+
+    # Creates new credentials or derives existing ones
+    credentials = client.create_or_derive_api_key()
+
+    print(credentials)
+    # {
+    #     "apiKey": "550e8400-e29b-41d4-a716-446655440000",
+    #     "secret": "base64EncodedSecretString",
+    #     "passphrase": "randomPassphraseString"
+    # }
+    ```
+  </Tab>
+
+  <Tab title="Rust">
+    ```rust theme={null}
+    use std::str::FromStr;
+    use polymarket_client_sdk_v2::POLYGON;
+    use polymarket_client_sdk_v2::auth::{LocalSigner, Signer};
+    use polymarket_client_sdk_v2::clob::{Client, Config};
+
+    let private_key = std::env::var("POLYMARKET_PRIVATE_KEY")?;
+    let signer = LocalSigner::from_str(&private_key)?
+        .with_chain_id(Some(POLYGON));
+
+    // Creates new credentials or derives existing ones,
+    // then initializes the authenticated client — all in one step
+    let client = Client::new("https://clob.polymarket.com", Config::default())?
+        .authentication_builder(&signer)
+        .authenticate()
+        .await?;
+
+    let credentials = client.credentials();
+    println!("API Key: {}", credentials.key());
+    ```
+  </Tab>
+</Tabs>
+
+<Warning>
+  **Never commit private keys to version control.** Always use environment
+  variables or secure key management systems.
+</Warning>
+
+### Using the REST API
+
+While we highly recommend using our provided clients to handle signing and authentication, the following is for developers who choose NOT to use our [Python](https://github.com/Polymarket/py-clob-client-v2) or [TypeScript](https://github.com/Polymarket/clob-client-v2) clients.
+
+**Create API Credentials**
+
+```bash theme={null}
+POST https://clob.polymarket.com/auth/api-key
+```
+
+**Derive API Credentials**
+
+```bash theme={null}
+GET https://clob.polymarket.com/auth/derive-api-key
+```
+
+Required L1 headers:
+
+| Header           | Description            |
+| ---------------- | ---------------------- |
+| `POLY_ADDRESS`   | Polygon signer address |
+| `POLY_SIGNATURE` | CLOB EIP-712 signature |
+| `POLY_TIMESTAMP` | Current UNIX timestamp |
+| `POLY_NONCE`     | Nonce (default: 0)     |
+
+The `POLY_SIGNATURE` is generated by signing the following EIP-712 struct:
+
+<Accordion title="EIP-712 Signing Example">
+  <CodeGroup>
+    ```typescript TypeScript theme={null}
+    const domain = {
+      name: "ClobAuthDomain",
+      version: "1",
+      chainId: chainId, // Polygon Chain ID 137
+    };
+
+    const types = {
+      ClobAuth: [
+        { name: "address", type: "address" },
+        { name: "timestamp", type: "string" },
+        { name: "nonce", type: "uint256" },
+        { name: "message", type: "string" },
+      ],
+    };
+
+    const value = {
+      address: signingAddress, // The Signing address
+      timestamp: ts,            // The CLOB API server timestamp
+      nonce: nonce,             // The nonce used
+      message: "This message attests that I control the given wallet",
+    };
+
+    const sig = await signer._signTypedData(domain, types, value);
+    ```
+
+    ```python Python theme={null}
+    domain = {
+        "name": "ClobAuthDomain",
+        "version": "1",
+        "chainId": chainId,  # Polygon Chain ID 137
+    }
+
+    types = {
+        "ClobAuth": [
+            {"name": "address", "type": "address"},
+            {"name": "timestamp", "type": "string"},
+            {"name": "nonce", "type": "uint256"},
+            {"name": "message", "type": "string"},
+        ]
+    }
+
+    value = {
+        "address": signingAddress,  # The signing address
+        "timestamp": ts,            # The CLOB API server timestamp
+        "nonce": nonce,             # The nonce used
+        "message": "This message attests that I control the given wallet",
+    }
+
+    sig = signer.sign_typed_data(domain, types, value)
+    ```
+  </CodeGroup>
+</Accordion>
+
+Reference implementations:
+
+* [TypeScript](https://github.com/Polymarket/clob-client-v2/blob/main/src/signing/eip712.ts)
+* [Python](https://github.com/Polymarket/py-clob-client-v2/blob/main/py_clob_client_v2/signing/eip712.py)
+
+Response:
+
+```json theme={null}
+{
+  "apiKey": "550e8400-e29b-41d4-a716-446655440000",
+  "secret": "base64EncodedSecretString",
+  "passphrase": "randomPassphraseString"
+}
+```
+
+**You'll need all three values for L2 authentication.**
+
+***
+
+## L2 Authentication Headers
+
+All trading endpoints require these 5 headers:
+
+| Header            | Description                   |
+| ----------------- | ----------------------------- |
+| `POLY_ADDRESS`    | Polygon signer address        |
+| `POLY_SIGNATURE`  | HMAC signature for request    |
+| `POLY_TIMESTAMP`  | Current UNIX timestamp        |
+| `POLY_API_KEY`    | User's API `apiKey` value     |
+| `POLY_PASSPHRASE` | User's API `passphrase` value |
+
+The `POLY_SIGNATURE` for L2 is an HMAC-SHA256 signature created using the user's API credentials `secret` value. Reference implementations can be found in the [TypeScript](https://github.com/Polymarket/clob-client-v2/blob/main/src/signing/hmac.ts) and [Python](https://github.com/Polymarket/py-clob-client-v2/blob/main/py_clob_client_v2/signing/hmac.py) clients.
+
+### CLOB Client
+
+<Tabs>
+  <Tab title="TypeScript">
+    ```typescript theme={null}
+    import { ClobClient, Side } from "@polymarket/clob-client-v2";
+    import { createWalletClient, http } from "viem";
+    import { privateKeyToAccount } from "viem/accounts";
+
+    const account = privateKeyToAccount(process.env.PRIVATE_KEY as `0x${string}`);
+    const signer = createWalletClient({ account, transport: http() });
+    const depositWalletAddress = process.env.DEPOSIT_WALLET_ADDRESS!;
+
+    const client = new ClobClient({
+      host: "https://clob.polymarket.com",
+      chain: 137,
+      signer,
+      creds: apiCreds, // Generated from L1 auth, API credentials enable L2 methods
+      signatureType: 3, // POLY_1271, explained below
+      funderAddress: depositWalletAddress, // deposit wallet funder
+    });
+
+    // Now you can trade!
+    const order = await client.createAndPostOrder(
+      { tokenID: "123456", price: 0.65, size: 100, side: Side.BUY },
+      { tickSize: "0.01", negRisk: false }
+    );
+    ```
+  </Tab>
+
+  <Tab title="Python">
+    ```python theme={null}
+    from py_clob_client_v2 import ClobClient, OrderArgs, PartialCreateOrderOptions
+    from py_clob_client_v2.order_builder.constants import BUY
+    import os
+
+    client = ClobClient(
+        host="https://clob.polymarket.com",
+        chain_id=137,
+        key=os.getenv("PRIVATE_KEY"),
+        creds=api_creds,  # Generated from L1 auth, API credentials enable L2 methods
+        signature_type=3,  # POLY_1271, explained below
+        funder=os.getenv("DEPOSIT_WALLET_ADDRESS")
+    )
+
+    # Now you can trade!
+    order = client.create_and_post_order(
+        OrderArgs(token_id="123456", price=0.65, size=100, side=BUY),
+        options=PartialCreateOrderOptions(tick_size="0.01", neg_risk=False),
+    )
+    ```
+  </Tab>
+
+  <Tab title="Rust">
+    ```rust theme={null}
+    use polymarket_client_sdk_v2::clob::types::{Side, SignatureType};
+    use polymarket_client_sdk_v2::types::dec;
+
+    let deposit_wallet = std::env::var("DEPOSIT_WALLET_ADDRESS")?.parse()?;
+
+    let client = Client::new("https://clob.polymarket.com", Config::default())?
+        .authentication_builder(&signer)
+        .funder(deposit_wallet)
+        .signature_type(SignatureType::Poly1271)
+        .authenticate()
+        .await?;
+
+    // Now you can trade!
+    let order = client.limit_order()
+        .token_id("123456".parse()?)
+        .price(dec!(0.65))
+        .size(dec!(100))
+        .side(Side::Buy)
+        .build().await?;
+    let signed = client.sign(&signer, order).await?;
+    let response = client.post_order(signed).await?;
+    ```
+  </Tab>
+</Tabs>
+
+<Info>
+  Even with L2 authentication headers, methods that create user orders still
+  require the user to sign the order payload.
+</Info>
+
+***
+
+## Signature Types and Funder
+
+When initializing the L2 client, you must specify your wallet **signatureType** and the **funder** address which holds the funds:
+
+| Signature Type | Value | Description                                                                                                                |
+| -------------- | ----- | -------------------------------------------------------------------------------------------------------------------------- |
+| EOA            | `0`   | Standard Ethereum wallet (MetaMask). Funder is the EOA address and will need POL to pay gas on transactions.               |
+| POLY\_PROXY    | `1`   | Existing Polymarket proxy wallet flow, commonly used by users who logged in via Magic Link email/Google.                   |
+| GNOSIS\_SAFE   | `2`   | Existing Gnosis Safe wallet flow. Existing Safe users can continue using this type.                                        |
+| POLY\_1271     | `3`   | Deposit wallet flow for new API users. The funder is the deposit wallet address and orders are validated through ERC-1271. |
+
+<Tip>
+  New API users should use deposit wallets with `POLY_1271`. Existing Safe and
+  Proxy users are unaffected and can keep using their current funder address and
+  signature type. See the [Deposit Wallet Guide](/trading/deposit-wallets) for
+  setup details.
+</Tip>
+
+***
+
+## Security Best Practices
+
+<AccordionGroup>
+  <Accordion title="Never expose private keys">
+    Store private keys in environment variables or secure key management systems. Never commit them to version control.
+
+    ```bash theme={null}
+    # .env (never commit this file)
+    PRIVATE_KEY=0x...
+    ```
+  </Accordion>
+
+  <Accordion title="Implement request signing on the server">
+    Never expose your API secret in client-side code. All authenticated requests should originate from your backend.
+  </Accordion>
+</AccordionGroup>
+
+***
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Error - INVALID_SIGNATURE">
+    Your wallet's private key is incorrect or improperly formatted.
+
+    **Solutions:**
+
+    * Verify your private key is a valid hex string (starts with "0x")
+    * Ensure you're using the correct key for the intended address
+    * Check that the key has proper permissions
+  </Accordion>
+
+  <Accordion title="Error - NONCE_ALREADY_USED">
+    The nonce you provided has already been used to create an API key.
+
+    **Solutions:**
+
+    * Use `deriveApiKey()` with the same nonce to retrieve existing credentials
+    * Or use a different nonce with `createApiKey()`
+  </Accordion>
+
+  <Accordion title="Error - Invalid Funder Address">
+    Your funder address is incorrect or doesn't match your wallet.
+
+    **Solution:** Check your Polymarket profile address at [polymarket.com/settings](https://polymarket.com/settings).
+
+    If it does not exist or user has never logged into Polymarket.com, deploy it first before creating L2 authentication.
+  </Accordion>
+
+  <Accordion title="Lost both credentials and nonce">
+    Unfortunately, there's no way to recover lost API credentials without the nonce. You'll need to create new credentials:
+
+    ```typescript theme={null}
+    // Create fresh credentials with a new nonce
+    const newCreds = await client.createApiKey();
+    // Save the nonce this time!
+    ```
+  </Accordion>
+</AccordionGroup>
+
+***
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Place Your First Order" icon="plus" href="/trading/quickstart">
+    Learn how to create and submit orders.
+  </Card>
+
+  <Card title="Geographic Restrictions" icon="globe" href="/api-reference/geoblock">
+    Check trading availability by region.
+  </Card>
+</CardGroup>
+> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Clients & SDKs
+
+> Official open-source libraries for interacting with Polymarket
+
+Polymarket provides official open-source clients in TypeScript, Python, and Rust. All three support the full CLOB API including market data, order management, and authentication.
+
+## Installation
+
+<CodeGroup>
+  ```bash TypeScript theme={null}
+  npm install @polymarket/clob-client-v2 viem
+  ```
+
+  ```bash Python theme={null}
+  pip install py-clob-client-v2
+  ```
+
+  ```bash Rust theme={null}
+  cargo add polymarket_client_sdk_v2 --features clob
+  ```
+</CodeGroup>
+
+## Quick Example
+
+<CodeGroup>
+  ```typescript TypeScript theme={null}
+  import { ClobClient } from "@polymarket/clob-client-v2";
+
+  const client = new ClobClient({
+    host: "https://clob.polymarket.com",
+    chain: 137,
+    signer,
+    creds: apiCreds,
+  });
+
+  const markets = await client.getMarkets();
+  ```
+
+  ```python Python theme={null}
+  from py_clob_client_v2 import ClobClient
+
+  client = ClobClient(
+      "https://clob.polymarket.com",
+      key=private_key,
+      chain_id=137,
+      creds=api_creds,
+  )
+
+  markets = client.get_markets()
+  ```
+
+  ```rust Rust theme={null}
+  use polymarket_client_sdk_v2::clob::{Client, Config};
+
+  let client = Client::new("https://clob.polymarket.com", Config::default())?
+      .authentication_builder(&signer)
+      .authenticate()
+      .await?;
+
+  let markets = client.markets(None).await?;
+  ```
+</CodeGroup>
+
+## Source Code
+
+| Language   | Package                      | Repository                                                                                 |
+| ---------- | ---------------------------- | ------------------------------------------------------------------------------------------ |
+| TypeScript | `@polymarket/clob-client-v2` | [github.com/Polymarket/clob-client-v2](https://github.com/Polymarket/clob-client-v2)       |
+| Python     | `py-clob-client-v2`          | [github.com/Polymarket/py-clob-client-v2](https://github.com/Polymarket/py-clob-client-v2) |
+| Rust       | `polymarket_client_sdk_v2`   | [github.com/Polymarket/rs-clob-client-v2](https://github.com/Polymarket/rs-clob-client-v2) |
+
+Each repository includes working examples in the `/examples` directory.
+
+## Relayer SDK
+
+For [gasless transactions](/trading/gasless), the relayer client handles deposit
+wallet creation and signed wallet batches for new API users. Existing Safe and
+Proxy wallet flows remain supported.
+
+| Language   | Package                              | Repository                                                                                                 |
+| ---------- | ------------------------------------ | ---------------------------------------------------------------------------------------------------------- |
+| TypeScript | `@polymarket/builder-relayer-client` | [github.com/Polymarket/builder-relayer-client](https://github.com/Polymarket/builder-relayer-client)       |
+| Python     | `py-builder-relayer-client`          | [github.com/Polymarket/py-builder-relayer-client](https://github.com/Polymarket/py-builder-relayer-client) |
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Set up your client and place your first order.
+  </Card>
+
+  <Card title="Authentication" icon="lock" href="/api-reference/authentication">
+    Understand L1/L2 auth and API credentials.
+  </Card>
+</CardGroup>
+> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Geographic Restrictions
+
+> Check geographic restrictions before placing orders on the Polymarket API
+
+Polymarket restricts order placement from certain geographic locations due to regulatory requirements and compliance with international sanctions. Before placing orders, builders should verify the location.
+
+<Warning>
+  Orders submitted from blocked regions will be rejected. Implement geoblock
+  checks in your application to provide users with appropriate feedback before
+  they attempt to trade.
+</Warning>
+
+***
+
+## Geoblock Endpoint
+
+Check the geographic eligibility of the requesting IP address:
+
+```bash theme={null}
+GET https://polymarket.com/api/geoblock
+```
+
+<Note>This endpoint is on `polymarket.com`, not the API servers.</Note>
+
+### Response
+
+```json theme={null}
+{
+  "blocked": true,
+  "ip": "203.0.113.42",
+  "country": "US",
+  "region": "NY"
+}
+```
+
+| Field     | Type    | Description                                     |
+| --------- | ------- | ----------------------------------------------- |
+| `blocked` | boolean | Whether the user is blocked from placing orders |
+| `ip`      | string  | Detected IP address                             |
+| `country` | string  | ISO 3166-1 alpha-2 country code                 |
+| `region`  | string  | Region/state code                               |
+
+***
+
+## Blocked Countries
+
+The following countries are restricted from placing orders on Polymarket. Countries marked as **close-only** can close existing positions but cannot open new ones. Countries marked as **frontend UI restricted** are blocked only on the Polymarket frontend; the API itself is not restricted:
+
+| Country Code | Country Name                         | Status                 |
+| ------------ | ------------------------------------ | ---------------------- |
+| AU           | Australia                            | Blocked                |
+| BE           | Belgium                              | Blocked                |
+| BY           | Belarus                              | Blocked                |
+| BI           | Burundi                              | Blocked                |
+| CF           | Central African Republic             | Blocked                |
+| CD           | Congo (Kinshasa)                     | Blocked                |
+| CU           | Cuba                                 | Blocked                |
+| DE           | Germany                              | Blocked                |
+| ET           | Ethiopia                             | Blocked                |
+| FR           | France                               | Blocked                |
+| GB           | United Kingdom                       | Blocked                |
+| IR           | Iran                                 | Blocked                |
+| IQ           | Iraq                                 | Blocked                |
+| IT           | Italy                                | Blocked                |
+| JP           | Japan                                | Frontend UI restricted |
+| KP           | North Korea                          | Blocked                |
+| LB           | Lebanon                              | Blocked                |
+| LY           | Libya                                | Blocked                |
+| MM           | Myanmar                              | Blocked                |
+| NI           | Nicaragua                            | Blocked                |
+| NL           | Netherlands                          | Blocked                |
+| PL           | Poland                               | Close-only             |
+| RU           | Russia                               | Blocked                |
+| SG           | Singapore                            | Close-only             |
+| SO           | Somalia                              | Blocked                |
+| SS           | South Sudan                          | Blocked                |
+| SD           | Sudan                                | Blocked                |
+| SY           | Syria                                | Blocked                |
+| TH           | Thailand                             | Close-only             |
+| TW           | Taiwan                               | Close-only             |
+| UM           | United States Minor Outlying Islands | Blocked                |
+| US           | United States                        | Blocked                |
+| VE           | Venezuela                            | Blocked                |
+| YE           | Yemen                                | Blocked                |
+| ZW           | Zimbabwe                             | Blocked                |
+
+***
+
+## Blocked Regions
+
+In addition to fully blocked countries, the following specific regions within otherwise accessible countries are also restricted:
+
+| Country      | Region  | Region Code |
+| ------------ | ------- | ----------- |
+| Canada (CA)  | Ontario | ON          |
+| Ukraine (UA) | Crimea  | 43          |
+| Ukraine (UA) | Donetsk | 14          |
+| Ukraine (UA) | Luhansk | 09          |
+
+***
+
+## Blocking Logic
+
+The geoblocking system includes:
+
+1. **OFAC-Sanctioned Countries**: Countries sanctioned by the U.S. Office of Foreign Assets Control (OFAC)
+2. **Additional Regulatory Restrictions**: Countries added for specific regulatory compliance reasons
+
+***
+
+## Server Infrastructure
+
+* **Primary Servers**: eu-west-2
+* **Closest Non-Georestricted Region**: eu-west-1
+
+<Tip>
+  **Direct co-location available.** Users who complete the [KYC/KYB
+  form](https://docs.google.com/forms/d/e/1FAIpQLSfY-3Dl3yxq8HKFjFad8YzKZmm0k3Gdg29HD6gL-K-AmI6KXw/viewform) can get access to co-locate
+  directly in `eu-west-2` for the lowest possible latency to Polymarket's
+  primary servers.
+</Tip>
+
+***
+
+## Usage Examples
+
+<Tabs>
+  <Tab title="TypeScript">
+    ```typescript theme={null}
+    interface GeoblockResponse {
+      blocked: boolean;
+      ip: string;
+      country: string;
+      region: string;
+    }
+
+    async function checkGeoblock(): Promise<GeoblockResponse> {
+      const response = await fetch("https://polymarket.com/api/geoblock");
+      return response.json();
+    }
+
+    // Usage
+    const geo = await checkGeoblock();
+
+    if (geo.blocked) {
+      console.log(`Trading not available in ${geo.country}`);
+    } else {
+      console.log("Trading available");
+    }
+    ```
+  </Tab>
+
+  <Tab title="Python">
+    ```python theme={null}
+    import requests
+
+    def check_geoblock() -> dict:
+        response = requests.get("https://polymarket.com/api/geoblock")
+        return response.json()
+
+    # Usage
+    geo = check_geoblock()
+
+    if geo["blocked"]:
+        print(f"Trading not available in {geo['country']}")
+    else:
+        print("Trading available")
+    ```
+  </Tab>
+
+  <Tab title="Rust">
+    ```rust theme={null}
+    use polymarket_client_sdk_v2::clob::{Client, Config};
+
+    let client = Client::new("https://clob.polymarket.com", Config::default())?;
+    let geo = client.check_geoblock().await?;
+
+    if geo.blocked {
+        println!("Trading not available in {}", geo.country);
+    } else {
+        println!("Trading available");
+    }
+    ```
+  </Tab>
+</Tabs>
+
+***
+
+## Why These Restrictions
+
+Geographic restrictions are implemented to ensure compliance with:
+
+* International sanctions and embargoes
+* Local financial regulations
+* Gambling and prediction market laws
+* Anti-money laundering (AML) requirements
+* Know Your Customer (KYC) regulations
+
+If you believe you are incorrectly restricted or have questions about geographic availability, please contact [Polymarket Support](https://polymarket.com/support).
+
+***
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Authentication" icon="key" href="/api-reference/authentication">
+    Learn how to authenticate trading requests.
+  </Card>
+
+  <Card title="Place Orders" icon="plus" href="/trading/quickstart">
+    Start placing orders (from eligible regions).
+  </Card>
+</CardGroup>
 > ## Documentation Index
 > Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
 > Use this file to discover all available pages before exploring further.
 
 # Overview
 
-> Real-time market data and trading updates via WebSocket
+> Learn about Polymarket's developer tooling roadmap.
 
-Polymarket provides WebSocket channels for near real-time streaming of orderbook data, trades, and personal order activity. There are four available channels: `market`, `user`, `sports`, and `RTDS` (Real-Time Data Socket).
-
-## Channels
-
-| Channel                             | Endpoint                                               | Auth     |
-| ----------------------------------- | ------------------------------------------------------ | -------- |
-| Market                              | `wss://ws-subscriptions-clob.polymarket.com/ws/market` | No       |
-| User                                | `wss://ws-subscriptions-clob.polymarket.com/ws/user`   | Yes      |
-| Sports                              | `wss://sports-api.polymarket.com/ws`                   | No       |
-| [RTDS](/market-data/websocket/rtds) | `wss://ws-live-data.polymarket.com`                    | Optional |
-
-### Market Channel
-
-| Type               | Description             | Custom Feature |
-| ------------------ | ----------------------- | -------------- |
-| `book`             | Full orderbook snapshot | No             |
-| `price_change`     | Price level updates     | No             |
-| `tick_size_change` | Tick size changes       | No             |
-| `last_trade_price` | Trade executions        | No             |
-| `best_bid_ask`     | Best prices update      | Yes            |
-| `new_market`       | New market created      | Yes            |
-| `market_resolved`  | Market resolution       | Yes            |
-
-Types marked "Custom Feature" require `custom_feature_enabled: true` in your subscription.
-
-### User Channel
-
-| Type    | Description                                   |
-| ------- | --------------------------------------------- |
-| `trade` | Trade lifecycle updates (MATCHED → CONFIRMED) |
-| `order` | Order placements, updates, and cancellations  |
-
-### Sports
-
-| Type           | Description                           |
-| -------------- | ------------------------------------- |
-| `sport_result` | Live game scores, periods, and status |
-
-## Subscribing
-
-Send a subscription message after connecting to specify which data you want to receive.
-
-### Market Channel
-
-```json  theme={null}
-{
-  "assets_ids": [
-    "21742633143463906290569050155826241533067272736897614950488156847949938836455",
-    "48331043336612883890938759509493159234755048973500640148014422747788308965732"
-  ],
-  "type": "market",
-  "custom_feature_enabled": true
-}
-```
-
-| Field                    | Type      | Description                                                       |
-| ------------------------ | --------- | ----------------------------------------------------------------- |
-| `assets_ids`             | string\[] | Token IDs to subscribe to                                         |
-| `type`                   | string    | Channel identifier                                                |
-| `custom_feature_enabled` | boolean   | Enable `best_bid_ask`, `new_market`, and `market_resolved` events |
-
-### User Channel
-
-```json  theme={null}
-{
-  "auth": {
-    "apiKey": "your-api-key",
-    "secret": "your-api-secret",
-    "passphrase": "your-passphrase"
-  },
-  "markets": ["0x1234...condition_id"],
-  "type": "user"
-}
-```
-
-<Note>
-  The `auth` fields (`apiKey`, `secret`, `passphrase`) are **only required for
-  the user channel**. For the market channel, these fields are optional and can
-  be omitted.
-</Note>
-
-| Field     | Type      | Description                                        |
-| --------- | --------- | -------------------------------------------------- |
-| `auth`    | object    | API credentials (`apiKey`, `secret`, `passphrase`) |
-| `markets` | string\[] | Condition IDs to receive events for                |
-| `type`    | string    | Channel identifier                                 |
-
-<Note>
-  The user channel subscribes by **condition IDs** (market identifiers), not
-  asset IDs. Each market has one condition ID but two asset IDs (Yes and No
-  tokens).
-</Note>
-
-### Sports Channel
-
-No subscription message required. Connect and start receiving data for all active sports events.
-
-## Dynamic Subscription
-
-Modify subscriptions without reconnecting.
-
-### Subscribe to more assets
-
-```json  theme={null}
-{
-  "assets_ids": ["new_asset_id_1", "new_asset_id_2"],
-  "operation": "subscribe",
-  "custom_feature_enabled": true
-}
-```
-
-### Unsubscribe from assets
-
-```json  theme={null}
-{
-  "assets_ids": ["asset_id_to_remove"],
-  "operation": "unsubscribe"
-}
-```
-
-For the user channel, use `markets` instead of `assets_ids`:
-
-```json  theme={null}
-{
-  "markets": ["0x1234...condition_id"],
-  "operation": "subscribe"
-}
-```
-
-## Heartbeats
-
-### Market and User Channels
-
-Send `PING` every 10 seconds. The server responds with `PONG`.
-
-```
-PING
-```
-
-### Sports Channel
-
-The server sends `ping` every 5 seconds. Respond with `pong` within 10 seconds.
-
-```
-pong
-```
-
-<Warning>
-  If you don't respond to the server's ping within 10 seconds, the connection
-  will be closed.
-</Warning>
-
-## Troubleshooting
-
-<Accordion title="Connection closes immediately after opening">
-  Send a valid subscription message immediately after connecting. The server may
-  close connections that don't subscribe within a timeout period.
-</Accordion>
-
-<Accordion title="Connection drops after about 10 seconds">
-  You're not sending heartbeats. Send `PING` every 10 seconds for market/user
-  channels, or respond to server `ping` with `pong` for the sports channel.
-</Accordion>
-
-<Accordion title="Not receiving any messages">
-  1. Verify your asset IDs or condition IDs are correct 2. Check that the
-     markets are active (not resolved) 3. Set `custom_feature_enabled: true` if
-     expecting `best_bid_ask`, `new_market`, or `market_resolved` events
-</Accordion>
-
-<Accordion title="Authentication failed - user channel">
-  Verify your API credentials are correct and haven't expired.
-</Accordion>
-
-
-Built with [Mintlify](https://mintlify.com).
-
-> ## Documentation Index
-> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
-> Use this file to discover all available pages before exploring further.
-
-# Create Order
-
-> Build, sign, and submit orders
-
-All orders on Polymarket are expressed as **limit orders**. Market orders are supported by submitting a limit order with a marketable price — your order executes immediately at the best available price on the book.
-
-<Info>
-  The SDK handles EIP-712 signing and submission for you. If you prefer the REST
-  API directly, see [Authentication](/api-reference/authentication) for constructing the
-  required headers and the [API Reference](/api-reference/introduction) for full endpoint
-  documentation including the raw order object fields and request/response schemas.
-</Info>
-
-***
-
-## Order Types
-
-| Type    | Behavior                                                             | Use Case                        |
-| ------- | -------------------------------------------------------------------- | ------------------------------- |
-| **GTC** | Good-Til-Cancelled — rests on the book until filled or cancelled     | Default for limit orders        |
-| **GTD** | Good-Til-Date — active until a specified expiration time             | Auto-expire before known events |
-| **FOK** | Fill-Or-Kill — must fill immediately and entirely, or cancel         | All-or-nothing market orders    |
-| **FAK** | Fill-And-Kill — fills what's available immediately, cancels the rest | Partial-fill market orders      |
-
-* **GTC** and **GTD** are limit order types — they rest on the book at your specified price.
-* **FOK** and **FAK** are market order types — they execute against resting liquidity immediately.
-  * **BUY**: specify the dollar amount you want to spend
-  * **SELL**: specify the number of shares you want to sell
-
-***
-
-## Limit Orders
-
-The simplest way to place a limit order — create, sign, and submit in one call:
-
-<CodeGroup>
-  ```typescript TypeScript theme={null}
-  import { ClobClient, Side, OrderType } from "@polymarket/clob-client";
-
-  const response = await client.createAndPostOrder(
-    {
-      tokenID: "TOKEN_ID",
-      price: 0.5,
-      size: 10,
-      side: Side.BUY,
-    },
-    {
-      tickSize: "0.01",
-      negRisk: false,
-    },
-    OrderType.GTC,
-  );
-
-  console.log("Order ID:", response.orderID);
-  console.log("Status:", response.status);
-  ```
-
-  ```python Python theme={null}
-  from py_clob_client.clob_types import OrderArgs, OrderType
-  from py_clob_client.order_builder.constants import BUY
-
-  response = client.create_and_post_order(
-      OrderArgs(
-          token_id="TOKEN_ID",
-          price=0.50,
-          size=10,
-          side=BUY,
-      ),
-      options={
-          "tick_size": "0.01",
-          "neg_risk": False,
-      },
-      order_type=OrderType.GTC
-  )
-
-  print("Order ID:", response["orderID"])
-  print("Status:", response["status"])
-  ```
-
-  ```rust Rust theme={null}
-  use polymarket_client_sdk::clob::types::Side;
-  use polymarket_client_sdk::types::dec;
-
-  let token_id = "TOKEN_ID".parse()?;
-  let order = client
-      .limit_order()
-      .token_id(token_id)
-      .price(dec!(0.50))
-      .size(dec!(10))
-      .side(Side::Buy)
-      .build()
-      .await?;
-  let signed = client.sign(&signer, order).await?;
-  let response = client.post_order(signed).await?;
-
-  println!("Order ID: {}", response.order_id);
-  println!("Status: {:?}", response.status);
-  ```
-</CodeGroup>
-
-### Two-Step Sign Then Submit
-
-For more control, you can separate signing from submission. This is useful for batch orders or custom submission logic:
-
-<CodeGroup>
-  ```typescript TypeScript theme={null}
-  // Step 1: Create and sign locally
-  const signedOrder = await client.createOrder(
-    {
-      tokenID: "TOKEN_ID",
-      price: 0.5,
-      size: 10,
-      side: Side.BUY,
-    },
-    { tickSize: "0.01", negRisk: false },
-  );
-
-  // Step 2: Submit to the CLOB
-  const response = await client.postOrder(signedOrder, OrderType.GTC);
-  ```
-
-  ```python Python theme={null}
-  # Step 1: Create and sign locally
-  signed_order = client.create_order(
-      OrderArgs(
-          token_id="TOKEN_ID",
-          price=0.50,
-          size=10,
-          side=BUY,
-      ),
-      options={
-          "tick_size": "0.01",
-          "neg_risk": False,
-      }
-  )
-
-  # Step 2: Submit to the CLOB
-  response = client.post_order(signed_order, OrderType.GTC)
-  ```
-
-  ```rust Rust theme={null}
-  // Step 1: Create order (auto-fetches tick size, neg risk, fee rate)
-  let order = client
-      .limit_order()
-      .token_id("TOKEN_ID".parse()?)
-      .price(dec!(0.50))
-      .size(dec!(10))
-      .side(Side::Buy)
-      .build()
-      .await?;
-
-  // Step 2: Sign and submit separately
-  let signed = client.sign(&signer, order).await?;
-  let response = client.post_order(signed).await?;
-  ```
-</CodeGroup>
-
-***
-
-## GTD Orders
-
-GTD orders auto-expire at a specified time. Useful for quoting around known events.
-
-<CodeGroup>
-  ```typescript TypeScript theme={null}
-  // Expire in 1 hour (+ 60s security threshold buffer)
-  const expiration = Math.floor(Date.now() / 1000) + 60 + 3600;
-
-  const response = await client.createAndPostOrder(
-    {
-      tokenID: "TOKEN_ID",
-      price: 0.5,
-      size: 10,
-      side: Side.BUY,
-      expiration,
-    },
-    { tickSize: "0.01", negRisk: false },
-    OrderType.GTD,
-  );
-  ```
-
-  ```python Python theme={null}
-  import time
-
-  # Expire in 1 hour (+ 60s security threshold buffer)
-  expiration = int(time.time()) + 60 + 3600
-
-  response = client.create_and_post_order(
-      OrderArgs(
-          token_id="TOKEN_ID",
-          price=0.50,
-          size=10,
-          side=BUY,
-          expiration=expiration,
-      ),
-      options={
-          "tick_size": "0.01",
-          "neg_risk": False,
-      },
-      order_type=OrderType.GTD
-  )
-  ```
-
-  ```rust Rust theme={null}
-  use chrono::{TimeDelta, Utc};
-  use polymarket_client_sdk::clob::types::OrderType;
-
-  let order = client
-      .limit_order()
-      .token_id("TOKEN_ID".parse()?)
-      .price(dec!(0.50))
-      .size(dec!(10))
-      .side(Side::Buy)
-      .order_type(OrderType::GTD)
-      .expiration(Utc::now() + TimeDelta::hours(1))
-      .build()
-      .await?;
-  let signed = client.sign(&signer, order).await?;
-  let response = client.post_order(signed).await?;
-  ```
-</CodeGroup>
-
-<Note>
-  There is a security threshold of one minute on GTD expiration. To set an
-  effective lifetime of N seconds, use `now + 60 + N`. For example, for a
-  30-second effective lifetime, set the expiration to `now + 60 + 30`.
-</Note>
-
-***
-
-## Market Orders
-
-Market orders execute immediately against resting liquidity using FOK or FAK types:
-
-<CodeGroup>
-  ```typescript TypeScript theme={null}
-  import { Side, OrderType } from "@polymarket/clob-client";
-
-  // FOK BUY: spend exactly $100 or cancel entirely
-  const buyOrder = await client.createMarketOrder(
-    {
-      tokenID: "TOKEN_ID",
-      side: Side.BUY,
-      amount: 100, // dollar amount
-      price: 0.5, // worst-price limit (slippage protection)
-    },
-    { tickSize: "0.01", negRisk: false },
-  );
-  await client.postOrder(buyOrder, OrderType.FOK);
-
-  // FOK SELL: sell exactly 200 shares or cancel entirely
-  const sellOrder = await client.createMarketOrder(
-    {
-      tokenID: "TOKEN_ID",
-      side: Side.SELL,
-      amount: 200, // number of shares
-      price: 0.45, // worst-price limit (slippage protection)
-    },
-    { tickSize: "0.01", negRisk: false },
-  );
-  await client.postOrder(sellOrder, OrderType.FOK);
-  ```
-
-  ```python Python theme={null}
-  from py_clob_client.order_builder.constants import BUY, SELL
-  from py_clob_client.clob_types import OrderType
-
-  # FOK BUY: spend exactly $100 or cancel entirely
-  buy_order = client.create_market_order(
-      token_id="TOKEN_ID",
-      side=BUY,
-      amount=100,  # dollar amount
-      price=0.50,  # worst-price limit (slippage protection)
-      options={"tick_size": "0.01", "neg_risk": False},
-  )
-  client.post_order(buy_order, OrderType.FOK)
-
-  # FOK SELL: sell exactly 200 shares or cancel entirely
-  sell_order = client.create_market_order(
-      token_id="TOKEN_ID",
-      side=SELL,
-      amount=200,  # number of shares
-      price=0.45,  # worst-price limit (slippage protection)
-      options={"tick_size": "0.01", "neg_risk": False},
-  )
-  client.post_order(sell_order, OrderType.FOK)
-  ```
-
-  ```rust Rust theme={null}
-  use polymarket_client_sdk::clob::types::{Amount, OrderType, Side};
-
-  let token_id = "TOKEN_ID".parse()?;
-
-  // FOK BUY: spend exactly $100 or cancel entirely
-  let buy = client
-      .market_order()
-      .token_id(token_id)
-      .amount(Amount::usdc(dec!(100))?)
-      .price(dec!(0.50)) // worst-price limit (slippage protection)
-      .side(Side::Buy)
-      .order_type(OrderType::FOK)
-      .build()
-      .await?;
-  let signed = client.sign(&signer, buy).await?;
-  client.post_order(signed).await?;
-
-  // FOK SELL: sell exactly 200 shares or cancel entirely
-  let sell = client
-      .market_order()
-      .token_id(token_id)
-      .amount(Amount::shares(dec!(200))?)
-      .price(dec!(0.45)) // worst-price limit (slippage protection)
-      .side(Side::Sell)
-      .order_type(OrderType::FOK)
-      .build()
-      .await?;
-  let signed = client.sign(&signer, sell).await?;
-  client.post_order(signed).await?;
-  ```
-</CodeGroup>
-
-* **FOK** — fill entirely or cancel the whole order
-* **FAK** — fill what's available, cancel the rest
-
-The `price` field on market orders acts as a **worst-price limit** (slippage protection), not a target execution price.
-
-### One-Step Market Order
-
-For convenience, `createAndPostMarketOrder` handles creation, signing, and submission in one call:
-
-<CodeGroup>
-  ```typescript TypeScript theme={null}
-  const response = await client.createAndPostMarketOrder(
-    {
-      tokenID: "TOKEN_ID",
-      side: Side.BUY,
-      amount: 100,
-      price: 0.5,
-    },
-    { tickSize: "0.01", negRisk: false },
-    OrderType.FOK,
-  );
-  ```
-
-  ```python Python theme={null}
-  response = client.create_and_post_market_order(
-      token_id="TOKEN_ID",
-      side=BUY,
-      amount=100,
-      price=0.50,
-      options={"tick_size": "0.01", "neg_risk": False},
-      order_type=OrderType.FOK,
-  )
-  ```
-
-  ```rust Rust theme={null}
-  let order = client
-      .market_order()
-      .token_id("TOKEN_ID".parse()?)
-      .amount(Amount::usdc(dec!(100))?)
-      .price(dec!(0.50))
-      .side(Side::Buy)
-      .order_type(OrderType::FOK)
-      .build()
-      .await?;
-  let signed = client.sign(&signer, order).await?;
-  let response = client.post_order(signed).await?;
-  ```
-</CodeGroup>
-
-***
-
-## Post-Only Orders
-
-Post-only orders guarantee you're always the maker. If the order would match immediately (cross the spread), it's rejected instead of executed.
-
-<CodeGroup>
-  ```typescript TypeScript theme={null}
-  const response = await client.postOrder(signedOrder, OrderType.GTC, true);
-  ```
-
-  ```python Python theme={null}
-  response = client.post_order(signed_order, OrderType.GTC, post_only=True)
-  ```
-
-  ```rust Rust theme={null}
-  let order = client
-      .limit_order()
-      .token_id("TOKEN_ID".parse()?)
-      .price(dec!(0.50))
-      .size(dec!(10))
-      .side(Side::Buy)
-      .post_only(true)
-      .build()
-      .await?;
-  let signed = client.sign(&signer, order).await?;
-  let response = client.post_order(signed).await?;
-  ```
-</CodeGroup>
-
-* Only works with **GTC** and **GTD** order types
-* Rejected if combined with FOK or FAK
-
-***
-
-## Batch Orders
-
-Place up to **15 orders** in a single request:
-
-<CodeGroup>
-  ```typescript TypeScript theme={null}
-  import { OrderType, Side, PostOrdersArgs } from "@polymarket/clob-client";
-
-  const orders: PostOrdersArgs[] = [
-    {
-      order: await client.createOrder(
-        {
-          tokenID: "TOKEN_ID",
-          price: 0.48,
-          side: Side.BUY,
-          size: 500,
-        },
-        { tickSize: "0.01", negRisk: false },
-      ),
-      orderType: OrderType.GTC,
-    },
-    {
-      order: await client.createOrder(
-        {
-          tokenID: "TOKEN_ID",
-          price: 0.52,
-          side: Side.SELL,
-          size: 500,
-        },
-        { tickSize: "0.01", negRisk: false },
-      ),
-      orderType: OrderType.GTC,
-    },
-  ];
-
-  const response = await client.postOrders(orders);
-  ```
-
-  ```python Python theme={null}
-  from py_clob_client.clob_types import OrderArgs, OrderType, PostOrdersArgs
-  from py_clob_client.order_builder.constants import BUY, SELL
-
-  response = client.post_orders([
-      PostOrdersArgs(
-          order=client.create_order(OrderArgs(
-              price=0.48,
-              size=500,
-              side=BUY,
-              token_id="TOKEN_ID",
-          ), options={"tick_size": "0.01", "neg_risk": False}),
-          orderType=OrderType.GTC,
-      ),
-      PostOrdersArgs(
-          order=client.create_order(OrderArgs(
-              price=0.52,
-              size=500,
-              side=SELL,
-              token_id="TOKEN_ID",
-          ), options={"tick_size": "0.01", "neg_risk": False}),
-          orderType=OrderType.GTC,
-      ),
-  ])
-  ```
-
-  ```rust Rust theme={null}
-  let token_id = "TOKEN_ID".parse()?;
-
-  let bid = client
-      .limit_order()
-      .token_id(token_id)
-      .price(dec!(0.48))
-      .size(dec!(500))
-      .side(Side::Buy)
-      .build()
-      .await?;
-  let ask = client
-      .limit_order()
-      .token_id(token_id)
-      .price(dec!(0.52))
-      .size(dec!(500))
-      .side(Side::Sell)
-      .build()
-      .await?;
-
-  let signed_bid = client.sign(&signer, bid).await?;
-  let signed_ask = client.sign(&signer, ask).await?;
-  let response = client.post_orders(vec![signed_bid, signed_ask]).await?;
-  ```
-</CodeGroup>
-
-***
-
-## Order Options
-
-Every order requires two market-specific options: `tickSize` and `negRisk`. For details on signature types (`0` = EOA, `1` = POLY\_PROXY, `2` = GNOSIS\_SAFE), see [Authentication](/api-reference/authentication#signature-types-and-funder).
-
-### Tick Sizes
-
-Your order price must conform to the market's tick size, or the order is rejected.
-
-| Tick Size | Precision  | Example Prices         |
-| --------- | ---------- | ---------------------- |
-| `0.1`     | 1 decimal  | 0.1, 0.2, 0.5          |
-| `0.01`    | 2 decimals | 0.01, 0.50, 0.99       |
-| `0.001`   | 3 decimals | 0.001, 0.500, 0.999    |
-| `0.0001`  | 4 decimals | 0.0001, 0.5000, 0.9999 |
-
-<CodeGroup>
-  ```typescript TypeScript theme={null}
-  const tickSize = await client.getTickSize("TOKEN_ID");
-  ```
-
-  ```python Python theme={null}
-  tick_size = client.get_tick_size("TOKEN_ID")
-  ```
-
-  ```rust Rust theme={null}
-  let token_id = "TOKEN_ID".parse()?;
-  let tick_size = client.tick_size(token_id).await?;
-  ```
-</CodeGroup>
-
-### Negative Risk
-
-Multi-outcome events (3+ outcomes) use the Neg Risk CTF Exchange. Pass `negRisk: true` for these markets.
-
-<CodeGroup>
-  ```typescript TypeScript theme={null}
-  const isNegRisk = await client.getNegRisk("TOKEN_ID");
-  ```
-
-  ```python Python theme={null}
-  is_neg_risk = client.get_neg_risk("TOKEN_ID")
-  ```
-
-  ```rust Rust theme={null}
-  let token_id = "TOKEN_ID".parse()?;
-  let is_neg_risk = client.neg_risk(token_id).await?;
-  ```
-</CodeGroup>
-
-<Tip>
-  Both values are also available on the market object: `minimum_tick_size` and
-  `neg_risk`. In Rust, the order builder auto-fetches both — you don't need to look them up manually.
-</Tip>
-
-***
-
-## Prerequisites
-
-Before placing an order, your funder address must have approved the Exchange contract to spend the relevant tokens:
-
-* **BUY orders**: USDC.e allowance >= spending amount
-* **SELL orders**: conditional token allowance >= selling amount
-
-Order size is limited by your available balance minus amounts reserved by existing open orders:
-
-$$
-\text{maxOrderSize} = \text{balance} - \sum(\text{openOrderSize} - \text{filledAmount})
-$$
-
-<Warning>
-  Orders are continuously monitored for validity — balances, allowances, and
-  onchain cancellations are tracked in real time. Any maker caught intentionally
-  abusing these checks will be blacklisted.
-</Warning>
-
-### Advanced Parameters
-
-These optional fields can be passed in the `UserOrder` object for fine-grained control:
-
-| Parameter    | Type   | Description                                     |
-| ------------ | ------ | ----------------------------------------------- |
-| `feeRateBps` | number | Fee rate in basis points (default: market rate) |
-| `nonce`      | number | Custom nonce for order uniqueness               |
-| `taker`      | string | Restrict the order to a specific taker address  |
-
-### Sports Markets
-
-Sports markets have additional behaviors:
-
-* Outstanding limit orders are **automatically cancelled** once the game begins, clearing the entire order book at the official start time
-* Marketable orders have a **3-second placement delay** before matching
-* Game start times can shift — monitor your orders closely, as they may not be cleared if the start time changes unexpectedly
-
-***
-
-## Response
-
-A successful order placement returns:
-
-```json  theme={null}
-{
-  "success": true,
-  "errorMsg": "",
-  "orderID": "0xabc123...",
-  "takingAmount": "",
-  "makingAmount": "",
-  "status": "live",
-  "transactionsHashes": [],
-  "tradeIDs": []
-}
-```
-
-### Statuses
-
-| Status      | Description                                                 |
-| ----------- | ----------------------------------------------------------- |
-| `live`      | Order resting on the book                                   |
-| `matched`   | Order matched immediately with a resting order              |
-| `delayed`   | Marketable order subject to a matching delay                |
-| `unmatched` | Marketable but failed to delay — placement still successful |
-
-### Error Messages
-
-| Error                              | Description                                     |
-| ---------------------------------- | ----------------------------------------------- |
-| `INVALID_ORDER_MIN_TICK_SIZE`      | Price doesn't conform to the market's tick size |
-| `INVALID_ORDER_MIN_SIZE`           | Order size below the minimum threshold          |
-| `INVALID_ORDER_DUPLICATED`         | Identical order already placed                  |
-| `INVALID_ORDER_NOT_ENOUGH_BALANCE` | Insufficient balance or allowance               |
-| `INVALID_ORDER_EXPIRATION`         | Expiration timestamp is in the past             |
-| `INVALID_POST_ONLY_ORDER_TYPE`     | Post-only used with FOK/FAK                     |
-| `INVALID_POST_ONLY_ORDER`          | Post-only order would cross the book            |
-| `FOK_ORDER_NOT_FILLED_ERROR`       | FOK order couldn't be fully filled              |
-| `INVALID_ORDER_ERROR`              | System error inserting the order                |
-| `EXECUTION_ERROR`                  | System error executing the trade                |
-| `ORDER_DELAYED`                    | Order match delayed due to market conditions    |
-| `DELAYING_ORDER_ERROR`             | System error while delaying the order           |
-| `MARKET_NOT_READY`                 | Market not yet accepting orders                 |
-
-***
-
-## Heartbeat
-
-The heartbeat endpoint maintains session liveness. If a valid heartbeat is not received within **10 seconds** (with a 5-second buffer), **all open orders are cancelled**.
-
-<CodeGroup>
-  ```typescript TypeScript theme={null}
-  let heartbeatId = "";
-  setInterval(async () => {
-    const resp = await client.postHeartbeat(heartbeatId);
-    heartbeatId = resp.heartbeat_id;
-  }, 5000);
-  ```
-
-  ```python Python theme={null}
-  import time
-
-  heartbeat_id = ""
-  while True:
-      resp = client.post_heartbeat(heartbeat_id)
-      heartbeat_id = resp["heartbeat_id"]
-      time.sleep(5)
-  ```
-
-  ```rust Rust theme={null}
-  // With the `heartbeats` feature, the Rust SDK can auto-send heartbeats
-  // in a background task — no manual loop needed:
-  Client::start_heartbeats(&mut client)?;
-  // ... your trading logic ...
-  client.stop_heartbeats().await?;
-
-  // Or send manually:
-  let resp = client.post_heartbeat(None).await?; // None for first call
-  let resp = client.post_heartbeat(Some(resp.heartbeat_id)).await?;
-  ```
-</CodeGroup>
-
-* Include the most recent `heartbeat_id` in each request. Use an empty string for the first request.
-* If you send an expired ID, the server responds with `400` and the correct ID. Update and retry.
-
-***
-
-## Next Steps
-
-<CardGroup cols={2}>
-  <Card title="Cancel Orders" icon="xmark" href="/trading/orders/cancel">
-    Cancel single, multiple, or all open orders
-  </Card>
-
-  <Card title="Order Attribution" icon="tag" href="/trading/orders/attribution">
-    Attribute orders to your builder account for volume credit
-  </Card>
-</CardGroup>
-
-
-Built with [Mintlify](https://mintlify.com).
-
-> ## Documentation Index
-> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
-> Use this file to discover all available pages before exploring further.
-
-# Order Lifecycle
-
-> Understanding how orders flow from creation to settlement
-
-Every trade on Polymarket follows a specific lifecycle. Orders are created offchain, matched by an operator, and settled onchain through smart contracts. This hybrid approach combines the speed of centralized matching with the security of blockchain settlement.
-
-<Frame>
-  <img src="https://mintcdn.com/polymarket-292d1b1b/FOMte3ewbG-LVy3k/images/core-concepts/order-lifecycle.png?fit=max&auto=format&n=FOMte3ewbG-LVy3k&q=85&s=4db07008193421bfe359afe44b5f604e" alt="" className="dark:hidden" width="2336" height="952" data-path="images/core-concepts/order-lifecycle.png" />
-
-  <img src="https://mintcdn.com/polymarket-292d1b1b/FOMte3ewbG-LVy3k/images/dark/core-concepts/order-lifecycle.png?fit=max&auto=format&n=FOMte3ewbG-LVy3k&q=85&s=5a0f3eba2f20c44471bae05c0670de4a" alt="" className="hidden dark:block" width="2336" height="952" data-path="images/dark/core-concepts/order-lifecycle.png" />
-</Frame>
-
-## How Orders Work
-
-All orders on Polymarket are **limit orders**. A limit order specifies the price you're willing to pay (or accept) and the quantity you want to trade.
-
-<Note>
-  "Market orders" are simply limit orders with a price set to execute
-  immediately against the best available resting orders.
-</Note>
-
-Orders are **EIP712-signed messages**. When you place an order, you sign a structured message with your private key. This signature authorizes the Exchange contract to execute the trade on your behalf—without ever taking custody of your funds.
-
-## Order Types
-
-| Type    | Behavior                                                      | Use Case                 |
-| ------- | ------------------------------------------------------------- | ------------------------ |
-| **GTC** | Good Till Cancelled — rests on book until filled or cancelled | Standard limit orders    |
-| **GTD** | Good Till Date — auto-expires at specified time               | Time-limited orders      |
-| **FOK** | Fill Or Kill — fill entirely or cancel immediately            | All-or-nothing execution |
-| **FAK** | Fill And Kill — fill what's available, cancel the rest        | Partial fills acceptable |
-
-### Post-Only Orders
-
-Post-only orders will only rest on the book. If a post-only order would match immediately (cross the spread), it's rejected instead of executed. This guarantees you're always the maker, never the taker.
+We are improving Polymarket's developer integration surface across SDKs, APIs, and frontend tooling. The unified TypeScript and Python SDKs are the first beta release in this effort and are currently being hardened before a stable release. Once stable, these SDKs will supersede the existing SDKs, and we will provide a documented migration path.
 
 <Steps>
-  <Step title="Create and Sign">
-    Your client creates an order object containing:
-
-    * Token ID (which outcome you're trading)
-    * Side (buy or sell)
-    * Price and size
-    * Expiration time
-    * Nonce (for replay protection)
-
-    You sign this order with your private key, creating an EIP712 signature.
+  <Step title="Beta TypeScript and Python SDKs">
+    Current beta release of the unified SDKs for early integrators.
   </Step>
 
-  <Step title="Submit to CLOB">
-    The signed order is submitted to the Central Limit Order Book (CLOB) operator. The operator validates:
-
-    * Signature is valid
-    * You have sufficient balance
-    * You have set the required allowances
-    * Price meets minimum tick size requirements
+  <Step title="Stable TypeScript and Python SDKs">
+    Next, harden the beta SDKs, resolve feedback from integrators, and publish
+    the documented migration path from the existing SDKs.
   </Step>
 
-  <Step title="Match or Rest">
-    **If the order is marketable** (your buy price ≥ lowest ask, or your sell price ≤ highest bid), it matches immediately against resting orders.
-
-    **If the order is not marketable**, it rests on the book waiting for a counterparty. It remains open until:
-
-    * Another order matches against it
-    * You cancel it
-    * It expires (GTD orders only)
+  <Step title="Unified API">
+    A cohesive API surface across Polymarket developer interfaces.
   </Step>
 
-  <Step title="Settlement">
-    When orders match, the operator submits the trade to the blockchain. The Exchange contract:
-
-    * Verifies both signatures
-    * Transfers tokens from seller to buyer
-    * Transfers USDC.e from buyer to seller
-
-    Settlement is **atomic**—either the entire trade succeeds or nothing happens.
+  <Step title="Rust SDK">
+    A unified SDK for systems-level integrations and backend services.
   </Step>
 
-  <Step title="Confirmation">
-    The trade achieves finality on Polygon. Your token balances update and the trade appears in your history.
+  <Step title="React SDK">
+    Frontend-oriented tooling for React applications on top of the same unified
+    model.
   </Step>
 </Steps>
 
-## Order Statuses
-
-When you place an order, it receives one of these statuses:
-
-| Status      | Description                                                                 |
-| ----------- | --------------------------------------------------------------------------- |
-| `live`      | Order is resting on the book                                                |
-| `matched`   | Order matched immediately                                                   |
-| `delayed`   | Marketable order subject to a 3-second matching delay (sports markets)      |
-| `unmatched` | Marketable order placed on the book after the delay expired without a match |
-
-## Trade Statuses
-
-After matching, trades progress through these statuses:
-
-| Status      | Terminal | Description                                            |
-| ----------- | -------- | ------------------------------------------------------ |
-| `MATCHED`   | No       | Trade matched, sent to executor for onchain submission |
-| `MINED`     | No       | Transaction mined into the blockchain                  |
-| `CONFIRMED` | Yes      | Trade achieved finality, successful                    |
-| `RETRYING`  | No       | Transaction failed, being retried                      |
-| `FAILED`    | Yes      | Trade failed permanently                               |
-
-## Maker vs Taker
-
-| Role      | Description                     | When                                                  |
-| --------- | ------------------------------- | ----------------------------------------------------- |
-| **Maker** | Adds liquidity to the book      | Your order rests and is later matched                 |
-| **Taker** | Removes liquidity from the book | Your order matches immediately against resting orders |
-
-Price improvement always benefits the taker. If you place a buy order at `$0.55` and it matches against a resting sell at `$0.52`, you pay `$0.52`.
-
-## Cancellation
-
-You can cancel orders at any time before they're matched:
-
-* **Via API** — Cancel through the CLOB API (instant)
-* **Onchain** — Cancel directly on the Exchange contract (fallback if API is unavailable)
-
-Partial fills cannot be cancelled—only the unfilled portion of an order can be cancelled.
-
-## Requirements
-
-Before placing orders, ensure:
-
-| Requirement         | Description                                        |
-| ------------------- | -------------------------------------------------- |
-| **Balance**         | Sufficient USDC.e (for buys) or tokens (for sells) |
-| **Allowance**       | Approve the Exchange contract to spend your assets |
-| **API Credentials** | Valid API key for authenticated endpoints          |
-
-<Info>
-  Order size is limited by your available balance minus any amounts reserved by existing open orders.
-
-  $$
-  \text{maxOrderSize} = \text{balance} - \sum(\text{openOrderSize} - \text{filledAmount})
-  $$
-</Info>
-
-## Next Steps
-
 <CardGroup cols={2}>
-  <Card title="Resolution" icon="gavel" href="/concepts/resolution">
-    Learn how markets are resolved and winning tokens redeemed.
+  <Card title="TypeScript SDK" href="/dev-tooling/typescript">
+    Beta documentation for the unified TypeScript SDK.
   </Card>
 
-  <Card title="Trading Guide" icon="book" href="/trading/overview">
-    Start placing orders with our step-by-step guide.
+  <Card title="Python SDK" href="/dev-tooling/python">
+    Beta documentation for the unified Python SDK.
   </Card>
 </CardGroup>
-
-
-Built with [Mintlify](https://mintlify.com).
-
 > ## Documentation Index
 > Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
 > Use this file to discover all available pages before exploring further.
 
-# Deposit
+# Overview
 
-> Bridge assets from any supported chain to fund your Polymarket account
+> Learn about Polymarket's developer tooling roadmap.
 
-Polymarket uses **USDC.e** (Bridged USDC) on Polygon as collateral for all trading. The Bridge API lets you deposit assets from Ethereum, Solana, Bitcoin, and other chains—they're automatically converted to USDC.e on Polygon.
-
-## How It Works
-
-1. Request deposit addresses for your Polymarket wallet
-2. Send assets to the appropriate address for your source chain
-3. Assets are bridged and swapped to USDC.e automatically
-4. USDC.e is credited to your wallet for trading
-
-## Create Deposit Addresses
-
-Generate unique deposit addresses linked to your Polymarket wallet. See the [Bridge API Reference](/api-reference/introduction) for full request and response schemas.
-
-```bash  theme={null}
-curl -X POST https://bridge.polymarket.com/deposit \
-  -H "Content-Type: application/json" \
-  -d '{"address": "0x56687bf447db6ffa42ffe2204a05edaa20f55839"}'
-```
-
-### Address Types
-
-| Address | Use For                                                  |
-| ------- | -------------------------------------------------------- |
-| `evm`   | Ethereum, Arbitrum, Base, Optimism, and other EVM chains |
-| `svm`   | Solana                                                   |
-| `btc`   | Bitcoin                                                  |
-| `tvm`   | Tron                                                     |
-
-<Warning>
-  Each address is unique to your wallet. Only send assets from supported chains
-  to the correct address type.
-</Warning>
-
-## Deposit Flow
+We are improving Polymarket's developer integration surface across SDKs, APIs, and frontend tooling. The unified TypeScript and Python SDKs are the first beta release in this effort and are currently being hardened before a stable release. Once stable, these SDKs will supersede the existing SDKs, and we will provide a documented migration path.
 
 <Steps>
-  <Step title="Get Your Deposit Address">
-    Call `POST /deposit` with your Polymarket wallet address to get deposit
-    addresses.
+  <Step title="Beta TypeScript and Python SDKs">
+    Current beta release of the unified SDKs for early integrators.
   </Step>
 
-  <Step title="Check Supported Assets">
-    Verify your token is supported and meets the minimum deposit amount via
-    `/supported-assets`.
+  <Step title="Stable TypeScript and Python SDKs">
+    Next, harden the beta SDKs, resolve feedback from integrators, and publish
+    the documented migration path from the existing SDKs.
   </Step>
 
-  <Step title="Send Assets">
-    Transfer tokens to the appropriate deposit address from your source chain.
+  <Step title="Unified API">
+    A cohesive API surface across Polymarket developer interfaces.
   </Step>
 
-  <Step title="Track Status">
-    Monitor your deposit progress using `/status/{address}`.
+  <Step title="Rust SDK">
+    A unified SDK for systems-level integrations and backend services.
+  </Step>
+
+  <Step title="React SDK">
+    Frontend-oriented tooling for React applications on top of the same unified
+    model.
   </Step>
 </Steps>
 
-## USDC vs USDC.e
-
-You can deposit either USDC (native) or USDC.e (bridged) to your Polymarket wallet. If you deposit native USDC, you will be prompted to "activate funds," which swaps it to USDC.e via the lowest-fee Uniswap pool (less than 10bp slippage).
-
-## Large Deposits
-
-For deposits over \$50,000 originating from a chain other than Polygon, we recommend using a third-party bridge to minimize slippage:
-
-* [DeBridge](https://app.debridge.finance/)
-* [Across](https://app.across.to/bridge)
-* [Portal](https://portalbridge.com/)
-
-Bridge directly to your Polymarket USDC (Polygon) deposit address. Polymarket is not affiliated with or responsible for any third-party bridge.
-
-## Minimum Deposits
-
-Each asset has a minimum deposit amount. Deposits below the minimum will not be processed. Check `/supported-assets` for current minimums.
-
-## Deposit Recovery
-
-If you deposited the wrong token on Ethereum or Polygon, use these tools to recover your funds:
-
-* **Ethereum deposits**: [recovery.polymarket.com](https://recovery.polymarket.com/)
-* **Polygon deposits**: [matic-recovery.polymarket.com](https://matic-recovery.polymarket.com/)
-
-<Warning>
-  Sending unsupported tokens may cause **irrecoverable loss**. Always verify
-  your token is listed in [Supported Assets](/trading/bridge/supported-assets)
-  before depositing.
-</Warning>
-
-## Next Steps
-
 <CardGroup cols={2}>
-  <Card title="Supported Assets" icon="coins" href="/trading/bridge/supported-assets">
-    See all supported chains and tokens with minimum amounts.
+  <Card title="TypeScript SDK" href="/dev-tooling/typescript">
+    Beta documentation for the unified TypeScript SDK.
   </Card>
 
-  <Card title="Check Status" icon="clock" href="/trading/bridge/status">
-    Track your deposit progress through completion.
+  <Card title="Python SDK" href="/dev-tooling/python">
+    Beta documentation for the unified Python SDK.
   </Card>
 </CardGroup>
-
-
-Built with [Mintlify](https://mintlify.com).
-
 > ## Documentation Index
 > Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
 > Use this file to discover all available pages before exploring further.
 
-# Market Channel
+# Python SDK
 
-> Real-time orderbook, price, and trade data
+> Build with the unified Polymarket Python SDK.
 
-Public channel for market data updates (level 2 price data). Subscribe with asset IDs to receive orderbook snapshots, price changes, trade executions, and market events.
-
-## Endpoint
-
-```
-wss://ws-subscriptions-clob.polymarket.com/ws/market
-```
-
-## Subscription
-
-```json  theme={null}
-{
-  "assets_ids": ["<token_id_1>", "<token_id_2>"],
-  "type": "market",
-  "custom_feature_enabled": true
-}
-```
-
-Set `custom_feature_enabled: true` to receive `best_bid_ask`, `new_market`, and `market_resolved` events.
-
-## Message Types
-
-Each message includes an `event_type` field identifying the type.
-
-### book
-
-Emitted when first subscribed to a market and when there is a trade that affects the book.
-
-```json  theme={null}
-{
-  "event_type": "book",
-  "asset_id": "65818619657568813474341868652308942079804919287380422192892211131408793125422",
-  "market": "0xbd31dc8a20211944f6b70f31557f1001557b59905b7738480ca09bd4532f84af",
-  "bids": [
-    { "price": ".48", "size": "30" },
-    { "price": ".49", "size": "20" },
-    { "price": ".50", "size": "15" }
-  ],
-  "asks": [
-    { "price": ".52", "size": "25" },
-    { "price": ".53", "size": "60" },
-    { "price": ".54", "size": "10" }
-  ],
-  "timestamp": "123456789000",
-  "hash": "0x0...."
-}
-```
-
-### price\_change
-
-Emitted when a new order is placed or an order is cancelled.
-
-```json  theme={null}
-{
-  "market": "0x5f65177b394277fd294cd75650044e32ba009a95022d88a0c1d565897d72f8f1",
-  "price_changes": [
-    {
-      "asset_id": "71321045679252212594626385532706912750332728571942532289631379312455583992563",
-      "price": "0.5",
-      "size": "200",
-      "side": "BUY",
-      "hash": "56621a121a47ed9333273e21c83b660cff37ae50",
-      "best_bid": "0.5",
-      "best_ask": "1"
-    },
-    {
-      "asset_id": "52114319501245915516055106046884209969926127482827954674443846427813813222426",
-      "price": "0.5",
-      "size": "200",
-      "side": "SELL",
-      "hash": "1895759e4df7a796bf4f1c5a5950b748306923e2",
-      "best_bid": "0",
-      "best_ask": "0.5"
-    }
-  ],
-  "timestamp": "1757908892351",
-  "event_type": "price_change"
-}
-```
-
-A `size` of `"0"` means the price level has been removed from the book.
-
-### tick\_size\_change
-
-Emitted when the minimum tick size of a market changes. This happens when the book's price reaches the limits: price > 0.96 or price \< 0.04.
-
-```json  theme={null}
-{
-  "event_type": "tick_size_change",
-  "asset_id": "65818619657568813474341868652308942079804919287380422192892211131408793125422",
-  "market": "0xbd31dc8a20211944f6b70f31557f1001557b59905b7738480ca09bd4532f84af",
-  "old_tick_size": "0.01",
-  "new_tick_size": "0.001",
-  "timestamp": "100000000"
-}
-```
-
-### last\_trade\_price
-
-Emitted when a maker and taker order is matched, creating a trade event.
-
-```json  theme={null}
-{
-  "asset_id": "114122071509644379678018727908709560226618148003371446110114509806601493071694",
-  "event_type": "last_trade_price",
-  "fee_rate_bps": "0",
-  "market": "0x6a67b9d828d53862160e470329ffea5246f338ecfffdf2cab45211ec578b0347",
-  "price": "0.456",
-  "side": "BUY",
-  "size": "219.217767",
-  "timestamp": "1750428146322"
-}
-```
-
-### best\_bid\_ask
-
-<Note>Requires `custom_feature_enabled: true`.</Note>
-
-Emitted when the best bid or ask prices for a market change.
-
-```json  theme={null}
-{
-  "event_type": "best_bid_ask",
-  "market": "0x0005c0d312de0be897668695bae9f32b624b4a1ae8b140c49f08447fcc74f442",
-  "asset_id": "85354956062430465315924116860125388538595433819574542752031640332592237464430",
-  "best_bid": "0.73",
-  "best_ask": "0.77",
-  "spread": "0.04",
-  "timestamp": "1766789469958"
-}
-```
-
-### new\_market
-
-<Note>Requires `custom_feature_enabled: true`.</Note>
-
-Emitted when a new market is created.
-
-The payload also includes market metadata fields such as `tags`,
-`condition_id`, `active`, `clob_token_ids`, `sports_market_type`, `line`,
-`game_start_time`, `order_price_min_tick_size`, and `group_item_title`.
-
-```json  theme={null}
-{
-  "id": "1031769",
-  "question": "Will NVIDIA (NVDA) close above $240 end of January?",
-  "market": "0x311d0c4b6671ab54af4970c06fcf58662516f5168997bdda209ec3db5aa6b0c1",
-  "slug": "nvda-above-240-on-january-30-2026",
-  "description": "This market will resolve to \"Yes\" if the official closing price...",
-  "assets_ids": [
-    "76043073756653678226373981964075571318267289248134717369284518995922789326425",
-    "31690934263385727664202099278545688007799199447969475608906331829650099442770"
-  ],
-  "outcomes": ["Yes", "No"],
-  "event_message": {
-    "id": "125819",
-    "ticker": "nvda-above-in-january-2026",
-    "slug": "nvda-above-in-january-2026",
-    "title": "Will NVIDIA (NVDA) close above ___ end of January?",
-    "description": "This market will resolve to \"Yes\" if the official closing price..."
-  },
-  "timestamp": "1766790415550",
-  "event_type": "new_market",
-  "tags": ["stocks"],
-  "condition_id": "0x311d0c4b6671ab54af4970c06fcf58662516f5168997bdda209ec3db5aa6b0c1",
-  "active": true,
-  "clob_token_ids": [
-    "76043073756653678226373981964075571318267289248134717369284518995922789326425",
-    "31690934263385727664202099278545688007799199447969475608906331829650099442770"
-  ],
-  "sports_market_type": "",
-  "line": "",
-  "game_start_time": "",
-  "order_price_min_tick_size": "0.01",
-  "group_item_title": "NVDA above $240"
-}
-```
-
-### market\_resolved
-
-<Note>Requires `custom_feature_enabled: true`.</Note>
-
-Emitted when a market is resolved.
-
-```json  theme={null}
-{
-  "id": "1031769",
-  "question": "Will NVIDIA (NVDA) close above $240 end of January?",
-  "market": "0x311d0c4b6671ab54af4970c06fcf58662516f5168997bdda209ec3db5aa6b0c1",
-  "slug": "nvda-above-240-on-january-30-2026",
-  "description": "This market will resolve to \"Yes\" if the official closing price...",
-  "assets_ids": [
-    "76043073756653678226373981964075571318267289248134717369284518995922789326425",
-    "31690934263385727664202099278545688007799199447969475608906331829650099442770"
-  ],
-  "outcomes": ["Yes", "No"],
-  "winning_asset_id": "76043073756653678226373981964075571318267289248134717369284518995922789326425",
-  "winning_outcome": "Yes",
-  "event_message": {
-    "id": "125819",
-    "ticker": "nvda-above-in-january-2026",
-    "slug": "nvda-above-in-january-2026",
-    "title": "Will NVIDIA (NVDA) close above ___ end of January?",
-    "description": "This market will resolve to \"Yes\" if the official closing price..."
-  },
-  "timestamp": "1766790415550",
-  "event_type": "market_resolved"
-}
-```
-
-
-Built with [Mintlify](https://mintlify.com).
-
-> ## Documentation Index
-> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
-> Use this file to discover all available pages before exploring further.
-
-# Trading
-
-> Order entry, management, and best practices for market makers
-
-Market makers interact with Polymarket through the CLOB API — posting two-sided quotes, managing inventory across markets, and rebalancing positions. The SDK clients handle order signing and submission, so you can focus on strategy.
-
-<Info>
-  This page covers MM-specific workflows and best practices. For full order
-  mechanics, see [Create Orders](/trading/orders/create) and [Cancel
-  Orders](/trading/orders/cancel).
-</Info>
-
-***
-
-## Two-Sided Quoting
-
-The core market making workflow is posting a bid and ask around your fair value. Use `createAndPostOrder` to place each side:
-
-<CodeGroup>
-  ```typescript TypeScript theme={null}
-  import { ClobClient, Side, OrderType } from "@polymarket/clob-client";
-
-  const client = new ClobClient(
-    "https://clob.polymarket.com",
-    137,
-    wallet,
-    credentials,
-    signatureType,
-    funder,
-  );
-
-  // Bid at 0.48
-  const bid = await client.createAndPostOrder({
-    tokenID: "3409705850427531082723332342151729...",
-    side: Side.BUY,
-    price: 0.48,
-    size: 1000,
-    orderType: OrderType.GTC,
-  });
-
-  // Ask at 0.52
-  const ask = await client.createAndPostOrder({
-    tokenID: "3409705850427531082723332342151729...",
-    side: Side.SELL,
-    price: 0.52,
-    size: 1000,
-    orderType: OrderType.GTC,
-  });
-  ```
-
-  ```python Python theme={null}
-  from py_clob_client.clob_types import OrderArgs, OrderType
-  from py_clob_client.order_builder.constants import BUY, SELL
-
-  token_id = "3409705850427531082723332342151729..."
-
-  # Bid at 0.48
-  bid = client.create_and_post_order(
-      OrderArgs(token_id=token_id, side=BUY, price=0.48, size=1000),
-      order_type=OrderType.GTC,
-  )
-
-  # Ask at 0.52
-  ask = client.create_and_post_order(
-      OrderArgs(token_id=token_id, side=SELL, price=0.52, size=1000),
-      order_type=OrderType.GTC,
-  )
-  ```
-
-  ```rust Rust theme={null}
-  use polymarket_client_sdk::clob::types::Side;
-  use polymarket_client_sdk::types::dec;
-
-  let token_id = "3409705850427531082723332342151729...".parse()?;
-
-  // Bid at 0.48
-  let bid = client.limit_order()
-      .token_id(token_id).price(dec!(0.48)).size(dec!(1000)).side(Side::Buy)
-      .build().await?;
-  let signed = client.sign(&signer, bid).await?;
-  client.post_order(signed).await?;
-
-  // Ask at 0.52
-  let ask = client.limit_order()
-      .token_id(token_id).price(dec!(0.52)).size(dec!(1000)).side(Side::Sell)
-      .build().await?;
-  let signed = client.sign(&signer, ask).await?;
-  client.post_order(signed).await?;
-  ```
-</CodeGroup>
-
-### Batch Orders
-
-For tighter spreads across multiple levels, use `postOrders` to submit up to 15 orders in a single request:
-
-<CodeGroup>
-  ```typescript TypeScript theme={null}
-  const orders = await Promise.all([
-    client.createOrder({ tokenID, side: Side.BUY, price: 0.48, size: 500 }),
-    client.createOrder({ tokenID, side: Side.BUY, price: 0.47, size: 500 }),
-    client.createOrder({ tokenID, side: Side.SELL, price: 0.52, size: 500 }),
-    client.createOrder({ tokenID, side: Side.SELL, price: 0.53, size: 500 }),
-  ]);
-
-  const response = await client.postOrders(
-    orders.map((order) => ({ order, orderType: OrderType.GTC })),
-  );
-  ```
-
-  ```python Python theme={null}
-  from py_clob_client.clob_types import OrderArgs, OrderType, PostOrdersArgs
-  from py_clob_client.order_builder.constants import BUY, SELL
-
-  response = client.post_orders([
-      PostOrdersArgs(
-          order=client.create_order(OrderArgs(
-              price=0.48, size=500, side=BUY, token_id=token_id,
-          )),
-          order_type=OrderType.GTC,
-      ),
-      PostOrdersArgs(
-          order=client.create_order(OrderArgs(
-              price=0.47, size=500, side=BUY, token_id=token_id,
-          )),
-          order_type=OrderType.GTC,
-      ),
-      PostOrdersArgs(
-          order=client.create_order(OrderArgs(
-              price=0.52, size=500, side=SELL, token_id=token_id,
-          )),
-          order_type=OrderType.GTC,
-      ),
-      PostOrdersArgs(
-          order=client.create_order(OrderArgs(
-              price=0.53, size=500, side=SELL, token_id=token_id,
-          )),
-          order_type=OrderType.GTC,
-      ),
-  ])
-  ```
-
-  ```rust Rust theme={null}
-  let mut signed_orders = Vec::new();
-  for (price, side) in [
-      (dec!(0.48), Side::Buy), (dec!(0.47), Side::Buy),
-      (dec!(0.52), Side::Sell), (dec!(0.53), Side::Sell),
-  ] {
-      let order = client.limit_order()
-          .token_id(token_id).price(price).size(dec!(500)).side(side)
-          .build().await?;
-      signed_orders.push(client.sign(&signer, order).await?);
-  }
-  let response = client.post_orders(signed_orders).await?;
-  ```
-</CodeGroup>
-
-<Tip>
-  Batching reduces latency by submitting multiple quotes in a single request.
-  Always prefer `postOrders()` over multiple individual `createAndPostOrder()`
-  calls.
-</Tip>
-
-***
-
-## Choosing Order Types
-
-| Type    | Behavior                                         | When to Use                             |
-| ------- | ------------------------------------------------ | --------------------------------------- |
-| **GTC** | Rests on the book until filled or cancelled      | Default for passive quoting             |
-| **GTD** | Auto-expires at a specified time                 | Expire quotes before known events       |
-| **FOK** | Must fill entirely and immediately, or cancel    | Aggressive rebalancing — all or nothing |
-| **FAK** | Fills what's available immediately, cancels rest | Rebalancing where partial fills are OK  |
-
-**GTC** and **GTD** are your primary tools for passive market making — they rest on the book at your specified price. **FOK** and **FAK** are for rebalancing inventory against resting liquidity.
-
-### Time-Limited Quotes with GTD
-
-Auto-expire quotes before known events like market close or resolution:
-
-<CodeGroup>
-  ```typescript TypeScript theme={null}
-  // Expire in 1 hour
-  const expiringOrder = await client.createOrder({
-    tokenID,
-    side: Side.BUY,
-    price: 0.5,
-    size: 1000,
-    orderType: OrderType.GTD,
-    expiration: Math.floor(Date.now() / 1000) + 3600,
-  });
-  ```
-
-  ```python Python theme={null}
-  import time
-
-  # Expire in 1 hour
-  expiring_order = client.create_order(
-      OrderArgs(
-          token_id=token_id,
-          side=BUY,
-          price=0.50,
-          size=1000,
-          expiration=int(time.time()) + 3600,
-      ),
-      order_type=OrderType.GTD,
-  )
-  ```
-
-  ```rust Rust theme={null}
-  use chrono::{TimeDelta, Utc};
-  use polymarket_client_sdk::clob::types::OrderType;
-
-  // Expire in 1 hour
-  let order = client.limit_order()
-      .token_id(token_id)
-      .price(dec!(0.50))
-      .size(dec!(1000))
-      .side(Side::Buy)
-      .order_type(OrderType::GTD)
-      .expiration(Utc::now() + TimeDelta::hours(1))
-      .build().await?;
-  let signed = client.sign(&signer, order).await?;
-  client.post_order(signed).await?;
-  ```
-</CodeGroup>
-
-***
-
-## Managing Orders
-
-### Cancelling
-
-Cancel individual orders, by market, or everything at once:
-
-<CodeGroup>
-  ```typescript TypeScript theme={null}
-  await client.cancelOrder(orderId); // Single order
-  await client.cancelOrders(orderIds); // Multiple orders
-  await client.cancelMarketOrders(conditionId); // All orders in a market
-  await client.cancelAll(); // Everything
-  ```
-
-  ```python Python theme={null}
-  client.cancel(order_id=order_id)                  # Single order
-  client.cancel_market_orders(market=condition_id)  # All orders in a market
-  client.cancel_all()                               # Everything
-  ```
-
-  ```rust Rust theme={null}
-  client.cancel_order(order_id).await?;           // Single order
-  client.cancel_market_orders(&request).await?;   // All orders in a market
-  client.cancel_all_orders().await?;              // Everything
-  ```
-</CodeGroup>
-
-See [Cancel Orders](/trading/orders/cancel) for full details including onchain cancellation.
-
-### Monitoring Open Orders
-
-<CodeGroup>
-  ```typescript TypeScript theme={null}
-  const order = await client.getOrder(orderId);
-
-  const orders = await client.getOpenOrders({
-    market: "0xbd31dc8a...",
-    asset_id: "52114319501245...",
-  });
-  ```
-
-  ```python Python theme={null}
-  from py_clob_client.clob_types import OpenOrderParams
-
-  order = client.get_order(order_id)
-
-  orders = client.get_orders(
-      OpenOrderParams(market="0xbd31dc8a...")
-  )
-  ```
-
-  ```rust Rust theme={null}
-  use polymarket_client_sdk::clob::types::request::OrdersRequest;
-
-  let order = client.order(order_id).await?;
-
-  let request = OrdersRequest::builder()
-      .market("0xbd31dc8a...".parse()?)
-      .build();
-  let orders = client.orders(&request, None).await?;
-  ```
-</CodeGroup>
-
-***
-
-## Tick Sizes
-
-Your order price must conform to the market's tick size, or it will be rejected. Look it up with the SDK before quoting:
-
-<CodeGroup>
-  ```typescript TypeScript theme={null}
-  const tickSize = await client.getTickSize(tokenID);
-  // Returns: "0.1" | "0.01" | "0.001" | "0.0001"
-  ```
-
-  ```python Python theme={null}
-  tick_size = client.get_tick_size(token_id)
-  # Returns: "0.1" | "0.01" | "0.001" | "0.0001"
-  ```
-
-  ```rust Rust theme={null}
-  let resp = client.tick_size(token_id).await?;
-  // resp.minimum_tick_size: TickSize::Tenth | Hundredth | Thousandth | TenThousandth
-  ```
-</CodeGroup>
-
-***
-
-## Fees
-
-Most markets have **zero fees** for both makers and takers. However, the following market types have taker fees:
-
-* **All crypto markets**
-* **Select sports markets** (e.g., NCAAB, Serie A)
+The unified Python SDK gives you a consistent surface across Polymarket discovery, market data, trading, account data, and realtime streams.
 
 <Note>
-  Fees apply only to markets deployed on or after the activation date. Pre-existing markets are unaffected. Markets with fees enabled have `feesEnabled` set to `true` on the market object.
+  The Python SDK is currently in beta. We are keeping it in this beta phase
+  while we address issues and harden the SDK before transitioning to a more
+  stable release.
 </Note>
 
-See [Fees](/trading/fees) for the full fee schedule and calculation details.
+The SDK ships parallel async and sync clients with matching method names and arguments: `AsyncPublicClient` / `PublicClient` for public reads, and `AsyncSecureClient` / `SecureClient` for authenticated reads and trading. Prefer the async clients for servers, bots, and any code that already runs inside an event loop. Use the sync clients for scripts, notebooks, and one-off tools where an event loop would just add ceremony. Realtime stream subscriptions are async only and require the async clients.
 
-***
+Examples below show the body of an `async def main()` function; wrap them with `asyncio.run(main())` to run as a script, as shown in [Quickstart](#quickstart). To switch a snippet to sync, swap `AsyncPublicClient` / `AsyncSecureClient` for `PublicClient` / `SecureClient`, drop `await`, replace `async with` with `with`, replace `async for` with `for`, and remove the `asyncio.run(...)` wrapper.
 
-## Best Practices
+## Quickstart
 
-### Quote Management
+<Steps>
+  <Step title="Install the Package">
+    Install the SDK from PyPI.
 
-* **Quote both sides** — Post bids and asks to earn maximum [liquidity rewards](/market-makers/liquidity-rewards)
-* **Skew on inventory** — Adjust quote prices based on your current position to manage exposure
-* **Cancel stale quotes** — Pull orders immediately when market conditions change
-* **Use GTD for events** — Auto-expire quotes before known catalysts to avoid stale exposure
+    <CodeGroup>
+      ```bash uv theme={null}
+      uv add polymarket-client
+      ```
 
-### Latency
+      ```bash pip theme={null}
+      pip install polymarket-client
+      ```
 
-* **Batch orders** — Use `postOrders()` to submit multiple quotes in a single request
-* **WebSocket for data** — Subscribe to real-time feeds instead of polling REST endpoints
+      ```bash poetry theme={null}
+      poetry add polymarket-client
+      ```
+    </CodeGroup>
+  </Step>
 
-### Risk Controls
+  <Step title="Create a Public Client">
+    Create an instance of the `AsyncPublicClient` inside an `async with` block so its network transports are released when you are done.
 
-* **Size limits** — Check token balances before quoting and don't exceed your available inventory
-* **Price guards** — Validate prices against the book midpoint and reject outliers
-* **Kill switch** — Call `cancelAll()` immediately on errors or position breaches
-* **Monitor fills** — Subscribe to the WebSocket user channel for real-time fill notifications
+    ```python theme={null}
+    from polymarket import AsyncPublicClient
 
-***
+    async with AsyncPublicClient() as client:
+        ...
+    ```
+  </Step>
 
-## Next Steps
+  <Step title="Fetch Markets">
+    Fetch a page of markets to discover active trading opportunities.
 
-<CardGroup cols={2}>
-  <Card title="Inventory" icon="boxes-stacked" href="/market-makers/inventory">
-    Split, merge, and redeem outcome tokens
-  </Card>
+    <CodeGroup>
+      ```python Async theme={null}
+      import asyncio
 
-  <Card title="Liquidity Rewards" icon="gift" href="/market-makers/liquidity-rewards">
-    Earn rewards for providing two-sided liquidity
-  </Card>
-
-  <Card title="Create Orders" icon="plus" href="/trading/orders/create">
-    Full order creation reference with all options
-  </Card>
-</CardGroup>
+      from polymarket import AsyncPublicClient
 
 
-Built with [Mintlify](https://mintlify.com).
+      async def main() -> None:
+          async with AsyncPublicClient() as client:
+              markets = client.list_markets(closed=False, page_size=5)
+              first_page = await markets.first_page()
 
-> ## Documentation Index
-> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
-> Use this file to discover all available pages before exploring further.
+              for market in first_page.items:
+                  # market: Market
+                  ...
 
-# Negative Risk Markets
 
-> Capital-efficient trading for multi-outcome events
+      asyncio.run(main())
+      ```
 
-**Negative risk** is a mechanism for multi-outcome events where only one outcome can win. It enables capital-efficient trading by allowing positions across all outcomes within an event to be related through a **conversion** operation.
+      ```python Sync theme={null}
+      from polymarket import PublicClient
 
-## How It Works
 
-In a standard multi-outcome event, each market is independent. If you want to bet against one outcome, you must buy that outcome's No tokens—but those No tokens have no relationship to the other outcomes.
+      with PublicClient() as client:
+          markets = client.list_markets(closed=False, page_size=5)
+          first_page = markets.first_page()
 
-Negative risk changes this. In a neg risk event:
+          for market in first_page.items:
+              # market: Market
+              ...
+      ```
+    </CodeGroup>
+  </Step>
+</Steps>
 
-* A **No share** in any market can be converted into **1 Yes share in every other market**
-* This conversion happens through the Neg Risk Adapter contract
+## SDK Patterns
 
-### Example
+The SDK uses consistent patterns for pagination, Python-native model values, and structured SDK exceptions across public and authenticated workflows.
 
-Consider an event: "Who will win the 2024 Presidential Election?" with three outcomes:
+### Typed Primitives
 
-| Outcome | Your Position |
-| ------- | ------------- |
-| Trump   | —             |
-| Harris  | —             |
-| Other   | 1 No          |
+Identifiers and EVM addresses are exposed as `typing.NewType` aliases (`MarketId`, `ConditionId`, `TokenId`, `EventId`, `EvmAddress`, …) so static type checkers can keep them distinct from plain strings. Precision-sensitive price, size, and amount fields generally use `decimal.Decimal`; date and time fields use `datetime.date` or `datetime.datetime`.
 
-With negative risk, that 1 No on "Other" can be converted into:
+```python theme={null}
+from datetime import datetime
+from decimal import Decimal
 
-| Outcome | After Conversion |
-| ------- | ---------------- |
-| Trump   | 1 Yes            |
-| Harris  | 1 Yes            |
-| Other   | —                |
+from polymarket import ConditionId, EvmAddress, MarketId, TokenId
 
-This is capital-efficient because betting against one outcome is economically equivalent to betting *for* all other outcomes.
 
-## Identifying Neg Risk Markets
+class Market:
+    id: MarketId
+    condition_id: ConditionId | None
+    state: MarketState
+    outcomes: MarketOutcomes
+    resolution: MarketResolution
+    # …
 
-The Gamma API includes a `negRisk` boolean on events and markets:
 
-```json  theme={null}
-{
-  "id": "123",
-  "title": "Who will win the 2024 Presidential Election?",
-  "negRisk": true,
-  "markets": [...]
-}
+class MarketState:
+    start_date: datetime | None
+    end_date: datetime | None
+    # …
+
+
+class MarketOutcome:
+    label: str
+    token_id: TokenId | None
+    price: Decimal | None
+
+
+class MarketResolution:
+    resolved_by: EvmAddress | None
+    # …
 ```
 
-When placing orders on neg risk markets, you must specify this in your order options:
+### Market and Event Data
 
-```typescript  theme={null}
-const response = await client.createAndPostOrder(
-  {
-    tokenID: "TOKEN_ID",
-    price: 0.5,
-    size: 100,
-    side: Side.BUY,
-  },
-  {
-    tickSize: "0.01",
-    negRisk: true, // Required for neg risk markets
-  },
-);
+Market and event responses are returned as SDK models with snake\_case fields and nested submodels.
+
+<CodeGroup>
+  ```python Market theme={null}
+  class Market:
+      id: MarketId
+      slug: str | None
+      condition_id: ConditionId | None
+      question: str | None
+      description: str | None
+      category: str | None
+      image: str | None
+      icon: str | None
+      state: MarketState
+      outcomes: MarketOutcomes
+      metrics: MarketMetrics
+      prices: MarketPrices
+      trading: MarketTrading
+      resolution: MarketResolution
+      rewards: MarketRewards
+      sports: MarketSportsMetadata
+      tags: tuple[MarketTag, ...]
+      # …
+  ```
+
+  ```python Event theme={null}
+  class Event:
+      id: EventId
+      slug: str | None
+      title: str | None
+      subtitle: str | None
+      description: str | None
+      category: str | None
+      subcategory: str | None
+      image: str | None
+      icon: str | None
+      created_at: datetime | None
+      updated_at: datetime | None
+      published_at: datetime | None
+      state: EventState
+      schedule: EventSchedule
+      metrics: EventMetrics
+      trading: EventTrading
+      estimation: EventEstimation
+      sports: EventSportsMetadata
+      partners: tuple[EventPartner, ...]
+      markets: tuple[Market, ...]
+      series: tuple[EventSeries, ...]
+      # …
+  ```
+</CodeGroup>
+
+### Environment Configuration
+
+Production is the default environment. Pass an `Environment` object when your integration needs to target a different deployment or custom endpoint set. The client owns network transports, so use `async with` (or call `await client.close()`) to release them when you are done.
+
+```python theme={null}
+from polymarket import AsyncPublicClient, PRODUCTION
+
+
+async with AsyncPublicClient(environment=PRODUCTION) as client:
+    ...
 ```
 
-## Contract Addresses
+### Pagination
 
-Neg risk markets use different contracts than standard markets:
+With async clients, list methods return an `AsyncPaginator` across paginated endpoints. Use `async for` to iterate through pages.
 
-See [Contract Addresses](/resources/contract-addresses) for the Neg Risk Adapter and Neg Risk CTF Exchange addresses.
+```python theme={null}
+async with AsyncPublicClient() as client:
+    markets = client.list_markets(closed=False, page_size=10)
 
-## Augmented Negative Risk
-
-Standard negative risk requires the complete set of outcomes to be known at market creation. But sometimes new outcomes emerge after trading begins (e.g., a new candidate enters a race).
-
-**Augmented negative risk** solves this with:
-
-| Outcome Type             | Description                                                   |
-| ------------------------ | ------------------------------------------------------------- |
-| **Named outcomes**       | Known outcomes (e.g., "Trump", "Harris")                      |
-| **Placeholder outcomes** | Reserved slots that can be clarified later (e.g., "Person A") |
-| **Explicit Other**       | Catches any outcome not explicitly named                      |
-
-### How Placeholders Work
-
-1. Event launches with named outcomes + placeholders + "Other"
-2. When a new outcome emerges, a placeholder is clarified via the bulletin board
-3. The "Other" definition narrows as placeholders are assigned
-
-### Trading Rules for Augmented Neg Risk
-
-<Warning>
-  Only trade on **named outcomes**. Placeholder outcomes should be ignored until
-  they are named or until resolution occurs. The Polymarket UI does not display
-  unnamed outcomes.
-</Warning>
-
-* If the correct outcome at resolution is not named, the market resolves to "Other"
-* The "Other" outcome's definition changes as placeholders are clarified—avoid trading it directly
-
-### Identifying Augmented Neg Risk
-
-An event is augmented neg risk when both flags are true:
-
-```json  theme={null}
-{
-  "enableNegRisk": true,
-  "negRiskAugmented": true
-}
+    async for page in markets:
+        # page.items: tuple[Market, ...]
+        ...
 ```
+
+You can also fetch the first page directly and resume later from a cursor.
+
+```python theme={null}
+first_page = await markets.first_page()
+# first_page.items: tuple[Market, ...]
+
+async for page in markets.from_cursor(first_page.next_cursor):
+    # page.items: tuple[Market, ...]
+    ...
+```
+
+When you only care about the items and not page boundaries, iterate them directly.
+
+```python theme={null}
+async for market in markets.items():
+    # market: Market
+    ...
+```
+
+### Error Handling
+
+All SDK exceptions inherit from `PolymarketError`. Catch specific subclasses to handle known cases, and catch `PolymarketError` as the final SDK fallback.
 
 <Note>
-  The Gamma API includes a boolean field `negRisk` on events and markets, which indicates whether the event uses negative risk. For augmented neg risk events, an additional `enableNegRisk` field is also `true`. When placing orders, the SDK option is always `negRisk: true` / `neg_risk: True` regardless of whether the market is standard or augmented neg risk.
+  Catching `PolymarketError` last ensures error subclasses added in future SDK
+  releases do not pass through unhandled.
 </Note>
 
-## Technical Details
+```python theme={null}
+from polymarket import (
+    AsyncPublicClient,
+    PolymarketError,
+    RateLimitError,
+    UserInputError,
+)
 
-### Conversion Mechanics
-
-The conversion operation is atomic and happens through the Neg Risk Adapter:
-
-1. You hold 1 No token for Outcome A
-2. Call the convert function on the adapter
-3. You receive 1 Yes token for every other outcome in the event
-
-## Resources
-
-* [Neg Risk Adapter Source Code](https://github.com/Polymarket/neg-risk-ctf-adapter)
-* [Gamma API Documentation](/market-data/overview)
-
-## Next Steps
-
-<CardGroup cols={2}>
-  <Card title="Markets & Events" icon="calendar" href="/concepts/markets-events">
-    Understand how multi-market events are structured.
-  </Card>
-
-  <Card title="Positions & Tokens" icon="coins" href="/concepts/positions-tokens">
-    Learn about token operations like split, merge, and redeem.
-  </Card>
-</CardGroup>
-
-
-Built with [Mintlify](https://mintlify.com).
-
-> ## Documentation Index
-> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
-> Use this file to discover all available pages before exploring further.
-
-# Conditional Token Framework
-
-> Onchain token mechanics powering Polymarket positions
-
-All outcomes on Polymarket are tokenized using the **Conditional Token Framework (CTF)**, an open standard developed by Gnosis. Understanding CTF operations enables advanced trading strategies, market making, and direct smart contract interactions.
-
-## What is CTF
-
-The Conditional Token Framework creates **ERC1155 tokens** representing outcomes of prediction markets. Each binary market has two tokens:
-
-| Token   | Redeems for   | Condition            |
-| ------- | ------------- | -------------------- |
-| **Yes** | \$1.00 USDC.e | Event occurs         |
-| **No**  | \$1.00 USDC.e | Event does not occur |
-
-These tokens are always **fully collateralized** — every Yes/No pair is backed by exactly \$1.00 USDC.e locked in the CTF contract.
-
-## Core Operations
-
-CTF provides three fundamental operations:
-
-<CardGroup cols={3}>
-  <Card title="Split" icon="scissors" href="/trading/ctf/split">
-    Convert USDC.e into Yes + No token pairs
-  </Card>
-
-  <Card title="Merge" icon="merge" href="/trading/ctf/merge">
-    Convert Yes + No pairs back to USDC.e
-  </Card>
-
-  <Card title="Redeem" icon="hand-holding-dollar" href="/trading/ctf/redeem">
-    Exchange winning tokens for USDC.e after resolution
-  </Card>
-</CardGroup>
-
-## Token Flow
-
-<Frame>
-  <img src="https://mintcdn.com/polymarket-292d1b1b/FOMte3ewbG-LVy3k/images/core-concepts/token-flow.png?fit=max&auto=format&n=FOMte3ewbG-LVy3k&q=85&s=36f5a57946ac2b83136e17b6c06b358c" alt="" className="dark:hidden" width="1596" height="952" data-path="images/core-concepts/token-flow.png" />
-
-  <img src="https://mintcdn.com/polymarket-292d1b1b/FOMte3ewbG-LVy3k/images/dark/core-concepts/token-flow.png?fit=max&auto=format&n=FOMte3ewbG-LVy3k&q=85&s=69d150ea49ffa18cd7f24689342b1bec" alt="" className="hidden dark:block" width="1596" height="952" data-path="images/dark/core-concepts/token-flow.png" />
-</Frame>
-
-## Token Identifiers
-
-Each outcome token has a unique **position ID** (also called token ID or asset ID), computed onchain in three steps.
-
-### Step 1 - Condition ID
-
-```
-getConditionId(oracle, questionId, outcomeSlotCount)
+async with AsyncPublicClient() as client:
+    try:
+        markets = client.list_markets(closed=False, page_size=10)
+        first_page = await markets.first_page()
+        # first_page.items: tuple[Market, ...]
+    except RateLimitError:
+        # Retry later.
+        ...
+    except UserInputError:
+        # Fix the request parameters.
+        ...
+    except PolymarketError:
+        # Handle any other SDK error.
+        ...
 ```
 
-| Parameter          | Type      | Value                                                            |
-| ------------------ | --------- | ---------------------------------------------------------------- |
-| `oracle`           | `address` | [UMA CTF Adapter](https://github.com/Polymarket/uma-ctf-adapter) |
-| `questionId`       | `bytes32` | Hash of the UMA ancillary data                                   |
-| `outcomeSlotCount` | `uint`    | `2` for all binary markets                                       |
+## Market Data
 
-### Step 2 - Collection IDs
+Use market data methods to fetch market and event details, order books, current prices, historical prices, and batch quotes.
 
+<CodeGroup>
+  ```python Market theme={null}
+  market = await client.get_market(
+      url="https://polymarket.com/market/eth-flipped-in-2026",
+  )
+
+  market_by_slug = await client.get_market(slug="eth-flipped-in-2026")
+
+  market_by_id = await client.get_market(id="12345")
+  ```
+
+  ```python Event theme={null}
+  event = await client.get_event(
+      url="https://polymarket.com/event/presidential-election-2028",
+  )
+
+  event_by_slug = await client.get_event(slug="presidential-election-2028")
+
+  event_by_id = await client.get_event(id="12345")
+  ```
+</CodeGroup>
+
+Then fetch related tags, order books, prices, and history.
+
+<CodeGroup>
+  ```python Tags theme={null}
+  market_tags = await client.get_market_tags(market.id)
+
+  event_tags = await client.get_event_tags(event.id)
+  ```
+
+  ```python Order Book theme={null}
+  yes_token_id = market.outcomes.yes.token_id
+  if yes_token_id is None:
+      raise RuntimeError("Market does not have a YES token id")
+
+  book = await client.get_order_book(token_id=yes_token_id)
+  ```
+
+  ```python Prices theme={null}
+  yes_token_id = market.outcomes.yes.token_id
+  if yes_token_id is None:
+      raise RuntimeError("Market does not have a YES token id")
+
+  buy_price = await client.get_price(token_id=yes_token_id, side="BUY")
+
+  midpoint = await client.get_midpoint(token_id=yes_token_id)
+
+  spread = await client.get_spread(token_id=yes_token_id)
+
+  last_trade = await client.get_last_trade_price(token_id=yes_token_id)
+  ```
+
+  ```python History theme={null}
+  yes_token_id = market.outcomes.yes.token_id
+  if yes_token_id is None:
+      raise RuntimeError("Market does not have a YES token id")
+
+  history = await client.get_price_history(token_id=yes_token_id, interval="1d")
+  ```
+
+  ```python Batch Reads theme={null}
+  from polymarket import PriceRequest
+
+  yes_token_id = market.outcomes.yes.token_id
+  no_token_id = market.outcomes.no.token_id
+  if yes_token_id is None or no_token_id is None:
+      raise RuntimeError("Market does not have both outcome token ids")
+
+  prices = await client.get_prices(
+      requests=[
+          PriceRequest(token_id=yes_token_id, side="BUY"),
+          PriceRequest(token_id=no_token_id, side="BUY"),
+      ],
+  )
+
+  midpoints = await client.get_midpoints(token_ids=[yes_token_id, no_token_id])
+  ```
+</CodeGroup>
+
+## Discovery
+
+Use discovery methods to browse events, markets, teams, tags, comments, sports metadata, and search results. The examples below show a few common entry points.
+
+<Tabs>
+  <Tab title="Events">
+    ```python theme={null}
+    events = client.list_events(page_size=10)
+
+    async for page in events:
+        # page.items: tuple[Event, ...]
+        ...
+    ```
+  </Tab>
+
+  <Tab title="Markets">
+    ```python theme={null}
+    markets = client.list_markets(closed=False, page_size=10)
+
+    async for page in markets:
+        # page.items: tuple[Market, ...]
+        ...
+    ```
+  </Tab>
+
+  <Tab title="Teams">
+    ```python theme={null}
+    teams = client.list_teams(league="NBA", page_size=10)
+
+    async for page in teams:
+        # page.items: tuple[Team, ...]
+        ...
+    ```
+  </Tab>
+
+  <Tab title="Tags">
+    ```python theme={null}
+    tags = client.list_tags(page_size=10)
+
+    async for page in tags:
+        # page.items: tuple[Tag, ...]
+        ...
+
+    tag = await client.get_tag(slug="politics")
+
+    related_tags = await client.get_related_tags(slug="politics")
+
+    related_resources = await client.get_related_tag_resources(
+        slug="politics",
+        status="active",
+    )
+    ```
+  </Tab>
+
+  <Tab title="Comments">
+    ```python theme={null}
+    import os
+
+    comments = client.list_comments(
+        parent_entity_id="12345",
+        parent_entity_type="Event",
+        page_size=20,
+    )
+
+    async for page in comments:
+        # page.items: tuple[Comment, ...]
+        ...
+
+    thread = await client.get_comment_thread("456", get_positions=True)
+
+    user_comments = client.list_comments_by_user_address(
+        address=os.environ["POLYMARKET_TARGET_WALLET_ADDRESS"],
+        page_size=10,
+        order="DESC",
+    )
+
+    async for page in user_comments:
+        # page.items: tuple[Comment, ...]
+        ...
+    ```
+  </Tab>
+
+  <Tab title="Sports">
+    ```python theme={null}
+    sports = await client.get_sports()
+
+    # sports: tuple[SportsMetadata, ...]
+    ```
+  </Tab>
+
+  <Tab title="Search">
+    ```python theme={null}
+    results = client.search(q="ethereum", page_size=10)
+
+    async for page in results:
+        for search_results in page.items:
+            # search_results.events: tuple[Event, ...]
+            # search_results.tags: tuple[SearchTag, ...]
+            # search_results.profiles: tuple[Profile, ...]
+            ...
+    ```
+  </Tab>
+</Tabs>
+
+## Realtime Streams
+
+Subscribe through one SDK interface even when events come from different stream families. The SDK routes each subscription spec to the right stream and merges the results into one async iterator. Subscriptions are async only and require `AsyncPublicClient` or `AsyncSecureClient`.
+
+```python theme={null}
+from polymarket import AsyncPublicClient
+from polymarket.streams import CryptoPricesSpec, MarketSpec
+
+
+yes_token_id = market.outcomes.yes.token_id
+if yes_token_id is None:
+    raise RuntimeError("Market does not have a YES token id")
+
+async with AsyncPublicClient() as client:
+    stream = await client.subscribe(
+        [
+            MarketSpec(token_ids=[yes_token_id]),
+            CryptoPricesSpec(
+                topic="prices.crypto.binance",
+                symbols=["btcusdt"],
+            ),
+        ],
+    )
+
+    async with stream:
+        async for event in stream:
+            # event:
+            #   | MarketBookEvent
+            #   | MarketPriceChangeEvent
+            #   | MarketLastTradePriceEvent
+            #   | MarketTickSizeChangeEvent
+            #   | MarketBestBidAskEvent
+            #   | NewMarketEvent
+            #   | MarketResolvedEvent
+            #   | CryptoPricesBinanceEvent
+            print(type(event).__name__)
+            break
 ```
-getCollectionId(parentCollectionId, conditionId, indexSet)
+
+`AsyncSecureClient.subscribe` accepts the same public subscription specs and adds `UserSpec` for user-scoped order and trade events on the authenticated wallet.
+
+```python theme={null}
+import os
+
+from polymarket import AsyncSecureClient
+from polymarket.streams import UserSpec
+
+
+async with await AsyncSecureClient.create(
+    private_key=os.environ["POLYMARKET_PRIVATE_KEY"],
+    wallet=os.environ.get("POLYMARKET_WALLET_ADDRESS"),
+) as secure_client:
+    user_stream = await secure_client.subscribe(UserSpec())
+
+    async with user_stream:
+        async for event in user_stream:
+            # event:
+            #   | UserOrderEvent
+            #   | UserTradeEvent
+            print(type(event).__name__)
+            break
 ```
 
-| Parameter            | Type      | Value                                                           |
-| -------------------- | --------- | --------------------------------------------------------------- |
-| `parentCollectionId` | `bytes32` | `bytes32(0)` — always zero for top-level positions              |
-| `conditionId`        | `bytes32` | The condition ID from step 1                                    |
-| `indexSet`           | `uint`    | `1` (`0b01`) for the first outcome, `2` (`0b10`) for the second |
+## Authenticated Client
 
-The `indexSet` is a bitmask denoting which outcome slots belong to a collection. It must be a nonempty proper subset of the condition's outcome slots. Binary markets always have exactly two collections — one per outcome.
-
-### Step 3 - Position IDs
-
-```
-getPositionId(collateralToken, collectionId)
-```
-
-| Parameter         | Type      | Value                                     |
-| ----------------- | --------- | ----------------------------------------- |
-| `collateralToken` | `IERC20`  | USDC.e contract address on Polygon        |
-| `collectionId`    | `bytes32` | One of the two collection IDs from step 2 |
-
-The two resulting position IDs are the ERC1155 token IDs for the Yes and No outcomes of the market.
+Create a secure client when you need wallet-scoped reads or trading.
 
 <Note>
-  You can look up token IDs directly via the Gamma API (`GET /markets` or `GET /events`
-  — the `tokens` array on each market contains both outcome token IDs). Computing them
-  manually is only necessary for direct smart contract integration.
+  Secure clients own multiple network transports. Wrap them in `async with`,
+  or call `await secure_client.close()` when you are done, to release the
+  underlying connections. The snippets below show client creation and
+  subsequent calls as a flat sequence for readability — in real code, keep
+  the client inside an `async with` block or close it explicitly.
 </Note>
 
-## Standard vs Neg Risk Markets
+### Private Key Setup
 
-Polymarket has two market types with different CTF configurations:
+The Python SDK authenticates with a local private key. Pass `wallet` when you want to operate on a Polymarket wallet address that differs from the signer address; if omitted, the client uses the signer address as the account wallet.
 
-| Feature           | Standard Markets    | Neg Risk Markets      |
-| ----------------- | ------------------- | --------------------- |
-| CTF Contract      | ConditionalTokens   | ConditionalTokens     |
-| Exchange Contract | CTF Exchange        | Neg Risk CTF Exchange |
-| Multi-outcome     | Independent markets | Linked via conversion |
-| `negRisk` flag    | `false`             | `true`                |
+```python theme={null}
+import os
 
-For neg risk markets, an additional **conversion** operation allows exchanging a No token for Yes tokens in all other outcomes. See [Negative Risk Markets](/advanced/neg-risk) for details.
-
-## Contract Addresses
-
-See [Contract Addresses](/resources/contract-addresses) for all Polymarket smart contract addresses on Polygon.
-
-## Resources
-
-<CardGroup cols={2}>
-  <Card title="CTF Source Code" icon="github" href="https://github.com/gnosis/conditional-tokens-contracts">
-    Gnosis Conditional Tokens smart contracts
-  </Card>
-
-  <Card title="Code Examples" icon="code" href="https://github.com/Polymarket/examples/tree/main/examples">
-    Python and TypeScript examples for onchain operations
-  </Card>
-</CardGroup>
-
-## Next Steps
-
-<CardGroup cols={3}>
-  <Card title="Split Tokens" icon="scissors" href="/trading/ctf/split">
-    Create outcome token pairs from USDC.e
-  </Card>
-
-  <Card title="Merge Tokens" icon="merge" href="/trading/ctf/merge">
-    Convert token pairs back to USDC.e
-  </Card>
-
-  <Card title="Redeem Tokens" icon="hand-holding-dollar" href="/trading/ctf/redeem">
-    Collect winnings after resolution
-  </Card>
-</CardGroup>
+from polymarket import AsyncSecureClient
 
 
-Built with [Mintlify](https://mintlify.com).
+async with await AsyncSecureClient.create(
+    private_key=os.environ["POLYMARKET_PRIVATE_KEY"],
+    wallet=os.environ.get("POLYMARKET_WALLET_ADDRESS"),
+) as secure_client:
+    ...
+```
+
+Keep private keys and API credentials in your secret manager or local environment. Do not commit them to source control.
+
+### API Key Authentication
+
+Configure an API key when the SDK needs to set up gasless wallet operations.
+
+<CodeGroup>
+  ```python Relayer API Key theme={null}
+  import os
+
+  from polymarket import AsyncSecureClient, RelayerApiKey
+
+
+  secure_client = await AsyncSecureClient.create(
+      private_key=os.environ["POLYMARKET_PRIVATE_KEY"],
+      wallet=os.environ.get("POLYMARKET_WALLET_ADDRESS"),
+      api_key=RelayerApiKey(
+          key=os.environ["POLYMARKET_RELAYER_API_KEY"],
+          address=os.environ["POLYMARKET_RELAYER_API_KEY_ADDRESS"],
+      ),
+  )
+  ```
+
+  ```python Builder API Key theme={null}
+  import os
+
+  from polymarket import AsyncSecureClient, BuilderApiKey
+
+
+  secure_client = await AsyncSecureClient.create(
+      private_key=os.environ["POLYMARKET_PRIVATE_KEY"],
+      wallet=os.environ.get("POLYMARKET_WALLET_ADDRESS"),
+      api_key=BuilderApiKey(
+          key=os.environ["POLYMARKET_BUILDER_API_KEY"],
+          secret=os.environ["POLYMARKET_BUILDER_SECRET"],
+          passphrase=os.environ["POLYMARKET_BUILDER_PASSPHRASE"],
+      ),
+  )
+  ```
+</CodeGroup>
+
+<Note>
+  Builder API keys are supported for backwards compatibility with builders that
+  still use them for gasless workflows. They are not used for order attribution.
+  Use `builder_code` on orders for attribution.
+</Note>
+
+### Trading Setup
+
+Before placing orders, make sure the authenticated wallet has the required trading approvals. If you use gasless wallet operations, configure API key authentication first.
+
+<Note>
+  From this point forward, snippets in Trading Setup, Trading, Position
+  Lifecycle, and Wallet Operations submit real on-chain transactions or
+  live orders against the configured environment when executed. Review
+  each call before running it against a wallet that holds funds.
+</Note>
+
+<Steps>
+  <Step title="Check Gasless Readiness">
+    Optionally check whether the deposit wallet for the authenticated EOA is already deployed. The result is informational — call `setup_gasless_wallet()` in the next step regardless, since it is idempotent on deployment and is the call that binds the client to the deposit wallet.
+
+    ```python theme={null}
+    is_gasless_ready = await secure_client.is_gasless_ready()
+    ```
+  </Step>
+
+  <Step title="Set Up Gasless Wallet">
+    Always call `setup_gasless_wallet()` for gasless workflows. It deploys the deposit wallet if needed and returns a new client bound to the deposit wallet address. Close the previous client when you replace it.
+
+    ```python theme={null}
+    gasless_client = await secure_client.setup_gasless_wallet()
+    await secure_client.close()
+    secure_client = gasless_client
+    ```
+  </Step>
+
+  <Step title="Set Up Trading Approvals">
+    Set up the approvals required for trading and wait for the setup transaction to complete.
+
+    ```python theme={null}
+    handle = await secure_client.setup_trading_approvals()
+    outcome = await handle.wait()
+
+    # outcome.transaction_hash: TransactionHash
+    ```
+  </Step>
+</Steps>
+
+### Trading
+
+Use a secure client to create, sign, and submit orders. Limit orders specify the price and size you want to trade. Market orders execute against resting liquidity immediately.
+
+Order placement returns a discriminated response. Check `response.ok` before reading order details.
+
+#### Place Orders
+
+<Tabs>
+  <Tab title="Limit Order">
+    ```python theme={null}
+    yes_token_id = market.outcomes.yes.token_id
+    if yes_token_id is None:
+        raise RuntimeError("Market does not have a YES token id")
+
+    response = await secure_client.place_limit_order(
+        token_id=yes_token_id,
+        side="BUY",
+        price="0.52",
+        size="10",
+    )
+
+    if response.ok:
+        # response.order_id: str
+        ...
+    else:
+        # response.code: OrderResponseErrorCode
+        # response.message: str
+        ...
+    ```
+  </Tab>
+
+  <Tab title="Expiring Limit Order">
+    ```python theme={null}
+    import time
+
+    yes_token_id = market.outcomes.yes.token_id
+    if yes_token_id is None:
+        raise RuntimeError("Market does not have a YES token id")
+
+    response = await secure_client.place_limit_order(
+        token_id=yes_token_id,
+        side="SELL",
+        price="0.52",
+        size="10",
+        expiration=int(time.time()) + 60 * 60,
+    )
+
+    if response.ok:
+        # response.order_id: str
+        ...
+    else:
+        # response.code: OrderResponseErrorCode
+        # response.message: str
+        ...
+    ```
+  </Tab>
+
+  <Tab title="Partial-Fill Market Order">
+    ```python theme={null}
+    yes_token_id = market.outcomes.yes.token_id
+    if yes_token_id is None:
+        raise RuntimeError("Market does not have a YES token id")
+
+    response = await secure_client.place_market_order(
+        token_id=yes_token_id,
+        side="BUY",
+        amount="10",
+        max_spend="11",
+        order_type="FAK",
+    )
+
+    if response.ok:
+        # response.order_id: str
+        ...
+    else:
+        # response.code: OrderResponseErrorCode
+        # response.message: str
+        ...
+    ```
+  </Tab>
+
+  <Tab title="All-Or-Nothing Market Order">
+    ```python theme={null}
+    yes_token_id = market.outcomes.yes.token_id
+    if yes_token_id is None:
+        raise RuntimeError("Market does not have a YES token id")
+
+    response = await secure_client.place_market_order(
+        token_id=yes_token_id,
+        side="SELL",
+        shares="10",
+        order_type="FOK",
+    )
+
+    if response.ok:
+        # response.order_id: str
+        ...
+    else:
+        # response.code: OrderResponseErrorCode
+        # response.message: str
+        ...
+    ```
+  </Tab>
+
+  <Tab title="Builder Code">
+    ```python theme={null}
+    import os
+
+    yes_token_id = market.outcomes.yes.token_id
+    if yes_token_id is None:
+        raise RuntimeError("Market does not have a YES token id")
+
+    response = await secure_client.place_limit_order(
+        token_id=yes_token_id,
+        side="BUY",
+        price="0.52",
+        size="10",
+        builder_code=os.environ["POLYMARKET_BUILDER_CODE"],
+    )
+
+    if response.ok:
+        # response.order_id: str
+        ...
+    else:
+        # response.code: OrderResponseErrorCode
+        # response.message: str
+        ...
+    ```
+  </Tab>
+</Tabs>
+
+#### Create, Then Post
+
+Create signed orders separately when you want to review, store, or batch them before submitting.
+
+<Tabs>
+  <Tab title="Single Order">
+    ```python theme={null}
+    yes_token_id = market.outcomes.yes.token_id
+    if yes_token_id is None:
+        raise RuntimeError("Market does not have a YES token id")
+
+    order = await secure_client.create_limit_order(
+        token_id=yes_token_id,
+        side="BUY",
+        price="0.52",
+        size="10",
+    )
+
+    response = await secure_client.post_order(order)
+
+    if response.ok:
+        # response.order_id: str
+        ...
+    else:
+        # response.code: OrderResponseErrorCode
+        # response.message: str
+        ...
+    ```
+  </Tab>
+
+  <Tab title="Batch Orders">
+    ```python theme={null}
+    yes_token_id = market.outcomes.yes.token_id
+    if yes_token_id is None:
+        raise RuntimeError("Market does not have a YES token id")
+
+    first_order = await secure_client.create_limit_order(
+        token_id=yes_token_id,
+        side="BUY",
+        price="0.52",
+        size="10",
+    )
+
+    second_order = await secure_client.create_limit_order(
+        token_id=yes_token_id,
+        side="SELL",
+        price="0.58",
+        size="5",
+    )
+
+    responses = await secure_client.post_orders([first_order, second_order])
+
+    for response in responses:
+        if response.ok:
+            # response.order_id: str
+            ...
+        else:
+            # response.code: OrderResponseErrorCode
+            # response.message: str
+            ...
+    ```
+  </Tab>
+</Tabs>
+
+### Position Lifecycle
+
+Use position lifecycle methods to split collateral into outcome tokens, merge complete sets back into collateral, or redeem resolved positions. These examples assume the secure client is configured with API key authentication as shown in [API Key Authentication](#api-key-authentication).
+
+<Tabs>
+  <Tab title="Split Position">
+    ```python theme={null}
+    condition_id = market.condition_id
+    if condition_id is None:
+        raise RuntimeError("Market does not have a condition id")
+
+    handle = await secure_client.split_position(
+        condition_id=condition_id,
+        amount=1,
+    )
+
+    outcome = await handle.wait()
+
+    # outcome.transaction_hash: TransactionHash
+    ```
+  </Tab>
+
+  <Tab title="Merge Positions">
+    ```python theme={null}
+    condition_id = market.condition_id
+    if condition_id is None:
+        raise RuntimeError("Market does not have a condition id")
+
+    handle = await secure_client.merge_positions(
+        condition_id=condition_id,
+        amount="max",
+    )
+
+    outcome = await handle.wait()
+
+    # outcome.transaction_hash: TransactionHash
+    ```
+  </Tab>
+
+  <Tab title="Redeem Positions">
+    ```python theme={null}
+    handle = await secure_client.redeem_positions(
+        market_id=market.id,
+    )
+
+    outcome = await handle.wait()
+
+    # outcome.transaction_hash: TransactionHash
+    ```
+  </Tab>
+</Tabs>
+
+### Wallet Operations
+
+Use wallet operation methods for direct token movements from the authenticated wallet. Amounts are in base units. These examples assume the secure client is configured with API key authentication as shown in [API Key Authentication](#api-key-authentication).
+
+```python theme={null}
+import os
+
+handle = await secure_client.transfer_erc20(
+    token_address=secure_client.environment.collateral_token,
+    recipient_address=os.environ["POLYMARKET_RECIPIENT_ADDRESS"],
+    amount=1_000_000,
+)
+
+outcome = await handle.wait()
+
+# outcome.transaction_hash: TransactionHash
+```
+
+### Order Management
+
+Manage open orders for the authenticated wallet after placement. These examples assume `order_id` comes from an accepted order response.
+
+<Tabs>
+  <Tab title="Get Order">
+    ```python theme={null}
+    order = await secure_client.get_order(order_id=order_id)
+
+    # order: OpenOrder
+    ```
+  </Tab>
+
+  <Tab title="List Open Orders">
+    ```python theme={null}
+    condition_id = market.condition_id
+    if condition_id is None:
+        raise RuntimeError("Market does not have a condition id")
+
+    open_orders = secure_client.list_open_orders(market=condition_id)
+
+    async for page in open_orders:
+        # page.items: tuple[OpenOrder, ...]
+        ...
+    ```
+  </Tab>
+
+  <Tab title="Cancel Order">
+    ```python theme={null}
+    response = await secure_client.cancel_order(order_id=order_id)
+
+    # response.canceled: tuple[str, ...]
+    ```
+  </Tab>
+
+  <Tab title="Cancel Market Orders">
+    ```python theme={null}
+    yes_token_id = market.outcomes.yes.token_id
+    if yes_token_id is None:
+        raise RuntimeError("Market does not have a YES token id")
+
+    response = await secure_client.cancel_market_orders(token_id=yes_token_id)
+
+    # response.canceled: tuple[str, ...]
+    ```
+  </Tab>
+</Tabs>
+
+### Rewards and Scoring
+
+Use rewards methods to inspect active reward programs and scoring methods to check whether orders are eligible for scoring. `list_current_rewards` and `list_market_rewards` are public reads and are also available on `AsyncPublicClient` / `PublicClient`; `get_order_scoring` and `get_orders_scoring` require a secure client because they read account-scoped order data.
+
+<Tabs>
+  <Tab title="Current Rewards">
+    ```python theme={null}
+    rewards = secure_client.list_current_rewards()
+
+    async for page in rewards:
+        # page.items: tuple[CurrentReward, ...]
+        ...
+    ```
+  </Tab>
+
+  <Tab title="Market Rewards">
+    ```python theme={null}
+    condition_id = market.condition_id
+    if condition_id is None:
+        raise RuntimeError("Market does not have a condition id")
+
+    rewards = secure_client.list_market_rewards(condition_id=condition_id)
+
+    async for page in rewards:
+        # page.items: tuple[MarketReward, ...]
+        ...
+    ```
+  </Tab>
+
+  <Tab title="Order Scoring">
+    ```python theme={null}
+    scoring = await secure_client.get_order_scoring(order_id=order_id)
+
+    # scoring: bool
+    ```
+  </Tab>
+
+  <Tab title="Batch Order Scoring">
+    ```python theme={null}
+    scoring = await secure_client.get_orders_scoring(
+        order_ids=[first_order_id, second_order_id],
+    )
+
+    # scoring: dict[str, bool]
+    ```
+  </Tab>
+</Tabs>
+
+### Account Data
+
+Secure clients read account-scoped data for the authenticated wallet by default. Methods that take a `user=` parameter (positions, portfolio value, activity) accept a different wallet address to read its data instead.
+
+<Tabs>
+  <Tab title="Positions">
+    ```python theme={null}
+    positions = secure_client.list_positions(
+        market=[market.id],
+        page_size=10,
+    )
+
+    async for page in positions:
+        # page.items: tuple[Position, ...]
+        ...
+    ```
+  </Tab>
+
+  <Tab title="Portfolio Value">
+    ```python theme={null}
+    value = await secure_client.get_portfolio_values(market=[market.id])
+
+    # value: tuple[PortfolioValue, ...]
+    ```
+  </Tab>
+
+  <Tab title="Activity">
+    ```python theme={null}
+    activity = secure_client.list_activity(
+        market=[market.id],
+        page_size=10,
+    )
+
+    async for page in activity:
+        for item in page.items:
+            match item.type:
+                case "TRADE":
+                    # item.token_id: TokenId
+                    # item.shares: Decimal
+                    ...
+                case "REWARD":
+                    # item.amount: Decimal
+                    ...
+                case _:
+                    # SPLIT / MERGE / REDEEM / CONVERSION / MAKER_REBATE
+                    # / REFERRAL_REWARD / YIELD
+                    ...
+    ```
+  </Tab>
+
+  <Tab title="Trades">
+    ```python theme={null}
+    yes_token_id = market.outcomes.yes.token_id
+    if yes_token_id is None:
+        raise RuntimeError("Market does not have a YES token id")
+
+    trades = secure_client.list_account_trades(token_id=yes_token_id)
+
+    async for page in trades:
+        # page.items: tuple[ClobTrade, ...]
+        ...
+    ```
+  </Tab>
+
+  <Tab title="Notifications">
+    ```python theme={null}
+    notifications = await secure_client.get_notifications()
+
+    # notifications: tuple[Notification, ...]
+    ```
+  </Tab>
+</Tabs>
+
+### Authentication Sessions
+
+Secure clients expose the API credentials created for the authenticated session. Store them securely if you want to reuse the session later without producing a new authentication signature while the credentials remain valid.
+
+<Tabs>
+  <Tab title="Save Credentials">
+    ```python theme={null}
+    import os
+
+    from polymarket import AsyncSecureClient
+
+
+    secure_client = await AsyncSecureClient.create(
+        private_key=os.environ["POLYMARKET_PRIVATE_KEY"],
+        wallet=os.environ.get("POLYMARKET_WALLET_ADDRESS"),
+    )
+
+    saved_credentials = secure_client.credentials.model_dump(mode="json")
+    ```
+  </Tab>
+
+  <Tab title="Reuse Credentials">
+    ```python theme={null}
+    import os
+
+    from polymarket import ApiKeyCreds, AsyncSecureClient
+
+
+    credentials = ApiKeyCreds.model_validate(saved_credentials)
+
+    secure_client = await AsyncSecureClient.create(
+        private_key=os.environ["POLYMARKET_PRIVATE_KEY"],
+        wallet=os.environ.get("POLYMARKET_WALLET_ADDRESS"),
+        credentials=credentials,
+    )
+    ```
+  </Tab>
+</Tabs>
+> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
 
 > ## Documentation Index
 > Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
 > Use this file to discover all available pages before exploring further.
 
-# Real-Time Data Socket
-
-> Stream comments, crypto prices, and equity prices via WebSocket
+# List events (keyset pagination)
 
-The Polymarket Real-Time Data Socket (RTDS) is a WebSocket-based streaming service that provides real-time updates for **comments**, **crypto prices**, and **equity prices**.
-
-<Card title="TypeScript client" icon="github" href="https://github.com/Polymarket/real-time-data-client">
-  Official RTDS TypeScript client (`real-time-data-client`).
-</Card>
-
-## Endpoint
-
-```
-wss://ws-live-data.polymarket.com
-```
-
-Some user-specific streams may require `gamma_auth` with your wallet address.
-
-## Subscribing
-
-Send a JSON message to subscribe to data streams:
-
-```json  theme={null}
-{
-  "action": "subscribe",
-  "subscriptions": [
-    {
-      "topic": "topic_name",
-      "type": "message_type",
-      "filters": "optional_filter_string",
-      "gamma_auth": {
-        "address": "wallet_address"
-      }
-    }
-  ]
-}
-```
-
-To unsubscribe, send the same structure with `"action": "unsubscribe"`.
-
-Subscriptions can be added, removed, and modified without disconnecting. Send `PING` messages every 5 seconds to maintain the connection.
-
-<Note>Only the subscription types documented below are supported.</Note>
-
-## Message Structure
-
-All messages follow this structure:
-
-```json  theme={null}
-{
-  "topic": "string",
-  "type": "string",
-  "timestamp": "number",
-  "payload": "object"
-}
-```
-
-| Field       | Type   | Description                                                                 |
-| ----------- | ------ | --------------------------------------------------------------------------- |
-| `topic`     | string | The subscription topic (e.g., `crypto_prices`, `equity_prices`, `comments`) |
-| `type`      | string | The message type/event (e.g., `update`, `reaction_created`)                 |
-| `timestamp` | number | Unix timestamp in milliseconds when the message was sent                    |
-| `payload`   | object | Event-specific data object                                                  |
-
-## Crypto Prices
-
-Real-time cryptocurrency price data from two sources: **Binance** and **Chainlink**. No authentication required.
-
-### Binance Source
-
-Subscribe to all symbols:
-
-```json  theme={null}
-{
-  "action": "subscribe",
-  "subscriptions": [
-    {
-      "topic": "crypto_prices",
-      "type": "update"
-    }
-  ]
-}
-```
-
-Subscribe to specific symbols with a comma-separated filter:
-
-```json  theme={null}
-{
-  "action": "subscribe",
-  "subscriptions": [
-    {
-      "topic": "crypto_prices",
-      "type": "update",
-      "filters": "solusdt,btcusdt,ethusdt"
-    }
-  ]
-}
-```
-
-Symbols use lowercase concatenated format (e.g., `solusdt`, `btcusdt`).
-
-**Solana price update:**
-
-```json  theme={null}
-{
-  "topic": "crypto_prices",
-  "type": "update",
-  "timestamp": 1753314064237,
-  "payload": {
-    "symbol": "solusdt",
-    "timestamp": 1753314064213,
-    "value": 189.55
-  }
-}
-```
-
-**Bitcoin price update:**
-
-```json  theme={null}
-{
-  "topic": "crypto_prices",
-  "type": "update",
-  "timestamp": 1753314088421,
-  "payload": {
-    "symbol": "btcusdt",
-    "timestamp": 1753314088395,
-    "value": 67234.50
-  }
-}
-```
-
-### Chainlink Source
-
-<Tip>
-  **Trading 15m Crypto Markets?** Get a sponsored Chainlink API key with onboarding support from Chainlink. Fill out [this form](https://pm-ds-request.streams.chain.link/).
-</Tip>
-
-Subscribe to all symbols:
-
-```json  theme={null}
-{
-  "action": "subscribe",
-  "subscriptions": [
-    {
-      "topic": "crypto_prices_chainlink",
-      "type": "*",
-      "filters": ""
-    }
-  ]
-}
-```
-
-Subscribe to a specific symbol with a JSON filter:
-
-```json  theme={null}
-{
-  "action": "subscribe",
-  "subscriptions": [
-    {
-      "topic": "crypto_prices_chainlink",
-      "type": "*",
-      "filters": "{\"symbol\":\"eth/usd\"}"
-    }
-  ]
-}
-```
-
-Symbols use slash-separated format (e.g., `eth/usd`, `btc/usd`).
-
-**Ethereum price update:**
-
-```json  theme={null}
-{
-  "topic": "crypto_prices_chainlink",
-  "type": "update",
-  "timestamp": 1753314064237,
-  "payload": {
-    "symbol": "eth/usd",
-    "timestamp": 1753314064213,
-    "value": 3456.78
-  }
-}
-```
-
-**Bitcoin price update:**
-
-```json  theme={null}
-{
-  "topic": "crypto_prices_chainlink",
-  "type": "update",
-  "timestamp": 1753314088421,
-  "payload": {
-    "symbol": "btc/usd",
-    "timestamp": 1753314088395,
-    "value": 67234.50
-  }
-}
-```
-
-### Price Payload Fields
-
-| Field       | Type   | Description                                                                                                                                        |
-| ----------- | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `symbol`    | string | Trading pair symbol. **Binance**: lowercase concatenated (e.g., `solusdt`, `btcusdt`). **Chainlink**: slash-separated (e.g., `eth/usd`, `btc/usd`) |
-| `timestamp` | number | When the price was recorded, in Unix milliseconds                                                                                                  |
-| `value`     | number | Current price value in the quote currency                                                                                                          |
-
-### Supported Symbols
-
-**Binance Source** — lowercase concatenated format:
-
-* `btcusdt` — Bitcoin to USDT
-* `ethusdt` — Ethereum to USDT
-* `solusdt` — Solana to USDT
-* `xrpusdt` — XRP to USDT
-
-**Chainlink Source** — slash-separated format:
-
-* `btc/usd` — Bitcoin to USD
-* `eth/usd` — Ethereum to USD
-* `sol/usd` — Solana to USD
-* `xrp/usd` — XRP to USD
-
-## Equity Prices
-
-Real-time price data for stocks, ETFs, forex pairs, precious metals, and commodities sourced from **Pyth Network**. No authentication required.
-
-<Tip>
-  **Trading Equity Markets?** Get a Pyth Network data feed - first 30 days free, then \$99/month. [Subscribe here](https://buy.stripe.com/cNi8wPeiq76FgQrbsD4ZG09).
-</Tip>
-
-All asset classes stream through a single `equity_prices` topic. When you subscribe with a symbol filter, the server sends a historical snapshot (last 2 minutes of data), then continues streaming live updates.
-
-### Subscribe
-
-Subscribe to a specific symbol with a JSON filter:
-
-```json  theme={null}
-{
-  "action": "subscribe",
-  "subscriptions": [
-    {
-      "topic": "equity_prices",
-      "type": "update",
-      "filters": "{\"symbol\":\"AAPL\"}"
-    }
-  ]
-}
-```
-
-Subscribe to multiple symbols across asset classes:
-
-```json  theme={null}
-{
-  "action": "subscribe",
-  "subscriptions": [
-    { "topic": "equity_prices", "type": "update", "filters": "{\"symbol\":\"AAPL\"}" },
-    { "topic": "equity_prices", "type": "update", "filters": "{\"symbol\":\"EURUSD\"}" },
-    { "topic": "equity_prices", "type": "update", "filters": "{\"symbol\":\"XAUUSD\"}" },
-    { "topic": "equity_prices", "type": "update", "filters": "{\"symbol\":\"WTI\"}" }
-  ]
-}
-```
-
-Use `type: "*"` to receive all message types (live updates and snapshots):
-
-```json  theme={null}
-{
-  "action": "subscribe",
-  "subscriptions": [
-    {
-      "topic": "equity_prices",
-      "type": "*",
-      "filters": "{\"symbol\":\"GOOGL\"}"
-    }
-  ]
-}
-```
-
-Filter values are case-insensitive on subscribe, but the `symbol` field in payloads is always returned lowercase.
-
-### Live Price Update
-
-**Apple stock update:**
-
-```json  theme={null}
-{
-  "topic": "equity_prices",
-  "type": "update",
-  "timestamp": 1711382400000,
-  "payload": {
-    "symbol": "aapl",
-    "value": 198.45,
-    "full_accuracy_value": "198.4523",
-    "timestamp": 1711382400000,
-    "received_at": 1711382400005
-  }
-}
-```
-
-**Gold price update (market closed):**
-
-```json  theme={null}
-{
-  "topic": "equity_prices",
-  "type": "update",
-  "timestamp": 1711400000000,
-  "payload": {
-    "symbol": "xauusd",
-    "value": 2175.30,
-    "full_accuracy_value": "2175.3012",
-    "timestamp": 1711399000000,
-    "received_at": 1711400000002,
-    "is_carried_forward": true
-  }
-}
-```
-
-### Historical Snapshot
-
-On subscribe, the server delivers a backfill of the last 2 minutes of price data. Use the `type` field to distinguish: `"subscribe"` for the initial snapshot vs `"update"` for live ticks.
-
-```json  theme={null}
-{
-  "topic": "equity_prices",
-  "type": "subscribe",
-  "timestamp": 1711382400000,
-  "payload": {
-    "symbol": "aapl",
-    "data": [
-      { "timestamp": 1711382280000, "value": 198.30 },
-      { "timestamp": 1711382281000, "value": 198.32 },
-      { "timestamp": 1711382340000, "value": 198.41 }
-    ]
-  }
-}
-```
-
-### Equity Price Payload Fields
-
-| Field                 | Type    | Description                                                                                               |
-| --------------------- | ------- | --------------------------------------------------------------------------------------------------------- |
-| `symbol`              | string  | Lowercase symbol identifier (e.g., `aapl`, `eurusd`, `xauusd`)                                            |
-| `value`               | number  | Spot price as a float                                                                                     |
-| `full_accuracy_value` | string  | Full-precision price as a string                                                                          |
-| `timestamp`           | number  | Price measurement timestamp in Unix milliseconds                                                          |
-| `received_at`         | number  | When the system received the price, in Unix milliseconds. Only present when non-zero.                     |
-| `is_carried_forward`  | boolean | `true` when the market session is closed and the value is the last known price. Only present when `true`. |
-
-### Supported Symbols
-
-**Stocks:**
-
-| Symbol  | Name           |
-| ------- | -------------- |
-| `AAPL`  | Apple          |
-| `TSLA`  | Tesla          |
-| `MSFT`  | Microsoft      |
-| `GOOGL` | Alphabet       |
-| `AMZN`  | Amazon         |
-| `META`  | Meta Platforms |
-| `NVDA`  | NVIDIA         |
-| `NFLX`  | Netflix        |
-| `PLTR`  | Palantir       |
-| `OPEN`  | Opendoor       |
-| `RKLB`  | Rocket Lab     |
-| `ABNB`  | Airbnb         |
-| `COIN`  | Coinbase       |
-| `HOOD`  | Robinhood      |
-
-**ETFs:**
-
-| Symbol | Name                                 |
-| ------ | ------------------------------------ |
-| `QQQ`  | Invesco QQQ ETF                      |
-| `SPY`  | S\&P 500 ETF                         |
-| `EWY`  | iShares MSCI South Korea ETF         |
-| `VXX`  | Barclays iPath Series B S\&P 500 VIX |
-
-**Forex:**
-
-| Symbol   | Pair                         |
-| -------- | ---------------------------- |
-| `EURUSD` | Euro / US Dollar             |
-| `GBPUSD` | British Pound / US Dollar    |
-| `USDCAD` | US Dollar / Canadian Dollar  |
-| `USDJPY` | US Dollar / Japanese Yen     |
-| `USDKRW` | US Dollar / South Korean Won |
-
-**Precious Metals:**
-
-| Symbol   | Name   |
-| -------- | ------ |
-| `XAUUSD` | Gold   |
-| `XAGUSD` | Silver |
-
-**Commodities** (rolling front-month futures):
-
-| Symbol | Name            |
-| ------ | --------------- |
-| `WTI`  | Crude Oil (WTI) |
-| `CC`   | Cocoa           |
-| `NGD`  | Natural Gas     |
-
-### Market Hours
-
-When a market session is closed, the stream continues with the last known price and `is_carried_forward: true`. This lets you distinguish stale prices from live ticks. Update frequency is sub-second (up to 5 per second per feed) during market hours.
-
-## Comments
-
-Real-time comment events on the Polymarket platform, including new comments, replies, reactions, and removals. May require Gamma authentication for user-specific data.
-
-### Subscribe
-
-```json  theme={null}
-{
-  "action": "subscribe",
-  "subscriptions": [
-    {
-      "topic": "comments",
-      "type": "comment_created"
-    }
-  ]
-}
-```
-
-### Message Types
-
-| Type               | Description                           |
-| ------------------ | ------------------------------------- |
-| `comment_created`  | A user creates a new comment or reply |
-| `comment_removed`  | A comment is removed or deleted       |
-| `reaction_created` | A user adds a reaction to a comment   |
-| `reaction_removed` | A reaction is removed from a comment  |
-
-### comment\_created
-
-Emitted when a user posts a new comment or replies to an existing one.
-
-```json  theme={null}
-{
-  "topic": "comments",
-  "type": "comment_created",
-  "timestamp": 1753454975808,
-  "payload": {
-    "body": "That's a good point about the definition.",
-    "createdAt": "2025-07-25T14:49:35.801298Z",
-    "id": "1763355",
-    "parentCommentID": "1763325",
-    "parentEntityID": 18396,
-    "parentEntityType": "Event",
-    "profile": {
-      "baseAddress": "0xce533188d53a16ed580fd5121dedf166d3482677",
-      "displayUsernamePublic": true,
-      "name": "salted.caramel",
-      "proxyWallet": "0x4ca749dcfa93c87e5ee23e2d21ff4422c7a4c1ee",
-      "pseudonym": "Adored-Disparity"
-    },
-    "reactionCount": 0,
-    "replyAddress": "0x0bda5d16f76cd1d3485bcc7a44bc6fa7db004cdd",
-    "reportCount": 0,
-    "userAddress": "0xce533188d53a16ed580fd5121dedf166d3482677"
-  }
-}
-```
-
-A reply to the above comment — note `parentCommentID` references the parent:
-
-```json  theme={null}
-{
-  "topic": "comments",
-  "type": "comment_created",
-  "timestamp": 1753454985123,
-  "payload": {
-    "body": "I agree, the resolution criteria should be clearer.",
-    "createdAt": "2025-07-25T14:49:45.120000Z",
-    "id": "1763356",
-    "parentCommentID": "1763355",
-    "parentEntityID": 18396,
-    "parentEntityType": "Event",
-    "profile": {
-      "baseAddress": "0x1234567890abcdef1234567890abcdef12345678",
-      "displayUsernamePublic": true,
-      "name": "trader",
-      "proxyWallet": "0x9876543210fedcba9876543210fedcba98765432",
-      "pseudonym": "Bright-Analysis"
-    },
-    "reactionCount": 0,
-    "replyAddress": "0x0bda5d16f76cd1d3485bcc7a44bc6fa7db004cdd",
-    "reportCount": 0,
-    "userAddress": "0x1234567890abcdef1234567890abcdef12345678"
-  }
-}
-```
-
-### Comment Payload Fields
-
-| Field              | Type   | Description                                                               |
-| ------------------ | ------ | ------------------------------------------------------------------------- |
-| `body`             | string | The text content of the comment                                           |
-| `createdAt`        | string | ISO 8601 timestamp when the comment was created                           |
-| `id`               | string | Unique identifier for this comment                                        |
-| `parentCommentID`  | string | ID of the parent comment if this is a reply (null for top-level comments) |
-| `parentEntityID`   | number | ID of the parent entity (event, market, etc.)                             |
-| `parentEntityType` | string | Type of parent entity (`Event`, `Market`)                                 |
-| `profile`          | object | Profile information of the comment author                                 |
-| `reactionCount`    | number | Current number of reactions on this comment                               |
-| `replyAddress`     | string | Polygon address for replies (may differ from userAddress)                 |
-| `reportCount`      | number | Current number of reports on this comment                                 |
-| `userAddress`      | string | Polygon address of the comment author                                     |
-
-### Profile Object Fields
-
-| Field                   | Type    | Description                                |
-| ----------------------- | ------- | ------------------------------------------ |
-| `baseAddress`           | string  | User profile address                       |
-| `displayUsernamePublic` | boolean | Whether the username is displayed publicly |
-| `name`                  | string  | User's display name                        |
-| `proxyWallet`           | string  | Proxy wallet address used for transactions |
-| `pseudonym`             | string  | Generated pseudonym for the user           |
-
-### Comment Hierarchy
-
-Comments support nested threading:
-
-* **Top-level comments**: `parentCommentID` is null or empty
-* **Reply comments**: `parentCommentID` contains the ID of the parent comment
-* All comments are associated with a `parentEntityID` and `parentEntityType` (`Event` or `Market`)
-
-## Troubleshooting
-
-<Accordion title="Connection drops unexpectedly">
-  Send `PING` messages every 5 seconds to keep the connection alive. Connection errors will trigger automatic reconnection attempts.
-</Accordion>
-
-<Accordion title="Not receiving messages after subscribing">
-  Verify your subscription message is valid JSON with the correct `action`, `topic`, and `type` fields. Invalid subscription messages may result in connection closure.
-</Accordion>
-
-<Accordion title="Authentication failures">
-  If subscribing to user-specific streams, ensure your `gamma_auth` object includes a valid wallet `address`. Authentication failures will prevent subscription to protected topics.
-</Accordion>
-
-
-Built with [Mintlify](https://mintlify.com).
+> Returns events using cursor-based (keyset) pagination for stable, efficient paging through large result sets. Use `next_cursor` from each response as `after_cursor` in the next request. The `offset` parameter is explicitly rejected; use `after_cursor` instead.
+
+
+
+
+## OpenAPI
+
+````yaml /api-spec/gamma-openapi.yaml get /events/keyset
+openapi: 3.0.3
+info:
+  title: Markets API
+  version: 1.0.0
+  description: REST API specification for public endpoints used by the Markets service.
+servers:
+  - url: https://gamma-api.polymarket.com
+    description: Polymarket Gamma API Production Server
+security: []
+tags:
+  - name: Gamma Status
+    description: Gamma API status and health check
+  - name: Sports
+    description: Sports-related endpoints including teams and game data
+  - name: Tags
+    description: Tag management and related tag operations
+  - name: Events
+    description: Event management and event-related operations
+  - name: Markets
+    description: Market data and market-related operations
+  - name: Comments
+    description: Comment system and user interactions
+  - name: Series
+    description: Series management and related operations
+  - name: Profiles
+    description: User profile management
+  - name: Search
+    description: Search functionality across different entity types
+paths:
+  /events/keyset:
+    get:
+      tags:
+        - Events
+      summary: List events (keyset pagination)
+      description: >
+        Returns events using cursor-based (keyset) pagination for stable,
+        efficient paging through large result sets. Use `next_cursor` from each
+        response as `after_cursor` in the next request. The `offset` parameter
+        is explicitly rejected; use `after_cursor` instead.
+      operationId: listEventsKeyset
+      parameters:
+        - name: limit
+          in: query
+          description: Maximum number of results to return (max 500)
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 20
+        - name: order
+          in: query
+          description: Comma-separated list of JSON field names to order by
+          schema:
+            type: string
+        - name: ascending
+          in: query
+          description: Sort direction. Only used when order is set.
+          schema:
+            type: boolean
+            default: true
+        - name: after_cursor
+          in: query
+          description: Opaque cursor token from a previous response's next_cursor
+          schema:
+            type: string
+        - name: offset
+          in: query
+          description: Not allowed. Returns 422 if provided.
+          schema:
+            type: integer
+        - name: id
+          in: query
+          schema:
+            type: array
+            items:
+              type: integer
+        - name: slug
+          in: query
+          schema:
+            type: array
+            items:
+              type: string
+        - name: closed
+          in: query
+          schema:
+            type: boolean
+        - name: live
+          in: query
+          schema:
+            type: boolean
+        - name: featured
+          in: query
+          schema:
+            type: boolean
+        - name: cyom
+          in: query
+          schema:
+            type: boolean
+        - name: title_search
+          in: query
+          schema:
+            type: string
+        - name: liquidity_min
+          in: query
+          schema:
+            type: number
+        - name: liquidity_max
+          in: query
+          schema:
+            type: number
+        - name: volume_min
+          in: query
+          schema:
+            type: number
+        - name: volume_max
+          in: query
+          schema:
+            type: number
+        - name: start_date_min
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: start_date_max
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: end_date_min
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: end_date_max
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: start_time_min
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: start_time_max
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: tag_id
+          in: query
+          schema:
+            type: array
+            items:
+              type: integer
+        - name: tag_slug
+          in: query
+          schema:
+            type: string
+        - name: exclude_tag_id
+          in: query
+          description: Tag IDs to exclude. Cannot overlap with tag_id.
+          schema:
+            type: array
+            items:
+              type: integer
+        - name: related_tags
+          in: query
+          schema:
+            type: boolean
+        - name: tag_match
+          in: query
+          schema:
+            type: string
+        - name: series_id
+          in: query
+          schema:
+            type: array
+            items:
+              type: integer
+        - name: game_id
+          in: query
+          schema:
+            type: array
+            items:
+              type: integer
+        - name: event_date
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: event_week
+          in: query
+          schema:
+            type: integer
+        - name: featured_order
+          in: query
+          schema:
+            type: boolean
+        - name: recurrence
+          in: query
+          schema:
+            type: string
+        - name: created_by
+          in: query
+          schema:
+            type: array
+            items:
+              type: string
+        - name: parent_event_id
+          in: query
+          schema:
+            type: integer
+        - name: include_children
+          in: query
+          schema:
+            type: boolean
+        - name: partner_slug
+          in: query
+          description: When set, external_partners are attached to matching events
+          schema:
+            type: string
+        - name: include_chat
+          in: query
+          description: When true, includes Chats and Series.Chats relations
+          schema:
+            type: boolean
+        - name: include_template
+          in: query
+          description: When true, includes Templates relation
+          schema:
+            type: boolean
+        - name: include_best_lines
+          in: query
+          description: When true, includes BestLines relation
+          schema:
+            type: boolean
+        - name: locale
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: >
+            Paginated list of events. Always includes Series, Tags, Markets, and
+            EventCreators relations. Chats/Series.Chats, Templates, and
+            BestLines are optional via their respective include_ flags. Nested
+            markets include clob_rewards and fee_schedule. Teams are enriched
+            automatically. external_partners attached only when partner_slug is
+            set.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/KeysetEventsResponse'
+        '422':
+          description: >
+            Validation error. Returned when offset is provided, cursor is
+            invalid, order fields are not valid, tag_id overlaps with
+            exclude_tag_id, invalid recurrence, or other filter validation
+            fails.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError'
+        '500':
+          description: Internal server error (DB failures, cursor encode failures)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InternalError'
+        '503':
+          description: Service unavailable when keyset pagination is not configured
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServiceUnavailableError'
+components:
+  schemas:
+    KeysetEventsResponse:
+      type: object
+      properties:
+        events:
+          type: array
+          description: Array of Event objects. Empty array if none found.
+          items:
+            $ref: '#/components/schemas/Event'
+        next_cursor:
+          type: string
+          description: >
+            Opaque cursor token for fetching the next page. Present only when
+            the number of returned events equals the effective limit. Omitted on
+            the last page.
+    ValidationError:
+      type: object
+      properties:
+        type:
+          type: string
+          example: validation error
+        error:
+          type: string
+          example: offset is not allowed on keyset endpoints
+    InternalError:
+      type: object
+      properties:
+        type:
+          type: string
+          example: internal error
+        error:
+          type: string
+          example: cannot get the information
+    ServiceUnavailableError:
+      type: object
+      properties:
+        type:
+          type: string
+          example: service unavailable
+        error:
+          type: string
+          example: keyset pagination is not configured
+    Event:
+      type: object
+      properties:
+        id:
+          type: string
+        ticker:
+          type: string
+          nullable: true
+        slug:
+          type: string
+          nullable: true
+        title:
+          type: string
+          nullable: true
+        subtitle:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        resolutionSource:
+          type: string
+          nullable: true
+        startDate:
+          type: string
+          format: date-time
+          nullable: true
+        creationDate:
+          type: string
+          format: date-time
+          nullable: true
+        endDate:
+          type: string
+          format: date-time
+          nullable: true
+        image:
+          type: string
+          nullable: true
+        icon:
+          type: string
+          nullable: true
+        active:
+          type: boolean
+          nullable: true
+        closed:
+          type: boolean
+          nullable: true
+        archived:
+          type: boolean
+          nullable: true
+        new:
+          type: boolean
+          nullable: true
+        featured:
+          type: boolean
+          nullable: true
+        restricted:
+          type: boolean
+          nullable: true
+        liquidity:
+          type: number
+          nullable: true
+        volume:
+          type: number
+          nullable: true
+        openInterest:
+          type: number
+          nullable: true
+        sortBy:
+          type: string
+          nullable: true
+        category:
+          type: string
+          nullable: true
+        subcategory:
+          type: string
+          nullable: true
+        isTemplate:
+          type: boolean
+          nullable: true
+        templateVariables:
+          type: string
+          nullable: true
+        published_at:
+          type: string
+          nullable: true
+        createdBy:
+          type: string
+          nullable: true
+        updatedBy:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        commentsEnabled:
+          type: boolean
+          nullable: true
+        competitive:
+          type: number
+          nullable: true
+        volume24hr:
+          type: number
+          nullable: true
+        volume1wk:
+          type: number
+          nullable: true
+        volume1mo:
+          type: number
+          nullable: true
+        volume1yr:
+          type: number
+          nullable: true
+        featuredImage:
+          type: string
+          nullable: true
+        disqusThread:
+          type: string
+          nullable: true
+        parentEvent:
+          type: string
+          nullable: true
+        enableOrderBook:
+          type: boolean
+          nullable: true
+        liquidityAmm:
+          type: number
+          nullable: true
+        liquidityClob:
+          type: number
+          nullable: true
+        negRisk:
+          type: boolean
+          nullable: true
+        negRiskMarketID:
+          type: string
+          nullable: true
+        negRiskFeeBips:
+          type: integer
+          nullable: true
+        commentCount:
+          type: integer
+          nullable: true
+        imageOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        iconOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        featuredImageOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        subEvents:
+          type: array
+          items:
+            type: string
+          nullable: true
+        markets:
+          type: array
+          items:
+            $ref: '#/components/schemas/Market'
+        series:
+          type: array
+          items:
+            $ref: '#/components/schemas/Series'
+        categories:
+          type: array
+          items:
+            $ref: '#/components/schemas/Category'
+        collections:
+          type: array
+          items:
+            $ref: '#/components/schemas/Collection'
+        tags:
+          type: array
+          items:
+            $ref: '#/components/schemas/Tag'
+        cyom:
+          type: boolean
+          nullable: true
+        closedTime:
+          type: string
+          format: date-time
+          nullable: true
+        showAllOutcomes:
+          type: boolean
+          nullable: true
+        showMarketImages:
+          type: boolean
+          nullable: true
+        automaticallyResolved:
+          type: boolean
+          nullable: true
+        enableNegRisk:
+          type: boolean
+          nullable: true
+        automaticallyActive:
+          type: boolean
+          nullable: true
+        eventDate:
+          type: string
+          nullable: true
+        startTime:
+          type: string
+          format: date-time
+          nullable: true
+        eventWeek:
+          type: integer
+          nullable: true
+        seriesSlug:
+          type: string
+          nullable: true
+        score:
+          type: string
+          nullable: true
+        elapsed:
+          type: string
+          nullable: true
+        period:
+          type: string
+          nullable: true
+        live:
+          type: boolean
+          nullable: true
+        ended:
+          type: boolean
+          nullable: true
+        finishedTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        gmpChartMode:
+          type: string
+          nullable: true
+        eventCreators:
+          type: array
+          items:
+            $ref: '#/components/schemas/EventCreator'
+        tweetCount:
+          type: integer
+          nullable: true
+        chats:
+          type: array
+          items:
+            $ref: '#/components/schemas/Chat'
+        featuredOrder:
+          type: integer
+          nullable: true
+        estimateValue:
+          type: boolean
+          nullable: true
+        cantEstimate:
+          type: boolean
+          nullable: true
+        estimatedValue:
+          type: string
+          nullable: true
+        templates:
+          type: array
+          items:
+            $ref: '#/components/schemas/Template'
+        spreadsMainLine:
+          type: number
+          nullable: true
+        totalsMainLine:
+          type: number
+          nullable: true
+        carouselMap:
+          type: string
+          nullable: true
+        pendingDeployment:
+          type: boolean
+          nullable: true
+        deploying:
+          type: boolean
+          nullable: true
+        deployingTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        scheduledDeploymentTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        gameStatus:
+          type: string
+          nullable: true
+    ImageOptimization:
+      type: object
+      properties:
+        id:
+          type: string
+        imageUrlSource:
+          type: string
+          nullable: true
+        imageUrlOptimized:
+          type: string
+          nullable: true
+        imageSizeKbSource:
+          type: number
+          nullable: true
+        imageSizeKbOptimized:
+          type: number
+          nullable: true
+        imageOptimizedComplete:
+          type: boolean
+          nullable: true
+        imageOptimizedLastUpdated:
+          type: string
+          nullable: true
+        relID:
+          type: integer
+          nullable: true
+        field:
+          type: string
+          nullable: true
+        relname:
+          type: string
+          nullable: true
+    Market:
+      type: object
+      properties:
+        id:
+          type: string
+        question:
+          type: string
+          nullable: true
+        conditionId:
+          type: string
+        slug:
+          type: string
+          nullable: true
+        twitterCardImage:
+          type: string
+          nullable: true
+        resolutionSource:
+          type: string
+          nullable: true
+        endDate:
+          type: string
+          format: date-time
+          nullable: true
+        category:
+          type: string
+          nullable: true
+        ammType:
+          type: string
+          nullable: true
+        liquidity:
+          type: string
+          nullable: true
+        sponsorName:
+          type: string
+          nullable: true
+        sponsorImage:
+          type: string
+          nullable: true
+        startDate:
+          type: string
+          format: date-time
+          nullable: true
+        xAxisValue:
+          type: string
+          nullable: true
+        yAxisValue:
+          type: string
+          nullable: true
+        denominationToken:
+          type: string
+          nullable: true
+        fee:
+          type: string
+          nullable: true
+        image:
+          type: string
+          nullable: true
+        icon:
+          type: string
+          nullable: true
+        lowerBound:
+          type: string
+          nullable: true
+        upperBound:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        outcomes:
+          type: string
+          nullable: true
+        outcomePrices:
+          type: string
+          nullable: true
+        volume:
+          type: string
+          nullable: true
+        active:
+          type: boolean
+          nullable: true
+        marketType:
+          type: string
+          nullable: true
+        formatType:
+          type: string
+          nullable: true
+        lowerBoundDate:
+          type: string
+          nullable: true
+        upperBoundDate:
+          type: string
+          nullable: true
+        closed:
+          type: boolean
+          nullable: true
+        marketMakerAddress:
+          type: string
+        createdBy:
+          type: integer
+          nullable: true
+        updatedBy:
+          type: integer
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        closedTime:
+          type: string
+          nullable: true
+        wideFormat:
+          type: boolean
+          nullable: true
+        new:
+          type: boolean
+          nullable: true
+        mailchimpTag:
+          type: string
+          nullable: true
+        featured:
+          type: boolean
+          nullable: true
+        archived:
+          type: boolean
+          nullable: true
+        resolvedBy:
+          type: string
+          nullable: true
+        restricted:
+          type: boolean
+          nullable: true
+        marketGroup:
+          type: integer
+          nullable: true
+        groupItemTitle:
+          type: string
+          nullable: true
+        groupItemThreshold:
+          type: string
+          nullable: true
+        questionID:
+          type: string
+          nullable: true
+        umaEndDate:
+          type: string
+          nullable: true
+        enableOrderBook:
+          type: boolean
+          nullable: true
+        orderPriceMinTickSize:
+          type: number
+          nullable: true
+        orderMinSize:
+          type: number
+          nullable: true
+        umaResolutionStatus:
+          type: string
+          nullable: true
+        curationOrder:
+          type: integer
+          nullable: true
+        volumeNum:
+          type: number
+          nullable: true
+        liquidityNum:
+          type: number
+          nullable: true
+        endDateIso:
+          type: string
+          nullable: true
+        startDateIso:
+          type: string
+          nullable: true
+        umaEndDateIso:
+          type: string
+          nullable: true
+        hasReviewedDates:
+          type: boolean
+          nullable: true
+        readyForCron:
+          type: boolean
+          nullable: true
+        commentsEnabled:
+          type: boolean
+          nullable: true
+        volume24hr:
+          type: number
+          nullable: true
+        volume1wk:
+          type: number
+          nullable: true
+        volume1mo:
+          type: number
+          nullable: true
+        volume1yr:
+          type: number
+          nullable: true
+        gameStartTime:
+          type: string
+          nullable: true
+        secondsDelay:
+          type: integer
+          nullable: true
+        clobTokenIds:
+          type: string
+          nullable: true
+        disqusThread:
+          type: string
+          nullable: true
+        shortOutcomes:
+          type: string
+          nullable: true
+        teamAID:
+          type: string
+          nullable: true
+        teamBID:
+          type: string
+          nullable: true
+        umaBond:
+          type: string
+          nullable: true
+        umaReward:
+          type: string
+          nullable: true
+        fpmmLive:
+          type: boolean
+          nullable: true
+        volume24hrAmm:
+          type: number
+          nullable: true
+        volume1wkAmm:
+          type: number
+          nullable: true
+        volume1moAmm:
+          type: number
+          nullable: true
+        volume1yrAmm:
+          type: number
+          nullable: true
+        volume24hrClob:
+          type: number
+          nullable: true
+        volume1wkClob:
+          type: number
+          nullable: true
+        volume1moClob:
+          type: number
+          nullable: true
+        volume1yrClob:
+          type: number
+          nullable: true
+        volumeAmm:
+          type: number
+          nullable: true
+        volumeClob:
+          type: number
+          nullable: true
+        liquidityAmm:
+          type: number
+          nullable: true
+        liquidityClob:
+          type: number
+          nullable: true
+        makerBaseFee:
+          type: integer
+          nullable: true
+        takerBaseFee:
+          type: integer
+          nullable: true
+        customLiveness:
+          type: integer
+          nullable: true
+        acceptingOrders:
+          type: boolean
+          nullable: true
+        notificationsEnabled:
+          type: boolean
+          nullable: true
+        score:
+          type: integer
+          nullable: true
+        imageOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        iconOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/Event'
+        categories:
+          type: array
+          items:
+            $ref: '#/components/schemas/Category'
+        tags:
+          type: array
+          items:
+            $ref: '#/components/schemas/Tag'
+        creator:
+          type: string
+          nullable: true
+        ready:
+          type: boolean
+          nullable: true
+        funded:
+          type: boolean
+          nullable: true
+        pastSlugs:
+          type: string
+          nullable: true
+        readyTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        fundedTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        acceptingOrdersTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        competitive:
+          type: number
+          nullable: true
+        rewardsMinSize:
+          type: number
+          nullable: true
+        rewardsMaxSpread:
+          type: number
+          nullable: true
+        spread:
+          type: number
+          nullable: true
+        automaticallyResolved:
+          type: boolean
+          nullable: true
+        oneDayPriceChange:
+          type: number
+          nullable: true
+        oneHourPriceChange:
+          type: number
+          nullable: true
+        oneWeekPriceChange:
+          type: number
+          nullable: true
+        oneMonthPriceChange:
+          type: number
+          nullable: true
+        oneYearPriceChange:
+          type: number
+          nullable: true
+        lastTradePrice:
+          type: number
+          nullable: true
+        bestBid:
+          type: number
+          nullable: true
+        bestAsk:
+          type: number
+          nullable: true
+        automaticallyActive:
+          type: boolean
+          nullable: true
+        clearBookOnStart:
+          type: boolean
+          nullable: true
+        chartColor:
+          type: string
+          nullable: true
+        seriesColor:
+          type: string
+          nullable: true
+        showGmpSeries:
+          type: boolean
+          nullable: true
+        showGmpOutcome:
+          type: boolean
+          nullable: true
+        manualActivation:
+          type: boolean
+          nullable: true
+        negRiskOther:
+          type: boolean
+          nullable: true
+        gameId:
+          type: string
+          nullable: true
+        groupItemRange:
+          type: string
+          nullable: true
+        sportsMarketType:
+          type: string
+          nullable: true
+        line:
+          type: number
+          nullable: true
+        umaResolutionStatuses:
+          type: string
+          nullable: true
+        pendingDeployment:
+          type: boolean
+          nullable: true
+        deploying:
+          type: boolean
+          nullable: true
+        deployingTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        scheduledDeploymentTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        rfqEnabled:
+          type: boolean
+          nullable: true
+        eventStartTime:
+          type: string
+          format: date-time
+          nullable: true
+        feesEnabled:
+          type: boolean
+          nullable: true
+        feeSchedule:
+          $ref: '#/components/schemas/FeeSchedule'
+    Series:
+      type: object
+      properties:
+        id:
+          type: string
+        ticker:
+          type: string
+          nullable: true
+        slug:
+          type: string
+          nullable: true
+        title:
+          type: string
+          nullable: true
+        subtitle:
+          type: string
+          nullable: true
+        seriesType:
+          type: string
+          nullable: true
+        recurrence:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        image:
+          type: string
+          nullable: true
+        icon:
+          type: string
+          nullable: true
+        layout:
+          type: string
+          nullable: true
+        active:
+          type: boolean
+          nullable: true
+        closed:
+          type: boolean
+          nullable: true
+        archived:
+          type: boolean
+          nullable: true
+        new:
+          type: boolean
+          nullable: true
+        featured:
+          type: boolean
+          nullable: true
+        restricted:
+          type: boolean
+          nullable: true
+        isTemplate:
+          type: boolean
+          nullable: true
+        templateVariables:
+          type: boolean
+          nullable: true
+        publishedAt:
+          type: string
+          nullable: true
+        createdBy:
+          type: string
+          nullable: true
+        updatedBy:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        commentsEnabled:
+          type: boolean
+          nullable: true
+        competitive:
+          type: string
+          nullable: true
+        volume24hr:
+          type: number
+          nullable: true
+        volume:
+          type: number
+          nullable: true
+        liquidity:
+          type: number
+          nullable: true
+        startDate:
+          type: string
+          format: date-time
+          nullable: true
+        pythTokenID:
+          type: string
+          nullable: true
+        cgAssetName:
+          type: string
+          nullable: true
+        score:
+          type: integer
+          nullable: true
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/Event'
+        collections:
+          type: array
+          items:
+            $ref: '#/components/schemas/Collection'
+        categories:
+          type: array
+          items:
+            $ref: '#/components/schemas/Category'
+        tags:
+          type: array
+          items:
+            $ref: '#/components/schemas/Tag'
+        commentCount:
+          type: integer
+          nullable: true
+        chats:
+          type: array
+          items:
+            $ref: '#/components/schemas/Chat'
+    Category:
+      type: object
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+          nullable: true
+        parentCategory:
+          type: string
+          nullable: true
+        slug:
+          type: string
+          nullable: true
+        publishedAt:
+          type: string
+          nullable: true
+        createdBy:
+          type: string
+          nullable: true
+        updatedBy:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+    Collection:
+      type: object
+      properties:
+        id:
+          type: string
+        ticker:
+          type: string
+          nullable: true
+        slug:
+          type: string
+          nullable: true
+        title:
+          type: string
+          nullable: true
+        subtitle:
+          type: string
+          nullable: true
+        collectionType:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        tags:
+          type: string
+          nullable: true
+        image:
+          type: string
+          nullable: true
+        icon:
+          type: string
+          nullable: true
+        headerImage:
+          type: string
+          nullable: true
+        layout:
+          type: string
+          nullable: true
+        active:
+          type: boolean
+          nullable: true
+        closed:
+          type: boolean
+          nullable: true
+        archived:
+          type: boolean
+          nullable: true
+        new:
+          type: boolean
+          nullable: true
+        featured:
+          type: boolean
+          nullable: true
+        restricted:
+          type: boolean
+          nullable: true
+        isTemplate:
+          type: boolean
+          nullable: true
+        templateVariables:
+          type: string
+          nullable: true
+        publishedAt:
+          type: string
+          nullable: true
+        createdBy:
+          type: string
+          nullable: true
+        updatedBy:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        commentsEnabled:
+          type: boolean
+          nullable: true
+        imageOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        iconOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        headerImageOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+    Tag:
+      type: object
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+          nullable: true
+        slug:
+          type: string
+          nullable: true
+        forceShow:
+          type: boolean
+          nullable: true
+        publishedAt:
+          type: string
+          nullable: true
+        createdBy:
+          type: integer
+          nullable: true
+        updatedBy:
+          type: integer
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        forceHide:
+          type: boolean
+          nullable: true
+        isCarousel:
+          type: boolean
+          nullable: true
+    EventCreator:
+      type: object
+      properties:
+        id:
+          type: string
+        creatorName:
+          type: string
+          nullable: true
+        creatorHandle:
+          type: string
+          nullable: true
+        creatorUrl:
+          type: string
+          nullable: true
+        creatorImage:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+    Chat:
+      type: object
+      properties:
+        id:
+          type: string
+        channelId:
+          type: string
+          nullable: true
+        channelName:
+          type: string
+          nullable: true
+        channelImage:
+          type: string
+          nullable: true
+        live:
+          type: boolean
+          nullable: true
+        startTime:
+          type: string
+          format: date-time
+          nullable: true
+        endTime:
+          type: string
+          format: date-time
+          nullable: true
+    Template:
+      type: object
+      properties:
+        id:
+          type: string
+        eventTitle:
+          type: string
+          nullable: true
+        eventSlug:
+          type: string
+          nullable: true
+        eventImage:
+          type: string
+          nullable: true
+        marketTitle:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        resolutionSource:
+          type: string
+          nullable: true
+        negRisk:
+          type: boolean
+          nullable: true
+        sortBy:
+          type: string
+          nullable: true
+        showMarketImages:
+          type: boolean
+          nullable: true
+        seriesSlug:
+          type: string
+          nullable: true
+        outcomes:
+          type: string
+          nullable: true
+    FeeSchedule:
+      type: object
+      properties:
+        exponent:
+          type: number
+          nullable: true
+        rate:
+          type: number
+          nullable: true
+        takerOnly:
+          type: boolean
+          nullable: true
+        rebateRate:
+          type: number
+          nullable: true
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# List events
+
+
+
+## OpenAPI
+
+````yaml /api-spec/gamma-openapi.yaml get /events
+openapi: 3.0.3
+info:
+  title: Markets API
+  version: 1.0.0
+  description: REST API specification for public endpoints used by the Markets service.
+servers:
+  - url: https://gamma-api.polymarket.com
+    description: Polymarket Gamma API Production Server
+security: []
+tags:
+  - name: Gamma Status
+    description: Gamma API status and health check
+  - name: Sports
+    description: Sports-related endpoints including teams and game data
+  - name: Tags
+    description: Tag management and related tag operations
+  - name: Events
+    description: Event management and event-related operations
+  - name: Markets
+    description: Market data and market-related operations
+  - name: Comments
+    description: Comment system and user interactions
+  - name: Series
+    description: Series management and related operations
+  - name: Profiles
+    description: User profile management
+  - name: Search
+    description: Search functionality across different entity types
+paths:
+  /events:
+    get:
+      tags:
+        - Events
+      summary: List events
+      operationId: listEvents
+      parameters:
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
+        - $ref: '#/components/parameters/order'
+        - $ref: '#/components/parameters/ascending'
+        - name: id
+          in: query
+          schema:
+            type: array
+            items:
+              type: integer
+        - name: tag_id
+          in: query
+          schema:
+            type: integer
+        - name: exclude_tag_id
+          in: query
+          schema:
+            type: array
+            items:
+              type: integer
+        - name: slug
+          in: query
+          schema:
+            type: array
+            items:
+              type: string
+        - name: tag_slug
+          in: query
+          schema:
+            type: string
+        - name: related_tags
+          in: query
+          schema:
+            type: boolean
+        - name: active
+          in: query
+          schema:
+            type: boolean
+        - name: archived
+          in: query
+          schema:
+            type: boolean
+        - name: featured
+          in: query
+          schema:
+            type: boolean
+        - name: cyom
+          in: query
+          schema:
+            type: boolean
+        - name: include_chat
+          in: query
+          schema:
+            type: boolean
+        - name: include_template
+          in: query
+          schema:
+            type: boolean
+        - name: recurrence
+          in: query
+          schema:
+            type: string
+        - name: closed
+          in: query
+          schema:
+            type: boolean
+        - name: liquidity_min
+          in: query
+          schema:
+            type: number
+        - name: liquidity_max
+          in: query
+          schema:
+            type: number
+        - name: volume_min
+          in: query
+          schema:
+            type: number
+        - name: volume_max
+          in: query
+          schema:
+            type: number
+        - name: start_date_min
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: start_date_max
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: end_date_min
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: end_date_max
+          in: query
+          schema:
+            type: string
+            format: date-time
+      responses:
+        '200':
+          description: List of events
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Event'
+components:
+  parameters:
+    limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        minimum: 0
+    offset:
+      name: offset
+      in: query
+      schema:
+        type: integer
+        minimum: 0
+    order:
+      name: order
+      in: query
+      schema:
+        type: string
+      description: Comma-separated list of fields to order by
+    ascending:
+      name: ascending
+      in: query
+      schema:
+        type: boolean
+  schemas:
+    Event:
+      type: object
+      properties:
+        id:
+          type: string
+        ticker:
+          type: string
+          nullable: true
+        slug:
+          type: string
+          nullable: true
+        title:
+          type: string
+          nullable: true
+        subtitle:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        resolutionSource:
+          type: string
+          nullable: true
+        startDate:
+          type: string
+          format: date-time
+          nullable: true
+        creationDate:
+          type: string
+          format: date-time
+          nullable: true
+        endDate:
+          type: string
+          format: date-time
+          nullable: true
+        image:
+          type: string
+          nullable: true
+        icon:
+          type: string
+          nullable: true
+        active:
+          type: boolean
+          nullable: true
+        closed:
+          type: boolean
+          nullable: true
+        archived:
+          type: boolean
+          nullable: true
+        new:
+          type: boolean
+          nullable: true
+        featured:
+          type: boolean
+          nullable: true
+        restricted:
+          type: boolean
+          nullable: true
+        liquidity:
+          type: number
+          nullable: true
+        volume:
+          type: number
+          nullable: true
+        openInterest:
+          type: number
+          nullable: true
+        sortBy:
+          type: string
+          nullable: true
+        category:
+          type: string
+          nullable: true
+        subcategory:
+          type: string
+          nullable: true
+        isTemplate:
+          type: boolean
+          nullable: true
+        templateVariables:
+          type: string
+          nullable: true
+        published_at:
+          type: string
+          nullable: true
+        createdBy:
+          type: string
+          nullable: true
+        updatedBy:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        commentsEnabled:
+          type: boolean
+          nullable: true
+        competitive:
+          type: number
+          nullable: true
+        volume24hr:
+          type: number
+          nullable: true
+        volume1wk:
+          type: number
+          nullable: true
+        volume1mo:
+          type: number
+          nullable: true
+        volume1yr:
+          type: number
+          nullable: true
+        featuredImage:
+          type: string
+          nullable: true
+        disqusThread:
+          type: string
+          nullable: true
+        parentEvent:
+          type: string
+          nullable: true
+        enableOrderBook:
+          type: boolean
+          nullable: true
+        liquidityAmm:
+          type: number
+          nullable: true
+        liquidityClob:
+          type: number
+          nullable: true
+        negRisk:
+          type: boolean
+          nullable: true
+        negRiskMarketID:
+          type: string
+          nullable: true
+        negRiskFeeBips:
+          type: integer
+          nullable: true
+        commentCount:
+          type: integer
+          nullable: true
+        imageOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        iconOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        featuredImageOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        subEvents:
+          type: array
+          items:
+            type: string
+          nullable: true
+        markets:
+          type: array
+          items:
+            $ref: '#/components/schemas/Market'
+        series:
+          type: array
+          items:
+            $ref: '#/components/schemas/Series'
+        categories:
+          type: array
+          items:
+            $ref: '#/components/schemas/Category'
+        collections:
+          type: array
+          items:
+            $ref: '#/components/schemas/Collection'
+        tags:
+          type: array
+          items:
+            $ref: '#/components/schemas/Tag'
+        cyom:
+          type: boolean
+          nullable: true
+        closedTime:
+          type: string
+          format: date-time
+          nullable: true
+        showAllOutcomes:
+          type: boolean
+          nullable: true
+        showMarketImages:
+          type: boolean
+          nullable: true
+        automaticallyResolved:
+          type: boolean
+          nullable: true
+        enableNegRisk:
+          type: boolean
+          nullable: true
+        automaticallyActive:
+          type: boolean
+          nullable: true
+        eventDate:
+          type: string
+          nullable: true
+        startTime:
+          type: string
+          format: date-time
+          nullable: true
+        eventWeek:
+          type: integer
+          nullable: true
+        seriesSlug:
+          type: string
+          nullable: true
+        score:
+          type: string
+          nullable: true
+        elapsed:
+          type: string
+          nullable: true
+        period:
+          type: string
+          nullable: true
+        live:
+          type: boolean
+          nullable: true
+        ended:
+          type: boolean
+          nullable: true
+        finishedTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        gmpChartMode:
+          type: string
+          nullable: true
+        eventCreators:
+          type: array
+          items:
+            $ref: '#/components/schemas/EventCreator'
+        tweetCount:
+          type: integer
+          nullable: true
+        chats:
+          type: array
+          items:
+            $ref: '#/components/schemas/Chat'
+        featuredOrder:
+          type: integer
+          nullable: true
+        estimateValue:
+          type: boolean
+          nullable: true
+        cantEstimate:
+          type: boolean
+          nullable: true
+        estimatedValue:
+          type: string
+          nullable: true
+        templates:
+          type: array
+          items:
+            $ref: '#/components/schemas/Template'
+        spreadsMainLine:
+          type: number
+          nullable: true
+        totalsMainLine:
+          type: number
+          nullable: true
+        carouselMap:
+          type: string
+          nullable: true
+        pendingDeployment:
+          type: boolean
+          nullable: true
+        deploying:
+          type: boolean
+          nullable: true
+        deployingTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        scheduledDeploymentTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        gameStatus:
+          type: string
+          nullable: true
+    ImageOptimization:
+      type: object
+      properties:
+        id:
+          type: string
+        imageUrlSource:
+          type: string
+          nullable: true
+        imageUrlOptimized:
+          type: string
+          nullable: true
+        imageSizeKbSource:
+          type: number
+          nullable: true
+        imageSizeKbOptimized:
+          type: number
+          nullable: true
+        imageOptimizedComplete:
+          type: boolean
+          nullable: true
+        imageOptimizedLastUpdated:
+          type: string
+          nullable: true
+        relID:
+          type: integer
+          nullable: true
+        field:
+          type: string
+          nullable: true
+        relname:
+          type: string
+          nullable: true
+    Market:
+      type: object
+      properties:
+        id:
+          type: string
+        question:
+          type: string
+          nullable: true
+        conditionId:
+          type: string
+        slug:
+          type: string
+          nullable: true
+        twitterCardImage:
+          type: string
+          nullable: true
+        resolutionSource:
+          type: string
+          nullable: true
+        endDate:
+          type: string
+          format: date-time
+          nullable: true
+        category:
+          type: string
+          nullable: true
+        ammType:
+          type: string
+          nullable: true
+        liquidity:
+          type: string
+          nullable: true
+        sponsorName:
+          type: string
+          nullable: true
+        sponsorImage:
+          type: string
+          nullable: true
+        startDate:
+          type: string
+          format: date-time
+          nullable: true
+        xAxisValue:
+          type: string
+          nullable: true
+        yAxisValue:
+          type: string
+          nullable: true
+        denominationToken:
+          type: string
+          nullable: true
+        fee:
+          type: string
+          nullable: true
+        image:
+          type: string
+          nullable: true
+        icon:
+          type: string
+          nullable: true
+        lowerBound:
+          type: string
+          nullable: true
+        upperBound:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        outcomes:
+          type: string
+          nullable: true
+        outcomePrices:
+          type: string
+          nullable: true
+        volume:
+          type: string
+          nullable: true
+        active:
+          type: boolean
+          nullable: true
+        marketType:
+          type: string
+          nullable: true
+        formatType:
+          type: string
+          nullable: true
+        lowerBoundDate:
+          type: string
+          nullable: true
+        upperBoundDate:
+          type: string
+          nullable: true
+        closed:
+          type: boolean
+          nullable: true
+        marketMakerAddress:
+          type: string
+        createdBy:
+          type: integer
+          nullable: true
+        updatedBy:
+          type: integer
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        closedTime:
+          type: string
+          nullable: true
+        wideFormat:
+          type: boolean
+          nullable: true
+        new:
+          type: boolean
+          nullable: true
+        mailchimpTag:
+          type: string
+          nullable: true
+        featured:
+          type: boolean
+          nullable: true
+        archived:
+          type: boolean
+          nullable: true
+        resolvedBy:
+          type: string
+          nullable: true
+        restricted:
+          type: boolean
+          nullable: true
+        marketGroup:
+          type: integer
+          nullable: true
+        groupItemTitle:
+          type: string
+          nullable: true
+        groupItemThreshold:
+          type: string
+          nullable: true
+        questionID:
+          type: string
+          nullable: true
+        umaEndDate:
+          type: string
+          nullable: true
+        enableOrderBook:
+          type: boolean
+          nullable: true
+        orderPriceMinTickSize:
+          type: number
+          nullable: true
+        orderMinSize:
+          type: number
+          nullable: true
+        umaResolutionStatus:
+          type: string
+          nullable: true
+        curationOrder:
+          type: integer
+          nullable: true
+        volumeNum:
+          type: number
+          nullable: true
+        liquidityNum:
+          type: number
+          nullable: true
+        endDateIso:
+          type: string
+          nullable: true
+        startDateIso:
+          type: string
+          nullable: true
+        umaEndDateIso:
+          type: string
+          nullable: true
+        hasReviewedDates:
+          type: boolean
+          nullable: true
+        readyForCron:
+          type: boolean
+          nullable: true
+        commentsEnabled:
+          type: boolean
+          nullable: true
+        volume24hr:
+          type: number
+          nullable: true
+        volume1wk:
+          type: number
+          nullable: true
+        volume1mo:
+          type: number
+          nullable: true
+        volume1yr:
+          type: number
+          nullable: true
+        gameStartTime:
+          type: string
+          nullable: true
+        secondsDelay:
+          type: integer
+          nullable: true
+        clobTokenIds:
+          type: string
+          nullable: true
+        disqusThread:
+          type: string
+          nullable: true
+        shortOutcomes:
+          type: string
+          nullable: true
+        teamAID:
+          type: string
+          nullable: true
+        teamBID:
+          type: string
+          nullable: true
+        umaBond:
+          type: string
+          nullable: true
+        umaReward:
+          type: string
+          nullable: true
+        fpmmLive:
+          type: boolean
+          nullable: true
+        volume24hrAmm:
+          type: number
+          nullable: true
+        volume1wkAmm:
+          type: number
+          nullable: true
+        volume1moAmm:
+          type: number
+          nullable: true
+        volume1yrAmm:
+          type: number
+          nullable: true
+        volume24hrClob:
+          type: number
+          nullable: true
+        volume1wkClob:
+          type: number
+          nullable: true
+        volume1moClob:
+          type: number
+          nullable: true
+        volume1yrClob:
+          type: number
+          nullable: true
+        volumeAmm:
+          type: number
+          nullable: true
+        volumeClob:
+          type: number
+          nullable: true
+        liquidityAmm:
+          type: number
+          nullable: true
+        liquidityClob:
+          type: number
+          nullable: true
+        makerBaseFee:
+          type: integer
+          nullable: true
+        takerBaseFee:
+          type: integer
+          nullable: true
+        customLiveness:
+          type: integer
+          nullable: true
+        acceptingOrders:
+          type: boolean
+          nullable: true
+        notificationsEnabled:
+          type: boolean
+          nullable: true
+        score:
+          type: integer
+          nullable: true
+        imageOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        iconOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/Event'
+        categories:
+          type: array
+          items:
+            $ref: '#/components/schemas/Category'
+        tags:
+          type: array
+          items:
+            $ref: '#/components/schemas/Tag'
+        creator:
+          type: string
+          nullable: true
+        ready:
+          type: boolean
+          nullable: true
+        funded:
+          type: boolean
+          nullable: true
+        pastSlugs:
+          type: string
+          nullable: true
+        readyTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        fundedTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        acceptingOrdersTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        competitive:
+          type: number
+          nullable: true
+        rewardsMinSize:
+          type: number
+          nullable: true
+        rewardsMaxSpread:
+          type: number
+          nullable: true
+        spread:
+          type: number
+          nullable: true
+        automaticallyResolved:
+          type: boolean
+          nullable: true
+        oneDayPriceChange:
+          type: number
+          nullable: true
+        oneHourPriceChange:
+          type: number
+          nullable: true
+        oneWeekPriceChange:
+          type: number
+          nullable: true
+        oneMonthPriceChange:
+          type: number
+          nullable: true
+        oneYearPriceChange:
+          type: number
+          nullable: true
+        lastTradePrice:
+          type: number
+          nullable: true
+        bestBid:
+          type: number
+          nullable: true
+        bestAsk:
+          type: number
+          nullable: true
+        automaticallyActive:
+          type: boolean
+          nullable: true
+        clearBookOnStart:
+          type: boolean
+          nullable: true
+        chartColor:
+          type: string
+          nullable: true
+        seriesColor:
+          type: string
+          nullable: true
+        showGmpSeries:
+          type: boolean
+          nullable: true
+        showGmpOutcome:
+          type: boolean
+          nullable: true
+        manualActivation:
+          type: boolean
+          nullable: true
+        negRiskOther:
+          type: boolean
+          nullable: true
+        gameId:
+          type: string
+          nullable: true
+        groupItemRange:
+          type: string
+          nullable: true
+        sportsMarketType:
+          type: string
+          nullable: true
+        line:
+          type: number
+          nullable: true
+        umaResolutionStatuses:
+          type: string
+          nullable: true
+        pendingDeployment:
+          type: boolean
+          nullable: true
+        deploying:
+          type: boolean
+          nullable: true
+        deployingTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        scheduledDeploymentTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        rfqEnabled:
+          type: boolean
+          nullable: true
+        eventStartTime:
+          type: string
+          format: date-time
+          nullable: true
+        feesEnabled:
+          type: boolean
+          nullable: true
+        feeSchedule:
+          $ref: '#/components/schemas/FeeSchedule'
+    Series:
+      type: object
+      properties:
+        id:
+          type: string
+        ticker:
+          type: string
+          nullable: true
+        slug:
+          type: string
+          nullable: true
+        title:
+          type: string
+          nullable: true
+        subtitle:
+          type: string
+          nullable: true
+        seriesType:
+          type: string
+          nullable: true
+        recurrence:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        image:
+          type: string
+          nullable: true
+        icon:
+          type: string
+          nullable: true
+        layout:
+          type: string
+          nullable: true
+        active:
+          type: boolean
+          nullable: true
+        closed:
+          type: boolean
+          nullable: true
+        archived:
+          type: boolean
+          nullable: true
+        new:
+          type: boolean
+          nullable: true
+        featured:
+          type: boolean
+          nullable: true
+        restricted:
+          type: boolean
+          nullable: true
+        isTemplate:
+          type: boolean
+          nullable: true
+        templateVariables:
+          type: boolean
+          nullable: true
+        publishedAt:
+          type: string
+          nullable: true
+        createdBy:
+          type: string
+          nullable: true
+        updatedBy:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        commentsEnabled:
+          type: boolean
+          nullable: true
+        competitive:
+          type: string
+          nullable: true
+        volume24hr:
+          type: number
+          nullable: true
+        volume:
+          type: number
+          nullable: true
+        liquidity:
+          type: number
+          nullable: true
+        startDate:
+          type: string
+          format: date-time
+          nullable: true
+        pythTokenID:
+          type: string
+          nullable: true
+        cgAssetName:
+          type: string
+          nullable: true
+        score:
+          type: integer
+          nullable: true
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/Event'
+        collections:
+          type: array
+          items:
+            $ref: '#/components/schemas/Collection'
+        categories:
+          type: array
+          items:
+            $ref: '#/components/schemas/Category'
+        tags:
+          type: array
+          items:
+            $ref: '#/components/schemas/Tag'
+        commentCount:
+          type: integer
+          nullable: true
+        chats:
+          type: array
+          items:
+            $ref: '#/components/schemas/Chat'
+    Category:
+      type: object
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+          nullable: true
+        parentCategory:
+          type: string
+          nullable: true
+        slug:
+          type: string
+          nullable: true
+        publishedAt:
+          type: string
+          nullable: true
+        createdBy:
+          type: string
+          nullable: true
+        updatedBy:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+    Collection:
+      type: object
+      properties:
+        id:
+          type: string
+        ticker:
+          type: string
+          nullable: true
+        slug:
+          type: string
+          nullable: true
+        title:
+          type: string
+          nullable: true
+        subtitle:
+          type: string
+          nullable: true
+        collectionType:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        tags:
+          type: string
+          nullable: true
+        image:
+          type: string
+          nullable: true
+        icon:
+          type: string
+          nullable: true
+        headerImage:
+          type: string
+          nullable: true
+        layout:
+          type: string
+          nullable: true
+        active:
+          type: boolean
+          nullable: true
+        closed:
+          type: boolean
+          nullable: true
+        archived:
+          type: boolean
+          nullable: true
+        new:
+          type: boolean
+          nullable: true
+        featured:
+          type: boolean
+          nullable: true
+        restricted:
+          type: boolean
+          nullable: true
+        isTemplate:
+          type: boolean
+          nullable: true
+        templateVariables:
+          type: string
+          nullable: true
+        publishedAt:
+          type: string
+          nullable: true
+        createdBy:
+          type: string
+          nullable: true
+        updatedBy:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        commentsEnabled:
+          type: boolean
+          nullable: true
+        imageOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        iconOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        headerImageOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+    Tag:
+      type: object
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+          nullable: true
+        slug:
+          type: string
+          nullable: true
+        forceShow:
+          type: boolean
+          nullable: true
+        publishedAt:
+          type: string
+          nullable: true
+        createdBy:
+          type: integer
+          nullable: true
+        updatedBy:
+          type: integer
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        forceHide:
+          type: boolean
+          nullable: true
+        isCarousel:
+          type: boolean
+          nullable: true
+    EventCreator:
+      type: object
+      properties:
+        id:
+          type: string
+        creatorName:
+          type: string
+          nullable: true
+        creatorHandle:
+          type: string
+          nullable: true
+        creatorUrl:
+          type: string
+          nullable: true
+        creatorImage:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+    Chat:
+      type: object
+      properties:
+        id:
+          type: string
+        channelId:
+          type: string
+          nullable: true
+        channelName:
+          type: string
+          nullable: true
+        channelImage:
+          type: string
+          nullable: true
+        live:
+          type: boolean
+          nullable: true
+        startTime:
+          type: string
+          format: date-time
+          nullable: true
+        endTime:
+          type: string
+          format: date-time
+          nullable: true
+    Template:
+      type: object
+      properties:
+        id:
+          type: string
+        eventTitle:
+          type: string
+          nullable: true
+        eventSlug:
+          type: string
+          nullable: true
+        eventImage:
+          type: string
+          nullable: true
+        marketTitle:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        resolutionSource:
+          type: string
+          nullable: true
+        negRisk:
+          type: boolean
+          nullable: true
+        sortBy:
+          type: string
+          nullable: true
+        showMarketImages:
+          type: boolean
+          nullable: true
+        seriesSlug:
+          type: string
+          nullable: true
+        outcomes:
+          type: string
+          nullable: true
+    FeeSchedule:
+      type: object
+      properties:
+        exponent:
+          type: number
+          nullable: true
+        rate:
+          type: number
+          nullable: true
+        takerOnly:
+          type: boolean
+          nullable: true
+        rebateRate:
+          type: number
+          nullable: true
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Get event by id
+
+
+
+## OpenAPI
+
+````yaml /api-spec/gamma-openapi.yaml get /events/{id}
+openapi: 3.0.3
+info:
+  title: Markets API
+  version: 1.0.0
+  description: REST API specification for public endpoints used by the Markets service.
+servers:
+  - url: https://gamma-api.polymarket.com
+    description: Polymarket Gamma API Production Server
+security: []
+tags:
+  - name: Gamma Status
+    description: Gamma API status and health check
+  - name: Sports
+    description: Sports-related endpoints including teams and game data
+  - name: Tags
+    description: Tag management and related tag operations
+  - name: Events
+    description: Event management and event-related operations
+  - name: Markets
+    description: Market data and market-related operations
+  - name: Comments
+    description: Comment system and user interactions
+  - name: Series
+    description: Series management and related operations
+  - name: Profiles
+    description: User profile management
+  - name: Search
+    description: Search functionality across different entity types
+paths:
+  /events/{id}:
+    get:
+      tags:
+        - Events
+      summary: Get event by id
+      operationId: getEvent
+      parameters:
+        - $ref: '#/components/parameters/pathId'
+        - name: include_chat
+          in: query
+          schema:
+            type: boolean
+        - name: include_template
+          in: query
+          schema:
+            type: boolean
+      responses:
+        '200':
+          description: Event
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Event'
+        '404':
+          description: Not found
+components:
+  parameters:
+    pathId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: integer
+  schemas:
+    Event:
+      type: object
+      properties:
+        id:
+          type: string
+        ticker:
+          type: string
+          nullable: true
+        slug:
+          type: string
+          nullable: true
+        title:
+          type: string
+          nullable: true
+        subtitle:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        resolutionSource:
+          type: string
+          nullable: true
+        startDate:
+          type: string
+          format: date-time
+          nullable: true
+        creationDate:
+          type: string
+          format: date-time
+          nullable: true
+        endDate:
+          type: string
+          format: date-time
+          nullable: true
+        image:
+          type: string
+          nullable: true
+        icon:
+          type: string
+          nullable: true
+        active:
+          type: boolean
+          nullable: true
+        closed:
+          type: boolean
+          nullable: true
+        archived:
+          type: boolean
+          nullable: true
+        new:
+          type: boolean
+          nullable: true
+        featured:
+          type: boolean
+          nullable: true
+        restricted:
+          type: boolean
+          nullable: true
+        liquidity:
+          type: number
+          nullable: true
+        volume:
+          type: number
+          nullable: true
+        openInterest:
+          type: number
+          nullable: true
+        sortBy:
+          type: string
+          nullable: true
+        category:
+          type: string
+          nullable: true
+        subcategory:
+          type: string
+          nullable: true
+        isTemplate:
+          type: boolean
+          nullable: true
+        templateVariables:
+          type: string
+          nullable: true
+        published_at:
+          type: string
+          nullable: true
+        createdBy:
+          type: string
+          nullable: true
+        updatedBy:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        commentsEnabled:
+          type: boolean
+          nullable: true
+        competitive:
+          type: number
+          nullable: true
+        volume24hr:
+          type: number
+          nullable: true
+        volume1wk:
+          type: number
+          nullable: true
+        volume1mo:
+          type: number
+          nullable: true
+        volume1yr:
+          type: number
+          nullable: true
+        featuredImage:
+          type: string
+          nullable: true
+        disqusThread:
+          type: string
+          nullable: true
+        parentEvent:
+          type: string
+          nullable: true
+        enableOrderBook:
+          type: boolean
+          nullable: true
+        liquidityAmm:
+          type: number
+          nullable: true
+        liquidityClob:
+          type: number
+          nullable: true
+        negRisk:
+          type: boolean
+          nullable: true
+        negRiskMarketID:
+          type: string
+          nullable: true
+        negRiskFeeBips:
+          type: integer
+          nullable: true
+        commentCount:
+          type: integer
+          nullable: true
+        imageOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        iconOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        featuredImageOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        subEvents:
+          type: array
+          items:
+            type: string
+          nullable: true
+        markets:
+          type: array
+          items:
+            $ref: '#/components/schemas/Market'
+        series:
+          type: array
+          items:
+            $ref: '#/components/schemas/Series'
+        categories:
+          type: array
+          items:
+            $ref: '#/components/schemas/Category'
+        collections:
+          type: array
+          items:
+            $ref: '#/components/schemas/Collection'
+        tags:
+          type: array
+          items:
+            $ref: '#/components/schemas/Tag'
+        cyom:
+          type: boolean
+          nullable: true
+        closedTime:
+          type: string
+          format: date-time
+          nullable: true
+        showAllOutcomes:
+          type: boolean
+          nullable: true
+        showMarketImages:
+          type: boolean
+          nullable: true
+        automaticallyResolved:
+          type: boolean
+          nullable: true
+        enableNegRisk:
+          type: boolean
+          nullable: true
+        automaticallyActive:
+          type: boolean
+          nullable: true
+        eventDate:
+          type: string
+          nullable: true
+        startTime:
+          type: string
+          format: date-time
+          nullable: true
+        eventWeek:
+          type: integer
+          nullable: true
+        seriesSlug:
+          type: string
+          nullable: true
+        score:
+          type: string
+          nullable: true
+        elapsed:
+          type: string
+          nullable: true
+        period:
+          type: string
+          nullable: true
+        live:
+          type: boolean
+          nullable: true
+        ended:
+          type: boolean
+          nullable: true
+        finishedTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        gmpChartMode:
+          type: string
+          nullable: true
+        eventCreators:
+          type: array
+          items:
+            $ref: '#/components/schemas/EventCreator'
+        tweetCount:
+          type: integer
+          nullable: true
+        chats:
+          type: array
+          items:
+            $ref: '#/components/schemas/Chat'
+        featuredOrder:
+          type: integer
+          nullable: true
+        estimateValue:
+          type: boolean
+          nullable: true
+        cantEstimate:
+          type: boolean
+          nullable: true
+        estimatedValue:
+          type: string
+          nullable: true
+        templates:
+          type: array
+          items:
+            $ref: '#/components/schemas/Template'
+        spreadsMainLine:
+          type: number
+          nullable: true
+        totalsMainLine:
+          type: number
+          nullable: true
+        carouselMap:
+          type: string
+          nullable: true
+        pendingDeployment:
+          type: boolean
+          nullable: true
+        deploying:
+          type: boolean
+          nullable: true
+        deployingTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        scheduledDeploymentTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        gameStatus:
+          type: string
+          nullable: true
+    ImageOptimization:
+      type: object
+      properties:
+        id:
+          type: string
+        imageUrlSource:
+          type: string
+          nullable: true
+        imageUrlOptimized:
+          type: string
+          nullable: true
+        imageSizeKbSource:
+          type: number
+          nullable: true
+        imageSizeKbOptimized:
+          type: number
+          nullable: true
+        imageOptimizedComplete:
+          type: boolean
+          nullable: true
+        imageOptimizedLastUpdated:
+          type: string
+          nullable: true
+        relID:
+          type: integer
+          nullable: true
+        field:
+          type: string
+          nullable: true
+        relname:
+          type: string
+          nullable: true
+    Market:
+      type: object
+      properties:
+        id:
+          type: string
+        question:
+          type: string
+          nullable: true
+        conditionId:
+          type: string
+        slug:
+          type: string
+          nullable: true
+        twitterCardImage:
+          type: string
+          nullable: true
+        resolutionSource:
+          type: string
+          nullable: true
+        endDate:
+          type: string
+          format: date-time
+          nullable: true
+        category:
+          type: string
+          nullable: true
+        ammType:
+          type: string
+          nullable: true
+        liquidity:
+          type: string
+          nullable: true
+        sponsorName:
+          type: string
+          nullable: true
+        sponsorImage:
+          type: string
+          nullable: true
+        startDate:
+          type: string
+          format: date-time
+          nullable: true
+        xAxisValue:
+          type: string
+          nullable: true
+        yAxisValue:
+          type: string
+          nullable: true
+        denominationToken:
+          type: string
+          nullable: true
+        fee:
+          type: string
+          nullable: true
+        image:
+          type: string
+          nullable: true
+        icon:
+          type: string
+          nullable: true
+        lowerBound:
+          type: string
+          nullable: true
+        upperBound:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        outcomes:
+          type: string
+          nullable: true
+        outcomePrices:
+          type: string
+          nullable: true
+        volume:
+          type: string
+          nullable: true
+        active:
+          type: boolean
+          nullable: true
+        marketType:
+          type: string
+          nullable: true
+        formatType:
+          type: string
+          nullable: true
+        lowerBoundDate:
+          type: string
+          nullable: true
+        upperBoundDate:
+          type: string
+          nullable: true
+        closed:
+          type: boolean
+          nullable: true
+        marketMakerAddress:
+          type: string
+        createdBy:
+          type: integer
+          nullable: true
+        updatedBy:
+          type: integer
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        closedTime:
+          type: string
+          nullable: true
+        wideFormat:
+          type: boolean
+          nullable: true
+        new:
+          type: boolean
+          nullable: true
+        mailchimpTag:
+          type: string
+          nullable: true
+        featured:
+          type: boolean
+          nullable: true
+        archived:
+          type: boolean
+          nullable: true
+        resolvedBy:
+          type: string
+          nullable: true
+        restricted:
+          type: boolean
+          nullable: true
+        marketGroup:
+          type: integer
+          nullable: true
+        groupItemTitle:
+          type: string
+          nullable: true
+        groupItemThreshold:
+          type: string
+          nullable: true
+        questionID:
+          type: string
+          nullable: true
+        umaEndDate:
+          type: string
+          nullable: true
+        enableOrderBook:
+          type: boolean
+          nullable: true
+        orderPriceMinTickSize:
+          type: number
+          nullable: true
+        orderMinSize:
+          type: number
+          nullable: true
+        umaResolutionStatus:
+          type: string
+          nullable: true
+        curationOrder:
+          type: integer
+          nullable: true
+        volumeNum:
+          type: number
+          nullable: true
+        liquidityNum:
+          type: number
+          nullable: true
+        endDateIso:
+          type: string
+          nullable: true
+        startDateIso:
+          type: string
+          nullable: true
+        umaEndDateIso:
+          type: string
+          nullable: true
+        hasReviewedDates:
+          type: boolean
+          nullable: true
+        readyForCron:
+          type: boolean
+          nullable: true
+        commentsEnabled:
+          type: boolean
+          nullable: true
+        volume24hr:
+          type: number
+          nullable: true
+        volume1wk:
+          type: number
+          nullable: true
+        volume1mo:
+          type: number
+          nullable: true
+        volume1yr:
+          type: number
+          nullable: true
+        gameStartTime:
+          type: string
+          nullable: true
+        secondsDelay:
+          type: integer
+          nullable: true
+        clobTokenIds:
+          type: string
+          nullable: true
+        disqusThread:
+          type: string
+          nullable: true
+        shortOutcomes:
+          type: string
+          nullable: true
+        teamAID:
+          type: string
+          nullable: true
+        teamBID:
+          type: string
+          nullable: true
+        umaBond:
+          type: string
+          nullable: true
+        umaReward:
+          type: string
+          nullable: true
+        fpmmLive:
+          type: boolean
+          nullable: true
+        volume24hrAmm:
+          type: number
+          nullable: true
+        volume1wkAmm:
+          type: number
+          nullable: true
+        volume1moAmm:
+          type: number
+          nullable: true
+        volume1yrAmm:
+          type: number
+          nullable: true
+        volume24hrClob:
+          type: number
+          nullable: true
+        volume1wkClob:
+          type: number
+          nullable: true
+        volume1moClob:
+          type: number
+          nullable: true
+        volume1yrClob:
+          type: number
+          nullable: true
+        volumeAmm:
+          type: number
+          nullable: true
+        volumeClob:
+          type: number
+          nullable: true
+        liquidityAmm:
+          type: number
+          nullable: true
+        liquidityClob:
+          type: number
+          nullable: true
+        makerBaseFee:
+          type: integer
+          nullable: true
+        takerBaseFee:
+          type: integer
+          nullable: true
+        customLiveness:
+          type: integer
+          nullable: true
+        acceptingOrders:
+          type: boolean
+          nullable: true
+        notificationsEnabled:
+          type: boolean
+          nullable: true
+        score:
+          type: integer
+          nullable: true
+        imageOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        iconOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/Event'
+        categories:
+          type: array
+          items:
+            $ref: '#/components/schemas/Category'
+        tags:
+          type: array
+          items:
+            $ref: '#/components/schemas/Tag'
+        creator:
+          type: string
+          nullable: true
+        ready:
+          type: boolean
+          nullable: true
+        funded:
+          type: boolean
+          nullable: true
+        pastSlugs:
+          type: string
+          nullable: true
+        readyTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        fundedTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        acceptingOrdersTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        competitive:
+          type: number
+          nullable: true
+        rewardsMinSize:
+          type: number
+          nullable: true
+        rewardsMaxSpread:
+          type: number
+          nullable: true
+        spread:
+          type: number
+          nullable: true
+        automaticallyResolved:
+          type: boolean
+          nullable: true
+        oneDayPriceChange:
+          type: number
+          nullable: true
+        oneHourPriceChange:
+          type: number
+          nullable: true
+        oneWeekPriceChange:
+          type: number
+          nullable: true
+        oneMonthPriceChange:
+          type: number
+          nullable: true
+        oneYearPriceChange:
+          type: number
+          nullable: true
+        lastTradePrice:
+          type: number
+          nullable: true
+        bestBid:
+          type: number
+          nullable: true
+        bestAsk:
+          type: number
+          nullable: true
+        automaticallyActive:
+          type: boolean
+          nullable: true
+        clearBookOnStart:
+          type: boolean
+          nullable: true
+        chartColor:
+          type: string
+          nullable: true
+        seriesColor:
+          type: string
+          nullable: true
+        showGmpSeries:
+          type: boolean
+          nullable: true
+        showGmpOutcome:
+          type: boolean
+          nullable: true
+        manualActivation:
+          type: boolean
+          nullable: true
+        negRiskOther:
+          type: boolean
+          nullable: true
+        gameId:
+          type: string
+          nullable: true
+        groupItemRange:
+          type: string
+          nullable: true
+        sportsMarketType:
+          type: string
+          nullable: true
+        line:
+          type: number
+          nullable: true
+        umaResolutionStatuses:
+          type: string
+          nullable: true
+        pendingDeployment:
+          type: boolean
+          nullable: true
+        deploying:
+          type: boolean
+          nullable: true
+        deployingTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        scheduledDeploymentTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        rfqEnabled:
+          type: boolean
+          nullable: true
+        eventStartTime:
+          type: string
+          format: date-time
+          nullable: true
+        feesEnabled:
+          type: boolean
+          nullable: true
+        feeSchedule:
+          $ref: '#/components/schemas/FeeSchedule'
+    Series:
+      type: object
+      properties:
+        id:
+          type: string
+        ticker:
+          type: string
+          nullable: true
+        slug:
+          type: string
+          nullable: true
+        title:
+          type: string
+          nullable: true
+        subtitle:
+          type: string
+          nullable: true
+        seriesType:
+          type: string
+          nullable: true
+        recurrence:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        image:
+          type: string
+          nullable: true
+        icon:
+          type: string
+          nullable: true
+        layout:
+          type: string
+          nullable: true
+        active:
+          type: boolean
+          nullable: true
+        closed:
+          type: boolean
+          nullable: true
+        archived:
+          type: boolean
+          nullable: true
+        new:
+          type: boolean
+          nullable: true
+        featured:
+          type: boolean
+          nullable: true
+        restricted:
+          type: boolean
+          nullable: true
+        isTemplate:
+          type: boolean
+          nullable: true
+        templateVariables:
+          type: boolean
+          nullable: true
+        publishedAt:
+          type: string
+          nullable: true
+        createdBy:
+          type: string
+          nullable: true
+        updatedBy:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        commentsEnabled:
+          type: boolean
+          nullable: true
+        competitive:
+          type: string
+          nullable: true
+        volume24hr:
+          type: number
+          nullable: true
+        volume:
+          type: number
+          nullable: true
+        liquidity:
+          type: number
+          nullable: true
+        startDate:
+          type: string
+          format: date-time
+          nullable: true
+        pythTokenID:
+          type: string
+          nullable: true
+        cgAssetName:
+          type: string
+          nullable: true
+        score:
+          type: integer
+          nullable: true
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/Event'
+        collections:
+          type: array
+          items:
+            $ref: '#/components/schemas/Collection'
+        categories:
+          type: array
+          items:
+            $ref: '#/components/schemas/Category'
+        tags:
+          type: array
+          items:
+            $ref: '#/components/schemas/Tag'
+        commentCount:
+          type: integer
+          nullable: true
+        chats:
+          type: array
+          items:
+            $ref: '#/components/schemas/Chat'
+    Category:
+      type: object
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+          nullable: true
+        parentCategory:
+          type: string
+          nullable: true
+        slug:
+          type: string
+          nullable: true
+        publishedAt:
+          type: string
+          nullable: true
+        createdBy:
+          type: string
+          nullable: true
+        updatedBy:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+    Collection:
+      type: object
+      properties:
+        id:
+          type: string
+        ticker:
+          type: string
+          nullable: true
+        slug:
+          type: string
+          nullable: true
+        title:
+          type: string
+          nullable: true
+        subtitle:
+          type: string
+          nullable: true
+        collectionType:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        tags:
+          type: string
+          nullable: true
+        image:
+          type: string
+          nullable: true
+        icon:
+          type: string
+          nullable: true
+        headerImage:
+          type: string
+          nullable: true
+        layout:
+          type: string
+          nullable: true
+        active:
+          type: boolean
+          nullable: true
+        closed:
+          type: boolean
+          nullable: true
+        archived:
+          type: boolean
+          nullable: true
+        new:
+          type: boolean
+          nullable: true
+        featured:
+          type: boolean
+          nullable: true
+        restricted:
+          type: boolean
+          nullable: true
+        isTemplate:
+          type: boolean
+          nullable: true
+        templateVariables:
+          type: string
+          nullable: true
+        publishedAt:
+          type: string
+          nullable: true
+        createdBy:
+          type: string
+          nullable: true
+        updatedBy:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        commentsEnabled:
+          type: boolean
+          nullable: true
+        imageOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        iconOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        headerImageOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+    Tag:
+      type: object
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+          nullable: true
+        slug:
+          type: string
+          nullable: true
+        forceShow:
+          type: boolean
+          nullable: true
+        publishedAt:
+          type: string
+          nullable: true
+        createdBy:
+          type: integer
+          nullable: true
+        updatedBy:
+          type: integer
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        forceHide:
+          type: boolean
+          nullable: true
+        isCarousel:
+          type: boolean
+          nullable: true
+    EventCreator:
+      type: object
+      properties:
+        id:
+          type: string
+        creatorName:
+          type: string
+          nullable: true
+        creatorHandle:
+          type: string
+          nullable: true
+        creatorUrl:
+          type: string
+          nullable: true
+        creatorImage:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+    Chat:
+      type: object
+      properties:
+        id:
+          type: string
+        channelId:
+          type: string
+          nullable: true
+        channelName:
+          type: string
+          nullable: true
+        channelImage:
+          type: string
+          nullable: true
+        live:
+          type: boolean
+          nullable: true
+        startTime:
+          type: string
+          format: date-time
+          nullable: true
+        endTime:
+          type: string
+          format: date-time
+          nullable: true
+    Template:
+      type: object
+      properties:
+        id:
+          type: string
+        eventTitle:
+          type: string
+          nullable: true
+        eventSlug:
+          type: string
+          nullable: true
+        eventImage:
+          type: string
+          nullable: true
+        marketTitle:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        resolutionSource:
+          type: string
+          nullable: true
+        negRisk:
+          type: boolean
+          nullable: true
+        sortBy:
+          type: string
+          nullable: true
+        showMarketImages:
+          type: boolean
+          nullable: true
+        seriesSlug:
+          type: string
+          nullable: true
+        outcomes:
+          type: string
+          nullable: true
+    FeeSchedule:
+      type: object
+      properties:
+        exponent:
+          type: number
+          nullable: true
+        rate:
+          type: number
+          nullable: true
+        takerOnly:
+          type: boolean
+          nullable: true
+        rebateRate:
+          type: number
+          nullable: true
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Get event by slug
+
+
+
+## OpenAPI
+
+````yaml /api-spec/gamma-openapi.yaml get /events/slug/{slug}
+openapi: 3.0.3
+info:
+  title: Markets API
+  version: 1.0.0
+  description: REST API specification for public endpoints used by the Markets service.
+servers:
+  - url: https://gamma-api.polymarket.com
+    description: Polymarket Gamma API Production Server
+security: []
+tags:
+  - name: Gamma Status
+    description: Gamma API status and health check
+  - name: Sports
+    description: Sports-related endpoints including teams and game data
+  - name: Tags
+    description: Tag management and related tag operations
+  - name: Events
+    description: Event management and event-related operations
+  - name: Markets
+    description: Market data and market-related operations
+  - name: Comments
+    description: Comment system and user interactions
+  - name: Series
+    description: Series management and related operations
+  - name: Profiles
+    description: User profile management
+  - name: Search
+    description: Search functionality across different entity types
+paths:
+  /events/slug/{slug}:
+    get:
+      tags:
+        - Events
+      summary: Get event by slug
+      operationId: getEventBySlug
+      parameters:
+        - $ref: '#/components/parameters/pathSlug'
+        - name: include_chat
+          in: query
+          schema:
+            type: boolean
+        - name: include_template
+          in: query
+          schema:
+            type: boolean
+      responses:
+        '200':
+          description: Event
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Event'
+        '404':
+          description: Not found
+components:
+  parameters:
+    pathSlug:
+      name: slug
+      in: path
+      required: true
+      schema:
+        type: string
+  schemas:
+    Event:
+      type: object
+      properties:
+        id:
+          type: string
+        ticker:
+          type: string
+          nullable: true
+        slug:
+          type: string
+          nullable: true
+        title:
+          type: string
+          nullable: true
+        subtitle:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        resolutionSource:
+          type: string
+          nullable: true
+        startDate:
+          type: string
+          format: date-time
+          nullable: true
+        creationDate:
+          type: string
+          format: date-time
+          nullable: true
+        endDate:
+          type: string
+          format: date-time
+          nullable: true
+        image:
+          type: string
+          nullable: true
+        icon:
+          type: string
+          nullable: true
+        active:
+          type: boolean
+          nullable: true
+        closed:
+          type: boolean
+          nullable: true
+        archived:
+          type: boolean
+          nullable: true
+        new:
+          type: boolean
+          nullable: true
+        featured:
+          type: boolean
+          nullable: true
+        restricted:
+          type: boolean
+          nullable: true
+        liquidity:
+          type: number
+          nullable: true
+        volume:
+          type: number
+          nullable: true
+        openInterest:
+          type: number
+          nullable: true
+        sortBy:
+          type: string
+          nullable: true
+        category:
+          type: string
+          nullable: true
+        subcategory:
+          type: string
+          nullable: true
+        isTemplate:
+          type: boolean
+          nullable: true
+        templateVariables:
+          type: string
+          nullable: true
+        published_at:
+          type: string
+          nullable: true
+        createdBy:
+          type: string
+          nullable: true
+        updatedBy:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        commentsEnabled:
+          type: boolean
+          nullable: true
+        competitive:
+          type: number
+          nullable: true
+        volume24hr:
+          type: number
+          nullable: true
+        volume1wk:
+          type: number
+          nullable: true
+        volume1mo:
+          type: number
+          nullable: true
+        volume1yr:
+          type: number
+          nullable: true
+        featuredImage:
+          type: string
+          nullable: true
+        disqusThread:
+          type: string
+          nullable: true
+        parentEvent:
+          type: string
+          nullable: true
+        enableOrderBook:
+          type: boolean
+          nullable: true
+        liquidityAmm:
+          type: number
+          nullable: true
+        liquidityClob:
+          type: number
+          nullable: true
+        negRisk:
+          type: boolean
+          nullable: true
+        negRiskMarketID:
+          type: string
+          nullable: true
+        negRiskFeeBips:
+          type: integer
+          nullable: true
+        commentCount:
+          type: integer
+          nullable: true
+        imageOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        iconOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        featuredImageOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        subEvents:
+          type: array
+          items:
+            type: string
+          nullable: true
+        markets:
+          type: array
+          items:
+            $ref: '#/components/schemas/Market'
+        series:
+          type: array
+          items:
+            $ref: '#/components/schemas/Series'
+        categories:
+          type: array
+          items:
+            $ref: '#/components/schemas/Category'
+        collections:
+          type: array
+          items:
+            $ref: '#/components/schemas/Collection'
+        tags:
+          type: array
+          items:
+            $ref: '#/components/schemas/Tag'
+        cyom:
+          type: boolean
+          nullable: true
+        closedTime:
+          type: string
+          format: date-time
+          nullable: true
+        showAllOutcomes:
+          type: boolean
+          nullable: true
+        showMarketImages:
+          type: boolean
+          nullable: true
+        automaticallyResolved:
+          type: boolean
+          nullable: true
+        enableNegRisk:
+          type: boolean
+          nullable: true
+        automaticallyActive:
+          type: boolean
+          nullable: true
+        eventDate:
+          type: string
+          nullable: true
+        startTime:
+          type: string
+          format: date-time
+          nullable: true
+        eventWeek:
+          type: integer
+          nullable: true
+        seriesSlug:
+          type: string
+          nullable: true
+        score:
+          type: string
+          nullable: true
+        elapsed:
+          type: string
+          nullable: true
+        period:
+          type: string
+          nullable: true
+        live:
+          type: boolean
+          nullable: true
+        ended:
+          type: boolean
+          nullable: true
+        finishedTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        gmpChartMode:
+          type: string
+          nullable: true
+        eventCreators:
+          type: array
+          items:
+            $ref: '#/components/schemas/EventCreator'
+        tweetCount:
+          type: integer
+          nullable: true
+        chats:
+          type: array
+          items:
+            $ref: '#/components/schemas/Chat'
+        featuredOrder:
+          type: integer
+          nullable: true
+        estimateValue:
+          type: boolean
+          nullable: true
+        cantEstimate:
+          type: boolean
+          nullable: true
+        estimatedValue:
+          type: string
+          nullable: true
+        templates:
+          type: array
+          items:
+            $ref: '#/components/schemas/Template'
+        spreadsMainLine:
+          type: number
+          nullable: true
+        totalsMainLine:
+          type: number
+          nullable: true
+        carouselMap:
+          type: string
+          nullable: true
+        pendingDeployment:
+          type: boolean
+          nullable: true
+        deploying:
+          type: boolean
+          nullable: true
+        deployingTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        scheduledDeploymentTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        gameStatus:
+          type: string
+          nullable: true
+    ImageOptimization:
+      type: object
+      properties:
+        id:
+          type: string
+        imageUrlSource:
+          type: string
+          nullable: true
+        imageUrlOptimized:
+          type: string
+          nullable: true
+        imageSizeKbSource:
+          type: number
+          nullable: true
+        imageSizeKbOptimized:
+          type: number
+          nullable: true
+        imageOptimizedComplete:
+          type: boolean
+          nullable: true
+        imageOptimizedLastUpdated:
+          type: string
+          nullable: true
+        relID:
+          type: integer
+          nullable: true
+        field:
+          type: string
+          nullable: true
+        relname:
+          type: string
+          nullable: true
+    Market:
+      type: object
+      properties:
+        id:
+          type: string
+        question:
+          type: string
+          nullable: true
+        conditionId:
+          type: string
+        slug:
+          type: string
+          nullable: true
+        twitterCardImage:
+          type: string
+          nullable: true
+        resolutionSource:
+          type: string
+          nullable: true
+        endDate:
+          type: string
+          format: date-time
+          nullable: true
+        category:
+          type: string
+          nullable: true
+        ammType:
+          type: string
+          nullable: true
+        liquidity:
+          type: string
+          nullable: true
+        sponsorName:
+          type: string
+          nullable: true
+        sponsorImage:
+          type: string
+          nullable: true
+        startDate:
+          type: string
+          format: date-time
+          nullable: true
+        xAxisValue:
+          type: string
+          nullable: true
+        yAxisValue:
+          type: string
+          nullable: true
+        denominationToken:
+          type: string
+          nullable: true
+        fee:
+          type: string
+          nullable: true
+        image:
+          type: string
+          nullable: true
+        icon:
+          type: string
+          nullable: true
+        lowerBound:
+          type: string
+          nullable: true
+        upperBound:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        outcomes:
+          type: string
+          nullable: true
+        outcomePrices:
+          type: string
+          nullable: true
+        volume:
+          type: string
+          nullable: true
+        active:
+          type: boolean
+          nullable: true
+        marketType:
+          type: string
+          nullable: true
+        formatType:
+          type: string
+          nullable: true
+        lowerBoundDate:
+          type: string
+          nullable: true
+        upperBoundDate:
+          type: string
+          nullable: true
+        closed:
+          type: boolean
+          nullable: true
+        marketMakerAddress:
+          type: string
+        createdBy:
+          type: integer
+          nullable: true
+        updatedBy:
+          type: integer
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        closedTime:
+          type: string
+          nullable: true
+        wideFormat:
+          type: boolean
+          nullable: true
+        new:
+          type: boolean
+          nullable: true
+        mailchimpTag:
+          type: string
+          nullable: true
+        featured:
+          type: boolean
+          nullable: true
+        archived:
+          type: boolean
+          nullable: true
+        resolvedBy:
+          type: string
+          nullable: true
+        restricted:
+          type: boolean
+          nullable: true
+        marketGroup:
+          type: integer
+          nullable: true
+        groupItemTitle:
+          type: string
+          nullable: true
+        groupItemThreshold:
+          type: string
+          nullable: true
+        questionID:
+          type: string
+          nullable: true
+        umaEndDate:
+          type: string
+          nullable: true
+        enableOrderBook:
+          type: boolean
+          nullable: true
+        orderPriceMinTickSize:
+          type: number
+          nullable: true
+        orderMinSize:
+          type: number
+          nullable: true
+        umaResolutionStatus:
+          type: string
+          nullable: true
+        curationOrder:
+          type: integer
+          nullable: true
+        volumeNum:
+          type: number
+          nullable: true
+        liquidityNum:
+          type: number
+          nullable: true
+        endDateIso:
+          type: string
+          nullable: true
+        startDateIso:
+          type: string
+          nullable: true
+        umaEndDateIso:
+          type: string
+          nullable: true
+        hasReviewedDates:
+          type: boolean
+          nullable: true
+        readyForCron:
+          type: boolean
+          nullable: true
+        commentsEnabled:
+          type: boolean
+          nullable: true
+        volume24hr:
+          type: number
+          nullable: true
+        volume1wk:
+          type: number
+          nullable: true
+        volume1mo:
+          type: number
+          nullable: true
+        volume1yr:
+          type: number
+          nullable: true
+        gameStartTime:
+          type: string
+          nullable: true
+        secondsDelay:
+          type: integer
+          nullable: true
+        clobTokenIds:
+          type: string
+          nullable: true
+        disqusThread:
+          type: string
+          nullable: true
+        shortOutcomes:
+          type: string
+          nullable: true
+        teamAID:
+          type: string
+          nullable: true
+        teamBID:
+          type: string
+          nullable: true
+        umaBond:
+          type: string
+          nullable: true
+        umaReward:
+          type: string
+          nullable: true
+        fpmmLive:
+          type: boolean
+          nullable: true
+        volume24hrAmm:
+          type: number
+          nullable: true
+        volume1wkAmm:
+          type: number
+          nullable: true
+        volume1moAmm:
+          type: number
+          nullable: true
+        volume1yrAmm:
+          type: number
+          nullable: true
+        volume24hrClob:
+          type: number
+          nullable: true
+        volume1wkClob:
+          type: number
+          nullable: true
+        volume1moClob:
+          type: number
+          nullable: true
+        volume1yrClob:
+          type: number
+          nullable: true
+        volumeAmm:
+          type: number
+          nullable: true
+        volumeClob:
+          type: number
+          nullable: true
+        liquidityAmm:
+          type: number
+          nullable: true
+        liquidityClob:
+          type: number
+          nullable: true
+        makerBaseFee:
+          type: integer
+          nullable: true
+        takerBaseFee:
+          type: integer
+          nullable: true
+        customLiveness:
+          type: integer
+          nullable: true
+        acceptingOrders:
+          type: boolean
+          nullable: true
+        notificationsEnabled:
+          type: boolean
+          nullable: true
+        score:
+          type: integer
+          nullable: true
+        imageOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        iconOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/Event'
+        categories:
+          type: array
+          items:
+            $ref: '#/components/schemas/Category'
+        tags:
+          type: array
+          items:
+            $ref: '#/components/schemas/Tag'
+        creator:
+          type: string
+          nullable: true
+        ready:
+          type: boolean
+          nullable: true
+        funded:
+          type: boolean
+          nullable: true
+        pastSlugs:
+          type: string
+          nullable: true
+        readyTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        fundedTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        acceptingOrdersTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        competitive:
+          type: number
+          nullable: true
+        rewardsMinSize:
+          type: number
+          nullable: true
+        rewardsMaxSpread:
+          type: number
+          nullable: true
+        spread:
+          type: number
+          nullable: true
+        automaticallyResolved:
+          type: boolean
+          nullable: true
+        oneDayPriceChange:
+          type: number
+          nullable: true
+        oneHourPriceChange:
+          type: number
+          nullable: true
+        oneWeekPriceChange:
+          type: number
+          nullable: true
+        oneMonthPriceChange:
+          type: number
+          nullable: true
+        oneYearPriceChange:
+          type: number
+          nullable: true
+        lastTradePrice:
+          type: number
+          nullable: true
+        bestBid:
+          type: number
+          nullable: true
+        bestAsk:
+          type: number
+          nullable: true
+        automaticallyActive:
+          type: boolean
+          nullable: true
+        clearBookOnStart:
+          type: boolean
+          nullable: true
+        chartColor:
+          type: string
+          nullable: true
+        seriesColor:
+          type: string
+          nullable: true
+        showGmpSeries:
+          type: boolean
+          nullable: true
+        showGmpOutcome:
+          type: boolean
+          nullable: true
+        manualActivation:
+          type: boolean
+          nullable: true
+        negRiskOther:
+          type: boolean
+          nullable: true
+        gameId:
+          type: string
+          nullable: true
+        groupItemRange:
+          type: string
+          nullable: true
+        sportsMarketType:
+          type: string
+          nullable: true
+        line:
+          type: number
+          nullable: true
+        umaResolutionStatuses:
+          type: string
+          nullable: true
+        pendingDeployment:
+          type: boolean
+          nullable: true
+        deploying:
+          type: boolean
+          nullable: true
+        deployingTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        scheduledDeploymentTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        rfqEnabled:
+          type: boolean
+          nullable: true
+        eventStartTime:
+          type: string
+          format: date-time
+          nullable: true
+        feesEnabled:
+          type: boolean
+          nullable: true
+        feeSchedule:
+          $ref: '#/components/schemas/FeeSchedule'
+    Series:
+      type: object
+      properties:
+        id:
+          type: string
+        ticker:
+          type: string
+          nullable: true
+        slug:
+          type: string
+          nullable: true
+        title:
+          type: string
+          nullable: true
+        subtitle:
+          type: string
+          nullable: true
+        seriesType:
+          type: string
+          nullable: true
+        recurrence:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        image:
+          type: string
+          nullable: true
+        icon:
+          type: string
+          nullable: true
+        layout:
+          type: string
+          nullable: true
+        active:
+          type: boolean
+          nullable: true
+        closed:
+          type: boolean
+          nullable: true
+        archived:
+          type: boolean
+          nullable: true
+        new:
+          type: boolean
+          nullable: true
+        featured:
+          type: boolean
+          nullable: true
+        restricted:
+          type: boolean
+          nullable: true
+        isTemplate:
+          type: boolean
+          nullable: true
+        templateVariables:
+          type: boolean
+          nullable: true
+        publishedAt:
+          type: string
+          nullable: true
+        createdBy:
+          type: string
+          nullable: true
+        updatedBy:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        commentsEnabled:
+          type: boolean
+          nullable: true
+        competitive:
+          type: string
+          nullable: true
+        volume24hr:
+          type: number
+          nullable: true
+        volume:
+          type: number
+          nullable: true
+        liquidity:
+          type: number
+          nullable: true
+        startDate:
+          type: string
+          format: date-time
+          nullable: true
+        pythTokenID:
+          type: string
+          nullable: true
+        cgAssetName:
+          type: string
+          nullable: true
+        score:
+          type: integer
+          nullable: true
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/Event'
+        collections:
+          type: array
+          items:
+            $ref: '#/components/schemas/Collection'
+        categories:
+          type: array
+          items:
+            $ref: '#/components/schemas/Category'
+        tags:
+          type: array
+          items:
+            $ref: '#/components/schemas/Tag'
+        commentCount:
+          type: integer
+          nullable: true
+        chats:
+          type: array
+          items:
+            $ref: '#/components/schemas/Chat'
+    Category:
+      type: object
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+          nullable: true
+        parentCategory:
+          type: string
+          nullable: true
+        slug:
+          type: string
+          nullable: true
+        publishedAt:
+          type: string
+          nullable: true
+        createdBy:
+          type: string
+          nullable: true
+        updatedBy:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+    Collection:
+      type: object
+      properties:
+        id:
+          type: string
+        ticker:
+          type: string
+          nullable: true
+        slug:
+          type: string
+          nullable: true
+        title:
+          type: string
+          nullable: true
+        subtitle:
+          type: string
+          nullable: true
+        collectionType:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        tags:
+          type: string
+          nullable: true
+        image:
+          type: string
+          nullable: true
+        icon:
+          type: string
+          nullable: true
+        headerImage:
+          type: string
+          nullable: true
+        layout:
+          type: string
+          nullable: true
+        active:
+          type: boolean
+          nullable: true
+        closed:
+          type: boolean
+          nullable: true
+        archived:
+          type: boolean
+          nullable: true
+        new:
+          type: boolean
+          nullable: true
+        featured:
+          type: boolean
+          nullable: true
+        restricted:
+          type: boolean
+          nullable: true
+        isTemplate:
+          type: boolean
+          nullable: true
+        templateVariables:
+          type: string
+          nullable: true
+        publishedAt:
+          type: string
+          nullable: true
+        createdBy:
+          type: string
+          nullable: true
+        updatedBy:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        commentsEnabled:
+          type: boolean
+          nullable: true
+        imageOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        iconOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        headerImageOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+    Tag:
+      type: object
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+          nullable: true
+        slug:
+          type: string
+          nullable: true
+        forceShow:
+          type: boolean
+          nullable: true
+        publishedAt:
+          type: string
+          nullable: true
+        createdBy:
+          type: integer
+          nullable: true
+        updatedBy:
+          type: integer
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        forceHide:
+          type: boolean
+          nullable: true
+        isCarousel:
+          type: boolean
+          nullable: true
+    EventCreator:
+      type: object
+      properties:
+        id:
+          type: string
+        creatorName:
+          type: string
+          nullable: true
+        creatorHandle:
+          type: string
+          nullable: true
+        creatorUrl:
+          type: string
+          nullable: true
+        creatorImage:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+    Chat:
+      type: object
+      properties:
+        id:
+          type: string
+        channelId:
+          type: string
+          nullable: true
+        channelName:
+          type: string
+          nullable: true
+        channelImage:
+          type: string
+          nullable: true
+        live:
+          type: boolean
+          nullable: true
+        startTime:
+          type: string
+          format: date-time
+          nullable: true
+        endTime:
+          type: string
+          format: date-time
+          nullable: true
+    Template:
+      type: object
+      properties:
+        id:
+          type: string
+        eventTitle:
+          type: string
+          nullable: true
+        eventSlug:
+          type: string
+          nullable: true
+        eventImage:
+          type: string
+          nullable: true
+        marketTitle:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        resolutionSource:
+          type: string
+          nullable: true
+        negRisk:
+          type: boolean
+          nullable: true
+        sortBy:
+          type: string
+          nullable: true
+        showMarketImages:
+          type: boolean
+          nullable: true
+        seriesSlug:
+          type: string
+          nullable: true
+        outcomes:
+          type: string
+          nullable: true
+    FeeSchedule:
+      type: object
+      properties:
+        exponent:
+          type: number
+          nullable: true
+        rate:
+          type: number
+          nullable: true
+        takerOnly:
+          type: boolean
+          nullable: true
+        rebateRate:
+          type: number
+          nullable: true
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Get event tags
+
+
+
+## OpenAPI
+
+````yaml /api-spec/gamma-openapi.yaml get /events/{id}/tags
+openapi: 3.0.3
+info:
+  title: Markets API
+  version: 1.0.0
+  description: REST API specification for public endpoints used by the Markets service.
+servers:
+  - url: https://gamma-api.polymarket.com
+    description: Polymarket Gamma API Production Server
+security: []
+tags:
+  - name: Gamma Status
+    description: Gamma API status and health check
+  - name: Sports
+    description: Sports-related endpoints including teams and game data
+  - name: Tags
+    description: Tag management and related tag operations
+  - name: Events
+    description: Event management and event-related operations
+  - name: Markets
+    description: Market data and market-related operations
+  - name: Comments
+    description: Comment system and user interactions
+  - name: Series
+    description: Series management and related operations
+  - name: Profiles
+    description: User profile management
+  - name: Search
+    description: Search functionality across different entity types
+paths:
+  /events/{id}/tags:
+    get:
+      tags:
+        - Events
+        - Tags
+      summary: Get event tags
+      operationId: getEventTags
+      parameters:
+        - $ref: '#/components/parameters/pathId'
+      responses:
+        '200':
+          description: Tags attached to the event
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Tag'
+        '404':
+          description: Not found
+components:
+  parameters:
+    pathId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: integer
+  schemas:
+    Tag:
+      type: object
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+          nullable: true
+        slug:
+          type: string
+          nullable: true
+        forceShow:
+          type: boolean
+          nullable: true
+        publishedAt:
+          type: string
+          nullable: true
+        createdBy:
+          type: integer
+          nullable: true
+        updatedBy:
+          type: integer
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        forceHide:
+          type: boolean
+          nullable: true
+        isCarousel:
+          type: boolean
+          nullable: true
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# List markets (keyset pagination)
+
+> Returns markets using cursor-based (keyset) pagination for stable, efficient paging through large result sets. Use `next_cursor` from each response as `after_cursor` in the next request. The `offset` parameter is explicitly rejected; use `after_cursor` instead.
+
+
+
+
+## OpenAPI
+
+````yaml /api-spec/gamma-openapi.yaml get /markets/keyset
+openapi: 3.0.3
+info:
+  title: Markets API
+  version: 1.0.0
+  description: REST API specification for public endpoints used by the Markets service.
+servers:
+  - url: https://gamma-api.polymarket.com
+    description: Polymarket Gamma API Production Server
+security: []
+tags:
+  - name: Gamma Status
+    description: Gamma API status and health check
+  - name: Sports
+    description: Sports-related endpoints including teams and game data
+  - name: Tags
+    description: Tag management and related tag operations
+  - name: Events
+    description: Event management and event-related operations
+  - name: Markets
+    description: Market data and market-related operations
+  - name: Comments
+    description: Comment system and user interactions
+  - name: Series
+    description: Series management and related operations
+  - name: Profiles
+    description: User profile management
+  - name: Search
+    description: Search functionality across different entity types
+paths:
+  /markets/keyset:
+    get:
+      tags:
+        - Markets
+      summary: List markets (keyset pagination)
+      description: >
+        Returns markets using cursor-based (keyset) pagination for stable,
+        efficient paging through large result sets. Use `next_cursor` from each
+        response as `after_cursor` in the next request. The `offset` parameter
+        is explicitly rejected; use `after_cursor` instead.
+      operationId: listMarketsKeyset
+      parameters:
+        - name: limit
+          in: query
+          description: Maximum number of results to return (max 100)
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: order
+          in: query
+          description: >-
+            Comma-separated list of JSON field names to order by, e.g.
+            volume_num,liquidity_num
+          schema:
+            type: string
+        - name: ascending
+          in: query
+          description: Sort direction. Only used when order is set.
+          schema:
+            type: boolean
+            default: true
+        - name: after_cursor
+          in: query
+          description: Opaque cursor token from a previous response's next_cursor
+          schema:
+            type: string
+        - name: offset
+          in: query
+          description: Not allowed. Returns 422 if provided.
+          schema:
+            type: integer
+        - name: id
+          in: query
+          schema:
+            type: array
+            items:
+              type: integer
+        - name: slug
+          in: query
+          schema:
+            type: array
+            items:
+              type: string
+        - name: closed
+          in: query
+          schema:
+            type: boolean
+            default: false
+        - name: decimalized
+          in: query
+          schema:
+            type: boolean
+        - name: clob_token_ids
+          in: query
+          schema:
+            type: array
+            items:
+              type: string
+        - name: condition_ids
+          in: query
+          schema:
+            type: array
+            items:
+              type: string
+        - name: question_ids
+          in: query
+          schema:
+            type: array
+            items:
+              type: string
+        - name: market_maker_address
+          in: query
+          schema:
+            type: array
+            items:
+              type: string
+        - name: liquidity_num_min
+          in: query
+          schema:
+            type: number
+        - name: liquidity_num_max
+          in: query
+          schema:
+            type: number
+        - name: volume_num_min
+          in: query
+          schema:
+            type: number
+        - name: volume_num_max
+          in: query
+          schema:
+            type: number
+        - name: start_date_min
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: start_date_max
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: end_date_min
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: end_date_max
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: tag_id
+          in: query
+          schema:
+            type: array
+            items:
+              type: integer
+        - name: related_tags
+          in: query
+          schema:
+            type: boolean
+        - name: tag_match
+          in: query
+          schema:
+            type: string
+        - name: cyom
+          in: query
+          schema:
+            type: boolean
+        - name: rfq_enabled
+          in: query
+          schema:
+            type: boolean
+        - name: uma_resolution_status
+          in: query
+          schema:
+            type: string
+        - name: game_id
+          in: query
+          schema:
+            type: string
+        - name: sports_market_types
+          in: query
+          schema:
+            type: array
+            items:
+              type: string
+        - name: include_tag
+          in: query
+          description: When true, includes Tags relation on each market
+          schema:
+            type: boolean
+        - name: locale
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: >
+            Paginated list of markets. Includes Events and Events.Series
+            relations. Tags included only when include_tag=true. Nested
+            clob_rewards and fee_schedule are populated on each market.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/KeysetMarketsResponse'
+        '422':
+          description: >
+            Validation error. Returned when offset is provided, cursor is
+            invalid, order fields are not valid, or other filter validation
+            fails.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError'
+        '500':
+          description: Internal server error (DB failures, cursor encode failures)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InternalError'
+        '503':
+          description: Service unavailable when keyset pagination is not configured
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServiceUnavailableError'
+components:
+  schemas:
+    KeysetMarketsResponse:
+      type: object
+      properties:
+        markets:
+          type: array
+          description: Array of Market objects. Empty array if none found.
+          items:
+            $ref: '#/components/schemas/Market'
+        next_cursor:
+          type: string
+          description: >
+            Opaque cursor token for fetching the next page. Present only when
+            the number of returned markets equals the effective limit. Omitted
+            on the last page.
+    ValidationError:
+      type: object
+      properties:
+        type:
+          type: string
+          example: validation error
+        error:
+          type: string
+          example: offset is not allowed on keyset endpoints
+    InternalError:
+      type: object
+      properties:
+        type:
+          type: string
+          example: internal error
+        error:
+          type: string
+          example: cannot get the information
+    ServiceUnavailableError:
+      type: object
+      properties:
+        type:
+          type: string
+          example: service unavailable
+        error:
+          type: string
+          example: keyset pagination is not configured
+    Market:
+      type: object
+      properties:
+        id:
+          type: string
+        question:
+          type: string
+          nullable: true
+        conditionId:
+          type: string
+        slug:
+          type: string
+          nullable: true
+        twitterCardImage:
+          type: string
+          nullable: true
+        resolutionSource:
+          type: string
+          nullable: true
+        endDate:
+          type: string
+          format: date-time
+          nullable: true
+        category:
+          type: string
+          nullable: true
+        ammType:
+          type: string
+          nullable: true
+        liquidity:
+          type: string
+          nullable: true
+        sponsorName:
+          type: string
+          nullable: true
+        sponsorImage:
+          type: string
+          nullable: true
+        startDate:
+          type: string
+          format: date-time
+          nullable: true
+        xAxisValue:
+          type: string
+          nullable: true
+        yAxisValue:
+          type: string
+          nullable: true
+        denominationToken:
+          type: string
+          nullable: true
+        fee:
+          type: string
+          nullable: true
+        image:
+          type: string
+          nullable: true
+        icon:
+          type: string
+          nullable: true
+        lowerBound:
+          type: string
+          nullable: true
+        upperBound:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        outcomes:
+          type: string
+          nullable: true
+        outcomePrices:
+          type: string
+          nullable: true
+        volume:
+          type: string
+          nullable: true
+        active:
+          type: boolean
+          nullable: true
+        marketType:
+          type: string
+          nullable: true
+        formatType:
+          type: string
+          nullable: true
+        lowerBoundDate:
+          type: string
+          nullable: true
+        upperBoundDate:
+          type: string
+          nullable: true
+        closed:
+          type: boolean
+          nullable: true
+        marketMakerAddress:
+          type: string
+        createdBy:
+          type: integer
+          nullable: true
+        updatedBy:
+          type: integer
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        closedTime:
+          type: string
+          nullable: true
+        wideFormat:
+          type: boolean
+          nullable: true
+        new:
+          type: boolean
+          nullable: true
+        mailchimpTag:
+          type: string
+          nullable: true
+        featured:
+          type: boolean
+          nullable: true
+        archived:
+          type: boolean
+          nullable: true
+        resolvedBy:
+          type: string
+          nullable: true
+        restricted:
+          type: boolean
+          nullable: true
+        marketGroup:
+          type: integer
+          nullable: true
+        groupItemTitle:
+          type: string
+          nullable: true
+        groupItemThreshold:
+          type: string
+          nullable: true
+        questionID:
+          type: string
+          nullable: true
+        umaEndDate:
+          type: string
+          nullable: true
+        enableOrderBook:
+          type: boolean
+          nullable: true
+        orderPriceMinTickSize:
+          type: number
+          nullable: true
+        orderMinSize:
+          type: number
+          nullable: true
+        umaResolutionStatus:
+          type: string
+          nullable: true
+        curationOrder:
+          type: integer
+          nullable: true
+        volumeNum:
+          type: number
+          nullable: true
+        liquidityNum:
+          type: number
+          nullable: true
+        endDateIso:
+          type: string
+          nullable: true
+        startDateIso:
+          type: string
+          nullable: true
+        umaEndDateIso:
+          type: string
+          nullable: true
+        hasReviewedDates:
+          type: boolean
+          nullable: true
+        readyForCron:
+          type: boolean
+          nullable: true
+        commentsEnabled:
+          type: boolean
+          nullable: true
+        volume24hr:
+          type: number
+          nullable: true
+        volume1wk:
+          type: number
+          nullable: true
+        volume1mo:
+          type: number
+          nullable: true
+        volume1yr:
+          type: number
+          nullable: true
+        gameStartTime:
+          type: string
+          nullable: true
+        secondsDelay:
+          type: integer
+          nullable: true
+        clobTokenIds:
+          type: string
+          nullable: true
+        disqusThread:
+          type: string
+          nullable: true
+        shortOutcomes:
+          type: string
+          nullable: true
+        teamAID:
+          type: string
+          nullable: true
+        teamBID:
+          type: string
+          nullable: true
+        umaBond:
+          type: string
+          nullable: true
+        umaReward:
+          type: string
+          nullable: true
+        fpmmLive:
+          type: boolean
+          nullable: true
+        volume24hrAmm:
+          type: number
+          nullable: true
+        volume1wkAmm:
+          type: number
+          nullable: true
+        volume1moAmm:
+          type: number
+          nullable: true
+        volume1yrAmm:
+          type: number
+          nullable: true
+        volume24hrClob:
+          type: number
+          nullable: true
+        volume1wkClob:
+          type: number
+          nullable: true
+        volume1moClob:
+          type: number
+          nullable: true
+        volume1yrClob:
+          type: number
+          nullable: true
+        volumeAmm:
+          type: number
+          nullable: true
+        volumeClob:
+          type: number
+          nullable: true
+        liquidityAmm:
+          type: number
+          nullable: true
+        liquidityClob:
+          type: number
+          nullable: true
+        makerBaseFee:
+          type: integer
+          nullable: true
+        takerBaseFee:
+          type: integer
+          nullable: true
+        customLiveness:
+          type: integer
+          nullable: true
+        acceptingOrders:
+          type: boolean
+          nullable: true
+        notificationsEnabled:
+          type: boolean
+          nullable: true
+        score:
+          type: integer
+          nullable: true
+        imageOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        iconOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/Event'
+        categories:
+          type: array
+          items:
+            $ref: '#/components/schemas/Category'
+        tags:
+          type: array
+          items:
+            $ref: '#/components/schemas/Tag'
+        creator:
+          type: string
+          nullable: true
+        ready:
+          type: boolean
+          nullable: true
+        funded:
+          type: boolean
+          nullable: true
+        pastSlugs:
+          type: string
+          nullable: true
+        readyTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        fundedTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        acceptingOrdersTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        competitive:
+          type: number
+          nullable: true
+        rewardsMinSize:
+          type: number
+          nullable: true
+        rewardsMaxSpread:
+          type: number
+          nullable: true
+        spread:
+          type: number
+          nullable: true
+        automaticallyResolved:
+          type: boolean
+          nullable: true
+        oneDayPriceChange:
+          type: number
+          nullable: true
+        oneHourPriceChange:
+          type: number
+          nullable: true
+        oneWeekPriceChange:
+          type: number
+          nullable: true
+        oneMonthPriceChange:
+          type: number
+          nullable: true
+        oneYearPriceChange:
+          type: number
+          nullable: true
+        lastTradePrice:
+          type: number
+          nullable: true
+        bestBid:
+          type: number
+          nullable: true
+        bestAsk:
+          type: number
+          nullable: true
+        automaticallyActive:
+          type: boolean
+          nullable: true
+        clearBookOnStart:
+          type: boolean
+          nullable: true
+        chartColor:
+          type: string
+          nullable: true
+        seriesColor:
+          type: string
+          nullable: true
+        showGmpSeries:
+          type: boolean
+          nullable: true
+        showGmpOutcome:
+          type: boolean
+          nullable: true
+        manualActivation:
+          type: boolean
+          nullable: true
+        negRiskOther:
+          type: boolean
+          nullable: true
+        gameId:
+          type: string
+          nullable: true
+        groupItemRange:
+          type: string
+          nullable: true
+        sportsMarketType:
+          type: string
+          nullable: true
+        line:
+          type: number
+          nullable: true
+        umaResolutionStatuses:
+          type: string
+          nullable: true
+        pendingDeployment:
+          type: boolean
+          nullable: true
+        deploying:
+          type: boolean
+          nullable: true
+        deployingTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        scheduledDeploymentTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        rfqEnabled:
+          type: boolean
+          nullable: true
+        eventStartTime:
+          type: string
+          format: date-time
+          nullable: true
+        feesEnabled:
+          type: boolean
+          nullable: true
+        feeSchedule:
+          $ref: '#/components/schemas/FeeSchedule'
+    ImageOptimization:
+      type: object
+      properties:
+        id:
+          type: string
+        imageUrlSource:
+          type: string
+          nullable: true
+        imageUrlOptimized:
+          type: string
+          nullable: true
+        imageSizeKbSource:
+          type: number
+          nullable: true
+        imageSizeKbOptimized:
+          type: number
+          nullable: true
+        imageOptimizedComplete:
+          type: boolean
+          nullable: true
+        imageOptimizedLastUpdated:
+          type: string
+          nullable: true
+        relID:
+          type: integer
+          nullable: true
+        field:
+          type: string
+          nullable: true
+        relname:
+          type: string
+          nullable: true
+    Event:
+      type: object
+      properties:
+        id:
+          type: string
+        ticker:
+          type: string
+          nullable: true
+        slug:
+          type: string
+          nullable: true
+        title:
+          type: string
+          nullable: true
+        subtitle:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        resolutionSource:
+          type: string
+          nullable: true
+        startDate:
+          type: string
+          format: date-time
+          nullable: true
+        creationDate:
+          type: string
+          format: date-time
+          nullable: true
+        endDate:
+          type: string
+          format: date-time
+          nullable: true
+        image:
+          type: string
+          nullable: true
+        icon:
+          type: string
+          nullable: true
+        active:
+          type: boolean
+          nullable: true
+        closed:
+          type: boolean
+          nullable: true
+        archived:
+          type: boolean
+          nullable: true
+        new:
+          type: boolean
+          nullable: true
+        featured:
+          type: boolean
+          nullable: true
+        restricted:
+          type: boolean
+          nullable: true
+        liquidity:
+          type: number
+          nullable: true
+        volume:
+          type: number
+          nullable: true
+        openInterest:
+          type: number
+          nullable: true
+        sortBy:
+          type: string
+          nullable: true
+        category:
+          type: string
+          nullable: true
+        subcategory:
+          type: string
+          nullable: true
+        isTemplate:
+          type: boolean
+          nullable: true
+        templateVariables:
+          type: string
+          nullable: true
+        published_at:
+          type: string
+          nullable: true
+        createdBy:
+          type: string
+          nullable: true
+        updatedBy:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        commentsEnabled:
+          type: boolean
+          nullable: true
+        competitive:
+          type: number
+          nullable: true
+        volume24hr:
+          type: number
+          nullable: true
+        volume1wk:
+          type: number
+          nullable: true
+        volume1mo:
+          type: number
+          nullable: true
+        volume1yr:
+          type: number
+          nullable: true
+        featuredImage:
+          type: string
+          nullable: true
+        disqusThread:
+          type: string
+          nullable: true
+        parentEvent:
+          type: string
+          nullable: true
+        enableOrderBook:
+          type: boolean
+          nullable: true
+        liquidityAmm:
+          type: number
+          nullable: true
+        liquidityClob:
+          type: number
+          nullable: true
+        negRisk:
+          type: boolean
+          nullable: true
+        negRiskMarketID:
+          type: string
+          nullable: true
+        negRiskFeeBips:
+          type: integer
+          nullable: true
+        commentCount:
+          type: integer
+          nullable: true
+        imageOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        iconOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        featuredImageOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        subEvents:
+          type: array
+          items:
+            type: string
+          nullable: true
+        markets:
+          type: array
+          items:
+            $ref: '#/components/schemas/Market'
+        series:
+          type: array
+          items:
+            $ref: '#/components/schemas/Series'
+        categories:
+          type: array
+          items:
+            $ref: '#/components/schemas/Category'
+        collections:
+          type: array
+          items:
+            $ref: '#/components/schemas/Collection'
+        tags:
+          type: array
+          items:
+            $ref: '#/components/schemas/Tag'
+        cyom:
+          type: boolean
+          nullable: true
+        closedTime:
+          type: string
+          format: date-time
+          nullable: true
+        showAllOutcomes:
+          type: boolean
+          nullable: true
+        showMarketImages:
+          type: boolean
+          nullable: true
+        automaticallyResolved:
+          type: boolean
+          nullable: true
+        enableNegRisk:
+          type: boolean
+          nullable: true
+        automaticallyActive:
+          type: boolean
+          nullable: true
+        eventDate:
+          type: string
+          nullable: true
+        startTime:
+          type: string
+          format: date-time
+          nullable: true
+        eventWeek:
+          type: integer
+          nullable: true
+        seriesSlug:
+          type: string
+          nullable: true
+        score:
+          type: string
+          nullable: true
+        elapsed:
+          type: string
+          nullable: true
+        period:
+          type: string
+          nullable: true
+        live:
+          type: boolean
+          nullable: true
+        ended:
+          type: boolean
+          nullable: true
+        finishedTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        gmpChartMode:
+          type: string
+          nullable: true
+        eventCreators:
+          type: array
+          items:
+            $ref: '#/components/schemas/EventCreator'
+        tweetCount:
+          type: integer
+          nullable: true
+        chats:
+          type: array
+          items:
+            $ref: '#/components/schemas/Chat'
+        featuredOrder:
+          type: integer
+          nullable: true
+        estimateValue:
+          type: boolean
+          nullable: true
+        cantEstimate:
+          type: boolean
+          nullable: true
+        estimatedValue:
+          type: string
+          nullable: true
+        templates:
+          type: array
+          items:
+            $ref: '#/components/schemas/Template'
+        spreadsMainLine:
+          type: number
+          nullable: true
+        totalsMainLine:
+          type: number
+          nullable: true
+        carouselMap:
+          type: string
+          nullable: true
+        pendingDeployment:
+          type: boolean
+          nullable: true
+        deploying:
+          type: boolean
+          nullable: true
+        deployingTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        scheduledDeploymentTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        gameStatus:
+          type: string
+          nullable: true
+    Category:
+      type: object
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+          nullable: true
+        parentCategory:
+          type: string
+          nullable: true
+        slug:
+          type: string
+          nullable: true
+        publishedAt:
+          type: string
+          nullable: true
+        createdBy:
+          type: string
+          nullable: true
+        updatedBy:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+    Tag:
+      type: object
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+          nullable: true
+        slug:
+          type: string
+          nullable: true
+        forceShow:
+          type: boolean
+          nullable: true
+        publishedAt:
+          type: string
+          nullable: true
+        createdBy:
+          type: integer
+          nullable: true
+        updatedBy:
+          type: integer
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        forceHide:
+          type: boolean
+          nullable: true
+        isCarousel:
+          type: boolean
+          nullable: true
+    FeeSchedule:
+      type: object
+      properties:
+        exponent:
+          type: number
+          nullable: true
+        rate:
+          type: number
+          nullable: true
+        takerOnly:
+          type: boolean
+          nullable: true
+        rebateRate:
+          type: number
+          nullable: true
+    Series:
+      type: object
+      properties:
+        id:
+          type: string
+        ticker:
+          type: string
+          nullable: true
+        slug:
+          type: string
+          nullable: true
+        title:
+          type: string
+          nullable: true
+        subtitle:
+          type: string
+          nullable: true
+        seriesType:
+          type: string
+          nullable: true
+        recurrence:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        image:
+          type: string
+          nullable: true
+        icon:
+          type: string
+          nullable: true
+        layout:
+          type: string
+          nullable: true
+        active:
+          type: boolean
+          nullable: true
+        closed:
+          type: boolean
+          nullable: true
+        archived:
+          type: boolean
+          nullable: true
+        new:
+          type: boolean
+          nullable: true
+        featured:
+          type: boolean
+          nullable: true
+        restricted:
+          type: boolean
+          nullable: true
+        isTemplate:
+          type: boolean
+          nullable: true
+        templateVariables:
+          type: boolean
+          nullable: true
+        publishedAt:
+          type: string
+          nullable: true
+        createdBy:
+          type: string
+          nullable: true
+        updatedBy:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        commentsEnabled:
+          type: boolean
+          nullable: true
+        competitive:
+          type: string
+          nullable: true
+        volume24hr:
+          type: number
+          nullable: true
+        volume:
+          type: number
+          nullable: true
+        liquidity:
+          type: number
+          nullable: true
+        startDate:
+          type: string
+          format: date-time
+          nullable: true
+        pythTokenID:
+          type: string
+          nullable: true
+        cgAssetName:
+          type: string
+          nullable: true
+        score:
+          type: integer
+          nullable: true
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/Event'
+        collections:
+          type: array
+          items:
+            $ref: '#/components/schemas/Collection'
+        categories:
+          type: array
+          items:
+            $ref: '#/components/schemas/Category'
+        tags:
+          type: array
+          items:
+            $ref: '#/components/schemas/Tag'
+        commentCount:
+          type: integer
+          nullable: true
+        chats:
+          type: array
+          items:
+            $ref: '#/components/schemas/Chat'
+    Collection:
+      type: object
+      properties:
+        id:
+          type: string
+        ticker:
+          type: string
+          nullable: true
+        slug:
+          type: string
+          nullable: true
+        title:
+          type: string
+          nullable: true
+        subtitle:
+          type: string
+          nullable: true
+        collectionType:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        tags:
+          type: string
+          nullable: true
+        image:
+          type: string
+          nullable: true
+        icon:
+          type: string
+          nullable: true
+        headerImage:
+          type: string
+          nullable: true
+        layout:
+          type: string
+          nullable: true
+        active:
+          type: boolean
+          nullable: true
+        closed:
+          type: boolean
+          nullable: true
+        archived:
+          type: boolean
+          nullable: true
+        new:
+          type: boolean
+          nullable: true
+        featured:
+          type: boolean
+          nullable: true
+        restricted:
+          type: boolean
+          nullable: true
+        isTemplate:
+          type: boolean
+          nullable: true
+        templateVariables:
+          type: string
+          nullable: true
+        publishedAt:
+          type: string
+          nullable: true
+        createdBy:
+          type: string
+          nullable: true
+        updatedBy:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        commentsEnabled:
+          type: boolean
+          nullable: true
+        imageOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        iconOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        headerImageOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+    EventCreator:
+      type: object
+      properties:
+        id:
+          type: string
+        creatorName:
+          type: string
+          nullable: true
+        creatorHandle:
+          type: string
+          nullable: true
+        creatorUrl:
+          type: string
+          nullable: true
+        creatorImage:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+    Chat:
+      type: object
+      properties:
+        id:
+          type: string
+        channelId:
+          type: string
+          nullable: true
+        channelName:
+          type: string
+          nullable: true
+        channelImage:
+          type: string
+          nullable: true
+        live:
+          type: boolean
+          nullable: true
+        startTime:
+          type: string
+          format: date-time
+          nullable: true
+        endTime:
+          type: string
+          format: date-time
+          nullable: true
+    Template:
+      type: object
+      properties:
+        id:
+          type: string
+        eventTitle:
+          type: string
+          nullable: true
+        eventSlug:
+          type: string
+          nullable: true
+        eventImage:
+          type: string
+          nullable: true
+        marketTitle:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        resolutionSource:
+          type: string
+          nullable: true
+        negRisk:
+          type: boolean
+          nullable: true
+        sortBy:
+          type: string
+          nullable: true
+        showMarketImages:
+          type: boolean
+          nullable: true
+        seriesSlug:
+          type: string
+          nullable: true
+        outcomes:
+          type: string
+          nullable: true
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# List markets
+
+
+
+## OpenAPI
+
+````yaml /api-spec/gamma-openapi.yaml get /markets
+openapi: 3.0.3
+info:
+  title: Markets API
+  version: 1.0.0
+  description: REST API specification for public endpoints used by the Markets service.
+servers:
+  - url: https://gamma-api.polymarket.com
+    description: Polymarket Gamma API Production Server
+security: []
+tags:
+  - name: Gamma Status
+    description: Gamma API status and health check
+  - name: Sports
+    description: Sports-related endpoints including teams and game data
+  - name: Tags
+    description: Tag management and related tag operations
+  - name: Events
+    description: Event management and event-related operations
+  - name: Markets
+    description: Market data and market-related operations
+  - name: Comments
+    description: Comment system and user interactions
+  - name: Series
+    description: Series management and related operations
+  - name: Profiles
+    description: User profile management
+  - name: Search
+    description: Search functionality across different entity types
+paths:
+  /markets:
+    get:
+      tags:
+        - Markets
+      summary: List markets
+      operationId: listMarkets
+      parameters:
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
+        - $ref: '#/components/parameters/order'
+        - $ref: '#/components/parameters/ascending'
+        - name: id
+          in: query
+          schema:
+            type: array
+            items:
+              type: integer
+        - name: slug
+          in: query
+          schema:
+            type: array
+            items:
+              type: string
+        - name: clob_token_ids
+          in: query
+          schema:
+            type: array
+            items:
+              type: string
+        - name: condition_ids
+          in: query
+          schema:
+            type: array
+            items:
+              type: string
+        - name: market_maker_address
+          in: query
+          schema:
+            type: array
+            items:
+              type: string
+        - name: liquidity_num_min
+          in: query
+          schema:
+            type: number
+        - name: liquidity_num_max
+          in: query
+          schema:
+            type: number
+        - name: volume_num_min
+          in: query
+          schema:
+            type: number
+        - name: volume_num_max
+          in: query
+          schema:
+            type: number
+        - name: start_date_min
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: start_date_max
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: end_date_min
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: end_date_max
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: tag_id
+          in: query
+          schema:
+            type: integer
+        - name: related_tags
+          in: query
+          schema:
+            type: boolean
+        - name: cyom
+          in: query
+          schema:
+            type: boolean
+        - name: uma_resolution_status
+          in: query
+          schema:
+            type: string
+        - name: game_id
+          in: query
+          schema:
+            type: string
+        - name: sports_market_types
+          in: query
+          schema:
+            type: array
+            items:
+              type: string
+        - name: rewards_min_size
+          in: query
+          schema:
+            type: number
+        - name: question_ids
+          in: query
+          schema:
+            type: array
+            items:
+              type: string
+        - name: include_tag
+          in: query
+          schema:
+            type: boolean
+        - name: closed
+          in: query
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: List of markets
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Market'
+components:
+  parameters:
+    limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        minimum: 0
+    offset:
+      name: offset
+      in: query
+      schema:
+        type: integer
+        minimum: 0
+    order:
+      name: order
+      in: query
+      schema:
+        type: string
+      description: Comma-separated list of fields to order by
+    ascending:
+      name: ascending
+      in: query
+      schema:
+        type: boolean
+  schemas:
+    Market:
+      type: object
+      properties:
+        id:
+          type: string
+        question:
+          type: string
+          nullable: true
+        conditionId:
+          type: string
+        slug:
+          type: string
+          nullable: true
+        twitterCardImage:
+          type: string
+          nullable: true
+        resolutionSource:
+          type: string
+          nullable: true
+        endDate:
+          type: string
+          format: date-time
+          nullable: true
+        category:
+          type: string
+          nullable: true
+        ammType:
+          type: string
+          nullable: true
+        liquidity:
+          type: string
+          nullable: true
+        sponsorName:
+          type: string
+          nullable: true
+        sponsorImage:
+          type: string
+          nullable: true
+        startDate:
+          type: string
+          format: date-time
+          nullable: true
+        xAxisValue:
+          type: string
+          nullable: true
+        yAxisValue:
+          type: string
+          nullable: true
+        denominationToken:
+          type: string
+          nullable: true
+        fee:
+          type: string
+          nullable: true
+        image:
+          type: string
+          nullable: true
+        icon:
+          type: string
+          nullable: true
+        lowerBound:
+          type: string
+          nullable: true
+        upperBound:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        outcomes:
+          type: string
+          nullable: true
+        outcomePrices:
+          type: string
+          nullable: true
+        volume:
+          type: string
+          nullable: true
+        active:
+          type: boolean
+          nullable: true
+        marketType:
+          type: string
+          nullable: true
+        formatType:
+          type: string
+          nullable: true
+        lowerBoundDate:
+          type: string
+          nullable: true
+        upperBoundDate:
+          type: string
+          nullable: true
+        closed:
+          type: boolean
+          nullable: true
+        marketMakerAddress:
+          type: string
+        createdBy:
+          type: integer
+          nullable: true
+        updatedBy:
+          type: integer
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        closedTime:
+          type: string
+          nullable: true
+        wideFormat:
+          type: boolean
+          nullable: true
+        new:
+          type: boolean
+          nullable: true
+        mailchimpTag:
+          type: string
+          nullable: true
+        featured:
+          type: boolean
+          nullable: true
+        archived:
+          type: boolean
+          nullable: true
+        resolvedBy:
+          type: string
+          nullable: true
+        restricted:
+          type: boolean
+          nullable: true
+        marketGroup:
+          type: integer
+          nullable: true
+        groupItemTitle:
+          type: string
+          nullable: true
+        groupItemThreshold:
+          type: string
+          nullable: true
+        questionID:
+          type: string
+          nullable: true
+        umaEndDate:
+          type: string
+          nullable: true
+        enableOrderBook:
+          type: boolean
+          nullable: true
+        orderPriceMinTickSize:
+          type: number
+          nullable: true
+        orderMinSize:
+          type: number
+          nullable: true
+        umaResolutionStatus:
+          type: string
+          nullable: true
+        curationOrder:
+          type: integer
+          nullable: true
+        volumeNum:
+          type: number
+          nullable: true
+        liquidityNum:
+          type: number
+          nullable: true
+        endDateIso:
+          type: string
+          nullable: true
+        startDateIso:
+          type: string
+          nullable: true
+        umaEndDateIso:
+          type: string
+          nullable: true
+        hasReviewedDates:
+          type: boolean
+          nullable: true
+        readyForCron:
+          type: boolean
+          nullable: true
+        commentsEnabled:
+          type: boolean
+          nullable: true
+        volume24hr:
+          type: number
+          nullable: true
+        volume1wk:
+          type: number
+          nullable: true
+        volume1mo:
+          type: number
+          nullable: true
+        volume1yr:
+          type: number
+          nullable: true
+        gameStartTime:
+          type: string
+          nullable: true
+        secondsDelay:
+          type: integer
+          nullable: true
+        clobTokenIds:
+          type: string
+          nullable: true
+        disqusThread:
+          type: string
+          nullable: true
+        shortOutcomes:
+          type: string
+          nullable: true
+        teamAID:
+          type: string
+          nullable: true
+        teamBID:
+          type: string
+          nullable: true
+        umaBond:
+          type: string
+          nullable: true
+        umaReward:
+          type: string
+          nullable: true
+        fpmmLive:
+          type: boolean
+          nullable: true
+        volume24hrAmm:
+          type: number
+          nullable: true
+        volume1wkAmm:
+          type: number
+          nullable: true
+        volume1moAmm:
+          type: number
+          nullable: true
+        volume1yrAmm:
+          type: number
+          nullable: true
+        volume24hrClob:
+          type: number
+          nullable: true
+        volume1wkClob:
+          type: number
+          nullable: true
+        volume1moClob:
+          type: number
+          nullable: true
+        volume1yrClob:
+          type: number
+          nullable: true
+        volumeAmm:
+          type: number
+          nullable: true
+        volumeClob:
+          type: number
+          nullable: true
+        liquidityAmm:
+          type: number
+          nullable: true
+        liquidityClob:
+          type: number
+          nullable: true
+        makerBaseFee:
+          type: integer
+          nullable: true
+        takerBaseFee:
+          type: integer
+          nullable: true
+        customLiveness:
+          type: integer
+          nullable: true
+        acceptingOrders:
+          type: boolean
+          nullable: true
+        notificationsEnabled:
+          type: boolean
+          nullable: true
+        score:
+          type: integer
+          nullable: true
+        imageOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        iconOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/Event'
+        categories:
+          type: array
+          items:
+            $ref: '#/components/schemas/Category'
+        tags:
+          type: array
+          items:
+            $ref: '#/components/schemas/Tag'
+        creator:
+          type: string
+          nullable: true
+        ready:
+          type: boolean
+          nullable: true
+        funded:
+          type: boolean
+          nullable: true
+        pastSlugs:
+          type: string
+          nullable: true
+        readyTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        fundedTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        acceptingOrdersTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        competitive:
+          type: number
+          nullable: true
+        rewardsMinSize:
+          type: number
+          nullable: true
+        rewardsMaxSpread:
+          type: number
+          nullable: true
+        spread:
+          type: number
+          nullable: true
+        automaticallyResolved:
+          type: boolean
+          nullable: true
+        oneDayPriceChange:
+          type: number
+          nullable: true
+        oneHourPriceChange:
+          type: number
+          nullable: true
+        oneWeekPriceChange:
+          type: number
+          nullable: true
+        oneMonthPriceChange:
+          type: number
+          nullable: true
+        oneYearPriceChange:
+          type: number
+          nullable: true
+        lastTradePrice:
+          type: number
+          nullable: true
+        bestBid:
+          type: number
+          nullable: true
+        bestAsk:
+          type: number
+          nullable: true
+        automaticallyActive:
+          type: boolean
+          nullable: true
+        clearBookOnStart:
+          type: boolean
+          nullable: true
+        chartColor:
+          type: string
+          nullable: true
+        seriesColor:
+          type: string
+          nullable: true
+        showGmpSeries:
+          type: boolean
+          nullable: true
+        showGmpOutcome:
+          type: boolean
+          nullable: true
+        manualActivation:
+          type: boolean
+          nullable: true
+        negRiskOther:
+          type: boolean
+          nullable: true
+        gameId:
+          type: string
+          nullable: true
+        groupItemRange:
+          type: string
+          nullable: true
+        sportsMarketType:
+          type: string
+          nullable: true
+        line:
+          type: number
+          nullable: true
+        umaResolutionStatuses:
+          type: string
+          nullable: true
+        pendingDeployment:
+          type: boolean
+          nullable: true
+        deploying:
+          type: boolean
+          nullable: true
+        deployingTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        scheduledDeploymentTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        rfqEnabled:
+          type: boolean
+          nullable: true
+        eventStartTime:
+          type: string
+          format: date-time
+          nullable: true
+        feesEnabled:
+          type: boolean
+          nullable: true
+        feeSchedule:
+          $ref: '#/components/schemas/FeeSchedule'
+    ImageOptimization:
+      type: object
+      properties:
+        id:
+          type: string
+        imageUrlSource:
+          type: string
+          nullable: true
+        imageUrlOptimized:
+          type: string
+          nullable: true
+        imageSizeKbSource:
+          type: number
+          nullable: true
+        imageSizeKbOptimized:
+          type: number
+          nullable: true
+        imageOptimizedComplete:
+          type: boolean
+          nullable: true
+        imageOptimizedLastUpdated:
+          type: string
+          nullable: true
+        relID:
+          type: integer
+          nullable: true
+        field:
+          type: string
+          nullable: true
+        relname:
+          type: string
+          nullable: true
+    Event:
+      type: object
+      properties:
+        id:
+          type: string
+        ticker:
+          type: string
+          nullable: true
+        slug:
+          type: string
+          nullable: true
+        title:
+          type: string
+          nullable: true
+        subtitle:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        resolutionSource:
+          type: string
+          nullable: true
+        startDate:
+          type: string
+          format: date-time
+          nullable: true
+        creationDate:
+          type: string
+          format: date-time
+          nullable: true
+        endDate:
+          type: string
+          format: date-time
+          nullable: true
+        image:
+          type: string
+          nullable: true
+        icon:
+          type: string
+          nullable: true
+        active:
+          type: boolean
+          nullable: true
+        closed:
+          type: boolean
+          nullable: true
+        archived:
+          type: boolean
+          nullable: true
+        new:
+          type: boolean
+          nullable: true
+        featured:
+          type: boolean
+          nullable: true
+        restricted:
+          type: boolean
+          nullable: true
+        liquidity:
+          type: number
+          nullable: true
+        volume:
+          type: number
+          nullable: true
+        openInterest:
+          type: number
+          nullable: true
+        sortBy:
+          type: string
+          nullable: true
+        category:
+          type: string
+          nullable: true
+        subcategory:
+          type: string
+          nullable: true
+        isTemplate:
+          type: boolean
+          nullable: true
+        templateVariables:
+          type: string
+          nullable: true
+        published_at:
+          type: string
+          nullable: true
+        createdBy:
+          type: string
+          nullable: true
+        updatedBy:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        commentsEnabled:
+          type: boolean
+          nullable: true
+        competitive:
+          type: number
+          nullable: true
+        volume24hr:
+          type: number
+          nullable: true
+        volume1wk:
+          type: number
+          nullable: true
+        volume1mo:
+          type: number
+          nullable: true
+        volume1yr:
+          type: number
+          nullable: true
+        featuredImage:
+          type: string
+          nullable: true
+        disqusThread:
+          type: string
+          nullable: true
+        parentEvent:
+          type: string
+          nullable: true
+        enableOrderBook:
+          type: boolean
+          nullable: true
+        liquidityAmm:
+          type: number
+          nullable: true
+        liquidityClob:
+          type: number
+          nullable: true
+        negRisk:
+          type: boolean
+          nullable: true
+        negRiskMarketID:
+          type: string
+          nullable: true
+        negRiskFeeBips:
+          type: integer
+          nullable: true
+        commentCount:
+          type: integer
+          nullable: true
+        imageOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        iconOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        featuredImageOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        subEvents:
+          type: array
+          items:
+            type: string
+          nullable: true
+        markets:
+          type: array
+          items:
+            $ref: '#/components/schemas/Market'
+        series:
+          type: array
+          items:
+            $ref: '#/components/schemas/Series'
+        categories:
+          type: array
+          items:
+            $ref: '#/components/schemas/Category'
+        collections:
+          type: array
+          items:
+            $ref: '#/components/schemas/Collection'
+        tags:
+          type: array
+          items:
+            $ref: '#/components/schemas/Tag'
+        cyom:
+          type: boolean
+          nullable: true
+        closedTime:
+          type: string
+          format: date-time
+          nullable: true
+        showAllOutcomes:
+          type: boolean
+          nullable: true
+        showMarketImages:
+          type: boolean
+          nullable: true
+        automaticallyResolved:
+          type: boolean
+          nullable: true
+        enableNegRisk:
+          type: boolean
+          nullable: true
+        automaticallyActive:
+          type: boolean
+          nullable: true
+        eventDate:
+          type: string
+          nullable: true
+        startTime:
+          type: string
+          format: date-time
+          nullable: true
+        eventWeek:
+          type: integer
+          nullable: true
+        seriesSlug:
+          type: string
+          nullable: true
+        score:
+          type: string
+          nullable: true
+        elapsed:
+          type: string
+          nullable: true
+        period:
+          type: string
+          nullable: true
+        live:
+          type: boolean
+          nullable: true
+        ended:
+          type: boolean
+          nullable: true
+        finishedTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        gmpChartMode:
+          type: string
+          nullable: true
+        eventCreators:
+          type: array
+          items:
+            $ref: '#/components/schemas/EventCreator'
+        tweetCount:
+          type: integer
+          nullable: true
+        chats:
+          type: array
+          items:
+            $ref: '#/components/schemas/Chat'
+        featuredOrder:
+          type: integer
+          nullable: true
+        estimateValue:
+          type: boolean
+          nullable: true
+        cantEstimate:
+          type: boolean
+          nullable: true
+        estimatedValue:
+          type: string
+          nullable: true
+        templates:
+          type: array
+          items:
+            $ref: '#/components/schemas/Template'
+        spreadsMainLine:
+          type: number
+          nullable: true
+        totalsMainLine:
+          type: number
+          nullable: true
+        carouselMap:
+          type: string
+          nullable: true
+        pendingDeployment:
+          type: boolean
+          nullable: true
+        deploying:
+          type: boolean
+          nullable: true
+        deployingTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        scheduledDeploymentTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        gameStatus:
+          type: string
+          nullable: true
+    Category:
+      type: object
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+          nullable: true
+        parentCategory:
+          type: string
+          nullable: true
+        slug:
+          type: string
+          nullable: true
+        publishedAt:
+          type: string
+          nullable: true
+        createdBy:
+          type: string
+          nullable: true
+        updatedBy:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+    Tag:
+      type: object
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+          nullable: true
+        slug:
+          type: string
+          nullable: true
+        forceShow:
+          type: boolean
+          nullable: true
+        publishedAt:
+          type: string
+          nullable: true
+        createdBy:
+          type: integer
+          nullable: true
+        updatedBy:
+          type: integer
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        forceHide:
+          type: boolean
+          nullable: true
+        isCarousel:
+          type: boolean
+          nullable: true
+    FeeSchedule:
+      type: object
+      properties:
+        exponent:
+          type: number
+          nullable: true
+        rate:
+          type: number
+          nullable: true
+        takerOnly:
+          type: boolean
+          nullable: true
+        rebateRate:
+          type: number
+          nullable: true
+    Series:
+      type: object
+      properties:
+        id:
+          type: string
+        ticker:
+          type: string
+          nullable: true
+        slug:
+          type: string
+          nullable: true
+        title:
+          type: string
+          nullable: true
+        subtitle:
+          type: string
+          nullable: true
+        seriesType:
+          type: string
+          nullable: true
+        recurrence:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        image:
+          type: string
+          nullable: true
+        icon:
+          type: string
+          nullable: true
+        layout:
+          type: string
+          nullable: true
+        active:
+          type: boolean
+          nullable: true
+        closed:
+          type: boolean
+          nullable: true
+        archived:
+          type: boolean
+          nullable: true
+        new:
+          type: boolean
+          nullable: true
+        featured:
+          type: boolean
+          nullable: true
+        restricted:
+          type: boolean
+          nullable: true
+        isTemplate:
+          type: boolean
+          nullable: true
+        templateVariables:
+          type: boolean
+          nullable: true
+        publishedAt:
+          type: string
+          nullable: true
+        createdBy:
+          type: string
+          nullable: true
+        updatedBy:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        commentsEnabled:
+          type: boolean
+          nullable: true
+        competitive:
+          type: string
+          nullable: true
+        volume24hr:
+          type: number
+          nullable: true
+        volume:
+          type: number
+          nullable: true
+        liquidity:
+          type: number
+          nullable: true
+        startDate:
+          type: string
+          format: date-time
+          nullable: true
+        pythTokenID:
+          type: string
+          nullable: true
+        cgAssetName:
+          type: string
+          nullable: true
+        score:
+          type: integer
+          nullable: true
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/Event'
+        collections:
+          type: array
+          items:
+            $ref: '#/components/schemas/Collection'
+        categories:
+          type: array
+          items:
+            $ref: '#/components/schemas/Category'
+        tags:
+          type: array
+          items:
+            $ref: '#/components/schemas/Tag'
+        commentCount:
+          type: integer
+          nullable: true
+        chats:
+          type: array
+          items:
+            $ref: '#/components/schemas/Chat'
+    Collection:
+      type: object
+      properties:
+        id:
+          type: string
+        ticker:
+          type: string
+          nullable: true
+        slug:
+          type: string
+          nullable: true
+        title:
+          type: string
+          nullable: true
+        subtitle:
+          type: string
+          nullable: true
+        collectionType:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        tags:
+          type: string
+          nullable: true
+        image:
+          type: string
+          nullable: true
+        icon:
+          type: string
+          nullable: true
+        headerImage:
+          type: string
+          nullable: true
+        layout:
+          type: string
+          nullable: true
+        active:
+          type: boolean
+          nullable: true
+        closed:
+          type: boolean
+          nullable: true
+        archived:
+          type: boolean
+          nullable: true
+        new:
+          type: boolean
+          nullable: true
+        featured:
+          type: boolean
+          nullable: true
+        restricted:
+          type: boolean
+          nullable: true
+        isTemplate:
+          type: boolean
+          nullable: true
+        templateVariables:
+          type: string
+          nullable: true
+        publishedAt:
+          type: string
+          nullable: true
+        createdBy:
+          type: string
+          nullable: true
+        updatedBy:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        commentsEnabled:
+          type: boolean
+          nullable: true
+        imageOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        iconOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        headerImageOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+    EventCreator:
+      type: object
+      properties:
+        id:
+          type: string
+        creatorName:
+          type: string
+          nullable: true
+        creatorHandle:
+          type: string
+          nullable: true
+        creatorUrl:
+          type: string
+          nullable: true
+        creatorImage:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+    Chat:
+      type: object
+      properties:
+        id:
+          type: string
+        channelId:
+          type: string
+          nullable: true
+        channelName:
+          type: string
+          nullable: true
+        channelImage:
+          type: string
+          nullable: true
+        live:
+          type: boolean
+          nullable: true
+        startTime:
+          type: string
+          format: date-time
+          nullable: true
+        endTime:
+          type: string
+          format: date-time
+          nullable: true
+    Template:
+      type: object
+      properties:
+        id:
+          type: string
+        eventTitle:
+          type: string
+          nullable: true
+        eventSlug:
+          type: string
+          nullable: true
+        eventImage:
+          type: string
+          nullable: true
+        marketTitle:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        resolutionSource:
+          type: string
+          nullable: true
+        negRisk:
+          type: boolean
+          nullable: true
+        sortBy:
+          type: string
+          nullable: true
+        showMarketImages:
+          type: boolean
+          nullable: true
+        seriesSlug:
+          type: string
+          nullable: true
+        outcomes:
+          type: string
+          nullable: true
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Get market by id
+
+
+
+## OpenAPI
+
+````yaml /api-spec/gamma-openapi.yaml get /markets/{id}
+openapi: 3.0.3
+info:
+  title: Markets API
+  version: 1.0.0
+  description: REST API specification for public endpoints used by the Markets service.
+servers:
+  - url: https://gamma-api.polymarket.com
+    description: Polymarket Gamma API Production Server
+security: []
+tags:
+  - name: Gamma Status
+    description: Gamma API status and health check
+  - name: Sports
+    description: Sports-related endpoints including teams and game data
+  - name: Tags
+    description: Tag management and related tag operations
+  - name: Events
+    description: Event management and event-related operations
+  - name: Markets
+    description: Market data and market-related operations
+  - name: Comments
+    description: Comment system and user interactions
+  - name: Series
+    description: Series management and related operations
+  - name: Profiles
+    description: User profile management
+  - name: Search
+    description: Search functionality across different entity types
+paths:
+  /markets/{id}:
+    get:
+      tags:
+        - Markets
+      summary: Get market by id
+      operationId: getMarket
+      parameters:
+        - $ref: '#/components/parameters/pathId'
+        - name: include_tag
+          in: query
+          schema:
+            type: boolean
+      responses:
+        '200':
+          description: Market
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Market'
+        '404':
+          description: Not found
+components:
+  parameters:
+    pathId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: integer
+  schemas:
+    Market:
+      type: object
+      properties:
+        id:
+          type: string
+        question:
+          type: string
+          nullable: true
+        conditionId:
+          type: string
+        slug:
+          type: string
+          nullable: true
+        twitterCardImage:
+          type: string
+          nullable: true
+        resolutionSource:
+          type: string
+          nullable: true
+        endDate:
+          type: string
+          format: date-time
+          nullable: true
+        category:
+          type: string
+          nullable: true
+        ammType:
+          type: string
+          nullable: true
+        liquidity:
+          type: string
+          nullable: true
+        sponsorName:
+          type: string
+          nullable: true
+        sponsorImage:
+          type: string
+          nullable: true
+        startDate:
+          type: string
+          format: date-time
+          nullable: true
+        xAxisValue:
+          type: string
+          nullable: true
+        yAxisValue:
+          type: string
+          nullable: true
+        denominationToken:
+          type: string
+          nullable: true
+        fee:
+          type: string
+          nullable: true
+        image:
+          type: string
+          nullable: true
+        icon:
+          type: string
+          nullable: true
+        lowerBound:
+          type: string
+          nullable: true
+        upperBound:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        outcomes:
+          type: string
+          nullable: true
+        outcomePrices:
+          type: string
+          nullable: true
+        volume:
+          type: string
+          nullable: true
+        active:
+          type: boolean
+          nullable: true
+        marketType:
+          type: string
+          nullable: true
+        formatType:
+          type: string
+          nullable: true
+        lowerBoundDate:
+          type: string
+          nullable: true
+        upperBoundDate:
+          type: string
+          nullable: true
+        closed:
+          type: boolean
+          nullable: true
+        marketMakerAddress:
+          type: string
+        createdBy:
+          type: integer
+          nullable: true
+        updatedBy:
+          type: integer
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        closedTime:
+          type: string
+          nullable: true
+        wideFormat:
+          type: boolean
+          nullable: true
+        new:
+          type: boolean
+          nullable: true
+        mailchimpTag:
+          type: string
+          nullable: true
+        featured:
+          type: boolean
+          nullable: true
+        archived:
+          type: boolean
+          nullable: true
+        resolvedBy:
+          type: string
+          nullable: true
+        restricted:
+          type: boolean
+          nullable: true
+        marketGroup:
+          type: integer
+          nullable: true
+        groupItemTitle:
+          type: string
+          nullable: true
+        groupItemThreshold:
+          type: string
+          nullable: true
+        questionID:
+          type: string
+          nullable: true
+        umaEndDate:
+          type: string
+          nullable: true
+        enableOrderBook:
+          type: boolean
+          nullable: true
+        orderPriceMinTickSize:
+          type: number
+          nullable: true
+        orderMinSize:
+          type: number
+          nullable: true
+        umaResolutionStatus:
+          type: string
+          nullable: true
+        curationOrder:
+          type: integer
+          nullable: true
+        volumeNum:
+          type: number
+          nullable: true
+        liquidityNum:
+          type: number
+          nullable: true
+        endDateIso:
+          type: string
+          nullable: true
+        startDateIso:
+          type: string
+          nullable: true
+        umaEndDateIso:
+          type: string
+          nullable: true
+        hasReviewedDates:
+          type: boolean
+          nullable: true
+        readyForCron:
+          type: boolean
+          nullable: true
+        commentsEnabled:
+          type: boolean
+          nullable: true
+        volume24hr:
+          type: number
+          nullable: true
+        volume1wk:
+          type: number
+          nullable: true
+        volume1mo:
+          type: number
+          nullable: true
+        volume1yr:
+          type: number
+          nullable: true
+        gameStartTime:
+          type: string
+          nullable: true
+        secondsDelay:
+          type: integer
+          nullable: true
+        clobTokenIds:
+          type: string
+          nullable: true
+        disqusThread:
+          type: string
+          nullable: true
+        shortOutcomes:
+          type: string
+          nullable: true
+        teamAID:
+          type: string
+          nullable: true
+        teamBID:
+          type: string
+          nullable: true
+        umaBond:
+          type: string
+          nullable: true
+        umaReward:
+          type: string
+          nullable: true
+        fpmmLive:
+          type: boolean
+          nullable: true
+        volume24hrAmm:
+          type: number
+          nullable: true
+        volume1wkAmm:
+          type: number
+          nullable: true
+        volume1moAmm:
+          type: number
+          nullable: true
+        volume1yrAmm:
+          type: number
+          nullable: true
+        volume24hrClob:
+          type: number
+          nullable: true
+        volume1wkClob:
+          type: number
+          nullable: true
+        volume1moClob:
+          type: number
+          nullable: true
+        volume1yrClob:
+          type: number
+          nullable: true
+        volumeAmm:
+          type: number
+          nullable: true
+        volumeClob:
+          type: number
+          nullable: true
+        liquidityAmm:
+          type: number
+          nullable: true
+        liquidityClob:
+          type: number
+          nullable: true
+        makerBaseFee:
+          type: integer
+          nullable: true
+        takerBaseFee:
+          type: integer
+          nullable: true
+        customLiveness:
+          type: integer
+          nullable: true
+        acceptingOrders:
+          type: boolean
+          nullable: true
+        notificationsEnabled:
+          type: boolean
+          nullable: true
+        score:
+          type: integer
+          nullable: true
+        imageOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        iconOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/Event'
+        categories:
+          type: array
+          items:
+            $ref: '#/components/schemas/Category'
+        tags:
+          type: array
+          items:
+            $ref: '#/components/schemas/Tag'
+        creator:
+          type: string
+          nullable: true
+        ready:
+          type: boolean
+          nullable: true
+        funded:
+          type: boolean
+          nullable: true
+        pastSlugs:
+          type: string
+          nullable: true
+        readyTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        fundedTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        acceptingOrdersTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        competitive:
+          type: number
+          nullable: true
+        rewardsMinSize:
+          type: number
+          nullable: true
+        rewardsMaxSpread:
+          type: number
+          nullable: true
+        spread:
+          type: number
+          nullable: true
+        automaticallyResolved:
+          type: boolean
+          nullable: true
+        oneDayPriceChange:
+          type: number
+          nullable: true
+        oneHourPriceChange:
+          type: number
+          nullable: true
+        oneWeekPriceChange:
+          type: number
+          nullable: true
+        oneMonthPriceChange:
+          type: number
+          nullable: true
+        oneYearPriceChange:
+          type: number
+          nullable: true
+        lastTradePrice:
+          type: number
+          nullable: true
+        bestBid:
+          type: number
+          nullable: true
+        bestAsk:
+          type: number
+          nullable: true
+        automaticallyActive:
+          type: boolean
+          nullable: true
+        clearBookOnStart:
+          type: boolean
+          nullable: true
+        chartColor:
+          type: string
+          nullable: true
+        seriesColor:
+          type: string
+          nullable: true
+        showGmpSeries:
+          type: boolean
+          nullable: true
+        showGmpOutcome:
+          type: boolean
+          nullable: true
+        manualActivation:
+          type: boolean
+          nullable: true
+        negRiskOther:
+          type: boolean
+          nullable: true
+        gameId:
+          type: string
+          nullable: true
+        groupItemRange:
+          type: string
+          nullable: true
+        sportsMarketType:
+          type: string
+          nullable: true
+        line:
+          type: number
+          nullable: true
+        umaResolutionStatuses:
+          type: string
+          nullable: true
+        pendingDeployment:
+          type: boolean
+          nullable: true
+        deploying:
+          type: boolean
+          nullable: true
+        deployingTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        scheduledDeploymentTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        rfqEnabled:
+          type: boolean
+          nullable: true
+        eventStartTime:
+          type: string
+          format: date-time
+          nullable: true
+        feesEnabled:
+          type: boolean
+          nullable: true
+        feeSchedule:
+          $ref: '#/components/schemas/FeeSchedule'
+    ImageOptimization:
+      type: object
+      properties:
+        id:
+          type: string
+        imageUrlSource:
+          type: string
+          nullable: true
+        imageUrlOptimized:
+          type: string
+          nullable: true
+        imageSizeKbSource:
+          type: number
+          nullable: true
+        imageSizeKbOptimized:
+          type: number
+          nullable: true
+        imageOptimizedComplete:
+          type: boolean
+          nullable: true
+        imageOptimizedLastUpdated:
+          type: string
+          nullable: true
+        relID:
+          type: integer
+          nullable: true
+        field:
+          type: string
+          nullable: true
+        relname:
+          type: string
+          nullable: true
+    Event:
+      type: object
+      properties:
+        id:
+          type: string
+        ticker:
+          type: string
+          nullable: true
+        slug:
+          type: string
+          nullable: true
+        title:
+          type: string
+          nullable: true
+        subtitle:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        resolutionSource:
+          type: string
+          nullable: true
+        startDate:
+          type: string
+          format: date-time
+          nullable: true
+        creationDate:
+          type: string
+          format: date-time
+          nullable: true
+        endDate:
+          type: string
+          format: date-time
+          nullable: true
+        image:
+          type: string
+          nullable: true
+        icon:
+          type: string
+          nullable: true
+        active:
+          type: boolean
+          nullable: true
+        closed:
+          type: boolean
+          nullable: true
+        archived:
+          type: boolean
+          nullable: true
+        new:
+          type: boolean
+          nullable: true
+        featured:
+          type: boolean
+          nullable: true
+        restricted:
+          type: boolean
+          nullable: true
+        liquidity:
+          type: number
+          nullable: true
+        volume:
+          type: number
+          nullable: true
+        openInterest:
+          type: number
+          nullable: true
+        sortBy:
+          type: string
+          nullable: true
+        category:
+          type: string
+          nullable: true
+        subcategory:
+          type: string
+          nullable: true
+        isTemplate:
+          type: boolean
+          nullable: true
+        templateVariables:
+          type: string
+          nullable: true
+        published_at:
+          type: string
+          nullable: true
+        createdBy:
+          type: string
+          nullable: true
+        updatedBy:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        commentsEnabled:
+          type: boolean
+          nullable: true
+        competitive:
+          type: number
+          nullable: true
+        volume24hr:
+          type: number
+          nullable: true
+        volume1wk:
+          type: number
+          nullable: true
+        volume1mo:
+          type: number
+          nullable: true
+        volume1yr:
+          type: number
+          nullable: true
+        featuredImage:
+          type: string
+          nullable: true
+        disqusThread:
+          type: string
+          nullable: true
+        parentEvent:
+          type: string
+          nullable: true
+        enableOrderBook:
+          type: boolean
+          nullable: true
+        liquidityAmm:
+          type: number
+          nullable: true
+        liquidityClob:
+          type: number
+          nullable: true
+        negRisk:
+          type: boolean
+          nullable: true
+        negRiskMarketID:
+          type: string
+          nullable: true
+        negRiskFeeBips:
+          type: integer
+          nullable: true
+        commentCount:
+          type: integer
+          nullable: true
+        imageOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        iconOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        featuredImageOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        subEvents:
+          type: array
+          items:
+            type: string
+          nullable: true
+        markets:
+          type: array
+          items:
+            $ref: '#/components/schemas/Market'
+        series:
+          type: array
+          items:
+            $ref: '#/components/schemas/Series'
+        categories:
+          type: array
+          items:
+            $ref: '#/components/schemas/Category'
+        collections:
+          type: array
+          items:
+            $ref: '#/components/schemas/Collection'
+        tags:
+          type: array
+          items:
+            $ref: '#/components/schemas/Tag'
+        cyom:
+          type: boolean
+          nullable: true
+        closedTime:
+          type: string
+          format: date-time
+          nullable: true
+        showAllOutcomes:
+          type: boolean
+          nullable: true
+        showMarketImages:
+          type: boolean
+          nullable: true
+        automaticallyResolved:
+          type: boolean
+          nullable: true
+        enableNegRisk:
+          type: boolean
+          nullable: true
+        automaticallyActive:
+          type: boolean
+          nullable: true
+        eventDate:
+          type: string
+          nullable: true
+        startTime:
+          type: string
+          format: date-time
+          nullable: true
+        eventWeek:
+          type: integer
+          nullable: true
+        seriesSlug:
+          type: string
+          nullable: true
+        score:
+          type: string
+          nullable: true
+        elapsed:
+          type: string
+          nullable: true
+        period:
+          type: string
+          nullable: true
+        live:
+          type: boolean
+          nullable: true
+        ended:
+          type: boolean
+          nullable: true
+        finishedTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        gmpChartMode:
+          type: string
+          nullable: true
+        eventCreators:
+          type: array
+          items:
+            $ref: '#/components/schemas/EventCreator'
+        tweetCount:
+          type: integer
+          nullable: true
+        chats:
+          type: array
+          items:
+            $ref: '#/components/schemas/Chat'
+        featuredOrder:
+          type: integer
+          nullable: true
+        estimateValue:
+          type: boolean
+          nullable: true
+        cantEstimate:
+          type: boolean
+          nullable: true
+        estimatedValue:
+          type: string
+          nullable: true
+        templates:
+          type: array
+          items:
+            $ref: '#/components/schemas/Template'
+        spreadsMainLine:
+          type: number
+          nullable: true
+        totalsMainLine:
+          type: number
+          nullable: true
+        carouselMap:
+          type: string
+          nullable: true
+        pendingDeployment:
+          type: boolean
+          nullable: true
+        deploying:
+          type: boolean
+          nullable: true
+        deployingTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        scheduledDeploymentTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        gameStatus:
+          type: string
+          nullable: true
+    Category:
+      type: object
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+          nullable: true
+        parentCategory:
+          type: string
+          nullable: true
+        slug:
+          type: string
+          nullable: true
+        publishedAt:
+          type: string
+          nullable: true
+        createdBy:
+          type: string
+          nullable: true
+        updatedBy:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+    Tag:
+      type: object
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+          nullable: true
+        slug:
+          type: string
+          nullable: true
+        forceShow:
+          type: boolean
+          nullable: true
+        publishedAt:
+          type: string
+          nullable: true
+        createdBy:
+          type: integer
+          nullable: true
+        updatedBy:
+          type: integer
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        forceHide:
+          type: boolean
+          nullable: true
+        isCarousel:
+          type: boolean
+          nullable: true
+    FeeSchedule:
+      type: object
+      properties:
+        exponent:
+          type: number
+          nullable: true
+        rate:
+          type: number
+          nullable: true
+        takerOnly:
+          type: boolean
+          nullable: true
+        rebateRate:
+          type: number
+          nullable: true
+    Series:
+      type: object
+      properties:
+        id:
+          type: string
+        ticker:
+          type: string
+          nullable: true
+        slug:
+          type: string
+          nullable: true
+        title:
+          type: string
+          nullable: true
+        subtitle:
+          type: string
+          nullable: true
+        seriesType:
+          type: string
+          nullable: true
+        recurrence:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        image:
+          type: string
+          nullable: true
+        icon:
+          type: string
+          nullable: true
+        layout:
+          type: string
+          nullable: true
+        active:
+          type: boolean
+          nullable: true
+        closed:
+          type: boolean
+          nullable: true
+        archived:
+          type: boolean
+          nullable: true
+        new:
+          type: boolean
+          nullable: true
+        featured:
+          type: boolean
+          nullable: true
+        restricted:
+          type: boolean
+          nullable: true
+        isTemplate:
+          type: boolean
+          nullable: true
+        templateVariables:
+          type: boolean
+          nullable: true
+        publishedAt:
+          type: string
+          nullable: true
+        createdBy:
+          type: string
+          nullable: true
+        updatedBy:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        commentsEnabled:
+          type: boolean
+          nullable: true
+        competitive:
+          type: string
+          nullable: true
+        volume24hr:
+          type: number
+          nullable: true
+        volume:
+          type: number
+          nullable: true
+        liquidity:
+          type: number
+          nullable: true
+        startDate:
+          type: string
+          format: date-time
+          nullable: true
+        pythTokenID:
+          type: string
+          nullable: true
+        cgAssetName:
+          type: string
+          nullable: true
+        score:
+          type: integer
+          nullable: true
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/Event'
+        collections:
+          type: array
+          items:
+            $ref: '#/components/schemas/Collection'
+        categories:
+          type: array
+          items:
+            $ref: '#/components/schemas/Category'
+        tags:
+          type: array
+          items:
+            $ref: '#/components/schemas/Tag'
+        commentCount:
+          type: integer
+          nullable: true
+        chats:
+          type: array
+          items:
+            $ref: '#/components/schemas/Chat'
+    Collection:
+      type: object
+      properties:
+        id:
+          type: string
+        ticker:
+          type: string
+          nullable: true
+        slug:
+          type: string
+          nullable: true
+        title:
+          type: string
+          nullable: true
+        subtitle:
+          type: string
+          nullable: true
+        collectionType:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        tags:
+          type: string
+          nullable: true
+        image:
+          type: string
+          nullable: true
+        icon:
+          type: string
+          nullable: true
+        headerImage:
+          type: string
+          nullable: true
+        layout:
+          type: string
+          nullable: true
+        active:
+          type: boolean
+          nullable: true
+        closed:
+          type: boolean
+          nullable: true
+        archived:
+          type: boolean
+          nullable: true
+        new:
+          type: boolean
+          nullable: true
+        featured:
+          type: boolean
+          nullable: true
+        restricted:
+          type: boolean
+          nullable: true
+        isTemplate:
+          type: boolean
+          nullable: true
+        templateVariables:
+          type: string
+          nullable: true
+        publishedAt:
+          type: string
+          nullable: true
+        createdBy:
+          type: string
+          nullable: true
+        updatedBy:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        commentsEnabled:
+          type: boolean
+          nullable: true
+        imageOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        iconOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        headerImageOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+    EventCreator:
+      type: object
+      properties:
+        id:
+          type: string
+        creatorName:
+          type: string
+          nullable: true
+        creatorHandle:
+          type: string
+          nullable: true
+        creatorUrl:
+          type: string
+          nullable: true
+        creatorImage:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+    Chat:
+      type: object
+      properties:
+        id:
+          type: string
+        channelId:
+          type: string
+          nullable: true
+        channelName:
+          type: string
+          nullable: true
+        channelImage:
+          type: string
+          nullable: true
+        live:
+          type: boolean
+          nullable: true
+        startTime:
+          type: string
+          format: date-time
+          nullable: true
+        endTime:
+          type: string
+          format: date-time
+          nullable: true
+    Template:
+      type: object
+      properties:
+        id:
+          type: string
+        eventTitle:
+          type: string
+          nullable: true
+        eventSlug:
+          type: string
+          nullable: true
+        eventImage:
+          type: string
+          nullable: true
+        marketTitle:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        resolutionSource:
+          type: string
+          nullable: true
+        negRisk:
+          type: boolean
+          nullable: true
+        sortBy:
+          type: string
+          nullable: true
+        showMarketImages:
+          type: boolean
+          nullable: true
+        seriesSlug:
+          type: string
+          nullable: true
+        outcomes:
+          type: string
+          nullable: true
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Get market by slug
+
+
+
+## OpenAPI
+
+````yaml /api-spec/gamma-openapi.yaml get /markets/slug/{slug}
+openapi: 3.0.3
+info:
+  title: Markets API
+  version: 1.0.0
+  description: REST API specification for public endpoints used by the Markets service.
+servers:
+  - url: https://gamma-api.polymarket.com
+    description: Polymarket Gamma API Production Server
+security: []
+tags:
+  - name: Gamma Status
+    description: Gamma API status and health check
+  - name: Sports
+    description: Sports-related endpoints including teams and game data
+  - name: Tags
+    description: Tag management and related tag operations
+  - name: Events
+    description: Event management and event-related operations
+  - name: Markets
+    description: Market data and market-related operations
+  - name: Comments
+    description: Comment system and user interactions
+  - name: Series
+    description: Series management and related operations
+  - name: Profiles
+    description: User profile management
+  - name: Search
+    description: Search functionality across different entity types
+paths:
+  /markets/slug/{slug}:
+    get:
+      tags:
+        - Markets
+      summary: Get market by slug
+      operationId: getMarketBySlug
+      parameters:
+        - $ref: '#/components/parameters/pathSlug'
+        - name: include_tag
+          in: query
+          schema:
+            type: boolean
+      responses:
+        '200':
+          description: Market
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Market'
+        '404':
+          description: Not found
+components:
+  parameters:
+    pathSlug:
+      name: slug
+      in: path
+      required: true
+      schema:
+        type: string
+  schemas:
+    Market:
+      type: object
+      properties:
+        id:
+          type: string
+        question:
+          type: string
+          nullable: true
+        conditionId:
+          type: string
+        slug:
+          type: string
+          nullable: true
+        twitterCardImage:
+          type: string
+          nullable: true
+        resolutionSource:
+          type: string
+          nullable: true
+        endDate:
+          type: string
+          format: date-time
+          nullable: true
+        category:
+          type: string
+          nullable: true
+        ammType:
+          type: string
+          nullable: true
+        liquidity:
+          type: string
+          nullable: true
+        sponsorName:
+          type: string
+          nullable: true
+        sponsorImage:
+          type: string
+          nullable: true
+        startDate:
+          type: string
+          format: date-time
+          nullable: true
+        xAxisValue:
+          type: string
+          nullable: true
+        yAxisValue:
+          type: string
+          nullable: true
+        denominationToken:
+          type: string
+          nullable: true
+        fee:
+          type: string
+          nullable: true
+        image:
+          type: string
+          nullable: true
+        icon:
+          type: string
+          nullable: true
+        lowerBound:
+          type: string
+          nullable: true
+        upperBound:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        outcomes:
+          type: string
+          nullable: true
+        outcomePrices:
+          type: string
+          nullable: true
+        volume:
+          type: string
+          nullable: true
+        active:
+          type: boolean
+          nullable: true
+        marketType:
+          type: string
+          nullable: true
+        formatType:
+          type: string
+          nullable: true
+        lowerBoundDate:
+          type: string
+          nullable: true
+        upperBoundDate:
+          type: string
+          nullable: true
+        closed:
+          type: boolean
+          nullable: true
+        marketMakerAddress:
+          type: string
+        createdBy:
+          type: integer
+          nullable: true
+        updatedBy:
+          type: integer
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        closedTime:
+          type: string
+          nullable: true
+        wideFormat:
+          type: boolean
+          nullable: true
+        new:
+          type: boolean
+          nullable: true
+        mailchimpTag:
+          type: string
+          nullable: true
+        featured:
+          type: boolean
+          nullable: true
+        archived:
+          type: boolean
+          nullable: true
+        resolvedBy:
+          type: string
+          nullable: true
+        restricted:
+          type: boolean
+          nullable: true
+        marketGroup:
+          type: integer
+          nullable: true
+        groupItemTitle:
+          type: string
+          nullable: true
+        groupItemThreshold:
+          type: string
+          nullable: true
+        questionID:
+          type: string
+          nullable: true
+        umaEndDate:
+          type: string
+          nullable: true
+        enableOrderBook:
+          type: boolean
+          nullable: true
+        orderPriceMinTickSize:
+          type: number
+          nullable: true
+        orderMinSize:
+          type: number
+          nullable: true
+        umaResolutionStatus:
+          type: string
+          nullable: true
+        curationOrder:
+          type: integer
+          nullable: true
+        volumeNum:
+          type: number
+          nullable: true
+        liquidityNum:
+          type: number
+          nullable: true
+        endDateIso:
+          type: string
+          nullable: true
+        startDateIso:
+          type: string
+          nullable: true
+        umaEndDateIso:
+          type: string
+          nullable: true
+        hasReviewedDates:
+          type: boolean
+          nullable: true
+        readyForCron:
+          type: boolean
+          nullable: true
+        commentsEnabled:
+          type: boolean
+          nullable: true
+        volume24hr:
+          type: number
+          nullable: true
+        volume1wk:
+          type: number
+          nullable: true
+        volume1mo:
+          type: number
+          nullable: true
+        volume1yr:
+          type: number
+          nullable: true
+        gameStartTime:
+          type: string
+          nullable: true
+        secondsDelay:
+          type: integer
+          nullable: true
+        clobTokenIds:
+          type: string
+          nullable: true
+        disqusThread:
+          type: string
+          nullable: true
+        shortOutcomes:
+          type: string
+          nullable: true
+        teamAID:
+          type: string
+          nullable: true
+        teamBID:
+          type: string
+          nullable: true
+        umaBond:
+          type: string
+          nullable: true
+        umaReward:
+          type: string
+          nullable: true
+        fpmmLive:
+          type: boolean
+          nullable: true
+        volume24hrAmm:
+          type: number
+          nullable: true
+        volume1wkAmm:
+          type: number
+          nullable: true
+        volume1moAmm:
+          type: number
+          nullable: true
+        volume1yrAmm:
+          type: number
+          nullable: true
+        volume24hrClob:
+          type: number
+          nullable: true
+        volume1wkClob:
+          type: number
+          nullable: true
+        volume1moClob:
+          type: number
+          nullable: true
+        volume1yrClob:
+          type: number
+          nullable: true
+        volumeAmm:
+          type: number
+          nullable: true
+        volumeClob:
+          type: number
+          nullable: true
+        liquidityAmm:
+          type: number
+          nullable: true
+        liquidityClob:
+          type: number
+          nullable: true
+        makerBaseFee:
+          type: integer
+          nullable: true
+        takerBaseFee:
+          type: integer
+          nullable: true
+        customLiveness:
+          type: integer
+          nullable: true
+        acceptingOrders:
+          type: boolean
+          nullable: true
+        notificationsEnabled:
+          type: boolean
+          nullable: true
+        score:
+          type: integer
+          nullable: true
+        imageOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        iconOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/Event'
+        categories:
+          type: array
+          items:
+            $ref: '#/components/schemas/Category'
+        tags:
+          type: array
+          items:
+            $ref: '#/components/schemas/Tag'
+        creator:
+          type: string
+          nullable: true
+        ready:
+          type: boolean
+          nullable: true
+        funded:
+          type: boolean
+          nullable: true
+        pastSlugs:
+          type: string
+          nullable: true
+        readyTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        fundedTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        acceptingOrdersTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        competitive:
+          type: number
+          nullable: true
+        rewardsMinSize:
+          type: number
+          nullable: true
+        rewardsMaxSpread:
+          type: number
+          nullable: true
+        spread:
+          type: number
+          nullable: true
+        automaticallyResolved:
+          type: boolean
+          nullable: true
+        oneDayPriceChange:
+          type: number
+          nullable: true
+        oneHourPriceChange:
+          type: number
+          nullable: true
+        oneWeekPriceChange:
+          type: number
+          nullable: true
+        oneMonthPriceChange:
+          type: number
+          nullable: true
+        oneYearPriceChange:
+          type: number
+          nullable: true
+        lastTradePrice:
+          type: number
+          nullable: true
+        bestBid:
+          type: number
+          nullable: true
+        bestAsk:
+          type: number
+          nullable: true
+        automaticallyActive:
+          type: boolean
+          nullable: true
+        clearBookOnStart:
+          type: boolean
+          nullable: true
+        chartColor:
+          type: string
+          nullable: true
+        seriesColor:
+          type: string
+          nullable: true
+        showGmpSeries:
+          type: boolean
+          nullable: true
+        showGmpOutcome:
+          type: boolean
+          nullable: true
+        manualActivation:
+          type: boolean
+          nullable: true
+        negRiskOther:
+          type: boolean
+          nullable: true
+        gameId:
+          type: string
+          nullable: true
+        groupItemRange:
+          type: string
+          nullable: true
+        sportsMarketType:
+          type: string
+          nullable: true
+        line:
+          type: number
+          nullable: true
+        umaResolutionStatuses:
+          type: string
+          nullable: true
+        pendingDeployment:
+          type: boolean
+          nullable: true
+        deploying:
+          type: boolean
+          nullable: true
+        deployingTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        scheduledDeploymentTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        rfqEnabled:
+          type: boolean
+          nullable: true
+        eventStartTime:
+          type: string
+          format: date-time
+          nullable: true
+        feesEnabled:
+          type: boolean
+          nullable: true
+        feeSchedule:
+          $ref: '#/components/schemas/FeeSchedule'
+    ImageOptimization:
+      type: object
+      properties:
+        id:
+          type: string
+        imageUrlSource:
+          type: string
+          nullable: true
+        imageUrlOptimized:
+          type: string
+          nullable: true
+        imageSizeKbSource:
+          type: number
+          nullable: true
+        imageSizeKbOptimized:
+          type: number
+          nullable: true
+        imageOptimizedComplete:
+          type: boolean
+          nullable: true
+        imageOptimizedLastUpdated:
+          type: string
+          nullable: true
+        relID:
+          type: integer
+          nullable: true
+        field:
+          type: string
+          nullable: true
+        relname:
+          type: string
+          nullable: true
+    Event:
+      type: object
+      properties:
+        id:
+          type: string
+        ticker:
+          type: string
+          nullable: true
+        slug:
+          type: string
+          nullable: true
+        title:
+          type: string
+          nullable: true
+        subtitle:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        resolutionSource:
+          type: string
+          nullable: true
+        startDate:
+          type: string
+          format: date-time
+          nullable: true
+        creationDate:
+          type: string
+          format: date-time
+          nullable: true
+        endDate:
+          type: string
+          format: date-time
+          nullable: true
+        image:
+          type: string
+          nullable: true
+        icon:
+          type: string
+          nullable: true
+        active:
+          type: boolean
+          nullable: true
+        closed:
+          type: boolean
+          nullable: true
+        archived:
+          type: boolean
+          nullable: true
+        new:
+          type: boolean
+          nullable: true
+        featured:
+          type: boolean
+          nullable: true
+        restricted:
+          type: boolean
+          nullable: true
+        liquidity:
+          type: number
+          nullable: true
+        volume:
+          type: number
+          nullable: true
+        openInterest:
+          type: number
+          nullable: true
+        sortBy:
+          type: string
+          nullable: true
+        category:
+          type: string
+          nullable: true
+        subcategory:
+          type: string
+          nullable: true
+        isTemplate:
+          type: boolean
+          nullable: true
+        templateVariables:
+          type: string
+          nullable: true
+        published_at:
+          type: string
+          nullable: true
+        createdBy:
+          type: string
+          nullable: true
+        updatedBy:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        commentsEnabled:
+          type: boolean
+          nullable: true
+        competitive:
+          type: number
+          nullable: true
+        volume24hr:
+          type: number
+          nullable: true
+        volume1wk:
+          type: number
+          nullable: true
+        volume1mo:
+          type: number
+          nullable: true
+        volume1yr:
+          type: number
+          nullable: true
+        featuredImage:
+          type: string
+          nullable: true
+        disqusThread:
+          type: string
+          nullable: true
+        parentEvent:
+          type: string
+          nullable: true
+        enableOrderBook:
+          type: boolean
+          nullable: true
+        liquidityAmm:
+          type: number
+          nullable: true
+        liquidityClob:
+          type: number
+          nullable: true
+        negRisk:
+          type: boolean
+          nullable: true
+        negRiskMarketID:
+          type: string
+          nullable: true
+        negRiskFeeBips:
+          type: integer
+          nullable: true
+        commentCount:
+          type: integer
+          nullable: true
+        imageOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        iconOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        featuredImageOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        subEvents:
+          type: array
+          items:
+            type: string
+          nullable: true
+        markets:
+          type: array
+          items:
+            $ref: '#/components/schemas/Market'
+        series:
+          type: array
+          items:
+            $ref: '#/components/schemas/Series'
+        categories:
+          type: array
+          items:
+            $ref: '#/components/schemas/Category'
+        collections:
+          type: array
+          items:
+            $ref: '#/components/schemas/Collection'
+        tags:
+          type: array
+          items:
+            $ref: '#/components/schemas/Tag'
+        cyom:
+          type: boolean
+          nullable: true
+        closedTime:
+          type: string
+          format: date-time
+          nullable: true
+        showAllOutcomes:
+          type: boolean
+          nullable: true
+        showMarketImages:
+          type: boolean
+          nullable: true
+        automaticallyResolved:
+          type: boolean
+          nullable: true
+        enableNegRisk:
+          type: boolean
+          nullable: true
+        automaticallyActive:
+          type: boolean
+          nullable: true
+        eventDate:
+          type: string
+          nullable: true
+        startTime:
+          type: string
+          format: date-time
+          nullable: true
+        eventWeek:
+          type: integer
+          nullable: true
+        seriesSlug:
+          type: string
+          nullable: true
+        score:
+          type: string
+          nullable: true
+        elapsed:
+          type: string
+          nullable: true
+        period:
+          type: string
+          nullable: true
+        live:
+          type: boolean
+          nullable: true
+        ended:
+          type: boolean
+          nullable: true
+        finishedTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        gmpChartMode:
+          type: string
+          nullable: true
+        eventCreators:
+          type: array
+          items:
+            $ref: '#/components/schemas/EventCreator'
+        tweetCount:
+          type: integer
+          nullable: true
+        chats:
+          type: array
+          items:
+            $ref: '#/components/schemas/Chat'
+        featuredOrder:
+          type: integer
+          nullable: true
+        estimateValue:
+          type: boolean
+          nullable: true
+        cantEstimate:
+          type: boolean
+          nullable: true
+        estimatedValue:
+          type: string
+          nullable: true
+        templates:
+          type: array
+          items:
+            $ref: '#/components/schemas/Template'
+        spreadsMainLine:
+          type: number
+          nullable: true
+        totalsMainLine:
+          type: number
+          nullable: true
+        carouselMap:
+          type: string
+          nullable: true
+        pendingDeployment:
+          type: boolean
+          nullable: true
+        deploying:
+          type: boolean
+          nullable: true
+        deployingTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        scheduledDeploymentTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        gameStatus:
+          type: string
+          nullable: true
+    Category:
+      type: object
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+          nullable: true
+        parentCategory:
+          type: string
+          nullable: true
+        slug:
+          type: string
+          nullable: true
+        publishedAt:
+          type: string
+          nullable: true
+        createdBy:
+          type: string
+          nullable: true
+        updatedBy:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+    Tag:
+      type: object
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+          nullable: true
+        slug:
+          type: string
+          nullable: true
+        forceShow:
+          type: boolean
+          nullable: true
+        publishedAt:
+          type: string
+          nullable: true
+        createdBy:
+          type: integer
+          nullable: true
+        updatedBy:
+          type: integer
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        forceHide:
+          type: boolean
+          nullable: true
+        isCarousel:
+          type: boolean
+          nullable: true
+    FeeSchedule:
+      type: object
+      properties:
+        exponent:
+          type: number
+          nullable: true
+        rate:
+          type: number
+          nullable: true
+        takerOnly:
+          type: boolean
+          nullable: true
+        rebateRate:
+          type: number
+          nullable: true
+    Series:
+      type: object
+      properties:
+        id:
+          type: string
+        ticker:
+          type: string
+          nullable: true
+        slug:
+          type: string
+          nullable: true
+        title:
+          type: string
+          nullable: true
+        subtitle:
+          type: string
+          nullable: true
+        seriesType:
+          type: string
+          nullable: true
+        recurrence:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        image:
+          type: string
+          nullable: true
+        icon:
+          type: string
+          nullable: true
+        layout:
+          type: string
+          nullable: true
+        active:
+          type: boolean
+          nullable: true
+        closed:
+          type: boolean
+          nullable: true
+        archived:
+          type: boolean
+          nullable: true
+        new:
+          type: boolean
+          nullable: true
+        featured:
+          type: boolean
+          nullable: true
+        restricted:
+          type: boolean
+          nullable: true
+        isTemplate:
+          type: boolean
+          nullable: true
+        templateVariables:
+          type: boolean
+          nullable: true
+        publishedAt:
+          type: string
+          nullable: true
+        createdBy:
+          type: string
+          nullable: true
+        updatedBy:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        commentsEnabled:
+          type: boolean
+          nullable: true
+        competitive:
+          type: string
+          nullable: true
+        volume24hr:
+          type: number
+          nullable: true
+        volume:
+          type: number
+          nullable: true
+        liquidity:
+          type: number
+          nullable: true
+        startDate:
+          type: string
+          format: date-time
+          nullable: true
+        pythTokenID:
+          type: string
+          nullable: true
+        cgAssetName:
+          type: string
+          nullable: true
+        score:
+          type: integer
+          nullable: true
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/Event'
+        collections:
+          type: array
+          items:
+            $ref: '#/components/schemas/Collection'
+        categories:
+          type: array
+          items:
+            $ref: '#/components/schemas/Category'
+        tags:
+          type: array
+          items:
+            $ref: '#/components/schemas/Tag'
+        commentCount:
+          type: integer
+          nullable: true
+        chats:
+          type: array
+          items:
+            $ref: '#/components/schemas/Chat'
+    Collection:
+      type: object
+      properties:
+        id:
+          type: string
+        ticker:
+          type: string
+          nullable: true
+        slug:
+          type: string
+          nullable: true
+        title:
+          type: string
+          nullable: true
+        subtitle:
+          type: string
+          nullable: true
+        collectionType:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        tags:
+          type: string
+          nullable: true
+        image:
+          type: string
+          nullable: true
+        icon:
+          type: string
+          nullable: true
+        headerImage:
+          type: string
+          nullable: true
+        layout:
+          type: string
+          nullable: true
+        active:
+          type: boolean
+          nullable: true
+        closed:
+          type: boolean
+          nullable: true
+        archived:
+          type: boolean
+          nullable: true
+        new:
+          type: boolean
+          nullable: true
+        featured:
+          type: boolean
+          nullable: true
+        restricted:
+          type: boolean
+          nullable: true
+        isTemplate:
+          type: boolean
+          nullable: true
+        templateVariables:
+          type: string
+          nullable: true
+        publishedAt:
+          type: string
+          nullable: true
+        createdBy:
+          type: string
+          nullable: true
+        updatedBy:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        commentsEnabled:
+          type: boolean
+          nullable: true
+        imageOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        iconOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        headerImageOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+    EventCreator:
+      type: object
+      properties:
+        id:
+          type: string
+        creatorName:
+          type: string
+          nullable: true
+        creatorHandle:
+          type: string
+          nullable: true
+        creatorUrl:
+          type: string
+          nullable: true
+        creatorImage:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+    Chat:
+      type: object
+      properties:
+        id:
+          type: string
+        channelId:
+          type: string
+          nullable: true
+        channelName:
+          type: string
+          nullable: true
+        channelImage:
+          type: string
+          nullable: true
+        live:
+          type: boolean
+          nullable: true
+        startTime:
+          type: string
+          format: date-time
+          nullable: true
+        endTime:
+          type: string
+          format: date-time
+          nullable: true
+    Template:
+      type: object
+      properties:
+        id:
+          type: string
+        eventTitle:
+          type: string
+          nullable: true
+        eventSlug:
+          type: string
+          nullable: true
+        eventImage:
+          type: string
+          nullable: true
+        marketTitle:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        resolutionSource:
+          type: string
+          nullable: true
+        negRisk:
+          type: boolean
+          nullable: true
+        sortBy:
+          type: string
+          nullable: true
+        showMarketImages:
+          type: boolean
+          nullable: true
+        seriesSlug:
+          type: string
+          nullable: true
+        outcomes:
+          type: string
+          nullable: true
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Get market tags by id
+
+
+
+## OpenAPI
+
+````yaml /api-spec/gamma-openapi.yaml get /markets/{id}/tags
+openapi: 3.0.3
+info:
+  title: Markets API
+  version: 1.0.0
+  description: REST API specification for public endpoints used by the Markets service.
+servers:
+  - url: https://gamma-api.polymarket.com
+    description: Polymarket Gamma API Production Server
+security: []
+tags:
+  - name: Gamma Status
+    description: Gamma API status and health check
+  - name: Sports
+    description: Sports-related endpoints including teams and game data
+  - name: Tags
+    description: Tag management and related tag operations
+  - name: Events
+    description: Event management and event-related operations
+  - name: Markets
+    description: Market data and market-related operations
+  - name: Comments
+    description: Comment system and user interactions
+  - name: Series
+    description: Series management and related operations
+  - name: Profiles
+    description: User profile management
+  - name: Search
+    description: Search functionality across different entity types
+paths:
+  /markets/{id}/tags:
+    get:
+      tags:
+        - Markets
+        - Tags
+      summary: Get market tags by id
+      operationId: getMarketTags
+      parameters:
+        - $ref: '#/components/parameters/pathId'
+      responses:
+        '200':
+          description: Tags attached to the market
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Tag'
+        '404':
+          description: Not found
+components:
+  parameters:
+    pathId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: integer
+  schemas:
+    Tag:
+      type: object
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+          nullable: true
+        slug:
+          type: string
+          nullable: true
+        forceShow:
+          type: boolean
+          nullable: true
+        publishedAt:
+          type: string
+          nullable: true
+        createdBy:
+          type: integer
+          nullable: true
+        updatedBy:
+          type: integer
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        forceHide:
+          type: boolean
+          nullable: true
+        isCarousel:
+          type: boolean
+          nullable: true
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Get market by token
+
+> Returns the parent market for a given token ID. Useful when you have
+a token ID and need to resolve its parent market without knowing the
+condition ID in advance.
+
+
+
+
+## OpenAPI
+
+````yaml /api-spec/clob-openapi.yaml get /markets-by-token/{token_id}
+openapi: 3.1.0
+info:
+  title: Polymarket CLOB API
+  description: Polymarket CLOB API Reference
+  license:
+    name: MIT
+    identifier: MIT
+  version: 1.0.0
+servers:
+  - url: https://clob.polymarket.com
+    description: Production CLOB API
+  - url: https://clob-staging.polymarket.com
+    description: Staging CLOB API
+security: []
+tags:
+  - name: Trade
+    description: Trade endpoints
+  - name: Markets
+    description: Market data endpoints
+  - name: Account
+    description: Account and authentication endpoints
+  - name: Notifications
+    description: User notification endpoints
+  - name: Rewards
+    description: Rewards and earnings endpoints
+  - name: Rebates
+    description: Maker rebate endpoints
+paths:
+  /markets-by-token/{token_id}:
+    get:
+      tags:
+        - Markets
+      summary: Get market by token
+      description: |
+        Returns the parent market for a given token ID. Useful when you have
+        a token ID and need to resolve its parent market without knowing the
+        condition ID in advance.
+      operationId: getMarketByToken
+      parameters:
+        - name: token_id
+          in: path
+          required: true
+          description: The token ID to look up the parent market for
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Successfully retrieved market
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MarketByTokenResponse'
+        '400':
+          description: Invalid market - empty token_id
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Market not found for token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+components:
+  schemas:
+    MarketByTokenResponse:
+      type: object
+      description: >-
+        Response for GET /markets-by-token/{token_id} — condition ID and both
+        token IDs in the market.
+      required:
+        - condition_id
+        - primary_token_id
+        - secondary_token_id
+      properties:
+        condition_id:
+          type: string
+          description: The condition ID of the market containing the given token
+          example: '0xbd31dc8a20211944f6b70f31557f1001557b59905b7738480ca09bd4532f84af'
+        primary_token_id:
+          type: string
+          description: The primary (Yes) token ID
+          example: >-
+            71321045679252212594626385532706912750332728571942532289631379312455583992563
+        secondary_token_id:
+          type: string
+          description: The secondary (No) token ID
+          example: >-
+            52114319501245915516055106046884209969926127482827954674443846427813813222426
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Error message
+        code:
+          type: string
+          description: Machine-readable error code, when provided
+        retry_after_seconds:
+          type: integer
+          description: Number of seconds to wait before retrying, when provided
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Get top holders for markets
+
+
+
+## OpenAPI
+
+````yaml /api-spec/data-openapi.yaml get /holders
+openapi: 3.0.3
+info:
+  title: Polymarket Data API
+  version: 1.0.0
+  description: >
+    HTTP API for Polymarket data. This specification documents all public
+    routes.
+servers:
+  - url: https://data-api.polymarket.com
+    description: Relative server (same host)
+security: []
+tags:
+  - name: Data API Status
+    description: Data API health check
+  - name: Core
+  - name: Builders
+  - name: Misc
+paths:
+  /holders:
+    get:
+      tags:
+        - Core
+      summary: Get top holders for markets
+      parameters:
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            default: 20
+            minimum: 0
+            maximum: 20
+          description: Maximum number of holders to return per token. Capped at 20.
+        - in: query
+          name: market
+          required: true
+          style: form
+          explode: false
+          schema:
+            type: array
+            items:
+              $ref: '#/components/schemas/Hash64'
+          description: Comma-separated list of condition IDs.
+        - in: query
+          name: minBalance
+          schema:
+            type: integer
+            default: 1
+            minimum: 0
+            maximum: 999999
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/MetaHolder'
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+components:
+  schemas:
+    Hash64:
+      type: string
+      description: 0x-prefixed 64-hex string
+      pattern: ^0x[a-fA-F0-9]{64}$
+      example: '0xdd22472e552920b8438158ea7238bfadfa4f736aa4cee91a6b86c39ead110917'
+    MetaHolder:
+      type: object
+      properties:
+        token:
+          type: string
+        holders:
+          type: array
+          items:
+            $ref: '#/components/schemas/Holder'
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+      required:
+        - error
+    Holder:
+      type: object
+      properties:
+        proxyWallet:
+          $ref: '#/components/schemas/Address'
+        bio:
+          type: string
+        asset:
+          type: string
+        pseudonym:
+          type: string
+        amount:
+          type: number
+        displayUsernamePublic:
+          type: boolean
+        outcomeIndex:
+          type: integer
+        name:
+          type: string
+        profileImage:
+          type: string
+        profileImageOptimized:
+          type: string
+    Address:
+      type: string
+      description: User Profile Address (0x-prefixed, 40 hex chars)
+      pattern: ^0x[a-fA-F0-9]{40}$
+      example: '0x56687bf447db6ffa42ffe2204a05edaa20f55839'
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Get open interest
+
+
+
+## OpenAPI
+
+````yaml /api-spec/data-openapi.yaml get /oi
+openapi: 3.0.3
+info:
+  title: Polymarket Data API
+  version: 1.0.0
+  description: >
+    HTTP API for Polymarket data. This specification documents all public
+    routes.
+servers:
+  - url: https://data-api.polymarket.com
+    description: Relative server (same host)
+security: []
+tags:
+  - name: Data API Status
+    description: Data API health check
+  - name: Core
+  - name: Builders
+  - name: Misc
+paths:
+  /oi:
+    get:
+      tags:
+        - Misc
+      summary: Get open interest
+      parameters:
+        - in: query
+          name: market
+          style: form
+          explode: false
+          schema:
+            type: array
+            items:
+              $ref: '#/components/schemas/Hash64'
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/OpenInterest'
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+components:
+  schemas:
+    Hash64:
+      type: string
+      description: 0x-prefixed 64-hex string
+      pattern: ^0x[a-fA-F0-9]{64}$
+      example: '0xdd22472e552920b8438158ea7238bfadfa4f736aa4cee91a6b86c39ead110917'
+    OpenInterest:
+      type: object
+      properties:
+        market:
+          $ref: '#/components/schemas/Hash64'
+        value:
+          type: number
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+      required:
+        - error
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Get live volume for an event
+
+
+
+## OpenAPI
+
+````yaml /api-spec/data-openapi.yaml get /live-volume
+openapi: 3.0.3
+info:
+  title: Polymarket Data API
+  version: 1.0.0
+  description: >
+    HTTP API for Polymarket data. This specification documents all public
+    routes.
+servers:
+  - url: https://data-api.polymarket.com
+    description: Relative server (same host)
+security: []
+tags:
+  - name: Data API Status
+    description: Data API health check
+  - name: Core
+  - name: Builders
+  - name: Misc
+paths:
+  /live-volume:
+    get:
+      tags:
+        - Misc
+      summary: Get live volume for an event
+      parameters:
+        - in: query
+          name: id
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/LiveVolume'
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+components:
+  schemas:
+    LiveVolume:
+      type: object
+      properties:
+        total:
+          type: number
+        markets:
+          type: array
+          items:
+            $ref: '#/components/schemas/MarketVolume'
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+      required:
+        - error
+    MarketVolume:
+      type: object
+      properties:
+        market:
+          $ref: '#/components/schemas/Hash64'
+        value:
+          type: number
+    Hash64:
+      type: string
+      description: 0x-prefixed 64-hex string
+      pattern: ^0x[a-fA-F0-9]{64}$
+      example: '0xdd22472e552920b8438158ea7238bfadfa4f736aa4cee91a6b86c39ead110917'
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Get order book
+
+> Retrieves the order book summary for a specific token ID.
+Includes bids, asks, market details, and last trade price.
+
+
+
+
+## OpenAPI
+
+````yaml /api-spec/clob-openapi.yaml get /book
+openapi: 3.1.0
+info:
+  title: Polymarket CLOB API
+  description: Polymarket CLOB API Reference
+  license:
+    name: MIT
+    identifier: MIT
+  version: 1.0.0
+servers:
+  - url: https://clob.polymarket.com
+    description: Production CLOB API
+  - url: https://clob-staging.polymarket.com
+    description: Staging CLOB API
+security: []
+tags:
+  - name: Trade
+    description: Trade endpoints
+  - name: Markets
+    description: Market data endpoints
+  - name: Account
+    description: Account and authentication endpoints
+  - name: Notifications
+    description: User notification endpoints
+  - name: Rewards
+    description: Rewards and earnings endpoints
+  - name: Rebates
+    description: Maker rebate endpoints
+paths:
+  /book:
+    get:
+      tags:
+        - Market Data
+      summary: Get order book
+      description: |
+        Retrieves the order book summary for a specific token ID.
+        Includes bids, asks, market details, and last trade price.
+      operationId: getBook
+      parameters:
+        - name: token_id
+          in: query
+          description: Token ID (asset ID)
+          required: true
+          schema:
+            type: string
+          example: 0xabc123def456...
+      responses:
+        '200':
+          description: Successfully retrieved order book
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderBookSummary'
+              example:
+                market: '0x1234567890123456789012345678901234567890'
+                asset_id: 0xabc123def456...
+                timestamp: '1234567890'
+                hash: a1b2c3d4e5f6...
+                bids:
+                  - price: '0.45'
+                    size: '100'
+                  - price: '0.44'
+                    size: '200'
+                asks:
+                  - price: '0.46'
+                    size: '150'
+                  - price: '0.47'
+                    size: '250'
+                min_order_size: '1'
+                tick_size: '0.01'
+                neg_risk: false
+                last_trade_price: '0.45'
+        '400':
+          description: Bad request - Invalid token id
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Invalid token id
+        '404':
+          description: Not found - No orderbook exists for the requested token id
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: No orderbook exists for the requested token id
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: error getting the orderbook
+      security: []
+components:
+  schemas:
+    OrderBookSummary:
+      type: object
+      required:
+        - market
+        - asset_id
+        - timestamp
+        - hash
+        - bids
+        - asks
+        - min_order_size
+        - tick_size
+        - neg_risk
+        - last_trade_price
+      properties:
+        market:
+          type: string
+          description: Market condition ID
+          example: '0x1234567890123456789012345678901234567890'
+        asset_id:
+          type: string
+          description: Token ID (asset ID)
+          example: 0xabc123def456...
+        timestamp:
+          type: string
+          description: Timestamp of the order book snapshot
+          example: '1234567890'
+        hash:
+          type: string
+          description: Hash of the order book summary
+          example: a1b2c3d4e5f6...
+        bids:
+          type: array
+          description: List of bid orders (sorted by price descending)
+          items:
+            $ref: '#/components/schemas/OrderSummary'
+        asks:
+          type: array
+          description: List of ask orders (sorted by price ascending)
+          items:
+            $ref: '#/components/schemas/OrderSummary'
+        min_order_size:
+          type: string
+          description: Minimum order size
+          example: '1'
+        tick_size:
+          type: string
+          description: Minimum price increment (tick size)
+          example: '0.01'
+        neg_risk:
+          type: boolean
+          description: Whether negative risk is enabled for this market
+          example: false
+        last_trade_price:
+          type: string
+          description: Last trade price
+          example: '0.45'
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Error message
+        code:
+          type: string
+          description: Machine-readable error code, when provided
+        retry_after_seconds:
+          type: integer
+          description: Number of seconds to wait before retrying, when provided
+    OrderSummary:
+      type: object
+      required:
+        - price
+        - size
+      properties:
+        price:
+          type: string
+          description: Order price
+          example: '0.45'
+        size:
+          type: string
+          description: Order size
+          example: '100'
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Get order books (request body)
+
+> Retrieves order book summaries for multiple token IDs using a request body.
+
+
+
+
+## OpenAPI
+
+````yaml /api-spec/clob-openapi.yaml post /books
+openapi: 3.1.0
+info:
+  title: Polymarket CLOB API
+  description: Polymarket CLOB API Reference
+  license:
+    name: MIT
+    identifier: MIT
+  version: 1.0.0
+servers:
+  - url: https://clob.polymarket.com
+    description: Production CLOB API
+  - url: https://clob-staging.polymarket.com
+    description: Staging CLOB API
+security: []
+tags:
+  - name: Trade
+    description: Trade endpoints
+  - name: Markets
+    description: Market data endpoints
+  - name: Account
+    description: Account and authentication endpoints
+  - name: Notifications
+    description: User notification endpoints
+  - name: Rewards
+    description: Rewards and earnings endpoints
+  - name: Rebates
+    description: Maker rebate endpoints
+paths:
+  /books:
+    post:
+      tags:
+        - Market Data
+      summary: Get order books (request body)
+      description: >
+        Retrieves order book summaries for multiple token IDs using a request
+        body.
+      operationId: getBooksPost
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: '#/components/schemas/BookRequest'
+            example:
+              - token_id: 0xabc123def456...
+              - token_id: 0xdef456abc123...
+      responses:
+        '200':
+          description: Successfully retrieved order books
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/OrderBookSummary'
+              example:
+                - market: '0x1234567890123456789012345678901234567890'
+                  asset_id: 0xabc123def456...
+                  timestamp: '1234567890'
+                  hash: a1b2c3d4e5f6...
+                  bids:
+                    - price: '0.45'
+                      size: '100'
+                  asks:
+                    - price: '0.46'
+                      size: '150'
+                  min_order_size: '1'
+                  tick_size: '0.01'
+                  neg_risk: false
+                  last_trade_price: '0.45'
+        '400':
+          description: Bad request - Invalid payload
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Invalid payload
+      security: []
+components:
+  schemas:
+    BookRequest:
+      type: object
+      required:
+        - token_id
+      properties:
+        token_id:
+          type: string
+          description: Token ID (asset ID)
+          example: 0xabc123def456...
+        side:
+          type: string
+          description: Order side (optional, not used for midpoint calculation)
+          enum:
+            - BUY
+            - SELL
+          example: BUY
+    OrderBookSummary:
+      type: object
+      required:
+        - market
+        - asset_id
+        - timestamp
+        - hash
+        - bids
+        - asks
+        - min_order_size
+        - tick_size
+        - neg_risk
+        - last_trade_price
+      properties:
+        market:
+          type: string
+          description: Market condition ID
+          example: '0x1234567890123456789012345678901234567890'
+        asset_id:
+          type: string
+          description: Token ID (asset ID)
+          example: 0xabc123def456...
+        timestamp:
+          type: string
+          description: Timestamp of the order book snapshot
+          example: '1234567890'
+        hash:
+          type: string
+          description: Hash of the order book summary
+          example: a1b2c3d4e5f6...
+        bids:
+          type: array
+          description: List of bid orders (sorted by price descending)
+          items:
+            $ref: '#/components/schemas/OrderSummary'
+        asks:
+          type: array
+          description: List of ask orders (sorted by price ascending)
+          items:
+            $ref: '#/components/schemas/OrderSummary'
+        min_order_size:
+          type: string
+          description: Minimum order size
+          example: '1'
+        tick_size:
+          type: string
+          description: Minimum price increment (tick size)
+          example: '0.01'
+        neg_risk:
+          type: boolean
+          description: Whether negative risk is enabled for this market
+          example: false
+        last_trade_price:
+          type: string
+          description: Last trade price
+          example: '0.45'
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Error message
+        code:
+          type: string
+          description: Machine-readable error code, when provided
+        retry_after_seconds:
+          type: integer
+          description: Number of seconds to wait before retrying, when provided
+    OrderSummary:
+      type: object
+      required:
+        - price
+        - size
+      properties:
+        price:
+          type: string
+          description: Order price
+          example: '0.45'
+        size:
+          type: string
+          description: Order size
+          example: '100'
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Get market price
+
+> Retrieves the best market price for a specific token ID and side (bid or ask).
+Returns the best bid price for BUY side or best ask price for SELL side.
+
+
+
+
+## OpenAPI
+
+````yaml /api-spec/clob-openapi.yaml get /price
+openapi: 3.1.0
+info:
+  title: Polymarket CLOB API
+  description: Polymarket CLOB API Reference
+  license:
+    name: MIT
+    identifier: MIT
+  version: 1.0.0
+servers:
+  - url: https://clob.polymarket.com
+    description: Production CLOB API
+  - url: https://clob-staging.polymarket.com
+    description: Staging CLOB API
+security: []
+tags:
+  - name: Trade
+    description: Trade endpoints
+  - name: Markets
+    description: Market data endpoints
+  - name: Account
+    description: Account and authentication endpoints
+  - name: Notifications
+    description: User notification endpoints
+  - name: Rewards
+    description: Rewards and earnings endpoints
+  - name: Rebates
+    description: Maker rebate endpoints
+paths:
+  /price:
+    get:
+      tags:
+        - Market Data
+      summary: Get market price
+      description: >
+        Retrieves the best market price for a specific token ID and side (bid or
+        ask).
+
+        Returns the best bid price for BUY side or best ask price for SELL side.
+      operationId: getPrice
+      parameters:
+        - name: token_id
+          in: query
+          description: Token ID (asset ID)
+          required: true
+          schema:
+            type: string
+          example: 0xabc123def456...
+        - name: side
+          in: query
+          description: Order side
+          required: true
+          schema:
+            type: string
+            enum:
+              - BUY
+              - SELL
+          example: BUY
+      responses:
+        '200':
+          description: Successfully retrieved market price
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - price
+                properties:
+                  price:
+                    type: number
+                    format: double
+                    description: Market price as a decimal number
+                    example: 0.45
+              example:
+                price: 0.45
+        '400':
+          description: Bad request - Invalid token id or side
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                invalid_token_id:
+                  summary: Invalid token id
+                  value:
+                    error: Invalid token id
+                invalid_side:
+                  summary: Invalid side
+                  value:
+                    error: Invalid side
+        '404':
+          description: Not found - No orderbook exists for the requested token id
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: No orderbook exists for the requested token id
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Internal server error
+      security: []
+components:
+  schemas:
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Error message
+        code:
+          type: string
+          description: Machine-readable error code, when provided
+        retry_after_seconds:
+          type: integer
+          description: Number of seconds to wait before retrying, when provided
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Get market prices (query parameters)
+
+> Retrieves market prices for multiple token IDs and sides using query parameters.
+
+
+
+
+## OpenAPI
+
+````yaml /api-spec/clob-openapi.yaml get /prices
+openapi: 3.1.0
+info:
+  title: Polymarket CLOB API
+  description: Polymarket CLOB API Reference
+  license:
+    name: MIT
+    identifier: MIT
+  version: 1.0.0
+servers:
+  - url: https://clob.polymarket.com
+    description: Production CLOB API
+  - url: https://clob-staging.polymarket.com
+    description: Staging CLOB API
+security: []
+tags:
+  - name: Trade
+    description: Trade endpoints
+  - name: Markets
+    description: Market data endpoints
+  - name: Account
+    description: Account and authentication endpoints
+  - name: Notifications
+    description: User notification endpoints
+  - name: Rewards
+    description: Rewards and earnings endpoints
+  - name: Rebates
+    description: Maker rebate endpoints
+paths:
+  /prices:
+    get:
+      tags:
+        - Market Data
+      summary: Get market prices (query parameters)
+      description: >
+        Retrieves market prices for multiple token IDs and sides using query
+        parameters.
+      operationId: getPricesGet
+      parameters:
+        - name: token_ids
+          in: query
+          description: Comma-separated list of token IDs
+          required: true
+          schema:
+            type: string
+          example: 0xabc123...,0xdef456...
+        - name: sides
+          in: query
+          description: >-
+            Comma-separated list of sides (BUY or SELL) corresponding to token
+            IDs
+          required: true
+          schema:
+            type: string
+          example: BUY,SELL
+      responses:
+        '200':
+          description: Successfully retrieved market prices
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties:
+                  type: object
+                  additionalProperties:
+                    type: number
+                    format: double
+                description: Map of token ID to map of side to price
+              example:
+                0xabc123def456...:
+                  BUY: 0.45
+                0xdef456abc123...:
+                  SELL: 0.52
+        '400':
+          description: Bad request - Invalid payload or side
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                invalid_payload:
+                  summary: Invalid payload
+                  value:
+                    error: Invalid payload
+                invalid_side:
+                  summary: Invalid side
+                  value:
+                    error: Invalid side
+        '404':
+          description: Not found - No orderbook exists for the requested token id
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: No orderbook exists for the requested token id
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Internal server error
+      security: []
+components:
+  schemas:
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Error message
+        code:
+          type: string
+          description: Machine-readable error code, when provided
+        retry_after_seconds:
+          type: integer
+          description: Number of seconds to wait before retrying, when provided
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Get market prices (request body)
+
+> Retrieves market prices for multiple token IDs and sides using a request body.
+Each request must include both token_id and side.
+
+
+
+
+## OpenAPI
+
+````yaml /api-spec/clob-openapi.yaml post /prices
+openapi: 3.1.0
+info:
+  title: Polymarket CLOB API
+  description: Polymarket CLOB API Reference
+  license:
+    name: MIT
+    identifier: MIT
+  version: 1.0.0
+servers:
+  - url: https://clob.polymarket.com
+    description: Production CLOB API
+  - url: https://clob-staging.polymarket.com
+    description: Staging CLOB API
+security: []
+tags:
+  - name: Trade
+    description: Trade endpoints
+  - name: Markets
+    description: Market data endpoints
+  - name: Account
+    description: Account and authentication endpoints
+  - name: Notifications
+    description: User notification endpoints
+  - name: Rewards
+    description: Rewards and earnings endpoints
+  - name: Rebates
+    description: Maker rebate endpoints
+paths:
+  /prices:
+    post:
+      tags:
+        - Market Data
+      summary: Get market prices (request body)
+      description: >
+        Retrieves market prices for multiple token IDs and sides using a request
+        body.
+
+        Each request must include both token_id and side.
+      operationId: getPricesPost
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: '#/components/schemas/BookRequest'
+            example:
+              - token_id: 0xabc123def456...
+                side: BUY
+              - token_id: 0xdef456abc123...
+                side: SELL
+      responses:
+        '200':
+          description: Successfully retrieved market prices
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties:
+                  type: object
+                  additionalProperties:
+                    type: number
+                    format: double
+                description: Map of token ID to map of side to price
+              example:
+                0xabc123def456...:
+                  BUY: 0.45
+                0xdef456abc123...:
+                  SELL: 0.52
+        '400':
+          description: Bad request - Invalid payload or side
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                invalid_payload:
+                  summary: Invalid payload
+                  value:
+                    error: Invalid payload
+                invalid_side:
+                  summary: Invalid side
+                  value:
+                    error: Invalid side
+        '404':
+          description: Not found - No orderbook exists for the requested token id
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: No orderbook exists for the requested token id
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Internal server error
+      security: []
+components:
+  schemas:
+    BookRequest:
+      type: object
+      required:
+        - token_id
+      properties:
+        token_id:
+          type: string
+          description: Token ID (asset ID)
+          example: 0xabc123def456...
+        side:
+          type: string
+          description: Order side (optional, not used for midpoint calculation)
+          enum:
+            - BUY
+            - SELL
+          example: BUY
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Error message
+        code:
+          type: string
+          description: Machine-readable error code, when provided
+        retry_after_seconds:
+          type: integer
+          description: Number of seconds to wait before retrying, when provided
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Get midpoint price
+
+> Retrieves the midpoint price for a specific token ID.
+The midpoint is calculated as the average of the best bid and best ask prices.
+
+
+
+
+## OpenAPI
+
+````yaml /api-spec/clob-openapi.yaml get /midpoint
+openapi: 3.1.0
+info:
+  title: Polymarket CLOB API
+  description: Polymarket CLOB API Reference
+  license:
+    name: MIT
+    identifier: MIT
+  version: 1.0.0
+servers:
+  - url: https://clob.polymarket.com
+    description: Production CLOB API
+  - url: https://clob-staging.polymarket.com
+    description: Staging CLOB API
+security: []
+tags:
+  - name: Trade
+    description: Trade endpoints
+  - name: Markets
+    description: Market data endpoints
+  - name: Account
+    description: Account and authentication endpoints
+  - name: Notifications
+    description: User notification endpoints
+  - name: Rewards
+    description: Rewards and earnings endpoints
+  - name: Rebates
+    description: Maker rebate endpoints
+paths:
+  /midpoint:
+    get:
+      tags:
+        - Data
+      summary: Get midpoint price
+      description: >
+        Retrieves the midpoint price for a specific token ID.
+
+        The midpoint is calculated as the average of the best bid and best ask
+        prices.
+      operationId: getMidpoint
+      parameters:
+        - name: token_id
+          in: query
+          description: Token ID (asset ID)
+          required: true
+          schema:
+            type: string
+          example: 0xabc123def456...
+      responses:
+        '200':
+          description: Successfully retrieved midpoint price
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - mid_price
+                properties:
+                  mid_price:
+                    type: string
+                    description: Midpoint price as a string
+                    example: '0.45'
+        '400':
+          description: Bad request - Invalid token id
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Invalid token id
+        '404':
+          description: Not found - No orderbook exists for the requested token id
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: No orderbook exists for the requested token id
+      security: []
+components:
+  schemas:
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Error message
+        code:
+          type: string
+          description: Machine-readable error code, when provided
+        retry_after_seconds:
+          type: integer
+          description: Number of seconds to wait before retrying, when provided
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Get midpoint prices (query parameters)
+
+> Retrieves midpoint prices for multiple token IDs using query parameters.
+The midpoint is calculated as the average of the best bid and best ask prices.
+
+
+
+
+## OpenAPI
+
+````yaml /api-spec/clob-openapi.yaml get /midpoints
+openapi: 3.1.0
+info:
+  title: Polymarket CLOB API
+  description: Polymarket CLOB API Reference
+  license:
+    name: MIT
+    identifier: MIT
+  version: 1.0.0
+servers:
+  - url: https://clob.polymarket.com
+    description: Production CLOB API
+  - url: https://clob-staging.polymarket.com
+    description: Staging CLOB API
+security: []
+tags:
+  - name: Trade
+    description: Trade endpoints
+  - name: Markets
+    description: Market data endpoints
+  - name: Account
+    description: Account and authentication endpoints
+  - name: Notifications
+    description: User notification endpoints
+  - name: Rewards
+    description: Rewards and earnings endpoints
+  - name: Rebates
+    description: Maker rebate endpoints
+paths:
+  /midpoints:
+    get:
+      tags:
+        - Market Data
+      summary: Get midpoint prices (query parameters)
+      description: >
+        Retrieves midpoint prices for multiple token IDs using query parameters.
+
+        The midpoint is calculated as the average of the best bid and best ask
+        prices.
+      operationId: getMidpointsGet
+      parameters:
+        - name: token_ids
+          in: query
+          description: Comma-separated list of token IDs
+          required: true
+          schema:
+            type: string
+          example: 0xabc123...,0xdef456...
+      responses:
+        '200':
+          description: Successfully retrieved midpoint prices
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties:
+                  type: string
+                description: Map of token ID to midpoint price
+              example:
+                0xabc123def456...: '0.45'
+                0xdef456abc123...: '0.52'
+        '400':
+          description: Bad request - Invalid payload
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Invalid payload
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: error getting the mid price
+      security: []
+components:
+  schemas:
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Error message
+        code:
+          type: string
+          description: Machine-readable error code, when provided
+        retry_after_seconds:
+          type: integer
+          description: Number of seconds to wait before retrying, when provided
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Get midpoint prices (request body)
+
+> Retrieves midpoint prices for multiple token IDs using a request body.
+The midpoint is calculated as the average of the best bid and best ask prices.
+
+
+
+
+## OpenAPI
+
+````yaml /api-spec/clob-openapi.yaml post /midpoints
+openapi: 3.1.0
+info:
+  title: Polymarket CLOB API
+  description: Polymarket CLOB API Reference
+  license:
+    name: MIT
+    identifier: MIT
+  version: 1.0.0
+servers:
+  - url: https://clob.polymarket.com
+    description: Production CLOB API
+  - url: https://clob-staging.polymarket.com
+    description: Staging CLOB API
+security: []
+tags:
+  - name: Trade
+    description: Trade endpoints
+  - name: Markets
+    description: Market data endpoints
+  - name: Account
+    description: Account and authentication endpoints
+  - name: Notifications
+    description: User notification endpoints
+  - name: Rewards
+    description: Rewards and earnings endpoints
+  - name: Rebates
+    description: Maker rebate endpoints
+paths:
+  /midpoints:
+    post:
+      tags:
+        - Market Data
+      summary: Get midpoint prices (request body)
+      description: >
+        Retrieves midpoint prices for multiple token IDs using a request body.
+
+        The midpoint is calculated as the average of the best bid and best ask
+        prices.
+      operationId: getMidpointsPost
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: '#/components/schemas/BookRequest'
+            example:
+              - token_id: 0xabc123def456...
+              - token_id: 0xdef456abc123...
+      responses:
+        '200':
+          description: Successfully retrieved midpoint prices
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties:
+                  type: string
+                description: Map of token ID to midpoint price
+              example:
+                0xabc123def456...: '0.45'
+                0xdef456abc123...: '0.52'
+        '400':
+          description: Bad request - Invalid payload
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Invalid payload
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: error getting the mid price
+      security: []
+components:
+  schemas:
+    BookRequest:
+      type: object
+      required:
+        - token_id
+      properties:
+        token_id:
+          type: string
+          description: Token ID (asset ID)
+          example: 0xabc123def456...
+        side:
+          type: string
+          description: Order side (optional, not used for midpoint calculation)
+          enum:
+            - BUY
+            - SELL
+          example: BUY
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Error message
+        code:
+          type: string
+          description: Machine-readable error code, when provided
+        retry_after_seconds:
+          type: integer
+          description: Number of seconds to wait before retrying, when provided
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Get spread
+
+> Retrieves the spread for a specific token ID.
+The spread is the difference between the best ask and best bid prices.
+
+
+
+
+## OpenAPI
+
+````yaml /api-spec/clob-openapi.yaml get /spread
+openapi: 3.1.0
+info:
+  title: Polymarket CLOB API
+  description: Polymarket CLOB API Reference
+  license:
+    name: MIT
+    identifier: MIT
+  version: 1.0.0
+servers:
+  - url: https://clob.polymarket.com
+    description: Production CLOB API
+  - url: https://clob-staging.polymarket.com
+    description: Staging CLOB API
+security: []
+tags:
+  - name: Trade
+    description: Trade endpoints
+  - name: Markets
+    description: Market data endpoints
+  - name: Account
+    description: Account and authentication endpoints
+  - name: Notifications
+    description: User notification endpoints
+  - name: Rewards
+    description: Rewards and earnings endpoints
+  - name: Rebates
+    description: Maker rebate endpoints
+paths:
+  /spread:
+    get:
+      tags:
+        - Market Data
+      summary: Get spread
+      description: |
+        Retrieves the spread for a specific token ID.
+        The spread is the difference between the best ask and best bid prices.
+      operationId: getSpread
+      parameters:
+        - name: token_id
+          in: query
+          description: Token ID (asset ID)
+          required: true
+          schema:
+            type: string
+          example: 0xabc123def456...
+      responses:
+        '200':
+          description: Successfully retrieved spread
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - spread
+                properties:
+                  spread:
+                    type: string
+                    description: Spread as a string
+                    example: '0.02'
+        '400':
+          description: Bad request - Invalid token id
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Invalid token id
+        '404':
+          description: Not found - No orderbook exists for the requested token id
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: No orderbook exists for the requested token id
+      security: []
+components:
+  schemas:
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Error message
+        code:
+          type: string
+          description: Machine-readable error code, when provided
+        retry_after_seconds:
+          type: integer
+          description: Number of seconds to wait before retrying, when provided
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Get spreads
+
+> Retrieves spreads for multiple token IDs.
+The spread is the difference between the best ask and best bid prices.
+
+
+
+
+## OpenAPI
+
+````yaml /api-spec/clob-openapi.yaml post /spreads
+openapi: 3.1.0
+info:
+  title: Polymarket CLOB API
+  description: Polymarket CLOB API Reference
+  license:
+    name: MIT
+    identifier: MIT
+  version: 1.0.0
+servers:
+  - url: https://clob.polymarket.com
+    description: Production CLOB API
+  - url: https://clob-staging.polymarket.com
+    description: Staging CLOB API
+security: []
+tags:
+  - name: Trade
+    description: Trade endpoints
+  - name: Markets
+    description: Market data endpoints
+  - name: Account
+    description: Account and authentication endpoints
+  - name: Notifications
+    description: User notification endpoints
+  - name: Rewards
+    description: Rewards and earnings endpoints
+  - name: Rebates
+    description: Maker rebate endpoints
+paths:
+  /spreads:
+    post:
+      tags:
+        - Market Data
+      summary: Get spreads
+      description: |
+        Retrieves spreads for multiple token IDs.
+        The spread is the difference between the best ask and best bid prices.
+      operationId: getSpreads
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: '#/components/schemas/BookRequest'
+            example:
+              - token_id: 0xabc123def456...
+              - token_id: 0xdef456abc123...
+      responses:
+        '200':
+          description: Successfully retrieved spreads
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties:
+                  type: string
+                description: Map of token ID to spread
+              example:
+                0xabc123def456...: '0.02'
+                0xdef456abc123...: '0.015'
+        '400':
+          description: Bad request - Invalid payload
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Invalid payload
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: error getting the spread
+      security: []
+components:
+  schemas:
+    BookRequest:
+      type: object
+      required:
+        - token_id
+      properties:
+        token_id:
+          type: string
+          description: Token ID (asset ID)
+          example: 0xabc123def456...
+        side:
+          type: string
+          description: Order side (optional, not used for midpoint calculation)
+          enum:
+            - BUY
+            - SELL
+          example: BUY
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Error message
+        code:
+          type: string
+          description: Machine-readable error code, when provided
+        retry_after_seconds:
+          type: integer
+          description: Number of seconds to wait before retrying, when provided
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Get last trade price
+
+> Retrieves the last trade price and side for a specific token ID.
+Returns default values of "0.5" for price and empty string for side if no trades found.
+
+
+
+
+## OpenAPI
+
+````yaml /api-spec/clob-openapi.yaml get /last-trade-price
+openapi: 3.1.0
+info:
+  title: Polymarket CLOB API
+  description: Polymarket CLOB API Reference
+  license:
+    name: MIT
+    identifier: MIT
+  version: 1.0.0
+servers:
+  - url: https://clob.polymarket.com
+    description: Production CLOB API
+  - url: https://clob-staging.polymarket.com
+    description: Staging CLOB API
+security: []
+tags:
+  - name: Trade
+    description: Trade endpoints
+  - name: Markets
+    description: Market data endpoints
+  - name: Account
+    description: Account and authentication endpoints
+  - name: Notifications
+    description: User notification endpoints
+  - name: Rewards
+    description: Rewards and earnings endpoints
+  - name: Rebates
+    description: Maker rebate endpoints
+paths:
+  /last-trade-price:
+    get:
+      tags:
+        - Market Data
+      summary: Get last trade price
+      description: >
+        Retrieves the last trade price and side for a specific token ID.
+
+        Returns default values of "0.5" for price and empty string for side if
+        no trades found.
+      operationId: getLastTradePrice
+      parameters:
+        - name: token_id
+          in: query
+          description: Token ID (asset ID)
+          required: true
+          schema:
+            type: string
+          example: 0xabc123def456...
+      responses:
+        '200':
+          description: Successfully retrieved last trade price
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - price
+                  - side
+                properties:
+                  price:
+                    type: string
+                    description: Last trade price
+                    example: '0.45'
+                  side:
+                    type: string
+                    description: Last trade side (BUY or SELL)
+                    enum:
+                      - BUY
+                      - SELL
+                      - ''
+                    example: BUY
+        '400':
+          description: Bad request - Invalid token id
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Invalid token id
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Internal server error
+      security: []
+components:
+  schemas:
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Error message
+        code:
+          type: string
+          description: Machine-readable error code, when provided
+        retry_after_seconds:
+          type: integer
+          description: Number of seconds to wait before retrying, when provided
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Get last trade prices (query parameters)
+
+> Retrieves last trade prices for multiple token IDs using query parameters.
+Maximum 500 token IDs can be requested per call.
+
+
+
+
+## OpenAPI
+
+````yaml /api-spec/clob-openapi.yaml get /last-trades-prices
+openapi: 3.1.0
+info:
+  title: Polymarket CLOB API
+  description: Polymarket CLOB API Reference
+  license:
+    name: MIT
+    identifier: MIT
+  version: 1.0.0
+servers:
+  - url: https://clob.polymarket.com
+    description: Production CLOB API
+  - url: https://clob-staging.polymarket.com
+    description: Staging CLOB API
+security: []
+tags:
+  - name: Trade
+    description: Trade endpoints
+  - name: Markets
+    description: Market data endpoints
+  - name: Account
+    description: Account and authentication endpoints
+  - name: Notifications
+    description: User notification endpoints
+  - name: Rewards
+    description: Rewards and earnings endpoints
+  - name: Rebates
+    description: Maker rebate endpoints
+paths:
+  /last-trades-prices:
+    get:
+      tags:
+        - Market Data
+      summary: Get last trade prices (query parameters)
+      description: >
+        Retrieves last trade prices for multiple token IDs using query
+        parameters.
+
+        Maximum 500 token IDs can be requested per call.
+      operationId: getLastTradesPricesGet
+      parameters:
+        - name: token_ids
+          in: query
+          description: Comma-separated list of token IDs (max 500)
+          required: true
+          schema:
+            type: string
+          example: 0xabc123...,0xdef456...
+      responses:
+        '200':
+          description: Successfully retrieved last trade prices
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  required:
+                    - token_id
+                    - price
+                    - side
+                  properties:
+                    token_id:
+                      type: string
+                      description: Token ID (asset ID)
+                      example: 0xabc123def456...
+                    price:
+                      type: string
+                      description: Last trade price
+                      example: '0.45'
+                    side:
+                      type: string
+                      description: Last trade side (BUY or SELL)
+                      enum:
+                        - BUY
+                        - SELL
+                      example: BUY
+              example:
+                - token_id: 0xabc123def456...
+                  price: '0.45'
+                  side: BUY
+                - token_id: 0xdef456abc123...
+                  price: '0.52'
+                  side: SELL
+        '400':
+          description: Bad request - Invalid payload or exceeds limit
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                invalid_payload:
+                  summary: Invalid payload
+                  value:
+                    error: Invalid payload
+                exceeds_limit:
+                  summary: Payload exceeds limit
+                  value:
+                    error: Payload exceeds the limit
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Internal server error
+      security: []
+components:
+  schemas:
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Error message
+        code:
+          type: string
+          description: Machine-readable error code, when provided
+        retry_after_seconds:
+          type: integer
+          description: Number of seconds to wait before retrying, when provided
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Get last trade prices (request body)
+
+> Retrieves last trade prices for multiple token IDs using a request body.
+Maximum 500 token IDs can be requested per call.
+
+
+
+
+## OpenAPI
+
+````yaml /api-spec/clob-openapi.yaml post /last-trades-prices
+openapi: 3.1.0
+info:
+  title: Polymarket CLOB API
+  description: Polymarket CLOB API Reference
+  license:
+    name: MIT
+    identifier: MIT
+  version: 1.0.0
+servers:
+  - url: https://clob.polymarket.com
+    description: Production CLOB API
+  - url: https://clob-staging.polymarket.com
+    description: Staging CLOB API
+security: []
+tags:
+  - name: Trade
+    description: Trade endpoints
+  - name: Markets
+    description: Market data endpoints
+  - name: Account
+    description: Account and authentication endpoints
+  - name: Notifications
+    description: User notification endpoints
+  - name: Rewards
+    description: Rewards and earnings endpoints
+  - name: Rebates
+    description: Maker rebate endpoints
+paths:
+  /last-trades-prices:
+    post:
+      tags:
+        - Market Data
+      summary: Get last trade prices (request body)
+      description: |
+        Retrieves last trade prices for multiple token IDs using a request body.
+        Maximum 500 token IDs can be requested per call.
+      operationId: getLastTradesPricesPost
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: '#/components/schemas/BookRequest'
+            example:
+              - token_id: 0xabc123def456...
+              - token_id: 0xdef456abc123...
+      responses:
+        '200':
+          description: Successfully retrieved last trade prices
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  required:
+                    - token_id
+                    - price
+                    - side
+                  properties:
+                    token_id:
+                      type: string
+                      description: Token ID (asset ID)
+                      example: 0xabc123def456...
+                    price:
+                      type: string
+                      description: Last trade price
+                      example: '0.45'
+                    side:
+                      type: string
+                      description: Last trade side (BUY or SELL)
+                      enum:
+                        - BUY
+                        - SELL
+                      example: BUY
+              example:
+                - token_id: 0xabc123def456...
+                  price: '0.45'
+                  side: BUY
+                - token_id: 0xdef456abc123...
+                  price: '0.52'
+                  side: SELL
+        '400':
+          description: Bad request - Invalid payload or exceeds limit
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                invalid_payload:
+                  summary: Invalid payload
+                  value:
+                    error: Invalid payload
+                exceeds_limit:
+                  summary: Payload exceeds limit
+                  value:
+                    error: Payload exceeds the limit
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Internal server error
+      security: []
+components:
+  schemas:
+    BookRequest:
+      type: object
+      required:
+        - token_id
+      properties:
+        token_id:
+          type: string
+          description: Token ID (asset ID)
+          example: 0xabc123def456...
+        side:
+          type: string
+          description: Order side (optional, not used for midpoint calculation)
+          enum:
+            - BUY
+            - SELL
+          example: BUY
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Error message
+        code:
+          type: string
+          description: Machine-readable error code, when provided
+        retry_after_seconds:
+          type: integer
+          description: Number of seconds to wait before retrying, when provided
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Get prices history
+
+> Retrieve historical price data for a market.
+
+
+
+## OpenAPI
+
+````yaml /api-spec/clob-openapi.yaml get /prices-history
+openapi: 3.1.0
+info:
+  title: Polymarket CLOB API
+  description: Polymarket CLOB API Reference
+  license:
+    name: MIT
+    identifier: MIT
+  version: 1.0.0
+servers:
+  - url: https://clob.polymarket.com
+    description: Production CLOB API
+  - url: https://clob-staging.polymarket.com
+    description: Staging CLOB API
+security: []
+tags:
+  - name: Trade
+    description: Trade endpoints
+  - name: Markets
+    description: Market data endpoints
+  - name: Account
+    description: Account and authentication endpoints
+  - name: Notifications
+    description: User notification endpoints
+  - name: Rewards
+    description: Rewards and earnings endpoints
+  - name: Rebates
+    description: Maker rebate endpoints
+paths:
+  /prices-history:
+    get:
+      tags:
+        - Markets
+      summary: Get prices history
+      description: Retrieve historical price data for a market.
+      operationId: getPricesHistory
+      parameters:
+        - name: market
+          in: query
+          required: true
+          description: The market (asset id) to query.
+          schema:
+            type: string
+        - name: startTs
+          in: query
+          required: false
+          description: Filter by items after this unix timestamp.
+          schema:
+            type: number
+            format: double
+        - name: endTs
+          in: query
+          required: false
+          description: Filter by items before this unix timestamp.
+          schema:
+            type: number
+            format: double
+        - name: interval
+          in: query
+          required: false
+          description: Time interval for data aggregation.
+          schema:
+            type: string
+            enum:
+              - max
+              - all
+              - 1m
+              - 1w
+              - 1d
+              - 6h
+              - 1h
+        - name: fidelity
+          in: query
+          required: false
+          description: Accuracy of the data expressed in minutes. Default is 1 minute.
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Successful response with price history
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PricesHistoryResponse'
+        '400':
+          description: Bad Request - Missing or invalid query parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security: []
+components:
+  schemas:
+    PricesHistoryResponse:
+      type: object
+      properties:
+        history:
+          type: array
+          items:
+            $ref: '#/components/schemas/MarketPrice'
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Error message
+        code:
+          type: string
+          description: Machine-readable error code, when provided
+        retry_after_seconds:
+          type: integer
+          description: Number of seconds to wait before retrying, when provided
+    MarketPrice:
+      type: object
+      properties:
+        t:
+          type: integer
+          format: uint32
+        p:
+          type: number
+          format: float
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Get batch prices history
+
+> Retrieve historical price data for multiple markets in a single request.
+
+
+
+## OpenAPI
+
+````yaml /api-spec/clob-openapi.yaml post /batch-prices-history
+openapi: 3.1.0
+info:
+  title: Polymarket CLOB API
+  description: Polymarket CLOB API Reference
+  license:
+    name: MIT
+    identifier: MIT
+  version: 1.0.0
+servers:
+  - url: https://clob.polymarket.com
+    description: Production CLOB API
+  - url: https://clob-staging.polymarket.com
+    description: Staging CLOB API
+security: []
+tags:
+  - name: Trade
+    description: Trade endpoints
+  - name: Markets
+    description: Market data endpoints
+  - name: Account
+    description: Account and authentication endpoints
+  - name: Notifications
+    description: User notification endpoints
+  - name: Rewards
+    description: Rewards and earnings endpoints
+  - name: Rebates
+    description: Maker rebate endpoints
+paths:
+  /batch-prices-history:
+    post:
+      tags:
+        - Markets
+      summary: Get batch prices history
+      description: Retrieve historical price data for multiple markets in a single request.
+      operationId: getBatchPricesHistory
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BatchPricesHistoryRequest'
+      responses:
+        '200':
+          description: Successful response with price history for each market
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchPricesHistoryResponse'
+        '400':
+          description: Bad Request - Missing or invalid parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security: []
+components:
+  schemas:
+    BatchPricesHistoryRequest:
+      type: object
+      required:
+        - markets
+      properties:
+        markets:
+          type: array
+          items:
+            type: string
+          description: List of market asset ids to query. Maximum 20.
+          maxItems: 20
+        start_ts:
+          type: number
+          format: double
+          description: Filter by items after this unix timestamp (seconds).
+        end_ts:
+          type: number
+          format: double
+          description: Filter by items before this unix timestamp (seconds).
+        interval:
+          type: string
+          enum:
+            - max
+            - all
+            - 1m
+            - 1w
+            - 1d
+            - 6h
+            - 1h
+          description: Time interval for data aggregation.
+        fidelity:
+          type: integer
+          description: Accuracy of the data expressed in minutes. Default is 1 minute.
+    BatchPricesHistoryResponse:
+      type: object
+      properties:
+        history:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              $ref: '#/components/schemas/MarketPrice'
+          description: Map of market asset id to array of price data points.
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Error message
+        code:
+          type: string
+          description: Machine-readable error code, when provided
+        retry_after_seconds:
+          type: integer
+          description: Number of seconds to wait before retrying, when provided
+    MarketPrice:
+      type: object
+      properties:
+        t:
+          type: integer
+          format: uint32
+        p:
+          type: number
+          format: float
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Get fee rate
+
+> Retrieves the base fee rate for a specific token ID.
+The fee rate can be provided either as a query parameter or as a path parameter.
+
+
+
+
+## OpenAPI
+
+````yaml /api-spec/clob-openapi.yaml get /fee-rate
+openapi: 3.1.0
+info:
+  title: Polymarket CLOB API
+  description: Polymarket CLOB API Reference
+  license:
+    name: MIT
+    identifier: MIT
+  version: 1.0.0
+servers:
+  - url: https://clob.polymarket.com
+    description: Production CLOB API
+  - url: https://clob-staging.polymarket.com
+    description: Staging CLOB API
+security: []
+tags:
+  - name: Trade
+    description: Trade endpoints
+  - name: Markets
+    description: Market data endpoints
+  - name: Account
+    description: Account and authentication endpoints
+  - name: Notifications
+    description: User notification endpoints
+  - name: Rewards
+    description: Rewards and earnings endpoints
+  - name: Rebates
+    description: Maker rebate endpoints
+paths:
+  /fee-rate:
+    get:
+      tags:
+        - Market Data
+      summary: Get fee rate
+      description: >
+        Retrieves the base fee rate for a specific token ID.
+
+        The fee rate can be provided either as a query parameter or as a path
+        parameter.
+      operationId: getFeeRate
+      parameters:
+        - name: token_id
+          in: query
+          description: Token ID (asset ID)
+          required: false
+          schema:
+            type: string
+          example: 0xabc123def456...
+      responses:
+        '200':
+          description: Successfully retrieved fee rate
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FeeRate'
+              example:
+                base_fee: 30
+        '400':
+          description: Bad request - Invalid token id
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Invalid token id
+        '404':
+          description: Not found - Fee rate not found for market
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: fee rate not found for market
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Internal server error
+      security: []
+components:
+  schemas:
+    FeeRate:
+      type: object
+      required:
+        - base_fee
+      properties:
+        base_fee:
+          type: integer
+          format: int64
+          description: Base fee in basis points
+          example: 30
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Error message
+        code:
+          type: string
+          description: Machine-readable error code, when provided
+        retry_after_seconds:
+          type: integer
+          description: Number of seconds to wait before retrying, when provided
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Get fee rate by path parameter
+
+> Retrieves the base fee rate for a specific token ID using the token ID as a path parameter.
+
+
+
+
+## OpenAPI
+
+````yaml /api-spec/clob-openapi.yaml get /fee-rate/{token_id}
+openapi: 3.1.0
+info:
+  title: Polymarket CLOB API
+  description: Polymarket CLOB API Reference
+  license:
+    name: MIT
+    identifier: MIT
+  version: 1.0.0
+servers:
+  - url: https://clob.polymarket.com
+    description: Production CLOB API
+  - url: https://clob-staging.polymarket.com
+    description: Staging CLOB API
+security: []
+tags:
+  - name: Trade
+    description: Trade endpoints
+  - name: Markets
+    description: Market data endpoints
+  - name: Account
+    description: Account and authentication endpoints
+  - name: Notifications
+    description: User notification endpoints
+  - name: Rewards
+    description: Rewards and earnings endpoints
+  - name: Rebates
+    description: Maker rebate endpoints
+paths:
+  /fee-rate/{token_id}:
+    get:
+      tags:
+        - Market Data
+      summary: Get fee rate by path parameter
+      description: >
+        Retrieves the base fee rate for a specific token ID using the token ID
+        as a path parameter.
+      operationId: getFeeRateByPath
+      parameters:
+        - name: token_id
+          in: path
+          description: Token ID (asset ID)
+          required: true
+          schema:
+            type: string
+          example: 0xabc123def456...
+      responses:
+        '200':
+          description: Successfully retrieved fee rate
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FeeRate'
+              example:
+                base_fee: 30
+        '400':
+          description: Bad request - Invalid token id
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Invalid token id
+        '404':
+          description: Not found - Fee rate not found for market
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: fee rate not found for market
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Internal server error
+      security: []
+components:
+  schemas:
+    FeeRate:
+      type: object
+      required:
+        - base_fee
+      properties:
+        base_fee:
+          type: integer
+          format: int64
+          description: Base fee in basis points
+          example: 30
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Error message
+        code:
+          type: string
+          description: Machine-readable error code, when provided
+        retry_after_seconds:
+          type: integer
+          description: Number of seconds to wait before retrying, when provided
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Get tick size
+
+> Retrieves the minimum tick size (price increment) for a specific token ID.
+The tick size can be provided either as a query parameter or as a path parameter.
+
+
+
+
+## OpenAPI
+
+````yaml /api-spec/clob-openapi.yaml get /tick-size
+openapi: 3.1.0
+info:
+  title: Polymarket CLOB API
+  description: Polymarket CLOB API Reference
+  license:
+    name: MIT
+    identifier: MIT
+  version: 1.0.0
+servers:
+  - url: https://clob.polymarket.com
+    description: Production CLOB API
+  - url: https://clob-staging.polymarket.com
+    description: Staging CLOB API
+security: []
+tags:
+  - name: Trade
+    description: Trade endpoints
+  - name: Markets
+    description: Market data endpoints
+  - name: Account
+    description: Account and authentication endpoints
+  - name: Notifications
+    description: User notification endpoints
+  - name: Rewards
+    description: Rewards and earnings endpoints
+  - name: Rebates
+    description: Maker rebate endpoints
+paths:
+  /tick-size:
+    get:
+      tags:
+        - Market Data
+      summary: Get tick size
+      description: >
+        Retrieves the minimum tick size (price increment) for a specific token
+        ID.
+
+        The tick size can be provided either as a query parameter or as a path
+        parameter.
+      operationId: getTickSize
+      parameters:
+        - name: token_id
+          in: query
+          description: Token ID (asset ID)
+          required: false
+          schema:
+            type: string
+          example: 0xabc123def456...
+      responses:
+        '200':
+          description: Successfully retrieved tick size
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TickSize'
+              example:
+                minimum_tick_size: 0.01
+        '400':
+          description: Bad request - Invalid token id
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Invalid token id
+        '404':
+          description: Not found - Market not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: market not found
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Internal server error
+      security: []
+components:
+  schemas:
+    TickSize:
+      type: object
+      required:
+        - minimum_tick_size
+      properties:
+        minimum_tick_size:
+          type: number
+          format: double
+          description: Minimum tick size (price increment)
+          example: 0.01
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Error message
+        code:
+          type: string
+          description: Machine-readable error code, when provided
+        retry_after_seconds:
+          type: integer
+          description: Number of seconds to wait before retrying, when provided
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Get tick size by path parameter
+
+> Retrieves the minimum tick size (price increment) for a specific token ID using the token ID as a path parameter.
+
+
+
+
+## OpenAPI
+
+````yaml /api-spec/clob-openapi.yaml get /tick-size/{token_id}
+openapi: 3.1.0
+info:
+  title: Polymarket CLOB API
+  description: Polymarket CLOB API Reference
+  license:
+    name: MIT
+    identifier: MIT
+  version: 1.0.0
+servers:
+  - url: https://clob.polymarket.com
+    description: Production CLOB API
+  - url: https://clob-staging.polymarket.com
+    description: Staging CLOB API
+security: []
+tags:
+  - name: Trade
+    description: Trade endpoints
+  - name: Markets
+    description: Market data endpoints
+  - name: Account
+    description: Account and authentication endpoints
+  - name: Notifications
+    description: User notification endpoints
+  - name: Rewards
+    description: Rewards and earnings endpoints
+  - name: Rebates
+    description: Maker rebate endpoints
+paths:
+  /tick-size/{token_id}:
+    get:
+      tags:
+        - Market Data
+      summary: Get tick size by path parameter
+      description: >
+        Retrieves the minimum tick size (price increment) for a specific token
+        ID using the token ID as a path parameter.
+      operationId: getTickSizeByPath
+      parameters:
+        - name: token_id
+          in: path
+          description: Token ID (asset ID)
+          required: true
+          schema:
+            type: string
+          example: 0xabc123def456...
+      responses:
+        '200':
+          description: Successfully retrieved tick size
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TickSize'
+              example:
+                minimum_tick_size: 0.01
+        '400':
+          description: Bad request - Invalid token id
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Invalid token id
+        '404':
+          description: Not found - Market not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: market not found
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Internal server error
+      security: []
+components:
+  schemas:
+    TickSize:
+      type: object
+      required:
+        - minimum_tick_size
+      properties:
+        minimum_tick_size:
+          type: number
+          format: double
+          description: Minimum tick size (price increment)
+          example: 0.01
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Error message
+        code:
+          type: string
+          description: Machine-readable error code, when provided
+        retry_after_seconds:
+          type: integer
+          description: Number of seconds to wait before retrying, when provided
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Get CLOB market info
+
+> Returns all CLOB-level parameters for a market in a single call —
+tokens, tick size, base fees, rewards, RFQ status, and fee details.
+
+
+
+
+## OpenAPI
+
+````yaml /api-spec/clob-openapi.yaml get /clob-markets/{condition_id}
+openapi: 3.1.0
+info:
+  title: Polymarket CLOB API
+  description: Polymarket CLOB API Reference
+  license:
+    name: MIT
+    identifier: MIT
+  version: 1.0.0
+servers:
+  - url: https://clob.polymarket.com
+    description: Production CLOB API
+  - url: https://clob-staging.polymarket.com
+    description: Staging CLOB API
+security: []
+tags:
+  - name: Trade
+    description: Trade endpoints
+  - name: Markets
+    description: Market data endpoints
+  - name: Account
+    description: Account and authentication endpoints
+  - name: Notifications
+    description: User notification endpoints
+  - name: Rewards
+    description: Rewards and earnings endpoints
+  - name: Rebates
+    description: Maker rebate endpoints
+paths:
+  /clob-markets/{condition_id}:
+    get:
+      tags:
+        - Markets
+      summary: Get CLOB market info
+      description: |
+        Returns all CLOB-level parameters for a market in a single call —
+        tokens, tick size, base fees, rewards, RFQ status, and fee details.
+      operationId: getClobMarketInfo
+      parameters:
+        - name: condition_id
+          in: path
+          required: true
+          description: The condition ID of the market
+          schema:
+            type: string
+          example: '0xbd31dc8a20211944f6b70f31557f1001557b59905b7738480ca09bd4532f84af'
+      responses:
+        '200':
+          description: Successfully retrieved CLOB market info
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClobMarketDetails'
+        '400':
+          description: Bad request - Invalid condition ID
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+components:
+  schemas:
+    ClobMarketDetails:
+      type: object
+      description: >-
+        CLOB-level parameters for a market — tokens, tick size, base fees,
+        rewards, RFQ status, and fee details.
+      properties:
+        gst:
+          type: string
+          format: date-time
+          nullable: true
+          description: >-
+            Game start time (used for sports markets), ISO 8601 timestamp or
+            null
+        r:
+          $ref: '#/components/schemas/ClobRewards'
+        t:
+          type: array
+          description: Tokens for this market
+          items:
+            $ref: '#/components/schemas/ClobToken'
+        mos:
+          type: number
+          format: float
+          description: Minimum order size
+          example: 5
+        mts:
+          type: number
+          format: float
+          description: Minimum tick size (price increment)
+          example: 0.01
+        mbf:
+          type: integer
+          format: int64
+          description: Maker base fee in basis points
+          example: 0
+        tbf:
+          type: integer
+          format: int64
+          description: Taker base fee in basis points
+          example: 0
+        rfqe:
+          type: boolean
+          description: Whether RFQ (Request for Quote) is enabled for this market
+        itode:
+          type: boolean
+          description: Whether taker order delay is enabled
+        ibce:
+          type: boolean
+          description: Whether Blockaid check is enabled
+        fd:
+          $ref: '#/components/schemas/FeeDetails'
+        oas:
+          type: integer
+          description: Minimum order age in seconds
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Error message
+        code:
+          type: string
+          description: Machine-readable error code, when provided
+        retry_after_seconds:
+          type: integer
+          description: Number of seconds to wait before retrying, when provided
+    ClobRewards:
+      type: object
+      description: Rewards configuration for a market.
+      additionalProperties: true
+    ClobToken:
+      type: object
+      description: A token in a CLOB market with its ID and outcome label.
+      properties:
+        t:
+          type: string
+          description: The token ID
+          example: >-
+            71321045679252212594626385532706912750332728571942532289631379312455583992563
+        o:
+          type: string
+          description: Outcome label for the token (e.g. "Yes", "No")
+          example: 'Yes'
+    FeeDetails:
+      type: object
+      description: Fee curve parameters for a market.
+      properties:
+        r:
+          type: number
+          format: float
+          nullable: true
+          description: Fee rate
+          example: 0.02
+        e:
+          type: number
+          format: float
+          nullable: true
+          description: Fee curve exponent
+          example: 2
+        to:
+          type: boolean
+          nullable: true
+          description: Whether fees apply to takers only
+          example: true
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Get server time
+
+> Returns the current Unix timestamp of the server.
+This can be used to synchronize client time with server time.
+
+
+
+
+## OpenAPI
+
+````yaml /api-spec/clob-openapi.yaml get /time
+openapi: 3.1.0
+info:
+  title: Polymarket CLOB API
+  description: Polymarket CLOB API Reference
+  license:
+    name: MIT
+    identifier: MIT
+  version: 1.0.0
+servers:
+  - url: https://clob.polymarket.com
+    description: Production CLOB API
+  - url: https://clob-staging.polymarket.com
+    description: Staging CLOB API
+security: []
+tags:
+  - name: Trade
+    description: Trade endpoints
+  - name: Markets
+    description: Market data endpoints
+  - name: Account
+    description: Account and authentication endpoints
+  - name: Notifications
+    description: User notification endpoints
+  - name: Rewards
+    description: Rewards and earnings endpoints
+  - name: Rebates
+    description: Maker rebate endpoints
+paths:
+  /time:
+    get:
+      tags:
+        - Data
+      summary: Get server time
+      description: |
+        Returns the current Unix timestamp of the server.
+        This can be used to synchronize client time with server time.
+      operationId: getTime
+      responses:
+        '200':
+          description: Successfully retrieved server time
+          content:
+            application/json:
+              schema:
+                type: integer
+                format: int64
+                description: Unix timestamp (seconds since epoch)
+              example: 1234567890
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security: []
+components:
+  schemas:
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Error message
+        code:
+          type: string
+          description: Machine-readable error code, when provided
+        retry_after_seconds:
+          type: integer
+          description: Number of seconds to wait before retrying, when provided
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Post a new order
+
+> Creates a new order in the order book
+
+
+
+
+## OpenAPI
+
+````yaml /api-spec/clob-openapi.yaml post /order
+openapi: 3.1.0
+info:
+  title: Polymarket CLOB API
+  description: Polymarket CLOB API Reference
+  license:
+    name: MIT
+    identifier: MIT
+  version: 1.0.0
+servers:
+  - url: https://clob.polymarket.com
+    description: Production CLOB API
+  - url: https://clob-staging.polymarket.com
+    description: Staging CLOB API
+security: []
+tags:
+  - name: Trade
+    description: Trade endpoints
+  - name: Markets
+    description: Market data endpoints
+  - name: Account
+    description: Account and authentication endpoints
+  - name: Notifications
+    description: User notification endpoints
+  - name: Rewards
+    description: Rewards and earnings endpoints
+  - name: Rebates
+    description: Maker rebate endpoints
+paths:
+  /order:
+    post:
+      tags:
+        - Trade
+      summary: Post a new order
+      description: |
+        Creates a new order in the order book
+      operationId: postOrder
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SendOrder'
+            examples:
+              example:
+                summary: Send order example
+                value:
+                  order:
+                    maker: '0x1234567890123456789012345678901234567890'
+                    signer: '0x1234567890123456789012345678901234567890'
+                    tokenId: 0xabc123def456...
+                    makerAmount: '100000000'
+                    takerAmount: '200000000'
+                    side: BUY
+                    expiration: '1735689600'
+                    timestamp: '1735689600000'
+                    metadata: ''
+                    builder: >-
+                      0x0000000000000000000000000000000000000000000000000000000000000000
+                    signature: 0x1234abcd...
+                    salt: 1234567890
+                    signatureType: 0
+                  owner: f4f247b7-4ac7-ff29-a152-04fda0a8755a
+                  orderType: GTC
+                  deferExec: false
+                  postOnly: false
+      responses:
+        '200':
+          description: Order successfully processed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SendOrderResponse'
+              examples:
+                live_order:
+                  summary: Order placed on book
+                  value:
+                    success: true
+                    orderID: '0xabcdef1234567890abcdef1234567890abcdef12'
+                    status: live
+                    makingAmount: '100000000'
+                    takingAmount: '200000000'
+                    errorMsg: ''
+                matched_order:
+                  summary: Order immediately matched
+                  value:
+                    success: true
+                    orderID: '0xabcdef1234567890abcdef1234567890abcdef12'
+                    status: matched
+                    makingAmount: '100000000'
+                    takingAmount: '200000000'
+                    transactionsHashes:
+                      - '0x1234567890abcdef1234567890abcdef12345678'
+                    tradeIDs:
+                      - trade-123
+                    errorMsg: ''
+                delayed_order:
+                  summary: Order delayed
+                  value:
+                    success: true
+                    orderID: '0xabcdef1234567890abcdef1234567890abcdef12'
+                    status: delayed
+                    makingAmount: '100000000'
+                    takingAmount: '200000000'
+                    errorMsg: ''
+        '400':
+          description: Bad request - Invalid order payload or validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                invalid_payload:
+                  summary: Invalid order payload
+                  value:
+                    error: Invalid order payload
+                owner_mismatch:
+                  summary: Owner mismatch
+                  value:
+                    error: the order owner has to be the owner of the API KEY
+                signer_mismatch:
+                  summary: Signer mismatch
+                  value:
+                    error: >-
+                      the order signer address has to be the address of the API
+                      KEY
+                banned_address:
+                  summary: Banned address
+                  value:
+                    error: '''0x1234...'' address banned'
+                closed_only_mode:
+                  summary: Closed only mode violation
+                  value:
+                    error: '''0x1234...'' address in closed only mode'
+                invalid_order:
+                  summary: Invalid order details
+                  value:
+                    error: >-
+                      order 0xabc... is invalid. Price (100) breaks minimum tick
+                      size rule: 0.1
+        '401':
+          description: Unauthorized - Invalid API key or authentication failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Invalid API key
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: could not insert order
+        '503':
+          description: Service unavailable - Trading disabled or cancel-only mode
+          headers:
+            Retry-After:
+              description: Seconds to wait before retrying when provided by post-only mode.
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                trading_disabled:
+                  summary: Trading disabled
+                  value:
+                    error: >-
+                      Trading is currently disabled. Check polymarket.com for
+                      updates
+                cancel_only:
+                  summary: Cancel-only mode
+                  value:
+                    error: >-
+                      Trading is currently cancel-only. New orders are not
+                      accepted, but cancels are allowed.
+                post_only_mode:
+                  summary: Post-only mode
+                  value:
+                    error: >-
+                      post-only mode: only post-only orders and cancels are
+                      allowed
+                    code: post_only_mode
+                    retry_after_seconds: 79
+      security:
+        - polyApiKey: []
+          polyAddress: []
+          polySignature: []
+          polyPassphrase: []
+          polyTimestamp: []
+components:
+  schemas:
+    SendOrder:
+      type: object
+      required:
+        - order
+        - owner
+      properties:
+        order:
+          $ref: '#/components/schemas/Order'
+        owner:
+          type: string
+          description: UUID of the API key owner
+          example: f4f247b7-4ac7-ff29-a152-04fda0a8755a
+        orderType:
+          type: string
+          description: Time in force
+          enum:
+            - GTC
+            - FOK
+            - GTD
+            - FAK
+          default: GTC
+        deferExec:
+          type: boolean
+          description: Whether to defer execution
+          default: false
+        postOnly:
+          type: boolean
+          description: >-
+            Whether the order must rest on the book and not match immediately.
+            Only supported for GTC and GTD orders.
+          default: false
+    SendOrderResponse:
+      type: object
+      required:
+        - success
+        - orderID
+        - status
+      properties:
+        success:
+          type: boolean
+          description: Whether the order was successfully processed
+          example: true
+        orderID:
+          type: string
+          description: Unique identifier for the order (order hash)
+          example: '0xabcdef1234567890abcdef1234567890abcdef12'
+        status:
+          type: string
+          description: Status of the order after processing
+          enum:
+            - live
+            - matched
+            - delayed
+        makingAmount:
+          type: string
+          description: Amount the maker is providing in fixed-math with 6 decimals
+          example: '100000000'
+        takingAmount:
+          type: string
+          description: Amount the taker is providing in fixed-math with 6 decimals
+          example: '200000000'
+        transactionsHashes:
+          type: array
+          description: Array of transaction hashes (present when status is 'matched')
+          items:
+            type: string
+          example:
+            - '0x1234567890abcdef1234567890abcdef12345678'
+        tradeIDs:
+          type: array
+          description: Array of trade IDs (present when status is 'matched')
+          items:
+            type: string
+        errorMsg:
+          type: string
+          description: Error message (empty on success)
+          example: ''
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Error message
+        code:
+          type: string
+          description: Machine-readable error code, when provided
+        retry_after_seconds:
+          type: integer
+          description: Number of seconds to wait before retrying, when provided
+    Order:
+      type: object
+      description: >
+        Order payload submitted to the CLOB API. In CLOB V2, `expiration`
+        remains in
+
+        the POST /order wire body for GTD/order-expiry handling, but it is not
+        part
+
+        of the EIP-712 signed order struct.
+      required:
+        - maker
+        - signer
+        - tokenId
+        - makerAmount
+        - takerAmount
+        - side
+        - expiration
+        - timestamp
+        - builder
+        - signature
+        - salt
+        - signatureType
+      properties:
+        maker:
+          type: string
+          description: >-
+            Ethereum address of the maker (In the default case, this is your
+            proxy address)
+          example: '0x1234567890123456789012345678901234567890'
+        signer:
+          type: string
+          description: Ethereum address of the signer
+          example: '0x1234567890123456789012345678901234567890'
+        tokenId:
+          type: string
+          description: Token ID (asset ID) for the order
+          example: 0xabc123def456...
+        makerAmount:
+          type: string
+          description: Amount the maker is providing in fixed-math with 6 decimals
+          example: '100000000'
+        takerAmount:
+          type: string
+          description: Amount the taker is providing in fixed-math with 6 decimals
+          example: '200000000'
+        side:
+          type: string
+          description: Order side
+          enum:
+            - BUY
+            - SELL
+          example: BUY
+        expiration:
+          type: string
+          description: >-
+            Unix timestamp when the order expires. Present in the API wire body;
+            not part of the CLOB V2 EIP-712 signed order struct.
+          example: '1735689600'
+        timestamp:
+          type: string
+          description: >-
+            Unix timestamp in milliseconds when the order was created (used for
+            order uniqueness)
+          example: '1735689600000'
+        metadata:
+          type: string
+          description: Reserved for future use
+          example: ''
+        builder:
+          type: string
+          description: >-
+            Builder code (bytes32) for integrator attribution. `0x` + 64 hex
+            chars or empty.
+          example: '0x0000000000000000000000000000000000000000000000000000000000000000'
+        signature:
+          type: string
+          description: Cryptographic signature of the order
+          example: 0x1234abcd...
+        salt:
+          type: integer
+          description: Random salt for order uniqueness
+          example: 1234567890
+        signatureType:
+          type: integer
+          description: Type of signature (0 = EOA, 1 = POLY_PROXY, 2 = POLY_GNOSIS_SAFE)
+          enum:
+            - 0
+            - 1
+            - 2
+  securitySchemes:
+    polyApiKey:
+      type: apiKey
+      in: header
+      name: POLY_API_KEY
+      description: Your API key
+    polyAddress:
+      type: apiKey
+      in: header
+      name: POLY_ADDRESS
+      description: Ethereum address associated with the API key
+    polySignature:
+      type: apiKey
+      in: header
+      name: POLY_SIGNATURE
+      description: HMAC signature of the request
+    polyPassphrase:
+      type: apiKey
+      in: header
+      name: POLY_PASSPHRASE
+      description: API key passphrase
+    polyTimestamp:
+      type: apiKey
+      in: header
+      name: POLY_TIMESTAMP
+      description: Unix timestamp of the request
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Cancel single order
+
+> Cancels a single order by its ID. Works even in cancel-only mode.
+
+
+
+
+## OpenAPI
+
+````yaml /api-spec/clob-openapi.yaml delete /order
+openapi: 3.1.0
+info:
+  title: Polymarket CLOB API
+  description: Polymarket CLOB API Reference
+  license:
+    name: MIT
+    identifier: MIT
+  version: 1.0.0
+servers:
+  - url: https://clob.polymarket.com
+    description: Production CLOB API
+  - url: https://clob-staging.polymarket.com
+    description: Staging CLOB API
+security: []
+tags:
+  - name: Trade
+    description: Trade endpoints
+  - name: Markets
+    description: Market data endpoints
+  - name: Account
+    description: Account and authentication endpoints
+  - name: Notifications
+    description: User notification endpoints
+  - name: Rewards
+    description: Rewards and earnings endpoints
+  - name: Rebates
+    description: Maker rebate endpoints
+paths:
+  /order:
+    delete:
+      tags:
+        - Trade
+      summary: Cancel single order
+      description: |
+        Cancels a single order by its ID. Works even in cancel-only mode.
+      operationId: cancelOrder
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CancelOrderPayload'
+            example:
+              orderID: '0xabcdef1234567890abcdef1234567890abcdef12'
+      responses:
+        '200':
+          description: Order cancellation result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CancelOrdersResponse'
+              examples:
+                canceled:
+                  summary: Order successfully canceled
+                  value:
+                    canceled:
+                      - '0xabcdef1234567890abcdef1234567890abcdef12'
+                    not_canceled: {}
+                not_canceled:
+                  summary: Order could not be canceled
+                  value:
+                    canceled: []
+                    not_canceled:
+                      '0xabcdef1234567890abcdef1234567890abcdef12': Order not found or already canceled
+        '400':
+          description: Bad request - Invalid order ID or payload
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                invalid_order_id:
+                  summary: Invalid order ID
+                  value:
+                    error: Invalid orderID
+                invalid_payload:
+                  summary: Invalid payload
+                  value:
+                    error: Invalid order payload
+        '401':
+          description: Unauthorized - Invalid API key or authentication failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Invalid API key
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Internal server error
+        '503':
+          description: >-
+            Service unavailable - Trading disabled (cancels still work in
+            cancel-only mode)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: >-
+                  Trading is currently disabled. Check polymarket.com for
+                  updates
+      security:
+        - polyApiKey: []
+          polyAddress: []
+          polySignature: []
+          polyPassphrase: []
+          polyTimestamp: []
+components:
+  schemas:
+    CancelOrderPayload:
+      type: object
+      required:
+        - orderID
+      properties:
+        orderID:
+          type: string
+          description: Order ID (order hash) to cancel
+          example: '0xabcdef1234567890abcdef1234567890abcdef12'
+    CancelOrdersResponse:
+      type: object
+      required:
+        - canceled
+        - not_canceled
+      properties:
+        canceled:
+          type: array
+          description: Array of order IDs that were successfully canceled
+          items:
+            type: string
+          example:
+            - '0xabcdef1234567890abcdef1234567890abcdef12'
+        not_canceled:
+          type: object
+          description: Map of order IDs that could not be canceled with error messages
+          additionalProperties:
+            type: string
+          example:
+            '0xabcdef1234567890abcdef1234567890abcdef12': Order not found or already canceled
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Error message
+        code:
+          type: string
+          description: Machine-readable error code, when provided
+        retry_after_seconds:
+          type: integer
+          description: Number of seconds to wait before retrying, when provided
+  securitySchemes:
+    polyApiKey:
+      type: apiKey
+      in: header
+      name: POLY_API_KEY
+      description: Your API key
+    polyAddress:
+      type: apiKey
+      in: header
+      name: POLY_ADDRESS
+      description: Ethereum address associated with the API key
+    polySignature:
+      type: apiKey
+      in: header
+      name: POLY_SIGNATURE
+      description: HMAC signature of the request
+    polyPassphrase:
+      type: apiKey
+      in: header
+      name: POLY_PASSPHRASE
+      description: API key passphrase
+    polyTimestamp:
+      type: apiKey
+      in: header
+      name: POLY_TIMESTAMP
+      description: Unix timestamp of the request
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Get single order by ID
+
+> Retrieves a specific order by its ID (order hash) for the authenticated user.
+Builder-authenticated clients can also use this endpoint to retrieve orders attributed to their builder account.
+
+
+
+
+## OpenAPI
+
+````yaml /api-spec/clob-openapi.yaml get /data/order/{orderID}
+openapi: 3.1.0
+info:
+  title: Polymarket CLOB API
+  description: Polymarket CLOB API Reference
+  license:
+    name: MIT
+    identifier: MIT
+  version: 1.0.0
+servers:
+  - url: https://clob.polymarket.com
+    description: Production CLOB API
+  - url: https://clob-staging.polymarket.com
+    description: Staging CLOB API
+security: []
+tags:
+  - name: Trade
+    description: Trade endpoints
+  - name: Markets
+    description: Market data endpoints
+  - name: Account
+    description: Account and authentication endpoints
+  - name: Notifications
+    description: User notification endpoints
+  - name: Rewards
+    description: Rewards and earnings endpoints
+  - name: Rebates
+    description: Maker rebate endpoints
+paths:
+  /data/order/{orderID}:
+    get:
+      tags:
+        - Trade
+      summary: Get single order by ID
+      description: >
+        Retrieves a specific order by its ID (order hash) for the authenticated
+        user.
+
+        Builder-authenticated clients can also use this endpoint to retrieve
+        orders attributed to their builder account.
+      operationId: getOrder
+      parameters:
+        - name: orderID
+          in: path
+          description: Order ID (order hash)
+          required: true
+          schema:
+            type: string
+          example: '0x0000000000000000000000000000000000000000000000000000000000000001'
+      responses:
+        '200':
+          description: Successfully retrieved order
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpenOrder'
+              example:
+                id: '0xabcdef1234567890abcdef1234567890abcdef12'
+                status: ORDER_STATUS_LIVE
+                owner: f4f247b7-4ac7-ff29-a152-04fda0a8755a
+                maker_address: '0x1234567890123456789012345678901234567890'
+                market: >-
+                  0x0000000000000000000000000000000000000000000000000000000000000001
+                asset_id: 0xabc123def456...
+                side: BUY
+                original_size: '100000000'
+                size_matched: '0'
+                price: '0.5'
+                outcome: 'YES'
+                expiration: '1735689600'
+                order_type: GTC
+                associate_trades: []
+                created_at: 1700000000
+        '400':
+          description: Bad request - Invalid order ID
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Invalid orderID
+        '401':
+          description: Unauthorized - Invalid API key or authentication failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Invalid API key
+        '404':
+          description: Order not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Order not found
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Internal server error
+      security:
+        - polyApiKey: []
+          polyAddress: []
+          polySignature: []
+          polyPassphrase: []
+          polyTimestamp: []
+components:
+  schemas:
+    OpenOrder:
+      type: object
+      required:
+        - id
+        - status
+        - owner
+        - maker_address
+        - market
+        - asset_id
+        - side
+        - original_size
+        - size_matched
+        - price
+        - expiration
+        - order_type
+        - created_at
+        - outcome
+      properties:
+        id:
+          type: string
+          description: Order ID (order hash)
+          example: '0xabcdef1234567890abcdef1234567890abcdef12'
+        status:
+          type: string
+          description: Order status
+          enum:
+            - ORDER_STATUS_LIVE
+            - ORDER_STATUS_INVALID
+            - ORDER_STATUS_CANCELED_MARKET_RESOLVED
+            - ORDER_STATUS_CANCELED
+            - ORDER_STATUS_MATCHED
+        owner:
+          type: string
+          description: UUID of the order owner
+          example: f4f247b7-4ac7-ff29-a152-04fda0a8755a
+        maker_address:
+          type: string
+          description: Ethereum address of the maker
+          example: '0x1234567890123456789012345678901234567890'
+        market:
+          type: string
+          description: Market (condition ID)
+          example: '0x0000000000000000000000000000000000000000000000000000000000000001'
+        asset_id:
+          type: string
+          description: Asset ID (token ID)
+          example: 0xabc123def456...
+        side:
+          type: string
+          description: Order side
+          enum:
+            - BUY
+            - SELL
+          example: BUY
+        original_size:
+          type: string
+          description: Original order size in fixed-math with 6 decimals
+          example: '100000000'
+        size_matched:
+          type: string
+          description: Size that has been matched in fixed-math with 6 decimals
+          example: '0'
+        price:
+          type: string
+          description: Order price
+          example: '0.5'
+        outcome:
+          type: string
+          description: Market outcome (YES/NO)
+          example: 'YES'
+        expiration:
+          type: string
+          description: Unix timestamp when the order expires
+          example: '1735689600'
+        order_type:
+          type: string
+          description: Order type
+          enum:
+            - GTC
+            - FOK
+            - GTD
+            - FAK
+          example: GTC
+        associate_trades:
+          type: array
+          description: Array of associated trade IDs
+          items:
+            type: string
+          example:
+            - trade-123
+        created_at:
+          type: integer
+          description: Unix timestamp when the order was created
+          example: 1700000000
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Error message
+        code:
+          type: string
+          description: Machine-readable error code, when provided
+        retry_after_seconds:
+          type: integer
+          description: Number of seconds to wait before retrying, when provided
+  securitySchemes:
+    polyApiKey:
+      type: apiKey
+      in: header
+      name: POLY_API_KEY
+      description: Your API key
+    polyAddress:
+      type: apiKey
+      in: header
+      name: POLY_ADDRESS
+      description: Ethereum address associated with the API key
+    polySignature:
+      type: apiKey
+      in: header
+      name: POLY_SIGNATURE
+      description: HMAC signature of the request
+    polyPassphrase:
+      type: apiKey
+      in: header
+      name: POLY_PASSPHRASE
+      description: API key passphrase
+    polyTimestamp:
+      type: apiKey
+      in: header
+      name: POLY_TIMESTAMP
+      description: Unix timestamp of the request
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Post multiple orders
+
+> Creates multiple new orders in the order book. Orders are processed in parallel.
+Maximum 15 orders per request.
+
+
+
+
+## OpenAPI
+
+````yaml /api-spec/clob-openapi.yaml post /orders
+openapi: 3.1.0
+info:
+  title: Polymarket CLOB API
+  description: Polymarket CLOB API Reference
+  license:
+    name: MIT
+    identifier: MIT
+  version: 1.0.0
+servers:
+  - url: https://clob.polymarket.com
+    description: Production CLOB API
+  - url: https://clob-staging.polymarket.com
+    description: Staging CLOB API
+security: []
+tags:
+  - name: Trade
+    description: Trade endpoints
+  - name: Markets
+    description: Market data endpoints
+  - name: Account
+    description: Account and authentication endpoints
+  - name: Notifications
+    description: User notification endpoints
+  - name: Rewards
+    description: Rewards and earnings endpoints
+  - name: Rebates
+    description: Maker rebate endpoints
+paths:
+  /orders:
+    post:
+      tags:
+        - Trade
+      summary: Post multiple orders
+      description: >
+        Creates multiple new orders in the order book. Orders are processed in
+        parallel.
+
+        Maximum 15 orders per request.
+      operationId: postOrders
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: '#/components/schemas/SendOrder'
+              maxItems: 15
+            examples:
+              example:
+                summary: Send multiple orders example
+                value:
+                  - order:
+                      maker: '0x1234567890123456789012345678901234567890'
+                      signer: '0x1234567890123456789012345678901234567890'
+                      tokenId: 0xabc123def456...
+                      makerAmount: '100000000'
+                      takerAmount: '200000000'
+                      side: BUY
+                      expiration: '1735689600'
+                      timestamp: '1735689600000'
+                      metadata: ''
+                      builder: >-
+                        0x0000000000000000000000000000000000000000000000000000000000000000
+                      signature: 0x1234abcd...
+                      salt: 1234567890
+                      signatureType: 0
+                    owner: f4f247b7-4ac7-ff29-a152-04fda0a8755a
+                    orderType: GTC
+                    deferExec: false
+                    postOnly: false
+                  - order:
+                      maker: '0x1234567890123456789012345678901234567890'
+                      signer: '0x1234567890123456789012345678901234567890'
+                      tokenId: 0xdef456abc789...
+                      makerAmount: '200000000'
+                      takerAmount: '100000000'
+                      side: SELL
+                      expiration: '1735689600'
+                      timestamp: '1735689600000'
+                      metadata: ''
+                      builder: >-
+                        0x0000000000000000000000000000000000000000000000000000000000000000
+                      signature: 0x5678efgh...
+                      salt: 1234567891
+                      signatureType: 0
+                    owner: f4f247b7-4ac7-ff29-a152-04fda0a8755a
+                    orderType: GTC
+                    deferExec: false
+                    postOnly: false
+      responses:
+        '200':
+          description: >-
+            Orders successfully processed. Returns an array of order responses,
+            one for each order in the request.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SendOrderResponse'
+              examples:
+                mixed_results:
+                  summary: Mixed order results
+                  value:
+                    - success: true
+                      orderID: '0xabcdef1234567890abcdef1234567890abcdef12'
+                      status: live
+                      makingAmount: '100000000'
+                      takingAmount: '200000000'
+                      errorMsg: ''
+                    - success: true
+                      orderID: '0xfedcba0987654321fedcba0987654321fedcba09'
+                      status: matched
+                      makingAmount: '200000000'
+                      takingAmount: '100000000'
+                      transactionsHashes:
+                        - '0x1234567890abcdef1234567890abcdef12345678'
+                      tradeIDs:
+                        - trade-123
+                      errorMsg: ''
+                    - success: false
+                      orderID: ''
+                      status: delayed
+                      errorMsg: 'Rate limit exceeded for tokenId: 0xdef456abc789...'
+                post_only_mode:
+                  summary: Post-only mode results
+                  value:
+                    - errorMsg: >-
+                        post-only mode: only post-only orders and cancels are
+                        allowed
+                      orderID: ''
+                      takingAmount: ''
+                      makingAmount: ''
+                      status: ''
+                      success: true
+                    - errorMsg: >-
+                        post-only mode: only post-only orders and cancels are
+                        allowed
+                      orderID: ''
+                      takingAmount: ''
+                      makingAmount: ''
+                      status: ''
+                      success: true
+        '400':
+          description: Bad request - Invalid order payload or validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                invalid_payload:
+                  summary: Invalid order payload
+                  value:
+                    error: Invalid order payload
+                empty_payload:
+                  summary: Empty orders array
+                  value:
+                    error: Invalid order payload
+                too_many_orders:
+                  summary: Too many orders
+                  value:
+                    error: 'Too many orders in payload: 20, max allowed: 15'
+                owner_mismatch:
+                  summary: Owner mismatch
+                  value:
+                    error: the order owner has to be the owner of the API KEY
+                signer_mismatch:
+                  summary: Signer mismatch
+                  value:
+                    error: >-
+                      the order signer address has to be the address of the API
+                      KEY
+                banned_address:
+                  summary: Banned address
+                  value:
+                    error: '''0x1234...'' address banned'
+                closed_only_mode:
+                  summary: Closed only mode violation
+                  value:
+                    error: '''0x1234...'' address in closed only mode'
+        '401':
+          description: Unauthorized - Invalid API key or authentication failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Invalid API key
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: could not insert order
+        '503':
+          description: Service unavailable - Trading disabled or cancel-only mode
+          headers:
+            Retry-After:
+              description: Seconds to wait before retrying when provided by post-only mode.
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                trading_disabled:
+                  summary: Trading disabled
+                  value:
+                    error: >-
+                      Trading is currently disabled. Check polymarket.com for
+                      updates
+                cancel_only:
+                  summary: Cancel-only mode
+                  value:
+                    error: >-
+                      Trading is currently cancel-only. New orders are not
+                      accepted, but cancels are allowed.
+                post_only_mode:
+                  summary: Post-only mode
+                  value:
+                    error: >-
+                      post-only mode: only post-only orders and cancels are
+                      allowed
+                    code: post_only_mode
+                    retry_after_seconds: 79
+      security:
+        - polyApiKey: []
+          polyAddress: []
+          polySignature: []
+          polyPassphrase: []
+          polyTimestamp: []
+components:
+  schemas:
+    SendOrder:
+      type: object
+      required:
+        - order
+        - owner
+      properties:
+        order:
+          $ref: '#/components/schemas/Order'
+        owner:
+          type: string
+          description: UUID of the API key owner
+          example: f4f247b7-4ac7-ff29-a152-04fda0a8755a
+        orderType:
+          type: string
+          description: Time in force
+          enum:
+            - GTC
+            - FOK
+            - GTD
+            - FAK
+          default: GTC
+        deferExec:
+          type: boolean
+          description: Whether to defer execution
+          default: false
+        postOnly:
+          type: boolean
+          description: >-
+            Whether the order must rest on the book and not match immediately.
+            Only supported for GTC and GTD orders.
+          default: false
+    SendOrderResponse:
+      type: object
+      required:
+        - success
+        - orderID
+        - status
+      properties:
+        success:
+          type: boolean
+          description: Whether the order was successfully processed
+          example: true
+        orderID:
+          type: string
+          description: Unique identifier for the order (order hash)
+          example: '0xabcdef1234567890abcdef1234567890abcdef12'
+        status:
+          type: string
+          description: Status of the order after processing
+          enum:
+            - live
+            - matched
+            - delayed
+        makingAmount:
+          type: string
+          description: Amount the maker is providing in fixed-math with 6 decimals
+          example: '100000000'
+        takingAmount:
+          type: string
+          description: Amount the taker is providing in fixed-math with 6 decimals
+          example: '200000000'
+        transactionsHashes:
+          type: array
+          description: Array of transaction hashes (present when status is 'matched')
+          items:
+            type: string
+          example:
+            - '0x1234567890abcdef1234567890abcdef12345678'
+        tradeIDs:
+          type: array
+          description: Array of trade IDs (present when status is 'matched')
+          items:
+            type: string
+        errorMsg:
+          type: string
+          description: Error message (empty on success)
+          example: ''
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Error message
+        code:
+          type: string
+          description: Machine-readable error code, when provided
+        retry_after_seconds:
+          type: integer
+          description: Number of seconds to wait before retrying, when provided
+    Order:
+      type: object
+      description: >
+        Order payload submitted to the CLOB API. In CLOB V2, `expiration`
+        remains in
+
+        the POST /order wire body for GTD/order-expiry handling, but it is not
+        part
+
+        of the EIP-712 signed order struct.
+      required:
+        - maker
+        - signer
+        - tokenId
+        - makerAmount
+        - takerAmount
+        - side
+        - expiration
+        - timestamp
+        - builder
+        - signature
+        - salt
+        - signatureType
+      properties:
+        maker:
+          type: string
+          description: >-
+            Ethereum address of the maker (In the default case, this is your
+            proxy address)
+          example: '0x1234567890123456789012345678901234567890'
+        signer:
+          type: string
+          description: Ethereum address of the signer
+          example: '0x1234567890123456789012345678901234567890'
+        tokenId:
+          type: string
+          description: Token ID (asset ID) for the order
+          example: 0xabc123def456...
+        makerAmount:
+          type: string
+          description: Amount the maker is providing in fixed-math with 6 decimals
+          example: '100000000'
+        takerAmount:
+          type: string
+          description: Amount the taker is providing in fixed-math with 6 decimals
+          example: '200000000'
+        side:
+          type: string
+          description: Order side
+          enum:
+            - BUY
+            - SELL
+          example: BUY
+        expiration:
+          type: string
+          description: >-
+            Unix timestamp when the order expires. Present in the API wire body;
+            not part of the CLOB V2 EIP-712 signed order struct.
+          example: '1735689600'
+        timestamp:
+          type: string
+          description: >-
+            Unix timestamp in milliseconds when the order was created (used for
+            order uniqueness)
+          example: '1735689600000'
+        metadata:
+          type: string
+          description: Reserved for future use
+          example: ''
+        builder:
+          type: string
+          description: >-
+            Builder code (bytes32) for integrator attribution. `0x` + 64 hex
+            chars or empty.
+          example: '0x0000000000000000000000000000000000000000000000000000000000000000'
+        signature:
+          type: string
+          description: Cryptographic signature of the order
+          example: 0x1234abcd...
+        salt:
+          type: integer
+          description: Random salt for order uniqueness
+          example: 1234567890
+        signatureType:
+          type: integer
+          description: Type of signature (0 = EOA, 1 = POLY_PROXY, 2 = POLY_GNOSIS_SAFE)
+          enum:
+            - 0
+            - 1
+            - 2
+  securitySchemes:
+    polyApiKey:
+      type: apiKey
+      in: header
+      name: POLY_API_KEY
+      description: Your API key
+    polyAddress:
+      type: apiKey
+      in: header
+      name: POLY_ADDRESS
+      description: Ethereum address associated with the API key
+    polySignature:
+      type: apiKey
+      in: header
+      name: POLY_SIGNATURE
+      description: HMAC signature of the request
+    polyPassphrase:
+      type: apiKey
+      in: header
+      name: POLY_PASSPHRASE
+      description: API key passphrase
+    polyTimestamp:
+      type: apiKey
+      in: header
+      name: POLY_TIMESTAMP
+      description: Unix timestamp of the request
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Get user orders
+
+> Retrieves open orders for the authenticated user. Returns paginated results.
+Builder-authenticated clients can also use this endpoint to retrieve orders attributed to their builder account.
+
+
+
+
+## OpenAPI
+
+````yaml /api-spec/clob-openapi.yaml get /data/orders
+openapi: 3.1.0
+info:
+  title: Polymarket CLOB API
+  description: Polymarket CLOB API Reference
+  license:
+    name: MIT
+    identifier: MIT
+  version: 1.0.0
+servers:
+  - url: https://clob.polymarket.com
+    description: Production CLOB API
+  - url: https://clob-staging.polymarket.com
+    description: Staging CLOB API
+security: []
+tags:
+  - name: Trade
+    description: Trade endpoints
+  - name: Markets
+    description: Market data endpoints
+  - name: Account
+    description: Account and authentication endpoints
+  - name: Notifications
+    description: User notification endpoints
+  - name: Rewards
+    description: Rewards and earnings endpoints
+  - name: Rebates
+    description: Maker rebate endpoints
+paths:
+  /data/orders:
+    get:
+      tags:
+        - Trade
+      summary: Get user orders
+      description: >
+        Retrieves open orders for the authenticated user. Returns paginated
+        results.
+
+        Builder-authenticated clients can also use this endpoint to retrieve
+        orders attributed to their builder account.
+      operationId: getOrders
+      parameters:
+        - name: id
+          in: query
+          description: Order ID (hash) to filter by specific order
+          required: false
+          schema:
+            type: string
+          example: '0xabcdef1234567890abcdef1234567890abcdef12'
+        - name: market
+          in: query
+          description: Market (condition ID) to filter orders
+          required: false
+          schema:
+            type: string
+          example: '0x0000000000000000000000000000000000000000000000000000000000000001'
+        - name: asset_id
+          in: query
+          description: Asset ID (token ID) to filter orders
+          required: false
+          schema:
+            type: string
+          example: 0xabc123def456...
+        - name: next_cursor
+          in: query
+          description: Cursor for pagination (base64 encoded offset)
+          required: false
+          schema:
+            type: string
+          example: MA==
+      responses:
+        '200':
+          description: Successfully retrieved orders
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrdersResponse'
+              examples:
+                example:
+                  summary: User orders response
+                  value:
+                    limit: 100
+                    next_cursor: MTAw
+                    count: 2
+                    data:
+                      - id: '0xabcdef1234567890abcdef1234567890abcdef12'
+                        status: ORDER_STATUS_LIVE
+                        owner: f4f247b7-4ac7-ff29-a152-04fda0a8755a
+                        maker_address: '0x1234567890123456789012345678901234567890'
+                        market: >-
+                          0x0000000000000000000000000000000000000000000000000000000000000001
+                        asset_id: 0xabc123def456...
+                        side: BUY
+                        original_size: '100000000'
+                        size_matched: '0'
+                        price: '0.5'
+                        outcome: 'YES'
+                        expiration: '1735689600'
+                        order_type: GTC
+                        associate_trades: []
+                        created_at: 1700000000
+                      - id: '0xfedcba0987654321fedcba0987654321fedcba09'
+                        status: ORDER_STATUS_LIVE
+                        owner: f4f247b7-4ac7-ff29-a152-04fda0a8755a
+                        maker_address: '0x1234567890123456789012345678901234567890'
+                        market: >-
+                          0x0000000000000000000000000000000000000000000000000000000000000002
+                        asset_id: 0xdef456abc789...
+                        side: SELL
+                        original_size: '200000000'
+                        size_matched: '50000000'
+                        price: '0.75'
+                        outcome: 'NO'
+                        expiration: '1735689600'
+                        order_type: GTC
+                        associate_trades:
+                          - trade-123
+                        created_at: 1700000001
+        '400':
+          description: Bad request - Invalid parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: invalid order params payload
+        '401':
+          description: Unauthorized - Invalid API key or authentication failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Invalid API key
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Internal server error
+      security:
+        - polyApiKey: []
+          polyAddress: []
+          polySignature: []
+          polyPassphrase: []
+          polyTimestamp: []
+components:
+  schemas:
+    OrdersResponse:
+      type: object
+      required:
+        - limit
+        - next_cursor
+        - count
+        - data
+      properties:
+        limit:
+          type: integer
+          description: Maximum number of results per page
+          example: 100
+        next_cursor:
+          type: string
+          description: >-
+            Cursor for pagination (base64 encoded offset). Empty if no more
+            results.
+          example: MTAw
+        count:
+          type: integer
+          description: Number of orders in this response
+          example: 2
+        data:
+          type: array
+          description: Array of open orders
+          items:
+            $ref: '#/components/schemas/OpenOrder'
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Error message
+        code:
+          type: string
+          description: Machine-readable error code, when provided
+        retry_after_seconds:
+          type: integer
+          description: Number of seconds to wait before retrying, when provided
+    OpenOrder:
+      type: object
+      required:
+        - id
+        - status
+        - owner
+        - maker_address
+        - market
+        - asset_id
+        - side
+        - original_size
+        - size_matched
+        - price
+        - expiration
+        - order_type
+        - created_at
+        - outcome
+      properties:
+        id:
+          type: string
+          description: Order ID (order hash)
+          example: '0xabcdef1234567890abcdef1234567890abcdef12'
+        status:
+          type: string
+          description: Order status
+          enum:
+            - ORDER_STATUS_LIVE
+            - ORDER_STATUS_INVALID
+            - ORDER_STATUS_CANCELED_MARKET_RESOLVED
+            - ORDER_STATUS_CANCELED
+            - ORDER_STATUS_MATCHED
+        owner:
+          type: string
+          description: UUID of the order owner
+          example: f4f247b7-4ac7-ff29-a152-04fda0a8755a
+        maker_address:
+          type: string
+          description: Ethereum address of the maker
+          example: '0x1234567890123456789012345678901234567890'
+        market:
+          type: string
+          description: Market (condition ID)
+          example: '0x0000000000000000000000000000000000000000000000000000000000000001'
+        asset_id:
+          type: string
+          description: Asset ID (token ID)
+          example: 0xabc123def456...
+        side:
+          type: string
+          description: Order side
+          enum:
+            - BUY
+            - SELL
+          example: BUY
+        original_size:
+          type: string
+          description: Original order size in fixed-math with 6 decimals
+          example: '100000000'
+        size_matched:
+          type: string
+          description: Size that has been matched in fixed-math with 6 decimals
+          example: '0'
+        price:
+          type: string
+          description: Order price
+          example: '0.5'
+        outcome:
+          type: string
+          description: Market outcome (YES/NO)
+          example: 'YES'
+        expiration:
+          type: string
+          description: Unix timestamp when the order expires
+          example: '1735689600'
+        order_type:
+          type: string
+          description: Order type
+          enum:
+            - GTC
+            - FOK
+            - GTD
+            - FAK
+          example: GTC
+        associate_trades:
+          type: array
+          description: Array of associated trade IDs
+          items:
+            type: string
+          example:
+            - trade-123
+        created_at:
+          type: integer
+          description: Unix timestamp when the order was created
+          example: 1700000000
+  securitySchemes:
+    polyApiKey:
+      type: apiKey
+      in: header
+      name: POLY_API_KEY
+      description: Your API key
+    polyAddress:
+      type: apiKey
+      in: header
+      name: POLY_ADDRESS
+      description: Ethereum address associated with the API key
+    polySignature:
+      type: apiKey
+      in: header
+      name: POLY_SIGNATURE
+      description: HMAC signature of the request
+    polyPassphrase:
+      type: apiKey
+      in: header
+      name: POLY_PASSPHRASE
+      description: API key passphrase
+    polyTimestamp:
+      type: apiKey
+      in: header
+      name: POLY_TIMESTAMP
+      description: Unix timestamp of the request
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Cancel multiple orders
+
+> Cancels multiple orders by their IDs. Maximum 3000 orders per request.
+Duplicate order IDs in the request are automatically ignored.
+Works even in cancel-only mode.
+
+
+
+
+## OpenAPI
+
+````yaml /api-spec/clob-openapi.yaml delete /orders
+openapi: 3.1.0
+info:
+  title: Polymarket CLOB API
+  description: Polymarket CLOB API Reference
+  license:
+    name: MIT
+    identifier: MIT
+  version: 1.0.0
+servers:
+  - url: https://clob.polymarket.com
+    description: Production CLOB API
+  - url: https://clob-staging.polymarket.com
+    description: Staging CLOB API
+security: []
+tags:
+  - name: Trade
+    description: Trade endpoints
+  - name: Markets
+    description: Market data endpoints
+  - name: Account
+    description: Account and authentication endpoints
+  - name: Notifications
+    description: User notification endpoints
+  - name: Rewards
+    description: Rewards and earnings endpoints
+  - name: Rebates
+    description: Maker rebate endpoints
+paths:
+  /orders:
+    delete:
+      tags:
+        - Trade
+      summary: Cancel multiple orders
+      description: |
+        Cancels multiple orders by their IDs. Maximum 3000 orders per request.
+        Duplicate order IDs in the request are automatically ignored.
+        Works even in cancel-only mode.
+      operationId: cancelOrders
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                type: string
+              maxItems: 3000
+            example:
+              - '0xabcdef1234567890abcdef1234567890abcdef12'
+              - '0xfedcba0987654321fedcba0987654321fedcba09'
+              - '0x1234567890abcdef1234567890abcdef12345678'
+      responses:
+        '200':
+          description: Cancellation results for all orders
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CancelOrdersResponse'
+              examples:
+                all_canceled:
+                  summary: All orders canceled
+                  value:
+                    canceled:
+                      - '0xabcdef1234567890abcdef1234567890abcdef12'
+                      - '0xfedcba0987654321fedcba0987654321fedcba09'
+                      - '0x1234567890abcdef1234567890abcdef12345678'
+                    not_canceled: {}
+                mixed:
+                  summary: Some orders canceled, some not
+                  value:
+                    canceled:
+                      - '0xabcdef1234567890abcdef1234567890abcdef12'
+                      - '0xfedcba0987654321fedcba0987654321fedcba09'
+                    not_canceled:
+                      '0x1234567890abcdef1234567890abcdef12345678': Order already matched
+                partial:
+                  summary: Partial cancellation
+                  value:
+                    canceled:
+                      - '0xabcdef1234567890abcdef1234567890abcdef12'
+                    not_canceled:
+                      '0xfedcba0987654321fedcba0987654321fedcba09': Order not found
+                      '0x1234567890abcdef1234567890abcdef12345678': Order already canceled
+        '400':
+          description: Bad request - Invalid order IDs or payload
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                invalid_order_id:
+                  summary: Invalid order ID
+                  value:
+                    error: Invalid orderID
+                invalid_payload:
+                  summary: Invalid payload
+                  value:
+                    error: Invalid order payload
+                too_many_orders:
+                  summary: Too many orders
+                  value:
+                    error: 'Too many orders in payload, max allowed: 3000'
+        '401':
+          description: Unauthorized - Invalid API key or authentication failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Invalid API key
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Internal server error
+        '503':
+          description: >-
+            Service unavailable - Trading disabled (cancels still work in
+            cancel-only mode)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: >-
+                  Trading is currently disabled. Check polymarket.com for
+                  updates
+      security:
+        - polyApiKey: []
+          polyAddress: []
+          polySignature: []
+          polyPassphrase: []
+          polyTimestamp: []
+components:
+  schemas:
+    CancelOrdersResponse:
+      type: object
+      required:
+        - canceled
+        - not_canceled
+      properties:
+        canceled:
+          type: array
+          description: Array of order IDs that were successfully canceled
+          items:
+            type: string
+          example:
+            - '0xabcdef1234567890abcdef1234567890abcdef12'
+        not_canceled:
+          type: object
+          description: Map of order IDs that could not be canceled with error messages
+          additionalProperties:
+            type: string
+          example:
+            '0xabcdef1234567890abcdef1234567890abcdef12': Order not found or already canceled
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Error message
+        code:
+          type: string
+          description: Machine-readable error code, when provided
+        retry_after_seconds:
+          type: integer
+          description: Number of seconds to wait before retrying, when provided
+  securitySchemes:
+    polyApiKey:
+      type: apiKey
+      in: header
+      name: POLY_API_KEY
+      description: Your API key
+    polyAddress:
+      type: apiKey
+      in: header
+      name: POLY_ADDRESS
+      description: Ethereum address associated with the API key
+    polySignature:
+      type: apiKey
+      in: header
+      name: POLY_SIGNATURE
+      description: HMAC signature of the request
+    polyPassphrase:
+      type: apiKey
+      in: header
+      name: POLY_PASSPHRASE
+      description: API key passphrase
+    polyTimestamp:
+      type: apiKey
+      in: header
+      name: POLY_TIMESTAMP
+      description: Unix timestamp of the request
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Cancel all orders
+
+> Cancels all open orders for the authenticated user. Works even in cancel-only mode.
+
+
+
+
+## OpenAPI
+
+````yaml /api-spec/clob-openapi.yaml delete /cancel-all
+openapi: 3.1.0
+info:
+  title: Polymarket CLOB API
+  description: Polymarket CLOB API Reference
+  license:
+    name: MIT
+    identifier: MIT
+  version: 1.0.0
+servers:
+  - url: https://clob.polymarket.com
+    description: Production CLOB API
+  - url: https://clob-staging.polymarket.com
+    description: Staging CLOB API
+security: []
+tags:
+  - name: Trade
+    description: Trade endpoints
+  - name: Markets
+    description: Market data endpoints
+  - name: Account
+    description: Account and authentication endpoints
+  - name: Notifications
+    description: User notification endpoints
+  - name: Rewards
+    description: Rewards and earnings endpoints
+  - name: Rebates
+    description: Maker rebate endpoints
+paths:
+  /cancel-all:
+    delete:
+      tags:
+        - Trade
+      summary: Cancel all orders
+      description: >
+        Cancels all open orders for the authenticated user. Works even in
+        cancel-only mode.
+      operationId: cancelAllOrders
+      responses:
+        '200':
+          description: Cancellation results for all orders
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CancelOrdersResponse'
+              examples:
+                canceled:
+                  summary: All orders canceled
+                  value:
+                    canceled:
+                      - '0xabcdef1234567890abcdef1234567890abcdef12'
+                      - '0xfedcba0987654321fedcba0987654321fedcba09'
+                    not_canceled: {}
+                mixed:
+                  summary: Some orders canceled, some not
+                  value:
+                    canceled:
+                      - '0xabcdef1234567890abcdef1234567890abcdef12'
+                    not_canceled:
+                      '0xfedcba0987654321fedcba0987654321fedcba09': Order already matched
+                no_orders:
+                  summary: No orders to cancel
+                  value:
+                    canceled: []
+                    not_canceled: {}
+        '401':
+          description: Unauthorized - Invalid API key or authentication failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Invalid API key
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Internal server error
+        '503':
+          description: >-
+            Service unavailable - Trading disabled (cancels still work in
+            cancel-only mode)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: >-
+                  Trading is currently disabled. Check polymarket.com for
+                  updates
+      security:
+        - polyApiKey: []
+          polyAddress: []
+          polySignature: []
+          polyPassphrase: []
+          polyTimestamp: []
+components:
+  schemas:
+    CancelOrdersResponse:
+      type: object
+      required:
+        - canceled
+        - not_canceled
+      properties:
+        canceled:
+          type: array
+          description: Array of order IDs that were successfully canceled
+          items:
+            type: string
+          example:
+            - '0xabcdef1234567890abcdef1234567890abcdef12'
+        not_canceled:
+          type: object
+          description: Map of order IDs that could not be canceled with error messages
+          additionalProperties:
+            type: string
+          example:
+            '0xabcdef1234567890abcdef1234567890abcdef12': Order not found or already canceled
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Error message
+        code:
+          type: string
+          description: Machine-readable error code, when provided
+        retry_after_seconds:
+          type: integer
+          description: Number of seconds to wait before retrying, when provided
+  securitySchemes:
+    polyApiKey:
+      type: apiKey
+      in: header
+      name: POLY_API_KEY
+      description: Your API key
+    polyAddress:
+      type: apiKey
+      in: header
+      name: POLY_ADDRESS
+      description: Ethereum address associated with the API key
+    polySignature:
+      type: apiKey
+      in: header
+      name: POLY_SIGNATURE
+      description: HMAC signature of the request
+    polyPassphrase:
+      type: apiKey
+      in: header
+      name: POLY_PASSPHRASE
+      description: API key passphrase
+    polyTimestamp:
+      type: apiKey
+      in: header
+      name: POLY_TIMESTAMP
+      description: Unix timestamp of the request
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Cancel orders for a market
+
+> Cancels all open orders for the authenticated user in a specific market (condition) and asset.
+Works even in cancel-only mode.
+
+
+
+
+## OpenAPI
+
+````yaml /api-spec/clob-openapi.yaml delete /cancel-market-orders
+openapi: 3.1.0
+info:
+  title: Polymarket CLOB API
+  description: Polymarket CLOB API Reference
+  license:
+    name: MIT
+    identifier: MIT
+  version: 1.0.0
+servers:
+  - url: https://clob.polymarket.com
+    description: Production CLOB API
+  - url: https://clob-staging.polymarket.com
+    description: Staging CLOB API
+security: []
+tags:
+  - name: Trade
+    description: Trade endpoints
+  - name: Markets
+    description: Market data endpoints
+  - name: Account
+    description: Account and authentication endpoints
+  - name: Notifications
+    description: User notification endpoints
+  - name: Rewards
+    description: Rewards and earnings endpoints
+  - name: Rebates
+    description: Maker rebate endpoints
+paths:
+  /cancel-market-orders:
+    delete:
+      tags:
+        - Trade
+      summary: Cancel orders for a market
+      description: >
+        Cancels all open orders for the authenticated user in a specific market
+        (condition) and asset.
+
+        Works even in cancel-only mode.
+      operationId: cancelMarketOrders
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OrderMarketCancelParams'
+            example:
+              market: >-
+                0x0000000000000000000000000000000000000000000000000000000000000001
+              asset_id: 0xabc123def456...
+      responses:
+        '200':
+          description: Cancellation results for market orders
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CancelOrdersResponse'
+              examples:
+                canceled:
+                  summary: All market orders canceled
+                  value:
+                    canceled:
+                      - '0xabcdef1234567890abcdef1234567890abcdef12'
+                      - '0xfedcba0987654321fedcba0987654321fedcba09'
+                    not_canceled: {}
+                mixed:
+                  summary: Some orders canceled, some not
+                  value:
+                    canceled:
+                      - '0xabcdef1234567890abcdef1234567890abcdef12'
+                    not_canceled:
+                      '0xfedcba0987654321fedcba0987654321fedcba09': Order already matched
+                no_orders:
+                  summary: No orders found for this market
+                  value:
+                    canceled: []
+                    not_canceled: {}
+        '400':
+          description: Bad request - Invalid payload
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Invalid order payload
+        '401':
+          description: Unauthorized - Invalid API key or authentication failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Invalid API key
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Internal server error
+        '503':
+          description: >-
+            Service unavailable - Trading disabled (cancels still work in
+            cancel-only mode)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: >-
+                  Trading is currently disabled. Check polymarket.com for
+                  updates
+      security:
+        - polyApiKey: []
+          polyAddress: []
+          polySignature: []
+          polyPassphrase: []
+          polyTimestamp: []
+components:
+  schemas:
+    OrderMarketCancelParams:
+      type: object
+      required:
+        - market
+        - asset_id
+      properties:
+        market:
+          type: string
+          description: Market (condition ID)
+          example: '0x0000000000000000000000000000000000000000000000000000000000000001'
+        asset_id:
+          type: string
+          description: Asset ID (token ID)
+          example: 0xabc123def456...
+    CancelOrdersResponse:
+      type: object
+      required:
+        - canceled
+        - not_canceled
+      properties:
+        canceled:
+          type: array
+          description: Array of order IDs that were successfully canceled
+          items:
+            type: string
+          example:
+            - '0xabcdef1234567890abcdef1234567890abcdef12'
+        not_canceled:
+          type: object
+          description: Map of order IDs that could not be canceled with error messages
+          additionalProperties:
+            type: string
+          example:
+            '0xabcdef1234567890abcdef1234567890abcdef12': Order not found or already canceled
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Error message
+        code:
+          type: string
+          description: Machine-readable error code, when provided
+        retry_after_seconds:
+          type: integer
+          description: Number of seconds to wait before retrying, when provided
+  securitySchemes:
+    polyApiKey:
+      type: apiKey
+      in: header
+      name: POLY_API_KEY
+      description: Your API key
+    polyAddress:
+      type: apiKey
+      in: header
+      name: POLY_ADDRESS
+      description: Ethereum address associated with the API key
+    polySignature:
+      type: apiKey
+      in: header
+      name: POLY_SIGNATURE
+      description: HMAC signature of the request
+    polyPassphrase:
+      type: apiKey
+      in: header
+      name: POLY_PASSPHRASE
+      description: API key passphrase
+    polyTimestamp:
+      type: apiKey
+      in: header
+      name: POLY_TIMESTAMP
+      description: Unix timestamp of the request
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Get order scoring status
+
+> Checks if a specific order is currently scoring for rewards.
+
+An order is considered "scoring" if it meets all the criteria for earning maker rewards:
+- The order is live on a rewards-eligible market
+- The order meets the minimum size requirements
+- The order is within the valid spread range
+- The order has been live for the required duration
+
+
+
+
+## OpenAPI
+
+````yaml /api-spec/clob-openapi.yaml get /order-scoring
+openapi: 3.1.0
+info:
+  title: Polymarket CLOB API
+  description: Polymarket CLOB API Reference
+  license:
+    name: MIT
+    identifier: MIT
+  version: 1.0.0
+servers:
+  - url: https://clob.polymarket.com
+    description: Production CLOB API
+  - url: https://clob-staging.polymarket.com
+    description: Staging CLOB API
+security: []
+tags:
+  - name: Trade
+    description: Trade endpoints
+  - name: Markets
+    description: Market data endpoints
+  - name: Account
+    description: Account and authentication endpoints
+  - name: Notifications
+    description: User notification endpoints
+  - name: Rewards
+    description: Rewards and earnings endpoints
+  - name: Rebates
+    description: Maker rebate endpoints
+paths:
+  /order-scoring:
+    get:
+      tags:
+        - Trade
+      summary: Get order scoring status
+      description: >
+        Checks if a specific order is currently scoring for rewards.
+
+
+        An order is considered "scoring" if it meets all the criteria for
+        earning maker rewards:
+
+        - The order is live on a rewards-eligible market
+
+        - The order meets the minimum size requirements
+
+        - The order is within the valid spread range
+
+        - The order has been live for the required duration
+      operationId: getOrderScoring
+      parameters:
+        - name: order_id
+          in: query
+          description: The order ID (order hash) to check scoring status for
+          required: true
+          schema:
+            type: string
+          example: '0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890'
+      responses:
+        '200':
+          description: Successfully retrieved order scoring status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderScoringResponse'
+              examples:
+                scoring:
+                  summary: Order is scoring
+                  value:
+                    scoring: true
+                not_scoring:
+                  summary: Order is not scoring
+                  value:
+                    scoring: false
+        '400':
+          description: Bad request - Invalid order ID
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Invalid order_id
+        '401':
+          description: Unauthorized - Invalid API key or order doesn't belong to user
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Invalid API key
+        '404':
+          description: Market not found for the order
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: market not found
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Internal server error
+        '503':
+          description: Service unavailable - Trading disabled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: >-
+                  Trading is currently disabled. Check polymarket.com for
+                  updates
+      security:
+        - polyApiKey: []
+          polyAddress: []
+          polySignature: []
+          polyPassphrase: []
+          polyTimestamp: []
+components:
+  schemas:
+    OrderScoringResponse:
+      type: object
+      description: Response indicating whether an order is currently scoring for rewards
+      required:
+        - scoring
+      properties:
+        scoring:
+          type: boolean
+          description: Whether the order is currently scoring for maker rewards
+          example: true
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Error message
+        code:
+          type: string
+          description: Machine-readable error code, when provided
+        retry_after_seconds:
+          type: integer
+          description: Number of seconds to wait before retrying, when provided
+  securitySchemes:
+    polyApiKey:
+      type: apiKey
+      in: header
+      name: POLY_API_KEY
+      description: Your API key
+    polyAddress:
+      type: apiKey
+      in: header
+      name: POLY_ADDRESS
+      description: Ethereum address associated with the API key
+    polySignature:
+      type: apiKey
+      in: header
+      name: POLY_SIGNATURE
+      description: HMAC signature of the request
+    polyPassphrase:
+      type: apiKey
+      in: header
+      name: POLY_PASSPHRASE
+      description: API key passphrase
+    polyTimestamp:
+      type: apiKey
+      in: header
+      name: POLY_TIMESTAMP
+      description: Unix timestamp of the request
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Send heartbeat
+
+> Sends a heartbeat signal to maintain active session status.
+If heartbeats are not sent regularly, all open orders for the user will be automatically canceled.
+This is useful for automated trading systems that need to ensure orders are canceled
+if the system becomes unresponsive.
+
+
+
+
+## OpenAPI
+
+````yaml /api-spec/clob-openapi.yaml post /heartbeats
+openapi: 3.1.0
+info:
+  title: Polymarket CLOB API
+  description: Polymarket CLOB API Reference
+  license:
+    name: MIT
+    identifier: MIT
+  version: 1.0.0
+servers:
+  - url: https://clob.polymarket.com
+    description: Production CLOB API
+  - url: https://clob-staging.polymarket.com
+    description: Staging CLOB API
+security: []
+tags:
+  - name: Trade
+    description: Trade endpoints
+  - name: Markets
+    description: Market data endpoints
+  - name: Account
+    description: Account and authentication endpoints
+  - name: Notifications
+    description: User notification endpoints
+  - name: Rewards
+    description: Rewards and earnings endpoints
+  - name: Rebates
+    description: Maker rebate endpoints
+paths:
+  /heartbeats:
+    post:
+      tags:
+        - Trade
+      summary: Send heartbeat
+      description: >
+        Sends a heartbeat signal to maintain active session status.
+
+        If heartbeats are not sent regularly, all open orders for the user will
+        be automatically canceled.
+
+        This is useful for automated trading systems that need to ensure orders
+        are canceled
+
+        if the system becomes unresponsive.
+      operationId: sendHeartbeat
+      responses:
+        '200':
+          description: Heartbeat acknowledged
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HeartbeatResponse'
+              example:
+                status: ok
+        '401':
+          description: Unauthorized - Invalid API key or authentication failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Invalid API key
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Internal server error
+      security:
+        - polyApiKey: []
+          polyAddress: []
+          polySignature: []
+          polyPassphrase: []
+          polyTimestamp: []
+components:
+  schemas:
+    HeartbeatResponse:
+      type: object
+      description: Response for heartbeat request
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          description: Status of the heartbeat acknowledgment
+          example: ok
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Error message
+        code:
+          type: string
+          description: Machine-readable error code, when provided
+        retry_after_seconds:
+          type: integer
+          description: Number of seconds to wait before retrying, when provided
+  securitySchemes:
+    polyApiKey:
+      type: apiKey
+      in: header
+      name: POLY_API_KEY
+      description: Your API key
+    polyAddress:
+      type: apiKey
+      in: header
+      name: POLY_ADDRESS
+      description: Ethereum address associated with the API key
+    polySignature:
+      type: apiKey
+      in: header
+      name: POLY_SIGNATURE
+      description: HMAC signature of the request
+    polyPassphrase:
+      type: apiKey
+      in: header
+      name: POLY_PASSPHRASE
+      description: API key passphrase
+    polyTimestamp:
+      type: apiKey
+      in: header
+      name: POLY_TIMESTAMP
+      description: Unix timestamp of the request
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Get trades
+
+> Retrieves trades for the authenticated user. Returns paginated results.
+Requires readonly or level 2 API key authentication.
+
+
+
+
+## OpenAPI
+
+````yaml /api-spec/clob-openapi.yaml get /data/trades
+openapi: 3.1.0
+info:
+  title: Polymarket CLOB API
+  description: Polymarket CLOB API Reference
+  license:
+    name: MIT
+    identifier: MIT
+  version: 1.0.0
+servers:
+  - url: https://clob.polymarket.com
+    description: Production CLOB API
+  - url: https://clob-staging.polymarket.com
+    description: Staging CLOB API
+security: []
+tags:
+  - name: Trade
+    description: Trade endpoints
+  - name: Markets
+    description: Market data endpoints
+  - name: Account
+    description: Account and authentication endpoints
+  - name: Notifications
+    description: User notification endpoints
+  - name: Rewards
+    description: Rewards and earnings endpoints
+  - name: Rebates
+    description: Maker rebate endpoints
+paths:
+  /data/trades:
+    get:
+      tags:
+        - Trade
+      summary: Get trades
+      description: |
+        Retrieves trades for the authenticated user. Returns paginated results.
+        Requires readonly or level 2 API key authentication.
+      operationId: getTrades
+      parameters:
+        - name: id
+          in: query
+          description: Trade ID to filter by specific trade
+          required: false
+          schema:
+            type: string
+          example: trade-123
+        - name: maker_address
+          in: query
+          description: Maker address to filter trades
+          required: true
+          schema:
+            type: string
+            pattern: ^0x[a-fA-F0-9]{40}$
+          example: '0x1234567890123456789012345678901234567890'
+        - name: market
+          in: query
+          description: Market (condition ID) to filter trades
+          required: false
+          schema:
+            type: string
+            pattern: ^0x[a-fA-F0-9]{64}$
+          example: '0x0000000000000000000000000000000000000000000000000000000000000001'
+        - name: asset_id
+          in: query
+          description: Asset ID (token ID) to filter trades
+          required: false
+          schema:
+            type: string
+          example: >-
+            15871154585880608648532107628464183779895785213830018178010423617714102767076
+        - name: before
+          in: query
+          description: Filter trades before this Unix timestamp
+          required: false
+          schema:
+            type: string
+            pattern: ^\d+$
+          example: '1700000000'
+        - name: after
+          in: query
+          description: Filter trades after this Unix timestamp
+          required: false
+          schema:
+            type: string
+            pattern: ^\d+$
+          example: '1600000000'
+        - name: next_cursor
+          in: query
+          description: Cursor for pagination (base64 encoded offset)
+          required: false
+          schema:
+            type: string
+          example: MA==
+      responses:
+        '200':
+          description: Successfully retrieved trades
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TradesResponse'
+              examples:
+                example:
+                  summary: User trades response
+                  value:
+                    limit: 100
+                    next_cursor: MTAw
+                    count: 2
+                    data:
+                      - id: trade-123
+                        taker_order_id: '0xabcdef1234567890abcdef1234567890abcdef12'
+                        market: >-
+                          0x0000000000000000000000000000000000000000000000000000000000000001
+                        asset_id: >-
+                          15871154585880608648532107628464183779895785213830018178010423617714102767076
+                        side: BUY
+                        size: '100000000'
+                        fee_rate_bps: '30'
+                        price: '0.5'
+                        status: TRADE_STATUS_CONFIRMED
+                        match_time: '1700000000'
+                        last_update: '1700000000'
+                        outcome: 'YES'
+                        bucket_index: 0
+                        owner: f4f247b7-4ac7-ff29-a152-04fda0a8755a
+                        maker_address: '0x1234567890123456789012345678901234567890'
+                        transaction_hash: >-
+                          0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef
+                        trader_side: TAKER
+                        maker_orders: []
+        '400':
+          description: Bad request - Invalid parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Invalid trade params payload
+        '401':
+          description: Unauthorized - Invalid API key or authentication failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Invalid API key
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Internal server error
+      security:
+        - polyApiKey: []
+          polyAddress: []
+          polySignature: []
+          polyPassphrase: []
+          polyTimestamp: []
+components:
+  schemas:
+    TradesResponse:
+      type: object
+      description: Paginated trades response
+      required:
+        - limit
+        - next_cursor
+        - count
+        - data
+      properties:
+        limit:
+          type: integer
+          description: Maximum number of items per page
+          example: 100
+        next_cursor:
+          type: string
+          description: >-
+            Cursor for next page (base64 encoded offset). "LTE=" indicates no
+            more pages
+          example: MTAw
+        count:
+          type: integer
+          description: Number of items in current response
+          example: 2
+        data:
+          type: array
+          description: Array of trades
+          items:
+            $ref: '#/components/schemas/Trade'
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Error message
+        code:
+          type: string
+          description: Machine-readable error code, when provided
+        retry_after_seconds:
+          type: integer
+          description: Number of seconds to wait before retrying, when provided
+    Trade:
+      type: object
+      description: Trade information
+      required:
+        - id
+        - taker_order_id
+        - market
+        - asset_id
+        - side
+        - size
+        - price
+        - status
+        - match_time
+        - last_update
+        - outcome
+        - bucket_index
+        - owner
+        - maker_address
+        - trader_side
+      properties:
+        id:
+          type: string
+          description: Trade ID
+          example: trade-123
+        taker_order_id:
+          type: string
+          description: Taker order ID (hash)
+          example: '0xabcdef1234567890abcdef1234567890abcdef12'
+        market:
+          type: string
+          description: Market (condition ID)
+          pattern: ^0x[a-fA-F0-9]{64}$
+          example: '0x0000000000000000000000000000000000000000000000000000000000000001'
+        asset_id:
+          type: string
+          description: Asset ID (token ID)
+          example: >-
+            15871154585880608648532107628464183779895785213830018178010423617714102767076
+        side:
+          type: string
+          description: Trade side
+          enum:
+            - BUY
+            - SELL
+          example: BUY
+        size:
+          type: string
+          description: Trade size
+          example: '100000000'
+        fee_rate_bps:
+          type: string
+          description: Fee rate in basis points
+          example: '30'
+        price:
+          type: string
+          description: Trade price
+          example: '0.5'
+        status:
+          type: string
+          description: Trade status
+          enum:
+            - TRADE_STATUS_CONFIRMED
+            - TRADE_STATUS_FAILED
+            - TRADE_STATUS_RETRYING
+            - TRADE_STATUS_MATCHED
+            - TRADE_STATUS_MINED
+          example: TRADE_STATUS_CONFIRMED
+        match_time:
+          type: string
+          description: Match time (Unix timestamp)
+          example: '1700000000'
+        match_time_nano:
+          type: string
+          description: Match time in nanoseconds
+          example: '1700000000000000000'
+        last_update:
+          type: string
+          description: Last update time (Unix timestamp)
+          example: '1700000000'
+        outcome:
+          type: string
+          description: Market outcome
+          example: 'YES'
+        bucket_index:
+          type: integer
+          description: Bucket index
+          example: 0
+        owner:
+          type: string
+          description: Owner UUID
+          example: f4f247b7-4ac7-ff29-a152-04fda0a8755a
+        maker_address:
+          type: string
+          description: Maker address
+          pattern: ^0x[a-fA-F0-9]{40}$
+          example: '0x1234567890123456789012345678901234567890'
+        transaction_hash:
+          type: string
+          description: Transaction hash
+          pattern: ^0x[a-fA-F0-9]{64}$
+          example: '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef'
+        err_msg:
+          type:
+            - string
+            - 'null'
+          description: Error message (if any)
+          example: null
+        maker_orders:
+          type: array
+          description: Array of maker orders associated with this trade
+          items:
+            type: object
+            properties:
+              order_id:
+                type: string
+                description: Order ID (hash)
+              owner:
+                type: string
+                description: Owner UUID
+              maker_address:
+                type: string
+                description: Maker address
+              matched_amount:
+                type: string
+                description: Matched amount
+              price:
+                type: string
+                description: Price
+              fee_rate_bps:
+                type: string
+                description: Fee rate in basis points
+              asset_id:
+                type: string
+                description: Asset ID
+              outcome:
+                type: string
+                description: Outcome
+              side:
+                type: string
+                enum:
+                  - BUY
+                  - SELL
+          example: []
+        trader_side:
+          type: string
+          description: Trader side (TAKER or MAKER)
+          enum:
+            - TAKER
+            - MAKER
+          example: TAKER
+  securitySchemes:
+    polyApiKey:
+      type: apiKey
+      in: header
+      name: POLY_API_KEY
+      description: Your API key
+    polyAddress:
+      type: apiKey
+      in: header
+      name: POLY_ADDRESS
+      description: Ethereum address associated with the API key
+    polySignature:
+      type: apiKey
+      in: header
+      name: POLY_SIGNATURE
+      description: HMAC signature of the request
+    polyPassphrase:
+      type: apiKey
+      in: header
+      name: POLY_PASSPHRASE
+      description: API key passphrase
+    polyTimestamp:
+      type: apiKey
+      in: header
+      name: POLY_TIMESTAMP
+      description: Unix timestamp of the request
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Get builder trades
+
+> Retrieves trades attributed to a builder code.
+
+
+
+
+## OpenAPI
+
+````yaml /api-spec/clob-openapi.yaml get /builder/trades
+openapi: 3.1.0
+info:
+  title: Polymarket CLOB API
+  description: Polymarket CLOB API Reference
+  license:
+    name: MIT
+    identifier: MIT
+  version: 1.0.0
+servers:
+  - url: https://clob.polymarket.com
+    description: Production CLOB API
+  - url: https://clob-staging.polymarket.com
+    description: Staging CLOB API
+security: []
+tags:
+  - name: Trade
+    description: Trade endpoints
+  - name: Markets
+    description: Market data endpoints
+  - name: Account
+    description: Account and authentication endpoints
+  - name: Notifications
+    description: User notification endpoints
+  - name: Rewards
+    description: Rewards and earnings endpoints
+  - name: Rebates
+    description: Maker rebate endpoints
+paths:
+  /builder/trades:
+    get:
+      tags:
+        - Trade
+      summary: Get builder trades
+      description: |
+        Retrieves trades attributed to a builder code.
+      operationId: getBuilderTrades
+      parameters:
+        - name: builder_code
+          in: query
+          description: Builder code to fetch attributed trades for
+          required: true
+          schema:
+            type: string
+            pattern: ^0x[a-fA-F0-9]{64}$
+          example: '0x0000000000000000000000000000000000000000000000000000000000000001'
+        - name: id
+          in: query
+          description: Trade ID to filter by specific trade
+          required: false
+          schema:
+            type: string
+          example: trade-123
+        - name: market
+          in: query
+          description: Market (condition ID) to filter trades
+          required: false
+          schema:
+            type: string
+            pattern: ^0x[a-fA-F0-9]{64}$
+          example: '0x0000000000000000000000000000000000000000000000000000000000000001'
+        - name: asset_id
+          in: query
+          description: Asset ID (token ID) to filter trades
+          required: false
+          schema:
+            type: string
+          example: >-
+            15871154585880608648532107628464183779895785213830018178010423617714102767076
+        - name: before
+          in: query
+          description: Filter trades before this Unix timestamp
+          required: false
+          schema:
+            type: string
+            pattern: ^\d+$
+          example: '1700000000'
+        - name: after
+          in: query
+          description: Filter trades after this Unix timestamp
+          required: false
+          schema:
+            type: string
+            pattern: ^\d+$
+          example: '1600000000'
+        - name: next_cursor
+          in: query
+          description: Cursor for pagination (base64 encoded offset)
+          required: false
+          schema:
+            type: string
+          example: MA==
+      responses:
+        '200':
+          description: Successfully retrieved builder trades
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BuilderTradesResponse'
+              examples:
+                example:
+                  summary: Builder trades response
+                  value:
+                    limit: 300
+                    next_cursor: MzAw
+                    count: 2
+                    data:
+                      - id: trade-123
+                        tradeType: TAKER
+                        takerOrderHash: '0xabcdef1234567890abcdef1234567890abcdef12'
+                        builder: >-
+                          0x0000000000000000000000000000000000000000000000000000000000000001
+                        market: >-
+                          0x0000000000000000000000000000000000000000000000000000000000000001
+                        assetId: >-
+                          15871154585880608648532107628464183779895785213830018178010423617714102767076
+                        side: BUY
+                        size: '100000000'
+                        sizeUsdc: '50000000'
+                        price: '0.5'
+                        status: TRADE_STATUS_CONFIRMED
+                        outcome: 'YES'
+                        outcomeIndex: 0
+                        owner: f4f247b7-4ac7-ff29-a152-04fda0a8755a
+                        maker: '0x1234567890123456789012345678901234567890'
+                        transactionHash: >-
+                          0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef
+                        matchTime: '1700000000'
+                        bucketIndex: 0
+                        fee: '300000'
+                        feeUsdc: '150000'
+                        createdAt: '2024-01-01T00:00:00Z'
+                        updatedAt: '2024-01-01T00:00:00Z'
+        '400':
+          description: Bad request - Invalid parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: invalid builder trade params
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: could not fetch builder trades
+components:
+  schemas:
+    BuilderTradesResponse:
+      type: object
+      description: Paginated builder trades response
+      required:
+        - limit
+        - next_cursor
+        - count
+        - data
+      properties:
+        limit:
+          type: integer
+          description: Maximum number of items per page
+          example: 300
+        next_cursor:
+          type: string
+          description: >-
+            Cursor for next page (base64 encoded offset). "LTE=" indicates no
+            more pages
+          example: MzAw
+        count:
+          type: integer
+          description: Number of items in current response
+          example: 2
+        data:
+          type: array
+          description: Array of builder trades
+          items:
+            $ref: '#/components/schemas/BuilderTrade'
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Error message
+        code:
+          type: string
+          description: Machine-readable error code, when provided
+        retry_after_seconds:
+          type: integer
+          description: Number of seconds to wait before retrying, when provided
+    BuilderTrade:
+      type: object
+      description: Builder trade information
+      required:
+        - id
+        - tradeType
+        - takerOrderHash
+        - builder
+        - market
+        - assetId
+        - side
+        - size
+        - sizeUsdc
+        - price
+        - status
+        - outcome
+        - outcomeIndex
+        - owner
+        - maker
+        - transactionHash
+        - matchTime
+        - bucketIndex
+        - fee
+        - feeUsdc
+      properties:
+        id:
+          type: string
+          description: Trade ID
+          example: trade-123
+        tradeType:
+          type: string
+          description: Trade type
+          example: TAKER
+        takerOrderHash:
+          type: string
+          description: Taker order hash
+          example: '0xabcdef1234567890abcdef1234567890abcdef12'
+        builder:
+          type: string
+          description: Builder code attributed to the trade
+          pattern: ^0x[a-fA-F0-9]{64}$
+          example: '0x0000000000000000000000000000000000000000000000000000000000000001'
+        market:
+          type: string
+          description: Market (condition ID)
+          pattern: ^0x[a-fA-F0-9]{64}$
+          example: '0x0000000000000000000000000000000000000000000000000000000000000001'
+        assetId:
+          type: string
+          description: Asset ID (token ID)
+          example: >-
+            15871154585880608648532107628464183779895785213830018178010423617714102767076
+        side:
+          type: string
+          description: Trade side
+          enum:
+            - BUY
+            - SELL
+          example: BUY
+        size:
+          type: string
+          description: Trade size
+          example: '100000000'
+        sizeUsdc:
+          type: string
+          description: Trade size in USDC
+          example: '50000000'
+        price:
+          type: string
+          description: Trade price
+          example: '0.5'
+        status:
+          type: string
+          description: Trade status
+          example: TRADE_STATUS_CONFIRMED
+        outcome:
+          type: string
+          description: Market outcome
+          example: 'YES'
+        outcomeIndex:
+          type: integer
+          description: Outcome index
+          example: 0
+        owner:
+          type: string
+          description: Owner UUID
+          example: f4f247b7-4ac7-ff29-a152-04fda0a8755a
+        maker:
+          type: string
+          description: Maker address
+          pattern: ^0x[a-fA-F0-9]{40}$
+          example: '0x1234567890123456789012345678901234567890'
+        transactionHash:
+          type: string
+          description: Transaction hash
+          pattern: ^0x[a-fA-F0-9]{64}$
+          example: '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef'
+        matchTime:
+          type: string
+          description: Match time (Unix timestamp)
+          example: '1700000000'
+        bucketIndex:
+          type: integer
+          description: Bucket index
+          example: 0
+        fee:
+          type: string
+          description: Fee amount
+          example: '300000'
+        feeUsdc:
+          type: string
+          description: Fee amount in USDC
+          example: '150000'
+        err_msg:
+          type:
+            - string
+            - 'null'
+          description: Error message (if any)
+          example: null
+        createdAt:
+          type: string
+          format: date-time
+          description: Creation timestamp
+          example: '2024-01-01T00:00:00Z'
+        updatedAt:
+          type: string
+          format: date-time
+          description: Last update timestamp
+          example: '2024-01-01T00:00:00Z'
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Get simplified markets
+
+
+
+## OpenAPI
+
+````yaml /api-spec/clob-openapi.yaml get /simplified-markets
+openapi: 3.1.0
+info:
+  title: Polymarket CLOB API
+  description: Polymarket CLOB API Reference
+  license:
+    name: MIT
+    identifier: MIT
+  version: 1.0.0
+servers:
+  - url: https://clob.polymarket.com
+    description: Production CLOB API
+  - url: https://clob-staging.polymarket.com
+    description: Staging CLOB API
+security: []
+tags:
+  - name: Trade
+    description: Trade endpoints
+  - name: Markets
+    description: Market data endpoints
+  - name: Account
+    description: Account and authentication endpoints
+  - name: Notifications
+    description: User notification endpoints
+  - name: Rewards
+    description: Rewards and earnings endpoints
+  - name: Rebates
+    description: Maker rebate endpoints
+paths:
+  /simplified-markets:
+    get:
+      tags:
+        - Markets
+      summary: Get simplified markets
+      operationId: getSimplifiedMarkets
+      parameters:
+        - name: next_cursor
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedSimplifiedMarkets'
+        '400':
+          description: Invalid request
+        '500':
+          description: Internal server error
+      security: []
+components:
+  schemas:
+    PaginatedSimplifiedMarkets:
+      type: object
+      properties:
+        limit:
+          type: integer
+        next_cursor:
+          type: string
+        count:
+          type: integer
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/SimplifiedMarket'
+    SimplifiedMarket:
+      type: object
+      properties:
+        condition_id:
+          type: string
+        rewards:
+          $ref: '#/components/schemas/Rewards'
+        tokens:
+          type: array
+          items:
+            $ref: '#/components/schemas/Token'
+        active:
+          type: boolean
+        closed:
+          type: boolean
+        archived:
+          type: boolean
+        accepting_orders:
+          type: boolean
+    Rewards:
+      type: object
+      properties:
+        rates:
+          type: array
+          items:
+            type: object
+            properties:
+              asset_address:
+                type: string
+              rewards_daily_rate:
+                type: number
+                format: double
+        min_size:
+          type: number
+          format: double
+        max_spread:
+          type: number
+          format: double
+    Token:
+      type: object
+      properties:
+        token_id:
+          type: string
+        outcome:
+          type: string
+        price:
+          type: number
+          format: double
+        winner:
+          type: boolean
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Get sampling markets
+
+
+
+## OpenAPI
+
+````yaml /api-spec/clob-openapi.yaml get /sampling-markets
+openapi: 3.1.0
+info:
+  title: Polymarket CLOB API
+  description: Polymarket CLOB API Reference
+  license:
+    name: MIT
+    identifier: MIT
+  version: 1.0.0
+servers:
+  - url: https://clob.polymarket.com
+    description: Production CLOB API
+  - url: https://clob-staging.polymarket.com
+    description: Staging CLOB API
+security: []
+tags:
+  - name: Trade
+    description: Trade endpoints
+  - name: Markets
+    description: Market data endpoints
+  - name: Account
+    description: Account and authentication endpoints
+  - name: Notifications
+    description: User notification endpoints
+  - name: Rewards
+    description: Rewards and earnings endpoints
+  - name: Rebates
+    description: Maker rebate endpoints
+paths:
+  /sampling-markets:
+    get:
+      tags:
+        - Markets
+      summary: Get sampling markets
+      operationId: getSamplingMarkets
+      parameters:
+        - name: next_cursor
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedMarkets'
+        '400':
+          description: Invalid request
+        '500':
+          description: Internal server error
+      security: []
+components:
+  schemas:
+    PaginatedMarkets:
+      type: object
+      properties:
+        limit:
+          type: integer
+        next_cursor:
+          type: string
+        count:
+          type: integer
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Market'
+    Market:
+      type: object
+      properties:
+        enable_order_book:
+          type: boolean
+        active:
+          type: boolean
+        closed:
+          type: boolean
+        archived:
+          type: boolean
+        accepting_orders:
+          type: boolean
+        accepting_order_timestamp:
+          type: string
+          format: date-time
+        minimum_order_size:
+          type: number
+          format: double
+        minimum_tick_size:
+          type: number
+          format: double
+        condition_id:
+          type: string
+        question_id:
+          type: string
+        question:
+          type: string
+        description:
+          type: string
+        market_slug:
+          type: string
+        end_date_iso:
+          type: string
+          format: date-time
+        game_start_time:
+          type: string
+          format: date-time
+        seconds_delay:
+          type: integer
+        fpmm:
+          type: string
+        maker_base_fee:
+          type: integer
+          format: int64
+        taker_base_fee:
+          type: integer
+          format: int64
+        notifications_enabled:
+          type: boolean
+        neg_risk:
+          type: boolean
+        neg_risk_market_id:
+          type: string
+        neg_risk_request_id:
+          type: string
+        icon:
+          type: string
+        image:
+          type: string
+        rewards:
+          $ref: '#/components/schemas/Rewards'
+        is_50_50_outcome:
+          type: boolean
+        tokens:
+          type: array
+          items:
+            $ref: '#/components/schemas/Token'
+        tags:
+          type: array
+          items:
+            type: string
+    Rewards:
+      type: object
+      properties:
+        rates:
+          type: array
+          items:
+            type: object
+            properties:
+              asset_address:
+                type: string
+              rewards_daily_rate:
+                type: number
+                format: double
+        min_size:
+          type: number
+          format: double
+        max_spread:
+          type: number
+          format: double
+    Token:
+      type: object
+      properties:
+        token_id:
+          type: string
+        outcome:
+          type: string
+        price:
+          type: number
+          format: double
+        winner:
+          type: boolean
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Get sampling simplified markets
+
+
+
+## OpenAPI
+
+````yaml /api-spec/clob-openapi.yaml get /sampling-simplified-markets
+openapi: 3.1.0
+info:
+  title: Polymarket CLOB API
+  description: Polymarket CLOB API Reference
+  license:
+    name: MIT
+    identifier: MIT
+  version: 1.0.0
+servers:
+  - url: https://clob.polymarket.com
+    description: Production CLOB API
+  - url: https://clob-staging.polymarket.com
+    description: Staging CLOB API
+security: []
+tags:
+  - name: Trade
+    description: Trade endpoints
+  - name: Markets
+    description: Market data endpoints
+  - name: Account
+    description: Account and authentication endpoints
+  - name: Notifications
+    description: User notification endpoints
+  - name: Rewards
+    description: Rewards and earnings endpoints
+  - name: Rebates
+    description: Maker rebate endpoints
+paths:
+  /sampling-simplified-markets:
+    get:
+      tags:
+        - Markets
+      summary: Get sampling simplified markets
+      operationId: getSamplingSimplifiedMarkets
+      parameters:
+        - name: next_cursor
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedSimplifiedMarkets'
+        '400':
+          description: Invalid request
+        '500':
+          description: Internal server error
+      security: []
+components:
+  schemas:
+    PaginatedSimplifiedMarkets:
+      type: object
+      properties:
+        limit:
+          type: integer
+        next_cursor:
+          type: string
+        count:
+          type: integer
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/SimplifiedMarket'
+    SimplifiedMarket:
+      type: object
+      properties:
+        condition_id:
+          type: string
+        rewards:
+          $ref: '#/components/schemas/Rewards'
+        tokens:
+          type: array
+          items:
+            $ref: '#/components/schemas/Token'
+        active:
+          type: boolean
+        closed:
+          type: boolean
+        archived:
+          type: boolean
+        accepting_orders:
+          type: boolean
+    Rewards:
+      type: object
+      properties:
+        rates:
+          type: array
+          items:
+            type: object
+            properties:
+              asset_address:
+                type: string
+              rewards_daily_rate:
+                type: number
+                format: double
+        min_size:
+          type: number
+          format: double
+        max_spread:
+          type: number
+          format: double
+    Token:
+      type: object
+      properties:
+        token_id:
+          type: string
+        outcome:
+          type: string
+        price:
+          type: number
+          format: double
+        winner:
+          type: boolean
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Get current rebated fees for a maker
+
+> Returns the current rebated fees for a maker address on a given date.
+
+Each entry includes the condition ID, asset address, and the USDC amount rebated.
+
+This endpoint does not require authentication.
+
+
+
+
+## OpenAPI
+
+````yaml /api-spec/clob-openapi.yaml get /rebates/current
+openapi: 3.1.0
+info:
+  title: Polymarket CLOB API
+  description: Polymarket CLOB API Reference
+  license:
+    name: MIT
+    identifier: MIT
+  version: 1.0.0
+servers:
+  - url: https://clob.polymarket.com
+    description: Production CLOB API
+  - url: https://clob-staging.polymarket.com
+    description: Staging CLOB API
+security: []
+tags:
+  - name: Trade
+    description: Trade endpoints
+  - name: Markets
+    description: Market data endpoints
+  - name: Account
+    description: Account and authentication endpoints
+  - name: Notifications
+    description: User notification endpoints
+  - name: Rewards
+    description: Rewards and earnings endpoints
+  - name: Rebates
+    description: Maker rebate endpoints
+paths:
+  /rebates/current:
+    get:
+      tags:
+        - Rebates
+      summary: Get current rebated fees for a maker
+      description: >
+        Returns the current rebated fees for a maker address on a given date.
+
+
+        Each entry includes the condition ID, asset address, and the USDC amount
+        rebated.
+
+
+        This endpoint does not require authentication.
+      operationId: getCurrentRebatedFees
+      parameters:
+        - name: date
+          in: query
+          description: Date in YYYY-MM-DD format
+          required: true
+          schema:
+            type: string
+            format: date
+          example: '2026-02-27'
+        - name: maker_address
+          in: query
+          description: Ethereum address of the maker
+          required: true
+          schema:
+            type: string
+          example: '0xFeA4cB3dD4ca7CefD3368653B7D6FF9BcDFca604'
+      responses:
+        '200':
+          description: Successfully retrieved rebated fees
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/RebatedFees'
+              example:
+                - date: '2026-02-27'
+                  condition_id: >-
+                    0xbd31dc8a20211944f6b70f31557f1001557b59905b7738480ca09bd4532f84af
+                  asset_address: '0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB'
+                  maker_address: '0xFeA4cB3dD4ca7CefD3368653B7D6FF9BcDFca604'
+                  rebated_fees_usdc: '0.237519'
+        '400':
+          description: Bad request - Invalid parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                invalid_date:
+                  summary: Invalid date
+                  value:
+                    error: Invalid date
+                invalid_maker_address:
+                  summary: Invalid maker address
+                  value:
+                    error: Invalid maker_address
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Internal server error
+components:
+  schemas:
+    RebatedFees:
+      type: object
+      description: Rebated fees for a maker on a specific market and date
+      required:
+        - date
+        - condition_id
+        - asset_address
+        - maker_address
+        - rebated_fees_usdc
+      properties:
+        date:
+          type: string
+          description: Date of the rebate (YYYY-MM-DD)
+          example: '2026-02-27'
+        condition_id:
+          type: string
+          description: Condition ID of the market
+          example: '0xbd31dc8a20211944f6b70f31557f1001557b59905b7738480ca09bd4532f84af'
+        asset_address:
+          type: string
+          description: Asset address (e.g. USDC contract)
+          example: '0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB'
+        maker_address:
+          type: string
+          description: Maker's Ethereum address
+          example: '0xFeA4cB3dD4ca7CefD3368653B7D6FF9BcDFca604'
+        rebated_fees_usdc:
+          type: string
+          description: Rebated fee amount in USDC
+          example: '0.237519'
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Error message
+        code:
+          type: string
+          description: Machine-readable error code, when provided
+        retry_after_seconds:
+          type: integer
+          description: Number of seconds to wait before retrying, when provided
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Get current active rewards configurations
+
+> Returns all current active rewards configurations grouped by market.
+
+When `sponsored=true`, returns sponsored reward configurations instead.
+
+Results are paginated (500 items per page). Use next_cursor to fetch subsequent pages.
+A next_cursor value of "LTE=" indicates the last page.
+
+
+
+
+## OpenAPI
+
+````yaml /api-spec/clob-openapi.yaml get /rewards/markets/current
+openapi: 3.1.0
+info:
+  title: Polymarket CLOB API
+  description: Polymarket CLOB API Reference
+  license:
+    name: MIT
+    identifier: MIT
+  version: 1.0.0
+servers:
+  - url: https://clob.polymarket.com
+    description: Production CLOB API
+  - url: https://clob-staging.polymarket.com
+    description: Staging CLOB API
+security: []
+tags:
+  - name: Trade
+    description: Trade endpoints
+  - name: Markets
+    description: Market data endpoints
+  - name: Account
+    description: Account and authentication endpoints
+  - name: Notifications
+    description: User notification endpoints
+  - name: Rewards
+    description: Rewards and earnings endpoints
+  - name: Rebates
+    description: Maker rebate endpoints
+paths:
+  /rewards/markets/current:
+    get:
+      tags:
+        - Rewards
+      summary: Get current active rewards configurations
+      description: >
+        Returns all current active rewards configurations grouped by market.
+
+
+        When `sponsored=true`, returns sponsored reward configurations instead.
+
+
+        Results are paginated (500 items per page). Use next_cursor to fetch
+        subsequent pages.
+
+        A next_cursor value of "LTE=" indicates the last page.
+      operationId: getCurrentRewards
+      parameters:
+        - name: sponsored
+          in: query
+          description: >-
+            If true, returns sponsored reward configurations instead of standard
+            ones
+          required: false
+          schema:
+            type: boolean
+            default: false
+        - name: next_cursor
+          in: query
+          description: Pagination cursor from previous response
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Successfully retrieved current rewards configurations
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedCurrentReward'
+              example:
+                limit: 500
+                count: 1
+                next_cursor: LTE=
+                data:
+                  - condition_id: >-
+                      0xbd31dc8a20211944f6b70f31557f1001557b59905b7738480ca09bd4532f84af
+                    rewards_max_spread: 99
+                    rewards_min_size: 10
+                    rewards_config:
+                      - id: 0
+                        asset_address: '0x9c4E1703476E875070EE25b56A58B008CFb8FA78'
+                        start_date: '2024-03-01'
+                        end_date: '2500-12-31'
+                        rate_per_day: 2
+                        total_rewards: 92
+                      - id: 0
+                        asset_address: '0x69308FB512518e39F9b16112fA8d994F4e2Bf8bB'
+                        start_date: '2024-03-01'
+                        end_date: '2500-12-31'
+                        rate_per_day: 1
+                        total_rewards: 46
+                    sponsored_daily_rate: 0.5
+                    sponsors_count: 2
+                    native_daily_rate: 2.5
+                    total_daily_rate: 3
+        '400':
+          description: Bad request - Invalid next_cursor
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Invalid next_cursor
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Internal server error
+components:
+  schemas:
+    PaginatedCurrentReward:
+      type: object
+      description: Paginated list of current reward configurations
+      properties:
+        limit:
+          type: integer
+          description: Maximum number of items per page
+        count:
+          type: integer
+          description: Number of items in the current response
+        next_cursor:
+          type: string
+          description: Cursor for the next page. "LTE=" indicates the last page.
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/CurrentReward'
+      required:
+        - limit
+        - count
+        - next_cursor
+        - data
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Error message
+        code:
+          type: string
+          description: Machine-readable error code, when provided
+        retry_after_seconds:
+          type: integer
+          description: Number of seconds to wait before retrying, when provided
+    CurrentReward:
+      type: object
+      description: Current active reward configuration for a market
+      properties:
+        condition_id:
+          type: string
+          description: Condition ID of the market
+        rewards_max_spread:
+          type: number
+          description: Maximum spread for rewards eligibility
+        rewards_min_size:
+          type: number
+          description: Minimum order size for rewards eligibility
+        rewards_config:
+          type: array
+          items:
+            $ref: '#/components/schemas/CurrentRewardConfig'
+        sponsored_daily_rate:
+          type: number
+          format: double
+          description: Sponsored daily rate (omitted when zero)
+        sponsors_count:
+          type: integer
+          description: Number of sponsors (omitted when zero)
+        native_daily_rate:
+          type: number
+          format: double
+          description: Computed native daily rate excluding sponsors (omitted when zero)
+        total_daily_rate:
+          type: number
+          format: double
+          description: Computed total daily rate including sponsors (omitted when zero)
+      required:
+        - condition_id
+    CurrentRewardConfig:
+      type: object
+      description: Reward configuration entry for a current rewards market
+      properties:
+        id:
+          type: integer
+          description: Rewards config ID (always 0 on /rewards/markets/current)
+        asset_address:
+          type: string
+          description: Address of the reward asset
+        start_date:
+          type: string
+          format: date
+          description: Start date of the rewards period
+        end_date:
+          type: string
+          format: date
+          description: End date of the rewards period
+        rate_per_day:
+          type: number
+          format: double
+          description: Daily reward rate
+        total_rewards:
+          type: number
+          format: double
+          description: Total rewards amount
+      required:
+        - asset_address
+        - start_date
+        - rate_per_day
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Get raw rewards for a specific market
+
+> Returns an array of present and future rewards configured on a market.
+
+When `sponsored=true`, sponsored daily rates are folded into each config's
+`rate_per_day` .
+
+Results are paginated (100 items per page). Use next_cursor to fetch subsequent pages.
+A next_cursor value of "LTE=" indicates the last page.
+
+
+
+
+## OpenAPI
+
+````yaml /api-spec/clob-openapi.yaml get /rewards/markets/{condition_id}
+openapi: 3.1.0
+info:
+  title: Polymarket CLOB API
+  description: Polymarket CLOB API Reference
+  license:
+    name: MIT
+    identifier: MIT
+  version: 1.0.0
+servers:
+  - url: https://clob.polymarket.com
+    description: Production CLOB API
+  - url: https://clob-staging.polymarket.com
+    description: Staging CLOB API
+security: []
+tags:
+  - name: Trade
+    description: Trade endpoints
+  - name: Markets
+    description: Market data endpoints
+  - name: Account
+    description: Account and authentication endpoints
+  - name: Notifications
+    description: User notification endpoints
+  - name: Rewards
+    description: Rewards and earnings endpoints
+  - name: Rebates
+    description: Maker rebate endpoints
+paths:
+  /rewards/markets/{condition_id}:
+    get:
+      tags:
+        - Rewards
+      summary: Get raw rewards for a specific market
+      description: >
+        Returns an array of present and future rewards configured on a market.
+
+
+        When `sponsored=true`, sponsored daily rates are folded into each
+        config's
+
+        `rate_per_day` .
+
+
+        Results are paginated (100 items per page). Use next_cursor to fetch
+        subsequent pages.
+
+        A next_cursor value of "LTE=" indicates the last page.
+      operationId: getRawRewardsForMarket
+      parameters:
+        - name: condition_id
+          in: path
+          required: true
+          description: The condition ID of the market
+          schema:
+            type: string
+          example: '0xbd31dc8a20211944f6b70f31557f1001557b59905b7738480ca09bd4532f84af'
+        - name: sponsored
+          in: query
+          description: If true, folds sponsored daily rates into each config's rate_per_day
+          required: false
+          schema:
+            type: boolean
+            default: false
+        - name: next_cursor
+          in: query
+          description: Pagination cursor from previous response
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Successfully retrieved rewards for market
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedMarketReward'
+              example:
+                limit: 100
+                count: 1
+                next_cursor: LTE=
+                data:
+                  - condition_id: >-
+                      0xbd31dc8a20211944f6b70f31557f1001557b59905b7738480ca09bd4532f84af
+                    question: Will Trump win the 2024 Iowa Caucus?
+                    market_slug: will-trump-win-the-2024-iowa-caucus
+                    event_slug: will-trump-win-the-2024-iowa-caucus
+                    image: >-
+                      https://polymarket-upload.s3.us-east-2.amazonaws.com/trump1+copy.png
+                    rewards_max_spread: 99
+                    rewards_min_size: 10
+                    market_competitiveness: 0.42
+                    tokens:
+                      - token_id: >-
+                          1343197538147866997676250008839231694243646439454152539053893078719042421992
+                        outcome: 'YES'
+                        price: 0.8
+                      - token_id: >-
+                          16678291189211314787145083999015737376658799626183230671758641503291735614088
+                        outcome: 'NO'
+                        price: 0.2
+                    rewards_config:
+                      - id: 1
+                        asset_address: '0x9c4E1703476E875070EE25b56A58B008CFb8FA78'
+                        start_date: '2024-03-01'
+                        end_date: '2500-12-31'
+                        rate_per_day: 0.25
+                        total_rewards: 0
+                        total_days: 174161
+                      - id: 2
+                        asset_address: '0x9c4E1703476E875070EE25b56A58B008CFb8FA78'
+                        start_date: '2024-03-01'
+                        end_date: '2024-05-31'
+                        rate_per_day: 1
+                        total_rewards: 92
+                        total_days: 92
+        '400':
+          description: Bad request - Invalid market or next_cursor
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                invalid_market:
+                  summary: Empty condition ID
+                  value:
+                    error: Invalid market
+                invalid_cursor:
+                  summary: Invalid pagination cursor
+                  value:
+                    error: Invalid next_cursor
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Internal server error
+components:
+  schemas:
+    PaginatedMarketReward:
+      type: object
+      description: Paginated list of market reward configurations
+      properties:
+        limit:
+          type: integer
+          description: Maximum number of items per page
+        count:
+          type: integer
+          description: Number of items in the current response
+        next_cursor:
+          type: string
+          description: Cursor for the next page. "LTE=" indicates the last page.
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/MarketReward'
+      required:
+        - limit
+        - count
+        - next_cursor
+        - data
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Error message
+        code:
+          type: string
+          description: Machine-readable error code, when provided
+        retry_after_seconds:
+          type: integer
+          description: Number of seconds to wait before retrying, when provided
+    MarketReward:
+      type: object
+      description: Market with raw reward configurations
+      properties:
+        condition_id:
+          type: string
+          description: Condition ID of the market
+        question:
+          type: string
+          description: Market question
+        market_slug:
+          type: string
+          description: URL slug for the market
+        event_slug:
+          type: string
+          description: URL slug for the event
+        image:
+          type: string
+          description: URL to market image
+        rewards_max_spread:
+          type: number
+          description: Maximum spread for rewards eligibility
+        rewards_min_size:
+          type: number
+          description: Minimum order size for rewards eligibility
+        market_competitiveness:
+          type: number
+          format: double
+          description: Competitiveness score of the market
+        tokens:
+          type: array
+          items:
+            $ref: '#/components/schemas/RewardsToken'
+        rewards_config:
+          type: array
+          items:
+            $ref: '#/components/schemas/RewardsConfig'
+      required:
+        - condition_id
+        - question
+        - tokens
+    RewardsToken:
+      type: object
+      description: Token information for rewards markets
+      properties:
+        token_id:
+          type: string
+          description: Token ID
+        outcome:
+          type: string
+          description: Outcome name (e.g., "YES", "NO")
+        price:
+          type: number
+          format: double
+          description: Current price of the token
+      required:
+        - token_id
+        - outcome
+    RewardsConfig:
+      type: object
+      description: Rewards configuration for a market
+      properties:
+        id:
+          type: integer
+          description: Rewards config ID
+        asset_address:
+          type: string
+          description: Address of the reward asset
+        start_date:
+          type: string
+          format: date
+          description: Start date of the rewards period
+        end_date:
+          type: string
+          format: date
+          description: End date of the rewards period
+        rate_per_day:
+          type: number
+          format: double
+          description: Daily reward rate
+        total_rewards:
+          type: number
+          format: double
+          description: Total rewards amount
+        remaining_reward_amount:
+          type: number
+          format: double
+          description: Remaining reward amount
+        total_days:
+          type: integer
+          description: Total number of days in the rewards period
+      required:
+        - asset_address
+        - start_date
+        - rate_per_day
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Get earnings for user by date
+
+> Returns an array of user earnings per market for a provided day.
+
+Requires CLOB L2 Auth headers.
+
+Results are paginated (100 items per page). Use next_cursor to fetch subsequent pages.
+A next_cursor value of "LTE=" indicates the last page.
+
+
+
+
+## OpenAPI
+
+````yaml /api-spec/clob-openapi.yaml get /rewards/user
+openapi: 3.1.0
+info:
+  title: Polymarket CLOB API
+  description: Polymarket CLOB API Reference
+  license:
+    name: MIT
+    identifier: MIT
+  version: 1.0.0
+servers:
+  - url: https://clob.polymarket.com
+    description: Production CLOB API
+  - url: https://clob-staging.polymarket.com
+    description: Staging CLOB API
+security: []
+tags:
+  - name: Trade
+    description: Trade endpoints
+  - name: Markets
+    description: Market data endpoints
+  - name: Account
+    description: Account and authentication endpoints
+  - name: Notifications
+    description: User notification endpoints
+  - name: Rewards
+    description: Rewards and earnings endpoints
+  - name: Rebates
+    description: Maker rebate endpoints
+paths:
+  /rewards/user:
+    get:
+      tags:
+        - Rewards
+      summary: Get earnings for user by date
+      description: >
+        Returns an array of user earnings per market for a provided day.
+
+
+        Requires CLOB L2 Auth headers.
+
+
+        Results are paginated (100 items per page). Use next_cursor to fetch
+        subsequent pages.
+
+        A next_cursor value of "LTE=" indicates the last page.
+      operationId: getEarningsForUserForDay
+      parameters:
+        - name: date
+          in: query
+          description: Date in YYYY-MM-DD format
+          required: true
+          schema:
+            type: string
+            format: date
+          example: '2024-03-26'
+        - name: signature_type
+          in: query
+          description: |
+            Signature type for address derivation (required for API KEY auth):
+            - 0: EOA
+            - 1: POLY_PROXY
+            - 2: POLY_GNOSIS_SAFE
+          required: false
+          schema:
+            type: integer
+            enum:
+              - 0
+              - 1
+              - 2
+        - name: maker_address
+          in: query
+          description: Maker address to query earnings for
+          required: false
+          schema:
+            type: string
+          example: '0xFeA4cB3dD4ca7CefD3368653B7D6FF9BcDFca604'
+        - name: sponsored
+          in: query
+          description: If true, returns sponsored-only earnings
+          required: false
+          schema:
+            type: boolean
+            default: false
+        - name: next_cursor
+          in: query
+          description: Pagination cursor from previous response
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Successfully retrieved user earnings
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedUserEarnings'
+              example:
+                limit: 100
+                count: 1
+                next_cursor: LTE=
+                data:
+                  - date: '2024-03-26T00:00:00Z'
+                    condition_id: >-
+                      0xbd31dc8a20211944f6b70f31557f1001557b59905b7738480ca09bd4532f84af
+                    asset_address: '0x9c4E1703476E875070EE25b56A58B008CFb8FA78'
+                    maker_address: '0xFeA4cB3dD4ca7CefD3368653B7D6FF9BcDFca604'
+                    earnings: 0.237519
+                    asset_rate: 1
+        '400':
+          description: Bad request - Invalid parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                invalid_date:
+                  summary: Invalid date format
+                  value:
+                    error: 'Invalid date (format: YYYY-MM-DD)'
+                invalid_signature_type:
+                  summary: Invalid signature type
+                  value:
+                    error: Invalid signature_type
+                invalid_maker_address:
+                  summary: Invalid maker address
+                  value:
+                    error: Invalid maker_address
+        '401':
+          description: Unauthorized - Invalid API key or authentication failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Invalid API key
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Internal server error
+      security:
+        - polyApiKey: []
+          polyAddress: []
+          polySignature: []
+          polyPassphrase: []
+          polyTimestamp: []
+components:
+  schemas:
+    PaginatedUserEarnings:
+      type: object
+      description: Paginated list of user earnings
+      properties:
+        limit:
+          type: integer
+          description: Maximum number of items per page
+        count:
+          type: integer
+          description: Number of items in the current response
+        next_cursor:
+          type: string
+          description: Cursor for the next page. "LTE=" indicates the last page.
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/UserEarning'
+      required:
+        - limit
+        - count
+        - next_cursor
+        - data
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Error message
+        code:
+          type: string
+          description: Machine-readable error code, when provided
+        retry_after_seconds:
+          type: integer
+          description: Number of seconds to wait before retrying, when provided
+    UserEarning:
+      type: object
+      description: User earnings for a specific market on a given day
+      properties:
+        date:
+          type: string
+          format: date-time
+          description: Date of the earnings
+        condition_id:
+          type: string
+          description: Condition ID of the market
+        asset_address:
+          type: string
+          description: Address of the reward asset
+        maker_address:
+          type: string
+          description: Address of the maker
+        earnings:
+          type: number
+          format: double
+          description: Amount of earnings in the asset
+        asset_rate:
+          type: number
+          format: double
+          description: Exchange rate of the asset
+      required:
+        - date
+        - condition_id
+        - asset_address
+        - maker_address
+        - earnings
+  securitySchemes:
+    polyApiKey:
+      type: apiKey
+      in: header
+      name: POLY_API_KEY
+      description: Your API key
+    polyAddress:
+      type: apiKey
+      in: header
+      name: POLY_ADDRESS
+      description: Ethereum address associated with the API key
+    polySignature:
+      type: apiKey
+      in: header
+      name: POLY_SIGNATURE
+      description: HMAC signature of the request
+    polyPassphrase:
+      type: apiKey
+      in: header
+      name: POLY_PASSPHRASE
+      description: API key passphrase
+    polyTimestamp:
+      type: apiKey
+      in: header
+      name: POLY_TIMESTAMP
+      description: Unix timestamp of the request
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Get total earnings for user by date
+
+> Returns the summed total rewards earnings for a user on a provided day,
+grouped by asset address.
+
+Requires CLOB L2 Auth headers.
+
+
+
+
+## OpenAPI
+
+````yaml /api-spec/clob-openapi.yaml get /rewards/user/total
+openapi: 3.1.0
+info:
+  title: Polymarket CLOB API
+  description: Polymarket CLOB API Reference
+  license:
+    name: MIT
+    identifier: MIT
+  version: 1.0.0
+servers:
+  - url: https://clob.polymarket.com
+    description: Production CLOB API
+  - url: https://clob-staging.polymarket.com
+    description: Staging CLOB API
+security: []
+tags:
+  - name: Trade
+    description: Trade endpoints
+  - name: Markets
+    description: Market data endpoints
+  - name: Account
+    description: Account and authentication endpoints
+  - name: Notifications
+    description: User notification endpoints
+  - name: Rewards
+    description: Rewards and earnings endpoints
+  - name: Rebates
+    description: Maker rebate endpoints
+paths:
+  /rewards/user/total:
+    get:
+      tags:
+        - Rewards
+      summary: Get total earnings for user by date
+      description: |
+        Returns the summed total rewards earnings for a user on a provided day,
+        grouped by asset address.
+
+        Requires CLOB L2 Auth headers.
+      operationId: getTotalEarningsForUserForDay
+      parameters:
+        - name: date
+          in: query
+          description: Date in YYYY-MM-DD format
+          required: true
+          schema:
+            type: string
+            format: date
+          example: '2024-03-26'
+        - name: signature_type
+          in: query
+          description: |
+            Signature type for address derivation (required for API KEY auth):
+            - 0: EOA
+            - 1: POLY_PROXY
+            - 2: POLY_GNOSIS_SAFE
+          required: false
+          schema:
+            type: integer
+            enum:
+              - 0
+              - 1
+              - 2
+        - name: maker_address
+          in: query
+          description: Maker address to query earnings for
+          required: false
+          schema:
+            type: string
+          example: '0xFeA4cB3dD4ca7CefD3368653B7D6FF9BcDFca604'
+        - name: sponsored
+          in: query
+          description: If true, aggregates both native and sponsored earnings
+          required: false
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: Successfully retrieved total user earnings
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TotalUserEarning'
+              example:
+                - date: '2024-04-09T00:00:00Z'
+                  asset_address: '0x9c4E1703476E875070EE25b56A58B008CFb8FA78'
+                  maker_address: '0xD527CCdBEB6478488c848465F9947bDA3C2e6994'
+                  earnings: 1.59984
+                  asset_rate: 0.999357
+                - date: '2024-04-09T00:00:00Z'
+                  asset_address: '0x69308FB512518e39F9b16112fA8d994F4e2Bf8bB'
+                  maker_address: '0xD527CCdBEB6478488c848465F9947bDA3C2e6994'
+                  earnings: 8.187219
+                  asset_rate: 3.51
+        '400':
+          description: Bad request - Invalid parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                invalid_date:
+                  summary: Invalid date format
+                  value:
+                    error: 'Invalid date (format: YYYY-MM-DD)'
+                invalid_signature_type:
+                  summary: Invalid signature type
+                  value:
+                    error: Invalid signature_type
+                invalid_maker_address:
+                  summary: Invalid maker address
+                  value:
+                    error: Invalid maker_address
+        '401':
+          description: Unauthorized - Invalid API key or authentication failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Invalid API key
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Internal server error
+      security:
+        - polyApiKey: []
+          polyAddress: []
+          polySignature: []
+          polyPassphrase: []
+          polyTimestamp: []
+components:
+  schemas:
+    TotalUserEarning:
+      type: object
+      description: Total user earnings for a given day grouped by asset
+      properties:
+        date:
+          type: string
+          format: date-time
+          description: Date of the earnings
+        asset_address:
+          type: string
+          description: Address of the reward asset
+        maker_address:
+          type: string
+          description: Address of the maker
+        earnings:
+          type: number
+          format: double
+          description: Total amount of earnings in the asset
+        asset_rate:
+          type: number
+          format: double
+          description: Exchange rate of the asset
+      required:
+        - date
+        - asset_address
+        - maker_address
+        - earnings
+        - asset_rate
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Error message
+        code:
+          type: string
+          description: Machine-readable error code, when provided
+        retry_after_seconds:
+          type: integer
+          description: Number of seconds to wait before retrying, when provided
+  securitySchemes:
+    polyApiKey:
+      type: apiKey
+      in: header
+      name: POLY_API_KEY
+      description: Your API key
+    polyAddress:
+      type: apiKey
+      in: header
+      name: POLY_ADDRESS
+      description: Ethereum address associated with the API key
+    polySignature:
+      type: apiKey
+      in: header
+      name: POLY_SIGNATURE
+      description: HMAC signature of the request
+    polyPassphrase:
+      type: apiKey
+      in: header
+      name: POLY_PASSPHRASE
+      description: API key passphrase
+    polyTimestamp:
+      type: apiKey
+      in: header
+      name: POLY_TIMESTAMP
+      description: Unix timestamp of the request
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Get reward percentages for user
+
+> Returns the real-time percentages of rewards that a user is earning per market.
+
+The response is a map of condition_id to the percentage of total rewards
+the user is currently earning in that market.
+
+Requires CLOB L2 Auth headers.
+
+
+
+
+## OpenAPI
+
+````yaml /api-spec/clob-openapi.yaml get /rewards/user/percentages
+openapi: 3.1.0
+info:
+  title: Polymarket CLOB API
+  description: Polymarket CLOB API Reference
+  license:
+    name: MIT
+    identifier: MIT
+  version: 1.0.0
+servers:
+  - url: https://clob.polymarket.com
+    description: Production CLOB API
+  - url: https://clob-staging.polymarket.com
+    description: Staging CLOB API
+security: []
+tags:
+  - name: Trade
+    description: Trade endpoints
+  - name: Markets
+    description: Market data endpoints
+  - name: Account
+    description: Account and authentication endpoints
+  - name: Notifications
+    description: User notification endpoints
+  - name: Rewards
+    description: Rewards and earnings endpoints
+  - name: Rebates
+    description: Maker rebate endpoints
+paths:
+  /rewards/user/percentages:
+    get:
+      tags:
+        - Rewards
+      summary: Get reward percentages for user
+      description: >
+        Returns the real-time percentages of rewards that a user is earning per
+        market.
+
+
+        The response is a map of condition_id to the percentage of total rewards
+
+        the user is currently earning in that market.
+
+
+        Requires CLOB L2 Auth headers.
+      operationId: getRewardPercentagesForUser
+      parameters:
+        - name: signature_type
+          in: query
+          description: |
+            Signature type for address derivation (required for API KEY auth):
+            - 0: EOA
+            - 1: POLY_PROXY
+            - 2: POLY_GNOSIS_SAFE
+          required: false
+          schema:
+            type: integer
+            enum:
+              - 0
+              - 1
+              - 2
+        - name: maker_address
+          in: query
+          description: Maker address to query percentages for
+          required: false
+          schema:
+            type: string
+          example: '0xFeA4cB3dD4ca7CefD3368653B7D6FF9BcDFca604'
+      responses:
+        '200':
+          description: Successfully retrieved reward percentages
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties:
+                  type: number
+                  format: double
+                description: Map of condition_id to reward percentage
+              example:
+                '0x296ea2f3ad438ce7ead77f40d0159bf3e5d8be146f6f615fa253b00e02243f5c': 20
+                '0xbd31dc8a20211944f6b70f31557f1001557b59905b7738480ca09bd4532f84af': 20
+        '400':
+          description: Bad request - Invalid parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                invalid_signature_type:
+                  summary: Invalid signature type
+                  value:
+                    error: Invalid signature_type
+                invalid_maker_address:
+                  summary: Invalid maker address
+                  value:
+                    error: Invalid maker_address
+        '401':
+          description: Unauthorized - Invalid API key or authentication failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Invalid API key
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Internal server error
+      security:
+        - polyApiKey: []
+          polyAddress: []
+          polySignature: []
+          polyPassphrase: []
+          polyTimestamp: []
+components:
+  schemas:
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Error message
+        code:
+          type: string
+          description: Machine-readable error code, when provided
+        retry_after_seconds:
+          type: integer
+          description: Number of seconds to wait before retrying, when provided
+  securitySchemes:
+    polyApiKey:
+      type: apiKey
+      in: header
+      name: POLY_API_KEY
+      description: Your API key
+    polyAddress:
+      type: apiKey
+      in: header
+      name: POLY_ADDRESS
+      description: Ethereum address associated with the API key
+    polySignature:
+      type: apiKey
+      in: header
+      name: POLY_SIGNATURE
+      description: HMAC signature of the request
+    polyPassphrase:
+      type: apiKey
+      in: header
+      name: POLY_PASSPHRASE
+      description: API key passphrase
+    polyTimestamp:
+      type: apiKey
+      in: header
+      name: POLY_TIMESTAMP
+      description: Unix timestamp of the request
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Get user earnings and markets configuration
+
+> Returns an array of current rewards including user earnings and live percentages
+per market for a provided day.
+
+Results are paginated (100 items per page by default, max 500). Use next_cursor to fetch subsequent pages.
+A next_cursor value of "LTE=" indicates the last page.
+
+Requires CLOB L2 Auth headers.
+
+Optional features:
+- Search by question/description using the `q` parameter
+- Filter by tag slugs using `tag_slug` parameter (multiple values are OR'ed)
+- Filter by favorite markets using `favorite_markets=true`
+- Sort by various fields using `order_by` and `position` parameters
+
+
+
+
+## OpenAPI
+
+````yaml /api-spec/clob-openapi.yaml get /rewards/user/markets
+openapi: 3.1.0
+info:
+  title: Polymarket CLOB API
+  description: Polymarket CLOB API Reference
+  license:
+    name: MIT
+    identifier: MIT
+  version: 1.0.0
+servers:
+  - url: https://clob.polymarket.com
+    description: Production CLOB API
+  - url: https://clob-staging.polymarket.com
+    description: Staging CLOB API
+security: []
+tags:
+  - name: Trade
+    description: Trade endpoints
+  - name: Markets
+    description: Market data endpoints
+  - name: Account
+    description: Account and authentication endpoints
+  - name: Notifications
+    description: User notification endpoints
+  - name: Rewards
+    description: Rewards and earnings endpoints
+  - name: Rebates
+    description: Maker rebate endpoints
+paths:
+  /rewards/user/markets:
+    get:
+      tags:
+        - Rewards
+      summary: Get user earnings and markets configuration
+      description: >
+        Returns an array of current rewards including user earnings and live
+        percentages
+
+        per market for a provided day.
+
+
+        Results are paginated (100 items per page by default, max 500). Use
+        next_cursor to fetch subsequent pages.
+
+        A next_cursor value of "LTE=" indicates the last page.
+
+
+        Requires CLOB L2 Auth headers.
+
+
+        Optional features:
+
+        - Search by question/description using the `q` parameter
+
+        - Filter by tag slugs using `tag_slug` parameter (multiple values are
+        OR'ed)
+
+        - Filter by favorite markets using `favorite_markets=true`
+
+        - Sort by various fields using `order_by` and `position` parameters
+      operationId: getUserEarningsAndMarketsConfig
+      parameters:
+        - name: date
+          in: query
+          description: Date in YYYY-MM-DD format. Defaults to current date if not provided.
+          required: false
+          schema:
+            type: string
+            format: date
+          example: '2024-03-26'
+        - name: signature_type
+          in: query
+          description: |
+            Signature type for address derivation (required for API KEY auth):
+            - 0: EOA
+            - 1: POLY_PROXY
+            - 2: POLY_GNOSIS_SAFE
+          required: false
+          schema:
+            type: integer
+            enum:
+              - 0
+              - 1
+              - 2
+        - name: maker_address
+          in: query
+          description: Maker address to query data for
+          required: false
+          schema:
+            type: string
+          example: '0xFeA4cB3dD4ca7CefD3368653B7D6FF9BcDFca604'
+        - name: sponsored
+          in: query
+          description: If true, returns sponsored reward earnings
+          required: false
+          schema:
+            type: boolean
+            default: false
+        - name: next_cursor
+          in: query
+          description: Pagination cursor from previous response
+          required: false
+          schema:
+            type: string
+        - name: page_size
+          in: query
+          description: Number of items per page (max 500, values above are capped)
+          required: false
+          schema:
+            type: integer
+            default: 100
+            maximum: 500
+        - name: q
+          in: query
+          description: Search query to filter markets by question/description
+          required: false
+          schema:
+            type: string
+        - name: tag_slug
+          in: query
+          description: Filter by tag slug (can be repeated for OR logic)
+          required: false
+          schema:
+            type: string
+        - name: favorite_markets
+          in: query
+          description: If true, only show markets favorited by the user (requires auth)
+          required: false
+          schema:
+            type: boolean
+            default: false
+        - name: no_competition
+          in: query
+          description: Filter for markets with no competition
+          required: false
+          schema:
+            type: boolean
+            default: false
+        - name: only_mergeable
+          in: query
+          description: Filter for only mergeable markets
+          required: false
+          schema:
+            type: boolean
+            default: false
+        - name: only_open_orders
+          in: query
+          description: Filter for markets where user has open orders
+          required: false
+          schema:
+            type: boolean
+            default: false
+        - name: only_open_positions
+          in: query
+          description: Filter for markets where user has open positions
+          required: false
+          schema:
+            type: boolean
+            default: false
+        - name: order_by
+          in: query
+          description: Field to sort by
+          required: false
+          schema:
+            type: string
+            enum:
+              - max_spread
+              - min_size
+              - end_date
+              - earning_percentage
+              - rate_per_day
+              - earnings
+              - spread
+              - competitiveness
+              - question
+              - price
+              - market
+              - volume_24hr
+        - name: position
+          in: query
+          description: Sort direction
+          required: false
+          schema:
+            type: string
+            enum:
+              - ASC
+              - DESC
+      responses:
+        '200':
+          description: Successfully retrieved user earnings and market configurations
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedUserRewardsMarkets'
+              example:
+                limit: 100
+                count: 1
+                total_count: 42
+                next_cursor: LTE=
+                data:
+                  - condition_id: >-
+                      0xbd31dc8a20211944f6b70f31557f1001557b59905b7738480ca09bd4532f84af
+                    market_id: '248849'
+                    event_id: '12345'
+                    question: Will Trump win the 2024 Iowa Caucus?
+                    market_slug: will-trump-win-the-2024-iowa-caucus
+                    event_slug: will-trump-win-the-2024-iowa-caucus
+                    image: >-
+                      https://polymarket-upload.s3.us-east-2.amazonaws.com/trump1+copy.png
+                    rewards_max_spread: 99
+                    rewards_min_size: 10
+                    volume_24hr: 12345.67
+                    spread: 0.12
+                    market_competitiveness: 0.42
+                    tokens:
+                      - token_id: >-
+                          1343197538147866997676250008839231694243646439454152539053893078719042421992
+                        outcome: 'YES'
+                        price: 0.8
+                      - token_id: >-
+                          16678291189211314787145083999015737376658799626183230671758641503291735614088
+                        outcome: 'NO'
+                        price: 0.2
+                    rewards_config:
+                      - id: 0
+                        asset_address: '0x9c4E1703476E875070EE25b56A58B008CFb8FA78'
+                        start_date: '2024-03-01'
+                        end_date: '2500-12-31'
+                        rate_per_day: 2
+                        total_rewards: 92
+                    maker_address: '0xD527CCdBEB6478488c848465F9947bDA3C2e6994'
+                    earning_percentage: 30
+                    earnings:
+                      - asset_address: '0x9c4E1703476E875070EE25b56A58B008CFb8FA78'
+                        earnings: 0.585051
+                        asset_rate: 1.001
+        '400':
+          description: Bad request - Invalid parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                invalid_date:
+                  summary: Invalid date format
+                  value:
+                    error: 'Invalid date (format: YYYY-MM-DD)'
+                invalid_signature_type:
+                  summary: Invalid signature type
+                  value:
+                    error: Invalid signature_type
+                favorite_requires_auth:
+                  summary: Favorite markets requires auth
+                  value:
+                    error: favorite_markets query argument requires authentication
+        '401':
+          description: Unauthorized - Invalid API key or authentication failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Invalid API key
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Internal server error
+      security:
+        - polyApiKey: []
+          polyAddress: []
+          polySignature: []
+          polyPassphrase: []
+          polyTimestamp: []
+components:
+  schemas:
+    PaginatedUserRewardsMarkets:
+      type: object
+      description: Paginated list of user rewards markets
+      properties:
+        limit:
+          type: integer
+          description: Maximum number of items per page
+        count:
+          type: integer
+          description: Number of items in the current response
+        total_count:
+          type: integer
+          description: Total number of items across all pages
+        next_cursor:
+          type: string
+          description: Cursor for the next page. "LTE=" indicates the last page.
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/UserRewardsMarket'
+      required:
+        - limit
+        - count
+        - next_cursor
+        - data
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Error message
+        code:
+          type: string
+          description: Machine-readable error code, when provided
+        retry_after_seconds:
+          type: integer
+          description: Number of seconds to wait before retrying, when provided
+    UserRewardsMarket:
+      type: object
+      description: Market with user rewards earnings and configuration
+      properties:
+        condition_id:
+          type: string
+          description: Condition ID of the market
+        market_id:
+          type: string
+          description: Market ID
+        event_id:
+          type: string
+          description: Event ID
+        question:
+          type: string
+          description: Market question
+        market_slug:
+          type: string
+          description: URL slug for the market
+        event_slug:
+          type: string
+          description: URL slug for the event
+        image:
+          type: string
+          description: URL to market image
+        rewards_max_spread:
+          type: number
+          description: Maximum spread for rewards eligibility
+        rewards_min_size:
+          type: number
+          description: Minimum order size for rewards eligibility
+        volume_24hr:
+          type: number
+          format: double
+          description: 24-hour trading volume
+        spread:
+          type: number
+          format: double
+          description: Current spread
+        market_competitiveness:
+          type: number
+          format: double
+          description: Competitiveness score of the market
+        tokens:
+          type: array
+          items:
+            $ref: '#/components/schemas/RewardsToken'
+        rewards_config:
+          type: array
+          items:
+            $ref: '#/components/schemas/CurrentRewardConfig'
+        maker_address:
+          type: string
+          description: Maker address
+        earning_percentage:
+          type: number
+          format: double
+          description: Percentage of total rewards the user is earning
+        earnings:
+          type: array
+          items:
+            $ref: '#/components/schemas/AssetEarning'
+      required:
+        - condition_id
+        - market_id
+        - question
+        - tokens
+    RewardsToken:
+      type: object
+      description: Token information for rewards markets
+      properties:
+        token_id:
+          type: string
+          description: Token ID
+        outcome:
+          type: string
+          description: Outcome name (e.g., "YES", "NO")
+        price:
+          type: number
+          format: double
+          description: Current price of the token
+      required:
+        - token_id
+        - outcome
+    CurrentRewardConfig:
+      type: object
+      description: Reward configuration entry for a current rewards market
+      properties:
+        id:
+          type: integer
+          description: Rewards config ID (always 0 on /rewards/markets/current)
+        asset_address:
+          type: string
+          description: Address of the reward asset
+        start_date:
+          type: string
+          format: date
+          description: Start date of the rewards period
+        end_date:
+          type: string
+          format: date
+          description: End date of the rewards period
+        rate_per_day:
+          type: number
+          format: double
+          description: Daily reward rate
+        total_rewards:
+          type: number
+          format: double
+          description: Total rewards amount
+      required:
+        - asset_address
+        - start_date
+        - rate_per_day
+    AssetEarning:
+      type: object
+      description: Earnings for a specific asset
+      properties:
+        asset_address:
+          type: string
+          description: Address of the reward asset
+        earnings:
+          type: number
+          format: double
+          description: Amount of earnings
+        asset_rate:
+          type: number
+          format: double
+          description: Exchange rate of the asset
+      required:
+        - asset_address
+        - earnings
+  securitySchemes:
+    polyApiKey:
+      type: apiKey
+      in: header
+      name: POLY_API_KEY
+      description: Your API key
+    polyAddress:
+      type: apiKey
+      in: header
+      name: POLY_ADDRESS
+      description: Ethereum address associated with the API key
+    polySignature:
+      type: apiKey
+      in: header
+      name: POLY_SIGNATURE
+      description: HMAC signature of the request
+    polyPassphrase:
+      type: apiKey
+      in: header
+      name: POLY_PASSPHRASE
+      description: API key passphrase
+    polyTimestamp:
+      type: apiKey
+      in: header
+      name: POLY_TIMESTAMP
+      description: Unix timestamp of the request
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Get public profile by wallet address
+
+
+
+## OpenAPI
+
+````yaml /api-spec/gamma-openapi.yaml get /public-profile
+openapi: 3.0.3
+info:
+  title: Markets API
+  version: 1.0.0
+  description: REST API specification for public endpoints used by the Markets service.
+servers:
+  - url: https://gamma-api.polymarket.com
+    description: Polymarket Gamma API Production Server
+security: []
+tags:
+  - name: Gamma Status
+    description: Gamma API status and health check
+  - name: Sports
+    description: Sports-related endpoints including teams and game data
+  - name: Tags
+    description: Tag management and related tag operations
+  - name: Events
+    description: Event management and event-related operations
+  - name: Markets
+    description: Market data and market-related operations
+  - name: Comments
+    description: Comment system and user interactions
+  - name: Series
+    description: Series management and related operations
+  - name: Profiles
+    description: User profile management
+  - name: Search
+    description: Search functionality across different entity types
+paths:
+  /public-profile:
+    get:
+      tags:
+        - Profiles
+      summary: Get public profile by wallet address
+      operationId: getPublicProfile
+      parameters:
+        - name: address
+          in: query
+          required: true
+          description: The wallet address (proxy wallet or user address)
+          schema:
+            type: string
+            pattern: ^0x[a-fA-F0-9]{40}$
+          example: '0x7c3db723f1d4d8cb9c550095203b686cb11e5c6b'
+      responses:
+        '200':
+          description: Public profile information
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicProfileResponse'
+        '400':
+          description: Invalid address format
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicProfileError'
+              example:
+                type: validation error
+                error: invalid address
+        '404':
+          description: Profile not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicProfileError'
+              example:
+                type: not found error
+                error: profile not found
+components:
+  schemas:
+    PublicProfileResponse:
+      type: object
+      properties:
+        createdAt:
+          type: string
+          format: date-time
+          description: ISO 8601 timestamp of when the profile was created
+          nullable: true
+        proxyWallet:
+          type: string
+          description: The proxy wallet address
+          nullable: true
+        profileImage:
+          type: string
+          format: uri
+          description: URL to the profile image
+          nullable: true
+        displayUsernamePublic:
+          type: boolean
+          description: Whether the username is displayed publicly
+          nullable: true
+        bio:
+          type: string
+          description: Profile bio
+          nullable: true
+        pseudonym:
+          type: string
+          description: Auto-generated pseudonym
+          nullable: true
+        name:
+          type: string
+          description: User-chosen display name
+          nullable: true
+        users:
+          type: array
+          description: Array of associated user objects
+          nullable: true
+          items:
+            $ref: '#/components/schemas/PublicProfileUser'
+        xUsername:
+          type: string
+          description: X (Twitter) username
+          nullable: true
+        verifiedBadge:
+          type: boolean
+          description: Whether the profile has a verified badge
+          nullable: true
+    PublicProfileError:
+      type: object
+      description: Error response for public profile endpoint
+      properties:
+        type:
+          type: string
+          description: Error type classification
+        error:
+          type: string
+          description: Error message
+    PublicProfileUser:
+      type: object
+      description: User object associated with a public profile
+      properties:
+        id:
+          type: string
+          description: User ID
+        creator:
+          type: boolean
+          description: Whether the user is a creator
+        mod:
+          type: boolean
+          description: Whether the user is a moderator
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Get current positions for a user
+
+
+
+## OpenAPI
+
+````yaml /api-spec/data-openapi.yaml get /positions
+openapi: 3.0.3
+info:
+  title: Polymarket Data API
+  version: 1.0.0
+  description: >
+    HTTP API for Polymarket data. This specification documents all public
+    routes.
+servers:
+  - url: https://data-api.polymarket.com
+    description: Relative server (same host)
+security: []
+tags:
+  - name: Data API Status
+    description: Data API health check
+  - name: Core
+  - name: Builders
+  - name: Misc
+paths:
+  /positions:
+    get:
+      tags:
+        - Core
+      summary: Get current positions for a user
+      parameters:
+        - in: query
+          name: user
+          required: true
+          schema:
+            $ref: '#/components/schemas/Address'
+          description: User address (required)
+        - in: query
+          name: market
+          style: form
+          explode: false
+          schema:
+            type: array
+            items:
+              $ref: '#/components/schemas/Hash64'
+          description: >-
+            Comma-separated list of condition IDs. Mutually exclusive with
+            eventId.
+        - in: query
+          name: eventId
+          style: form
+          explode: false
+          schema:
+            type: array
+            items:
+              type: integer
+              minimum: 1
+          description: Comma-separated list of event IDs. Mutually exclusive with market.
+        - in: query
+          name: sizeThreshold
+          schema:
+            type: number
+            default: 1
+            minimum: 0
+        - in: query
+          name: redeemable
+          schema:
+            type: boolean
+            default: false
+        - in: query
+          name: mergeable
+          schema:
+            type: boolean
+            default: false
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            default: 100
+            minimum: 0
+            maximum: 500
+        - in: query
+          name: offset
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+            maximum: 10000
+        - in: query
+          name: sortBy
+          schema:
+            type: string
+            enum:
+              - CURRENT
+              - INITIAL
+              - TOKENS
+              - CASHPNL
+              - PERCENTPNL
+              - TITLE
+              - RESOLVING
+              - PRICE
+              - AVGPRICE
+            default: TOKENS
+        - in: query
+          name: sortDirection
+          schema:
+            type: string
+            enum:
+              - ASC
+              - DESC
+            default: DESC
+        - in: query
+          name: title
+          schema:
+            type: string
+            maxLength: 100
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Position'
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+components:
+  schemas:
+    Address:
+      type: string
+      description: User Profile Address (0x-prefixed, 40 hex chars)
+      pattern: ^0x[a-fA-F0-9]{40}$
+      example: '0x56687bf447db6ffa42ffe2204a05edaa20f55839'
+    Hash64:
+      type: string
+      description: 0x-prefixed 64-hex string
+      pattern: ^0x[a-fA-F0-9]{64}$
+      example: '0xdd22472e552920b8438158ea7238bfadfa4f736aa4cee91a6b86c39ead110917'
+    Position:
+      type: object
+      properties:
+        proxyWallet:
+          $ref: '#/components/schemas/Address'
+        asset:
+          type: string
+        conditionId:
+          $ref: '#/components/schemas/Hash64'
+        size:
+          type: number
+        avgPrice:
+          type: number
+        initialValue:
+          type: number
+        currentValue:
+          type: number
+        cashPnl:
+          type: number
+        percentPnl:
+          type: number
+        totalBought:
+          type: number
+        realizedPnl:
+          type: number
+        percentRealizedPnl:
+          type: number
+        curPrice:
+          type: number
+        redeemable:
+          type: boolean
+        mergeable:
+          type: boolean
+        title:
+          type: string
+        slug:
+          type: string
+        icon:
+          type: string
+        eventSlug:
+          type: string
+        outcome:
+          type: string
+        outcomeIndex:
+          type: integer
+        oppositeOutcome:
+          type: string
+        oppositeAsset:
+          type: string
+        endDate:
+          type: string
+        negativeRisk:
+          type: boolean
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+      required:
+        - error
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Get closed positions for a user
+
+
+
+## OpenAPI
+
+````yaml /api-spec/data-openapi.yaml get /closed-positions
+openapi: 3.0.3
+info:
+  title: Polymarket Data API
+  version: 1.0.0
+  description: >
+    HTTP API for Polymarket data. This specification documents all public
+    routes.
+servers:
+  - url: https://data-api.polymarket.com
+    description: Relative server (same host)
+security: []
+tags:
+  - name: Data API Status
+    description: Data API health check
+  - name: Core
+  - name: Builders
+  - name: Misc
+paths:
+  /closed-positions:
+    get:
+      tags:
+        - Core
+      summary: Get closed positions for a user
+      parameters:
+        - in: query
+          name: user
+          required: true
+          schema:
+            $ref: '#/components/schemas/Address'
+          description: The address of the user in question
+        - in: query
+          name: market
+          style: form
+          explode: false
+          schema:
+            type: array
+            items:
+              $ref: '#/components/schemas/Hash64'
+          description: >-
+            The conditionId of the market in question. Supports multiple csv
+            separated values. Cannot be used with the eventId param.
+        - in: query
+          name: title
+          schema:
+            type: string
+            maxLength: 100
+          description: Filter by market title
+        - in: query
+          name: eventId
+          style: form
+          explode: false
+          schema:
+            type: array
+            items:
+              type: integer
+              minimum: 1
+          description: >-
+            The event id of the event in question. Supports multiple csv
+            separated values. Returns positions for all markets for those event
+            ids. Cannot be used with the market param.
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            default: 10
+            minimum: 0
+            maximum: 50
+          description: The max number of positions to return
+        - in: query
+          name: offset
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+            maximum: 100000
+          description: The starting index for pagination
+        - in: query
+          name: sortBy
+          schema:
+            type: string
+            enum:
+              - REALIZEDPNL
+              - TITLE
+              - PRICE
+              - AVGPRICE
+              - TIMESTAMP
+            default: REALIZEDPNL
+          description: The sort criteria
+        - in: query
+          name: sortDirection
+          schema:
+            type: string
+            enum:
+              - ASC
+              - DESC
+            default: DESC
+          description: The sort direction
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ClosedPosition'
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+components:
+  schemas:
+    Address:
+      type: string
+      description: User Profile Address (0x-prefixed, 40 hex chars)
+      pattern: ^0x[a-fA-F0-9]{40}$
+      example: '0x56687bf447db6ffa42ffe2204a05edaa20f55839'
+    Hash64:
+      type: string
+      description: 0x-prefixed 64-hex string
+      pattern: ^0x[a-fA-F0-9]{64}$
+      example: '0xdd22472e552920b8438158ea7238bfadfa4f736aa4cee91a6b86c39ead110917'
+    ClosedPosition:
+      type: object
+      properties:
+        proxyWallet:
+          $ref: '#/components/schemas/Address'
+        asset:
+          type: string
+        conditionId:
+          $ref: '#/components/schemas/Hash64'
+        avgPrice:
+          type: number
+        totalBought:
+          type: number
+        realizedPnl:
+          type: number
+        curPrice:
+          type: number
+        timestamp:
+          type: integer
+          format: int64
+        title:
+          type: string
+        slug:
+          type: string
+        icon:
+          type: string
+        eventSlug:
+          type: string
+        outcome:
+          type: string
+        outcomeIndex:
+          type: integer
+        oppositeOutcome:
+          type: string
+        oppositeAsset:
+          type: string
+        endDate:
+          type: string
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+      required:
+        - error
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Get user activity
+
+
+
+## OpenAPI
+
+````yaml /api-spec/data-openapi.yaml get /activity
+openapi: 3.0.3
+info:
+  title: Polymarket Data API
+  version: 1.0.0
+  description: >
+    HTTP API for Polymarket data. This specification documents all public
+    routes.
+servers:
+  - url: https://data-api.polymarket.com
+    description: Relative server (same host)
+security: []
+tags:
+  - name: Data API Status
+    description: Data API health check
+  - name: Core
+  - name: Builders
+  - name: Misc
+paths:
+  /activity:
+    get:
+      tags:
+        - Core
+      summary: Get user activity
+      parameters:
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            default: 100
+            minimum: 0
+            maximum: 500
+        - in: query
+          name: offset
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+            maximum: 10000
+        - in: query
+          name: user
+          required: true
+          schema:
+            $ref: '#/components/schemas/Address'
+        - in: query
+          name: market
+          style: form
+          explode: false
+          schema:
+            type: array
+            items:
+              $ref: '#/components/schemas/Hash64'
+          description: >-
+            Comma-separated list of condition IDs. Mutually exclusive with
+            eventId.
+        - in: query
+          name: eventId
+          style: form
+          explode: false
+          schema:
+            type: array
+            items:
+              type: integer
+              minimum: 1
+          description: Comma-separated list of event IDs. Mutually exclusive with market.
+        - in: query
+          name: type
+          style: form
+          explode: false
+          schema:
+            type: array
+            items:
+              type: string
+              enum:
+                - TRADE
+                - SPLIT
+                - MERGE
+                - REDEEM
+                - REWARD
+                - CONVERSION
+                - MAKER_REBATE
+                - REFERRAL_REWARD
+        - in: query
+          name: start
+          schema:
+            type: integer
+            minimum: 0
+        - in: query
+          name: end
+          schema:
+            type: integer
+            minimum: 0
+        - in: query
+          name: sortBy
+          schema:
+            type: string
+            enum:
+              - TIMESTAMP
+              - TOKENS
+              - CASH
+            default: TIMESTAMP
+        - in: query
+          name: sortDirection
+          schema:
+            type: string
+            enum:
+              - ASC
+              - DESC
+            default: DESC
+        - in: query
+          name: side
+          schema:
+            type: string
+            enum:
+              - BUY
+              - SELL
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Activity'
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+components:
+  schemas:
+    Address:
+      type: string
+      description: User Profile Address (0x-prefixed, 40 hex chars)
+      pattern: ^0x[a-fA-F0-9]{40}$
+      example: '0x56687bf447db6ffa42ffe2204a05edaa20f55839'
+    Hash64:
+      type: string
+      description: 0x-prefixed 64-hex string
+      pattern: ^0x[a-fA-F0-9]{64}$
+      example: '0xdd22472e552920b8438158ea7238bfadfa4f736aa4cee91a6b86c39ead110917'
+    Activity:
+      type: object
+      properties:
+        proxyWallet:
+          $ref: '#/components/schemas/Address'
+        timestamp:
+          type: integer
+          format: int64
+        conditionId:
+          $ref: '#/components/schemas/Hash64'
+        type:
+          type: string
+          enum:
+            - TRADE
+            - SPLIT
+            - MERGE
+            - REDEEM
+            - REWARD
+            - CONVERSION
+            - MAKER_REBATE
+            - REFERRAL_REWARD
+        size:
+          type: number
+        usdcSize:
+          type: number
+        transactionHash:
+          type: string
+        price:
+          type: number
+        asset:
+          type: string
+        side:
+          type: string
+          enum:
+            - BUY
+            - SELL
+        outcomeIndex:
+          type: integer
+        title:
+          type: string
+        slug:
+          type: string
+        icon:
+          type: string
+        eventSlug:
+          type: string
+        outcome:
+          type: string
+        name:
+          type: string
+        pseudonym:
+          type: string
+        bio:
+          type: string
+        profileImage:
+          type: string
+        profileImageOptimized:
+          type: string
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+      required:
+        - error
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Get total value of a user's positions
+
+
+
+## OpenAPI
+
+````yaml /api-spec/data-openapi.yaml get /value
+openapi: 3.0.3
+info:
+  title: Polymarket Data API
+  version: 1.0.0
+  description: >
+    HTTP API for Polymarket data. This specification documents all public
+    routes.
+servers:
+  - url: https://data-api.polymarket.com
+    description: Relative server (same host)
+security: []
+tags:
+  - name: Data API Status
+    description: Data API health check
+  - name: Core
+  - name: Builders
+  - name: Misc
+paths:
+  /value:
+    get:
+      tags:
+        - Core
+      summary: Get total value of a user's positions
+      parameters:
+        - in: query
+          name: user
+          required: true
+          schema:
+            $ref: '#/components/schemas/Address'
+        - in: query
+          name: market
+          style: form
+          explode: false
+          schema:
+            type: array
+            items:
+              $ref: '#/components/schemas/Hash64'
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Value'
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+components:
+  schemas:
+    Address:
+      type: string
+      description: User Profile Address (0x-prefixed, 40 hex chars)
+      pattern: ^0x[a-fA-F0-9]{40}$
+      example: '0x56687bf447db6ffa42ffe2204a05edaa20f55839'
+    Hash64:
+      type: string
+      description: 0x-prefixed 64-hex string
+      pattern: ^0x[a-fA-F0-9]{64}$
+      example: '0xdd22472e552920b8438158ea7238bfadfa4f736aa4cee91a6b86c39ead110917'
+    Value:
+      type: object
+      properties:
+        user:
+          $ref: '#/components/schemas/Address'
+        value:
+          type: number
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+      required:
+        - error
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Get trades for a user or markets
+
+
+
+## OpenAPI
+
+````yaml /api-spec/data-openapi.yaml get /trades
+openapi: 3.0.3
+info:
+  title: Polymarket Data API
+  version: 1.0.0
+  description: >
+    HTTP API for Polymarket data. This specification documents all public
+    routes.
+servers:
+  - url: https://data-api.polymarket.com
+    description: Relative server (same host)
+security: []
+tags:
+  - name: Data API Status
+    description: Data API health check
+  - name: Core
+  - name: Builders
+  - name: Misc
+paths:
+  /trades:
+    get:
+      tags:
+        - Core
+      summary: Get trades for a user or markets
+      parameters:
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            default: 100
+            minimum: 0
+            maximum: 10000
+        - in: query
+          name: offset
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+            maximum: 10000
+        - in: query
+          name: takerOnly
+          schema:
+            type: boolean
+            default: true
+        - in: query
+          name: filterType
+          schema:
+            type: string
+            enum:
+              - CASH
+              - TOKENS
+          description: Must be provided together with filterAmount.
+        - in: query
+          name: filterAmount
+          schema:
+            type: number
+            minimum: 0
+          description: Must be provided together with filterType.
+        - in: query
+          name: market
+          style: form
+          explode: false
+          schema:
+            type: array
+            items:
+              $ref: '#/components/schemas/Hash64'
+          description: >-
+            Comma-separated list of condition IDs. Mutually exclusive with
+            eventId.
+        - in: query
+          name: eventId
+          style: form
+          explode: false
+          schema:
+            type: array
+            items:
+              type: integer
+              minimum: 1
+          description: Comma-separated list of event IDs. Mutually exclusive with market.
+        - in: query
+          name: user
+          schema:
+            $ref: '#/components/schemas/Address'
+        - in: query
+          name: side
+          schema:
+            type: string
+            enum:
+              - BUY
+              - SELL
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Trade'
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+components:
+  schemas:
+    Hash64:
+      type: string
+      description: 0x-prefixed 64-hex string
+      pattern: ^0x[a-fA-F0-9]{64}$
+      example: '0xdd22472e552920b8438158ea7238bfadfa4f736aa4cee91a6b86c39ead110917'
+    Address:
+      type: string
+      description: User Profile Address (0x-prefixed, 40 hex chars)
+      pattern: ^0x[a-fA-F0-9]{40}$
+      example: '0x56687bf447db6ffa42ffe2204a05edaa20f55839'
+    Trade:
+      type: object
+      properties:
+        proxyWallet:
+          $ref: '#/components/schemas/Address'
+        side:
+          type: string
+          enum:
+            - BUY
+            - SELL
+        asset:
+          type: string
+        conditionId:
+          $ref: '#/components/schemas/Hash64'
+        size:
+          type: number
+        price:
+          type: number
+        timestamp:
+          type: integer
+          format: int64
+        title:
+          type: string
+        slug:
+          type: string
+        icon:
+          type: string
+        eventSlug:
+          type: string
+        outcome:
+          type: string
+        outcomeIndex:
+          type: integer
+        name:
+          type: string
+        pseudonym:
+          type: string
+        bio:
+          type: string
+        profileImage:
+          type: string
+        profileImageOptimized:
+          type: string
+        transactionHash:
+          type: string
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+      required:
+        - error
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Get total markets a user has traded
+
+
+
+## OpenAPI
+
+````yaml /api-spec/data-openapi.yaml get /traded
+openapi: 3.0.3
+info:
+  title: Polymarket Data API
+  version: 1.0.0
+  description: >
+    HTTP API for Polymarket data. This specification documents all public
+    routes.
+servers:
+  - url: https://data-api.polymarket.com
+    description: Relative server (same host)
+security: []
+tags:
+  - name: Data API Status
+    description: Data API health check
+  - name: Core
+  - name: Builders
+  - name: Misc
+paths:
+  /traded:
+    get:
+      tags:
+        - Misc
+      summary: Get total markets a user has traded
+      parameters:
+        - in: query
+          name: user
+          required: true
+          schema:
+            $ref: '#/components/schemas/Address'
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Traded'
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+components:
+  schemas:
+    Address:
+      type: string
+      description: User Profile Address (0x-prefixed, 40 hex chars)
+      pattern: ^0x[a-fA-F0-9]{40}$
+      example: '0x56687bf447db6ffa42ffe2204a05edaa20f55839'
+    Traded:
+      type: object
+      properties:
+        user:
+          $ref: '#/components/schemas/Address'
+        traded:
+          type: integer
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+      required:
+        - error
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Get positions for a market
+
+
+
+## OpenAPI
+
+````yaml /api-spec/data-openapi.yaml get /v1/market-positions
+openapi: 3.0.3
+info:
+  title: Polymarket Data API
+  version: 1.0.0
+  description: >
+    HTTP API for Polymarket data. This specification documents all public
+    routes.
+servers:
+  - url: https://data-api.polymarket.com
+    description: Relative server (same host)
+security: []
+tags:
+  - name: Data API Status
+    description: Data API health check
+  - name: Core
+  - name: Builders
+  - name: Misc
+paths:
+  /v1/market-positions:
+    get:
+      tags:
+        - Core
+      summary: Get positions for a market
+      parameters:
+        - in: query
+          name: market
+          required: true
+          schema:
+            $ref: '#/components/schemas/Hash64'
+          description: The condition ID of the market to query positions for
+        - in: query
+          name: user
+          schema:
+            $ref: '#/components/schemas/Address'
+          description: Filter to a single user by proxy wallet address
+        - in: query
+          name: status
+          schema:
+            type: string
+            enum:
+              - OPEN
+              - CLOSED
+              - ALL
+            default: ALL
+          description: |
+            Filter positions by status.
+            - `OPEN` — Only positions with size > 0.01
+            - `CLOSED` — Only positions with size <= 0.01
+            - `ALL` — All positions regardless of size
+        - in: query
+          name: sortBy
+          schema:
+            type: string
+            enum:
+              - TOKENS
+              - CASH_PNL
+              - REALIZED_PNL
+              - TOTAL_PNL
+            default: TOTAL_PNL
+          description: |
+            Sort positions by:
+            - `TOKENS` — Position size (number of tokens)
+            - `CASH_PNL` — Unrealized cash PnL
+            - `REALIZED_PNL` — Realized PnL
+            - `TOTAL_PNL` — Total PnL (cash_pnl + realized_pnl)
+        - in: query
+          name: sortDirection
+          schema:
+            type: string
+            enum:
+              - ASC
+              - DESC
+            default: DESC
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            default: 50
+            minimum: 0
+            maximum: 500
+          description: Max number of positions to return per outcome token
+        - in: query
+          name: offset
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+            maximum: 10000
+          description: Pagination offset per outcome token
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/MetaMarketPositionV1'
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+components:
+  schemas:
+    Hash64:
+      type: string
+      description: 0x-prefixed 64-hex string
+      pattern: ^0x[a-fA-F0-9]{64}$
+      example: '0xdd22472e552920b8438158ea7238bfadfa4f736aa4cee91a6b86c39ead110917'
+    Address:
+      type: string
+      description: User Profile Address (0x-prefixed, 40 hex chars)
+      pattern: ^0x[a-fA-F0-9]{40}$
+      example: '0x56687bf447db6ffa42ffe2204a05edaa20f55839'
+    MetaMarketPositionV1:
+      type: object
+      properties:
+        token:
+          type: string
+          description: The outcome token asset ID
+        positions:
+          type: array
+          items:
+            $ref: '#/components/schemas/MarketPositionV1'
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+      required:
+        - error
+    MarketPositionV1:
+      type: object
+      properties:
+        proxyWallet:
+          $ref: '#/components/schemas/Address'
+        name:
+          type: string
+        profileImage:
+          type: string
+        verified:
+          type: boolean
+        asset:
+          type: string
+        conditionId:
+          $ref: '#/components/schemas/Hash64'
+        avgPrice:
+          type: number
+        size:
+          type: number
+        currPrice:
+          type: number
+        currentValue:
+          type: number
+        cashPnl:
+          type: number
+        totalBought:
+          type: number
+        realizedPnl:
+          type: number
+        totalPnl:
+          type: number
+        outcome:
+          type: string
+        outcomeIndex:
+          type: integer
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Download an accounting snapshot (ZIP of CSVs)
+
+
+
+## OpenAPI
+
+````yaml /api-spec/data-openapi.yaml get /v1/accounting/snapshot
+openapi: 3.0.3
+info:
+  title: Polymarket Data API
+  version: 1.0.0
+  description: >
+    HTTP API for Polymarket data. This specification documents all public
+    routes.
+servers:
+  - url: https://data-api.polymarket.com
+    description: Relative server (same host)
+security: []
+tags:
+  - name: Data API Status
+    description: Data API health check
+  - name: Core
+  - name: Builders
+  - name: Misc
+paths:
+  /v1/accounting/snapshot:
+    get:
+      tags:
+        - Misc
+      summary: Download an accounting snapshot (ZIP of CSVs)
+      parameters:
+        - in: query
+          name: user
+          required: true
+          schema:
+            $ref: '#/components/schemas/Address'
+          description: User address (0x-prefixed)
+      responses:
+        '200':
+          description: ZIP file containing `positions.csv` and `equity.csv`.
+          content:
+            application/zip:
+              schema:
+                type: string
+                format: binary
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+components:
+  schemas:
+    Address:
+      type: string
+      description: User Profile Address (0x-prefixed, 40 hex chars)
+      pattern: ^0x[a-fA-F0-9]{40}$
+      example: '0x56687bf447db6ffa42ffe2204a05edaa20f55839'
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+      required:
+        - error
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Get trader leaderboard rankings
+
+
+
+## OpenAPI
+
+````yaml /api-spec/data-openapi.yaml get /v1/leaderboard
+openapi: 3.0.3
+info:
+  title: Polymarket Data API
+  version: 1.0.0
+  description: >
+    HTTP API for Polymarket data. This specification documents all public
+    routes.
+servers:
+  - url: https://data-api.polymarket.com
+    description: Relative server (same host)
+security: []
+tags:
+  - name: Data API Status
+    description: Data API health check
+  - name: Core
+  - name: Builders
+  - name: Misc
+paths:
+  /v1/leaderboard:
+    get:
+      tags:
+        - Core
+      summary: Get trader leaderboard rankings
+      parameters:
+        - in: query
+          name: category
+          schema:
+            type: string
+            enum:
+              - OVERALL
+              - POLITICS
+              - SPORTS
+              - CRYPTO
+              - CULTURE
+              - MENTIONS
+              - WEATHER
+              - ECONOMICS
+              - TECH
+              - FINANCE
+            default: OVERALL
+          description: Market category for the leaderboard
+        - in: query
+          name: timePeriod
+          schema:
+            type: string
+            enum:
+              - DAY
+              - WEEK
+              - MONTH
+              - ALL
+            default: DAY
+          description: Time period for leaderboard results
+        - in: query
+          name: orderBy
+          schema:
+            type: string
+            enum:
+              - PNL
+              - VOL
+            default: PNL
+          description: Leaderboard ordering criteria
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            default: 25
+            minimum: 1
+            maximum: 50
+          description: Max number of leaderboard traders to return
+        - in: query
+          name: offset
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+            maximum: 1000
+          description: Starting index for pagination
+        - in: query
+          name: user
+          schema:
+            $ref: '#/components/schemas/Address'
+          description: Limit leaderboard to a single user by address
+        - in: query
+          name: userName
+          schema:
+            type: string
+          description: Limit leaderboard to a single username
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TraderLeaderboardEntry'
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+components:
+  schemas:
+    Address:
+      type: string
+      description: User Profile Address (0x-prefixed, 40 hex chars)
+      pattern: ^0x[a-fA-F0-9]{40}$
+      example: '0x56687bf447db6ffa42ffe2204a05edaa20f55839'
+    TraderLeaderboardEntry:
+      type: object
+      properties:
+        rank:
+          type: string
+          description: The rank position of the trader
+        proxyWallet:
+          $ref: '#/components/schemas/Address'
+        userName:
+          type: string
+          description: The trader's username
+        vol:
+          type: number
+          description: Trading volume for this trader
+        pnl:
+          type: number
+          description: Profit and loss for this trader
+        profileImage:
+          type: string
+          description: URL to the trader's profile image
+        xUsername:
+          type: string
+          description: The trader's X (Twitter) username
+        verifiedBadge:
+          type: boolean
+          description: Whether the trader has a verified badge
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+      required:
+        - error
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Get aggregated builder leaderboard
+
+
+
+## OpenAPI
+
+````yaml /api-spec/data-openapi.yaml get /v1/builders/leaderboard
+openapi: 3.0.3
+info:
+  title: Polymarket Data API
+  version: 1.0.0
+  description: >
+    HTTP API for Polymarket data. This specification documents all public
+    routes.
+servers:
+  - url: https://data-api.polymarket.com
+    description: Relative server (same host)
+security: []
+tags:
+  - name: Data API Status
+    description: Data API health check
+  - name: Core
+  - name: Builders
+  - name: Misc
+paths:
+  /v1/builders/leaderboard:
+    get:
+      tags:
+        - Builders
+      summary: Get aggregated builder leaderboard
+      parameters:
+        - in: query
+          name: timePeriod
+          schema:
+            type: string
+            enum:
+              - DAY
+              - WEEK
+              - MONTH
+              - ALL
+            default: DAY
+          description: |
+            The time period to aggregate results over.
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            default: 25
+            minimum: 0
+            maximum: 50
+          description: Maximum number of builders to return
+        - in: query
+          name: offset
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+            maximum: 1000
+          description: Starting index for pagination
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/LeaderboardEntry'
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+components:
+  schemas:
+    LeaderboardEntry:
+      type: object
+      properties:
+        rank:
+          type: string
+          description: The rank position of the builder
+        builder:
+          type: string
+          description: The builder name or identifier
+        builderCode:
+          type: string
+          description: >-
+            The builder's onchain attribution code as attached to orders via
+            `builderCode` (see CLOB V2). Empty string for legacy builders
+            without a registered code.
+        volume:
+          type: number
+          description: Total trading volume attributed to this builder
+        activeUsers:
+          type: integer
+          description: Number of active users for this builder
+        verified:
+          type: boolean
+          description: Whether the builder is verified
+        builderLogo:
+          type: string
+          description: URL to the builder's logo image
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+      required:
+        - error
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Get daily builder volume time-series
+
+
+
+## OpenAPI
+
+````yaml /api-spec/data-openapi.yaml get /v1/builders/volume
+openapi: 3.0.3
+info:
+  title: Polymarket Data API
+  version: 1.0.0
+  description: >
+    HTTP API for Polymarket data. This specification documents all public
+    routes.
+servers:
+  - url: https://data-api.polymarket.com
+    description: Relative server (same host)
+security: []
+tags:
+  - name: Data API Status
+    description: Data API health check
+  - name: Core
+  - name: Builders
+  - name: Misc
+paths:
+  /v1/builders/volume:
+    get:
+      tags:
+        - Builders
+      summary: Get daily builder volume time-series
+      parameters:
+        - in: query
+          name: timePeriod
+          schema:
+            type: string
+            enum:
+              - DAY
+              - WEEK
+              - MONTH
+              - ALL
+            default: DAY
+          description: |
+            The time period to fetch daily records for.
+      responses:
+        '200':
+          description: Success - Returns array of daily volume records
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/BuilderVolumeEntry'
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+components:
+  schemas:
+    BuilderVolumeEntry:
+      type: object
+      properties:
+        dt:
+          type: string
+          format: date-time
+          description: The timestamp for this volume entry in ISO 8601 format
+          example: '2025-11-15T00:00:00Z'
+        builder:
+          type: string
+          description: The builder name or identifier
+        builderCode:
+          type: string
+          description: >-
+            The builder's onchain attribution code as attached to orders via
+            `builderCode` (see CLOB V2). Empty string for legacy builders
+            without a registered code.
+        builderLogo:
+          type: string
+          description: URL to the builder's logo image
+        verified:
+          type: boolean
+          description: Whether the builder is verified
+        volume:
+          type: number
+          description: Trading volume for this builder on this date
+        activeUsers:
+          type: integer
+          description: Number of active users for this builder on this date
+        rank:
+          type: string
+          description: The rank position of the builder on this date
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+      required:
+        - error
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Search markets, events, and profiles
+
+
+
+## OpenAPI
+
+````yaml /api-spec/gamma-openapi.yaml get /public-search
+openapi: 3.0.3
+info:
+  title: Markets API
+  version: 1.0.0
+  description: REST API specification for public endpoints used by the Markets service.
+servers:
+  - url: https://gamma-api.polymarket.com
+    description: Polymarket Gamma API Production Server
+security: []
+tags:
+  - name: Gamma Status
+    description: Gamma API status and health check
+  - name: Sports
+    description: Sports-related endpoints including teams and game data
+  - name: Tags
+    description: Tag management and related tag operations
+  - name: Events
+    description: Event management and event-related operations
+  - name: Markets
+    description: Market data and market-related operations
+  - name: Comments
+    description: Comment system and user interactions
+  - name: Series
+    description: Series management and related operations
+  - name: Profiles
+    description: User profile management
+  - name: Search
+    description: Search functionality across different entity types
+paths:
+  /public-search:
+    get:
+      tags:
+        - Search
+      summary: Search markets, events, and profiles
+      operationId: publicSearch
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: cache
+          in: query
+          schema:
+            type: boolean
+        - name: events_status
+          in: query
+          schema:
+            type: string
+        - name: limit_per_type
+          in: query
+          schema:
+            type: integer
+        - name: page
+          in: query
+          schema:
+            type: integer
+        - name: events_tag
+          in: query
+          schema:
+            type: array
+            items:
+              type: string
+        - name: keep_closed_markets
+          in: query
+          schema:
+            type: integer
+        - name: sort
+          in: query
+          schema:
+            type: string
+        - name: ascending
+          in: query
+          schema:
+            type: boolean
+        - name: search_tags
+          in: query
+          schema:
+            type: boolean
+        - name: search_profiles
+          in: query
+          schema:
+            type: boolean
+        - name: recurrence
+          in: query
+          schema:
+            type: string
+        - name: exclude_tag_id
+          in: query
+          schema:
+            type: array
+            items:
+              type: integer
+        - name: optimized
+          in: query
+          schema:
+            type: boolean
+      responses:
+        '200':
+          description: Search results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Search'
+components:
+  schemas:
+    Search:
+      type: object
+      properties:
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/Event'
+          nullable: true
+        tags:
+          type: array
+          items:
+            $ref: '#/components/schemas/SearchTag'
+          nullable: true
+        profiles:
+          type: array
+          items:
+            $ref: '#/components/schemas/Profile'
+          nullable: true
+        pagination:
+          $ref: '#/components/schemas/Pagination'
+    Event:
+      type: object
+      properties:
+        id:
+          type: string
+        ticker:
+          type: string
+          nullable: true
+        slug:
+          type: string
+          nullable: true
+        title:
+          type: string
+          nullable: true
+        subtitle:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        resolutionSource:
+          type: string
+          nullable: true
+        startDate:
+          type: string
+          format: date-time
+          nullable: true
+        creationDate:
+          type: string
+          format: date-time
+          nullable: true
+        endDate:
+          type: string
+          format: date-time
+          nullable: true
+        image:
+          type: string
+          nullable: true
+        icon:
+          type: string
+          nullable: true
+        active:
+          type: boolean
+          nullable: true
+        closed:
+          type: boolean
+          nullable: true
+        archived:
+          type: boolean
+          nullable: true
+        new:
+          type: boolean
+          nullable: true
+        featured:
+          type: boolean
+          nullable: true
+        restricted:
+          type: boolean
+          nullable: true
+        liquidity:
+          type: number
+          nullable: true
+        volume:
+          type: number
+          nullable: true
+        openInterest:
+          type: number
+          nullable: true
+        sortBy:
+          type: string
+          nullable: true
+        category:
+          type: string
+          nullable: true
+        subcategory:
+          type: string
+          nullable: true
+        isTemplate:
+          type: boolean
+          nullable: true
+        templateVariables:
+          type: string
+          nullable: true
+        published_at:
+          type: string
+          nullable: true
+        createdBy:
+          type: string
+          nullable: true
+        updatedBy:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        commentsEnabled:
+          type: boolean
+          nullable: true
+        competitive:
+          type: number
+          nullable: true
+        volume24hr:
+          type: number
+          nullable: true
+        volume1wk:
+          type: number
+          nullable: true
+        volume1mo:
+          type: number
+          nullable: true
+        volume1yr:
+          type: number
+          nullable: true
+        featuredImage:
+          type: string
+          nullable: true
+        disqusThread:
+          type: string
+          nullable: true
+        parentEvent:
+          type: string
+          nullable: true
+        enableOrderBook:
+          type: boolean
+          nullable: true
+        liquidityAmm:
+          type: number
+          nullable: true
+        liquidityClob:
+          type: number
+          nullable: true
+        negRisk:
+          type: boolean
+          nullable: true
+        negRiskMarketID:
+          type: string
+          nullable: true
+        negRiskFeeBips:
+          type: integer
+          nullable: true
+        commentCount:
+          type: integer
+          nullable: true
+        imageOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        iconOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        featuredImageOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        subEvents:
+          type: array
+          items:
+            type: string
+          nullable: true
+        markets:
+          type: array
+          items:
+            $ref: '#/components/schemas/Market'
+        series:
+          type: array
+          items:
+            $ref: '#/components/schemas/Series'
+        categories:
+          type: array
+          items:
+            $ref: '#/components/schemas/Category'
+        collections:
+          type: array
+          items:
+            $ref: '#/components/schemas/Collection'
+        tags:
+          type: array
+          items:
+            $ref: '#/components/schemas/Tag'
+        cyom:
+          type: boolean
+          nullable: true
+        closedTime:
+          type: string
+          format: date-time
+          nullable: true
+        showAllOutcomes:
+          type: boolean
+          nullable: true
+        showMarketImages:
+          type: boolean
+          nullable: true
+        automaticallyResolved:
+          type: boolean
+          nullable: true
+        enableNegRisk:
+          type: boolean
+          nullable: true
+        automaticallyActive:
+          type: boolean
+          nullable: true
+        eventDate:
+          type: string
+          nullable: true
+        startTime:
+          type: string
+          format: date-time
+          nullable: true
+        eventWeek:
+          type: integer
+          nullable: true
+        seriesSlug:
+          type: string
+          nullable: true
+        score:
+          type: string
+          nullable: true
+        elapsed:
+          type: string
+          nullable: true
+        period:
+          type: string
+          nullable: true
+        live:
+          type: boolean
+          nullable: true
+        ended:
+          type: boolean
+          nullable: true
+        finishedTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        gmpChartMode:
+          type: string
+          nullable: true
+        eventCreators:
+          type: array
+          items:
+            $ref: '#/components/schemas/EventCreator'
+        tweetCount:
+          type: integer
+          nullable: true
+        chats:
+          type: array
+          items:
+            $ref: '#/components/schemas/Chat'
+        featuredOrder:
+          type: integer
+          nullable: true
+        estimateValue:
+          type: boolean
+          nullable: true
+        cantEstimate:
+          type: boolean
+          nullable: true
+        estimatedValue:
+          type: string
+          nullable: true
+        templates:
+          type: array
+          items:
+            $ref: '#/components/schemas/Template'
+        spreadsMainLine:
+          type: number
+          nullable: true
+        totalsMainLine:
+          type: number
+          nullable: true
+        carouselMap:
+          type: string
+          nullable: true
+        pendingDeployment:
+          type: boolean
+          nullable: true
+        deploying:
+          type: boolean
+          nullable: true
+        deployingTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        scheduledDeploymentTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        gameStatus:
+          type: string
+          nullable: true
+    SearchTag:
+      type: object
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+        slug:
+          type: string
+        event_count:
+          type: integer
+    Profile:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+          nullable: true
+        user:
+          type: integer
+          nullable: true
+        referral:
+          type: string
+          nullable: true
+        createdBy:
+          type: integer
+          nullable: true
+        updatedBy:
+          type: integer
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        utmSource:
+          type: string
+          nullable: true
+        utmMedium:
+          type: string
+          nullable: true
+        utmCampaign:
+          type: string
+          nullable: true
+        utmContent:
+          type: string
+          nullable: true
+        utmTerm:
+          type: string
+          nullable: true
+        walletActivated:
+          type: boolean
+          nullable: true
+        pseudonym:
+          type: string
+          nullable: true
+        displayUsernamePublic:
+          type: boolean
+          nullable: true
+        profileImage:
+          type: string
+          nullable: true
+        bio:
+          type: string
+          nullable: true
+        proxyWallet:
+          type: string
+          nullable: true
+        profileImageOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        isCloseOnly:
+          type: boolean
+          nullable: true
+        isCertReq:
+          type: boolean
+          nullable: true
+        certReqDate:
+          type: string
+          format: date-time
+          nullable: true
+    Pagination:
+      type: object
+      properties:
+        hasMore:
+          type: boolean
+        totalResults:
+          type: integer
+    ImageOptimization:
+      type: object
+      properties:
+        id:
+          type: string
+        imageUrlSource:
+          type: string
+          nullable: true
+        imageUrlOptimized:
+          type: string
+          nullable: true
+        imageSizeKbSource:
+          type: number
+          nullable: true
+        imageSizeKbOptimized:
+          type: number
+          nullable: true
+        imageOptimizedComplete:
+          type: boolean
+          nullable: true
+        imageOptimizedLastUpdated:
+          type: string
+          nullable: true
+        relID:
+          type: integer
+          nullable: true
+        field:
+          type: string
+          nullable: true
+        relname:
+          type: string
+          nullable: true
+    Market:
+      type: object
+      properties:
+        id:
+          type: string
+        question:
+          type: string
+          nullable: true
+        conditionId:
+          type: string
+        slug:
+          type: string
+          nullable: true
+        twitterCardImage:
+          type: string
+          nullable: true
+        resolutionSource:
+          type: string
+          nullable: true
+        endDate:
+          type: string
+          format: date-time
+          nullable: true
+        category:
+          type: string
+          nullable: true
+        ammType:
+          type: string
+          nullable: true
+        liquidity:
+          type: string
+          nullable: true
+        sponsorName:
+          type: string
+          nullable: true
+        sponsorImage:
+          type: string
+          nullable: true
+        startDate:
+          type: string
+          format: date-time
+          nullable: true
+        xAxisValue:
+          type: string
+          nullable: true
+        yAxisValue:
+          type: string
+          nullable: true
+        denominationToken:
+          type: string
+          nullable: true
+        fee:
+          type: string
+          nullable: true
+        image:
+          type: string
+          nullable: true
+        icon:
+          type: string
+          nullable: true
+        lowerBound:
+          type: string
+          nullable: true
+        upperBound:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        outcomes:
+          type: string
+          nullable: true
+        outcomePrices:
+          type: string
+          nullable: true
+        volume:
+          type: string
+          nullable: true
+        active:
+          type: boolean
+          nullable: true
+        marketType:
+          type: string
+          nullable: true
+        formatType:
+          type: string
+          nullable: true
+        lowerBoundDate:
+          type: string
+          nullable: true
+        upperBoundDate:
+          type: string
+          nullable: true
+        closed:
+          type: boolean
+          nullable: true
+        marketMakerAddress:
+          type: string
+        createdBy:
+          type: integer
+          nullable: true
+        updatedBy:
+          type: integer
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        closedTime:
+          type: string
+          nullable: true
+        wideFormat:
+          type: boolean
+          nullable: true
+        new:
+          type: boolean
+          nullable: true
+        mailchimpTag:
+          type: string
+          nullable: true
+        featured:
+          type: boolean
+          nullable: true
+        archived:
+          type: boolean
+          nullable: true
+        resolvedBy:
+          type: string
+          nullable: true
+        restricted:
+          type: boolean
+          nullable: true
+        marketGroup:
+          type: integer
+          nullable: true
+        groupItemTitle:
+          type: string
+          nullable: true
+        groupItemThreshold:
+          type: string
+          nullable: true
+        questionID:
+          type: string
+          nullable: true
+        umaEndDate:
+          type: string
+          nullable: true
+        enableOrderBook:
+          type: boolean
+          nullable: true
+        orderPriceMinTickSize:
+          type: number
+          nullable: true
+        orderMinSize:
+          type: number
+          nullable: true
+        umaResolutionStatus:
+          type: string
+          nullable: true
+        curationOrder:
+          type: integer
+          nullable: true
+        volumeNum:
+          type: number
+          nullable: true
+        liquidityNum:
+          type: number
+          nullable: true
+        endDateIso:
+          type: string
+          nullable: true
+        startDateIso:
+          type: string
+          nullable: true
+        umaEndDateIso:
+          type: string
+          nullable: true
+        hasReviewedDates:
+          type: boolean
+          nullable: true
+        readyForCron:
+          type: boolean
+          nullable: true
+        commentsEnabled:
+          type: boolean
+          nullable: true
+        volume24hr:
+          type: number
+          nullable: true
+        volume1wk:
+          type: number
+          nullable: true
+        volume1mo:
+          type: number
+          nullable: true
+        volume1yr:
+          type: number
+          nullable: true
+        gameStartTime:
+          type: string
+          nullable: true
+        secondsDelay:
+          type: integer
+          nullable: true
+        clobTokenIds:
+          type: string
+          nullable: true
+        disqusThread:
+          type: string
+          nullable: true
+        shortOutcomes:
+          type: string
+          nullable: true
+        teamAID:
+          type: string
+          nullable: true
+        teamBID:
+          type: string
+          nullable: true
+        umaBond:
+          type: string
+          nullable: true
+        umaReward:
+          type: string
+          nullable: true
+        fpmmLive:
+          type: boolean
+          nullable: true
+        volume24hrAmm:
+          type: number
+          nullable: true
+        volume1wkAmm:
+          type: number
+          nullable: true
+        volume1moAmm:
+          type: number
+          nullable: true
+        volume1yrAmm:
+          type: number
+          nullable: true
+        volume24hrClob:
+          type: number
+          nullable: true
+        volume1wkClob:
+          type: number
+          nullable: true
+        volume1moClob:
+          type: number
+          nullable: true
+        volume1yrClob:
+          type: number
+          nullable: true
+        volumeAmm:
+          type: number
+          nullable: true
+        volumeClob:
+          type: number
+          nullable: true
+        liquidityAmm:
+          type: number
+          nullable: true
+        liquidityClob:
+          type: number
+          nullable: true
+        makerBaseFee:
+          type: integer
+          nullable: true
+        takerBaseFee:
+          type: integer
+          nullable: true
+        customLiveness:
+          type: integer
+          nullable: true
+        acceptingOrders:
+          type: boolean
+          nullable: true
+        notificationsEnabled:
+          type: boolean
+          nullable: true
+        score:
+          type: integer
+          nullable: true
+        imageOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        iconOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/Event'
+        categories:
+          type: array
+          items:
+            $ref: '#/components/schemas/Category'
+        tags:
+          type: array
+          items:
+            $ref: '#/components/schemas/Tag'
+        creator:
+          type: string
+          nullable: true
+        ready:
+          type: boolean
+          nullable: true
+        funded:
+          type: boolean
+          nullable: true
+        pastSlugs:
+          type: string
+          nullable: true
+        readyTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        fundedTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        acceptingOrdersTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        competitive:
+          type: number
+          nullable: true
+        rewardsMinSize:
+          type: number
+          nullable: true
+        rewardsMaxSpread:
+          type: number
+          nullable: true
+        spread:
+          type: number
+          nullable: true
+        automaticallyResolved:
+          type: boolean
+          nullable: true
+        oneDayPriceChange:
+          type: number
+          nullable: true
+        oneHourPriceChange:
+          type: number
+          nullable: true
+        oneWeekPriceChange:
+          type: number
+          nullable: true
+        oneMonthPriceChange:
+          type: number
+          nullable: true
+        oneYearPriceChange:
+          type: number
+          nullable: true
+        lastTradePrice:
+          type: number
+          nullable: true
+        bestBid:
+          type: number
+          nullable: true
+        bestAsk:
+          type: number
+          nullable: true
+        automaticallyActive:
+          type: boolean
+          nullable: true
+        clearBookOnStart:
+          type: boolean
+          nullable: true
+        chartColor:
+          type: string
+          nullable: true
+        seriesColor:
+          type: string
+          nullable: true
+        showGmpSeries:
+          type: boolean
+          nullable: true
+        showGmpOutcome:
+          type: boolean
+          nullable: true
+        manualActivation:
+          type: boolean
+          nullable: true
+        negRiskOther:
+          type: boolean
+          nullable: true
+        gameId:
+          type: string
+          nullable: true
+        groupItemRange:
+          type: string
+          nullable: true
+        sportsMarketType:
+          type: string
+          nullable: true
+        line:
+          type: number
+          nullable: true
+        umaResolutionStatuses:
+          type: string
+          nullable: true
+        pendingDeployment:
+          type: boolean
+          nullable: true
+        deploying:
+          type: boolean
+          nullable: true
+        deployingTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        scheduledDeploymentTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        rfqEnabled:
+          type: boolean
+          nullable: true
+        eventStartTime:
+          type: string
+          format: date-time
+          nullable: true
+        feesEnabled:
+          type: boolean
+          nullable: true
+        feeSchedule:
+          $ref: '#/components/schemas/FeeSchedule'
+    Series:
+      type: object
+      properties:
+        id:
+          type: string
+        ticker:
+          type: string
+          nullable: true
+        slug:
+          type: string
+          nullable: true
+        title:
+          type: string
+          nullable: true
+        subtitle:
+          type: string
+          nullable: true
+        seriesType:
+          type: string
+          nullable: true
+        recurrence:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        image:
+          type: string
+          nullable: true
+        icon:
+          type: string
+          nullable: true
+        layout:
+          type: string
+          nullable: true
+        active:
+          type: boolean
+          nullable: true
+        closed:
+          type: boolean
+          nullable: true
+        archived:
+          type: boolean
+          nullable: true
+        new:
+          type: boolean
+          nullable: true
+        featured:
+          type: boolean
+          nullable: true
+        restricted:
+          type: boolean
+          nullable: true
+        isTemplate:
+          type: boolean
+          nullable: true
+        templateVariables:
+          type: boolean
+          nullable: true
+        publishedAt:
+          type: string
+          nullable: true
+        createdBy:
+          type: string
+          nullable: true
+        updatedBy:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        commentsEnabled:
+          type: boolean
+          nullable: true
+        competitive:
+          type: string
+          nullable: true
+        volume24hr:
+          type: number
+          nullable: true
+        volume:
+          type: number
+          nullable: true
+        liquidity:
+          type: number
+          nullable: true
+        startDate:
+          type: string
+          format: date-time
+          nullable: true
+        pythTokenID:
+          type: string
+          nullable: true
+        cgAssetName:
+          type: string
+          nullable: true
+        score:
+          type: integer
+          nullable: true
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/Event'
+        collections:
+          type: array
+          items:
+            $ref: '#/components/schemas/Collection'
+        categories:
+          type: array
+          items:
+            $ref: '#/components/schemas/Category'
+        tags:
+          type: array
+          items:
+            $ref: '#/components/schemas/Tag'
+        commentCount:
+          type: integer
+          nullable: true
+        chats:
+          type: array
+          items:
+            $ref: '#/components/schemas/Chat'
+    Category:
+      type: object
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+          nullable: true
+        parentCategory:
+          type: string
+          nullable: true
+        slug:
+          type: string
+          nullable: true
+        publishedAt:
+          type: string
+          nullable: true
+        createdBy:
+          type: string
+          nullable: true
+        updatedBy:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+    Collection:
+      type: object
+      properties:
+        id:
+          type: string
+        ticker:
+          type: string
+          nullable: true
+        slug:
+          type: string
+          nullable: true
+        title:
+          type: string
+          nullable: true
+        subtitle:
+          type: string
+          nullable: true
+        collectionType:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        tags:
+          type: string
+          nullable: true
+        image:
+          type: string
+          nullable: true
+        icon:
+          type: string
+          nullable: true
+        headerImage:
+          type: string
+          nullable: true
+        layout:
+          type: string
+          nullable: true
+        active:
+          type: boolean
+          nullable: true
+        closed:
+          type: boolean
+          nullable: true
+        archived:
+          type: boolean
+          nullable: true
+        new:
+          type: boolean
+          nullable: true
+        featured:
+          type: boolean
+          nullable: true
+        restricted:
+          type: boolean
+          nullable: true
+        isTemplate:
+          type: boolean
+          nullable: true
+        templateVariables:
+          type: string
+          nullable: true
+        publishedAt:
+          type: string
+          nullable: true
+        createdBy:
+          type: string
+          nullable: true
+        updatedBy:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        commentsEnabled:
+          type: boolean
+          nullable: true
+        imageOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        iconOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        headerImageOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+    Tag:
+      type: object
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+          nullable: true
+        slug:
+          type: string
+          nullable: true
+        forceShow:
+          type: boolean
+          nullable: true
+        publishedAt:
+          type: string
+          nullable: true
+        createdBy:
+          type: integer
+          nullable: true
+        updatedBy:
+          type: integer
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        forceHide:
+          type: boolean
+          nullable: true
+        isCarousel:
+          type: boolean
+          nullable: true
+    EventCreator:
+      type: object
+      properties:
+        id:
+          type: string
+        creatorName:
+          type: string
+          nullable: true
+        creatorHandle:
+          type: string
+          nullable: true
+        creatorUrl:
+          type: string
+          nullable: true
+        creatorImage:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+    Chat:
+      type: object
+      properties:
+        id:
+          type: string
+        channelId:
+          type: string
+          nullable: true
+        channelName:
+          type: string
+          nullable: true
+        channelImage:
+          type: string
+          nullable: true
+        live:
+          type: boolean
+          nullable: true
+        startTime:
+          type: string
+          format: date-time
+          nullable: true
+        endTime:
+          type: string
+          format: date-time
+          nullable: true
+    Template:
+      type: object
+      properties:
+        id:
+          type: string
+        eventTitle:
+          type: string
+          nullable: true
+        eventSlug:
+          type: string
+          nullable: true
+        eventImage:
+          type: string
+          nullable: true
+        marketTitle:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        resolutionSource:
+          type: string
+          nullable: true
+        negRisk:
+          type: boolean
+          nullable: true
+        sortBy:
+          type: string
+          nullable: true
+        showMarketImages:
+          type: boolean
+          nullable: true
+        seriesSlug:
+          type: string
+          nullable: true
+        outcomes:
+          type: string
+          nullable: true
+    FeeSchedule:
+      type: object
+      properties:
+        exponent:
+          type: number
+          nullable: true
+        rate:
+          type: number
+          nullable: true
+        takerOnly:
+          type: boolean
+          nullable: true
+        rebateRate:
+          type: number
+          nullable: true
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# List tags
+
+
+
+## OpenAPI
+
+````yaml /api-spec/gamma-openapi.yaml get /tags
+openapi: 3.0.3
+info:
+  title: Markets API
+  version: 1.0.0
+  description: REST API specification for public endpoints used by the Markets service.
+servers:
+  - url: https://gamma-api.polymarket.com
+    description: Polymarket Gamma API Production Server
+security: []
+tags:
+  - name: Gamma Status
+    description: Gamma API status and health check
+  - name: Sports
+    description: Sports-related endpoints including teams and game data
+  - name: Tags
+    description: Tag management and related tag operations
+  - name: Events
+    description: Event management and event-related operations
+  - name: Markets
+    description: Market data and market-related operations
+  - name: Comments
+    description: Comment system and user interactions
+  - name: Series
+    description: Series management and related operations
+  - name: Profiles
+    description: User profile management
+  - name: Search
+    description: Search functionality across different entity types
+paths:
+  /tags:
+    get:
+      tags:
+        - Tags
+      summary: List tags
+      operationId: listTags
+      parameters:
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
+        - $ref: '#/components/parameters/order'
+        - $ref: '#/components/parameters/ascending'
+        - name: include_template
+          in: query
+          schema:
+            type: boolean
+        - name: is_carousel
+          in: query
+          schema:
+            type: boolean
+      responses:
+        '200':
+          description: List of tags
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Tag'
+components:
+  parameters:
+    limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        minimum: 0
+    offset:
+      name: offset
+      in: query
+      schema:
+        type: integer
+        minimum: 0
+    order:
+      name: order
+      in: query
+      schema:
+        type: string
+      description: Comma-separated list of fields to order by
+    ascending:
+      name: ascending
+      in: query
+      schema:
+        type: boolean
+  schemas:
+    Tag:
+      type: object
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+          nullable: true
+        slug:
+          type: string
+          nullable: true
+        forceShow:
+          type: boolean
+          nullable: true
+        publishedAt:
+          type: string
+          nullable: true
+        createdBy:
+          type: integer
+          nullable: true
+        updatedBy:
+          type: integer
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        forceHide:
+          type: boolean
+          nullable: true
+        isCarousel:
+          type: boolean
+          nullable: true
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Get tag by id
+
+
+
+## OpenAPI
+
+````yaml /api-spec/gamma-openapi.yaml get /tags/{id}
+openapi: 3.0.3
+info:
+  title: Markets API
+  version: 1.0.0
+  description: REST API specification for public endpoints used by the Markets service.
+servers:
+  - url: https://gamma-api.polymarket.com
+    description: Polymarket Gamma API Production Server
+security: []
+tags:
+  - name: Gamma Status
+    description: Gamma API status and health check
+  - name: Sports
+    description: Sports-related endpoints including teams and game data
+  - name: Tags
+    description: Tag management and related tag operations
+  - name: Events
+    description: Event management and event-related operations
+  - name: Markets
+    description: Market data and market-related operations
+  - name: Comments
+    description: Comment system and user interactions
+  - name: Series
+    description: Series management and related operations
+  - name: Profiles
+    description: User profile management
+  - name: Search
+    description: Search functionality across different entity types
+paths:
+  /tags/{id}:
+    get:
+      tags:
+        - Tags
+      summary: Get tag by id
+      operationId: getTag
+      parameters:
+        - $ref: '#/components/parameters/pathId'
+        - name: include_template
+          in: query
+          schema:
+            type: boolean
+      responses:
+        '200':
+          description: Tag
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Tag'
+        '404':
+          description: Not found
+components:
+  parameters:
+    pathId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: integer
+  schemas:
+    Tag:
+      type: object
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+          nullable: true
+        slug:
+          type: string
+          nullable: true
+        forceShow:
+          type: boolean
+          nullable: true
+        publishedAt:
+          type: string
+          nullable: true
+        createdBy:
+          type: integer
+          nullable: true
+        updatedBy:
+          type: integer
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        forceHide:
+          type: boolean
+          nullable: true
+        isCarousel:
+          type: boolean
+          nullable: true
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Get tag by slug
+
+
+
+## OpenAPI
+
+````yaml /api-spec/gamma-openapi.yaml get /tags/slug/{slug}
+openapi: 3.0.3
+info:
+  title: Markets API
+  version: 1.0.0
+  description: REST API specification for public endpoints used by the Markets service.
+servers:
+  - url: https://gamma-api.polymarket.com
+    description: Polymarket Gamma API Production Server
+security: []
+tags:
+  - name: Gamma Status
+    description: Gamma API status and health check
+  - name: Sports
+    description: Sports-related endpoints including teams and game data
+  - name: Tags
+    description: Tag management and related tag operations
+  - name: Events
+    description: Event management and event-related operations
+  - name: Markets
+    description: Market data and market-related operations
+  - name: Comments
+    description: Comment system and user interactions
+  - name: Series
+    description: Series management and related operations
+  - name: Profiles
+    description: User profile management
+  - name: Search
+    description: Search functionality across different entity types
+paths:
+  /tags/slug/{slug}:
+    get:
+      tags:
+        - Tags
+      summary: Get tag by slug
+      operationId: getTagBySlug
+      parameters:
+        - $ref: '#/components/parameters/pathSlug'
+        - name: include_template
+          in: query
+          schema:
+            type: boolean
+      responses:
+        '200':
+          description: Tag
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Tag'
+        '404':
+          description: Not found
+components:
+  parameters:
+    pathSlug:
+      name: slug
+      in: path
+      required: true
+      schema:
+        type: string
+  schemas:
+    Tag:
+      type: object
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+          nullable: true
+        slug:
+          type: string
+          nullable: true
+        forceShow:
+          type: boolean
+          nullable: true
+        publishedAt:
+          type: string
+          nullable: true
+        createdBy:
+          type: integer
+          nullable: true
+        updatedBy:
+          type: integer
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        forceHide:
+          type: boolean
+          nullable: true
+        isCarousel:
+          type: boolean
+          nullable: true
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Get related tags (relationships) by tag id
+
+
+
+## OpenAPI
+
+````yaml /api-spec/gamma-openapi.yaml get /tags/{id}/related-tags
+openapi: 3.0.3
+info:
+  title: Markets API
+  version: 1.0.0
+  description: REST API specification for public endpoints used by the Markets service.
+servers:
+  - url: https://gamma-api.polymarket.com
+    description: Polymarket Gamma API Production Server
+security: []
+tags:
+  - name: Gamma Status
+    description: Gamma API status and health check
+  - name: Sports
+    description: Sports-related endpoints including teams and game data
+  - name: Tags
+    description: Tag management and related tag operations
+  - name: Events
+    description: Event management and event-related operations
+  - name: Markets
+    description: Market data and market-related operations
+  - name: Comments
+    description: Comment system and user interactions
+  - name: Series
+    description: Series management and related operations
+  - name: Profiles
+    description: User profile management
+  - name: Search
+    description: Search functionality across different entity types
+paths:
+  /tags/{id}/related-tags:
+    get:
+      tags:
+        - Tags
+      summary: Get related tags (relationships) by tag id
+      operationId: getRelatedTagsById
+      parameters:
+        - $ref: '#/components/parameters/pathId'
+        - name: omit_empty
+          in: query
+          schema:
+            type: boolean
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum:
+              - active
+              - closed
+              - all
+      responses:
+        '200':
+          description: Related tag relationships
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/RelatedTag'
+components:
+  parameters:
+    pathId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: integer
+  schemas:
+    RelatedTag:
+      type: object
+      properties:
+        id:
+          type: string
+        tagID:
+          type: integer
+          nullable: true
+        relatedTagID:
+          type: integer
+          nullable: true
+        rank:
+          type: integer
+          nullable: true
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Get related tags (relationships) by tag slug
+
+
+
+## OpenAPI
+
+````yaml /api-spec/gamma-openapi.yaml get /tags/slug/{slug}/related-tags
+openapi: 3.0.3
+info:
+  title: Markets API
+  version: 1.0.0
+  description: REST API specification for public endpoints used by the Markets service.
+servers:
+  - url: https://gamma-api.polymarket.com
+    description: Polymarket Gamma API Production Server
+security: []
+tags:
+  - name: Gamma Status
+    description: Gamma API status and health check
+  - name: Sports
+    description: Sports-related endpoints including teams and game data
+  - name: Tags
+    description: Tag management and related tag operations
+  - name: Events
+    description: Event management and event-related operations
+  - name: Markets
+    description: Market data and market-related operations
+  - name: Comments
+    description: Comment system and user interactions
+  - name: Series
+    description: Series management and related operations
+  - name: Profiles
+    description: User profile management
+  - name: Search
+    description: Search functionality across different entity types
+paths:
+  /tags/slug/{slug}/related-tags:
+    get:
+      tags:
+        - Tags
+      summary: Get related tags (relationships) by tag slug
+      operationId: getRelatedTagsBySlug
+      parameters:
+        - $ref: '#/components/parameters/pathSlug'
+        - name: omit_empty
+          in: query
+          schema:
+            type: boolean
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum:
+              - active
+              - closed
+              - all
+      responses:
+        '200':
+          description: Related tag relationships
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/RelatedTag'
+components:
+  parameters:
+    pathSlug:
+      name: slug
+      in: path
+      required: true
+      schema:
+        type: string
+  schemas:
+    RelatedTag:
+      type: object
+      properties:
+        id:
+          type: string
+        tagID:
+          type: integer
+          nullable: true
+        relatedTagID:
+          type: integer
+          nullable: true
+        rank:
+          type: integer
+          nullable: true
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Get tags related to a tag id
+
+
+
+## OpenAPI
+
+````yaml /api-spec/gamma-openapi.yaml get /tags/{id}/related-tags/tags
+openapi: 3.0.3
+info:
+  title: Markets API
+  version: 1.0.0
+  description: REST API specification for public endpoints used by the Markets service.
+servers:
+  - url: https://gamma-api.polymarket.com
+    description: Polymarket Gamma API Production Server
+security: []
+tags:
+  - name: Gamma Status
+    description: Gamma API status and health check
+  - name: Sports
+    description: Sports-related endpoints including teams and game data
+  - name: Tags
+    description: Tag management and related tag operations
+  - name: Events
+    description: Event management and event-related operations
+  - name: Markets
+    description: Market data and market-related operations
+  - name: Comments
+    description: Comment system and user interactions
+  - name: Series
+    description: Series management and related operations
+  - name: Profiles
+    description: User profile management
+  - name: Search
+    description: Search functionality across different entity types
+paths:
+  /tags/{id}/related-tags/tags:
+    get:
+      tags:
+        - Tags
+      summary: Get tags related to a tag id
+      operationId: getTagsRelatedToATagById
+      parameters:
+        - $ref: '#/components/parameters/pathId'
+        - name: omit_empty
+          in: query
+          schema:
+            type: boolean
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum:
+              - active
+              - closed
+              - all
+      responses:
+        '200':
+          description: Related tags
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Tag'
+components:
+  parameters:
+    pathId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: integer
+  schemas:
+    Tag:
+      type: object
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+          nullable: true
+        slug:
+          type: string
+          nullable: true
+        forceShow:
+          type: boolean
+          nullable: true
+        publishedAt:
+          type: string
+          nullable: true
+        createdBy:
+          type: integer
+          nullable: true
+        updatedBy:
+          type: integer
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        forceHide:
+          type: boolean
+          nullable: true
+        isCarousel:
+          type: boolean
+          nullable: true
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Get tags related to a tag slug
+
+
+
+## OpenAPI
+
+````yaml /api-spec/gamma-openapi.yaml get /tags/slug/{slug}/related-tags/tags
+openapi: 3.0.3
+info:
+  title: Markets API
+  version: 1.0.0
+  description: REST API specification for public endpoints used by the Markets service.
+servers:
+  - url: https://gamma-api.polymarket.com
+    description: Polymarket Gamma API Production Server
+security: []
+tags:
+  - name: Gamma Status
+    description: Gamma API status and health check
+  - name: Sports
+    description: Sports-related endpoints including teams and game data
+  - name: Tags
+    description: Tag management and related tag operations
+  - name: Events
+    description: Event management and event-related operations
+  - name: Markets
+    description: Market data and market-related operations
+  - name: Comments
+    description: Comment system and user interactions
+  - name: Series
+    description: Series management and related operations
+  - name: Profiles
+    description: User profile management
+  - name: Search
+    description: Search functionality across different entity types
+paths:
+  /tags/slug/{slug}/related-tags/tags:
+    get:
+      tags:
+        - Tags
+      summary: Get tags related to a tag slug
+      operationId: getTagsRelatedToATagBySlug
+      parameters:
+        - $ref: '#/components/parameters/pathSlug'
+        - name: omit_empty
+          in: query
+          schema:
+            type: boolean
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum:
+              - active
+              - closed
+              - all
+      responses:
+        '200':
+          description: Related tags
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Tag'
+components:
+  parameters:
+    pathSlug:
+      name: slug
+      in: path
+      required: true
+      schema:
+        type: string
+  schemas:
+    Tag:
+      type: object
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+          nullable: true
+        slug:
+          type: string
+          nullable: true
+        forceShow:
+          type: boolean
+          nullable: true
+        publishedAt:
+          type: string
+          nullable: true
+        createdBy:
+          type: integer
+          nullable: true
+        updatedBy:
+          type: integer
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        forceHide:
+          type: boolean
+          nullable: true
+        isCarousel:
+          type: boolean
+          nullable: true
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# List series
+
+
+
+## OpenAPI
+
+````yaml /api-spec/gamma-openapi.yaml get /series
+openapi: 3.0.3
+info:
+  title: Markets API
+  version: 1.0.0
+  description: REST API specification for public endpoints used by the Markets service.
+servers:
+  - url: https://gamma-api.polymarket.com
+    description: Polymarket Gamma API Production Server
+security: []
+tags:
+  - name: Gamma Status
+    description: Gamma API status and health check
+  - name: Sports
+    description: Sports-related endpoints including teams and game data
+  - name: Tags
+    description: Tag management and related tag operations
+  - name: Events
+    description: Event management and event-related operations
+  - name: Markets
+    description: Market data and market-related operations
+  - name: Comments
+    description: Comment system and user interactions
+  - name: Series
+    description: Series management and related operations
+  - name: Profiles
+    description: User profile management
+  - name: Search
+    description: Search functionality across different entity types
+paths:
+  /series:
+    get:
+      tags:
+        - Series
+      summary: List series
+      operationId: listSeries
+      parameters:
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
+        - $ref: '#/components/parameters/order'
+        - $ref: '#/components/parameters/ascending'
+        - name: slug
+          in: query
+          schema:
+            type: array
+            items:
+              type: string
+        - name: categories_ids
+          in: query
+          schema:
+            type: array
+            items:
+              type: integer
+        - name: categories_labels
+          in: query
+          schema:
+            type: array
+            items:
+              type: string
+        - name: closed
+          in: query
+          schema:
+            type: boolean
+        - name: include_chat
+          in: query
+          schema:
+            type: boolean
+        - name: recurrence
+          in: query
+          schema:
+            type: string
+        - name: exclude_events
+          in: query
+          schema:
+            type: boolean
+      responses:
+        '200':
+          description: List of series
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Series'
+components:
+  parameters:
+    limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        minimum: 0
+    offset:
+      name: offset
+      in: query
+      schema:
+        type: integer
+        minimum: 0
+    order:
+      name: order
+      in: query
+      schema:
+        type: string
+      description: Comma-separated list of fields to order by
+    ascending:
+      name: ascending
+      in: query
+      schema:
+        type: boolean
+  schemas:
+    Series:
+      type: object
+      properties:
+        id:
+          type: string
+        ticker:
+          type: string
+          nullable: true
+        slug:
+          type: string
+          nullable: true
+        title:
+          type: string
+          nullable: true
+        subtitle:
+          type: string
+          nullable: true
+        seriesType:
+          type: string
+          nullable: true
+        recurrence:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        image:
+          type: string
+          nullable: true
+        icon:
+          type: string
+          nullable: true
+        layout:
+          type: string
+          nullable: true
+        active:
+          type: boolean
+          nullable: true
+        closed:
+          type: boolean
+          nullable: true
+        archived:
+          type: boolean
+          nullable: true
+        new:
+          type: boolean
+          nullable: true
+        featured:
+          type: boolean
+          nullable: true
+        restricted:
+          type: boolean
+          nullable: true
+        isTemplate:
+          type: boolean
+          nullable: true
+        templateVariables:
+          type: boolean
+          nullable: true
+        publishedAt:
+          type: string
+          nullable: true
+        createdBy:
+          type: string
+          nullable: true
+        updatedBy:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        commentsEnabled:
+          type: boolean
+          nullable: true
+        competitive:
+          type: string
+          nullable: true
+        volume24hr:
+          type: number
+          nullable: true
+        volume:
+          type: number
+          nullable: true
+        liquidity:
+          type: number
+          nullable: true
+        startDate:
+          type: string
+          format: date-time
+          nullable: true
+        pythTokenID:
+          type: string
+          nullable: true
+        cgAssetName:
+          type: string
+          nullable: true
+        score:
+          type: integer
+          nullable: true
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/Event'
+        collections:
+          type: array
+          items:
+            $ref: '#/components/schemas/Collection'
+        categories:
+          type: array
+          items:
+            $ref: '#/components/schemas/Category'
+        tags:
+          type: array
+          items:
+            $ref: '#/components/schemas/Tag'
+        commentCount:
+          type: integer
+          nullable: true
+        chats:
+          type: array
+          items:
+            $ref: '#/components/schemas/Chat'
+    Event:
+      type: object
+      properties:
+        id:
+          type: string
+        ticker:
+          type: string
+          nullable: true
+        slug:
+          type: string
+          nullable: true
+        title:
+          type: string
+          nullable: true
+        subtitle:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        resolutionSource:
+          type: string
+          nullable: true
+        startDate:
+          type: string
+          format: date-time
+          nullable: true
+        creationDate:
+          type: string
+          format: date-time
+          nullable: true
+        endDate:
+          type: string
+          format: date-time
+          nullable: true
+        image:
+          type: string
+          nullable: true
+        icon:
+          type: string
+          nullable: true
+        active:
+          type: boolean
+          nullable: true
+        closed:
+          type: boolean
+          nullable: true
+        archived:
+          type: boolean
+          nullable: true
+        new:
+          type: boolean
+          nullable: true
+        featured:
+          type: boolean
+          nullable: true
+        restricted:
+          type: boolean
+          nullable: true
+        liquidity:
+          type: number
+          nullable: true
+        volume:
+          type: number
+          nullable: true
+        openInterest:
+          type: number
+          nullable: true
+        sortBy:
+          type: string
+          nullable: true
+        category:
+          type: string
+          nullable: true
+        subcategory:
+          type: string
+          nullable: true
+        isTemplate:
+          type: boolean
+          nullable: true
+        templateVariables:
+          type: string
+          nullable: true
+        published_at:
+          type: string
+          nullable: true
+        createdBy:
+          type: string
+          nullable: true
+        updatedBy:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        commentsEnabled:
+          type: boolean
+          nullable: true
+        competitive:
+          type: number
+          nullable: true
+        volume24hr:
+          type: number
+          nullable: true
+        volume1wk:
+          type: number
+          nullable: true
+        volume1mo:
+          type: number
+          nullable: true
+        volume1yr:
+          type: number
+          nullable: true
+        featuredImage:
+          type: string
+          nullable: true
+        disqusThread:
+          type: string
+          nullable: true
+        parentEvent:
+          type: string
+          nullable: true
+        enableOrderBook:
+          type: boolean
+          nullable: true
+        liquidityAmm:
+          type: number
+          nullable: true
+        liquidityClob:
+          type: number
+          nullable: true
+        negRisk:
+          type: boolean
+          nullable: true
+        negRiskMarketID:
+          type: string
+          nullable: true
+        negRiskFeeBips:
+          type: integer
+          nullable: true
+        commentCount:
+          type: integer
+          nullable: true
+        imageOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        iconOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        featuredImageOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        subEvents:
+          type: array
+          items:
+            type: string
+          nullable: true
+        markets:
+          type: array
+          items:
+            $ref: '#/components/schemas/Market'
+        series:
+          type: array
+          items:
+            $ref: '#/components/schemas/Series'
+        categories:
+          type: array
+          items:
+            $ref: '#/components/schemas/Category'
+        collections:
+          type: array
+          items:
+            $ref: '#/components/schemas/Collection'
+        tags:
+          type: array
+          items:
+            $ref: '#/components/schemas/Tag'
+        cyom:
+          type: boolean
+          nullable: true
+        closedTime:
+          type: string
+          format: date-time
+          nullable: true
+        showAllOutcomes:
+          type: boolean
+          nullable: true
+        showMarketImages:
+          type: boolean
+          nullable: true
+        automaticallyResolved:
+          type: boolean
+          nullable: true
+        enableNegRisk:
+          type: boolean
+          nullable: true
+        automaticallyActive:
+          type: boolean
+          nullable: true
+        eventDate:
+          type: string
+          nullable: true
+        startTime:
+          type: string
+          format: date-time
+          nullable: true
+        eventWeek:
+          type: integer
+          nullable: true
+        seriesSlug:
+          type: string
+          nullable: true
+        score:
+          type: string
+          nullable: true
+        elapsed:
+          type: string
+          nullable: true
+        period:
+          type: string
+          nullable: true
+        live:
+          type: boolean
+          nullable: true
+        ended:
+          type: boolean
+          nullable: true
+        finishedTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        gmpChartMode:
+          type: string
+          nullable: true
+        eventCreators:
+          type: array
+          items:
+            $ref: '#/components/schemas/EventCreator'
+        tweetCount:
+          type: integer
+          nullable: true
+        chats:
+          type: array
+          items:
+            $ref: '#/components/schemas/Chat'
+        featuredOrder:
+          type: integer
+          nullable: true
+        estimateValue:
+          type: boolean
+          nullable: true
+        cantEstimate:
+          type: boolean
+          nullable: true
+        estimatedValue:
+          type: string
+          nullable: true
+        templates:
+          type: array
+          items:
+            $ref: '#/components/schemas/Template'
+        spreadsMainLine:
+          type: number
+          nullable: true
+        totalsMainLine:
+          type: number
+          nullable: true
+        carouselMap:
+          type: string
+          nullable: true
+        pendingDeployment:
+          type: boolean
+          nullable: true
+        deploying:
+          type: boolean
+          nullable: true
+        deployingTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        scheduledDeploymentTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        gameStatus:
+          type: string
+          nullable: true
+    Collection:
+      type: object
+      properties:
+        id:
+          type: string
+        ticker:
+          type: string
+          nullable: true
+        slug:
+          type: string
+          nullable: true
+        title:
+          type: string
+          nullable: true
+        subtitle:
+          type: string
+          nullable: true
+        collectionType:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        tags:
+          type: string
+          nullable: true
+        image:
+          type: string
+          nullable: true
+        icon:
+          type: string
+          nullable: true
+        headerImage:
+          type: string
+          nullable: true
+        layout:
+          type: string
+          nullable: true
+        active:
+          type: boolean
+          nullable: true
+        closed:
+          type: boolean
+          nullable: true
+        archived:
+          type: boolean
+          nullable: true
+        new:
+          type: boolean
+          nullable: true
+        featured:
+          type: boolean
+          nullable: true
+        restricted:
+          type: boolean
+          nullable: true
+        isTemplate:
+          type: boolean
+          nullable: true
+        templateVariables:
+          type: string
+          nullable: true
+        publishedAt:
+          type: string
+          nullable: true
+        createdBy:
+          type: string
+          nullable: true
+        updatedBy:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        commentsEnabled:
+          type: boolean
+          nullable: true
+        imageOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        iconOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        headerImageOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+    Category:
+      type: object
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+          nullable: true
+        parentCategory:
+          type: string
+          nullable: true
+        slug:
+          type: string
+          nullable: true
+        publishedAt:
+          type: string
+          nullable: true
+        createdBy:
+          type: string
+          nullable: true
+        updatedBy:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+    Tag:
+      type: object
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+          nullable: true
+        slug:
+          type: string
+          nullable: true
+        forceShow:
+          type: boolean
+          nullable: true
+        publishedAt:
+          type: string
+          nullable: true
+        createdBy:
+          type: integer
+          nullable: true
+        updatedBy:
+          type: integer
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        forceHide:
+          type: boolean
+          nullable: true
+        isCarousel:
+          type: boolean
+          nullable: true
+    Chat:
+      type: object
+      properties:
+        id:
+          type: string
+        channelId:
+          type: string
+          nullable: true
+        channelName:
+          type: string
+          nullable: true
+        channelImage:
+          type: string
+          nullable: true
+        live:
+          type: boolean
+          nullable: true
+        startTime:
+          type: string
+          format: date-time
+          nullable: true
+        endTime:
+          type: string
+          format: date-time
+          nullable: true
+    ImageOptimization:
+      type: object
+      properties:
+        id:
+          type: string
+        imageUrlSource:
+          type: string
+          nullable: true
+        imageUrlOptimized:
+          type: string
+          nullable: true
+        imageSizeKbSource:
+          type: number
+          nullable: true
+        imageSizeKbOptimized:
+          type: number
+          nullable: true
+        imageOptimizedComplete:
+          type: boolean
+          nullable: true
+        imageOptimizedLastUpdated:
+          type: string
+          nullable: true
+        relID:
+          type: integer
+          nullable: true
+        field:
+          type: string
+          nullable: true
+        relname:
+          type: string
+          nullable: true
+    Market:
+      type: object
+      properties:
+        id:
+          type: string
+        question:
+          type: string
+          nullable: true
+        conditionId:
+          type: string
+        slug:
+          type: string
+          nullable: true
+        twitterCardImage:
+          type: string
+          nullable: true
+        resolutionSource:
+          type: string
+          nullable: true
+        endDate:
+          type: string
+          format: date-time
+          nullable: true
+        category:
+          type: string
+          nullable: true
+        ammType:
+          type: string
+          nullable: true
+        liquidity:
+          type: string
+          nullable: true
+        sponsorName:
+          type: string
+          nullable: true
+        sponsorImage:
+          type: string
+          nullable: true
+        startDate:
+          type: string
+          format: date-time
+          nullable: true
+        xAxisValue:
+          type: string
+          nullable: true
+        yAxisValue:
+          type: string
+          nullable: true
+        denominationToken:
+          type: string
+          nullable: true
+        fee:
+          type: string
+          nullable: true
+        image:
+          type: string
+          nullable: true
+        icon:
+          type: string
+          nullable: true
+        lowerBound:
+          type: string
+          nullable: true
+        upperBound:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        outcomes:
+          type: string
+          nullable: true
+        outcomePrices:
+          type: string
+          nullable: true
+        volume:
+          type: string
+          nullable: true
+        active:
+          type: boolean
+          nullable: true
+        marketType:
+          type: string
+          nullable: true
+        formatType:
+          type: string
+          nullable: true
+        lowerBoundDate:
+          type: string
+          nullable: true
+        upperBoundDate:
+          type: string
+          nullable: true
+        closed:
+          type: boolean
+          nullable: true
+        marketMakerAddress:
+          type: string
+        createdBy:
+          type: integer
+          nullable: true
+        updatedBy:
+          type: integer
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        closedTime:
+          type: string
+          nullable: true
+        wideFormat:
+          type: boolean
+          nullable: true
+        new:
+          type: boolean
+          nullable: true
+        mailchimpTag:
+          type: string
+          nullable: true
+        featured:
+          type: boolean
+          nullable: true
+        archived:
+          type: boolean
+          nullable: true
+        resolvedBy:
+          type: string
+          nullable: true
+        restricted:
+          type: boolean
+          nullable: true
+        marketGroup:
+          type: integer
+          nullable: true
+        groupItemTitle:
+          type: string
+          nullable: true
+        groupItemThreshold:
+          type: string
+          nullable: true
+        questionID:
+          type: string
+          nullable: true
+        umaEndDate:
+          type: string
+          nullable: true
+        enableOrderBook:
+          type: boolean
+          nullable: true
+        orderPriceMinTickSize:
+          type: number
+          nullable: true
+        orderMinSize:
+          type: number
+          nullable: true
+        umaResolutionStatus:
+          type: string
+          nullable: true
+        curationOrder:
+          type: integer
+          nullable: true
+        volumeNum:
+          type: number
+          nullable: true
+        liquidityNum:
+          type: number
+          nullable: true
+        endDateIso:
+          type: string
+          nullable: true
+        startDateIso:
+          type: string
+          nullable: true
+        umaEndDateIso:
+          type: string
+          nullable: true
+        hasReviewedDates:
+          type: boolean
+          nullable: true
+        readyForCron:
+          type: boolean
+          nullable: true
+        commentsEnabled:
+          type: boolean
+          nullable: true
+        volume24hr:
+          type: number
+          nullable: true
+        volume1wk:
+          type: number
+          nullable: true
+        volume1mo:
+          type: number
+          nullable: true
+        volume1yr:
+          type: number
+          nullable: true
+        gameStartTime:
+          type: string
+          nullable: true
+        secondsDelay:
+          type: integer
+          nullable: true
+        clobTokenIds:
+          type: string
+          nullable: true
+        disqusThread:
+          type: string
+          nullable: true
+        shortOutcomes:
+          type: string
+          nullable: true
+        teamAID:
+          type: string
+          nullable: true
+        teamBID:
+          type: string
+          nullable: true
+        umaBond:
+          type: string
+          nullable: true
+        umaReward:
+          type: string
+          nullable: true
+        fpmmLive:
+          type: boolean
+          nullable: true
+        volume24hrAmm:
+          type: number
+          nullable: true
+        volume1wkAmm:
+          type: number
+          nullable: true
+        volume1moAmm:
+          type: number
+          nullable: true
+        volume1yrAmm:
+          type: number
+          nullable: true
+        volume24hrClob:
+          type: number
+          nullable: true
+        volume1wkClob:
+          type: number
+          nullable: true
+        volume1moClob:
+          type: number
+          nullable: true
+        volume1yrClob:
+          type: number
+          nullable: true
+        volumeAmm:
+          type: number
+          nullable: true
+        volumeClob:
+          type: number
+          nullable: true
+        liquidityAmm:
+          type: number
+          nullable: true
+        liquidityClob:
+          type: number
+          nullable: true
+        makerBaseFee:
+          type: integer
+          nullable: true
+        takerBaseFee:
+          type: integer
+          nullable: true
+        customLiveness:
+          type: integer
+          nullable: true
+        acceptingOrders:
+          type: boolean
+          nullable: true
+        notificationsEnabled:
+          type: boolean
+          nullable: true
+        score:
+          type: integer
+          nullable: true
+        imageOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        iconOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/Event'
+        categories:
+          type: array
+          items:
+            $ref: '#/components/schemas/Category'
+        tags:
+          type: array
+          items:
+            $ref: '#/components/schemas/Tag'
+        creator:
+          type: string
+          nullable: true
+        ready:
+          type: boolean
+          nullable: true
+        funded:
+          type: boolean
+          nullable: true
+        pastSlugs:
+          type: string
+          nullable: true
+        readyTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        fundedTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        acceptingOrdersTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        competitive:
+          type: number
+          nullable: true
+        rewardsMinSize:
+          type: number
+          nullable: true
+        rewardsMaxSpread:
+          type: number
+          nullable: true
+        spread:
+          type: number
+          nullable: true
+        automaticallyResolved:
+          type: boolean
+          nullable: true
+        oneDayPriceChange:
+          type: number
+          nullable: true
+        oneHourPriceChange:
+          type: number
+          nullable: true
+        oneWeekPriceChange:
+          type: number
+          nullable: true
+        oneMonthPriceChange:
+          type: number
+          nullable: true
+        oneYearPriceChange:
+          type: number
+          nullable: true
+        lastTradePrice:
+          type: number
+          nullable: true
+        bestBid:
+          type: number
+          nullable: true
+        bestAsk:
+          type: number
+          nullable: true
+        automaticallyActive:
+          type: boolean
+          nullable: true
+        clearBookOnStart:
+          type: boolean
+          nullable: true
+        chartColor:
+          type: string
+          nullable: true
+        seriesColor:
+          type: string
+          nullable: true
+        showGmpSeries:
+          type: boolean
+          nullable: true
+        showGmpOutcome:
+          type: boolean
+          nullable: true
+        manualActivation:
+          type: boolean
+          nullable: true
+        negRiskOther:
+          type: boolean
+          nullable: true
+        gameId:
+          type: string
+          nullable: true
+        groupItemRange:
+          type: string
+          nullable: true
+        sportsMarketType:
+          type: string
+          nullable: true
+        line:
+          type: number
+          nullable: true
+        umaResolutionStatuses:
+          type: string
+          nullable: true
+        pendingDeployment:
+          type: boolean
+          nullable: true
+        deploying:
+          type: boolean
+          nullable: true
+        deployingTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        scheduledDeploymentTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        rfqEnabled:
+          type: boolean
+          nullable: true
+        eventStartTime:
+          type: string
+          format: date-time
+          nullable: true
+        feesEnabled:
+          type: boolean
+          nullable: true
+        feeSchedule:
+          $ref: '#/components/schemas/FeeSchedule'
+    EventCreator:
+      type: object
+      properties:
+        id:
+          type: string
+        creatorName:
+          type: string
+          nullable: true
+        creatorHandle:
+          type: string
+          nullable: true
+        creatorUrl:
+          type: string
+          nullable: true
+        creatorImage:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+    Template:
+      type: object
+      properties:
+        id:
+          type: string
+        eventTitle:
+          type: string
+          nullable: true
+        eventSlug:
+          type: string
+          nullable: true
+        eventImage:
+          type: string
+          nullable: true
+        marketTitle:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        resolutionSource:
+          type: string
+          nullable: true
+        negRisk:
+          type: boolean
+          nullable: true
+        sortBy:
+          type: string
+          nullable: true
+        showMarketImages:
+          type: boolean
+          nullable: true
+        seriesSlug:
+          type: string
+          nullable: true
+        outcomes:
+          type: string
+          nullable: true
+    FeeSchedule:
+      type: object
+      properties:
+        exponent:
+          type: number
+          nullable: true
+        rate:
+          type: number
+          nullable: true
+        takerOnly:
+          type: boolean
+          nullable: true
+        rebateRate:
+          type: number
+          nullable: true
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Get series by id
+
+
+
+## OpenAPI
+
+````yaml /api-spec/gamma-openapi.yaml get /series/{id}
+openapi: 3.0.3
+info:
+  title: Markets API
+  version: 1.0.0
+  description: REST API specification for public endpoints used by the Markets service.
+servers:
+  - url: https://gamma-api.polymarket.com
+    description: Polymarket Gamma API Production Server
+security: []
+tags:
+  - name: Gamma Status
+    description: Gamma API status and health check
+  - name: Sports
+    description: Sports-related endpoints including teams and game data
+  - name: Tags
+    description: Tag management and related tag operations
+  - name: Events
+    description: Event management and event-related operations
+  - name: Markets
+    description: Market data and market-related operations
+  - name: Comments
+    description: Comment system and user interactions
+  - name: Series
+    description: Series management and related operations
+  - name: Profiles
+    description: User profile management
+  - name: Search
+    description: Search functionality across different entity types
+paths:
+  /series/{id}:
+    get:
+      tags:
+        - Series
+      summary: Get series by id
+      operationId: getSeries
+      parameters:
+        - $ref: '#/components/parameters/pathId'
+        - name: include_chat
+          in: query
+          schema:
+            type: boolean
+      responses:
+        '200':
+          description: Series
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Series'
+        '404':
+          description: Not found
+components:
+  parameters:
+    pathId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: integer
+  schemas:
+    Series:
+      type: object
+      properties:
+        id:
+          type: string
+        ticker:
+          type: string
+          nullable: true
+        slug:
+          type: string
+          nullable: true
+        title:
+          type: string
+          nullable: true
+        subtitle:
+          type: string
+          nullable: true
+        seriesType:
+          type: string
+          nullable: true
+        recurrence:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        image:
+          type: string
+          nullable: true
+        icon:
+          type: string
+          nullable: true
+        layout:
+          type: string
+          nullable: true
+        active:
+          type: boolean
+          nullable: true
+        closed:
+          type: boolean
+          nullable: true
+        archived:
+          type: boolean
+          nullable: true
+        new:
+          type: boolean
+          nullable: true
+        featured:
+          type: boolean
+          nullable: true
+        restricted:
+          type: boolean
+          nullable: true
+        isTemplate:
+          type: boolean
+          nullable: true
+        templateVariables:
+          type: boolean
+          nullable: true
+        publishedAt:
+          type: string
+          nullable: true
+        createdBy:
+          type: string
+          nullable: true
+        updatedBy:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        commentsEnabled:
+          type: boolean
+          nullable: true
+        competitive:
+          type: string
+          nullable: true
+        volume24hr:
+          type: number
+          nullable: true
+        volume:
+          type: number
+          nullable: true
+        liquidity:
+          type: number
+          nullable: true
+        startDate:
+          type: string
+          format: date-time
+          nullable: true
+        pythTokenID:
+          type: string
+          nullable: true
+        cgAssetName:
+          type: string
+          nullable: true
+        score:
+          type: integer
+          nullable: true
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/Event'
+        collections:
+          type: array
+          items:
+            $ref: '#/components/schemas/Collection'
+        categories:
+          type: array
+          items:
+            $ref: '#/components/schemas/Category'
+        tags:
+          type: array
+          items:
+            $ref: '#/components/schemas/Tag'
+        commentCount:
+          type: integer
+          nullable: true
+        chats:
+          type: array
+          items:
+            $ref: '#/components/schemas/Chat'
+    Event:
+      type: object
+      properties:
+        id:
+          type: string
+        ticker:
+          type: string
+          nullable: true
+        slug:
+          type: string
+          nullable: true
+        title:
+          type: string
+          nullable: true
+        subtitle:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        resolutionSource:
+          type: string
+          nullable: true
+        startDate:
+          type: string
+          format: date-time
+          nullable: true
+        creationDate:
+          type: string
+          format: date-time
+          nullable: true
+        endDate:
+          type: string
+          format: date-time
+          nullable: true
+        image:
+          type: string
+          nullable: true
+        icon:
+          type: string
+          nullable: true
+        active:
+          type: boolean
+          nullable: true
+        closed:
+          type: boolean
+          nullable: true
+        archived:
+          type: boolean
+          nullable: true
+        new:
+          type: boolean
+          nullable: true
+        featured:
+          type: boolean
+          nullable: true
+        restricted:
+          type: boolean
+          nullable: true
+        liquidity:
+          type: number
+          nullable: true
+        volume:
+          type: number
+          nullable: true
+        openInterest:
+          type: number
+          nullable: true
+        sortBy:
+          type: string
+          nullable: true
+        category:
+          type: string
+          nullable: true
+        subcategory:
+          type: string
+          nullable: true
+        isTemplate:
+          type: boolean
+          nullable: true
+        templateVariables:
+          type: string
+          nullable: true
+        published_at:
+          type: string
+          nullable: true
+        createdBy:
+          type: string
+          nullable: true
+        updatedBy:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        commentsEnabled:
+          type: boolean
+          nullable: true
+        competitive:
+          type: number
+          nullable: true
+        volume24hr:
+          type: number
+          nullable: true
+        volume1wk:
+          type: number
+          nullable: true
+        volume1mo:
+          type: number
+          nullable: true
+        volume1yr:
+          type: number
+          nullable: true
+        featuredImage:
+          type: string
+          nullable: true
+        disqusThread:
+          type: string
+          nullable: true
+        parentEvent:
+          type: string
+          nullable: true
+        enableOrderBook:
+          type: boolean
+          nullable: true
+        liquidityAmm:
+          type: number
+          nullable: true
+        liquidityClob:
+          type: number
+          nullable: true
+        negRisk:
+          type: boolean
+          nullable: true
+        negRiskMarketID:
+          type: string
+          nullable: true
+        negRiskFeeBips:
+          type: integer
+          nullable: true
+        commentCount:
+          type: integer
+          nullable: true
+        imageOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        iconOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        featuredImageOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        subEvents:
+          type: array
+          items:
+            type: string
+          nullable: true
+        markets:
+          type: array
+          items:
+            $ref: '#/components/schemas/Market'
+        series:
+          type: array
+          items:
+            $ref: '#/components/schemas/Series'
+        categories:
+          type: array
+          items:
+            $ref: '#/components/schemas/Category'
+        collections:
+          type: array
+          items:
+            $ref: '#/components/schemas/Collection'
+        tags:
+          type: array
+          items:
+            $ref: '#/components/schemas/Tag'
+        cyom:
+          type: boolean
+          nullable: true
+        closedTime:
+          type: string
+          format: date-time
+          nullable: true
+        showAllOutcomes:
+          type: boolean
+          nullable: true
+        showMarketImages:
+          type: boolean
+          nullable: true
+        automaticallyResolved:
+          type: boolean
+          nullable: true
+        enableNegRisk:
+          type: boolean
+          nullable: true
+        automaticallyActive:
+          type: boolean
+          nullable: true
+        eventDate:
+          type: string
+          nullable: true
+        startTime:
+          type: string
+          format: date-time
+          nullable: true
+        eventWeek:
+          type: integer
+          nullable: true
+        seriesSlug:
+          type: string
+          nullable: true
+        score:
+          type: string
+          nullable: true
+        elapsed:
+          type: string
+          nullable: true
+        period:
+          type: string
+          nullable: true
+        live:
+          type: boolean
+          nullable: true
+        ended:
+          type: boolean
+          nullable: true
+        finishedTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        gmpChartMode:
+          type: string
+          nullable: true
+        eventCreators:
+          type: array
+          items:
+            $ref: '#/components/schemas/EventCreator'
+        tweetCount:
+          type: integer
+          nullable: true
+        chats:
+          type: array
+          items:
+            $ref: '#/components/schemas/Chat'
+        featuredOrder:
+          type: integer
+          nullable: true
+        estimateValue:
+          type: boolean
+          nullable: true
+        cantEstimate:
+          type: boolean
+          nullable: true
+        estimatedValue:
+          type: string
+          nullable: true
+        templates:
+          type: array
+          items:
+            $ref: '#/components/schemas/Template'
+        spreadsMainLine:
+          type: number
+          nullable: true
+        totalsMainLine:
+          type: number
+          nullable: true
+        carouselMap:
+          type: string
+          nullable: true
+        pendingDeployment:
+          type: boolean
+          nullable: true
+        deploying:
+          type: boolean
+          nullable: true
+        deployingTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        scheduledDeploymentTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        gameStatus:
+          type: string
+          nullable: true
+    Collection:
+      type: object
+      properties:
+        id:
+          type: string
+        ticker:
+          type: string
+          nullable: true
+        slug:
+          type: string
+          nullable: true
+        title:
+          type: string
+          nullable: true
+        subtitle:
+          type: string
+          nullable: true
+        collectionType:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        tags:
+          type: string
+          nullable: true
+        image:
+          type: string
+          nullable: true
+        icon:
+          type: string
+          nullable: true
+        headerImage:
+          type: string
+          nullable: true
+        layout:
+          type: string
+          nullable: true
+        active:
+          type: boolean
+          nullable: true
+        closed:
+          type: boolean
+          nullable: true
+        archived:
+          type: boolean
+          nullable: true
+        new:
+          type: boolean
+          nullable: true
+        featured:
+          type: boolean
+          nullable: true
+        restricted:
+          type: boolean
+          nullable: true
+        isTemplate:
+          type: boolean
+          nullable: true
+        templateVariables:
+          type: string
+          nullable: true
+        publishedAt:
+          type: string
+          nullable: true
+        createdBy:
+          type: string
+          nullable: true
+        updatedBy:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        commentsEnabled:
+          type: boolean
+          nullable: true
+        imageOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        iconOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        headerImageOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+    Category:
+      type: object
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+          nullable: true
+        parentCategory:
+          type: string
+          nullable: true
+        slug:
+          type: string
+          nullable: true
+        publishedAt:
+          type: string
+          nullable: true
+        createdBy:
+          type: string
+          nullable: true
+        updatedBy:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+    Tag:
+      type: object
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+          nullable: true
+        slug:
+          type: string
+          nullable: true
+        forceShow:
+          type: boolean
+          nullable: true
+        publishedAt:
+          type: string
+          nullable: true
+        createdBy:
+          type: integer
+          nullable: true
+        updatedBy:
+          type: integer
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        forceHide:
+          type: boolean
+          nullable: true
+        isCarousel:
+          type: boolean
+          nullable: true
+    Chat:
+      type: object
+      properties:
+        id:
+          type: string
+        channelId:
+          type: string
+          nullable: true
+        channelName:
+          type: string
+          nullable: true
+        channelImage:
+          type: string
+          nullable: true
+        live:
+          type: boolean
+          nullable: true
+        startTime:
+          type: string
+          format: date-time
+          nullable: true
+        endTime:
+          type: string
+          format: date-time
+          nullable: true
+    ImageOptimization:
+      type: object
+      properties:
+        id:
+          type: string
+        imageUrlSource:
+          type: string
+          nullable: true
+        imageUrlOptimized:
+          type: string
+          nullable: true
+        imageSizeKbSource:
+          type: number
+          nullable: true
+        imageSizeKbOptimized:
+          type: number
+          nullable: true
+        imageOptimizedComplete:
+          type: boolean
+          nullable: true
+        imageOptimizedLastUpdated:
+          type: string
+          nullable: true
+        relID:
+          type: integer
+          nullable: true
+        field:
+          type: string
+          nullable: true
+        relname:
+          type: string
+          nullable: true
+    Market:
+      type: object
+      properties:
+        id:
+          type: string
+        question:
+          type: string
+          nullable: true
+        conditionId:
+          type: string
+        slug:
+          type: string
+          nullable: true
+        twitterCardImage:
+          type: string
+          nullable: true
+        resolutionSource:
+          type: string
+          nullable: true
+        endDate:
+          type: string
+          format: date-time
+          nullable: true
+        category:
+          type: string
+          nullable: true
+        ammType:
+          type: string
+          nullable: true
+        liquidity:
+          type: string
+          nullable: true
+        sponsorName:
+          type: string
+          nullable: true
+        sponsorImage:
+          type: string
+          nullable: true
+        startDate:
+          type: string
+          format: date-time
+          nullable: true
+        xAxisValue:
+          type: string
+          nullable: true
+        yAxisValue:
+          type: string
+          nullable: true
+        denominationToken:
+          type: string
+          nullable: true
+        fee:
+          type: string
+          nullable: true
+        image:
+          type: string
+          nullable: true
+        icon:
+          type: string
+          nullable: true
+        lowerBound:
+          type: string
+          nullable: true
+        upperBound:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        outcomes:
+          type: string
+          nullable: true
+        outcomePrices:
+          type: string
+          nullable: true
+        volume:
+          type: string
+          nullable: true
+        active:
+          type: boolean
+          nullable: true
+        marketType:
+          type: string
+          nullable: true
+        formatType:
+          type: string
+          nullable: true
+        lowerBoundDate:
+          type: string
+          nullable: true
+        upperBoundDate:
+          type: string
+          nullable: true
+        closed:
+          type: boolean
+          nullable: true
+        marketMakerAddress:
+          type: string
+        createdBy:
+          type: integer
+          nullable: true
+        updatedBy:
+          type: integer
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        closedTime:
+          type: string
+          nullable: true
+        wideFormat:
+          type: boolean
+          nullable: true
+        new:
+          type: boolean
+          nullable: true
+        mailchimpTag:
+          type: string
+          nullable: true
+        featured:
+          type: boolean
+          nullable: true
+        archived:
+          type: boolean
+          nullable: true
+        resolvedBy:
+          type: string
+          nullable: true
+        restricted:
+          type: boolean
+          nullable: true
+        marketGroup:
+          type: integer
+          nullable: true
+        groupItemTitle:
+          type: string
+          nullable: true
+        groupItemThreshold:
+          type: string
+          nullable: true
+        questionID:
+          type: string
+          nullable: true
+        umaEndDate:
+          type: string
+          nullable: true
+        enableOrderBook:
+          type: boolean
+          nullable: true
+        orderPriceMinTickSize:
+          type: number
+          nullable: true
+        orderMinSize:
+          type: number
+          nullable: true
+        umaResolutionStatus:
+          type: string
+          nullable: true
+        curationOrder:
+          type: integer
+          nullable: true
+        volumeNum:
+          type: number
+          nullable: true
+        liquidityNum:
+          type: number
+          nullable: true
+        endDateIso:
+          type: string
+          nullable: true
+        startDateIso:
+          type: string
+          nullable: true
+        umaEndDateIso:
+          type: string
+          nullable: true
+        hasReviewedDates:
+          type: boolean
+          nullable: true
+        readyForCron:
+          type: boolean
+          nullable: true
+        commentsEnabled:
+          type: boolean
+          nullable: true
+        volume24hr:
+          type: number
+          nullable: true
+        volume1wk:
+          type: number
+          nullable: true
+        volume1mo:
+          type: number
+          nullable: true
+        volume1yr:
+          type: number
+          nullable: true
+        gameStartTime:
+          type: string
+          nullable: true
+        secondsDelay:
+          type: integer
+          nullable: true
+        clobTokenIds:
+          type: string
+          nullable: true
+        disqusThread:
+          type: string
+          nullable: true
+        shortOutcomes:
+          type: string
+          nullable: true
+        teamAID:
+          type: string
+          nullable: true
+        teamBID:
+          type: string
+          nullable: true
+        umaBond:
+          type: string
+          nullable: true
+        umaReward:
+          type: string
+          nullable: true
+        fpmmLive:
+          type: boolean
+          nullable: true
+        volume24hrAmm:
+          type: number
+          nullable: true
+        volume1wkAmm:
+          type: number
+          nullable: true
+        volume1moAmm:
+          type: number
+          nullable: true
+        volume1yrAmm:
+          type: number
+          nullable: true
+        volume24hrClob:
+          type: number
+          nullable: true
+        volume1wkClob:
+          type: number
+          nullable: true
+        volume1moClob:
+          type: number
+          nullable: true
+        volume1yrClob:
+          type: number
+          nullable: true
+        volumeAmm:
+          type: number
+          nullable: true
+        volumeClob:
+          type: number
+          nullable: true
+        liquidityAmm:
+          type: number
+          nullable: true
+        liquidityClob:
+          type: number
+          nullable: true
+        makerBaseFee:
+          type: integer
+          nullable: true
+        takerBaseFee:
+          type: integer
+          nullable: true
+        customLiveness:
+          type: integer
+          nullable: true
+        acceptingOrders:
+          type: boolean
+          nullable: true
+        notificationsEnabled:
+          type: boolean
+          nullable: true
+        score:
+          type: integer
+          nullable: true
+        imageOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        iconOptimized:
+          $ref: '#/components/schemas/ImageOptimization'
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/Event'
+        categories:
+          type: array
+          items:
+            $ref: '#/components/schemas/Category'
+        tags:
+          type: array
+          items:
+            $ref: '#/components/schemas/Tag'
+        creator:
+          type: string
+          nullable: true
+        ready:
+          type: boolean
+          nullable: true
+        funded:
+          type: boolean
+          nullable: true
+        pastSlugs:
+          type: string
+          nullable: true
+        readyTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        fundedTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        acceptingOrdersTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        competitive:
+          type: number
+          nullable: true
+        rewardsMinSize:
+          type: number
+          nullable: true
+        rewardsMaxSpread:
+          type: number
+          nullable: true
+        spread:
+          type: number
+          nullable: true
+        automaticallyResolved:
+          type: boolean
+          nullable: true
+        oneDayPriceChange:
+          type: number
+          nullable: true
+        oneHourPriceChange:
+          type: number
+          nullable: true
+        oneWeekPriceChange:
+          type: number
+          nullable: true
+        oneMonthPriceChange:
+          type: number
+          nullable: true
+        oneYearPriceChange:
+          type: number
+          nullable: true
+        lastTradePrice:
+          type: number
+          nullable: true
+        bestBid:
+          type: number
+          nullable: true
+        bestAsk:
+          type: number
+          nullable: true
+        automaticallyActive:
+          type: boolean
+          nullable: true
+        clearBookOnStart:
+          type: boolean
+          nullable: true
+        chartColor:
+          type: string
+          nullable: true
+        seriesColor:
+          type: string
+          nullable: true
+        showGmpSeries:
+          type: boolean
+          nullable: true
+        showGmpOutcome:
+          type: boolean
+          nullable: true
+        manualActivation:
+          type: boolean
+          nullable: true
+        negRiskOther:
+          type: boolean
+          nullable: true
+        gameId:
+          type: string
+          nullable: true
+        groupItemRange:
+          type: string
+          nullable: true
+        sportsMarketType:
+          type: string
+          nullable: true
+        line:
+          type: number
+          nullable: true
+        umaResolutionStatuses:
+          type: string
+          nullable: true
+        pendingDeployment:
+          type: boolean
+          nullable: true
+        deploying:
+          type: boolean
+          nullable: true
+        deployingTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        scheduledDeploymentTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        rfqEnabled:
+          type: boolean
+          nullable: true
+        eventStartTime:
+          type: string
+          format: date-time
+          nullable: true
+        feesEnabled:
+          type: boolean
+          nullable: true
+        feeSchedule:
+          $ref: '#/components/schemas/FeeSchedule'
+    EventCreator:
+      type: object
+      properties:
+        id:
+          type: string
+        creatorName:
+          type: string
+          nullable: true
+        creatorHandle:
+          type: string
+          nullable: true
+        creatorUrl:
+          type: string
+          nullable: true
+        creatorImage:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+    Template:
+      type: object
+      properties:
+        id:
+          type: string
+        eventTitle:
+          type: string
+          nullable: true
+        eventSlug:
+          type: string
+          nullable: true
+        eventImage:
+          type: string
+          nullable: true
+        marketTitle:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        resolutionSource:
+          type: string
+          nullable: true
+        negRisk:
+          type: boolean
+          nullable: true
+        sortBy:
+          type: string
+          nullable: true
+        showMarketImages:
+          type: boolean
+          nullable: true
+        seriesSlug:
+          type: string
+          nullable: true
+        outcomes:
+          type: string
+          nullable: true
+    FeeSchedule:
+      type: object
+      properties:
+        exponent:
+          type: number
+          nullable: true
+        rate:
+          type: number
+          nullable: true
+        takerOnly:
+          type: boolean
+          nullable: true
+        rebateRate:
+          type: number
+          nullable: true
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Get sports metadata information
+
+
+
+## OpenAPI
+
+````yaml /api-spec/gamma-openapi.yaml get /sports
+openapi: 3.0.3
+info:
+  title: Markets API
+  version: 1.0.0
+  description: REST API specification for public endpoints used by the Markets service.
+servers:
+  - url: https://gamma-api.polymarket.com
+    description: Polymarket Gamma API Production Server
+security: []
+tags:
+  - name: Gamma Status
+    description: Gamma API status and health check
+  - name: Sports
+    description: Sports-related endpoints including teams and game data
+  - name: Tags
+    description: Tag management and related tag operations
+  - name: Events
+    description: Event management and event-related operations
+  - name: Markets
+    description: Market data and market-related operations
+  - name: Comments
+    description: Comment system and user interactions
+  - name: Series
+    description: Series management and related operations
+  - name: Profiles
+    description: User profile management
+  - name: Search
+    description: Search functionality across different entity types
+paths:
+  /sports:
+    get:
+      tags:
+        - Sports
+      summary: Get sports metadata information
+      operationId: getSportsMetadata
+      responses:
+        '200':
+          description: >-
+            List of sports metadata objects containing sport configuration
+            details, visual assets, and related identifiers
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SportsMetadata'
+components:
+  schemas:
+    SportsMetadata:
+      type: object
+      properties:
+        sport:
+          type: string
+          description: The sport identifier or abbreviation
+        image:
+          type: string
+          format: uri
+          description: URL to the sport's logo or image asset
+        resolution:
+          type: string
+          format: uri
+          description: >-
+            URL to the official resolution source for the sport (e.g., league
+            website)
+        ordering:
+          type: string
+          description: Preferred ordering for sport display, typically "home" or "away"
+        tags:
+          type: string
+          description: >-
+            Comma-separated list of tag IDs associated with the sport for
+            categorization and filtering
+        series:
+          type: string
+          description: >-
+            Series identifier linking the sport to a specific tournament or
+            season series
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Get valid sports market types
+
+
+
+## OpenAPI
+
+````yaml /api-spec/gamma-openapi.yaml get /sports/market-types
+openapi: 3.0.3
+info:
+  title: Markets API
+  version: 1.0.0
+  description: REST API specification for public endpoints used by the Markets service.
+servers:
+  - url: https://gamma-api.polymarket.com
+    description: Polymarket Gamma API Production Server
+security: []
+tags:
+  - name: Gamma Status
+    description: Gamma API status and health check
+  - name: Sports
+    description: Sports-related endpoints including teams and game data
+  - name: Tags
+    description: Tag management and related tag operations
+  - name: Events
+    description: Event management and event-related operations
+  - name: Markets
+    description: Market data and market-related operations
+  - name: Comments
+    description: Comment system and user interactions
+  - name: Series
+    description: Series management and related operations
+  - name: Profiles
+    description: User profile management
+  - name: Search
+    description: Search functionality across different entity types
+paths:
+  /sports/market-types:
+    get:
+      tags:
+        - Sports
+      summary: Get valid sports market types
+      operationId: getSportsMarketTypes
+      responses:
+        '200':
+          description: List of valid sports market types
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SportsMarketTypesResponse'
+components:
+  schemas:
+    SportsMarketTypesResponse:
+      type: object
+      properties:
+        marketTypes:
+          type: array
+          description: List of all valid sports market types
+          items:
+            type: string
+
+````> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.polymarket.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# List teams
+
+
+
+## OpenAPI
+
+````yaml /api-spec/gamma-openapi.yaml get /teams
+openapi: 3.0.3
+info:
+  title: Markets API
+  version: 1.0.0
+  description: REST API specification for public endpoints used by the Markets service.
+servers:
+  - url: https://gamma-api.polymarket.com
+    description: Polymarket Gamma API Production Server
+security: []
+tags:
+  - name: Gamma Status
+    description: Gamma API status and health check
+  - name: Sports
+    description: Sports-related endpoints including teams and game data
+  - name: Tags
+    description: Tag management and related tag operations
+  - name: Events
+    description: Event management and event-related operations
+  - name: Markets
+    description: Market data and market-related operations
+  - name: Comments
+    description: Comment system and user interactions
+  - name: Series
+    description: Series management and related operations
+  - name: Profiles
+    description: User profile management
+  - name: Search
+    description: Search functionality across different entity types
+paths:
+  /teams:
+    get:
+      tags:
+        - Sports
+      summary: List teams
+      operationId: listTeams
+      parameters:
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
+        - $ref: '#/components/parameters/order'
+        - $ref: '#/components/parameters/ascending'
+        - name: league
+          in: query
+          schema:
+            type: array
+            items:
+              type: string
+        - name: name
+          in: query
+          schema:
+            type: array
+            items:
+              type: string
+        - name: abbreviation
+          in: query
+          schema:
+            type: array
+            items:
+              type: string
+      responses:
+        '200':
+          description: List of teams
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Team'
+components:
+  parameters:
+    limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        minimum: 0
+    offset:
+      name: offset
+      in: query
+      schema:
+        type: integer
+        minimum: 0
+    order:
+      name: order
+      in: query
+      schema:
+        type: string
+      description: Comma-separated list of fields to order by
+    ascending:
+      name: ascending
+      in: query
+      schema:
+        type: boolean
+  schemas:
+    Team:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+          nullable: true
+        league:
+          type: string
+          nullable: true
+        record:
+          type: string
+          nullable: true
+        logo:
+          type: string
+          nullable: true
+        abbreviation:
+          type: string
+          nullable: true
+        alias:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+
+````

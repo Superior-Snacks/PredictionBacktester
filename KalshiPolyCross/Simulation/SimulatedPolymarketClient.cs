@@ -128,4 +128,7 @@ public class SimulatedPolymarketClient : IPolymarketOrderExecutor
 
     // Executor overrides this to $1,000 immediately after calling it in dry-run mode.
     public Task<decimal> GetUsdcBalanceAsync() => Task.FromResult(1000m);
+
+    public Task UpdateBalanceAllowanceAsync(string tokenId) => Task.CompletedTask;
+    public Task<int> GetTakerFeeAsync(string tokenId) => Task.FromResult(0);
 }

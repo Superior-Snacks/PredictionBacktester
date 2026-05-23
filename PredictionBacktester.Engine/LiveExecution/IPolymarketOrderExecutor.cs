@@ -22,4 +22,16 @@ public interface IPolymarketOrderExecutor
 
     /// <summary>Returns the deposited USDC collateral balance.</summary>
     Task<decimal> GetUsdcBalanceAsync();
+
+    /// <summary>
+    /// Forces the CLOB to refresh its cached balance for a conditional token.
+    /// Call best-effort after a buy fill and before a sell.
+    /// </summary>
+    Task UpdateBalanceAllowanceAsync(string tokenId);
+
+    /// <summary>
+    /// Fetches the taker fee rate in basis points for a specific token.
+    /// Returns 0 for fee-free markets or on failure.
+    /// </summary>
+    Task<int> GetTakerFeeAsync(string tokenId);
 }
