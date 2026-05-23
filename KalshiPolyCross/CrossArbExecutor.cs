@@ -501,10 +501,33 @@ public class CrossArbExecutor
         // Fire both legs simultaneously
         var kalshiTask = PlaceKalshiLegAsync(pair.KalshiTicker, kalshiSide, kPriceCents, contracts, execId);
         var polyTask   = PlacePolyLegAsync(polyToken, pLegAsk, polyShares, pair.IsNegRisk);
-        await Task.WhenAll(kalshiTask, polyTask);
 
-        var (kOrderId, kStatus, kFilled) = kalshiTask.Result;
-        var (pFilled, pActualPrice)       = polyTask.Result;
+        // Catch any unhandled leg exception so the OTHER leg's fill is still visible.
+        // PlaceXxxLegAsync both have general catch blocks, but those blocks call
+        // CheckMaintenanceThresholdAsync which can itself throw, propagating out.
+        // If Task.WhenAll throws here we must still reach the recovery section below.
+        Exception? legException = null;
+        try { await Task.WhenAll(kalshiTask, polyTask); }
+        catch (Exception ex) { legException = ex; }
+
+        var (kOrderId, kStatus, kFilled) = kalshiTask.IsCompletedSuccessfully
+            ? kalshiTask.Result : ("", "error", 0m);
+        var (pFilled, pActualPrice) = polyTask.IsCompletedSuccessfully
+            ? polyTask.Result : (0m, 0m);
+
+        if (legException != null)
+        {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine(
+                $"[LEG EXCEPTION] {pair.Label} | {legException.Message} — " +
+                $"kFilled={kFilled} pFilled={pFilled:0.00}; routing through recovery if needed");
+            Console.ResetColor();
+            await JournalAsync(JsonSerializer.Serialize(new {
+                t = DateTime.UtcNow, @event = "LEG_EXCEPTION",
+                pairId, arbType, kFilled, pFilled = (double)pFilled,
+                error = legException.Message, dryRun = _dryRun
+            }));
+        }
 
         // Balanced quantity: the portion of each leg that is fully hedged.
         // Any excess on one side is an unhedged delta requiring recovery.
