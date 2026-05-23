@@ -105,18 +105,16 @@ public class PolymarketOrderClient : IPolymarketOrderExecutor
         // 4. Build the Order Struct: POLY_GNOSIS_SAFE mode
         var order = new PolymarketOrder
         {
-            Salt = GenerateSalt(),
-            Maker = _config.ProxyAddress,  
-            Signer = _account.Address,     
-            Taker = "0x0000000000000000000000000000000000000000",
-            TokenId = BigInteger.Parse(tokenId),
-            MakerAmount = makerAmount,
-            TakerAmount = takerAmount,
-            Expiration = BigInteger.Zero,
-            Nonce = BigInteger.Zero,
-            FeeRateBps = new BigInteger(feeRateBps),
-            Side = side,
-            SignatureType = 2 
+            Salt          = GenerateSalt(),
+            Maker         = _config.ProxyAddress,
+            Signer        = _account.Address,
+            TokenId       = BigInteger.Parse(tokenId),
+            MakerAmount   = makerAmount,
+            TakerAmount   = takerAmount,
+            Expiration    = BigInteger.Zero,
+            Timestamp     = new BigInteger(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()),
+            Side          = side,
+            SignatureType = 2
         };
 
         // 5. Sign the order (EIP-712) using the correct exchange contract
@@ -126,19 +124,19 @@ public class PolymarketOrderClient : IPolymarketOrderExecutor
         // 6. Build JSON body using JsonNode
         var orderNode = new JsonObject
         {
-            ["salt"] = (long)order.Salt,
-            ["maker"] = order.Maker,
-            ["signer"] = order.Signer,
-            ["taker"] = order.Taker,
-            ["tokenId"] = order.TokenId.ToString(),
-            ["makerAmount"] = order.MakerAmount.ToString(),
-            ["takerAmount"] = order.TakerAmount.ToString(),
-            ["expiration"] = order.Expiration.ToString(),
-            ["nonce"] = order.Nonce.ToString(),
-            ["feeRateBps"] = order.FeeRateBps.ToString(),
-            ["side"] = side == 0 ? "BUY" : "SELL",
+            ["salt"]          = (long)order.Salt,
+            ["maker"]         = order.Maker,
+            ["signer"]        = order.Signer,
+            ["tokenId"]       = order.TokenId.ToString(),
+            ["makerAmount"]   = order.MakerAmount.ToString(),
+            ["takerAmount"]   = order.TakerAmount.ToString(),
+            ["expiration"]    = order.Expiration.ToString(),
+            ["side"]          = side == 0 ? "BUY" : "SELL",
             ["signatureType"] = order.SignatureType,
-            ["signature"] = signature
+            ["timestamp"]     = (long)order.Timestamp,
+            ["metadata"]      = "0x0000000000000000000000000000000000000000000000000000000000000000",
+            ["builder"]       = "0x0000000000000000000000000000000000000000000000000000000000000000",
+            ["signature"]     = signature
         };
 
         var payloadNode = new JsonObject
@@ -157,7 +155,7 @@ public class PolymarketOrderClient : IPolymarketOrderExecutor
             Console.WriteLine($"[ORDER DEBUG] maker={order.Maker} | signer={order.Signer}");
             Console.WriteLine($"[ORDER DEBUG] price={price} | size={size} | side={(side == 0 ? "BUY" : "SELL")}");
             Console.WriteLine($"[ORDER DEBUG] makerAmt={order.MakerAmount} | takerAmt={order.TakerAmount}");
-            Console.WriteLine($"[ORDER DEBUG] feeRateBps={feeRateBps}");
+            Console.WriteLine($"[ORDER DEBUG] timestamp={order.Timestamp}");
             Console.WriteLine($"[ORDER DEBUG] POST /order payload:");
             Console.WriteLine(jsonBody);
             Console.ResetColor();
@@ -299,22 +297,21 @@ public class PolymarketOrderClient : IPolymarketOrderExecutor
 
     private static readonly string BalanceOfErc1155Abi = @"[{""constant"":true,""inputs"":[{""name"":""account"",""type"":""address""},{""name"":""id"",""type"":""uint256""}],""name"":""balanceOf"",""outputs"":[{""name"":"""",""type"":""uint256""}],""type"":""function""}]";
 
-    // Manual EIP-712 signing
+    // Manual EIP-712 signing — CLOB V2
     private string SignOrder(PolymarketOrder order, string verifyingContract)
     {
+        // V2 type string: taker/expiration/nonce/feeRateBps removed; timestamp/metadata/builder added
         byte[] orderTypeHash = Sha3Keccack.Current.CalculateHash(
             Encoding.UTF8.GetBytes(
-                "Order(uint256 salt,address maker,address signer,address taker,uint256 tokenId,uint256 makerAmount,uint256 takerAmount,uint256 expiration,uint256 nonce,uint256 feeRateBps,uint8 side,uint8 signatureType)"
+                "Order(uint256 salt,address maker,address signer,uint256 tokenId,uint256 makerAmount,uint256 takerAmount,uint8 side,uint8 signatureType,uint256 timestamp,bytes32 metadata,bytes32 builder)"
             ));
 
         byte[] domainTypeHash = Sha3Keccack.Current.CalculateHash(
             Encoding.UTF8.GetBytes(
                 "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"
             ));
-        byte[] nameHash = Sha3Keccack.Current.CalculateHash(
-            Encoding.UTF8.GetBytes("Polymarket CTF Exchange"));
-        byte[] versionHash = Sha3Keccack.Current.CalculateHash(
-            Encoding.UTF8.GetBytes("1"));
+        byte[] nameHash    = Sha3Keccack.Current.CalculateHash(Encoding.UTF8.GetBytes("Polymarket CTF Exchange"));
+        byte[] versionHash = Sha3Keccack.Current.CalculateHash(Encoding.UTF8.GetBytes("2")); // V2
 
         byte[] domainData = ConcatBytes(
             domainTypeHash,
@@ -325,20 +322,21 @@ public class PolymarketOrderClient : IPolymarketOrderExecutor
         );
         byte[] domainSeparator = Sha3Keccack.Current.CalculateHash(domainData);
 
+        // V2 field order: salt, maker, signer, tokenId, makerAmount, takerAmount,
+        //                 side, signatureType, timestamp, metadata(bytes32), builder(bytes32)
         byte[] structData = ConcatBytes(
             orderTypeHash,
             PadUint256(order.Salt),
             PadAddress(order.Maker),
             PadAddress(order.Signer),
-            PadAddress(order.Taker),
             PadUint256(order.TokenId),
             PadUint256(order.MakerAmount),
             PadUint256(order.TakerAmount),
-            PadUint256(order.Expiration),
-            PadUint256(order.Nonce),
-            PadUint256(order.FeeRateBps), // Properly padded as uint256
             PadUint256(new BigInteger(order.Side)),
-            PadUint256(new BigInteger(order.SignatureType))
+            PadUint256(new BigInteger(order.SignatureType)),
+            PadUint256(order.Timestamp),
+            new byte[32], // metadata: zero bytes32
+            new byte[32]  // builder:  zero bytes32
         );
         byte[] structHash = Sha3Keccack.Current.CalculateHash(structData);
 
