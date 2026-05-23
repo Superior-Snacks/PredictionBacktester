@@ -254,6 +254,7 @@ def fetch_poly_markets(no_live: bool = False) -> list:
                 continue
             ev_live = bool(ev.get("live", False))
             ev_end_date_raw = ev.get("end_date")  # event-level fallback
+            ev_neg_risk = bool(ev.get("negRisk", False))
             description = ev.get("description", "") or ""
             for mkt in ev.get("markets", []):
                 question = mkt.get("question", "")
@@ -290,6 +291,7 @@ def fetch_poly_markets(no_live: bool = False) -> list:
                     "end_date":    end_date,
                     "description": description,
                     "outcomes":    outcomes,
+                    "neg_risk":    ev_neg_risk,
                 })
         print(f"[POLY] page={page} events_in_page={len(arr)} markets_so_far={len(results)}", flush=True)
         if len(arr) == 0:
@@ -392,6 +394,7 @@ def find_candidates(
                     "poly_close":       p["end_date"],
                     "poly_desc":        p["description"],
                     "poly_outcomes":    p.get("outcomes", []),
+                    "is_neg_risk":      p.get("neg_risk", False),
                     "score":            float(col[idx]),
                 })
 
@@ -767,6 +770,7 @@ def _save_pairs(matched: list, output_path: Path) -> None:
             "label":           m["kalshi_title"],
             "event_id":        _event_root(m["kalshi_ticker"]),
             "settlement_date": m["kalshi_close"].strftime("%Y-%m-%d") if m.get("kalshi_close") else "",
+            "is_neg_risk":     m.get("is_neg_risk", False),
         })
         added += 1
 
@@ -847,6 +851,7 @@ def _save_potential_pairs(conditional: list, output_path: Path) -> None:
             "safe_hours_before_event": verdict["safe_hours_before_event"],
             "earliest_cutoff_date":    verdict["earliest_cutoff_date"],
             "explanation":             verdict["explanation"],
+            "is_neg_risk":             m.get("is_neg_risk", False),
         })
         added += 1
 

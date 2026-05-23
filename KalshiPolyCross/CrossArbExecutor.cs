@@ -913,15 +913,23 @@ public class CrossArbExecutor
 
             string result = "";
             int feeRate = 0;
-            for (int attempt = 0; attempt < 2; attempt++)
+            for (int attempt = 0; attempt < 3; attempt++)
             {
                 try
                 {
-                    DebugLog.Trades($"PlacePolyLegAsync: attempt {attempt + 1} feeRateBps={feeRate}");
+                    DebugLog.Trades($"PlacePolyLegAsync: attempt {attempt + 1} negRisk={negRisk} feeRateBps={feeRate}");
                     result = await _poly.SubmitOrderAsync(
                         tokenId, limitPrice, shares, side: 0 /*BUY*/,
                         negRisk: negRisk, feeRateBps: feeRate);
                     break;
+                }
+                catch (Exception ex) when (
+                    ex.Message.Contains("order_version_mismatch") && !negRisk)
+                {
+                    Console.ForegroundColor = ConsoleColor.Yellow;
+                    Console.WriteLine($"[FILL P WARN] {tokenShort}... order_version_mismatch — pair tagged non-neg-risk but market is; retrying with NEG_RISK_EXCHANGE");
+                    Console.ResetColor();
+                    negRisk = true;
                 }
                 catch (Exception ex) when (
                     ex.Message.Contains("invalid fee rate") &&
@@ -1078,8 +1086,24 @@ public class CrossArbExecutor
         try
         {
             // FAK sell: 0.01 floor so it matches any buyer; actual fill is at best bid
-            string result = await _poly.SubmitOrderAsync(
-                tokenId, 0.01m, shares, side: 1 /*SELL*/, negRisk: negRisk, feeRateBps: 0);
+            string result = "";
+            for (int attempt = 0; attempt < 2; attempt++)
+            {
+                try
+                {
+                    result = await _poly.SubmitOrderAsync(
+                        tokenId, 0.01m, shares, side: 1 /*SELL*/, negRisk: negRisk, feeRateBps: 0);
+                    break;
+                }
+                catch (Exception ex) when (
+                    ex.Message.Contains("order_version_mismatch") && !negRisk)
+                {
+                    Console.ForegroundColor = ConsoleColor.Yellow;
+                    Console.WriteLine($"[FILL P WARN] {tokenShort}... order_version_mismatch on sell — retrying with NEG_RISK_EXCHANGE");
+                    Console.ResetColor();
+                    negRisk = true;
+                }
+            }
 
             if (string.IsNullOrEmpty(result)) return (0m, 0m);
 
