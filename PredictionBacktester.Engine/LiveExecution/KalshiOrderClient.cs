@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text;
@@ -175,7 +176,8 @@ public class KalshiOrderClient : IKalshiOrderExecutor, IDisposable
 
         string  orderId = order.TryGetProperty("order_id",      out var id) ? (id.GetString() ?? "") : "";
         string  status  = order.TryGetProperty("status",        out var st) ? (st.GetString() ?? "") : "";
-        decimal fill    = order.TryGetProperty("fill_count_fp", out var fc) ? fc.GetDecimal()       : 0m;
+        decimal fill    = order.TryGetProperty("fill_count_fp", out var fc)
+            ? decimal.Parse(fc.GetString() ?? "0", CultureInfo.InvariantCulture) : 0m;
 
         return (orderId, status, fill);
     }
@@ -187,7 +189,8 @@ public class KalshiOrderClient : IKalshiOrderExecutor, IDisposable
         var order = doc.RootElement.TryGetProperty("order", out var o) ? o : doc.RootElement;
 
         string  status = order.TryGetProperty("status",        out var st) ? (st.GetString() ?? "") : "";
-        decimal fill   = order.TryGetProperty("fill_count_fp", out var fc) ? fc.GetDecimal()       : 0m;
+        decimal fill   = order.TryGetProperty("fill_count_fp", out var fc)
+            ? decimal.Parse(fc.GetString() ?? "0", CultureInfo.InvariantCulture) : 0m;
 
         return (status, fill);
     }
