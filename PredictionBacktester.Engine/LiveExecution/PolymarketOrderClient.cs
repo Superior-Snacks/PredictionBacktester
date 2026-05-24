@@ -355,33 +355,6 @@ public class PolymarketOrderClient : IPolymarketOrderExecutor
             Console.ResetColor();
         }
 
-        // POLY_GNOSIS_SAFE: the safe's isValidSignature wraps the order digest before ecrecover.
-        // The EOA must sign the safe-wrapped digest, not the raw order digest.
-        if (order.SignatureType == 2)
-        {
-            byte[] safeTypehash    = Sha3Keccack.Current.CalculateHash(Encoding.UTF8.GetBytes("EIP712Domain(uint256 chainId,address verifyingContract)"));
-            byte[] safeMsgTypehash = Sha3Keccack.Current.CalculateHash(Encoding.UTF8.GetBytes("SafeMessage(bytes message)"));
-
-            byte[] safeDomainSep = Sha3Keccack.Current.CalculateHash(
-                ConcatBytes(safeTypehash, PadUint256(BigInteger.Parse(_config.ChainId)), PadAddress(_config.ProxyAddress)));
-
-            // SafeMessage.message = abi.encode(bytes32 dataHash) = the raw 32-byte digest
-            byte[] safeMessageHash = Sha3Keccack.Current.CalculateHash(
-                ConcatBytes(safeMsgTypehash, Sha3Keccack.Current.CalculateHash(digest)));
-
-            digest = Sha3Keccack.Current.CalculateHash(
-                ConcatBytes(new byte[] { 0x19, 0x01 }, safeDomainSep, safeMessageHash));
-
-            if (DebugMode)
-            {
-                Console.ForegroundColor = ConsoleColor.DarkGray;
-                Console.WriteLine($"[EIP712] safeDomSep  =0x{BitConverter.ToString(safeDomainSep).Replace("-", "").ToLower()}");
-                Console.WriteLine($"[EIP712] safeMsgHash =0x{BitConverter.ToString(safeMessageHash).Replace("-", "").ToLower()}");
-                Console.WriteLine($"[EIP712] safeDigest  =0x{BitConverter.ToString(digest).Replace("-", "").ToLower()}");
-                Console.ResetColor();
-            }
-        }
-
         var ecKey = new EthECKey(_account.PrivateKey);
         var signature = ecKey.SignAndCalculateV(digest);
         byte[] sigBytes = new byte[65];
