@@ -134,7 +134,7 @@ public class PolymarketOrderClient : IPolymarketOrderExecutor
             ["side"]          = side == 0 ? "BUY" : "SELL",
             ["signatureType"] = order.SignatureType,
             ["timestamp"]     = order.Timestamp.ToString(),
-            ["metadata"]      = "",
+            ["metadata"]      = "0x0000000000000000000000000000000000000000000000000000000000000000",
             ["builder"]       = "0x0000000000000000000000000000000000000000000000000000000000000000",
             ["signature"]     = signature
         };
