@@ -431,6 +431,25 @@ public class CrossArbExecutor
             DebugLog.Balance($"ExecuteAsync {pair.Label}: balance too low — K=${kBalSnap:0.00} P=${pBalSnap:0.00}");
             return;
         }
+
+        // Polymarket minimum: orderMinSize (shares) and CLOB $1 dollar floor
+        int polyMinByShare   = (int)Math.Ceiling(pair.PolyMinSize);
+        int polyMinByDollar  = pLegAsk > 0 ? (int)Math.Ceiling(1.00m / pLegAsk) : 1;
+        int polyMinContracts = Math.Max(polyMinByShare, polyMinByDollar);
+        if (contracts < polyMinContracts)
+        {
+            lock (_balanceLock)
+            {
+                _kalshiBalanceUsd += kalshiCost;
+                _polyBalanceUsd   += polyCost;
+            }
+            Console.WriteLine(
+                $"[EXEC SKIP] {pair.Label} | {contracts} contract(s) below Poly minimum {polyMinContracts} " +
+                $"(orderMinSize={pair.PolyMinSize} pLeg=${pLegAsk:0.0000} → need ${pLegAsk * polyMinContracts:0.00} ≥ $1.00)");
+            DebugLog.Trades($"ExecuteAsync {pair.Label}: skipped — {contracts} contracts < polyMin {polyMinContracts}");
+            return;
+        }
+
         if (contracts < idealContracts)
         {
             Console.WriteLine(

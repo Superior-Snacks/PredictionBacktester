@@ -188,10 +188,11 @@ if (File.Exists(manualPath))
             if (el.TryGetProperty("settlement_date", out var sd) && DateOnly.TryParse(sd.GetString(), out var d))
                 settlementDate = d;
             bool isNegRisk = el.TryGetProperty("is_neg_risk", out var nr) && nr.ValueKind == JsonValueKind.True;
+            decimal polyMinSize = el.TryGetProperty("poly_min_size", out var ms) && ms.TryGetDecimal(out decimal msv) && msv > 0 ? msv : 1.0m;
             if (!string.IsNullOrEmpty(kTicker) && !string.IsNullOrEmpty(yesToken) && !string.IsNullOrEmpty(noToken))
             {
                 string pairId = $"MANUAL_{kTicker}__{yesToken[..Math.Min(8, yesToken.Length)]}";
-                manualPairs.Add(new CrossPair(pairId, label, kTicker, yesToken, noToken, eventId, settlementDate, isNegRisk));
+                manualPairs.Add(new CrossPair(pairId, label, kTicker, yesToken, noToken, eventId, settlementDate, isNegRisk, polyMinSize));
             }
         }
         Console.WriteLine($"[CONFIG] {manualPairs.Count} manual pair(s) loaded from cross_pairs.json");
@@ -620,11 +621,12 @@ _ = Task.Run(async () =>
                 if (string.IsNullOrEmpty(kTicker) || string.IsNullOrEmpty(yesToken) || string.IsNullOrEmpty(noToken)) continue;
 
                 bool isNegRiskHot = el.TryGetProperty("is_neg_risk", out var nrHot) && nrHot.ValueKind == JsonValueKind.True;
+                decimal polyMinSizeHot = el.TryGetProperty("poly_min_size", out var msHot) && msHot.TryGetDecimal(out decimal msvHot) && msvHot > 0 ? msvHot : 1.0m;
                 string pairId = $"MANUAL_{kTicker}__{yesToken[..Math.Min(8, yesToken.Length)]}";
                 if (knownPairIds.Contains(pairId)) continue;
                 knownPairIds.Add(pairId);
 
-                newPairs.Add(new CrossPair(pairId, label, kTicker, yesToken, noToken, eventId, settlementDate, isNegRiskHot));
+                newPairs.Add(new CrossPair(pairId, label, kTicker, yesToken, noToken, eventId, settlementDate, isNegRiskHot, polyMinSizeHot));
                 if (knownKalshiTickers.Add(kTicker)) newKTickers.Add(kTicker);
                 if (knownPolyTokens.Add(yesToken))   newPTokens.Add(yesToken);
                 if (knownPolyTokens.Add(noToken))    newPTokens.Add(noToken);

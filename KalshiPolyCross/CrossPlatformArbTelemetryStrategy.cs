@@ -15,7 +15,8 @@ public record CrossPair(
     string PolyNoTokenId,   // book key:  "P:{noToken}"
     string EventId = "",    // retained for JSON compat; not used internally
     DateOnly? SettlementDate = null,
-    bool IsNegRisk = false  // passed to CLOB negRisk flag on Poly order submission
+    bool IsNegRisk = false, // passed to CLOB negRisk flag on Poly order submission
+    decimal PolyMinSize = 1.0m  // orderMinSize from Poly Gamma API (minimum shares per order)
 );
 
 record ActiveWindow(

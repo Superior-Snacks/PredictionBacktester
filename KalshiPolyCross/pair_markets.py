@@ -285,13 +285,14 @@ def fetch_poly_markets(no_live: bool = False) -> list:
                 else:
                     outcomes = raw_outcomes if isinstance(raw_outcomes, list) else []
                 results.append({
-                    "question":    question,
-                    "yes_token":   tokens[0],
-                    "no_token":    tokens[1],
-                    "end_date":    end_date,
-                    "description": description,
-                    "outcomes":    outcomes,
-                    "neg_risk":    ev_neg_risk,
+                    "question":       question,
+                    "yes_token":      tokens[0],
+                    "no_token":       tokens[1],
+                    "end_date":       end_date,
+                    "description":    description,
+                    "outcomes":       outcomes,
+                    "neg_risk":       ev_neg_risk,
+                    "order_min_size": float(mkt.get("orderMinSize") or 0) or 1.0,
                 })
         print(f"[POLY] page={page} events_in_page={len(arr)} markets_so_far={len(results)}", flush=True)
         if len(arr) == 0:
@@ -380,22 +381,23 @@ def find_candidates(
                     if abs((kd - pd).total_seconds()) / 86400 > DATE_WINDOW_DAYS:
                         continue
                 candidates.append({
-                    "kalshi_ticker":    ticker,
-                    "kalshi_title":     info["title"],
-                    "kalshi_close":     info["close_date"],
-                    "kalshi_rules":     info["rules"],
-                    "kalshi_event":     info["event_ticker"],
-                    "kalshi_category":  info.get("category", ""),
-                    "kalshi_yes_sub":   info.get("yes_sub_title", ""),
-                    "kalshi_no_sub":    info.get("no_sub_title",  ""),
-                    "poly_question":    p["question"],
-                    "poly_yes":         p["yes_token"],
-                    "poly_no":          p["no_token"],
-                    "poly_close":       p["end_date"],
-                    "poly_desc":        p["description"],
-                    "poly_outcomes":    p.get("outcomes", []),
-                    "is_neg_risk":      p.get("neg_risk", False),
-                    "score":            float(col[idx]),
+                    "kalshi_ticker":      ticker,
+                    "kalshi_title":       info["title"],
+                    "kalshi_close":       info["close_date"],
+                    "kalshi_rules":       info["rules"],
+                    "kalshi_event":       info["event_ticker"],
+                    "kalshi_category":    info.get("category", ""),
+                    "kalshi_yes_sub":     info.get("yes_sub_title", ""),
+                    "kalshi_no_sub":      info.get("no_sub_title",  ""),
+                    "poly_question":      p["question"],
+                    "poly_yes":           p["yes_token"],
+                    "poly_no":            p["no_token"],
+                    "poly_close":         p["end_date"],
+                    "poly_desc":          p["description"],
+                    "poly_outcomes":      p.get("outcomes", []),
+                    "is_neg_risk":        p.get("neg_risk", False),
+                    "poly_order_min_size": p.get("order_min_size", 1.0),
+                    "score":              float(col[idx]),
                 })
 
         print(f"[EMBED] {chunk_end}/{total_k} tickers scored, {len(candidates)} raw hits so far...", flush=True)
@@ -771,6 +773,7 @@ def _save_pairs(matched: list, output_path: Path) -> None:
             "event_id":        _event_root(m["kalshi_ticker"]),
             "settlement_date": m["kalshi_close"].strftime("%Y-%m-%d") if m.get("kalshi_close") else "",
             "is_neg_risk":     m.get("is_neg_risk", False),
+            "poly_min_size":   m.get("poly_order_min_size", 1.0),
         })
         added += 1
 
