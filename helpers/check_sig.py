@@ -12,9 +12,9 @@ from eth_utils.crypto import keccak
 from eth_account import Account
 
 # Paste values from [ORDER DEBUG] + [EIP712] output here:
-DIGEST    = "2abdd45674e50c849333c83585d9caeedc044831732a7a15e19a80a8e923d76e"
-SIGNATURE = "727bf19f155b45ad85adb99075774509ff1876cbca9c782130a2a31b708e329c76f1c37902a614ff01066ecf0ffe0a1646fefac4e01a6fd17577ea292ef9a1ac1c"
-SIGNER    = "0xf786a3DAe390d2342886ABA75e61529F75E953D7"  # EOA from debug
+DIGEST    = "b23a342669d1527e974758ecfaf4297004b60d830b2944b860f6fe3a2ba32b13"
+SIGNATURE = "0e26598c87b87d652cf0cad46ac5be610860214d3caffca782515b044800bbb61632347378951e5b5cc5ed0b104060083ddf19d26eafc393d51a5f0bf007c6711c"
+SIGNER    = "0xf786a3DAe390d2342886ABA75e61529F75E953D7"
 
 digest_bytes = bytes.fromhex(DIGEST)
 sig_bytes    = bytes.fromhex(SIGNATURE)
