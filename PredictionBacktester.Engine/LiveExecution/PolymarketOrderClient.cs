@@ -133,17 +133,19 @@ public class PolymarketOrderClient : IPolymarketOrderExecutor
             ["expiration"]    = order.Expiration.ToString(),
             ["side"]          = side == 0 ? "BUY" : "SELL",
             ["signatureType"] = order.SignatureType,
-            ["timestamp"]     = (long)order.Timestamp,
-            ["metadata"]      = "0x0000000000000000000000000000000000000000000000000000000000000000",
+            ["timestamp"]     = order.Timestamp.ToString(),
+            ["metadata"]      = "",
             ["builder"]       = "0x0000000000000000000000000000000000000000000000000000000000000000",
             ["signature"]     = signature
         };
 
         var payloadNode = new JsonObject
         {
-            ["order"] = orderNode,
-            ["owner"] = _config.ApiKey,
-            ["orderType"] = "FAK"
+            ["order"]      = orderNode,
+            ["owner"]      = _config.ApiKey,
+            ["orderType"]  = "FAK",
+            ["deferExec"]  = false,
+            ["postOnly"]   = false
         };
 
         string jsonBody = payloadNode.ToJsonString();
