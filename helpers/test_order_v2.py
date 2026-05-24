@@ -31,7 +31,7 @@ CHAIN = 137
 # Use a very low price so a FAK order won't fill.
 TOKEN_ID = "29880061952566489686808125557917525240335275846871233640387819113187553719242"
 PRICE    = 0.02
-SIZE     = 1.0
+SIZE     = 50.0  # $1.00 min order; 50 shares × $0.02 = $1.00
 
 from py_clob_client_v2.order_utils.model.side import Side
 from py_clob_client_v2.order_utils.model.signature_type_v2 import SignatureTypeV2
