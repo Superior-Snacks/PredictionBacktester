@@ -42,7 +42,7 @@ EOA_ADDR  = signer.address()
 print(f"EOA (maker+signer): {EOA_ADDR}")
 
 cfg     = get_contract_config(CHAIN)
-builder = ExchangeOrderBuilderV2(cfg.exchange_v2, CHAIN, signer)
+builder = ExchangeOrderBuilderV2(cfg.neg_risk_exchange_v2, CHAIN, signer)
 ts_ms   = str(int(time.time() * 1000))
 
 order_data = OrderDataV2(

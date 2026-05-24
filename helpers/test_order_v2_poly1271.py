@@ -62,7 +62,7 @@ def safe_wrap(raw_hash: bytes) -> bytes:
 # ── Build order ───────────────────────────────────────────────────────────────
 signer  = Signer(PRIVATE_KEY, CHAIN)
 cfg     = get_contract_config(CHAIN)
-builder = ExchangeOrderBuilderV2(cfg.exchange_v2, CHAIN, signer)
+builder = ExchangeOrderBuilderV2(cfg.neg_risk_exchange_v2, CHAIN, signer)
 ts_ms   = str(int(time.time() * 1000))
 
 order_data = OrderDataV2(

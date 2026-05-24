@@ -47,7 +47,7 @@ SIG_TYPE = SignatureTypeV2.POLY_GNOSIS_SAFE  # 2 — correct for Gnosis Safe wal
 
 signer  = Signer(PRIVATE_KEY, CHAIN)
 cfg     = get_contract_config(CHAIN)
-builder = ExchangeOrderBuilderV2(cfg.exchange_v2, CHAIN, signer)
+builder = ExchangeOrderBuilderV2(cfg.neg_risk_exchange_v2, CHAIN, signer)
 ts_ms   = str(int(time.time() * 1000))
 
 order_data = OrderDataV2(
