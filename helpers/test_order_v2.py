@@ -1,22 +1,38 @@
 """
-Test V2 order signing end-to-end using py_clob_client_v2 directly.
-This sends a real but tiny order to confirm:
-  - Python SDK can sign V2 orders and the server accepts them
-  - What the working wire body looks like
+Test V2 order signing end-to-end using py_clob_client_v2.
+Run on the Linux server (same machine as the C# bot).
 
-Run on Linux server:
+Usage:
   export POLY_PRIVATE_KEY="0x..."
   export POLY_API_KEY="..."
   export POLY_API_SECRET="..."
   export POLY_API_PASSPHRASE="..."
-  export POLY_PROXY_ADDRESS="0x..."   # the maker/funder address
+  export POLY_PROXY_ADDRESS="0x..."          # maker/funder (proxy wallet)
+  export POLY_SOCKS_PROXY="socks5://..."     # optional — same as C# SocksProxy config
   python helpers/test_order_v2.py
 
-Tweak TOKEN_ID + PRICE before running to a real market you want to test against.
+Expected outcomes:
+  accepted/canceled  → Python V2 works. C# has a signing bug to find.
+  "invalid signature" → Account needs V2 proxy wallet registration on-chain.
+  403 geo-block       → Run from the Linux server, not Windows.
 """
-import os, json, time
-from py_clob_client_v2 import ClobClient
-from py_clob_client_v2.clob_types import ApiCreds, OrderArgsV2
+import os, json, time, requests
+
+PRIVATE_KEY    = os.environ["POLY_PRIVATE_KEY"]
+API_KEY        = os.environ["POLY_API_KEY"]
+API_SECRET     = os.environ["POLY_API_SECRET"]
+API_PASSPHRASE = os.environ["POLY_API_PASSPHRASE"]
+PROXY_ADDR     = os.environ["POLY_PROXY_ADDRESS"]
+SOCKS_PROXY    = os.environ.get("POLY_SOCKS_PROXY", "")
+
+HOST  = "https://clob.polymarket.com"
+CHAIN = 137
+
+# Use a very low price so a FAK order won't fill.
+TOKEN_ID = "29880061952566489686808125557917525240335275846871233640387819113187553719242"
+PRICE    = 0.02
+SIZE     = 1.0
+
 from py_clob_client_v2.order_utils.model.side import Side
 from py_clob_client_v2.order_utils.model.signature_type_v2 import SignatureTypeV2
 from py_clob_client_v2.order_utils import ExchangeOrderBuilderV2
@@ -24,79 +40,51 @@ from py_clob_client_v2.order_utils.model.order_data_v2 import OrderDataV2, order
 from py_clob_client_v2.config import get_contract_config
 from py_clob_client_v2.constants import BYTES32_ZERO
 from py_clob_client_v2.signer import Signer
-from eth_utils.crypto import keccak
+from py_clob_client_v2.clob_types import ApiCreds, RequestArgs
+from py_clob_client_v2.headers.headers import create_level_2_headers
 
-PRIVATE_KEY    = os.environ["POLY_PRIVATE_KEY"]
-API_KEY        = os.environ["POLY_API_KEY"]
-API_SECRET     = os.environ["POLY_API_SECRET"]
-API_PASSPHRASE = os.environ["POLY_API_PASSPHRASE"]
-PROXY_ADDR     = os.environ["POLY_PROXY_ADDRESS"]  # maker (funder)
+SIG_TYPE = SignatureTypeV2.POLY_PROXY  # 1 — start here; try GNOSIS_SAFE=2 if this fails
 
-HOST    = "https://clob.polymarket.com"
-CHAIN   = 137
-
-# Change these to a real open market token you can test against.
-# Use a low price (0.02) so the FAK order almost certainly won't fill.
-TOKEN_ID = "29880061952566489686808125557917525240335275846871233640387819113187553719242"
-PRICE    = 0.02
-SIZE     = 1.0
-SIG_TYPE = SignatureTypeV2.POLY_PROXY  # try 1 first; change to GNOSIS_SAFE=2 or POLY_1271=3 if needed
-
-# ---------- build the order manually so we can inspect intermediate hashes ----------
 signer  = Signer(PRIVATE_KEY, CHAIN)
 cfg     = get_contract_config(CHAIN)
 builder = ExchangeOrderBuilderV2(cfg.exchange_v2, CHAIN, signer)
-
-ts = str(int(time.time() * 1000))  # ms
+ts_ms   = str(int(time.time() * 1000))
 
 order_data = OrderDataV2(
-    maker       = PROXY_ADDR,
-    tokenId     = TOKEN_ID,
-    makerAmount = str(int(PRICE * SIZE * 1_000_000)),    # e.g. 20000 for $0.02
-    takerAmount = str(int(SIZE * 1_000_000)),            # e.g. 1000000 for 1 share
-    side        = Side.BUY,
-    signer      = signer.address(),
+    maker         = PROXY_ADDR,
+    tokenId       = TOKEN_ID,
+    makerAmount   = str(int(PRICE * SIZE * 1_000_000)),
+    takerAmount   = str(int(SIZE * 1_000_000)),
+    side          = Side.BUY,
+    signer        = signer.address(),
     signatureType = SIG_TYPE,
-    timestamp   = ts,
-    metadata    = BYTES32_ZERO,
-    builder     = BYTES32_ZERO,
-    expiration  = "0",
+    timestamp     = ts_ms,
+    metadata      = BYTES32_ZERO,
+    builder       = BYTES32_ZERO,
+    expiration    = "0",
 )
 
 signed_order = builder.build_signed_order(order_data)
 typed_data   = builder.build_order_typed_data(signed_order)
 order_hash   = builder.build_order_hash(typed_data)
+wire         = order_to_json_v2(signed_order, API_KEY, "FAK", False, False)
+body_str     = json.dumps(wire, separators=(",", ":"), ensure_ascii=False)
 
-# Show intermediate hashes for comparison with C# debug output
-from eth_account.messages import encode_typed_data as _enc
-encoded = _enc(full_message=typed_data)
+print("=== Python V2 order ===")
+print(f"orderHash     : {order_hash}")
+print(f"signatureType : {int(SIG_TYPE)}")
+print(f"timestamp     : {ts_ms}")
+print(f"\n=== Wire body ===\n{json.dumps(wire, indent=2)}")
 
-print("=== Python V2 order hashes ===")
-print(f"domainSep  (should match C# [EIP712]): check below")
-print(f"orderHash  : {order_hash}")
-print(f"timestamp  : {ts}")
-print(f"signatureType: {int(SIG_TYPE)}")
-print()
-print("=== Wire body ===")
-wire = order_to_json_v2(signed_order, API_KEY, "FAK", False, False)
-print(json.dumps(wire, indent=2))
+# Build L2 headers the same way ClobClient does internally
+ts_sec = int(time.time())
+creds  = ApiCreds(api_key=API_KEY, api_secret=API_SECRET, api_passphrase=API_PASSPHRASE)
+args   = RequestArgs(method="POST", request_path="/order", body=wire, serialized_body=body_str)
+headers = create_level_2_headers(signer, creds, args, timestamp=ts_sec)
+headers["Content-Type"] = "application/json"
 
-# ---------- submit via ClobClient ----------
-print("\n=== Submitting order via ClobClient ===")
-creds = ApiCreds(api_key=API_KEY, api_secret=API_SECRET, api_passphrase=API_PASSPHRASE)
-client = ClobClient(
-    host=HOST, chain_id=CHAIN, key=PRIVATE_KEY,
-    creds=creds, signature_type=SIG_TYPE, funder=PROXY_ADDR
-)
+proxies = {"https": SOCKS_PROXY, "http": SOCKS_PROXY} if SOCKS_PROXY else None
 
-try:
-    args = OrderArgsV2(
-        token_id    = TOKEN_ID,
-        price       = PRICE,
-        size        = SIZE,
-        side        = Side.BUY,
-    )
-    result = client.create_and_post_order(args)
-    print(f"Result: {json.dumps(result, indent=2)}")
-except Exception as e:
-    print(f"Error: {e}")
+print(f"\n=== Submitting (proxy={'yes' if SOCKS_PROXY else 'no'}) ===")
+resp = requests.post(f"{HOST}/order", data=body_str, headers=headers, proxies=proxies, timeout=10)
+print(f"HTTP {resp.status_code}: {resp.text}")
