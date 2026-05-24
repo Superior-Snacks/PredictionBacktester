@@ -153,7 +153,8 @@ public class PolymarketOrderClient : IPolymarketOrderExecutor
         if (DebugMode)
         {
             Console.ForegroundColor = ConsoleColor.DarkYellow;
-            Console.WriteLine($"\n[ORDER DEBUG] negRisk={negRisk} | tickSize={tickSize} | exchange={verifyingContract}");
+            Console.WriteLine($"\n[ORDER DEBUG] negRisk={negRisk} | tickSize={tickSize}");
+            Console.WriteLine($"[ORDER DEBUG] domain: name=\"Polymarket CTF Exchange\" version=2 chainId={_config.ChainId} contract={verifyingContract}");
             Console.WriteLine($"[ORDER DEBUG] maker={order.Maker} | signer={order.Signer}");
             Console.WriteLine($"[ORDER DEBUG] price={price} | size={size} | side={(side == 0 ? "BUY" : "SELL")}");
             Console.WriteLine($"[ORDER DEBUG] makerAmt={order.MakerAmount} | takerAmt={order.TakerAmount}");
@@ -344,6 +345,15 @@ public class PolymarketOrderClient : IPolymarketOrderExecutor
 
         byte[] digest = Sha3Keccack.Current.CalculateHash(
             ConcatBytes(new byte[] { 0x19, 0x01 }, domainSeparator, structHash));
+
+        if (DebugMode)
+        {
+            Console.ForegroundColor = ConsoleColor.DarkGray;
+            Console.WriteLine($"[EIP712] domainSep=0x{BitConverter.ToString(domainSeparator).Replace("-", "").ToLower()}");
+            Console.WriteLine($"[EIP712] structHash=0x{BitConverter.ToString(structHash).Replace("-", "").ToLower()}");
+            Console.WriteLine($"[EIP712] digest    =0x{BitConverter.ToString(digest).Replace("-", "").ToLower()}");
+            Console.ResetColor();
+        }
 
         var ecKey = new EthECKey(_account.PrivateKey);
         var signature = ecKey.SignAndCalculateV(digest);
