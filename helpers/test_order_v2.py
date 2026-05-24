@@ -43,7 +43,7 @@ from py_clob_client_v2.signer import Signer
 from py_clob_client_v2.clob_types import ApiCreds, RequestArgs
 from py_clob_client_v2.headers.headers import create_level_2_headers
 
-SIG_TYPE = SignatureTypeV2.POLY_PROXY  # 1 — start here; try GNOSIS_SAFE=2 if this fails
+SIG_TYPE = SignatureTypeV2.POLY_GNOSIS_SAFE  # 2 — correct for Gnosis Safe wallets
 
 signer  = Signer(PRIVATE_KEY, CHAIN)
 cfg     = get_contract_config(CHAIN)
