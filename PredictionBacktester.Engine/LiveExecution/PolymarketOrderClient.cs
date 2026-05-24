@@ -40,10 +40,10 @@ public class PolymarketOrderClient : IPolymarketOrderExecutor
         return response;
     }
 
-    // CTF Exchange for standard binary markets
-    private const string CTF_EXCHANGE = "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E";
-    // NegRisk CTF Exchange for multi-outcome markets
-    private const string NEG_RISK_EXCHANGE = "0xC5d563A36AE78145C45a50134d48A1215220f80a";
+    // CTF Exchange V2 — standard binary markets (Polygon mainnet)
+    private const string CTF_EXCHANGE = "0xE111180000d2663C0091e4f400237545B87B996B";
+    // CTF Exchange V2 — NegRisk multi-outcome markets (Polygon mainnet)
+    private const string NEG_RISK_EXCHANGE = "0xe2222d279d744050d28e00520010520000310F59";
     // USDC on Polygon (bridged USDC.e used by Polymarket)
     private const string USDC_CONTRACT = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
     private const int USDC_DECIMALS = 6;
