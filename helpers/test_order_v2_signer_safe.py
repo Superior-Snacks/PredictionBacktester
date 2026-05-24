@@ -1,12 +1,10 @@
 """
 Test V2 order with POLY_1271 (type=3), maker=Safe, signer=Safe.
-
-The API key was registered to the Safe address, so order.signer MUST be the Safe.
-For type=3, the CLOB then calls Safe.isValidSignature(orderDigest, sig).
-The Safe wraps the digest internally, so the EOA must sign the safe-wrapped version.
+The CLOB checks order.signer == POLY_ADDRESS header (the "API KEY address").
+This test sets POLY_ADDRESS = Safe in L2 headers so they match.
 
 Two variants:
-  A: EOA signs raw EIP-712 digest (simple ecrecover flow, in case CLOB doesn't call isValidSignature)
+  A: EOA signs raw EIP-712 digest
   B: EOA signs safe-wrapped digest (for Gnosis Safe isValidSignature)
 
 Usage:
@@ -16,7 +14,7 @@ Usage:
   export POLY_SOCKS_PROXY="socks5://127.0.0.1:8081"
   python3 helpers/test_order_v2_signer_safe.py
 """
-import os, json, time, random, requests
+import os, json, time, random, requests, hmac, hashlib, base64
 from eth_utils.crypto import keccak
 from eth_account import Account
 from eth_account.messages import encode_typed_data
@@ -37,8 +35,6 @@ PRICE    = 0.02
 SIZE     = 1.0
 
 from py_clob_client_v2.signer import Signer
-from py_clob_client_v2.clob_types import ApiCreds, RequestArgs
-from py_clob_client_v2.headers.headers import create_level_2_headers
 
 # ── Gnosis Safe wrapping ──────────────────────────────────────────────────────
 def pad_uint256(v: int) -> bytes: return v.to_bytes(32, 'big')
@@ -57,9 +53,9 @@ def safe_wrap(raw_hash: bytes) -> bytes:
 print(f"Safe (maker+signer): {PROXY_ADDR}")
 print(f"Safe domain sep:     0x{_safe_domain_sep.hex()}")
 
-# ── Manually build typed data with signer=Safe (not EOA) ─────────────────────
-salt   = str(int(random.random() * (time.time_ns() // 1_000_000)))
-ts_ms  = str(int(time.time() * 1000))
+# ── Order params ──────────────────────────────────────────────────────────────
+salt  = str(int(random.random() * (time.time_ns() // 1_000_000)))
+ts_ms = str(int(time.time() * 1000))
 
 typed_data = {
     "primaryType": "Order",
@@ -92,13 +88,13 @@ typed_data = {
     },
     "message": {
         "salt":          int(salt),
-        "maker":         PROXY_ADDR,   # Safe
-        "signer":        PROXY_ADDR,   # Safe (same — this is the key change)
+        "maker":         PROXY_ADDR,
+        "signer":        PROXY_ADDR,   # Safe as the signer field
         "tokenId":       int(TOKEN_ID),
         "makerAmount":   int(PRICE * SIZE * 1_000_000),
         "takerAmount":   int(SIZE * 1_000_000),
-        "side":          0,            # BUY
-        "signatureType": 3,            # POLY_1271
+        "side":          0,
+        "signatureType": 3,
         "timestamp":     int(ts_ms),
         "metadata":      bytes(32),
         "builder":       bytes(32),
@@ -108,21 +104,38 @@ typed_data = {
 encoded    = encode_typed_data(full_message=typed_data)
 raw_digest = eth_keccak(primitive=b"\x19" + encoded.version + encoded.header + encoded.body)
 wrapped    = safe_wrap(raw_digest)
-
 print(f"Raw EIP-712 digest:   0x{raw_digest.hex()}")
 print(f"Safe-wrapped digest:  0x{wrapped.hex()}")
 
-account = Account.from_key(PRIVATE_KEY)
-signer_sdk = Signer(PRIVATE_KEY, CHAIN)
-creds = ApiCreds(api_key=API_KEY, api_secret=API_SECRET, api_passphrase=API_PASSPHRASE)
-proxies = {"https": SOCKS_PROXY, "http": SOCKS_PROXY} if SOCKS_PROXY else None
+# ── L2 HMAC headers with POLY_ADDRESS = Safe (not EOA) ───────────────────────
+def build_l2_headers_with_poly_address(poly_addr: str, body_str: str) -> dict:
+    ts = int(time.time())
+    msg = f"{ts}POST/order{body_str}"
+    sig = hmac.new(
+        base64.b64decode(API_SECRET),
+        msg.encode("utf-8"),
+        hashlib.sha256,
+    ).digest()
+    hmac_sig = base64.b64encode(sig).decode()
+    return {
+        "POLY_ADDRESS":    poly_addr,
+        "POLY_SIGNATURE":  hmac_sig,
+        "POLY_TIMESTAMP":  str(ts),
+        "POLY_API_KEY":    API_KEY,
+        "POLY_PASSPHRASE": API_PASSPHRASE,
+        "Content-Type":    "application/json",
+    }
 
-def submit(sig_hex: str, label: str):
+signer_sdk = Signer(PRIVATE_KEY, CHAIN)
+account    = Account.from_key(PRIVATE_KEY)
+proxies    = {"https": SOCKS_PROXY, "http": SOCKS_PROXY} if SOCKS_PROXY else None
+
+def submit(sig_hex: str, label: str, poly_address: str):
     wire = {
         "order": {
             "salt":          int(salt),
             "maker":         PROXY_ADDR,
-            "signer":        PROXY_ADDR,   # Safe
+            "signer":        PROXY_ADDR,
             "tokenId":       TOKEN_ID,
             "makerAmount":   str(int(PRICE * SIZE * 1_000_000)),
             "takerAmount":   str(int(SIZE * 1_000_000)),
@@ -140,19 +153,21 @@ def submit(sig_hex: str, label: str):
         "postOnly":  False,
     }
     body_str = json.dumps(wire, separators=(",", ":"), ensure_ascii=False)
-    ts_sec = int(time.time())
-    args   = RequestArgs(method="POST", request_path="/order", body=wire, serialized_body=body_str)
-    hdrs   = create_level_2_headers(signer_sdk, creds, args, timestamp=ts_sec)
-    hdrs["Content-Type"] = "application/json"
+    hdrs = build_l2_headers_with_poly_address(poly_address, body_str)
     resp = requests.post(f"{HOST}/order", data=body_str, headers=hdrs, proxies=proxies, timeout=10)
-    print(f"  HTTP {resp.status_code}: {resp.text}")
+    print(f"  [{label}] POLY_ADDRESS={poly_address[:10]}... HTTP {resp.status_code}: {resp.text}")
 
-# ── Test A: EOA signs raw digest ──────────────────────────────────────────────
-raw_sig = "0x" + Account._sign_hash(raw_digest, PRIVATE_KEY).signature.hex()
-print(f"\nTest A: signer=Safe, type=3, EOA signs RAW digest")
-submit(raw_sig, "A")
-
-# ── Test B: EOA signs safe-wrapped digest ─────────────────────────────────────
+raw_sig  = "0x" + Account._sign_hash(raw_digest, PRIVATE_KEY).signature.hex()
 wrap_sig = "0x" + Account._sign_hash(wrapped, PRIVATE_KEY).signature.hex()
-print(f"\nTest B: signer=Safe, type=3, EOA signs SAFE-WRAPPED digest")
-submit(wrap_sig, "B")
+
+print(f"\nTest A: signer=Safe, POLY_ADDRESS=Safe, raw sig")
+submit(raw_sig, "A", PROXY_ADDR)
+
+print(f"\nTest B: signer=Safe, POLY_ADDRESS=Safe, safe-wrapped sig")
+submit(wrap_sig, "B", PROXY_ADDR)
+
+print(f"\nTest C: signer=Safe, POLY_ADDRESS=EOA, raw sig  (baseline)")
+submit(raw_sig, "C", account.address)
+
+print(f"\nTest D: signer=Safe, POLY_ADDRESS=EOA, safe-wrapped sig  (baseline)")
+submit(wrap_sig, "D", account.address)
