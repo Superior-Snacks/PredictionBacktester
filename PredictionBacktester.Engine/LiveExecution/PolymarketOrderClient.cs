@@ -114,7 +114,7 @@ public class PolymarketOrderClient : IPolymarketOrderExecutor
             Expiration    = BigInteger.Zero,
             Timestamp     = new BigInteger(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()),
             Side          = side,
-            SignatureType = 2
+            SignatureType = 1
         };
 
         // 5. Sign the order (EIP-712) using the correct exchange contract
