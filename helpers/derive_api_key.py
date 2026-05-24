@@ -67,64 +67,64 @@ def safe_wrap(raw_hash: bytes) -> bytes:
     safe_msg_hash = keccak(_safe_msg_typehash + keccak(raw_hash))
     return keccak(b'\x19\x01' + _safe_domain_sep + safe_msg_hash)
 
-def attempt(label: str, poly_address: str, digest: bytes) -> bool:
-    sig  = Account._sign_hash(digest, PRIVATE_KEY)
-    ts   = int(time.time())
-    hdrs = {
+def l1_headers(poly_address: str, digest: bytes, ts: int) -> dict:
+    sig = Account._sign_hash(digest, PRIVATE_KEY)
+    return {
         "POLY_ADDRESS":   poly_address,
         "POLY_SIGNATURE": "0x" + sig.signature.hex(),
         "POLY_TIMESTAMP": str(ts),
         "POLY_NONCE":     "0",
     }
-    try:
-        resp = requests.post(f"{HOST}/auth/api-key", headers=hdrs, proxies=proxies, timeout=10)
-        print(f"  [{label}] HTTP {resp.status_code}: {resp.text}")
-        if resp.status_code == 200:
-            data = resp.json()
-            key  = data.get("apiKey")    or data.get("api_key")
-            sec  = data.get("secret")    or data.get("api_secret")
-            pw   = data.get("passphrase") or data.get("api_passphrase")
-            if key:
-                print(f"\n{'='*55}")
-                print(f"  SUCCESS — {label}")
-                print(f"{'='*55}")
-                print(f"  POLY_API_KEY={key}")
-                print(f"  POLY_API_SECRET={sec}")
-                print(f"  POLY_API_PASSPHRASE={pw}")
-                print(f"{'='*55}")
-                return True
-    except Exception as e:
-        print(f"  [{label}] Error: {e}")
+
+def print_creds(data: dict):
+    key = data.get("apiKey")    or data.get("api_key")
+    sec = data.get("secret")    or data.get("api_secret")
+    pw  = data.get("passphrase") or data.get("api_passphrase")
+    if key:
+        print(f"\n{'='*55}")
+        print(f"  POLY_API_KEY={key}")
+        print(f"  POLY_API_SECRET={sec}")
+        print(f"  POLY_API_PASSPHRASE={pw}")
+        print(f"{'='*55}")
+        return True
     return False
 
 ts = int(time.time())
 found = False
 
-# Method A: POLY_ADDRESS=Safe, address-field=Safe, SAFE-WRAPPED
-# → CLOB calls isValidSignature(Safe, raw_auth_hash, sig), Safe verifies safe_wrap was signed
-found |= attempt(
-    "Safe-addr + safe-wrapped(safe-addr struct)",
-    PROXY_ADDRESS,
-    safe_wrap(compute_raw_auth_hash(ts, PROXY_ADDRESS))
-)
+# ── Phase 1: DERIVE existing key (correct endpoint) ──────────────────────────
+# GET /auth/derive-api-key — retrieves the already-registered key for this wallet.
+# This is what py_clob_client_v2.derive_api_key() actually calls.
+print("\n── Phase 1: Derive existing key (EOA L1 → GET /auth/derive-api-key) ──")
+hdrs = l1_headers(EOA_ADDRESS, compute_raw_auth_hash(ts, EOA_ADDRESS), ts)
+resp = requests.get(f"{HOST}/auth/derive-api-key", headers=hdrs, proxies=proxies, timeout=10)
+print(f"  HTTP {resp.status_code}: {resp.text}")
+if resp.status_code == 200:
+    found = print_creds(resp.json())
 
-# Method B: POLY_ADDRESS=Safe, address-field=EOA, SAFE-WRAPPED
-# → Same as A but the address field in the ClobAuth struct uses the EOA
-found |= attempt(
-    "Safe-addr + safe-wrapped(EOA-addr struct)",
-    PROXY_ADDRESS,
-    safe_wrap(compute_raw_auth_hash(ts, EOA_ADDRESS))
-)
+# ── Phase 2: List all keys ─────────────────────────────────────────────────────
+print("\n── Phase 2: List all API keys (GET /auth/api-keys) ──")
+hdrs = l1_headers(EOA_ADDRESS, compute_raw_auth_hash(ts, EOA_ADDRESS), ts)
+resp = requests.get(f"{HOST}/auth/api-keys", headers=hdrs, proxies=proxies, timeout=10)
+print(f"  HTTP {resp.status_code}: {resp.text[:500]}")
 
-# Method C: POLY_ADDRESS=EOA, address-field=EOA, raw (standard flow)
-# → Standard flow — works for ProxyFactory wallets; fails here if no ProxyFactory entry
-found |= attempt(
-    "EOA-addr + raw (standard)",
-    EOA_ADDRESS,
-    compute_raw_auth_hash(ts, EOA_ADDRESS)
-)
+# ── Phase 3: Create with standard EOA flow ────────────────────────────────────
+print("\n── Phase 3: Create (POST /auth/api-key, EOA L1) ──")
+hdrs = l1_headers(EOA_ADDRESS, compute_raw_auth_hash(ts, EOA_ADDRESS), ts)
+resp = requests.post(f"{HOST}/auth/api-key", headers=hdrs, proxies=proxies, timeout=10)
+print(f"  HTTP {resp.status_code}: {resp.text}")
+if resp.status_code == 200:
+    found = print_creds(resp.json())
+
+# ── Phase 4: Create with safe-wrapped L1 (Safe address) ──────────────────────
+print("\n── Phase 4: Create (POST /auth/api-key, Safe-addr + safe-wrapped L1) ──")
+hdrs = l1_headers(PROXY_ADDRESS, safe_wrap(compute_raw_auth_hash(ts, PROXY_ADDRESS)), ts)
+resp = requests.post(f"{HOST}/auth/api-key", headers=hdrs, proxies=proxies, timeout=10)
+print(f"  HTTP {resp.status_code}: {resp.text}")
+if resp.status_code == 200:
+    found = print_creds(resp.json())
 
 if not found:
-    print("\n[RESULT] All methods failed.")
-    print("  The wallet likely needs to be registered via app.polymarket.com first.")
-    print("  Log in with the Gnosis Safe → Settings → API Keys → export credentials.")
+    print("\n[RESULT] No working method found.")
+    print("  → Log into app.polymarket.com with the Gnosis Safe, go to Settings → API Keys,")
+    print("    and export the POLY_API_KEY / POLY_API_SECRET / POLY_API_PASSPHRASE.")
