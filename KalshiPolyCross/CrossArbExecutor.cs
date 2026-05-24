@@ -384,11 +384,22 @@ public class CrossArbExecutor
 
         int     kPriceCents   = (int)Math.Round(kLegAsk * 100);
         decimal pricePerSet   = kLegAsk + pLegAsk;
-        int     contracts     = (int)Math.Floor(_maxBetUsd / pricePerSet);
-        if (_minBuy && contracts > 1) contracts = 1;  // --min-buy: trade bare minimum regardless of maxBet
-        if (contracts < 1)
+
+        // Poly minimum: per-market orderMinSize and the CLOB's hard $1 dollar floor
+        int polyMinByShare   = (int)Math.Ceiling(pair.PolyMinSize);
+        int polyMinByDollar  = pLegAsk > 0 ? (int)Math.Ceiling(1.00m / pLegAsk) : 1;
+        int polyMinContracts = Math.Max(polyMinByShare, polyMinByDollar);
+
+        // --min-buy: trade exactly the Poly floor amount (ignores maxBet — test/debug mode)
+        int contracts = _minBuy
+            ? polyMinContracts
+            : (int)Math.Floor(_maxBetUsd / pricePerSet);
+
+        if (contracts < polyMinContracts)
         {
-            Console.WriteLine($"[EXEC SKIP] {pair.Label} | pricePerSet=${pricePerSet:0.0000} > maxBet=${_maxBetUsd:0.00}");
+            Console.WriteLine(
+                $"[EXEC SKIP] {pair.Label} | pricePerSet=${pricePerSet:0.0000} > maxBet=${_maxBetUsd:0.00} " +
+                $"(need {polyMinContracts} contracts, pLeg=${pLegAsk:0.0000})");
             return;
         }
         decimal polyShares    = contracts;
@@ -423,19 +434,6 @@ public class CrossArbExecutor
                 _polyBalanceUsd   -= polyCost;
             }
         }
-        if (contracts < 1)
-        {
-            Console.WriteLine(
-                $"[EXEC SKIP] {pair.Label} | Balance too low for 1 contract (${pricePerSet:0.0000}/set) " +
-                $"K=${kBalSnap:0.00} P=${pBalSnap:0.00} buffer={_balanceBufferPct:P0}(${minBuffer:0.00})");
-            DebugLog.Balance($"ExecuteAsync {pair.Label}: balance too low — K=${kBalSnap:0.00} P=${pBalSnap:0.00}");
-            return;
-        }
-
-        // Polymarket minimum: orderMinSize (shares) and CLOB $1 dollar floor
-        int polyMinByShare   = (int)Math.Ceiling(pair.PolyMinSize);
-        int polyMinByDollar  = pLegAsk > 0 ? (int)Math.Ceiling(1.00m / pLegAsk) : 1;
-        int polyMinContracts = Math.Max(polyMinByShare, polyMinByDollar);
         if (contracts < polyMinContracts)
         {
             lock (_balanceLock)
