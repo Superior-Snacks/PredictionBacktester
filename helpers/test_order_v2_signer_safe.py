@@ -112,11 +112,11 @@ def build_l2_headers_with_poly_address(poly_addr: str, body_str: str) -> dict:
     ts = int(time.time())
     msg = f"{ts}POST/order{body_str}"
     sig = hmac.new(
-        base64.b64decode(API_SECRET),
+        base64.urlsafe_b64decode(API_SECRET),
         msg.encode("utf-8"),
         hashlib.sha256,
     ).digest()
-    hmac_sig = base64.b64encode(sig).decode()
+    hmac_sig = base64.urlsafe_b64encode(sig).decode()
     return {
         "POLY_ADDRESS":    poly_addr,
         "POLY_SIGNATURE":  hmac_sig,
