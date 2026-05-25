@@ -81,6 +81,11 @@ public class CrossArbExecutor
     private readonly ConcurrentDictionary<string, decimal> _perPairInvested = new();
     private readonly ConcurrentDictionary<string, int>     _polyFeeRates    = new();
     private readonly HashSet<string>                        _blocklist       = new(StringComparer.OrdinalIgnoreCase);
+    private readonly bool _singleEntry;
+    private readonly ConcurrentDictionary<string, byte>    _enteredPairs    = new();
+    private readonly bool          _logErrors;
+    private readonly string        _errorLogPath = "error_log.txt";
+    private readonly SemaphoreSlim _errorLogLock = new(1, 1);
     private          int _kalshiConsecErrors = 0;
     private          int _polyConsecErrors   = 0;
     private const    int MaintenanceErrorThreshold = 5;
@@ -165,6 +170,8 @@ public class CrossArbExecutor
         decimal maxDayLossUsd            = 20m,
         bool    dryRun                   = false,
         bool    minBuy                   = false,
+        bool    singleEntry              = false,
+        bool    logErrors                = false,
         int?    tryN                = null,
         CancellationTokenSource? outerCts = null)
     {
@@ -176,6 +183,8 @@ public class CrossArbExecutor
         _balanceBufferPct    = balanceBufferPct;
         _maxExposureUsd      = maxExposureUsd;
         _minBuy              = minBuy;
+        _singleEntry         = singleEntry;
+        _logErrors           = logErrors;
         _executionThreshold  = executionThreshold;
         _pairCooldownSeconds = pairCooldownSeconds;
         _fillTimeoutMs       = fillTimeoutMs;
