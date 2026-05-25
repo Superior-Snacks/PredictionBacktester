@@ -96,6 +96,12 @@ if (tryIdx >= 0 && tryIdx + 1 < args.Length && int.TryParse(args[tryIdx + 1], ou
 // --min-buy: cap every arb to 1 contract regardless of maxBet sizing
 bool minBuy = args.Contains("--min-buy");
 
+// --single-entry: never re-enter a pair after the first successful trade
+bool singleEntry = args.Contains("--single-entry");
+
+// --log: capture all console output for failed executions and append to error_log.txt
+bool logErrors = args.Contains("--log");
+
 // --seed N: seed the dry-run fill RNG for reproducible simulated outcomes
 int? fillSeed = null;
 int seedIdx = Array.IndexOf(args, "--seed");
@@ -302,6 +308,8 @@ if (isLive || isDryRun)
         maxDayLossUsd:       20m,
         dryRun:              isDryRun,
         minBuy:              minBuy,
+        singleEntry:         singleEntry,
+        logErrors:           logErrors,
         tryN:                tryN,
         outerCts:            cts);
     telemetry.OnArbOpened  += executor.OnArbOpened;

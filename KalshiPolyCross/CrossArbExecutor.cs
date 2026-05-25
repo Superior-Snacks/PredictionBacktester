@@ -129,6 +129,22 @@ public class CrossArbExecutor
     private static decimal KalshiFee(decimal p) => 0.07m * p * (1m - p);
     private static decimal PolyFee(decimal p)   => p * 0.04m * p * (1m - p);
 
+    private static void Emit(List<string>? log, string msg)
+    {
+        Console.WriteLine(msg);
+        log?.Add(msg);
+    }
+
+    private async Task FlushErrorLogAsync(List<string> log, string pairId, string arbType, DateTime ts)
+    {
+        string sep    = new string('=', 60);
+        string header = $"\n{sep}\nATTEMPT {ts:yyyy-MM-dd HH:mm:ss} UTC  pair={pairId}  arbType={arbType}\n{sep}";
+        string block  = header + "\n" + string.Join("\n", log) + "\n";
+        await _errorLogLock.WaitAsync();
+        try   { await File.AppendAllTextAsync(_errorLogPath, block); }
+        finally { _errorLogLock.Release(); }
+    }
+
     // ── Trade journal ─────────────────────────────────────────────────────────
     private readonly string        _journalPath = $"CrossArbJournal_{DateTime.UtcNow:yyyyMMdd}.jsonl";
     private readonly SemaphoreSlim _journalLock = new(1, 1);
@@ -320,6 +336,11 @@ public class CrossArbExecutor
             DebugLog.Trades($"ExecuteAsync {pairId}: skipped — open position already tracked (AllowScaleIn=false)");
             return;
         }
+        if (_singleEntry && _enteredPairs.ContainsKey(pairId))
+        {
+            DebugLog.Trades($"ExecuteAsync {pairId}: skipped — single-entry: already traded once");
+            return;
+        }
 
         var pair = _telemetry.GetPair(pairId);
         if (pair == null)
@@ -507,9 +528,14 @@ public class CrossArbExecutor
 
         // Set cooldown before firing to block concurrent execution on the same pair
         _cooldownUntil[pairId] = now + _pairCooldownSeconds;
+        if (_singleEntry) _enteredPairs.TryAdd(pairId, 0);
+
+        DateTime execStart = DateTime.UtcNow;
+        var execLog = _logErrors ? new List<string>() : null;
+        bool hadError = false;
 
         Console.ForegroundColor = ConsoleColor.Cyan;
-        Console.WriteLine(_dryRun
+        Emit(execLog, _dryRun
             ? $"[DRY RUN EXEC] {pair.Label} | {arbType} | K-{kalshiSide}={kLegAsk:0.0000} " +
               $"P={pLegAsk:0.0000} net=${netNow:0.0000} | {contracts} contracts est.${estimatedCost:0.00}"
             : $"[EXEC] {pair.Label} | {arbType} | K-{kalshiSide}={kLegAsk:0.0000} " +
@@ -529,8 +555,8 @@ public class CrossArbExecutor
         }));
 
         // Fire both legs simultaneously
-        var kalshiTask = PlaceKalshiLegAsync(pair.KalshiTicker, kalshiSide, kPriceCents, contracts, execId);
-        var polyTask   = PlacePolyLegAsync(polyToken, pLegAsk, polyShares, pair.IsNegRisk);
+        var kalshiTask = PlaceKalshiLegAsync(pair.KalshiTicker, kalshiSide, kPriceCents, contracts, execId, execLog);
+        var polyTask   = PlacePolyLegAsync(polyToken, pLegAsk, polyShares, pair.IsNegRisk, execLog);
 
         // Catch any unhandled leg exception so the OTHER leg's fill is still visible.
         // PlaceXxxLegAsync both have general catch blocks, but those blocks call
@@ -547,8 +573,9 @@ public class CrossArbExecutor
 
         if (legException != null)
         {
+            hadError = true;
             Console.ForegroundColor = ConsoleColor.Red;
-            Console.WriteLine(
+            Emit(execLog,
                 $"[LEG EXCEPTION] {pair.Label} | {legException.Message} — " +
                 $"kFilled={kFilled} pFilled={pFilled:0.00}; routing through recovery if needed");
             Console.ResetColor();
@@ -571,8 +598,9 @@ public class CrossArbExecutor
         bool staleSuspected = !neitherFilled && (kFilled == 0 || pFilled == 0);
         if (staleSuspected)
         {
+            hadError = true;
             Console.ForegroundColor = ConsoleColor.DarkYellow;
-            Console.WriteLine(
+            Emit(execLog,
                 $"[STALE PRICE] {pair.Label} | detectedNet={netNow:0.0000} " +
                 $"kFilled={kFilled} pFilled={pFilled:0.00} — one leg missed limit, price may have moved");
             Console.ResetColor();
@@ -602,7 +630,7 @@ public class CrossArbExecutor
             if (arbProfitable)
             {
                 Console.ForegroundColor = ConsoleColor.Green;
-                Console.WriteLine(
+                Emit(execLog,
                     $"[EXEC OK] {pair.Label} | K={balancedQty}@{kPriceCents}¢ | " +
                     $"P={balancedQty:0.00}sh@${pActualPrice:0.0000} | cost=${actualCost:0.00} " +
                     $"actualNet={actualNetPerSet:0.0000} projProfit=${actualProfit:0.00}");
@@ -610,7 +638,7 @@ public class CrossArbExecutor
             else
             {
                 Console.ForegroundColor = ConsoleColor.Yellow;
-                Console.WriteLine(
+                Emit(execLog,
                     $"[EXEC SLIPPAGE] {pair.Label} | K={balancedQty}@{kPriceCents}¢ | " +
                     $"P={balancedQty:0.00}sh@${pActualPrice:0.0000} | cost=${actualCost:0.00} " +
                     $"actualNet={actualNetPerSet:0.0000} detectedNet={netNow:0.0000} — arb eaten by slippage");
@@ -631,7 +659,7 @@ public class CrossArbExecutor
                         maxAllowed = 1.0m + TradeMaxLossMult * expectedEdge
                     }));
                     Console.ForegroundColor = ConsoleColor.Red;
-                    Console.WriteLine(
+                    Emit(execLog,
                         $"[HALT] {pair.Label} | Per-trade tripwire: loss={actualLoss:0.0000} > " +
                         $"{TradeMaxLossMult}× edge={expectedEdge:0.0000}. Manual reset required.");
                     Console.ResetColor();
@@ -656,7 +684,7 @@ public class CrossArbExecutor
                         dayLoss = _dayLossUsd, maxDayLoss = _maxDayLossUsd
                     }));
                     Console.ForegroundColor = ConsoleColor.Red;
-                    Console.WriteLine(
+                    Emit(execLog,
                         $"[HALT] Per-day tripwire: cumulative loss ${_dayLossUsd:0.00} >= " +
                         $"max ${_maxDayLossUsd:0.00}. Manual reset required.");
                     Console.ResetColor();
@@ -714,16 +742,18 @@ public class CrossArbExecutor
         RecoveryResult? recovery = null;
         if (kUnhedged > 0 || pUnhedged > 0)
         {
-            Console.WriteLine(
+            hadError = true;
+            Emit(execLog,
                 $"[EXEC UNHEDGED] {pair.Label} | " +
                 $"kFilled={kFilled} pFilled={pFilled:0.00} balanced={balancedQty} " +
                 $"kExcess={kUnhedged} pExcess={pUnhedged:0.00} — starting recovery");
             recovery = await RecoverUnhedgedAsync(pair, arbType, kalshiSide, polyToken,
-                kFilled, pFilled, kLegAsk, pActualPrice, execId);
+                kFilled, pFilled, kLegAsk, pActualPrice, execId, execLog);
         }
         else if (neitherFilled)
         {
-            Console.WriteLine($"[EXEC MISS] {pair.Label} | Neither leg filled. k-status={kStatus}");
+            hadError = true;
+            Emit(execLog, $"[EXEC MISS] {pair.Label} | Neither leg filled. k-status={kStatus}");
         }
 
         await JournalAsync(JsonSerializer.Serialize(new {
@@ -840,17 +870,20 @@ public class CrossArbExecutor
 
         EnqueueCsvRow(pair, arbType, t0, kPriceCents, kLegAsk, pLegAsk,
                       kFilled, pFilled, pActualPrice, netNow, kStatus);
+
+        if (_logErrors && hadError && execLog?.Count > 0)
+            await FlushErrorLogAsync(execLog, pairId, arbType, execStart);
     }
 
     // ── Kalshi IOC leg ────────────────────────────────────────────────────────
 
     private async Task<(string OrderId, string Status, decimal FillCount)> PlaceKalshiLegAsync(
-        string ticker, string side, int priceCents, int count, string execId = "")
+        string ticker, string side, int priceCents, int count, string execId = "", List<string>? execLog = null)
     {
         string clientId = string.IsNullOrEmpty(execId)
             ? $"CAXARB_{ticker}_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}"
             : $"CAXARB_{execId}";
-        Console.WriteLine($"[ORDER K] {ticker} {side.ToUpper()} {priceCents}¢ × {count}  clientId={clientId}");
+        Emit(execLog, $"[ORDER K] {ticker} {side.ToUpper()} {priceCents}¢ × {count}  clientId={clientId}");
         DebugLog.Trades($"PlaceKalshiLegAsync: {ticker} {side} {priceCents}¢ × {count} clientId={clientId}");
         try
         {
@@ -858,7 +891,7 @@ public class CrossArbExecutor
                 ticker, side, priceCents, count, clientOrderId: clientId);
             Interlocked.Exchange(ref _kalshiConsecErrors, 0);
             Console.ForegroundColor = ConsoleColor.Green;
-            Console.WriteLine($"[FILL K]  {ticker} placed orderId={orderId} status={status} fillImm={fillImm}");
+            Emit(execLog, $"[FILL K]  {ticker} placed orderId={orderId} status={status} fillImm={fillImm}");
             Console.ResetColor();
             DebugLog.Trades($"PlaceKalshiLegAsync: placed orderId={orderId} status={status} fillImm={fillImm}");
 
@@ -867,7 +900,7 @@ public class CrossArbExecutor
 
             if (string.IsNullOrEmpty(orderId))
             {
-                Console.WriteLine($"[FILL K WARN] {ticker} empty orderId with status={status} — not polling");
+                Emit(execLog, $"[FILL K WARN] {ticker} empty orderId with status={status} — not polling");
                 DebugLog.Trades($"PlaceKalshiLegAsync: empty orderId with status={status} — not polling");
                 return ("", status, 0m);
             }
@@ -890,7 +923,7 @@ public class CrossArbExecutor
             await Task.Delay(200).ConfigureAwait(false);
             var (settleStatus, settleFill) = await _kalshi.PollOrderAsync(orderId);
             Console.ForegroundColor = settleStatus == "executed" ? ConsoleColor.Green : ConsoleColor.Yellow;
-            Console.WriteLine($"[FILL K]  {ticker} settle-poll after {polls} polls — status={settleStatus} fill={settleFill}");
+            Emit(execLog, $"[FILL K]  {ticker} settle-poll after {polls} polls — status={settleStatus} fill={settleFill}");
             Console.ResetColor();
             DebugLog.Trades($"PlaceKalshiLegAsync: settle-poll after {polls} polls — status={settleStatus} fill={settleFill}");
             return (orderId, settleStatus is "executed" or "canceled" ? settleStatus : "timeout",
@@ -898,7 +931,7 @@ public class CrossArbExecutor
         }
         catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
         {
-            Console.WriteLine($"[KALSHI RATE LIMIT] {ticker} — 429, retrying in 1s");
+            Emit(execLog, $"[KALSHI RATE LIMIT] {ticker} — 429, retrying in 1s");
             DebugLog.Trades($"PlaceKalshiLegAsync: 429 on {ticker}, backing off 1s");
             await Task.Delay(1_000);
             try
@@ -908,14 +941,14 @@ public class CrossArbExecutor
                     ticker, side, priceCents, count, clientOrderId: retryId);
                 Interlocked.Exchange(ref _kalshiConsecErrors, 0);
                 Console.ForegroundColor = ConsoleColor.Green;
-                Console.WriteLine($"[FILL K]  {ticker} 429-retry placed oid={oid2} status={st2} fill={fi2}");
+                Emit(execLog, $"[FILL K]  {ticker} 429-retry placed oid={oid2} status={st2} fill={fi2}");
                 Console.ResetColor();
                 DebugLog.Trades($"PlaceKalshiLegAsync: 429-retry placed oid={oid2} status={st2} fill={fi2}");
                 return (oid2, st2, fi2);
             }
             catch (Exception retryEx)
             {
-                Console.WriteLine($"[KALSHI LEG ERROR] {ticker} (after 429): {ApiErrorHelper.ClassifyKalshi(retryEx)}");
+                Emit(execLog, $"[KALSHI LEG ERROR] {ticker} (after 429): {ApiErrorHelper.ClassifyKalshi(retryEx)}");
                 DebugLog.Trades($"PlaceKalshiLegAsync: 429 retry failed for {ticker}: {retryEx.Message}");
                 await CheckMaintenanceThresholdAsync("kalshi", Interlocked.Increment(ref _kalshiConsecErrors));
                 return ("", "error", 0m);
@@ -923,7 +956,7 @@ public class CrossArbExecutor
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[KALSHI LEG ERROR] {ticker}: {ApiErrorHelper.ClassifyKalshi(ex)}");
+            Emit(execLog, $"[KALSHI LEG ERROR] {ticker}: {ApiErrorHelper.ClassifyKalshi(ex)}");
             DebugLog.Trades($"PlaceKalshiLegAsync exception for {ticker}: {ex}");
             await CheckMaintenanceThresholdAsync("kalshi", Interlocked.Increment(ref _kalshiConsecErrors));
             return ("", "error", 0m);
@@ -954,10 +987,10 @@ public class CrossArbExecutor
     }
 
     private async Task<(decimal FilledShares, decimal AvgPrice)> PlacePolyLegAsync(
-        string tokenId, decimal price, decimal shares, bool negRisk = false)
+        string tokenId, decimal price, decimal shares, bool negRisk = false, List<string>? execLog = null)
     {
         string tokenShort = tokenId[..Math.Min(12, tokenId.Length)];
-        Console.WriteLine($"[ORDER P] BUY token={tokenShort}... price={price:0.0000} shares={shares}");
+        Emit(execLog, $"[ORDER P] BUY token={tokenShort}... price={price:0.0000} shares={shares}");
         DebugLog.Trades($"PlacePolyLegAsync: token={tokenShort}... price={price:0.0000} shares={shares}");
         try
         {
@@ -984,7 +1017,7 @@ public class CrossArbExecutor
                     (ex.Message.Contains("order_version_mismatch") || ex.Message.Contains("invalid signature")) && !negRisk)
                 {
                     Console.ForegroundColor = ConsoleColor.Yellow;
-                    Console.WriteLine($"[FILL P WARN] {tokenShort}... {(ex.Message.Contains("invalid signature") ? "invalid signature" : "order_version_mismatch")} — pair tagged non-neg-risk but market is neg-risk; retrying with NEG_RISK_EXCHANGE");
+                    Emit(execLog, $"[FILL P WARN] {tokenShort}... {(ex.Message.Contains("invalid signature") ? "invalid signature" : "order_version_mismatch")} — pair tagged non-neg-risk but market is neg-risk; retrying with NEG_RISK_EXCHANGE");
                     Console.ResetColor();
                     negRisk = true;
                 }
@@ -1006,7 +1039,7 @@ public class CrossArbExecutor
 
             if (string.IsNullOrEmpty(result))
             {
-                Console.WriteLine($"[FILL P WARN] {tokenShort}... empty result from SubmitOrderAsync");
+                Emit(execLog, $"[FILL P WARN] {tokenShort}... empty result from SubmitOrderAsync");
                 DebugLog.Trades($"PlacePolyLegAsync: empty result from SubmitOrderAsync");
                 return (0m, 0m);
             }
@@ -1017,7 +1050,7 @@ public class CrossArbExecutor
 
             if (!root.TryGetProperty("success", out var sv) || !sv.GetBoolean())
             {
-                Console.WriteLine($"[FILL P WARN] {tokenShort}... success=false — {result[..Math.Min(200, result.Length)]}");
+                Emit(execLog, $"[FILL P WARN] {tokenShort}... success=false — {result[..Math.Min(200, result.Length)]}");
                 DebugLog.Trades($"PlacePolyLegAsync: success=false in response — {result[..Math.Min(200, result.Length)]}");
                 return (0m, 0m);
             }
@@ -1025,7 +1058,7 @@ public class CrossArbExecutor
             string orderId = root.TryGetProperty("orderID", out var oidEl) ? oidEl.GetString() ?? "" : "";
             string respStatus = root.TryGetProperty("status", out var stEl) ? stEl.GetString() ?? "" : "";
             Console.ForegroundColor = ConsoleColor.Green;
-            Console.WriteLine($"[FILL P]  {tokenShort}... placed orderID={orderId} status={respStatus}");
+            Emit(execLog, $"[FILL P]  {tokenShort}... placed orderID={orderId} status={respStatus}");
             Console.ResetColor();
             DebugLog.Trades($"PlacePolyLegAsync: orderID={orderId} status={respStatus}");
 
@@ -1068,21 +1101,21 @@ public class CrossArbExecutor
                 }
                 catch (Exception pollEx)
                 {
-                    Console.WriteLine($"[FILL P WARN] {tokenShort}... poll failed for orderID={orderId}: {pollEx.Message}");
+                    Emit(execLog, $"[FILL P WARN] {tokenShort}... poll failed for orderID={orderId}: {pollEx.Message}");
                     DebugLog.Trades($"PlacePolyLegAsync: poll failed for orderID={orderId}: {pollEx.Message}");
                 }
             }
 
             if (filledShares <= 0)
             {
-                Console.WriteLine($"[FILL P WARN] {tokenShort}... filledShares=0 after response+poll — FAK killed or no liquidity");
+                Emit(execLog, $"[FILL P WARN] {tokenShort}... filledShares=0 after response+poll — FAK killed or no liquidity");
                 DebugLog.Trades($"PlacePolyLegAsync: filledShares=0 after response+poll — FAK killed or no liquidity");
                 return (0m, 0m);
             }
 
             decimal avgPrice = spentUsdc > 0 ? spentUsdc / filledShares : price;
             Console.ForegroundColor = ConsoleColor.Green;
-            Console.WriteLine($"[FILL P]  {tokenShort}... filled={filledShares} avgPrice={avgPrice:0.0000}");
+            Emit(execLog, $"[FILL P]  {tokenShort}... filled={filledShares} avgPrice={avgPrice:0.0000}");
             Console.ResetColor();
             DebugLog.Trades($"PlacePolyLegAsync: filled={filledShares} avgPrice={avgPrice:0.0000}");
             _ = _poly.UpdateBalanceAllowanceAsync(tokenId); // give CLOB a head start on settlement
@@ -1090,7 +1123,7 @@ public class CrossArbExecutor
         }
         catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
         {
-            Console.WriteLine($"[POLY RATE LIMIT] {tokenShort}... — 429, retrying in 1s");
+            Emit(execLog, $"[POLY RATE LIMIT] {tokenShort}... — 429, retrying in 1s");
             DebugLog.Trades($"PlacePolyLegAsync: 429 on {tokenShort}, backing off 1s");
             await Task.Delay(1_000);
             try
@@ -1109,7 +1142,7 @@ public class CrossArbExecutor
                         {
                             decimal avg2 = su2 > 0 ? su2 / fs2 : price;
                             Console.ForegroundColor = ConsoleColor.Green;
-                            Console.WriteLine($"[FILL P]  {tokenShort}... 429-retry filled={fs2} avg={avg2:0.0000}");
+                            Emit(execLog, $"[FILL P]  {tokenShort}... 429-retry filled={fs2} avg={avg2:0.0000}");
                             Console.ResetColor();
                             DebugLog.Trades($"PlacePolyLegAsync: 429-retry filled={fs2} avg={avg2:0.0000}");
                             _ = _poly.UpdateBalanceAllowanceAsync(tokenId);
@@ -1120,7 +1153,7 @@ public class CrossArbExecutor
             }
             catch (Exception retryEx)
             {
-                Console.WriteLine($"[POLY LEG ERROR] {tokenShort}... (after 429): {ApiErrorHelper.ClassifyPoly(retryEx)}");
+                Emit(execLog, $"[POLY LEG ERROR] {tokenShort}... (after 429): {ApiErrorHelper.ClassifyPoly(retryEx)}");
                 DebugLog.Trades($"PlacePolyLegAsync: 429 retry failed for {tokenShort}: {retryEx.Message}");
             }
             await CheckMaintenanceThresholdAsync("poly", Interlocked.Increment(ref _polyConsecErrors));
@@ -1128,7 +1161,7 @@ public class CrossArbExecutor
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[POLY LEG ERROR] {tokenShort}...: {ApiErrorHelper.ClassifyPoly(ex)}");
+            Emit(execLog, $"[POLY LEG ERROR] {tokenShort}...: {ApiErrorHelper.ClassifyPoly(ex)}");
             DebugLog.Trades($"PlacePolyLegAsync exception for {tokenShort}: {ex}");
             await CheckMaintenanceThresholdAsync("poly", Interlocked.Increment(ref _polyConsecErrors));
             return (0m, 0m);
@@ -1138,10 +1171,10 @@ public class CrossArbExecutor
     // ── Poly FAK sell (reversal) ──────────────────────────────────────────────
 
     private async Task<(decimal SoldShares, decimal AvgPrice)> PlacePolySellAsync(
-        string tokenId, decimal shares, bool negRisk = false)
+        string tokenId, decimal shares, bool negRisk = false, List<string>? execLog = null)
     {
         string tokenShort = tokenId[..Math.Min(12, tokenId.Length)];
-        Console.WriteLine($"[ORDER P] SELL token={tokenShort}... shares={shares}");
+        Emit(execLog, $"[ORDER P] SELL token={tokenShort}... shares={shares}");
         DebugLog.Trades($"PlacePolySellAsync: token={tokenShort}... shares={shares}");
         try
         {
@@ -1166,7 +1199,7 @@ public class CrossArbExecutor
                     (ex.Message.Contains("order_version_mismatch") || ex.Message.Contains("invalid signature")) && !negRisk)
                 {
                     Console.ForegroundColor = ConsoleColor.Yellow;
-                    Console.WriteLine($"[FILL P WARN] {tokenShort}... {(ex.Message.Contains("invalid signature") ? "invalid signature" : "order_version_mismatch")} on sell — pair tagged non-neg-risk but market is neg-risk; retrying with NEG_RISK_EXCHANGE");
+                    Emit(execLog, $"[FILL P WARN] {tokenShort}... {(ex.Message.Contains("invalid signature") ? "invalid signature" : "order_version_mismatch")} on sell — pair tagged non-neg-risk but market is neg-risk; retrying with NEG_RISK_EXCHANGE");
                     Console.ResetColor();
                     negRisk = true;
                 }
@@ -1188,7 +1221,7 @@ public class CrossArbExecutor
                     attempt < maxSellRetries)
                 {
                     if (attempt == 1 || attempt % 3 == 0)
-                        Console.WriteLine($"[SELL HAMMER] {tokenShort}... tokens not settled yet. Retrying in 500ms... ({attempt}/{maxSellRetries})");
+                        Emit(execLog, $"[SELL HAMMER] {tokenShort}... tokens not settled yet. Retrying in 500ms... ({attempt}/{maxSellRetries})");
                     await Task.Delay(500);
                     try { await _poly.UpdateBalanceAllowanceAsync(tokenId); } catch { /* best-effort */ }
                 }
@@ -1200,7 +1233,7 @@ public class CrossArbExecutor
             var root = doc.RootElement;
             if (!root.TryGetProperty("success", out var sv) || !sv.GetBoolean())
             {
-                Console.WriteLine($"[FILL P WARN] {tokenShort}... sell success=false — {result[..Math.Min(200, result.Length)]}");
+                Emit(execLog, $"[FILL P WARN] {tokenShort}... sell success=false — {result[..Math.Min(200, result.Length)]}");
                 DebugLog.Trades($"PlacePolySellAsync: success=false — {result[..Math.Min(200, result.Length)]}");
                 return (0m, 0m);
             }
@@ -1209,14 +1242,14 @@ public class CrossArbExecutor
             (decimal soldShares, decimal usdcReceived) = ExtractPolyFill(root, isSell: true);
             decimal avgPrice = soldShares > 0 && usdcReceived > 0 ? usdcReceived / soldShares : 0m;
             Console.ForegroundColor = ConsoleColor.Green;
-            Console.WriteLine($"[FILL P]  {tokenShort}... sold={soldShares} avgPrice={avgPrice:0.0000}");
+            Emit(execLog, $"[FILL P]  {tokenShort}... sold={soldShares} avgPrice={avgPrice:0.0000}");
             Console.ResetColor();
             DebugLog.Trades($"PlacePolySellAsync: soldShares={soldShares} avgPrice={avgPrice:0.0000}");
             return (soldShares, avgPrice);
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[POLY SELL ERROR] {tokenShort}...: {ApiErrorHelper.ClassifyPoly(ex)}");
+            Emit(execLog, $"[POLY SELL ERROR] {tokenShort}...: {ApiErrorHelper.ClassifyPoly(ex)}");
             DebugLog.Trades($"PlacePolySellAsync exception for {tokenShort}: {ex}");
             return (0m, 0m);
         }
@@ -1229,7 +1262,7 @@ public class CrossArbExecutor
         string kalshiSide, string polyToken,
         decimal kFilled, decimal pFilled,
         decimal kLegAsk, decimal pActualPrice,
-        string execId = "")
+        string execId = "", List<string>? execLog = null)
     {
         decimal balancedQty = Math.Min(kFilled, pFilled);
         decimal kUnhedged   = kFilled - balancedQty;
@@ -1248,7 +1281,7 @@ public class CrossArbExecutor
                     pair = pair.PairId, leg = "kalshi", qty = kUnhedged, absorbedUsd = kUnhedgedValue
                 }));
                 Console.ForegroundColor = ConsoleColor.DarkYellow;
-                Console.WriteLine($"[CLEANUP DUST] {pair.Label} | Absorbing {kUnhedged} Kalshi dust (${kUnhedgedValue:0.00}) — no halt");
+                Emit(execLog, $"[CLEANUP DUST] {pair.Label} | Absorbing {kUnhedged} Kalshi dust (${kUnhedgedValue:0.00}) — no halt");
                 Console.ResetColor();
                 return new RecoveryResult("DUST_ABSORBED_KALSHI", kUnhedged, kUnhedgedValue);
             }
@@ -1257,7 +1290,7 @@ public class CrossArbExecutor
             if (!hasPolyBook)
             {
                 DebugLog.Trades($"RecoverUnhedgedAsync {pair.Label}: Poly book missing for {polyToken} — skipping hedge, falling through to reverse");
-                Console.WriteLine($"[RECOVER] {pair.Label} | Poly book missing — skipping hedge, falling through to reverse");
+                Emit(execLog, $"[RECOVER] {pair.Label} | Poly book missing — skipping hedge, falling through to reverse");
             }
             bool skipHedgeA = kUnhedgedValue < CleanupHedgeSkipUsd || !hasPolyBook;
 
@@ -1270,11 +1303,17 @@ public class CrossArbExecutor
                 if (hedgeNet < 1.0m)
                 {
                     Console.ForegroundColor = ConsoleColor.Yellow;
-                    Console.WriteLine($"[RECOVER] {pair.Label} | kExcess={kUnhedged} hedgeNet={hedgeNet:0.0000} — completing hedge on Poly");
+                    Emit(execLog, $"[RECOVER] {pair.Label} | kExcess={kUnhedged} hedgeNet={hedgeNet:0.0000} — completing hedge on Poly");
                     Console.ResetColor();
 
                     decimal polyHedgeLimit = Math.Min(1.0m, currentPolyAsk + RecoveryHedgeSlippageCents / 100m);
-                    var (polyFill2, _) = await PlacePolyLegAsync(polyToken, polyHedgeLimit, kUnhedged, pair.IsNegRisk);
+                    // Skip hedge if fractional Kalshi fill makes Poly order < $1 CLOB minimum
+                    decimal polyHedgeCost  = Math.Floor(polyHedgeLimit * 100m) / 100m * kUnhedged;
+                    bool polyHedgeTooSmall = polyHedgeCost < 1.00m;
+                    if (polyHedgeTooSmall)
+                        Emit(execLog, $"[RECOVER] {pair.Label} | Poly hedge cost ${polyHedgeCost:0.00} < $1 min — reversing Kalshi excess directly");
+                    (decimal polyFill2, decimal _) = polyHedgeTooSmall ? (0m, 0m)
+                        : await PlacePolyLegAsync(polyToken, polyHedgeLimit, kUnhedged, pair.IsNegRisk, execLog);
                     if (polyFill2 > 0)
                     {
                         decimal additional   = Math.Min(kUnhedged, polyFill2);
@@ -1291,7 +1330,7 @@ public class CrossArbExecutor
                             hedgedQty = additional, remainderQty = Math.Round(remainderQty, 6)
                         }));
                         Console.ForegroundColor = ConsoleColor.Green;
-                        Console.WriteLine($"[RECOVER OK] {pair.Label} | hedge completed +{additional} sets via Poly retry");
+                        Emit(execLog, $"[RECOVER OK] {pair.Label} | hedge completed +{additional} sets via Poly retry");
                         Console.ResetColor();
                         if (remainderQty > 0m)
                         {
@@ -1313,7 +1352,7 @@ public class CrossArbExecutor
                                     unresolvedQty = Math.Round(remainderQty, 6), unresolvedValueUsd = Math.Round(remValue, 4)
                                 }));
                                 Console.ForegroundColor = ConsoleColor.Red;
-                                Console.WriteLine($"[HALT] {pair.Label} | Partial Poly hedge left {remainderQty} Kalshi contracts unhedged — manual reset required.");
+                                Emit(execLog, $"[HALT] {pair.Label} | Partial Poly hedge left {remainderQty} Kalshi contracts unhedged — manual reset required.");
                                 Console.ResetColor();
                                 _halted = true;
                                 return new RecoveryResult("HALT", remainderQty, remValue);
@@ -1321,16 +1360,16 @@ public class CrossArbExecutor
                         }
                         return new RecoveryResult("HEDGE_COMPLETED", additional, 0);
                     }
-                    Console.WriteLine($"[RECOVER] {pair.Label} | Poly hedge retry failed — reversing Kalshi excess");
+                    Emit(execLog, $"[RECOVER] {pair.Label} | Poly hedge retry failed — reversing Kalshi excess");
                 }
                 else
                 {
-                    Console.WriteLine($"[RECOVER] {pair.Label} | hedgeNet={hedgeNet:0.0000} >= 1.0 — reversing {kUnhedged} Kalshi {kalshiSide} directly");
+                    Emit(execLog, $"[RECOVER] {pair.Label} | hedgeNet={hedgeNet:0.0000} >= 1.0 — reversing {kUnhedged} Kalshi {kalshiSide} directly");
                 }
             }
             else if (kUnhedgedValue < CleanupHedgeSkipUsd)
             {
-                Console.WriteLine($"[CLEANUP SKIP HEDGE] {pair.Label} | kExcess={kUnhedged} value=${kUnhedgedValue:0.00} < ${CleanupHedgeSkipUsd:0.00} — reversing directly");
+                Emit(execLog, $"[CLEANUP SKIP HEDGE] {pair.Label} | kExcess={kUnhedged} value=${kUnhedgedValue:0.00} < ${CleanupHedgeSkipUsd:0.00} — reversing directly");
             }
 
             // Reverse: sell excess Kalshi contracts back at best bid − buffer
@@ -1356,7 +1395,7 @@ public class CrossArbExecutor
                             loss = Math.Max(0m, reversalLoss)
                         }));
                         Console.ForegroundColor = ConsoleColor.Yellow;
-                        Console.WriteLine($"[RECOVER REVERSED] {pair.Label} | sold {revFill} Kalshi {kalshiSide} @ {kReverseCents}¢");
+                        Emit(execLog, $"[RECOVER REVERSED] {pair.Label} | sold {revFill} Kalshi {kalshiSide} @ {kReverseCents}¢");
                         Console.ResetColor();
                         return new RecoveryResult("REVERSED_KALSHI", revFill, Math.Max(0m, reversalLoss));
                     }
@@ -1368,7 +1407,7 @@ public class CrossArbExecutor
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"[RECOVER ERROR] {pair.Label} | Kalshi reverse exception: {ApiErrorHelper.ClassifyKalshi(ex)}");
+                    Emit(execLog, $"[RECOVER ERROR] {pair.Label} | Kalshi reverse exception: {ApiErrorHelper.ClassifyKalshi(ex)}");
                     await JournalAsync(JsonSerializer.Serialize(new {
                         t = DateTime.UtcNow, @event = "CLEANUP_REVERSE_ERROR", execId,
                         pair = pair.PairId, leg = "kalshi",
@@ -1378,7 +1417,7 @@ public class CrossArbExecutor
             }
             else
             {
-                Console.WriteLine($"[RECOVER] {pair.Label} | Kalshi bid side empty — skipping doomed reverse");
+                Emit(execLog, $"[RECOVER] {pair.Label} | Kalshi bid side empty — skipping doomed reverse");
             }
 
             await JournalAsync(JsonSerializer.Serialize(new {
@@ -1387,7 +1426,7 @@ public class CrossArbExecutor
                 unresolvedQty = Math.Round(kUnhedged, 6), unresolvedValueUsd = Math.Round(kUnhedgedValue, 4)
             }));
             Console.ForegroundColor = ConsoleColor.Red;
-            Console.WriteLine($"[HALT] {pair.Label} | Reverse order failed — unhedged position open. Manual reset required.");
+            Emit(execLog, $"[HALT] {pair.Label} | Reverse order failed — unhedged position open. Manual reset required.");
             Console.ResetColor();
             _halted = true;
             return new RecoveryResult("HALT", 0, kUnhedgedValue);
@@ -1406,7 +1445,7 @@ public class CrossArbExecutor
                     pair = pair.PairId, leg = "poly", qty = pUnhedged, absorbedUsd = pUnhedgedValue
                 }));
                 Console.ForegroundColor = ConsoleColor.DarkYellow;
-                Console.WriteLine($"[CLEANUP DUST] {pair.Label} | Absorbing {pUnhedged:0.00} Poly dust (${pUnhedgedValue:0.00}) — no halt");
+                Emit(execLog, $"[CLEANUP DUST] {pair.Label} | Absorbing {pUnhedged:0.00} Poly dust (${pUnhedgedValue:0.00}) — no halt");
                 Console.ResetColor();
                 return new RecoveryResult("DUST_ABSORBED_POLY", pUnhedged, pUnhedgedValue);
             }
@@ -1416,7 +1455,7 @@ public class CrossArbExecutor
             if (!hasKalshiBook)
             {
                 DebugLog.Trades($"RecoverUnhedgedAsync {pair.Label}: Kalshi book missing for {kHedgeKey} — skipping hedge, falling through to reverse");
-                Console.WriteLine($"[RECOVER] {pair.Label} | Kalshi book missing — skipping hedge, falling through to reverse");
+                Emit(execLog, $"[RECOVER] {pair.Label} | Kalshi book missing — skipping hedge, falling through to reverse");
             }
             bool skipHedgeB = pUnhedgedValue < CleanupHedgeSkipUsd || !hasKalshiBook;
 
@@ -1440,17 +1479,17 @@ public class CrossArbExecutor
                             pair = pair.PairId, leg = "poly_fractional", qty = pUnhedged, absorbedUsd = fracValue
                         }));
                         Console.ForegroundColor = ConsoleColor.DarkYellow;
-                        Console.WriteLine($"[CLEANUP DUST] {pair.Label} | Absorbing {pUnhedged:0.0000} fractional Poly dust (${fracValue:0.00}) — sub-1-share, can't hedge on Kalshi");
+                        Emit(execLog, $"[CLEANUP DUST] {pair.Label} | Absorbing {pUnhedged:0.0000} fractional Poly dust (${fracValue:0.00}) — sub-1-share, can't hedge on Kalshi");
                         Console.ResetColor();
                         return new RecoveryResult("DUST_ABSORBED_POLY", pUnhedged, fracValue);
                     }
 
                     Console.ForegroundColor = ConsoleColor.Yellow;
-                    Console.WriteLine($"[RECOVER] {pair.Label} | pExcess={pUnhedged:0.0000} hedgeQty={hedgeQty} hedgeNet={hedgeNet:0.0000} — completing hedge on Kalshi");
+                    Emit(execLog, $"[RECOVER] {pair.Label} | pExcess={pUnhedged:0.0000} hedgeQty={hedgeQty} hedgeNet={hedgeNet:0.0000} — completing hedge on Kalshi");
                     Console.ResetColor();
 
                     var (_, _, kFill2) = await PlaceKalshiLegAsync(
-                        pair.KalshiTicker, kalshiSide, currentKCents, hedgeQty, execId);
+                        pair.KalshiTicker, kalshiSide, currentKCents, hedgeQty, execId, execLog);
                     if (kFill2 > 0)
                     {
                         decimal additional    = Math.Min((decimal)hedgeQty, kFill2);
@@ -1489,31 +1528,31 @@ public class CrossArbExecutor
                                     unresolvedQty = Math.Round(remainderQty, 6), unresolvedValueUsd = Math.Round(remValue, 4)
                                 }));
                                 Console.ForegroundColor = ConsoleColor.Red;
-                                Console.WriteLine($"[HALT] {pair.Label} | Partial Kalshi hedge left {remainderQty:0.00} Poly shares unhedged — manual reset required.");
+                                Emit(execLog, $"[HALT] {pair.Label} | Partial Kalshi hedge left {remainderQty:0.00} Poly shares unhedged — manual reset required.");
                                 Console.ResetColor();
                                 _halted = true;
                                 return new RecoveryResult("HALT", remainderQty, remValue);
                             }
                         }
                         Console.ForegroundColor = ConsoleColor.Green;
-                        Console.WriteLine($"[RECOVER OK] {pair.Label} | hedge completed +{additional} sets via Kalshi retry");
+                        Emit(execLog, $"[RECOVER OK] {pair.Label} | hedge completed +{additional} sets via Kalshi retry");
                         Console.ResetColor();
                         return new RecoveryResult("HEDGE_COMPLETED", additional, 0);
                     }
-                    Console.WriteLine($"[RECOVER] {pair.Label} | Kalshi hedge retry failed — reversing Poly excess");
+                    Emit(execLog, $"[RECOVER] {pair.Label} | Kalshi hedge retry failed — reversing Poly excess");
                 }
                 else
                 {
-                    Console.WriteLine($"[RECOVER] {pair.Label} | hedgeNet={hedgeNet:0.0000} >= 1.0 — reversing {pUnhedged:0.00} Poly shares directly");
+                    Emit(execLog, $"[RECOVER] {pair.Label} | hedgeNet={hedgeNet:0.0000} >= 1.0 — reversing {pUnhedged:0.00} Poly shares directly");
                 }
             }
             else if (pUnhedgedValue < CleanupHedgeSkipUsd)
             {
-                Console.WriteLine($"[CLEANUP SKIP HEDGE] {pair.Label} | pExcess={pUnhedged:0.00} value=${pUnhedgedValue:0.00} < ${CleanupHedgeSkipUsd:0.00} — reversing directly");
+                Emit(execLog, $"[CLEANUP SKIP HEDGE] {pair.Label} | pExcess={pUnhedged:0.00} value=${pUnhedgedValue:0.00} < ${CleanupHedgeSkipUsd:0.00} — reversing directly");
             }
 
             // Reverse: sell excess Poly shares back
-            var (soldShares, soldPrice) = await PlacePolySellAsync(polyToken, pUnhedged, pair.IsNegRisk);
+            var (soldShares, soldPrice) = await PlacePolySellAsync(polyToken, pUnhedged, pair.IsNegRisk, execLog);
             if (soldShares > 0)
             {
                 decimal reversalLoss = soldShares * (pActualPrice - soldPrice);
@@ -1526,7 +1565,7 @@ public class CrossArbExecutor
                     loss = Math.Max(0m, reversalLoss)
                 }));
                 Console.ForegroundColor = ConsoleColor.Yellow;
-                Console.WriteLine($"[RECOVER REVERSED] {pair.Label} | sold {soldShares:0.00} Poly shares @ ${soldPrice:0.0000}");
+                Emit(execLog, $"[RECOVER REVERSED] {pair.Label} | sold {soldShares:0.00} Poly shares @ ${soldPrice:0.0000}");
                 Console.ResetColor();
                 return new RecoveryResult("REVERSED_POLY", soldShares, Math.Max(0m, reversalLoss));
             }
@@ -1542,7 +1581,7 @@ public class CrossArbExecutor
                 unresolvedQty = Math.Round(pUnhedged, 6), unresolvedValueUsd = Math.Round(pUnhedgedValue, 4)
             }));
             Console.ForegroundColor = ConsoleColor.Red;
-            Console.WriteLine($"[HALT] {pair.Label} | Reverse order failed — unhedged position open. Manual reset required.");
+            Emit(execLog, $"[HALT] {pair.Label} | Reverse order failed — unhedged position open. Manual reset required.");
             Console.ResetColor();
             _halted = true;
             return new RecoveryResult("HALT", 0, pUnhedgedValue);
