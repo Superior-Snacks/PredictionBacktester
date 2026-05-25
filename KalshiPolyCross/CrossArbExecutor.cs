@@ -385,10 +385,13 @@ public class CrossArbExecutor
         int     kPriceCents   = (int)Math.Round(kLegAsk * 100);
         decimal pricePerSet   = kLegAsk + pLegAsk;
 
-        // Poly minimum: per-market orderMinSize and the CLOB's hard $1 dollar floor
-        int polyMinByShare   = (int)Math.Ceiling(pair.PolyMinSize);
-        int polyMinByDollar  = pLegAsk > 0 ? (int)Math.Ceiling(1.00m / pLegAsk) : 1;
-        int polyMinContracts = Math.Max(polyMinByShare, polyMinByDollar);
+        // Poly minimum: per-market orderMinSize and the CLOB's hard $1 dollar floor.
+        // Floor pLegAsk to the order tick (0.01) so the minimum count guarantees
+        // makerAmount >= $1 after the same rounding SubmitOrderAsync applies.
+        decimal pLegAskForMin = Math.Max(0.01m, Math.Floor(pLegAsk * 100m) / 100m);
+        int polyMinByShare    = (int)Math.Ceiling(pair.PolyMinSize);
+        int polyMinByDollar   = (int)Math.Ceiling(1.00m / pLegAskForMin);
+        int polyMinContracts  = Math.Max(polyMinByShare, polyMinByDollar);
 
         // --min-buy: trade exactly the Poly floor amount (ignores maxBet — test/debug mode)
         int contracts = _minBuy
