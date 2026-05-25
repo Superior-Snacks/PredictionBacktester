@@ -969,10 +969,10 @@ public class CrossArbExecutor
                     break;
                 }
                 catch (Exception ex) when (
-                    ex.Message.Contains("order_version_mismatch") && !negRisk)
+                    (ex.Message.Contains("order_version_mismatch") || ex.Message.Contains("invalid signature")) && !negRisk)
                 {
                     Console.ForegroundColor = ConsoleColor.Yellow;
-                    Console.WriteLine($"[FILL P WARN] {tokenShort}... order_version_mismatch — pair tagged non-neg-risk but market is; retrying with NEG_RISK_EXCHANGE");
+                    Console.WriteLine($"[FILL P WARN] {tokenShort}... {(ex.Message.Contains("invalid signature") ? "invalid signature" : "order_version_mismatch")} — pair tagged non-neg-risk but market is neg-risk; retrying with NEG_RISK_EXCHANGE");
                     Console.ResetColor();
                     negRisk = true;
                 }
@@ -1151,10 +1151,10 @@ public class CrossArbExecutor
                     break;
                 }
                 catch (Exception ex) when (
-                    ex.Message.Contains("order_version_mismatch") && !negRisk)
+                    (ex.Message.Contains("order_version_mismatch") || ex.Message.Contains("invalid signature")) && !negRisk)
                 {
                     Console.ForegroundColor = ConsoleColor.Yellow;
-                    Console.WriteLine($"[FILL P WARN] {tokenShort}... order_version_mismatch on sell — retrying with NEG_RISK_EXCHANGE");
+                    Console.WriteLine($"[FILL P WARN] {tokenShort}... {(ex.Message.Contains("invalid signature") ? "invalid signature" : "order_version_mismatch")} on sell — pair tagged non-neg-risk but market is neg-risk; retrying with NEG_RISK_EXCHANGE");
                     Console.ResetColor();
                     negRisk = true;
                 }
