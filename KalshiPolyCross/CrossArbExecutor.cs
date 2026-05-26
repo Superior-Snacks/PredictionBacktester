@@ -277,6 +277,10 @@ public class CrossArbExecutor
             string tag = initial ? "[BALANCE INIT]" : "[BALANCE]";
             Console.WriteLine($"{tag} Kalshi=${newKalshi:0.00} Poly=${newPoly:0.00}");
             DebugLog.Balance($"RefreshBalancesAsync: K=${newKalshi:0.00} P=${newPoly:0.00} initial={initial}");
+            await JournalAsync(JsonSerializer.Serialize(new {
+                t = DateTime.UtcNow, @event = "BALANCE",
+                kalshi = newKalshi, poly = newPoly, initial
+            }));
         }
         catch (Exception ex)
         {
@@ -1888,6 +1892,49 @@ public class CrossArbExecutor
             catch (TaskCanceledException) { break; }
 
             if (_halted || _connectionHalted || _openPositions.IsEmpty) continue;
+
+            // Settlement detection: positions where kBid is zero may have resolved on Kalshi.
+            // Fetch GetPositionsAsync() lazily — at most one call per 60 s tick.
+            if (!_dryRun)
+            {
+                List<(string Ticker, int Position)>? kalshiPositions = null;
+                foreach (var (pairId, pos) in _openPositions.ToArray())
+                {
+                    var pair = _telemetry.GetPair(pairId);
+                    if (pair == null) continue;
+                    string kBidKey = pos.ArbType == "K_YES_P_NO"
+                        ? $"K:{pair.KalshiTicker}" : $"K:{pair.KalshiTicker}_NO";
+                    if (!_books.TryGetValue(kBidKey, out var kBook) || kBook.GetBestBidPrice() > 0m) continue;
+
+                    try { kalshiPositions ??= await _kalshi.GetPositionsAsync(); }
+                    catch (Exception ex)
+                    {
+                        DebugLog.Trades($"Settlement check GetPositionsAsync failed: {ex.Message}");
+                        break;
+                    }
+                    bool stillHeld = kalshiPositions.Any(p =>
+                        p.Ticker.Equals(pair.KalshiTicker, StringComparison.OrdinalIgnoreCase) &&
+                        Math.Abs(p.Position) > 0);
+                    if (stillHeld) continue;
+
+                    _openPositions.TryRemove(pairId, out _);
+                    decimal settledCost = pos.KalshiContracts * pos.KalshiEntryPrice
+                                        + pos.PolyShares      * pos.PolyEntryPrice;
+                    lock (_exposureLock) { _totalExposure = Math.Max(0m, _totalExposure - settledCost); }
+                    Console.ForegroundColor = ConsoleColor.Cyan;
+                    Console.WriteLine($"[SETTLEMENT] {pair.Label} | position settled — removed from tracking");
+                    Console.ResetColor();
+                    await JournalAsync(JsonSerializer.Serialize(new {
+                        t            = DateTime.UtcNow, @event = "SETTLEMENT_DETECTED",
+                        execId       = pos.ExecId, pairId, label = pair.Label,
+                        kContracts   = pos.KalshiContracts, kEntryPrice = pos.KalshiEntryPrice,
+                        pShares      = pos.PolyShares,      pEntryPrice = pos.PolyEntryPrice,
+                        entryCostUsd = Math.Round(settledCost, 4),
+                        heldSince    = pos.EntryTime
+                    }));
+                    await RefreshBalancesAsync();
+                }
+            }
 
             foreach (var (pairId, pos) in _openPositions.ToArray())
             {

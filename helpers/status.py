@@ -172,7 +172,7 @@ def load_journal_state(journal_files):
         if evt == "EXECUTION_COMPLETE" and ev.get("outcome") == "FILLED" and ev.get("position"):
             open_positions[eid] = ev
 
-        elif evt == "EARLY_EXIT_COMPLETE":
+        elif evt in ("EARLY_EXIT_COMPLETE", "SETTLEMENT_DETECTED"):
             open_positions.pop(eid, None)
             if ev.get("t", "") >= cutoff:
                 closed_today.append(ev)
