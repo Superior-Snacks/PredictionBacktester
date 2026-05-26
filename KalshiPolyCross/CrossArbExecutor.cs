@@ -466,6 +466,11 @@ public class CrossArbExecutor
                 _kalshiBalanceUsd -= kalshiCost;
                 _polyBalanceUsd   -= polyCost;
             }
+            else
+            {
+                // Nothing reserved — zero out so the restoration below is a no-op.
+                kalshiCost = polyCost = estimatedCost = 0m;
+            }
         }
         if (contracts < polyMinContracts)
         {
@@ -475,9 +480,9 @@ public class CrossArbExecutor
                 _polyBalanceUsd   += polyCost;
             }
             Console.WriteLine(
-                $"[EXEC SKIP] {pair.Label} | {contracts} contract(s) below Poly minimum {polyMinContracts} " +
-                $"(orderMinSize={pair.PolyMinSize} pLeg=${pLegAsk:0.0000} → need ${pLegAsk * polyMinContracts:0.00} ≥ $1.00)");
-            DebugLog.Trades($"ExecuteAsync {pair.Label}: skipped — {contracts} contracts < polyMin {polyMinContracts}");
+                $"[EXEC SKIP] {pair.Label} | balance-limited to {contracts} contract(s), need ≥ {polyMinContracts} " +
+                $"(K=${kBalSnap:0.00} P=${pBalSnap:0.00} need K≈${kLegAsk * polyMinContracts:0.00} P≈${pLegAsk * polyMinContracts:0.00})");
+            DebugLog.Trades($"ExecuteAsync {pair.Label}: skipped — {contracts} contracts < polyMin {polyMinContracts} (balance-limited)");
             return;
         }
 
@@ -1898,7 +1903,8 @@ public class CrossArbExecutor
 
     private async Task CheckEarlyExitAsync(string pairId, ArbPosition pos)
     {
-        if (EarlyExitThreshold <= 0m) return;
+        bool breakEvenMode = _minBuy;
+        if (!breakEvenMode && EarlyExitThreshold <= 0m) return;
 
         var pair = _telemetry.GetPair(pairId);
         if (pair == null) return;
@@ -1930,8 +1936,15 @@ public class CrossArbExecutor
             $"hurdle={EarlyExitThreshold * expectedProfitPerSet:0.0000} " +
             $"total=${unrealizedPnlTotal:0.00}");
 
-        if (unrealizedPnlPerSet < EarlyExitThreshold * expectedProfitPerSet) return;
-        if (unrealizedPnlTotal  < EarlyExitMinProfitUsd) return;
+        if (breakEvenMode)
+        {
+            if (unrealizedPnlPerSet < 0m) return;
+        }
+        else
+        {
+            if (unrealizedPnlPerSet < EarlyExitThreshold * expectedProfitPerSet) return;
+            if (unrealizedPnlTotal  < EarlyExitMinProfitUsd) return;
+        }
 
         // Guard: reuse _inFlight so an OnArbOpened callback can't race with our exit.
         if (!_inFlight.TryAdd(pairId, 0))
@@ -1946,8 +1959,10 @@ public class CrossArbExecutor
 
             Console.ForegroundColor = ConsoleColor.Cyan;
             Console.WriteLine(
-                $"[EARLY EXIT] {pair.Label} | unrealizedPnl=${unrealizedPnlTotal:0.00} ≥ " +
-                $"{EarlyExitThreshold:P0} × expected=${(expectedProfitPerSet * currentPos.KalshiContracts):0.00} " +
+                $"[EARLY EXIT] {pair.Label} | unrealizedPnl=${unrealizedPnlTotal:0.00} " +
+                (breakEvenMode
+                    ? "≥ 0 (break-even) "
+                    : $"≥ {EarlyExitThreshold:P0} × expected=${(expectedProfitPerSet * currentPos.KalshiContracts):0.00} ") +
                 $"— closing early (kBid={kBid:0.0000} pBid={pBid:0.0000})");
             Console.ResetColor();
 
@@ -1957,13 +1972,18 @@ public class CrossArbExecutor
                 kalshiContracts = currentPos.KalshiContracts, polyShares = currentPos.PolyShares,
                 kBid, pBid, unrealizedPnlPerSet, unrealizedPnlTotal,
                 expectedProfitTotal = expectedProfitPerSet * currentPos.KalshiContracts,
-                threshold = EarlyExitThreshold, dryRun = _dryRun
+                threshold = breakEvenMode ? (decimal?)null : EarlyExitThreshold, breakEven = breakEvenMode, dryRun = _dryRun
             }));
 
             if (_dryRun)
             {
                 _openPositions.TryRemove(pairId, out _);
                 Interlocked.Increment(ref _earlyExitsCompleted);
+                decimal dryCost = currentPos.KalshiContracts * currentPos.KalshiEntryPrice
+                                + currentPos.PolyShares      * currentPos.PolyEntryPrice;
+                lock (_exposureLock) { _totalExposure = Math.Max(0m, _totalExposure - dryCost); }
+                lock (_balanceLock)  { _kalshiBalanceUsd += currentPos.KalshiContracts * kBid;
+                                       _polyBalanceUsd   += currentPos.PolyShares      * pBid; }
                 Console.ForegroundColor = ConsoleColor.Cyan;
                 Console.WriteLine($"[EARLY EXIT DRY-RUN] {pair.Label} | position closed (simulated)");
                 Console.ResetColor();
@@ -2005,6 +2025,9 @@ public class CrossArbExecutor
             {
                 _openPositions.TryRemove(pairId, out _);
                 Interlocked.Increment(ref _earlyExitsCompleted);
+                decimal exitEntryCost = currentPos.KalshiContracts * currentPos.KalshiEntryPrice
+                                      + currentPos.PolyShares      * currentPos.PolyEntryPrice;
+                lock (_exposureLock) { _totalExposure = Math.Max(0m, _totalExposure - exitEntryCost); }
                 decimal kProceeds   = kSold * (kSellCents / 100m);
                 decimal pProceeds   = pSold * pAvgPrice;
                 decimal kExitFee    = KalshiFee(kSellCents / 100m) * kSold;
@@ -2026,6 +2049,7 @@ public class CrossArbExecutor
                     pairId, outcome = "FILLED",
                     kSold, kSellCents, pSold, pAvgPrice, realizedPnl
                 }));
+                await RefreshBalancesAsync();
             }
             else if (!kOk && !pOk)
             {
