@@ -79,8 +79,9 @@ public class CrossArbExecutor
     private readonly ConcurrentDictionary<string, byte>    _inFlight          = new();
     private readonly ConcurrentDictionary<string, byte>    _earlyExitScheduled = new();
     private readonly ConcurrentDictionary<string, decimal> _perPairInvested = new();
-    private readonly ConcurrentDictionary<string, int>                  _polyFeeRates  = new();
+    private readonly ConcurrentDictionary<string, int>                   _polyFeeRates  = new();
     private readonly ConcurrentDictionary<string, (decimal R, double E)> _polyFeeParams = new();
+    private readonly ConcurrentDictionary<string, string>                 _polyTickSizes;
     private readonly HashSet<string>                        _blocklist       = new(StringComparer.OrdinalIgnoreCase);
     private readonly bool _singleEntry;
     private readonly ConcurrentDictionary<string, byte>    _enteredPairs    = new();
@@ -198,7 +199,8 @@ public class CrossArbExecutor
         bool    singleEntry              = false,
         bool    logErrors                = false,
         int?    tryN                = null,
-        CancellationTokenSource? outerCts = null)
+        CancellationTokenSource? outerCts = null,
+        ConcurrentDictionary<string, string>? polyTickSizes = null)
     {
         _kalshi              = kalshi;
         _poly                = poly;
@@ -218,6 +220,7 @@ public class CrossArbExecutor
         _triesRemaining      = tryN ?? -1;
         _tryLimit            = tryN ?? -1;
         _outerCts            = outerCts;
+        _polyTickSizes       = polyTickSizes ?? new();
         _csvPath             = $"CrossArbExecution_{DateTime.UtcNow:yyyyMMdd_HHmmss}.csv";
         _csvWriterTask = Task.Run(RunCsvWriterAsync);
         var journalDir = Path.GetDirectoryName(Path.GetFullPath(_journalPath));
@@ -1051,14 +1054,15 @@ public class CrossArbExecutor
             if (!_polyFeeRates.ContainsKey(tokenId))
                 _polyFeeRates[tokenId] = await _poly.GetTakerFeeAsync(tokenId);
             int feeRate = _polyFeeRates[tokenId];
+            string tickSize = _polyTickSizes.GetValueOrDefault(tokenId, "0.01");
             for (int attempt = 0; attempt < 3; attempt++)
             {
                 try
                 {
-                    DebugLog.Trades($"PlacePolyLegAsync: attempt {attempt + 1} negRisk={negRisk} feeRateBps={feeRate}");
+                    DebugLog.Trades($"PlacePolyLegAsync: attempt {attempt + 1} negRisk={negRisk} feeRateBps={feeRate} tickSize={tickSize}");
                     result = await _poly.SubmitOrderAsync(
                         tokenId, limitPrice, shares, side: 0 /*BUY*/,
-                        negRisk: negRisk, feeRateBps: feeRate);
+                        negRisk: negRisk, tickSize: tickSize, feeRateBps: feeRate);
                     break;
                 }
                 catch (Exception ex) when (

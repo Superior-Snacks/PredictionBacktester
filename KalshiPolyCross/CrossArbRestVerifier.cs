@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
@@ -15,6 +16,9 @@ public class CrossArbRestVerifier
     private readonly HttpClient _http;
     private readonly CrossPlatformArbTelemetryStrategy _telemetry;
     private readonly SemaphoreSlim _sem = new(2, 2); // max 2 concurrent REST checks
+
+    /// <summary>Tick size per Poly token ID, populated lazily from /book REST responses.</summary>
+    public ConcurrentDictionary<string, string> PolyTickSizes { get; } = new();
 
     private const string PolyBookUrl = "https://clob.polymarket.com/book?token_id=";
 
@@ -149,6 +153,14 @@ public class CrossArbRestVerifier
         string json = await _http.GetStringAsync(PolyBookUrl + tokenId);
         DebugLog.Books($"[POLY REST /book] {json}");
         using var doc = JsonDocument.Parse(json);
+
+        // Cache tick_size so PlacePolyLegAsync can use the real market tick.
+        if (doc.RootElement.TryGetProperty("tick_size", out var tsEl))
+        {
+            string ts = tsEl.GetString() ?? "0.01";
+            PolyTickSizes[tokenId] = ts;
+        }
+
         if (!doc.RootElement.TryGetProperty("asks", out var asks))
         {
             DebugLog.Trades($"GetPolyAskAsync {tokenId[..Math.Min(8, tokenId.Length)]}: no 'asks' field in response");
