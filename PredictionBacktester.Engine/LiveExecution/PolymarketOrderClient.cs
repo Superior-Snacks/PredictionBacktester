@@ -427,9 +427,10 @@ public class PolymarketOrderClient : IPolymarketOrderExecutor
                 using var doc = JsonDocument.Parse(response.Content);
                 var root = doc.RootElement;
 
-                // Response contains fee_rate_bps or feeRateBps
+                // Response field name varies by API version: fee_rate_bps, feeRateBps, or base_fee
                 if (root.TryGetProperty("fee_rate_bps", out var feeEl) ||
-                    root.TryGetProperty("feeRateBps", out feeEl))
+                    root.TryGetProperty("feeRateBps",   out feeEl)     ||
+                    root.TryGetProperty("base_fee",     out feeEl))
                 {
                     if (feeEl.ValueKind == JsonValueKind.String)
                         return int.Parse(feeEl.GetString()!);

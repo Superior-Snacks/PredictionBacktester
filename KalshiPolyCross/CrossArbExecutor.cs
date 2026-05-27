@@ -125,13 +125,11 @@ public class CrossArbExecutor
     private readonly object  _balanceLock = new();
 
     // ── Fee model (must mirror CrossPlatformArbTelemetryStrategy) ────────────
-    // Poly: fee = feeRate × p² × (1-p). Rate fetched per-token at startup; falls back to 0.04.
+    // Poly: fee = feeRate × p × (1-p) per share (docs formula).
+    //   Sports feeRate = 0.03. _polyFeeRates stores base_fee from /fee-rate — that is the
+    //   protocol feeRateBps value for order submission, NOT the math coefficient.
     private static decimal KalshiFee(decimal p) => 0.07m * p * (1m - p);
-    private decimal PolyFee(decimal p, string tokenId)
-    {
-        decimal rate = _polyFeeRates.TryGetValue(tokenId, out int bps) ? bps / 10_000m : 0.04m;
-        return p * rate * p * (1m - p);
-    }
+    private static decimal PolyFee(decimal p, string _tokenId) => 0.03m * p * (1m - p);
 
     private static void Emit(List<string>? log, string msg)
     {
