@@ -125,9 +125,13 @@ public class CrossArbExecutor
     private readonly object  _balanceLock = new();
 
     // ── Fee model (must mirror CrossPlatformArbTelemetryStrategy) ────────────
-    // Poly: fee = p × feeRate × (p×(1-p))^1 — Politics/Finance/Tech, March 30 2026+
+    // Poly: fee = feeRate × p² × (1-p). Rate fetched per-token at startup; falls back to 0.04.
     private static decimal KalshiFee(decimal p) => 0.07m * p * (1m - p);
-    private static decimal PolyFee(decimal p)   => p * 0.04m * p * (1m - p);
+    private decimal PolyFee(decimal p, string tokenId)
+    {
+        decimal rate = _polyFeeRates.TryGetValue(tokenId, out int bps) ? bps / 10_000m : 0.04m;
+        return p * rate * p * (1m - p);
+    }
 
     private static void Emit(List<string>? log, string msg)
     {
@@ -238,14 +242,35 @@ public class CrossArbExecutor
             // Probe real balances so credential/connectivity issues surface in dry-run.
             // Simulation still starts at $1,000 regardless of actual balance.
             await RefreshBalancesAsync(initial: true);
+            await PrefetchFeeRatesAsync();
             lock (_balanceLock) { _kalshiBalanceUsd = 1000m; _polyBalanceUsd = 1000m; }
             Console.WriteLine("[BALANCE INIT] Dry-run: simulation seeded at $1,000.00 on each platform");
             _ = Task.Run(RunEarlyExitMonitorAsync);
             return;
         }
         await RefreshBalancesAsync(initial: true);
+        await PrefetchFeeRatesAsync();
         _ = Task.Run(PeriodicBalanceRefreshLoop);
         _ = Task.Run(RunEarlyExitMonitorAsync);
+    }
+
+    private async Task PrefetchFeeRatesAsync()
+    {
+        var tokens = _telemetry.GetAllPairs()
+            .SelectMany(p => new[] { p.PolyYesTokenId, p.PolyNoTokenId })
+            .Where(t => !string.IsNullOrEmpty(t))
+            .Distinct()
+            .ToList();
+        if (tokens.Count == 0) return;
+        Console.WriteLine($"[FEE PREFETCH] Fetching fee rates for {tokens.Count} Poly token(s)...");
+        foreach (var token in tokens)
+        {
+            int bps = await _poly.GetTakerFeeAsync(token);
+            _polyFeeRates[token] = bps;
+            Console.WriteLine($"[FEE PREFETCH] {token[..Math.Min(8, token.Length)]}... = {bps} bps");
+            await Task.Delay(500);
+        }
+        _telemetry.PolyFeeRates = _polyFeeRates;
     }
 
     private async Task PeriodicBalanceRefreshLoop()
@@ -402,7 +427,7 @@ public class CrossArbExecutor
         }
 
         // Re-validate arb still holds at execution time
-        decimal netNow = kLegAsk + pLegAsk + KalshiFee(kLegAsk) + PolyFee(pLegAsk);
+        decimal netNow = kLegAsk + pLegAsk + KalshiFee(kLegAsk) + PolyFee(pLegAsk, polyToken);
         DebugLog.Trades($"ExecuteAsync {pair.Label}: live check — kLeg={kLegAsk:0.0000} pLeg={pLegAsk:0.0000} net={netNow:0.0000} threshold={_executionThreshold:0.000}");
         if (netNow >= _executionThreshold)
         {
@@ -626,7 +651,7 @@ public class CrossArbExecutor
             // Actual net cost per set using confirmed fill prices + fees.
             // kLegAsk is the IOC limit price (fills at or below this). pActualPrice is Poly's
             // reported average fill price and may exceed pLegAsk if the book was walked.
-            actualNetPerSet = kLegAsk + pActualPrice + KalshiFee(kLegAsk) + PolyFee(pActualPrice);
+            actualNetPerSet = kLegAsk + pActualPrice + KalshiFee(kLegAsk) + PolyFee(pActualPrice, polyToken);
             bool    arbProfitable   = actualNetPerSet < 1.0m;
             decimal actualProfit    = balancedQty * (1.0m - actualNetPerSet);
 
@@ -702,7 +727,7 @@ public class CrossArbExecutor
             }
 
             // ── Fee model tracking ────────────────────────────────────────────────
-            decimal modeledFees = (KalshiFee(kLegAsk) + PolyFee(pLegAsk)) * balancedQty;
+            decimal modeledFees = (KalshiFee(kLegAsk) + PolyFee(pLegAsk, polyToken)) * balancedQty;
             decimal netVar      = (actualNetPerSet - netNow) * balancedQty;
             bool emitDailyReport = false;
             decimal reportModeled = 0m, reportNetVar = 0m;
@@ -809,7 +834,7 @@ public class CrossArbExecutor
                         ordered = polyShares, filled = Math.Round(pFilled, 6),
                         limitPrice = pLegAsk,
                         avgFillPrice = pFilled > 0 ? Math.Round(pActualPrice, 6) : (object?)null,
-                        feePerShare  = pFilled > 0 ? (object?)Math.Round(PolyFee(pActualPrice), 6) : null,
+                        feePerShare  = pFilled > 0 ? (object?)Math.Round(PolyFee(pActualPrice, polyToken), 6) : null,
                         slippagePct  = pFilled > 0 && pLegAsk > 0
                             ? (object?)Math.Round((pActualPrice - pLegAsk) / pLegAsk * 100m, 4) : null
                     }
@@ -1306,7 +1331,7 @@ public class CrossArbExecutor
             if (!skipHedgeA)
             {
                 decimal currentPolyAsk = pBook!.GetBestAskPrice();
-                decimal hedgeNet = kLegAsk + currentPolyAsk + KalshiFee(kLegAsk) + PolyFee(currentPolyAsk);
+                decimal hedgeNet = kLegAsk + currentPolyAsk + KalshiFee(kLegAsk) + PolyFee(currentPolyAsk, polyToken);
                 DebugLog.Trades($"RecoverUnhedgedAsync {pair.Label}: kUnhedged={kUnhedged} polyAsk={currentPolyAsk:0.0000} hedgeNet={hedgeNet:0.0000}");
 
                 if (hedgeNet < 1.0m)
@@ -1472,7 +1497,7 @@ public class CrossArbExecutor
             {
                 decimal currentKalshiAsk = kHedgeBook!.GetBestAskPrice();
                 int currentKCents = Math.Max(1, (int)Math.Ceiling(currentKalshiAsk * 100) + RecoveryHedgeSlippageCents);
-                decimal hedgeNet = currentKalshiAsk + pActualPrice + KalshiFee(currentKalshiAsk) + PolyFee(pActualPrice);
+                decimal hedgeNet = currentKalshiAsk + pActualPrice + KalshiFee(currentKalshiAsk) + PolyFee(pActualPrice, polyToken);
                 DebugLog.Trades($"RecoverUnhedgedAsync {pair.Label}: pUnhedged={pUnhedged} kalshiAsk={currentKalshiAsk:0.0000} hedgeNet={hedgeNet:0.0000}");
 
                 if (hedgeNet < 1.0m)
@@ -1969,11 +1994,11 @@ public class CrossArbExecutor
 
         decimal entryCostPerSet      = pos.KalshiEntryPrice + pos.PolyEntryPrice;
         decimal expectedProfitPerSet = 1.0m - entryCostPerSet
-            - KalshiFee(pos.KalshiEntryPrice) - PolyFee(pos.PolyEntryPrice);
+            - KalshiFee(pos.KalshiEntryPrice) - PolyFee(pos.PolyEntryPrice, polyToken);
         if (expectedProfitPerSet <= 0m) return;
 
-        decimal exitFeesPerSet      = KalshiFee(kBid) + PolyFee(pBid);
-        decimal entryFeesPerSet     = KalshiFee(pos.KalshiEntryPrice) + PolyFee(pos.PolyEntryPrice);
+        decimal exitFeesPerSet      = KalshiFee(kBid) + PolyFee(pBid, polyToken);
+        decimal entryFeesPerSet     = KalshiFee(pos.KalshiEntryPrice) + PolyFee(pos.PolyEntryPrice, polyToken);
         decimal unrealizedPnlPerSet = (kBid + pBid) - exitFeesPerSet - entryCostPerSet - entryFeesPerSet;
         decimal unrealizedPnlTotal  = unrealizedPnlPerSet * pos.KalshiContracts;
 
@@ -2078,9 +2103,9 @@ public class CrossArbExecutor
                 decimal kProceeds   = kSold * (kSellCents / 100m);
                 decimal pProceeds   = pSold * pAvgPrice;
                 decimal kExitFee    = KalshiFee(kSellCents / 100m) * kSold;
-                decimal pExitFee    = PolyFee(pAvgPrice) * pSold;
+                decimal pExitFee    = PolyFee(pAvgPrice, polyToken) * pSold;
                 decimal kEntryFee   = KalshiFee(currentPos.KalshiEntryPrice) * currentPos.KalshiContracts;
-                decimal pEntryFee   = PolyFee(currentPos.PolyEntryPrice) * currentPos.PolyShares;
+                decimal pEntryFee   = PolyFee(currentPos.PolyEntryPrice, polyToken) * currentPos.PolyShares;
                 decimal realizedPnl = (kProceeds + pProceeds)
                     - (kExitFee + pExitFee)
                     - (currentPos.KalshiContracts * currentPos.KalshiEntryPrice

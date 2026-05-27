@@ -83,17 +83,20 @@ public class CrossPlatformArbTelemetryStrategy
 
     // ── Fee model ─────────────────────────────────────────────────────────────
     // Kalshi: fee = 0.07 × P × (1-P) per contract.
-    // Poly:   fee = C × p × feeRate × (p×(1-p))^exponent  (Polymarket docs formula).
-    //         Category-dependent. Politics/Finance/Tech (March 30 2026+): feeRate=0.04, exponent=1
-    //         → per share: 0.04 × p² × (1-p). Peak effective rate: ~1% at p=0.50.
-    //         If your pairs are in fee-free geopolitical/world-events markets, set PolyFeeRate=0.
-    private const decimal KalshiFeeRate  = 0.07m;
-    private const decimal PolyFeeRate    = 0.04m; // Politics/Finance/Tech; 0 if fee-free markets
-    private const double  PolyFeeExpnt   = 1.0;
+    // Poly:   fee = feeRate × p² × (1-p). Rate is per-token (fetched from /fee-rate API).
+    //         Falls back to 0.04 if rate not yet cached (e.g. before prefetch completes).
+    private const decimal KalshiFeeRate = 0.07m;
+
+    /// <summary>Shared with CrossArbExecutor — populated at startup via PrefetchFeeRatesAsync.</summary>
+    public ConcurrentDictionary<string, int>? PolyFeeRates { get; set; }
 
     private static decimal KalshiFee(decimal p) => KalshiFeeRate * p * (1m - p);
-    private static decimal PolyFee(decimal p)
-        => p * PolyFeeRate * (decimal)Math.Pow((double)(p * (1m - p)), PolyFeeExpnt);
+    private decimal PolyFee(decimal p, string tokenId)
+    {
+        decimal rate = (PolyFeeRates?.TryGetValue(tokenId, out int bps) == true)
+            ? bps / 10_000m : 0.04m;
+        return p * rate * p * (1m - p);
+    }
 
     private const decimal HurdleRateApr        = 0.20m;
     private const decimal MinProfitCaptureRatio = 0.70m;
@@ -125,6 +128,7 @@ public class CrossPlatformArbTelemetryStrategy
     public event Action<string>? BookUpdated;
 
     public CrossPair? GetPair(string pairId) => _pairs.FirstOrDefault(p => p.PairId == pairId);
+    public IReadOnlyList<CrossPair> GetAllPairs() => _pairs;
 
     public CrossPlatformArbTelemetryStrategy(
         IReadOnlyList<CrossPair> pairs,
@@ -372,7 +376,7 @@ public class CrossPlatformArbTelemetryStrategy
 
         // Type A: buy Kalshi YES + buy Poly NO
         decimal kYesFee    = KalshiFee(kYesAsk);
-        decimal pNoFee     = PolyFee(pNoAsk);
+        decimal pNoFee     = PolyFee(pNoAsk, pair.PolyNoTokenId);
         decimal typeAGross = kYesAsk + pNoAsk;
         decimal typeAFees  = kYesFee + pNoFee;
         decimal typeANet   = typeAGross + typeAFees;
@@ -382,7 +386,7 @@ public class CrossPlatformArbTelemetryStrategy
 
         // Type B: buy Kalshi NO + buy Poly YES
         decimal kNoFee     = KalshiFee(kNoAsk);
-        decimal pYesFee    = PolyFee(pYesAsk);
+        decimal pYesFee    = PolyFee(pYesAsk, pair.PolyYesTokenId);
         decimal typeBGross = kNoAsk + pYesAsk;
         decimal typeBFees  = kNoFee + pYesFee;
         decimal typeBNet   = typeBGross + typeBFees;
@@ -526,7 +530,8 @@ public class CrossPlatformArbTelemetryStrategy
         decimal bidSum = kBid + pBid;
         if (bidSum <= 0m) return;
 
-        decimal exitFees      = (KalshiFee(kBid) + PolyFee(pBid)) * pos.Shares;
+        string  polyToken     = pos.ArbType == "K_YES_P_NO" ? pair.PolyNoTokenId : pair.PolyYesTokenId;
+        decimal exitFees      = (KalshiFee(kBid) + PolyFee(pBid, polyToken)) * pos.Shares;
         double  daysElapsed   = Math.Max((DateTime.UtcNow - pos.EntryTime).TotalDays, 1.0 / 1440.0);
         double  daysRemaining = Math.Max(pos.DaysToSettlement - daysElapsed, 0.001);
 
