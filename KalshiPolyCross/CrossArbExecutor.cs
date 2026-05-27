@@ -283,7 +283,11 @@ public class CrossArbExecutor
 
             var (r, e) = await _poly.GetFeeParamsAsync(token);
             _polyFeeParams[token] = (r, e);
-            Console.WriteLine($"[FEE PREFETCH] ({idx}/{tokens.Count}) {tok}... order={bps} bps  math: r={r:0.000} e={e:0.0}");
+            await Task.Delay(500);
+
+            string ts = await _poly.GetTickSizeAsync(token);
+            _polyTickSizes[token] = ts;
+            Console.WriteLine($"[FEE PREFETCH] ({idx}/{tokens.Count}) {tok}... order={bps} bps  math: r={r:0.000} e={e:0.0}  tick={ts}");
             await Task.Delay(500);
         }
         _telemetry.PolyFeeRates  = _polyFeeRates;

@@ -132,4 +132,5 @@ public class SimulatedPolymarketClient : IPolymarketOrderExecutor
     public Task UpdateBalanceAllowanceAsync(string tokenId) => Task.CompletedTask;
     public Task<int> GetTakerFeeAsync(string tokenId) => Task.FromResult(0);
     public Task<(decimal R, double E)> GetFeeParamsAsync(string tokenId) => Task.FromResult((0.03m, 1.0));
+    public Task<string> GetTickSizeAsync(string tokenId) => Task.FromResult("0.01");
 }

@@ -457,6 +457,21 @@ public class PolymarketOrderClient : IPolymarketOrderExecutor
         }
     }
 
+    public async Task<string> GetTickSizeAsync(string tokenId)
+    {
+        try
+        {
+            var req  = new RestRequest($"/book?token_id={tokenId}", Method.Get);
+            var resp = await ExecuteAndLogAsync(req);
+            if (!resp.IsSuccessful || string.IsNullOrEmpty(resp.Content)) return "0.01";
+            using var doc = JsonDocument.Parse(resp.Content);
+            if (doc.RootElement.TryGetProperty("tick_size", out var tsEl))
+                return tsEl.GetString() ?? "0.01";
+        }
+        catch { }
+        return "0.01";
+    }
+
     /// <summary>
     /// Fetches the exact taker fee (in basis points) from the CLOB API.
     /// </summary>

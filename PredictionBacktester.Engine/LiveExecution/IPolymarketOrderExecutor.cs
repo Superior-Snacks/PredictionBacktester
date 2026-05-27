@@ -41,4 +41,10 @@ public interface IPolymarketOrderExecutor
     /// Returns (0.03, 1.0) on failure.
     /// </summary>
     Task<(decimal R, double E)> GetFeeParamsAsync(string tokenId);
+
+    /// <summary>
+    /// Fetches the tick size string for a token from /book (e.g. "0.01" or "0.001").
+    /// Returns "0.01" on failure.
+    /// </summary>
+    Task<string> GetTickSizeAsync(string tokenId);
 }
