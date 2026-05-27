@@ -412,6 +412,52 @@ public class PolymarketOrderClient : IPolymarketOrderExecutor
     }
 
     /// <summary>
+    /// Fetches fee curve parameters (r, e) for a token.
+    /// Two-call chain: /markets-by-token/{token_id} → condition_id → /clob-markets/{condition_id} → fd.r, fd.e.
+    /// Formula: fee = r × (p×(1-p))^e per share. Falls back to (0.03, 1.0) on any failure.
+    /// </summary>
+    public async Task<(decimal R, double E)> GetFeeParamsAsync(string tokenId)
+    {
+        try
+        {
+            var req1  = new RestRequest($"/markets-by-token/{tokenId}", Method.Get);
+            var resp1 = await ExecuteAndLogAsync(req1);
+            if (!resp1.IsSuccessful || string.IsNullOrEmpty(resp1.Content))
+                return (0.03m, 1.0);
+            string conditionId;
+            using (var doc1 = JsonDocument.Parse(resp1.Content))
+            {
+                if (!doc1.RootElement.TryGetProperty("condition_id", out var cEl))
+                    return (0.03m, 1.0);
+                conditionId = cEl.GetString() ?? "";
+            }
+            if (string.IsNullOrEmpty(conditionId)) return (0.03m, 1.0);
+
+            await Task.Delay(300);
+            var req2  = new RestRequest($"/clob-markets/{conditionId}", Method.Get);
+            var resp2 = await ExecuteAndLogAsync(req2);
+            if (!resp2.IsSuccessful || string.IsNullOrEmpty(resp2.Content))
+                return (0.03m, 1.0);
+
+            decimal r = 0.03m;
+            double  e = 1.0;
+            using var doc2 = JsonDocument.Parse(resp2.Content);
+            if (doc2.RootElement.TryGetProperty("fd", out var fd))
+            {
+                if (fd.TryGetProperty("r", out var rEl) && rEl.ValueKind == JsonValueKind.Number)
+                    r = rEl.GetDecimal();
+                if (fd.TryGetProperty("e", out var eEl) && eEl.ValueKind == JsonValueKind.Number)
+                    e = eEl.GetDouble();
+            }
+            return (r, e);
+        }
+        catch
+        {
+            return (0.03m, 1.0);
+        }
+    }
+
+    /// <summary>
     /// Fetches the exact taker fee (in basis points) from the CLOB API.
     /// </summary>
     public async Task<int> GetTakerFeeAsync(string tokenId)

@@ -79,7 +79,8 @@ public class CrossArbExecutor
     private readonly ConcurrentDictionary<string, byte>    _inFlight          = new();
     private readonly ConcurrentDictionary<string, byte>    _earlyExitScheduled = new();
     private readonly ConcurrentDictionary<string, decimal> _perPairInvested = new();
-    private readonly ConcurrentDictionary<string, int>     _polyFeeRates    = new();
+    private readonly ConcurrentDictionary<string, int>                  _polyFeeRates  = new();
+    private readonly ConcurrentDictionary<string, (decimal R, double E)> _polyFeeParams = new();
     private readonly HashSet<string>                        _blocklist       = new(StringComparer.OrdinalIgnoreCase);
     private readonly bool _singleEntry;
     private readonly ConcurrentDictionary<string, byte>    _enteredPairs    = new();
@@ -125,11 +126,17 @@ public class CrossArbExecutor
     private readonly object  _balanceLock = new();
 
     // ── Fee model (must mirror CrossPlatformArbTelemetryStrategy) ────────────
-    // Poly: fee = feeRate × p × (1-p) per share (docs formula).
-    //   Sports feeRate = 0.03. _polyFeeRates stores base_fee from /fee-rate — that is the
-    //   protocol feeRateBps value for order submission, NOT the math coefficient.
+    // Kalshi: 0.07 × p × (1-p) per contract (server-side, modelled client-side).
+    // Poly:   r × (p×(1-p))^e per share — r and e from /clob-markets fd, fetched at startup.
+    //   _polyFeeRates  stores base_fee from /fee-rate  → feeRateBps for order submission only.
+    //   _polyFeeParams stores (r, e) from /clob-markets → fee math only.
     private static decimal KalshiFee(decimal p) => 0.07m * p * (1m - p);
-    private static decimal PolyFee(decimal p, string _tokenId) => 0.03m * p * (1m - p);
+    private decimal PolyFee(decimal p, string tokenId)
+    {
+        if (_polyFeeParams.TryGetValue(tokenId, out var fp))
+            return fp.R * (decimal)Math.Pow((double)(p * (1m - p)), fp.E);
+        return 0.03m * p * (1m - p); // fallback: Sports r=0.03, e=1
+    }
 
     private static void Emit(List<string>? log, string msg)
     {
@@ -260,15 +267,22 @@ public class CrossArbExecutor
             .Distinct()
             .ToList();
         if (tokens.Count == 0) return;
-        Console.WriteLine($"[FEE PREFETCH] Fetching fee rates for {tokens.Count} Poly token(s)...");
+        Console.WriteLine($"[FEE PREFETCH] Fetching fee parameters for {tokens.Count} Poly token(s)...");
         foreach (var token in tokens)
         {
+            string tok = token[..Math.Min(8, token.Length)];
+
             int bps = await _poly.GetTakerFeeAsync(token);
             _polyFeeRates[token] = bps;
-            Console.WriteLine($"[FEE PREFETCH] {token[..Math.Min(8, token.Length)]}... = {bps} bps");
+            await Task.Delay(500);
+
+            var (r, e) = await _poly.GetFeeParamsAsync(token);
+            _polyFeeParams[token] = (r, e);
+            Console.WriteLine($"[FEE PREFETCH] {tok}... order={bps} bps  math: r={r:0.000} e={e:0.0}");
             await Task.Delay(500);
         }
-        _telemetry.PolyFeeRates = _polyFeeRates;
+        _telemetry.PolyFeeRates  = _polyFeeRates;
+        _telemetry.PolyFeeParams = _polyFeeParams;
     }
 
     private async Task PeriodicBalanceRefreshLoop()

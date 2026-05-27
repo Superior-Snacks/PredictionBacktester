@@ -34,4 +34,11 @@ public interface IPolymarketOrderExecutor
     /// Returns 0 for fee-free markets or on failure.
     /// </summary>
     Task<int> GetTakerFeeAsync(string tokenId);
+
+    /// <summary>
+    /// Fetches the fee curve parameters (r, e) for a token via
+    /// /markets-by-token → /clob-markets. Use in the formula: fee = r × (p×(1-p))^e per share.
+    /// Returns (0.03, 1.0) on failure.
+    /// </summary>
+    Task<(decimal R, double E)> GetFeeParamsAsync(string tokenId);
 }

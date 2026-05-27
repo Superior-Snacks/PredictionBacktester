@@ -82,17 +82,25 @@ public class CrossPlatformArbTelemetryStrategy
     private readonly ConcurrentDictionary<string, (decimal Cost, string Type, decimal Depth)> _nearMiss = new();
 
     // ── Fee model ─────────────────────────────────────────────────────────────
-    // Kalshi: fee = 0.07 × P × (1-P) per contract.
-    // Poly:   fee = feeRate × p × (1-p) per share (Polymarket docs formula).
-    //         Sports feeRate = 0.03. PolyFeeRates stores base_fee from /fee-rate — that is
-    //         the protocol feeRateBps for order submission, NOT the math coefficient.
+    // Kalshi: 0.07 × p × (1-p) per contract.
+    // Poly:   r × (p×(1-p))^e per share — r and e from /clob-markets fd, fetched at startup.
+    //   PolyFeeRates  = base_fee per token  → feeRateBps for order submission only.
+    //   PolyFeeParams = (r, e) per token    → fee math only.
     private const decimal KalshiFeeRate = 0.07m;
 
     /// <summary>Shared with CrossArbExecutor — base_fee per token, used for order submission feeRateBps.</summary>
     public ConcurrentDictionary<string, int>? PolyFeeRates { get; set; }
 
+    /// <summary>Shared with CrossArbExecutor — (r, e) fee curve params per token, used in PolyFee math.</summary>
+    public ConcurrentDictionary<string, (decimal R, double E)>? PolyFeeParams { get; set; }
+
     private static decimal KalshiFee(decimal p) => KalshiFeeRate * p * (1m - p);
-    private static decimal PolyFee(decimal p, string _tokenId) => 0.03m * p * (1m - p);
+    private decimal PolyFee(decimal p, string tokenId)
+    {
+        if (PolyFeeParams?.TryGetValue(tokenId, out var fp) == true)
+            return fp.R * (decimal)Math.Pow((double)(p * (1m - p)), fp.E);
+        return 0.03m * p * (1m - p); // fallback: Sports r=0.03, e=1
+    }
 
     private const decimal HurdleRateApr        = 0.20m;
     private const decimal MinProfitCaptureRatio = 0.70m;
