@@ -462,8 +462,14 @@ public class CrossArbExecutor
             return;
         }
 
-        int     kPriceCents   = (int)Math.Round(kLegAsk * 100);
-        decimal pricePerSet   = kLegAsk + pLegAsk;
+        // Split the profit margin evenly as slippage allowance for each leg.
+        // Each leg's limit = WS ask + half the gap to threshold, so both legs
+        // can each slip by halfAllow simultaneously without crossing the threshold.
+        decimal halfAllow   = (_executionThreshold - netNow) / 2m;
+        int     kPriceCents = (int)Math.Floor((kLegAsk + halfAllow) * 100m);
+        decimal pLimitAsk   = Math.Min(0.99m, pLegAsk + halfAllow);
+        DebugLog.Trades($"ExecuteAsync {pair.Label}: halfAllow={halfAllow:0.00000} kLimit={kPriceCents}¢ pLimit={pLimitAsk:0.0000}");
+        decimal pricePerSet = kLegAsk + pLegAsk;
 
         // Poly minimum: per-market orderMinSize and the CLOB's hard $1 dollar floor.
         // Floor pLegAsk to the order tick (0.01) so the minimum count guarantees
@@ -611,7 +617,7 @@ public class CrossArbExecutor
 
         // Fire both legs simultaneously
         var kalshiTask = PlaceKalshiLegAsync(pair.KalshiTicker, kalshiSide, kPriceCents, contracts, execId, execLog);
-        var polyTask   = PlacePolyLegAsync(polyToken, pLegAsk, polyShares, pair.IsNegRisk, execLog);
+        var polyTask   = PlacePolyLegAsync(polyToken, pLimitAsk, polyShares, pair.IsNegRisk, execLog);
 
         // Catch any unhandled leg exception so the OTHER leg's fill is still visible.
         // PlaceXxxLegAsync both have general catch blocks, but those blocks call
