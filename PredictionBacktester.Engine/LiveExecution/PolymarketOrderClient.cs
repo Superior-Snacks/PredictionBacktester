@@ -259,23 +259,24 @@ public class PolymarketOrderClient : IPolymarketOrderExecutor
     }
 
     /// <summary>
-    /// Forces the CLOB to refresh its cached balance for a conditional token.
-    /// Call this after a buy fill to speed up settlement recognition for sells.
+    /// Tells the CLOB to refresh its cached balance for a conditional token.
+    /// Same endpoint as GetUsdcBalanceAsync but with asset_type=CONDITIONAL.
+    /// Call best-effort after a buy fill so the CLOB recognises the tokens for selling.
     /// </summary>
     public async Task UpdateBalanceAllowanceAsync(string tokenId)
     {
-        string jsonBody = $"{{\"asset_type\":\"CONDITIONAL\",\"token_id\":\"{tokenId}\",\"signature_type\":2}}";
+        var request = new RestRequest("/balance-allowance", Method.Get);
+        request.AddQueryParameter("asset_type",     "CONDITIONAL");
+        request.AddQueryParameter("token_id",        tokenId);
+        request.AddQueryParameter("signature_type", "2");
 
-        var request = new RestRequest("/update-balance-allowance", Method.Post);
-        string timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString();
-        string hmacSignature = BuildHmacSignature(_config.ApiSecret, timestamp, "POST", "/update-balance-allowance", jsonBody);
-
-        request.AddHeader("POLY_ADDRESS", _account.Address);
-        request.AddHeader("POLY_SIGNATURE", hmacSignature);
-        request.AddHeader("POLY_TIMESTAMP", timestamp);
-        request.AddHeader("POLY_API_KEY", _config.ApiKey);
+        string timestamp     = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString();
+        string hmacSignature = BuildHmacSignature(_config.ApiSecret, timestamp, "GET", "/balance-allowance");
+        request.AddHeader("POLY_ADDRESS",    _account.Address);
+        request.AddHeader("POLY_SIGNATURE",  hmacSignature);
+        request.AddHeader("POLY_TIMESTAMP",  timestamp);
+        request.AddHeader("POLY_API_KEY",    _config.ApiKey);
         request.AddHeader("POLY_PASSPHRASE", _config.ApiPassphrase);
-        request.AddStringBody(jsonBody, ContentType.Json);
 
         await ExecuteAndLogAsync(request); // Best-effort — don't throw on failure
     }
