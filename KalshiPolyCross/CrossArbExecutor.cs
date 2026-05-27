@@ -268,8 +268,10 @@ public class CrossArbExecutor
             .ToList();
         if (tokens.Count == 0) return;
         Console.WriteLine($"[FEE PREFETCH] Fetching fee parameters for {tokens.Count} Poly token(s)...");
+        int idx = 0;
         foreach (var token in tokens)
         {
+            idx++;
             string tok = token[..Math.Min(8, token.Length)];
 
             int bps = await _poly.GetTakerFeeAsync(token);
@@ -278,7 +280,7 @@ public class CrossArbExecutor
 
             var (r, e) = await _poly.GetFeeParamsAsync(token);
             _polyFeeParams[token] = (r, e);
-            Console.WriteLine($"[FEE PREFETCH] {tok}... order={bps} bps  math: r={r:0.000} e={e:0.0}");
+            Console.WriteLine($"[FEE PREFETCH] ({idx}/{tokens.Count}) {tok}... order={bps} bps  math: r={r:0.000} e={e:0.0}");
             await Task.Delay(500);
         }
         _telemetry.PolyFeeRates  = _polyFeeRates;
