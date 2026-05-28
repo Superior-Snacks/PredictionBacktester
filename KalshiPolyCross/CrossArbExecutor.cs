@@ -1798,12 +1798,22 @@ public class CrossArbExecutor
     {
         try
         {
-            await Task.Delay(2_000); // brief settle window before querying venues
-            var kalshiPositions = await _kalshi.GetPositionsAsync();
-            int kPos = kalshiPositions.FirstOrDefault(p => p.Ticker == pair.KalshiTicker).Position;
+            // Kalshi /portfolio/positions can lag several seconds after a fill.
+            // Retry up to 4 times (max ~15 s total) before declaring a real mismatch.
+            const int maxAttempts  = 4;
+            const int retryDelayMs = 3_000;
+            decimal kActual = 0m;
+            for (int attempt = 1; attempt <= maxAttempts; attempt++)
+            {
+                await Task.Delay(retryDelayMs);
+                var kalshiPositions = await _kalshi.GetPositionsAsync();
+                int kPos = kalshiPositions.FirstOrDefault(p => p.Ticker == pair.KalshiTicker).Position;
+                kActual = Math.Abs(kPos);
+                if (Math.Abs(kActual - expectedKalshi) <= 0.5m) break; // position confirmed
+                DebugLog.Trades($"ReconcileTradeAsync {pair.Label}: attempt {attempt}/{maxAttempts} kVenue={kActual} (expected {expectedKalshi}) — retrying");
+            }
             string polyTokenId = arbType == "K_YES_P_NO" ? pair.PolyNoTokenId : pair.PolyYesTokenId;
             decimal polyBal    = await _poly.GetTokenBalanceAsync(polyTokenId);
-            decimal kActual    = Math.Abs(kPos);
             bool kMismatch = Math.Abs(kActual - expectedKalshi) > 0.5m;
             bool pMismatch = Math.Abs(polyBal  - expectedPoly)  > 0.5m;
             if (kMismatch || pMismatch)
