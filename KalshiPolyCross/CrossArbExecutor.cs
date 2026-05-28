@@ -1402,7 +1402,7 @@ public class CrossArbExecutor
                     bool polyHedgeTooSmall = polyHedgeCost < 1.00m;
                     if (polyHedgeTooSmall)
                         Emit(execLog, $"[RECOVER] {pair.Label} | Poly hedge cost ${polyHedgeCost:0.00} < $1 min — reversing Kalshi excess directly");
-                    (decimal polyFill2, decimal _) = polyHedgeTooSmall ? (0m, 0m)
+                    (decimal polyFill2, decimal polyFill2Price) = polyHedgeTooSmall ? (0m, 0m)
                         : await PlacePolyLegAsync(polyToken, polyHedgeLimit, kUnhedged, pair.IsNegRisk, execLog);
                     if (polyFill2 > 0)
                     {
@@ -1414,6 +1414,10 @@ public class CrossArbExecutor
                                 KalshiContracts = pos.KalshiContracts + additional,
                                 PolyShares      = pos.PolyShares      + additional
                             };
+                        else
+                            _openPositions[pair.PairId] = new ArbPosition(
+                                pair.PairId, arbType, additional, additional,
+                                kLegAsk, polyFill2Price, DateTime.UtcNow, execId);
                         await JournalAsync(JsonSerializer.Serialize(new {
                             t = DateTime.UtcNow, @event = "CLEANUP_HEDGE_COMPLETED", execId,
                             pair = pair.PairId, leg = "poly",
@@ -1590,6 +1594,10 @@ public class CrossArbExecutor
                                 KalshiContracts = pos.KalshiContracts + additional,
                                 PolyShares      = pos.PolyShares      + additional
                             };
+                        else
+                            _openPositions[pair.PairId] = new ArbPosition(
+                                pair.PairId, arbType, additional, additional,
+                                currentKalshiAsk, pActualPrice, DateTime.UtcNow, execId);
                         await JournalAsync(JsonSerializer.Serialize(new {
                             t = DateTime.UtcNow, @event = "CLEANUP_HEDGE_COMPLETED", execId,
                             pair = pair.PairId, leg = "kalshi",
