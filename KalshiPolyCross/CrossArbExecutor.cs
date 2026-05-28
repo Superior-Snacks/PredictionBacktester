@@ -87,6 +87,7 @@ public class CrossArbExecutor
     private readonly ConcurrentDictionary<string, (decimal R, double E)> _polyFeeParams = new();
     private readonly ConcurrentDictionary<string, string>                 _polyTickSizes;
     private readonly HashSet<string>                        _blocklist       = new(StringComparer.OrdinalIgnoreCase);
+    private readonly object                                 _blocklistLock   = new();
     private readonly bool _singleEntry;
     private readonly ConcurrentDictionary<string, byte>    _enteredPairs    = new();
     private readonly bool          _logErrors;
@@ -1065,6 +1066,14 @@ public class CrossArbExecutor
                 return ("", "error", 0m);
             }
         }
+        catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            // 404 = market doesn't exist or has been delisted — blocklist it so we never fire again.
+            Emit(execLog, $"[KALSHI LEG ERROR] {ticker}: 404 — market not found, blocklisting");
+            DebugLog.Trades($"PlaceKalshiLegAsync: 404 on {ticker}");
+            BlocklistKalshiTicker(ticker);
+            return ("", "error", 0m);
+        }
         catch (Exception ex)
         {
             Emit(execLog, $"[KALSHI LEG ERROR] {ticker}: {ApiErrorHelper.ClassifyKalshi(ex)}");
@@ -1835,6 +1844,85 @@ public class CrossArbExecutor
         return report;
     }
 
+    // ── Blocklist helpers ─────────────────────────────────────────────────────
+
+    private void BlocklistKalshiTicker(string ticker)
+    {
+        lock (_blocklistLock) _blocklist.Add(ticker);
+        Console.ForegroundColor = ConsoleColor.Yellow;
+        Console.WriteLine($"[BLOCKLIST] {ticker} added — will be skipped for all future executions this session");
+        Console.ResetColor();
+        try
+        {
+            string blPath = Path.Combine(AppContext.BaseDirectory, "cross_pair_blocklist.json");
+            if (!File.Exists(blPath))
+                blPath = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "cross_pair_blocklist.json");
+            var existing = File.Exists(blPath)
+                ? JsonSerializer.Deserialize<List<string>>(File.ReadAllText(blPath)) ?? []
+                : new List<string>();
+            if (!existing.Contains(ticker, StringComparer.OrdinalIgnoreCase))
+            {
+                existing.Add(ticker);
+                File.WriteAllText(blPath, JsonSerializer.Serialize(existing,
+                    new JsonSerializerOptions { WriteIndented = true }));
+            }
+        }
+        catch (Exception ex) { Console.WriteLine($"[BLOCKLIST] Failed to persist {ticker}: {ex.Message}"); }
+    }
+
+    private async Task ValidatePairsAtStartupAsync(IEnumerable<CrossPair> pairs)
+    {
+        var pairList = pairs.Where(p => !_blocklist.Contains(p.KalshiTicker)).ToList();
+        if (pairList.Count == 0) return;
+        bool checkPoly = _restVerifier != null;
+        Console.WriteLine($"[VALIDATE] Checking {pairList.Count} pair(s) — Kalshi status + {(checkPoly ? "Poly tokens" : "Kalshi only")}...");
+        int blocked = 0;
+        foreach (var pair in pairList)
+        {
+            string? blockReason = null;
+
+            // ── Kalshi ──────────────────────────────────────────────────────
+            try
+            {
+                using var doc  = await _kalshi.GetMarketAsync(pair.KalshiTicker);
+                var mkt        = doc.RootElement.TryGetProperty("market", out var m) ? m : doc.RootElement;
+                string kStatus = mkt.TryGetProperty("status", out var sEl) ? sEl.GetString() ?? "" : "unknown";
+                if (!string.Equals(kStatus, "open", StringComparison.OrdinalIgnoreCase))
+                    blockReason = $"Kalshi status={kStatus}";
+            }
+            catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                blockReason = "Kalshi 404";
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[VALIDATE] {pair.Label} | Kalshi check error: {ex.Message}");
+            }
+
+            // ── Polymarket (both tokens) ─────────────────────────────────────
+            if (blockReason == null && checkPoly)
+            {
+                bool yesOk = await _restVerifier!.CheckPolyTokenAsync(pair.PolyYesTokenId);
+                bool noOk  = await _restVerifier!.CheckPolyTokenAsync(pair.PolyNoTokenId);
+                if (!yesOk || !noOk)
+                    blockReason = !yesOk && !noOk ? "Poly YES+NO tokens invalid"
+                                : !yesOk          ? "Poly YES token invalid"
+                                :                   "Poly NO token invalid";
+            }
+
+            if (blockReason != null)
+            {
+                BlocklistKalshiTicker(pair.KalshiTicker);
+                Console.WriteLine($"[VALIDATE] {pair.Label} | {blockReason} — blocked");
+                blocked++;
+            }
+        }
+        int open = pairList.Count - blocked;
+        Console.WriteLine(blocked == 0
+            ? $"[VALIDATE] All {pairList.Count} pair(s) verified."
+            : $"[VALIDATE] {blocked} blocked, {open} open.");
+    }
+
     public async Task ReconcileOnStartupAsync(IEnumerable<CrossPair> pairs)
     {
         Console.WriteLine("[RECONCILE] Checking both venues for open positions from prior runs...");
@@ -1853,6 +1941,7 @@ public class CrossArbExecutor
             Console.WriteLine("[RECONCILE] All pairs clean — no prior positions detected.");
 
         await RestorePositionsFromVenuesAsync(pairList);
+        if (!_dryRun) await ValidatePairsAtStartupAsync(pairList);
     }
 
     private async Task RestorePositionsFromVenuesAsync(IEnumerable<CrossPair> pairs)

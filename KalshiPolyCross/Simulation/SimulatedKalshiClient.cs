@@ -92,4 +92,10 @@ public class SimulatedKalshiClient : IKalshiOrderExecutor
 
     // Executor overrides this to $1,000 immediately after calling it in dry-run mode.
     public Task<long> GetBalanceCentsAsync() => Task.FromResult(100_000_00L);
+
+    public Task<System.Text.Json.JsonDocument> GetMarketAsync(string ticker)
+    {
+        var doc = System.Text.Json.JsonDocument.Parse($"{{\"market\":{{\"ticker\":\"{ticker}\",\"status\":\"open\"}}}}");
+        return Task.FromResult(doc);
+    }
 }

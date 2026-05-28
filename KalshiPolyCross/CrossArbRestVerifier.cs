@@ -160,6 +160,22 @@ public class CrossArbRestVerifier
         return -1m;
     }
 
+    /// <summary>
+    /// Checks whether a Poly token's CLOB book is reachable and has a tick_size field
+    /// (present on all active, non-resolved markets). Returns false on HTTP error or if the
+    /// field is absent (market closed / token delisted).
+    /// </summary>
+    public async Task<bool> CheckPolyTokenAsync(string tokenId)
+    {
+        try
+        {
+            string json = await _http.GetStringAsync(PolyBookUrl + tokenId);
+            using var doc = JsonDocument.Parse(json);
+            return doc.RootElement.TryGetProperty("tick_size", out _);
+        }
+        catch { return false; }
+    }
+
     // Polymarket CLOB REST book: asks sorted ascending by price.
     private async Task<decimal> GetPolyAskAsync(string tokenId)
     {

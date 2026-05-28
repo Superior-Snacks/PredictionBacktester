@@ -65,4 +65,7 @@ public class SimulatedVenuePositionClient : IKalshiOrderExecutor
         => _inner.PollOrderAsync(orderId);
 
     public Task<long> GetBalanceCentsAsync() => _inner.GetBalanceCentsAsync();
+
+    public Task<System.Text.Json.JsonDocument> GetMarketAsync(string ticker)
+        => _inner.GetMarketAsync(ticker);
 }

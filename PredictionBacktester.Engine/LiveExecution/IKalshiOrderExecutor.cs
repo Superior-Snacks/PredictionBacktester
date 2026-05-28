@@ -22,4 +22,7 @@ public interface IKalshiOrderExecutor
 
     /// <summary>Returns the current account balance in cents.</summary>
     Task<long> GetBalanceCentsAsync();
+
+    /// <summary>Returns the full market document for a given ticker. Throws on 404.</summary>
+    Task<System.Text.Json.JsonDocument> GetMarketAsync(string ticker);
 }
