@@ -211,8 +211,9 @@ public class CrossArbExecutor
                     decimal exitFees  = KalshiFee(kBid)                 + PolyFee(pBid,               polyToken);
                     decimal pnlPerSet = (kBid + pBid) - exitFees - (pos.KalshiEntryPrice + pos.PolyEntryPrice) - entryFees;
                     unrealizedPnl     = pnlPerSet * pos.KalshiContracts;
-                    exitEligible      = true; // bids are live — bot can act on this position
                 }
+                // Can monitor via REST even when WS books are stale
+                exitEligible = (kBid > 0m && pBid > 0m) || _restVerifier != null;
             }
 
             result.Add(new PositionStatus(pairId, label, pos.ArbType,
@@ -2385,11 +2386,19 @@ public class CrossArbExecutor
         string kalshiSide = pos.ArbType == "K_YES_P_NO" ? "yes" : "no";
         string polyToken  = pos.ArbType == "K_YES_P_NO" ? pair.PolyNoTokenId : pair.PolyYesTokenId;
 
-        if (!_books.TryGetValue(kBidKey, out var kBook) || !_books.TryGetValue(pBidKey, out var pBook)) return;
+        decimal kBid = 0m, pBid = 0m;
+        bool wsLive = _books.TryGetValue(kBidKey, out var kBook)
+                   && _books.TryGetValue(pBidKey, out var pBook)
+                   && (kBid = kBook.GetBestBidPrice()) > 0m
+                   && (pBid = pBook.GetBestBidPrice()) > 0m;
 
-        decimal kBid = kBook.GetBestBidPrice();
-        decimal pBid = pBook.GetBestBidPrice();
-        if (kBid <= 0m || pBid <= 0m) return;
+        if (!wsLive)
+        {
+            if (_restVerifier == null) return;
+            (kBid, pBid) = await _restVerifier.GetCurrentBidsAsync(pair, pos.ArbType);
+            if (kBid <= 0m || pBid <= 0m) return;
+            DebugLog.Trades($"CheckEarlyExitAsync {pair.Label}: WS books stale — REST bids K={kBid:0.0000} P={pBid:0.0000}");
+        }
 
         decimal entryCostPerSet      = pos.KalshiEntryPrice + pos.PolyEntryPrice;
         decimal expectedProfitPerSet = 1.0m - entryCostPerSet

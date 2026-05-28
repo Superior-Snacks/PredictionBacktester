@@ -69,6 +69,20 @@ public class CrossArbRestVerifier
         return (kAsk, pAsk);
     }
 
+    /// <summary>
+    /// Fetches live bid prices for both held legs. Used by early-exit monitoring when
+    /// WS books are stale. Returns (-1,-1) if either fetch fails.
+    /// K_YES_P_NO: we hold K YES + P NO → fetch yes_bid on Kalshi, bids on Poly NO token.
+    /// K_NO_P_YES: we hold K NO  + P YES → fetch no_bid  on Kalshi, bids on Poly YES token.
+    /// </summary>
+    public async Task<(decimal KBid, decimal PBid)> GetCurrentBidsAsync(CrossPair pair, string arbType)
+    {
+        string polyToken = arbType == "K_YES_P_NO" ? pair.PolyNoTokenId : pair.PolyYesTokenId;
+        decimal kBid = await GetKalshiBidAsync(pair.KalshiTicker, arbType);
+        decimal pBid = await GetPolyBidAsync(polyToken);
+        return (kBid, pBid);
+    }
+
     private async Task VerifyAsync(string pairId, string arbType)
     {
         DebugLog.Trades($"VerifyAsync {pairId}: waiting for semaphore (current count unknown)");
@@ -174,6 +188,77 @@ public class CrossArbRestVerifier
             return doc.RootElement.TryGetProperty("tick_size", out _);
         }
         catch { return false; }
+    }
+
+    // Same structure as GetKalshiAskAsync but reads bid fields.
+    // K_YES_P_NO: hold YES → sell YES → yes_bid; K_NO_P_YES: hold NO → sell NO → no_bid.
+    private async Task<decimal> GetKalshiBidAsync(string ticker, string arbType)
+    {
+        using var doc = await _kalshi.GetMarketAsync(ticker);
+        var mkt = doc.RootElement.TryGetProperty("market", out var m) ? m : doc.RootElement;
+
+        bool sellYes = arbType == "K_YES_P_NO";
+        string[] dollarKeys = sellYes
+            ? ["yes_bid_dollars", "yes_bid_price"]
+            : ["no_bid_dollars",  "no_bid_price"];
+        string centsKey = sellYes ? "yes_bid" : "no_bid";
+
+        foreach (var key in dollarKeys)
+        {
+            if (!mkt.TryGetProperty(key, out var el)) continue;
+            string? s = el.ValueKind == JsonValueKind.String ? el.GetString() : el.GetRawText();
+            if (decimal.TryParse(s, NumberStyles.Any, CultureInfo.InvariantCulture, out decimal p) && p > 0m)
+            {
+                DebugLog.Trades($"GetKalshiBidAsync {ticker}: found {key}={p:0.0000}");
+                return p;
+            }
+        }
+
+        if (mkt.TryGetProperty(centsKey, out var centsEl) && centsEl.ValueKind == JsonValueKind.Number)
+        {
+            decimal cents = centsEl.GetDecimal();
+            if (cents > 0m)
+            {
+                decimal result = Math.Round(cents / 100m, 4);
+                DebugLog.Trades($"GetKalshiBidAsync {ticker}: fallback cents {centsKey}={cents} → {result:0.0000}");
+                return result;
+            }
+        }
+
+        DebugLog.Trades($"GetKalshiBidAsync {ticker}: no valid bid field found");
+        return -1m;
+    }
+
+    // Polymarket CLOB REST book: bids sorted descending by price; best bid = highest price.
+    private async Task<decimal> GetPolyBidAsync(string tokenId)
+    {
+        string json = await _http.GetStringAsync(PolyBookUrl + tokenId);
+        using var doc = JsonDocument.Parse(json);
+
+        if (!doc.RootElement.TryGetProperty("bids", out var bids))
+        {
+            DebugLog.Trades($"GetPolyBidAsync {tokenId[..Math.Min(8, tokenId.Length)]}: no 'bids' field in response");
+            return -1m;
+        }
+
+        decimal bestBid = decimal.MinValue;
+        int count = 0;
+        foreach (var bid in bids.EnumerateArray())
+        {
+            if (bid.TryGetProperty("price", out var priceEl) &&
+                decimal.TryParse(priceEl.GetString(), NumberStyles.Any,
+                    CultureInfo.InvariantCulture, out decimal price))
+            { bestBid = Math.Max(bestBid, price); count++; }
+        }
+
+        if (bestBid > decimal.MinValue)
+        {
+            DebugLog.Trades($"GetPolyBidAsync {tokenId[..Math.Min(8, tokenId.Length)]}: bestBid={bestBid:0.0000} from {count} levels");
+            return bestBid;
+        }
+
+        DebugLog.Trades($"GetPolyBidAsync {tokenId[..Math.Min(8, tokenId.Length)]}: no parseable bid levels");
+        return -1m;
     }
 
     // Polymarket CLOB REST book: asks sorted ascending by price.

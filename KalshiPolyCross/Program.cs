@@ -600,7 +600,7 @@ if (executor != null)
                     string bidStr  = p.CanMonitorExit
                         ? $"bid {p.KBid:0.000}+{p.PBid:0.000}"
                         : "bid n/a";
-                    string monTag  = p.CanMonitorExit ? "" : "  [NO BID DATA — exit monitoring blind]";
+                    string monTag  = p.CanMonitorExit ? "" : "  [NO BID DATA — exit monitoring unavailable]";
                     Console.WriteLine(
                         $"  ├ {p.Label[..Math.Min(45, p.Label.Length)].PadRight(45)} │ {p.ArbType,-12} │ " +
                         $"K={p.KContracts:0}@{p.KEntry:0.000} P={p.PShares:0.##}@{p.PEntry:0.000} │ " +
