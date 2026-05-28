@@ -949,7 +949,7 @@ public class CrossArbExecutor
             // tracks total fills while the executor tracks balanced fills, causing spurious mismatches).
             // reconcileInDryRun overrides this when QueueMismatchOnNextTrade() was pending.
             if ((!_dryRun || reconcileInDryRun) && balancedQty > 0)
-                _ = Task.Run(async () => await ReconcileTradeAsync(pair, arbType, balancedQty, balancedQty, execId));
+                _ = Task.Run(async () => await ReconcileTradeAsync(pair, arbType, balancedQty, balancedQty, execId, kOrderId));
         }
         else
         {
@@ -1953,23 +1953,34 @@ public class CrossArbExecutor
 
     // ── Post-trade reconciliation ─────────────────────────────────────────────
 
-    private async Task ReconcileTradeAsync(CrossPair pair, string arbType, decimal expectedKalshi, decimal expectedPoly, string execId = "")
+    private async Task ReconcileTradeAsync(CrossPair pair, string arbType, decimal expectedKalshi, decimal expectedPoly, string execId = "", string kOrderId = "")
     {
         try
         {
-            // Kalshi /portfolio/positions can lag several seconds after a fill.
-            // Retry up to 4 times (max ~15 s total) before declaring a real mismatch.
-            const int maxAttempts  = 4;
+            // Kalshi /portfolio/positions lags 10–20 s after a fill. Instead, poll the specific
+            // order directly (GET /portfolio/orders/{id}) which reflects the fill immediately.
+            // Fall back to GetPositionsAsync only when kOrderId is unavailable.
+            const int maxAttempts  = 6;
             const int retryDelayMs = 3_000;
             decimal kActual = 0m;
             for (int attempt = 1; attempt <= maxAttempts; attempt++)
             {
                 await Task.Delay(retryDelayMs);
-                var kalshiPositions = await _kalshi.GetPositionsAsync();
-                int kPos = kalshiPositions.FirstOrDefault(p => p.Ticker == pair.KalshiTicker).Position;
-                kActual = Math.Abs(kPos);
-                if (Math.Abs(kActual - expectedKalshi) <= 0.5m) break; // position confirmed
-                DebugLog.Trades($"ReconcileTradeAsync {pair.Label}: attempt {attempt}/{maxAttempts} kVenue={kActual} (expected {expectedKalshi}) — retrying");
+                if (!string.IsNullOrEmpty(kOrderId))
+                {
+                    var (pollStatus, pollFill) = await _kalshi.PollOrderAsync(kOrderId);
+                    kActual = pollFill;
+                    if (pollStatus == "executed") break;
+                    DebugLog.Trades($"ReconcileTradeAsync {pair.Label}: attempt {attempt}/{maxAttempts} order={kOrderId} status={pollStatus} fill={pollFill} — retrying");
+                }
+                else
+                {
+                    var kalshiPositions = await _kalshi.GetPositionsAsync();
+                    int kPos = kalshiPositions.FirstOrDefault(p => p.Ticker == pair.KalshiTicker).Position;
+                    kActual = Math.Abs(kPos);
+                    if (Math.Abs(kActual - expectedKalshi) <= 0.5m) break;
+                    DebugLog.Trades($"ReconcileTradeAsync {pair.Label}: attempt {attempt}/{maxAttempts} kVenue={kActual} (expected {expectedKalshi}) — retrying");
+                }
             }
             string polyTokenId = arbType == "K_YES_P_NO" ? pair.PolyNoTokenId : pair.PolyYesTokenId;
             decimal polyBal    = await _poly.GetTokenBalanceAsync(polyTokenId);
