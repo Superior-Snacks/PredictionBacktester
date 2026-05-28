@@ -1421,7 +1421,8 @@ public class CrossArbExecutor
                         await JournalAsync(JsonSerializer.Serialize(new {
                             t = DateTime.UtcNow, @event = "CLEANUP_HEDGE_COMPLETED", execId,
                             pair = pair.PairId, leg = "poly",
-                            hedgedQty = additional, remainderQty = Math.Round(remainderQty, 6)
+                            hedgedQty = additional, remainderQty = Math.Round(remainderQty, 6),
+                            polyFillPrice = Math.Round(polyFill2Price, 6)
                         }));
                         Console.ForegroundColor = ConsoleColor.Green;
                         Emit(execLog, $"[RECOVER OK] {pair.Label} | hedge completed +{additional} sets via Poly retry");
@@ -1601,7 +1602,8 @@ public class CrossArbExecutor
                         await JournalAsync(JsonSerializer.Serialize(new {
                             t = DateTime.UtcNow, @event = "CLEANUP_HEDGE_COMPLETED", execId,
                             pair = pair.PairId, leg = "kalshi",
-                            hedgedQty = additional, remainderQty = Math.Round(remainderQty, 6)
+                            hedgedQty = additional, remainderQty = Math.Round(remainderQty, 6),
+                            kFillPrice = Math.Round(currentKalshiAsk, 6)
                         }));
                         if (remainderQty > 0m)
                         {
@@ -1814,7 +1816,8 @@ public class CrossArbExecutor
     public async Task ReconcileOnStartupAsync(IEnumerable<CrossPair> pairs)
     {
         Console.WriteLine("[RECONCILE] Checking both venues for open positions from prior runs...");
-        var entries = await ReconcilePositionsAsync(pairs);
+        var pairList = pairs.ToList();
+        var entries = await ReconcilePositionsAsync(pairList);
         int issues = 0;
         foreach (var e in entries)
         {
@@ -1826,6 +1829,126 @@ public class CrossArbExecutor
         }
         if (issues == 0)
             Console.WriteLine("[RECONCILE] All pairs clean — no prior positions detected.");
+
+        await RestorePositionsFromVenuesAsync(pairList);
+    }
+
+    private async Task RestorePositionsFromVenuesAsync(IEnumerable<CrossPair> pairs)
+    {
+        if (_dryRun) return;
+        var pairList = pairs.ToList();
+        if (pairList.Count == 0 || !File.Exists(_journalPath)) return;
+
+        var pairByPairId = pairList.ToDictionary(p => p.PairId);
+
+        // Scan journal forward: EXECUTION_COMPLETE seeds entry prices; CLEANUP_HEDGE_COMPLETED
+        // fills in the price for the recovery leg; SETTLEMENT/EARLY_EXIT removes the pair.
+        var entryMap = new Dictionary<string, (string ArbType, decimal KEntry, decimal PEntry)>();
+        foreach (string line in await File.ReadAllLinesAsync(_journalPath))
+        {
+            if (string.IsNullOrWhiteSpace(line)) continue;
+            try
+            {
+                using var doc = JsonDocument.Parse(line);
+                var root = doc.RootElement;
+                if (!root.TryGetProperty("event", out var evEl)) continue;
+                string ev = evEl.GetString() ?? "";
+
+                if (ev == "EXECUTION_COMPLETE")
+                {
+                    if (!root.TryGetProperty("pairId", out var pidEl)) continue;
+                    string pairId = pidEl.GetString() ?? "";
+                    if (!pairByPairId.ContainsKey(pairId)) continue;
+                    string arbType = root.TryGetProperty("arbType", out var atEl) ? atEl.GetString() ?? "" : "";
+                    decimal kEntry = 0m, pEntry = 0m;
+                    if (root.TryGetProperty("fills", out var fills))
+                    {
+                        if (fills.TryGetProperty("kalshi", out var kf) &&
+                            kf.TryGetProperty("fillPrice", out var kfp))
+                            kEntry = kfp.GetDecimal();
+                        if (fills.TryGetProperty("poly", out var pf) &&
+                            pf.TryGetProperty("avgFillPrice", out var pfp) &&
+                            pfp.ValueKind == JsonValueKind.Number)
+                            pEntry = pfp.GetDecimal();
+                    }
+                    entryMap[pairId] = (arbType, kEntry, pEntry);
+                }
+                else if (ev == "CLEANUP_HEDGE_COMPLETED")
+                {
+                    if (!root.TryGetProperty("pair", out var pidEl)) continue;
+                    string pairId = pidEl.GetString() ?? "";
+                    if (!entryMap.TryGetValue(pairId, out var e)) continue;
+                    string leg = root.TryGetProperty("leg", out var legEl) ? legEl.GetString() ?? "" : "";
+                    if (leg == "poly" && e.PEntry == 0m &&
+                        root.TryGetProperty("polyFillPrice", out var pfp2) &&
+                        pfp2.ValueKind == JsonValueKind.Number)
+                        entryMap[pairId] = (e.ArbType, e.KEntry, pfp2.GetDecimal());
+                    else if (leg == "kalshi" && e.KEntry == 0m &&
+                        root.TryGetProperty("kFillPrice", out var kfp2) &&
+                        kfp2.ValueKind == JsonValueKind.Number)
+                        entryMap[pairId] = (e.ArbType, kfp2.GetDecimal(), e.PEntry);
+                }
+                else if (ev == "SETTLEMENT_DETECTED" || ev == "EARLY_EXIT_COMPLETE")
+                {
+                    string pairId = root.TryGetProperty("pairId", out var pidEl2) ? pidEl2.GetString() ?? "" : "";
+                    entryMap.Remove(pairId);
+                }
+            }
+            catch { /* malformed line — skip */ }
+        }
+
+        if (entryMap.Count == 0) return;
+
+        List<(string Ticker, int Position)> kalshiPos;
+        try   { kalshiPos = await _kalshi.GetPositionsAsync(); }
+        catch (Exception ex) { Console.WriteLine($"[RESTORE] Kalshi fetch failed: {ex.Message}"); return; }
+        var kalshiByTicker = kalshiPos.ToDictionary(p => p.Ticker, p => p.Position);
+
+        int restored = 0;
+        foreach (var (pairId, entry) in entryMap)
+        {
+            if (!pairByPairId.TryGetValue(pairId, out var pair)) continue;
+            if (!kalshiByTicker.TryGetValue(pair.KalshiTicker, out int kPos) || kPos == 0) continue;
+
+            decimal kQty = Math.Abs(kPos);
+            string polyToken = entry.ArbType == "K_NO_P_YES" ? pair.PolyYesTokenId : pair.PolyNoTokenId;
+            decimal pQty = 0m;
+            try   { pQty = await _poly.GetTokenBalanceAsync(polyToken); }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[RESTORE] {pair.Label} | Poly balance failed: {ex.Message}");
+                continue;
+            }
+
+            if (pQty <= 0m)
+            {
+                Console.ForegroundColor = ConsoleColor.Yellow;
+                Console.WriteLine($"[RESTORE] {pair.Label} | No Poly balance found — unhedged Kalshi position, skipping");
+                Console.ResetColor();
+                continue;
+            }
+
+            string restoreId = $"RESTORED_{DateTime.UtcNow:yyyyMMddHHmmss}";
+            _openPositions[pairId] = new ArbPosition(
+                pairId, entry.ArbType, kQty, pQty, entry.KEntry, entry.PEntry, DateTime.UtcNow, restoreId);
+
+            Console.ForegroundColor = ConsoleColor.Cyan;
+            Console.WriteLine(
+                $"[RESTORE] {pair.Label} | {entry.ArbType} | K={kQty} P={pQty:0.00} " +
+                $"entry={entry.KEntry:0.0000}+{entry.PEntry:0.0000} — added to monitoring");
+            Console.ResetColor();
+
+            await JournalAsync(JsonSerializer.Serialize(new {
+                t = DateTime.UtcNow, @event = "STARTUP_POSITION_RESTORED",
+                execId = restoreId, pairId, label = pair.Label,
+                arbType = entry.ArbType, kContracts = kQty, pShares = pQty,
+                kEntry = entry.KEntry, pEntry = entry.PEntry
+            }));
+            restored++;
+        }
+
+        if (restored > 0)
+            Console.WriteLine($"[RESTORE] {restored} position(s) registered for early-exit and settlement monitoring.");
     }
 
     // ── Post-trade reconciliation ─────────────────────────────────────────────
