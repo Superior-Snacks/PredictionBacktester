@@ -312,7 +312,8 @@ if (isLive || isDryRun)
         logErrors:           logErrors,
         tryN:                tryN,
         outerCts:            cts,
-        polyTickSizes:       restVerifier.PolyTickSizes);
+        polyTickSizes:       restVerifier.PolyTickSizes,
+        restVerifier:        restVerifier);
     telemetry.OnArbOpened  += executor.OnArbOpened;
     telemetry.BookUpdated  += executor.OnBookUpdate;  // event-driven early exit checks
     await executor.InitializeBalancesAsync();

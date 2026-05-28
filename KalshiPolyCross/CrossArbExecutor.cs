@@ -41,6 +41,10 @@ public class CrossArbExecutor
     private readonly IPolymarketOrderExecutor _poly;
     private readonly CrossPlatformArbTelemetryStrategy _telemetry;
     private readonly ConcurrentDictionary<string, LocalOrderBook> _books;
+    private readonly CrossArbRestVerifier? _restVerifier;
+
+    // When venue time-skew exceeds this value, block and REST-verify before firing.
+    private const double StaleGateMs = 5_000.0;
 
     // ── Early exit tuning ─────────────────────────────────────────────────────
     // Triggered on every book update for pairs with an open position (event-driven),
@@ -200,12 +204,14 @@ public class CrossArbExecutor
         bool    logErrors                = false,
         int?    tryN                = null,
         CancellationTokenSource? outerCts = null,
-        ConcurrentDictionary<string, string>? polyTickSizes = null)
+        ConcurrentDictionary<string, string>? polyTickSizes = null,
+        CrossArbRestVerifier? restVerifier = null)
     {
         _kalshi              = kalshi;
         _poly                = poly;
         _telemetry           = telemetry;
         _books               = books;
+        _restVerifier        = restVerifier;
         _maxBetUsd           = maxBetUsd;
         _balanceBufferPct    = balanceBufferPct;
         _maxExposureUsd      = maxExposureUsd;
@@ -428,7 +434,8 @@ public class CrossArbExecutor
             polyToken  = pair.PolyYesTokenId;
         }
 
-        // Venue time-skew: significant drift means one book is stale — log and journal
+        // Venue time-skew: if one book is significantly stale, REST-verify current prices
+        // before firing orders. The WS book is unreliable above StaleGateMs.
         {
             DateTime kLastDelta = (arbType == "K_YES_P_NO" ? kYes : kNo).LastDeltaAt;
             DateTime pLastDelta = (arbType == "K_YES_P_NO" ? pNo  : pYes).LastDeltaAt;
@@ -444,6 +451,27 @@ public class CrossArbExecutor
                     venueSkewMs = Math.Round(venueSkewMs, 1),
                     kLastDelta, pLastDelta
                 }));
+            }
+
+            if (venueSkewMs >= StaleGateMs && _restVerifier != null)
+            {
+                Console.WriteLine($"[STALE GATE] {pair.Label} | skew={venueSkewMs:0}ms — REST-verifying before firing");
+                var (freshK, freshP) = await _restVerifier.GetCurrentAsksAsync(pair, arbType);
+                if (freshK <= 0m || freshP <= 0m)
+                {
+                    Console.WriteLine($"[STALE GATE] {pair.Label} | REST fetch failed — skipping");
+                    return;
+                }
+                decimal freshNet = freshK + freshP + KalshiFee(freshK) + PolyFee(freshP, polyToken);
+                if (freshNet >= _executionThreshold)
+                {
+                    Console.WriteLine($"[STALE GATE] {pair.Label} | REST net=${freshNet:0.0000} >= threshold — no arb, skipping");
+                    return;
+                }
+                // Use REST prices as the execution basis
+                Console.WriteLine($"[STALE GATE] {pair.Label} | REST confirmed K={freshK:0.0000} P={freshP:0.0000} net=${freshNet:0.0000} — proceeding");
+                kLegAsk = freshK;
+                pLegAsk = freshP;
             }
         }
 

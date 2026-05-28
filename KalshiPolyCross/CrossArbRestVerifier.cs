@@ -56,6 +56,19 @@ public class CrossArbRestVerifier
         });
     }
 
+    /// <summary>
+    /// Fetches live ask prices for both legs directly. Used by the executor as a
+    /// stale-book gate before firing orders when venue time-skew is large.
+    /// Returns (-1,-1) if either fetch fails.
+    /// </summary>
+    public async Task<(decimal KAsk, decimal PAsk)> GetCurrentAsksAsync(CrossPair pair, string arbType)
+    {
+        string polyToken = arbType == "K_YES_P_NO" ? pair.PolyNoTokenId : pair.PolyYesTokenId;
+        decimal kAsk = await GetKalshiAskAsync(pair.KalshiTicker, arbType);
+        decimal pAsk = await GetPolyAskAsync(polyToken);
+        return (kAsk, pAsk);
+    }
+
     private async Task VerifyAsync(string pairId, string arbType)
     {
         DebugLog.Trades($"VerifyAsync {pairId}: waiting for semaphore (current count unknown)");
