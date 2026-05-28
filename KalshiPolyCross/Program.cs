@@ -14,13 +14,13 @@ using PredictionBacktester.Engine.LiveExecution;
 //  dotnet run --project KalshiPolyCross -- --live --min-buy     # live: always 1 contract, ignore maxBet sizing
 //  dotnet run --project KalshiPolyCross -- --dry-run --seed 42  # reproducible dry-run (same fills every time)
 //  dotnet run --project KalshiPolyCross -- --dry-run --scenario FlakyKalshi  # named failure profile
-//  dotnet run --project KalshiPolyCross -- --live --single-entry  # never re-enter a pair after first trade
+//  dotnet run --project KalshiPolyCross -- --live --single-entry  # one open position per pair; re-entry allowed after close
 //  dotnet run --project KalshiPolyCross -- --live --log           # append failed-execution output to error_log.txt
 //
 //  Exactly one mode flag is required. All others are optional.
 //  --try N         execute exactly N complete arbs then shut down; works with --dry-run or --live.
 //  --min-buy       cap every arb to exactly 1 contract regardless of maxBet (useful for initial live shakedown).
-//  --single-entry  block re-entry on a pair after the first successful fill (useful when 1 arb/market is enough).
+//  --single-entry  one open position per pair at a time; re-entry allowed once the position closes (exit or settlement).
 //  --log           capture full console output for failed executions and append to error_log.txt.
 //  --seed N        seed the dry-run fill RNG for reproducible results; omit for non-deterministic simulation.
 //  --scenario Name named failure profile for dry-run (default: HappyPath).
@@ -100,7 +100,7 @@ if (tryIdx >= 0 && tryIdx + 1 < args.Length && int.TryParse(args[tryIdx + 1], ou
 // --min-buy: cap every arb to 1 contract regardless of maxBet sizing
 bool minBuy = args.Contains("--min-buy");
 
-// --single-entry: never re-enter a pair after the first successful trade
+// --single-entry: one open position per pair at a time (re-entry allowed after close)
 bool singleEntry = args.Contains("--single-entry");
 
 // --log: capture all console output for failed executions and append to error_log.txt

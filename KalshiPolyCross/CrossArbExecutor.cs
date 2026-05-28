@@ -88,8 +88,6 @@ public class CrossArbExecutor
     private readonly ConcurrentDictionary<string, string>                 _polyTickSizes;
     private readonly HashSet<string>                        _blocklist       = new(StringComparer.OrdinalIgnoreCase);
     private readonly object                                 _blocklistLock   = new();
-    private readonly bool _singleEntry;
-    private readonly ConcurrentDictionary<string, byte>    _enteredPairs    = new();
     private readonly bool          _logErrors;
     private readonly string        _errorLogPath = "error_log.txt";
     private readonly SemaphoreSlim _errorLogLock = new(1, 1);
@@ -106,11 +104,12 @@ public class CrossArbExecutor
     private const  decimal  CleanupDustUsd         = 0.25m; // absorb silently (no halt) if reversal fails and value < $0.25
 
     // ── Position scaling ──────────────────────────────────────────────────────
-    // AllowScaleIn = false: one position per pair (hold to settlement/exit).
-    // AllowScaleIn = true:  allow additional entries while a position is open,
-    //                       up to MaxPerPairExposureUsd total across all fills.
-    private const  bool     AllowScaleIn           = false;
-    private const  decimal  MaxPerPairExposureUsd  = 200m;
+    // _singleEntry = true (--single-entry):  one open position per pair at a time.
+    //   Re-entry is allowed once the position closes (early exit or settlement).
+    //   Applies to both fresh and restored positions.
+    // _singleEntry = false (default): scale-in allowed up to MaxPerPairExposureUsd.
+    private readonly bool    _singleEntry;
+    private const    decimal MaxPerPairExposureUsd = 200m;
 
     private          decimal  _dayLossUsd          = 0m;
     private          DateOnly _dayStart            = DateOnly.FromDateTime(DateTime.UtcNow);
@@ -398,14 +397,9 @@ public class CrossArbExecutor
             DebugLog.Trades($"ExecuteAsync {pairId}: skipped — cooldown active for {cd - now}s more");
             return;
         }
-        if (!AllowScaleIn && _openPositions.ContainsKey(pairId))
+        if (_singleEntry && _openPositions.ContainsKey(pairId))
         {
-            DebugLog.Trades($"ExecuteAsync {pairId}: skipped — open position already tracked (AllowScaleIn=false)");
-            return;
-        }
-        if (_singleEntry && _enteredPairs.ContainsKey(pairId))
-        {
-            DebugLog.Trades($"ExecuteAsync {pairId}: skipped — single-entry: already traded once");
+            DebugLog.Trades($"ExecuteAsync {pairId}: skipped — single-entry: position already open");
             return;
         }
 
@@ -628,7 +622,6 @@ public class CrossArbExecutor
 
         // Set cooldown before firing to block concurrent execution on the same pair
         _cooldownUntil[pairId] = now + _pairCooldownSeconds;
-        if (_singleEntry) _enteredPairs.TryAdd(pairId, 0);
 
         DateTime execStart = DateTime.UtcNow;
         var execLog = _logErrors ? new List<string>() : null;
