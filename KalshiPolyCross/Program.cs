@@ -591,6 +591,21 @@ if (executor != null)
                     $"  dayLoss=${executor.DayLossUsd:0.00}/${executor.MaxDayLossUsd:0.00}" +
                     $"  cleanup=${executor.TotalCleanupCostUsd:0.00}" +
                     $"{tryTag}{haltTag}");
+
+                foreach (var p in executor.GetOpenPositionStatus())
+                {
+                    string pnlStr  = p.CanMonitorExit
+                        ? (p.UnrealizedPnl >= 0 ? $"+${p.UnrealizedPnl:0.00}" : $"-${Math.Abs(p.UnrealizedPnl):0.00}")
+                        : "n/a";
+                    string bidStr  = p.CanMonitorExit
+                        ? $"bid {p.KBid:0.000}+{p.PBid:0.000}"
+                        : "bid n/a";
+                    string monTag  = p.CanMonitorExit ? "" : "  [NO BID DATA — exit monitoring blind]";
+                    Console.WriteLine(
+                        $"  ├ {p.Label[..Math.Min(45, p.Label.Length)].PadRight(45)} │ {p.ArbType,-12} │ " +
+                        $"K={p.KContracts:0}@{p.KEntry:0.000} P={p.PShares:0.##}@{p.PEntry:0.000} │ " +
+                        $"{bidStr} │ pnl {pnlStr}{monTag}");
+                }
             }
         }
         catch (Exception ex)

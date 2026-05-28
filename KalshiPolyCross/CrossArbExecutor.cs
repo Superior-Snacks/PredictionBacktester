@@ -23,6 +23,20 @@ public record ArbPosition(
     string   ExecId           // trace ID — correlates all journal events for this trade
 );
 
+public record PositionStatus(
+    string  PairId,
+    string  Label,
+    string  ArbType,
+    decimal KContracts,
+    decimal PShares,
+    decimal KEntry,
+    decimal PEntry,
+    decimal KBid,             // -1 if book unavailable
+    decimal PBid,             // -1 if book unavailable
+    decimal UnrealizedPnl,
+    bool    CanMonitorExit    // true when both bid books are live; false = bot is monitoring blind
+);
+
 // Summary of what RecoverUnhedgedAsync did with the unhedged delta.
 public record RecoveryResult(
     string  Outcome,        // HEDGE_COMPLETED | REVERSED_KALSHI | REVERSED_POLY | DUST_ABSORBED_KALSHI | DUST_ABSORBED_POLY | HALT
@@ -171,6 +185,43 @@ public class CrossArbExecutor
     private Task _csvWriterTask = Task.CompletedTask;
 
     public int     OpenPositionCount    => _openPositions.Count(kv => kv.Value != null);
+
+    public List<PositionStatus> GetOpenPositionStatus()
+    {
+        var result = new List<PositionStatus>();
+        foreach (var (pairId, pos) in _openPositions)
+        {
+            var     pair      = _telemetry.GetPair(pairId);
+            string  label     = pair?.Label ?? pairId;
+            string  kBidKey   = pos.ArbType == "K_YES_P_NO" ? $"K:{pair?.KalshiTicker}" : $"K:{pair?.KalshiTicker}_NO";
+            string  pBidKey   = pos.ArbType == "K_YES_P_NO" ? $"P:{pair?.PolyNoTokenId}" : $"P:{pair?.PolyYesTokenId}";
+            string  polyToken = pos.ArbType == "K_YES_P_NO" ? pair?.PolyNoTokenId ?? "" : pair?.PolyYesTokenId ?? "";
+            decimal kBid = -1m, pBid = -1m, unrealizedPnl = 0m;
+            bool    exitEligible = false;
+
+            if (pair != null
+                && _books.TryGetValue(kBidKey, out var kBook)
+                && _books.TryGetValue(pBidKey, out var pBook))
+            {
+                kBid = kBook.GetBestBidPrice();
+                pBid = pBook.GetBestBidPrice();
+                if (kBid > 0m && pBid > 0m)
+                {
+                    decimal entryFees = KalshiFee(pos.KalshiEntryPrice) + PolyFee(pos.PolyEntryPrice, polyToken);
+                    decimal exitFees  = KalshiFee(kBid)                 + PolyFee(pBid,               polyToken);
+                    decimal pnlPerSet = (kBid + pBid) - exitFees - (pos.KalshiEntryPrice + pos.PolyEntryPrice) - entryFees;
+                    unrealizedPnl     = pnlPerSet * pos.KalshiContracts;
+                    exitEligible      = true; // bids are live — bot can act on this position
+                }
+            }
+
+            result.Add(new PositionStatus(pairId, label, pos.ArbType,
+                pos.KalshiContracts, pos.PolyShares,
+                pos.KalshiEntryPrice, pos.PolyEntryPrice,
+                kBid, pBid, unrealizedPnl, CanMonitorExit: exitEligible));
+        }
+        return result;
+    }
     public decimal MaxExposureUsd       => _maxExposureUsd;
     public int     TotalExecuted        => Volatile.Read(ref _totalExecuted);
     public int     EarlyExitsCompleted  => Volatile.Read(ref _earlyExitsCompleted);
