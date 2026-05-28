@@ -653,6 +653,15 @@ public class CrossArbExecutor
             dryRun = _dryRun
         }));
 
+        // Snapshot pre-trade Poly balance concurrently with leg orders so reconcile can
+        // compute a delta rather than comparing against total wallet balance. This prevents
+        // spurious RECONCILE_MISMATCH halts when a pre-existing Poly balance is present
+        // (e.g. orphaned shares from a prior run where Kalshi settled but Poly has not).
+        var priorPolyBalTask = _dryRun
+            ? Task.FromResult(0m)
+            : _poly.GetTokenBalanceAsync(polyToken).ContinueWith(
+                t => t.IsCompletedSuccessfully ? t.Result : 0m);
+
         // Fire both legs simultaneously
         var kalshiTask = PlaceKalshiLegAsync(pair.KalshiTicker, kalshiSide, kPriceCents, contracts, execId, execLog);
         var polyTask   = PlacePolyLegAsync(polyToken, pLimitAsk, polyShares, pair.IsNegRisk, execLog);
@@ -959,7 +968,10 @@ public class CrossArbExecutor
             // tracks total fills while the executor tracks balanced fills, causing spurious mismatches).
             // reconcileInDryRun overrides this when QueueMismatchOnNextTrade() was pending.
             if ((!_dryRun || reconcileInDryRun) && balancedQty > 0)
-                _ = Task.Run(async () => await ReconcileTradeAsync(pair, arbType, balancedQty, balancedQty, execId, kOrderId));
+            {
+                decimal priorPolyBal = priorPolyBalTask.IsCompletedSuccessfully ? priorPolyBalTask.Result : 0m;
+                _ = Task.Run(async () => await ReconcileTradeAsync(pair, arbType, balancedQty, balancedQty, execId, kOrderId, priorPolyBal));
+            }
         }
         else
         {
@@ -1963,7 +1975,7 @@ public class CrossArbExecutor
 
     // ── Post-trade reconciliation ─────────────────────────────────────────────
 
-    private async Task ReconcileTradeAsync(CrossPair pair, string arbType, decimal expectedKalshi, decimal expectedPoly, string execId = "", string kOrderId = "")
+    private async Task ReconcileTradeAsync(CrossPair pair, string arbType, decimal expectedKalshi, decimal expectedPoly, string execId = "", string kOrderId = "", decimal priorPolyBalance = 0m)
     {
         try
         {
@@ -1994,8 +2006,10 @@ public class CrossArbExecutor
             }
             string polyTokenId = arbType == "K_YES_P_NO" ? pair.PolyNoTokenId : pair.PolyYesTokenId;
             decimal polyBal    = await _poly.GetTokenBalanceAsync(polyTokenId);
-            bool kMismatch = Math.Abs(kActual - expectedKalshi) > 0.5m;
-            bool pMismatch = Math.Abs(polyBal  - expectedPoly)  > 0.5m;
+            // Use delta vs pre-trade snapshot so orphaned prior-run shares don't trigger a false halt.
+            decimal polyDelta  = polyBal - priorPolyBalance;
+            bool kMismatch = Math.Abs(kActual  - expectedKalshi) > 0.5m;
+            bool pMismatch = Math.Abs(polyDelta - expectedPoly)   > 0.5m;
             if (kMismatch || pMismatch)
             {
                 _halted = true;
@@ -2011,11 +2025,12 @@ public class CrossArbExecutor
                     pair = pair.PairId, arbType,
                     kExpected = expectedKalshi, kVenue = kActual,
                     pExpected = expectedPoly,   pVenue = polyBal,
+                    pPrior = priorPolyBalance, pDelta = polyDelta,
                     halted = true
                 }));
             }
             else
-                DebugLog.Trades($"ReconcileTradeAsync {pair.Label}: confirmed K={kActual} P={polyBal:0.00}");
+                DebugLog.Trades($"ReconcileTradeAsync {pair.Label}: confirmed K={kActual} P={polyBal:0.00} (delta={polyDelta:0.00} prior={priorPolyBalance:0.00})");
         }
         catch (Exception ex)
         {
