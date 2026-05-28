@@ -266,6 +266,16 @@ public class CrossArbExecutor
         await PrefetchFeeRatesAsync();
         _ = Task.Run(PeriodicBalanceRefreshLoop);
         _ = Task.Run(RunEarlyExitMonitorAsync);
+        _ = Task.Run(async () =>
+        {
+            while (!_cts.Token.IsCancellationRequested)
+            {
+                try { await Task.Delay(30_000, _cts.Token); }
+                catch (TaskCanceledException) { break; }
+                await PingKalshiAsync();
+                await PingPolyAsync();
+            }
+        });
     }
 
     private async Task PrefetchFeeRatesAsync()
@@ -944,7 +954,7 @@ public class CrossArbExecutor
         {
             // Re-fetch real balances after execution — not needed in dry-run (simulated clients
             // return dummy values that would overwrite the executor's tracked simulation balances).
-            if (!_dryRun) await RefreshBalancesAsync();
+            if (!_dryRun) _ = Task.Run(async () => await RefreshBalancesAsync());
             // Post-trade position reconciliation — skipped in dry-run normally (simulated client
             // tracks total fills while the executor tracks balanced fills, causing spurious mismatches).
             // reconcileInDryRun overrides this when QueueMismatchOnNextTrade() was pending.
