@@ -1863,10 +1863,10 @@ public class CrossArbExecutor
         catch (Exception ex) { Console.WriteLine($"[BLOCKLIST] Failed to persist {ticker}: {ex.Message}"); }
     }
 
-    private async Task ValidatePairsAtStartupAsync(IEnumerable<CrossPair> pairs)
+    public async Task<List<CrossPair>> ValidatePairsAtStartupAsync(IEnumerable<CrossPair> pairs)
     {
         var pairList = pairs.Where(p => !_blocklist.Contains(p.KalshiTicker)).ToList();
-        if (pairList.Count == 0) return;
+        if (pairList.Count == 0) return [];
         bool checkPoly = _restVerifier != null;
         Console.WriteLine($"[VALIDATE] Checking {pairList.Count} pair(s) — Kalshi status + {(checkPoly ? "Poly tokens" : "Kalshi only")}...");
         int blocked = 0;
@@ -1914,6 +1914,7 @@ public class CrossArbExecutor
         Console.WriteLine(blocked == 0
             ? $"[VALIDATE] All {pairList.Count} pair(s) verified."
             : $"[VALIDATE] {blocked} blocked, {open} open.");
+        return pairList.Where(p => !_blocklist.Contains(p.KalshiTicker)).ToList();
     }
 
     public async Task ReconcileOnStartupAsync(IEnumerable<CrossPair> pairs)
@@ -1934,7 +1935,7 @@ public class CrossArbExecutor
             Console.WriteLine("[RECONCILE] All pairs clean — no prior positions detected.");
 
         await RestorePositionsFromVenuesAsync(pairList);
-        if (!_dryRun) await ValidatePairsAtStartupAsync(pairList);
+        if (!_dryRun) await ValidatePairsAtStartupAsync(pairList); // return value ignored — blocklist updated as side-effect
     }
 
     private async Task RestorePositionsFromVenuesAsync(IEnumerable<CrossPair> pairs)

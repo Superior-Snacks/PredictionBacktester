@@ -653,11 +653,28 @@ _ = Task.Run(async () =>
             }
             DebugLog.Write($"Hot-reload: found {newPairs.Count} new pair(s) — K={newKTickers.Count} new tickers, P={newPTokens.Count} new tokens");
 
-            foreach (var t in newKTickers) state.InitKalshiMarket(t);
-            foreach (var t in newPTokens)  state.InitPolyToken(t);
-            telemetry.AddPairs(newPairs);
-            if (newKTickers.Count > 0) kalshiFeed.EnqueueSubscribe(newKTickers);
-            if (newPTokens.Count  > 0) polyFeed.EnqueueSubscribe(newPTokens);
+            // Validate each new pair (Kalshi open + Poly tokens active) before subscribing.
+            // Runs in this background Task.Run so the main bot is not interrupted.
+            var validPairs = isDryRun
+                ? newPairs
+                : await executor!.ValidatePairsAtStartupAsync(newPairs);
+
+            if (validPairs.Count == 0)
+            {
+                Console.WriteLine("[HOT-RELOAD] All new pair(s) failed validation — nothing added");
+                continue;
+            }
+
+            var validKTickers = validPairs.Select(p => p.KalshiTicker).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var validKList    = newKTickers.Where(t => validKTickers.Contains(t)).ToList();
+            var validPTokens  = validPairs.SelectMany(p => new[] { p.PolyYesTokenId, p.PolyNoTokenId }).ToHashSet();
+            var validPList    = newPTokens.Where(t => validPTokens.Contains(t)).ToList();
+
+            foreach (var t in validKList)  state.InitKalshiMarket(t);
+            foreach (var t in validPList)  state.InitPolyToken(t);
+            telemetry.AddPairs(validPairs);
+            if (validKList.Count > 0) kalshiFeed.EnqueueSubscribe(validKList);
+            if (validPList.Count > 0) polyFeed.EnqueueSubscribe(validPList);
         }
         catch (Exception ex)
         {
