@@ -1865,7 +1865,8 @@ public class CrossArbExecutor
 
         // Scan journal forward: EXECUTION_COMPLETE seeds entry prices; CLEANUP_HEDGE_COMPLETED
         // fills in the price for the recovery leg; SETTLEMENT/EARLY_EXIT removes the pair.
-        var entryMap = new Dictionary<string, (string ArbType, decimal KEntry, decimal PEntry)>();
+        // JournalKQty is the last known fill count — used as fallback when Kalshi positions API is empty.
+        var entryMap = new Dictionary<string, (string ArbType, decimal KEntry, decimal PEntry, decimal JournalKQty)>();
         foreach (string line in await File.ReadAllLinesAsync(_journalPath))
         {
             if (string.IsNullOrWhiteSpace(line)) continue;
@@ -1882,18 +1883,22 @@ public class CrossArbExecutor
                     string pairId = pidEl.GetString() ?? "";
                     if (!pairByPairId.ContainsKey(pairId)) continue;
                     string arbType = root.TryGetProperty("arbType", out var atEl) ? atEl.GetString() ?? "" : "";
-                    decimal kEntry = 0m, pEntry = 0m;
+                    decimal kEntry = 0m, pEntry = 0m, journalKQty = 0m;
                     if (root.TryGetProperty("fills", out var fills))
                     {
-                        if (fills.TryGetProperty("kalshi", out var kf) &&
-                            kf.TryGetProperty("fillPrice", out var kfp))
-                            kEntry = kfp.GetDecimal();
+                        if (fills.TryGetProperty("kalshi", out var kf))
+                        {
+                            if (kf.TryGetProperty("fillPrice", out var kfp))
+                                kEntry = kfp.GetDecimal();
+                            if (kf.TryGetProperty("filled", out var kfq) && kfq.ValueKind == JsonValueKind.Number)
+                                journalKQty = kfq.GetDecimal();
+                        }
                         if (fills.TryGetProperty("poly", out var pf) &&
                             pf.TryGetProperty("avgFillPrice", out var pfp) &&
                             pfp.ValueKind == JsonValueKind.Number)
                             pEntry = pfp.GetDecimal();
                     }
-                    entryMap[pairId] = (arbType, kEntry, pEntry);
+                    entryMap[pairId] = (arbType, kEntry, pEntry, journalKQty);
                 }
                 else if (ev == "CLEANUP_HEDGE_COMPLETED")
                 {
@@ -1904,11 +1909,11 @@ public class CrossArbExecutor
                     if (leg == "poly" && e.PEntry == 0m &&
                         root.TryGetProperty("polyFillPrice", out var pfp2) &&
                         pfp2.ValueKind == JsonValueKind.Number)
-                        entryMap[pairId] = (e.ArbType, e.KEntry, pfp2.GetDecimal());
+                        entryMap[pairId] = (e.ArbType, e.KEntry, pfp2.GetDecimal(), e.JournalKQty);
                     else if (leg == "kalshi" && e.KEntry == 0m &&
                         root.TryGetProperty("kFillPrice", out var kfp2) &&
                         kfp2.ValueKind == JsonValueKind.Number)
-                        entryMap[pairId] = (e.ArbType, kfp2.GetDecimal(), e.PEntry);
+                        entryMap[pairId] = (e.ArbType, kfp2.GetDecimal(), e.PEntry, e.JournalKQty);
                 }
                 else if (ev == "SETTLEMENT_DETECTED" || ev == "EARLY_EXIT_COMPLETE")
                 {
@@ -1926,13 +1931,30 @@ public class CrossArbExecutor
         catch (Exception ex) { Console.WriteLine($"[RESTORE] Kalshi fetch failed: {ex.Message}"); return; }
         var kalshiByTicker = kalshiPos.ToDictionary(p => p.Ticker, p => p.Position);
 
+        if (kalshiByTicker.Count == 0)
+        {
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.WriteLine("[RESTORE] Kalshi positions API returned empty list — using journal qty as fallback (Poly balance still required)");
+            Console.ResetColor();
+        }
+
         int restored = 0;
         foreach (var (pairId, entry) in entryMap)
         {
             if (!pairByPairId.TryGetValue(pairId, out var pair)) continue;
-            if (!kalshiByTicker.TryGetValue(pair.KalshiTicker, out int kPos) || kPos == 0) continue;
 
-            decimal kQty = Math.Abs(kPos);
+            decimal kQty;
+            if (kalshiByTicker.TryGetValue(pair.KalshiTicker, out int kPos) && kPos != 0)
+                kQty = Math.Abs(kPos);
+            else if (entry.JournalKQty > 0)
+            {
+                Console.ForegroundColor = ConsoleColor.Yellow;
+                Console.WriteLine($"[RESTORE] {pair.Label} | Kalshi position not in API — using journal qty {entry.JournalKQty}");
+                Console.ResetColor();
+                kQty = entry.JournalKQty;
+            }
+            else continue;
+
             string polyToken = entry.ArbType == "K_NO_P_YES" ? pair.PolyYesTokenId : pair.PolyNoTokenId;
             decimal pQty = 0m;
             try   { pQty = await _poly.GetTokenBalanceAsync(polyToken); }
@@ -1945,7 +1967,7 @@ public class CrossArbExecutor
             if (pQty <= 0m)
             {
                 Console.ForegroundColor = ConsoleColor.Yellow;
-                Console.WriteLine($"[RESTORE] {pair.Label} | No Poly balance found — unhedged Kalshi position, skipping");
+                Console.WriteLine($"[RESTORE] {pair.Label} | No Poly balance found — skipping");
                 Console.ResetColor();
                 continue;
             }
@@ -2005,7 +2027,17 @@ public class CrossArbExecutor
                 }
             }
             string polyTokenId = arbType == "K_YES_P_NO" ? pair.PolyNoTokenId : pair.PolyYesTokenId;
-            decimal polyBal    = await _poly.GetTokenBalanceAsync(polyTokenId);
+            // Poly balance API has the same propagation lag as Kalshi's positions endpoint.
+            // Retry until the delta vs pre-trade snapshot reaches at least half of expected, or give up.
+            decimal polyBal = priorPolyBalance;
+            for (int pAttempt = 1; pAttempt <= maxAttempts; pAttempt++)
+            {
+                polyBal = await _poly.GetTokenBalanceAsync(polyTokenId);
+                decimal delta = polyBal - priorPolyBalance;
+                if (delta >= expectedPoly * 0.5m) break;
+                if (pAttempt < maxAttempts) await Task.Delay(retryDelayMs);
+                DebugLog.Trades($"ReconcileTradeAsync {pair.Label}: Poly balance attempt {pAttempt}/{maxAttempts} total={polyBal:0.00} delta={delta:0.00} (expected ~{expectedPoly:0.00}) — retrying");
+            }
             // Use delta vs pre-trade snapshot so orphaned prior-run shares don't trigger a false halt.
             decimal polyDelta  = polyBal - priorPolyBalance;
             bool kMismatch = Math.Abs(kActual  - expectedKalshi) > 0.5m;
