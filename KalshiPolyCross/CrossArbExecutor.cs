@@ -1944,7 +1944,7 @@ public class CrossArbExecutor
                 using var doc  = await _kalshi.GetMarketAsync(pair.KalshiTicker);
                 var mkt        = doc.RootElement.TryGetProperty("market", out var m) ? m : doc.RootElement;
                 string kStatus = mkt.TryGetProperty("status", out var sEl) ? sEl.GetString() ?? "" : "unknown";
-                if (!string.Equals(kStatus, "open", StringComparison.OrdinalIgnoreCase))
+                if (!string.Equals(kStatus, "active", StringComparison.OrdinalIgnoreCase))
                     blockReason = $"Kalshi status={kStatus}";
             }
             catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
