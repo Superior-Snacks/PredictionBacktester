@@ -27,21 +27,20 @@ using PredictionBacktester.Engine.LiveExecution;
 //                  Valid: HappyPath, FlakyKalshi, FlakyPoly, ChronicSlippage,
 //                         PartialFillSwamp, BothVenuesFlaky, LatencyStorm
 //
-//  Runtime key toggles (all modes):
-//    N   toggle near-miss top-10 report   (on by default)
-//    S   toggle status dashboard          (on by default; live/dry-run only)
-//    M   inject +1 position mismatch      (dry-run only; fires on next ReconcileTradeAsync → halt)
-//    C   simulate WS reconnect            (dry-run only; closes arb windows, resumes after 500ms)
-//    E   inject 6 Kalshi REST errors      (dry-run only; triggers VENUE_MAINTENANCE halt at 5+)
-//    X   drop first pair's Poly YES book  (dry-run only; simulates book-missing during recovery)
+//  Runtime key toggles — all require Ctrl+<key> (bare keystrokes are ignored):
+//    Ctrl+N   toggle near-miss top-10 report   (on by default)
+//    Ctrl+A   toggle status dashboard          (on by default; live/dry-run only)
+//    Ctrl+U   inject +1 position mismatch      (dry-run only; fires on next ReconcileTradeAsync → halt)
+//    Ctrl+K   simulate WS reconnect            (dry-run only; closes arb windows, resumes after 500ms)
+//    Ctrl+E   inject 6 Kalshi REST errors      (dry-run only; triggers VENUE_MAINTENANCE halt at 5+)
+//    Ctrl+X   drop first pair's Poly YES book  (dry-run only; simulates book-missing during recovery)
 //
-//  --debug additional key toggles:
-//    D   toggle Discovery logs  — arb window detection events
-//    T   toggle Trades logs     — order execution events
-//    B   toggle Balance logs    — balance fetch / refresh events
-//    F   toggle Feed logs       — WebSocket connect / message events
-//    R   toggle Books logs      — REST book-refresh events
-//    H   print current toggle status
+//  --debug additional key toggles (also require Ctrl):
+//    Ctrl+G   toggle Discovery logs  — arb window detection events
+//    Ctrl+T   toggle Trades logs     — order execution events
+//    Ctrl+W   toggle Balance logs    — balance fetch / refresh events
+//    Ctrl+F   toggle Feed logs       — WebSocket connect / message events
+//    Ctrl+R   toggle Books logs      — REST book-refresh events
 //
 //  Required env vars (Kalshi):
 //    KALSHI_API_KEY_ID          Kalshi API key ID
