@@ -1359,6 +1359,10 @@ public class CrossArbExecutor
     private async Task<(decimal SoldShares, decimal AvgPrice)> PlacePolySellAsync(
         string tokenId, decimal shares, bool negRisk = false, List<string>? execLog = null)
     {
+        // Poly CLOB rejects sell maker amounts with more than 2 decimal places.
+        shares = Math.Floor(shares * 100m) / 100m;
+        if (shares <= 0m) return (0m, 0m);
+
         string tokenShort = tokenId[..Math.Min(12, tokenId.Length)];
         Emit(execLog, $"[ORDER P] SELL token={tokenShort}... shares={shares}");
         DebugLog.Trades($"PlacePolySellAsync: token={tokenShort}... shares={shares}");
