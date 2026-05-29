@@ -425,7 +425,7 @@ public class CrossArbExecutor
     {
         if (_halted || _connectionHalted)
         {
-            DebugLog.Trades($"ExecuteAsync {pairId}: skipped — {(_halted ? "bot halted (manual reset required)" : "connection halted")}");
+            Console.WriteLine($"[EXEC SKIP] {pairId}: {(_halted ? "bot halted (manual reset required)" : "connection halted")}");
             return;
         }
         // Per-pair in-flight guard: prevents two concurrent OnArbOpened callbacks from
@@ -446,7 +446,7 @@ public class CrossArbExecutor
         // Guard: cooldown or open position on this pair
         if (_cooldownUntil.TryGetValue(pairId, out long cd) && now < cd)
         {
-            DebugLog.Trades($"ExecuteAsync {pairId}: skipped — cooldown active for {cd - now}s more");
+            Console.WriteLine($"[EXEC SKIP] {pairId}: cooldown active for {cd - now}s more");
             return;
         }
         if (_singleEntry && _openPositions.ContainsKey(pairId))
@@ -458,19 +458,19 @@ public class CrossArbExecutor
         var pair = _telemetry.GetPair(pairId);
         if (pair == null)
         {
-            DebugLog.Trades($"ExecuteAsync {pairId}: pair not found in telemetry");
+            Console.WriteLine($"[EXEC SKIP] {pairId}: pair not found in telemetry — possible config mismatch");
             return;
         }
 
         // Books are needed for stale-gate timestamp checks; prices come from the detection event.
         if (!_books.TryGetValue($"K:{pair.KalshiTicker}",    out var kYes))
-        { DebugLog.Trades($"ExecuteAsync {pair.Label}: missing book K:{pair.KalshiTicker}"); return; }
+        { Console.WriteLine($"[EXEC SKIP] {pair.Label}: missing book K:{pair.KalshiTicker} — WS not yet subscribed"); return; }
         if (!_books.TryGetValue($"K:{pair.KalshiTicker}_NO", out var kNo))
-        { DebugLog.Trades($"ExecuteAsync {pair.Label}: missing book K:{pair.KalshiTicker}_NO"); return; }
+        { Console.WriteLine($"[EXEC SKIP] {pair.Label}: missing book K:{pair.KalshiTicker}_NO — WS not yet subscribed"); return; }
         if (!_books.TryGetValue($"P:{pair.PolyYesTokenId}",  out var pYes))
-        { DebugLog.Trades($"ExecuteAsync {pair.Label}: missing book P:yes"); return; }
+        { Console.WriteLine($"[EXEC SKIP] {pair.Label}: missing book P:yes — WS not yet subscribed"); return; }
         if (!_books.TryGetValue($"P:{pair.PolyNoTokenId}",   out var pNo))
-        { DebugLog.Trades($"ExecuteAsync {pair.Label}: missing book P:no"); return; }
+        { Console.WriteLine($"[EXEC SKIP] {pair.Label}: missing book P:no — WS not yet subscribed"); return; }
 
         // kLegAsk / pLegAsk are the prices captured at detection time — no WS re-read here.
         // Avoids the race where Task.Run scheduling delay lets the book update before we read it.
@@ -541,7 +541,7 @@ public class CrossArbExecutor
 
         if (kLegAsk <= 0.02m || pLegAsk <= 0.02m)
         {
-            DebugLog.Trades($"ExecuteAsync {pair.Label}: price below 2¢ floor — kLeg={kLegAsk:0.0000} pLeg={pLegAsk:0.0000}");
+            Console.WriteLine($"[EXEC SKIP] {pair.Label}: price below 2¢ floor — K={kLegAsk:0.0000} P={pLegAsk:0.0000}");
             return;
         }
 
