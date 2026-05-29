@@ -432,7 +432,7 @@ public class CrossArbExecutor
         // both passing the cooldown/open-position check before either one sets the cooldown.
         if (!_inFlight.TryAdd(pairId, 0))
         {
-            DebugLog.Trades($"ExecuteAsync {pairId}: skipped — already in-flight");
+            Console.WriteLine($"[EXEC SKIP] {pairId}: already in-flight (previous attempt still running)");
             return;
         }
         try   { await ExecuteLockedAsync(pairId, arbType, detectedKAsk, detectedPAsk); }
@@ -451,7 +451,7 @@ public class CrossArbExecutor
         }
         if (_singleEntry && _openPositions.ContainsKey(pairId))
         {
-            DebugLog.Trades($"ExecuteAsync {pairId}: skipped — single-entry: position already open");
+            Console.WriteLine($"[EXEC SKIP] {pairId}: single-entry — position already open");
             return;
         }
 
@@ -536,6 +536,11 @@ public class CrossArbExecutor
         if (netNow >= _executionThreshold)
         {
             Console.WriteLine($"[EXEC SKIP] {pair.Label} | net=${netNow:0.0000} >= threshold {_executionThreshold:0.000}");
+            await JournalAsync(JsonSerializer.Serialize(new {
+                t = DateTime.UtcNow, @event = "EXEC_SKIP", pairId, arbType,
+                reason = "NET_TOO_HIGH", netNow, threshold = _executionThreshold,
+                kAsk = kLegAsk, pAsk = pLegAsk
+            }));
             return;
         }
 
@@ -635,10 +640,15 @@ public class CrossArbExecutor
 
         string execId = string.Empty;
 
-        // Blocklist check — pairs flagged by prod_cross_arb.py for pair mismatch at settlement
+        // Blocklist check — pairs flagged at startup (closed/invalid) or by runtime 404
         if (_blocklist.Contains(pair.KalshiTicker))
         {
+            Console.WriteLine($"[EXEC SKIP] {pair.Label}: on blocklist — skipping");
             lock (_balanceLock) { _kalshiBalanceUsd += kalshiCost; _polyBalanceUsd += polyCost; }
+            await JournalAsync(JsonSerializer.Serialize(new {
+                t = DateTime.UtcNow, @event = "EXEC_SKIP", pairId, arbType,
+                reason = "BLOCKLISTED", ticker = pair.KalshiTicker
+            }));
             return;
         }
 
@@ -1889,12 +1899,16 @@ public class CrossArbExecutor
 
     // ── Blocklist helpers ─────────────────────────────────────────────────────
 
-    private void BlocklistKalshiTicker(string ticker)
+    // persist=true: writes to cross_pair_blocklist.json (survives restarts).
+    // persist=false: session-only — use for startup validation where transient errors are possible.
+    private void BlocklistKalshiTicker(string ticker, bool persist = true)
     {
         lock (_blocklistLock) _blocklist.Add(ticker);
         Console.ForegroundColor = ConsoleColor.Yellow;
-        Console.WriteLine($"[BLOCKLIST] {ticker} added — will be skipped for all future executions this session");
+        string tag = persist ? "persisted" : "session-only";
+        Console.WriteLine($"[BLOCKLIST] {ticker} added ({tag}) — skipped for all future executions this session");
         Console.ResetColor();
+        if (!persist) return;
         try
         {
             string blPath = Path.Combine(AppContext.BaseDirectory, "cross_pair_blocklist.json");
@@ -1943,20 +1957,31 @@ public class CrossArbExecutor
             }
 
             // ── Polymarket (both tokens) ─────────────────────────────────────
-            if (blockReason == null && checkPoly)
-            {
-                bool yesOk = await _restVerifier!.CheckPolyTokenAsync(pair.PolyYesTokenId);
-                bool noOk  = await _restVerifier!.CheckPolyTokenAsync(pair.PolyNoTokenId);
-                if (!yesOk || !noOk)
-                    blockReason = !yesOk && !noOk ? "Poly YES+NO tokens invalid"
-                                : !yesOk          ? "Poly YES token invalid"
-                                :                   "Poly NO token invalid";
-            }
+            // TODO: re-enable once CheckPolyTokenAsync is verified against negRisk markets.
+            // The tick_size check was incorrectly blocking valid active pairs (negRisk tokens
+            // may not return tick_size on the /book endpoint).
+            // if (blockReason == null && checkPoly)
+            // {
+            //     bool yesOk = await _restVerifier!.CheckPolyTokenAsync(pair.PolyYesTokenId);
+            //     bool noOk  = await _restVerifier!.CheckPolyTokenAsync(pair.PolyNoTokenId);
+            //     if (!yesOk || !noOk)
+            //         blockReason = !yesOk && !noOk ? "Poly YES+NO tokens invalid"
+            //                     : !yesOk          ? "Poly YES token invalid"
+            //                     :                   "Poly NO token invalid";
+            // }
 
             if (blockReason != null)
             {
-                BlocklistKalshiTicker(pair.KalshiTicker);
-                Console.WriteLine($"[VALIDATE] {pair.Label} | {blockReason} — blocked");
+                // session-only: startup checks can fail transiently (timeout, geo-block).
+                // Only execution-time 404s are persisted to cross_pair_blocklist.json.
+                BlocklistKalshiTicker(pair.KalshiTicker, persist: false);
+                Console.WriteLine($"[VALIDATE] {pair.Label} | {blockReason} — blocked (session-only)");
+                await JournalAsync(JsonSerializer.Serialize(new {
+                    t = DateTime.UtcNow, @event = "VALIDATE_BLOCKED",
+                    pairId = pair.PairId, label = pair.Label,
+                    ticker = pair.KalshiTicker, reason = blockReason,
+                    sessionOnly = true
+                }));
                 blocked++;
             }
         }
