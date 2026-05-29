@@ -27,20 +27,20 @@ using PredictionBacktester.Engine.LiveExecution;
 //                  Valid: HappyPath, FlakyKalshi, FlakyPoly, ChronicSlippage,
 //                         PartialFillSwamp, BothVenuesFlaky, LatencyStorm
 //
-//  Runtime key toggles — all require Ctrl+<key> (bare keystrokes are ignored):
-//    Ctrl+N   toggle near-miss top-10 report   (on by default)
-//    Ctrl+A   toggle status dashboard          (on by default; live/dry-run only)
-//    Ctrl+U   inject +1 position mismatch      (dry-run only; fires on next ReconcileTradeAsync → halt)
-//    Ctrl+K   simulate WS reconnect            (dry-run only; closes arb windows, resumes after 500ms)
-//    Ctrl+E   inject 6 Kalshi REST errors      (dry-run only; triggers VENUE_MAINTENANCE halt at 5+)
-//    Ctrl+X   drop first pair's Poly YES book  (dry-run only; simulates book-missing during recovery)
+//  Runtime key toggles (bare keypresses — works in tmux, SSH, screen):
+//    N   toggle near-miss top-10 report   (on by default)
+//    A   toggle status dashboard          (on by default; live/dry-run only)
+//    U   inject +1 position mismatch      (dry-run only; fires on next ReconcileTradeAsync → halt)
+//    K   simulate WS reconnect            (dry-run only; closes arb windows, resumes after 500ms)
+//    E   inject 6 Kalshi REST errors      (dry-run only; triggers VENUE_MAINTENANCE halt at 5+)
+//    X   drop first pair's Poly YES book  (dry-run only; simulates book-missing during recovery)
 //
-//  --debug additional key toggles (also require Ctrl):
-//    Ctrl+G   toggle Discovery logs  — arb window detection events
-//    Ctrl+T   toggle Trades logs     — order execution events
-//    Ctrl+W   toggle Balance logs    — balance fetch / refresh events
-//    Ctrl+F   toggle Feed logs       — WebSocket connect / message events
-//    Ctrl+R   toggle Books logs      — REST book-refresh events
+//  --debug additional key toggles:
+//    G   toggle Discovery logs  — arb window detection events
+//    T   toggle Trades logs     — order execution events
+//    W   toggle Balance logs    — balance fetch / refresh events
+//    F   toggle Feed logs       — WebSocket connect / message events
+//    R   toggle Books logs      — REST book-refresh events
 //
 //  Required env vars (Kalshi):
 //    KALSHI_API_KEY_ID          Kalshi API key ID
@@ -348,12 +348,10 @@ var knownPairIds       = new HashSet<string>(pairs.Select(p => p.PairId), String
 Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
 
 // ── Key toggles ────────────────────────────────────────────────────────────
-// All keys require Ctrl to avoid conflicts with bare-key tmux bindings.
-// Avoided: Ctrl+B (tmux prefix), Ctrl+C (SIGINT), Ctrl+D (EOF),
-//          Ctrl+H (backspace), Ctrl+M (Enter), Ctrl+S (XOFF/freeze).
-Console.WriteLine("[KEYS] ^N=NearMiss  ^A=StatusDash" +
-    (isDryRun ? "  ^U=InjectMismatch  ^K=SimReconnect  ^E=InjectErrors  ^X=DropPolyBook" : "") +
-    (isDebug  ? "  │  ^G=Discovery  ^T=Trades  ^W=Balance  ^F=Feed  ^R=Books  ^P=DebugStatus" : ""));
+// Bare keypresses (no Ctrl) — works in tmux, SSH, and screen sessions.
+Console.WriteLine("[KEYS] N=NearMiss  A=StatusDash" +
+    (isDryRun ? "  U=InjectMismatch  K=SimReconnect  E=InjectErrors  X=DropPolyBook" : "") +
+    (isDebug  ? "  │  G=Discovery  T=Trades  W=Balance  F=Feed  R=Books" : ""));
 _ = Task.Run(() =>
 {
     try
@@ -363,8 +361,6 @@ _ = Task.Run(() =>
             if (!Console.KeyAvailable) { Thread.Sleep(50); continue; }
             var info = Console.ReadKey(intercept: true);
             var key  = info.Key;
-            bool ctrl = (info.Modifiers & ConsoleModifiers.Control) != 0;
-            if (!ctrl) continue;   // bare keystrokes ignored — only Ctrl+<key> accepted
             switch (key)
             {
                 case ConsoleKey.N: DebugLog.NearMissEnabled   = !DebugLog.NearMissEnabled;   break;
