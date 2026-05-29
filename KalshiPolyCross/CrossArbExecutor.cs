@@ -59,6 +59,8 @@ public class CrossArbExecutor
 
     // When venue time-skew exceeds this value, block and REST-verify before firing.
     private const double StaleGateMs = 5_000.0;
+    // When either book's absolute age exceeds this, REST-verify regardless of relative skew.
+    private const double AbsoluteStaleMs = 30_000.0;
 
     // ── Early exit tuning ─────────────────────────────────────────────────────
     // Triggered on every book update for pairs with an open position (event-driven),
@@ -508,9 +510,16 @@ public class CrossArbExecutor
                 }));
             }
 
-            if (venueSkewMs >= StaleGateMs && _restVerifier != null)
+            double kAgeMs = kLastDelta.Ticks > 0 ? (DateTime.UtcNow - kLastDelta).TotalMilliseconds : 0;
+            double pAgeMs = pLastDelta.Ticks > 0 ? (DateTime.UtcNow - pLastDelta).TotalMilliseconds : 0;
+            double maxAgeMs = Math.Max(kAgeMs, pAgeMs);
+            bool staleByAge = maxAgeMs >= AbsoluteStaleMs;
+
+            if ((venueSkewMs >= StaleGateMs || staleByAge) && _restVerifier != null)
             {
-                Console.WriteLine($"[STALE GATE] {pair.Label} | skew={venueSkewMs:0}ms — REST-verifying before firing");
+                string reason = staleByAge && venueSkewMs < StaleGateMs
+                    ? $"age={maxAgeMs:0}ms" : $"skew={venueSkewMs:0}ms";
+                Console.WriteLine($"[STALE GATE] {pair.Label} | {reason} — REST-verifying before firing");
                 var (freshK, freshP) = await _restVerifier.GetCurrentAsksAsync(pair, arbType);
                 if (freshK <= 0m || freshP <= 0m)
                 {
@@ -1668,7 +1677,7 @@ public class CrossArbExecutor
                     Console.ResetColor();
 
                     var (_, _, kFill2) = await PlaceKalshiLegAsync(
-                        pair.KalshiTicker, kalshiSide, currentKCents, hedgeQty, execId, execLog);
+                        pair.KalshiTicker, kalshiSide, currentKCents, hedgeQty, execId + "_RH", execLog);
                     if (kFill2 > 0)
                     {
                         decimal additional    = Math.Min((decimal)hedgeQty, kFill2);
