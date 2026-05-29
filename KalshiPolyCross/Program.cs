@@ -325,7 +325,7 @@ if (isLive || isDryRun)
         await executor.ReconcileOnStartupAsync(pairs);
     string execLabel  = isDryRun ? $"DRY RUN [{scenarioName}] — no real orders" : "LIVE";
     string minBuyTag  = minBuy ? "  MIN-BUY=1" : $"  maxBet=${MAX_BET_USD:0.00}";
-    Console.WriteLine($"[EXECUTOR] {execLabel} |{minBuyTag} buffer={BALANCE_BUFFER_PCT:P0} maxExposure=${maxExposureUsd:0.00} threshold=0.990 cooldown=120s");
+    Console.WriteLine($"[EXECUTOR] {execLabel} |{minBuyTag} buffer={BALANCE_BUFFER_PCT:P0} maxExposure=${maxExposureUsd:0.00} threshold={EXECUTION_THRESHOLD:0.000} cooldown=120s");
 }
 else // --telemetry
 {
