@@ -1033,7 +1033,10 @@ public class CrossArbExecutor
             if ((!_dryRun || reconcileInDryRun) && balancedQty > 0)
             {
                 decimal priorPolyBal = priorPolyBalTask.IsCompletedSuccessfully ? priorPolyBalTask.Result : 0m;
-                _ = Task.Run(async () => await ReconcileTradeAsync(pair, arbType, balancedQty, balancedQty, execId, kOrderId, priorPolyBal));
+                // When there was Kalshi excess that needed cleanup, the buy order fill count
+                // != net position, so order-poll gives the wrong kActual. Use positions API instead.
+                string reconcileOrderId = kUnhedged > 0 ? "" : kOrderId;
+                _ = Task.Run(async () => await ReconcileTradeAsync(pair, arbType, balancedQty, balancedQty, execId, reconcileOrderId, priorPolyBal));
             }
         }
         else
@@ -1578,13 +1581,26 @@ public class CrossArbExecutor
                             lock (_cleanupLock) { _totalCleanupCostUsd += reversalLoss; }
                         await JournalAsync(JsonSerializer.Serialize(new {
                             t = DateTime.UtcNow, @event = "CLEANUP_REVERSED", execId,
-                            pair = pair.PairId, leg = "kalshi", qty = kUnhedged,
+                            pair = pair.PairId, leg = "kalshi", qty = revFill,
                             entryPrice = kLegAsk, reversalPrice = kReverseCents / 100m,
                             loss = Math.Max(0m, reversalLoss)
                         }));
                         Console.ForegroundColor = ConsoleColor.Yellow;
                         Emit(execLog, $"[RECOVER REVERSED] {pair.Label} | sold {revFill} Kalshi {kalshiSide} @ {kReverseCents}¢");
                         Console.ResetColor();
+
+                        int remaining = (int)kUnhedged - (int)revFill;
+                        if (remaining > 0)
+                        {
+                            await JournalAsync(JsonSerializer.Serialize(new {
+                                t = DateTime.UtcNow, @event = "CLEANUP_REVERSE_PARTIAL", execId,
+                                pair = pair.PairId, leg = "kalshi",
+                                requested = (int)kUnhedged, filled = (int)revFill, remaining
+                            }));
+                            Emit(execLog, $"[HALT] {pair.Label} | Partial reversal: sold {revFill}/{(int)kUnhedged} — {remaining} contracts still open. Manual reset required.");
+                            _halted = true;
+                            return new RecoveryResult("HALT", revFill, Math.Max(0m, reversalLoss));
+                        }
                         return new RecoveryResult("REVERSED_KALSHI", revFill, Math.Max(0m, reversalLoss));
                     }
                     await JournalAsync(JsonSerializer.Serialize(new {
@@ -2189,7 +2205,7 @@ public class CrossArbExecutor
                     var kalshiPositions = await _kalshi.GetPositionsAsync();
                     int kPos = kalshiPositions.FirstOrDefault(p => p.Ticker == pair.KalshiTicker).Position;
                     kActual = Math.Abs(kPos);
-                    if (Math.Abs(kActual - expectedKalshi) <= 0.5m) break;
+                    if (Math.Abs(kActual - expectedKalshi) <= 1.0m) break;
                     DebugLog.Trades($"ReconcileTradeAsync {pair.Label}: attempt {attempt}/{maxAttempts} kVenue={kActual} (expected {expectedKalshi}) — retrying");
                 }
             }
