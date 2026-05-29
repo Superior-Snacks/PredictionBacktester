@@ -405,12 +405,12 @@ public class CrossArbExecutor
     }
 
     /// <summary>Wire to telemetry.OnArbOpened — fires on every new WS-detected arb window.</summary>
-    public void OnArbOpened(string pairId, decimal netCost, string arbType, decimal depth)
+    public void OnArbOpened(string pairId, decimal netCost, string arbType, decimal depth, decimal kLegAsk, decimal pLegAsk)
     {
-        DebugLog.Trades($"OnArbOpened: {pairId} {arbType} net={netCost:0.0000} depth={depth:0.0}");
+        DebugLog.Trades($"OnArbOpened: {pairId} {arbType} net={netCost:0.0000} depth={depth:0.0} K={kLegAsk:0.0000} P={pLegAsk:0.0000}");
         _ = Task.Run(async () =>
         {
-            try { await ExecuteAsync(pairId, arbType); }
+            try { await ExecuteAsync(pairId, arbType, kLegAsk, pLegAsk); }
             catch (Exception ex)
             {
                 Console.WriteLine($"[EXEC ERROR] {pairId}: {ex.Message}");
@@ -421,7 +421,7 @@ public class CrossArbExecutor
 
     // ── Core execution ────────────────────────────────────────────────────────
 
-    private async Task ExecuteAsync(string pairId, string arbType)
+    private async Task ExecuteAsync(string pairId, string arbType, decimal detectedKAsk, decimal detectedPAsk)
     {
         if (_halted || _connectionHalted)
         {
@@ -435,11 +435,11 @@ public class CrossArbExecutor
             DebugLog.Trades($"ExecuteAsync {pairId}: skipped — already in-flight");
             return;
         }
-        try   { await ExecuteLockedAsync(pairId, arbType); }
+        try   { await ExecuteLockedAsync(pairId, arbType, detectedKAsk, detectedPAsk); }
         finally { _inFlight.TryRemove(pairId, out _); }
     }
 
-    private async Task ExecuteLockedAsync(string pairId, string arbType)
+    private async Task ExecuteLockedAsync(string pairId, string arbType, decimal kLegAsk, decimal pLegAsk)
     {
         long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 
@@ -462,7 +462,7 @@ public class CrossArbExecutor
             return;
         }
 
-        // Re-read live book prices at execution time
+        // Books are needed for stale-gate timestamp checks; prices come from the detection event.
         if (!_books.TryGetValue($"K:{pair.KalshiTicker}",    out var kYes))
         { DebugLog.Trades($"ExecuteAsync {pair.Label}: missing book K:{pair.KalshiTicker}"); return; }
         if (!_books.TryGetValue($"K:{pair.KalshiTicker}_NO", out var kNo))
@@ -472,21 +472,19 @@ public class CrossArbExecutor
         if (!_books.TryGetValue($"P:{pair.PolyNoTokenId}",   out var pNo))
         { DebugLog.Trades($"ExecuteAsync {pair.Label}: missing book P:no"); return; }
 
-        decimal kLegAsk, pLegAsk;
+        // kLegAsk / pLegAsk are the prices captured at detection time — no WS re-read here.
+        // Avoids the race where Task.Run scheduling delay lets the book update before we read it.
+        // The stale gate below will REST-override them when the book age is > StaleGateMs.
         string  kalshiSide, polyToken;
         double  venueSkewMs = 0;
 
         if (arbType == "K_YES_P_NO")
         {
-            kLegAsk    = kYes.GetBestAskPrice();
-            pLegAsk    = pNo.GetBestAskPrice();
             kalshiSide = "yes";
             polyToken  = pair.PolyNoTokenId;
         }
         else // K_NO_P_YES
         {
-            kLegAsk    = kNo.GetBestAskPrice();
-            pLegAsk    = pYes.GetBestAskPrice();
             kalshiSide = "no";
             polyToken  = pair.PolyYesTokenId;
         }

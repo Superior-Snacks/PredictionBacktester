@@ -42,7 +42,7 @@ public class CrossArbRestVerifier
     }
 
     /// <summary>Subscribe to telemetry.OnArbOpened and call this method.</summary>
-    public void OnArbOpened(string pairId, decimal netCost, string arbType, decimal depth)
+    public void OnArbOpened(string pairId, decimal netCost, string arbType, decimal depth, decimal kLegAsk, decimal pLegAsk)
     {
         DebugLog.Trades($"CrossArbRestVerifier.OnArbOpened: {pairId} {arbType} — queuing REST check");
         _ = Task.Run(async () =>

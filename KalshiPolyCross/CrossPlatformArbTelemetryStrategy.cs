@@ -126,7 +126,7 @@ public class CrossPlatformArbTelemetryStrategy
     public int OpenArbs   => _activeWindows.Values.Count(w => w != null);
     public int TotalPairs => _pairs.Count;
 
-    public event Action<string, decimal, string, decimal>? OnArbOpened;
+    public event Action<string, decimal, string, decimal, decimal, decimal>? OnArbOpened;
 
     /// <summary>Fires after every book update — subscribers (e.g. executor) use this for event-driven exit checks.</summary>
     public event Action<string>? BookUpdated;
@@ -515,7 +515,7 @@ public class CrossPlatformArbTelemetryStrategy
         }
 
         if (invokeOnArbOpened)
-            OnArbOpened?.Invoke(pair.PairId, bestNet, bestType, bestDepth);
+            OnArbOpened?.Invoke(pair.PairId, bestNet, bestType, bestDepth, kLegPrice, pLegPrice);
 
         var posPrefix = pair.PairId + "\x00";
         foreach (var kvp in _hypotheticalPositions)
