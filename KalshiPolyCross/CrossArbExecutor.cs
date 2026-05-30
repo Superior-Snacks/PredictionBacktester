@@ -1036,7 +1036,9 @@ public class CrossArbExecutor
                 // When there was Kalshi excess that needed cleanup, the buy order fill count
                 // != net position, so order-poll gives the wrong kActual. Use positions API instead.
                 string reconcileOrderId = kUnhedged > 0 ? "" : kOrderId;
-                _ = Task.Run(async () => await ReconcileTradeAsync(pair, arbType, balancedQty, balancedQty, execId, reconcileOrderId, priorPolyBal));
+                // When Poly dust was absorbed we didn't sell — venue holds pFilled, not balancedQty.
+                decimal expectedPolyVenue = recovery?.Outcome == "DUST_ABSORBED_POLY" ? pFilled : balancedQty;
+                _ = Task.Run(async () => await ReconcileTradeAsync(pair, arbType, balancedQty, expectedPolyVenue, execId, reconcileOrderId, priorPolyBal));
             }
         }
         else
