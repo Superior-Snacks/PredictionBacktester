@@ -563,6 +563,17 @@ public class CrossArbExecutor
         // Each leg's limit = WS ask + half the gap to threshold, so both legs
         // can each slip by halfAllow simultaneously without crossing the threshold.
         decimal halfAllow   = (_executionThreshold - netNow) / 2m;
+        // Require at least 1 Kalshi tick of headroom per leg. Thinner arbs get IOC-canceled
+        // and leave a reversed-leg loss when the recovery sell is worse than entry.
+        if (halfAllow < 0.01m)
+        {
+            Console.WriteLine($"[EXEC SKIP] {pair.Label} | margin too thin: halfAllow={halfAllow:0.00000} net=${netNow:0.0000}");
+            await JournalAsync(JsonSerializer.Serialize(new {
+                t = DateTime.UtcNow, @event = "EXEC_SKIP", pairId, arbType,
+                reason = "THIN_MARGIN", halfAllow, netNow, threshold = _executionThreshold
+            }));
+            return;
+        }
         int     kPriceCents = (int)Math.Floor((kLegAsk + halfAllow) * 100m);
         decimal pLimitAsk   = Math.Min(0.99m, pLegAsk + halfAllow);
         DebugLog.Trades($"ExecuteAsync {pair.Label}: halfAllow={halfAllow:0.00000} kLimit={kPriceCents}¢ pLimit={pLimitAsk:0.0000}");
@@ -2558,6 +2569,9 @@ public class CrossArbExecutor
             if (kOk && pOk)
             {
                 _openPositions.TryRemove(pairId, out _);
+                // Block re-entry after early exit — the stale book that triggered the exit
+                // may still show an apparent arb on the same pair within seconds.
+                _cooldownUntil[pairId] = DateTimeOffset.UtcNow.ToUnixTimeSeconds() + _pairCooldownSeconds;
                 Interlocked.Increment(ref _earlyExitsCompleted);
                 decimal exitEntryCost = currentPos.KalshiContracts * currentPos.KalshiEntryPrice
                                       + currentPos.PolyShares      * currentPos.PolyEntryPrice;
