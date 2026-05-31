@@ -2552,8 +2552,8 @@ public class CrossArbExecutor
             var (_, kStatus, kSold) = kSellTask.Result;
             var (pSold, pAvgPrice)  = pSellTask.Result;
 
-            bool kOk = kSold > 0;
-            bool pOk = pSold > 0;
+            bool kOk = kSold >= currentPos.KalshiContracts - 0.5m;
+            bool pOk = pSold >= currentPos.PolyShares      - 0.5m;
 
             if (kOk && pOk)
             {
