@@ -2097,7 +2097,8 @@ public class CrossArbExecutor
 
         // Scan journal forward: EXECUTION_COMPLETE seeds entry prices; CLEANUP_HEDGE_COMPLETED
         // fills in the price for the recovery leg; SETTLEMENT/EARLY_EXIT removes the pair.
-        // JournalKQty is the last known fill count — used as fallback when Kalshi positions API is empty.
+        // JournalKQty is the net held qty (position.kHeld) — subtracts any REVERSED_KALSHI cleanup,
+        // so it's used as the correct fallback when the Kalshi positions API is empty or flaky.
         var entryMap = new Dictionary<string, (string ArbType, decimal KEntry, decimal PEntry, decimal JournalKQty)>();
         foreach (string line in await File.ReadAllLinesAsync(_journalPath))
         {
@@ -2118,18 +2119,22 @@ public class CrossArbExecutor
                     decimal kEntry = 0m, pEntry = 0m, journalKQty = 0m;
                     if (root.TryGetProperty("fills", out var fills))
                     {
-                        if (fills.TryGetProperty("kalshi", out var kf))
-                        {
-                            if (kf.TryGetProperty("fillPrice", out var kfp))
-                                kEntry = kfp.GetDecimal();
-                            if (kf.TryGetProperty("filled", out var kfq) && kfq.ValueKind == JsonValueKind.Number)
-                                journalKQty = kfq.GetDecimal();
-                        }
+                        if (fills.TryGetProperty("kalshi", out var kf) &&
+                            kf.TryGetProperty("fillPrice", out var kfp))
+                            kEntry = kfp.GetDecimal();
                         if (fills.TryGetProperty("poly", out var pf) &&
                             pf.TryGetProperty("avgFillPrice", out var pfp) &&
                             pfp.ValueKind == JsonValueKind.Number)
                             pEntry = pfp.GetDecimal();
                     }
+                    // Net held qty, NOT the gross entry fill. position.kHeld already subtracts any
+                    // REVERSED_KALSHI cleanup; reading fills.kalshi.filled is why ABAN restored as 12
+                    // instead of the real 5. position is null on MISS / zero-balanced execs → leave 0.
+                    if (root.TryGetProperty("position", out var posEl) &&
+                        posEl.ValueKind == JsonValueKind.Object &&
+                        posEl.TryGetProperty("kHeld", out var khEl) &&
+                        khEl.ValueKind == JsonValueKind.Number)
+                        journalKQty = khEl.GetDecimal();
                     entryMap[pairId] = (arbType, kEntry, pEntry, journalKQty);
                 }
                 else if (ev == "CLEANUP_HEDGE_COMPLETED")

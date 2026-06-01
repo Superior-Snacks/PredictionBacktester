@@ -526,7 +526,7 @@ def print_duration_analysis(rows, min_duration_ms):
     for label, lo, hi in buckets:
         count  = sum(1 for d in durations if lo <= d < hi)
         pct    = count / total * 100 if total else 0
-        marker = " <-- capturable threshold" if lo == min_duration_ms or (lo < min_duration_ms <= hi) else ""
+        marker = " " if lo == min_duration_ms or (lo < min_duration_ms <= hi) else ""
         print(f"  {label:<16} {count:>6}  {pct:>5.1f}%{marker}")
 
     capturable = sum(1 for r in rows if r["duration_ms"] >= min_duration_ms)
