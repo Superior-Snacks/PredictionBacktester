@@ -153,6 +153,13 @@ public class LocalOrderBook
             return _asks.Take(levels).Sum(kv => kv.Value);
     }
 
+    /// <summary>Returns total ask volume at price levels at or below <paramref name="limitPrice"/>.</summary>
+    public decimal GetAskVolumeAtOrBelow(decimal limitPrice)
+    {
+        lock (_bookLock)
+            return _asks.TakeWhile(kv => kv.Key <= limitPrice).Sum(kv => kv.Value);
+    }
+
     public void ClearBook()
     {
         lock (_bookLock)

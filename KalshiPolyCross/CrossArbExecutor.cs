@@ -653,6 +653,31 @@ public class CrossArbExecutor
             return;
         }
 
+        // Depth gate: only fire if both venues can fill the full order at our limit prices.
+        // Measures volume at or below each limit — not top-N regardless of price — so a book
+        // with 12 contracts at 15¢ doesn't count toward a 9¢ Poly limit.
+        {
+            var kBook = arbType == "K_YES_P_NO" ? kYes : kNo;
+            var pBook = arbType == "K_YES_P_NO" ? pNo  : pYes;
+            decimal kLimitDec     = kLegAsk + 0.01m;   // mirrors kPriceCents calc above
+            decimal kDepthAtLimit = kBook.GetAskVolumeAtOrBelow(kLimitDec);
+            decimal pDepthAtLimit = pBook.GetAskVolumeAtOrBelow(pLimitAsk);
+            if (Math.Min(kDepthAtLimit, pDepthAtLimit) < contracts)
+            {
+                lock (_balanceLock) { _kalshiBalanceUsd += kalshiCost; _polyBalanceUsd += polyCost; }
+                Console.WriteLine(
+                    $"[EXEC SKIP] {pair.Label} | depth too thin: need={contracts} " +
+                    $"K≤{kLimitDec:0.00}={kDepthAtLimit:0.0} P≤{pLimitAsk:0.0000}={pDepthAtLimit:0.0}");
+                await JournalAsync(JsonSerializer.Serialize(new {
+                    t = DateTime.UtcNow, @event = "EXEC_SKIP", pairId, arbType,
+                    reason = "THIN_DEPTH", contracts,
+                    kDepthAtLimit = Math.Round(kDepthAtLimit, 2), kLimit = kLimitDec,
+                    pDepthAtLimit = Math.Round(pDepthAtLimit, 2), pLimit = pLimitAsk
+                }));
+                return;
+            }
+        }
+
         if (contracts < idealContracts)
         {
             Console.WriteLine(
