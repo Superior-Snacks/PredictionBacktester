@@ -1047,12 +1047,16 @@ public class CrossArbExecutor
             if ((!_dryRun || reconcileInDryRun) && balancedQty > 0)
             {
                 decimal priorPolyBal = priorPolyBalTask.IsCompletedSuccessfully ? priorPolyBalTask.Result : 0m;
-                // When there was Kalshi excess that needed cleanup, the buy order fill count
-                // != net position, so order-poll gives the wrong kActual. Use positions API instead.
-                string reconcileOrderId = kUnhedged > 0 ? "" : kOrderId;
+                // Order-poll reflects fills immediately; the positions endpoint lags 10–20s.
+                // A clean Kalshi reverse can still use order-poll: poll the original buy fill and
+                // subtract the venue-confirmed reversed qty. Other kUnhedged>0 outcomes
+                // (hedge-completed / dust-absorbed) still fall back to the positions endpoint.
+                bool kReversed = recovery?.Outcome == "REVERSED_KALSHI";
+                string reconcileOrderId = (kUnhedged == 0 || kReversed) ? kOrderId : "";
+                decimal reversedKalshiQty = kReversed ? recovery!.RecoveredQty : 0m;
                 // When Poly dust was absorbed we didn't sell — venue holds pFilled, not balancedQty.
                 decimal expectedPolyVenue = recovery?.Outcome == "DUST_ABSORBED_POLY" ? pFilled : balancedQty;
-                _ = Task.Run(async () => await ReconcileTradeAsync(pair, arbType, balancedQty, expectedPolyVenue, execId, reconcileOrderId, priorPolyBal));
+                _ = Task.Run(async () => await ReconcileTradeAsync(pair, arbType, balancedQty, expectedPolyVenue, execId, reconcileOrderId, priorPolyBal, reversedKalshiQty));
             }
         }
         else
@@ -2200,14 +2204,14 @@ public class CrossArbExecutor
 
     // ── Post-trade reconciliation ─────────────────────────────────────────────
 
-    private async Task ReconcileTradeAsync(CrossPair pair, string arbType, decimal expectedKalshi, decimal expectedPoly, string execId = "", string kOrderId = "", decimal priorPolyBalance = 0m)
+    private async Task ReconcileTradeAsync(CrossPair pair, string arbType, decimal expectedKalshi, decimal expectedPoly, string execId = "", string kOrderId = "", decimal priorPolyBalance = 0m, decimal reversedKalshiQty = 0m)
     {
         try
         {
             // Kalshi /portfolio/positions lags 10–20 s after a fill. Instead, poll the specific
             // order directly (GET /portfolio/orders/{id}) which reflects the fill immediately.
             // Fall back to GetPositionsAsync only when kOrderId is unavailable.
-            const int maxAttempts  = 6;
+            const int maxAttempts  = 10;    // 10 × 3s = 30s — comfortably past Kalshi's 10–20s positions lag
             const int retryDelayMs = 3_000;
             decimal kActual = 0m;
             for (int attempt = 1; attempt <= maxAttempts; attempt++)
@@ -2216,9 +2220,11 @@ public class CrossArbExecutor
                 if (!string.IsNullOrEmpty(kOrderId))
                 {
                     var (pollStatus, pollFill) = await _kalshi.PollOrderAsync(kOrderId);
-                    kActual = pollFill;
-                    if (pollStatus == "executed") break;
-                    DebugLog.Trades($"ReconcileTradeAsync {pair.Label}: attempt {attempt}/{maxAttempts} order={kOrderId} status={pollStatus} fill={pollFill} — retrying");
+                    // Entry order shows the full buy fill; held position = buyFill - cleanly-reversed excess.
+                    // reversedKalshiQty is 0 for clean fills, so this is a no-op there.
+                    kActual = pollFill - reversedKalshiQty;
+                    if (pollStatus is "executed" or "canceled") break;  // terminal: fill count is final
+                    DebugLog.Trades($"ReconcileTradeAsync {pair.Label}: attempt {attempt}/{maxAttempts} order={kOrderId} status={pollStatus} fill={pollFill} reversed={reversedKalshiQty} — retrying");
                 }
                 else
                 {
