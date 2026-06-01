@@ -2566,6 +2566,31 @@ public class CrossArbExecutor
             bool kOk = kSold >= currentPos.KalshiContracts - 0.5m;
             bool pOk = pSold >= currentPos.PolyShares      - 0.5m;
 
+            // Poly is out but Kalshi partially filled: sweep 3 ticks deeper to close the unhedged leg.
+            // Halting here would leave unhedged Kalshi contracts indefinitely; sweeping costs at most 3¢/contract.
+            if (!kOk && pOk)
+            {
+                decimal kRemaining = currentPos.KalshiContracts - kSold;
+                for (int sweep = 1; sweep <= 3 && kRemaining >= 0.5m; sweep++)
+                {
+                    int kRetryPrice = Math.Max(1, kSellCents - sweep);
+                    Console.WriteLine($"[EARLY EXIT RETRY] {pair.Label} | K partial {kSold}/{currentPos.KalshiContracts} — sweeping {kRemaining:0} contracts @{kRetryPrice}¢ (pass {sweep}/3)");
+                    try
+                    {
+                        var (_, _, kFilled2) = await _kalshi.PlaceOrderAsync(
+                            pair.KalshiTicker, kalshiSide, kRetryPrice, (int)Math.Ceiling(kRemaining), action: "sell");
+                        kSold += kFilled2;
+                        kRemaining = currentPos.KalshiContracts - kSold;
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[EARLY EXIT RETRY ERROR] {pair.Label} pass {sweep}: {ApiErrorHelper.ClassifyKalshi(ex)}");
+                        break;
+                    }
+                }
+                kOk = kSold >= currentPos.KalshiContracts - 0.5m;
+            }
+
             if (kOk && pOk)
             {
                 _openPositions.TryRemove(pairId, out _);
