@@ -1,0 +1,40 @@
+
+============================================================
+ATTEMPT 2026-05-31 23:07:41 UTC  pair=MANUAL_KXGOVIANOMR-26-ZLAH__21525917  arbType=K_NO_P_YES
+============================================================
+[EXEC] Will Zach Lahn be the Republican nominee for Governor in Iowa? | K_NO_P_YES | K-no=0.7400 P=0.1860 net=$0.9455 | 6 contracts @ $5.56
+[ORDER K] KXGOVIANOMR-26-ZLAH NO 76¢ × 6  clientId=CAXARB_AX_20260531230741_KXGOVIANOMR-26-ZLAH
+[ORDER P] BUY token=215259175425... price=0.2107 shares=6
+[FILL K]  KXGOVIANOMR-26-ZLAH placed orderId=b1d31531-4b1c-4572-8819-e47529c1a46b status=canceled fillImm=3.00
+[FILL P]  215259175425... placed orderID=0x4368e5aa50ced65f271ece9cd27f4a854b4d416edbb28e3bb3064b24d6c97262 status=matched
+[FILL P]  215259175425... filled=6.826255 avgPrice=0.1860
+[EXEC OK] Will Zach Lahn be the Republican nominee for Governor in Iowa? | K=3.00@76¢ | P=3.00sh@$0.1860 | cost=$2.78 actualNet=0.9456 projProfit=$0.16
+[EXEC UNHEDGED] Will Zach Lahn be the Republican nominee for Governor in Iowa? | kFilled=3.00 pFilled=6.83 balanced=3.00 kExcess=0.00 pExcess=3.83 — starting recovery
+[CLEANUP SKIP HEDGE] Will Zach Lahn be the Republican nominee for Governor in Iowa? | pExcess=3.83 value=$0.71 < $1.00 — reversing directly
+[ORDER P] SELL token=215259175425... shares=3.82
+[SELL HAMMER] 215259175425... tokens not settled yet. Retrying in 500ms... (1/10)
+[FILL P]  215259175425... sold=3.82 avgPrice=0.0790
+[RECOVER REVERSED] Will Zach Lahn be the Republican nominee for Governor in Iowa? | sold 3.82 Poly shares @ $0.0790
+
+============================================================
+ATTEMPT 2026-05-31 23:13:50 UTC  pair=MANUAL_KXNBADRAFTPICK-26-5-KWAG__80151146  arbType=K_YES_P_NO
+============================================================
+[EXEC] Will Keaton Wagler be picked 5th in the Pro Basketball Draft? | K_YES_P_NO | K-yes=0.3800 P=0.5100 net=$0.9140 | 5 contracts @ $4.45
+[ORDER K] KXNBADRAFTPICK-26-5-KWAG YES 42¢ × 5  clientId=CAXARB_AX_20260531231350_KXNBADRAFTPICK-26-5-KWAG
+[ORDER P] BUY token=203761228831... price=0.5505 shares=5
+[FILL K]  KXNBADRAFTPICK-26-5-KWAG placed orderId=8543c169-a117-422b-9bba-c54289989092 status=canceled fillImm=0.00
+[POLY LEG ERROR] 203761228831...: [Polymarket API Error] BadRequest: {"error":"no orders found to match with FAK order. FAK orders are partially filled or killed if no match is found.","orderID":"0x64f1fc5e422d5fee736bfbdff1fb690073caace57180e8c43d0d46da28705a9d"}
+[EXEC MISS] Will Keaton Wagler be picked 5th in the Pro Basketball Draft? | Neither leg filled. k-status=canceled
+
+============================================================
+ATTEMPT 2026-05-31 23:24:21 UTC  pair=MANUAL_KXTORONTOMAYOR-26OCT26-BBRA__10593744  arbType=K_NO_P_YES
+============================================================
+[EXEC] Will Brad Bradford win the 2026 Toronto mayoral election? | K_NO_P_YES | K-no=0.8400 P=0.1200 net=$0.9736 | 9 contracts @ $8.64
+[ORDER K] KXTORONTOMAYOR-26OCT26-BBRA NO 85¢ × 9  clientId=CAXARB_AX_20260531232421_KXTORONTOMAYOR-26OCT26-BBRA
+[ORDER P] BUY token=105937440725... price=0.1307 shares=9
+[FILL K]  KXTORONTOMAYOR-26OCT26-BBRA placed orderId=fd250831-90ca-406b-ba10-1ecde665854a status=executed fillImm=9.00
+[FILL P]  105937440725... placed orderID=0x1294ea2fde3c47a05daf7bd14bb93d97ecc95699dbc802b7ecbddfc675057448 status=matched
+[FILL P]  105937440725... filled=9.75 avgPrice=0.1200
+[EXEC OK] Will Brad Bradford win the 2026 Toronto mayoral election? | K=9.00@85¢ | P=9.00sh@$0.1200 | cost=$8.64 actualNet=0.9736 projProfit=$0.24
+[EXEC UNHEDGED] Will Brad Bradford win the 2026 Toronto mayoral election? | kFilled=9.00 pFilled=9.75 balanced=9.00 kExcess=0.00 pExcess=0.75 — starting recovery
+[CLEANUP DUST] Will Brad Bradford win the 2026 Toronto mayoral election? | Absorbing 0.75 Poly dust ($0.09) — no halt
