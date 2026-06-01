@@ -79,6 +79,7 @@ public class CrossArbExecutor
     private readonly decimal _maxExposureUsd;
     private readonly bool    _minBuy;              // --min-buy: cap every arb to exactly 1 contract
     private readonly decimal _executionThreshold;
+    private readonly decimal _execNetFloor;
     private readonly int     _pairCooldownSeconds;
     private readonly int     _fillTimeoutMs;
     private readonly bool    _dryRun;
@@ -249,6 +250,7 @@ public class CrossArbExecutor
         decimal balanceBufferPct    = 0.20m,
         decimal maxExposureUsd      = 10m,
         decimal executionThreshold  = 0.990m,
+        decimal execNetFloor        = 0.975m,
         int     pairCooldownSeconds = 120,
         int     fillTimeoutMs       = 5000,
         decimal maxDayLossUsd            = 20m,
@@ -273,6 +275,7 @@ public class CrossArbExecutor
         _singleEntry         = singleEntry;
         _logErrors           = logErrors;
         _executionThreshold  = executionThreshold;
+        _execNetFloor        = execNetFloor;
         _pairCooldownSeconds = pairCooldownSeconds;
         _fillTimeoutMs       = fillTimeoutMs;
         _maxDayLossUsd       = maxDayLossUsd;
@@ -559,23 +562,23 @@ public class CrossArbExecutor
             return;
         }
 
-        // Split the profit margin evenly as slippage allowance for each leg.
-        // Each leg's limit = WS ask + half the gap to threshold, so both legs
-        // can each slip by halfAllow simultaneously without crossing the threshold.
-        decimal halfAllow   = (_executionThreshold - netNow) / 2m;
-        // Require at least 1 Kalshi tick of headroom per leg. Thinner arbs get IOC-canceled
-        // and leave a reversed-leg loss when the recovery sell is worse than entry.
-        if (halfAllow < 0.01m)
+        // Gate: require minimum net margin before attempting execution.
+        // Kalshi prices are whole cents, so any halfAllow < 0.01 rounds back to exact ask —
+        // instead we always give Kalshi ask+1¢ and use a separate net floor as the gate.
+        if (netNow > _execNetFloor)
         {
-            Console.WriteLine($"[EXEC SKIP] {pair.Label} | margin too thin: halfAllow={halfAllow:0.00000} net=${netNow:0.0000}");
+            Console.WriteLine($"[EXEC SKIP] {pair.Label} | margin too thin: net=${netNow:0.0000} > floor {_execNetFloor:0.000}");
             await JournalAsync(JsonSerializer.Serialize(new {
                 t = DateTime.UtcNow, @event = "EXEC_SKIP", pairId, arbType,
-                reason = "THIN_MARGIN", halfAllow, netNow, threshold = _executionThreshold
+                reason = "THIN_MARGIN", netNow, floor = _execNetFloor, threshold = _executionThreshold
             }));
             return;
         }
-        int     kPriceCents = (int)Math.Floor((kLegAsk + halfAllow) * 100m);
-        decimal pLimitAsk   = Math.Min(0.99m, pLegAsk + halfAllow);
+        // Kalshi always gets ask+1¢ (one full tick of IOC buffer, regardless of margin).
+        // Poly gets the remaining margin as buffer; floor at exact ask if margin is thin.
+        decimal halfAllow   = (_executionThreshold - netNow) / 2m;
+        int     kPriceCents = (int)Math.Floor((kLegAsk + 0.01m) * 100m);
+        decimal pLimitAsk   = Math.Min(0.99m, pLegAsk + Math.Max(0m, halfAllow - 0.01m));
         DebugLog.Trades($"ExecuteAsync {pair.Label}: halfAllow={halfAllow:0.00000} kLimit={kPriceCents}¢ pLimit={pLimitAsk:0.0000}");
         decimal pricePerSet = kLegAsk + pLegAsk;
 

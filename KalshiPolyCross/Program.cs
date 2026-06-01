@@ -262,7 +262,8 @@ if (isLive || isDryRun)
         polyOrderClient.RawResponseLogger = (path, body) => DebugLog.Books($"[POLY REST] {path}\n{body}");
     const decimal MAX_BET_USD          = 10m;    // max combined dollar cost per arb entry
     const decimal BALANCE_BUFFER_PCT   = 0.20m;  // per-platform reserve (fraction of maxBet)
-    const decimal EXECUTION_THRESHOLD  = 0.995m; // net-cost ceiling to fire orders (matches telemetry threshold — change to e.g. 0.990 to require tighter margin)
+    const decimal EXECUTION_THRESHOLD  = 0.995m; // net-cost ceiling for arb detection
+    const decimal EXEC_NET_FLOOR       = 0.985m; // minimum net to attempt execution (1.5¢/set profit floor); Kalshi always gets ask+1¢ limit regardless
 
     // In dry-run, probe real credentials before swapping in simulated clients.
     // This surfaces auth/connectivity issues without risking any orders.
@@ -307,6 +308,7 @@ if (isLive || isDryRun)
         balanceBufferPct:    BALANCE_BUFFER_PCT,
         maxExposureUsd:      maxExposureUsd,
         executionThreshold:  EXECUTION_THRESHOLD,
+        execNetFloor:        EXEC_NET_FLOOR,
         pairCooldownSeconds: 120,
         fillTimeoutMs:       5000,
         maxDayLossUsd:       20m,
