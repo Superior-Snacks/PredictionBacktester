@@ -2133,6 +2133,10 @@ public class CrossArbExecutor
         // JournalKQty is the net held qty (position.kHeld) — subtracts any REVERSED_KALSHI cleanup,
         // so it's used as the correct fallback when the Kalshi positions API is empty or flaky.
         var entryMap = new Dictionary<string, (string ArbType, decimal KEntry, decimal PEntry, decimal JournalKQty)>();
+        // Buffer hedge fills separately and apply after the scan — CLEANUP_HEDGE_COMPLETED for a
+        // from-zero entry is journaled BEFORE its EXECUTION_COMPLETE, so an inline patch would miss.
+        var hedgePoly   = new Dictionary<string, decimal>();
+        var hedgeKalshi = new Dictionary<string, decimal>();
         foreach (string line in await File.ReadAllLinesAsync(_journalPath))
         {
             if (string.IsNullOrWhiteSpace(line)) continue;
@@ -2174,16 +2178,13 @@ public class CrossArbExecutor
                 {
                     if (!root.TryGetProperty("pair", out var pidEl)) continue;
                     string pairId = pidEl.GetString() ?? "";
-                    if (!entryMap.TryGetValue(pairId, out var e)) continue;
                     string leg = root.TryGetProperty("leg", out var legEl) ? legEl.GetString() ?? "" : "";
-                    if (leg == "poly" && e.PEntry == 0m &&
-                        root.TryGetProperty("polyFillPrice", out var pfp2) &&
-                        pfp2.ValueKind == JsonValueKind.Number)
-                        entryMap[pairId] = (e.ArbType, e.KEntry, pfp2.GetDecimal(), e.JournalKQty);
-                    else if (leg == "kalshi" && e.KEntry == 0m &&
-                        root.TryGetProperty("kFillPrice", out var kfp2) &&
-                        kfp2.ValueKind == JsonValueKind.Number)
-                        entryMap[pairId] = (e.ArbType, kfp2.GetDecimal(), e.PEntry, e.JournalKQty);
+                    if (leg == "poly" &&
+                        root.TryGetProperty("polyFillPrice", out var pfp2) && pfp2.ValueKind == JsonValueKind.Number)
+                        hedgePoly[pairId] = pfp2.GetDecimal();
+                    else if (leg == "kalshi" &&
+                        root.TryGetProperty("kFillPrice", out var kfp2) && kfp2.ValueKind == JsonValueKind.Number)
+                        hedgeKalshi[pairId] = kfp2.GetDecimal();
                 }
                 else if (ev == "SETTLEMENT_DETECTED" || ev == "EARLY_EXIT_COMPLETE")
                 {
@@ -2192,6 +2193,17 @@ public class CrossArbExecutor
                 }
             }
             catch { /* malformed line — skip */ }
+        }
+
+        // Apply buffered hedge fills now that every EXECUTION_COMPLETE has seeded the map.
+        // Only fills the gap when the entry leg's price is still 0 (recovery completed it).
+        foreach (var pid in entryMap.Keys.ToList())
+        {
+            var e = entryMap[pid];
+            if (e.PEntry == 0m && hedgePoly.TryGetValue(pid, out var pp))
+                entryMap[pid] = (e.ArbType, e.KEntry, pp, e.JournalKQty);
+            if (entryMap[pid].KEntry == 0m && hedgeKalshi.TryGetValue(pid, out var kk))
+                entryMap[pid] = (entryMap[pid].ArbType, kk, entryMap[pid].PEntry, entryMap[pid].JournalKQty);
         }
 
         if (entryMap.Count == 0) return;
