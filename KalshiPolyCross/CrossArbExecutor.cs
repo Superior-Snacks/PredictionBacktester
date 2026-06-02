@@ -833,9 +833,8 @@ public class CrossArbExecutor
 
             _openPositions[pairId] = new ArbPosition(
                 pairId, arbType, balancedQty, balancedQty, kLegAsk, pActualPrice, t0, execId);
-            Interlocked.Increment(ref _totalExecuted);
-            lock (_exposureLock) { _totalInvested += actualCost; _totalProjectedProfit += actualProfit; }
-            _perPairInvested.AddOrUpdate(pairId, actualCost, (_, old) => old + actualCost);
+            // Exposure/projection aggregates are updated once after recovery (see below), keyed off
+            // the FINAL position — so hedge-completed sets beyond balancedQty are counted too.
 
             if (arbProfitable)
             {
@@ -987,6 +986,27 @@ public class CrossArbExecutor
             decimal kHeld = finalPos?.KalshiContracts ?? 0m;
             decimal pHeld = finalPos?.PolyShares      ?? 0m;
 
+            // Net/cost from the FINAL position, not the initial-fill locals. On a
+            // hedge-completed-from-zero entry balancedQty==0, so pActualPrice/actualNetPerSet
+            // are still 0 and would log pAvgPrice=0, net=0, projected=kHeld*(1-0). finalPos
+            // carries the real blended prices set in the recovery branch.
+            decimal finalNet = finalPos != null
+                ? finalPos.KalshiEntryPrice + finalPos.PolyEntryPrice
+                  + KalshiFee(finalPos.KalshiEntryPrice) + PolyFee(finalPos.PolyEntryPrice, polyToken)
+                : actualNetPerSet;
+
+            // Exposure/projection from the FINAL position, so a hedge-completed-from-zero entry
+            // (balancedQty==0) is counted and a pure miss (kHeld==0) contributes nothing. Counts
+            // exactly when the EXECUTION_COMPLETE record below emits a position block (kHeld > 0).
+            if (kHeld > 0)
+            {
+                decimal finalCost   = finalPos!.KalshiEntryPrice * kHeld + finalPos.PolyEntryPrice * pHeld;
+                decimal finalProfit = kHeld * (1.0m - finalNet);
+                Interlocked.Increment(ref _totalExecuted);
+                lock (_exposureLock) { _totalInvested += finalCost; _totalProjectedProfit += finalProfit; }
+                _perPairInvested.AddOrUpdate(pairId, finalCost, (_, old) => old + finalCost);
+            }
+
             DecrementTryLimit();
             await JournalAsync(JsonSerializer.Serialize(new {
                 t = DateTime.UtcNow, @event = "EXECUTION_COMPLETE",
@@ -1027,12 +1047,12 @@ public class CrossArbExecutor
 
                 position = kHeld > 0 ? (object?)new {
                     kHeld, pHeld,
-                    kEntryPrice = kLegAsk,
-                    pAvgPrice   = Math.Round(pActualPrice, 6),
-                    totalCostUsd       = Math.Round(kLegAsk * kHeld + pActualPrice * pHeld, 4),
+                    kEntryPrice = Math.Round(finalPos!.KalshiEntryPrice, 6),
+                    pAvgPrice   = Math.Round(finalPos.PolyEntryPrice, 6),
+                    totalCostUsd       = Math.Round(finalPos.KalshiEntryPrice * kHeld + finalPos.PolyEntryPrice * pHeld, 4),
                     modeledNetPerSet   = Math.Round(netNow, 6),
-                    actualNetPerSet    = Math.Round(actualNetPerSet, 6),
-                    projectedProfitUsd = Math.Round(kHeld * (1.0m - actualNetPerSet), 4)
+                    actualNetPerSet    = Math.Round(finalNet, 6),
+                    projectedProfitUsd = Math.Round(kHeld * (1.0m - finalNet), 4)
                 } : null,
 
                 outcome = execOutcome,
@@ -1554,11 +1574,17 @@ public class CrossArbExecutor
                         decimal additional   = Math.Min(kUnhedged, polyFill2);
                         decimal remainderQty = kUnhedged - additional;
                         if (_openPositions.TryGetValue(pair.PairId, out var pos))
+                        {
+                            decimal newP = pos.PolyShares + additional;
                             _openPositions[pair.PairId] = pos with
                             {
                                 KalshiContracts = pos.KalshiContracts + additional,
-                                PolyShares      = pos.PolyShares      + additional
+                                PolyShares      = newP,
+                                PolyEntryPrice  = newP > 0
+                                    ? (pos.PolyShares * pos.PolyEntryPrice + additional * polyFill2Price) / newP
+                                    : polyFill2Price
                             };
+                        }
                         else
                             _openPositions[pair.PairId] = new ArbPosition(
                                 pair.PairId, arbType, additional, additional,
@@ -1748,11 +1774,18 @@ public class CrossArbExecutor
                         decimal additional    = Math.Min((decimal)hedgeQty, kFill2);
                         decimal remainderQty  = pUnhedged - additional;
                         if (_openPositions.TryGetValue(pair.PairId, out var pos))
+                        {
+                            decimal newK = pos.KalshiContracts + additional;
                             _openPositions[pair.PairId] = pos with
                             {
-                                KalshiContracts = pos.KalshiContracts + additional,
-                                PolyShares      = pos.PolyShares      + additional
+                                KalshiContracts  = newK,
+                                PolyShares       = pos.PolyShares + additional,
+                                // currentKalshiAsk is the IOC limit used — best proxy for fill price
+                                KalshiEntryPrice = newK > 0
+                                    ? (pos.KalshiContracts * pos.KalshiEntryPrice + additional * currentKalshiAsk) / newK
+                                    : currentKalshiAsk
                             };
+                        }
                         else
                             _openPositions[pair.PairId] = new ArbPosition(
                                 pair.PairId, arbType, additional, additional,
