@@ -61,6 +61,11 @@ POLY_GAMMA_URL    = "https://gamma-api.polymarket.com"
 KALSHI_CATEGORY   = ""
 POLY_CATEGORY     = ""
 
+# Embedding model. mxbai-embed-large-v1 is same size/dim class as bge-large-en-v1.5 (335M, 1024-dim)
+# so no speed cost, and generally scores higher on English retrieval. NOTE: cosine-score
+# distributions differ per model, so SIMILARITY_THRESH may need re-tuning after a swap — sanity-check
+# with --dry-run. The embedding cache is keyed by model (CACHE_PATH below) to avoid mixing vector spaces.
+EMBED_MODEL       = "mixedbread-ai/mxbai-embed-large-v1"
 SIMILARITY_THRESH = 0.78
 TOP_N_CANDIDATES  = 5
 DATE_WINDOW_DAYS  = 7
@@ -80,7 +85,7 @@ OLLAMA_BATCH_SIZE = 1   # one at a time — local model is slow and small contex
 SCP_REMOTE        = "jonsi@35.245.182.71:~/PredictionBacktester/KalshiPolyCross/"
 
 SCRIPT_DIR        = Path(__file__).parent
-CACHE_PATH        = SCRIPT_DIR / "embeddings_cache_bge.json"
+CACHE_PATH        = SCRIPT_DIR / "embeddings_cache_mxbai.json"  # model-keyed: never mix vector spaces
 DEFAULT_OUTPUT    = SCRIPT_DIR / "cross_pairs.json"
 
 # -- Kalshi auth ---------------------------------------------------------------
@@ -323,8 +328,8 @@ def find_candidates(
     to_encode = [t for t in dict.fromkeys(k_titles_unique + poly_questions) if t not in cache]
 
     if to_encode:
-        print(f"[EMBED] Loading model BAAI/bge-large-en-v1.5 ...")
-        model = SentenceTransformer("BAAI/bge-large-en-v1.5")
+        print(f"[EMBED] Loading model {EMBED_MODEL} ...")
+        model = SentenceTransformer(EMBED_MODEL)
         print(f"[EMBED] Encoding {len(to_encode)} texts...")
         vecs = model.encode(to_encode, batch_size=256, show_progress_bar=True, normalize_embeddings=True)
         for text, vec in zip(to_encode, vecs):
