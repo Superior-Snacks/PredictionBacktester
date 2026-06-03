@@ -71,6 +71,10 @@ public class CrossArbExecutor
     //   1.0 = only exit when full settlement value is available on the bid
     private static decimal  EarlyExitThreshold         = 0.50m;
     private const  decimal  EarlyExitMinProfitUsd      = 0.05m;  // skip micro-exits below this
+    // Break-even mode fires at exactly ≥0, so normal fill slippage flips the exit negative (the
+    // "exit bleed"). Require a few ticks past break-even before selling. Non-breakeven mode already
+    // has a positive hurdle (EarlyExitThreshold × expectedProfit) so it doesn't need this cushion.
+    private const  decimal  ExitCushionPerSet          = 0.004m;
     private const  int      EarlyExitFallbackIntervalMs = 60_000; // fallback poll if a book update was missed
 
     // ── Configuration ─────────────────────────────────────────────────────────
@@ -759,10 +763,11 @@ public class CrossArbExecutor
         // compute a delta rather than comparing against total wallet balance. This prevents
         // spurious RECONCILE_MISMATCH halts when a pre-existing Poly balance is present
         // (e.g. orphaned shares from a prior run where Kalshi settled but Poly has not).
-        var priorPolyBalTask = _dryRun
-            ? Task.FromResult(0m)
-            : _poly.GetTokenBalanceAsync(polyToken).ContinueWith(
-                t => t.IsCompletedSuccessfully ? t.Result : 0m);
+        // Returns null (not 0) on a failed read so reconcile can tell a real zero balance from a
+        // flaky API call and refuse to halt against a fabricated prior.
+        Task<decimal?> priorPolyBalTask = _dryRun
+            ? Task.FromResult<decimal?>(0m)
+            : SnapshotPolyBalanceAsync(polyToken);
 
         // Fire both legs simultaneously
         var kalshiTask = PlaceKalshiLegAsync(pair.KalshiTicker, kalshiSide, kPriceCents, contracts, execId, execLog);
@@ -965,6 +970,19 @@ public class CrossArbExecutor
             Emit(execLog, $"[EXEC MISS] {pair.Label} | Neither leg filled. k-status={kStatus}");
         }
 
+        // Dust fold: on DUST_ABSORBED_POLY the venue holds pFilled but the tracked position only has
+        // balancedQty. Fold the absorbed shares into PolyShares so (a) the early exit sweeps them every
+        // cycle (the live Poly sell takes the fractional PolyShares un-floored) instead of orphaning a
+        // remainder that accumulates across cycles past reconcile's 0.5-share tolerance, and (b) reconcile's
+        // expected venue (pFilled) matches the position even when the pre-trade balance snapshot reads 0.
+        if (recovery?.Outcome == "DUST_ABSORBED_POLY"
+            && _openPositions.TryGetValue(pairId, out var dustPos))
+        {
+            decimal folded = dustPos.PolyShares + recovery.RecoveredQty;
+            _openPositions[pairId] = dustPos with { PolyShares = folded };
+            DebugLog.Trades($"ExecuteAsync {pair.Label}: folded {recovery.RecoveredQty:0.####} absorbed Poly dust → PolyShares={folded:0.####}.");
+        }
+
         await JournalAsync(JsonSerializer.Serialize(new {
             t = DateTime.UtcNow,
             @event = neitherFilled ? "MISS" : "FILLED",
@@ -1091,7 +1109,8 @@ public class CrossArbExecutor
             // reconcileInDryRun overrides this when QueueMismatchOnNextTrade() was pending.
             if ((!_dryRun || reconcileInDryRun) && balancedQty > 0)
             {
-                decimal priorPolyBal = priorPolyBalTask.IsCompletedSuccessfully ? priorPolyBalTask.Result : 0m;
+                // null = snapshot failed/inconclusive (distinct from a real 0); reconcile won't halt on it.
+                decimal? priorPolyBal = priorPolyBalTask.IsCompletedSuccessfully ? priorPolyBalTask.Result : null;
                 // Order-poll reflects fills immediately; the positions endpoint lags 10–20s.
                 // A clean Kalshi reverse can still use order-poll: poll the original buy fill and
                 // subtract the venue-confirmed reversed qty. Other kUnhedged>0 outcomes
@@ -2279,7 +2298,23 @@ public class CrossArbExecutor
 
     // ── Post-trade reconciliation ─────────────────────────────────────────────
 
-    private async Task ReconcileTradeAsync(CrossPair pair, string arbType, decimal expectedKalshi, decimal expectedPoly, string execId = "", string kOrderId = "", decimal priorPolyBalance = 0m, decimal reversedKalshiQty = 0m)
+    /// <summary>Pre-trade Poly balance snapshot. Retries once; returns null (inconclusive) rather
+    /// than a fabricated 0 if the read fails, so reconcile won't false-halt against a fake prior.</summary>
+    private async Task<decimal?> SnapshotPolyBalanceAsync(string polyToken)
+    {
+        for (int attempt = 1; attempt <= 2; attempt++)
+        {
+            try { return await _poly.GetTokenBalanceAsync(polyToken); }
+            catch (Exception ex)
+            {
+                DebugLog.Trades($"SnapshotPolyBalanceAsync attempt {attempt}/2 failed: {ex.Message}");
+                if (attempt < 2) await Task.Delay(500);
+            }
+        }
+        return null;   // inconclusive — caller must NOT treat as a real zero balance
+    }
+
+    private async Task ReconcileTradeAsync(CrossPair pair, string arbType, decimal expectedKalshi, decimal expectedPoly, string execId = "", string kOrderId = "", decimal? priorPolyBalance = null, decimal reversedKalshiQty = 0m)
     {
         try
         {
@@ -2313,19 +2348,41 @@ public class CrossArbExecutor
             string polyTokenId = arbType == "K_YES_P_NO" ? pair.PolyNoTokenId : pair.PolyYesTokenId;
             // Poly balance API has the same propagation lag as Kalshi's positions endpoint.
             // Retry until the delta vs pre-trade snapshot reaches at least half of expected, or give up.
-            decimal polyBal = priorPolyBalance;
+            // priorValid=false means the pre-trade snapshot failed — we have no trusted baseline,
+            // so a delta can't be computed and the Poly side must NOT hard-halt (it would be comparing
+            // against a fabricated 0). The Kalshi side (order-poll) is independent and still halts.
+            bool    priorValid = priorPolyBalance.HasValue;
+            decimal prior      = priorPolyBalance ?? 0m;
+            decimal polyBal    = prior;
             for (int pAttempt = 1; pAttempt <= maxAttempts; pAttempt++)
             {
                 polyBal = await _poly.GetTokenBalanceAsync(polyTokenId);
-                decimal delta = polyBal - priorPolyBalance;
+                if (!priorValid) break;   // no trusted baseline — one read for logging, then stop
+                decimal delta = polyBal - prior;
                 if (delta >= expectedPoly * 0.5m) break;
                 if (pAttempt < maxAttempts) await Task.Delay(retryDelayMs);
                 DebugLog.Trades($"ReconcileTradeAsync {pair.Label}: Poly balance attempt {pAttempt}/{maxAttempts} total={polyBal:0.00} delta={delta:0.00} (expected ~{expectedPoly:0.00}) — retrying");
             }
             // Use delta vs pre-trade snapshot so orphaned prior-run shares don't trigger a false halt.
-            decimal polyDelta  = polyBal - priorPolyBalance;
-            bool kMismatch = Math.Abs(kActual  - expectedKalshi) > 0.5m;
-            bool pMismatch = Math.Abs(polyDelta - expectedPoly)   > 0.5m;
+            decimal polyDelta     = polyBal - prior;
+            bool    kMismatch     = Math.Abs(kActual  - expectedKalshi) > 0.5m;
+            bool    pWouldMismatch = Math.Abs(polyDelta - expectedPoly) > 0.5m;
+            bool    pMismatch     = priorValid && pWouldMismatch;
+            if (!priorValid && pWouldMismatch)
+            {
+                Console.ForegroundColor = ConsoleColor.Yellow;
+                Console.WriteLine(
+                    $"[RECONCILE INCONCLUSIVE] {pair.Label} | pre-trade Poly snapshot failed — " +
+                    $"venue={polyBal:0.00} expectedΔ={expectedPoly:0.00}; cannot trust absolute balance, NOT halting this cycle.");
+                Console.ResetColor();
+                await JournalAsync(JsonSerializer.Serialize(new {
+                    t = DateTime.UtcNow, @event = "RECONCILE_INCONCLUSIVE", execId,
+                    pair = pair.PairId, arbType,
+                    kExpected = expectedKalshi, kVenue = kActual,
+                    pExpected = expectedPoly, pVenue = polyBal,
+                    reason = "PRIOR_SNAPSHOT_FAILED", halted = false
+                }));
+            }
             if (kMismatch || pMismatch)
             {
                 _halted = true;
@@ -2341,12 +2398,12 @@ public class CrossArbExecutor
                     pair = pair.PairId, arbType,
                     kExpected = expectedKalshi, kVenue = kActual,
                     pExpected = expectedPoly,   pVenue = polyBal,
-                    pPrior = priorPolyBalance, pDelta = polyDelta,
+                    pPrior = priorValid ? (object?)prior : null, pPriorValid = priorValid, pDelta = polyDelta,
                     halted = true
                 }));
             }
             else
-                DebugLog.Trades($"ReconcileTradeAsync {pair.Label}: confirmed K={kActual} P={polyBal:0.00} (delta={polyDelta:0.00} prior={priorPolyBalance:0.00})");
+                DebugLog.Trades($"ReconcileTradeAsync {pair.Label}: confirmed K={kActual} P={polyBal:0.00} (delta={polyDelta:0.00} prior={prior:0.00} priorValid={priorValid})");
         }
         catch (Exception ex)
         {
@@ -2536,8 +2593,11 @@ public class CrossArbExecutor
         string polyToken  = pos.ArbType == "K_YES_P_NO" ? pair.PolyNoTokenId : pair.PolyYesTokenId;
 
         decimal kBid = 0m, pBid = 0m;
-        bool wsLive = _books.TryGetValue(kBidKey, out var kBook)
-                   && _books.TryGetValue(pBidKey, out var pBook)
+        // Unconditional lookups (not inside the &&) so kBook/pBook are definitely assigned for the
+        // executable-bid depth walk below, even when wsLive is false.
+        _books.TryGetValue(kBidKey, out var kBook);
+        _books.TryGetValue(pBidKey, out var pBook);
+        bool wsLive = kBook != null && pBook != null
                    && (kBid = kBook.GetBestBidPrice()) > 0m
                    && (pBid = pBook.GetBestBidPrice()) > 0m;
 
@@ -2547,6 +2607,25 @@ public class CrossArbExecutor
             (kBid, pBid) = await _restVerifier.GetCurrentBidsAsync(pair, pos.ArbType);
             if (kBid <= 0m || pBid <= 0m) return;
             DebugLog.Trades($"CheckEarlyExitAsync {pair.Label}: WS books stale — REST bids K={kBid:0.0000} P={pBid:0.0000}");
+        }
+
+        // Exit-bleed fix: price off the size-weighted executable bid, not top-of-book, so PnL
+        // reflects what we'd actually get selling the FULL size (mirror of the entry depth walk).
+        // If the bid side can't absorb the whole size, hold — selling would walk down the ladder
+        // and flip a break-even exit negative. Only possible with live WS depth; the REST fallback
+        // has no ladder, so the ExitCushionPerSet below is what guards that path.
+        if (wsLive)
+        {
+            var (kVwap, kFill) = kBook!.GetExecutableBidVwap(pos.KalshiContracts);
+            var (pVwap, pFill) = pBook!.GetExecutableBidVwap(pos.PolyShares);
+            if (kFill < pos.KalshiContracts - 0.5m || pFill < pos.PolyShares - 0.5m)
+            {
+                DebugLog.Trades($"CheckEarlyExitAsync {pair.Label}: thin exit depth — " +
+                    $"kFill={kFill:0.##}/{pos.KalshiContracts:0.##} pFill={pFill:0.##}/{pos.PolyShares:0.##} — holding");
+                return;
+            }
+            if (kVwap > 0m) kBid = kVwap;
+            if (pVwap > 0m) pBid = pVwap;
         }
 
         decimal entryCostPerSet      = pos.KalshiEntryPrice + pos.PolyEntryPrice;
@@ -2567,7 +2646,7 @@ public class CrossArbExecutor
 
         if (breakEvenMode)
         {
-            if (unrealizedPnlPerSet < 0m) return;
+            if (unrealizedPnlPerSet < ExitCushionPerSet) return;
         }
         else
         {

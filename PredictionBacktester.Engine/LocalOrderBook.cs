@@ -160,6 +160,27 @@ public class LocalOrderBook
             return _asks.TakeWhile(kv => kv.Key <= limitPrice).Sum(kv => kv.Value);
     }
 
+    /// <summary>Size-weighted average bid price executable for <paramref name="size"/>, plus how much
+    /// is actually fillable. Walks bids high→low accumulating depth (sell-side mirror of the entry
+    /// depth walk). Fillable &lt; size means the book can't absorb the full size at any price.</summary>
+    public (decimal Vwap, decimal Fillable) GetExecutableBidVwap(decimal size)
+    {
+        lock (_bookLock)
+        {
+            if (_bids.Count == 0 || size <= 0m) return (0m, 0m);
+            decimal remaining = size, cost = 0m, filled = 0m;
+            foreach (var kv in _bids.Reverse())   // highest bid first
+            {
+                decimal take = Math.Min(remaining, kv.Value);
+                cost      += take * kv.Key;
+                filled    += take;
+                remaining -= take;
+                if (remaining <= 0m) break;
+            }
+            return (filled > 0m ? cost / filled : 0m, filled);
+        }
+    }
+
     public void ClearBook()
     {
         lock (_bookLock)
