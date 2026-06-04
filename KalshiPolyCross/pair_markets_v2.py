@@ -1707,12 +1707,15 @@ def manual_override_candidate(kalshi_rec: MarketRecord, poly_rec: MarketRecord) 
 
 
 def _select_index(prompt: str, n: int):
-    """Prompt for a 1..n choice (Enter/blank = cancel). Returns 0-based index or None."""
+    """Prompt for a 1..n choice (Enter/blank/q = cancel). Returns 0-based index or None."""
     try:
-        raw = input(prompt).strip()
+        raw = input(prompt).strip().lower()
     except (EOFError, KeyboardInterrupt):
         return None
+    if not raw or raw == "q":
+        return None
     if not raw.isdigit():
+        print(f"  (enter a number 1–{n}, or blank to cancel)")
         return None
     i = int(raw) - 1
     return i if 0 <= i < n else None
@@ -1820,7 +1823,7 @@ def manual_review_session(candidates: list, index, output_path: Path,
     by_id = _rec_index_by_id(index)
     total = len(candidates)
     print(f"\n[MANUAL] {total} candidates to judge.")
-    print("  Keys: 1=VALID 2=CONDITIONAL 3=INVALID 4=INVERTED  i=info  /=find  t=twin  c=coverage  e=event  s=skip  q=quit\n")
+    print("  Keys: 1=VALID 2=CONDITIONAL 3=INVALID 4=INVERTED  i=info  /p=find-poly  /k=find-kalshi  t=twin  c=coverage  e=event  s=skip  q=quit\n")
 
     i = 0
     while i < len(candidates):
@@ -1837,11 +1840,25 @@ def manual_review_session(candidates: list, index, output_path: Path,
             if key == "i":
                 print("i"); _print_poly_token_info(c); continue
             if key == "/":
-                print("/")
-                newc = _interactive_find(index, c, by_id)
+                # Read the modifier: 'p' = poly search, 'k' = kalshi search
+                print("/", end="", flush=True)
+                try:
+                    mod = _getch()
+                except (EOFError, KeyboardInterrupt):
+                    print(); continue
+                print(mod)
+                if mod == "p":
+                    newc = _interactive_find_poly(index, c, by_id)
+                elif mod == "k":
+                    newc = _interactive_find_kalshi(index, c, by_id)
+                else:
+                    print("  (use /p for poly search or /k for kalshi search)")
+                    continue
                 if newc:
                     candidates[i] = c = newc
                     _display_candidate(c, i, len(candidates))
+                else:
+                    print("  (search cancelled — 1/2/3/4/i/t/s/q)")
                 continue
             if key == "t":
                 print("t")
@@ -1849,6 +1866,8 @@ def manual_review_session(candidates: list, index, output_path: Path,
                 if newc:
                     candidates[i] = c = newc
                     _display_candidate(c, i, len(candidates))
+                else:
+                    print("  (twin search cancelled — 1/2/3/4/i//s/q)")
                 continue
             if key == "c":
                 print("c")
@@ -1890,8 +1909,8 @@ def manual_review_session(candidates: list, index, output_path: Path,
         print()
 
 
-def _interactive_find(index, current_candidate, by_id):
-    """`/` key: free-text BM25 search on Poly, swap the poly side of the current candidate."""
+def _interactive_find_poly(index, current_candidate, by_id):
+    """`/p` key: BM25 search on Poly, swap the Poly side of the current candidate."""
     try:
         query = input("  Search query (poly): ").strip()
     except (EOFError, KeyboardInterrupt):
@@ -1912,6 +1931,30 @@ def _interactive_find(index, current_candidate, by_id):
         print("  (kalshi record not in index)"); return None
     print(f"  [OVERRIDE] poly -> {_short(poly_rec.title, 60)}")
     return manual_override_candidate(k_rec, poly_rec)
+
+
+def _interactive_find_kalshi(index, current_candidate, by_id):
+    """`/k` key: BM25 search on Kalshi, swap the Kalshi side of the current candidate."""
+    try:
+        query = input("  Search query (kalshi): ").strip()
+    except (EOFError, KeyboardInterrupt):
+        return None
+    if not query:
+        return None
+    results = search_bm25(index, query, venue="kalshi", limit=15)
+    if not results:
+        print("  (no matches)"); return None
+    for n, (s, e) in enumerate(results, 1):
+        print(f"    {n:>2}. [{s:.2f}] {_short(e.title, 70)}")
+    sel = _select_index("  Pick # (blank to cancel): ", len(results))
+    if sel is None:
+        return None
+    k_rec = results[sel][1]
+    p_rec = by_id.get(current_candidate.get("poly_yes", ""))
+    if p_rec is None:
+        print("  (poly record not in index)"); return None
+    print(f"  [OVERRIDE] kalshi -> {_short(k_rec.title, 60)}")
+    return manual_override_candidate(k_rec, p_rec)
 
 
 def _interactive_twin(index, current_candidate, by_id, series_titles):
