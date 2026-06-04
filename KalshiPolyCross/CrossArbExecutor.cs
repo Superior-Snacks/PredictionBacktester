@@ -414,6 +414,14 @@ public class CrossArbExecutor
                 t = DateTime.UtcNow, @event = "BALANCE",
                 kalshi = newKalshi, poly = newPoly, initial
             }));
+            if (initial)
+                await JournalAsync(JsonSerializer.Serialize(new {
+                    t = DateTime.UtcNow, @event = "RUN_CONFIG",
+                    singleEntry = _singleEntry, minBuy = _minBuy,
+                    maxBetUsd = _maxBetUsd, maxExposureUsd = _maxExposureUsd,
+                    executionThreshold = _executionThreshold, execNetFloor = _execNetFloor,
+                    pairCooldownSeconds = _pairCooldownSeconds, dryRun = _dryRun
+                }));
         }
         catch (Exception ex)
         {
@@ -468,9 +476,20 @@ public class CrossArbExecutor
             Console.WriteLine($"[EXEC SKIP] {pairId}: cooldown active for {cd - now}s more");
             return;
         }
-        if (_singleEntry && _openPositions.ContainsKey(pairId))
+        if (_openPositions.TryGetValue(pairId, out var heldPos))
         {
-            Console.WriteLine($"[EXEC SKIP] {pairId}: single-entry — position already open");
+            await JournalAsync(JsonSerializer.Serialize(new {
+                t = DateTime.UtcNow, @event = "REENTRY_WHILE_HELD",
+                pairId, singleEntry = _singleEntry,
+                heldK = heldPos.KalshiContracts, heldP = heldPos.PolyShares,
+                heldArbType = heldPos.ArbType,
+                detectedNet = Math.Round(kLegAsk + pLegAsk, 4),
+                willBlock = _singleEntry
+            }));
+        }
+        if (_openPositions.ContainsKey(pairId))
+        {
+            Console.WriteLine($"[EXEC SKIP] {pairId}: position already open (single-entry enforced)");
             return;
         }
 
@@ -849,6 +868,7 @@ public class CrossArbExecutor
 
             _openPositions[pairId] = new ArbPosition(
                 pairId, arbType, balancedQty, balancedQty, kLegAsk, pActualPrice, t0, execId);
+            DebugLog.Trades($"POSITION_ADDED {pairId} reason=FILL k={balancedQty} p={balancedQty}");
             // Exposure/projection aggregates are updated once after recovery (see below), keyed off
             // the FINAL position — so hedge-completed sets beyond balancedQty are counted too.
 
@@ -2455,18 +2475,39 @@ public class CrossArbExecutor
             bool    pMismatch     = priorValid && pWouldMismatch;
             if (!priorValid && pWouldMismatch)
             {
-                Console.ForegroundColor = ConsoleColor.Yellow;
-                Console.WriteLine(
-                    $"[RECONCILE INCONCLUSIVE] {pair.Label} | pre-trade Poly snapshot failed — " +
-                    $"venue={polyBal:0.00} expectedΔ={expectedPoly:0.00}; cannot trust absolute balance, NOT halting this cycle.");
-                Console.ResetColor();
-                await JournalAsync(JsonSerializer.Serialize(new {
-                    t = DateTime.UtcNow, @event = "RECONCILE_INCONCLUSIVE", execId,
-                    pair = pair.PairId, arbType,
-                    kExpected = expectedKalshi, kVenue = kActual,
-                    pExpected = expectedPoly, pVenue = polyBal,
-                    reason = "PRIOR_SNAPSHOT_FAILED", halted = false
-                }));
+                bool largeImbalance = Math.Abs(polyBal - expectedPoly) > 1m
+                                   || Math.Abs(kActual  - expectedKalshi) > 1m;
+                if (largeImbalance)
+                {
+                    Console.ForegroundColor = ConsoleColor.Red;
+                    Console.WriteLine(
+                        $"[RECONCILE LARGE IMBALANCE] {pair.Label} | prior snapshot failed but gap is large — " +
+                        $"K: expected={expectedKalshi} venue={kActual} | P: expected={expectedPoly:0.00} venue={polyBal:0.00} — halting for manual review");
+                    Console.ResetColor();
+                    _halted = true;
+                    await JournalAsync(JsonSerializer.Serialize(new {
+                        t = DateTime.UtcNow, @event = "RECONCILE_LARGE_IMBALANCE", execId,
+                        pair = pair.PairId, arbType,
+                        kExpected = expectedKalshi, kVenue = kActual,
+                        pExpected = expectedPoly,   pVenue = polyBal,
+                        reason = "PRIOR_SNAPSHOT_FAILED_LARGE_GAP", halted = true
+                    }));
+                }
+                else
+                {
+                    Console.ForegroundColor = ConsoleColor.Yellow;
+                    Console.WriteLine(
+                        $"[RECONCILE INCONCLUSIVE] {pair.Label} | pre-trade Poly snapshot failed — " +
+                        $"venue={polyBal:0.00} expectedΔ={expectedPoly:0.00}; gap within tolerance, NOT halting.");
+                    Console.ResetColor();
+                    await JournalAsync(JsonSerializer.Serialize(new {
+                        t = DateTime.UtcNow, @event = "RECONCILE_INCONCLUSIVE", execId,
+                        pair = pair.PairId, arbType,
+                        kExpected = expectedKalshi, kVenue = kActual,
+                        pExpected = expectedPoly, pVenue = polyBal,
+                        reason = "PRIOR_SNAPSHOT_FAILED", halted = false
+                    }));
+                }
             }
             if (kMismatch || pMismatch)
             {
@@ -2652,6 +2693,7 @@ public class CrossArbExecutor
                     _settlementAbsentTicks.TryRemove(pairId, out _);
 
                     _openPositions.TryRemove(pairId, out _);
+                    DebugLog.Trades($"POSITION_REMOVED {pairId} reason=SETTLEMENT");
                     decimal settledCost = pos.KalshiContracts * pos.KalshiEntryPrice
                                         + pos.PolyShares      * pos.PolyEntryPrice;
                     lock (_exposureLock) { _totalExposure = Math.Max(0m, _totalExposure - settledCost); }
@@ -2789,6 +2831,7 @@ public class CrossArbExecutor
             if (_dryRun)
             {
                 _openPositions.TryRemove(pairId, out _);
+                DebugLog.Trades($"POSITION_REMOVED {pairId} reason=EARLY_EXIT_DRY_RUN");
                 Interlocked.Increment(ref _earlyExitsCompleted);
                 decimal dryCost = currentPos.KalshiContracts * currentPos.KalshiEntryPrice
                                 + currentPos.PolyShares      * currentPos.PolyEntryPrice;
@@ -2860,6 +2903,7 @@ public class CrossArbExecutor
             if (kOk && pOk)
             {
                 _openPositions.TryRemove(pairId, out _);
+                DebugLog.Trades($"POSITION_REMOVED {pairId} reason=EARLY_EXIT_LIVE");
                 // Block re-entry after early exit — the stale book that triggered the exit
                 // may still show an apparent arb on the same pair within seconds.
                 _cooldownUntil[pairId] = DateTimeOffset.UtcNow.ToUnixTimeSeconds() + _pairCooldownSeconds;
