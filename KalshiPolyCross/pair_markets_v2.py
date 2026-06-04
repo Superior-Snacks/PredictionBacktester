@@ -1848,9 +1848,9 @@ def manual_review_session(candidates: list, index, output_path: Path,
                     print(); continue
                 print(mod)
                 if mod == "p":
-                    newc = _interactive_find_poly(index, c, by_id)
+                    newc = _interactive_find_poly(index, c, by_id, output_path, rejected_path)
                 elif mod == "k":
-                    newc = _interactive_find_kalshi(index, c, by_id)
+                    newc = _interactive_find_kalshi(index, c, by_id, output_path, rejected_path)
                 else:
                     print("  (use /p for poly search or /k for kalshi search)")
                     continue
@@ -1909,7 +1909,22 @@ def manual_review_session(candidates: list, index, output_path: Path,
         print()
 
 
-def _interactive_find_poly(index, current_candidate, by_id):
+def _annotate_results(results, paired_ids, rejected_ids, id_field=1):
+    """Return list of (score, entry, tag_str) where tag is '' / '[paired]' / '[rejected]'."""
+    out = []
+    for item in results:
+        s, e = item[0], item[id_field]
+        if e.id in paired_ids:
+            tag = " \033[33m[paired]\033[0m"
+        elif e.id in rejected_ids:
+            tag = " \033[90m[rejected]\033[0m"
+        else:
+            tag = ""
+        out.append((s, e, tag))
+    return out
+
+
+def _interactive_find_poly(index, current_candidate, by_id, output_path, rejected_path):
     """`/p` key: BM25 search on Poly, swap the Poly side of the current candidate."""
     try:
         query = input("  Search query (poly): ").strip()
@@ -1920,12 +1935,14 @@ def _interactive_find_poly(index, current_candidate, by_id):
     results = search_bm25(index, query, venue="poly", limit=15)
     if not results:
         print("  (no matches)"); return None
-    for n, (s, e) in enumerate(results, 1):
-        print(f"    {n:>2}. [{s:.2f}] {_short(e.title, 70)}")
-    sel = _select_index("  Pick # (blank to cancel): ", len(results))
+    paired, rejected = _paired_rejected_ids(output_path, rejected_path)
+    annotated = _annotate_results(results, paired, rejected)
+    for n, (s, e, tag) in enumerate(annotated, 1):
+        print(f"    {n:>2}. [{s:.2f}] {_short(e.title, 70)}{tag}")
+    sel = _select_index("  Pick # (blank to cancel): ", len(annotated))
     if sel is None:
         return None
-    poly_rec = results[sel][1]
+    poly_rec = annotated[sel][1]
     k_rec = by_id.get(current_candidate["kalshi_ticker"])
     if k_rec is None:
         print("  (kalshi record not in index)"); return None
@@ -1933,7 +1950,7 @@ def _interactive_find_poly(index, current_candidate, by_id):
     return manual_override_candidate(k_rec, poly_rec)
 
 
-def _interactive_find_kalshi(index, current_candidate, by_id):
+def _interactive_find_kalshi(index, current_candidate, by_id, output_path, rejected_path):
     """`/k` key: BM25 search on Kalshi, swap the Kalshi side of the current candidate."""
     try:
         query = input("  Search query (kalshi): ").strip()
@@ -1944,12 +1961,14 @@ def _interactive_find_kalshi(index, current_candidate, by_id):
     results = search_bm25(index, query, venue="kalshi", limit=15)
     if not results:
         print("  (no matches)"); return None
-    for n, (s, e) in enumerate(results, 1):
-        print(f"    {n:>2}. [{s:.2f}] {_short(e.title, 70)}")
-    sel = _select_index("  Pick # (blank to cancel): ", len(results))
+    paired, rejected = _paired_rejected_ids(output_path, rejected_path)
+    annotated = _annotate_results(results, paired, rejected)
+    for n, (s, e, tag) in enumerate(annotated, 1):
+        print(f"    {n:>2}. [{s:.2f}] {_short(e.title, 70)}{tag}")
+    sel = _select_index("  Pick # (blank to cancel): ", len(annotated))
     if sel is None:
         return None
-    k_rec = results[sel][1]
+    k_rec = annotated[sel][1]
     p_rec = by_id.get(current_candidate.get("poly_yes", ""))
     if p_rec is None:
         print("  (poly record not in index)"); return None
