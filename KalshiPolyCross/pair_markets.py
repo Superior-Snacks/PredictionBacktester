@@ -378,7 +378,15 @@ def find_candidates(
                 if kd and pd:
                     if kd.tzinfo is None: kd = kd.replace(tzinfo=timezone.utc)
                     if pd.tzinfo is None: pd = pd.replace(tzinfo=timezone.utc)
-                    if abs((kd - pd).total_seconds()) / 86400 > DATE_WINDOW_DAYS:
+                    k_years = set(re.findall(r'\b20\d{2}\b', info["title"]))
+                    p_years = set(re.findall(r'\b20\d{2}\b', p["question"]))
+                    if k_years and p_years and k_years == p_years:
+                        window = 366  # shared year token proves same event cycle
+                    elif info.get("category") in ("Politics", "Elections"):
+                        window = 30
+                    else:
+                        window = DATE_WINDOW_DAYS
+                    if abs((kd - pd).total_seconds()) / 86400 > window:
                         continue
                 candidates.append({
                     "kalshi_ticker":      ticker,
