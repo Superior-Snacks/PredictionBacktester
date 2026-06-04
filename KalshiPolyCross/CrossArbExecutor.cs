@@ -75,7 +75,8 @@ public class CrossArbExecutor
     // "exit bleed"). Require a few ticks past break-even before selling. Non-breakeven mode already
     // has a positive hurdle (EarlyExitThreshold × expectedProfit) so it doesn't need this cushion.
     private const  decimal  ExitCushionPerSet          = 0.004m;
-    private const  int      EarlyExitFallbackIntervalMs = 60_000; // fallback poll if a book update was missed
+    private const  int      EarlyExitFallbackIntervalMs  = 60_000; // fallback poll if a book update was missed
+    private const  int      SettlementConfirmTicks        = 2;     // consecutive absent-from-positions ticks before settling
 
     // ── Configuration ─────────────────────────────────────────────────────────
     private readonly decimal _maxBetUsd;           // max combined dollar cost per arb entry
@@ -103,7 +104,8 @@ public class CrossArbExecutor
     private          CancellationTokenSource? _outerCts;
     private readonly ConcurrentDictionary<string, byte>    _inFlight          = new();
     private readonly ConcurrentDictionary<string, byte>    _earlyExitScheduled = new();
-    private readonly ConcurrentDictionary<string, decimal> _perPairInvested = new();
+    private readonly ConcurrentDictionary<string, decimal> _perPairInvested        = new();
+    private readonly ConcurrentDictionary<string, int>     _settlementAbsentTicks  = new();
     private readonly ConcurrentDictionary<string, int>                   _polyFeeRates  = new();
     private readonly ConcurrentDictionary<string, (decimal R, double E)> _polyFeeParams = new();
     private readonly ConcurrentDictionary<string, string>                 _polyTickSizes;
@@ -123,6 +125,13 @@ public class CrossArbExecutor
     private const  decimal  TradeMaxLossMult       = 3.0m; // halt if actual loss > 3× expected edge
     private const  decimal  CleanupHedgeSkipUsd   = 1.00m; // skip hedge attempt if unhedged value < $1.00
     private const  decimal  CleanupDustUsd         = 0.25m; // absorb silently (no halt) if reversal fails and value < $0.25
+    // Dollar-denominated Poly FAK can sweep far past the intended count on thin books (e.g. 106 shares
+    // when balanced=20). An over-fill that large must be reversed, not matched with a Kalshi hedge that
+    // would open a huge unintended position. Guard: if pUnhedged > balancedQty × this fraction, reverse.
+    private const  decimal  MaxHedgeOverfillFraction   = 0.25m;
+    // Cap the Poly IOC limit buffer to this fraction of the ask price. Without the cap, the flat
+    // halfAllow buffer doubles the dollar budget on cheap legs (ask=0.05 → limit=0.10+).
+    private const  decimal  MaxPolyLimitBufferPct      = 0.15m;
 
     // ── Position scaling ──────────────────────────────────────────────────────
     // _singleEntry = true (--single-entry):  one open position per pair at a time.
@@ -582,7 +591,8 @@ public class CrossArbExecutor
         // Poly gets the remaining margin as buffer; floor at exact ask if margin is thin.
         decimal halfAllow   = (_executionThreshold - netNow) / 2m;
         int     kPriceCents = (int)Math.Floor((kLegAsk + 0.01m) * 100m);
-        decimal pLimitAsk   = Math.Min(0.99m, pLegAsk + Math.Max(0m, halfAllow - 0.01m));
+        decimal pBufferCap  = pLegAsk * MaxPolyLimitBufferPct;
+        decimal pLimitAsk   = Math.Min(0.99m, pLegAsk + Math.Min(Math.Max(0m, halfAllow - 0.01m), pBufferCap));
         DebugLog.Trades($"ExecuteAsync {pair.Label}: halfAllow={halfAllow:0.00000} kLimit={kPriceCents}¢ pLimit={pLimitAsk:0.0000}");
         decimal pricePerSet = kLegAsk + pLegAsk;
 
@@ -1584,9 +1594,15 @@ public class CrossArbExecutor
                     // Skip hedge if fractional Kalshi fill makes Poly order < $1 CLOB minimum
                     decimal polyHedgeCost  = Math.Floor(polyHedgeLimit * 100m) / 100m * kUnhedged;
                     bool polyHedgeTooSmall = polyHedgeCost < 1.00m;
+                    // Symmetry with Case B: never let a recovery hedge push total open exposure past the cap.
+                    bool polyHedgeBreachesCap;
+                    lock (_exposureLock) polyHedgeBreachesCap = _totalExposure + polyHedgeCost > _maxExposureUsd;
+                    bool skipPolyHedge = polyHedgeTooSmall || polyHedgeBreachesCap;
                     if (polyHedgeTooSmall)
                         Emit(execLog, $"[RECOVER] {pair.Label} | Poly hedge cost ${polyHedgeCost:0.00} < $1 min — reversing Kalshi excess directly");
-                    (decimal polyFill2, decimal polyFill2Price) = polyHedgeTooSmall ? (0m, 0m)
+                    else if (polyHedgeBreachesCap)
+                        Emit(execLog, $"[RECOVER] {pair.Label} | Poly hedge ${polyHedgeCost:0.00} would push exposure ${_totalExposure:0.00}→${_totalExposure + polyHedgeCost:0.00} past cap ${_maxExposureUsd:0.00} — reversing Kalshi excess instead");
+                    (decimal polyFill2, decimal polyFill2Price) = skipPolyHedge ? (0m, 0m)
                         : await PlacePolyLegAsync(polyToken, polyHedgeLimit, kUnhedged, pair.IsNegRisk, execLog);
                     if (polyFill2 > 0)
                     {
@@ -1608,6 +1624,7 @@ public class CrossArbExecutor
                             _openPositions[pair.PairId] = new ArbPosition(
                                 pair.PairId, arbType, additional, additional,
                                 kLegAsk, polyFill2Price, DateTime.UtcNow, execId);
+                        lock (_exposureLock) { _totalExposure += additional * polyFill2Price; }
                         await JournalAsync(JsonSerializer.Serialize(new {
                             t = DateTime.UtcNow, @event = "CLEANUP_HEDGE_COMPLETED", execId,
                             pair = pair.PairId, leg = "poly",
@@ -1735,6 +1752,27 @@ public class CrossArbExecutor
         {
             decimal pUnhedgedValue = pUnhedged * pActualPrice;
 
+            // Shared helper: sell the entire Poly excess and record it. Used by the over-fill guard
+            // and the exposure backstop so neither duplicates the sell/journal/lock logic.
+            // Returns null when the sell filled nothing; caller falls through to hedge/reverse/halt.
+            async Task<RecoveryResult?> ReverseExcessPolyAsync(string reason)
+            {
+                var (revSold, revPrice) = await PlacePolySellAsync(polyToken, pUnhedged, pair.IsNegRisk, execLog);
+                if (revSold <= 0m) return null;
+                decimal reversalLoss = Math.Max(0m, revSold * (pActualPrice - revPrice));
+                lock (_cleanupLock) { _totalCleanupCostUsd += reversalLoss; }
+                await JournalAsync(JsonSerializer.Serialize(new {
+                    t = DateTime.UtcNow, @event = "CLEANUP_REVERSED", execId,
+                    pair = pair.PairId, leg = "poly", reason,
+                    soldShares = Math.Round(revSold, 6), soldPrice = Math.Round(revPrice, 6),
+                    reversalLossUsd = Math.Round(reversalLoss, 4)
+                }));
+                Console.ForegroundColor = ConsoleColor.Yellow;
+                Emit(execLog, $"[RECOVER] {pair.Label} | reversed {revSold:0.00} excess Poly @ {revPrice:0.0000} ({reason}) loss=${reversalLoss:0.00}");
+                Console.ResetColor();
+                return new RecoveryResult("REVERSED_POLY", revSold, reversalLoss);
+            }
+
             if (pUnhedgedValue < CleanupDustUsd)
             {
                 lock (_cleanupLock) { _totalCleanupCostUsd += pUnhedgedValue; }
@@ -1746,6 +1784,15 @@ public class CrossArbExecutor
                 Emit(execLog, $"[CLEANUP DUST] {pair.Label} | Absorbing {pUnhedged:0.00} Poly dust (${pUnhedgedValue:0.00}) — no halt");
                 Console.ResetColor();
                 return new RecoveryResult("DUST_ABSORBED_POLY", pUnhedged, pUnhedgedValue);
+            }
+
+            // Fix 1 — over-fill guard: a Poly fill far above the balanced size is an accidental
+            // over-buy. Never enlarge the position by hedging it on Kalshi — reverse the excess.
+            if (pUnhedged > balancedQty * MaxHedgeOverfillFraction)
+            {
+                var r = await ReverseExcessPolyAsync("OVERFILL");
+                if (r is not null) return r;
+                Emit(execLog, $"[RECOVER] {pair.Label} | over-fill reverse sold 0 — falling through");
             }
 
             string kHedgeKey = arbType == "K_YES_P_NO" ? $"K:{pair.KalshiTicker}" : $"K:{pair.KalshiTicker}_NO";
@@ -1782,6 +1829,23 @@ public class CrossArbExecutor
                         return new RecoveryResult("DUST_ABSORBED_POLY", pUnhedged, fracValue);
                     }
 
+                    // Fix 3 — capital backstop: never let a recovery hedge push total open exposure
+                    // past the cap. _totalExposure holds each open position's reservation until it
+                    // closes, so this is real cumulative exposure, not just in-flight reservations.
+                    decimal hedgeCost = hedgeQty * currentKalshiAsk;
+                    bool breachesCap;
+                    lock (_exposureLock) breachesCap = _totalExposure + hedgeCost > _maxExposureUsd;
+                    if (breachesCap)
+                    {
+                        Console.ForegroundColor = ConsoleColor.Yellow;
+                        Emit(execLog, $"[RECOVER] {pair.Label} | hedge ${hedgeCost:0.00} would push exposure " +
+                                      $"${_totalExposure:0.00}→${_totalExposure + hedgeCost:0.00} past cap ${_maxExposureUsd:0.00} — reversing instead");
+                        Console.ResetColor();
+                        var r = await ReverseExcessPolyAsync("EXPOSURE_CAP");
+                        if (r is not null) return r;
+                        Emit(execLog, $"[RECOVER] {pair.Label} | exposure-cap reverse sold 0 — proceeding as last resort");
+                    }
+
                     Console.ForegroundColor = ConsoleColor.Yellow;
                     Emit(execLog, $"[RECOVER] {pair.Label} | pExcess={pUnhedged:0.0000} hedgeQty={hedgeQty} hedgeNet={hedgeNet:0.0000} — completing hedge on Kalshi");
                     Console.ResetColor();
@@ -1809,6 +1873,9 @@ public class CrossArbExecutor
                             _openPositions[pair.PairId] = new ArbPosition(
                                 pair.PairId, arbType, additional, additional,
                                 currentKalshiAsk, pActualPrice, DateTime.UtcNow, execId);
+                        // Keep the exposure reservation aligned with the contracts the hedge added,
+                        // so the cap stays accurate for future trades and the close-time release matches.
+                        lock (_exposureLock) { _totalExposure += additional * currentKalshiAsk; }
                         await JournalAsync(JsonSerializer.Serialize(new {
                             t = DateTime.UtcNow, @event = "CLEANUP_HEDGE_COMPLETED", execId,
                             pair = pair.PairId, leg = "kalshi",
@@ -2543,10 +2610,28 @@ public class CrossArbExecutor
                         DebugLog.Trades($"Settlement check GetPositionsAsync failed: {ex.Message}");
                         break;
                     }
+
+                    // An empty positions list is far more likely a transient API/pagination failure
+                    // than every held position resolving at once. Never settle on it.
+                    if (kalshiPositions.Count == 0)
+                    {
+                        DebugLog.Trades("Settlement check: positions API returned empty — skipping pass this tick");
+                        break;
+                    }
+
                     bool stillHeld = kalshiPositions.Any(p =>
                         p.Ticker.Equals(pair.KalshiTicker, StringComparison.OrdinalIgnoreCase) &&
                         Math.Abs(p.Position) > 0);
-                    if (stillHeld) continue;
+                    if (stillHeld) { _settlementAbsentTicks[pairId] = 0; continue; }
+
+                    // Debounce: require N consecutive absent ticks so one partial read can't settle a live position.
+                    int absent = _settlementAbsentTicks.AddOrUpdate(pairId, 1, (_, n) => n + 1);
+                    if (absent < SettlementConfirmTicks)
+                    {
+                        DebugLog.Trades($"Settlement check {pair.Label}: absent {absent}/{SettlementConfirmTicks} — deferring");
+                        continue;
+                    }
+                    _settlementAbsentTicks.TryRemove(pairId, out _);
 
                     _openPositions.TryRemove(pairId, out _);
                     decimal settledCost = pos.KalshiContracts * pos.KalshiEntryPrice
