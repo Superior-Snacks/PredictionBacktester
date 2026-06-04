@@ -76,6 +76,7 @@ public class CrossArbExecutor
     // has a positive hurdle (EarlyExitThreshold × expectedProfit) so it doesn't need this cushion.
     private const  decimal  ExitCushionPerSet          = 0.004m;
     private const  int      EarlyExitFallbackIntervalMs  = 60_000; // fallback poll if a book update was missed
+    private const  decimal  MinRestorePolyShares          = 1.0m;  // a Poly leg reduced to dust means the position was closed — don't resurrect it
     private const  int      SettlementConfirmTicks        = 2;     // consecutive absent-from-positions ticks before settling
 
     // ── Configuration ─────────────────────────────────────────────────────────
@@ -2301,9 +2302,10 @@ public class CrossArbExecutor
 
         if (kalshiByTicker.Count == 0)
         {
-            Console.ForegroundColor = ConsoleColor.Yellow;
-            Console.WriteLine("[RESTORE] Kalshi positions API returned empty list — using journal qty as fallback (Poly balance still required)");
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine("[RESTORE] Kalshi positions API returned empty list — skipping restore entirely (venue-only policy).");
             Console.ResetColor();
+            return;
         }
 
         int restored = 0;
@@ -2311,17 +2313,9 @@ public class CrossArbExecutor
         {
             if (!pairByPairId.TryGetValue(pairId, out var pair)) continue;
 
-            decimal kQty;
-            if (kalshiByTicker.TryGetValue(pair.KalshiTicker, out int kPos) && kPos != 0)
-                kQty = Math.Abs(kPos);
-            else if (entry.JournalKQty > 0)
-            {
-                Console.ForegroundColor = ConsoleColor.Yellow;
-                Console.WriteLine($"[RESTORE] {pair.Label} | Kalshi position not in API — using journal qty {entry.JournalKQty}");
-                Console.ResetColor();
-                kQty = entry.JournalKQty;
-            }
-            else continue;
+            // Venue-only: a venue-confirmed 0 means the Kalshi leg is closed, not API lag.
+            // The journal fallback is intentionally removed — trusting it manufactured phantom positions (JOR incident).
+            decimal kQty = kalshiByTicker.TryGetValue(pair.KalshiTicker, out int kPos) ? Math.Abs(kPos) : 0m;
 
             string polyToken = entry.ArbType == "K_NO_P_YES" ? pair.PolyYesTokenId : pair.PolyNoTokenId;
             decimal pQty = 0m;
@@ -2332,28 +2326,52 @@ public class CrossArbExecutor
                 continue;
             }
 
-            if (pQty <= 0m)
+            if (pQty < MinRestorePolyShares)
             {
                 Console.ForegroundColor = ConsoleColor.Yellow;
-                Console.WriteLine($"[RESTORE] {pair.Label} | No Poly balance found — skipping");
+                Console.WriteLine($"[RESTORE] {pair.Label} | Poly balance {pQty:0.000} below dust floor — treating as closed, skipping");
                 Console.ResetColor();
                 continue;
             }
 
+            // Orphan guard: Kalshi leg gone but Poly still held — legs decoupled (settlement/void closed
+            // only the Kalshi side). Do not restore a phantom position.
+            if (kQty == 0m)
+            {
+                Console.ForegroundColor = ConsoleColor.Yellow;
+                Console.WriteLine($"[RESTORE] {pair.Label} | ORPHANED Poly {pQty:0.00} with no Kalshi — needs manual review / reverse, not restore");
+                Console.ResetColor();
+                await JournalAsync(JsonSerializer.Serialize(new {
+                    t = DateTime.UtcNow, @event = "RESTORE_ORPHANED_POLY",
+                    pairId, label = pair.Label, pShares = pQty, polyToken
+                }));
+                continue;
+            }
+
+            decimal matched = Math.Min(kQty, pQty);
+            decimal orphaned = Math.Abs(kQty - pQty);
+            if (orphaned > 0.5m)
+            {
+                Console.ForegroundColor = ConsoleColor.Yellow;
+                Console.WriteLine($"[RESTORE] {pair.Label} | leg imbalance k={kQty} p={pQty:0.00} — restoring matched={matched:0.00}, orphaned={orphaned:0.00}");
+                Console.ResetColor();
+            }
+
             string restoreId = $"RESTORED_{DateTime.UtcNow:yyyyMMddHHmmss}";
             _openPositions[pairId] = new ArbPosition(
-                pairId, entry.ArbType, kQty, pQty, entry.KEntry, entry.PEntry, DateTime.UtcNow, restoreId);
+                pairId, entry.ArbType, matched, matched, entry.KEntry, entry.PEntry, DateTime.UtcNow, restoreId);
 
             Console.ForegroundColor = ConsoleColor.Cyan;
             Console.WriteLine(
-                $"[RESTORE] {pair.Label} | {entry.ArbType} | K={kQty} P={pQty:0.00} " +
+                $"[RESTORE] {pair.Label} | {entry.ArbType} | K={kQty} P={pQty:0.00} matched={matched:0.00} " +
                 $"entry={entry.KEntry:0.0000}+{entry.PEntry:0.0000} — added to monitoring");
             Console.ResetColor();
 
             await JournalAsync(JsonSerializer.Serialize(new {
                 t = DateTime.UtcNow, @event = "STARTUP_POSITION_RESTORED",
                 execId = restoreId, pairId, label = pair.Label,
-                arbType = entry.ArbType, kContracts = kQty, pShares = pQty,
+                arbType = entry.ArbType, kContracts = matched, pShares = matched,
+                kVenue = kQty, pVenue = pQty,
                 kEntry = entry.KEntry, pEntry = entry.PEntry
             }));
             restored++;
