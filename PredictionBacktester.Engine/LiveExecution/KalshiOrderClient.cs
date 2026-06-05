@@ -144,7 +144,7 @@ public class KalshiOrderClient : IKalshiOrderExecutor, IDisposable
                 foreach (var el in arr.EnumerateArray())
                 {
                     string ticker = el.TryGetProperty("ticker", out var t) ? t.GetString() ?? "" : "";
-                    int pos = ReadIntFlexible(el, "position");
+                    int pos = ReadIntFlexible(el, "position_fp");
                     if (!string.IsNullOrEmpty(ticker) && pos != 0) result.Add((ticker, pos));
                 }
             }

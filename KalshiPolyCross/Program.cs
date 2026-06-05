@@ -68,6 +68,39 @@ using PredictionBacktester.Engine.LiveExecution;
 // ══════════════════════════════════════════════════════════════════════════════
 //  MODE SELECTION
 // ══════════════════════════════════════════════════════════════════════════════
+// ── Quick diagnostic: fetch + print raw positions response then exit ──────────
+if (args.Contains("--positions-check"))
+{
+    var cfg = KalshiApiConfig.FromEnvironment();
+    using var client = new KalshiOrderClient(cfg);
+    client.RawResponseLogger = (path, body) =>
+    {
+        Console.WriteLine($"\n=== RAW {path} (total {body.Length} chars) ===");
+        // Print first 2000 chars to show event_positions header
+        Console.WriteLine(body.Length > 2000 ? body[..2000] + "\n[…trimmed…]" : body);
+        // Specifically locate and print market_positions
+        int mpIdx = body.IndexOf("\"market_positions\"", StringComparison.Ordinal);
+        if (mpIdx < 0)
+            Console.WriteLine("\n*** market_positions key NOT FOUND in response ***");
+        else
+        {
+            int end = Math.Min(mpIdx + 3000, body.Length);
+            Console.WriteLine($"\n--- market_positions (at char {mpIdx}) ---");
+            Console.WriteLine(body[mpIdx..end] + (end < body.Length ? "…" : ""));
+        }
+        Console.WriteLine("=== END ===");
+    };
+    var sw = System.Diagnostics.Stopwatch.StartNew();
+    try
+    {
+        var positions = await client.GetPositionsAsync();
+        Console.WriteLine($"\nParsed {positions.Count} position(s) in {sw.ElapsedMilliseconds}ms");
+        foreach (var (t, p) in positions) Console.WriteLine($"  {t} = {p}");
+    }
+    catch (Exception ex) { Console.WriteLine($"\nTHREW: {ex.GetType().Name}: {ex.Message}"); }
+    return;
+}
+
 bool isLive      = args.Contains("--live");
 bool isDryRun    = args.Contains("--dry-run");
 bool isTelemetry = args.Contains("--telemetry");
