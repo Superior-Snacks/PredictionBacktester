@@ -4478,3 +4478,8 @@
 {"t":"2026-06-05T00:52:48.4778655Z","event":"BALANCE","kalshi":46.77,"poly":40.719545,"initial":true}
 {"t":"2026-06-05T00:52:48.9439144Z","event":"RUN_CONFIG","singleEntry":true,"minBuy":true,"maxBetUsd":10,"maxExposureUsd":50,"executionThreshold":0.995,"execNetFloor":0.985,"pairCooldownSeconds":120,"dryRun":false}
 {"t":"2026-06-05T02:32:28.3612943Z","event":"RESTORE_FAILED_HALT","reason":"POSITIONS_EMPTY_BUT_JOURNAL_NONEMPTY","expectedOpen":30}
+{re-run 10}
+{"t":"2026-06-05T13:02:36.9522138Z","event":"BALANCE","kalshi":46.77,"poly":40.719545,"initial":true}
+{"t":"2026-06-05T13:02:37.180887Z","event":"RUN_CONFIG","singleEntry":true,"minBuy":true,"maxBetUsd":10,"maxExposureUsd":50,"executionThreshold":0.995,"execNetFloor":0.985,"pairCooldownSeconds":120,"dryRun":false}
+{"t":"2026-06-05T14:44:10.1462892Z","event":"RESTORE_FAILED_HALT","reason":"POSITIONS_EMPTY_BUT_JOURNAL_NONEMPTY","expectedOpen":30}
+
