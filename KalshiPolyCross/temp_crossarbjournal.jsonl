@@ -4474,3 +4474,7 @@
 {"t":"2026-06-04T21:22:32.2245168Z","event":"RECONCILE_LARGE_IMBALANCE","execId":"AX_20260604212228_KXTIME-26-SHE","pair":"MANUAL_KXTIME-26-SHE__20710961","arbType":"K_YES_P_NO","kExpected":5,"kVenue":5.00,"pExpected":5,"pVenue":10,"reason":"PRIOR_SNAPSHOT_FAILED_LARGE_GAP","halted":true}
 {"t":"2026-06-04T21:24:14.8631332Z","event":"BALANCE","kalshi":46.77,"poly":40.719545,"initial":false}
 {"t":"2026-06-04T21:29:15.1115918Z","event":"BALANCE","kalshi":46.77,"poly":40.719545,"initial":false}
+{re-run 9}
+{"t":"2026-06-05T00:52:48.4778655Z","event":"BALANCE","kalshi":46.77,"poly":40.719545,"initial":true}
+{"t":"2026-06-05T00:52:48.9439144Z","event":"RUN_CONFIG","singleEntry":true,"minBuy":true,"maxBetUsd":10,"maxExposureUsd":50,"executionThreshold":0.995,"execNetFloor":0.985,"pairCooldownSeconds":120,"dryRun":false}
+{"t":"2026-06-05T02:32:28.3612943Z","event":"RESTORE_FAILED_HALT","reason":"POSITIONS_EMPTY_BUT_JOURNAL_NONEMPTY","expectedOpen":30}
