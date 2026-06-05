@@ -2321,46 +2321,35 @@ public class CrossArbExecutor
 
         if (entryMap.Count == 0) return;
 
-        // Fetch venue positions with retries. Only retry on exception (transient network/auth
-        // failure). A clean empty response is a valid flat account — don't retry it.
+        // Fetch venue positions with retries. A single empty/failed read must not be trusted —
+        // the journal says we hold positions, and trading with an empty book re-enters them.
         List<(string Ticker, int Position)> kalshiPos = new();
         bool fetchOk = false;
         for (int attempt = 1; attempt <= 3; attempt++)
         {
-            try
-            {
-                kalshiPos = await _kalshi.GetPositionsAsync();
-                fetchOk = true;
-                break;  // Clean response received (even if empty) — stop retrying
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[RESTORE] Kalshi fetch attempt {attempt} failed: {ex.Message}");
-            }
+            try { kalshiPos = await _kalshi.GetPositionsAsync(); fetchOk = true; }
+            catch (Exception ex) { Console.WriteLine($"[RESTORE] Kalshi fetch attempt {attempt} failed: {ex.Message}"); }
+            if (fetchOk && kalshiPos.Count > 0) break;
             if (attempt < 3) await Task.Delay(2000);
         }
         var kalshiByTicker = kalshiPos.ToDictionary(p => p.Ticker, p => p.Position);
 
-        // Only halt when the API was genuinely unreachable. A clean empty list is a valid flat
-        // account — the journal may have entries that never filled on Kalshi (IOC zero-fills),
-        // already settled, or already early-exited. The restore loop below handles kQty==0
-        // correctly for each entry (dust-skip or orphan-guard), so proceeding is safe.
-        if (!fetchOk)
+        // Contradiction guard: journal expects open positions but the venue returned none after
+        // retries. Bad read, not a flat account. Refuse to trade blind — an empty _openPositions
+        // disables single-entry and the bot re-enters positions it still holds (the seg9 halt).
+        if (kalshiByTicker.Count == 0)
         {
             Console.ForegroundColor = ConsoleColor.Red;
-            Console.WriteLine($"[RESTORE] Kalshi positions API unreachable after retries — journal expects {entryMap.Count} open. " +
-                              "HALTING; verify Kalshi connectivity and restart.");
+            Console.WriteLine($"[RESTORE] Positions API empty after retries but journal expects {entryMap.Count} open — " +
+                              "refusing to trade blind. HALTING; verify Kalshi connectivity and restart.");
             Console.ResetColor();
             await JournalAsync(JsonSerializer.Serialize(new {
                 t = DateTime.UtcNow, @event = "RESTORE_FAILED_HALT",
-                reason = "POSITIONS_API_UNREACHABLE", expectedOpen = entryMap.Count
+                reason = "POSITIONS_EMPTY_BUT_JOURNAL_NONEMPTY", expectedOpen = entryMap.Count
             }));
             _halted = true;
             return;
         }
-
-        if (kalshiByTicker.Count == 0)
-            Console.WriteLine($"[RESTORE] Kalshi returned flat account ({entryMap.Count} journal entries will be checked for orphaned Poly legs).");
 
         int restored = 0;
         foreach (var (pairId, entry) in entryMap)
