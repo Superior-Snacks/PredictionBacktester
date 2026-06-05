@@ -156,6 +156,12 @@ if (string.IsNullOrEmpty(kalshiConfig.ApiKeyId) || string.IsNullOrEmpty(kalshiCo
 using var orderClient = new KalshiOrderClient(kalshiConfig);
 if (isDebug)
     orderClient.RawResponseLogger = (path, body) => DebugLog.Books($"[KALSHI REST] {path}\n{body}");
+else
+    orderClient.RawResponseLogger = (path, body) =>
+    {
+        if (path.Contains("/portfolio/positions"))
+            Console.WriteLine($"[KALSHI RAW {DateTime.UtcNow:HH:mm:ss}] {path}\n{body[..Math.Min(1200, body.Length)]}");
+    };
 try
 {
     long bal = await orderClient.GetBalanceCentsAsync();

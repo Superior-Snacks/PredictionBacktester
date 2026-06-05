@@ -1863,6 +1863,7 @@ def manual_review_session(candidates: list, index, output_path: Path,
                     print("  (use /p for poly search or /k for kalshi search)")
                     continue
                 if newc:
+                    _save_rejected([(c, "OVERRIDDEN")], rejected_path)
                     candidates[i] = c = newc
                     _display_candidate(c, i, len(candidates))
                 else:
@@ -1872,6 +1873,7 @@ def manual_review_session(candidates: list, index, output_path: Path,
                 print("t")
                 newc = _interactive_twin(index, c, by_id, series_titles)
                 if newc:
+                    _save_rejected([(c, "OVERRIDDEN")], rejected_path)
                     candidates[i] = c = newc
                     _display_candidate(c, i, len(candidates))
                 else:

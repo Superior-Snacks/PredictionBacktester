@@ -123,29 +123,53 @@ public class KalshiOrderClient : IKalshiOrderExecutor, IDisposable
 
     /// <summary>
     /// Returns all open market positions. Positive position = net YES, negative = net NO.
-    /// Returns empty list on any API failure.
+    /// Paginates automatically. Throws on HTTP/parse errors — callers must distinguish
+    /// failure from a genuinely empty account (empty list = no positions, exception = bad read).
     /// </summary>
     public async Task<List<(string Ticker, int Position)>> GetPositionsAsync()
     {
-        try
+        var result = new List<(string, int)>();
+        string cursor = "";
+        while (true)
         {
-            using var doc = await GetAsync("/portfolio/positions");
-            var result = new List<(string, int)>();
-            if (!doc.RootElement.TryGetProperty("market_positions", out var arr)) return result;
-            foreach (var el in arr.EnumerateArray())
+            string path = cursor == ""
+                ? "/portfolio/positions?limit=200"
+                : $"/portfolio/positions?limit=200&cursor={Uri.EscapeDataString(cursor)}";
+
+            using var doc = await GetAsync(path);   // throws on HTTP error — callers distinguish failure from empty
+            var root = doc.RootElement;
+
+            if (root.TryGetProperty("market_positions", out var arr) && arr.ValueKind == JsonValueKind.Array)
             {
-                string ticker = el.TryGetProperty("ticker",   out var t) ? t.GetString() ?? "" : "";
-                int    pos    = el.TryGetProperty("position", out var p) ? p.GetInt32()         : 0;
-                if (!string.IsNullOrEmpty(ticker) && pos != 0)
-                    result.Add((ticker, pos));
+                foreach (var el in arr.EnumerateArray())
+                {
+                    string ticker = el.TryGetProperty("ticker", out var t) ? t.GetString() ?? "" : "";
+                    int pos = ReadIntFlexible(el, "position");
+                    if (!string.IsNullOrEmpty(ticker) && pos != 0) result.Add((ticker, pos));
+                }
             }
-            return result;
+
+            if (root.TryGetProperty("cursor", out var cEl) && cEl.ValueKind == JsonValueKind.String &&
+                !string.IsNullOrEmpty(cEl.GetString()))
+                cursor = cEl.GetString()!;
+            else break;
+
+            await Task.Delay(200);
         }
-        catch (Exception ex)
+        return result;
+    }
+
+    private static int ReadIntFlexible(JsonElement el, string prop)
+    {
+        if (!el.TryGetProperty(prop, out var v)) return 0;
+        return v.ValueKind switch
         {
-            Console.WriteLine($"[KALSHI] GetPositionsAsync failed: {ex.Message}");
-            return new List<(string, int)>();
-        }
+            JsonValueKind.Number => v.TryGetInt32(out var i) ? i : (int)Math.Round(v.GetDouble()),
+            JsonValueKind.String =>
+                int.TryParse(v.GetString(), NumberStyles.Any, CultureInfo.InvariantCulture, out var s) ? s :
+                decimal.TryParse(v.GetString(), NumberStyles.Any, CultureInfo.InvariantCulture, out var d) ? (int)Math.Round(d) : 0,
+            _ => 0
+        };
     }
 
     /// <summary>

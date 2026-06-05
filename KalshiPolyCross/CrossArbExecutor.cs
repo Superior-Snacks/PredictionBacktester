@@ -119,6 +119,7 @@ public class CrossArbExecutor
     private          int _polyConsecErrors   = 0;
     private const    int MaintenanceErrorThreshold = 5;
     private volatile bool   _halted               = false; // manual reset required (failed reversal / tripwire)
+    private readonly ConcurrentDictionary<string, byte> _orphanedPairs = new();  // venue has a stranded leg — block re-entry until cleared
     private volatile bool   _connectionHalted     = false; // auto-clears when both venues reconnect
     private volatile bool   _injectMismatchOnNextTrade = false; // test harness: inject mismatch on next fill
     private const    int    ReverseBufferCents           = 2;  // extra slippage tolerance for reversal orders
@@ -453,6 +454,11 @@ public class CrossArbExecutor
         if (_halted || _connectionHalted)
         {
             Console.WriteLine($"[EXEC SKIP] {pairId}: {(_halted ? "bot halted (manual reset required)" : "connection halted")}");
+            return;
+        }
+        if (_orphanedPairs.ContainsKey(pairId))
+        {
+            Console.WriteLine($"[EXEC SKIP] {pairId}: orphaned leg on venue from a prior run — blocked until cleared");
             return;
         }
         // Per-pair in-flight guard: prevents two concurrent OnArbOpened callbacks from
@@ -2315,16 +2321,33 @@ public class CrossArbExecutor
 
         if (entryMap.Count == 0) return;
 
-        List<(string Ticker, int Position)> kalshiPos;
-        try   { kalshiPos = await _kalshi.GetPositionsAsync(); }
-        catch (Exception ex) { Console.WriteLine($"[RESTORE] Kalshi fetch failed: {ex.Message}"); return; }
+        // Fetch venue positions with retries. A single empty/failed read must not be trusted —
+        // the journal says we hold positions, and trading with an empty book re-enters them.
+        List<(string Ticker, int Position)> kalshiPos = new();
+        bool fetchOk = false;
+        for (int attempt = 1; attempt <= 3; attempt++)
+        {
+            try { kalshiPos = await _kalshi.GetPositionsAsync(); fetchOk = true; }
+            catch (Exception ex) { Console.WriteLine($"[RESTORE] Kalshi fetch attempt {attempt} failed: {ex.Message}"); }
+            if (fetchOk && kalshiPos.Count > 0) break;
+            if (attempt < 3) await Task.Delay(2000);
+        }
         var kalshiByTicker = kalshiPos.ToDictionary(p => p.Ticker, p => p.Position);
 
+        // Contradiction guard: journal expects open positions but the venue returned none after
+        // retries. Bad read, not a flat account. Refuse to trade blind — an empty _openPositions
+        // disables single-entry and the bot re-enters positions it still holds (the seg9 halt).
         if (kalshiByTicker.Count == 0)
         {
             Console.ForegroundColor = ConsoleColor.Red;
-            Console.WriteLine("[RESTORE] Kalshi positions API returned empty list — skipping restore entirely (venue-only policy).");
+            Console.WriteLine($"[RESTORE] Positions API empty after retries but journal expects {entryMap.Count} open — " +
+                              "refusing to trade blind. HALTING; verify Kalshi connectivity and restart.");
             Console.ResetColor();
+            await JournalAsync(JsonSerializer.Serialize(new {
+                t = DateTime.UtcNow, @event = "RESTORE_FAILED_HALT",
+                reason = "POSITIONS_EMPTY_BUT_JOURNAL_NONEMPTY", expectedOpen = entryMap.Count
+            }));
+            _halted = true;
             return;
         }
 
@@ -2365,6 +2388,7 @@ public class CrossArbExecutor
                     t = DateTime.UtcNow, @event = "RESTORE_ORPHANED_POLY",
                     pairId, label = pair.Label, pShares = pQty, polyToken
                 }));
+                _orphanedPairs[pairId] = 0;   // block re-entry — the stranded Poly would collide with a fresh fill
                 continue;
             }
 

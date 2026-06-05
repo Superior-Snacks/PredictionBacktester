@@ -17,7 +17,10 @@ public interface IKalshiOrderExecutor
     /// <summary>Polls a single order for its current status and fill count.</summary>
     Task<(string Status, decimal FillCount)> PollOrderAsync(string orderId);
 
-    /// <summary>Returns all open market positions as (Ticker, Position) pairs.</summary>
+    /// <summary>
+    /// Returns all open market positions as (Ticker, Position) pairs. Paginates automatically.
+    /// Throws on HTTP/parse errors — an empty list means a genuinely flat account, not a failed read.
+    /// </summary>
     Task<List<(string Ticker, int Position)>> GetPositionsAsync();
 
     /// <summary>Returns the current account balance in cents.</summary>
