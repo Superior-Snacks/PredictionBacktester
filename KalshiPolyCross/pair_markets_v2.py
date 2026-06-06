@@ -33,6 +33,7 @@ Usage:
     python pair_markets_v2.py --event KXBRAZILPRES-26           # Stage 5: event-level pairing
     python pair_markets_v2.py --discover [--n N]               # Stage 6: batch discovery + routing
     python pair_markets_v2.py --daily                         # Stage 7: full refresh pipeline
+    python pair_markets_v2.py --clean [--dry-run]            # prune concluded Kalshi markets -> archive to closed_markets.jsonl
     python pair_markets_v2.py --manual-judge                 # Stage 5: enhanced manual review
   plus all v1 filter flags: --no-cache --dry-run --include --exclude --include-category
     --exclude-category --no-live --wN --n --sync --ollama --verbose-judge --show-prompt
@@ -2364,6 +2365,147 @@ def _resolve_source_record(index, ident: str):
     return None
 
 
+# ============================================================================
+# Maintenance - prune concluded markets from the pairs file (--clean)
+# ============================================================================
+# Kalshi market lifecycle (GET /markets, .status; see Documetation/Kalshi_manual_docs.txt):
+#   initialized  created, not yet open (opens at open_time)      KEEP - will trade
+#   active       open for trading                                KEEP - tradeable now
+#   inactive     temporarily deactivated, may be reactivated     KEEP - paused, not over
+#   closed       past close_time, awaiting determination         DROP - finished trading
+#   determined   result known, settlement timer running          DROP - concluded
+#   disputed     result challenged, may be re-determined          DROP - concluded
+#   amended      re-determined after a dispute                    DROP - concluded
+#   finalized    settlement complete, terminal state              DROP - concluded
+# A ticker the API does not return at all is delisted or settled past the historical
+# cutoff (only on GET /historical/markets) -> also concluded -> DROP.
+_KALSHI_LIVE_STATUSES = {"active", "initialized", "inactive"}
+
+CLEAN_BATCH_SIZE = 90   # tickers per GET /markets?tickers= call (URL-length safe; API limit is 1000 results)
+
+
+def _fetch_kalshi_statuses(tickers: list, api_key_id: str, private_key) -> dict:
+    """ticker -> status for every given ticker the API still lists.
+
+    Uses GET /markets?tickers=<csv> (no status filter, so finalized markets are
+    included while they remain past the historical cutoff). Tickers absent from the
+    result are simply no longer listed. Raises on a hard API failure so a failed read
+    is never mistaken for 'concluded' by the caller.
+    """
+    status_map = {}
+    unique = sorted({t for t in tickers if t})
+    total = (len(unique) + CLEAN_BATCH_SIZE - 1) // CLEAN_BATCH_SIZE
+    for bi in range(total):
+        batch = unique[bi * CLEAN_BATCH_SIZE:(bi + 1) * CLEAN_BATCH_SIZE]
+        path = "/markets?limit=1000&tickers=" + ",".join(batch)
+        data = _kalshi_get(path, api_key_id, private_key, _label=f"clean {bi+1}/{total}")
+        for m in data.get("markets", []):
+            tk = m.get("ticker")
+            if tk:
+                status_map[tk] = m.get("status", "") or ""
+        time.sleep(0.15)
+    return status_map
+
+
+def _archive_removed(removed: list, archive_path: Path) -> int:
+    """Append removed pairs to an append-only JSONL recovery log, one JSON object per line.
+
+    Each line is the original pair row (all keys preserved for trivial recovery) plus
+    `kalshi_status` (why it was archived) and `archived_at` (UTC ISO). Append mode means the
+    log accumulates across every --clean run and never overwrites prior removals, so a bad
+    clean can be recovered without re-pairing from scratch. Raises on write failure so the
+    caller aborts before pruning.
+    """
+    ts = datetime.now(timezone.utc).isoformat()
+    lines = []
+    for p, reason in removed:
+        rec = dict(p)
+        rec["kalshi_status"] = reason
+        rec["archived_at"]   = ts
+        lines.append(json.dumps(rec, ensure_ascii=False))
+    with open(archive_path, "a", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+    return len(lines)
+
+
+def clean_concluded_pairs(api_key_id: str, private_key, output_path: Path, dry_run: bool = False) -> None:
+    """Remove pairs whose Kalshi market has closed/finished (or is no longer listed)."""
+    if not output_path.exists():
+        print(f"[CLEAN] {output_path.name} not found - nothing to do.")
+        return
+    try:
+        pairs = json.loads(output_path.read_text(encoding="utf-8-sig"))
+    except Exception as e:
+        print(f"[CLEAN] ABORT - could not parse {output_path.name} ({e}). No changes written.")
+        return
+    if not isinstance(pairs, list) or not pairs:
+        print(f"[CLEAN] {output_path.name} is empty - nothing to do.")
+        return
+
+    tickers = [p.get("kalshi_ticker", "") for p in pairs if isinstance(p, dict) and p.get("kalshi_ticker")]
+    unique = sorted(set(tickers))
+    print(f"[CLEAN] {len(pairs)} pairs, {len(unique)} unique Kalshi tickers to check via GET /markets.")
+
+    try:
+        status_map = _fetch_kalshi_statuses(unique, api_key_id, private_key)
+    except Exception as e:
+        print(f"[CLEAN] ABORT - Kalshi status fetch failed ({e}). No changes written.")
+        return
+
+    kept, removed = [], []
+    for p in pairs:
+        tk = p.get("kalshi_ticker", "") if isinstance(p, dict) else ""
+        if not tk:
+            kept.append(p)                      # can't evaluate without a ticker - leave untouched
+            continue
+        status = status_map.get(tk)
+        if status in _KALSHI_LIVE_STATUSES:
+            kept.append(p)
+        else:
+            removed.append((p, status if status else "not_listed"))
+
+    if not removed:
+        print(f"[CLEAN] All {len(kept)} pairs are still live - nothing to remove.")
+        return
+
+    reason_counts = {}
+    for _, r in removed:
+        reason_counts[r] = reason_counts.get(r, 0) + 1
+    print(f"\n[CLEAN] {len(removed)} concluded pair(s) to remove, {len(kept)} to keep:")
+    for reason, n in sorted(reason_counts.items(), key=lambda kv: -kv[1]):
+        print(f"    {reason:<12} {n}")
+    print("  Sample:")
+    for p, reason in removed[:15]:
+        print(f"    [{reason:<11}] {p.get('kalshi_ticker',''):<34} {_short(p.get('label',''), 50)}")
+    if len(removed) > 15:
+        print(f"    ... and {len(removed) - 15} more.")
+
+    archive_path = output_path.parent / "closed_markets.jsonl"
+    if dry_run:
+        print(f"\n[CLEAN] --dry-run: no changes written "
+              f"(would archive {len(removed)} pair(s) -> {archive_path.name}).")
+        return
+
+    # Archive the removed rows FIRST so the pairing work is never lost - even if the prune
+    # below fails. Append-only JSONL accumulates every market ever removed, so a bad clean
+    # is recoverable without re-pairing from scratch.
+    try:
+        n_arch = _archive_removed(removed, archive_path)
+    except Exception as e:
+        print(f"[CLEAN] ABORT - could not archive removed pairs to {archive_path.name} ({e}). "
+              f"No changes written.")
+        return
+    print(f"\n[CLEAN] Archived {n_arch} removed pair(s) -> {archive_path.name} (append-only recovery log).")
+
+    backup = output_path.with_suffix(".json.bak")
+    backup.write_bytes(output_path.read_bytes())
+    print(f"[CLEAN] Backed up full file -> {backup.name}")
+    tmp = output_path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(kept, indent=2), encoding="utf-8")
+    _safe_replace(tmp, output_path)
+    print(f"[CLEAN] Wrote {len(kept)} live pair(s) -> {output_path.name} (removed {len(removed)}).")
+
+
 def main() -> None:
     weeks_limit = None
     clean_argv = []
@@ -2388,6 +2530,8 @@ def main() -> None:
     ap.add_argument("--discover", action="store_true", help="Stage 6: batch discovery + confidence routing")
     ap.add_argument("--audit", action="store_true", help="Stage 6: audit settled llm_auto pairs")
     ap.add_argument("--daily", action="store_true", help="Stage 7: full refresh pipeline")
+    ap.add_argument("--clean", action="store_true",
+                    help="Prune concluded (closed/finished/delisted) Kalshi markets from the pairs file and exit")
     # v1 flags
     ap.add_argument("--no-cache", action="store_true")
     ap.add_argument("--dry-run", action="store_true")
@@ -2413,6 +2557,12 @@ def main() -> None:
     # --- index-only modes (use persisted cache; fetch only if stale/missing) ---
     if args.rebuild_index:
         load_or_build_index(api_key_id, private_key, force_rebuild=True, no_live=args.no_live)
+        return
+
+    if args.clean:
+        if not api_key_id or not key_path:
+            sys.exit("[ERROR] --clean needs KALSHI_API_KEY_ID and KALSHI_PRIVATE_KEY_PATH.")
+        clean_concluded_pairs(api_key_id, private_key, output_path, dry_run=args.dry_run)
         return
 
     if args.find:
