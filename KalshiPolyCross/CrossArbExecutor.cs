@@ -39,10 +39,16 @@ public record PositionStatus(
 
 // Summary of what RecoverUnhedgedAsync did with the unhedged delta.
 public record RecoveryResult(
-    string  Outcome,        // HEDGE_COMPLETED | REVERSED_KALSHI | REVERSED_POLY | DUST_ABSORBED_KALSHI | DUST_ABSORBED_POLY | HALT
+    string  Outcome,        // HEDGE_COMPLETED | REVERSED_KALSHI | REVERSED_POLY | DUST_ABSORBED_KALSHI | DUST_ABSORBED_POLY | ORPHANED | HALT
     decimal RecoveredQty,   // contracts/shares successfully hedged or reversed
     decimal LossUsd         // realized loss from the cleanup action
 );
+
+// A single naked leg left by a PARTIAL early exit, parked for the 60s monitor loop to keep flattening.
+// Attempts counts failed flatten passes; past the cap we stop retrying and let the leg ride to settlement.
+public record PendingReversal(
+    CrossPair Pair, string Leg /* "kalshi" | "poly" */, string KalshiSide, string KBookKey,
+    string PolyToken, bool NegRisk, decimal Qty, decimal EntryPrice, string ExecId, int Attempts = 0);
 
 /// <summary>
 /// Fires simultaneous IOC/FAK orders on both legs when CrossPlatformArbTelemetryStrategy
@@ -120,6 +126,12 @@ public class CrossArbExecutor
     private const    int MaintenanceErrorThreshold = 5;
     private volatile bool   _halted               = false; // manual reset required (failed reversal / tripwire)
     private readonly ConcurrentDictionary<string, byte> _orphanedPairs = new();  // venue has a stranded leg — block re-entry until cleared
+    // Naked legs left by a PARTIAL early exit: orphaned (no halt) and retried by the 60s monitor loop
+    // until they flatten — the "longer retry period" for the early-exit case (vs immediate-only recovery).
+    private readonly ConcurrentDictionary<string, PendingReversal> _pendingReversals = new();
+    // After this many failed flatten passes (~5 monitor loops ≈ 5 min), stop retrying and let the leg
+    // ride to settlement — a decisive winner can leave no makers to sell to, so retrying is futile.
+    private const int PendingReversalMaxRetries = 5;
     private volatile bool   _connectionHalted     = false; // auto-clears when both venues reconnect
     private volatile bool   _injectMismatchOnNextTrade = false; // test harness: inject mismatch on next fill
     private const    int    ReverseBufferCents           = 2;  // extra slippage tolerance for reversal orders
@@ -931,18 +943,23 @@ public class CrossArbExecutor
                 decimal actualLoss   = actualNetPerSet - 1.0m;
                 if (_perTradeTripwire && actualLoss > _tradeMaxLossMult * expectedEdge)
                 {
+                    // The position is already HEDGED (both legs filled) — no directional risk — so we
+                    // DON'T halt; just flag the anomaly and keep trading. The loss still flows into the
+                    // per-day tripwire below, which is the only loss-based stop.
+                    // TODO(discord): push an alert here. A fill landing >Nx worse than its edge signals a
+                    // pricing/feed bug worth a human eyeball even though trading continues.
                     await JournalAsync(JsonSerializer.Serialize(new {
-                        t = DateTime.UtcNow, @event = "HALT_TRIPWIRE",
+                        t = DateTime.UtcNow, @event = "TRADE_LOSS_ANOMALY",
                         reason = "per_trade_loss", pairId, dryRun = _dryRun,
                         actualNet = actualNetPerSet, detectedNet = netNow,
-                        maxAllowed = 1.0m + _tradeMaxLossMult * expectedEdge
+                        actualLoss = Math.Round(actualLoss, 4),
+                        maxExpected = 1.0m + _tradeMaxLossMult * expectedEdge, halted = false
                     }));
-                    Console.ForegroundColor = ConsoleColor.Red;
+                    Console.ForegroundColor = ConsoleColor.Yellow;
                     Emit(execLog,
-                        $"[HALT] {pair.Label} | Per-trade tripwire: loss={actualLoss:0.0000} > " +
-                        $"{_tradeMaxLossMult}× edge={expectedEdge:0.0000}. Manual reset required.");
+                        $"[ANOMALY] {pair.Label} | Per-trade loss {actualLoss:0.0000} > {_tradeMaxLossMult}× " +
+                        $"edge {expectedEdge:0.0000} — hedged, continuing (alert).");
                     Console.ResetColor();
-                    _halted = true;
                 }
 
                 // ── Per-day max loss tripwire ─────────────────────────────────
@@ -1671,6 +1688,8 @@ public class CrossArbExecutor
         CrossPair pair, string leg, decimal qty, decimal valueUsd, string execId, List<string>? execLog)
     {
         _orphanedPairs[pair.PairId] = 0;
+        // TODO(discord): push an alert here. An orphaned leg means a position couldn't be flattened
+        // (venue paused/closed) and is sitting un-hedged until manual clear — a human should know.
         await JournalAsync(JsonSerializer.Serialize(new {
             t = DateTime.UtcNow, @event = "CLEANUP_ORPHANED", execId,
             pair = pair.PairId, leg,
@@ -2819,7 +2838,84 @@ public class CrossArbExecutor
                     DebugLog.Trades($"RunEarlyExitMonitorAsync {pairId}: {ex.GetType().Name}: {ex.Message}");
                 }
             }
+
+            // The "longer retry period": re-attempt any naked leg parked by a partial early exit until
+            // it flattens (e.g. once the venue reopens). Never halts — just keeps trying every 60s.
+            foreach (var (pairId, pr) in _pendingReversals.ToArray())
+            {
+                if (_cts.Token.IsCancellationRequested) break;
+                try { await RetryPendingReversalAsync(pr); }
+                catch (Exception ex)
+                {
+                    DebugLog.Trades($"RetryPendingReversal {pairId}: {ex.GetType().Name}: {ex.Message}");
+                }
+            }
         }
+    }
+
+    // Retry a naked leg parked by a partial early exit. Flattens via the relentless reverse helpers;
+    // clears on success, else stays queued for the next 60s tick. After PendingReversalMaxRetries failed
+    // passes it gives up and lets the leg ride to settlement (a decisive winner leaves no makers to sell
+    // to — retrying is futile). Never halts.
+    private async Task RetryPendingReversalAsync(PendingReversal pr)
+    {
+        string  pairId       = pr.Pair.PairId;
+        decimal soldOrFilled = 0m;
+        decimal remaining    = pr.Qty;
+
+        if (pr.Leg == "kalshi")
+        {
+            int want = (int)Math.Ceiling(pr.Qty);
+            if (want <= 0) { _pendingReversals.TryRemove(pairId, out _); _orphanedPairs.TryRemove(pairId, out _); return; }
+            var (filled, _) = await ReverseKalshiLegAsync(
+                pr.Pair, pr.KalshiSide, want, pr.EntryPrice, pr.KBookKey, pr.ExecId, null);
+            soldOrFilled = filled;
+            remaining    = pr.Qty - filled;
+        }
+        else // poly
+        {
+            var (sold, price) = await PlacePolySellAsync(pr.PolyToken, pr.Qty, pr.NegRisk);
+            if (sold > 0m)
+            {
+                decimal loss = Math.Max(0m, sold * (pr.EntryPrice - price));
+                if (loss > 0m) lock (_cleanupLock) { _totalCleanupCostUsd += loss; }
+            }
+            soldOrFilled = sold;
+            remaining    = pr.Qty - sold;
+        }
+
+        if (remaining < 1.0m)   // fully flattened (sub-1 leftover is untradeable dust) → resolved
+        {
+            _pendingReversals.TryRemove(pairId, out _);
+            _orphanedPairs.TryRemove(pairId, out _);   // leg flat again → pair is re-tradeable
+            await JournalAsync(JsonSerializer.Serialize(new {
+                t = DateTime.UtcNow, @event = "PENDING_REVERSAL_RESOLVED",
+                pair = pairId, leg = pr.Leg, flattened = Math.Round(soldOrFilled, 6)
+            }));
+            Console.ForegroundColor = ConsoleColor.Green;
+            Console.WriteLine($"[PENDING REVERSAL OK] {pr.Pair.Label} | flattened naked {pr.Leg} — cleared.");
+            Console.ResetColor();
+            return;
+        }
+
+        // Didn't flatten this pass — bump the counter; give up to settlement past the cap.
+        int attempts = pr.Attempts + 1;
+        if (attempts >= PendingReversalMaxRetries)
+        {
+            // No makers (decisive winner / market closed for settlement). Stop retrying and let the leg
+            // ride to settlement; keep the pair orphaned so we don't re-enter while it's still held.
+            _pendingReversals.TryRemove(pairId, out _);
+            // TODO(discord): alert — a naked leg couldn't be flattened in N tries; left to settle.
+            await JournalAsync(JsonSerializer.Serialize(new {
+                t = DateTime.UtcNow, @event = "PENDING_REVERSAL_ABANDONED",
+                pair = pairId, leg = pr.Leg, attempts, unresolvedQty = Math.Round(remaining, 6)
+            }));
+            Console.ForegroundColor = ConsoleColor.Magenta;
+            Console.WriteLine($"[PENDING REVERSAL ABANDONED] {pr.Pair.Label} | naked {pr.Leg} {remaining:0.##} unsellable after {attempts} tries — letting it ride to settlement.");
+            Console.ResetColor();
+            return;
+        }
+        _pendingReversals[pairId] = pr with { Qty = remaining, Attempts = attempts };
     }
 
     private async Task CheckEarlyExitAsync(string pairId, ArbPosition pos)
@@ -3043,17 +3139,37 @@ public class CrossArbExecutor
             }
             else
             {
-                // One leg sold, the other did not — this creates an unhedged position. Halt to prevent compounding.
-                Console.ForegroundColor = ConsoleColor.Red;
-                Console.WriteLine(
-                    $"[EARLY EXIT PARTIAL] {pair.Label} | kOk={kOk} pOk={pOk} " +
-                    $"— one leg sold, other did not. Halting for manual review.");
+                // One leg sold, the other did not → a naked, unhedged leg. Ops policy: do NOT halt.
+                // Orphan the pair (block re-entry), drop the now-invalid arb position + release its
+                // reservation, and queue the naked leg for the 60s monitor to keep flattening.
+                string nakedLeg; decimal nakedQty; decimal nakedEntry;
+                if (!pOk) { nakedLeg = "poly";   nakedQty = currentPos.PolyShares      - pSold; nakedEntry = currentPos.PolyEntryPrice;  }
+                else      { nakedLeg = "kalshi"; nakedQty = currentPos.KalshiContracts - kSold; nakedEntry = currentPos.KalshiEntryPrice; }
+
+                _openPositions.TryRemove(pairId, out _);
+                decimal partialEntryCost = currentPos.KalshiContracts * currentPos.KalshiEntryPrice
+                                         + currentPos.PolyShares      * currentPos.PolyEntryPrice;
+                lock (_exposureLock) { _totalExposure = Math.Max(0m, _totalExposure - partialEntryCost); }
+                _orphanedPairs[pairId] = 0;
+
+                string kBookKey = pos.ArbType == "K_YES_P_NO" ? $"K:{pair.KalshiTicker}" : $"K:{pair.KalshiTicker}_NO";
+                var pr = new PendingReversal(pair, nakedLeg, kalshiSide, kBookKey, polyToken,
+                                             pair.IsNegRisk, nakedQty, nakedEntry, currentPos.ExecId);
+                _pendingReversals[pairId] = pr;
+
+                // TODO(discord): push an alert here — an early exit left a naked leg; the bot keeps
+                // running and the 60s monitor retries the flatten, but a human should know.
+                Console.ForegroundColor = ConsoleColor.Magenta;
+                Console.WriteLine($"[EARLY EXIT PARTIAL] {pair.Label} | kOk={kOk} pOk={pOk} — naked {nakedLeg} {nakedQty:0.##} orphaned + queued for retry (no halt).");
                 Console.ResetColor();
-                _halted = true;
                 await JournalAsync(JsonSerializer.Serialize(new {
                     t = DateTime.UtcNow, @event = "EARLY_EXIT_PARTIAL", execId = currentPos.ExecId,
-                    pairId, kOk, pOk, kSold, kSellCents, pSold, pAvgPrice, halted = true
+                    pairId, kOk, pOk, kSold, kSellCents, pSold, pAvgPrice,
+                    nakedLeg, nakedQty = Math.Round(nakedQty, 6), halted = false, queuedForRetry = true
                 }));
+
+                // Immediate first attempt — flatten now if the venue is open; else the monitor retries every 60s.
+                await RetryPendingReversalAsync(pr);
             }
         }
         finally
