@@ -1,27 +1,94 @@
 
 ============================================================
-ATTEMPT 2026-06-06 18:04:25 UTC  pair=MANUAL_KXLEADERMLBHR-26-KSCH__29880061  arbType=K_NO_P_YES
+ATTEMPT 2026-06-06 21:16:34 UTC  pair=MANUAL_KXLEADERMLBERA-26-CSAN__75668784  arbType=K_YES_P_NO
 ============================================================
-[EXEC] Will Kyle Schwarber lead Pro Baseball in home runs for the 2026 regular season? | K_NO_P_YES | K-no=0.4500 P=0.4900 net=$0.9648 | 5 contracts @ $4.70
-[ORDER K] KXLEADERMLBHR-26-KSCH NO 46¢ × 5  clientId=CAXARB_AX_20260606180425_KXLEADERMLBHR-26-KSCH
-[ORDER P] BUY token=298800619525... price=0.4951 shares=5
-[FILL K]  KXLEADERMLBHR-26-KSCH placed orderId=92367a9a-fa93-4d1e-9c0e-f1d0e24f43c5 status=executed fillImm=5.00
-[FILL P]  298800619525... placed orderID=0x447cf5ae7cb5a362185f71a9c4275783c072ae071de7ec488af25cc371a27029 status=matched
-[FILL P]  298800619525... filled=5.102039 avgPrice=0.4900
-[EXEC OK] Will Kyle Schwarber lead Pro Baseball in home runs for the 2026 regular season? | K=5.00@46¢ | P=5.00sh@$0.4900 | cost=$4.70 actualNet=0.9648 projProfit=$0.18
-[EXEC UNHEDGED] Will Kyle Schwarber lead Pro Baseball in home runs for the 2026 regular season? | kFilled=5.00 pFilled=5.10 balanced=5.00 kExcess=0.00 pExcess=0.10 — starting recovery
-[CLEANUP DUST] Will Kyle Schwarber lead Pro Baseball in home runs for the 2026 regular season? | Absorbing 0.10 Poly dust ($0.05) — no halt
+[EXEC] Will Cristopher Sánchez lead Pro Baseball in earned run average (ERA) for the 2026 regular season? | K_YES_P_NO | K-yes=0.1500 P=0.8100 net=$0.9735 | 5 contracts @ $4.80
+[ORDER K] KXLEADERMLBERA-26-CSAN YES 16¢ × 5  clientId=CAXARB_AX_20260606211634_KXLEADERMLBERA-26-CSAN
+[ORDER P] BUY token=834632701874... price=0.8107 shares=5
+[FILL K]  KXLEADERMLBERA-26-CSAN placed orderId=033a680c-b82a-4c1f-a188-e6cedccbde92 status=executed fillImm=5.00
+[FILL P]  834632701874... placed orderID=0x0bae8028087cf45742d2c612777150b365827b1a2364c3cd18188e4a127cef02 status=matched
+[FILL P]  834632701874... filled=5.018539 avgPrice=0.8090
+[EXEC OK] Will Cristopher Sánchez lead Pro Baseball in earned run average (ERA) for the 2026 regular season? | K=5.00@16¢ | P=5.00sh@$0.8090 | cost=$4.79 actualNet=0.9726 projProfit=$0.14
+[EXEC UNHEDGED] Will Cristopher Sánchez lead Pro Baseball in earned run average (ERA) for the 2026 regular season? | kFilled=5.00 pFilled=5.02 balanced=5.00 kExcess=0.00 pExcess=0.02 — starting recovery
+[CLEANUP DUST] Will Cristopher Sánchez lead Pro Baseball in earned run average (ERA) for the 2026 regular season? | Absorbing 0.02 Poly dust ($0.01) — no halt
 
 ============================================================
-ATTEMPT 2026-06-06 18:32:38 UTC  pair=MANUAL_KXLEADERMLBERA-26-CSAN__75668784  arbType=K_YES_P_NO
+ATTEMPT 2026-06-06 21:37:33 UTC  pair=MANUAL_KXSPGOV-26OCT04-KKAT__55080391  arbType=K_YES_P_NO
 ============================================================
-[EXEC] Will Cristopher Sánchez lead Pro Baseball in earned run average (ERA) for the 2026 regular season? | K_YES_P_NO | K-yes=0.1600 P=0.8090 net=$0.9830 | 5 contracts @ $4.85
-[ORDER K] KXLEADERMLBERA-26-CSAN YES 17¢ × 5  clientId=CAXARB_AX_20260606183238_KXLEADERMLBERA-26-CSAN
-[ORDER P] BUY token=834632701874... price=0.8090 shares=5
-[FILL K]  KXLEADERMLBERA-26-CSAN placed orderId=6924ea08-30c8-4ed5-bf44-1519981321f8 status=executed fillImm=5.00
-[POLY LEG ERROR] 834632701874...: [Polymarket API Error] BadRequest: {"error":"no orders found to match with FAK order. FAK orders are partially filled or killed if no match is found.","orderID":"0xf7ea79aeeac04c1887dacf3bc5c47c4e4ddc8031cce5f3dd721ed8c9f60d24dc"}
-[STALE PRICE] Will Cristopher Sánchez lead Pro Baseball in earned run average (ERA) for the 2026 regular season? | detectedNet=0.9830 kFilled=5.00 pFilled=0.00 — one leg missed limit, price may have moved
-[EXEC UNHEDGED] Will Cristopher Sánchez lead Pro Baseball in earned run average (ERA) for the 2026 regular season? | kFilled=5.00 pFilled=0.00 balanced=0 kExcess=5.00 pExcess=0.00 — starting recovery
-[CLEANUP SKIP HEDGE] Will Cristopher Sánchez lead Pro Baseball in earned run average (ERA) for the 2026 regular season? | kExcess=5.00 value=$0.80 < $1.00 — reversing directly
-[RECOVER ERROR] Will Cristopher Sánchez lead Pro Baseball in earned run average (ERA) for the 2026 regular season? | Kalshi reverse exception: HTTP  — Kalshi POST /portfolio/orders 429: {"error":{"code":"too_many_requests","message":"too many requests"}}
-[HALT] Will Cristopher Sánchez lead Pro Baseball in earned run average (ERA) for the 2026 regular season? | Reverse order failed — unhedged position open. Manual reset required.
+[EXEC] Will Kim Kataguiri win the 2026 São Paulo gubernatorial election? | K_YES_P_NO | K-yes=0.0900 P=0.8790 net=$0.9790 | 5 contracts @ $4.85
+[ORDER K] KXSPGOV-26OCT04-KKAT YES 10¢ × 5  clientId=CAXARB_AX_20260606213733_KXSPGOV-26OCT04-KKAT
+[ORDER P] BUY token=157023957814... price=0.8790 shares=5
+[FILL K]  KXSPGOV-26OCT04-KKAT placed orderId=6a37e158-26e8-4957-9f91-8d6ff11127e3 status=executed fillImm=5.00
+[FILL P]  157023957814... placed orderID=0xdc02ddc53ebc5c1e754a37174323353545d4e291aea2f873e4c2d679436e1b41 status=matched
+[FILL P]  157023957814... filled=5.005685 avgPrice=0.8790
+[EXEC OK] Will Kim Kataguiri win the 2026 São Paulo gubernatorial election? | K=5.00@10¢ | P=5.00sh@$0.8790 | cost=$4.84 actualNet=0.9790 projProfit=$0.11
+[EXEC UNHEDGED] Will Kim Kataguiri win the 2026 São Paulo gubernatorial election? | kFilled=5.00 pFilled=5.01 balanced=5.00 kExcess=0.00 pExcess=0.01 — starting recovery
+[CLEANUP DUST] Will Kim Kataguiri win the 2026 São Paulo gubernatorial election? | Absorbing 0.01 Poly dust ($0.00) — no halt
+
+============================================================
+ATTEMPT 2026-06-07 02:37:12 UTC  pair=MANUAL_KXNHL-26-VGK__68803485  arbType=K_YES_P_NO
+============================================================
+[EXEC] Will Vegas Golden Knights win the 2025-26 Stanley Cup Finals? | K_YES_P_NO | K-yes=0.6000 P=0.3500 net=$0.9736 | 5 contracts @ $4.75
+[ORDER K] KXNHL-26-VGK YES 61¢ × 5  clientId=CAXARB_AX_20260607023712_KXNHL-26-VGK
+[ORDER P] BUY token=585348312244... price=0.3507 shares=5
+[FILL K]  KXNHL-26-VGK placed orderId=fec1c091-b9e8-4dd6-a4ff-4237e4eb558f status=executed fillImm=5.00
+[FILL P]  585348312244... placed orderID=0x85c2e0e28dcf66d6cbf3346135fb6d2389dccc82197caf70d300abb430cfb459 status=matched
+[FILL P]  585348312244... filled=5.008351 avgPrice=0.3514
+[EXEC OK] Will Vegas Golden Knights win the 2025-26 Stanley Cup Finals? | K=5.00@61¢ | P=5.00sh@$0.3514 | cost=$4.76 actualNet=0.9751 projProfit=$0.12
+[EXEC UNHEDGED] Will Vegas Golden Knights win the 2025-26 Stanley Cup Finals? | kFilled=5.00 pFilled=5.01 balanced=5.00 kExcess=0.00 pExcess=0.01 — starting recovery
+[CLEANUP DUST] Will Vegas Golden Knights win the 2025-26 Stanley Cup Finals? | Absorbing 0.01 Poly dust ($0.00) — no halt
+
+============================================================
+ATTEMPT 2026-06-07 02:38:37 UTC  pair=MANUAL_KXNHL-26-CAR__79397003  arbType=K_NO_P_YES
+============================================================
+[EXEC] Will Carolina Hurricanes win the 2025-26 Stanley Cup Finals? | K_NO_P_YES | K-no=0.5800 P=0.3800 net=$0.9841 | 5 contracts @ $4.80
+[ORDER K] KXNHL-26-CAR NO 59¢ × 5  clientId=CAXARB_AX_20260607023837_KXNHL-26-CAR
+[ORDER P] BUY token=793970034344... price=0.3800 shares=5
+[FILL K]  KXNHL-26-CAR placed orderId=a5f0f6af-4adc-4b7b-ae61-99e6776e505d status=executed fillImm=5.00
+[FILL P]  793970034344... placed orderID=0xcb3a0fcf9c85160f73de7685f3c61d32b17e2c14ba7eb593009b4b2bc4e0e9fc status=matched
+[FILL P]  793970034344... filled=5.05263 avgPrice=0.3760
+[EXEC OK] Will Carolina Hurricanes win the 2025-26 Stanley Cup Finals? | K=5.00@59¢ | P=5.00sh@$0.3760 | cost=$4.78 actualNet=0.9801 projProfit=$0.10
+[EXEC UNHEDGED] Will Carolina Hurricanes win the 2025-26 Stanley Cup Finals? | kFilled=5.00 pFilled=5.05 balanced=5.00 kExcess=0.00 pExcess=0.05 — starting recovery
+[CLEANUP DUST] Will Carolina Hurricanes win the 2025-26 Stanley Cup Finals? | Absorbing 0.05 Poly dust ($0.02) — no halt
+
+============================================================
+ATTEMPT 2026-06-07 06:20:52 UTC  pair=MANUAL_KXLEADERWNBAREB-26-AREESE5__10913723  arbType=K_NO_P_YES
+============================================================
+[EXEC] Will Angel Reese lead Women's Pro Basketball in rebounds per game for the 2026 regular season? | K_NO_P_YES | K-no=0.3500 P=0.5900 net=$0.9632 | 5 contracts @ $4.70
+[ORDER K] KXLEADERWNBAREB-26-AREESE5 NO 36¢ × 5  clientId=CAXARB_AX_20260607062052_KXLEADERWNBAREB-26-AREESE5
+[ORDER P] BUY token=109137235645... price=0.5959 shares=5
+[FILL K]  KXLEADERWNBAREB-26-AREESE5 placed orderId=c622f1a8-6709-4aca-8882-a6bfbd46a98e status=executed fillImm=5.00
+[FILL P]  109137235645... placed orderID=0x93585845e715868afcca8dea3f3483ffdddb927c640e390309c8c9afc2fba55a status=matched
+[FILL P]  109137235645... filled=5.084743 avgPrice=0.5900
+[EXEC OK] Will Angel Reese lead Women's Pro Basketball in rebounds per game for the 2026 regular season? | K=5.00@36¢ | P=5.00sh@$0.5900 | cost=$4.70 actualNet=0.9632 projProfit=$0.18
+[EXEC UNHEDGED] Will Angel Reese lead Women's Pro Basketball in rebounds per game for the 2026 regular season? | kFilled=5.00 pFilled=5.08 balanced=5.00 kExcess=0.00 pExcess=0.08 — starting recovery
+[CLEANUP DUST] Will Angel Reese lead Women's Pro Basketball in rebounds per game for the 2026 regular season? | Absorbing 0.08 Poly dust ($0.05) — no halt
+
+============================================================
+ATTEMPT 2026-06-07 07:00:01 UTC  pair=MANUAL_KXLEADERWNBAREB-26-JSHEPARD32__23318548  arbType=K_NO_P_YES
+============================================================
+[EXEC] Will Jessica Shepard lead Women's Pro Basketball in rebounds per game for the 2026 regular season? | K_NO_P_YES | K-no=0.7300 P=0.2000 net=$0.9486 | 5 contracts @ $4.65
+[ORDER K] KXLEADERWNBAREB-26-JSHEPARD32 NO 74¢ × 5  clientId=CAXARB_AX_20260607070001_KXLEADERWNBAREB-26-JSHEPARD32
+[ORDER P] BUY token=233185485255... price=0.2132 shares=5
+[FILL K]  KXLEADERWNBAREB-26-JSHEPARD32 placed orderId=478d71ad-3981-4bef-bae2-f6b4355ffe4d status=executed fillImm=5.00
+[FILL P]  233185485255... placed orderID=0x5f861c352d5602cd2781580823fd8a072ea1a7e7ece3768c6585e7d6bb705963 status=matched
+[FILL P]  233185485255... filled=5.3 avgPrice=0.2000
+[EXEC OK] Will Jessica Shepard lead Women's Pro Basketball in rebounds per game for the 2026 regular season? | K=5.00@74¢ | P=5.00sh@$0.2000 | cost=$4.65 actualNet=0.9486 projProfit=$0.26
+[EXEC UNHEDGED] Will Jessica Shepard lead Women's Pro Basketball in rebounds per game for the 2026 regular season? | kFilled=5.00 pFilled=5.30 balanced=5.00 kExcess=0.00 pExcess=0.30 — starting recovery
+[CLEANUP DUST] Will Jessica Shepard lead Women's Pro Basketball in rebounds per game for the 2026 regular season? | Absorbing 0.30 Poly dust ($0.06) — no halt
+
+============================================================
+ATTEMPT 2026-06-07 07:00:21 UTC  pair=MANUAL_KXLEAVEOPEC-27__51521497  arbType=K_NO_P_YES
+============================================================
+[EXEC] Will another country leave OPEC in 2026? | K_NO_P_YES | K-no=0.7100 P=0.2500 net=$0.9800 | 5 contracts @ $4.80
+[ORDER K] KXLEAVEOPEC-27 NO 72¢ × 5  clientId=CAXARB_AX_20260607070021_KXLEAVEOPEC-27
+[ORDER P] BUY token=515214977793... price=0.2500 shares=5
+[FILL P]  515214977793... placed orderID=0x2607c9377f39d16335ead921c5711d42f4b3f9a75a6e8b507efdb78e257cf8bd status=matched
+[FILL P]  515214977793... filled=5 avgPrice=0.2500
+[KALSHI LEG ERROR] KXLEAVEOPEC-27: HTTP 409 — Kalshi POST /portfolio/orders 409: {"error":{"code":"trading_is_paused","message":"trading is paused","service":"exchange"}}
+[STALE PRICE] Will another country leave OPEC in 2026? | detectedNet=0.9800 kFilled=0 pFilled=5.00 — one leg missed limit, price may have moved
+[EXEC UNHEDGED] Will another country leave OPEC in 2026? | kFilled=0 pFilled=5.00 balanced=0 kExcess=0 pExcess=5.00 — starting recovery
+[ORDER P] SELL token=515214977793... shares=5
+[SELL HAMMER] 515214977793... tokens not settled yet. Retrying in 500ms... (1/10)
+[FILL P]  515214977793... sold=5 avgPrice=0.2200
+[RECOVER] Will another country leave OPEC in 2026? | reversed 5.00 excess Poly @ 0.2200 (OVERFILL) loss=$0.15

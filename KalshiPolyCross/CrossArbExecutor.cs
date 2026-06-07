@@ -304,6 +304,12 @@ public class CrossArbExecutor
         var journalDir = Path.GetDirectoryName(Path.GetFullPath(_journalPath));
         if (journalDir != null) Directory.CreateDirectory(journalDir);
 
+        // Surface Kalshi 429 back-offs to the journal. The real client is shared across order POSTs,
+        // book-refresh GETs, balance/position polls and REST verification, so this one hook captures
+        // every rate-limit retry app-wide. (Dry-run uses a sim client — nothing to wire.)
+        if (_kalshi is KalshiOrderClient kalshiClient)
+            kalshiClient.RateLimitRetryLogger = OnKalshiRateLimitRetry;
+
         // Load pair blocklist written by prod_cross_arb.py (pair-mismatch settlements)
         string blPath = Path.Combine(AppContext.BaseDirectory, "cross_pair_blocklist.json");
         if (!File.Exists(blPath))
@@ -2070,6 +2076,23 @@ public class CrossArbExecutor
         await _journalLock.WaitAsync();
         try   { await File.AppendAllTextAsync(_journalPath, json + "\n"); }
         finally { _journalLock.Release(); }
+    }
+
+    // Hook target on the shared KalshiOrderClient: fire-and-forget journal of each 429 back-off.
+    // Runs from inside an HTTP call, so it must not block the retry loop; JournalAsync is lock-serialized.
+    private void OnKalshiRateLimitRetry(RateLimitRetryInfo r) => _ = JournalRateLimitRetryAsync(r);
+
+    private async Task JournalRateLimitRetryAsync(RateLimitRetryInfo r)
+    {
+        try
+        {
+            await JournalAsync(JsonSerializer.Serialize(new {
+                t = DateTime.UtcNow, @event = "KALSHI_RATE_LIMIT_RETRY",
+                method = r.Method, path = r.Path, status = r.StatusCode,
+                attempt = r.Attempt, maxAttempts = r.MaxAttempts, delaySeconds = r.DelaySeconds
+            }));
+        }
+        catch { /* journaling must never disrupt trading */ }
     }
 
     // ── Position reconciliation ───────────────────────────────────────────────

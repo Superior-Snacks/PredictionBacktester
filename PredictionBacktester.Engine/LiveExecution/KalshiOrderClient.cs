@@ -6,6 +6,10 @@ using System.Text.Json;
 
 namespace PredictionBacktester.Engine.LiveExecution;
 
+/// <summary>Details of a single 429 back-off, surfaced to callers for logging/journaling.</summary>
+public readonly record struct RateLimitRetryInfo(
+    string Method, string Path, int StatusCode, int Attempt, int MaxAttempts, double DelaySeconds);
+
 /// <summary>
 /// REST client for the Kalshi API. Handles RSA-PSS request signing, market queries,
 /// and live IOC order placement / fill polling.
@@ -20,11 +24,21 @@ public class KalshiOrderClient : IKalshiOrderExecutor, IDisposable
     // Signing requires the complete path from root: /trade-api/v2/...
     private const string PathPrefix = "/trade-api/v2";
 
+    // Max 429 retries per request (see DelayForRateLimitAsync). A rate-limited order — above all
+    // the recovery reverse that flattens an unhedged leg — must back off and retry, never abandon.
+    private const int RateLimitMaxRetries = 5;
+
     /// <summary>
     /// Optional hook invoked with (relPath, responseBody) for every REST response.
     /// Set this in callers that need raw-response logging (e.g. KalshiPolyCross --debug).
     /// </summary>
     public Action<string, string>? RawResponseLogger { get; set; }
+
+    /// <summary>
+    /// Optional hook invoked just before each 429 back-off sleep, so callers can journal how
+    /// often (and on which method/path) Kalshi rate limits are hit. Exceptions are swallowed.
+    /// </summary>
+    public Action<RateLimitRetryInfo>? RateLimitRetryLogger { get; set; }
 
     public KalshiOrderClient(KalshiApiConfig config)
     {
@@ -61,41 +75,100 @@ public class KalshiOrderClient : IKalshiOrderExecutor, IDisposable
     //  HTTP helpers
     // ──────────────────────────────────────────────────────────────────────────
 
+    // Backoff before retrying a 429: honor Retry-After when Kalshi sends it (capped at 10s), else
+    // exponential backoff (0.25s→4s) with jitter so concurrent legs don't resync onto one retry tick.
+    private static TimeSpan ComputeRateLimitDelay(HttpResponseMessage resp, int attempt)
+    {
+        TimeSpan delay;
+        var ra = resp.Headers.RetryAfter;
+        if (ra?.Delta is TimeSpan d && d > TimeSpan.Zero)
+            delay = d;
+        else if (ra?.Date is DateTimeOffset when && when > DateTimeOffset.UtcNow)
+            delay = when - DateTimeOffset.UtcNow;
+        else
+            delay = TimeSpan.FromMilliseconds(Math.Min(250 * Math.Pow(2, attempt - 1), 4000));
+        if (delay > TimeSpan.FromSeconds(10)) delay = TimeSpan.FromSeconds(10);
+        delay += TimeSpan.FromMilliseconds(Random.Shared.Next(0, 150));
+        return delay;
+    }
+
+    // Notify the retry hook (query stripped from the path), then sleep before the next attempt.
+    private async Task HandleRateLimitAsync(string method, string relPath, HttpResponseMessage resp, int attempt)
+    {
+        TimeSpan delay = ComputeRateLimitDelay(resp, attempt);
+        try
+        {
+            RateLimitRetryLogger?.Invoke(new RateLimitRetryInfo(
+                method, relPath.Split('?')[0], (int)resp.StatusCode,
+                attempt, RateLimitMaxRetries, Math.Round(delay.TotalSeconds, 3)));
+        }
+        catch { /* logging must never disrupt the retry */ }
+        await Task.Delay(delay);
+    }
+
     private async Task<JsonDocument> GetAsync(string relPath)
     {
-        var (key, ts, sig) = CreateAuthHeaders("GET", relPath);
+        for (int attempt = 1; ; attempt++)
+        {
+            // Re-sign each attempt: the auth signature embeds a timestamp Kalshi rejects once stale.
+            var (key, ts, sig) = CreateAuthHeaders("GET", relPath);
+            using var req = new HttpRequestMessage(HttpMethod.Get, _config.BaseRestUrl.TrimEnd('/') + relPath);
+            req.Headers.Add("KALSHI-ACCESS-KEY", key);
+            req.Headers.Add("KALSHI-ACCESS-TIMESTAMP", ts);
+            req.Headers.Add("KALSHI-ACCESS-SIGNATURE", sig);
+            req.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
 
-        using var req = new HttpRequestMessage(HttpMethod.Get, _config.BaseRestUrl.TrimEnd('/') + relPath);
-        req.Headers.Add("KALSHI-ACCESS-KEY", key);
-        req.Headers.Add("KALSHI-ACCESS-TIMESTAMP", ts);
-        req.Headers.Add("KALSHI-ACCESS-SIGNATURE", sig);
-        req.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+            using var resp = await _http.SendAsync(req);
+            string body = await resp.Content.ReadAsStringAsync();
+            RawResponseLogger?.Invoke(relPath, body);
 
-        using var resp = await _http.SendAsync(req);
-        string body = await resp.Content.ReadAsStringAsync();
-        RawResponseLogger?.Invoke(relPath, body);
-        resp.EnsureSuccessStatusCode();
-        return JsonDocument.Parse(body);
+            if (resp.IsSuccessStatusCode)
+                return JsonDocument.Parse(body);
+
+            if ((int)resp.StatusCode == 429 && attempt <= RateLimitMaxRetries)
+            {
+                await HandleRateLimitAsync("GET", relPath, resp, attempt);
+                continue;
+            }
+
+            throw new HttpRequestException(
+                $"Kalshi GET {relPath} {(int)resp.StatusCode}: {body[..Math.Min(400, body.Length)]}",
+                inner: null, statusCode: resp.StatusCode);
+        }
     }
 
     private async Task<JsonDocument> PostAsync(string relPath, object body)
     {
         string json = JsonSerializer.Serialize(body);
-        var (key, ts, sig) = CreateAuthHeaders("POST", relPath);
+        for (int attempt = 1; ; attempt++)
+        {
+            // Re-sign + rebuild the request each attempt (signature timestamp; a request isn't reusable).
+            // The body — including any client_order_id — is identical across retries, so a 429'd order
+            // (rejected at the gateway, never placed) is safely re-sent with no risk of a double fill.
+            var (key, ts, sig) = CreateAuthHeaders("POST", relPath);
+            using var req = new HttpRequestMessage(HttpMethod.Post, _config.BaseRestUrl.TrimEnd('/') + relPath);
+            req.Headers.Add("KALSHI-ACCESS-KEY",       key);
+            req.Headers.Add("KALSHI-ACCESS-TIMESTAMP", ts);
+            req.Headers.Add("KALSHI-ACCESS-SIGNATURE", sig);
+            req.Content = new StringContent(json, Encoding.UTF8, "application/json");
 
-        using var req = new HttpRequestMessage(HttpMethod.Post, _config.BaseRestUrl.TrimEnd('/') + relPath);
-        req.Headers.Add("KALSHI-ACCESS-KEY",       key);
-        req.Headers.Add("KALSHI-ACCESS-TIMESTAMP", ts);
-        req.Headers.Add("KALSHI-ACCESS-SIGNATURE", sig);
-        req.Content = new StringContent(json, Encoding.UTF8, "application/json");
+            using var resp = await _http.SendAsync(req);
+            string respBody = await resp.Content.ReadAsStringAsync();
+            RawResponseLogger?.Invoke(relPath, respBody);
 
-        using var resp = await _http.SendAsync(req);
-        string respBody = await resp.Content.ReadAsStringAsync();
-        RawResponseLogger?.Invoke(relPath, respBody);
-        if (!resp.IsSuccessStatusCode)
+            if (resp.IsSuccessStatusCode)
+                return JsonDocument.Parse(respBody);
+
+            if ((int)resp.StatusCode == 429 && attempt <= RateLimitMaxRetries)
+            {
+                await HandleRateLimitAsync("POST", relPath, resp, attempt);
+                continue;
+            }
+
             throw new HttpRequestException(
-                $"Kalshi POST {relPath} {(int)resp.StatusCode}: {respBody[..Math.Min(400, respBody.Length)]}");
-        return JsonDocument.Parse(respBody);
+                $"Kalshi POST {relPath} {(int)resp.StatusCode}: {respBody[..Math.Min(400, respBody.Length)]}",
+                inner: null, statusCode: resp.StatusCode);
+        }
     }
 
     // ──────────────────────────────────────────────────────────────────────────
