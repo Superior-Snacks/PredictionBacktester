@@ -124,9 +124,18 @@ public class CrossArbExecutor
     private volatile bool   _injectMismatchOnNextTrade = false; // test harness: inject mismatch on next fill
     private const    int    ReverseBufferCents           = 2;  // extra slippage tolerance for reversal orders
     private const    int    RecoveryHedgeSlippageCents   = 2;  // extra slippage tolerance for recovery hedge retries
-    private const  decimal  TradeMaxLossMult       = 3.0m; // halt if actual loss > 3× expected edge
     private const  decimal  CleanupHedgeSkipUsd   = 1.00m; // skip hedge attempt if unhedged value < $1.00
     private const  decimal  CleanupDustUsd         = 0.25m; // absorb silently (no halt) if reversal fails and value < $0.25
+
+    // Recovery / halt policy (configurable from the constructor; defaults preserve prior behavior).
+    // Ops rule: the only halts are daily-loss tripwire, manual, and network errors. A naked leg is
+    // always worked (hedge if net ≤ _hedgeMaxNet, else relentless reverse); if it still can't flatten
+    // (venue paused/closed) the pair is orphaned and the bot keeps trading — it never halts.
+    private readonly bool    _perTradeTripwire;     // halt on a single fill landing >N× worse than its edge
+    private readonly decimal _tradeMaxLossMult;     // the N above (was the const 3.0)
+    private readonly decimal _hedgeMaxNet;          // complete a hedge only if net ≤ this (1.0 = break-even)
+    private readonly int     _reverseFloorCents;    // relentless reverse sweeps the book down to this price
+    private readonly int     _reverseMaxAttempts;   // sweep attempts before orphaning the remainder
     // Dollar-denominated Poly FAK can sweep far past the intended count on thin books (e.g. 106 shares
     // when balanced=20). An over-fill that large must be reversed, not matched with a Kalshi hedge that
     // would open a huge unintended position. Guard: if pUnhedged > balancedQty × this fraction, reverse.
@@ -276,7 +285,12 @@ public class CrossArbExecutor
         int?    tryN                = null,
         CancellationTokenSource? outerCts = null,
         ConcurrentDictionary<string, string>? polyTickSizes = null,
-        CrossArbRestVerifier? restVerifier = null)
+        CrossArbRestVerifier? restVerifier = null,
+        decimal hedgeMaxNet         = 1.0m,
+        int     reverseFloorCents   = 1,
+        int     reverseMaxAttempts  = 4,
+        decimal tradeMaxLossMult    = 3.0m,
+        bool    perTradeTripwire    = true)
     {
         _kalshi              = kalshi;
         _poly                = poly;
@@ -298,6 +312,11 @@ public class CrossArbExecutor
         _triesRemaining      = tryN ?? -1;
         _tryLimit            = tryN ?? -1;
         _outerCts            = outerCts;
+        _hedgeMaxNet         = hedgeMaxNet;
+        _reverseFloorCents   = Math.Max(1, reverseFloorCents);
+        _reverseMaxAttempts  = Math.Max(1, reverseMaxAttempts);
+        _tradeMaxLossMult    = tradeMaxLossMult;
+        _perTradeTripwire    = perTradeTripwire;
         _polyTickSizes       = polyTickSizes ?? new();
         _csvPath             = $"CrossArbExecution_{DateTime.UtcNow:yyyyMMdd_HHmmss}.csv";
         _csvWriterTask = Task.Run(RunCsvWriterAsync);
@@ -427,7 +446,10 @@ public class CrossArbExecutor
                     singleEntry = _singleEntry, minBuy = _minBuy,
                     maxBetUsd = _maxBetUsd, maxExposureUsd = _maxExposureUsd,
                     executionThreshold = _executionThreshold, execNetFloor = _execNetFloor,
-                    pairCooldownSeconds = _pairCooldownSeconds, dryRun = _dryRun
+                    pairCooldownSeconds = _pairCooldownSeconds, dryRun = _dryRun,
+                    hedgeMaxNet = _hedgeMaxNet, reverseFloorCents = _reverseFloorCents,
+                    reverseMaxAttempts = _reverseMaxAttempts,
+                    perTradeTripwire = _perTradeTripwire, tradeMaxLossMult = _tradeMaxLossMult
                 }));
         }
         catch (Exception ex)
@@ -907,18 +929,18 @@ public class CrossArbExecutor
             {
                 decimal expectedEdge = 1.0m - netNow;
                 decimal actualLoss   = actualNetPerSet - 1.0m;
-                if (actualLoss > TradeMaxLossMult * expectedEdge)
+                if (_perTradeTripwire && actualLoss > _tradeMaxLossMult * expectedEdge)
                 {
                     await JournalAsync(JsonSerializer.Serialize(new {
                         t = DateTime.UtcNow, @event = "HALT_TRIPWIRE",
                         reason = "per_trade_loss", pairId, dryRun = _dryRun,
                         actualNet = actualNetPerSet, detectedNet = netNow,
-                        maxAllowed = 1.0m + TradeMaxLossMult * expectedEdge
+                        maxAllowed = 1.0m + _tradeMaxLossMult * expectedEdge
                     }));
                     Console.ForegroundColor = ConsoleColor.Red;
                     Emit(execLog,
                         $"[HALT] {pair.Label} | Per-trade tripwire: loss={actualLoss:0.0000} > " +
-                        $"{TradeMaxLossMult}× edge={expectedEdge:0.0000}. Manual reset required.");
+                        $"{_tradeMaxLossMult}× edge={expectedEdge:0.0000}. Manual reset required.");
                     Console.ResetColor();
                     _halted = true;
                 }
@@ -1039,6 +1061,7 @@ public class CrossArbExecutor
         {
             string execOutcome = neitherFilled                           ? "MISS"
                 : recovery?.Outcome.StartsWith("HALT") == true          ? "HALTED"
+                : recovery?.Outcome == "ORPHANED"                       ? "ORPHANED"
                 : recovery != null && recovery.Outcome != "NONE"        ? "FILLED_WITH_CLEANUP"
                 : "FILLED";
 
@@ -1574,6 +1597,91 @@ public class CrossArbExecutor
 
     // ── Unhedged delta recovery ───────────────────────────────────────────────
 
+    // Relentlessly flatten a naked Kalshi leg: IOC-sell at the configurable floor so the order sweeps
+    // the whole bid book (fills best-first, down to the floor), retrying for partials / settlement lag.
+    // Returns (filledContracts, estLossUsd). Never halts — any unfilled remainder is the caller's to orphan.
+    private async Task<(int Filled, decimal Loss)> ReverseKalshiLegAsync(
+        CrossPair pair, string kalshiSide, int qty, decimal entryAsk, string kBookKey,
+        string execId, List<string>? execLog)
+    {
+        int     remaining   = qty;
+        int     totalFilled = 0;
+        decimal totalLoss   = 0m;
+        // Cached bid is only a loss-accounting proxy (the order API doesn't return the reversal fill
+        // price); the ORDER limit is the floor so it sweeps regardless of how stale the cache is.
+        decimal proxyBid = _books.TryGetValue(kBookKey, out var kBook) ? kBook.GetBestBidPrice() : 0m;
+
+        for (int attempt = 1; attempt <= _reverseMaxAttempts && remaining > 0; attempt++)
+        {
+            decimal fill;
+            try
+            {
+                var (_, _, f) = await _kalshi.PlaceOrderAsync(
+                    pair.KalshiTicker, kalshiSide, _reverseFloorCents, remaining, action: "sell");
+                fill = f;
+            }
+            catch (Exception ex)
+            {
+                // 429s are already retried inside the client; reaching here is a harder error
+                // (network / venue paused). Stop sweeping — the caller orphans the remainder.
+                await JournalAsync(JsonSerializer.Serialize(new {
+                    t = DateTime.UtcNow, @event = "CLEANUP_REVERSE_ERROR", execId,
+                    pair = pair.PairId, leg = "kalshi", attempt,
+                    qty = remaining, exType = ex.GetType().Name, message = ex.Message
+                }));
+                Emit(execLog, $"[RECOVER ERROR] {pair.Label} | Kalshi reverse attempt {attempt}: {ApiErrorHelper.ClassifyKalshi(ex)}");
+                break;
+            }
+
+            if (fill > 0)
+            {
+                int     fi      = (int)fill;
+                decimal proxyPx = proxyBid > 0m ? proxyBid : _reverseFloorCents / 100m;
+                decimal loss    = fi * Math.Max(0m, entryAsk - proxyPx);
+                totalLoss   += loss;
+                totalFilled += fi;
+                remaining   -= fi;
+                await JournalAsync(JsonSerializer.Serialize(new {
+                    t = DateTime.UtcNow, @event = "CLEANUP_REVERSED", execId,
+                    pair = pair.PairId, leg = "kalshi", qty = fi, attempt,
+                    entryPrice = entryAsk, floorCents = _reverseFloorCents, estLoss = Math.Round(loss, 4)
+                }));
+                Console.ForegroundColor = ConsoleColor.Yellow;
+                Emit(execLog, $"[RECOVER REVERSED] {pair.Label} | swept {fi} Kalshi {kalshiSide} (attempt {attempt}), {remaining} left");
+                Console.ResetColor();
+            }
+            else
+            {
+                await JournalAsync(JsonSerializer.Serialize(new {
+                    t = DateTime.UtcNow, @event = "CLEANUP_REVERSE_FAILED", execId,
+                    pair = pair.PairId, leg = "kalshi", attempt, qty = remaining, reason = "zero_fill"
+                }));
+            }
+            if (remaining > 0 && attempt < _reverseMaxAttempts)
+                await Task.Delay(400);   // let the book refill / settlement catch up before re-sweeping
+        }
+
+        if (totalLoss > 0m) lock (_cleanupLock) { _totalCleanupCostUsd += totalLoss; }
+        return (totalFilled, totalLoss);
+    }
+
+    // Park a leg we couldn't flatten right now (venue paused/closed, or no bids). Ops policy: do NOT
+    // halt — block re-entry on this pair and keep trading everything else; clear it manually later.
+    private async Task OrphanPairAsync(
+        CrossPair pair, string leg, decimal qty, decimal valueUsd, string execId, List<string>? execLog)
+    {
+        _orphanedPairs[pair.PairId] = 0;
+        await JournalAsync(JsonSerializer.Serialize(new {
+            t = DateTime.UtcNow, @event = "CLEANUP_ORPHANED", execId,
+            pair = pair.PairId, leg,
+            unresolvedQty = Math.Round(qty, 6), unresolvedValueUsd = Math.Round(valueUsd, 4)
+        }));
+        Console.ForegroundColor = ConsoleColor.Magenta;
+        Emit(execLog, $"[ORPHANED] {pair.Label} | {leg} leg couldn't be flattened now ({qty:0.##} ≈ ${valueUsd:0.00}) — " +
+                      "re-entry blocked, bot keeps running. Clear manually when the venue reopens.");
+        Console.ResetColor();
+    }
+
     private async Task<RecoveryResult> RecoverUnhedgedAsync(
         CrossPair pair, string arbType,
         string kalshiSide, string polyToken,
@@ -1617,7 +1725,7 @@ public class CrossArbExecutor
                 decimal hedgeNet = kLegAsk + currentPolyAsk + KalshiFee(kLegAsk) + PolyFee(currentPolyAsk, polyToken);
                 DebugLog.Trades($"RecoverUnhedgedAsync {pair.Label}: kUnhedged={kUnhedged} polyAsk={currentPolyAsk:0.0000} hedgeNet={hedgeNet:0.0000}");
 
-                if (hedgeNet < 1.0m)
+                if (hedgeNet <= _hedgeMaxNet)
                 {
                     Console.ForegroundColor = ConsoleColor.Yellow;
                     Emit(execLog, $"[RECOVER] {pair.Label} | kExcess={kUnhedged} hedgeNet={hedgeNet:0.0000} — completing hedge on Poly");
@@ -1681,16 +1789,17 @@ public class CrossArbExecutor
                             }
                             else
                             {
-                                await JournalAsync(JsonSerializer.Serialize(new {
-                                    t = DateTime.UtcNow, @event = "CLEANUP_HALT", execId,
-                                    pair = pair.PairId, leg = "kalshi_partial_hedge_remainder",
-                                    unresolvedQty = Math.Round(remainderQty, 6), unresolvedValueUsd = Math.Round(remValue, 4)
-                                }));
-                                Console.ForegroundColor = ConsoleColor.Red;
-                                Emit(execLog, $"[HALT] {pair.Label} | Partial Poly hedge left {remainderQty} Kalshi contracts unhedged — manual reset required.");
-                                Console.ResetColor();
-                                _halted = true;
-                                return new RecoveryResult("HALT", remainderQty, remValue);
+                                // Partial Poly hedge left Kalshi contracts unhedged — reverse them out
+                                // relentlessly, orphan only if the venue won't fill. Never halt.
+                                string rkKey = arbType == "K_YES_P_NO" ? $"K:{pair.KalshiTicker}" : $"K:{pair.KalshiTicker}_NO";
+                                var (rf, _) = await ReverseKalshiLegAsync(
+                                    pair, kalshiSide, (int)remainderQty, kLegAsk, rkKey, execId, execLog);
+                                int left = (int)remainderQty - rf;
+                                if (left > 0)
+                                {
+                                    await OrphanPairAsync(pair, "kalshi_partial_hedge_remainder", left, left * kLegAsk, execId, execLog);
+                                    return new RecoveryResult("ORPHANED", additional, 0);
+                                }
                             }
                         }
                         return new RecoveryResult("HEDGE_COMPLETED", additional, 0);
@@ -1707,77 +1816,17 @@ public class CrossArbExecutor
                 Emit(execLog, $"[CLEANUP SKIP HEDGE] {pair.Label} | kExcess={kUnhedged} value=${kUnhedgedValue:0.00} < ${CleanupHedgeSkipUsd:0.00} — reversing directly");
             }
 
-            // Reverse: sell excess Kalshi contracts back at best bid − buffer
+            // Reverse: relentlessly sweep the excess Kalshi contracts out at the floor (re-reading the
+            // live book is moot — the floor limit fills against whatever bids exist). Orphan, never halt,
+            // anything that still can't fill: a paused/closed market we'll clear on the next run.
             string kBookKey = arbType == "K_YES_P_NO" ? $"K:{pair.KalshiTicker}" : $"K:{pair.KalshiTicker}_NO";
-            decimal kBestBid = _books.TryGetValue(kBookKey, out var kBook) ? kBook.GetBestBidPrice() : 0m;
-            if (kBestBid > 0m)
-            {
-                int kReverseCents = Math.Max(1, (int)Math.Floor((kBestBid - ReverseBufferCents / 100m) * 100));
-                DebugLog.Trades($"RecoverUnhedgedAsync: selling {kUnhedged} Kalshi {kalshiSide} @ {kReverseCents}¢");
-                try
-                {
-                    var (_, _, revFill) = await _kalshi.PlaceOrderAsync(
-                        pair.KalshiTicker, kalshiSide, kReverseCents, (int)kUnhedged, action: "sell");
-                    if (revFill > 0)
-                    {
-                        decimal reversalLoss = revFill * (kLegAsk - kReverseCents / 100m);
-                        if (reversalLoss > 0)
-                            lock (_cleanupLock) { _totalCleanupCostUsd += reversalLoss; }
-                        await JournalAsync(JsonSerializer.Serialize(new {
-                            t = DateTime.UtcNow, @event = "CLEANUP_REVERSED", execId,
-                            pair = pair.PairId, leg = "kalshi", qty = revFill,
-                            entryPrice = kLegAsk, reversalPrice = kReverseCents / 100m,
-                            loss = Math.Max(0m, reversalLoss)
-                        }));
-                        Console.ForegroundColor = ConsoleColor.Yellow;
-                        Emit(execLog, $"[RECOVER REVERSED] {pair.Label} | sold {revFill} Kalshi {kalshiSide} @ {kReverseCents}¢");
-                        Console.ResetColor();
-
-                        int remaining = (int)kUnhedged - (int)revFill;
-                        if (remaining > 0)
-                        {
-                            await JournalAsync(JsonSerializer.Serialize(new {
-                                t = DateTime.UtcNow, @event = "CLEANUP_REVERSE_PARTIAL", execId,
-                                pair = pair.PairId, leg = "kalshi",
-                                requested = (int)kUnhedged, filled = (int)revFill, remaining
-                            }));
-                            Emit(execLog, $"[HALT] {pair.Label} | Partial reversal: sold {revFill}/{(int)kUnhedged} — {remaining} contracts still open. Manual reset required.");
-                            _halted = true;
-                            return new RecoveryResult("HALT", revFill, Math.Max(0m, reversalLoss));
-                        }
-                        return new RecoveryResult("REVERSED_KALSHI", revFill, Math.Max(0m, reversalLoss));
-                    }
-                    await JournalAsync(JsonSerializer.Serialize(new {
-                        t = DateTime.UtcNow, @event = "CLEANUP_REVERSE_FAILED", execId,
-                        pair = pair.PairId, leg = "kalshi",
-                        qty = kUnhedged, reason = "zero_fill", reversalCents = kReverseCents
-                    }));
-                }
-                catch (Exception ex)
-                {
-                    Emit(execLog, $"[RECOVER ERROR] {pair.Label} | Kalshi reverse exception: {ApiErrorHelper.ClassifyKalshi(ex)}");
-                    await JournalAsync(JsonSerializer.Serialize(new {
-                        t = DateTime.UtcNow, @event = "CLEANUP_REVERSE_ERROR", execId,
-                        pair = pair.PairId, leg = "kalshi",
-                        qty = kUnhedged, exType = ex.GetType().Name, message = ex.Message
-                    }));
-                }
-            }
-            else
-            {
-                Emit(execLog, $"[RECOVER] {pair.Label} | Kalshi bid side empty — skipping doomed reverse");
-            }
-
-            await JournalAsync(JsonSerializer.Serialize(new {
-                t = DateTime.UtcNow, @event = "CLEANUP_HALT", execId,
-                pair = pair.PairId, leg = "kalshi",
-                unresolvedQty = Math.Round(kUnhedged, 6), unresolvedValueUsd = Math.Round(kUnhedgedValue, 4)
-            }));
-            Console.ForegroundColor = ConsoleColor.Red;
-            Emit(execLog, $"[HALT] {pair.Label} | Reverse order failed — unhedged position open. Manual reset required.");
-            Console.ResetColor();
-            _halted = true;
-            return new RecoveryResult("HALT", 0, kUnhedgedValue);
+            var (kRevFilled, kRevLoss) = await ReverseKalshiLegAsync(
+                pair, kalshiSide, (int)kUnhedged, kLegAsk, kBookKey, execId, execLog);
+            int kStillOpen = (int)kUnhedged - kRevFilled;
+            if (kStillOpen <= 0)
+                return new RecoveryResult("REVERSED_KALSHI", kRevFilled, kRevLoss);
+            await OrphanPairAsync(pair, "kalshi", kStillOpen, kStillOpen * kLegAsk, execId, execLog);
+            return new RecoveryResult("ORPHANED", kRevFilled, kRevLoss);
         }
 
         // ── Case B: Poly filled more — own excess Poly shares ────────────────
@@ -1844,7 +1893,7 @@ public class CrossArbExecutor
                 decimal hedgeNet = currentKalshiAsk + pActualPrice + KalshiFee(currentKalshiAsk) + PolyFee(pActualPrice, polyToken);
                 DebugLog.Trades($"RecoverUnhedgedAsync {pair.Label}: pUnhedged={pUnhedged} kalshiAsk={currentKalshiAsk:0.0000} hedgeNet={hedgeNet:0.0000}");
 
-                if (hedgeNet < 1.0m)
+                if (hedgeNet <= _hedgeMaxNet)
                 {
                     int hedgeQty = (int)Math.Floor(pUnhedged);
                     if (hedgeQty == 0)
@@ -1931,17 +1980,26 @@ public class CrossArbExecutor
                             }
                             else
                             {
-                                // Substantial Poly remainder — partial Kalshi fill left ≥1 share unhedged
-                                await JournalAsync(JsonSerializer.Serialize(new {
-                                    t = DateTime.UtcNow, @event = "CLEANUP_HALT", execId,
-                                    pair = pair.PairId, leg = "poly_partial_hedge_remainder",
-                                    unresolvedQty = Math.Round(remainderQty, 6), unresolvedValueUsd = Math.Round(remValue, 4)
-                                }));
-                                Console.ForegroundColor = ConsoleColor.Red;
-                                Emit(execLog, $"[HALT] {pair.Label} | Partial Kalshi hedge left {remainderQty:0.00} Poly shares unhedged — manual reset required.");
-                                Console.ResetColor();
-                                _halted = true;
-                                return new RecoveryResult("HALT", remainderQty, remValue);
+                                // Partial Kalshi hedge left Poly shares unhedged — sell them back
+                                // (PlacePolySellAsync sweeps at the floor with settlement retries), orphan
+                                // only if it still won't fill. Never halt.
+                                var (rSold, rPx) = await PlacePolySellAsync(polyToken, remainderQty, pair.IsNegRisk, execLog);
+                                if (rSold > 0m)
+                                {
+                                    decimal rLoss = Math.Max(0m, rSold * (pActualPrice - rPx));
+                                    if (rLoss > 0m) lock (_cleanupLock) { _totalCleanupCostUsd += rLoss; }
+                                    await JournalAsync(JsonSerializer.Serialize(new {
+                                        t = DateTime.UtcNow, @event = "CLEANUP_REVERSED", execId,
+                                        pair = pair.PairId, leg = "poly_partial_hedge_remainder",
+                                        qty = Math.Round(rSold, 6), reversalPrice = Math.Round(rPx, 6), loss = Math.Round(rLoss, 4)
+                                    }));
+                                }
+                                decimal stillP = remainderQty - rSold;
+                                if (stillP >= 1.0m)
+                                {
+                                    await OrphanPairAsync(pair, "poly_partial_hedge_remainder", stillP, stillP * pActualPrice, execId, execLog);
+                                    return new RecoveryResult("ORPHANED", additional, 0);
+                                }
                             }
                         }
                         Console.ForegroundColor = ConsoleColor.Green;
@@ -1979,22 +2037,15 @@ public class CrossArbExecutor
                 Console.ResetColor();
                 return new RecoveryResult("REVERSED_POLY", soldShares, Math.Max(0m, reversalLoss));
             }
+            // PlacePolySellAsync already swept at the 1¢ floor with settlement retries; a zero return
+            // means the venue/token genuinely won't fill now. Orphan (not halt) and keep trading.
             await JournalAsync(JsonSerializer.Serialize(new {
                 t = DateTime.UtcNow, @event = "CLEANUP_REVERSE_FAILED", execId,
                 pair = pair.PairId, leg = "poly",
                 qty = pUnhedged, reason = "zero_fill"
             }));
-
-            await JournalAsync(JsonSerializer.Serialize(new {
-                t = DateTime.UtcNow, @event = "CLEANUP_HALT", execId,
-                pair = pair.PairId, leg = "poly",
-                unresolvedQty = Math.Round(pUnhedged, 6), unresolvedValueUsd = Math.Round(pUnhedgedValue, 4)
-            }));
-            Console.ForegroundColor = ConsoleColor.Red;
-            Emit(execLog, $"[HALT] {pair.Label} | Reverse order failed — unhedged position open. Manual reset required.");
-            Console.ResetColor();
-            _halted = true;
-            return new RecoveryResult("HALT", 0, pUnhedgedValue);
+            await OrphanPairAsync(pair, "poly", pUnhedged, pUnhedgedValue, execId, execLog);
+            return new RecoveryResult("ORPHANED", 0, pUnhedgedValue);
         }
 
         return new RecoveryResult("NONE", 0, 0);

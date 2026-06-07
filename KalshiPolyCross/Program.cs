@@ -304,6 +304,15 @@ if (isLive || isDryRun)
     const decimal EXECUTION_THRESHOLD  = 0.995m; // net-cost ceiling for arb detection
     const decimal EXEC_NET_FLOOR       = 0.985m; // minimum net to attempt execution (1.5¢/set profit floor); Kalshi always gets ask+1¢ limit regardless
 
+    // Recovery / halt policy. Ops rule: only halt on the daily-loss tripwire, a manual stop, or a network
+    // error — never on a naked leg. A naked/partial leg is hedged if still ≤ break-even, else swept out;
+    // if it truly can't flatten (venue paused) the pair is orphaned and the bot keeps running.
+    const decimal HEDGE_MAX_NET        = 1.0m;   // complete a hedge only if net ≤ this (1.0 = break-even; raise to tolerate worse hedges when capital is ample)
+    const int     REVERSE_FLOOR_CENTS  = 1;      // relentless reverse sweeps the book down to this price to guarantee a fill
+    const int     REVERSE_MAX_ATTEMPTS = 4;      // sweep attempts before orphaning the remainder
+    const decimal TRADE_MAX_LOSS_MULT  = 3.0m;   // per-trade tripwire: halt if a single (hedged) fill lands >Nx worse than its edge
+    const bool    PER_TRADE_TRIPWIRE   = true;   // enable the per-trade tripwire above
+
     // In dry-run, probe real credentials before swapping in simulated clients.
     // This surfaces auth/connectivity issues without risking any orders.
     if (isDryRun)
@@ -358,7 +367,12 @@ if (isLive || isDryRun)
         tryN:                tryN,
         outerCts:            cts,
         polyTickSizes:       restVerifier.PolyTickSizes,
-        restVerifier:        restVerifier);
+        restVerifier:        restVerifier,
+        hedgeMaxNet:         HEDGE_MAX_NET,
+        reverseFloorCents:   REVERSE_FLOOR_CENTS,
+        reverseMaxAttempts:  REVERSE_MAX_ATTEMPTS,
+        tradeMaxLossMult:    TRADE_MAX_LOSS_MULT,
+        perTradeTripwire:    PER_TRADE_TRIPWIRE);
     telemetry.OnArbOpened  += executor.OnArbOpened;
     telemetry.BookUpdated  += executor.OnBookUpdate;  // event-driven early exit checks
     await executor.InitializeBalancesAsync();
