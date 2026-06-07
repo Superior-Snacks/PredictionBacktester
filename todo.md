@@ -80,6 +80,7 @@
 - [X] Venue maintenance windows: detect via repeated REST failures, halt trading on that venue
 - [X] API rate limits: rate limiter on outbound requests, never let limit-hit cause leg-fail
 - [X] Daylight savings / timezone bugs in settlement timing comparisons
+- [ ] **Live / near-settlement market entry guard**: skip entering a pair when its Kalshi market is `live` (event in progress) or within N minutes of `close_time` / `expected_expiration_time`. These are exactly where the Poly book is thinnest and fastest-moving (high leg-miss risk) AND where a missed leg can't be reversed because settlement is imminent (no makers to sell into) — so a missed arb becomes a forced naked *directional* bet, not a hedged arb. Real case: `KXPGATOUR-THMTPBW26-JPOS` (J.T. Poston, Memorial, 2026-06-07) — Poly NO leg missed during the live final round, left naked 5 Kalshi YES @57¢, reverse caught zero bids, rode to settlement and won by luck (could just as easily have been −$2.85). Recovery now *handles* this (relentless reverse → orphan → abandon-to-settlement after 5 retries), but this guard would *prevent* the gamble at the source. Add as a check in the entry path alongside the stale-gate / depth guards. (Deferred — keeping these cases live for now to exercise the recovery paths.)
 
 
 # CrossArbExecutor — Pre-Live Fix List
