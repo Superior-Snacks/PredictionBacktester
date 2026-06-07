@@ -433,6 +433,4 @@
 {"t":"2026-06-07T18:44:34.1759165Z","event":"FILLED","pairId":"MANUAL_KXPGATOUR-THMTPBW26-JPOS__61953801","kFilled":5.00,"pFilled":0,"balanced":0,"kStatus":"executed","dryRun":false,"modeledNet":null,"actualNet":null}
 {"t":"2026-06-07T18:44:34.1761362Z","event":"EXECUTION_COMPLETE","execId":"AX_20260607184432_KXPGATOUR-THMTPBW26-JPOS","pairId":"MANUAL_KXPGATOUR-THMTPBW26-JPOS__61953801","arbType":"K_YES_P_NO","label":"Will J.T. Poston win the the Memorial Tournament presented by Workday?","dryRun":false,"detected":{"kAsk":0.5700,"pAsk":0.35,"netCost":0.943982,"contracts":5,"estCostUsd":4.6000,"venueSkewMs":1265.2},"fills":{"kalshi":{"ordered":5,"filled":5.00,"limitCents":58,"fillPrice":0.5700,"feePerContract":0.017157,"status":"executed"},"poly":{"ordered":5,"filled":0,"limitPrice":0.35,"avgFillPrice":null,"feePerShare":null,"slippagePct":null}},"hedge":{"balanced":0,"kExcess":5.00,"pExcess":0,"recovery":{"outcome":"HALT","qty":0,"lossUsd":2.850000}},"position":null,"outcome":"HALTED","stalePriceSuspected":true,"durationMs":1784}
 {"t":"2026-06-07T18:44:34.3817759Z","event":"BALANCE","kalshi":113.06,"poly":96.696085,"initial":false}
-{"t":"2026-06-07T18:48:52.6256779Z","event":"BALANCE","kalshi":113.06,"poly":96.696085,"initial":false}
-{"t":"2026-06-07T18:53:52.8818024Z","event":"BALANCE","kalshi":113.06,"poly":96.696085,"initial":false}
-{"t":"2026-06-07T18:58:53.1263033Z","event":"BALANCE","kalshi":113.06,"poly":96.696085,"initial":false}
+{re-run 1}
