@@ -346,7 +346,7 @@ if (isLive || isDryRun)
     PredictionBacktester.Engine.LiveExecution.IPolymarketOrderExecutor polyExec   =
         isDryRun ? simPoly!     : polyOrderClient;
     // Dry-run mirrors the full simulated $1,000 balance; live caps concurrent risk tightly.
-    decimal       maxExposureUsd     = isDryRun ? 1000m : 50m;
+    decimal       maxExposureUsd     = isDryRun ? 1000m : 500m;
     executor = new CrossArbExecutor(
         kalshi:              kalshiExec,
         poly:                polyExec,
