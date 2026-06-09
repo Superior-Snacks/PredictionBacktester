@@ -2572,80 +2572,65 @@ public class CrossArbExecutor
                 }
             }
             string polyTokenId = arbType == "K_YES_P_NO" ? pair.PolyNoTokenId : pair.PolyYesTokenId;
-            // Poly balance API has the same propagation lag as Kalshi's positions endpoint.
-            // Retry until the delta vs pre-trade snapshot reaches at least half of expected, or give up.
-            // priorValid=false means the pre-trade snapshot failed — we have no trusted baseline,
-            // so a delta can't be computed and the Poly side must NOT hard-halt (it would be comparing
-            // against a fabricated 0). The Kalshi side (order-poll) is independent and still halts.
+            // Poly balance API has the same propagation lag as Kalshi's positions endpoint (often minutes).
+            // priorValid=false means the pre-trade snapshot failed -> no baseline -> Measured() falls back
+            // to the absolute read. Either way, a Poly read BELOW the confirmed fill is treated as lag and
+            // never halts (see below); only an over-read or a Kalshi order-poll mismatch can halt.
             bool    priorValid = priorPolyBalance.HasValue;
             decimal prior      = priorPolyBalance ?? 0m;
             decimal polyBal    = prior;
+            // Measured Poly position attributable to THIS trade:
+            //   * prior-valid, normal       -> delta vs pre-trade snapshot (so orphaned prior-run shares don't count)
+            //   * prior-valid, overfill-rev  -> absolute (an in-trade overfill->reversal races & poisons the snapshot/delta)
+            //   * no prior snapshot          -> absolute (no trusted baseline to delta against)
+            // Retry until it reaches at least half of expected, to let Poly's data-API indexing lag clear.
+            decimal Measured() => (priorValid && !polyOverfillReversed) ? polyBal - prior : polyBal;
             for (int pAttempt = 1; pAttempt <= maxAttempts; pAttempt++)
             {
                 polyBal = await _poly.GetTokenBalanceAsync(polyTokenId);
-                if (!priorValid) break;   // no trusted baseline — one read for logging, then stop
-                decimal delta = polyBal - prior;
-                if (delta >= expectedPoly * 0.5m) break;
+                if (Measured() >= expectedPoly * 0.5m) break;
                 if (pAttempt < maxAttempts) await Task.Delay(retryDelayMs);
-                DebugLog.Trades($"ReconcileTradeAsync {pair.Label}: Poly balance attempt {pAttempt}/{maxAttempts} total={polyBal:0.00} delta={delta:0.00} (expected ~{expectedPoly:0.00}) — retrying");
+                DebugLog.Trades($"ReconcileTradeAsync {pair.Label}: Poly attempt {pAttempt}/{maxAttempts} measured={Measured():0.00} polyBal={polyBal:0.00} (expected ~{expectedPoly:0.00}, priorValid={priorValid}) - retrying");
             }
-            // Use delta vs pre-trade snapshot so orphaned prior-run shares don't trigger a false halt.
-            decimal polyDelta     = polyBal - prior;
-            bool    kMismatch     = Math.Abs(kActual  - expectedKalshi) > 0.5m;
-            // Normally compare the DELTA vs the pre-trade snapshot, so pre-existing orphaned shares
-            // don't false-halt. But an in-trade overfill reversal can race that snapshot — it captures
-            // the overfilled buy (e.g. prior=79.59 after 64.59 was reversed back to 15), poisoning the
-            // delta (−64.59 vs +15). When one is on record the snapshot is untrustworthy, so verify the
-            // ABSOLUTE position (which was correct: 15.004 ≈ 15) instead.
-            bool    pWouldMismatch = polyOverfillReversed
-                ? Math.Abs(polyBal   - expectedPoly) > 0.5m
-                : Math.Abs(polyDelta - expectedPoly) > 0.5m;
-            bool    pMismatch     = priorValid && pWouldMismatch;
-            if (!priorValid && pWouldMismatch)
+            decimal polyDelta    = polyBal - prior;
+            decimal polyMeasured = Measured();
+            bool    kMismatch    = Math.Abs(kActual - expectedKalshi) > 0.5m;
+            // Poly direction matters. An UNDER-read (measured < expected) right after a CONFIRMED
+            // execution-time fill is almost always Polymarket data-API indexing lag -- which can run
+            // minutes, well past our ~30s retry window -- NOT a real naked leg. The fill already
+            // confirmed the position, so never halt on it: journal inconclusive and keep trading.
+            // Only an OVER-read (measured > expected) means real un-reversed excess exposure -> halt.
+            // (priorValid uses the delta so orphaned prior-run shares can't masquerade as an over-read.)
+            bool    pUnder = polyMeasured < expectedPoly - 0.5m;
+            bool    pOver  = polyMeasured > expectedPoly + 0.5m;
+            if (pUnder)
             {
-                bool largeImbalance = Math.Abs(polyBal - expectedPoly) > 1m
-                                   || Math.Abs(kActual  - expectedKalshi) > 1m;
-                if (largeImbalance)
-                {
-                    Console.ForegroundColor = ConsoleColor.Red;
-                    Console.WriteLine(
-                        $"[RECONCILE LARGE IMBALANCE] {pair.Label} | prior snapshot failed but gap is large — " +
-                        $"K: expected={expectedKalshi} venue={kActual} | P: expected={expectedPoly:0.00} venue={polyBal:0.00} — halting for manual review");
-                    Console.ResetColor();
-                    _halted = true;
-                    await JournalAsync(JsonSerializer.Serialize(new {
-                        t = DateTime.UtcNow, @event = "RECONCILE_LARGE_IMBALANCE", execId,
-                        pair = pair.PairId, arbType,
-                        kExpected = expectedKalshi, kVenue = kActual,
-                        pExpected = expectedPoly,   pVenue = polyBal,
-                        reason = "PRIOR_SNAPSHOT_FAILED_LARGE_GAP", halted = true
-                    }));
-                }
-                else
-                {
-                    Console.ForegroundColor = ConsoleColor.Yellow;
-                    Console.WriteLine(
-                        $"[RECONCILE INCONCLUSIVE] {pair.Label} | pre-trade Poly snapshot failed — " +
-                        $"venue={polyBal:0.00} expectedΔ={expectedPoly:0.00}; gap within tolerance, NOT halting.");
-                    Console.ResetColor();
-                    await JournalAsync(JsonSerializer.Serialize(new {
-                        t = DateTime.UtcNow, @event = "RECONCILE_INCONCLUSIVE", execId,
-                        pair = pair.PairId, arbType,
-                        kExpected = expectedKalshi, kVenue = kActual,
-                        pExpected = expectedPoly, pVenue = polyBal,
-                        reason = "PRIOR_SNAPSHOT_FAILED", halted = false
-                    }));
-                }
+                Console.ForegroundColor = ConsoleColor.Yellow;
+                Console.WriteLine(
+                    $"[RECONCILE INCONCLUSIVE] {pair.Label} | Poly venue reads {polyMeasured:0.00} < expected {expectedPoly:0.00} " +
+                    $"after a confirmed fill -- suspected data-API lag, NOT halting (position trusted from fill).");
+                Console.ResetColor();
+                await JournalAsync(JsonSerializer.Serialize(new {
+                    t = DateTime.UtcNow, @event = "RECONCILE_INCONCLUSIVE", execId,
+                    pair = pair.PairId, arbType,
+                    kExpected = expectedKalshi, kVenue = kActual,
+                    pExpected = expectedPoly, pVenue = polyBal, pMeasured = polyMeasured,
+                    pPriorValid = priorValid, polyOverfillReversed,
+                    reason = "POLY_UNDER_READ_SUSPECTED_LAG", halted = false
+                }));
             }
-            if (kMismatch || pMismatch)
+            if (kMismatch || pOver)
             {
                 _halted = true;
+                string cause = kMismatch && pOver ? "Kalshi mismatch + Poly over-read"
+                             : kMismatch          ? "Kalshi mismatch"
+                                                  : "Poly over-read";
                 Console.ForegroundColor = ConsoleColor.Red;
                 Console.WriteLine(
-                    $"[RECONCILE ALERT] {pair.Label} | " +
+                    $"[RECONCILE ALERT] {pair.Label} | {cause} | " +
                     $"K: local={expectedKalshi} venue={kActual} | " +
-                    $"P: local={expectedPoly:0.00} venue={polyBal:0.00}");
-                Console.WriteLine("[RECONCILE ALERT] Bot halted — manual reset required. Verify positions before resuming.");
+                    $"P: local={expectedPoly:0.00} venue={polyBal:0.00} measured={polyMeasured:0.00}");
+                Console.WriteLine("[RECONCILE ALERT] Bot halted -- manual reset required. Verify positions before resuming.");
                 Console.ResetColor();
                 await JournalAsync(JsonSerializer.Serialize(new {
                     t = DateTime.UtcNow, @event = "RECONCILE_MISMATCH", execId,
@@ -2653,11 +2638,12 @@ public class CrossArbExecutor
                     kExpected = expectedKalshi, kVenue = kActual,
                     pExpected = expectedPoly,   pVenue = polyBal,
                     pPrior = priorValid ? (object?)prior : null, pPriorValid = priorValid, pDelta = polyDelta,
-                    polyOverfillReversed, halted = true
+                    pMeasured = polyMeasured, polyOverfillReversed,
+                    kHalt = kMismatch, pOverHalt = pOver, halted = true
                 }));
             }
-            else
-                DebugLog.Trades($"ReconcileTradeAsync {pair.Label}: confirmed K={kActual} P={polyBal:0.00} (delta={polyDelta:0.00} prior={prior:0.00} priorValid={priorValid})");
+            else if (!pUnder)
+                DebugLog.Trades($"ReconcileTradeAsync {pair.Label}: confirmed K={kActual} P_measured={polyMeasured:0.00} (polyBal={polyBal:0.00} prior={prior:0.00} priorValid={priorValid})");
         }
         catch (Exception ex)
         {
