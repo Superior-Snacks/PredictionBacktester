@@ -427,11 +427,24 @@ def _normalize_category(cat: str) -> str:
 
 
 # -- Phase 2: Embedding candidates (one signal of several; copied from v1) ------
+def _kalshi_match_text(info: dict) -> str:
+    """Text used to embed/match a Kalshi market. Categorical (neg-risk) events repeat the same
+    event-level question in every leg's `title` and carry the only distinguishing token -- the
+    candidate / team / nominee -- in `yes_sub_title`. Fold that in so each leg embeds distinctly;
+    without it all ~50 nominees share one vector and collapse onto a single generic Poly market
+    (the 'Will another person be named...' negRiskOther leg). Binary markets are left unchanged."""
+    title = (info.get("title") or "").strip()
+    sub   = (info.get("yes_sub_title") or "").strip()
+    if info.get("is_neg_risk") and sub and sub.lower() not in ("yes", "no") and sub.lower() not in title.lower():
+        return f"{title} {sub}".strip()
+    return title or sub
+
+
 def find_candidates(kalshi_markets: dict, poly_markets: list, already_paired: set, use_cache: bool) -> list:
     cache = load_cache() if use_cache else {}
 
     filtered_poly   = poly_markets
-    k_titles_unique = list({m["title"] for m in kalshi_markets.values()})
+    k_titles_unique = list({_kalshi_match_text(m) for m in kalshi_markets.values()})
     print(f"[EMBED] {len(k_titles_unique)} unique Kalshi titles, {len(filtered_poly)} Poly markets.")
 
     poly_questions = [p["question"] for p in filtered_poly]
@@ -463,7 +476,7 @@ def find_candidates(kalshi_markets: dict, poly_markets: list, already_paired: se
     for ticker, info in kalshi_markets.items():
         if ticker in already_paired:
             continue
-        vec = cache.get(info["title"])
+        vec = cache.get(_kalshi_match_text(info))
         if vec is not None:
             k_tickers.append((ticker, info))
             k_vecs.append(vec)
