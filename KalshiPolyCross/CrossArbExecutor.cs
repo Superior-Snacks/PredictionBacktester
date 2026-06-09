@@ -984,6 +984,8 @@ public class CrossArbExecutor
                         $"[HALT] Per-day tripwire: cumulative loss ${_dayLossUsd:0.00} >= " +
                         $"max ${_maxDayLossUsd:0.00}. Manual reset required.");
                     Console.ResetColor();
+                    // TODO(discord): push an alert here - HARD HALT (per-day loss tripwire). Bot is done
+                    // for the day and needs a manual reset; notify immediately.
                     _halted = true;
                 }
             }
@@ -2444,6 +2446,8 @@ public class CrossArbExecutor
                 t = DateTime.UtcNow, @event = "RESTORE_FAILED_HALT",
                 reason = "POSITIONS_EMPTY_BUT_JOURNAL_NONEMPTY", expectedOpen = entryMap.Count
             }));
+            // TODO(discord): push an alert here - HARD HALT at startup (Kalshi positions API empty but the
+            // journal expects open positions). Bot refused to trade blind; check connectivity + restart.
             _halted = true;
             return;
         }
@@ -2621,6 +2625,8 @@ public class CrossArbExecutor
             }
             if (kMismatch || pOver)
             {
+                // TODO(discord): push an alert here - HARD HALT (reconcile mismatch: Kalshi position
+                // mismatch or Poly over-read / un-reversed excess). Needs manual position check + reset.
                 _halted = true;
                 string cause = kMismatch && pOver ? "Kalshi mismatch + Poly over-read"
                              : kMismatch          ? "Kalshi mismatch"
@@ -2650,6 +2656,8 @@ public class CrossArbExecutor
             Console.ForegroundColor = ConsoleColor.Red;
             Console.WriteLine($"[RECONCILE ERROR] {pair.Label}: reconciliation threw {ex.GetType().Name}: {ex.Message} — halting bot");
             Console.ResetColor();
+            // TODO(discord): push an alert here - HARD HALT (reconciliation threw an exception). Needs
+            // manual investigation + reset.
             _halted = true;
             await JournalAsync(JsonSerializer.Serialize(new {
                 t = DateTime.UtcNow, @event = "RECONCILE_ERROR", execId,
@@ -2669,6 +2677,8 @@ public class CrossArbExecutor
             Console.WriteLine(
                 $"[MAINTENANCE] {venue}: {consec} consecutive REST failures — halting new trades");
             Console.ResetColor();
+            // TODO(discord): push an alert here - CONNECTION HALT (N consecutive REST failures on this
+            // venue). Auto-clears on recovery, so debounce: alert on the halt->resume transition, not per loop.
             _connectionHalted = true;
             await JournalAsync(JsonSerializer.Serialize(new {
                 t = DateTime.UtcNow, @event = "VENUE_MAINTENANCE",
@@ -2679,6 +2689,8 @@ public class CrossArbExecutor
 
     // ── Connection watchdog controls ──────────────────────────────────────────
 
+    // TODO(discord): connection halt also enters here (WS disconnect / watchdog). Same debounced
+    // CONNECTION HALT alert as VENUE_MAINTENANCE - notify on the halt->resume transition, not every call.
     public void HaltForConnectionLoss()  => _connectionHalted = true;
     public void ResumeFromConnectionLoss() => _connectionHalted = false;
 
