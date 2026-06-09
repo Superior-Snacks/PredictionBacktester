@@ -1,15 +1,65 @@
 
 ============================================================
-ATTEMPT 2026-06-08 20:40:12 UTC  pair=MANUAL_KXWCGROUPQUAL-26J-JOR__52413286  arbType=K_NO_P_YES
+ATTEMPT 2026-06-09 15:36:10 UTC  pair=MANUAL_KXMENWORLDCUP-26-PT__45415751  arbType=K_YES_P_NO
 ============================================================
-[EXEC] Will Jordan qualify from World Cup Group J? | K_NO_P_YES | K-no=0.8100 P=0.0700 net=$0.8927 | 15 contracts @ $13.20
-[ORDER K] KXWCGROUPQUAL-26J-JOR NO 82¢ × 15  clientId=CAXARB_AX_20260608204012_KXWCGROUPQUAL-26J-JOR
-[ORDER P] BUY token=524132861781... price=0.0805 shares=15
-[FILL P]  524132861781... placed orderID=0xe20b293ac419449207002606c1215a6dbc3d3d7d3ff7d943f1dda221ab10f2f8 status=matched
-[FILL P]  524132861781... filled=79.59125 avgPrice=0.0151
-[FILL K]  KXWCGROUPQUAL-26J-JOR placed orderId=6cf42bd7-81c5-48a0-9ee9-7f5e0c8fd3d7 status=executed fillImm=15.00
-[EXEC OK] Will Jordan qualify from World Cup Group J? | K=15.00@82¢ | P=15.00sh@$0.0151 | cost=$12.38 actualNet=0.8363 projProfit=$2.46
-[EXEC UNHEDGED] Will Jordan qualify from World Cup Group J? | kFilled=15.00 pFilled=79.59 balanced=15.00 kExcess=0.00 pExcess=64.59 — starting recovery
-[ORDER P] SELL token=524132861781... shares=64.59
-[FILL P]  524132861781... sold=64.59 avgPrice=0.0110
-[RECOVER] Will Jordan qualify from World Cup Group J? | reversed 64.59 excess Poly @ 0.0110 (OVERFILL) loss=$0.26
+[EXEC] Will the Portugal win the 2026 Men's World Cup? | K_YES_P_NO | K-yes=0.1050 P=0.8690 net=$0.9840 | 5 contracts @ $4.87
+[ORDER K] KXMENWORLDCUP-26-PT YES 11¢ × 5  clientId=CAXARB_AX_20260609153610_KXMENWORLDCUP-26-PT
+[ORDER P] BUY token=319407835803... price=0.8690 shares=5
+[FILL K]  KXMENWORLDCUP-26-PT placed orderId=304b325d-39b3-43f2-b2f7-62bc5d80f1e4 status=executed fillImm=5.00
+[POLY LEG ERROR] 319407835803...: [Polymarket API Error] BadRequest: {"error":"no orders found to match with FAK order. FAK orders are partially filled or killed if no match is found.","orderID":"0x30c5b82c949a64ad7b0e04c6ebed5b37d26800b61d2769bd37899fea290091ba"}
+[STALE PRICE] Will the Portugal win the 2026 Men's World Cup? | detectedNet=0.9840 kFilled=5.00 pFilled=0.00 — one leg missed limit, price may have moved
+[EXEC UNHEDGED] Will the Portugal win the 2026 Men's World Cup? | kFilled=5.00 pFilled=0.00 balanced=0 kExcess=5.00 pExcess=0.00 — starting recovery
+[CLEANUP SKIP HEDGE] Will the Portugal win the 2026 Men's World Cup? | kExcess=5.00 value=$0.53 < $1.00 — reversing directly
+[RECOVER REVERSED] Will the Portugal win the 2026 Men's World Cup? | swept 5 Kalshi yes (attempt 1), 0 left
+
+============================================================
+ATTEMPT 2026-06-09 15:49:36 UTC  pair=MANUAL_KXLEADERMLBAVG-26-OLOP__72254634  arbType=K_YES_P_NO
+============================================================
+[EXEC] Will Otto Lopez lead Pro Baseball in batting average for the 2026 regular season? | K_YES_P_NO | K-yes=0.0900 P=0.8740 net=$0.9730 | 5 contracts @ $4.82
+[ORDER K] KXLEADERMLBAVG-26-OLOP YES 10¢ × 5  clientId=CAXARB_AX_20260609154936_KXLEADERMLBAVG-26-OLOP
+[ORDER P] BUY token=109242249138... price=0.8750 shares=5
+[FILL K]  KXLEADERMLBAVG-26-OLOP placed orderId=c9647197-32d4-4597-86cc-ad69f63e3572 status=executed fillImm=5.00
+[FILL P]  109242249138... placed orderID=0x156b6be427fc959bd0dfd2fde57033bbeb3f320fea8afe3f0923e44c76f9d2ab status=matched
+[FILL P]  109242249138... filled=5.011436 avgPrice=0.8740
+[EXEC OK] Will Otto Lopez lead Pro Baseball in batting average for the 2026 regular season? | K=5.00@10¢ | P=5.00sh@$0.8740 | cost=$4.82 actualNet=0.9730 projProfit=$0.13
+[EXEC UNHEDGED] Will Otto Lopez lead Pro Baseball in batting average for the 2026 regular season? | kFilled=5.00 pFilled=5.01 balanced=5.00 kExcess=0.00 pExcess=0.01 — starting recovery
+[CLEANUP DUST] Will Otto Lopez lead Pro Baseball in batting average for the 2026 regular season? | Absorbing 0.01 Poly dust ($0.01) — no halt
+
+============================================================
+ATTEMPT 2026-06-09 16:39:24 UTC  pair=MANUAL_KXTIME-26-BEN__48890278  arbType=K_YES_P_NO
+============================================================
+[EXEC] Will Benjamin Netanyahu be Time Person of the Year in 2026? | K_YES_P_NO | K-yes=0.0700 P=0.8600 net=$0.9406 | 5 contracts @ $4.65
+[ORDER K] KXTIME-26-BEN YES 8¢ × 5  clientId=CAXARB_AX_20260609163924_KXTIME-26-BEN
+[ORDER P] BUY token=658499658082... price=0.8772 shares=5
+[FILL K]  KXTIME-26-BEN placed orderId=339f6f87-b574-4fa8-86bc-896650d1444c status=executed fillImm=5.00
+[FILL P]  658499658082... placed orderID=0xe7073de3144412877a7a4647dd250314054bc330467cc7d78f2736b4dedf705a status=matched
+[FILL P]  658499658082... filled=5.116278 avgPrice=0.8600
+[EXEC OK] Will Benjamin Netanyahu be Time Person of the Year in 2026? | K=5.00@8¢ | P=5.00sh@$0.8600 | cost=$4.65 actualNet=0.9406 projProfit=$0.30
+[EXEC UNHEDGED] Will Benjamin Netanyahu be Time Person of the Year in 2026? | kFilled=5.00 pFilled=5.12 balanced=5.00 kExcess=0.00 pExcess=0.12 — starting recovery
+[CLEANUP DUST] Will Benjamin Netanyahu be Time Person of the Year in 2026? | Absorbing 0.12 Poly dust ($0.10) — no halt
+
+============================================================
+ATTEMPT 2026-06-09 16:55:16 UTC  pair=MANUAL_KXBRPRES1MOV-BRPRES26-LSIL-P7__48407765  arbType=K_YES_P_NO
+============================================================
+[EXEC] Will the margin of victory for Lula da Silva in the first round of the 2026 Brazilian presidential election be between 5% and 10%? | K_YES_P_NO | K-yes=0.2100 P=0.7200 net=$0.9497 | 5 contracts @ $4.65
+[ORDER K] KXBRPRES1MOV-BRPRES26-LSIL-P7 YES 22¢ × 5  clientId=CAXARB_AX_20260609165516_KXBRPRES1MOV-BRPRES26-LSIL-P7
+[ORDER P] BUY token=247047209822... price=0.7327 shares=5
+[FILL K]  KXBRPRES1MOV-BRPRES26-LSIL-P7 placed orderId=c838b32f-131e-4c1c-8c66-a2eb4eacbd21 status=executed fillImm=5.00
+[FILL P]  247047209822... placed orderID=0x9bf85d7f851e5d11b7bea854812568ff2d263388acbbdc509274a1c64a91e08e status=matched
+[FILL P]  247047209822... filled=5.069442 avgPrice=0.7200
+[EXEC OK] Will the margin of victory for Lula da Silva in the first round of the 2026 Brazilian presidential election be between 5% and 10%? | K=5.00@22¢ | P=5.00sh@$0.7200 | cost=$4.65 actualNet=0.9497 projProfit=$0.25
+[EXEC UNHEDGED] Will the margin of victory for Lula da Silva in the first round of the 2026 Brazilian presidential election be between 5% and 10%? | kFilled=5.00 pFilled=5.07 balanced=5.00 kExcess=0.00 pExcess=0.07 — starting recovery
+[CLEANUP DUST] Will the margin of victory for Lula da Silva in the first round of the 2026 Brazilian presidential election be between 5% and 10%? | Absorbing 0.07 Poly dust ($0.05) — no halt
+
+============================================================
+ATTEMPT 2026-06-09 18:00:04 UTC  pair=MANUAL_KXSC01R-26-APEL__59320203  arbType=K_YES_P_NO
+============================================================
+[EXEC] Will Alex Pelbath be the Republican nominee for SC-01? | K_YES_P_NO | K-yes=0.0610 P=0.8710 net=$0.9405 | 5 contracts @ $4.66
+[ORDER K] KXSC01R-26-APEL YES 7¢ × 5  clientId=CAXARB_AX_20260609180004_KXSC01R-26-APEL
+[ORDER P] BUY token=533795082091... price=0.8882 shares=5
+[FILL K]  KXSC01R-26-APEL placed orderId=af44b9db-57f5-4516-9d07-82d2b7859f4e status=executed fillImm=5.00
+[POLY LEG ERROR] 533795082091...: [Polymarket API Error] BadRequest: {"error":"no orders found to match with FAK order. FAK orders are partially filled or killed if no match is found.","orderID":"0x119c5b6bb581daac1924a81436effba7994430be0e802f71d45b48d57e6500fa"}
+[STALE PRICE] Will Alex Pelbath be the Republican nominee for SC-01? | detectedNet=0.9405 kFilled=5.00 pFilled=0.00 — one leg missed limit, price may have moved
+[EXEC UNHEDGED] Will Alex Pelbath be the Republican nominee for SC-01? | kFilled=5.00 pFilled=0.00 balanced=0 kExcess=5.00 pExcess=0.00 — starting recovery
+[CLEANUP SKIP HEDGE] Will Alex Pelbath be the Republican nominee for SC-01? | kExcess=5.00 value=$0.31 < $1.00 — reversing directly
+[RECOVER REVERSED] Will Alex Pelbath be the Republican nominee for SC-01? | swept 5 Kalshi yes (attempt 1), 0 left
