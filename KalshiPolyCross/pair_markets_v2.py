@@ -84,7 +84,12 @@ POLY_CATEGORY     = ""
 
 SIMILARITY_THRESH = 0.78
 TOP_N_CANDIDATES  = 5
-DATE_WINDOW_DAYS  = 7
+# End-date match window (days) between a Kalshi close and a Poly end date, tiered by confidence that the
+# two refer to the same event cycle. Applied AFTER the 0.78 similarity filter and BEFORE the LLM judge,
+# so it's candidate-generation slack, not the final precision guard (the judge flags DEADLINE_MISMATCH).
+DATE_WINDOW_DAYS      = 14    # default tier (no shared year token, non-politics); was 7, widened for cross-venue settlement-buffer offsets
+DATE_WINDOW_POLITICS  = 30    # politics/elections without a shared year token
+DATE_WINDOW_SAME_YEAR = 366   # both titles carry the same 20XX token -> same event cycle
 
 JUDGE_BATCH_SIZE   = 10
 JUDGE_DELAY_S      = 5
@@ -489,9 +494,9 @@ def find_candidates(kalshi_markets: dict, poly_markets: list, already_paired: se
                     k_years = set(re.findall(r'\b20\d{2}\b', info["title"]))
                     p_years = set(re.findall(r'\b20\d{2}\b', p["question"]))
                     if k_years and p_years and k_years == p_years:
-                        effective_window = 366  # shared year token proves same event cycle
+                        effective_window = DATE_WINDOW_SAME_YEAR  # shared year token proves same event cycle
                     elif info.get("category") in ("Politics", "Elections"):
-                        effective_window = 30
+                        effective_window = DATE_WINDOW_POLITICS
                     else:
                         effective_window = DATE_WINDOW_DAYS
                     if abs((kd - pd).total_seconds()) / 86400 > effective_window:
