@@ -1,65 +1,15 @@
 
 ============================================================
-ATTEMPT 2026-06-08 00:46:32 UTC  pair=MANUAL_KXLEADERMLBAVG-26-LARR__21496785  arbType=K_YES_P_NO
+ATTEMPT 2026-06-08 20:40:12 UTC  pair=MANUAL_KXWCGROUPQUAL-26J-JOR__52413286  arbType=K_NO_P_YES
 ============================================================
-[EXEC] Will Luis Arraez lead Pro Baseball in batting average for the 2026 regular season? | K_YES_P_NO | K-yes=0.2400 P=0.6900 net=$0.9492 | 5 contracts @ $4.65
-[ORDER K] KXLEADERMLBAVG-26-LARR YES 25¢ × 5  clientId=CAXARB_AX_20260608004632_KXLEADERMLBAVG-26-LARR
-[ORDER P] BUY token=771924468071... price=0.7029 shares=5
-[FILL K]  KXLEADERMLBAVG-26-LARR placed orderId=0440518f-aa93-4cc3-ae0f-66bf04fffbca status=executed fillImm=5.00
-[FILL P]  771924468071... placed orderID=0x28b1bb8537e02599433d31b147224fb44f6c53624fde03b673524b9c3fb18c30 status=matched
-[FILL P]  771924468071... filled=5.071426 avgPrice=0.6901
-[EXEC OK] Will Luis Arraez lead Pro Baseball in batting average for the 2026 regular season? | K=5.00@25¢ | P=5.00sh@$0.6901 | cost=$4.65 actualNet=0.9493 projProfit=$0.25
-[EXEC UNHEDGED] Will Luis Arraez lead Pro Baseball in batting average for the 2026 regular season? | kFilled=5.00 pFilled=5.07 balanced=5.00 kExcess=0.00 pExcess=0.07 — starting recovery
-[CLEANUP DUST] Will Luis Arraez lead Pro Baseball in batting average for the 2026 regular season? | Absorbing 0.07 Poly dust ($0.05) — no halt
-
-============================================================
-ATTEMPT 2026-06-08 00:48:57 UTC  pair=MANUAL_KXMEASLES-26-3000__24374365  arbType=K_NO_P_YES
-============================================================
-[EXEC] Will there be more than 3000 measles cases in 2026? | K_NO_P_YES | K-no=0.1200 P=0.8500 net=$0.9812 | 5 contracts @ $4.85
-[ORDER K] KXMEASLES-26-3000 NO 13¢ × 5  clientId=CAXARB_AX_20260608004857_KXMEASLES-26-3000
-[ORDER P] BUY token=243743657509... price=0.8500 shares=5
-[FILL K]  KXMEASLES-26-3000 placed orderId=d528e239-bc4d-40e9-95c0-3d4a35147bdf status=executed fillImm=5.00
-[FILL P]  243743657509... placed orderID=0xde2f7ffc02d385171390bcc110f20db37305a78363e4705248365e791c847f4a status=matched
-[FILL P]  243743657509... filled=5.059518 avgPrice=0.8400
-[EXEC OK] Will there be more than 3000 measles cases in 2026? | K=5.00@13¢ | P=5.00sh@$0.8400 | cost=$4.80 actualNet=0.9714 projProfit=$0.14
-[EXEC UNHEDGED] Will there be more than 3000 measles cases in 2026? | kFilled=5.00 pFilled=5.06 balanced=5.00 kExcess=0.00 pExcess=0.06 — starting recovery
-[CLEANUP DUST] Will there be more than 3000 measles cases in 2026? | Absorbing 0.06 Poly dust ($0.05) — no halt
-
-============================================================
-ATTEMPT 2026-06-08 00:54:51 UTC  pair=MANUAL_KXVALORANT-MASTLD26-NRG__11485436  arbType=K_NO_P_YES
-============================================================
-[EXEC] Will NRG win VALORANT Masters London? | K_NO_P_YES | K-no=0.8600 P=0.1100 net=$0.9814 | 10 contracts @ $9.70
-[ORDER K] KXVALORANT-MASTLD26-NRG NO 87¢ × 10  clientId=CAXARB_AX_20260608005451_KXVALORANT-MASTLD26-NRG
-[ORDER P] BUY token=114854363876... price=0.1100 shares=10
-[FILL K]  KXVALORANT-MASTLD26-NRG placed orderId=9e24ff34-5c65-4348-9ea3-7cf79edf0566 status=executed fillImm=10.00
-[FILL P]  114854363876... placed orderID=0xcbf0b522eedca5ae6b7ec3b3b2cdd4d611684bd7a67416d0e7a7d965d6048f82 status=matched
-[FILL P]  114854363876... filled=10.021817 avgPrice=0.1098
-[EXEC OK] Will NRG win VALORANT Masters London? | K=10.00@87¢ | P=10.00sh@$0.1098 | cost=$9.70 actualNet=0.9811 projProfit=$0.19
-[EXEC UNHEDGED] Will NRG win VALORANT Masters London? | kFilled=10.00 pFilled=10.02 balanced=10.00 kExcess=0.00 pExcess=0.02 — starting recovery
-[CLEANUP DUST] Will NRG win VALORANT Masters London? | Absorbing 0.02 Poly dust ($0.00) — no halt
-
-============================================================
-ATTEMPT 2026-06-08 01:04:47 UTC  pair=MANUAL_KXLEADERMLBERA-26-CSAN__75668784  arbType=K_YES_P_NO
-============================================================
-[EXEC] Will Cristopher Sánchez lead Pro Baseball in earned run average (ERA) for the 2026 regular season? | K_YES_P_NO | K-yes=0.1600 P=0.8100 net=$0.9840 | 5 contracts @ $4.85
-[ORDER K] KXLEADERMLBERA-26-CSAN YES 17¢ × 5  clientId=CAXARB_AX_20260608010447_KXLEADERMLBERA-26-CSAN
-[ORDER P] BUY token=834632701874... price=0.8100 shares=5
-[FILL K]  KXLEADERMLBERA-26-CSAN placed orderId=2a909aa2-c931-467a-8877-37d710d2f50e status=executed fillImm=5.00
-[FILL P]  834632701874... placed orderID=0xff515164f46926c4738b6c3ce9baa18e9b4e1b392b8b24f9c98c8ff9d4876447 status=matched
-[FILL P]  834632701874... filled=5.006178 avgPrice=0.8090
-[EXEC OK] Will Cristopher Sánchez lead Pro Baseball in earned run average (ERA) for the 2026 regular season? | K=5.00@17¢ | P=5.00sh@$0.8090 | cost=$4.84 actualNet=0.9830 projProfit=$0.08
-[EXEC UNHEDGED] Will Cristopher Sánchez lead Pro Baseball in earned run average (ERA) for the 2026 regular season? | kFilled=5.00 pFilled=5.01 balanced=5.00 kExcess=0.00 pExcess=0.01 — starting recovery
-[CLEANUP DUST] Will Cristopher Sánchez lead Pro Baseball in earned run average (ERA) for the 2026 regular season? | Absorbing 0.01 Poly dust ($0.00) — no halt
-
-============================================================
-ATTEMPT 2026-06-08 01:17:35 UTC  pair=MANUAL_KXLEADERWNBAREB-26-JSHEPARD32__23318548  arbType=K_NO_P_YES
-============================================================
-[EXEC] Will Jessica Shepard lead Women's Pro Basketball in rebounds per game for the 2026 regular season? | K_NO_P_YES | K-no=0.7200 P=0.1890 net=$0.9277 | 6 contracts @ $5.45
-[ORDER K] KXLEADERWNBAREB-26-JSHEPARD32 NO 73¢ × 6  clientId=CAXARB_AX_20260608011735_KXLEADERWNBAREB-26-JSHEPARD32
-[ORDER P] BUY token=233185485255... price=0.2126 shares=6
-[FILL K]  KXLEADERWNBAREB-26-JSHEPARD32 placed orderId=5f696528-71dc-4a68-ba5d-8acd6cb6d3c9 status=executed fillImm=6.00
-[FILL P]  233185485255... placed orderID=0xf698eae88c12e081db1dd0afd6a35b5bf32e133e15cc28890c9bdd61fb1edfbd status=matched
-[FILL P]  233185485255... filled=6.772485 avgPrice=0.1890
-[EXEC OK] Will Jessica Shepard lead Women's Pro Basketball in rebounds per game for the 2026 regular season? | K=6.00@73¢ | P=6.00sh@$0.1890 | cost=$5.45 actualNet=0.9277 projProfit=$0.43
-[EXEC UNHEDGED] Will Jessica Shepard lead Women's Pro Basketball in rebounds per game for the 2026 regular season? | kFilled=6.00 pFilled=6.77 balanced=6.00 kExcess=0.00 pExcess=0.77 — starting recovery
-[CLEANUP DUST] Will Jessica Shepard lead Women's Pro Basketball in rebounds per game for the 2026 regular season? | Absorbing 0.77 Poly dust ($0.15) — no halt
+[EXEC] Will Jordan qualify from World Cup Group J? | K_NO_P_YES | K-no=0.8100 P=0.0700 net=$0.8927 | 15 contracts @ $13.20
+[ORDER K] KXWCGROUPQUAL-26J-JOR NO 82¢ × 15  clientId=CAXARB_AX_20260608204012_KXWCGROUPQUAL-26J-JOR
+[ORDER P] BUY token=524132861781... price=0.0805 shares=15
+[FILL P]  524132861781... placed orderID=0xe20b293ac419449207002606c1215a6dbc3d3d7d3ff7d943f1dda221ab10f2f8 status=matched
+[FILL P]  524132861781... filled=79.59125 avgPrice=0.0151
+[FILL K]  KXWCGROUPQUAL-26J-JOR placed orderId=6cf42bd7-81c5-48a0-9ee9-7f5e0c8fd3d7 status=executed fillImm=15.00
+[EXEC OK] Will Jordan qualify from World Cup Group J? | K=15.00@82¢ | P=15.00sh@$0.0151 | cost=$12.38 actualNet=0.8363 projProfit=$2.46
+[EXEC UNHEDGED] Will Jordan qualify from World Cup Group J? | kFilled=15.00 pFilled=79.59 balanced=15.00 kExcess=0.00 pExcess=64.59 — starting recovery
+[ORDER P] SELL token=524132861781... shares=64.59
+[FILL P]  524132861781... sold=64.59 avgPrice=0.0110
+[RECOVER] Will Jordan qualify from World Cup Group J? | reversed 64.59 excess Poly @ 0.0110 (OVERFILL) loss=$0.26

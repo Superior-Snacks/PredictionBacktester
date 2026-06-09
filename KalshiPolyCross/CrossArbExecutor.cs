@@ -1203,7 +1203,11 @@ public class CrossArbExecutor
                 decimal reversedKalshiQty = kReversed ? recovery!.RecoveredQty : 0m;
                 // When Poly dust was absorbed we didn't sell — venue holds pFilled, not balancedQty.
                 decimal expectedPolyVenue = recovery?.Outcome == "DUST_ABSORBED_POLY" ? pFilled : balancedQty;
-                _ = Task.Run(async () => await ReconcileTradeAsync(pair, arbType, balancedQty, expectedPolyVenue, execId, reconcileOrderId, priorPolyBal, reversedKalshiQty));
+                // A Poly overfill reversal (bought too many, sold the excess in-trade) can race the
+                // pre-trade snapshot and poison reconcile's delta check — flag it so reconcile trusts
+                // the absolute position instead of the (contaminated) delta.
+                bool polyOverfillReversed = recovery?.Outcome == "REVERSED_POLY";
+                _ = Task.Run(async () => await ReconcileTradeAsync(pair, arbType, balancedQty, expectedPolyVenue, execId, reconcileOrderId, priorPolyBal, reversedKalshiQty, polyOverfillReversed));
             }
         }
         else
@@ -2536,7 +2540,7 @@ public class CrossArbExecutor
         return null;   // inconclusive — caller must NOT treat as a real zero balance
     }
 
-    private async Task ReconcileTradeAsync(CrossPair pair, string arbType, decimal expectedKalshi, decimal expectedPoly, string execId = "", string kOrderId = "", decimal? priorPolyBalance = null, decimal reversedKalshiQty = 0m)
+    private async Task ReconcileTradeAsync(CrossPair pair, string arbType, decimal expectedKalshi, decimal expectedPoly, string execId = "", string kOrderId = "", decimal? priorPolyBalance = null, decimal reversedKalshiQty = 0m, bool polyOverfillReversed = false)
     {
         try
         {
@@ -2588,7 +2592,14 @@ public class CrossArbExecutor
             // Use delta vs pre-trade snapshot so orphaned prior-run shares don't trigger a false halt.
             decimal polyDelta     = polyBal - prior;
             bool    kMismatch     = Math.Abs(kActual  - expectedKalshi) > 0.5m;
-            bool    pWouldMismatch = Math.Abs(polyDelta - expectedPoly) > 0.5m;
+            // Normally compare the DELTA vs the pre-trade snapshot, so pre-existing orphaned shares
+            // don't false-halt. But an in-trade overfill reversal can race that snapshot — it captures
+            // the overfilled buy (e.g. prior=79.59 after 64.59 was reversed back to 15), poisoning the
+            // delta (−64.59 vs +15). When one is on record the snapshot is untrustworthy, so verify the
+            // ABSOLUTE position (which was correct: 15.004 ≈ 15) instead.
+            bool    pWouldMismatch = polyOverfillReversed
+                ? Math.Abs(polyBal   - expectedPoly) > 0.5m
+                : Math.Abs(polyDelta - expectedPoly) > 0.5m;
             bool    pMismatch     = priorValid && pWouldMismatch;
             if (!priorValid && pWouldMismatch)
             {
@@ -2642,7 +2653,7 @@ public class CrossArbExecutor
                     kExpected = expectedKalshi, kVenue = kActual,
                     pExpected = expectedPoly,   pVenue = polyBal,
                     pPrior = priorValid ? (object?)prior : null, pPriorValid = priorValid, pDelta = polyDelta,
-                    halted = true
+                    polyOverfillReversed, halted = true
                 }));
             }
             else
