@@ -1303,7 +1303,11 @@ def extract_entities_spacy(text: str) -> set:
 
 def _record_entities(e: MarketRecord) -> set:
     if e.extracted_entities is None:
-        e.extracted_entities = extract_entities_spacy(e.title + " " + (e.rules_text or "")[:400])
+        # Fold in group_item_title: categorical Kalshi events carry the distinguishing outcome
+        # (candidate/team/nominee, e.g. "Gunnar Henderson") here, not in the generic event title —
+        # without it the entity signal can't see the nominee. (Same fix as `_kalshi_match_text`.)
+        e.extracted_entities = extract_entities_spacy(
+            e.title + " " + (e.group_item_title or "") + " " + (e.rules_text or "")[:400])
     return e.extracted_entities
 
 
@@ -1431,7 +1435,10 @@ def auto_suggest_keywords_from_ticker(ticker: str, series_titles: dict = None) -
 
 def twin_search(source_market: MarketRecord, target_venue: str, index, limit=20, series_titles=None):
     """Multi-signal candidate generation on the opposite venue. Returns ranked dicts with provenance."""
-    keywords = extract_search_keywords(source_market.title + " " + source_market.event_title)
+    # Include group_item_title so a categorical source (generic title, nominee in the outcome field)
+    # contributes its nominee to the BM25 query — otherwise "Gunnar Henderson" never reaches the search.
+    keywords = extract_search_keywords(
+        source_market.title + " " + source_market.event_title + " " + (source_market.group_item_title or ""))
     if source_market.venue == "kalshi":
         keywords += auto_suggest_keywords_from_ticker(source_market.id, series_titles)
     entities = _record_entities(source_market)
