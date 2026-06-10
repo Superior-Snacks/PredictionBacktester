@@ -145,7 +145,7 @@ bool logErrors = args.Contains("--log");
 // pairs become eligible as they approach. 0 = no window (all dates eligible).
 int execWindowWeeks = 0;
 foreach (var a in args)
-    if (a.Length > 3 && a.StartsWith("--w", StringComparison.Ordinal) && int.TryParse(a.AsSpan(3), out int wkN) && wkN > 0)
+    if (a.Length > 3 && a.StartsWith("--w", StringComparison.OrdinalIgnoreCase) && int.TryParse(a.AsSpan(3), out int wkN) && wkN > 0)
     { execWindowWeeks = wkN; break; }
 if (execWindowWeeks > 0)
     Console.WriteLine($"[WINDOW] Execution limited to arbs settling within {execWindowWeeks} week(s) (rolling, by Kalshi close date).");
