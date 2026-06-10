@@ -384,10 +384,12 @@ public class CrossArbExecutor
             lock (_balanceLock) { _kalshiBalanceUsd = 1000m; _polyBalanceUsd = 1000m; }
             Console.WriteLine("[BALANCE INIT] Dry-run: simulation seeded at $1,000.00 on each platform");
             _ = Task.Run(RunEarlyExitMonitorAsync);
+            AnnounceStartup();
             return;
         }
         await RefreshBalancesAsync(initial: true);
         await PrefetchFeeRatesAsync();
+        AnnounceStartup();
         _ = Task.Run(PeriodicBalanceRefreshLoop);
         _ = Task.Run(RunEarlyExitMonitorAsync);
         _ = Task.Run(async () =>
@@ -400,6 +402,17 @@ public class CrossArbExecutor
                 await PingPolyAsync();
             }
         });
+    }
+
+    // One-shot startup announcement to Discord — fires once the long Poly fee prefetch finishes and the
+    // bot is entering its trading phase. Also serves as a live webhook smoke test on every (re)start.
+    private void AnnounceStartup()
+    {
+        decimal k, p;
+        lock (_balanceLock) { k = _kalshiBalanceUsd; p = _polyBalanceUsd; }
+        int pairCount = _telemetry.GetAllPairs().Count();
+        string mode = _dryRun ? "DRY-RUN" : "LIVE";
+        DiscordAlert($"✅ {mode} started — startup complete (Poly fees prefetched), monitoring {pairCount} pair(s). Cash: Kalshi ${k:0.00} / Poly ${p:0.00}.");
     }
 
     private async Task PrefetchFeeRatesAsync()
