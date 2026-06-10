@@ -316,7 +316,7 @@ if (isLive || isDryRun)
     var polyOrderClient = new PredictionBacktester.Engine.LiveExecution.PolymarketOrderClient(polyConfig);
     if (isDebug)
         polyOrderClient.RawResponseLogger = (path, body) => DebugLog.Books($"[POLY REST] {path}\n{body}");
-    const decimal MAX_BET_USD          = 10m;    // max combined dollar cost per arb entry
+    const decimal MAX_BET_USD          = 30m;    // max combined dollar cost per arb entry
     const decimal BALANCE_BUFFER_PCT   = 0.20m;  // per-platform reserve (fraction of maxBet)
     const decimal EXECUTION_THRESHOLD  = 0.995m; // net-cost ceiling for arb detection
     const decimal EXEC_NET_FLOOR       = 0.985m; // minimum net to attempt execution (1.5¢/set profit floor); Kalshi always gets ask+1¢ limit regardless
@@ -364,8 +364,9 @@ if (isLive || isDryRun)
         isDryRun ? venueClient! : orderClient;
     PredictionBacktester.Engine.LiveExecution.IPolymarketOrderExecutor polyExec   =
         isDryRun ? simPoly!     : polyOrderClient;
-    // Dry-run mirrors the full simulated $1,000 balance; live caps concurrent risk tightly.
-    decimal       maxExposureUsd     = isDryRun ? 1000m : 500m;
+    // Total combined open-exposure cap. $1,000 = full deployment of the $500/platform capital;
+    // the per-platform balance/buffer checks still gate each side so neither venue overdraws.
+    decimal       maxExposureUsd     = 1000m;
     executor = new CrossArbExecutor(
         kalshi:              kalshiExec,
         poly:                polyExec,

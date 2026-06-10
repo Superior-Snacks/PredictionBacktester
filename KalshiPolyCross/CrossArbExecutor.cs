@@ -73,9 +73,11 @@ public class CrossArbExecutor
     // with a 60 s fallback timer in case a book update is missed.
     // EarlyExitThreshold: fraction of expected settlement profit required to exit early.
     //   0   = never exit early (hold to settlement)
-    //   0.5 = exit when unrealized PnL ≥ 50 % of expected profit   ← default
+    //   0.5 = exit when unrealized PnL ≥ 50 % of expected profit
+    //   0.6 = exit when unrealized PnL ≥ 60 % of expected profit   ← default
     //   1.0 = only exit when full settlement value is available on the bid
-    private static decimal  EarlyExitThreshold         = 0.50m;
+    //   NOTE: only applies when --min-buy is OFF; --min-buy forces break-even early-exit (see breakEvenMode).
+    private static decimal  EarlyExitThreshold         = 0.60m;
     private const  decimal  EarlyExitMinProfitUsd      = 0.05m;  // skip micro-exits below this
     // Break-even mode fires at exactly ≥0, so normal fill slippage flips the exit negative (the
     // "exit bleed"). Require a few ticks past break-even before selling. Non-breakeven mode already
