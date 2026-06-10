@@ -21,6 +21,8 @@ using PredictionBacktester.Engine.LiveExecution;
 //  --try N         execute exactly N complete arbs then shut down; works with --dry-run or --live.
 //  --min-buy       cap every arb to exactly 1 contract regardless of maxBet (useful for initial live shakedown).
 //  --single-entry  one open position per pair at a time; re-entry allowed once the position closes (exit or settlement).
+//  --wN            rolling execution window: only execute arbs whose Kalshi close date is within N weeks of today
+//                  (e.g. --w2). Re-checked live each attempt, so far-out pairs become eligible as they approach.
 //  --log           capture full console output for failed executions and append to error_log.txt.
 //  --seed N        seed the dry-run fill RNG for reproducible results; omit for non-deterministic simulation.
 //  --scenario Name named failure profile for dry-run (default: HappyPath).
@@ -137,6 +139,16 @@ bool singleEntry = args.Contains("--single-entry");
 
 // --log: capture all console output for failed executions and append to error_log.txt
 bool logErrors = args.Contains("--log");
+
+// --wN: rolling execution window — only execute arbs whose Kalshi close date is within N weeks of today.
+// Evaluated live in the executor (not a startup filter), so the window rolls forward each day and far-out
+// pairs become eligible as they approach. 0 = no window (all dates eligible).
+int execWindowWeeks = 0;
+foreach (var a in args)
+    if (a.Length > 3 && a.StartsWith("--w", StringComparison.Ordinal) && int.TryParse(a.AsSpan(3), out int wkN) && wkN > 0)
+    { execWindowWeeks = wkN; break; }
+if (execWindowWeeks > 0)
+    Console.WriteLine($"[WINDOW] Execution limited to arbs settling within {execWindowWeeks} week(s) (rolling, by Kalshi close date).");
 
 // --seed N: seed the dry-run fill RNG for reproducible simulated outcomes
 int? fillSeed = null;
@@ -382,7 +394,8 @@ if (isLive || isDryRun)
         perTradeTripwire:    PER_TRADE_TRIPWIRE,
         minPlausibleNet:     MIN_PLAUSIBLE_NET,
         discord:             discord,
-        lowBalanceAlertUsd:  LOW_BALANCE_ALERT_USD);
+        lowBalanceAlertUsd:  LOW_BALANCE_ALERT_USD,
+        executionWindowWeeks: execWindowWeeks);
     telemetry.OnArbOpened  += executor.OnArbOpened;
     telemetry.BookUpdated  += executor.OnBookUpdate;  // event-driven early exit checks
     await executor.InitializeBalancesAsync();

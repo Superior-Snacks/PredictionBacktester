@@ -97,6 +97,7 @@ public class CrossArbExecutor
     private readonly decimal _lowBalanceAlertUsd;  // Discord-alert when either venue's cash drops below this
     private bool _kalshiLowAlerted;                // low-cash alert debounce (per side), guarded by _balanceLock
     private bool _polyLowAlerted;
+    private readonly int     _executionWindowWeeks;  // --wN: only execute arbs whose Kalshi close date is within N weeks of now (0 = no window)
     private readonly int     _pairCooldownSeconds;
     private readonly int     _fillTimeoutMs;
     private readonly bool    _dryRun;
@@ -310,7 +311,8 @@ public class CrossArbExecutor
         bool    perTradeTripwire    = true,
         decimal minPlausibleNet     = 0.90m,
         DiscordNotifier? discord    = null,
-        decimal lowBalanceAlertUsd  = 15m)
+        decimal lowBalanceAlertUsd  = 15m,
+        int     executionWindowWeeks = 0)
     {
         _kalshi              = kalshi;
         _poly                = poly;
@@ -328,6 +330,7 @@ public class CrossArbExecutor
         _minPlausibleNet     = minPlausibleNet;
         _discord             = discord;
         _lowBalanceAlertUsd  = lowBalanceAlertUsd;
+        _executionWindowWeeks = executionWindowWeeks;
         _pairCooldownSeconds = pairCooldownSeconds;
         _fillTimeoutMs       = fillTimeoutMs;
         _maxDayLossUsd       = maxDayLossUsd;
@@ -500,6 +503,7 @@ public class CrossArbExecutor
                     maxBetUsd = _maxBetUsd, maxExposureUsd = _maxExposureUsd,
                     executionThreshold = _executionThreshold, execNetFloor = _execNetFloor,
                     minPlausibleNet = _minPlausibleNet, lowBalanceAlertUsd = _lowBalanceAlertUsd,
+                    executionWindowWeeks = _executionWindowWeeks,
                     pairCooldownSeconds = _pairCooldownSeconds, dryRun = _dryRun,
                     hedgeMaxNet = _hedgeMaxNet, reverseFloorCents = _reverseFloorCents,
                     reverseMaxAttempts = _reverseMaxAttempts,
@@ -586,6 +590,29 @@ public class CrossArbExecutor
         {
             Console.WriteLine($"[EXEC SKIP] {pairId}: pair not found in telemetry — possible config mismatch");
             return;
+        }
+
+        // --wN rolling execution window: only fire arbs whose Kalshi close (settlement) date is within N
+        // weeks of *now*. Evaluated live on every attempt (NOT a startup filter), so the window rolls
+        // forward each day — a far-out pair becomes eligible once it crosses into range. Fail-closed: a
+        // pair with no date can't be confirmed in-window, so it's skipped while a window is active.
+        if (_executionWindowWeeks > 0)
+        {
+            DateTime  horizon   = DateTime.UtcNow.AddDays(_executionWindowWeeks * 7);
+            DateTime? settleUtc = pair.SettlementDate?.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
+            if (settleUtc is null || settleUtc.Value > horizon)
+            {
+                double weeksOut = settleUtc is null ? -1.0 : (settleUtc.Value - DateTime.UtcNow).TotalDays / 7.0;
+                string dateStr  = pair.SettlementDate?.ToString("yyyy-MM-dd") ?? "no-date";
+                Console.WriteLine($"[EXEC SKIP] {pair.Label}: settles {dateStr} (~{(weeksOut < 0 ? 0 : weeksOut):0.0}w out) — outside {_executionWindowWeeks}w window");
+                await JournalAsync(JsonSerializer.Serialize(new {
+                    t = DateTime.UtcNow, @event = "EXEC_SKIP", pairId, arbType,
+                    reason = "OUTSIDE_WINDOW", settlementDate = dateStr,
+                    weeksOut = weeksOut < 0 ? (object?)null : Math.Round(weeksOut, 1),
+                    windowWeeks = _executionWindowWeeks
+                }));
+                return;
+            }
         }
 
         // Books are needed for stale-gate timestamp checks; prices come from the detection event.
