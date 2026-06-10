@@ -344,6 +344,10 @@ public class CrossArbExecutor
         if (_kalshi is KalshiOrderClient kalshiClient)
             kalshiClient.RateLimitRetryLogger = OnKalshiRateLimitRetry;
 
+        // Same for Poly 425 "order manager not ready" back-offs (live client only; sim has none).
+        if (_poly is PolymarketOrderClient polyClient)
+            polyClient.OrderRetryLogger = OnPolyOrderRetry;
+
         // Load pair blocklist written by prod_cross_arb.py (pair-mismatch settlements)
         string blPath = Path.Combine(AppContext.BaseDirectory, "cross_pair_blocklist.json");
         if (!File.Exists(blPath))
@@ -2223,6 +2227,21 @@ public class CrossArbExecutor
                 t = DateTime.UtcNow, @event = "KALSHI_RATE_LIMIT_RETRY",
                 method = r.Method, path = r.Path, status = r.StatusCode,
                 attempt = r.Attempt, maxAttempts = r.MaxAttempts, delaySeconds = r.DelaySeconds
+            }));
+        }
+        catch { /* journaling must never disrupt trading */ }
+    }
+
+    private void OnPolyOrderRetry(PolyOrderRetryInfo r) => _ = JournalPolyOrderRetryAsync(r);
+
+    private async Task JournalPolyOrderRetryAsync(PolyOrderRetryInfo r)
+    {
+        try
+        {
+            await JournalAsync(JsonSerializer.Serialize(new {
+                t = DateTime.UtcNow, @event = "POLY_ORDER_RETRY",
+                token = r.TokenId.Length > 12 ? r.TokenId[..12] + "..." : r.TokenId,
+                status = r.StatusCode, attempt = r.Attempt, maxAttempts = r.MaxAttempts, delaySeconds = r.DelaySeconds
             }));
         }
         catch { /* journaling must never disrupt trading */ }

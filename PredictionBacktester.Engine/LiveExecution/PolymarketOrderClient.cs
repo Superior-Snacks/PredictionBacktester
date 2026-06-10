@@ -18,11 +18,20 @@ using RestSharp;
 
 namespace PredictionBacktester.Engine.LiveExecution;
 
+/// <summary>Details of a single Poly 425 "order manager not ready" back-off, surfaced for journaling.</summary>
+public readonly record struct PolyOrderRetryInfo(
+    string TokenId, int StatusCode, int Attempt, int MaxAttempts, double DelaySeconds);
+
 public class PolymarketOrderClient : IPolymarketOrderExecutor
 {
     private readonly PolymarketApiConfig _config;
     private readonly RestClient _httpClient;
     private readonly Account _account;
+
+    // Retry budget for a transient 425 "order manager not ready" (CLOB matching engine warming up).
+    // 4 attempts with 200/400/800 ms backoff ≈ 1.4 s worst case before giving up to recovery.
+    private const int OrderManagerMaxRetries   = 4;
+    private const int OrderManagerBaseDelayMs  = 200;
 
     /// <summary>When true, prints [ORDER DEBUG] payload and [EIP712] intermediate hashes.</summary>
     public volatile bool DebugMode = true;
@@ -32,6 +41,12 @@ public class PolymarketOrderClient : IPolymarketOrderExecutor
     /// Set this in callers that need raw-response logging (e.g. KalshiPolyCross --debug).
     /// </summary>
     public Action<string, string>? RawResponseLogger { get; set; }
+
+    /// <summary>
+    /// Optional hook invoked just before each 425 "order manager not ready" back-off sleep, so callers
+    /// can journal how often the CLOB matching engine rejects orders. Exceptions are swallowed.
+    /// </summary>
+    public Action<PolyOrderRetryInfo>? OrderRetryLogger { get; set; }
 
     private async Task<RestResponse> ExecuteAndLogAsync(RestRequest request)
     {
@@ -164,23 +179,50 @@ public class PolymarketOrderClient : IPolymarketOrderExecutor
             Console.ResetColor();
         }
 
-        // 7. Build request with L2 HMAC auth headers
-        var request = new RestRequest("/order", Method.Post);
-        string timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString();
-        string hmacSignature = BuildHmacSignature(_config.ApiSecret, timestamp, "POST", "/order", jsonBody);
-
-        request.AddHeader("POLY_ADDRESS", _account.Address);
-        request.AddHeader("POLY_SIGNATURE", hmacSignature);
-        request.AddHeader("POLY_TIMESTAMP", timestamp);
-        request.AddHeader("POLY_API_KEY", _config.ApiKey);
-        request.AddHeader("POLY_PASSPHRASE", _config.ApiPassphrase);
-        request.AddStringBody(jsonBody, ContentType.Json);
-
-        // 8. Submit
-        var response = await ExecuteAndLogAsync(request);
-
-        if (!response.IsSuccessful)
+        // 7-8. Build request (L2 HMAC auth) and submit, retrying on a transient 425 "order manager not
+        // ready" (the CLOB matching engine is warming up and rejected the order BEFORE processing it, so
+        // nothing filled — resubmitting the same signed order is safe, and the CLOB dedupes on salt so
+        // even a spurious 425 can't double-fill). Auth headers are re-signed each attempt because the
+        // HMAC timestamp must be fresh (same as the Kalshi 429 retry).
+        for (int attempt = 1; ; attempt++)
         {
+            var request = new RestRequest("/order", Method.Post);
+            string timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString();
+            string hmacSignature = BuildHmacSignature(_config.ApiSecret, timestamp, "POST", "/order", jsonBody);
+
+            request.AddHeader("POLY_ADDRESS", _account.Address);
+            request.AddHeader("POLY_SIGNATURE", hmacSignature);
+            request.AddHeader("POLY_TIMESTAMP", timestamp);
+            request.AddHeader("POLY_API_KEY", _config.ApiKey);
+            request.AddHeader("POLY_PASSPHRASE", _config.ApiPassphrase);
+            request.AddStringBody(jsonBody, ContentType.Json);
+
+            var response = await ExecuteAndLogAsync(request);
+
+            if (response.IsSuccessful)
+                return response.Content ?? "OK";
+
+            bool orderManagerNotReady =
+                   (int)response.StatusCode == 425
+                || (response.Content?.Contains("order manager not ready", StringComparison.OrdinalIgnoreCase) ?? false);
+
+            if (orderManagerNotReady && attempt < OrderManagerMaxRetries)
+            {
+                int delayMs = OrderManagerBaseDelayMs * (1 << (attempt - 1));  // 200, 400, 800 ms
+                try
+                {
+                    OrderRetryLogger?.Invoke(new PolyOrderRetryInfo(
+                        tokenId, (int)response.StatusCode, attempt, OrderManagerMaxRetries, Math.Round(delayMs / 1000.0, 3)));
+                }
+                catch { /* logging must never disrupt the retry */ }
+                Console.ForegroundColor = ConsoleColor.DarkYellow;
+                Console.WriteLine($"[ORDER RETRY] Polymarket 'order manager not ready' (HTTP {(int)response.StatusCode}) — " +
+                                  $"attempt {attempt}/{OrderManagerMaxRetries}, retrying in {delayMs}ms");
+                Console.ResetColor();
+                await Task.Delay(delayMs);
+                continue;
+            }
+
             if (DebugMode)
             {
                 Console.ForegroundColor = ConsoleColor.Red;
@@ -189,8 +231,6 @@ public class PolymarketOrderClient : IPolymarketOrderExecutor
             }
             throw new Exception($"[Polymarket API Error] {response.StatusCode}: {response.Content ?? "No response body"}");
         }
-
-        return response.Content ?? "OK";
     }
 
     /// <summary>
