@@ -180,6 +180,11 @@ Console.WriteLine("════════════════════�
 var kalshiConfig = KalshiApiConfig.FromEnvironment(); // also loads .env into the process environment
 // Read proxy after .env is loaded — it's set by LoadDotEnv() inside FromEnvironment().
 string polyProxy = (Environment.GetEnvironmentVariable("POLY_SOCKS_PROXY") ?? "").Trim();
+
+// Discord webhook alerter (halts, naked-position failures, low cash). .env is loaded above, so the
+// URL is in the process env now; an unset/empty URL leaves it a disabled no-op.
+var discord = new DiscordNotifier(Environment.GetEnvironmentVariable("DISCORD_WEBHOOK_URL"));
+if (discord.Enabled) Console.WriteLine("[DISCORD] webhook alerts enabled");
 if (string.IsNullOrEmpty(kalshiConfig.ApiKeyId) || string.IsNullOrEmpty(kalshiConfig.PrivateKeyPath))
 {
     Console.WriteLine("[ERROR] Set KALSHI_API_KEY_ID and KALSHI_PRIVATE_KEY_PATH environment variables.");
@@ -304,6 +309,7 @@ if (isLive || isDryRun)
     const decimal EXECUTION_THRESHOLD  = 0.995m; // net-cost ceiling for arb detection
     const decimal EXEC_NET_FLOOR       = 0.985m; // minimum net to attempt execution (1.5¢/set profit floor); Kalshi always gets ask+1¢ limit regardless
     const decimal MIN_PLAUSIBLE_NET    = 0.90m;  // reject arbs cheaper than this: a >10% "edge" signals a mispriced/mismatched pair (JOR), not a real arb
+    const decimal LOW_BALANCE_ALERT_USD = 15m;   // Discord-alert when either venue's cash drops below this
 
     // Recovery / halt policy. Ops rule: only halt on the daily-loss tripwire, a manual stop, or a network
     // error — never on a naked leg. A naked/partial leg is hedged if still ≤ break-even, else swept out;
@@ -374,7 +380,9 @@ if (isLive || isDryRun)
         reverseMaxAttempts:  REVERSE_MAX_ATTEMPTS,
         tradeMaxLossMult:    TRADE_MAX_LOSS_MULT,
         perTradeTripwire:    PER_TRADE_TRIPWIRE,
-        minPlausibleNet:     MIN_PLAUSIBLE_NET);
+        minPlausibleNet:     MIN_PLAUSIBLE_NET,
+        discord:             discord,
+        lowBalanceAlertUsd:  LOW_BALANCE_ALERT_USD);
     telemetry.OnArbOpened  += executor.OnArbOpened;
     telemetry.BookUpdated  += executor.OnBookUpdate;  // event-driven early exit checks
     await executor.InitializeBalancesAsync();

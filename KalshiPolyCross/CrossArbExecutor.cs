@@ -93,6 +93,10 @@ public class CrossArbExecutor
     private readonly decimal _executionThreshold;
     private readonly decimal _execNetFloor;
     private readonly decimal _minPlausibleNet;     // floor below which a net is "too good to be true" — likely a mispriced/mismatched pair; skip it
+    private readonly DiscordNotifier? _discord;    // webhook alerter for halts / naked positions / low cash (null = disabled)
+    private readonly decimal _lowBalanceAlertUsd;  // Discord-alert when either venue's cash drops below this
+    private bool _kalshiLowAlerted;                // low-cash alert debounce (per side), guarded by _balanceLock
+    private bool _polyLowAlerted;
     private readonly int     _pairCooldownSeconds;
     private readonly int     _fillTimeoutMs;
     private readonly bool    _dryRun;
@@ -304,7 +308,9 @@ public class CrossArbExecutor
         int     reverseMaxAttempts  = 4,
         decimal tradeMaxLossMult    = 3.0m,
         bool    perTradeTripwire    = true,
-        decimal minPlausibleNet     = 0.90m)
+        decimal minPlausibleNet     = 0.90m,
+        DiscordNotifier? discord    = null,
+        decimal lowBalanceAlertUsd  = 15m)
     {
         _kalshi              = kalshi;
         _poly                = poly;
@@ -320,6 +326,8 @@ public class CrossArbExecutor
         _executionThreshold  = executionThreshold;
         _execNetFloor        = execNetFloor;
         _minPlausibleNet     = minPlausibleNet;
+        _discord             = discord;
+        _lowBalanceAlertUsd  = lowBalanceAlertUsd;
         _pairCooldownSeconds = pairCooldownSeconds;
         _fillTimeoutMs       = fillTimeoutMs;
         _maxDayLossUsd       = maxDayLossUsd;
@@ -444,6 +452,10 @@ public class CrossArbExecutor
         }
     }
 
+    // Fire-and-forget Discord alert. Safe everywhere — even at a hard halt the process stays alive
+    // (halted, not exited), so the post completes; failures are swallowed inside AlertAsync.
+    private void DiscordAlert(string message) => _ = _discord?.AlertAsync(message);
+
     private async Task RefreshBalancesAsync(bool initial = false)
     {
         try
@@ -451,7 +463,16 @@ public class CrossArbExecutor
             long    kCents    = await _kalshi.GetBalanceCentsAsync();
             decimal newKalshi = kCents / 100m;
             decimal newPoly   = await _poly.GetUsdcBalanceAsync();
-            lock (_balanceLock) { _kalshiBalanceUsd = newKalshi; _polyBalanceUsd = newPoly; }
+            lock (_balanceLock)
+            {
+                _kalshiBalanceUsd = newKalshi; _polyBalanceUsd = newPoly;
+                // Low-cash alert, debounced per side: fire once on cross-below, re-arm on cross-above,
+                // so the ~5-min balance poll doesn't repeat the alert every cycle.
+                if (newKalshi < _lowBalanceAlertUsd) { if (!_kalshiLowAlerted) { _kalshiLowAlerted = true; DiscordAlert($"⚠️ Low cash: Kalshi ${newKalshi:0.00} < ${_lowBalanceAlertUsd:0.00} — top up to avoid balance-skipping arbs."); } }
+                else _kalshiLowAlerted = false;
+                if (newPoly < _lowBalanceAlertUsd) { if (!_polyLowAlerted) { _polyLowAlerted = true; DiscordAlert($"⚠️ Low cash: Poly ${newPoly:0.00} < ${_lowBalanceAlertUsd:0.00} — top up to avoid balance-skipping arbs."); } }
+                else _polyLowAlerted = false;
+            }
             string tag = initial ? "[BALANCE INIT]" : "[BALANCE]";
             Console.WriteLine($"{tag} Kalshi=${newKalshi:0.00} Poly=${newPoly:0.00}");
             DebugLog.Balance($"RefreshBalancesAsync: K=${newKalshi:0.00} P=${newPoly:0.00} initial={initial}");
@@ -465,7 +486,7 @@ public class CrossArbExecutor
                     singleEntry = _singleEntry, minBuy = _minBuy,
                     maxBetUsd = _maxBetUsd, maxExposureUsd = _maxExposureUsd,
                     executionThreshold = _executionThreshold, execNetFloor = _execNetFloor,
-                    minPlausibleNet = _minPlausibleNet,
+                    minPlausibleNet = _minPlausibleNet, lowBalanceAlertUsd = _lowBalanceAlertUsd,
                     pairCooldownSeconds = _pairCooldownSeconds, dryRun = _dryRun,
                     hedgeMaxNet = _hedgeMaxNet, reverseFloorCents = _reverseFloorCents,
                     reverseMaxAttempts = _reverseMaxAttempts,
@@ -970,8 +991,7 @@ public class CrossArbExecutor
                     // The position is already HEDGED (both legs filled) — no directional risk — so we
                     // DON'T halt; just flag the anomaly and keep trading. The loss still flows into the
                     // per-day tripwire below, which is the only loss-based stop.
-                    // TODO(discord): push an alert here. A fill landing >Nx worse than its edge signals a
-                    // pricing/feed bug worth a human eyeball even though trading continues.
+                    DiscordAlert($"⚠️ Trade-loss anomaly: {pair.Label} — fill {actualLoss:0.0000} worse than {_tradeMaxLossMult}× edge {expectedEdge:0.0000}; position hedged, trading continues. Possible pricing/feed bug.");
                     await JournalAsync(JsonSerializer.Serialize(new {
                         t = DateTime.UtcNow, @event = "TRADE_LOSS_ANOMALY",
                         reason = "per_trade_loss", pairId, dryRun = _dryRun,
@@ -1008,8 +1028,7 @@ public class CrossArbExecutor
                         $"[HALT] Per-day tripwire: cumulative loss ${_dayLossUsd:0.00} >= " +
                         $"max ${_maxDayLossUsd:0.00}. Manual reset required.");
                     Console.ResetColor();
-                    // TODO(discord): push an alert here - HARD HALT (per-day loss tripwire). Bot is done
-                    // for the day and needs a manual reset; notify immediately.
+                    DiscordAlert($"🚨 HARD HALT — per-day loss tripwire: cumulative loss ${_dayLossUsd:0.00} ≥ max ${_maxDayLossUsd:0.00}. Trading stopped for the day; manual reset required.");
                     _halted = true;
                 }
             }
@@ -1718,8 +1737,7 @@ public class CrossArbExecutor
         CrossPair pair, string leg, decimal qty, decimal valueUsd, string execId, List<string>? execLog)
     {
         _orphanedPairs[pair.PairId] = 0;
-        // TODO(discord): push an alert here. An orphaned leg means a position couldn't be flattened
-        // (venue paused/closed) and is sitting un-hedged until manual clear — a human should know.
+        DiscordAlert($"⚠️ Orphaned: {pair.Label} — {leg} leg couldn't be flattened ({qty:0.##} ≈ ${valueUsd:0.00}); re-entry blocked, sitting un-hedged until manual clear.");
         await JournalAsync(JsonSerializer.Serialize(new {
             t = DateTime.UtcNow, @event = "CLEANUP_ORPHANED", execId,
             pair = pair.PairId, leg,
@@ -2522,8 +2540,7 @@ public class CrossArbExecutor
                 t = DateTime.UtcNow, @event = "RESTORE_FAILED_HALT",
                 reason = "POSITIONS_EMPTY_BUT_JOURNAL_NONEMPTY", expectedOpen = entryMap.Count
             }));
-            // TODO(discord): push an alert here - HARD HALT at startup (Kalshi positions API empty but the
-            // journal expects open positions). Bot refused to trade blind; check connectivity + restart.
+            DiscordAlert($"🚨 HARD HALT at startup — Kalshi positions API returned empty but the journal expects {entryMap.Count} open position(s). Refusing to trade blind; verify connectivity and restart.");
             _halted = true;
             return;
         }
@@ -2701,12 +2718,11 @@ public class CrossArbExecutor
             }
             if (kMismatch || pOver)
             {
-                // TODO(discord): push an alert here - HARD HALT (reconcile mismatch: Kalshi position
-                // mismatch or Poly over-read / un-reversed excess). Needs manual position check + reset.
                 _halted = true;
                 string cause = kMismatch && pOver ? "Kalshi mismatch + Poly over-read"
                              : kMismatch          ? "Kalshi mismatch"
                                                   : "Poly over-read";
+                DiscordAlert($"🚨 HARD HALT — reconcile mismatch on {pair.Label} ({cause}): K local={expectedKalshi} venue={kActual} | P local={expectedPoly:0.00} venue={polyBal:0.00}. Manual position check + reset required.");
                 Console.ForegroundColor = ConsoleColor.Red;
                 Console.WriteLine(
                     $"[RECONCILE ALERT] {pair.Label} | {cause} | " +
@@ -2732,8 +2748,7 @@ public class CrossArbExecutor
             Console.ForegroundColor = ConsoleColor.Red;
             Console.WriteLine($"[RECONCILE ERROR] {pair.Label}: reconciliation threw {ex.GetType().Name}: {ex.Message} — halting bot");
             Console.ResetColor();
-            // TODO(discord): push an alert here - HARD HALT (reconciliation threw an exception). Needs
-            // manual investigation + reset.
+            DiscordAlert($"🚨 HARD HALT — reconciliation threw {ex.GetType().Name} on {pair.Label}: {ex.Message}. Manual investigation + reset required.");
             _halted = true;
             await JournalAsync(JsonSerializer.Serialize(new {
                 t = DateTime.UtcNow, @event = "RECONCILE_ERROR", execId,
@@ -2753,8 +2768,7 @@ public class CrossArbExecutor
             Console.WriteLine(
                 $"[MAINTENANCE] {venue}: {consec} consecutive REST failures — halting new trades");
             Console.ResetColor();
-            // TODO(discord): push an alert here - CONNECTION HALT (N consecutive REST failures on this
-            // venue). Auto-clears on recovery, so debounce: alert on the halt->resume transition, not per loop.
+            DiscordAlert($"⚠️ CONNECTION HALT — {venue}: {consec} consecutive REST failures, new trades paused (auto-recovers on reconnect).");
             _connectionHalted = true;
             await JournalAsync(JsonSerializer.Serialize(new {
                 t = DateTime.UtcNow, @event = "VENUE_MAINTENANCE",
@@ -2765,9 +2779,14 @@ public class CrossArbExecutor
 
     // ── Connection watchdog controls ──────────────────────────────────────────
 
-    // TODO(discord): connection halt also enters here (WS disconnect / watchdog). Same debounced
-    // CONNECTION HALT alert as VENUE_MAINTENANCE - notify on the halt->resume transition, not every call.
-    public void HaltForConnectionLoss()  => _connectionHalted = true;
+    // Watchdog calls this every loop while disconnected — guard on the flag so the alert fires once per
+    // disconnect episode (and de-dupes against the VENUE_MAINTENANCE path, which shares the flag).
+    public void HaltForConnectionLoss()
+    {
+        if (_connectionHalted) return;
+        _connectionHalted = true;
+        DiscordAlert("⚠️ CONNECTION HALT — venue disconnect detected by the watchdog; new trades paused until reconnect.");
+    }
     public void ResumeFromConnectionLoss() => _connectionHalted = false;
 
     /// <summary>
@@ -2990,7 +3009,7 @@ public class CrossArbExecutor
             // No makers (decisive winner / market closed for settlement). Stop retrying and let the leg
             // ride to settlement; keep the pair orphaned so we don't re-enter while it's still held.
             _pendingReversals.TryRemove(pairId, out _);
-            // TODO(discord): alert — a naked leg couldn't be flattened in N tries; left to settle.
+            DiscordAlert($"⚠️ Abandoned to settlement: {pairId} — {pr.Leg} naked leg couldn't be flattened after {attempts} tries; left to ride to settlement, pair stays orphaned.");
             await JournalAsync(JsonSerializer.Serialize(new {
                 t = DateTime.UtcNow, @event = "PENDING_REVERSAL_ABANDONED",
                 pair = pairId, leg = pr.Leg, attempts, unresolvedQty = Math.Round(remaining, 6)
@@ -3242,8 +3261,7 @@ public class CrossArbExecutor
                                              pair.IsNegRisk, nakedQty, nakedEntry, currentPos.ExecId);
                 _pendingReversals[pairId] = pr;
 
-                // TODO(discord): push an alert here — an early exit left a naked leg; the bot keeps
-                // running and the 60s monitor retries the flatten, but a human should know.
+                DiscordAlert($"⚠️ Early-exit naked leg: {pair.Label} — {nakedLeg} {nakedQty:0.##} orphaned + queued for 60s-monitor retry; bot keeps running.");
                 Console.ForegroundColor = ConsoleColor.Magenta;
                 Console.WriteLine($"[EARLY EXIT PARTIAL] {pair.Label} | kOk={kOk} pOk={pOk} — naked {nakedLeg} {nakedQty:0.##} orphaned + queued for retry (no halt).");
                 Console.ResetColor();
