@@ -303,6 +303,7 @@ if (isLive || isDryRun)
     const decimal BALANCE_BUFFER_PCT   = 0.20m;  // per-platform reserve (fraction of maxBet)
     const decimal EXECUTION_THRESHOLD  = 0.995m; // net-cost ceiling for arb detection
     const decimal EXEC_NET_FLOOR       = 0.985m; // minimum net to attempt execution (1.5¢/set profit floor); Kalshi always gets ask+1¢ limit regardless
+    const decimal MIN_PLAUSIBLE_NET    = 0.90m;  // reject arbs cheaper than this: a >10% "edge" signals a mispriced/mismatched pair (JOR), not a real arb
 
     // Recovery / halt policy. Ops rule: only halt on the daily-loss tripwire, a manual stop, or a network
     // error — never on a naked leg. A naked/partial leg is hedged if still ≤ break-even, else swept out;
@@ -372,7 +373,8 @@ if (isLive || isDryRun)
         reverseFloorCents:   REVERSE_FLOOR_CENTS,
         reverseMaxAttempts:  REVERSE_MAX_ATTEMPTS,
         tradeMaxLossMult:    TRADE_MAX_LOSS_MULT,
-        perTradeTripwire:    PER_TRADE_TRIPWIRE);
+        perTradeTripwire:    PER_TRADE_TRIPWIRE,
+        minPlausibleNet:     MIN_PLAUSIBLE_NET);
     telemetry.OnArbOpened  += executor.OnArbOpened;
     telemetry.BookUpdated  += executor.OnBookUpdate;  // event-driven early exit checks
     await executor.InitializeBalancesAsync();

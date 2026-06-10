@@ -92,6 +92,7 @@ public class CrossArbExecutor
     private readonly bool    _minBuy;              // --min-buy: cap every arb to exactly 1 contract
     private readonly decimal _executionThreshold;
     private readonly decimal _execNetFloor;
+    private readonly decimal _minPlausibleNet;     // floor below which a net is "too good to be true" — likely a mispriced/mismatched pair; skip it
     private readonly int     _pairCooldownSeconds;
     private readonly int     _fillTimeoutMs;
     private readonly bool    _dryRun;
@@ -302,7 +303,8 @@ public class CrossArbExecutor
         int     reverseFloorCents   = 1,
         int     reverseMaxAttempts  = 4,
         decimal tradeMaxLossMult    = 3.0m,
-        bool    perTradeTripwire    = true)
+        bool    perTradeTripwire    = true,
+        decimal minPlausibleNet     = 0.90m)
     {
         _kalshi              = kalshi;
         _poly                = poly;
@@ -317,6 +319,7 @@ public class CrossArbExecutor
         _logErrors           = logErrors;
         _executionThreshold  = executionThreshold;
         _execNetFloor        = execNetFloor;
+        _minPlausibleNet     = minPlausibleNet;
         _pairCooldownSeconds = pairCooldownSeconds;
         _fillTimeoutMs       = fillTimeoutMs;
         _maxDayLossUsd       = maxDayLossUsd;
@@ -458,6 +461,7 @@ public class CrossArbExecutor
                     singleEntry = _singleEntry, minBuy = _minBuy,
                     maxBetUsd = _maxBetUsd, maxExposureUsd = _maxExposureUsd,
                     executionThreshold = _executionThreshold, execNetFloor = _execNetFloor,
+                    minPlausibleNet = _minPlausibleNet,
                     pairCooldownSeconds = _pairCooldownSeconds, dryRun = _dryRun,
                     hedgeMaxNet = _hedgeMaxNet, reverseFloorCents = _reverseFloorCents,
                     reverseMaxAttempts = _reverseMaxAttempts,
@@ -650,6 +654,22 @@ public class CrossArbExecutor
             await JournalAsync(JsonSerializer.Serialize(new {
                 t = DateTime.UtcNow, @event = "EXEC_SKIP", pairId, arbType,
                 reason = "THIN_MARGIN", netNow, floor = _execNetFloor, threshold = _executionThreshold
+            }));
+            return;
+        }
+
+        // "Too good to be true" floor: a net this far below 1.00 means the two legs disagree by more
+        // than any real cross-platform spread (healthy arbs sit ~0.985-0.995). That's the signature of a
+        // mispriced/mismatched pair (the JOR class) — skip it at the source rather than open a phantom
+        // position. Non-destructive: just don't trade; the pair stays eligible if it later re-prices.
+        if (netNow < _minPlausibleNet)
+        {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"[EXEC SKIP] {pair.Label} | net=${netNow:0.0000} < plausible floor {_minPlausibleNet:0.000} — too good to be true, likely mismatched pair");
+            Console.ResetColor();
+            await JournalAsync(JsonSerializer.Serialize(new {
+                t = DateTime.UtcNow, @event = "EXEC_SKIP", pairId, arbType,
+                reason = "IMPLAUSIBLE_NET", netNow, minPlausibleNet = _minPlausibleNet, floor = _execNetFloor
             }));
             return;
         }
@@ -1773,7 +1793,8 @@ public class CrossArbExecutor
                     if (polyFill2 > 0)
                     {
                         decimal additional   = Math.Min(kUnhedged, polyFill2);
-                        decimal remainderQty = kUnhedged - additional;
+                        decimal remainderQty = kUnhedged - additional;     // Kalshi left unhedged if the hedge UNDER-filled
+                        decimal polyExcess   = polyFill2 - additional;     // naked Poly bought past the need if it OVER-filled
                         if (_openPositions.TryGetValue(pair.PairId, out var pos))
                         {
                             decimal newP = pos.PolyShares + additional;
@@ -1825,6 +1846,42 @@ public class CrossArbExecutor
                                     await OrphanPairAsync(pair, "kalshi_partial_hedge_remainder", left, left * kLegAsk, execId, execLog);
                                     return new RecoveryResult("ORPHANED", additional, 0);
                                 }
+                            }
+                        }
+                        // The hedge FAK is dollar-denominated — a fill below our (bumped) limit over-buys.
+                        // Own that excess: sell it back to the intended size (or absorb if dust) so it's
+                        // never left untracked (the Cawthorn bug), and flag the pair if the over-buy is
+                        // extreme enough to signal a mismatched token.
+                        if (polyExcess > 0m)
+                        {
+                            decimal exValue = polyExcess * polyFill2Price;
+                            if (exValue < CleanupDustUsd)
+                            {
+                                lock (_cleanupLock) { _totalCleanupCostUsd += exValue; }
+                                await JournalAsync(JsonSerializer.Serialize(new {
+                                    t = DateTime.UtcNow, @event = "CLEANUP_DUST", execId,
+                                    pair = pair.PairId, leg = "poly_hedge_overfill",
+                                    qty = Math.Round(polyExcess, 6), absorbedUsd = Math.Round(exValue, 4)
+                                }));
+                                Console.ForegroundColor = ConsoleColor.DarkYellow;
+                                Emit(execLog, $"[CLEANUP DUST] {pair.Label} | Absorbing {polyExcess:0.00} Poly hedge-overfill dust (${exValue:0.00}) — no halt");
+                                Console.ResetColor();
+                            }
+                            else
+                            {
+                                var (exSold, exPx) = await PlacePolySellAsync(polyToken, polyExcess, pair.IsNegRisk, execLog);
+                                decimal exLoss = Math.Max(0m, exSold * (polyFill2Price - exPx));
+                                lock (_cleanupLock) { _totalCleanupCostUsd += exLoss; }
+                                await JournalAsync(JsonSerializer.Serialize(new {
+                                    t = DateTime.UtcNow, @event = "CLEANUP_REVERSED", execId,
+                                    pair = pair.PairId, leg = "poly_hedge_overfill",
+                                    reason = "OVERFILL",
+                                    soldShares = Math.Round(exSold, 6), soldPrice = Math.Round(exPx, 6),
+                                    reversalLossUsd = Math.Round(exLoss, 4)
+                                }));
+                                Console.ForegroundColor = ConsoleColor.Yellow;
+                                Emit(execLog, $"[RECOVER] {pair.Label} | reversed {exSold:0.00}/{polyExcess:0.00} Poly hedge-overfill @ {exPx:0.0000} loss=${exLoss:0.00}");
+                                Console.ResetColor();
                             }
                         }
                         return new RecoveryResult("HEDGE_COMPLETED", additional, 0);
