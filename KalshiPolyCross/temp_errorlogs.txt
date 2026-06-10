@@ -1,65 +1,139 @@
 
 ============================================================
-ATTEMPT 2026-06-09 15:36:10 UTC  pair=MANUAL_KXMENWORLDCUP-26-PT__45415751  arbType=K_YES_P_NO
+ATTEMPT 2026-06-09 22:06:36 UTC  pair=MANUAL_KXTIME-26-CHR__93008287  arbType=K_YES_P_NO
 ============================================================
-[EXEC] Will the Portugal win the 2026 Men's World Cup? | K_YES_P_NO | K-yes=0.1050 P=0.8690 net=$0.9840 | 5 contracts @ $4.87
-[ORDER K] KXMENWORLDCUP-26-PT YES 11¢ × 5  clientId=CAXARB_AX_20260609153610_KXMENWORLDCUP-26-PT
-[ORDER P] BUY token=319407835803... price=0.8690 shares=5
-[FILL K]  KXMENWORLDCUP-26-PT placed orderId=304b325d-39b3-43f2-b2f7-62bc5d80f1e4 status=executed fillImm=5.00
-[POLY LEG ERROR] 319407835803...: [Polymarket API Error] BadRequest: {"error":"no orders found to match with FAK order. FAK orders are partially filled or killed if no match is found.","orderID":"0x30c5b82c949a64ad7b0e04c6ebed5b37d26800b61d2769bd37899fea290091ba"}
-[STALE PRICE] Will the Portugal win the 2026 Men's World Cup? | detectedNet=0.9840 kFilled=5.00 pFilled=0.00 — one leg missed limit, price may have moved
-[EXEC UNHEDGED] Will the Portugal win the 2026 Men's World Cup? | kFilled=5.00 pFilled=0.00 balanced=0 kExcess=5.00 pExcess=0.00 — starting recovery
-[CLEANUP SKIP HEDGE] Will the Portugal win the 2026 Men's World Cup? | kExcess=5.00 value=$0.53 < $1.00 — reversing directly
-[RECOVER REVERSED] Will the Portugal win the 2026 Men's World Cup? | swept 5 Kalshi yes (attempt 1), 0 left
+[EXEC] Will Christina Koch be Time Person of the Year in 2026? | K_YES_P_NO | K-yes=0.1000 P=0.8500 net=$0.9627 | 5 contracts @ $4.75
+[ORDER K] KXTIME-26-CHR YES 11¢ × 5  clientId=CAXARB_AX_20260609220636_KXTIME-26-CHR
+[ORDER P] BUY token=431972135756... price=0.8562 shares=5
+[FILL K]  KXTIME-26-CHR placed orderId=5409d4b0-cf53-452c-8123-731af7878ad2 status=executed fillImm=5.00
+[FILL P]  431972135756... placed orderID=0x81149fe2f8792408c750e503db204bd2734a720ad9547a94d919392c9862707b status=matched
+[FILL P]  431972135756... filled=5.05882 avgPrice=0.8500
+[EXEC OK] Will Christina Koch be Time Person of the Year in 2026? | K=5.00@11¢ | P=5.00sh@$0.8500 | cost=$4.75 actualNet=0.9627 projProfit=$0.19
+[EXEC UNHEDGED] Will Christina Koch be Time Person of the Year in 2026? | kFilled=5.00 pFilled=5.06 balanced=5.00 kExcess=0.00 pExcess=0.06 — starting recovery
+[CLEANUP DUST] Will Christina Koch be Time Person of the Year in 2026? | Absorbing 0.06 Poly dust ($0.05) — no halt
 
 ============================================================
-ATTEMPT 2026-06-09 15:49:36 UTC  pair=MANUAL_KXLEADERMLBAVG-26-OLOP__72254634  arbType=K_YES_P_NO
+ATTEMPT 2026-06-09 23:35:41 UTC  pair=MANUAL_KXCS2QUALIFIERS-26IEMCOLPO-FURIA__83918488  arbType=K_NO_P_YES
 ============================================================
-[EXEC] Will Otto Lopez lead Pro Baseball in batting average for the 2026 regular season? | K_YES_P_NO | K-yes=0.0900 P=0.8740 net=$0.9730 | 5 contracts @ $4.82
-[ORDER K] KXLEADERMLBAVG-26-OLOP YES 10¢ × 5  clientId=CAXARB_AX_20260609154936_KXLEADERMLBAVG-26-OLOP
-[ORDER P] BUY token=109242249138... price=0.8750 shares=5
-[FILL K]  KXLEADERMLBAVG-26-OLOP placed orderId=c9647197-32d4-4597-86cc-ad69f63e3572 status=executed fillImm=5.00
-[FILL P]  109242249138... placed orderID=0x156b6be427fc959bd0dfd2fde57033bbeb3f320fea8afe3f0923e44c76f9d2ab status=matched
-[FILL P]  109242249138... filled=5.011436 avgPrice=0.8740
-[EXEC OK] Will Otto Lopez lead Pro Baseball in batting average for the 2026 regular season? | K=5.00@10¢ | P=5.00sh@$0.8740 | cost=$4.82 actualNet=0.9730 projProfit=$0.13
-[EXEC UNHEDGED] Will Otto Lopez lead Pro Baseball in batting average for the 2026 regular season? | kFilled=5.00 pFilled=5.01 balanced=5.00 kExcess=0.00 pExcess=0.01 — starting recovery
-[CLEANUP DUST] Will Otto Lopez lead Pro Baseball in batting average for the 2026 regular season? | Absorbing 0.01 Poly dust ($0.01) — no halt
+[EXEC] Will FURIA qualify for the playoffs at 2026 IEM Cologne? | K_NO_P_YES | K-no=0.3600 P=0.5800 net=$0.9634 | 5 contracts @ $4.70
+[ORDER K] KXCS2QUALIFIERS-26IEMCOLPO-FURIA NO 37¢ × 5  clientId=CAXARB_AX_20260609233541_KXCS2QUALIFIERS-26IEMCOLPO-FURIA
+[ORDER P] BUY token=839184880154... price=0.5858 shares=5
+[FILL K]  KXCS2QUALIFIERS-26IEMCOLPO-FURIA placed orderId=5f60dbcf-d9af-41c3-ac63-64fe34a84ffd status=executed fillImm=5.00
+[FILL P]  839184880154... placed orderID=0x657302fc5478b86c69185ad49473d6d9a1f6aab286a1e6e37cafa1602f731d0f status=matched
+[FILL P]  839184880154... filled=5.086204 avgPrice=0.5800
+[EXEC OK] Will FURIA qualify for the playoffs at 2026 IEM Cologne? | K=5.00@37¢ | P=5.00sh@$0.5800 | cost=$4.70 actualNet=0.9634 projProfit=$0.18
+[EXEC UNHEDGED] Will FURIA qualify for the playoffs at 2026 IEM Cologne? | kFilled=5.00 pFilled=5.09 balanced=5.00 kExcess=0.00 pExcess=0.09 — starting recovery
+[CLEANUP DUST] Will FURIA qualify for the playoffs at 2026 IEM Cologne? | Absorbing 0.09 Poly dust ($0.05) — no halt
 
 ============================================================
-ATTEMPT 2026-06-09 16:39:24 UTC  pair=MANUAL_KXTIME-26-BEN__48890278  arbType=K_YES_P_NO
+ATTEMPT 2026-06-09 23:35:45 UTC  pair=MANUAL_KXCS2QUALIFIERS-26IEMCOLPO-MOUZ__13757483  arbType=K_NO_P_YES
 ============================================================
-[EXEC] Will Benjamin Netanyahu be Time Person of the Year in 2026? | K_YES_P_NO | K-yes=0.0700 P=0.8600 net=$0.9406 | 5 contracts @ $4.65
-[ORDER K] KXTIME-26-BEN YES 8¢ × 5  clientId=CAXARB_AX_20260609163924_KXTIME-26-BEN
-[ORDER P] BUY token=658499658082... price=0.8772 shares=5
-[FILL K]  KXTIME-26-BEN placed orderId=339f6f87-b574-4fa8-86bc-896650d1444c status=executed fillImm=5.00
-[FILL P]  658499658082... placed orderID=0xe7073de3144412877a7a4647dd250314054bc330467cc7d78f2736b4dedf705a status=matched
-[FILL P]  658499658082... filled=5.116278 avgPrice=0.8600
-[EXEC OK] Will Benjamin Netanyahu be Time Person of the Year in 2026? | K=5.00@8¢ | P=5.00sh@$0.8600 | cost=$4.65 actualNet=0.9406 projProfit=$0.30
-[EXEC UNHEDGED] Will Benjamin Netanyahu be Time Person of the Year in 2026? | kFilled=5.00 pFilled=5.12 balanced=5.00 kExcess=0.00 pExcess=0.12 — starting recovery
-[CLEANUP DUST] Will Benjamin Netanyahu be Time Person of the Year in 2026? | Absorbing 0.12 Poly dust ($0.10) — no halt
+[EXEC] Will MOUZ qualify for the playoffs at 2026 IEM Cologne? | K_NO_P_YES | K-no=0.3100 P=0.4300 net=$0.7623 | 5 contracts @ $3.70
+[ORDER K] KXCS2QUALIFIERS-26IEMCOLPO-MOUZ NO 32¢ × 5  clientId=CAXARB_AX_20260609233545_KXCS2QUALIFIERS-26IEMCOLPO-MOUZ
+[ORDER P] BUY token=137574830445... price=0.4945 shares=5
+[FILL K]  KXCS2QUALIFIERS-26IEMCOLPO-MOUZ placed orderId=7f33d897-844b-4330-8787-ac0fc002666c status=executed fillImm=5.00
+[POLY LEG ERROR] 137574830445...: [Polymarket API Error] BadRequest: {"error":"no orders found to match with FAK order. FAK orders are partially filled or killed if no match is found.","orderID":"0x51460b667a69715e3ae6b536e4dd5b855c421018e929a7dbae977d31dd83bb78"}
+[STALE PRICE] Will MOUZ qualify for the playoffs at 2026 IEM Cologne? | detectedNet=0.7623 kFilled=5.00 pFilled=0.00 — one leg missed limit, price may have moved
+[EXEC UNHEDGED] Will MOUZ qualify for the playoffs at 2026 IEM Cologne? | kFilled=5.00 pFilled=0.00 balanced=0 kExcess=5.00 pExcess=0.00 — starting recovery
+[RECOVER] Will MOUZ qualify for the playoffs at 2026 IEM Cologne? | hedgeNet=1.0806 >= 1.0 — reversing 5.00 Kalshi no directly
+[RECOVER REVERSED] Will MOUZ qualify for the playoffs at 2026 IEM Cologne? | swept 5 Kalshi no (attempt 1), 0 left
 
 ============================================================
-ATTEMPT 2026-06-09 16:55:16 UTC  pair=MANUAL_KXBRPRES1MOV-BRPRES26-LSIL-P7__48407765  arbType=K_YES_P_NO
+ATTEMPT 2026-06-09 23:59:20 UTC  pair=MANUAL_KXFL19R-26-MCAW__22028634  arbType=K_NO_P_YES
 ============================================================
-[EXEC] Will the margin of victory for Lula da Silva in the first round of the 2026 Brazilian presidential election be between 5% and 10%? | K_YES_P_NO | K-yes=0.2100 P=0.7200 net=$0.9497 | 5 contracts @ $4.65
-[ORDER K] KXBRPRES1MOV-BRPRES26-LSIL-P7 YES 22¢ × 5  clientId=CAXARB_AX_20260609165516_KXBRPRES1MOV-BRPRES26-LSIL-P7
-[ORDER P] BUY token=247047209822... price=0.7327 shares=5
-[FILL K]  KXBRPRES1MOV-BRPRES26-LSIL-P7 placed orderId=c838b32f-131e-4c1c-8c66-a2eb4eacbd21 status=executed fillImm=5.00
-[FILL P]  247047209822... placed orderID=0x9bf85d7f851e5d11b7bea854812568ff2d263388acbbdc509274a1c64a91e08e status=matched
-[FILL P]  247047209822... filled=5.069442 avgPrice=0.7200
-[EXEC OK] Will the margin of victory for Lula da Silva in the first round of the 2026 Brazilian presidential election be between 5% and 10%? | K=5.00@22¢ | P=5.00sh@$0.7200 | cost=$4.65 actualNet=0.9497 projProfit=$0.25
-[EXEC UNHEDGED] Will the margin of victory for Lula da Silva in the first round of the 2026 Brazilian presidential election be between 5% and 10%? | kFilled=5.00 pFilled=5.07 balanced=5.00 kExcess=0.00 pExcess=0.07 — starting recovery
-[CLEANUP DUST] Will the margin of victory for Lula da Silva in the first round of the 2026 Brazilian presidential election be between 5% and 10%? | Absorbing 0.07 Poly dust ($0.05) — no halt
+[EXEC] Will Madison Cawthorn be the Republican nominee for FL-19? | K_NO_P_YES | K-no=0.9000 P=0.0710 net=$0.9799 | 15 contracts @ $14.57
+[ORDER K] KXFL19R-26-MCAW NO 91¢ × 15  clientId=CAXARB_AX_20260609235920_KXFL19R-26-MCAW
+[ORDER P] BUY token=220286347655... price=0.0710 shares=15
+[FILL K]  KXFL19R-26-MCAW placed orderId=9281f444-f0a8-4fe8-8d78-310f68833d46 status=executed fillImm=15.00
+[POLY LEG ERROR] 220286347655...: [Polymarket API Error] BadRequest: {"error":"no orders found to match with FAK order. FAK orders are partially filled or killed if no match is found.","orderID":"0x458c2b84b5bdef2620b4cebcd472d14163b7dc3a84c4e7f1f8b70fbf84fa7b2f"}
+[STALE PRICE] Will Madison Cawthorn be the Republican nominee for FL-19? | detectedNet=0.9799 kFilled=15.00 pFilled=0.00 — one leg missed limit, price may have moved
+[EXEC UNHEDGED] Will Madison Cawthorn be the Republican nominee for FL-19? | kFilled=15.00 pFilled=0.00 balanced=0 kExcess=15.00 pExcess=0.00 — starting recovery
+[RECOVER] Will Madison Cawthorn be the Republican nominee for FL-19? | kExcess=15.00 hedgeNet=0.9799 — completing hedge on Poly
+[ORDER P] BUY token=220286347655... price=0.0910 shares=15.00
+[FILL P]  220286347655... placed orderID=0xca2ab3250dfb7076baf9fc2879226ae2f4f3493abc8d09a8deb9a1ba80279d95 status=matched
+[FILL P]  220286347655... filled=19.154928 avgPrice=0.0710
+[RECOVER OK] Will Madison Cawthorn be the Republican nominee for FL-19? | hedge completed +15.00 sets via Poly retry
 
 ============================================================
-ATTEMPT 2026-06-09 18:00:04 UTC  pair=MANUAL_KXSC01R-26-APEL__59320203  arbType=K_YES_P_NO
+ATTEMPT 2026-06-10 00:23:25 UTC  pair=MANUAL_KXNHL-26-VGK__68803485  arbType=K_NO_P_YES
 ============================================================
-[EXEC] Will Alex Pelbath be the Republican nominee for SC-01? | K_YES_P_NO | K-yes=0.0610 P=0.8710 net=$0.9405 | 5 contracts @ $4.66
-[ORDER K] KXSC01R-26-APEL YES 7¢ × 5  clientId=CAXARB_AX_20260609180004_KXSC01R-26-APEL
-[ORDER P] BUY token=533795082091... price=0.8882 shares=5
-[FILL K]  KXSC01R-26-APEL placed orderId=af44b9db-57f5-4516-9d07-82d2b7859f4e status=executed fillImm=5.00
-[POLY LEG ERROR] 533795082091...: [Polymarket API Error] BadRequest: {"error":"no orders found to match with FAK order. FAK orders are partially filled or killed if no match is found.","orderID":"0x119c5b6bb581daac1924a81436effba7994430be0e802f71d45b48d57e6500fa"}
-[STALE PRICE] Will Alex Pelbath be the Republican nominee for SC-01? | detectedNet=0.9405 kFilled=5.00 pFilled=0.00 — one leg missed limit, price may have moved
-[EXEC UNHEDGED] Will Alex Pelbath be the Republican nominee for SC-01? | kFilled=5.00 pFilled=0.00 balanced=0 kExcess=5.00 pExcess=0.00 — starting recovery
-[CLEANUP SKIP HEDGE] Will Alex Pelbath be the Republican nominee for SC-01? | kExcess=5.00 value=$0.31 < $1.00 — reversing directly
-[RECOVER REVERSED] Will Alex Pelbath be the Republican nominee for SC-01? | swept 5 Kalshi yes (attempt 1), 0 left
+[EXEC] Will Vegas Golden Knights win the 2025-26 Stanley Cup Finals? | K_NO_P_YES | K-no=0.4500 P=0.5100 net=$0.9848 | 5 contracts @ $4.80
+[ORDER K] KXNHL-26-VGK NO 46¢ × 5  clientId=CAXARB_AX_20260610002325_KXNHL-26-VGK
+[ORDER P] BUY token=688034850300... price=0.5100 shares=5
+[FILL K]  KXNHL-26-VGK placed orderId=8a45c88b-8d2e-4e53-8b21-0fc2a7695ac1 status=executed fillImm=5.00
+[FILL P]  688034850300... placed orderID=0x8ec8d0c17d6942eb813f4da0d95c409415a4cd195a18c495f4242c926232386d status=matched
+[FILL P]  688034850300... filled=5.009822 avgPrice=0.5090
+[EXEC OK] Will Vegas Golden Knights win the 2025-26 Stanley Cup Finals? | K=5.00@46¢ | P=5.00sh@$0.5090 | cost=$4.79 actualNet=0.9838 projProfit=$0.08
+[EXEC UNHEDGED] Will Vegas Golden Knights win the 2025-26 Stanley Cup Finals? | kFilled=5.00 pFilled=5.01 balanced=5.00 kExcess=0.00 pExcess=0.01 — starting recovery
+[CLEANUP DUST] Will Vegas Golden Knights win the 2025-26 Stanley Cup Finals? | Absorbing 0.01 Poly dust ($0.00) — no halt
+
+============================================================
+ATTEMPT 2026-06-10 00:27:19 UTC  pair=MANUAL_KXNHL-26-CAR__79397003  arbType=K_YES_P_NO
+============================================================
+[EXEC] Will Carolina Hurricanes win the 2025-26 Stanley Cup Finals? | K_YES_P_NO | K-yes=0.4900 P=0.4600 net=$0.9749 | 5 contracts @ $4.75
+[ORDER K] KXNHL-26-CAR YES 50¢ × 5  clientId=CAXARB_AX_20260610002719_KXNHL-26-CAR
+[ORDER P] BUY token=404739774410... price=0.4600 shares=5
+[FILL K]  KXNHL-26-CAR placed orderId=7420f563-0773-4bbe-98db-d9a9cc470493 status=executed fillImm=5.00
+[POLY LEG ERROR] 404739774410...: [Polymarket API Error] BadRequest: {"error":"no orders found to match with FAK order. FAK orders are partially filled or killed if no match is found.","orderID":"0x02c4772901913f04e14cba9aea35d14fb963e44702ea7a74467a6b32daf2ced4"}
+[STALE PRICE] Will Carolina Hurricanes win the 2025-26 Stanley Cup Finals? | detectedNet=0.9749 kFilled=5.00 pFilled=0.00 — one leg missed limit, price may have moved
+[EXEC UNHEDGED] Will Carolina Hurricanes win the 2025-26 Stanley Cup Finals? | kFilled=5.00 pFilled=0.00 balanced=0 kExcess=5.00 pExcess=0.00 — starting recovery
+[RECOVER] Will Carolina Hurricanes win the 2025-26 Stanley Cup Finals? | hedgeNet=1.0450 >= 1.0 — reversing 5.00 Kalshi yes directly
+[RECOVER REVERSED] Will Carolina Hurricanes win the 2025-26 Stanley Cup Finals? | swept 5 Kalshi yes (attempt 1), 0 left
+
+============================================================
+ATTEMPT 2026-06-10 00:51:52 UTC  pair=MANUAL_KXLEADERWNBAREB-26-AREESE5__10913723  arbType=K_NO_P_YES
+============================================================
+[EXEC] Will Angel Reese lead Women's Pro Basketball in rebounds per game for the 2026 regular season? | K_NO_P_YES | K-no=0.3700 P=0.5600 net=$0.9537 | 5 contracts @ $4.65
+[ORDER K] KXLEADERWNBAREB-26-AREESE5 NO 38¢ × 5  clientId=CAXARB_AX_20260610005152_KXLEADERWNBAREB-26-AREESE5
+[ORDER P] BUY token=109137235645... price=0.5706 shares=5
+[FILL K]  KXLEADERWNBAREB-26-AREESE5 placed orderId=9ddb454c-4841-48a4-ad1b-8d4a75cf694d status=executed fillImm=5.00
+[FILL P]  109137235645... placed orderID=0x9b3567091d9a797f063b0bd16c0ad245952ba9914ce094fec52cbeabc92dadec status=matched
+[FILL P]  109137235645... filled=5.089284 avgPrice=0.5600
+[EXEC OK] Will Angel Reese lead Women's Pro Basketball in rebounds per game for the 2026 regular season? | K=5.00@38¢ | P=5.00sh@$0.5600 | cost=$4.65 actualNet=0.9537 projProfit=$0.23
+[EXEC UNHEDGED] Will Angel Reese lead Women's Pro Basketball in rebounds per game for the 2026 regular season? | kFilled=5.00 pFilled=5.09 balanced=5.00 kExcess=0.00 pExcess=0.09 — starting recovery
+[CLEANUP DUST] Will Angel Reese lead Women's Pro Basketball in rebounds per game for the 2026 regular season? | Absorbing 0.09 Poly dust ($0.05) — no halt
+
+============================================================
+ATTEMPT 2026-06-10 04:28:22 UTC  pair=MANUAL_KXNBA-26-NYK__20257190  arbType=K_YES_P_NO
+============================================================
+[EXEC] Will the New York win the 2026 Pro Basketball Finals? | K_YES_P_NO | K-yes=0.6300 P=0.2070 net=$0.8582 | 5 contracts @ $4.19
+[ORDER K] KXNBA-26-NYK YES 64¢ × 5  clientId=CAXARB_AX_20260610042822_KXNBA-26-NYK
+[ORDER P] BUY token=177084055977... price=0.2381 shares=5
+[FILL K]  KXNBA-26-NYK placed orderId=5c72d7d7-8a62-4ada-8d81-eb39ae9c5ff2 status=executed fillImm=5.00
+[POLY LEG ERROR] 177084055977...: [Polymarket API Error] 425: {"error":"order manager not ready, please retry"}
+[STALE PRICE] Will the New York win the 2026 Pro Basketball Finals? | detectedNet=0.8582 kFilled=5.00 pFilled=0.00 — one leg missed limit, price may have moved
+[EXEC UNHEDGED] Will the New York win the 2026 Pro Basketball Finals? | kFilled=5.00 pFilled=0.00 balanced=0 kExcess=5.00 pExcess=0.00 — starting recovery
+[RECOVER] Will the New York win the 2026 Pro Basketball Finals? | kExcess=5.00 hedgeNet=0.8582 — completing hedge on Poly
+[ORDER P] BUY token=177084055977... price=0.2270 shares=5.00
+[POLY LEG ERROR] 177084055977...: [Polymarket API Error] 425: {"error":"order manager not ready, please retry"}
+[RECOVER] Will the New York win the 2026 Pro Basketball Finals? | Poly hedge retry failed — reversing Kalshi excess
+[RECOVER REVERSED] Will the New York win the 2026 Pro Basketball Finals? | swept 5 Kalshi yes (attempt 1), 0 left
+
+============================================================
+ATTEMPT 2026-06-10 04:28:56 UTC  pair=MANUAL_KXNBA-26-SAS__10222718  arbType=K_NO_P_YES
+============================================================
+[EXEC] Will the San Antonio win the 2026 Pro Basketball Finals? | K_NO_P_YES | K-no=0.6300 P=0.1940 net=$0.8450 | 6 contracts @ $4.94
+[ORDER K] KXNBA-26-SAS NO 64¢ × 6  clientId=CAXARB_AX_20260610042856_KXNBA-26-SAS
+[ORDER P] BUY token=102227184035... price=0.2231 shares=6
+[FILL K]  KXNBA-26-SAS placed orderId=aae01e72-1f9c-4e70-963c-8ca2d631357f status=executed fillImm=6.00
+[POLY LEG ERROR] 102227184035...: [Polymarket API Error] 425: {"error":"order manager not ready, please retry"}
+[STALE PRICE] Will the San Antonio win the 2026 Pro Basketball Finals? | detectedNet=0.8450 kFilled=6.00 pFilled=0.00 — one leg missed limit, price may have moved
+[EXEC UNHEDGED] Will the San Antonio win the 2026 Pro Basketball Finals? | kFilled=6.00 pFilled=0.00 balanced=0 kExcess=6.00 pExcess=0.00 — starting recovery
+[RECOVER] Will the San Antonio win the 2026 Pro Basketball Finals? | kExcess=6.00 hedgeNet=0.8450 — completing hedge on Poly
+[ORDER P] BUY token=102227184035... price=0.2140 shares=6.00
+[POLY LEG ERROR] 102227184035...: [Polymarket API Error] 425: {"error":"order manager not ready, please retry"}
+[RECOVER] Will the San Antonio win the 2026 Pro Basketball Finals? | Poly hedge retry failed — reversing Kalshi excess
+[RECOVER REVERSED] Will the San Antonio win the 2026 Pro Basketball Finals? | swept 6 Kalshi no (attempt 1), 0 left
+
+============================================================
+ATTEMPT 2026-06-10 09:58:14 UTC  pair=MANUAL_KXFEDDECISION-26SEP-H25__63842529  arbType=K_YES_P_NO
+============================================================
+[EXEC] Will the Federal Reserve Hike rates by 25bps at their September 2026 meeting? | K_YES_P_NO | K-yes=0.1800 P=0.7600 net=$0.9595 | 5 contracts @ $4.70
+[ORDER K] KXFEDDECISION-26SEP-H25 YES 19¢ × 5  clientId=CAXARB_AX_20260610095814_KXFEDDECISION-26SEP-H25
+[ORDER P] BUY token=288195718996... price=0.7678 shares=5
+[FILL K]  KXFEDDECISION-26SEP-H25 placed orderId=93b58b4d-3e90-4c6f-98d5-8a071d787f95 status=executed fillImm=5.00
+[FILL P]  288195718996... placed orderID=0xa3696aab9dc4bc518a848a0345f1cc6cecde20426f557719e40f3ee65c77be08 status=matched
+[FILL P]  288195718996... filled=5.065788 avgPrice=0.7600
+[EXEC OK] Will the Federal Reserve Hike rates by 25bps at their September 2026 meeting? | K=5.00@19¢ | P=5.00sh@$0.7600 | cost=$4.70 actualNet=0.9595 projProfit=$0.20
+[EXEC UNHEDGED] Will the Federal Reserve Hike rates by 25bps at their September 2026 meeting? | kFilled=5.00 pFilled=5.07 balanced=5.00 kExcess=0.00 pExcess=0.07 — starting recovery
+[CLEANUP DUST] Will the Federal Reserve Hike rates by 25bps at their September 2026 meeting? | Absorbing 0.07 Poly dust ($0.05) — no halt
