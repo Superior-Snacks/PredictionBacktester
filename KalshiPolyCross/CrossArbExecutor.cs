@@ -1570,6 +1570,7 @@ public class CrossArbExecutor
             Emit(execLog, $"[POLY RATE LIMIT] {tokenShort}... — 429, retrying in 1s");
             DebugLog.Trades($"PlacePolyLegAsync: 429 on {tokenShort}, backing off 1s");
             await Task.Delay(1_000);
+            Exception? retryFailure = null;
             try
             {
                 string result2 = await _poly.SubmitOrderAsync(
@@ -1599,15 +1600,25 @@ public class CrossArbExecutor
             {
                 Emit(execLog, $"[POLY LEG ERROR] {tokenShort}... (after 429): {ApiErrorHelper.ClassifyPoly(retryEx)}");
                 DebugLog.Trades($"PlacePolyLegAsync: 429 retry failed for {tokenShort}: {retryEx.Message}");
+                retryFailure = retryEx;
             }
-            await CheckMaintenanceThresholdAsync("poly", Interlocked.Increment(ref _polyConsecErrors));
+            // Count toward maintenance only when the retry failed with a genuine venue-health error. A
+            // successful-but-no-fill retry (retryFailure==null; counter already reset above) or an
+            // order-level rejection means Poly is UP — don't trip a spurious CONNECTION HALT.
+            if (retryFailure is not null && !ApiErrorHelper.IsPolyOrderRejection(retryFailure))
+                await CheckMaintenanceThresholdAsync("poly", Interlocked.Increment(ref _polyConsecErrors));
             return (0m, 0m);
         }
         catch (Exception ex)
         {
             Emit(execLog, $"[POLY LEG ERROR] {tokenShort}...: {ApiErrorHelper.ClassifyPoly(ex)}");
             DebugLog.Trades($"PlacePolyLegAsync exception for {tokenShort}: {ex}");
-            await CheckMaintenanceThresholdAsync("poly", Interlocked.Increment(ref _polyConsecErrors));
+            // Only genuine venue-health failures (5xx, timeout, connection, sustained 429) count toward
+            // the maintenance/outage tripwire. A FAK no-match / order rejection means Poly is UP and just
+            // refused this order — don't let a fast-market streak of them trip a spurious CONNECTION HALT.
+            // (Mirrors the clean 0-fill path above, which also doesn't increment.)
+            if (!ApiErrorHelper.IsPolyOrderRejection(ex))
+                await CheckMaintenanceThresholdAsync("poly", Interlocked.Increment(ref _polyConsecErrors));
             return (0m, 0m);
         }
     }
