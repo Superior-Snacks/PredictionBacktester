@@ -1,108 +1,17 @@
 
 ============================================================
-ATTEMPT 2026-06-11 03:16:52 UTC  pair=MANUAL_KXNBA-26-SAS__10222718  arbType=K_YES_P_NO
+ATTEMPT 2026-06-11 15:26:00 UTC  pair=MANUAL_KXATTENDUFC250-26JUN-JPAU__87569075  arbType=K_YES_P_NO
 ============================================================
-[EXEC] Will the San Antonio win the 2026 Pro Basketball Finals? | K_YES_P_NO | K-yes=0.4400 P=0.5090 net=$0.9737 | 31 contracts @ $29.42
-[ORDER K] KXNBA-26-SAS YES 45¢ × 31  clientId=CAXARB_AX_20260611031652_KXNBA-26-SAS
-[ORDER P] BUY token=126360350705... price=0.5096 shares=31
-[FILL K]  KXNBA-26-SAS placed orderId=e38ef651-512f-4e73-82cd-59ef891ab79e status=canceled fillImm=0.00
-[FILL P]  126360350705... placed orderID=0xbfb9d929cf8b9b9795c0ddcb245ff590885f9bbab201439bce5cd8fee1111386 status=matched
-[FILL P]  126360350705... filled=31.060902 avgPrice=0.5090
-[STALE PRICE] Will the San Antonio win the 2026 Pro Basketball Finals? | detectedNet=0.9737 kFilled=0.00 pFilled=31.06 — one leg missed limit, price may have moved
-[EXEC UNHEDGED] Will the San Antonio win the 2026 Pro Basketball Finals? | kFilled=0.00 pFilled=31.06 balanced=0.00 kExcess=0.00 pExcess=31.06 — starting recovery
-[ORDER P] SELL token=126360350705... shares=31.06
-[FILL P]  126360350705... sold=31.06 avgPrice=0.4870
-[RECOVER] Will the San Antonio win the 2026 Pro Basketball Finals? | reversed 31.06 excess Poly @ 0.4870 (OVERFILL) loss=$0.68
-
-============================================================
-ATTEMPT 2026-06-11 03:22:56 UTC  pair=MANUAL_KXNBA-26-SAS__10222718  arbType=K_YES_P_NO
-============================================================
-[EXEC] Will the San Antonio win the 2026 Pro Basketball Finals? | K_YES_P_NO | K-yes=0.3400 P=0.6170 net=$0.9798 | 31 contracts @ $29.67
-[ORDER K] KXNBA-26-SAS YES 35¢ × 31  clientId=CAXARB_AX_20260611032256_KXNBA-26-SAS
-[ORDER P] BUY token=126360350705... price=0.6170 shares=31
-[FILL K]  KXNBA-26-SAS placed orderId=2629df3e-cbb1-4115-9db7-999573c2d1d1 status=executed fillImm=31.00
-[POLY LEG ERROR] 126360350705...: [Polymarket API Error] BadRequest: {"error":"no orders found to match with FAK order. FAK orders are partially filled or killed if no match is found.","orderID":"0x79e911ee8a0db4c56b82770493bd5c05525b316f68a59c11d61e901d123106b6"}
-[STALE PRICE] Will the San Antonio win the 2026 Pro Basketball Finals? | detectedNet=0.9798 kFilled=31.00 pFilled=0.00 — one leg missed limit, price may have moved
-[EXEC UNHEDGED] Will the San Antonio win the 2026 Pro Basketball Finals? | kFilled=31.00 pFilled=0.00 balanced=0 kExcess=31.00 pExcess=0.00 — starting recovery
-[RECOVER] Will the San Antonio win the 2026 Pro Basketball Finals? | hedgeNet=1.0590 >= 1.0 — reversing 31.00 Kalshi yes directly
-[RECOVER REVERSED] Will the San Antonio win the 2026 Pro Basketball Finals? | swept 31 Kalshi yes (attempt 1), 0 left
-
-============================================================
-ATTEMPT 2026-06-11 03:32:13 UTC  pair=MANUAL_KXNBA-26-NYK__20257190  arbType=K_NO_P_YES
-============================================================
-[EXEC] Will the New York win the 2026 Pro Basketball Finals? | K_NO_P_YES | K-no=0.3200 P=0.6320 net=$0.9742 | 31 contracts @ $29.51
-[ORDER K] KXNBA-26-NYK NO 33¢ × 31  clientId=CAXARB_AX_20260611033213_KXNBA-26-NYK
-[ORDER P] BUY token=202571905407... price=0.6324 shares=31
-[FILL K]  KXNBA-26-NYK placed orderId=fa09f4bb-6288-420a-ae41-b46e6e144a6a status=executed fillImm=31.00
-[POLY LEG ERROR] 202571905407...: [Polymarket API Error] BadRequest: {"error":"no orders found to match with FAK order. FAK orders are partially filled or killed if no match is found.","orderID":"0x4f7470be2afa8b07a784abe51e801a3ffede63900f40df2d1613e09fb3a0640f"}
-[STALE PRICE] Will the New York win the 2026 Pro Basketball Finals? | detectedNet=0.9742 kFilled=31.00 pFilled=0.00 — one leg missed limit, price may have moved
-[EXEC UNHEDGED] Will the New York win the 2026 Pro Basketball Finals? | kFilled=31.00 pFilled=0.00 balanced=0 kExcess=31.00 pExcess=0.00 — starting recovery
-[RECOVER] Will the New York win the 2026 Pro Basketball Finals? | kExcess=31.00 hedgeNet=0.9990 — completing hedge on Poly
-[ORDER P] BUY token=202571905407... price=0.6770 shares=31.00
-[POLY LEG ERROR] 202571905407...: [Polymarket API Error] BadRequest: {"error":"no orders found to match with FAK order. FAK orders are partially filled or killed if no match is found.","orderID":"0xbe46aebe89823903659040f01067c11a12d60a0b7986c7668c80e936dff7b51a"}
-[RECOVER] Will the New York win the 2026 Pro Basketball Finals? | Poly hedge retry failed — reversing Kalshi excess
-[RECOVER REVERSED] Will the New York win the 2026 Pro Basketball Finals? | swept 31 Kalshi no (attempt 1), 0 left
-
-============================================================
-ATTEMPT 2026-06-11 03:32:24 UTC  pair=MANUAL_KXNBA-26-SAS__10222718  arbType=K_YES_P_NO
-============================================================
-[EXEC] Will the San Antonio win the 2026 Pro Basketball Finals? | K_YES_P_NO | K-yes=0.2000 P=0.7600 net=$0.9767 | 31 contracts @ $29.76
-[ORDER K] KXNBA-26-SAS YES 21¢ × 31  clientId=CAXARB_AX_20260611033224_KXNBA-26-SAS
-[ORDER P] BUY token=126360350705... price=0.7600 shares=31
-[FILL K]  KXNBA-26-SAS placed orderId=2cde8813-fff7-439e-992b-43b4d73994c2 status=executed fillImm=31.00
-[POLY LEG ERROR] 126360350705...: [Polymarket API Error] BadRequest: {"error":"no orders found to match with FAK order. FAK orders are partially filled or killed if no match is found.","orderID":"0x8d586bff5c5630a73786a78e5a60d867be2944f77e933ccfa1960c7285279379"}
-[STALE PRICE] Will the San Antonio win the 2026 Pro Basketball Finals? | detectedNet=0.9767 kFilled=31.00 pFilled=0.00 — one leg missed limit, price may have moved
-[EXEC UNHEDGED] Will the San Antonio win the 2026 Pro Basketball Finals? | kFilled=31.00 pFilled=0.00 balanced=0 kExcess=31.00 pExcess=0.00 — starting recovery
-[RECOVER] Will the San Antonio win the 2026 Pro Basketball Finals? | kExcess=31.00 hedgeNet=0.9767 — completing hedge on Poly
-[ORDER P] BUY token=126360350705... price=0.7800 shares=31.00
-[POLY LEG ERROR] 126360350705...: [Polymarket API Error] BadRequest: {"error":"no orders found to match with FAK order. FAK orders are partially filled or killed if no match is found.","orderID":"0xe37847dfc29e3bb01be372285feafd10f3027bdafa25253b0cbf6bd190ad901f"}
-[RECOVER] Will the San Antonio win the 2026 Pro Basketball Finals? | Poly hedge retry failed — reversing Kalshi excess
-[RECOVER REVERSED] Will the San Antonio win the 2026 Pro Basketball Finals? | swept 31 Kalshi yes (attempt 1), 0 left
-
-============================================================
-ATTEMPT 2026-06-11 03:34:25 UTC  pair=MANUAL_KXNBAFINMVP-26-OANU__47087773  arbType=K_NO_P_YES
-============================================================
-[EXEC] Will OG Anunoby win Finals MVP? | K_NO_P_YES | K-no=0.7000 P=0.2590 net=$0.9795 | 31 contracts @ $29.73
-[ORDER K] KXNBAFINMVP-26-OANU NO 71¢ × 31  clientId=CAXARB_AX_20260611033425_KXNBAFINMVP-26-OANU
-[ORDER P] BUY token=470877730345... price=0.2590 shares=31
-[FILL K]  KXNBAFINMVP-26-OANU placed orderId=7b855731-f93b-4780-927e-7947ffc56279 status=executed fillImm=31.00
-[POLY LEG ERROR] 470877730345...: [Polymarket API Error] BadRequest: {"error":"no orders found to match with FAK order. FAK orders are partially filled or killed if no match is found.","orderID":"0xa251bff3d084ea6950a95d059b3074479162c6669d297561a17c3836b956a47b"}
-[STALE PRICE] Will OG Anunoby win Finals MVP? | detectedNet=0.9795 kFilled=31.00 pFilled=0.00 — one leg missed limit, price may have moved
-[EXEC UNHEDGED] Will OG Anunoby win Finals MVP? | kFilled=31.00 pFilled=0.00 balanced=0 kExcess=31.00 pExcess=0.00 — starting recovery
-[RECOVER] Will OG Anunoby win Finals MVP? | kExcess=31.00 hedgeNet=0.9805 — completing hedge on Poly
-[ORDER P] BUY token=470877730345... price=0.2800 shares=31.00
-[FILL P]  470877730345... placed orderID=0x74c6182c0b5f429bbbaf71cf0fbea3e60061935b2e5fee74103bfde154158182 status=matched
-[FILL P]  470877730345... filled=33.384614 avgPrice=0.2600
-[RECOVER OK] Will OG Anunoby win Finals MVP? | hedge completed +31.00 sets via Poly retry
-[ORDER P] SELL token=470877730345... shares=2.38
-[SELL HAMMER] 470877730345... tokens not settled yet. Retrying in 500ms... (1/10)
-[FILL P]  470877730345... sold=2.38 avgPrice=0.1030
-[RECOVER] Will OG Anunoby win Finals MVP? | reversed 2.38/2.38 Poly hedge-overfill @ 0.1030 loss=$0.37
-
-============================================================
-ATTEMPT 2026-06-11 09:00:57 UTC  pair=MANUAL_KXVALORANT-MASTLD26-LEV__20787503  arbType=K_YES_P_NO
-============================================================
-[EXEC] Will Leviatán Esports win VALORANT Masters London? | K_YES_P_NO | K-yes=0.0500 P=0.9040 net=$0.9599 | 31 contracts @ $29.57
-[ORDER K] KXVALORANT-MASTLD26-LEV YES 6¢ × 31  clientId=CAXARB_AX_20260611090057_KXVALORANT-MASTLD26-LEV
-[ORDER P] BUY token=229789313132... price=0.9115 shares=31
-[FILL K]  KXVALORANT-MASTLD26-LEV placed orderId=6fdea169-8443-46d5-9c93-58ddb0a5649d status=canceled fillImm=0.17
-[FILL P]  229789313132... placed orderID=0x29020245ebb7cbc80e4de7c920153bcc44ad82166fda7e580c4bfac071102011 status=matched
-[FILL P]  229789313132... filled=31.150934 avgPrice=0.9075
-[EXEC OK] Will Leviatán Esports win VALORANT Masters London? | K=0.17@6¢ | P=0.17sh@$0.9075 | cost=$0.16 actualNet=0.9634 projProfit=$0.01
-[EXEC UNHEDGED] Will Leviatán Esports win VALORANT Masters London? | kFilled=0.17 pFilled=31.15 balanced=0.17 kExcess=0.00 pExcess=30.98 — starting recovery
-[ORDER P] SELL token=229789313132... shares=30.98
-[FILL P]  229789313132... sold=30.98 avgPrice=0.8929
-[RECOVER] Will Leviatán Esports win VALORANT Masters London? | reversed 30.98 excess Poly @ 0.8929 (OVERFILL) loss=$0.45
-
-============================================================
-ATTEMPT 2026-06-11 09:37:18 UTC  pair=MANUAL_KXNBA-26-NYK__20257190  arbType=K_YES_P_NO
-============================================================
-[EXEC] Will the New York win the 2026 Pro Basketball Finals? | K_YES_P_NO | K-yes=0.8200 P=0.1500 net=$0.9842 | 30 contracts @ $29.10
-[ORDER K] KXNBA-26-NYK YES 83¢ × 30  clientId=CAXARB_AX_20260611093718_KXNBA-26-NYK
-[ORDER P] BUY token=177084055977... price=0.1500 shares=30
-[FILL K]  KXNBA-26-NYK placed orderId=28bc4bc0-aefe-44c4-839f-d469fc0814b7 status=executed fillImm=30.00
-[POLY LEG ERROR] 177084055977...: [Polymarket API Error] BadRequest: {"error":"no orders found to match with FAK order. FAK orders are partially filled or killed if no match is found.","orderID":"0x82547ab9dae5a9554c7a5ce3c4aeeebc40f5d1a646c049cd8f27a83b13dd142b"}
-[STALE PRICE] Will the New York win the 2026 Pro Basketball Finals? | detectedNet=0.9842 kFilled=30.00 pFilled=0.00 — one leg missed limit, price may have moved
-[EXEC UNHEDGED] Will the New York win the 2026 Pro Basketball Finals? | kFilled=30.00 pFilled=0.00 balanced=0 kExcess=30.00 pExcess=0.00 — starting recovery
-[RECOVER] Will the New York win the 2026 Pro Basketball Finals? | hedgeNet=1.0148 >= 1.0 — reversing 30.00 Kalshi yes directly
-[RECOVER REVERSED] Will the New York win the 2026 Pro Basketball Finals? | swept 30 Kalshi yes (attempt 1), 0 left
+[EXEC] Will Jake Paul attend any UFC Freedom 250 event in person? | K_YES_P_NO | K-yes=0.2300 P=0.7300 net=$0.9783 | 31 contracts @ $29.76
+[ORDER K] KXATTENDUFC250-26JUN-JPAU YES 24¢ × 31  clientId=CAXARB_AX_20260611152600_KXATTENDUFC250-26JUN-JPAU
+[ORDER P] BUY token=213376739875... price=0.7300 shares=31
+[FILL K]  KXATTENDUFC250-26JUN-JPAU placed orderId=94e15f3a-7d70-4820-ab5b-3ce279fff136 status=executed fillImm=31.00
+[FILL P]  213376739875... placed orderID=0xacad5c17b5dec07e69fe629b2f12a55e2857768135e4d937c9b648c680a48d33 status=matched
+[FILL P]  213376739875... filled=0.45 avgPrice=0.7300
+[EXEC OK] Will Jake Paul attend any UFC Freedom 250 event in person? | K=0.45@24¢ | P=0.45sh@$0.7300 | cost=$0.43 actualNet=0.9783 projProfit=$0.01
+[EXEC UNHEDGED] Will Jake Paul attend any UFC Freedom 250 event in person? | kFilled=31.00 pFilled=0.45 balanced=0.45 kExcess=30.55 pExcess=0.00 — starting recovery
+[RECOVER] Will Jake Paul attend any UFC Freedom 250 event in person? | kExcess=30.55 hedgeNet=0.9783 — completing hedge on Poly
+[ORDER P] BUY token=213376739875... price=0.7500 shares=30.55
+[POLY LEG ERROR] 213376739875...: [Polymarket API Error] BadRequest: {"error":"no orders found to match with FAK order. FAK orders are partially filled or killed if no match is found.","orderID":"0x6951eb6eb55721dcd25502f8cd9869006fa005d519500301e39fd38c5f98e602"}
+[RECOVER] Will Jake Paul attend any UFC Freedom 250 event in person? | Poly hedge retry failed — reversing Kalshi excess
+[RECOVER REVERSED] Will Jake Paul attend any UFC Freedom 250 event in person? | swept 30 Kalshi yes (attempt 1), 0 left
