@@ -964,9 +964,12 @@ public class CrossArbExecutor
             }));
         }
 
-        // Balanced quantity: the portion of each leg that is fully hedged.
-        // Any excess on one side is an unhedged delta requiring recovery.
-        decimal balancedQty  = Math.Min(kFilled, pFilled);
+        // Balanced quantity: the portion of each leg that is fully hedged. Floored to a whole number —
+        // the Kalshi leg trades in whole contracts only, so a fractional matched qty (e.g. Poly FAK
+        // fills 0.45 vs Kalshi's 31 whole contracts) can never be held or reconciled on Kalshi. Rounding
+        // down to whole sets keeps the tracked position integer-valid; any fractional remainder on either
+        // leg falls out as unhedged excess and is reversed/absorbed below.
+        decimal balancedQty  = Math.Floor(Math.Min(kFilled, pFilled));
         decimal kUnhedged    = kFilled - balancedQty;  // excess Kalshi contracts
         decimal pUnhedged    = pFilled - balancedQty;  // excess Poly shares
         bool    neitherFilled   = kFilled == 0 && pFilled == 0;
@@ -1288,8 +1291,13 @@ public class CrossArbExecutor
                 bool kReversed = recovery?.Outcome == "REVERSED_KALSHI";
                 string reconcileOrderId = (kUnhedged == 0 || kReversed) ? kOrderId : "";
                 decimal reversedKalshiQty = kReversed ? recovery!.RecoveredQty : 0m;
-                // When Poly dust was absorbed we didn't sell — venue holds pFilled, not balancedQty.
-                decimal expectedPolyVenue = recovery?.Outcome == "DUST_ABSORBED_POLY" ? pFilled : balancedQty;
+                // pFilled (not balancedQty) whenever Poly was left intact on the venue: an absorbed Poly
+                // dust, OR a Case-A recovery that only touched Kalshi (reversed / absorbed the Kalshi
+                // excess, Poly untouched). Keeps a fractional Poly under-fill remainder — now possible
+                // since balancedQty floors to whole sets — from tripping reconcile's >0.5 Poly tolerance.
+                decimal expectedPolyVenue =
+                    recovery?.Outcome is "DUST_ABSORBED_POLY" or "REVERSED_KALSHI" or "DUST_ABSORBED_KALSHI"
+                        ? pFilled : balancedQty;
                 // A Poly overfill reversal (bought too many, sold the excess in-trade) can race the
                 // pre-trade snapshot and poison reconcile's delta check — flag it so reconcile trusts
                 // the absolute position instead of the (contaminated) delta.
@@ -1809,7 +1817,10 @@ public class CrossArbExecutor
         decimal kLegAsk, decimal pActualPrice,
         string execId = "", List<string>? execLog = null)
     {
-        decimal balancedQty = Math.Min(kFilled, pFilled);
+        // Floor to whole sets — Kalshi holds whole contracts only (see ExecuteAsync). A fractional
+        // smaller-leg (Poly) fill leaves BOTH legs with excess: the integer Kalshi excess reverses
+        // cleanly, the sub-unit Poly remainder (<1 share) is absorbed in the reverse path below.
+        decimal balancedQty = Math.Floor(Math.Min(kFilled, pFilled));
         decimal kUnhedged   = kFilled - balancedQty;
         decimal pUnhedged   = pFilled - balancedQty;
 
@@ -1971,6 +1982,25 @@ public class CrossArbExecutor
             else if (kUnhedgedValue < CleanupHedgeSkipUsd)
             {
                 Emit(execLog, $"[CLEANUP SKIP HEDGE] {pair.Label} | kExcess={kUnhedged} value=${kUnhedgedValue:0.00} < ${CleanupHedgeSkipUsd:0.00} — reversing directly");
+            }
+
+            // Sub-unit fill leftover: when the smaller (Poly) leg filled a fraction below one whole set,
+            // balancedQty floored down and left this naked Poly remainder alongside the full Kalshi
+            // excess. It's always <1 share (<$1 — under Poly's $1 CLOB min, so un-sellable), so absorb it
+            // as dust and let it settle on its own — nothing left untracked. Normal single-excess
+            // recoveries have pUnhedged==0 here and skip this.
+            if (pUnhedged > 0m)
+            {
+                decimal pRemValue = pUnhedged * pActualPrice;
+                lock (_cleanupLock) { _totalCleanupCostUsd += pRemValue; }
+                await JournalAsync(JsonSerializer.Serialize(new {
+                    t = DateTime.UtcNow, @event = "CLEANUP_DUST", execId,
+                    pair = pair.PairId, leg = "poly_subunit_remainder",
+                    qty = Math.Round(pUnhedged, 6), absorbedUsd = Math.Round(pRemValue, 4)
+                }));
+                Console.ForegroundColor = ConsoleColor.DarkYellow;
+                Emit(execLog, $"[CLEANUP DUST] {pair.Label} | Absorbing {pUnhedged:0.00} Poly sub-unit remainder (${pRemValue:0.00}) — no halt");
+                Console.ResetColor();
             }
 
             // Reverse: relentlessly sweep the excess Kalshi contracts out at the floor (re-reading the
