@@ -21,6 +21,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "KalshiPaperTrader", "Kalshi
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "KalshiPolyCross", "KalshiPolyCross\KalshiPolyCross.csproj", "{77BA1FB7-9D99-4417-B784-A6DCC97A81C6}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "HardVenArb", "HardVenArb\HardVenArb.csproj", "{692E717A-5376-43DC-A7A0-EB8D453B7FC7}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -139,6 +141,18 @@ Global
 		{77BA1FB7-9D99-4417-B784-A6DCC97A81C6}.Release|x64.Build.0 = Release|Any CPU
 		{77BA1FB7-9D99-4417-B784-A6DCC97A81C6}.Release|x86.ActiveCfg = Release|Any CPU
 		{77BA1FB7-9D99-4417-B784-A6DCC97A81C6}.Release|x86.Build.0 = Release|Any CPU
+		{692E717A-5376-43DC-A7A0-EB8D453B7FC7}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{692E717A-5376-43DC-A7A0-EB8D453B7FC7}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{692E717A-5376-43DC-A7A0-EB8D453B7FC7}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{692E717A-5376-43DC-A7A0-EB8D453B7FC7}.Debug|x64.Build.0 = Debug|Any CPU
+		{692E717A-5376-43DC-A7A0-EB8D453B7FC7}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{692E717A-5376-43DC-A7A0-EB8D453B7FC7}.Debug|x86.Build.0 = Debug|Any CPU
+		{692E717A-5376-43DC-A7A0-EB8D453B7FC7}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{692E717A-5376-43DC-A7A0-EB8D453B7FC7}.Release|Any CPU.Build.0 = Release|Any CPU
+		{692E717A-5376-43DC-A7A0-EB8D453B7FC7}.Release|x64.ActiveCfg = Release|Any CPU
+		{692E717A-5376-43DC-A7A0-EB8D453B7FC7}.Release|x64.Build.0 = Release|Any CPU
+		{692E717A-5376-43DC-A7A0-EB8D453B7FC7}.Release|x86.ActiveCfg = Release|Any CPU
+		{692E717A-5376-43DC-A7A0-EB8D453B7FC7}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

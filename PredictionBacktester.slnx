@@ -7,4 +7,5 @@
   <Project Path="PredictionLiveProduction/PredictionLiveProduction.csproj" />
   <Project Path="PredictionLiveTrader/PredictionLiveTrader.csproj" />
   <Project Path="KalshiPaperTrader/KalshiPaperTrader.csproj" />
+  <Project Path="HardVenArb/HardVenArb.csproj" />
 </Solution>
