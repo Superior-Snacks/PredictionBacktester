@@ -49,17 +49,37 @@ Keep the fragile browser automation OUT of the trading core.
 
 ## 2. TODO by component
 
-### A. Pairing system (semi-manual — accept it won't fully automate)
-- [ ] **Schema** for `cross_pairs.json` (HardVen variant). Fields per pair:
-      `kalshi_ticker`, `hardven_book`, `hardven_event_id` (or URL), `hardven_market`, and the
-      **YES/NO → selectionId mapping** (which book selection = Kalshi YES vs NO), plus
-      `match_start_time` (UTC, for the pre-live gate) and `label`.
-- [ ] **Pairing helper** (Python): given a Kalshi event, query the book's catalog/search and fuzzy-match
-      candidate events/markets/selections; present to a human to confirm + record. (Mirror the spirit of
-      `pair_markets_v2.py` but for the sportsbook's taxonomy — the Poly Gamma pairing does NOT transfer.)
-- [ ] **Outcome-equivalence checks** (manual review): same event, same resolution rule, same YES/NO sense
-      (e.g. Kalshi "X wins the title" ↔ book "Outright winner → X"). Mismatched rules = silent loss.
-- [ ] Decide handling of book markets with no Kalshi equivalent and vice-versa.
+### A. Pairing system (mostly automatable — AI judge + empirical settlement gate)
+Reuse `pair_markets_v2.py`'s machinery (unified index, BM25/spaCy/embedding signals, LLM judge with
+confidence routing). Name/event matching is the SAME problem as Kalshi↔Poly. The ONE part NOT to trust
+the AI on is **resolution-rule equivalence** — a wrong pairing here is a real-money loss (the two venues
+settle the same event differently), not a missed opportunity. So layer the automation with gates that
+do not depend on the AI being right.
+
+- [ ] **Schema** for `cross_pairs.json` (HardVen variant): `kalshi_ticker`, `hardven_book`,
+      `hardven_event_id` (or URL), `hardven_market`, the **YES/NO → selectionId mapping**,
+      `match_start_time` (UTC, pre-live gate), `label`, plus a **trust status** (observe-only | trusted |
+      blocklisted) and a settled-event count.
+- [ ] **Catalog enumeration (prereq):** the scraper must list the book's FULL catalog
+      (sport/league/event/market/selection/start-time/odds) and, ideally, per-market **rules text or a
+      rules URL**. No comprehensive catalog ⇒ nothing to auto-match against; no rules text ⇒ the AI can't
+      catch settlement mismatches, so you lean harder on the settlement back-test below.
+- [ ] **Candidate generation (auto):** embedding/BM25/entity-match each Kalshi market → top-K book
+      selections (reuse the v2 index + signals). Cheap; narrows thousands → a few per Kalshi market.
+- [ ] **AI judge (auto):** per candidate, feed BOTH sides' full context (titles, outcome/selection names,
+      **rules text**, dates, sport/league) and ask: *do these resolve to the SAME outcome under the SAME
+      conditions?* Output = verdict + confidence + the YES/NO↔selectionId mapping + explicit
+      **rule-mismatch flags** (settlement source, void/push, OT vs regulation, futures cutoff, dead-heat,
+      postponement). Same confidence routing as v2: high + no flags → candidate pool; medium → review
+      queue; low / any rule flag → reject.
+- [ ] **Settlement back-test gate (the trust mechanism — auto):** every auto-paired market starts
+      **observe-only** and is NEVER bet until proven. After its markets settle, auto-compare: did Kalshi
+      and the book resolve to the SAME outcome? Resolved-identically across N past events → promote to
+      **trusted** (bettable). A single divergence → auto-blocklist. This trusts observed settlement
+      history, not the AI — it's what makes "automatic pairing" safe with real money.
+- [ ] **Price-sanity gate:** reuse `_minPlausibleNet` — a "too good" edge flags a likely rule mismatch,
+      not free money.
+- [ ] Human review handles only the medium-confidence queue + first-time book-taxonomy quirks.
 
 ### B. Scraper sidecar service
 - [ ] **Pick the POC sportsbook.** Criteria: a scrapable site or semi-stable internal JSON endpoint;
