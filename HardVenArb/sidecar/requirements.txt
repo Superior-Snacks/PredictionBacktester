@@ -2,6 +2,7 @@
 fastapi
 uvicorn[standard]
 httpx
-# For real browser-based book adapters (odds via network interception + bet-slip automation):
-#   pip install playwright && playwright install chromium
-# playwright
+
+# bookmaker.eu adapter is browser-driven (no API/broker needed). After installing:
+#   playwright install chromium
+playwright

@@ -25,9 +25,11 @@ def load_adapter() -> BookAdapter:
     name = os.environ.get("HARDVEN_BOOK", "mock").lower()
     if name == "mock":
         return MockBookAdapter()
-    # Register real books here as you build them, e.g.:
-    #   if name == "pinnacle": from pinnacle_adapter import PinnacleAdapter; return PinnacleAdapter()
-    #   if name == "mybook":   from mybook_adapter import MyBookPlaywrightAdapter; return MyBookPlaywrightAdapter()
+    if name == "bookmaker":
+        from bookmaker_adapter import BookmakerAdapter   # lazy: only needs Playwright when selected
+        return BookmakerAdapter()
+    # Register more books here as you build them, e.g.:
+    #   if name == "mybook": from mybook_adapter import MyBookPlaywrightAdapter; return MyBookPlaywrightAdapter()
     raise ValueError(f"Unknown HARDVEN_BOOK={name!r} (no adapter registered)")
 
 

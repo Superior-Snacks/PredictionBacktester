@@ -86,9 +86,13 @@ do not depend on the AI being right.
 `BookAdapter` contract (`book_adapter.py` — the abstract methods ARE the checklist), a working
 `MockBookAdapter` (`mock_adapter.py`), `requirements.txt`, `README.md`. Runs today against the mock
 (`HARDVEN_BOOK=mock uvicorn app:app --port 8787`). The remaining items below are about the REAL adapter:
-- [ ] **Pick the POC sportsbook.** Criteria: a scrapable site or semi-stable internal JSON endpoint;
-      decent pre-match markets that overlap Kalshi (politics/sports futures/season-long); fundable account;
-      tolerable ToS/automation risk; not aggressively bot-protected.
+- [x] **POC sportsbook = bookmaker.eu** (chosen 2026-06-16). Bankroll too small for a broker/API book
+      (e.g. Pinnacle), so **browser path**. `bookmaker_adapter.py` scaffolded with working Playwright
+      plumbing (persistent profile, network interception, bet-serialization lock); site-specific bits are
+      `TODO(recon)`.
+- [ ] **Recon (manual, one-time):** log into bookmaker.eu → devtools Network/XHR → find the odds JSON
+      (URL + shape + outcome-id field). Fill `_looks_like_odds()` + `_parse_odds()`; the outcome id
+      becomes the `hardven_*_id` in cross_pairs.json. (DOM-scrape fallback if no JSON.) See sidecar README.
 - [ ] **Session management:** login, cookie/session persistence, 2FA, CAPTCHA strategy, geo/IP. Keep-alive
       + re-login on expiry.
 - [ ] **Odds polling:** for each subscribed selection, poll every N seconds; parse → `decimalOdds` +
@@ -101,9 +105,12 @@ do not depend on the AI being right.
       mode that places nothing.
 
 ### C. C# HardVen clients (fill the 4 stubs)
-- [ ] `HardVenWebsocketFeed` → poll the sidecar `/odds`; for each selection push a single-level book into
-      `"H:{selectionId}"`: **ask price = `1/decimalOdds`**, **ask size = `maxStake × decimalOdds`**
-      (= max contracts). Call `_telemetry.OnBookUpdate`. **Loosen the staleness guard** for pre-match cadence.
+- [x] `HardVenWebsocketFeed` (DONE 2026-06-16) — now an HTTP poller of the sidecar `/odds` (book-agnostic):
+      reads `decimal_odds`/`max_contracts`/`status`, pushes a single-ask snapshot into `"H:{id}"`
+      (price = `1/decimalOdds`, size = `max_contracts`) via `ProcessBookUpdate` (clears stale levels),
+      `MarkDeltaReceived` + `_telemetry.OnBookUpdate`. Suspended/missing → empty ask (no arb). Program.cs
+      points at `HARDVEN_SIDECAR_URL` (env, default `http://127.0.0.1:8787`). Builds clean; sidecar `/odds`
+      shape verified to match. Poll cadence = `HARDVEN_PING_INTERVAL_MS` (9 s).
 - [ ] `HardVenOrderClient.SubmitOrderAsync` → convert contracts↔stake (`stake = contracts / O`), POST
       `/bet`, return a response the executor can parse as a fill (mirror the JSON shape the executor expects,
       or adapt the executor's HardVen-fill parsing).

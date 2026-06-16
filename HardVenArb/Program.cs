@@ -177,7 +177,7 @@ const int     HARDVEN_BATCH_SIZE       = 200;
 const int     HARDVEN_PING_INTERVAL_MS = 9_000;
 const int     NEAR_MISS_INTERVAL_MS  = 60_000;
 const int     STATUS_DASH_INTERVAL_MS = 30_000;
-const string  HARDVEN_WS_URL            = "";   // TODO: real betting-site feed URL (stub feed ignores this)
+string        HARDVEN_SIDECAR_URL      = Environment.GetEnvironmentVariable("HARDVEN_SIDECAR_URL") ?? "http://127.0.0.1:8787";  // HardVen private-API sidecar
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  STARTUP
@@ -544,7 +544,7 @@ _ = Task.Run(async () =>
 // ══════════════════════════════════════════════════════════════════════════════
 var kalshiFeed = new KalshiWebsocketFeed(orderClient, kalshiConfig, kalshiSubscribeTickers,
                                          state, telemetry, KALSHI_BATCH_SIZE, MIN_BOOK_PRICE);
-var hardvenFeed   = new HardVenWebsocketFeed(HARDVEN_WS_URL, hardvenSubscribeTokens,
+var hardvenFeed   = new HardVenWebsocketFeed(HARDVEN_SIDECAR_URL, hardvenSubscribeTokens,
                                              state, telemetry, HARDVEN_BATCH_SIZE, HARDVEN_PING_INTERVAL_MS);
 
 // ══════════════════════════════════════════════════════════════════════════════
