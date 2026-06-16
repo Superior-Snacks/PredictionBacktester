@@ -1,0 +1,7 @@
+# HardVen sidecar — the "private API" the C# bot calls. Book-agnostic core + pluggable adapters.
+fastapi
+uvicorn[standard]
+httpx
+# For real browser-based book adapters (odds via network interception + bet-slip automation):
+#   pip install playwright && playwright install chromium
+# playwright

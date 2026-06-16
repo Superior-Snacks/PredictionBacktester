@@ -82,6 +82,10 @@ do not depend on the AI being right.
 - [ ] Human review handles only the medium-confidence queue + first-time book-taxonomy quirks.
 
 ### B. Scraper sidecar service
+**✅ Skeleton scaffolded at `HardVenArb/sidecar/`** (2026-06-16): FastAPI app (`app.py`), the
+`BookAdapter` contract (`book_adapter.py` — the abstract methods ARE the checklist), a working
+`MockBookAdapter` (`mock_adapter.py`), `requirements.txt`, `README.md`. Runs today against the mock
+(`HARDVEN_BOOK=mock uvicorn app:app --port 8787`). The remaining items below are about the REAL adapter:
 - [ ] **Pick the POC sportsbook.** Criteria: a scrapable site or semi-stable internal JSON endpoint;
       decent pre-match markets that overlap Kalshi (politics/sports futures/season-long); fundable account;
       tolerable ToS/automation risk; not aggressively bot-protected.
@@ -108,7 +112,19 @@ do not depend on the AI being right.
 - [ ] `GetTakerFeeAsync→0`, `GetFeeParamsAsync→(0,1)`, `GetTickSizeAsync→` nominal/odds-step.
 
 ### D. Executor changes (the non-trivial work — `CrossArbExecutor.cs`)
-- [ ] **Invert leg ordering for HardVen:** place the **HardVen bet first** (slow, irreversible), await
+**Keep ONE execution core — drive the differences off venue CAPABILITIES, not venue identity.** The
+private-API/`IHardVenOrderExecutor` interface makes the *calls* uniform (great), but it CANNOT hide
+behavioral differences: you genuinely can't un-place a sportsbook bet, so the sidecar must not fake a
+"reverse" (returning fake success would leave the bot exposed while thinking it flattened). So have the
+venue advertise a small **capability descriptor** the executor reads — e.g. `CanReverseFills`
+(exchange=true, book=false), leg priority / `IsAnchorLeg` (place-first vs place-second), settlement model
+(token-balance-→0/1 vs bet-wins/loses-and-balance-moves), min/max size. The executor branches on these
+flags, so the SAME script handles a reversible exchange (Poly) and an irreversible book (HardVen), and a
+future venue (e.g. a Betfair-style exchange, which IS reversible) drops in by declaring capabilities — no
+executor edits. Add a `VenueCapabilities` to `IHardVenOrderExecutor` (or a `GetCapabilities()`) and make
+the items below read it rather than hard-coding "HardVen":
+- [ ] **Leg ordering by capability:** the non-reversible / anchor leg places **first** (HardVen: slow,
+      irreversible), await
       confirmation of the *actual accepted odds/stake*, **then** fire the Kalshi leg sized to it. (Today the
       executor fires Kalshi first then the second venue — gate this behind a HardVen path / flag.)
 - [ ] **No-reverse recovery:** a naked HardVen bet **cannot be sold**. Rework `RecoverUnhedgedAsync` so the
