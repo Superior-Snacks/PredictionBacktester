@@ -13,12 +13,38 @@ from __future__ import annotations
 import os
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
 
 from book_adapter import BookAdapter
 from mock_adapter import MockBookAdapter
+
+
+def _load_dotenv_upwards() -> None:
+    """Load KEY=VALUE lines from the nearest .env (walking up from this file) into os.environ without
+    overwriting already-set vars — so BOOKMAKER_USER/PASS, HARDVEN_BOOK, HARDVEN_SIDECAR_URL etc. can
+    live in the repo's root .env (the same file the C# bot reads). Dependency-free."""
+    here = Path(__file__).resolve()
+    for d in (here.parent, *here.parents):
+        env = d / ".env"
+        if env.exists():
+            for raw in env.read_text(encoding="utf-8", errors="replace").splitlines():
+                line = raw.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                if line[:7].lower() == "export ":
+                    line = line[7:]
+                k, _, v = line.partition("=")
+                k, v = k.strip(), v.strip().strip('"').strip("'")
+                if k and k not in os.environ:
+                    os.environ[k] = v
+            print(f"[SIDECAR] loaded env from {env}")
+            return
+
+
+_load_dotenv_upwards()
 
 
 def load_adapter() -> BookAdapter:

@@ -24,6 +24,9 @@ BOOKMAKER_HEADFUL=1 HARDVEN_BOOK=bookmaker uvicorn app:app --port 8787
 # (a browser opens → log into bookmaker.eu once → the cookies persist in .bookmaker_profile/)
 # thereafter you can run headless: HARDVEN_BOOK=bookmaker uvicorn app:app --port 8787
 ```
+**Credentials:** simplest is the persistent profile above — log in by hand once, no password stored. If
+you'd rather auto-login, put `BOOKMAKER_USER` / `BOOKMAKER_PASS` in the repo's **root `.env`** (the
+sidecar loads it automatically) and fill the login selectors in `_ensure_logged_in()`.
 `bookmaker_adapter.py` has the working session/interception plumbing; the site-specific bits are marked
 `TODO(recon)`. Until `_looks_like_odds()` + `_parse_odds()` are filled in, `/odds` returns `{}`.
 

@@ -56,6 +56,12 @@ the AI on is **resolution-rule equivalence** — a wrong pairing here is a real-
 settle the same event differently), not a missed opportunity. So layer the automation with gates that
 do not depend on the AI being right.
 
+- [x] **Interim manual scaffolder `pairHard.py`** (DONE 2026-06-16): fetches Kalshi open events (public
+      API, no auth), allowlists classic full-match 2-way WINNER series (`KXMLBGAME`/`KXNFLGAME`/tennis
+      `KX*MATCH`/`KXUFCFIGHT`/…; Sports category is mostly props/futures/esports so an allowlist is
+      required), writes `cross_pairs.json` with the Kalshi side filled + `hardven_*_token` BLANK for
+      hand-pairing (bot skips blanks). Knobs: `CLASSIC_SERIES`, `--series`, `--days`, `--all`. The
+      automated AI-judge pipeline below supersedes this once the scraper `catalog()` exists.
 - [ ] **Schema** for `cross_pairs.json` (HardVen variant): `kalshi_ticker`, `hardven_book`,
       `hardven_event_id` (or URL), `hardven_market`, the **YES/NO → selectionId mapping**,
       `match_start_time` (UTC, pre-live gate), `label`, plus a **trust status** (observe-only | trusted |
