@@ -22,6 +22,7 @@ Frame mechanics (per the bookmaker.eu spec):
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import os
 from typing import Callable, Optional
@@ -32,6 +33,13 @@ STOMP_LOGIN    = "rtweb"
 STOMP_PASSCODE = "rtweb"
 STOMP_HOST     = "WebRT"
 NULL = "\x00"
+
+# bookmaker.eu's RealTimeHandler.ashx serves a normal HTTP 200 (instead of the 101 upgrade) when the
+# request doesn't look like it came from the site's own browser session. A real browser UA + the
+# logged-in session Cookie are what flip it into the WebSocket code path. Override the UA via
+# BOOKMAKER_WS_USER_AGENT; paste your browser's Cookie header into BOOKMAKER_WS_COOKIE.
+DEFAULT_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+              "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
 
 
 def american_to_decimal(american) -> Optional[float]:
@@ -51,6 +59,35 @@ def _build_frame(command: str, headers: dict, body: str = "") -> str:
     """COMMAND\\n k:v\\n … \\n\\n body \\x00  — note the trailing NULL byte STOMP requires."""
     head = "\n".join([command] + [f"{k}:{v}" for k, v in headers.items()])
     return f"{head}\n\n{body}{NULL}"
+
+
+def _dump_handshake_failure(e: Exception) -> None:
+    """When the WS upgrade is rejected, surface the server's actual response so we can see WHY it
+    served a non-101 status. websockets carries this differently per version:
+      • new (InvalidStatus):     e.response  → .status_code / .headers / .body
+      • old (InvalidStatusCode): e.status_code / e.headers (no body)
+    """
+    resp = getattr(e, "response", None)
+    status = getattr(resp, "status_code", None) if resp is not None else getattr(e, "status_code", None)
+    headers = getattr(resp, "headers", None) if resp is not None else getattr(e, "headers", None)
+    if status is None and headers is None:
+        return  # not a handshake-status failure (e.g. DNS/TLS/connection) — nothing extra to show
+    print(f"[BOOKMAKER STOMP]   server status: {status}")
+    if headers is not None:
+        for k in ("content-type", "location", "server", "set-cookie", "www-authenticate"):
+            try:
+                v = headers.get(k)
+            except Exception:
+                v = None
+            if v:
+                print(f"[BOOKMAKER STOMP]   {k}: {v}")
+    body = getattr(resp, "body", None)
+    if body:
+        if isinstance(body, (bytes, bytearray)):
+            body = bytes(body).decode("utf-8", "replace")
+        snippet = body.strip().replace("\n", " ")[:400]
+        if snippet:
+            print(f"[BOOKMAKER STOMP]   body: {snippet}")
 
 
 def parse_stomp_frame(raw: str):
@@ -140,7 +177,7 @@ class StompOddsClient:
         self._hb_ms = heartbeat_ms
         # RabbitMQ Web-STOMP usually negotiates a vNN.stomp subprotocol (as stomp.js does). Override via
         # BOOKMAKER_WS_SUBPROTOCOLS="" to disable if the handshake is rejected.
-        self._subprotocols = subprotocols if subprotocols is not None else ["v12.stomp", "v11.stomp", "v10.stomp"]
+        self._subprotocols = subprotocols if subprotocols is not None else ["v10.stomp", "v11.stomp", "v12.stomp"]
         self._origin = origin
         self.connected = False
 
@@ -152,6 +189,7 @@ class StompOddsClient:
                 raise
             except Exception as e:
                 print(f"[BOOKMAKER STOMP] {type(e).__name__}: {e} — reconnecting in 5s")
+                _dump_handshake_failure(e)
             self.connected = False
             await asyncio.sleep(5)
 
@@ -161,6 +199,28 @@ class StompOddsClient:
             kwargs["subprotocols"] = self._subprotocols
         if self._origin:
             kwargs["origin"] = self._origin
+
+        # Make the handshake look like the site's own browser: real UA, session Cookie, and the
+        # cache/lang headers a fetch carries. Without these, bookmaker.eu returns HTTP 200 (no upgrade).
+        extra = {
+            "Accept-Language": "en-US,en;q=0.9",
+            "Pragma": "no-cache",
+            "Cache-Control": "no-cache",
+        }
+        cookie = os.environ.get("BOOKMAKER_WS_COOKIE")
+        if cookie:
+            extra["Cookie"] = cookie
+        ua = os.environ.get("BOOKMAKER_WS_USER_AGENT") or DEFAULT_UA
+
+        # websockets renamed extra_headers→additional_headers (legacy vs asyncio impl) and exposes a
+        # dedicated user_agent_header; feature-detect so this works across installed versions.
+        params = set(inspect.signature(websockets.connect).parameters)
+        header_kw = "additional_headers" if "additional_headers" in params else "extra_headers"
+        kwargs[header_kw] = extra
+        if "user_agent_header" in params:
+            kwargs["user_agent_header"] = ua
+        else:
+            extra.setdefault("User-Agent", ua)
 
         async with websockets.connect(self._url, **kwargs) as ws:
             # 1) CONNECT → CONNECTED
