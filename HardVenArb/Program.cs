@@ -177,7 +177,8 @@ const int     HARDVEN_BATCH_SIZE       = 200;
 const int     HARDVEN_PING_INTERVAL_MS = 9_000;
 const int     NEAR_MISS_INTERVAL_MS  = 60_000;
 const int     STATUS_DASH_INTERVAL_MS = 30_000;
-string        HARDVEN_SIDECAR_URL      = Environment.GetEnvironmentVariable("HARDVEN_SIDECAR_URL") ?? "http://127.0.0.1:8787";  // HardVen private-API sidecar
+// HARDVEN_SIDECAR_URL is read after .env is loaded (see below, next to the proxy read) — reading it here
+// would predate LoadDotEnv() and silently ignore any value in .env.
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  STARTUP
@@ -192,6 +193,8 @@ Console.WriteLine("════════════════════�
 var kalshiConfig = KalshiApiConfig.FromEnvironment(); // also loads .env into the process environment
 // Read proxy after .env is loaded — it's set by LoadDotEnv() inside FromEnvironment().
 string hardvenProxy = (Environment.GetEnvironmentVariable("HARDVEN_SOCKS_PROXY") ?? "").Trim();
+// Same: read the sidecar URL after .env loads so a .env override is honoured on the server.
+string HARDVEN_SIDECAR_URL = (Environment.GetEnvironmentVariable("HARDVEN_SIDECAR_URL") ?? "http://127.0.0.1:8787").Trim();
 
 // Discord webhook alerter (halts, naked-position failures, low cash). .env is loaded above, so the
 // URL is in the process env now; an unset/empty URL leaves it a disabled no-op.
