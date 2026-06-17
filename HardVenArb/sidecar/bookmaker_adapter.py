@@ -214,15 +214,66 @@ class BookmakerAdapter(BookAdapter):
         self._pw = await async_playwright().start()
         user_data = os.environ.get("BOOKMAKER_USER_DATA_DIR", ".bookmaker_profile")
         headless = os.environ.get("BOOKMAKER_HEADLESS") == "1"  # DEFAULT headful (Cloudflare/login)
-        self._ctx = await self._pw.chromium.launch_persistent_context(
-            user_data_dir=user_data, headless=headless,
-            viewport={"width": 1400, "height": 900},
-        )
+        # Anti-detection: bookmaker.eu blocks API/XHR (GetGameView, schedule) from an automated Chromium even
+        # though the page shell loads. Use the REAL installed Chrome and strip the automation flags so
+        # navigator.webdriver / --enable-automation don't give us away.
+        channel = os.environ.get("BOOKMAKER_CHANNEL", "chrome")
+        launch = dict(user_data_dir=user_data, headless=headless,
+                      viewport={"width": 1400, "height": 900},
+                      args=["--disable-blink-features=AutomationControlled"],
+                      ignore_default_args=["--enable-automation"])
+        try:
+            self._ctx = await self._pw.chromium.launch_persistent_context(channel=channel, **launch)
+        except Exception as e:
+            print(f"[BOOKMAKER] channel='{channel}' unavailable ({e}); using bundled Chromium "
+                  "(more likely to be bot-blocked — install Chrome or set BOOKMAKER_CHANNEL).")
+            self._ctx = await self._pw.chromium.launch_persistent_context(**launch)
+        await self._ctx.add_init_script("Object.defineProperty(navigator,'webdriver',{get:()=>undefined});")
+        self._ctx.on("request", self._on_request)     # capture rtqname from the site's own traffic
+        self._ctx.on("response", self._on_response)   # capture the site's OWN GetGameView responses
         self._page = self._ctx.pages[0] if self._ctx.pages else await self._ctx.new_page()
-        self._ctx.on("request", self._on_request)   # capture rtqname from the site's own traffic
         await self._page.goto(BASE_URL, wait_until="domcontentloaded")
-        print(f"[BOOKMAKER] browser on {BASE_URL} (headless={headless}). If GetGameView returns 401/Cloudflare, "
-              "log in / clear the check in the window — the persistent profile remembers it.")
+        print(f"[BOOKMAKER] browser on {BASE_URL} (channel={channel}, headless={headless}). First, confirm the "
+              "SITE works in the window — browse the schedule and open a game. If the schedule won't load, "
+              "log in / clear Cloudflare; the profile remembers it.")
+
+    # ── intercept the site's own GetGameView responses (most robust odds source) ─
+    def _on_response(self, resp) -> None:
+        try:
+            if "getgameview" in resp.url.lower():
+                asyncio.create_task(self._ingest_response(resp))
+        except Exception:
+            pass
+
+    async def _ingest_response(self, resp) -> None:
+        try:
+            if resp.status != 200:
+                return
+            text = await resp.text()
+            data = json.loads(text)
+        except Exception:
+            return
+        if isinstance(data, dict) and "d" in data and "GameView" not in data:
+            d = data["d"]
+            try:
+                data = json.loads(d) if isinstance(d, str) else d
+            except ValueError:
+                return
+        now = time.time()
+        captured = []
+        for e in parse_gameview(data).values():
+            idgm, idlg, side = e.get("idgm"), e.get("idlg"), e.get("side")
+            if not idgm or not idlg:
+                continue
+            full = f"{idgm}:{idlg}:{side}"
+            if e["status"] == "open" and e["decimal_odds"]:
+                self._odds_cache[full] = Selection(full, float(e["decimal_odds"]),
+                                                   float(e["max_stake"] or 0.0), "open", now)
+                captured.append(f"{full}={e['decimal_odds']}")
+            else:
+                self._odds_cache[full] = Selection(full, 1.0, 0.0, "suspended", now)
+        if captured:
+            print(f"[BOOKMAKER] intercepted site GetGameView → {captured}")
 
 
 if __name__ == "__main__":
@@ -238,9 +289,9 @@ if __name__ == "__main__":
         a = BookmakerAdapter()
         await a.startup()
         try:
-            for _ in range(20):
+            for _ in range(30):
                 result = await a.odds(ids)
-                print(f"[SMOKE] {time.strftime('%H:%M:%S')}")
+                print(f"[SMOKE] {time.strftime('%H:%M:%S')}  (cache={len(a._odds_cache)})")
                 for sid in ids:
                     s = result.get(sid)
                     if s:
@@ -248,6 +299,11 @@ if __name__ == "__main__":
                               f"max_contracts={round(s.max_contracts,1)}  {s.status}")
                     else:
                         print(f"        {sid}  (not returned)")
+                # also surface anything captured by intercepting the site's own GetGameView (navigate a game)
+                extra = {k: v for k, v in a._odds_cache.items() if k not in ids and v.status == "open"}
+                for sid, s in list(extra.items())[:8]:
+                    print(f"        [intercepted] {sid}  dec={s.decimal_odds}  "
+                          f"implied={round(s.implied_price,4)}  {s.status}")
                 await asyncio.sleep(10)
         except (KeyboardInterrupt, asyncio.CancelledError):
             pass

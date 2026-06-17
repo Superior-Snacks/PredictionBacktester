@@ -95,6 +95,7 @@ def parse_gameview(data: dict, pre_match_only: bool = True) -> dict:
             ok = tradeable and dec and dec > 1.0
             out[sid] = {
                 "idgm": idgm,
+                "idlg": game.get("idlg"),
                 "side": side,
                 "name": game.get(name_key, ""),
                 "decimal_odds": float(dec) if ok else None,
