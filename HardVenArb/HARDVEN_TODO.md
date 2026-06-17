@@ -93,17 +93,32 @@ do not depend on the AI being right.
 `MockBookAdapter` (`mock_adapter.py`), `requirements.txt`, `README.md`. Runs today against the mock
 (`HARDVEN_BOOK=mock uvicorn app:app --port 8787`). The remaining items below are about the REAL adapter:
 - [x] **POC sportsbook = bookmaker.eu** (chosen 2026-06-16). Bankroll too small for a broker/API book.
-- [x] **ODDS via STOMP-over-WebSocket — DONE 2026-06-16.** bookmaker.eu streams odds over RabbitMQ
-      Web-STOMP (feed creds login/passcode=rtweb, host=WebRT) — **no browser needed for odds**.
-      `sidecar/bookmaker_stomp.py` = full asyncio client (CONNECT→CONNECTED→SUBSCRIBE, 20s heartbeat,
-      reconnect, NULL-byte frames) + parser (m=moneyline, s=spread, t=totals; American→decimal; primary
-      line i==0). `bookmaker_adapter.py` runs it as a background task → cache keyed `"<lid>:H"` (home ML)
-      / `"<lid>:V"` (visitor ML), which are the `hardven_*_token` ids for cross_pairs.json. Parser
-      VERIFIED against a live sample (-1603→1.0624, +779→8.79, spread/total all correct).
-- [ ] **Recon (per session, manual for now):** grab `BOOKMAKER_WSS_URL` + the dynamic
-      `BOOKMAKER_STOMP_QUEUE` (x-queue-name/destination) from devtools (WS frames / init XHR); optional
-      `BOOKMAKER_WS_ORIGIN`. TODO later: auto-parse the queue from the init XHR in `_start_browser()`.
-      Then map each `lid` to its Kalshi market in cross_pairs.json. Playwright (login + bet slip) is M1.
+- [x] **STOMP odds PARSER — DONE 2026-06-16.** bookmaker.eu streams odds as RabbitMQ Web-STOMP frames
+      (feed creds login/passcode=rtweb, host=WebRT). `sidecar/bookmaker_stomp.py` = frame + payload parser
+      (`parse_stomp_frame`; `parse_markets`: m=moneyline, s=spread, t=totals; American→decimal; primary
+      line i==0). VERIFIED against a live sample (-1603→1.0624, +779→8.79, spread/total all correct). It
+      also has a standalone `StompOddsClient` (CONNECT→CONNECTED→SUBSCRIBE loop) — see the ❌ below.
+- [x] **❌ Raw-socket odds DEAD END (Cloudflare, confirmed 2026-06-17).** Opening our OWN websocket to
+      `RealTimeHandler.ashx` from Python is blocked: bookmaker.eu is behind Cloudflare bot-management, and
+      `cf_clearance` is bound to the browser's **TLS/JA3 fingerprint** (not just IP+UA+cookie). Python's
+      stdlib-`ssl` handshake ≠ Chrome ⇒ Cloudflare returns an HTTP **200 managed-challenge** instead of the
+      101 upgrade, *even with a valid cookie/UA/Origin copied from the browser*. No header-matching fixes
+      this. (`bookmaker_stomp.py`'s `__main__` smoke test now adds browser headers + a `_dump_handshake_failure`
+      diagnostic — kept for reference, but the standalone client is not the odds path.)
+- [x] **ODDS via Playwright CDP frame-sniff — DONE 2026-06-17** (the way past Cloudflare). `bookmaker_adapter.py`
+      launches the real Chrome (which passes Cloudflare, holds the login, and subscribes to the right
+      session queue itself), attaches a CDP session, and READS the frames the page's own socket receives
+      (`Network.webSocketFrameReceived`, filtered to the `realtimehandler` socket). Each frame's payload is
+      run through the SAME `parse_stomp_frame`/`parse_markets`, folded into the cache keyed `"<lid>:H"`
+      (home ML) / `"<lid>:V"` (visitor ML) = the `hardven_*_token` ids for cross_pairs.json. **No cookie,
+      no queue string, no WSS URL needed** — the browser owns the socket; we just sniff. Standalone smoke
+      test: `python sidecar/bookmaker_adapter.py` (headful; print captured odds every 5 s). Needs
+      `pip install playwright && playwright install chromium`.
+- [ ] **Recon (per session):** mostly OBSOLETED by the CDP path — the browser binds its own session/queue,
+      so you no longer hand-grab `BOOKMAKER_WSS_URL`/`BOOKMAKER_STOMP_QUEUE`. Remaining: map each game's
+      `lid` → its Kalshi market in cross_pairs.json (still manual until `catalog()` exists). Optional
+      `BOOKMAKER_WATCH_URL` opens a specific game on startup so its odds stream without a manual click.
+      `BOOKMAKER_WSS_URL`/`QUEUE`/`WS_COOKIE` now only feed the (dead-end) standalone smoke test.
 - [ ] **Session management:** login, cookie/session persistence, 2FA, CAPTCHA strategy, geo/IP. Keep-alive
       + re-login on expiry.
 - [ ] **Odds polling:** for each subscribed selection, poll every N seconds; parse → `decimalOdds` +
