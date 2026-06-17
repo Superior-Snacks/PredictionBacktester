@@ -171,12 +171,14 @@ class StompOddsClient:
                  heartbeat_ms: int = 20000,
                  subprotocols=None,
                  origin: Optional[str] = None,
-                 debug: bool = False):
+                 debug: bool = False,
+                 dump_path: Optional[str] = None):
         self._url = ws_url
         self._queue = queue
         self._on_markets = on_markets
         self._hb_ms = heartbeat_ms
         self._debug = debug
+        self._dump_path = dump_path   # if set, append every MESSAGE as {dest, body} JSONL for offline modeling
         self._hb_in = 0      # heartbeats received (proves the socket is alive even with no odds)
         # RabbitMQ Web-STOMP usually negotiates a vNN.stomp subprotocol (as stomp.js does). Override via
         # BOOKMAKER_WS_SUBPROTOCOLS="" to disable if the handshake is rejected.
@@ -273,6 +275,12 @@ class StompOddsClient:
                             print(f"[BOOKMAKER STOMP] {cmd} dest={dest} body[:140]={body[:140]!r}")
                     if cmd != "MESSAGE" or not body:
                         continue
+                    if self._dump_path:
+                        try:
+                            with open(self._dump_path, "a", encoding="utf-8") as f:
+                                f.write(json.dumps({"dest": headers.get("destination", ""), "body": body}) + "\n")
+                        except OSError:
+                            pass
                     try:
                         payload = json.loads(body)
                     except json.JSONDecodeError:
@@ -309,4 +317,5 @@ if __name__ == "__main__":
 
     asyncio.run(StompOddsClient(url, queue, show,
                                 origin=os.environ.get("BOOKMAKER_WS_ORIGIN") or None,
-                                debug=os.environ.get("BOOKMAKER_DEBUG_FRAMES") == "1").run())
+                                debug=os.environ.get("BOOKMAKER_DEBUG_FRAMES") == "1",
+                                dump_path=os.environ.get("BOOKMAKER_DUMP_FILE") or None).run())
