@@ -269,11 +269,14 @@ class BookmakerAdapter(BookAdapter):
             if e["status"] == "open" and e["decimal_odds"]:
                 self._odds_cache[full] = Selection(full, float(e["decimal_odds"]),
                                                    float(e["max_stake"] or 0.0), "open", now)
-                captured.append(f"{full}={e['decimal_odds']}")
+                # only NOTE games we're NOT already polling directly (i.e. ones you navigated to) — our own
+                # page.evaluate fetches also surface here and would just spam.
+                if (idgm, idlg) not in self._last_fetch:
+                    captured.append(f"{full}={e['decimal_odds']}")
             else:
                 self._odds_cache[full] = Selection(full, 1.0, 0.0, "suspended", now)
         if captured:
-            print(f"[BOOKMAKER] intercepted site GetGameView → {captured}")
+            print(f"[BOOKMAKER] intercepted site GetGameView (navigated game) → {captured}")
 
 
 if __name__ == "__main__":

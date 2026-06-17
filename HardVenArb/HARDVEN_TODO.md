@@ -115,9 +115,14 @@ do not depend on the AI being right.
       `!MarketsClosed`/`!FreezeMoneyLine`→tradeable. Emits `"<idgm>:H"`(home)/`"<idgm>:V"`(visitor) with
       `decimal_odds`/`implied_price=1/dec`/`max_stake`. VALIDATED vs the real Paul,Tommy(-333→1.3003) vs
       Van de Zandschulp(+256→3.56) capture (vig 1.05; derivatives/props correctly ignored). Fixture:
-      `sidecar/gameview_sample.json`. **TODO to wire polling:** capture the `GetGameView` REQUEST (URL +
-      param that picks the game) and poll it from INSIDE the browser (Playwright `page.evaluate(fetch)`) so
-      Cloudflare + session are handled; fold `parse_gameview` output into the adapter's odds cache.
+      `sidecar/gameview_sample.json`. **✅ WORKING END-TO-END (2026-06-17):** `bookmaker_adapter.py` polls
+      `POST be.bookmaker.eu/gateway/BetslipProxy.aspx/GetGameView` (body picks the game by `GameId`+`LeagueId`)
+      from INSIDE real Chrome via `page.evaluate(fetch, credentials:'include')`. Needed: (a) real Chrome
+      (`channel="chrome"`) + stripped automation flags — bundled Chromium gets API-route 403s (bot-detection);
+      (b) the `rtqname` session header, auto-captured live from the site's traffic (`context.on("request")`;
+      it ROTATES per session). Confirmed: polled an arbitrary pre-match game and got correct odds with NO
+      navigation to it. Response-interception (`context.on("response")`) kept as a backup. Selection id =
+      `"<GameId>:<LeagueId>:H|V"`.
 - [x] **ODDS via Playwright CDP frame-sniff — DONE 2026-06-17, but for IN-PLAY only (out of POC scope).**
       `bookmaker_adapter.py` launches Chrome, attaches CDP, reads `Network.webSocketFrameReceived` (the
       `realtimehandler` socket), runs frames through `parse_stomp_frame`/`parse_markets` → cache. This is
