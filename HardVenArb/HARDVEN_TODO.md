@@ -92,13 +92,18 @@ do not depend on the AI being right.
 `BookAdapter` contract (`book_adapter.py` — the abstract methods ARE the checklist), a working
 `MockBookAdapter` (`mock_adapter.py`), `requirements.txt`, `README.md`. Runs today against the mock
 (`HARDVEN_BOOK=mock uvicorn app:app --port 8787`). The remaining items below are about the REAL adapter:
-- [x] **POC sportsbook = bookmaker.eu** (chosen 2026-06-16). Bankroll too small for a broker/API book
-      (e.g. Pinnacle), so **browser path**. `bookmaker_adapter.py` scaffolded with working Playwright
-      plumbing (persistent profile, network interception, bet-serialization lock); site-specific bits are
-      `TODO(recon)`.
-- [ ] **Recon (manual, one-time):** log into bookmaker.eu → devtools Network/XHR → find the odds JSON
-      (URL + shape + outcome-id field). Fill `_looks_like_odds()` + `_parse_odds()`; the outcome id
-      becomes the `hardven_*_id` in cross_pairs.json. (DOM-scrape fallback if no JSON.) See sidecar README.
+- [x] **POC sportsbook = bookmaker.eu** (chosen 2026-06-16). Bankroll too small for a broker/API book.
+- [x] **ODDS via STOMP-over-WebSocket — DONE 2026-06-16.** bookmaker.eu streams odds over RabbitMQ
+      Web-STOMP (feed creds login/passcode=rtweb, host=WebRT) — **no browser needed for odds**.
+      `sidecar/bookmaker_stomp.py` = full asyncio client (CONNECT→CONNECTED→SUBSCRIBE, 20s heartbeat,
+      reconnect, NULL-byte frames) + parser (m=moneyline, s=spread, t=totals; American→decimal; primary
+      line i==0). `bookmaker_adapter.py` runs it as a background task → cache keyed `"<lid>:H"` (home ML)
+      / `"<lid>:V"` (visitor ML), which are the `hardven_*_token` ids for cross_pairs.json. Parser
+      VERIFIED against a live sample (-1603→1.0624, +779→8.79, spread/total all correct).
+- [ ] **Recon (per session, manual for now):** grab `BOOKMAKER_WSS_URL` + the dynamic
+      `BOOKMAKER_STOMP_QUEUE` (x-queue-name/destination) from devtools (WS frames / init XHR); optional
+      `BOOKMAKER_WS_ORIGIN`. TODO later: auto-parse the queue from the init XHR in `_start_browser()`.
+      Then map each `lid` to its Kalshi market in cross_pairs.json. Playwright (login + bet slip) is M1.
 - [ ] **Session management:** login, cookie/session persistence, 2FA, CAPTCHA strategy, geo/IP. Keep-alive
       + re-login on expiry.
 - [ ] **Odds polling:** for each subscribed selection, poll every N seconds; parse → `decimalOdds` +

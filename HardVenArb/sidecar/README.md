@@ -15,37 +15,41 @@ curl "http://127.0.0.1:8787/health"
 curl "http://127.0.0.1:8787/odds?selections=MOCK_NBA_FINALS_SAS,MOCK_NBA_FINALS_NYK"
 ```
 
-## Run bookmaker.eu (browser path — Playwright)
+## Run bookmaker.eu — ODDS via STOMP-over-WebSocket (no browser needed)
+bookmaker.eu streams odds over a RabbitMQ Web-STOMP feed (`bookmaker_stomp.py`). Reading prices needs
+**no browser** — just the WSS URL + the per-session dynamic queue string.
 ```bash
 pip install -r requirements.txt
-playwright install chromium
-# First time: log in BY HAND so the session persists in the profile dir
-BOOKMAKER_HEADFUL=1 HARDVEN_BOOK=bookmaker uvicorn app:app --port 8787
-# (a browser opens → log into bookmaker.eu once → the cookies persist in .bookmaker_profile/)
-# thereafter you can run headless: HARDVEN_BOOK=bookmaker uvicorn app:app --port 8787
+# supply the feed coordinates (grab from devtools, see Recon), then:
+HARDVEN_BOOK=bookmaker \
+BOOKMAKER_WSS_URL="wss://…" \
+BOOKMAKER_STOMP_QUEUE="_uybxhytg541…" \
+uvicorn app:app --port 8787
+# smoke-test the raw feed on its own (prints moneylines as they arrive):
+BOOKMAKER_WSS_URL="wss://…" BOOKMAKER_STOMP_QUEUE="_…" python bookmaker_stomp.py
 ```
-**Credentials:** simplest is the persistent profile above — log in by hand once, no password stored. If
-you'd rather auto-login, put `BOOKMAKER_USER` / `BOOKMAKER_PASS` in the repo's **root `.env`** (the
-sidecar loads it automatically) and fill the login selectors in `_ensure_logged_in()`.
-`bookmaker_adapter.py` has the working session/interception plumbing; the site-specific bits are marked
-`TODO(recon)`. Until `_looks_like_odds()` + `_parse_odds()` are filled in, `/odds` returns `{}`.
+Each game's moneyline becomes two selections: **`"<lid>:H"`** (home) and **`"<lid>:V"`** (visitor) —
+those are the ids you put in `cross_pairs.json` as `hardven_yes_token` / `hardven_no_token`. Odds come
+in American and are converted to decimal; `price = 1/decimal_odds`. Env knobs: `BOOKMAKER_WS_ORIGIN`
+(if the handshake needs an Origin), `BOOKMAKER_MAX_STAKE` (feed omits it; default 250),
+`BOOKMAKER_WS_SUBPROTOCOLS` (default `v12.stomp,v11.stomp,v10.stomp`).
 
-## Recon — finding bookmaker.eu's site-specific bits (the only manual step)
-Do this once in a normal Chrome window, logged into bookmaker.eu:
-1. **Odds source (most important):** F12 → **Network** tab → filter **Fetch/XHR**. Open a pre-match
-   market you care about and watch the requests. Find the one whose **response** is JSON containing the
-   prices/lines. Note (a) its **URL pattern** → goes in `_looks_like_odds()`, (b) the **JSON shape** and
-   the **outcome id** field → `_parse_odds()` maps it to `Selection`, and that outcome id is your
-   `selection_id` (what you put in `cross_pairs.json` `hardven_*_id`).
-   - If odds only appear in the HTML (no JSON), right-click an odds cell → **Inspect** → find a stable
-     selector / `data-` attribute → use `_scrape_odds_from_dom()` instead.
-2. **Login (optional):** if you don't want to log in by hand each profile reset, inspect the login form's
-   field/button selectors → fill `_ensure_logged_in()`. (Handle 2FA with `BOOKMAKER_HEADFUL=1`.)
-3. **Balance / bets / bet slip (M1):** same method — watch the XHR for balance + "My Bets", and (later)
-   record the bet-slip click→stake→confirm flow for `place_bet()`.
+**Betting/login (M1) uses Playwright** and is opt-in (`BOOKMAKER_ENABLE_BROWSER=1`, persistent profile —
+log in by hand once, no stored password; or set `BOOKMAKER_USER/PASS` + fill `_start_browser()`). Not
+needed for M0 odds.
 
-**Paste me the odds request (URL + a sample JSON response) and I'll write `_looks_like_odds` /
-`_parse_odds` for you.** That's the one thing I can't get without a logged-in session.
+## Recon — the only manual step (get the feed coordinates)
+The odds parsing is already written (verified against a live sample). What's per-session and must be
+grabbed once from devtools on bookmaker.eu:
+1. **WSS URL** — F12 → **Network** → **WS** filter → the websocket connection → copy its `wss://` URL →
+   `BOOKMAKER_WSS_URL`.
+2. **Dynamic queue string** — in that WS stream's frames (or the init XHR that precedes it), find the
+   `x-queue-name` / `destination:/amq/queue/<…>` value → `BOOKMAKER_STOMP_QUEUE`. (It rotates per
+   session, so this is a TODO to auto-parse from the init XHR later; for now set it by hand.)
+3. **Origin** (only if the WS handshake 403s) — copy the request's `Origin` header → `BOOKMAKER_WS_ORIGIN`.
+4. **lid → game mapping** — watch which `lid` carries the game you want (the `destination` header and the
+   moneyline teams tell you), then pair `"<lid>:H"`/`"<lid>:V"` to the matching Kalshi market in
+   cross_pairs.json.
 
 ## API contract (what the C# bot calls)
 | Method | Endpoint | Returns | Used by | Milestone |

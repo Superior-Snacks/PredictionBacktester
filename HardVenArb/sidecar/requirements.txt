@@ -2,6 +2,7 @@
 fastapi
 uvicorn[standard]
 httpx
+websockets   # bookmaker.eu STOMP-over-WebSocket odds client (bookmaker_stomp.py)
 
 # bookmaker.eu adapter is browser-driven (no API/broker needed). After installing:
 #   playwright install chromium
