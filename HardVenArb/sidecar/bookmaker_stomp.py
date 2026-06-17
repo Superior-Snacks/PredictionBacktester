@@ -225,6 +225,8 @@ class StompOddsClient:
 
 
 if __name__ == "__main__":
+    from env_util import load_dotenv_upwards   # smoke test: pick up BOOKMAKER_* from the repo .env
+    load_dotenv_upwards()
     url, queue = os.environ.get("BOOKMAKER_WSS_URL"), os.environ.get("BOOKMAKER_STOMP_QUEUE")
     if not url or not queue:
         raise SystemExit("set BOOKMAKER_WSS_URL and BOOKMAKER_STOMP_QUEUE to smoke-test the live feed")
