@@ -9,6 +9,7 @@
 *.user
 *.userosscache
 *.sln.docstates
+.bookmaker_profile
 
 # SQLite Database Files
 *.db

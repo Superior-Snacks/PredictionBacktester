@@ -1,179 +1,214 @@
 """
-BookmakerAdapter — bookmaker.eu integration for the HardVen sidecar.
+BookmakerAdapter — bookmaker.eu integration for the HardVen sidecar (PRE-MATCH odds path).
 
-ODDS are read by SNIFFING the WebSocket frames the site's own page receives, via Playwright + Chrome
-DevTools Protocol (CDP `Network.webSocketFrameReceived`). We do NOT open our own socket: bookmaker.eu
-sits behind Cloudflare bot-management, and Cloudflare ties `cf_clearance` to the browser's TLS/JA3
-fingerprint — a raw Python `websockets` client gets a 200 challenge no matter what cookie/UA it sends.
-So we let the real Chrome (which already passes Cloudflare, holds the login, and subscribes to the
-right session queue) do the talking, and we just read the bytes off its socket and run them through the
-same STOMP parsers in bookmaker_stomp (parse_stomp_frame → parse_markets). This sidesteps Cloudflare,
-the session cookie, and the dynamic queue string entirely.
+Pre-match odds come from bookmaker.eu's `GetGameView` HTTP endpoint (a clean JSON board snapshot), NOT
+the WebSocket — the WS only streams in-play deltas (see bookmaker_stomp.py, kept for a future in-play
+path). For a pre-match-only POC we simply POLL GetGameView.
 
-Each game's moneyline becomes two selections:
-    "<lid>:H"  → home moneyline   (decimal odds)
-    "<lid>:V"  → visitor moneyline (decimal odds)
-Put those selection ids in cross_pairs.json as hardven_yes_token / hardven_no_token (YES = the same
-outcome as the Kalshi market; NO = the opposite side). Spread/total are parsed too (see bookmaker_stomp)
-but not surfaced as selections yet.
+The catch is Cloudflare: a bare HTTP client gets a 200 challenge (cf_clearance is fingerprint+IP bound).
+So we run the fetch INSIDE a real logged-in Chrome via Playwright `page.evaluate(fetch(...))` — the request
+inherits the browser's session + Cloudflare clearance and sails through. The browser does NOT need to
+navigate to each game; GetGameView is a direct query by GameId, so one logged-in be.bookmaker.eu tab can
+poll odds for every paired game.
+
+Selection ids are "<GameId>:<LeagueId>:H" (home) / "<GameId>:<LeagueId>:V" (visitor) — both ids are
+needed for the GetGameView call, so we encode them in the id and the sidecar stays stateless. Put those
+in cross_pairs.json as hardven_yes_token / hardven_no_token (map by the actual PLAYER: Kalshi
+"Will X win?" YES → whichever of :H/:V IS player X).
 
 CONFIG (env; the sidecar loads the repo root .env):
   BOOKMAKER_HEADLESS       — "1" forces headless. DEFAULT is headful so you can clear Cloudflare / log in
                              by hand the first time; the persistent profile then remembers it.
   BOOKMAKER_USER_DATA_DIR  — persistent Chrome profile dir (keeps login + Cloudflare clearance). Default
                              ".bookmaker_profile".
-  BOOKMAKER_WATCH_URL      — optional: a game page URL to open on startup so its odds start streaming.
-                             Omit and just click into the match yourself in the headful window.
-  BOOKMAKER_MAX_STAKE      — assumed max stake per selection (feed omits it; default 250)
-  BOOKMAKER_USER / PASS    — optional auto-login creds (selectors are a TODO; hand-login works via profile)
-
-The old BOOKMAKER_WSS_URL / BOOKMAKER_STOMP_QUEUE / BOOKMAKER_WS_COOKIE vars are no longer used for odds
-(the browser owns the socket). They remain only for the standalone bookmaker_stomp.py smoke test.
+  BOOKMAKER_BASE_URL       — page to sit on (default https://be.bookmaker.eu). Must be the be. host so the
+                             GetGameView fetch is same-origin.
+  BOOKMAKER_ODDS_TTL_MS    — min ms between GetGameView fetches per game (default 4000); the C# feed polls
+                             ~every 9 s, so each poll is fresh.
 """
 from __future__ import annotations
 
 import asyncio
-import base64
 import json
 import os
 import time
 from typing import Optional
 
 from book_adapter import BookAdapter, BetResult, CatalogEntry, Selection
-from bookmaker_stomp import parse_markets, parse_stomp_frame
+from bookmaker_gameview import parse_gameview
 
-BASE_URL = os.environ.get("BOOKMAKER_BASE_URL", "https://www.bookmaker.eu")
-NULL = "\x00"
-# The site multiplexes several sockets (analytics, etc.); the odds feed is RealTimeHandler.ashx.
-ODDS_URL_MARKER = "realtimehandler"
+BASE_URL = os.environ.get("BOOKMAKER_BASE_URL", "https://be.bookmaker.eu")
+GAMEVIEW_URL = "https://be.bookmaker.eu/gateway/BetslipProxy.aspx/GetGameView"
+
+# Run the POST from inside the page so it carries the session cookie + Cloudflare clearance (same-origin).
+_GAMEVIEW_JS = """
+async (arg) => {
+  const headers = {
+    'content-type': 'application/json',
+    'accept': 'application/json, text/plain, */*',
+    'cache-control': 'no-cache',
+    'pragma': 'no-cache',
+  };
+  if (arg.rtqname) headers['rtqname'] = arg.rtqname;
+  const r = await fetch(arg.url, {
+    method: 'POST',
+    headers: headers,
+    body: JSON.stringify(arg.body),
+    credentials: 'include',
+  });
+  const text = await r.text();
+  return { status: r.status, text: text };
+}
+"""
+
+
+def _gameview_body(game_id: str, league_id: str) -> dict:
+    """The exact GetGameView POST body shape (captured from the site), parameterised by game/league."""
+    return {"o": {"BORequestData": {"BOParameters": {
+        "BORt": {}, "GameId": str(game_id), "LeagueId": str(league_id), "LanguageId": "0",
+        "LineStyle": "E", "ClientTimeStamp": "", "LinkDeriv": "true", "ShowPeriods": "false",
+        "IdEventList": "",
+    }}}}
 
 
 class BookmakerAdapter(BookAdapter):
     name = "bookmaker"
 
     def __init__(self) -> None:
-        self._odds_cache: dict[str, Selection] = {}   # "<lid>:H" / "<lid>:V" -> Selection
-        self._max_stake = float(os.environ.get("BOOKMAKER_MAX_STAKE", "250"))
+        self._odds_cache: dict[str, Selection] = {}        # "<gid>:<lid>:H/V" -> Selection
+        self._last_fetch: dict[tuple, float] = {}          # (gid, lid) -> unix ts of last GetGameView
+        self._ttl = float(os.environ.get("BOOKMAKER_ODDS_TTL_MS", "4000")) / 1000.0
+        self._fetch_lock = asyncio.Lock()
         self._bet_lock = asyncio.Lock()
-        # Playwright + CDP
         self._pw = None
         self._ctx = None
         self._page = None
-        self._cdp = None
-        self._odds_request_ids: set[str] = set()  # CDP requestIds for the odds socket(s)
-        self._frames_seen = 0
+        self._rtqname: Optional[str] = None   # captured from the site's own traffic; required by GetGameView
 
     # ── session lifecycle ──────────────────────────────────────────────────────
     async def startup(self) -> None:
-        # The browser is MANDATORY for this book — it's the only way past Cloudflare to the odds feed.
         await self._start_browser()
-        await self._attach_cdp()
-        watch = os.environ.get("BOOKMAKER_WATCH_URL", "").strip()
-        if watch:
-            try:
-                await self._page.goto(watch, wait_until="domcontentloaded")
-                print(f"[BOOKMAKER] opened watch URL → {watch}")
-            except Exception as e:
-                print(f"[BOOKMAKER] could not open BOOKMAKER_WATCH_URL ({e}); navigate manually.")
-        print("[BOOKMAKER] sniffing odds via CDP. Click into a game in the browser window if frames "
-              "don't start arriving (look for '[BOOKMAKER] odds socket …').")
+        print("[BOOKMAKER] ready. Odds via GetGameView polling (selection id = '<GameId>:<LeagueId>:H|V').\n"
+              "[BOOKMAKER] >>> click into ANY match in the window once: it seeds the 'rtqname' session header "
+              "and sets a deep referer, both of which GetGameView requires.")
 
     async def shutdown(self) -> None:
+        # The user closing the window mid-run makes close() raise "Connection closed" — swallow it.
         if self._ctx:
             try:
                 await self._ctx.close()
-            finally:
-                if self._pw:
-                    await self._pw.stop()
-
-    # ── odds (CDP frame sniff → cache) ─────────────────────────────────────────
-    def _on_ws_created(self, params: dict) -> None:
-        url = (params.get("url") or "")
-        if ODDS_URL_MARKER in url.lower():
-            rid = params.get("requestId")
-            if rid is not None and rid not in self._odds_request_ids:
-                self._odds_request_ids.add(rid)
-                print(f"[BOOKMAKER] odds socket detected (requestId={rid}) {url[:60]}…")
-
-    def _on_ws_frame(self, params: dict) -> None:
-        rid = params.get("requestId")
-        # Once we've positively identified the odds socket(s), only read those. Until then (set empty),
-        # read everything so we never miss frames from a socket created before CDP attached.
-        if self._odds_request_ids and rid not in self._odds_request_ids:
-            return
-        resp = params.get("response") or {}
-        opcode = resp.get("opcode")
-        payload = resp.get("payloadData")
-        if payload is None or opcode in (8, 9, 10):  # close / ping / pong control frames
-            return
-        if opcode == 2:  # binary → base64 in CDP
-            try:
-                payload = base64.b64decode(payload).decode("utf-8", "replace")
             except Exception:
-                return
-        # A single WS frame can carry one OR several NULL-terminated STOMP frames — split and parse each.
-        for chunk in payload.split(NULL):
-            if not chunk.strip():
-                continue
-            cmd, _, body = parse_stomp_frame(chunk)
-            if cmd != "MESSAGE" or not body:
-                continue
+                pass
+        if self._pw:
             try:
-                data = json.loads(body)
-            except ValueError:
-                continue
-            if isinstance(data, dict):
-                data = [data]
-            parsed = parse_markets(data)
-            if parsed:
-                self._ingest(parsed)
+                await self._pw.stop()
+            except Exception:
+                pass
 
-    def _ingest(self, parsed: dict) -> None:
-        """Fold each game's moneyline into the selection cache."""
-        now = time.time()
-        self._frames_seen += 1
-        for lid, e in parsed.items():
-            ml = e.get("moneyline") or {}
-            active = e.get("active", True)
-            for side, key in (("home", "H"), ("visitor", "V")):
-                sid = f"{lid}:{key}"
-                dec = ml.get(side)
-                if active and dec and dec > 1.0:
-                    self._odds_cache[sid] = Selection(sid, decimal_odds=float(dec),
-                                                      max_stake=self._max_stake, status="open", ts=now)
-                else:
-                    # suspended / missing → empty-ish so no arb can fire on it
-                    self._odds_cache[sid] = Selection(sid, decimal_odds=1.0,
-                                                      max_stake=0.0, status="suspended", ts=now)
+    def _on_request(self, req) -> None:
+        """Sniff the site's own requests for the session 'rtqname' header so our fetch can replay it."""
+        try:
+            q = req.headers.get("rtqname")
+        except Exception:
+            q = None
+        if q and q != self._rtqname:
+            self._rtqname = q
+            print(f"[BOOKMAKER] captured rtqname (…{q[-12:]}) — GetGameView polling enabled.")
+
+    # ── odds (poll GetGameView per requested game) ──────────────────────────────
+    @staticmethod
+    def _parse_sid(sid: str):
+        parts = sid.split(":")
+        if len(parts) == 3 and parts[0] and parts[1] and parts[2] in ("H", "V"):
+            return parts[0], parts[1], parts[2]   # (game_id, league_id, side)
+        return None
 
     async def odds(self, selection_ids: list[str]) -> dict[str, Selection]:
+        games = set()
+        for sid in selection_ids:
+            p = self._parse_sid(sid)
+            if p:
+                games.add((p[0], p[1]))
+        for gid, lid in games:
+            await self._ensure_fresh(gid, lid)
         return {sid: self._odds_cache[sid] for sid in selection_ids if sid in self._odds_cache}
+
+    async def _ensure_fresh(self, game_id: str, league_id: str) -> None:
+        key = (game_id, league_id)
+        if time.time() - self._last_fetch.get(key, 0.0) < self._ttl:
+            return
+        async with self._fetch_lock:
+            if time.time() - self._last_fetch.get(key, 0.0) < self._ttl:
+                return  # filled while we waited for the lock
+            data = await self._fetch_gameview(game_id, league_id)
+            self._last_fetch[key] = time.time()
+            if not data:
+                return
+            parsed = parse_gameview(data)   # keyed "<idgm>:H/V"
+            now = time.time()
+            for side in ("H", "V"):
+                full = f"{game_id}:{league_id}:{side}"
+                e = parsed.get(f"{game_id}:{side}")
+                if e and e["status"] == "open" and e["decimal_odds"]:
+                    self._odds_cache[full] = Selection(full, decimal_odds=float(e["decimal_odds"]),
+                                                       max_stake=float(e["max_stake"] or 0.0),
+                                                       status="open", ts=now)
+                else:
+                    # suspended / missing → no usable price, so no arb can fire on it
+                    self._odds_cache[full] = Selection(full, decimal_odds=1.0, max_stake=0.0,
+                                                       status="suspended", ts=now)
+
+    async def _fetch_gameview(self, game_id: str, league_id: str) -> Optional[dict]:
+        if not self._page:
+            return None
+        if not self._rtqname:
+            print("[BOOKMAKER] no rtqname captured yet — click into any match in the window once.")
+        try:
+            res = await self._page.evaluate(_GAMEVIEW_JS,
+                                            {"url": GAMEVIEW_URL, "rtqname": self._rtqname,
+                                             "body": _gameview_body(game_id, league_id)})
+        except Exception as e:
+            print(f"[BOOKMAKER] GetGameView fetch error gid={game_id}: {e}")
+            return None
+        status, text = res.get("status"), res.get("text") or ""
+        if status != 200:
+            print(f"[BOOKMAKER] GetGameView HTTP {status} gid={game_id} "
+                  f"(logged in? Cloudflare?) body[:120]={text[:120]!r}")
+            return None
+        try:
+            data = json.loads(text)
+        except ValueError:
+            print(f"[BOOKMAKER] GetGameView non-JSON gid={game_id} body[:120]={text[:120]!r}")
+            return None
+        # ASP.NET page methods sometimes wrap the payload in {"d": …}; unwrap if present.
+        if isinstance(data, dict) and "d" in data and "GameView" not in data:
+            d = data["d"]
+            data = json.loads(d) if isinstance(d, str) else d
+        return data
 
     # ── pairing catalog ────────────────────────────────────────────────────────
     async def catalog(self) -> list[CatalogEntry]:
-        # TODO(M1+): enumerate the book's events/markets for automated pairing. The feed is push-based
-        # (you receive what the page subscribes to), so the catalog likely comes from an HTTP/XHR listing
-        # endpoint — capture it via devtools like the odds feed.
+        # TODO(pairing): enumerate upcoming events (there's a schedule/league-listing XHR alongside
+        # GetGameView). For now cross_pairs.json is hand-built with "<GameId>:<LeagueId>:H/V" ids.
         return []
 
-    # ── M1: betting + wallet confirmation (Playwright) ─────────────────────────
+    # ── M1: betting + wallet confirmation (Playwright bet slip) ─────────────────
     async def balance(self) -> float:
-        # TODO(M1): read account balance (Playwright header scrape or the balance XHR).
-        return 0.0
+        return 0.0  # TODO(M1): read account balance.
 
     async def place_bet(self, selection_id: str, stake: float, max_odds: float) -> BetResult:
-        async with self._bet_lock:  # one bet at a time on the single browser session
-            # TODO(M1): drive the bet slip via Playwright (selection → stake → handle "odds changed?"
-            # accept only if odds <= max_odds → confirm → read bet id + accepted odds). IRREVERSIBLE.
+        async with self._bet_lock:
+            # TODO(M1): drive the bet slip (selection → stake → handle "odds changed?" accept only if
+            # odds <= max_odds → confirm → read bet id + accepted odds). IRREVERSIBLE.
             return BetResult(accepted=False, reason="place_bet not implemented (M1; needs Playwright bet slip)")
 
     async def open_bets(self) -> list[dict]:
-        return []  # TODO(M1): "My Bets" / open wagers
+        return []  # TODO(M1)
 
     async def bet(self, bet_id: str) -> Optional[dict]:
         return None  # TODO(M1)
 
-    # ── Playwright + CDP plumbing ───────────────────────────────────────────────
+    # ── Playwright ──────────────────────────────────────────────────────────────
     async def _start_browser(self) -> None:
         from playwright.async_api import async_playwright
         self._pw = await async_playwright().start()
@@ -184,40 +219,36 @@ class BookmakerAdapter(BookAdapter):
             viewport={"width": 1400, "height": 900},
         )
         self._page = self._ctx.pages[0] if self._ctx.pages else await self._ctx.new_page()
+        self._ctx.on("request", self._on_request)   # capture rtqname from the site's own traffic
         await self._page.goto(BASE_URL, wait_until="domcontentloaded")
-        if not (os.environ.get("BOOKMAKER_USER") and os.environ.get("BOOKMAKER_PASS")):
-            print("[BOOKMAKER] log in by hand in the browser window (persistent profile keeps the "
-                  "session + Cloudflare clearance for next runs).")
-        # TODO(recon): submit the login form selectors here if you want auto-login.
-        print(f"[BOOKMAKER] browser session ready (headless={headless})")
-
-    async def _attach_cdp(self) -> None:
-        # CDP session on the page → subscribe to WebSocket lifecycle + frame events.
-        self._cdp = await self._ctx.new_cdp_session(self._page)
-        await self._cdp.send("Network.enable")
-        self._cdp.on("Network.webSocketCreated", self._on_ws_created)
-        self._cdp.on("Network.webSocketFrameReceived", self._on_ws_frame)
-        print("[BOOKMAKER] CDP attached (Network.webSocketFrameReceived).")
+        print(f"[BOOKMAKER] browser on {BASE_URL} (headless={headless}). If GetGameView returns 401/Cloudflare, "
+              "log in / clear the check in the window — the persistent profile remembers it.")
 
 
 if __name__ == "__main__":
-    # Standalone smoke test of the CDP odds sniff (no FastAPI). A headful Chrome opens — clear Cloudflare
-    # / log in / click into a game; this prints the moneyline odds it captures every few seconds.
-    #   python sidecar/bookmaker_adapter.py
+    # Standalone smoke test: poll GetGameView for the given selection ids and print the odds.
+    #   python sidecar/bookmaker_adapter.py 51989880:16036:H 51989880:16036:V
     # First time only:  pip install -r requirements.txt && playwright install chromium
+    import sys
     from env_util import load_dotenv_upwards
 
     async def _smoke() -> None:
         load_dotenv_upwards()
+        ids = sys.argv[1:] or ["51989880:16036:H", "51989880:16036:V"]
         a = BookmakerAdapter()
         await a.startup()
         try:
-            while True:
-                await asyncio.sleep(5)
-                open_sel = {k: v for k, v in a._odds_cache.items() if v.status == "open"}
-                print(f"[SMOKE] frames={a._frames_seen} cached={len(a._odds_cache)} open={len(open_sel)}")
-                for sid, sel in list(open_sel.items())[:8]:
-                    print(f"        {sid}  decimal={sel.decimal_odds}  implied={round(1/sel.decimal_odds, 4)}")
+            for _ in range(20):
+                result = await a.odds(ids)
+                print(f"[SMOKE] {time.strftime('%H:%M:%S')}")
+                for sid in ids:
+                    s = result.get(sid)
+                    if s:
+                        print(f"        {sid}  dec={s.decimal_odds}  implied={round(s.implied_price,4)}  "
+                              f"max_contracts={round(s.max_contracts,1)}  {s.status}")
+                    else:
+                        print(f"        {sid}  (not returned)")
+                await asyncio.sleep(10)
         except (KeyboardInterrupt, asyncio.CancelledError):
             pass
         finally:
