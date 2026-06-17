@@ -183,8 +183,33 @@ the items below read it rather than hard-coding "HardVen":
 ---
 
 ## 3. Open decisions (answer before M1)
-- Which sportsbook for the POC?
-- Sidecar in Python/Playwright (recommended) or all-C#?
+- ~~Which sportsbook for the POC?~~ → **bookmaker.eu** (browser path; STOMP odds).
+- Sidecar in Python/Playwright (recommended) or all-C#? → Python sidecar in progress.
 - M1: auto-place the bet, or alert-a-human-to-place while auto-firing Kalshi?
 - Stranded-directional policy when Kalshi fails after the bet is placed?
 - Stake unit + max, and the minimum net edge required to bother (must exceed latency/slippage risk).
+
+## 4. Market structures that DON'T fit the 2-way binary arb (adapt later)
+The bot pairs ONE Kalshi binary market (YES/NO) with ONE bookmaker 2-outcome selection — it only works
+when the two legs are exact **complements** (exactly one pays out). That holds for **2-outcome match
+winners** (MLB, tennis, UFC, boxing, NBA, NFL, NHL, WNBA, KBO, NCAAF/B) — the current scope, and what
+`pairHard.py` already filters to. Deferred, by structure:
+
+- [ ] **3-way / draw markets — soccer & football (1X2 match result).** Home/Draw/Away means Kalshi
+      "Team A wins" YES and the book's "Team A" moneyline are the SAME outcome, not complements (both
+      lose on a draw), so a single 2-way pair can't arb it. Adapt later via **either** (a) **multi-leg** —
+      hedge Kalshi "A wins" by backing BOTH Draw and B at the book (cover all 3 outcomes), **or** (b) pair
+      Kalshi-binary against the book's **Double Chance / Draw-No-Bet** 2-way market (a clean complement,
+      if bookmaker.eu offers it AND Kalshi's resolution rule matches). Model the multi-leg version on the
+      sibling bot's `PolymarketCategoricalArbStrategy` ("buy all legs when Σcost < $1").
+- [ ] **Multi-runner outrights / futures / props** (championship winner, draft pick, first/anytime
+      goalscorer, player props): N outcomes → multi-leg, and only where Kalshi lists the matching market.
+      bookmaker.eu's `TNT.*` feeds are these (parser already ignores them).
+- [ ] **Totals (over/under) & spreads/handicaps** (`mkt.t` / `mkt.s`): these ARE 2-outcome, so they fit
+      the binary model — the only blocker is **exact line-matching** (Kalshi's total/spread line must
+      equal the book's). **This is the easiest future extension** (no multi-leg): add the matching Kalshi
+      total/spread series to `pairHard.py`, and surface `mkt.t`/`mkt.s` as selections (the STOMP parser
+      already extracts them).
+
+**Order of difficulty:** 2-way match winners (now) → totals/spreads (next-easiest; 2-way + line-match) →
+3-way + multi-runner (a bigger change; needs multi-leg arb like `PolymarketCategoricalArbStrategy`).

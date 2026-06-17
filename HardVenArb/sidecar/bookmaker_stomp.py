@@ -55,7 +55,7 @@ def _build_frame(command: str, headers: dict, body: str = "") -> str:
 
 def parse_stomp_frame(raw: str):
     """(command, headers, body). Heartbeats / empty frames → (None, {}, '')."""
-    raw = raw.strip(NULL)
+    raw = raw.strip(NULL).replace("\r\n", "\n")  # STOMP 1.2 may use CRLF; normalize to LF
     if not raw.strip():
         return None, {}, ""                      # server heart-beat (lone newline)
     head, _, body = raw.partition("\n\n")
@@ -94,6 +94,10 @@ def parse_markets(payload: list) -> dict:
         if lid is None:
             continue
         mkt = obj.get("mkt") or {}
+        if not mkt:
+            # Not a line market — bookmaker.eu also pushes flat {tnm,odd} prop/multi-runner feeds on
+            # "TNT.*" topics (no "mkt" block). Skip them so they can't clobber a game's cached moneyline.
+            continue
         entry = {"lid": lid, "active": bool(obj.get("la", True))}
 
         m = _main_line(mkt.get("m"))
