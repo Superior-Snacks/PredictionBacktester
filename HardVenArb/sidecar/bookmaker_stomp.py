@@ -170,11 +170,14 @@ class StompOddsClient:
                  on_markets: Callable[[dict], None],
                  heartbeat_ms: int = 20000,
                  subprotocols=None,
-                 origin: Optional[str] = None):
+                 origin: Optional[str] = None,
+                 debug: bool = False):
         self._url = ws_url
         self._queue = queue
         self._on_markets = on_markets
         self._hb_ms = heartbeat_ms
+        self._debug = debug
+        self._hb_in = 0      # heartbeats received (proves the socket is alive even with no odds)
         # RabbitMQ Web-STOMP usually negotiates a vNN.stomp subprotocol (as stomp.js does). Override via
         # BOOKMAKER_WS_SUBPROTOCOLS="" to disable if the handshake is rejected.
         self._subprotocols = subprotocols if subprotocols is not None else ["v10.stomp", "v11.stomp", "v12.stomp"]
@@ -259,7 +262,15 @@ class StompOddsClient:
                 async for raw in ws:
                     if isinstance(raw, bytes):
                         raw = raw.decode("utf-8", "replace")
-                    cmd, _, body = parse_stomp_frame(raw)
+                    cmd, headers, body = parse_stomp_frame(raw)
+                    if self._debug:
+                        if cmd is None:
+                            self._hb_in += 1
+                            if self._hb_in % 5 == 1:   # don't spam every 20s heartbeat
+                                print(f"[BOOKMAKER STOMP] ‹alive: {self._hb_in} heartbeats, no odds frames yet›")
+                        else:
+                            dest = headers.get("destination", "?")
+                            print(f"[BOOKMAKER STOMP] {cmd} dest={dest} body[:140]={body[:140]!r}")
                     if cmd != "MESSAGE" or not body:
                         continue
                     try:
@@ -297,4 +308,5 @@ if __name__ == "__main__":
             print(f"lid={lid} active={e['active']}  ML home={ml.get('home')} visitor={ml.get('visitor')}")
 
     asyncio.run(StompOddsClient(url, queue, show,
-                                origin=os.environ.get("BOOKMAKER_WS_ORIGIN") or None).run())
+                                origin=os.environ.get("BOOKMAKER_WS_ORIGIN") or None,
+                                debug=os.environ.get("BOOKMAKER_DEBUG_FRAMES") == "1").run())
