@@ -118,18 +118,42 @@ def _pick_book_team(outcome: str, team_keys):
     return None
 
 
+def _team_sim(k: str, b: str) -> int:
+    """Per-team similarity 0-100. Prefers the LEGIT direction Kalshi ⊆ Book ('boston'⊆'boston red sox',
+    'new york m'⊆'new york mets') = 100; PENALIZES Book ⊆ Kalshi (a barer book name, e.g. book 'new york'
+    vs Kalshi 'new york m' — the hallmark of a wrong-league lookalike) = 60; else token_set_ratio
+    (handles word-order 'congo dr'/'dr congo' and spelling 'lewicki'/'lewicky')."""
+    if k == b or k in b:
+        return 100
+    if b in k:
+        return 60
+    return int(fuzz.token_set_ratio(k, b)) if fuzz is not None else 0
+
+
 def _best_book_game(teams: frozenset, book: dict, threshold: int):
-    """Fuzzy-match a Kalshi team-set to a bookmaker game (token_set_ratio of the joined names).
-    Returns (book_entry, score), or (None, best_score) if nothing clears `threshold`."""
+    """BIPARTITE per-team fuzzy match: each of the two Kalshi teams must match a DISTINCT book team
+    (not an aggregate joined-string ratio, which let wrong-league lookalikes through — e.g. a Kalshi MLB
+    'New York M vs Philadelphia' matching a different league's 'New York'/'Philadelphia'). Returns
+    (entry, worse_leg_score) of the best game whose WORSE leg clears `threshold`, else (None, best_worse)."""
     if fuzz is None:
         return None, 0
-    kjoin = " ".join(sorted(teams))
-    best_score, best_key = 0, None
-    for bk in book:
-        s = fuzz.token_set_ratio(kjoin, " ".join(sorted(bk)))
-        if s > best_score:
-            best_score, best_key = s, bk
-    return (book[best_key], best_score) if best_key is not None and best_score >= threshold else (None, best_score)
+    kt = list(teams)
+    if len(kt) != 2:
+        return None, 0
+    best_min, best_sum, best_entry = 0, -1, None
+    for bset, entry in book.items():
+        bt = list(bset)
+        if len(bt) != 2:
+            continue
+        # two ways to assign the 2 Kalshi teams to the 2 book teams — take the better assignment,
+        # scored by the WORSE of its two legs (so BOTH teams must match), tie-broken by the sum.
+        s00, s11 = _team_sim(kt[0], bt[0]), _team_sim(kt[1], bt[1])
+        s01, s10 = _team_sim(kt[0], bt[1]), _team_sim(kt[1], bt[0])
+        m1, m2 = min(s00, s11), min(s01, s10)
+        mn, sm = (m1, s00 + s11) if (m1, s00 + s11) >= (m2, s01 + s10) else (m2, s01 + s10)
+        if (mn, sm) > (best_min, best_sum):
+            best_min, best_sum, best_entry = mn, sm, entry
+    return (best_entry, best_min) if best_entry is not None and best_min >= threshold else (None, best_min)
 
 
 def _date_close(kalshi_settlement: str, book_start: str, days: int = 1) -> bool:
@@ -191,7 +215,7 @@ def main() -> None:
     ap.add_argument("--fuzzy", action="store_true",
                     help="enable fuzzy name-variant matching (auto-fills team-name variants; flags pairs 'fuzzy':true)")
     ap.add_argument("--fuzzy-threshold", type=int, default=85,
-                    help="min token_set_ratio (0-100) for a fuzzy GAME match (default 85)")
+                    help="min per-team match score (0-100) — BOTH teams must clear it (default 85)")
     args = ap.parse_args()
 
     book = index_catalog(fetch_catalog(args.sidecar))
