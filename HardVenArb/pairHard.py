@@ -72,6 +72,10 @@ CLASSIC_SERIES = {
     "KXT20MATCH", "KXWT20MATCH",
     # Combat sports
     "KXBOXING", "KXUFCFIGHT",
+    # Soccer — World Cup match moneyline (3-way: TeamA / TIE / TeamB; each a binary market). Pairs
+    # NO-only vs the bookmaker home/draw/visitor backs (three_way). Sub-markets exist too
+    # (KXWCSPREAD / KXWCTOTAL / KXWCBTTS / KXWC1H* / KXWC2H*) — totals/spreads are future work.
+    "KXWCGAME",
 }
 
 
@@ -145,6 +149,10 @@ def main() -> None:
             entries.append({
                 "kalshi_ticker":     ticker,
                 "label":             m.get("title", "") or ev.get("title", ""),
+                # event_title = the matchup ("A vs B"); kalshi_outcome = THIS market's YES side
+                # ("Jordan"/"Tie"/"Hijikata"). pair_auto matches on these (C# ignores unknown keys).
+                "event_title":       ev.get("title", ""),
+                "kalshi_outcome":    m.get("yes_sub_title") or m.get("subtitle") or "",
                 "event_id":          ev.get("event_ticker", ""),
                 "settlement_date":   close.date().isoformat(),
                 "is_neg_risk":       False,   # sportsbook bets have no neg-risk concept

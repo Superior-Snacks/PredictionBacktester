@@ -87,7 +87,12 @@ def _emit_game(game: dict, out: dict, pre_match_only: bool) -> None:
     # 3-way market (soccer 1X2, cricket tie, …): the primary line carries a non-empty draw price. Such a
     # market must be paired NO-only (Kalshi NO + book back-team); see CrossPair.ThreeWay.
     three_way = bool((line.get("drawoddst") or "").strip())
-    for side, name_key, odds_key in (("H", "htm", "hoddst"), ("V", "vtm", "voddst")):
+    # H = home, V = visitor; D = draw, emitted ONLY for 3-way markets (soccer 1X2) so the Kalshi "Tie"
+    # binary can pair against it (Kalshi Tie-NO + book back-draw).
+    sides = [("H", "htm", "hoddst"), ("V", "vtm", "voddst")]
+    if three_way:
+        sides.append(("D", None, "drawoddst"))
+    for side, name_key, odds_key in sides:
         sid = f"{idgm}:{side}"
         dec = american_to_decimal(line.get(odds_key))
         ok = tradeable and dec and dec > 1.0
@@ -95,7 +100,7 @@ def _emit_game(game: dict, out: dict, pre_match_only: bool) -> None:
             "idgm": idgm,
             "idlg": game.get("idlg"),
             "side": side,
-            "name": game.get(name_key, ""),
+            "name": "Draw" if side == "D" else game.get(name_key, ""),
             "event": event,
             "live": bool(game.get("LiveGame", False)),
             "decimal_odds": float(dec) if ok else None,
