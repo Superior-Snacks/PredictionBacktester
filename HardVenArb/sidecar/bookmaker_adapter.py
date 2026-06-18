@@ -143,8 +143,8 @@ class BookmakerAdapter(BookAdapter):
     @staticmethod
     def _parse_sid(sid: str):
         parts = sid.split(":")
-        if len(parts) == 3 and parts[0] and parts[1] and parts[2] in ("H", "V"):
-            return parts[0], parts[1], parts[2]   # (game_id, league_id, side)
+        if len(parts) == 3 and parts[0] and parts[1] and parts[2] in ("H", "V", "D"):
+            return parts[0], parts[1], parts[2]   # (game_id, league_id, side); D = draw (3-way)
         return None
 
     async def odds(self, selection_ids: list[str]) -> dict[str, Selection]:

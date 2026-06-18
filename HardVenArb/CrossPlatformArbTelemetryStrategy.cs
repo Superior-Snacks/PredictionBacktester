@@ -376,7 +376,9 @@ public class CrossPlatformArbTelemetryStrategy
             DebugLog.Discovery($"EvaluatePair {pair.Label}: Kalshi mid-sum sanity fail — kMidSum={kMidSum:0.0000}");
             return;
         }
-        if (pMidSum < 0.70m || pMidSum > 1.30m)
+        // 3-way pairs: the HardVen YES/NO tokens are two of three outcomes (not complements), so their
+        // mid-sum doesn't approach 1 — skip this 2-way sanity check for them (kMidSum + depth/price still guard).
+        if (!pair.ThreeWay && (pMidSum < 0.70m || pMidSum > 1.30m))
         {
             DebugLog.Discovery($"EvaluatePair {pair.Label}: HardVen mid-sum sanity fail — pMidSum={pMidSum:0.0000}");
             return;
