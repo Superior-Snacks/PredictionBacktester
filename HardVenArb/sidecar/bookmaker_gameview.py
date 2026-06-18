@@ -141,15 +141,27 @@ def parse_leagues(data: dict, sports=None) -> list[dict]:
         if sports and sport.upper() not in sports:
             continue
         for region in node.get("region") or []:
+            region_name = (region.get("value", "") or "").upper()
             for lg in region.get("league") or []:
                 idsport = lg.get("idsport", "")
                 desc = (lg.get("desc") or lg.get("descEn") or "")
+                du = desc.upper()
                 lid = lg.get("id")
-                if not lid or idsport == "TNT" or "DOUBLES" in desc.upper():
-                    continue  # TNT = futures/props/outrights; doubles aren't 2-outcome match winners
+                # Drop non-match-winner leagues: TNT feed, doubles, and the futures/props/outright leagues
+                # that share idsport "MU" with real matches (e.g. WC "Special Props"=17146, "To Finish
+                # Higher"=20204). They collide with the real moneyline by team name → mixed-game pairs.
+                if (not lid or idsport == "TNT" or "DOUBLES" in du
+                        or any(k in du for k in _NON_MATCH_DESC)
+                        or any(k in region_name for k in _NON_MATCH_REGION)):
+                    continue
                 out.append({"id": str(lid), "idsport": idsport, "desc": desc, "sport": sport,
                             "region": region.get("value", ""), "game_count": int(lg.get("gameCount") or 0)})
     return out
+
+
+_NON_MATCH_DESC = ("FUTURE", "PROP", "OUTRIGHT", "TO WIN", "ODDS TO", "TO FINISH", "TO REACH",
+                   "TO QUALIFY", "SPECIAL", "AWARD", "WINNER", "STAGE OF", "NAME THE")
+_NON_MATCH_REGION = ("FUTURES", "PROPOSITION", "AWARDS")
 
 
 def parse_schedule(data: dict, pre_match_only: bool = True) -> dict:

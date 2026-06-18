@@ -121,20 +121,37 @@ def fetch_catalog(sidecar: str) -> list[dict]:
 
 
 def index_catalog(selections: list[dict]) -> dict:
-    """{ frozenset({teamA_key, teamB_key}) : {date, three_way, teams:{key: sel_id}, draw: sel_id|None} }."""
-    by_event: dict[str, dict] = {}
+    """{ frozenset({teamA_key, teamB_key}) : {date, three_way, teams:{key: sel_id}, draw: sel_id|None} }.
+
+    Grouped by the bookmaker GAME id (idgm, the first segment of the selection_id) — NOT the event title.
+    The same match can appear in several leagues (real matches vs prop/futures leagues), and merging by
+    title would mix a pair's legs across different games. Grouping by idgm guarantees a pair's H/V/D all
+    come from ONE game; on a team-set collision (same teams in two leagues) we keep the game that has a
+    draw (the real moneyline) over one that doesn't (a prop)."""
+    games: dict[str, dict] = {}
     for s in selections:
-        ev = by_event.setdefault(s.get("event", ""),
-                                 {"date": (s.get("start_time") or "")[:8], "three_way": False,
-                                  "teams": {}, "draw": None})
+        sid = s.get("selection_id", "")
+        idgm = sid.split(":")[0]
+        if not idgm:
+            continue
+        g = games.setdefault(idgm, {"date": (s.get("start_time") or "")[:8], "three_way": False,
+                                    "teams": {}, "draw": None})
         if s.get("three_way"):
-            ev["three_way"] = True
-        sid, name = s.get("selection_id", ""), s.get("selection_name", "")
+            g["three_way"] = True
+        name = s.get("selection_name", "")
         if sid.rsplit(":", 1)[-1] == "D" or _norm(name) == "draw":
-            ev["draw"] = sid
+            g["draw"] = sid
         else:
-            ev["teams"][_book_name(name)] = sid
-    return {frozenset(ev["teams"].keys()): ev for ev in by_event.values() if len(ev["teams"]) == 2}
+            g["teams"][_book_name(name)] = sid
+    out: dict = {}
+    for g in games.values():
+        if len(g["teams"]) != 2:
+            continue
+        key = frozenset(g["teams"].keys())
+        if key in out and out[key]["draw"] and not g["draw"]:
+            continue  # keep the existing match (has draw) over this draw-less prop game
+        out[key] = g
+    return out
 
 
 def main() -> None:
