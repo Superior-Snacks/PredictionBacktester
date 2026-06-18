@@ -99,12 +99,12 @@ public class CrossPlatformArbTelemetryStrategy
     public ConcurrentDictionary<string, (decimal R, double E)>? HardVenFeeParams { get; set; }
 
     private static decimal KalshiFee(decimal p) => KalshiFeeRate * p * (1m - p);
-    private decimal HardVenFee(decimal p, string tokenId)
-    {
-        if (HardVenFeeParams?.TryGetValue(tokenId, out var fp) == true)
-            return fp.R * (decimal)Math.Pow((double)(p * (1m - p)), fp.E);
-        return 0.03m * p * (1m - p); // fallback: Sports r=0.03, e=1
-    }
+
+    // HardVen (sportsbook) charges NO separate fee — the bookmaker's vig/overround is already baked into
+    // the odds, i.e. into the price we pay (1/decimal_odds). Charging a fee on top would double-count the
+    // margin. So the only per-contract fee in the net cost is Kalshi's. (HardVenFeeParams is retained for a
+    // future reversible-exchange venue that DOES charge commission; a back-only book doesn't.)
+    private decimal HardVenFee(decimal p, string tokenId) => 0m;
 
     private const decimal HurdleRateApr        = 0.20m;
     private const decimal MinProfitCaptureRatio = 0.70m;

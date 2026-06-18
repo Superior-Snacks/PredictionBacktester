@@ -11,17 +11,21 @@ Workflow:
      (team → :H/:V; "Tie" → :D), writes the tokens, and stamps three_way for 3-way (soccer 1X2) pairs.
 
 Matching is deterministic name-set matching (order/accent-insensitive) — best for sports' canonical
-entities. A wrong pairing is real money later, so: nothing is written without --write, unmatched entries
-are left blank (the bot skips blanks), and fuzzy (rapidfuzz) name-variant matches are REVIEW-ONLY
-(printed, never auto-written) unless you hand-apply them.
+entities. Nothing is written without --write; unmatched entries are left blank (the bot skips blanks).
+
+--fuzzy enables rapidfuzz name-variant matching for the systematic gaps (Kalshi city "boston" vs book
+"boston red sox"; cricket "scotland" vs "scotland w"; soccer "congo dr" vs "dr congo"; boxing spelling).
+Fuzzy-matched pairs are AUTO-FILLED but tagged "fuzzy": true so they can be re-verified before any
+real-money M1 — the settlement back-test, not the matcher, is what authorizes betting. Fine for
+observe-only M0 telemetry.
 
 3-way (soccer): the three outcomes (TeamA / Tie / TeamB) are DISTINCT binaries, not mirrors — all three
 are filled (each is its own NO-only pair). 2-way (tennis etc.): the two markets are mirrors → one filled.
 
-  python pair_auto.py                 # dry-run preview
-  python pair_auto.py --write         # write cross_pairs.json
-  python pair_auto.py --write --both  # also fill the 2-way mirror market (telemetry only; M1 = double bet)
-  python pair_auto.py --fuzzy         # also show review-only fuzzy name-variant suggestions
+  python pair_auto.py                       # dry-run preview (exact matches only)
+  python pair_auto.py --write               # write cross_pairs.json (exact)
+  python pair_auto.py --fuzzy --write       # also auto-fill team-name variants (flagged "fuzzy":true)
+  python pair_auto.py --write --both        # also fill the 2-way mirror market (telemetry only; M1 = double bet)
 """
 from __future__ import annotations
 
@@ -92,16 +96,37 @@ def kalshi_key(entry: dict):
     return None
 
 
-def _resolve_team(yes_outcome: str, teams: frozenset):
-    """Which of the two team keys is the YES outcome ('rinky hijikata' → 'hijikata'; 'jordan' → 'jordan')."""
-    for t in teams:
-        if t == yes_outcome or t in yes_outcome or yes_outcome in t:
-            return t
-    yt = set(yes_outcome.split())
-    for t in teams:
-        if yt & set(t.split()):
-            return t
+def _pick_book_team(outcome: str, team_keys):
+    """Which book team key IS the Kalshi outcome — exact/substring → token-overlap → fuzzy. Safe even on
+    fuzzy (it's a choice between the 2 teams of an already-matched game): 'rinky hijikata'→'hijikata',
+    'boston'→'boston red sox', 'congo dr'→'dr congo', 'ryszard lewicki'→'ryszard lewicky'."""
+    keys = list(team_keys)
+    for k in keys:
+        if k == outcome or k in outcome or outcome in k:
+            return k
+    ot = set(outcome.split())
+    for k in keys:
+        if ot & set(k.split()):
+            return k
+    if fuzz is not None and keys:
+        score, best = max((fuzz.token_set_ratio(outcome, k), k) for k in keys)
+        if score >= 60:
+            return best
     return None
+
+
+def _best_book_game(teams: frozenset, book: dict, threshold: int):
+    """Fuzzy-match a Kalshi team-set to a bookmaker game (token_set_ratio of the joined names).
+    Returns (book_entry, score), or (None, best_score) if nothing clears `threshold`."""
+    if fuzz is None:
+        return None, 0
+    kjoin = " ".join(sorted(teams))
+    best_score, best_key = 0, None
+    for bk in book:
+        s = fuzz.token_set_ratio(kjoin, " ".join(sorted(bk)))
+        if s > best_score:
+            best_score, best_key = s, bk
+    return (book[best_key], best_score) if best_key is not None and best_score >= threshold else (None, best_score)
 
 
 def _date_close(kalshi_settlement: str, book_start: str, days: int = 1) -> bool:
@@ -160,16 +185,20 @@ def main() -> None:
     ap.add_argument("--pairs", default=str(Path(__file__).resolve().parent.parent / "cross_pairs.json"))
     ap.add_argument("--write", action="store_true", help="write the file (default = dry-run preview)")
     ap.add_argument("--both", action="store_true", help="also fill the 2-way mirror market (default: one)")
-    ap.add_argument("--fuzzy", action="store_true", help="show review-only fuzzy name-variant suggestions")
+    ap.add_argument("--fuzzy", action="store_true",
+                    help="enable fuzzy name-variant matching (auto-fills team-name variants; flags pairs 'fuzzy':true)")
+    ap.add_argument("--fuzzy-threshold", type=int, default=85,
+                    help="min token_set_ratio (0-100) for a fuzzy GAME match (default 85)")
     args = ap.parse_args()
 
     book = index_catalog(fetch_catalog(args.sidecar))
     print(f"[PAIR] {len(book)} bookmaker games in /catalog")
+    if args.fuzzy and fuzz is None:
+        print("[PAIR] --fuzzy requested but rapidfuzz isn't installed:  pip install rapidfuzz")
 
     pairs = json.loads(Path(args.pairs).read_text(encoding="utf-8"))
-    filled = already = skipped_dupe = 0
+    filled = already = skipped_dupe = fuzzy_n = 0
     unmatched: list[str] = []
-    review: list[str] = []
     done_events: set[str] = set()   # for 2-way mirror dedupe (per Kalshi event_id)
 
     for e in pairs:
@@ -183,14 +212,13 @@ def main() -> None:
             continue
         yes_outcome, teams, is_tie = key
         entry = book.get(teams)
-        if not entry:
-            unmatched.append(f"{tk}  {sorted(teams)}")
-            if args.fuzzy and fuzz is not None:
-                kjoin = " ".join(sorted(teams))
-                best = max(((fuzz.token_set_ratio(kjoin, " ".join(sorted(bk))), bk) for bk in book),
-                           default=(0, None))
-                if best[0] >= 85:
-                    review.append(f"{tk}  {sorted(teams)}  ~?  {sorted(best[1])}  (fuzzy {best[0]:.0f})")
+        is_fuzzy, fscore = False, 0
+        if entry is None and args.fuzzy:
+            entry, fscore = _best_book_game(teams, book, args.fuzzy_threshold)
+            is_fuzzy = entry is not None
+        if entry is None:
+            extra = f" (best fuzzy {fscore:.0f})" if (args.fuzzy and fuzz is not None) else ""
+            unmatched.append(f"{tk}  {sorted(teams)}{extra}")
             continue
         if not _date_close(e.get("settlement_date", ""), entry["date"]):
             unmatched.append(f"{tk}  {sorted(teams)} (date mismatch {e.get('settlement_date')} vs {entry['date']})")
@@ -207,30 +235,28 @@ def main() -> None:
                 unmatched.append(f"{tk} (Tie, but no book draw selection)")
                 continue
         else:
-            yes_team = _resolve_team(yes_outcome, teams)
-            if not yes_team:
-                unmatched.append(f"{tk} (outcome '{yes_outcome}' not in {sorted(teams)})")
+            yes_key = _pick_book_team(yes_outcome, entry["teams"].keys())
+            if not yes_key:
+                unmatched.append(f"{tk} (outcome '{yes_outcome}' not resolvable to a book team)")
                 continue
-            yes_tok = entry["teams"][yes_team]
-            no_tok = entry["teams"][next(t for t in teams if t != yes_team)]
+            yes_tok = entry["teams"][yes_key]
+            no_tok = entry["teams"][next(k for k in entry["teams"] if k != yes_key)]
 
         e["hardven_yes_token"], e["hardven_no_token"] = yes_tok, no_tok
         if entry["three_way"]:
             e["three_way"] = True   # NO-only hedge (Kalshi NO + book back-this-outcome)
+        if is_fuzzy:
+            e["fuzzy"] = True        # matched by fuzzy name variant — verify before M1 (back-test gates real money)
+            fuzzy_n += 1
         done_events.add(e.get("event_id"))
         filled += 1
-        tag = "  [3-way NO-only]" if entry["three_way"] else ""
+        tag = ("  [3-way NO-only]" if entry["three_way"] else "") + (f"  [FUZZY {fscore:.0f}]" if is_fuzzy else "")
         print(f"[PAIR] {tk:<34} YES={yes_outcome:<16} → {yes_tok} | NO → {no_tok}{tag}")
 
-    print(f"\n[PAIR] filled={filled}  already={already}  skipped_mirror={skipped_dupe}  unmatched={len(unmatched)}")
+    print(f"\n[PAIR] filled={filled} (fuzzy={fuzzy_n})  already={already}  "
+          f"skipped_mirror={skipped_dupe}  unmatched={len(unmatched)}")
     for u in unmatched:
         print(f"   UNMATCHED: {u}")
-    if review:
-        print("\n[PAIR] FUZZY SUGGESTIONS (review only — NOT written; hand-edit if correct):")
-        for r in review:
-            print(f"   REVIEW: {r}")
-    elif args.fuzzy and fuzz is None:
-        print("\n[PAIR] --fuzzy needs rapidfuzz:  pip install rapidfuzz")
 
     if args.write and filled:
         Path(args.pairs).write_text(json.dumps(pairs, indent=2), encoding="utf-8")

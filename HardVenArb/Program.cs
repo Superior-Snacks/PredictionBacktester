@@ -298,7 +298,7 @@ foreach (var token  in hardvenSubscribeTokens)    state.InitHardVenToken(token);
 var telemetry = new CrossPlatformArbTelemetryStrategy(pairs, state.Books, ARB_THRESHOLD, DEPTH_FLOOR);
 
 // ── REST verifier — confirms arb windows via independent REST calls ───────────
-var restVerifier = new CrossArbRestVerifier(orderClient, telemetry, hardvenProxy);
+var restVerifier = new CrossArbRestVerifier(orderClient, telemetry, hardvenProxy, HARDVEN_SIDECAR_URL);
 telemetry.OnArbOpened += restVerifier.OnArbOpened;
 
 // ── Executor — live order placement on WS-detected arb windows ────────────────

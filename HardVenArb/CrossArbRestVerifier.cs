@@ -20,12 +20,16 @@ public class CrossArbRestVerifier
     /// <summary>Tick size per HardVen token ID, populated lazily from /book REST responses.</summary>
     public ConcurrentDictionary<string, string> HardVenTickSizes { get; } = new();
 
-    private const string HardVenBookUrl = "https://clob.hardven.com/book?token_id=";
+    // HardVen odds come from the local sidecar (the only source) — the verifier re-reads /odds to confirm
+    // a window at arb-open. (Replaces a dead clob.hardven.com host left over from the Poly→HardVen rename.)
+    private readonly string _sidecarBase;
 
-    public CrossArbRestVerifier(KalshiOrderClient kalshi, CrossPlatformArbTelemetryStrategy telemetry, string? socksProxy = null)
+    public CrossArbRestVerifier(KalshiOrderClient kalshi, CrossPlatformArbTelemetryStrategy telemetry,
+                                string? socksProxy = null, string? sidecarBase = null)
     {
         _kalshi    = kalshi;
         _telemetry = telemetry;
+        _sidecarBase = (sidecarBase ?? "http://127.0.0.1:8787").TrimEnd('/');
         if (!string.IsNullOrEmpty(socksProxy))
         {
             var handler = new HttpClientHandler
@@ -175,18 +179,29 @@ public class CrossArbRestVerifier
     }
 
     /// <summary>
-    /// Checks whether a HardVen token's CLOB book is reachable and has a tick_size field
-    /// (present on all active, non-resolved markets). Returns false on HTTP error or if the
-    /// field is absent (market closed / token delisted).
+    /// Re-reads one HardVen selection from the sidecar /odds → (implied_price, status).
+    /// implied_price is the per-contract cost (= 1/decimal_odds = the "ask"); status is "open"/"suspended".
+    /// (-1, "") on any error or missing selection.
+    /// </summary>
+    private async Task<(decimal price, string status)> GetHardVenSelectionAsync(string tokenId)
+    {
+        string url = $"{_sidecarBase}/odds?selections={Uri.EscapeDataString(tokenId)}";
+        string json = await _http.GetStringAsync(url);
+        using var doc = JsonDocument.Parse(json);
+        if (!doc.RootElement.TryGetProperty("selections", out var sels) ||
+            !sels.TryGetProperty(tokenId, out var sel))
+            return (-1m, "");
+        string status = sel.TryGetProperty("status", out var st) ? (st.GetString() ?? "") : "";
+        decimal price = sel.TryGetProperty("implied_price", out var ip) && ip.TryGetDecimal(out var p) ? p : -1m;
+        return (price, status);
+    }
+
+    /// <summary>
+    /// Whether a HardVen token is currently tradeable (sidecar reports status "open"). False on error.
     /// </summary>
     public async Task<bool> CheckHardVenTokenAsync(string tokenId)
     {
-        try
-        {
-            string json = await _http.GetStringAsync(HardVenBookUrl + tokenId);
-            using var doc = JsonDocument.Parse(json);
-            return doc.RootElement.TryGetProperty("tick_size", out _);
-        }
+        try { return (await GetHardVenSelectionAsync(tokenId)).status == "open"; }
         catch { return false; }
     }
 
@@ -229,75 +244,20 @@ public class CrossArbRestVerifier
         return -1m;
     }
 
-    // HardVen CLOB REST book: bids sorted descending by price; best bid = highest price.
-    private async Task<decimal> GetHardVenBidAsync(string tokenId)
-    {
-        string json = await _http.GetStringAsync(HardVenBookUrl + tokenId);
-        using var doc = JsonDocument.Parse(json);
+    // HardVen is a BACK-ONLY sportsbook — there is no lay/sell side, so no bid to confirm. Return -1
+    // ("no bid"); the executor treats a HardVen leg as non-reversible (it can't sell into a bid).
+    private Task<decimal> GetHardVenBidAsync(string tokenId) => Task.FromResult(-1m);
 
-        if (!doc.RootElement.TryGetProperty("bids", out var bids))
-        {
-            DebugLog.Trades($"GetHardVenBidAsync {tokenId[..Math.Min(8, tokenId.Length)]}: no 'bids' field in response");
-            return -1m;
-        }
-
-        decimal bestBid = decimal.MinValue;
-        int count = 0;
-        foreach (var bid in bids.EnumerateArray())
-        {
-            if (bid.TryGetProperty("price", out var priceEl) &&
-                decimal.TryParse(priceEl.GetString(), NumberStyles.Any,
-                    CultureInfo.InvariantCulture, out decimal price))
-            { bestBid = Math.Max(bestBid, price); count++; }
-        }
-
-        if (bestBid > decimal.MinValue)
-        {
-            DebugLog.Trades($"GetHardVenBidAsync {tokenId[..Math.Min(8, tokenId.Length)]}: bestBid={bestBid:0.0000} from {count} levels");
-            return bestBid;
-        }
-
-        DebugLog.Trades($"GetHardVenBidAsync {tokenId[..Math.Min(8, tokenId.Length)]}: no parseable bid levels");
-        return -1m;
-    }
-
-    // HardVen CLOB REST book: asks sorted ascending by price.
+    // HardVen "ask" = the sidecar's per-contract implied price (1/decimal_odds) when the market is open.
     private async Task<decimal> GetHardVenAskAsync(string tokenId)
     {
-        string json = await _http.GetStringAsync(HardVenBookUrl + tokenId);
-        DebugLog.Books($"[HARDVEN REST /book] {json}");
-        using var doc = JsonDocument.Parse(json);
-
-        // Cache tick_size so PlaceHardVenLegAsync can use the real market tick.
-        if (doc.RootElement.TryGetProperty("tick_size", out var tsEl))
+        var (price, status) = await GetHardVenSelectionAsync(tokenId);
+        if (status == "open" && price > 0m)
         {
-            string ts = tsEl.GetString() ?? "0.01";
-            HardVenTickSizes[tokenId] = ts;
+            DebugLog.Trades($"GetHardVenAskAsync {tokenId}: ask={price:0.0000} (sidecar)");
+            return price;
         }
-
-        if (!doc.RootElement.TryGetProperty("asks", out var asks))
-        {
-            DebugLog.Trades($"GetHardVenAskAsync {tokenId[..Math.Min(8, tokenId.Length)]}: no 'asks' field in response");
-            return -1m;
-        }
-
-        decimal bestAsk = decimal.MaxValue;
-        int count = 0;
-        foreach (var ask in asks.EnumerateArray())
-        {
-            if (ask.TryGetProperty("price", out var priceEl) &&
-                decimal.TryParse(priceEl.GetString(), NumberStyles.Any,
-                    CultureInfo.InvariantCulture, out decimal price))
-            { bestAsk = Math.Min(bestAsk, price); count++; }
-        }
-
-        if (bestAsk < decimal.MaxValue)
-        {
-            DebugLog.Trades($"GetHardVenAskAsync {tokenId[..Math.Min(8, tokenId.Length)]}: bestAsk={bestAsk:0.0000} from {count} levels");
-            return bestAsk;
-        }
-
-        DebugLog.Trades($"GetHardVenAskAsync {tokenId[..Math.Min(8, tokenId.Length)]}: no parseable ask levels");
+        DebugLog.Trades($"GetHardVenAskAsync {tokenId}: not open / no price (status={status})");
         return -1m;
     }
 }
