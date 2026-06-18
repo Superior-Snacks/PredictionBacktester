@@ -75,11 +75,14 @@ def fetch_catalog(sidecar: str) -> list[dict]:
 
 
 def index_catalog(selections: list[dict]) -> dict:
-    """{ frozenset({surnameA, surnameB}) : {"date": "YYYYMMDD", "sels": {surname: selection_id}} }."""
+    """{ frozenset({surnameA, surnameB}) : {"date","three_way","sels":{surname: selection_id}} }."""
     by_event: dict[str, dict] = {}
     for s in selections:
-        ev = by_event.setdefault(s.get("event", ""), {"date": (s.get("start_time") or "")[:8], "sels": {}})
+        ev = by_event.setdefault(s.get("event", ""),
+                                 {"date": (s.get("start_time") or "")[:8], "three_way": False, "sels": {}})
         ev["sels"][_book_surname(s.get("selection_name", ""))] = s.get("selection_id")
+        if s.get("three_way"):
+            ev["three_way"] = True
     return {frozenset(ev["sels"].keys()): ev for ev in by_event.values() if len(ev["sels"]) == 2}
 
 
@@ -125,9 +128,12 @@ def main() -> None:
             unmatched.append(f"{e.get('kalshi_ticker','?')} (surname not in book selections)")
             continue
         e["hardven_yes_token"], e["hardven_no_token"] = yes_tok, no_tok
+        if entry.get("three_way"):
+            e["three_way"] = True   # 3-way market → bot pairs NO-only (Kalshi NO + book back-team)
         done_events.add(e.get("event_id"))
         filled += 1
-        print(f"[PAIR] {e.get('kalshi_ticker'):<32} YES={yes_sn:<14} → {yes_tok} | NO → {no_tok}")
+        tag = "  [3-way: NO-only]" if entry.get("three_way") else ""
+        print(f"[PAIR] {e.get('kalshi_ticker'):<32} YES={yes_sn:<14} → {yes_tok} | NO → {no_tok}{tag}")
 
     print(f"\n[PAIR] filled={filled}  already={already}  skipped_mirror={skipped_dupe}  unmatched={len(unmatched)}")
     for u in unmatched:

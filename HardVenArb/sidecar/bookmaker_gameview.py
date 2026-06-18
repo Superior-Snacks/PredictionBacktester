@@ -84,6 +84,9 @@ def _emit_game(game: dict, out: dict, pre_match_only: bool) -> None:
     category = game.get("categoryEn", "")
     htm, vtm = game.get("htm", ""), game.get("vtm", "")
     event = f"{htm} vs {vtm}"
+    # 3-way market (soccer 1X2, cricket tie, …): the primary line carries a non-empty draw price. Such a
+    # market must be paired NO-only (Kalshi NO + book back-team); see CrossPair.ThreeWay.
+    three_way = bool((line.get("drawoddst") or "").strip())
     for side, name_key, odds_key in (("H", "htm", "hoddst"), ("V", "vtm", "voddst")):
         sid = f"{idgm}:{side}"
         dec = american_to_decimal(line.get(odds_key))
@@ -101,6 +104,7 @@ def _emit_game(game: dict, out: dict, pre_match_only: bool) -> None:
             "status": "open" if ok else "suspended",
             "start": start,
             "category": category,
+            "three_way": three_way,
         }
 
 
@@ -114,6 +118,32 @@ def parse_gameview(data: dict, pre_match_only: bool = True) -> dict:
     out: dict[str, dict] = {}
     for game in ((data or {}).get("GameView") or {}).get("game") or []:
         _emit_game(game, out, pre_match_only)
+    return out
+
+
+def parse_leagues(data: dict, sports=None) -> list[dict]:
+    """
+    GetLeagues response (root key "ActiveLeagues") → flat list of match-winner leagues:
+        [{ "id", "idsport", "desc", "sport", "region", "game_count" }, ...]
+    Structure: ActiveLeagues.Data.Leagues.index[] (per SPORT, valueEn) → region[] → league[] (id/desc/idsport).
+    Excludes idsport "TNT" (futures/props/multi-runner) and DOUBLES leagues. If `sports` (a set of UPPER
+    sport names) is given, keeps only those sports. This is the dynamic league discovery — no hardcoded ids.
+    """
+    root = (((data or {}).get("ActiveLeagues") or {}).get("Data") or {}).get("Leagues") or {}
+    out: list[dict] = []
+    for node in root.get("index") or []:
+        sport = (node.get("valueEn") or node.get("value") or "").strip()
+        if sports and sport.upper() not in sports:
+            continue
+        for region in node.get("region") or []:
+            for lg in region.get("league") or []:
+                idsport = lg.get("idsport", "")
+                desc = (lg.get("desc") or lg.get("descEn") or "")
+                lid = lg.get("id")
+                if not lid or idsport == "TNT" or "DOUBLES" in desc.upper():
+                    continue  # TNT = futures/props/outrights; doubles aren't 2-outcome match winners
+                out.append({"id": str(lid), "idsport": idsport, "desc": desc, "sport": sport,
+                            "region": region.get("value", ""), "game_count": int(lg.get("gameCount") or 0)})
     return out
 
 

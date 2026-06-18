@@ -35,16 +35,19 @@ import time
 from typing import Optional
 
 from book_adapter import BookAdapter, BetResult, CatalogEntry, Selection
-from bookmaker_gameview import parse_gameview, parse_schedule
+from bookmaker_gameview import parse_gameview, parse_leagues, parse_schedule
 
 BASE_URL = os.environ.get("BOOKMAKER_BASE_URL", "https://be.bookmaker.eu")
 GAMEVIEW_URL = "https://be.bookmaker.eu/gateway/BetslipProxy.aspx/GetGameView"
 SCHEDULE_URL = "https://be.bookmaker.eu/gateway/BetslipProxy.aspx/GetSchedule"
+LEAGUES_URL  = "https://be.bookmaker.eu/gateway/BetslipProxy.aspx/GetLeagues"
 
-# Tennis SINGLES league ids for catalog discovery (from GetActiveLeagues; idsport "MU", no doubles).
-# These rotate as tournaments come/go — override via BOOKMAKER_CATALOG_LEAGUES="16036,16035,...".
-# (Dynamic upgrade: fetch GetActiveLeagues live and filter — needs that request captured.)
-DEFAULT_TENNIS_LEAGUES = "16036,16035,16034,16014,20270,20269,16043,15228,16194,19240,20267,20268"
+# Catalog discovery is now DYNAMIC: GetLeagues lists every live league → we bulk-GetSchedule them. Filter
+# to the match-winner sports we can pair (others = multi-runner/props, skipped). Override with
+# BOOKMAKER_CATALOG_SPORTS="TENNIS,SOCCER,..."; or force explicit league ids with BOOKMAKER_CATALOG_LEAGUES.
+DEFAULT_CATALOG_SPORTS = {"TENNIS", "SOCCER", "FIFA WORLD CUP", "BASEBALL", "BASKETBALL",
+                          "FOOTBALL", "BOXING", "CRICKET", "MARTIAL ARTS", "AUSSIE RULES"}
+SCHEDULE_CHUNK = 25   # leagues per GetSchedule call (keep the request/response a sane size)
 
 # Run the POST from inside the page so it carries the session cookie + Cloudflare clearance (same-origin).
 _GAMEVIEW_JS = """
@@ -84,6 +87,11 @@ def _schedule_body(league_ids) -> dict:
         "BORt": {}, "LeaguesIdList": ",".join(str(x) for x in league_ids), "LanguageId": "0",
         "LineStyle": "E", "ScheduleType": "american", "LinkDeriv": "true",
     }}}}
+
+
+def _leagues_body() -> dict:
+    """GetLeagues POST body (captured) — the full league directory; no params beyond language."""
+    return {"o": {"BORequestData": {"BOParameters": {"BORt": {}, "LanguageId": "0"}}}}
 
 
 class BookmakerAdapter(BookAdapter):
@@ -211,23 +219,44 @@ class BookmakerAdapter(BookAdapter):
         return await self._post_json(GAMEVIEW_URL, _gameview_body(game_id, league_id),
                                      f"GetGameView gid={game_id}")
 
-    # ── pairing catalog (bulk Schedule over the tennis-singles leagues) ─────────
-    async def catalog(self) -> list[CatalogEntry]:
-        leagues = [x.strip() for x in (os.environ.get("BOOKMAKER_CATALOG_LEAGUES")
-                                       or DEFAULT_TENNIS_LEAGUES).split(",") if x.strip()]
-        data = await self._fetch_schedule(leagues)
+    async def _fetch_leagues(self) -> Optional[dict]:
+        return await self._post_json(LEAGUES_URL, _leagues_body(), "GetLeagues")
+
+    # ── pairing catalog (DYNAMIC: GetLeagues → bulk Schedule over all match leagues) ─
+    async def _discover_league_map(self) -> dict[str, str]:
+        """{ league_id: sport } for every match-winner league. Override the sport filter with
+        BOOKMAKER_CATALOG_SPORTS, or skip discovery entirely with explicit BOOKMAKER_CATALOG_LEAGUES."""
+        forced = os.environ.get("BOOKMAKER_CATALOG_LEAGUES")
+        if forced:
+            return {x.strip(): "" for x in forced.split(",") if x.strip()}
+        data = await self._fetch_leagues()
         if not data:
+            return {}
+        sports_env = os.environ.get("BOOKMAKER_CATALOG_SPORTS")
+        sports = {s.strip().upper() for s in sports_env.split(",")} if sports_env else DEFAULT_CATALOG_SPORTS
+        return {lg["id"]: lg["sport"] for lg in parse_leagues(data, sports=sports) if lg["game_count"] > 0}
+
+    async def catalog(self) -> list[CatalogEntry]:
+        lid_to_sport = await self._discover_league_map()
+        if not lid_to_sport:
             return []
+        league_ids = list(lid_to_sport.keys())
         out: list[CatalogEntry] = []
-        for e in parse_schedule(data, pre_match_only=False).values():
-            idgm, idlg = e.get("idgm"), e.get("idlg")
-            if not idgm or not idlg:
+        for i in range(0, len(league_ids), SCHEDULE_CHUNK):
+            data = await self._fetch_schedule(league_ids[i:i + SCHEDULE_CHUNK])
+            if not data:
                 continue
-            out.append(CatalogEntry(
-                selection_id=f"{idgm}:{idlg}:{e['side']}",
-                sport="TENNIS", league=str(idlg), event=e.get("event", ""),
-                market="moneyline", selection_name=e.get("name", ""), start_time=e.get("start"),
-            ))
+            for e in parse_schedule(data, pre_match_only=False).values():
+                idgm, idlg = e.get("idgm"), e.get("idlg")
+                if not idgm or not idlg:
+                    continue
+                out.append(CatalogEntry(
+                    selection_id=f"{idgm}:{idlg}:{e['side']}",
+                    sport=lid_to_sport.get(str(idlg)) or e.get("category", "") or "",
+                    league=str(idlg), event=e.get("event", ""), market="moneyline",
+                    selection_name=e.get("name", ""), start_time=e.get("start"),
+                    three_way=bool(e.get("three_way")),
+                ))
         return out
 
     # ── M1: betting + wallet confirmation (Playwright bet slip) ─────────────────

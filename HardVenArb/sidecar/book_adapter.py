@@ -62,6 +62,7 @@ class CatalogEntry:
     market: str
     selection_name: str
     start_time: Optional[str] = None      # ISO 8601 UTC; drives the pre-live gate
+    three_way: bool = False               # market has a draw/extra outcome → pair NO-only (soccer 1X2 etc.)
     rules_text: Optional[str] = None      # per-market rules, if scrapable (feeds the AI judge)
     rules_url: Optional[str] = None
 
