@@ -35,10 +35,16 @@ import time
 from typing import Optional
 
 from book_adapter import BookAdapter, BetResult, CatalogEntry, Selection
-from bookmaker_gameview import parse_gameview
+from bookmaker_gameview import parse_gameview, parse_schedule
 
 BASE_URL = os.environ.get("BOOKMAKER_BASE_URL", "https://be.bookmaker.eu")
 GAMEVIEW_URL = "https://be.bookmaker.eu/gateway/BetslipProxy.aspx/GetGameView"
+SCHEDULE_URL = "https://be.bookmaker.eu/gateway/BetslipProxy.aspx/GetSchedule"
+
+# Tennis SINGLES league ids for catalog discovery (from GetActiveLeagues; idsport "MU", no doubles).
+# These rotate as tournaments come/go — override via BOOKMAKER_CATALOG_LEAGUES="16036,16035,...".
+# (Dynamic upgrade: fetch GetActiveLeagues live and filter — needs that request captured.)
+DEFAULT_TENNIS_LEAGUES = "16036,16035,16034,16014,20270,20269,16043,15228,16194,19240,20267,20268"
 
 # Run the POST from inside the page so it carries the session cookie + Cloudflare clearance (same-origin).
 _GAMEVIEW_JS = """
@@ -71,12 +77,22 @@ def _gameview_body(game_id: str, league_id: str) -> dict:
     }}}}
 
 
+def _schedule_body(league_ids) -> dict:
+    """GetSchedule POST body (captured). `LeaguesIdList` takes a COMMA-JOINED list → one call covers
+    many leagues. Returns every game in those leagues + their moneylines."""
+    return {"o": {"BORequestData": {"BOParameters": {
+        "BORt": {}, "LeaguesIdList": ",".join(str(x) for x in league_ids), "LanguageId": "0",
+        "LineStyle": "E", "ScheduleType": "american", "LinkDeriv": "true",
+    }}}}
+
+
 class BookmakerAdapter(BookAdapter):
     name = "bookmaker"
 
     def __init__(self) -> None:
         self._odds_cache: dict[str, Selection] = {}        # "<gid>:<lid>:H/V" -> Selection
-        self._last_fetch: dict[tuple, float] = {}          # (gid, lid) -> unix ts of last GetGameView
+        self._sched_last_fetch = 0.0                       # unix ts of last GetSchedule
+        self._sched_covered: set[str] = set()              # league ids covered by the last fetch
         self._ttl = float(os.environ.get("BOOKMAKER_ODDS_TTL_MS", "4000")) / 1000.0
         self._fetch_lock = asyncio.Lock()
         self._bet_lock = asyncio.Lock()
@@ -88,9 +104,9 @@ class BookmakerAdapter(BookAdapter):
     # ── session lifecycle ──────────────────────────────────────────────────────
     async def startup(self) -> None:
         await self._start_browser()
-        print("[BOOKMAKER] ready. Odds via GetGameView polling (selection id = '<GameId>:<LeagueId>:H|V').\n"
+        print("[BOOKMAKER] ready. Odds via bulk GetSchedule polling (selection id = '<GameId>:<LeagueId>:H|V').\n"
               "[BOOKMAKER] >>> click into ANY match in the window once: it seeds the 'rtqname' session header "
-              "and sets a deep referer, both of which GetGameView requires.")
+              "and sets a deep referer, both of which the BetslipProxy calls require.")
 
     async def shutdown(self) -> None:
         # The user closing the window mid-run makes close() raise "Connection closed" — swallow it.
@@ -113,9 +129,9 @@ class BookmakerAdapter(BookAdapter):
             q = None
         if q and q != self._rtqname:
             self._rtqname = q
-            print(f"[BOOKMAKER] captured rtqname (…{q[-12:]}) — GetGameView polling enabled.")
+            print(f"[BOOKMAKER] captured rtqname (…{q[-12:]}) — odds polling enabled.")
 
-    # ── odds (poll GetGameView per requested game) ──────────────────────────────
+    # ── odds (bulk: ONE GetSchedule covers all requested leagues) ───────────────
     @staticmethod
     def _parse_sid(sid: str):
         parts = sid.split(":")
@@ -124,73 +140,95 @@ class BookmakerAdapter(BookAdapter):
         return None
 
     async def odds(self, selection_ids: list[str]) -> dict[str, Selection]:
-        games = set()
-        for sid in selection_ids:
-            p = self._parse_sid(sid)
-            if p:
-                games.add((p[0], p[1]))
-        for gid, lid in games:
-            await self._ensure_fresh(gid, lid)
+        # The league id is what GetSchedule needs; one call covers every requested league at once.
+        leagues = {p[1] for sid in selection_ids if (p := self._parse_sid(sid))}
+        if leagues:
+            await self._ensure_schedule(leagues)
         return {sid: self._odds_cache[sid] for sid in selection_ids if sid in self._odds_cache}
 
-    async def _ensure_fresh(self, game_id: str, league_id: str) -> None:
-        key = (game_id, league_id)
-        if time.time() - self._last_fetch.get(key, 0.0) < self._ttl:
+    async def _ensure_schedule(self, leagues: set) -> None:
+        fresh = (time.time() - self._sched_last_fetch < self._ttl) and leagues.issubset(self._sched_covered)
+        if fresh:
             return
         async with self._fetch_lock:
-            if time.time() - self._last_fetch.get(key, 0.0) < self._ttl:
+            if (time.time() - self._sched_last_fetch < self._ttl) and leagues.issubset(self._sched_covered):
                 return  # filled while we waited for the lock
-            data = await self._fetch_gameview(game_id, league_id)
-            self._last_fetch[key] = time.time()
+            data = await self._fetch_schedule(sorted(leagues))
+            self._sched_last_fetch = time.time()
             if not data:
                 return
-            parsed = parse_gameview(data)   # keyed "<idgm>:H/V"
             now = time.time()
-            for side in ("H", "V"):
-                full = f"{game_id}:{league_id}:{side}"
-                e = parsed.get(f"{game_id}:{side}")
-                if e and e["status"] == "open" and e["decimal_odds"]:
-                    self._odds_cache[full] = Selection(full, decimal_odds=float(e["decimal_odds"]),
-                                                       max_stake=float(e["max_stake"] or 0.0),
-                                                       status="open", ts=now)
-                else:
-                    # suspended / missing → no usable price, so no arb can fire on it
-                    self._odds_cache[full] = Selection(full, decimal_odds=1.0, max_stake=0.0,
-                                                       status="suspended", ts=now)
+            for e in parse_schedule(data, pre_match_only=False).values():   # observe live too (telemetry)
+                self._cache_entry(e, now)
+            self._sched_covered = set(leagues)
 
-    async def _fetch_gameview(self, game_id: str, league_id: str) -> Optional[dict]:
+    def _cache_entry(self, e: dict, now: float) -> None:
+        """Fold one parse entry into the cache, keyed '<idgm>:<idlg>:side'."""
+        idgm, idlg, side = e.get("idgm"), e.get("idlg"), e.get("side")
+        if not idgm or not idlg:
+            return
+        full = f"{idgm}:{idlg}:{side}"
+        if e["status"] == "open" and e["decimal_odds"]:
+            self._odds_cache[full] = Selection(full, decimal_odds=float(e["decimal_odds"]),
+                                               max_stake=float(e["max_stake"] or 0.0), status="open", ts=now)
+        else:
+            # suspended / missing → no usable price, so no arb can fire on it
+            self._odds_cache[full] = Selection(full, decimal_odds=1.0, max_stake=0.0, status="suspended", ts=now)
+
+    # ── HTTP via the browser page (carries session cookie + Cloudflare clearance) ─
+    async def _post_json(self, url: str, body: dict, label: str) -> Optional[dict]:
         if not self._page:
             return None
         if not self._rtqname:
             print("[BOOKMAKER] no rtqname captured yet — click into any match in the window once.")
         try:
-            res = await self._page.evaluate(_GAMEVIEW_JS,
-                                            {"url": GAMEVIEW_URL, "rtqname": self._rtqname,
-                                             "body": _gameview_body(game_id, league_id)})
-        except Exception as e:
-            print(f"[BOOKMAKER] GetGameView fetch error gid={game_id}: {e}")
+            res = await self._page.evaluate(_GAMEVIEW_JS, {"url": url, "rtqname": self._rtqname, "body": body})
+        except Exception as ex:
+            print(f"[BOOKMAKER] {label} fetch error: {ex}")
             return None
         status, text = res.get("status"), res.get("text") or ""
         if status != 200:
-            print(f"[BOOKMAKER] GetGameView HTTP {status} gid={game_id} "
-                  f"(logged in? Cloudflare?) body[:120]={text[:120]!r}")
+            print(f"[BOOKMAKER] {label} HTTP {status} (logged in? Cloudflare?) body[:120]={text[:120]!r}")
             return None
         try:
             data = json.loads(text)
         except ValueError:
-            print(f"[BOOKMAKER] GetGameView non-JSON gid={game_id} body[:120]={text[:120]!r}")
+            print(f"[BOOKMAKER] {label} non-JSON body[:120]={text[:120]!r}")
             return None
         # ASP.NET page methods sometimes wrap the payload in {"d": …}; unwrap if present.
-        if isinstance(data, dict) and "d" in data and "GameView" not in data:
+        if isinstance(data, dict) and "d" in data and not ("GameView" in data or "Schedule" in data):
             d = data["d"]
-            data = json.loads(d) if isinstance(d, str) else d
+            try:
+                data = json.loads(d) if isinstance(d, str) else d
+            except ValueError:
+                return None
         return data
 
-    # ── pairing catalog ────────────────────────────────────────────────────────
+    async def _fetch_schedule(self, league_ids) -> Optional[dict]:
+        return await self._post_json(SCHEDULE_URL, _schedule_body(league_ids), "GetSchedule")
+
+    async def _fetch_gameview(self, game_id: str, league_id: str) -> Optional[dict]:
+        return await self._post_json(GAMEVIEW_URL, _gameview_body(game_id, league_id),
+                                     f"GetGameView gid={game_id}")
+
+    # ── pairing catalog (bulk Schedule over the tennis-singles leagues) ─────────
     async def catalog(self) -> list[CatalogEntry]:
-        # TODO(pairing): enumerate upcoming events (there's a schedule/league-listing XHR alongside
-        # GetGameView). For now cross_pairs.json is hand-built with "<GameId>:<LeagueId>:H/V" ids.
-        return []
+        leagues = [x.strip() for x in (os.environ.get("BOOKMAKER_CATALOG_LEAGUES")
+                                       or DEFAULT_TENNIS_LEAGUES).split(",") if x.strip()]
+        data = await self._fetch_schedule(leagues)
+        if not data:
+            return []
+        out: list[CatalogEntry] = []
+        for e in parse_schedule(data, pre_match_only=False).values():
+            idgm, idlg = e.get("idgm"), e.get("idlg")
+            if not idgm or not idlg:
+                continue
+            out.append(CatalogEntry(
+                selection_id=f"{idgm}:{idlg}:{e['side']}",
+                sport="TENNIS", league=str(idlg), event=e.get("event", ""),
+                market="moneyline", selection_name=e.get("name", ""), start_time=e.get("start"),
+            ))
+        return out
 
     # ── M1: betting + wallet confirmation (Playwright bet slip) ─────────────────
     async def balance(self) -> float:
