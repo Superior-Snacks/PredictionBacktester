@@ -16,7 +16,11 @@ public record CrossPair(
     string EventId = "",    // retained for JSON compat; not used internally
     DateOnly? SettlementDate = null,
     bool IsNegRisk = false, // passed to CLOB negRisk flag on HardVen order submission
-    decimal HardVenMinSize = 1.0m  // orderMinSize from HardVen Gamma API (minimum shares per order)
+    decimal HardVenMinSize = 1.0m, // orderMinSize from HardVen Gamma API (minimum shares per order)
+    // 3-way market (e.g. soccer 1X2): ONLY the Kalshi-NO direction (K_NO_P_YES) is a complete hedge —
+    // Kalshi NO(A) + book back-A covers A / Draw / B. The K_YES_P_NO direction (Kalshi YES + book back-B)
+    // would miss the draw, so it's disabled for these pairs. Both tokens are still the two team moneylines.
+    bool ThreeWay = false
 );
 
 record ActiveWindow(
@@ -402,7 +406,9 @@ public class CrossPlatformArbTelemetryStrategy
         string  bestType;
         decimal kLegPrice, pLegPrice;
 
-        if (typeANet <= typeBNet)
+        // 3-way pairs: force Type B (K_NO_P_YES) — the Kalshi-NO direction is the only complete hedge;
+        // Type A (Kalshi YES + book back-opponent) would lose on a draw, so never pick it.
+        if (!pair.ThreeWay && typeANet <= typeBNet)
         {
             bestGross  = typeAGross;  bestNet    = typeANet;
             bestKFee   = kYesFee;    bestPFee   = pNoFee;

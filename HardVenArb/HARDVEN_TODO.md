@@ -224,13 +224,23 @@ when the two legs are exact **complements** (exactly one pays out). That holds f
 winners** (MLB, tennis, UFC, boxing, NBA, NFL, NHL, WNBA, KBO, NCAAF/B) — the current scope, and what
 `pairHard.py` already filters to. Deferred, by structure:
 
-- [ ] **3-way / draw markets — soccer & football (1X2 match result).** Home/Draw/Away means Kalshi
-      "Team A wins" YES and the book's "Team A" moneyline are the SAME outcome, not complements (both
-      lose on a draw), so a single 2-way pair can't arb it. Adapt later via **either** (a) **multi-leg** —
-      hedge Kalshi "A wins" by backing BOTH Draw and B at the book (cover all 3 outcomes), **or** (b) pair
-      Kalshi-binary against the book's **Double Chance / Draw-No-Bet** 2-way market (a clean complement,
-      if bookmaker.eu offers it AND Kalshi's resolution rule matches). Model the multi-leg version on the
-      sibling bot's `PolymarketCategoricalArbStrategy` ("buy all legs when Σcost < $1").
+- [ ] **3-way / draw markets — soccer & football (1X2 match result). ★ CLEAN 2-LEG SOLUTION FOUND
+      (user, 2026-06-18): "Kalshi NO + book back-same-team".** Home/Draw/Away breaks the tennis-style
+      YES+back-opponent pairing (both lose on a draw). BUT pairing **Kalshi NO(A) + bookmaker back-A**
+      covers ALL outcomes in just 2 legs: A wins → book back-A pays; Draw OR B wins → Kalshi NO pays
+      (NO = "A doesn't win" absorbs the draw + B in one contract; the count of other outcomes is
+      irrelevant). Arb when `p_no(A) + (1/dec_A) + kalshiFee < 1`. **This is EXACTLY the bot's existing
+      `K_NO_P_YES` direction** (Kalshi NO + book YES=back-that-team) — so soccer needs NO new hedge, just
+      "disable the broken `K_YES_P_NO` direction for 3-way pairs." Pair EACH Kalshi team market (Will A
+      win? / Will B win?) with that team's book moneyline, NO-direction only → 2 shots per match.
+      **Impl (small):** per-pair `three_way: true` flag → executor skips `K_YES_P_NO` for it; loader
+      accepts it with only `hardven_yes_token` (the team's book moneyline; `hardven_no_token` unused).
+      Trade-off: catches only ONE mispricing direction (misses the YES+complement side) — accepted,
+      because the alternative (3-leg: Kalshi YES + book Draw + book B) adds partial-fill exposure on an
+      IRREVERSIBLE book (get Draw, B fails → stuck directional, can't sell). So **2-leg-NO = do it;
+      3-leg/Double-Chance = defer, probably never.** Same `NO + back-X` trick generalizes to any
+      binary-vs-multiway sub-bet where Kalshi YES ⟺ one book selection (limited by Kalshi listing it +
+      settlement-rule risk).
 - [ ] **Multi-runner outrights / futures / props** (championship winner, draft pick, first/anytime
       goalscorer, player props): N outcomes → multi-leg, and only where Kalshi lists the matching market.
       bookmaker.eu's `TNT.*` feeds are these (parser already ignores them).
@@ -240,5 +250,6 @@ winners** (MLB, tennis, UFC, boxing, NBA, NFL, NHL, WNBA, KBO, NCAAF/B) — the 
       total/spread series to `pairHard.py`, and surface `mkt.t`/`mkt.s` as selections (the STOMP parser
       already extracts them).
 
-**Order of difficulty:** 2-way match winners (now) → totals/spreads (next-easiest; 2-way + line-match) →
-3-way + multi-runner (a bigger change; needs multi-leg arb like `PolymarketCategoricalArbStrategy`).
+**Order of difficulty:** 2-way match winners (now) → **soccer 3-way via the `K_NO_P_YES`-only 2-leg trick
+above (now EASY — small flag, reuses existing machinery)** → totals/spreads (2-way + line-match) →
+multi-runner outrights (the only true multi-leg case left; `PolymarketCategoricalArbStrategy`-style).

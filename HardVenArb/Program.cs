@@ -257,10 +257,11 @@ if (File.Exists(manualPath))
                 settlementDate = d;
             bool isNegRisk = el.TryGetProperty("is_neg_risk", out var nr) && nr.ValueKind == JsonValueKind.True;
             decimal hardvenMinSize = el.TryGetProperty("hardven_min_size", out var ms) && ms.TryGetDecimal(out decimal msv) && msv > 0 ? msv : 1.0m;
+            bool threeWay = el.TryGetProperty("three_way", out var tw) && tw.ValueKind == JsonValueKind.True;
             if (!string.IsNullOrEmpty(kTicker) && !string.IsNullOrEmpty(yesToken) && !string.IsNullOrEmpty(noToken))
             {
                 string pairId = $"MANUAL_{kTicker}__{yesToken[..Math.Min(8, yesToken.Length)]}";
-                manualPairs.Add(new CrossPair(pairId, label, kTicker, yesToken, noToken, eventId, settlementDate, isNegRisk, hardvenMinSize));
+                manualPairs.Add(new CrossPair(pairId, label, kTicker, yesToken, noToken, eventId, settlementDate, isNegRisk, hardvenMinSize, threeWay));
             }
         }
         Console.WriteLine($"[CONFIG] {manualPairs.Count} manual pair(s) loaded from cross_pairs.json");
@@ -723,11 +724,12 @@ _ = Task.Run(async () =>
 
                 bool isNegRiskHot = el.TryGetProperty("is_neg_risk", out var nrHot) && nrHot.ValueKind == JsonValueKind.True;
                 decimal hardvenMinSizeHot = el.TryGetProperty("hardven_min_size", out var msHot) && msHot.TryGetDecimal(out decimal msvHot) && msvHot > 0 ? msvHot : 1.0m;
+                bool threeWayHot = el.TryGetProperty("three_way", out var twHot) && twHot.ValueKind == JsonValueKind.True;
                 string pairId = $"MANUAL_{kTicker}__{yesToken[..Math.Min(8, yesToken.Length)]}";
                 if (knownPairIds.Contains(pairId)) continue;
                 knownPairIds.Add(pairId);
 
-                newPairs.Add(new CrossPair(pairId, label, kTicker, yesToken, noToken, eventId, settlementDate, isNegRiskHot, hardvenMinSizeHot));
+                newPairs.Add(new CrossPair(pairId, label, kTicker, yesToken, noToken, eventId, settlementDate, isNegRiskHot, hardvenMinSizeHot, threeWayHot));
                 if (knownKalshiTickers.Add(kTicker)) newKTickers.Add(kTicker);
                 if (knownHardVenTokens.Add(yesToken))   newPTokens.Add(yesToken);
                 if (knownHardVenTokens.Add(noToken))    newPTokens.Add(noToken);
