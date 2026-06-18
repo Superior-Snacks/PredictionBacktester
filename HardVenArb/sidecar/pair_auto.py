@@ -61,12 +61,15 @@ def _book_name(selection_name: str) -> str:
 
 
 def _teams_from_event_title(title: str):
-    """'Jordan vs Argentina' / 'Hijikata vs Lehecka: Round Of 16' → frozenset({'jordan','argentina'})."""
+    """'Jordan vs Argentina' / 'Hijikata vs Lehecka: Round Of 16' / 'Fight Night: Kape vs Horiguchi'
+    → frozenset of the two competitor names. A colon can be a CARD-NAME PREFIX on the LEFT side
+    (UFC 'Fight Night: …') OR a ROUND SUFFIX on the RIGHT ('…: Round Of 16'), so take the left
+    competitor AFTER its last colon and the right competitor BEFORE its first colon."""
     parts = re.split(r"\bvs\.?\b", title or "", flags=re.IGNORECASE)
     if len(parts) != 2:
         return None
-    a = _norm(parts[0].split(":")[0])
-    b = _norm(parts[1].split(":")[0])   # strip a trailing ": Round Of 16" / ": Quarterfinal"
+    a = _norm(parts[0].rsplit(":", 1)[-1])   # drop a leading "Fight Night:" / card-name prefix
+    b = _norm(parts[1].split(":", 1)[0])      # drop a trailing ": Round Of 16" / ": Quarterfinal"
     return frozenset({a, b}) if a and b else None
 
 
