@@ -1,1 +1,342 @@
-[]
+[
+  {
+    "kalshi_ticker": "KXATPMATCH-26JUN17COLBEL-BEL",
+    "label": "Will Mattia Bellucci win the Collignon vs Bellucci: Round Of 16 match?",
+    "event_id": "KXATPMATCH-26JUN17COLBEL",
+    "settlement_date": "2026-06-17",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "52002822:16034:V",
+    "hardven_no_token": "52002822:16034:H"
+  },
+  {
+    "kalshi_ticker": "KXATPMATCH-26JUN17COLBEL-COL",
+    "label": "Will Raphael Collignon win the Collignon vs Bellucci: Round Of 16 match?",
+    "event_id": "KXATPMATCH-26JUN17COLBEL",
+    "settlement_date": "2026-06-17",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "",
+    "hardven_no_token": ""
+  },
+  {
+    "kalshi_ticker": "KXATPMATCH-26JUN17MEDHUM-HUM",
+    "label": "Will Ugo Humbert win the Medjedovic vs Humbert: Round Of 16 match?",
+    "event_id": "KXATPMATCH-26JUN17MEDHUM",
+    "settlement_date": "2026-06-17",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "52015038:16036:V",
+    "hardven_no_token": "52015038:16036:H"
+  },
+  {
+    "kalshi_ticker": "KXATPMATCH-26JUN17MEDHUM-MED",
+    "label": "Will Hamad Medjedovic win the Medjedovic vs Humbert: Round Of 16 match?",
+    "event_id": "KXATPMATCH-26JUN17MEDHUM",
+    "settlement_date": "2026-06-17",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "",
+    "hardven_no_token": ""
+  },
+  {
+    "kalshi_ticker": "KXATPMATCH-26JUN17PAUVAN-PAU",
+    "label": "Will Tommy Paul win the Paul vs Van de Zandschulp: Round Of 16 match?",
+    "event_id": "KXATPMATCH-26JUN17PAUVAN",
+    "settlement_date": "2026-06-17",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "51989880:16036:H",
+    "hardven_no_token": "51989880:16036:V"
+  },
+  {
+    "kalshi_ticker": "KXATPMATCH-26JUN17PAUVAN-VAN",
+    "label": "Will Botic Van de Zandschulp win the Paul vs Van de Zandschulp: Round Of 16 match?",
+    "event_id": "KXATPMATCH-26JUN17PAUVAN",
+    "settlement_date": "2026-06-17",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "",
+    "hardven_no_token": ""
+  },
+  {
+    "kalshi_ticker": "KXWTAMATCH-26JUN17ANNPRE-ANN",
+    "label": "Will Ann Li win the Li vs Preston: Round Of 16 match?",
+    "event_id": "KXWTAMATCH-26JUN17ANNPRE",
+    "settlement_date": "2026-06-17",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "52007439:16014:H",
+    "hardven_no_token": "52007439:16014:V"
+  },
+  {
+    "kalshi_ticker": "KXWTAMATCH-26JUN17ANNPRE-PRE",
+    "label": "Will Taylah Preston win the Li vs Preston: Round Of 16 match?",
+    "event_id": "KXWTAMATCH-26JUN17ANNPRE",
+    "settlement_date": "2026-06-17",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "",
+    "hardven_no_token": ""
+  },
+  {
+    "kalshi_ticker": "KXWTAMATCH-26JUN17KEYMUC-KEY",
+    "label": "Will Madison Keys win the Keys vs Muchova: Round Of 16 match?",
+    "event_id": "KXWTAMATCH-26JUN17KEYMUC",
+    "settlement_date": "2026-06-17",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "52008195:16035:H",
+    "hardven_no_token": "52008195:16035:V"
+  },
+  {
+    "kalshi_ticker": "KXWTAMATCH-26JUN17KEYMUC-MUC",
+    "label": "Will Karolina Muchova win the Keys vs Muchova: Round Of 16 match?",
+    "event_id": "KXWTAMATCH-26JUN17KEYMUC",
+    "settlement_date": "2026-06-17",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "",
+    "hardven_no_token": ""
+  },
+  {
+    "kalshi_ticker": "KXWTAMATCH-26JUN17SVILYS-LYS",
+    "label": "Will Eva Lys win the Svitolina vs Lys: Round Of 16 match?",
+    "event_id": "KXWTAMATCH-26JUN17SVILYS",
+    "settlement_date": "2026-06-17",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "",
+    "hardven_no_token": ""
+  },
+  {
+    "kalshi_ticker": "KXWTAMATCH-26JUN17SVILYS-SVI",
+    "label": "Will Elina Svitolina win the Svitolina vs Lys: Round Of 16 match?",
+    "event_id": "KXWTAMATCH-26JUN17SVILYS",
+    "settlement_date": "2026-06-17",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "",
+    "hardven_no_token": ""
+  },
+  {
+    "kalshi_ticker": "KXATPMATCH-26JUN18DENAK-DE",
+    "label": "Will Alex de Minaur win the de Minaur vs Nakashima: Quarterfinal match?",
+    "event_id": "KXATPMATCH-26JUN18DENAK",
+    "settlement_date": "2026-06-18",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "52031475:16036:H",
+    "hardven_no_token": "52031475:16036:V"
+  },
+  {
+    "kalshi_ticker": "KXATPMATCH-26JUN18DENAK-NAK",
+    "label": "Will Brandon Nakashima win the de Minaur vs Nakashima: Quarterfinal match?",
+    "event_id": "KXATPMATCH-26JUN18DENAK",
+    "settlement_date": "2026-06-18",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "",
+    "hardven_no_token": ""
+  },
+  {
+    "kalshi_ticker": "KXATPMATCH-26JUN18HIJLEH-HIJ",
+    "label": "Will Rinky Hijikata win the Hijikata vs Lehecka: Round Of 16 match?",
+    "event_id": "KXATPMATCH-26JUN18HIJLEH",
+    "settlement_date": "2026-06-18",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "52015300:16036:H",
+    "hardven_no_token": "52015300:16036:V"
+  },
+  {
+    "kalshi_ticker": "KXATPMATCH-26JUN18HIJLEH-LEH",
+    "label": "Will Jiri Lehecka win the Hijikata vs Lehecka: Round Of 16 match?",
+    "event_id": "KXATPMATCH-26JUN18HIJLEH",
+    "settlement_date": "2026-06-18",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "52015300:16036:V",
+    "hardven_no_token": "52015300:16036:H"
+  },
+  {
+    "kalshi_ticker": "KXATPMATCH-26JUN18MARFRI-FRI",
+    "label": "Will Taylor Fritz win the Marozsan vs Fritz: Round Of 16 match?",
+    "event_id": "KXATPMATCH-26JUN18MARFRI",
+    "settlement_date": "2026-06-18",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "",
+    "hardven_no_token": ""
+  },
+  {
+    "kalshi_ticker": "KXATPMATCH-26JUN18MARFRI-MAR",
+    "label": "Will Fabian Marozsan win the Marozsan vs Fritz: Round Of 16 match?",
+    "event_id": "KXATPMATCH-26JUN18MARFRI",
+    "settlement_date": "2026-06-18",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "",
+    "hardven_no_token": ""
+  },
+  {
+    "kalshi_ticker": "KXATPMATCH-26JUN18MOUDAV-DAV",
+    "label": "Will Alejandro Davidovich Fokina win the Moutet vs Davidovich Fokina: Round Of 16 match?",
+    "event_id": "KXATPMATCH-26JUN18MOUDAV",
+    "settlement_date": "2026-06-18",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "52015097:16036:V",
+    "hardven_no_token": "52015097:16036:H"
+  },
+  {
+    "kalshi_ticker": "KXATPMATCH-26JUN18MOUDAV-MOU",
+    "label": "Will Corentin Moutet win the Moutet vs Davidovich Fokina: Round Of 16 match?",
+    "event_id": "KXATPMATCH-26JUN18MOUDAV",
+    "settlement_date": "2026-06-18",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "",
+    "hardven_no_token": ""
+  },
+  {
+    "kalshi_ticker": "KXATPMATCH-26JUN18SHEQUI-QUI",
+    "label": "Will Ethan Quinn win the Shelton vs Quinn: Round Of 16 match?",
+    "event_id": "KXATPMATCH-26JUN18SHEQUI",
+    "settlement_date": "2026-06-18",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "52032990:16034:V",
+    "hardven_no_token": "52032990:16034:H"
+  },
+  {
+    "kalshi_ticker": "KXATPMATCH-26JUN18SHEQUI-SHE",
+    "label": "Will Ben Shelton win the Shelton vs Quinn: Round Of 16 match?",
+    "event_id": "KXATPMATCH-26JUN18SHEQUI",
+    "settlement_date": "2026-06-18",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "",
+    "hardven_no_token": ""
+  },
+  {
+    "kalshi_ticker": "KXATPMATCH-26JUN18ZVEHAN-HAN",
+    "label": "Will Yannick Hanfmann win the Zverev vs Hanfmann: Round Of 16 match?",
+    "event_id": "KXATPMATCH-26JUN18ZVEHAN",
+    "settlement_date": "2026-06-18",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "52012612:16034:V",
+    "hardven_no_token": "52012612:16034:H"
+  },
+  {
+    "kalshi_ticker": "KXATPMATCH-26JUN18ZVEHAN-ZVE",
+    "label": "Will Alexander Zverev win the Zverev vs Hanfmann: Round Of 16 match?",
+    "event_id": "KXATPMATCH-26JUN18ZVEHAN",
+    "settlement_date": "2026-06-18",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "",
+    "hardven_no_token": ""
+  },
+  {
+    "kalshi_ticker": "KXWTAMATCH-26JUN18BOUKLU-BOU",
+    "label": "Will Marie Bouzkova win the Bouzkova vs Klugman: Round Of 16 match?",
+    "event_id": "KXWTAMATCH-26JUN18BOUKLU",
+    "settlement_date": "2026-06-18",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "52012149:16014:H",
+    "hardven_no_token": "52012149:16014:V"
+  },
+  {
+    "kalshi_ticker": "KXWTAMATCH-26JUN18BOUKLU-KLU",
+    "label": "Will Hannah Klugman win the Bouzkova vs Klugman: Round Of 16 match?",
+    "event_id": "KXWTAMATCH-26JUN18BOUKLU",
+    "settlement_date": "2026-06-18",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "",
+    "hardven_no_token": ""
+  },
+  {
+    "kalshi_ticker": "KXWTAMATCH-26JUN18EALRYB-EAL",
+    "label": "Will Alexandra Eala win the Eala vs Rybakina: Round Of 16 match?",
+    "event_id": "KXWTAMATCH-26JUN18EALRYB",
+    "settlement_date": "2026-06-18",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "52027193:16035:H",
+    "hardven_no_token": "52027193:16035:V"
+  },
+  {
+    "kalshi_ticker": "KXWTAMATCH-26JUN18EALRYB-RYB",
+    "label": "Will Elena Rybakina win the Eala vs Rybakina: Round Of 16 match?",
+    "event_id": "KXWTAMATCH-26JUN18EALRYB",
+    "settlement_date": "2026-06-18",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "",
+    "hardven_no_token": ""
+  },
+  {
+    "kalshi_ticker": "KXWTAMATCH-26JUN18GOLSON-GOL",
+    "label": "Will Viktorija Golubic win the Golubic vs Sonmez: Round Of 16 match?",
+    "event_id": "KXWTAMATCH-26JUN18GOLSON",
+    "settlement_date": "2026-06-18",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "52013293:16014:H",
+    "hardven_no_token": "52013293:16014:V"
+  },
+  {
+    "kalshi_ticker": "KXWTAMATCH-26JUN18GOLSON-SON",
+    "label": "Will Zeynep Sonmez win the Golubic vs Sonmez: Round Of 16 match?",
+    "event_id": "KXWTAMATCH-26JUN18GOLSON",
+    "settlement_date": "2026-06-18",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "",
+    "hardven_no_token": ""
+  },
+  {
+    "kalshi_ticker": "KXWTAMATCH-26JUN18NOSPAR-NOS",
+    "label": "Will Linda Noskova win the Noskova vs Parry: Round Of 16 match?",
+    "event_id": "KXWTAMATCH-26JUN18NOSPAR",
+    "settlement_date": "2026-06-18",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "",
+    "hardven_no_token": ""
+  },
+  {
+    "kalshi_ticker": "KXWTAMATCH-26JUN18NOSPAR-PAR",
+    "label": "Will Diane Parry win the Noskova vs Parry: Round Of 16 match?",
+    "event_id": "KXWTAMATCH-26JUN18NOSPAR",
+    "settlement_date": "2026-06-18",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "",
+    "hardven_no_token": ""
+  },
+  {
+    "kalshi_ticker": "KXWTAMATCH-26JUN18PLIMCC-MCC",
+    "label": "Will Caty McNally win the Pliskova vs McNally: Round Of 16 match?",
+    "event_id": "KXWTAMATCH-26JUN18PLIMCC",
+    "settlement_date": "2026-06-18",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "52016544:16014:V",
+    "hardven_no_token": "52016544:16014:H"
+  },
+  {
+    "kalshi_ticker": "KXWTAMATCH-26JUN18PLIMCC-PLI",
+    "label": "Will Karolina Pliskova win the Pliskova vs McNally: Round Of 16 match?",
+    "event_id": "KXWTAMATCH-26JUN18PLIMCC",
+    "settlement_date": "2026-06-18",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "",
+    "hardven_no_token": ""
+  }
+]
