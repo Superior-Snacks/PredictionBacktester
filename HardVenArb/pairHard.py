@@ -59,23 +59,34 @@ HERE = Path(__file__).parent
 OUT = HERE / "cross_pairs.json"
 DEFAULT_MAX_DAYS_OUT = 10
 
-# Classic full-match, 2-way WINNER series (moneylines). Exact series_ticker match. Edit freely.
-# (Some are listed even when out of season — harmless; they simply won't appear until games are posted.)
+# Match-WINNER (moneyline) series only — the "…GAME"/"…MATCH"/"…FIGHT" tickers, NOT the sub-markets
+# (…SPREAD/…TOTAL/…RFI/…F5/…SETWINNER/…1H/…2H/…BTTS/…EXACTMATCH = totals/spreads/props, future work).
+# Exact series_ticker match. Out-of-season ones are harmless (they just produce no games). Discovered
+# from the Kalshi public API — far more per-match leagues than the obvious North-American ones. A series
+# only PAIRS if bookmaker.eu also lists that league; extras simply stay unmatched.
 CLASSIC_SERIES = {
-    # North American leagues — game winner
-    "KXNBAGAME", "KXWNBAGAME", "KXNFLGAME", "KXMLBGAME", "KXNHLGAME",
-    "KXNCAAFGAME", "KXNCAABGAME", "KXKBOGAME",
-    # Tennis — full match winner (NOT set/half winners)
+    # Baseball — MLB / Korea KBO / Japan NPB
+    "KXMLBGAME", "KXKBOGAME", "KXNPBGAME",
+    # Basketball — WNBA/NBA + international club leagues (Spain ACB, Germany BBL, Italy Serie A/B,
+    # Turkey BSL, France Elite, NZ NBL, Poland, Venezuela, Vietnam, Puerto Rico BSN, Israel, BIG3, NCAA)
+    "KXNBAGAME", "KXWNBAGAME", "KXACBGAME", "KXBBLGAME", "KXBBSERIEAGAME", "KXBBSERIEBGAME",
+    "KXBSLGAME", "KXLNBELITEGAME", "KXNZNBLGAME", "KXPLKGAME", "KXSPBGAME", "KXVBAGAME",
+    "KXBSNGAME", "KXBIG3GAME", "KXISLGAME", "KXNCAABBGAME",
+    # Soccer — World Cup (3-way moneyline; pairs NO-only via three_way vs home/draw/visitor) + club
+    # leagues (USL + USL Cup, Spain La Liga 2, Chile, Bolivia). Club soccer is also 3-way (auto-detected
+    # from the bookmaker draw price). Sub-markets KXWC{SPREAD,TOTAL,BTTS,1H*,2H*} are future totals/spreads.
+    "KXWCGAME", "KXUSLGAME", "KXUSLCUPGAME", "KXLALIGA2GAME", "KXCHLLDPGAME", "KXBOLPDIVGAME",
+    # Football — NFL / NCAA (off-season) + Canadian CFL (in-season)
+    "KXNFLGAME", "KXNCAAFGAME", "KXCFLGAME",
+    # Aussie Rules — AFL
+    "KXAFLGAME",
+    # Tennis — full match winner (NOT set/exact-match/spread sub-markets)
     "KXATPMATCH", "KXWTAMATCH", "KXITFMATCH", "KXITFWMATCH",
     "KXATPCHALLENGERMATCH", "KXWTACHALLENGERMATCH",
-    # Cricket
-    "KXT20MATCH", "KXWT20MATCH",
-    # Combat sports
+    # Cricket — T20 / Women's T20 / ODI / Test / County Championship
+    "KXT20MATCH", "KXWT20MATCH", "KXODIMATCH", "KXTESTMATCH", "KXCOUNTYCHAMPMATCH",
+    # Combat sports — boxing / UFC
     "KXBOXING", "KXUFCFIGHT",
-    # Soccer — World Cup match moneyline (3-way: TeamA / TIE / TeamB; each a binary market). Pairs
-    # NO-only vs the bookmaker home/draw/visitor backs (three_way). Sub-markets exist too
-    # (KXWCSPREAD / KXWCTOTAL / KXWCBTTS / KXWC1H* / KXWC2H*) — totals/spreads are future work.
-    "KXWCGAME",
 }
 
 
