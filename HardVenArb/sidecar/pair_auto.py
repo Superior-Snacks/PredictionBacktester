@@ -172,14 +172,30 @@ def fetch_catalog(sidecar: str) -> list[dict]:
         return json.loads(r.read().decode("utf-8")).get("selections", [])
 
 
+def _league_id(sid: str) -> int:
+    """Numeric league id (2nd segment of selection_id), for canonical-league ordering; non-numeric → huge."""
+    parts = sid.split(":")
+    return int(parts[1]) if len(parts) >= 2 and parts[1].isdigit() else 10 ** 9
+
+
+def _better_listing(new: dict, prev: dict) -> bool:
+    """On a same-teams collision across leagues, prefer the canonical listing: (1) a 3-way moneyline
+    (has a draw) over a draw-less one, then (2) the lower (primary) league id. Deterministic — replaces
+    the old last-write-wins, which let a duplicate high-id league (e.g. MLB 505) overwrite the real one (MLB 5)."""
+    new_rank  = (1 if new["draw"]  else 0, -new["league"])    # higher tuple = more canonical
+    prev_rank = (1 if prev["draw"] else 0, -prev["league"])
+    return new_rank > prev_rank
+
+
 def index_catalog(selections: list[dict]) -> dict:
     """{ frozenset({teamA_key, teamB_key}) : {date, three_way, teams:{key: sel_id}, draw: sel_id|None} }.
 
     Grouped by the bookmaker GAME id (idgm, the first segment of the selection_id) — NOT the event title.
     The same match can appear in several leagues (real matches vs prop/futures leagues), and merging by
     title would mix a pair's legs across different games. Grouping by idgm guarantees a pair's H/V/D all
-    come from ONE game; on a team-set collision (same teams in two leagues) we keep the game that has a
-    draw (the real moneyline) over one that doesn't (a prop)."""
+    come from ONE game; on a team-set collision (same teams listed in two leagues — e.g. the same MLB
+    game in leagues 5 and 505) we keep the most canonical listing via _better_listing (draw, then lowest
+    league id), NOT whichever was iterated last."""
     games: dict[str, dict] = {}
     for s in selections:
         sid = s.get("selection_id", "")
@@ -187,7 +203,7 @@ def index_catalog(selections: list[dict]) -> dict:
         if not idgm:
             continue
         g = games.setdefault(idgm, {"date": (s.get("start_time") or "")[:8], "three_way": False,
-                                    "teams": {}, "draw": None})
+                                    "teams": {}, "draw": None, "league": _league_id(sid)})
         if s.get("three_way"):
             g["three_way"] = True
         name = s.get("selection_name", "")
@@ -200,9 +216,9 @@ def index_catalog(selections: list[dict]) -> dict:
         if len(g["teams"]) != 2:
             continue
         key = frozenset(g["teams"].keys())
-        if key in out and out[key]["draw"] and not g["draw"]:
-            continue  # keep the existing match (has draw) over this draw-less prop game
-        out[key] = g
+        prev = out.get(key)
+        if prev is None or _better_listing(g, prev):
+            out[key] = g   # canonical listing wins (draw, then lowest league id) — deterministic
     return out
 
 
