@@ -77,11 +77,62 @@ python pairHard.py ; python sidecar/pair_auto.py --fuzzy --write
 
 ---
 
+## Running unattended on a Linux server (tmux)
+
+The C# bot is portable (.NET 10, Kalshi side is just HTTP/WS); the **sidecar** needs real Chrome under a
+virtual display. The bookmaker session is **IP + fingerprint bound**, so the datacenter IP must do its own
+one-time login (home cookies won't validate here) and will draw more Cloudflare challenges than home.
+
+**One-time server setup**
+```bash
+sudo apt install -y xvfb x11vnc                       # virtual display + VNC for the one-time login
+# install Google Chrome (the channel="chrome" the adapter prefers); bundled chromium is more bot-blocked
+python -m pip install fastapi "uvicorn[standard]" httpx websockets playwright rapidfuzz
+playwright install chromium                           # fallback browser only
+```
+
+**One-time login (seed `.bookmaker_profile` on the server's IP)**
+```bash
+Xvfb :99 -screen 0 1400x900x24 &
+export DISPLAY=:99
+x11vnc -display :99 -localhost -nopw -bg              # SSH-tunnel 5900, VNC in
+cd HardVenArb/sidecar
+HARDVEN_BOOK=bookmaker python -m uvicorn app:app --port 8787   # Chrome opens on :99 → VNC in,
+#   log in / clear Cloudflare / click a match once. The profile remembers it across restarts.
+```
+
+**Normal unattended run (tmux, two panes)**
+```bash
+tmux new -s hardven
+# pane 1 — sidecar under the virtual display:
+cd HardVenArb/sidecar && HARDVEN_BOOK=bookmaker DISPLAY=:99 xvfb-run -a python -m uvicorn app:app --port 8787
+# pane 2 — pairs + bot:
+cd HardVenArb && python pairHard.py && python sidecar/pair_auto.py --fuzzy --write
+dotnet run --project HardVenArb -- --telemetry
+# Ctrl-b d to detach; the run survives logout/SSH close.
+```
+The sidecar now **keeps the session warm and auto-recovers** (see Gotchas) — but an *interactive* Cloudflare
+challenge (captcha) still needs a human: VNC in and clear it once.
+
+## Tuning knobs (env)
+
+| Var | Default | What |
+|-----|---------|------|
+| `HARDVEN_QUOTE_MAX_AGE_MS` | `30000` | **Bot:** a HardVen quote older than this (sidecar `ts`) is treated as STALE → its book is cleared so no phantom arb can fire after a session drop. |
+| `BOOKMAKER_KEEPALIVE_SEC` | `180` | **Sidecar:** keep-alive ping interval (renews `__cf_bm` / login). |
+| `BOOKMAKER_RECOVER_COOLDOWN_SEC` | `45` | **Sidecar:** min seconds between session-recovery reloads. |
+| `BOOKMAKER_RECOVER_WAIT_SEC` | `8` | **Sidecar:** wait after a recovery reload for the managed challenge to clear. |
+| `BOOKMAKER_HEADLESS` | unset (headful) | Keep headful under Xvfb — `1` is more bot-detectable. |
+| `BOOKMAKER_CATALOG_SPORTS` / `BOOKMAKER_CATALOG_LEAGUES` | — | Limit catalog discovery to specific sports / force explicit league ids. |
+
+---
+
 ## Gotchas (all learned the hard way)
 
 - **Keep the machine awake.** Sleep drops the Kalshi WS and the bot shuts down (a feed exiting cancels everything). Disable sleep: `powercfg /change standby-timeout-ac 0`.
 - **uvicorn does NOT hot-reload Python.** Edited the adapter/parser? Restart the sidecar.
-- **Bookmaker session expires** (Cloudflare `cf_clearance`/`__cf_bm`, hours). When it does, the `H:` books go stale and `GetGameView`/odds 401/403 — **click into a match again** to refresh. The Kalshi side keeps running; the bot won't die from this.
+- **Bookmaker session expires** (Cloudflare `cf_clearance`/`__cf_bm`, hours). The sidecar now **auto-recovers**: a keep-alive ping every `BOOKMAKER_KEEPALIVE_SEC` keeps it warm, and any odds 401/403/429/5xx fires a cooldown-guarded page reload that re-clears the *managed* challenge and re-captures `rtqname` — no manual click needed for the common case. Only an **interactive** challenge (captcha) needs a human (VNC). The Kalshi side keeps running regardless.
+- **Stale HardVen quotes can't make phantom arbs anymore.** If the bookmaker side freezes (session dead, page mid-recovery), the sidecar re-serves the last quote with a frozen `ts`; the bot treats any quote older than `HARDVEN_QUOTE_MAX_AGE_MS` (30s) as stale and **clears that book** (logs `[HARDVEN] WARNING: N/M quotes STALE…`, then `…fresh again` on recovery). So a long run goes *quiet* during an outage instead of logging fat fakes — telemetry stays trustworthy. (Pre-2026-06-19 CSVs predate this fix and are poisoned.)
 - **`pairHard` overwrites `cross_pairs.json`** (fresh blanks) → re-run `pair_auto` after, every time.
 - **Fuzzy pairs are tagged `"fuzzy": true`** (MLB/WNBA/KBO/cricket team-name variants). They're fine for telemetry; the settlement back-test must validate them before any real-money M1.
 - **Telemetry only.** No orders are placed (`--telemetry`). "Open arbs" that sit open for tens of seconds on thin/obscure markets are usually stale-quote phantoms, not executable — observe, don't trust.

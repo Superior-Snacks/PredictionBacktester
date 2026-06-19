@@ -50,7 +50,10 @@ record ActiveWindow(
     bool     RestConfirmed = false,
     decimal  RestKalshiAsk = -1m,
     decimal  RestHardVenAsk   = -1m,
-    long     RestDelayMs   = -1
+    long     RestDelayMs   = -1,
+    string   OpenedBy      = "",   // which side's price move CREATED the arb: KALSHI / HARDVEN / BOTH / INITIAL
+    decimal  OpenKLeg      = -1m,  // the Kalshi leg price at open (for held/move comparison at close)
+    decimal  OpenPLeg      = -1m   // the HardVen leg price at open
 );
 
 record HypotheticalPosition(
@@ -84,6 +87,16 @@ public class CrossPlatformArbTelemetryStrategy
     private readonly Dictionary<string, ActiveWindow?> _activeWindows;
     private readonly ConcurrentDictionary<string, HypotheticalPosition?> _hypotheticalPositions = new();
     private readonly ConcurrentDictionary<string, (decimal Cost, string Type, decimal Depth)> _nearMiss = new();
+
+    // Per-pair last-seen leg asks + when each last CHANGED — to attribute which side opened/closed a window.
+    // Kalshi = fast WS side (ms); HardVen = slow ~9s poll. Updated under _windowLock on every evaluation.
+    private sealed class LegMoveState
+    {
+        public bool Primed;
+        public decimal KYes = -1m, KNo = -1m, PYes = -1m, PNo = -1m;
+        public DateTime KYesAt, KNoAt, PYesAt, PNoAt;
+    }
+    private readonly Dictionary<string, LegMoveState> _legMoves = new(StringComparer.Ordinal);
 
     // ── Fee model ─────────────────────────────────────────────────────────────
     // Kalshi: 0.07 × p × (1-p) per contract.
@@ -456,6 +469,21 @@ public class CrossPlatformArbTelemetryStrategy
 
         lock (_windowLock)
         {
+            // ── leg-movement attribution: record which of the 4 asks changed since this pair's last eval,
+            // and stamp the change time, so open/close can name the moving side and gauge book "hold". ──
+            DateTime evalNow = DateTime.UtcNow;
+            if (!_legMoves.TryGetValue(pair.PairId, out var lm)) { lm = new LegMoveState(); _legMoves[pair.PairId] = lm; }
+            bool primed = lm.Primed;
+            bool kYesMoved = primed && lm.KYes != kYesAsk;
+            bool kNoMoved  = primed && lm.KNo  != kNoAsk;
+            bool pYesMoved = primed && lm.PYes != pYesAsk;
+            bool pNoMoved  = primed && lm.PNo  != pNoAsk;
+            if (lm.KYes != kYesAsk) { lm.KYes = kYesAsk; lm.KYesAt = evalNow; }
+            if (lm.KNo  != kNoAsk)  { lm.KNo  = kNoAsk;  lm.KNoAt  = evalNow; }
+            if (lm.PYes != pYesAsk) { lm.PYes = pYesAsk; lm.PYesAt = evalNow; }
+            if (lm.PNo  != pNoAsk)  { lm.PNo  = pNoAsk;  lm.PNoAt  = evalNow; }
+            lm.Primed = true;
+
             var existing = _activeWindows[pair.PairId];
 
             if (isArb)
@@ -466,6 +494,13 @@ public class CrossPlatformArbTelemetryStrategy
                         ? (long)(DateTime.UtcNow - kYes.LastDeltaAt).TotalMilliseconds : -1;
                     long pAge = pYes.LastDeltaAt > DateTime.MinValue
                         ? (long)(DateTime.UtcNow - pYes.LastDeltaAt).TotalMilliseconds : -1;
+
+                    bool kOpenMoved = bestType == "K_YES_P_NO" ? kYesMoved : kNoMoved;
+                    bool pOpenMoved = bestType == "K_YES_P_NO" ? pNoMoved  : pYesMoved;
+                    string openedBy = !primed ? "INITIAL"
+                                    : (kOpenMoved && pOpenMoved) ? "BOTH"
+                                    : kOpenMoved ? "KALSHI"
+                                    : pOpenMoved ? "HARDVEN" : "OTHER";
 
                     var w = new ActiveWindow(
                         PairId:            pair.PairId,
@@ -489,7 +524,10 @@ public class CrossPlatformArbTelemetryStrategy
                         HardVenDropsAtOpen:   currentHardVenDrops,
                         DaysToSettlement:  daysToSettle,
                         AprHoldToSettle:   aprHoldSettle,
-                        UpdateCount:       1
+                        UpdateCount:       1,
+                        OpenedBy:          openedBy,
+                        OpenKLeg:          kLegPrice,
+                        OpenPLeg:          pLegPrice
                     );
                     _activeWindows[pair.PairId] = w;
                     DebugLog.Discovery($"EvaluatePair {pair.Label}: ARB OPEN {bestType} net={bestNet:0.0000} depth={bestDepth:0.0} kAge={kAge}ms pAge={pAge}ms");
@@ -516,8 +554,18 @@ public class CrossPlatformArbTelemetryStrategy
             }
             else if (existing != null)
             {
-                DebugLog.Discovery($"EvaluatePair {pair.Label}: ARB CLOSE — net={bestNet:0.0000} above threshold, was open {(DateTime.UtcNow - existing.StartTime).TotalMilliseconds:0}ms");
-                CloseWindow(pair.PairId, existing, DateTime.UtcNow, "PRICE");
+                bool kWinMoved = existing.ArbType == "K_YES_P_NO" ? kYesMoved : kNoMoved;
+                bool pWinMoved = existing.ArbType == "K_YES_P_NO" ? pNoMoved  : pYesMoved;
+                string closedSide = (kWinMoved && pWinMoved) ? "BOTH" : kWinMoved ? "KALSHI"
+                                  : pWinMoved ? "HARDVEN" : "NEITHER";
+                DateTime kAt = existing.ArbType == "K_YES_P_NO" ? lm.KYesAt : lm.KNoAt;
+                DateTime pAt = existing.ArbType == "K_YES_P_NO" ? lm.PNoAt  : lm.PYesAt;
+                long kLegAgeMs = (long)(evalNow - kAt).TotalMilliseconds;
+                long pLegAgeMs = (long)(evalNow - pAt).TotalMilliseconds;
+                decimal closePLeg = existing.ArbType == "K_YES_P_NO" ? pNoAsk : pYesAsk;
+                bool pHeld = existing.OpenPLeg >= 0m && closePLeg == existing.OpenPLeg;   // book never moved
+                DebugLog.Discovery($"EvaluatePair {pair.Label}: ARB CLOSE — net={bestNet:0.0000} above threshold, closedBySide={closedSide} bookHeld={pHeld}, was open {(DateTime.UtcNow - existing.StartTime).TotalMilliseconds:0}ms");
+                CloseWindow(pair.PairId, existing, DateTime.UtcNow, "PRICE", closedSide, kLegAgeMs, pLegAgeMs, pHeld);
                 _activeWindows[pair.PairId] = null;
             }
         }
@@ -582,7 +630,8 @@ public class CrossPlatformArbTelemetryStrategy
     }
 
     // NOTE: must be called while holding _windowLock
-    private void CloseWindow(string pairId, ActiveWindow w, DateTime endTime, string closedBy)
+    private void CloseWindow(string pairId, ActiveWindow w, DateTime endTime, string closedBy,
+        string closedSide = "", long kLegAgeMs = -1, long pLegAgeMs = -1, bool pHeld = false)
     {
         long durationMs = (long)(endTime - w.StartTime).TotalMilliseconds;
         if (durationMs < 5) return;
@@ -601,9 +650,14 @@ public class CrossPlatformArbTelemetryStrategy
                         || (Volatile.Read(ref _hardvenWsDrops)   > w.HardVenDropsAtOpen);
 
         string aprStr = w.AprHoldToSettle >= 0m ? $" APR={w.AprHoldToSettle:P0}" : "";
+        string moveStr = "";
+        if (closedBy == "PRICE" && closedSide.Length > 0)
+            moveStr = closedSide == "KALSHI" && pHeld
+                ? $" by KALSHI (book HELD {pLegAgeMs}ms -> CAPTURABLE)"
+                : $" by {closedSide}" + (pHeld ? " (book held)" : "");
         Console.WriteLine($"[CROSS ARB CLOSE] {pair.Label} | {w.ArbType} | {durationMs}ms | " +
                           $"gross=${w.BestGrossCost:0.0000} fees=${fees:0.0000} profit/share=${profit:0.0000} | " +
-                          $"updates={w.UpdateCount} closedBy={closedBy}{aprStr}");
+                          $"opened={w.OpenedBy} closedBy={closedBy}{moveStr} | updates={w.UpdateCount}{aprStr}");
 
         string restKalshi = w.RestKalshiAsk >= 0 ? w.RestKalshiAsk.ToString("0.0000") : "";
         string restHardVen   = w.RestHardVenAsk   >= 0 ? w.RestHardVenAsk.ToString("0.0000")   : "";
@@ -648,7 +702,12 @@ public class CrossPlatformArbTelemetryStrategy
             w.RestConfirmed ? "1" : "0",
             restKalshi,
             restHardVen,
-            restDelay
+            restDelay,
+            w.OpenedBy,
+            closedBy == "PRICE" ? closedSide : "",
+            kLegAgeMs >= 0 ? kLegAgeMs.ToString() : "",
+            pLegAgeMs >= 0 ? pLegAgeMs.ToString() : "",
+            (closedBy == "PRICE" && pHeld) ? "1" : "0"
         );
 
         EnqueueCsvRow(row);
@@ -691,7 +750,8 @@ public class CrossPlatformArbTelemetryStrategy
                 "KalshiWsDropsAtOpen,HardVenWsDropsAtOpen,DropDuringWindow," +
                 "UpdateCount,ClosedBy," +
                 "DaysToSettlement,AprHoldToSettle," +
-                "RestChecked,RestConfirmed,RestKalshiAsk,RestHardVenAsk,RestDelayMs";
+                "RestChecked,RestConfirmed,RestKalshiAsk,RestHardVenAsk,RestDelayMs," +
+                "OpenedBy,ClosedBySide,KalshiLegAgeMsAtClose,HardVenLegAgeMsAtClose,HardVenLegHeld";
             _csvChannel.Writer.TryWrite(header);
         }
         _csvChannel.Writer.TryWrite(row);

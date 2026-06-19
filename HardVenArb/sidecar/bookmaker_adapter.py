@@ -35,7 +35,8 @@ import time
 from typing import Optional
 
 from book_adapter import BookAdapter, BetResult, CatalogEntry, Selection
-from bookmaker_gameview import parse_gameview, parse_leagues, parse_schedule
+from bookmaker_gameview import (parse_gameview, parse_leagues, parse_schedule,
+                                _primary_ml_line, _is_tradeable)
 
 BASE_URL = os.environ.get("BOOKMAKER_BASE_URL", "https://be.bookmaker.eu")
 GAMEVIEW_URL = "https://be.bookmaker.eu/gateway/BetslipProxy.aspx/GetGameView"
@@ -108,15 +109,30 @@ class BookmakerAdapter(BookAdapter):
         self._ctx = None
         self._page = None
         self._rtqname: Optional[str] = None   # captured from the site's own traffic; required by GetGameView
+        # ── unattended session keep-alive + auto-recovery (Cloudflare / login expiry) ──
+        self._recover_lock = asyncio.Lock()
+        self._recover_cooldown = float(os.environ.get("BOOKMAKER_RECOVER_COOLDOWN_SEC", "45"))
+        self._last_recover = 0.0
+        self._recover_task: Optional[asyncio.Task] = None
+        self._keepalive_task: Optional[asyncio.Task] = None
+        # ── live-market observability: capture raw fields when an in-play market locks/unlocks ──
+        self._live_debug = os.environ.get("BOOKMAKER_LIVE_DEBUG") == "1"
+        self._live_debug_path = f"live_debug_{int(time.time())}.jsonl"
+        self._live_last_sig: dict = {}
 
     # ── session lifecycle ──────────────────────────────────────────────────────
     async def startup(self) -> None:
         await self._start_browser()
+        self._keepalive_task = asyncio.create_task(self._keepalive_loop())
         print("[BOOKMAKER] ready. Odds via bulk GetSchedule polling (selection id = '<GameId>:<LeagueId>:H|V').\n"
               "[BOOKMAKER] >>> click into ANY match in the window once: it seeds the 'rtqname' session header "
-              "and sets a deep referer, both of which the BetslipProxy calls require.")
+              "and sets a deep referer, both of which the BetslipProxy calls require.\n"
+              "[BOOKMAKER] keep-alive + auto-recovery armed (reloads the session on Cloudflare/login expiry).")
 
     async def shutdown(self) -> None:
+        for task in (self._keepalive_task, self._recover_task):
+            if task and not task.done():
+                task.cancel()
         # The user closing the window mid-run makes close() raise "Connection closed" — swallow it.
         if self._ctx:
             try:
@@ -138,6 +154,57 @@ class BookmakerAdapter(BookAdapter):
         if q and q != self._rtqname:
             self._rtqname = q
             print(f"[BOOKMAKER] captured rtqname (…{q[-12:]}) — odds polling enabled.")
+
+    # ── unattended keep-alive + auto-recovery ───────────────────────────────────
+    def _trigger_recovery(self, reason: str) -> None:
+        """Fire-and-forget a session reload (deduped + cooldown-guarded) so the failing odds call returns
+        immediately; the NEXT poll benefits once recovery completes. Non-blocking by design."""
+        if self._recover_task and not self._recover_task.done():
+            return
+        self._recover_task = asyncio.create_task(self._recover(reason))
+
+    async def _recover(self, reason: str) -> None:
+        """Reload be.bookmaker.eu in the real browser so Cloudflare's MANAGED challenge re-clears and the
+        session cookies refresh; rtqname re-captures from the site's own traffic on navigation. NOTE: an
+        INTERACTIVE challenge (checkbox/captcha) cannot be auto-solved — that still needs a human (VNC)."""
+        if time.time() - self._last_recover < self._recover_cooldown:
+            return
+        async with self._recover_lock:
+            if time.time() - self._last_recover < self._recover_cooldown:
+                return
+            self._last_recover = time.time()
+            if not self._page:
+                return
+            print(f"[BOOKMAKER] session recovery: reloading {BASE_URL} ({reason})…")
+            try:
+                await self._page.goto(BASE_URL, wait_until="domcontentloaded", timeout=60_000)
+                # let real Chrome run Cloudflare's JS managed challenge + the SPA's own API calls (which
+                # re-emit the rtqname header we sniff in _on_request)
+                await self._page.wait_for_timeout(
+                    int(float(os.environ.get("BOOKMAKER_RECOVER_WAIT_SEC", "8")) * 1000))
+                ok = "ok" if self._rtqname else "NOT captured — may need a manual click / VNC"
+                print(f"[BOOKMAKER] session recovery done (rtqname {ok}).")
+            except Exception as ex:
+                print(f"[BOOKMAKER] session recovery failed: {ex}")
+
+    async def _keepalive_loop(self) -> None:
+        """Periodic light same-origin request to keep __cf_bm / the login session warm so it rarely expires;
+        if the ping is blocked, proactively recover. Interval via BOOKMAKER_KEEPALIVE_SEC (default 180)."""
+        interval = float(os.environ.get("BOOKMAKER_KEEPALIVE_SEC", "180"))
+        while True:
+            try:
+                await asyncio.sleep(interval)
+            except asyncio.CancelledError:
+                break
+            if not self._page:
+                continue
+            try:
+                status = await self._page.evaluate(
+                    "() => fetch('/', {credentials:'include', cache:'no-store'}).then(r => r.status).catch(() => 0)")
+            except Exception:
+                status = 0
+            if not (isinstance(status, int) and 200 <= status < 400):
+                self._trigger_recovery(f"keepalive status={status}")
 
     # ── odds (bulk: ONE GetSchedule covers all requested leagues) ───────────────
     @staticmethod
@@ -165,10 +232,45 @@ class BookmakerAdapter(BookAdapter):
             self._sched_last_fetch = time.time()
             if not data:
                 return
+            if self._live_debug:
+                self._capture_live_debug(data)
             now = time.time()
             for e in parse_schedule(data, pre_match_only=False).values():   # observe live too (telemetry)
                 self._cache_entry(e, now)
             self._sched_covered = set(leagues)
+
+    def _capture_live_debug(self, data: dict) -> None:
+        """OBSERVABILITY (BOOKMAKER_LIVE_DEBUG=1): dump every LIVE main market's raw SCALAR fields on change,
+        so we can see which field bookmaker.eu flips when an in-play market locks/unlocks (cricket suspends
+        after each ball/wicket). _is_tradeable only watches MoneyLineStatus/MarketsClosed/FreezeMoneyLine; if
+        a lock slips through, diff a `tradeable=true` record against the locked one in live_debug_*.jsonl to
+        find the real lock field, then add it to _is_tradeable so the book goes empty (no phantom arb)."""
+        scalar = (str, int, float, bool, type(None))
+        leagues = (((data or {}).get("Schedule") or {}).get("Data") or {}).get("Leagues") or {}
+        for league in leagues.get("League") or []:
+            for dg in league.get("dateGroup") or []:
+                for g in dg.get("game") or []:
+                    idgm = g.get("idgm")
+                    if not idgm or idgm != g.get("famGame") or not g.get("LiveGame"):
+                        continue
+                    line = _primary_ml_line(g) or {}
+                    gkeys = {k: v for k, v in g.items() if isinstance(v, scalar)}
+                    lkeys = {k: v for k, v in line.items() if isinstance(v, scalar)}
+                    sig = json.dumps({"g": gkeys, "l": lkeys}, sort_keys=True, default=str)
+                    if self._live_last_sig.get(idgm) == sig:
+                        continue   # unchanged since last poll — only log transitions
+                    self._live_last_sig[idgm] = sig
+                    rec = {"ts": round(time.time(), 3), "idgm": idgm,
+                           "event": f"{g.get('htm','')} vs {g.get('vtm','')}",
+                           "tradeable": _is_tradeable(g), "game": gkeys, "line": lkeys}
+                    try:
+                        with open(self._live_debug_path, "a", encoding="utf-8") as f:
+                            f.write(json.dumps(rec, default=str) + "\n")
+                    except Exception:
+                        pass
+                    print(f"[BOOKMAKER LIVE] {rec['event']}  tradeable={rec['tradeable']}  "
+                          f"MLS={g.get('MoneyLineStatus')} Freeze={g.get('FreezeMoneyLine')} "
+                          f"Closed={g.get('MarketsClosed')}  odds={line.get('hoddst')}/{line.get('voddst')}")
 
     def _cache_entry(self, e: dict, now: float) -> None:
         """Fold one parse entry into the cache, keyed '<idgm>:<idlg>:side'."""
@@ -193,10 +295,13 @@ class BookmakerAdapter(BookAdapter):
             res = await self._page.evaluate(_GAMEVIEW_JS, {"url": url, "rtqname": self._rtqname, "body": body})
         except Exception as ex:
             print(f"[BOOKMAKER] {label} fetch error: {ex}")
+            self._trigger_recovery(f"{label} evaluate error")
             return None
         status, text = res.get("status"), res.get("text") or ""
         if status != 200:
             print(f"[BOOKMAKER] {label} HTTP {status} (logged in? Cloudflare?) body[:120]={text[:120]!r}")
+            if status in (401, 403, 429) or (isinstance(status, int) and status >= 500):
+                self._trigger_recovery(f"{label} HTTP {status}")
             return None
         try:
             data = json.loads(text)
