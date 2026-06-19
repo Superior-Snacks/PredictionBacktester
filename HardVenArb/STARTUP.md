@@ -77,42 +77,94 @@ python pairHard.py ; python sidecar/pair_auto.py --fuzzy --write
 
 ---
 
-## Running unattended on a Linux server (tmux)
+## Running unattended on a Google Cloud Ubuntu server (step by step)
 
 The C# bot is portable (.NET 10, Kalshi side is just HTTP/WS); the **sidecar** needs real Chrome under a
-virtual display. The bookmaker session is **IP + fingerprint bound**, so the datacenter IP must do its own
-one-time login (home cookies won't validate here) and will draw more Cloudflare challenges than home.
+virtual display (Xvfb). The bookmaker session is **IP + fingerprint bound**, so the server logs in on its
+OWN IP (home cookies won't validate). **A GCP IP is a datacenter IP — Cloudflare/bookmaker.eu are harsher
+on those**, so Step 1 is a go/no-go test; don't do the rest until it passes.
 
-**One-time server setup**
-```bash
-sudo apt install -y xvfb x11vnc                       # virtual display + VNC for the one-time login
-# install Google Chrome (the channel="chrome" the adapter prefers); bundled chromium is more bot-blocked
-python -m pip install fastapi "uvicorn[standard]" httpx websockets playwright rapidfuzz
-playwright install chromium                           # fallback browser only
-```
+**VM:** Ubuntu 22.04/24.04 LTS, ≥2 vCPU, **≥4 GB RAM** (Chrome is hungry), ≥20 GB disk. Everything runs on
+`localhost` — do **NOT** open ports 8787 or 5900 to the internet; reach them via SSH tunnels only.
 
-**One-time login (seed `.bookmaker_profile` on the server's IP)**
+### 1. Go/no-go: can the server even log in?  (do this FIRST)
 ```bash
-Xvfb :99 -screen 0 1400x900x24 &
+sudo apt update && sudo apt install -y xvfb x11vnc python3-pip git tmux
+wget https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+sudo apt install -y ./google-chrome-stable_current_amd64.deb
+python3 -m pip install playwright && python3 -m playwright install-deps
+Xvfb :99 -screen 0 1400x900x24 &      # virtual display
 export DISPLAY=:99
-x11vnc -display :99 -localhost -nopw -bg              # SSH-tunnel 5900, VNC in
-cd HardVenArb/sidecar
-HARDVEN_BOOK=bookmaker python -m uvicorn app:app --port 8787   # Chrome opens on :99 → VNC in,
-#   log in / clear Cloudflare / click a match once. The profile remembers it across restarts.
+x11vnc -display :99 -localhost -nopw -forever -bg     # VNC server (localhost only)
+google-chrome --user-data-dir=$HOME/.bmtest https://be.bookmaker.eu &
+```
+From your **local machine**: `ssh -L 5900:localhost:5900 USER@SERVER_IP` then point a VNC viewer at
+`localhost:5900`. Try to load the site and log in.
+- **Loads + logs in** → proceed. **Perma-challenge / blocked / "verify your location"** → bookmaker.eu is
+  rejecting the GCP IP; stop here and use the split setup (sidecar at home, bot on server) instead.
+
+### 2. Install .NET 10 SDK
+```bash
+wget https://dot.net/v1/dotnet-install.sh -O dotnet-install.sh && chmod +x dotnet-install.sh
+./dotnet-install.sh --channel 10.0
+echo 'export PATH="$HOME/.dotnet:$PATH"' >> ~/.bashrc && export PATH="$HOME/.dotnet:$PATH"
+dotnet --version
 ```
 
-**Normal unattended run (tmux, two panes)**
+### 3. Get the code + credentials
+```bash
+git clone <your-repo-url> PredictionBacktester && cd PredictionBacktester
+# Kalshi creds — scp your RSA key over securely (NOT committed), then point .env at it:
+#   (from local)  scp kalshi_key.pem USER@SERVER_IP:~/PredictionBacktester/
+chmod 600 kalshi_key.pem
+cat > .env <<'EOF'
+KALSHI_API_KEY_ID=your-key-id
+KALSHI_PRIVATE_KEY_PATH=/home/USER/PredictionBacktester/kalshi_key.pem
+BOOKMAKER_AUTOLOGIN=1
+# optional explicit creds if Chrome autofill doesn't persist on the server profile:
+# BOOKMAKER_USERNAME=...
+# BOOKMAKER_PASSWORD=...
+EOF
+```
+
+### 4. Python sidecar deps
+```bash
+cd HardVenArb/sidecar
+python3 -m pip install fastapi "uvicorn[standard]" httpx websockets playwright rapidfuzz requests
+python3 -m playwright install chromium          # fallback browser only; we use channel="chrome"
+```
+
+### 5. Build the bot
+```bash
+cd ~/PredictionBacktester && dotnet build HardVenArb/HardVenArb.csproj   # expect 0 errors
+```
+
+### 6. One-time real login (seed `.bookmaker_profile` on the server)
+```bash
+export DISPLAY=:99                               # the Xvfb from step 1 (restart it if you rebooted)
+cd ~/PredictionBacktester/HardVenArb/sidecar
+HARDVEN_BOOK=bookmaker python3 -m uvicorn app:app --port 8787
+```
+VNC in (SSH tunnel from step 1). A real Chrome opens → **log in, let Chrome SAVE the password** (so
+`BOOKMAKER_AUTOLOGIN` autofill works later), clear any Cloudflare check, click into one match (seeds
+`rtqname`). Wait for `[BOOKMAKER] captured rtqname …`. Ctrl-C — the profile now remembers it.
+
+### 7. Run unattended in tmux
 ```bash
 tmux new -s hardven
-# pane 1 — sidecar under the virtual display:
-cd HardVenArb/sidecar && HARDVEN_BOOK=bookmaker DISPLAY=:99 xvfb-run -a python -m uvicorn app:app --port 8787
-# pane 2 — pairs + bot:
-cd HardVenArb && python pairHard.py && python sidecar/pair_auto.py --fuzzy --write
-dotnet run --project HardVenArb -- --telemetry
-# Ctrl-b d to detach; the run survives logout/SSH close.
+# pane 1 — sidecar under Xvfb (auto-allocates a display; profile carries the login):
+cd ~/PredictionBacktester/HardVenArb/sidecar
+HARDVEN_BOOK=bookmaker BOOKMAKER_AUTOLOGIN=1 xvfb-run -a python3 -m uvicorn app:app --port 8787
+# Ctrl-b % to split → pane 2 — pairs + bot:
+cd ~/PredictionBacktester/HardVenArb
+python3 pairHard.py && python3 sidecar/pair_auto.py --fuzzy --write
+dotnet run --project HardVenArb -- --telemetry          # add --exclude tennis etc. to taste
+# Ctrl-b d to detach. Survives logout/SSH close. `tmux attach -t hardven` to check on it.
 ```
-The sidecar now **keeps the session warm and auto-recovers** (see Gotchas) — but an *interactive* Cloudflare
-challenge (captcha) still needs a human: VNC in and clear it once.
+
+GCP VMs don't sleep, so the Windows "keep awake" gotcha is gone. The sidecar keeps the session warm
+(mouse-activity + "Stay connected") and auto-recovers Cloudflare; an *interactive* captcha still needs a
+VNC nudge. CSV telemetry lands in `~/PredictionBacktester/CrossArbTelemetry_*.csv` — `scp` it home to analyze.
 
 ## Tuning knobs (env)
 
