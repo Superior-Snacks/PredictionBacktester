@@ -140,6 +140,34 @@ bool singleEntry = args.Contains("--single-entry");
 // --log: capture all console output for failed executions and append to error_log.txt
 bool logErrors = args.Contains("--log");
 
+// --exclude tennis,cricket,...  : skip pairs whose Kalshi ticker matches these sports/series (cleaner
+// telemetry). Accepts friendly sport names (via the alias map) or any raw ticker substring (e.g. KXATP).
+var excludeSubs = new List<string>();
+int excludeIdx = Array.IndexOf(args, "--exclude");
+if (excludeIdx >= 0 && excludeIdx + 1 < args.Length)
+{
+    var sportAliases = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
+    {
+        ["tennis"]     = new[] { "ATPMATCH", "WTAMATCH", "ITFMATCH", "ITFWMATCH", "ATPCHALLENGERMATCH", "WTACHALLENGERMATCH" },
+        ["baseball"]   = new[] { "MLBGAME", "KBOGAME", "NPBGAME" },
+        ["basketball"] = new[] { "NBAGAME", "WNBAGAME", "ACBGAME", "BBLGAME", "BSLGAME", "NCAABBGAME", "BIG3GAME" },
+        ["cricket"]    = new[] { "T20MATCH", "WT20MATCH", "ODIMATCH", "TESTMATCH", "COUNTYCHAMPMATCH" },
+        ["soccer"]     = new[] { "WCGAME", "USLGAME", "USLCUPGAME", "LALIGA2GAME", "CHLLDPGAME", "BOLPDIVGAME" },
+        ["football"]   = new[] { "NFLGAME", "NCAAFGAME", "CFLGAME" },
+        ["afl"]        = new[] { "AFLGAME" },
+        ["boxing"]     = new[] { "BOXING" },
+        ["ufc"]        = new[] { "UFCFIGHT" },
+        ["mma"]        = new[] { "UFCFIGHT" },
+    };
+    foreach (var term in args[excludeIdx + 1].Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        if (sportAliases.TryGetValue(term, out var subs)) excludeSubs.AddRange(subs);
+        else excludeSubs.Add(term.ToUpperInvariant());
+}
+bool IsExcludedTicker(string ticker) =>
+    excludeSubs.Count > 0 && excludeSubs.Any(((ticker ?? "").ToUpperInvariant()).Contains);
+if (excludeSubs.Count > 0)
+    Console.WriteLine($"[CONFIG] --exclude active — skipping tickers containing: {string.Join(", ", excludeSubs)}");
+
 // --wN: rolling execution window — only execute arbs whose Kalshi close date is within N weeks of today.
 // Evaluated live in the executor (not a startup filter), so the window rolls forward each day and far-out
 // pairs become eligible as they approach. 0 = no window (all dates eligible).
@@ -245,9 +273,11 @@ if (File.Exists(manualPath))
     try
     {
         using var manDoc = JsonDocument.Parse(File.ReadAllText(manualPath));
+        int excludedCount = 0;
         foreach (var el in manDoc.RootElement.EnumerateArray())
         {
             string kTicker  = el.TryGetProperty("kalshi_ticker",  out var kt)  ? (kt.GetString()  ?? "") : "";
+            if (IsExcludedTicker(kTicker)) { excludedCount++; continue; }
             string yesToken = el.TryGetProperty("hardven_yes_token", out var yt)  ? (yt.GetString()  ?? "") : "";
             string noToken  = el.TryGetProperty("hardven_no_token",  out var nt)  ? (nt.GetString()  ?? "") : "";
             string label    = el.TryGetProperty("label",          out var lb)  ? (lb.GetString()  ?? "") : kTicker;
@@ -264,7 +294,8 @@ if (File.Exists(manualPath))
                 manualPairs.Add(new CrossPair(pairId, label, kTicker, yesToken, noToken, eventId, settlementDate, isNegRisk, hardvenMinSize, threeWay));
             }
         }
-        Console.WriteLine($"[CONFIG] {manualPairs.Count} manual pair(s) loaded from cross_pairs.json");
+        Console.WriteLine($"[CONFIG] {manualPairs.Count} manual pair(s) loaded from cross_pairs.json"
+                          + (excludedCount > 0 ? $" ({excludedCount} skipped by --exclude)" : ""));
     }
     catch (Exception ex)
     {
@@ -713,6 +744,7 @@ _ = Task.Run(async () =>
             foreach (var el in doc.RootElement.EnumerateArray())
             {
                 string kTicker  = el.TryGetProperty("kalshi_ticker",  out var kt)  ? (kt.GetString()  ?? "") : "";
+                if (IsExcludedTicker(kTicker)) continue;
                 string yesToken = el.TryGetProperty("hardven_yes_token", out var yt)  ? (yt.GetString()  ?? "") : "";
                 string noToken  = el.TryGetProperty("hardven_no_token",  out var nt)  ? (nt.GetString()  ?? "") : "";
                 string label    = el.TryGetProperty("label",          out var lb)  ? (lb.GetString()  ?? "") : kTicker;

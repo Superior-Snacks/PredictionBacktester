@@ -115,6 +115,7 @@ class BookmakerAdapter(BookAdapter):
         self._last_recover = 0.0
         self._recover_task: Optional[asyncio.Task] = None
         self._keepalive_task: Optional[asyncio.Task] = None
+        self._autologin_fails = 0
         # ── live-market observability: capture raw fields when an in-play market locks/unlocks ──
         self._live_debug = os.environ.get("BOOKMAKER_LIVE_DEBUG") == "1"
         self._live_debug_path = f"live_debug_{int(time.time())}.jsonl"
@@ -182,10 +183,67 @@ class BookmakerAdapter(BookAdapter):
                 # re-emit the rtqname header we sniff in _on_request)
                 await self._page.wait_for_timeout(
                     int(float(os.environ.get("BOOKMAKER_RECOVER_WAIT_SEC", "8")) * 1000))
+                # Distinguish a LOGIN-session expiry (redirect to the login form) from a Cloudflare challenge —
+                # recovery can clear Cloudflare but CANNOT re-enter credentials.
+                if await self._looks_like_login():
+                    print("[BOOKMAKER] *** LOGIN REQUIRED *** — the ACCOUNT session expired (page is on the "
+                          "login form). Auto-recovery clears Cloudflare but cannot log in. Log in once in the "
+                          "window / via VNC, or set BOOKMAKER_USERNAME + BOOKMAKER_PASSWORD for auto-login.")
+                    await self._try_auto_login()
+                    return
                 ok = "ok" if self._rtqname else "NOT captured — may need a manual click / VNC"
                 print(f"[BOOKMAKER] session recovery done (rtqname {ok}).")
             except Exception as ex:
                 print(f"[BOOKMAKER] session recovery failed: {ex}")
+
+    async def _looks_like_login(self) -> bool:
+        """Heuristic: are we sitting on the login page (account session expired, not just a CF challenge)?"""
+        if not self._page:
+            return False
+        try:
+            if "login" in (self._page.url or "").lower():
+                return True
+            return await self._page.query_selector("input[type=password]") is not None
+        except Exception:
+            return False
+
+    async def _try_auto_login(self) -> None:
+        """Best-effort auto re-login IF BOOKMAKER_USERNAME/PASSWORD are set (else a no-op — a human logs in
+        via the window / VNC). Selectors default to generic ones and are overridable
+        (BOOKMAKER_LOGIN_USER_SEL / _PASS_SEL / _SUBMIT_SEL) since bookmaker.eu's form may differ. It will
+        NOT blind-submit to unknown fields, and DISABLES itself after 3 failures to avoid account lockout.
+        NOTE: cannot pass a login CAPTCHA / 2FA — if the site has one, unattended re-login isn't possible."""
+        user = os.environ.get("BOOKMAKER_USERNAME")
+        pw = os.environ.get("BOOKMAKER_PASSWORD")
+        if not (user and pw) or not self._page:
+            return
+        if self._autologin_fails >= 3:
+            print("[BOOKMAKER] auto-login disabled after 3 failures (avoiding lockout) — log in manually.")
+            return
+        user_sel = os.environ.get("BOOKMAKER_LOGIN_USER_SEL", "input[type=email], input[type=text]")
+        pass_sel = os.environ.get("BOOKMAKER_LOGIN_PASS_SEL", "input[type=password]")
+        submit_sel = os.environ.get("BOOKMAKER_LOGIN_SUBMIT_SEL", "button[type=submit], input[type=submit]")
+        try:
+            usr = await self._page.query_selector(user_sel)
+            pwd = await self._page.query_selector(pass_sel)
+            if not (usr and pwd):
+                print("[BOOKMAKER] auto-login: login fields not found — leaving it for a manual login "
+                      "(set BOOKMAKER_LOGIN_USER_SEL / _PASS_SEL to the real selectors).")
+                return
+            await usr.fill(user)
+            await pwd.fill(pw)
+            btn = await self._page.query_selector(submit_sel)
+            await (btn.click() if btn else pwd.press("Enter"))
+            await self._page.wait_for_timeout(6000)
+            if await self._looks_like_login():
+                self._autologin_fails += 1
+                print(f"[BOOKMAKER] auto-login failed ({self._autologin_fails}/3) — check creds / selectors / captcha.")
+            else:
+                self._autologin_fails = 0
+                print("[BOOKMAKER] auto-login succeeded — session restored.")
+        except Exception as ex:
+            self._autologin_fails += 1
+            print(f"[BOOKMAKER] auto-login error ({self._autologin_fails}/3): {ex}")
 
     async def _keepalive_loop(self) -> None:
         """Periodic light same-origin request to keep __cf_bm / the login session warm so it rarely expires;
