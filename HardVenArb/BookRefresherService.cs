@@ -19,8 +19,6 @@ public class BookRefresherService
 {
     private readonly ConcurrentDictionary<string, LocalOrderBook> _books;
     private readonly KalshiOrderClient _kalshi;
-    private readonly HttpClient _http;
-    private readonly SemaphoreSlim _hardvenSem = new(4, 4); // HardVen parallel limit
 
     // Refresh any book whose last delta is older than this.
     // LocalOrderBook.IsStale() defaults to 120s — keep a 20s buffer so books
@@ -35,28 +33,12 @@ public class BookRefresherService
     // Kalshi: flag a divergence if REST ask differs from WS ask by more than this
     private const decimal KalshiPriceTolerance = 0.05m;
 
-    private const string HardVenBookUrl = "https://clob.hardven.com/book?token_id=";
-
     public BookRefresherService(
         ConcurrentDictionary<string, LocalOrderBook> books,
-        KalshiOrderClient kalshi,
-        string? socksProxy = null)
+        KalshiOrderClient kalshi)
     {
         _books  = books;
         _kalshi = kalshi;
-        if (!string.IsNullOrEmpty(socksProxy))
-        {
-            var handler = new HttpClientHandler
-            {
-                Proxy    = new System.Net.WebProxy(socksProxy),
-                UseProxy = true
-            };
-            _http = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(5) };
-        }
-        else
-        {
-            _http = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
-        }
     }
 
     public async Task RunAsync(CancellationToken ct)
@@ -67,7 +49,6 @@ public class BookRefresherService
             if (ct.IsCancellationRequested) break;
 
             var now = DateTime.UtcNow;
-            var hardvenTasks    = new List<Task>();
             var kalshiStale  = new List<(LocalOrderBook book, string ticker, DateTime lastDelta)>();
 
             foreach (var (key, book) in _books)
@@ -77,19 +58,13 @@ public class BookRefresherService
                 var age = now - book.LastDeltaAt;
                 if (age.TotalSeconds < RefreshAfterSeconds) continue;
 
-                if (key.StartsWith("H:", StringComparison.Ordinal))
-                {
-                    hardvenTasks.Add(RefreshHardVenBookAsync(book, key[2..], ct));
-                }
-                else if (key.StartsWith("K:", StringComparison.Ordinal) && !key.EndsWith("_NO"))
-                {
+                // Only Kalshi (WS) books go quiet and benefit from a REST nudge. HardVen ("H:") books are
+                // refreshed by HardVenWebsocketFeed's 9s sidecar poll; a quiet HardVen book means the sidecar
+                // has no quote for it (resolved/off-board, or cleared by the staleness gate), which a REST
+                // refresh can't fix — so skip it and let the strategy's stale guard close any open window.
+                if (key.StartsWith("K:", StringComparison.Ordinal) && !key.EndsWith("_NO"))
                     kalshiStale.Add((book, key[2..], book.LastDeltaAt));
-                }
             }
-
-            // HardVen: parallel (HardVen rate limits are lenient)
-            if (hardvenTasks.Count > 0)
-                await Task.WhenAll(hardvenTasks);
 
             // Kalshi: serial with inter-request delay, capped per cycle to avoid 429s.
             // Sort oldest-first so the most overdue books get priority.
@@ -104,7 +79,7 @@ public class BookRefresherService
                     await Task.Delay(KalshiIntervalMs, ct).ContinueWith(_ => { });
             }
 
-            int total = hardvenTasks.Count + kalshiCount;
+            int total = kalshiCount;
             int dead  = _books.Count(kv => kv.Value.IsDead);
 
             if (total > 0 || dead > 0)
@@ -118,49 +93,6 @@ public class BookRefresherService
                 Console.WriteLine($"[BOOK REFRESH] Refreshed {total} quiet book(s) via REST{kalshiNote}{deadNote}");
             }
         }
-    }
-
-    // ── HardVen: full snapshot clear+rebuild ───────────────────────────────
-
-    private async Task RefreshHardVenBookAsync(LocalOrderBook book, string tokenId, CancellationToken ct)
-    {
-        await _hardvenSem.WaitAsync(ct);
-        try
-        {
-            string json = await _http.GetStringAsync(HardVenBookUrl + tokenId, ct);
-            DebugLog.Books($"[HARDVEN BOOK] {json}");
-            using var doc = JsonDocument.Parse(json);
-            var root = doc.RootElement;
-
-            if (root.TryGetProperty("bids", out var bids) && root.TryGetProperty("asks", out var asks))
-            {
-                if (bids.GetArrayLength() > 0 || asks.GetArrayLength() > 0)
-                {
-                    book.ProcessBookUpdate(bids, asks);
-                    book.MarkDeltaReceived();
-                }
-                else
-                {
-                    // REST confirmed empty book — market resolved/halted; stop polling.
-                    // Dead flag resets on WS reconnect via ClearBook().
-                    book.MarkDead();
-                }
-            }
-        }
-        catch (OperationCanceledException) { }
-        catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
-        {
-            // Token no longer exists — market resolved or delisted. Stop polling.
-            book.MarkDead();
-            Console.WriteLine($"[BOOK DEAD] HardVen {tokenId}: 404 — market resolved/delisted, stopped polling");
-            DebugLog.Books($"RefreshHardVenBookAsync {tokenId}: 404 Not Found — marked dead");
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"[BOOK REFRESH WARN] HardVen {tokenId[..Math.Min(8, tokenId.Length)]}: {ApiErrorHelper.ClassifyHardVen(ex)}");
-            DebugLog.Books($"RefreshHardVenBookAsync {tokenId[..Math.Min(8, tokenId.Length)]}: {ex.GetType().Name}: {ex}");
-        }
-        finally { _hardvenSem.Release(); }
     }
 
     // ── Kalshi: verify top price; bump timestamp if valid ────────────────────

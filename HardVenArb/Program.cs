@@ -805,7 +805,7 @@ _ = Task.Run(async () =>
 });
 
 // ── Book refresher — keeps quiet books alive via periodic REST snapshots ──────
-var bookRefresher = new BookRefresherService(state.Books, orderClient, hardvenProxy);
+var bookRefresher = new BookRefresherService(state.Books, orderClient);
 _ = Task.Run(async () =>
 {
     try { await bookRefresher.RunAsync(cts.Token); }
