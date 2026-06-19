@@ -124,8 +124,9 @@ challenge (captcha) still needs a human: VNC in and clear it once.
 | `BOOKMAKER_RECOVER_WAIT_SEC` | `8` | **Sidecar:** wait after a recovery reload for the managed challenge to clear. |
 | `BOOKMAKER_HEADLESS` | unset (headful) | Keep headful under Xvfb — `1` is more bot-detectable. |
 | `BOOKMAKER_CATALOG_SPORTS` / `BOOKMAKER_CATALOG_LEAGUES` | — | Limit catalog discovery to specific sports / force explicit league ids. |
-| `BOOKMAKER_USERNAME` / `BOOKMAKER_PASSWORD` | — | **Sidecar:** if set, recovery attempts auto re-login when the ACCOUNT session expires (caps at 3 tries; can't pass a captcha/2FA). Unset = manual login via the window/VNC. |
-| `BOOKMAKER_LOGIN_USER_SEL` / `_PASS_SEL` / `_SUBMIT_SEL` | generic | **Sidecar:** CSS selectors for the login form, if the defaults don't match bookmaker.eu's form. |
+| `BOOKMAKER_AUTOLOGIN` | unset | **Sidecar:** `1` = if logged out anyway, re-login using Chrome's SAVED autofill (profile remembers it) — clicks the fields + presses Enter, no creds stored. The keep-alive already prevents the *inactivity* logout (trusted mouse activity + auto-clicking "Stay connected"); this is the fallback. |
+| `BOOKMAKER_USERNAME` / `BOOKMAKER_PASSWORD` | — | **Sidecar:** alternative to autofill — type these into the login form on re-login (caps at 3 tries). |
+| `BOOKMAKER_LOGIN_USER_SEL` / `_PASS_SEL` / `_SUBMIT_SEL` | bookmaker.eu | **Sidecar:** override the login-form selectors (defaults: `input[name=account]` / `input[name=password]` / Enter). |
 
 **Bot flag:** `--exclude tennis,cricket,…` skips pairs whose Kalshi ticker matches those sports (friendly names: tennis/baseball/basketball/cricket/soccer/football/afl/boxing/ufc — or any raw ticker substring like `KXATPMATCH`). For a cleaner telemetry run.
 

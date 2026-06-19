@@ -208,36 +208,50 @@ class BookmakerAdapter(BookAdapter):
             return False
 
     async def _try_auto_login(self) -> None:
-        """Best-effort auto re-login IF BOOKMAKER_USERNAME/PASSWORD are set (else a no-op — a human logs in
-        via the window / VNC). Selectors default to generic ones and are overridable
-        (BOOKMAKER_LOGIN_USER_SEL / _PASS_SEL / _SUBMIT_SEL) since bookmaker.eu's form may differ. It will
-        NOT blind-submit to unknown fields, and DISABLES itself after 3 failures to avoid account lockout.
-        NOTE: cannot pass a login CAPTCHA / 2FA — if the site has one, unattended re-login isn't possible."""
+        """Fallback re-login if the inactivity keep-alive failed and we got logged out anyway. bookmaker.eu's
+        form is `input[name=account]` + `input[name=password]`, submitted by pressing Enter (the manual
+        action). Two opt-in modes (default off, so we never submit unprompted):
+          - BOOKMAKER_AUTOLOGIN=1 → rely on Chrome's SAVED autofill (the profile remembers the login): click
+            the fields to commit autofill, then press Enter. No credentials stored anywhere.
+          - BOOKMAKER_USERNAME + BOOKMAKER_PASSWORD → type them explicitly.
+        Selectors overridable via BOOKMAKER_LOGIN_USER_SEL / _PASS_SEL / _SUBMIT_SEL. DISABLES after 3 fails
+        (lockout guard). No CAPTCHA/2FA seen on this form; if one appears it'll just fail and stop."""
+        autologin = os.environ.get("BOOKMAKER_AUTOLOGIN") == "1"
         user = os.environ.get("BOOKMAKER_USERNAME")
         pw = os.environ.get("BOOKMAKER_PASSWORD")
-        if not (user and pw) or not self._page:
+        if not self._page or not (autologin or (user and pw)):
             return
         if self._autologin_fails >= 3:
             print("[BOOKMAKER] auto-login disabled after 3 failures (avoiding lockout) — log in manually.")
             return
-        user_sel = os.environ.get("BOOKMAKER_LOGIN_USER_SEL", "input[type=email], input[type=text]")
-        pass_sel = os.environ.get("BOOKMAKER_LOGIN_PASS_SEL", "input[type=password]")
-        submit_sel = os.environ.get("BOOKMAKER_LOGIN_SUBMIT_SEL", "button[type=submit], input[type=submit]")
+        acc_sel = os.environ.get("BOOKMAKER_LOGIN_USER_SEL", "input[name=account]")
+        pass_sel = os.environ.get("BOOKMAKER_LOGIN_PASS_SEL", "input[name=password]")
+        submit_sel = os.environ.get("BOOKMAKER_LOGIN_SUBMIT_SEL")   # unset → press Enter on the password field
         try:
-            usr = await self._page.query_selector(user_sel)
+            acc = await self._page.query_selector(acc_sel)
             pwd = await self._page.query_selector(pass_sel)
-            if not (usr and pwd):
-                print("[BOOKMAKER] auto-login: login fields not found — leaving it for a manual login "
-                      "(set BOOKMAKER_LOGIN_USER_SEL / _PASS_SEL to the real selectors).")
+            if not pwd:
+                print("[BOOKMAKER] auto-login: password field not found — manual login needed.")
                 return
-            await usr.fill(user)
-            await pwd.fill(pw)
-            btn = await self._page.query_selector(submit_sel)
-            await (btn.click() if btn else pwd.press("Enter"))
+            if user and pw:
+                if acc:
+                    await acc.fill(user)
+                await pwd.fill(pw)
+            else:
+                # rely on Chrome's saved autofill: click the fields to commit it before submitting
+                if acc:
+                    await acc.click()
+                await pwd.click()
+            if submit_sel:
+                btn = await self._page.query_selector(submit_sel)
+                await (btn.click() if btn else pwd.press("Enter"))
+            else:
+                await pwd.press("Enter")   # submits the form — the manual "hit Enter"
             await self._page.wait_for_timeout(6000)
             if await self._looks_like_login():
                 self._autologin_fails += 1
-                print(f"[BOOKMAKER] auto-login failed ({self._autologin_fails}/3) — check creds / selectors / captcha.")
+                print(f"[BOOKMAKER] auto-login failed ({self._autologin_fails}/3) — autofill empty / captcha? "
+                      "set BOOKMAKER_USERNAME/PASSWORD or log in manually.")
             else:
                 self._autologin_fails = 0
                 print("[BOOKMAKER] auto-login succeeded — session restored.")
@@ -246,8 +260,11 @@ class BookmakerAdapter(BookAdapter):
             print(f"[BOOKMAKER] auto-login error ({self._autologin_fails}/3): {ex}")
 
     async def _keepalive_loop(self) -> None:
-        """Periodic light same-origin request to keep __cf_bm / the login session warm so it rarely expires;
-        if the ping is blocked, proactively recover. Interval via BOOKMAKER_KEEPALIVE_SEC (default 180)."""
+        """Keep the session alive. bookmaker.eu logs out on UI INACTIVITY (an Angular timer that listens to
+        mouse/keyboard, NOT our background odds XHR — which is why constant polling still got logged out). So
+        each tick we (1) generate a trusted UI gesture to reset that timer, (2) click 'Stay connected' if the
+        expiry modal is already up, (3) ping same-origin to keep Cloudflare warm + detect a hard logout.
+        Interval via BOOKMAKER_KEEPALIVE_SEC (default 180; keep it well under the site's inactivity timeout)."""
         interval = float(os.environ.get("BOOKMAKER_KEEPALIVE_SEC", "180"))
         while True:
             try:
@@ -256,6 +273,21 @@ class BookmakerAdapter(BookAdapter):
                 break
             if not self._page:
                 continue
+            # 1) trusted UI activity — resets the client-side inactivity timer (the actual fix)
+            try:
+                await self._page.mouse.move(5, 5)
+                await self._page.mouse.move(60, 60)
+            except Exception:
+                pass
+            # 2) if the "session about to expire" modal is showing, keep us connected
+            try:
+                btn = await self._page.query_selector("#modalLogout .btn-green")
+                if btn and await btn.is_visible():
+                    await btn.click()
+                    print("[BOOKMAKER] dismissed inactivity logout ('Stay connected').")
+            except Exception:
+                pass
+            # 3) keep Cloudflare/session warm + detect a hard logout
             try:
                 status = await self._page.evaluate(
                     "() => fetch('/', {credentials:'include', cache:'no-store'}).then(r => r.status).catch(() => 0)")
