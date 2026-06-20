@@ -453,12 +453,26 @@ var knownKalshiTickers = new HashSet<string>(kalshiSubscribeTickers, StringCompa
 var knownHardVenTokens    = new HashSet<string>(hardvenSubscribeTokens,    StringComparer.Ordinal);
 var knownPairIds       = new HashSet<string>(pairs.Select(p => p.PairId), StringComparer.Ordinal);
 
+// Survive a STRAY Ctrl+C/Break (the terminal/host can deliver one we didn't type, which was killing
+// unattended runs). A single signal is logged + IGNORED; a deliberate quit needs a SECOND within 3s.
+int ctrlCCount = 0;
+DateTime lastCtrlC = DateTime.MinValue;
 Console.CancelKeyPress += (_, e) =>
 {
-    e.Cancel = true;
-    Console.WriteLine($"[SIGNAL] Ctrl+C / Ctrl+Break received ({e.SpecialKey}) — initiating shutdown. " +
-                      "(If you didn't press it, the terminal/host delivered it — run detached or in tmux.)");
-    cts.Cancel();
+    e.Cancel = true;   // always prevent the default abrupt termination
+    var now = DateTime.UtcNow;
+    if ((now - lastCtrlC).TotalSeconds > 3) ctrlCCount = 0;
+    lastCtrlC = now;
+    if (++ctrlCCount >= 2)
+    {
+        Console.WriteLine($"[SIGNAL] Second Ctrl+C/Break ({e.SpecialKey}) within 3s — shutting down.");
+        cts.Cancel();
+    }
+    else
+    {
+        Console.WriteLine($"[SIGNAL] Ctrl+C/Break received ({e.SpecialKey}) — IGNORED. Press again within 3s to quit. " +
+                          "(If you didn't press it, the terminal/host delivered a stray signal — now harmless.)");
+    }
 };
 
 // ── Key toggles ────────────────────────────────────────────────────────────
