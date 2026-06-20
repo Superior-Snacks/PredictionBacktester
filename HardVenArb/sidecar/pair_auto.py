@@ -222,6 +222,74 @@ def index_catalog(selections: list[dict]) -> dict:
     return out
 
 
+def _fetch_implied(sidecar: str, tokens: set) -> dict:
+    """{selection_id: implied_price} for OPEN book selections, via the sidecar /odds (one batched call)."""
+    if not tokens:
+        return {}
+    try:
+        q = urllib.request.quote(",".join(tokens))
+        with urllib.request.urlopen(f"{sidecar.rstrip('/')}/odds?selections={q}", timeout=30) as r:
+            data = json.loads(r.read().decode("utf-8"))
+    except Exception as ex:
+        print(f"[PAIR] price-gate: could not fetch /odds ({ex}) — skipping price validation.")
+        return {}
+    out = {}
+    for sid, s in (data.get("selections") or {}).items():
+        ip = s.get("implied_price")
+        if s.get("status") == "open" and ip:
+            out[sid] = float(ip)
+    return out
+
+
+def price_validate(pairs: list[dict], sidecar: str, tol: float) -> tuple:
+    """PRICE-CONSISTENCY GATE. For each filled pair, the Kalshi-YES probability (kalshi_yes_price, from
+    pairHard) and the bookmaker yes-token's implied prob must AGREE on the favorite — both are P(the same
+    team). If they're COMPLEMENTS (book ≈ 1 − kalshi) the two sides are inverted → swap the tokens. If
+    NEITHER orientation fits within `tol`, the prices are unrelated → almost certainly the wrong game →
+    blank the pair. This catches the mispairs team-matching can't: inverted sides + wrong-game. (Near a
+    coin-flip the agree/invert distinction is ambiguous but the error is benign; the gate bites on lopsided
+    games, which is where inversions create the fat phantom 'arbs'.) Returns (consistent, inverted, rejected,
+    unvalidated)."""
+    tokens = {e[k] for e in pairs for k in ("hardven_yes_token", "hardven_no_token") if e.get(k)}
+    implied = _fetch_implied(sidecar, tokens)
+    consistent = inverted = rejected = unvalidated = 0
+    for e in pairs:
+        yt, nt = e.get("hardven_yes_token"), e.get("hardven_no_token")
+        ky = e.get("kalshi_yes_price")
+        if not (yt and nt):
+            continue
+        by = implied.get(yt)
+        if ky is None or by is None:
+            unvalidated += 1
+            continue
+        d_agree, d_invert = abs(ky - by), abs(ky - (1.0 - by))
+        tk = e.get("kalshi_ticker", "?")
+        if e.get("three_way"):
+            # 3-way: only the agree orientation is valid (no complement). Reject a gross mismatch.
+            if d_agree > tol:
+                print(f"[PAIR] PRICE-REJECT (3way) {tk}  kalshi_yes={ky:.2f} book_yes={by:.2f}  Δ{d_agree:.2f}>{tol}")
+                e["hardven_yes_token"] = e["hardven_no_token"] = ""
+                e.pop("fuzzy", None)
+                rejected += 1
+            else:
+                consistent += 1
+            continue
+        if min(d_agree, d_invert) > tol:
+            print(f"[PAIR] PRICE-REJECT {tk}  kalshi_yes={ky:.2f} book_yes={by:.2f}  "
+                  f"(agree Δ{d_agree:.2f} / invert Δ{d_invert:.2f} both >{tol}) — likely WRONG GAME")
+            e["hardven_yes_token"] = e["hardven_no_token"] = ""
+            e.pop("fuzzy", None)
+            rejected += 1
+        elif d_invert < d_agree:
+            e["hardven_yes_token"], e["hardven_no_token"] = nt, yt   # sides were inverted → swap
+            e["price_inverted_fixed"] = True
+            print(f"[PAIR] INVERTED-FIXED {tk}  swapped sides (kalshi_yes={ky:.2f}, book_yes {by:.2f}→{1-by:.2f})")
+            inverted += 1
+        else:
+            consistent += 1
+    return consistent, inverted, rejected, unvalidated
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--sidecar", default=os.environ.get("HARDVEN_SIDECAR_URL", "http://127.0.0.1:8787"))
@@ -232,6 +300,10 @@ def main() -> None:
                     help="enable fuzzy name-variant matching (auto-fills team-name variants; flags pairs 'fuzzy':true)")
     ap.add_argument("--fuzzy-threshold", type=int, default=85,
                     help="min per-team match score (0-100) — BOTH teams must clear it (default 85)")
+    ap.add_argument("--no-price-gate", action="store_true",
+                    help="skip the price-consistency gate (rejects wrong-game pairs + fixes inverted sides)")
+    ap.add_argument("--price-tol", type=float, default=0.25,
+                    help="price-gate tolerance 0-1: book vs Kalshi win-prob must agree within this (default 0.25)")
     args = ap.parse_args()
 
     book = index_catalog(fetch_catalog(args.sidecar))
@@ -301,9 +373,18 @@ def main() -> None:
     for u in unmatched:
         print(f"   UNMATCHED: {u}")
 
-    if args.write and filled:
+    # ── price-consistency gate: reject wrong-game pairs + fix inverted sides by live prices ──
+    gate = (0, 0, 0, 0)
+    if not args.no_price_gate:
+        gate = price_validate(pairs, args.sidecar, args.price_tol)
+        if any(gate):
+            print(f"[PAIR] price-gate (tol={args.price_tol}): {gate[0]} consistent | {gate[1]} inverted-fixed | "
+                  f"{gate[2]} wrong-game rejected | {gate[3]} unvalidated (no price)")
+
+    valid = sum(1 for e in pairs if e.get("hardven_yes_token") and e.get("hardven_no_token"))
+    if args.write and (filled or gate[1] or gate[2]):
         Path(args.pairs).write_text(json.dumps(pairs, indent=2), encoding="utf-8")
-        print(f"\n[PAIR] wrote {filled} filled pair(s) → {args.pairs}")
+        print(f"\n[PAIR] wrote {valid} filled pair(s) → {args.pairs}")
     elif not args.write:
         print("\n[PAIR] dry-run (no file written). Re-run with --write to save.")
 

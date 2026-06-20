@@ -114,7 +114,15 @@ public class HardVenWebsocketFeed
                     }
                 }
             }
-            catch (OperationCanceledException) { break; }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }  // real shutdown
+            catch (OperationCanceledException ex)
+            {
+                // HttpClient.Timeout (15s) throws TaskCanceledException : OperationCanceledException. That is
+                // NOT a shutdown — a slow sidecar response (during a Cloudflare recovery / page reload / heavy
+                // poll) must NOT exit the feed, because exiting cancels the WHOLE bot. Treat it as transient.
+                IsConnected = false;
+                DebugLog.Feed($"HardVenFeed poll timeout (sidecar slow, not a shutdown): {ex.Message}");
+            }
             catch (Exception ex)
             {
                 IsConnected = false;
@@ -122,7 +130,7 @@ public class HardVenWebsocketFeed
             }
 
             try { await Task.Delay(_pollIntervalMs, ct); }
-            catch (OperationCanceledException) { break; }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
         }
         IsConnected = false;
     }

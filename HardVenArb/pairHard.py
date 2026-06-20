@@ -118,6 +118,19 @@ def _close_date(market: dict):
     return None
 
 
+def _yes_price(m: dict):
+    """Kalshi YES probability (0-1) for the price-consistency gate: mid of yes_bid/yes_ask (cents) if both
+    present, else last_price; None if the market has no price yet. Lets pair_auto verify each pair's two
+    sides AGREE on the favorite (catches inverted sides + wrong-game mispairs)."""
+    yb, ya = m.get("yes_bid"), m.get("yes_ask")
+    if isinstance(yb, (int, float)) and isinstance(ya, (int, float)) and yb > 0 and ya > 0:
+        return round((yb + ya) / 200.0, 4)
+    lp = m.get("last_price")
+    if isinstance(lp, (int, float)) and lp > 0:
+        return round(lp / 100.0, 4)
+    return None
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--days", type=int, default=DEFAULT_MAX_DAYS_OUT,
@@ -166,6 +179,8 @@ def main() -> None:
                 "kalshi_outcome":    m.get("yes_sub_title") or m.get("subtitle") or "",
                 "event_id":          ev.get("event_ticker", ""),
                 "settlement_date":   close.date().isoformat(),
+                # P(this market's YES) — pair_auto's price gate checks the book side agrees on the favorite.
+                "kalshi_yes_price":  _yes_price(m),
                 "is_neg_risk":       False,   # sportsbook bets have no neg-risk concept
                 "hardven_min_size":  1.0,
                 # ── FILL FROM bookmaker.eu (see sidecar/README "Recon"); empty = bot skips this pair ──
