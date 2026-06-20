@@ -373,6 +373,10 @@ FodyWeavers.xsd
 # Generated CSV exports
 *.csv
 
+# Bookmaker capture/audit tapes (sidecar BOOKMAKER_AUDIT=1 / BOOKMAKER_LIVE_DEBUG=1)
+quote_audit_*.jsonl
+live_debug_*.jsonl
+
 # huge gz files
 *.gz
 *.json

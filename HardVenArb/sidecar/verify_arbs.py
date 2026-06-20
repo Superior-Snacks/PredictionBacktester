@@ -96,7 +96,7 @@ def main():
             r = json.loads(line)
             by_idgm[str(r.get("idgm"))].append(r)
 
-    rows = list(csv.DictReader(open(csv_path, encoding="utf-8")))
+    rows = list(csv.DictReader(open(csv_path, encoding="utf-8-sig")))   # utf-8-sig strips the CSV's BOM
     counts = defaultdict(int)
     for r in rows:
         label = r.get("Label", "")
@@ -110,16 +110,18 @@ def main():
             pleg = None
 
         flags = []
-        samples = by_idgm.get(idgm, []) if idgm else []
+        samples = sorted(by_idgm.get(idgm, []), key=lambda a: a.get("ts", 0)) if idgm else []
+        in_win = []
         if t0 is not None and t1 is not None and samples:
-            window = [a for a in samples if t0 - WINDOW_PAD <= a.get("ts", 0) <= t1 + WINDOW_PAD]
-        else:
-            window = []
+            during = [a for a in samples if t0 <= a.get("ts", 0) <= t1 + WINDOW_PAD]
+            before = [a for a in samples if a.get("ts", 0) <= t0]
+            # the audit logs ON CHANGE, so the book's state during the window is the last change at/before
+            # the window start (carry-in), plus any changes within the window.
+            in_win = ([before[-1]] if before else []) + during
 
-        if not window:
+        if not in_win:
             flags.append("NO_AUDIT")
         else:
-            in_win = [a for a in window if t0 <= a.get("ts", 0) <= t1] or window
             # MISPAIR — does the joined bookmaker game's teams match the Kalshi market?
             kt = _kalshi_teams(label)
             if not any(_teams_match(kt, a.get("htm", ""), a.get("vtm", "")) for a in in_win):
