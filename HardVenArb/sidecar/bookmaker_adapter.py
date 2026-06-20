@@ -36,7 +36,7 @@ from typing import Optional
 
 from book_adapter import BookAdapter, BetResult, CatalogEntry, Selection
 from bookmaker_gameview import (parse_gameview, parse_leagues, parse_schedule,
-                                _primary_ml_line, _is_tradeable)
+                                _primary_ml_line, _is_tradeable, parse_max_stake, american_to_decimal)
 
 BASE_URL = os.environ.get("BOOKMAKER_BASE_URL", "https://be.bookmaker.eu")
 GAMEVIEW_URL = "https://be.bookmaker.eu/gateway/BetslipProxy.aspx/GetGameView"
@@ -116,10 +116,13 @@ class BookmakerAdapter(BookAdapter):
         self._recover_task: Optional[asyncio.Task] = None
         self._keepalive_task: Optional[asyncio.Task] = None
         self._autologin_fails = 0
-        # ── live-market observability: capture raw fields when an in-play market locks/unlocks ──
+        # ── observability / audit: capture raw bookmaker fields on change ──
+        # BOOKMAKER_LIVE_DEBUG=1 → LIVE games only (lock diagnosis → live_debug_*.jsonl).
+        # BOOKMAKER_AUDIT=1      → ALL main games (post-mortem arb-verification tape → quote_audit_*.jsonl).
         self._live_debug = os.environ.get("BOOKMAKER_LIVE_DEBUG") == "1"
-        self._live_debug_path = f"live_debug_{int(time.time())}.jsonl"
-        self._live_last_sig: dict = {}
+        self._audit = os.environ.get("BOOKMAKER_AUDIT") == "1"
+        self._debug_path = f"{'quote_audit' if self._audit else 'live_debug'}_{int(time.time())}.jsonl"
+        self._debug_last_sig: dict = {}
 
     # ── session lifecycle ──────────────────────────────────────────────────────
     async def startup(self) -> None:
@@ -322,45 +325,55 @@ class BookmakerAdapter(BookAdapter):
             self._sched_last_fetch = time.time()
             if not data:
                 return
-            if self._live_debug:
-                self._capture_live_debug(data)
+            if self._live_debug or self._audit:
+                self._capture_audit(data)
             now = time.time()
             for e in parse_schedule(data, pre_match_only=False).values():   # observe live too (telemetry)
                 self._cache_entry(e, now)
             self._sched_covered = set(leagues)
 
-    def _capture_live_debug(self, data: dict) -> None:
-        """OBSERVABILITY (BOOKMAKER_LIVE_DEBUG=1): dump every LIVE main market's raw SCALAR fields on change,
-        so we can see which field bookmaker.eu flips when an in-play market locks/unlocks (cricket suspends
-        after each ball/wicket). _is_tradeable only watches MoneyLineStatus/MarketsClosed/FreezeMoneyLine; if
-        a lock slips through, diff a `tradeable=true` record against the locked one in live_debug_*.jsonl to
-        find the real lock field, then add it to _is_tradeable so the book goes empty (no phantom arb)."""
+    def _capture_audit(self, data: dict) -> None:
+        """Raw bookmaker TAPE for post-mortem arb verification (+ lock diagnosis). On change, per main game,
+        records the fields needed to independently re-check any arb: teams (mispair), tradeable + MoneyLineStatus
+        + freeze + line_present (lock/suspend), implied prices (re-derive net), max_stake (real depth), and
+        idgm/idlg + full raw game/line scalars (catch unknown mechanisms). BOOKMAKER_AUDIT=1 = all games;
+        BOOKMAKER_LIVE_DEBUG=1 = live only. Cross-check vs CrossArbTelemetry_*.csv with verify_arbs.py."""
         scalar = (str, int, float, bool, type(None))
         leagues = (((data or {}).get("Schedule") or {}).get("Data") or {}).get("Leagues") or {}
         for league in leagues.get("League") or []:
             for dg in league.get("dateGroup") or []:
                 for g in dg.get("game") or []:
                     idgm = g.get("idgm")
-                    if not idgm or idgm != g.get("famGame") or not g.get("LiveGame"):
+                    if not idgm or idgm != g.get("famGame"):
                         continue
+                    if not self._audit and not g.get("LiveGame"):
+                        continue   # live-debug mode captures live games only
                     line = _primary_ml_line(g) or {}
                     gkeys = {k: v for k, v in g.items() if isinstance(v, scalar)}
                     lkeys = {k: v for k, v in line.items() if isinstance(v, scalar)}
                     sig = json.dumps({"g": gkeys, "l": lkeys}, sort_keys=True, default=str)
-                    if self._live_last_sig.get(idgm) == sig:
-                        continue   # unchanged since last poll — only log transitions
-                    self._live_last_sig[idgm] = sig
-                    rec = {"ts": round(time.time(), 3), "idgm": idgm,
+                    if self._debug_last_sig.get(idgm) == sig:
+                        continue   # unchanged since last poll — log transitions only
+                    self._debug_last_sig[idgm] = sig
+                    dh, dv = american_to_decimal(line.get("hoddst")), american_to_decimal(line.get("voddst"))
+                    rec = {"ts": round(time.time(), 3), "idgm": idgm, "idlg": g.get("idlg"),
                            "event": f"{g.get('htm','')} vs {g.get('vtm','')}",
-                           "tradeable": _is_tradeable(g), "game": gkeys, "line": lkeys}
+                           "htm": g.get("htm", ""), "vtm": g.get("vtm", ""),
+                           "live": bool(g.get("LiveGame", False)), "tradeable": _is_tradeable(g),
+                           "line_present": bool(line),
+                           "implied_h": round(1.0 / dh, 6) if dh else None,
+                           "implied_v": round(1.0 / dv, 6) if dv else None,
+                           "max_stake": parse_max_stake(g.get("descgmtyp")),
+                           "game": gkeys, "line": lkeys}
                     try:
-                        with open(self._live_debug_path, "a", encoding="utf-8") as f:
+                        with open(self._debug_path, "a", encoding="utf-8") as f:
                             f.write(json.dumps(rec, default=str) + "\n")
                     except Exception:
                         pass
-                    print(f"[BOOKMAKER LIVE] {rec['event']}  tradeable={rec['tradeable']}  "
-                          f"MLS={g.get('MoneyLineStatus')} Freeze={g.get('FreezeMoneyLine')} "
-                          f"Closed={g.get('MarketsClosed')}  odds={line.get('hoddst')}/{line.get('voddst')}")
+                    if g.get("LiveGame"):
+                        print(f"[BOOKMAKER LIVE] {rec['event']}  tradeable={rec['tradeable']}  "
+                              f"MLS={g.get('MoneyLineStatus')} Freeze={g.get('FreezeMoneyLine')} "
+                              f"line={'Y' if line else 'GONE'}  odds={line.get('hoddst')}/{line.get('voddst')}")
 
     def _cache_entry(self, e: dict, now: float) -> None:
         """Fold one parse entry into the cache, keyed '<idgm>:<idlg>:side'."""

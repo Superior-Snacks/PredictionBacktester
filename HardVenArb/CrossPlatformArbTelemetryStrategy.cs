@@ -643,6 +643,10 @@ public class CrossPlatformArbTelemetryStrategy
             return;
         }
 
+        // the bookmaker selection_id this arb's book leg actually used — the exact join key for the audit
+        // tape (verify_arbs.py): K_NO_P_YES backs HardVen YES, K_YES_P_NO backs HardVen NO.
+        string hardvenLegId = w.ArbType == "K_YES_P_NO" ? pair.HardVenNoTokenId : pair.HardVenYesTokenId;
+
         decimal fees     = w.KalshiFees + w.HardVenFees;
         decimal profit   = 1m - w.BestNetCost;
         decimal maxDepth = Math.Min(w.KalshiDepth, w.HardVenDepth);
@@ -707,7 +711,8 @@ public class CrossPlatformArbTelemetryStrategy
             closedBy == "PRICE" ? closedSide : "",
             kLegAgeMs >= 0 ? kLegAgeMs.ToString() : "",
             pLegAgeMs >= 0 ? pLegAgeMs.ToString() : "",
-            (closedBy == "PRICE" && pHeld) ? "1" : "0"
+            (closedBy == "PRICE" && pHeld) ? "1" : "0",
+            Quote(hardvenLegId)
         );
 
         EnqueueCsvRow(row);
@@ -751,7 +756,7 @@ public class CrossPlatformArbTelemetryStrategy
                 "UpdateCount,ClosedBy," +
                 "DaysToSettlement,AprHoldToSettle," +
                 "RestChecked,RestConfirmed,RestKalshiAsk,RestHardVenAsk,RestDelayMs," +
-                "OpenedBy,ClosedBySide,KalshiLegAgeMsAtClose,HardVenLegAgeMsAtClose,HardVenLegHeld";
+                "OpenedBy,ClosedBySide,KalshiLegAgeMsAtClose,HardVenLegAgeMsAtClose,HardVenLegHeld,HardVenLegId";
             _csvChannel.Writer.TryWrite(header);
         }
         _csvChannel.Writer.TryWrite(row);

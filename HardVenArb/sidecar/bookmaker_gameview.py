@@ -77,6 +77,25 @@ def _emit_game(game: dict, out: dict, pre_match_only: bool) -> None:
         return
     line = _primary_ml_line(game)
     if not line:
+        # In-play SUSPENSION for baseball/cricket works by REMOVING the moneyline line entirely (its
+        # index/odds go null), NOT by flipping MoneyLineStatus while the line stays (tennis/basketball do
+        # that, and _is_tradeable catches it). Without emitting here, parse skips the game and the sidecar
+        # keeps serving the last OPEN quote (stale) → a phantom arb until the C# freshness gate ages it out.
+        # So for a LIVE game whose line vanished, emit SUSPENDED selections → cache clears → book empties.
+        if game.get("LiveGame", False):
+            idlg = game.get("idlg")
+            event = f"{game.get('htm','')} vs {game.get('vtm','')}"
+            start = f"{game.get('gmdt','')}{game.get('gmtm','')}"
+            category = game.get("categoryEn", "")
+            for side, name_key in (("H", "htm"), ("V", "vtm"), ("D", None)):
+                out[f"{idgm}:{side}"] = {
+                    "idgm": idgm, "idlg": idlg, "side": side,
+                    "name": "Draw" if side == "D" else game.get(name_key, ""),
+                    "event": event, "live": True,
+                    "decimal_odds": None, "implied_price": None, "max_stake": 0.0,
+                    "status": "suspended", "start": start,
+                    "category": category, "three_way": False,
+                }
         return
     tradeable = _is_tradeable(game)
     start = f"{game.get('gmdt','')}{game.get('gmtm','')}"          # e.g. "2026061811:40:00"

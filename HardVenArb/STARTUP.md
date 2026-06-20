@@ -174,6 +174,8 @@ VNC nudge. CSV telemetry lands in `~/PredictionBacktester/CrossArbTelemetry_*.cs
 | `BOOKMAKER_KEEPALIVE_SEC` | `180` | **Sidecar:** keep-alive ping interval (renews `__cf_bm` / login). |
 | `BOOKMAKER_RECOVER_COOLDOWN_SEC` | `45` | **Sidecar:** min seconds between session-recovery reloads. |
 | `BOOKMAKER_RECOVER_WAIT_SEC` | `8` | **Sidecar:** wait after a recovery reload for the managed challenge to clear. |
+| `BOOKMAKER_AUDIT` | unset | **Sidecar:** `1` = log ALL games' raw state to `quote_audit_*.jsonl` for post-mortem arb verification. Then `python sidecar/verify_arbs.py` cross-checks every CSV arb (MISPAIR / SUSPENDED / PRICE_DRIFT / THIN). |
+| `BOOKMAKER_LIVE_DEBUG` | unset | **Sidecar:** `1` = log LIVE games only (`live_debug_*.jsonl`) for lock diagnosis (`find_lock_field.py`). |
 | `BOOKMAKER_HEADLESS` | unset (headful) | Keep headful under Xvfb — `1` is more bot-detectable. |
 | `BOOKMAKER_CATALOG_SPORTS` / `BOOKMAKER_CATALOG_LEAGUES` | — | Limit catalog discovery to specific sports / force explicit league ids. |
 | `BOOKMAKER_AUTOLOGIN` | unset | **Sidecar:** `1` = if logged out anyway, re-login using Chrome's SAVED autofill (profile remembers it) — clicks the fields + presses Enter, no creds stored. The keep-alive already prevents the *inactivity* logout (trusted mouse activity + auto-clicking "Stay connected"); this is the fallback. |
