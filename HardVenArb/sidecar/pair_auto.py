@@ -36,7 +36,7 @@ import re
 import sys
 import unicodedata
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 sys.stdout.reconfigure(encoding="utf-8")  # Windows console: tolerate accented names
@@ -167,6 +167,46 @@ def _date_close(kalshi_settlement: str, book_start: str, days: int = 1) -> bool:
     return abs((kd - bd).days) <= days
 
 
+# ── game-time matching (distinguishes a SERIES / doubleheader: same teams, different start) ──
+_MON = {"JAN": 1, "FEB": 2, "MAR": 3, "APR": 4, "MAY": 5, "JUN": 6,
+        "JUL": 7, "AUG": 8, "SEP": 9, "OCT": 10, "NOV": 11, "DEC": 12}
+
+
+def _et_offset_hours(y: int, m: int, d: int) -> int:
+    """US Eastern UTC offset: -4 (EDT) from 2nd Sun Mar to 1st Sun Nov, else -5 (EST). Kalshi ticker times
+    are ET; the bookmaker start_time is UTC — so we convert ET→UTC to compare. Dependency-free (no tzdata)."""
+    def nth_sun(year: int, month: int, n: int) -> int:
+        first_wd = datetime(year, month, 1).weekday()      # Mon=0 … Sun=6
+        return (1 + (6 - first_wd) % 7) + (n - 1) * 7
+    try:
+        day = datetime(y, m, d).date()
+        return -4 if datetime(y, 3, nth_sun(y, 3, 2)).date() <= day < datetime(y, 11, nth_sun(y, 11, 1)).date() else -5
+    except ValueError:
+        return -5
+
+
+def _book_dt(start: str):
+    """Bookmaker start_time 'YYYYMMDDHH:MM:SS' (UTC) → naive UTC datetime; None if unparseable."""
+    try:
+        return datetime.strptime((start or "")[:8] + (start or "")[8:].replace(":", ""), "%Y%m%d%H%M%S")
+    except (ValueError, TypeError):
+        return None
+
+
+def _kalshi_dt(entry: dict):
+    """Kalshi game time from the ticker, e.g. KXMLBGAME-26JUN181840NYMPHI → 2026-06-18 18:40 ET → UTC.
+    Returns a naive UTC datetime, or None when the ticker has no HHMM (combat/tennis list by date only)."""
+    m = re.search(r"-(\d{2})([A-Z]{3})(\d{2})(\d{4})", entry.get("kalshi_ticker", ""))
+    if not m or m.group(2) not in _MON:
+        return None
+    try:
+        et = datetime(2000 + int(m.group(1)), _MON[m.group(2)], int(m.group(3)),
+                      int(m.group(4)[:2]), int(m.group(4)[2:]))
+    except ValueError:
+        return None
+    return et - timedelta(hours=_et_offset_hours(et.year, et.month, et.day))   # ET → UTC
+
+
 def fetch_catalog(sidecar: str) -> list[dict]:
     with urllib.request.urlopen(f"{sidecar.rstrip('/')}/catalog", timeout=30) as r:
         return json.loads(r.read().decode("utf-8")).get("selections", [])
@@ -202,7 +242,8 @@ def index_catalog(selections: list[dict]) -> dict:
         idgm = sid.split(":")[0]
         if not idgm:
             continue
-        g = games.setdefault(idgm, {"date": (s.get("start_time") or "")[:8], "three_way": False,
+        g = games.setdefault(idgm, {"date": (s.get("start_time") or "")[:8],
+                                    "start": (s.get("start_time") or ""), "three_way": False,
                                     "teams": {}, "draw": None, "league": _league_id(sid)})
         if s.get("three_way"):
             g["three_way"] = True
@@ -211,15 +252,52 @@ def index_catalog(selections: list[dict]) -> dict:
             g["draw"] = sid
         else:
             g["teams"][_book_name(name)] = sid
+    # team-set -> [game, ...]: a SERIES/doubleheader (same teams, different start) keeps EVERY game, so the
+    # Kalshi market can match the one closest in time. Same-start duplicate LISTINGS (the MLB-5-vs-505 case)
+    # still collapse to the canonical one via _better_listing.
     out: dict = {}
     for g in games.values():
         if len(g["teams"]) != 2:
             continue
-        key = frozenset(g["teams"].keys())
-        prev = out.get(key)
-        if prev is None or _better_listing(g, prev):
-            out[key] = g   # canonical listing wins (draw, then lowest league id) — deterministic
+        lst = out.setdefault(frozenset(g["teams"].keys()), [])
+        twin = next((x for x in lst if x["start"] == g["start"]), None)   # same game in another league?
+        if twin is None:
+            lst.append(g)                            # different start = different game → keep both
+        elif _better_listing(g, twin):
+            lst[lst.index(twin)] = g                 # same game: keep the canonical (draw, lowest league id)
     return out
+
+
+def _pick_game(games: list, entry: dict, time_tol_sec: float):
+    """From the bookmaker games sharing a team-set, pick the one matching the Kalshi market's date/time.
+    With a ticker TIME → the game whose start is closest, within time_tol. Without a time (combat/tennis,
+    listed by date) → closest date within ±1 day. None if the nearest is still too far (the Kalshi game
+    isn't on the board → avoids the wrong-day mispair)."""
+    if not games:
+        return None
+    if len(games) == 1:
+        g = games[0]
+        return g if _date_close(entry.get("settlement_date", ""), g.get("start", ""), days=1) else None
+    kdt = _kalshi_dt(entry)
+    if kdt is not None:
+        scored = [(abs((bd - kdt).total_seconds()), g) for g in games if (bd := _book_dt(g.get("start", "")))]
+        if scored:
+            diff, best = min(scored, key=lambda x: x[0])
+            if diff <= time_tol_sec:
+                return best
+        # no time-close game → fall through to the date-only match below
+    sd = entry.get("settlement_date", "")
+    cands = [g for g in games if _date_close(sd, g.get("start", ""), days=1)]
+    if not cands:
+        return None
+
+    def _ddiff(g: dict) -> int:
+        try:
+            kd = datetime.strptime(sd[:10], "%Y-%m-%d").date()
+            return abs((kd - datetime.strptime((g.get("start", "") or "")[:8], "%Y%m%d").date()).days)
+        except ValueError:
+            return 99
+    return min(cands, key=_ddiff)
 
 
 def _fetch_implied(sidecar: str, tokens: set) -> dict:
@@ -304,10 +382,14 @@ def main() -> None:
                     help="skip the price-consistency gate (rejects wrong-game pairs + fixes inverted sides)")
     ap.add_argument("--price-tol", type=float, default=0.25,
                     help="price-gate tolerance 0-1: book vs Kalshi win-prob must agree within this (default 0.25)")
+    ap.add_argument("--time-tol-hours", type=float, default=3.0,
+                    help="for a series/doubleheader, the book game's start must be within this many hours of "
+                         "the Kalshi ticker time (default 3)")
     args = ap.parse_args()
 
     book = index_catalog(fetch_catalog(args.sidecar))
-    print(f"[PAIR] {len(book)} bookmaker games in /catalog")
+    print(f"[PAIR] {sum(len(v) for v in book.values())} bookmaker games "
+          f"({len(book)} matchups) in /catalog")
     if args.fuzzy and fuzz is None:
         print("[PAIR] --fuzzy requested but rapidfuzz isn't installed:  pip install rapidfuzz")
 
@@ -326,17 +408,20 @@ def main() -> None:
             unmatched.append(f"{tk} (couldn't parse Kalshi outcome)")
             continue
         yes_outcome, teams, is_tie = key
-        entry = book.get(teams)
+        games = book.get(teams)                      # now a LIST (a series keeps every game)
         is_fuzzy, fscore = False, 0
-        if entry is None and args.fuzzy:
-            entry, fscore = _best_book_game(teams, book, args.fuzzy_threshold)
-            is_fuzzy = entry is not None
-        if entry is None:
+        if games is None and args.fuzzy:
+            games, fscore = _best_book_game(teams, book, args.fuzzy_threshold)
+            is_fuzzy = games is not None
+        if not games:
             extra = f" (best fuzzy {fscore:.0f})" if (args.fuzzy and fuzz is not None) else ""
             unmatched.append(f"{tk}  {sorted(teams)}{extra}")
             continue
-        if not _date_close(e.get("settlement_date", ""), entry["date"]):
-            unmatched.append(f"{tk}  {sorted(teams)} (date mismatch {e.get('settlement_date')} vs {entry['date']})")
+        # pick the game whose start matches the Kalshi ticker time (series/doubleheader) — date fallback inside
+        entry = _pick_game(games, e, args.time_tol_hours * 3600)
+        if entry is None:
+            unmatched.append(f"{tk}  {sorted(teams)} (no book game near {e.get('settlement_date')}"
+                             f"/ticker-time among {len(games)} candidate(s))")
             continue
         # 2-way markets are mirrors → fill one per event; 3-way outcomes are DISTINCT → fill all.
         if not entry["three_way"] and not args.both and e.get("event_id") in done_events:
