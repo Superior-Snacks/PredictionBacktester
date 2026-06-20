@@ -453,7 +453,13 @@ var knownKalshiTickers = new HashSet<string>(kalshiSubscribeTickers, StringCompa
 var knownHardVenTokens    = new HashSet<string>(hardvenSubscribeTokens,    StringComparer.Ordinal);
 var knownPairIds       = new HashSet<string>(pairs.Select(p => p.PairId), StringComparer.Ordinal);
 
-Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
+Console.CancelKeyPress += (_, e) =>
+{
+    e.Cancel = true;
+    Console.WriteLine($"[SIGNAL] Ctrl+C / Ctrl+Break received ({e.SpecialKey}) — initiating shutdown. " +
+                      "(If you didn't press it, the terminal/host delivered it — run detached or in tmux.)");
+    cts.Cancel();
+};
 
 // ── Key toggles ────────────────────────────────────────────────────────────
 // Bare keypresses (no Ctrl) — works in tmux, SSH, and screen sessions.
@@ -820,7 +826,14 @@ var kalshiWsTask = Task.Run(async () =>
         Console.WriteLine($"[FATAL] Kalshi feed crashed: {ex.Message}");
         DebugLog.Write($"Kalshi feed exception: {ex}");
     }
-    finally { if (!cts.IsCancellationRequested) cts.Cancel(); }
+    finally
+    {
+        if (!cts.IsCancellationRequested)
+        {
+            Console.WriteLine("[SHUTDOWN CAUSE] Kalshi feed returned on its own (not a signal) — this triggered the shutdown.");
+            cts.Cancel();
+        }
+    }
 });
 
 var hardvenWsTask = Task.Run(async () =>
@@ -831,7 +844,14 @@ var hardvenWsTask = Task.Run(async () =>
         Console.WriteLine($"[FATAL] HardVen feed crashed: {ex.Message}");
         DebugLog.Write($"HardVen feed exception: {ex}");
     }
-    finally { if (!cts.IsCancellationRequested) cts.Cancel(); }
+    finally
+    {
+        if (!cts.IsCancellationRequested)
+        {
+            Console.WriteLine("[SHUTDOWN CAUSE] HardVen feed returned on its own (not a signal) — this triggered the shutdown.");
+            cts.Cancel();
+        }
+    }
 });
 
 await Task.WhenAll(kalshiWsTask, hardvenWsTask);
