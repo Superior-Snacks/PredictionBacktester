@@ -130,21 +130,55 @@ def _team_sim(k: str, b: str) -> int:
     return int(fuzz.token_set_ratio(k, b)) if fuzz is not None else 0
 
 
-def _best_book_game(teams: frozenset, book: dict, threshold: int):
+# LEAGUE ANCHOR: Kalshi series prefix → the bookmaker sport(s) it must match (the catalog's `sport` label,
+# from DEFAULT_CATALOG_SPORTS). Stops a Kalshi market matching a similarly-named game in the WRONG sport.
+# A series NOT listed here is simply not anchored (matches across all sports = old behaviour) — so if you
+# add a series to pairHard.CLASSIC_SERIES, add it here too to get anchoring. Mirror of those sport groups.
+SERIES_SPORT = {
+    "KXMLBGAME": {"BASEBALL"}, "KXKBOGAME": {"BASEBALL"}, "KXNPBGAME": {"BASEBALL"},
+    "KXNBAGAME": {"BASKETBALL"}, "KXWNBAGAME": {"BASKETBALL"}, "KXACBGAME": {"BASKETBALL"},
+    "KXBBLGAME": {"BASKETBALL"}, "KXBBSERIEAGAME": {"BASKETBALL"}, "KXBBSERIEBGAME": {"BASKETBALL"},
+    "KXBSLGAME": {"BASKETBALL"}, "KXLNBELITEGAME": {"BASKETBALL"}, "KXNZNBLGAME": {"BASKETBALL"},
+    "KXPLKGAME": {"BASKETBALL"}, "KXSPBGAME": {"BASKETBALL"}, "KXVBAGAME": {"BASKETBALL"},
+    "KXBSNGAME": {"BASKETBALL"}, "KXBIG3GAME": {"BASKETBALL"}, "KXISLGAME": {"BASKETBALL"},
+    "KXNCAABBGAME": {"BASKETBALL"},
+    "KXWCGAME": {"FIFA WORLD CUP", "SOCCER"}, "KXUSLGAME": {"SOCCER"}, "KXUSLCUPGAME": {"SOCCER"},
+    "KXLALIGA2GAME": {"SOCCER"}, "KXCHLLDPGAME": {"SOCCER"}, "KXBOLPDIVGAME": {"SOCCER"},
+    "KXNFLGAME": {"FOOTBALL"}, "KXNCAAFGAME": {"FOOTBALL"}, "KXCFLGAME": {"FOOTBALL"},
+    "KXAFLGAME": {"AUSSIE RULES"},
+    "KXATPMATCH": {"TENNIS"}, "KXWTAMATCH": {"TENNIS"}, "KXITFMATCH": {"TENNIS"}, "KXITFWMATCH": {"TENNIS"},
+    "KXATPCHALLENGERMATCH": {"TENNIS"}, "KXWTACHALLENGERMATCH": {"TENNIS"},
+    "KXT20MATCH": {"CRICKET"}, "KXWT20MATCH": {"CRICKET"}, "KXODIMATCH": {"CRICKET"},
+    "KXTESTMATCH": {"CRICKET"}, "KXCOUNTYCHAMPMATCH": {"CRICKET"},
+    "KXBOXING": {"BOXING"}, "KXUFCFIGHT": {"MARTIAL ARTS"},
+}
+
+
+def _expected_sports(ticker: str) -> set:
+    """Bookmaker sport(s) a Kalshi ticker must match (by its series prefix); empty = not anchored."""
+    return SERIES_SPORT.get((ticker or "").split("-")[0].upper(), set())
+
+
+def _best_book_game(teams: frozenset, book: dict, threshold: int, expected_sports=None):
     """BIPARTITE per-team fuzzy match: each of the two Kalshi teams must match a DISTINCT book team
     (not an aggregate joined-string ratio, which let wrong-league lookalikes through — e.g. a Kalshi MLB
-    'New York M vs Philadelphia' matching a different league's 'New York'/'Philadelphia'). Returns
-    (entry, worse_leg_score) of the best game whose WORSE leg clears `threshold`, else (None, best_worse)."""
+    'New York M vs Philadelphia' matching a different league's 'New York'/'Philadelphia'). LEAGUE-ANCHORED:
+    when `expected_sports` is given, only book games in that sport are considered (a Kalshi MLB market can't
+    fuzzy-grab a similarly-named cricket/KBO game). Returns (games_in_sport, worse_leg_score) of the best
+    team-set whose WORSE leg clears `threshold`, else (None, best_worse)."""
     if fuzz is None:
         return None, 0
     kt = list(teams)
     if len(kt) != 2:
         return None, 0
-    best_min, best_sum, best_entry = 0, -1, None
-    for bset, entry in book.items():
+    best_min, best_sum, best_games = 0, -1, None
+    for bset, games in book.items():
         bt = list(bset)
         if len(bt) != 2:
             continue
+        cand = [g for g in games if (not expected_sports or g.get("sport", "").upper() in expected_sports)]
+        if not cand:
+            continue   # no game in the expected sport for this team-set → not a candidate
         # two ways to assign the 2 Kalshi teams to the 2 book teams — take the better assignment,
         # scored by the WORSE of its two legs (so BOTH teams must match), tie-broken by the sum.
         s00, s11 = _team_sim(kt[0], bt[0]), _team_sim(kt[1], bt[1])
@@ -152,8 +186,8 @@ def _best_book_game(teams: frozenset, book: dict, threshold: int):
         m1, m2 = min(s00, s11), min(s01, s10)
         mn, sm = (m1, s00 + s11) if (m1, s00 + s11) >= (m2, s01 + s10) else (m2, s01 + s10)
         if (mn, sm) > (best_min, best_sum):
-            best_min, best_sum, best_entry = mn, sm, entry
-    return (best_entry, best_min) if best_entry is not None and best_min >= threshold else (None, best_min)
+            best_min, best_sum, best_games = mn, sm, cand
+    return (best_games, best_min) if best_games is not None and best_min >= threshold else (None, best_min)
 
 
 def _date_close(kalshi_settlement: str, book_start: str, days: int = 1) -> bool:
@@ -244,7 +278,8 @@ def index_catalog(selections: list[dict]) -> dict:
             continue
         g = games.setdefault(idgm, {"date": (s.get("start_time") or "")[:8],
                                     "start": (s.get("start_time") or ""), "three_way": False,
-                                    "teams": {}, "draw": None, "league": _league_id(sid)})
+                                    "teams": {}, "draw": None, "league": _league_id(sid),
+                                    "sport": (s.get("sport") or "")})
         if s.get("three_way"):
             g["three_way"] = True
         name = s.get("selection_name", "")
@@ -385,6 +420,9 @@ def main() -> None:
     ap.add_argument("--time-tol-hours", type=float, default=3.0,
                     help="for a series/doubleheader, the book game's start must be within this many hours of "
                          "the Kalshi ticker time (default 3)")
+    ap.add_argument("--no-league-anchor", action="store_true",
+                    help="skip the league/sport anchor (match across all sports — disable if a sport's label "
+                         "is over-rejecting valid pairs)")
     args = ap.parse_args()
 
     book = index_catalog(fetch_catalog(args.sidecar))
@@ -394,7 +432,7 @@ def main() -> None:
         print("[PAIR] --fuzzy requested but rapidfuzz isn't installed:  pip install rapidfuzz")
 
     pairs = json.loads(Path(args.pairs).read_text(encoding="utf-8"))
-    filled = already = skipped_dupe = fuzzy_n = 0
+    filled = already = skipped_dupe = fuzzy_n = anchor_rejected = 0
     unmatched: list[str] = []
     done_events: set[str] = set()   # for 2-way mirror dedupe (per Kalshi event_id)
 
@@ -408,14 +446,21 @@ def main() -> None:
             unmatched.append(f"{tk} (couldn't parse Kalshi outcome)")
             continue
         yes_outcome, teams, is_tie = key
-        games = book.get(teams)                      # now a LIST (a series keeps every game)
+        expected = set() if args.no_league_anchor else _expected_sports(tk)   # league anchor by series
+        raw = book.get(teams)                        # now a LIST (a series keeps every game)
+        games = [g for g in raw if g.get("sport", "").upper() in expected] if (raw and expected) else raw
         is_fuzzy, fscore = False, 0
-        if games is None and args.fuzzy:
-            games, fscore = _best_book_game(teams, book, args.fuzzy_threshold)
-            is_fuzzy = games is not None
+        if not games and args.fuzzy:
+            games, fscore = _best_book_game(teams, book, args.fuzzy_threshold, expected)
+            is_fuzzy = bool(games)
         if not games:
-            extra = f" (best fuzzy {fscore:.0f})" if (args.fuzzy and fuzz is not None) else ""
-            unmatched.append(f"{tk}  {sorted(teams)}{extra}")
+            if raw and expected:                     # teams matched but no game in the expected sport
+                anchor_rejected += 1
+                unmatched.append(f"{tk}  {sorted(teams)} (teams matched but no "
+                                 f"{'/'.join(sorted(expected))} game — league-anchored out)")
+            else:
+                extra = f" (best fuzzy {fscore:.0f})" if (args.fuzzy and fuzz is not None) else ""
+                unmatched.append(f"{tk}  {sorted(teams)}{extra}")
             continue
         # pick the game whose start matches the Kalshi ticker time (series/doubleheader) — date fallback inside
         entry = _pick_game(games, e, args.time_tol_hours * 3600)
@@ -454,7 +499,7 @@ def main() -> None:
         print(f"[PAIR] {tk:<34} YES={yes_outcome:<16} → {yes_tok} | NO → {no_tok}{tag}")
 
     print(f"\n[PAIR] filled={filled} (fuzzy={fuzzy_n})  already={already}  "
-          f"skipped_mirror={skipped_dupe}  unmatched={len(unmatched)}")
+          f"skipped_mirror={skipped_dupe}  league-anchored-out={anchor_rejected}  unmatched={len(unmatched)}")
     for u in unmatched:
         print(f"   UNMATCHED: {u}")
 
