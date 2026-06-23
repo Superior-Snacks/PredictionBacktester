@@ -168,6 +168,9 @@ class BookmakerAdapter(BookAdapter):
         self._last_refresh_log = 0.0                   # throttle the refresh heartbeat to ~every 30s
         self._refresh_log_verbose = os.environ.get("BOOKMAKER_REFRESH_LOG") == "1"  # log EVERY cycle (tuning)
         self._rate_limit_total = 0                     # cumulative 429s on GetSchedule (rate-limit watch)
+        self._warned_no_rtqname = False                # throttle the "waiting for rtqname" notice (print once)
+        self._backoff_sec = 0.0                        # current auto-backoff delay (×2 on 429, reset when clean)
+        self._last_cycle_rate_limited = False          # did the last fetch see a 429? (drives the backoff)
 
     # ── session lifecycle ──────────────────────────────────────────────────────
     async def startup(self) -> None:
@@ -425,7 +428,7 @@ class BookmakerAdapter(BookAdapter):
         on a fetch. Robust: any error is logged and the loop keeps going (a dead loop = permanently stale)."""
         while True:
             try:
-                await asyncio.sleep(self._refresh_sec)
+                await asyncio.sleep(self._backoff_sec if self._backoff_sec > 0 else self._refresh_sec)
             except asyncio.CancelledError:
                 break
             now = time.time()
@@ -436,6 +439,16 @@ class BookmakerAdapter(BookAdapter):
                 t0 = time.perf_counter()
                 n_chunks = await self._refresh_schedule_concurrent(leagues)
                 dt = time.perf_counter() - t0
+                # auto-backoff: on a 429 cycle grow the interval (×2, cap 60s); reset the moment it's clean.
+                # Unattended-safe — the bot stops hammering a rate-limited endpoint instead of storming it.
+                if self._last_cycle_rate_limited:
+                    self._backoff_sec = min(max(self._backoff_sec, self._refresh_sec) * 2, 60.0)
+                    print(f"[BOOKMAKER] rate-limited → backing off to {self._backoff_sec:.0f}s "
+                          f"(normal {self._refresh_sec:g}s). Permanent fix: RAISE "
+                          "BOOKMAKER_SCHEDULE_CHUNK_LEAGUES (fewer concurrent requests).")
+                elif self._backoff_sec > 0:
+                    print(f"[BOOKMAKER] rate limit cleared — resuming {self._refresh_sec:g}s refresh.")
+                    self._backoff_sec = 0.0
                 now2 = time.time()
                 if self._refresh_log_verbose or dt > self._refresh_sec or now2 - self._last_refresh_log >= 30:
                     self._last_refresh_log = now2
@@ -475,10 +488,18 @@ class BookmakerAdapter(BookAdapter):
           - 429 (RATE LIMITED) → logged loudly + counted, but does NOT reload the session (429 = slow down,
             not a dead session; reloading would only add load). Back off via the chunk/refresh env knobs.
           - 401/403/5xx (real session/server failure) → triggers session recovery, as _post_json does."""
+        self._last_cycle_rate_limited = False
         if not self._page or not bodies:
             return []
         if not self._rtqname:
-            print("[BOOKMAKER] no rtqname captured yet — click into any match in the window once.")
+            # Session not seeded yet (no match clicked since (re)start). Do NOT fire requests — hammering the
+            # API before the session is ready just earns 429s and can block the login itself. Warn once.
+            if not self._warned_no_rtqname:
+                print("[BOOKMAKER] waiting for rtqname — click into any match in the window once to seed the "
+                      "session; skipping schedule fetches until then (not hammering the API pre-login).")
+                self._warned_no_rtqname = True
+            return []
+        self._warned_no_rtqname = False
         try:
             raw = await self._page.evaluate(
                 _SCHEDULE_MULTI_JS, {"url": SCHEDULE_URL, "rtqname": self._rtqname, "bodies": bodies})
@@ -500,6 +521,7 @@ class BookmakerAdapter(BookAdapter):
             print(f"[BOOKMAKER] GetSchedule(multi): {n_fail}/{len(bodies)} chunk(s) failed, statuses={statuses}")
             if 429 in statuses:
                 self._rate_limit_total += statuses[429]
+                self._last_cycle_rate_limited = True
                 print(f"[BOOKMAKER] *** RATE LIMITED *** 429 ×{statuses[429]} this cycle "
                       f"(cumulative {self._rate_limit_total}) — back off: RAISE BOOKMAKER_SCHEDULE_CHUNK_LEAGUES "
                       "(fewer concurrent requests) and/or BOOKMAKER_REFRESH_SEC (slower cadence). NOT reloading "
