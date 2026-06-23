@@ -166,6 +166,8 @@ class BookmakerAdapter(BookAdapter):
         self._active_ttl = float(os.environ.get("BOOKMAKER_ACTIVE_TTL_SEC", "120"))
         self._chunk_leagues = max(1, int(os.environ.get("BOOKMAKER_SCHEDULE_CHUNK_LEAGUES", "4")))
         self._last_refresh_log = 0.0                   # throttle the refresh heartbeat to ~every 30s
+        self._refresh_log_verbose = os.environ.get("BOOKMAKER_REFRESH_LOG") == "1"  # log EVERY cycle (tuning)
+        self._rate_limit_total = 0                     # cumulative 429s on GetSchedule (rate-limit watch)
 
     # ── session lifecycle ──────────────────────────────────────────────────────
     async def startup(self) -> None:
@@ -435,12 +437,13 @@ class BookmakerAdapter(BookAdapter):
                 n_chunks = await self._refresh_schedule_concurrent(leagues)
                 dt = time.perf_counter() - t0
                 now2 = time.time()
-                if dt > self._refresh_sec or now2 - self._last_refresh_log >= 30:
+                if self._refresh_log_verbose or dt > self._refresh_sec or now2 - self._last_refresh_log >= 30:
                     self._last_refresh_log = now2
                     slow = " — SLOWER than the refresh interval (can't keep up; raise it or trim leagues)" \
                         if dt > self._refresh_sec else ""
+                    rl = f"  rate-limited 429s: {self._rate_limit_total}" if self._rate_limit_total else ""
                     print(f"[BOOKMAKER] refresh: {len(leagues)} leagues / {n_chunks} chunks in {dt:.2f}s "
-                          f"(cache={len(self._odds_cache)} sel){slow}")
+                          f"(cache={len(self._odds_cache)} sel){slow}{rl}")
             except Exception as ex:
                 print(f"[BOOKMAKER] background refresh error: {type(ex).__name__}: {ex}")
 
@@ -468,7 +471,10 @@ class BookmakerAdapter(BookAdapter):
 
     async def _post_schedule_multi(self, bodies: list[dict]) -> list[Optional[dict]]:
         """One page.evaluate that fires all GetSchedule chunk POSTs CONCURRENTLY (Promise.all). Returns one
-        parsed payload (or None) per body, in order. Triggers session recovery on auth/5xx like _post_json."""
+        parsed payload (or None) per body, in order. Logs every cycle's chunk failures by status code, and:
+          - 429 (RATE LIMITED) → logged loudly + counted, but does NOT reload the session (429 = slow down,
+            not a dead session; reloading would only add load). Back off via the chunk/refresh env knobs.
+          - 401/403/5xx (real session/server failure) → triggers session recovery, as _post_json does."""
         if not self._page or not bodies:
             return []
         if not self._rtqname:
@@ -481,18 +487,26 @@ class BookmakerAdapter(BookAdapter):
             self._trigger_recovery("GetSchedule(multi) evaluate error")
             return []
         out: list[Optional[dict]] = []
-        auth_fail = False
+        statuses: dict = {}            # non-200 status_code -> count, this cycle
         for res in raw or []:
             status, text = (res or {}).get("status"), (res or {}).get("text") or ""
             if status != 200:
-                if status in (401, 403, 429) or (isinstance(status, int) and status >= 500):
-                    auth_fail = True
+                statuses[status] = statuses.get(status, 0) + 1
                 out.append(None)
                 continue
             out.append(self._parse_body(text))
-        if auth_fail:
-            print("[BOOKMAKER] GetSchedule(multi): a chunk returned auth/5xx — triggering session recovery.")
-            self._trigger_recovery("GetSchedule(multi) auth/5xx")
+        if statuses:
+            n_fail = sum(statuses.values())
+            print(f"[BOOKMAKER] GetSchedule(multi): {n_fail}/{len(bodies)} chunk(s) failed, statuses={statuses}")
+            if 429 in statuses:
+                self._rate_limit_total += statuses[429]
+                print(f"[BOOKMAKER] *** RATE LIMITED *** 429 ×{statuses[429]} this cycle "
+                      f"(cumulative {self._rate_limit_total}) — back off: RAISE BOOKMAKER_SCHEDULE_CHUNK_LEAGUES "
+                      "(fewer concurrent requests) and/or BOOKMAKER_REFRESH_SEC (slower cadence). NOT reloading "
+                      "the session (429 = slow down, not a dead session).")
+            if any(s in (401, 403) or (isinstance(s, int) and s >= 500) for s in statuses):
+                print("[BOOKMAKER] GetSchedule(multi): auth/5xx among the failures — triggering session recovery.")
+                self._trigger_recovery("GetSchedule(multi) auth/5xx")
         return out
 
     @staticmethod
