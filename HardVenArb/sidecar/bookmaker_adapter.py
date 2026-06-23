@@ -83,10 +83,17 @@ def _gameview_body(game_id: str, league_id: str) -> dict:
 
 def _schedule_body(league_ids) -> dict:
     """GetSchedule POST body (captured). `LeaguesIdList` takes a COMMA-JOINED list → one call covers
-    many leagues. Returns every game in those leagues + their moneylines."""
+    many leagues. Returns every game in those leagues + their moneylines.
+
+    LinkDeriv attaches EVERY derivative market (spreads/totals/props) to each game — the main reason a
+    multi-league GetSchedule response is fat (multi-MB) and slow. We only read the moneyline right now, so
+    BOOKMAKER_SCHEDULE_LINKDERIV=false drops all that bloat for a much smaller/faster response. Default
+    stays 'true' (current behaviour); flip it back to true when the props phase actually needs derivatives."""
+    ld = os.environ.get("BOOKMAKER_SCHEDULE_LINKDERIV", "true").strip().lower()
+    link_deriv = "false" if ld in ("0", "false", "no", "off") else "true"
     return {"o": {"BORequestData": {"BOParameters": {
         "BORt": {}, "LeaguesIdList": ",".join(str(x) for x in league_ids), "LanguageId": "0",
-        "LineStyle": "E", "ScheduleType": "american", "LinkDeriv": "true",
+        "LineStyle": "E", "ScheduleType": "american", "LinkDeriv": link_deriv,
     }}}}
 
 
