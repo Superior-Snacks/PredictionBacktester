@@ -10,6 +10,7 @@ BookAdapter subclass and registering it in load_adapter() below.
 """
 from __future__ import annotations
 
+import logging
 import os
 import time
 from contextlib import asynccontextmanager
@@ -22,6 +23,19 @@ from env_util import load_dotenv_upwards
 from mock_adapter import MockBookAdapter
 
 load_dotenv_upwards()
+
+
+# Quiet uvicorn's access log for the /odds poll: the bot hits it every ~2s, so the line fires constantly
+# and buries the [BOOKMAKER] diagnostics. We drop ONLY /odds; other endpoints (/catalog, /health, /balance)
+# still log. The access record's args are (client, method, full_path, http_version, status). Set
+# HARDVEN_LOG_ODDS=1 to keep them.
+if os.environ.get("HARDVEN_LOG_ODDS") != "1":
+    class _SuppressOddsAccessLog(logging.Filter):
+        def filter(self, record: logging.LogRecord) -> bool:
+            a = record.args
+            return not (isinstance(a, tuple) and len(a) >= 3 and isinstance(a[2], str)
+                        and a[2].startswith("/odds"))
+    logging.getLogger("uvicorn.access").addFilter(_SuppressOddsAccessLog())
 
 
 def load_adapter() -> BookAdapter:
