@@ -121,9 +121,11 @@ cat > .env <<'EOF'
 KALSHI_API_KEY_ID=your-key-id
 KALSHI_PRIVATE_KEY_PATH=/home/USER/PredictionBacktester/kalshi_key.pem
 BOOKMAKER_AUTOLOGIN=1
-# optional explicit creds if Chrome autofill doesn't persist on the server profile:
-# BOOKMAKER_USERNAME=...
-# BOOKMAKER_PASSWORD=...
+# A headless server has no desktop keyring, so Chrome can't autofill the saved password — set creds
+# explicitly and the sidecar types them straight into the login form on re-login (this is the reliable
+# auto-relogin path on a server; AUTOLOGIN autofill is desktop-only):
+BOOKMAKER_USERNAME=...
+BOOKMAKER_PASSWORD=...
 EOF
 ```
 
@@ -145,9 +147,10 @@ export DISPLAY=:99                               # the Xvfb from step 1 (restart
 cd ~/PredictionBacktester/HardVenArb/sidecar
 HARDVEN_BOOK=bookmaker python3 -m uvicorn app:app --port 8787
 ```
-VNC in (SSH tunnel from step 1). A real Chrome opens → **log in, let Chrome SAVE the password** (so
-`BOOKMAKER_AUTOLOGIN` autofill works later), clear any Cloudflare check, click into one match (seeds
-`rtqname`). Wait for `[BOOKMAKER] captured rtqname …`. Ctrl-C — the profile now remembers it.
+VNC in (SSH tunnel from step 1). A real Chrome opens → **log in**, clear any Cloudflare check, click
+into one match (seeds `rtqname`). Wait for `[BOOKMAKER] captured rtqname …`. Ctrl-C — the profile now
+remembers the **session cookies**. (It can NOT remember the *password* for autofill — a headless server
+has no keyring — so set `BOOKMAKER_USERNAME`/`BOOKMAKER_PASSWORD` (§3) for automatic re-login.)
 
 ### 7. Run unattended in tmux
 ```bash
@@ -166,6 +169,16 @@ GCP VMs don't sleep, so the Windows "keep awake" gotcha is gone. The sidecar kee
 (mouse-activity + "Stay connected") and auto-recovers Cloudflare; an *interactive* captcha still needs a
 VNC nudge. CSV telemetry lands in `~/PredictionBacktester/CrossArbTelemetry_*.csv` — `scp` it home to analyze.
 
+### Is the VM throttling the bot/Chrome?  (e2-medium is shared-core — worth checking)
+```bash
+python3 HardVenArb/sidecar/server_health.py            # one-shot: CPU steal, load, RAM/swap, sidecar latency
+python3 HardVenArb/sidecar/server_health.py --watch 10 # live (run in a 3rd tmux pane)
+```
+Reports a verdict (✅ OK / ⚠️ WARN). The headline number is **CPU steal %** — sustained > ~10% means the
+hypervisor is throttling this VM (burst credits exhausted). Also flags low free RAM, active swap, and a
+slow sidecar `/health`. When the bot logs `STALE` quotes or a `poll timeout`, run this to see whether the
+cause is throttling/swapping (server) vs a network blip (not the server).
+
 ## Tuning knobs (env)
 
 | Var | Default | What |
@@ -178,8 +191,8 @@ VNC nudge. CSV telemetry lands in `~/PredictionBacktester/CrossArbTelemetry_*.cs
 | `BOOKMAKER_LIVE_DEBUG` | unset | **Sidecar:** `1` = log LIVE games only (`live_debug_*.jsonl`) for lock diagnosis (`find_lock_field.py`). |
 | `BOOKMAKER_HEADLESS` | unset (headful) | Keep headful under Xvfb — `1` is more bot-detectable. |
 | `BOOKMAKER_CATALOG_SPORTS` / `BOOKMAKER_CATALOG_LEAGUES` | — | Limit catalog discovery to specific sports / force explicit league ids. |
-| `BOOKMAKER_AUTOLOGIN` | unset | **Sidecar:** `1` = if logged out anyway, re-login using Chrome's SAVED autofill (profile remembers it) — clicks the fields + presses Enter, no creds stored. The keep-alive already prevents the *inactivity* logout (trusted mouse activity + auto-clicking "Stay connected"); this is the fallback. |
-| `BOOKMAKER_USERNAME` / `BOOKMAKER_PASSWORD` | — | **Sidecar:** alternative to autofill — type these into the login form on re-login (caps at 3 tries). |
+| `BOOKMAKER_AUTOLOGIN` | unset | **Sidecar:** `1` = re-login using Chrome's SAVED autofill — clicks the fields + presses Enter, no creds stored. **Desktop only:** needs an unlocked keyring, so it does NOT work on a headless server (Chrome can't persist the password there) — use `BOOKMAKER_USERNAME`/`PASSWORD` instead. The keep-alive already prevents the *inactivity* logout; this is the fallback for a hard logout. |
+| `BOOKMAKER_USERNAME` / `BOOKMAKER_PASSWORD` | — | **Sidecar:** types these straight into the login form on re-login (no keyring needed) — **the reliable auto-relogin path on a headless server.** Caps at 3 tries. |
 | `BOOKMAKER_LOGIN_USER_SEL` / `_PASS_SEL` / `_SUBMIT_SEL` | bookmaker.eu | **Sidecar:** override the login-form selectors (defaults: `input[name=account]` / `input[name=password]` / Enter). |
 
 **Bot flag:** `--exclude tennis,cricket,…` skips pairs whose Kalshi ticker matches those sports (friendly names: tennis/baseball/basketball/cricket/soccer/football/afl/boxing/ufc — or any raw ticker substring like `KXATPMATCH`). For a cleaner telemetry run.
