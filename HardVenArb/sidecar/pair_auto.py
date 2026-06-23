@@ -241,8 +241,11 @@ def _kalshi_dt(entry: dict):
     return et - timedelta(hours=_et_offset_hours(et.year, et.month, et.day))   # ET → UTC
 
 
-def fetch_catalog(sidecar: str) -> list[dict]:
-    with urllib.request.urlopen(f"{sidecar.rstrip('/')}/catalog", timeout=30) as r:
+def fetch_catalog(sidecar: str, timeout: float = 120.0) -> list[dict]:
+    # /catalog is NOT a cheap read: it makes the sidecar run GetLeagues + a sequential chunked GetSchedule
+    # over every match league through the browser. On a slower/cold server Chrome that easily exceeds 30s,
+    # so the default is generous (override with --catalog-timeout / HARDVEN_CATALOG_TIMEOUT).
+    with urllib.request.urlopen(f"{sidecar.rstrip('/')}/catalog", timeout=timeout) as r:
         return json.loads(r.read().decode("utf-8")).get("selections", [])
 
 
@@ -423,9 +426,12 @@ def main() -> None:
     ap.add_argument("--no-league-anchor", action="store_true",
                     help="skip the league/sport anchor (match across all sports — disable if a sport's label "
                          "is over-rejecting valid pairs)")
+    ap.add_argument("--catalog-timeout", type=float,
+                    default=float(os.environ.get("HARDVEN_CATALOG_TIMEOUT", "120")),
+                    help="seconds to wait for /catalog — raise on a slow/cold server Chrome (default 120)")
     args = ap.parse_args()
 
-    book = index_catalog(fetch_catalog(args.sidecar))
+    book = index_catalog(fetch_catalog(args.sidecar, args.catalog_timeout))
     print(f"[PAIR] {sum(len(v) for v in book.values())} bookmaker games "
           f"({len(book)} matchups) in /catalog")
     if args.fuzzy and fuzz is None:
