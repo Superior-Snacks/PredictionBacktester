@@ -200,15 +200,32 @@ class BookmakerAdapter(BookAdapter):
                 print(f"[BOOKMAKER] session recovery failed: {ex}")
 
     async def _looks_like_login(self) -> bool:
-        """Heuristic: are we sitting on the login page (account session expired, not just a CF challenge)?"""
+        """Heuristic: are we sitting on the login page (account session expired, not just a CF challenge)?
+        Checks for a VISIBLE password input — bookmaker.eu keeps a header login widget AND a full login-page
+        form in the DOM, so 'any password input exists' is too loose; visibility = a login form is on screen."""
         if not self._page:
             return False
         try:
             if "login" in (self._page.url or "").lower():
                 return True
-            return await self._page.query_selector("input[type=password]") is not None
+            return await self._first_visible("input[type=password]") is not None
         except Exception:
             return False
+
+    async def _first_visible(self, selector: str):
+        """First VISIBLE element matching `selector`. bookmaker.eu renders TWO login forms (the top-right
+        header widget and the full app-login-page), and BOTH carry id/name 'account'/'password' + a submit
+        button — so a plain query_selector hits whichever is first in the DOM, not necessarily the one on
+        screen. We must act on the visible one (and submit ITS form), or the keystrokes/click go nowhere."""
+        if not self._page:
+            return None
+        for el in await self._page.query_selector_all(selector):
+            try:
+                if await el.is_visible():
+                    return el
+            except Exception:
+                pass
+        return None
 
     async def _try_auto_login(self) -> None:
         """Fallback re-login if the inactivity keep-alive failed and we got logged out anyway. bookmaker.eu's
@@ -229,32 +246,51 @@ class BookmakerAdapter(BookAdapter):
             return
         acc_sel = os.environ.get("BOOKMAKER_LOGIN_USER_SEL", "input[name=account]")
         pass_sel = os.environ.get("BOOKMAKER_LOGIN_PASS_SEL", "input[name=password]")
-        submit_sel = os.environ.get("BOOKMAKER_LOGIN_SUBMIT_SEL")   # unset → press Enter on the password field
+        submit_sel = os.environ.get("BOOKMAKER_LOGIN_SUBMIT_SEL")   # unset → click the visible form's submit button
         try:
-            acc = await self._page.query_selector(acc_sel)
-            pwd = await self._page.query_selector(pass_sel)
+            acc = await self._first_visible(acc_sel)
+            pwd = await self._first_visible(pass_sel)
             if not pwd:
-                print("[BOOKMAKER] auto-login: password field not found — manual login needed.")
+                print("[BOOKMAKER] auto-login: no visible password field — manual login needed.")
                 return
             if user and pw:
                 if acc:
-                    await acc.fill(user)
+                    await acc.fill(user)     # fill() fires the input/change events Angular's reactive form needs
                 await pwd.fill(pw)
             else:
                 # rely on Chrome's saved autofill: click the fields to commit it before submitting
                 if acc:
                     await acc.click()
                 await pwd.click()
+            # Submit. This is an Angular (ngSubmit) form, so a real submit event must fire on the SAME form we
+            # just filled: click that form's own submit button — not a bare Enter (Angular may ignore it) and
+            # not some other form's button. Fall back to any visible submit button, then to Enter.
+            clicked = False
             if submit_sel:
-                btn = await self._page.query_selector(submit_sel)
-                await (btn.click() if btn else pwd.press("Enter"))
-            else:
-                await pwd.press("Enter")   # submits the form — the manual "hit Enter"
-            await self._page.wait_for_timeout(6000)
+                btn = await self._first_visible(submit_sel)
+                if btn:
+                    await btn.click(); clicked = True
+            if not clicked:
+                try:
+                    form = (await pwd.evaluate_handle("el => el.closest('form')")).as_element()
+                    btn = await form.query_selector("button[type=submit]") if form else None
+                except Exception:
+                    btn = None
+                if not btn:
+                    btn = await self._first_visible("button[type=submit]")
+                if btn:
+                    await btn.click(); clicked = True
+            if not clicked:
+                await pwd.press("Enter")
+            # Poll up to ~12s for the login form to clear (a fixed sleep is too short on a slow server Chrome).
+            for _ in range(24):
+                await self._page.wait_for_timeout(500)
+                if not await self._looks_like_login():
+                    break
             if await self._looks_like_login():
                 self._autologin_fails += 1
-                print(f"[BOOKMAKER] auto-login failed ({self._autologin_fails}/3) — autofill empty / captcha? "
-                      "set BOOKMAKER_USERNAME/PASSWORD or log in manually.")
+                print(f"[BOOKMAKER] auto-login failed ({self._autologin_fails}/3) — wrong creds / captcha / "
+                      "selector? set BOOKMAKER_USERNAME/PASSWORD (+ _LOGIN_*_SEL) or log in manually via VNC.")
             else:
                 self._autologin_fails = 0
                 print("[BOOKMAKER] auto-login succeeded — session restored.")
