@@ -184,6 +184,11 @@ cause is throttling/swapping (server) vs a network blip (not the server).
 | Var | Default | What |
 |-----|---------|------|
 | `HARDVEN_QUOTE_MAX_AGE_MS` | `30000` | **Bot:** a HardVen quote older than this (sidecar `ts`) is treated as STALE → its book is cleared so no phantom arb can fire after a session drop. |
+| `HARDVEN_POLL_MS` | `3000` | **Bot:** how often the bot pulls the latest cached book from the sidecar. `/odds` is an instant cache read now, so this is cheap. (Quote *freshness* is set by `BOOKMAKER_REFRESH_SEC`, not this.) |
+| `BOOKMAKER_REFRESH_SEC` | `2` | **Sidecar:** background loop cadence — how often it re-fetches the active leagues' schedules into the cache. This is the real quote-freshness floor. |
+| `BOOKMAKER_SCHEDULE_CHUNK_LEAGUES` | `4` | **Sidecar:** leagues per concurrent GetSchedule request. The background fetch splits the active leagues into chunks fired in parallel (Promise.all) so wall-time ≈ slowest chunk, not sum. Lower = more parallelism (watch for rate-limits). |
+| `BOOKMAKER_ACTIVE_TTL_SEC` | `120` | **Sidecar:** a league stops being refreshed if no `/odds` request has asked for it in this long (keeps the background fetch scoped to what the bot actually wants). |
+| `BOOKMAKER_SCHEDULE_LINKDERIV` | `true` | **Sidecar:** `false` drops derivative markets (spreads/totals/props) from GetSchedule for a smaller/faster response while moneyline-only. Flip back to `true` when the props phase needs them. |
 | `BOOKMAKER_KEEPALIVE_SEC` | `180` | **Sidecar:** keep-alive ping interval (renews `__cf_bm` / login). |
 | `BOOKMAKER_RECOVER_COOLDOWN_SEC` | `45` | **Sidecar:** min seconds between session-recovery reloads. |
 | `BOOKMAKER_RECOVER_WAIT_SEC` | `8` | **Sidecar:** wait after a recovery reload for the managed challenge to clear. |

@@ -202,7 +202,12 @@ const decimal DEPTH_FLOOR           = 1m;
 const decimal MIN_BOOK_PRICE        = 0.03m;
 const int     KALSHI_BATCH_SIZE     = 100;
 const int     HARDVEN_BATCH_SIZE       = 200;
-const int     HARDVEN_PING_INTERVAL_MS = 9_000;
+// /odds is now an instant cache read (the sidecar refreshes the book in the background), so the bot can
+// poll fast and cheaply. Default 3s; override with HARDVEN_POLL_MS. NOTE: actual quote freshness is set by
+// the sidecar's BOOKMAKER_REFRESH_SEC — this only controls how often the bot pulls the latest cached book.
+int           HARDVEN_PING_INTERVAL_MS =
+    int.TryParse(Environment.GetEnvironmentVariable("HARDVEN_POLL_MS"), out var _hvPollMs) && _hvPollMs > 0
+        ? _hvPollMs : 3_000;
 const int     NEAR_MISS_INTERVAL_MS  = 60_000;
 const int     STATUS_DASH_INTERVAL_MS = 30_000;
 // HARDVEN_SIDECAR_URL is read after .env is loaded (see below, next to the proxy read) — reading it here

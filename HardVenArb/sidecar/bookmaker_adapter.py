@@ -71,6 +71,31 @@ async (arg) => {
 }
 """
 
+# Multi: fire N POSTs CONCURRENTLY (Promise.all) from inside the page and return all results, in order.
+# Used to split a big GetSchedule (many leagues) into smaller per-chunk requests that run in parallel —
+# wall-time ≈ the slowest chunk, not the sum. One page, many concurrent fetches (no extra windows needed).
+_SCHEDULE_MULTI_JS = """
+async (arg) => {
+  const headers = {
+    'content-type': 'application/json',
+    'accept': 'application/json, text/plain, */*',
+    'cache-control': 'no-cache',
+    'pragma': 'no-cache',
+  };
+  if (arg.rtqname) headers['rtqname'] = arg.rtqname;
+  return await Promise.all(arg.bodies.map(async (b) => {
+    try {
+      const r = await fetch(arg.url, {
+        method: 'POST', headers: headers, body: JSON.stringify(b), credentials: 'include',
+      });
+      return { status: r.status, text: await r.text() };
+    } catch (e) {
+      return { status: 0, text: '' };
+    }
+  }));
+}
+"""
+
 
 def _gameview_body(game_id: str, league_id: str) -> dict:
     """The exact GetGameView POST body shape (captured from the site), parameterised by game/league."""
@@ -130,18 +155,31 @@ class BookmakerAdapter(BookAdapter):
         self._audit = os.environ.get("BOOKMAKER_AUDIT") == "1"
         self._debug_path = f"{'quote_audit' if self._audit else 'live_debug'}_{int(time.time())}.jsonl"
         self._debug_last_sig: dict = {}
+        # ── background schedule refresh (decoupled from /odds) ──
+        # A loop keeps the recently-requested leagues' cache warm so /odds is an instant cache read; the
+        # GetSchedule fetch (which scales ~linearly with league count) runs CONCURRENTLY in chunks off the
+        # request path. Knobs: BOOKMAKER_REFRESH_SEC (cycle), _CHUNK_LEAGUES (leagues per parallel request),
+        # _ACTIVE_TTL_SEC (drop a league from the refresh set if not requested for this long).
+        self._active_leagues: dict[str, float] = {}   # league_id -> unix ts last requested via /odds
+        self._refresh_task: Optional[asyncio.Task] = None
+        self._refresh_sec = float(os.environ.get("BOOKMAKER_REFRESH_SEC", "2"))
+        self._active_ttl = float(os.environ.get("BOOKMAKER_ACTIVE_TTL_SEC", "120"))
+        self._chunk_leagues = max(1, int(os.environ.get("BOOKMAKER_SCHEDULE_CHUNK_LEAGUES", "4")))
+        self._last_refresh_log = 0.0                   # throttle the refresh heartbeat to ~every 30s
 
     # ── session lifecycle ──────────────────────────────────────────────────────
     async def startup(self) -> None:
         await self._start_browser()
         self._keepalive_task = asyncio.create_task(self._keepalive_loop())
-        print("[BOOKMAKER] ready. Odds via bulk GetSchedule polling (selection id = '<GameId>:<LeagueId>:H|V').\n"
+        self._refresh_task = asyncio.create_task(self._refresh_loop())
+        print("[BOOKMAKER] ready. Odds via BACKGROUND GetSchedule refresh (selection id = '<GameId>:<LeagueId>:H|V').\n"
               "[BOOKMAKER] >>> click into ANY match in the window once: it seeds the 'rtqname' session header "
               "and sets a deep referer, both of which the BetslipProxy calls require.\n"
-              "[BOOKMAKER] keep-alive + auto-recovery armed (reloads the session on Cloudflare/login expiry).")
+              f"[BOOKMAKER] refresh every {self._refresh_sec:g}s ({self._chunk_leagues} leagues/chunk, concurrent); "
+              "keep-alive + auto-recovery armed.")
 
     async def shutdown(self) -> None:
-        for task in (self._keepalive_task, self._recover_task):
+        for task in (self._keepalive_task, self._recover_task, self._refresh_task):
             if task and not task.done():
                 task.cancel()
         # The user closing the window mid-run makes close() raise "Connection closed" — swallow it.
@@ -351,10 +389,13 @@ class BookmakerAdapter(BookAdapter):
         return None
 
     async def odds(self, selection_ids: list[str]) -> dict[str, Selection]:
-        # The league id is what GetSchedule needs; one call covers every requested league at once.
-        leagues = {p[1] for sid in selection_ids if (p := self._parse_sid(sid))}
-        if leagues:
-            await self._ensure_schedule(leagues)
+        # Decoupled: just RECORD which leagues are wanted (the background _refresh_loop keeps them warm) and
+        # return the cached selections immediately. No GetSchedule on the request path — /odds is an instant
+        # cache read. A brand-new league fills in on the next refresh cycle (≤ BOOKMAKER_REFRESH_SEC).
+        now = time.time()
+        for sid in selection_ids:
+            if (p := self._parse_sid(sid)):
+                self._active_leagues[p[1]] = now
         return {sid: self._odds_cache[sid] for sid in selection_ids if sid in self._odds_cache}
 
     async def _ensure_schedule(self, leagues: set) -> None:
@@ -374,6 +415,100 @@ class BookmakerAdapter(BookAdapter):
             for e in parse_schedule(data, pre_match_only=False).values():   # observe live too (telemetry)
                 self._cache_entry(e, now)
             self._sched_covered = set(leagues)
+
+    # ── background refresh (decoupled from /odds; concurrent chunked GetSchedule) ──
+    async def _refresh_loop(self) -> None:
+        """Keep the cache warm for leagues requested via /odds in the last BOOKMAKER_ACTIVE_TTL_SEC. Each
+        cycle fetches them CONCURRENTLY in chunks (≈ slowest-chunk wall-time, not sum), so /odds never blocks
+        on a fetch. Robust: any error is logged and the loop keeps going (a dead loop = permanently stale)."""
+        while True:
+            try:
+                await asyncio.sleep(self._refresh_sec)
+            except asyncio.CancelledError:
+                break
+            now = time.time()
+            leagues = {lg for lg, ts in self._active_leagues.items() if now - ts <= self._active_ttl}
+            if not leagues:
+                continue
+            try:
+                t0 = time.perf_counter()
+                n_chunks = await self._refresh_schedule_concurrent(leagues)
+                dt = time.perf_counter() - t0
+                now2 = time.time()
+                if dt > self._refresh_sec or now2 - self._last_refresh_log >= 30:
+                    self._last_refresh_log = now2
+                    slow = " — SLOWER than the refresh interval (can't keep up; raise it or trim leagues)" \
+                        if dt > self._refresh_sec else ""
+                    print(f"[BOOKMAKER] refresh: {len(leagues)} leagues / {n_chunks} chunks in {dt:.2f}s "
+                          f"(cache={len(self._odds_cache)} sel){slow}")
+            except Exception as ex:
+                print(f"[BOOKMAKER] background refresh error: {type(ex).__name__}: {ex}")
+
+    async def _refresh_schedule_concurrent(self, leagues: set) -> int:
+        """Fetch the given leagues' schedules in concurrent chunks and fold them into the odds cache.
+        Returns the number of chunks issued (for the heartbeat log)."""
+        ordered = sorted(leagues)
+        chunks = [ordered[i:i + self._chunk_leagues] for i in range(0, len(ordered), self._chunk_leagues)]
+        results = await self._post_schedule_multi([_schedule_body(c) for c in chunks])
+        if not results:
+            return len(chunks)
+        now, parsed_any = time.time(), False
+        for data in results:
+            if not data:
+                continue
+            if self._live_debug or self._audit:
+                self._capture_audit(data)
+            for e in parse_schedule(data, pre_match_only=False).values():   # observe live too (telemetry)
+                self._cache_entry(e, now)
+            parsed_any = True
+        if parsed_any:
+            self._sched_last_fetch = now
+            self._sched_covered = set(ordered)
+        return len(chunks)
+
+    async def _post_schedule_multi(self, bodies: list[dict]) -> list[Optional[dict]]:
+        """One page.evaluate that fires all GetSchedule chunk POSTs CONCURRENTLY (Promise.all). Returns one
+        parsed payload (or None) per body, in order. Triggers session recovery on auth/5xx like _post_json."""
+        if not self._page or not bodies:
+            return []
+        if not self._rtqname:
+            print("[BOOKMAKER] no rtqname captured yet — click into any match in the window once.")
+        try:
+            raw = await self._page.evaluate(
+                _SCHEDULE_MULTI_JS, {"url": SCHEDULE_URL, "rtqname": self._rtqname, "bodies": bodies})
+        except Exception as ex:
+            print(f"[BOOKMAKER] GetSchedule(multi) fetch error: {ex}")
+            self._trigger_recovery("GetSchedule(multi) evaluate error")
+            return []
+        out: list[Optional[dict]] = []
+        auth_fail = False
+        for res in raw or []:
+            status, text = (res or {}).get("status"), (res or {}).get("text") or ""
+            if status != 200:
+                if status in (401, 403, 429) or (isinstance(status, int) and status >= 500):
+                    auth_fail = True
+                out.append(None)
+                continue
+            out.append(self._parse_body(text))
+        if auth_fail:
+            print("[BOOKMAKER] GetSchedule(multi): a chunk returned auth/5xx — triggering session recovery.")
+            self._trigger_recovery("GetSchedule(multi) auth/5xx")
+        return out
+
+    @staticmethod
+    def _parse_body(text: str) -> Optional[dict]:
+        """Parse a BetslipProxy response body, unwrapping the ASP.NET {"d": …} envelope if present."""
+        try:
+            data = json.loads(text)
+        except ValueError:
+            return None
+        if isinstance(data, dict) and "d" in data and not ("GameView" in data or "Schedule" in data):
+            d = data["d"]
+            try:
+                data = json.loads(d) if isinstance(d, str) else d
+            except ValueError:
+                return None
+        return data
 
     def _capture_audit(self, data: dict) -> None:
         """Raw bookmaker TAPE for post-mortem arb verification (+ lock diagnosis). On change, per main game,
