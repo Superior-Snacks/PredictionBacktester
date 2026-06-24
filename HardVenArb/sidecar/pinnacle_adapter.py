@@ -1,44 +1,49 @@
 """
-pinnacle_adapter.py — Pinnacle (pinnacle.bet) odds via its private "Arcadia" JSON API.
+pinnacle_adapter.py — Pinnacle (pinnacle.bet) odds via its private "Arcadia" API.
 
-WHY THIS IS A CLEAN httpx ADAPTER (no Playwright, unlike bookmaker.eu): api.arcadia.pinnacle.com answers a
-plain HTTP client — a bare `curl` returns data, so there is NO Cloudflare browser-fingerprint wall. Auth is
-three REPLAYED headers captured from a logged-in browser session:
-  x-api-key     — the site's STATIC public client key (shared by all users; embedded in their JS).
-  x-session     — your PER-USER logged-in token. THIS unlocks REAL-TIME odds (a guest gets DELAYED prices).
-                  It is a live credential — it expires/rotates → refresh PINNACLE_SESSION when calls 401.
-  x-device-uuid — a client-generated device id.
-Pinnacle CLOSED its official betting API, so this replays the website's own private API with a scraped
-session token. The traffic is therefore tied to your account → OPERATE GENTLY (account-ban risk): SERIAL
-jittered requests, conservative cadence, hard back-off on 429. Concurrency is deliberately NOT used here
-(that is what got the bookmaker account banned).
+TWO odds sources, selectable with PINNACLE_ODDS_MODE:
+  "ws"   (DEFAULT) — MQTT-over-WebSocket PUSH feed (real-time, gentle, looks like the real client). This is
+                     what the browser uses after the initial REST snapshot. Best for LIVE arbs.
+  "rest" (fallback) — serial polling of /leagues/{id}/markets/straight (use if the WS is blocked/awkward).
 
-ENDPOINTS (base https://api.arcadia.pinnacle.com/0.1):
-  GET /sports                              -> sports [{id,name,primaryMarketType,matchupCount,...}]
-  GET /leagues/{leagueId}/matchups         -> games [{id, participants[{alignment,name,order}], league,
-                                               startTime(ISO-UTC), status, periods, ...}]  (NO odds)
-  GET /leagues/{leagueId}/markets/straight -> ALL straight markets for the league in ONE call:
-       [{ matchupId, period, type("moneyline"|"total"|"spread"), key("s;{period};{m|ou|s}"),
-          limits[{amount,type:"maxRiskStake"}], cutoffAt,
-          prices[{participantId, price(AMERICAN int), points?}], version? }]
-       2-way game moneyline = type=="moneyline" & period 0 & exactly 2 prices (3 = 3-way w/ draw);
-       many prices = an outright/futures → skip.
+WHY NO PLAYWRIGHT: api.arcadia.pinnacle.com answers a plain HTTP/WS client — `curl` returns JSON, so there
+is NO Cloudflare *browser-challenge* on these endpoints (Cloudflare is just the CDN; the gate is the
+x-api-key/x-session headers + the MQTT CONNECT auth). Pinnacle CLOSED its official API, so this replays the
+website's own private API with a scraped session → OPERATE GENTLY (account-ban risk): the WS is passive
+(no polling), the REST fallback is serial+jittered+backoff. No concurrency (that got the bookmaker acct banned).
 
-SELECTION-ID (the pinnacle/hardven token in cross_pairs.json):
-  "{leagueId}:{matchupId}:{participantId}" — leagueId picks the markets/straight poll, matchupId the
-  market, participantId the exact price. Map Kalshi YES player -> the participantId that IS that player;
-  catalog() pairs by participant ORDER (prices[i] ↔ matchup.participants order i; home=0, away=1).
+WEBSOCKET (mode "ws") — MQTT 3.1.1 over WSS at wss://api.arcadia.pinnacle.com/ws (subprotocol "mqtt"):
+  CONNECT   username = ACCOUNT ID (PINNACLE_WS_USERNAME), password = "{x-session}|{suffix}" (PINNACLE_WS_PASSWORD).
+  SUBSCRIBE topics "matchups/reg/lg/{leagueId}/{pre|live/ld|live/dz|live/both}" (reg=regular incl moneyline).
+  PUBLISH   payload = JSON {op:"upd"|"add"|"del", pk:matchupId, rec:{id, league{id}, participants[...],
+            markets:[{key:"s;{period};{type}", period, type, status, prices:[{designation:"home"|"away"|
+            "draw", price(AMERICAN), points?}], limits:[{type:"maxRiskStake", amount}]}]}}.
+  Full-game 2-way moneyline = market period 0 & type "moneyline" → prices home/away (3 = +draw).
 
-CONFIG (env): PINNACLE_SESSION (required), PINNACLE_DEVICE_UUID (required), PINNACLE_API_KEY (defaults to
-  the observed static site key), PINNACLE_CATALOG_LEAGUES (CSV league ids for catalog()/pairing),
-  PINNACLE_REFRESH_SEC (bg refresh cadence, default 5 — GENTLE), PINNACLE_ACTIVE_TTL_SEC (default 120),
-  PINNACLE_REQUEST_JITTER_MS (default 250 — random gap between serial league fetches; less robotic).
+SELECTION-ID (the token in cross_pairs.json): "{leagueId}:{matchupId}:{designation}" (designation = home|
+  away|draw — semantic, taken straight from the WS payload; catalog() emits the same from the matchup's
+  participant alignment, so WS odds and REST catalog keys MATCH).
+
+FRESHNESS on a PUSH feed: a STABLE price does not re-tick, so we must NOT let its ts age while the WS is
+healthy — the live connection IS the freshness guarantee (Pinnacle pushes any change/suspend). So odds()
+stamps ts=now WHILE CONNECTED; on disconnect it serves the stored ts → it ages → the C# gate clears the book.
+
+CONFIG (env): PINNACLE_WS_USERNAME, PINNACLE_WS_PASSWORD (WS auth); PINNACLE_API_KEY (defaults to the
+  observed static site key); PINNACLE_SESSION, PINNACLE_DEVICE_UUID (REST headers for catalog()/rest mode);
+  PINNACLE_CATALOG_LEAGUES (CSV league ids for catalog/pairing); PINNACLE_ODDS_MODE (ws|rest, default ws);
+  PINNACLE_REFRESH_SEC (rest mode cadence, default 15 — GENTLE), PINNACLE_ACTIVE_TTL_SEC (default 180),
+  PINNACLE_REQUEST_JITTER_MS (rest mode, default 250).
+
+NOTE: requires `paho-mqtt` for ws mode (pip install paho-mqtt). UNTESTED against the live WS — verify the
+upgrade isn't Cloudflare-challenged on first connect; if it is, fall back to PINNACLE_ODDS_MODE=rest.
 """
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import random
+import threading
 import time
 from typing import Optional
 
@@ -46,12 +51,13 @@ import httpx
 
 from book_adapter import BookAdapter, BetResult, CatalogEntry, Selection
 
-BASE = os.environ.get("PINNACLE_API_BASE", "https://api.arcadia.pinnacle.com/0.1")
-# x-api-key is the website's STATIC public client key (not a per-user secret); default to the observed value,
-# override via env if Pinnacle rotates it.
-DEFAULT_API_KEY = "CmX2KcMrXuFmNg6YFbmTxE0y9CIrOi0R"
+REST_BASE = os.environ.get("PINNACLE_API_BASE", "https://api.arcadia.pinnacle.com/0.1")
+WS_HOST = os.environ.get("PINNACLE_WS_HOST", "api.arcadia.pinnacle.com")
+WS_PATH = os.environ.get("PINNACLE_WS_PATH", "/ws")
+DEFAULT_API_KEY = "CmX2KcMrXuFmNg6YFbmTxE0y9CIrOi0R"   # static public site client key (not a per-user secret)
 USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
               "Chrome/149.0.0.0 Safari/537.36")
+_SIDES = ("home", "away", "draw")
 
 
 def american_to_decimal(american) -> float:
@@ -66,7 +72,6 @@ def american_to_decimal(american) -> float:
 
 
 def _max_risk(limits) -> float:
-    """Pull the maxRiskStake (max cash you may stake) from a market's limits array."""
     for lim in limits or []:
         if lim.get("type") == "maxRiskStake":
             try:
@@ -80,102 +85,205 @@ class PinnacleAdapter(BookAdapter):
     name = "pinnacle"
 
     def __init__(self) -> None:
+        self._mode = os.environ.get("PINNACLE_ODDS_MODE", "ws").strip().lower()
         self._api_key = os.environ.get("PINNACLE_API_KEY", DEFAULT_API_KEY)
         self._session = os.environ.get("PINNACLE_SESSION", "")
         self._device = os.environ.get("PINNACLE_DEVICE_UUID", "")
-        self._client: Optional[httpx.AsyncClient] = None
-        self._cache: dict[str, Selection] = {}            # "{lid}:{mid}:{pid}" -> Selection
-        self._active_leagues: dict[str, float] = {}       # leagueId -> unix ts last requested via /odds
-        self._refresh_task: Optional[asyncio.Task] = None
-        self._refresh_sec = float(os.environ.get("PINNACLE_REFRESH_SEC", "5"))
-        self._active_ttl = float(os.environ.get("PINNACLE_ACTIVE_TTL_SEC", "120"))
-        self._jitter_ms = float(os.environ.get("PINNACLE_REQUEST_JITTER_MS", "250"))
+        self._ws_user = os.environ.get("PINNACLE_WS_USERNAME", "")
+        self._ws_pass = os.environ.get("PINNACLE_WS_PASSWORD", "")
         self._catalog_leagues = [x.strip() for x in
                                  os.environ.get("PINNACLE_CATALOG_LEAGUES", "").split(",") if x.strip()]
+        self._cache: dict[str, Selection] = {}            # "{lid}:{mid}:{designation}" -> Selection
+        self._cache_lock = threading.Lock()               # paho thread writes; asyncio reads
+        self._active_leagues: dict[str, float] = {}       # leagueId -> unix ts last requested via /odds
+        self._subscribed: set[str] = set()                # leagueIds subscribed on the WS
+        self._http: Optional[httpx.AsyncClient] = None     # for catalog() (+ rest mode)
+        # ── WS state ──
+        self._client = None
+        self._connected = False
+        # ── REST-mode state ──
+        self._refresh_task: Optional[asyncio.Task] = None
+        self._refresh_sec = float(os.environ.get("PINNACLE_REFRESH_SEC", "15"))
+        self._active_ttl = float(os.environ.get("PINNACLE_ACTIVE_TTL_SEC", "180"))
+        self._jitter_ms = float(os.environ.get("PINNACLE_REQUEST_JITTER_MS", "250"))
         self._backoff_sec = 0.0
-        self._rate_limited = False                        # any 429 this refresh cycle? (drives backoff)
-        self._rate_limit_total = 0
+        self._rate_limited = False
+        self._rl_total = 0
         self._last_hb = 0.0
 
-    # ── lifecycle ────────────────────────────────────────────────────────────
+    # ── lifecycle ──────────────────────────────────────────────────────────────
     async def startup(self) -> None:
-        if not self._session or not self._device:
-            print("[PINNACLE] WARNING: PINNACLE_SESSION / PINNACLE_DEVICE_UUID not set — real-time odds need a "
-                  "logged-in session token. Set them from a browser capture (x-session / x-device-uuid).")
-        self._client = httpx.AsyncClient(
-            headers={
-                "accept": "application/json",
-                "content-type": "application/json",
-                "origin": "https://www.pinnacle.bet",
-                "referer": "https://www.pinnacle.bet/",
-                "user-agent": USER_AGENT,
-                "x-api-key": self._api_key,
-                "x-device-uuid": self._device,
-                "x-session": self._session,
-            },
-            timeout=15.0,
-        )
-        self._refresh_task = asyncio.create_task(self._refresh_loop())
-        print(f"[PINNACLE] ready (httpx, no browser). Gentle background refresh every {self._refresh_sec:g}s, "
-              "SERIAL per-league + jitter (account-safe). Odds id = '<leagueId>:<matchupId>:<participantId>'.")
+        self._http = httpx.AsyncClient(
+            headers={"accept": "application/json", "content-type": "application/json",
+                     "origin": "https://www.pinnacle.bet", "referer": "https://www.pinnacle.bet/",
+                     "user-agent": USER_AGENT, "x-api-key": self._api_key,
+                     "x-device-uuid": self._device, "x-session": self._session},
+            timeout=15.0)
+        if self._mode == "rest":
+            self._refresh_task = asyncio.create_task(self._refresh_loop())
+            print(f"[PINNACLE] ready — REST poll mode (gentle serial, {self._refresh_sec:g}s). "
+                  "Odds id = '<leagueId>:<matchupId>:<designation>'.")
+        else:
+            self._start_ws()
 
     async def shutdown(self) -> None:
         if self._refresh_task and not self._refresh_task.done():
             self._refresh_task.cancel()
-        if self._client:
+        if self._client is not None:
             try:
-                await self._client.aclose()
+                self._client.loop_stop()
+                self._client.disconnect()
+            except Exception:
+                pass
+        if self._http:
+            try:
+                await self._http.aclose()
             except Exception:
                 pass
 
-    # ── HTTP ─────────────────────────────────────────────────────────────────
-    async def _get(self, path: str):
-        if not self._client:
-            return None
-        try:
-            r = await self._client.get(BASE + path)
-        except Exception as ex:
-            print(f"[PINNACLE] GET {path} error: {type(ex).__name__}: {ex}")
-            return None
-        sc = r.status_code
-        if sc == 429:
-            self._rate_limited = True
-            self._rate_limit_total += 1
-            print(f"[PINNACLE] *** RATE LIMITED (429) on {path} *** (cumulative {self._rate_limit_total}) — "
-                  "backing off. Permanent fix: RAISE PINNACLE_REFRESH_SEC or narrow the leagues.")
-            return None
-        if sc in (401, 403):
-            print(f"[PINNACLE] AUTH {sc} on {path} — x-session likely expired; log in again and refresh "
-                  "PINNACLE_SESSION (re-capture the token).")
-            return None
-        if sc != 200:
-            print(f"[PINNACLE] GET {path} HTTP {sc}")
-            return None
-        try:
-            return r.json()
-        except Exception:
-            return None
-
-    # ── M0: odds (decoupled — instant cache read; the bg loop keeps it warm) ──
     @staticmethod
     def _parse_sid(sid: str):
         parts = sid.split(":")
-        if len(parts) == 3 and all(parts):
-            return parts[0], parts[1], parts[2]   # leagueId, matchupId, participantId (all str)
+        if len(parts) == 3 and parts[0] and parts[1] and parts[2] in _SIDES:
+            return parts[0], parts[1], parts[2]   # leagueId, matchupId, designation
         return None
 
     async def odds(self, selection_ids: list[str]) -> dict[str, Selection]:
-        # Record the leagues these selections need (the bg loop keeps them warm); return cache instantly.
         now = time.time()
+        new: list[str] = []
         for sid in selection_ids:
             p = self._parse_sid(sid)
             if p:
                 self._active_leagues[p[0]] = now
-        return {sid: self._cache[sid] for sid in selection_ids if sid in self._cache}
+                if self._mode == "ws" and p[0] not in self._subscribed:
+                    new.append(p[0])
+        for lid in new:
+            self._subscribe_league(lid)
+        out: dict[str, Selection] = {}
+        with self._cache_lock:
+            for sid in selection_ids:
+                s = self._cache.get(sid)
+                if not s:
+                    continue
+                # WS push: stamp ts=now WHILE CONNECTED (connection = freshness; a stable price won't re-tick
+                # but is still live — Pinnacle pushes any change/suspend). Disconnected → serve stored ts → ages
+                # → C# clears. REST mode: the poller already stamps ts on each fetch, so serve it as-is.
+                ts = (now if self._connected else s.ts) if self._mode == "ws" else s.ts
+                out[sid] = Selection(s.selection_id, s.decimal_odds, s.max_stake, "open", ts)
+        return out
 
+    # ── WS (MQTT) odds source ────────────────────────────────────────────────
+    def _start_ws(self) -> None:
+        try:
+            import paho.mqtt.client as mqtt
+        except Exception:
+            print("[PINNACLE WS] paho-mqtt not installed (`pip install paho-mqtt`). Falling back to REST mode.")
+            self._mode = "rest"
+            self._refresh_task = asyncio.create_task(self._refresh_loop())
+            return
+        if not self._ws_user or not self._ws_pass:
+            print("[PINNACLE WS] WARNING: PINNACLE_WS_USERNAME / PINNACLE_WS_PASSWORD not set — set from the WS "
+                  "CONNECT frame (username = account id, password = '{x-session}|{suffix}').")
+        cid = "sub-" + "".join(random.choices(
+            "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789", k=16))
+        try:
+            self._client = mqtt.Client(client_id=cid, transport="websockets",
+                                       callback_api_version=mqtt.CallbackAPIVersion.VERSION1)
+        except (TypeError, AttributeError):
+            self._client = mqtt.Client(client_id=cid, transport="websockets")   # paho < 2.0
+        self._client.username_pw_set(self._ws_user, self._ws_pass)
+        self._client.ws_set_options(path=WS_PATH, headers={
+            "Origin": "https://www.pinnacle.bet", "User-Agent": USER_AGENT, "x-api-key": self._api_key})
+        try:
+            self._client.tls_set()                       # wss
+        except Exception:
+            pass
+        self._client.reconnect_delay_set(min_delay=1, max_delay=60)
+        self._client.on_connect = self._on_connect
+        self._client.on_disconnect = self._on_disconnect
+        self._client.on_message = self._on_message
+        try:
+            self._client.connect_async(WS_HOST, 443, keepalive=60)
+            self._client.loop_start()                    # background network thread
+            print(f"[PINNACLE WS] connecting wss://{WS_HOST}{WS_PATH} (MQTT). Real-time PUSH; "
+                  "id = '<leagueId>:<matchupId>:<designation>'.")
+        except Exception as ex:
+            print(f"[PINNACLE WS] connect error: {ex}")
+
+    def _topics_for(self, lid: str):
+        return [(f"matchups/reg/lg/{lid}/pre", 0),
+                (f"matchups/reg/lg/{lid}/live/ld", 0),
+                (f"matchups/reg/lg/{lid}/live/dz", 0),
+                (f"matchups/reg/lg/{lid}/live/both", 0)]
+
+    def _subscribe_league(self, lid: str) -> None:
+        if not self._client or lid in self._subscribed:
+            return
+        try:
+            for topic, qos in self._topics_for(lid):
+                self._client.subscribe(topic, qos)
+            self._subscribed.add(lid)
+            print(f"[PINNACLE WS] subscribed league {lid}")
+        except Exception as ex:
+            print(f"[PINNACLE WS] subscribe {lid} error: {ex}")
+
+    def _on_connect(self, client, userdata, flags, rc, *a) -> None:
+        self._connected = (rc == 0) or (getattr(rc, "value", None) == 0)
+        print(f"[PINNACLE WS] connected (rc={rc}).")
+        self._subscribed.clear()                          # resubscribe everything on (re)connect
+        for lid in list(self._active_leagues.keys()):
+            self._subscribe_league(lid)
+
+    def _on_disconnect(self, client, userdata, rc, *a) -> None:
+        self._connected = False
+        print(f"[PINNACLE WS] disconnected (rc={rc}) — paho will auto-reconnect; books go stale until then.")
+
+    def _on_message(self, client, userdata, msg, *a) -> None:
+        try:
+            data = json.loads(msg.payload.decode("utf-8"))
+        except Exception:
+            return
+        try:
+            self._apply(data)
+        except Exception as ex:
+            print(f"[PINNACLE WS] apply error: {type(ex).__name__}: {ex}")
+
+    def _apply(self, data: dict) -> None:
+        rec = data.get("rec") or {}
+        mid = rec.get("id") if rec.get("id") is not None else data.get("pk")
+        lid = (rec.get("league") or {}).get("id")
+        if mid is None or lid is None:
+            return
+        lid, mid = str(lid), str(mid)
+        prefix = f"{lid}:{mid}:"
+        if data.get("op") == "del":
+            with self._cache_lock:
+                for k in [k for k in self._cache if k.startswith(prefix)]:
+                    del self._cache[k]
+            return
+        now = time.time()
+        updates: dict[str, Selection] = {}
+        for mk in rec.get("markets") or []:
+            if mk.get("type") != "moneyline" or mk.get("period") != 0:
+                continue
+            if mk.get("status") and mk.get("status") != "open":
+                continue
+            max_stake = _max_risk(mk.get("limits"))
+            for pr in mk.get("prices") or []:
+                desig = pr.get("designation")
+                if desig not in _SIDES:
+                    continue
+                dec = american_to_decimal(pr.get("price"))
+                if dec <= 1.0:
+                    continue
+                token = f"{lid}:{mid}:{desig}"
+                updates[token] = Selection(token, decimal_odds=dec, max_stake=max_stake, status="open", ts=now)
+        if updates:
+            with self._cache_lock:
+                self._cache.update(updates)
+
+    # ── REST fallback odds source (designation via participant order) ─────────
     async def _refresh_loop(self) -> None:
-        """Keep the cache warm for leagues requested in the last PINNACLE_ACTIVE_TTL_SEC, fetched ONE AT A
-        TIME with jitter (gentle/account-safe — NO concurrency). Auto-backs-off on 429."""
         while True:
             try:
                 await asyncio.sleep(self._backoff_sec if self._backoff_sec > 0 else self._refresh_sec)
@@ -191,73 +299,98 @@ class PinnacleAdapter(BookAdapter):
                 for i, lid in enumerate(leagues):
                     await self._refresh_league(lid)
                     if i + 1 < len(leagues) and self._jitter_ms > 0:
-                        await asyncio.sleep(random.uniform(0, self._jitter_ms / 1000.0))  # de-robotize
+                        await asyncio.sleep(random.uniform(0, self._jitter_ms / 1000.0))
             except Exception as ex:
                 print(f"[PINNACLE] refresh error: {type(ex).__name__}: {ex}")
             dt = time.perf_counter() - t0
-            # auto-backoff on 429 (×2, cap 60s; reset when clean)
             if self._rate_limited:
-                self._backoff_sec = min(max(self._backoff_sec, self._refresh_sec) * 2, 60.0)
-                print(f"[PINNACLE] rate-limited → backing off to {self._backoff_sec:.0f}s "
-                      f"(normal {self._refresh_sec:g}s).")
+                self._backoff_sec = min(max(self._backoff_sec, self._refresh_sec) * 2, 120.0)
+                print(f"[PINNACLE] rate-limited → backing off to {self._backoff_sec:.0f}s.")
             elif self._backoff_sec > 0:
-                print(f"[PINNACLE] rate limit cleared — resuming {self._refresh_sec:g}s refresh.")
+                print(f"[PINNACLE] rate limit cleared — resuming {self._refresh_sec:g}s.")
                 self._backoff_sec = 0.0
             if now - self._last_hb >= 30:
                 self._last_hb = now
-                rl = f"  429s: {self._rate_limit_total}" if self._rate_limit_total else ""
+                rl = f"  429s: {self._rl_total}" if self._rl_total else ""
                 print(f"[PINNACLE] refresh: {len(leagues)} leagues (serial) in {dt:.2f}s "
                       f"(cache={len(self._cache)} sel){rl}")
 
     async def _refresh_league(self, lid: str) -> None:
-        markets = await self._get(f"/leagues/{lid}/markets/straight")
+        markets = await self._http_get(f"/leagues/{lid}/markets/straight", count_429=True)
         if not markets:
             return
+        # join matchups (participant alignment, by order) so REST participantId-prices map to a designation
+        matchups = await self._http_get(f"/leagues/{lid}/matchups") or []
+        order_to_side = {}
+        for m in matchups:
+            sides = {}
+            for p in sorted((m.get("participants") or []), key=lambda x: x.get("order", 0)):
+                if p.get("alignment") in _SIDES:
+                    sides[p.get("order")] = p.get("alignment")
+            order_to_side[m.get("id")] = sides
         now = time.time()
         for mk in markets:
             if mk.get("type") != "moneyline" or mk.get("period") != 0:
                 continue
             prices = mk.get("prices") or []
-            if not (2 <= len(prices) <= 3):       # 2-way / 3-way GAME; skip outrights (many prices)
+            if not (2 <= len(prices) <= 3):
                 continue
             mid = mk.get("matchupId")
+            sides = order_to_side.get(mid, {})
             max_stake = _max_risk(mk.get("limits"))
-            for pr in prices:
+            for idx, pr in enumerate(prices):
+                desig = sides.get(idx) or (_SIDES[idx] if idx < len(_SIDES) else None)   # fallback by order
+                if desig not in _SIDES:
+                    continue
                 dec = american_to_decimal(pr.get("price"))
                 if dec <= 1.0:
                     continue
-                token = f"{lid}:{mid}:{pr.get('participantId')}"
-                # status="open": a price present = tradeable. A suspended/removed price simply drops out of
-                # the response → its cache entry's ts ages → the C# freshness gate clears it (no phantom).
-                self._cache[token] = Selection(token, decimal_odds=dec, max_stake=max_stake,
-                                               status="open", ts=now)
+                token = f"{lid}:{mid}:{desig}"
+                with self._cache_lock:
+                    self._cache[token] = Selection(token, decimal_odds=dec, max_stake=max_stake,
+                                                   status="open", ts=now)
 
-    # ── pairing catalog (set PINNACLE_CATALOG_LEAGUES; auto-discovery of leagues-per-sport = TODO) ──
+    # ── HTTP (catalog + rest mode) ───────────────────────────────────────────
+    async def _http_get(self, path: str, count_429: bool = False):
+        if not self._http:
+            return None
+        try:
+            r = await self._http.get(REST_BASE + path)
+        except Exception as ex:
+            print(f"[PINNACLE] GET {path} error: {type(ex).__name__}: {ex}")
+            return None
+        if r.status_code == 429:
+            if count_429:
+                self._rate_limited = True
+                self._rl_total += 1
+            print(f"[PINNACLE] *** RATE LIMITED (429) on {path} *** — raise PINNACLE_REFRESH_SEC / fewer leagues.")
+            return None
+        if r.status_code in (401, 403):
+            print(f"[PINNACLE] AUTH {r.status_code} on {path} — refresh PINNACLE_SESSION (re-capture token).")
+            return None
+        if r.status_code != 200:
+            print(f"[PINNACLE] GET {path} HTTP {r.status_code}")
+            return None
+        try:
+            return r.json()
+        except Exception:
+            return None
+
+    # ── pairing catalog (REST matchups; designation-keyed to match the WS odds) ──
     async def catalog(self) -> list[CatalogEntry]:
         if not self._catalog_leagues:
-            print("[PINNACLE] catalog(): set PINNACLE_CATALOG_LEAGUES (CSV of league ids, e.g. 246 for MLB) to "
-                  "enumerate games for pairing. (Auto-discovery via /sports/{id}/leagues is a TODO.)")
+            print("[PINNACLE] catalog(): set PINNACLE_CATALOG_LEAGUES (CSV league ids, e.g. 246 for MLB).")
             return []
         out: list[CatalogEntry] = []
         for lid in self._catalog_leagues:
-            matchups = await self._get(f"/leagues/{lid}/matchups") or []
-            markets = await self._get(f"/leagues/{lid}/markets/straight") or []
-            if self._jitter_ms > 0:
-                await asyncio.sleep(random.uniform(0, self._jitter_ms / 1000.0))
-            # index period-0 moneyline prices (participant-ordered) by matchupId — 2-way only for the join
-            ml: dict = {}
-            for mk in markets:
-                if mk.get("type") == "moneyline" and mk.get("period") == 0:
-                    prices = mk.get("prices") or []
-                    if len(prices) == 2:           # auto-pair 2-way only; 3-way (draw) mapping is a TODO
-                        ml[mk.get("matchupId")] = prices
+            matchups = await self._http_get(f"/leagues/{lid}/matchups") or []
             for m in matchups:
                 mid = m.get("id")
-                prices = ml.get(mid)
-                if not prices:
+                p0 = next((p for p in (m.get("periods") or []) if p.get("period") == 0), None)
+                if not (p0 and p0.get("hasMoneyline")):
                     continue
-                parts = sorted((m.get("participants") or []), key=lambda p: p.get("order", 0))
-                if len(parts) != 2:
+                parts = m.get("participants") or []
+                if len(parts) < 2:
                     continue
                 lg = m.get("league") or {}
                 sport = ((lg.get("sport") or {}).get("name")) or ""
@@ -265,23 +398,23 @@ class PinnacleAdapter(BookAdapter):
                 home = next((p.get("name", "") for p in parts if p.get("alignment") == "home"), "")
                 away = next((p.get("name", "") for p in parts if p.get("alignment") == "away"), "")
                 event = f"{home} vs {away}"
-                # ASSUMPTION (verify on a known game): prices are returned in participant ORDER, so
-                # prices[0] ↔ parts[0] (home), prices[1] ↔ parts[1] (away). pair_auto's price-consistency
-                # gate catches a swap, but get this right.
-                for i, p in enumerate(parts):
+                three_way = sport.strip().lower() == "soccer"
+                for p in parts:
+                    desig = p.get("alignment")
+                    if desig not in _SIDES:
+                        continue
                     out.append(CatalogEntry(
-                        selection_id=f"{lid}:{mid}:{prices[i].get('participantId')}",
+                        selection_id=f"{lid}:{mid}:{desig}",
                         sport=sport, league=league_name, event=event, market="moneyline",
                         selection_name=p.get("name", ""), start_time=m.get("startTime"),
-                        three_way=False))
+                        three_way=three_way))
         return out
 
     # ── M1 (later): betting + wallet confirmation ──
     async def balance(self) -> float:
-        return 0.0  # TODO(M1): read account balance.
+        return 0.0  # TODO(M1)
 
     async def place_bet(self, selection_id: str, stake: float, max_odds: float) -> BetResult:
-        # TODO(M1): Pinnacle's bet-placement endpoint (irreversible). Accept only if odds <= max_odds.
         return BetResult(accepted=False, reason="place_bet not implemented (M1)")
 
     async def open_bets(self) -> list[dict]:

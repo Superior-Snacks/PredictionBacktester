@@ -7,3 +7,6 @@ websockets   # bookmaker.eu STOMP-over-WebSocket odds client (bookmaker_stomp.py
 # bookmaker.eu adapter is browser-driven (no API/broker needed). After installing:
 #   playwright install chromium
 playwright
+
+# Pinnacle adapter (pinnacle_adapter.py) — MQTT-over-WebSocket push feed (PINNACLE_ODDS_MODE=ws)
+paho-mqtt
