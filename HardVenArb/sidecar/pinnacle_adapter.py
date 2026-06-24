@@ -109,6 +109,8 @@ class PinnacleAdapter(BookAdapter):
         self._status_task: Optional[asyncio.Task] = None       # browser-like /status liveness ping
         self._status_ping_sec = float(os.environ.get("PINNACLE_STATUS_PING_SEC", "30"))
         self._subscribe_gap_sec = float(os.environ.get("PINNACLE_SUBSCRIBE_GAP_SEC", "3"))
+        self._session_ka_task: Optional[asyncio.Task] = None   # session keepalive (vs inactivity logout)
+        self._session_ka_sec = float(os.environ.get("PINNACLE_SESSION_KEEPALIVE_SEC", "240"))
         # ── REST-mode state ──
         self._refresh_task: Optional[asyncio.Task] = None
         self._refresh_sec = float(os.environ.get("PINNACLE_REFRESH_SEC", "15"))
@@ -142,7 +144,7 @@ class PinnacleAdapter(BookAdapter):
             self._refresh_task.cancel()
         if self._ws_watchdog_task and not self._ws_watchdog_task.done():
             self._ws_watchdog_task.cancel()
-        for t in (self._reconciler_task, self._status_task):
+        for t in (self._reconciler_task, self._status_task, self._session_ka_task):
             if t and not t.done():
                 t.cancel()
         if self._client is not None:
@@ -232,6 +234,7 @@ class PinnacleAdapter(BookAdapter):
             self._ws_watchdog_task = asyncio.create_task(self._ws_watchdog())     # reconnect cap
             self._reconciler_task = asyncio.create_task(self._sub_reconciler())   # staggered subscribes
             self._status_task = asyncio.create_task(self._status_ping())          # browser-like liveness ping
+            self._session_ka_task = asyncio.create_task(self._session_keepalive()) # vs inactivity logout
             print(f"[PINNACLE WS] connecting wss://{WS_HOST}{WS_PATH} (MQTT). Real-time PUSH; "
                   "id = '<leagueId>:<matchupId>:<designation>'.")
         except Exception as ex:
@@ -321,6 +324,21 @@ class PinnacleAdapter(BookAdapter):
             except asyncio.CancelledError:
                 break
             await self._http_get("/status")
+
+    async def _session_keepalive(self) -> None:
+        """Keep the x-session alive vs the ~90-min INACTIVITY logout (an idle session — only /status, no
+        AUTHED calls — gets logged out). Every PINNACLE_SESSION_KEEPALIVE_SEC, re-fetch each active league's
+        /markets/straight: an AUTHED origin hit (carries x-session, must-revalidate past its 5s cache) that
+        should reset the server-side inactivity timer. Doubles as a pre-match RE-SEED to reconcile any drift
+        the WS missed. (If the timeout turns out to be UI-activity-based, this won't help → we'd need re-auth.)"""
+        while not self._ws_gave_up:
+            try:
+                await asyncio.sleep(self._session_ka_sec)
+            except asyncio.CancelledError:
+                break
+            for lid in list(self._active_leagues.keys()):
+                await self._refresh_league(lid)
+                await asyncio.sleep(random.uniform(0, self._jitter_ms / 1000.0))   # gentle spacing
 
     def _on_message(self, client, userdata, msg, *a) -> None:
         try:
