@@ -105,6 +105,10 @@ class PinnacleAdapter(BookAdapter):
         self._ws_started = False                          # LAZY: WS connects only on the first /odds w/ a league
         self._ws_gave_up = False                          # reconnect CAP tripped → stop retrying a dead session
         self._ws_watchdog_task: Optional[asyncio.Task] = None
+        self._reconciler_task: Optional[asyncio.Task] = None   # staggered league subscribes (organic timing)
+        self._status_task: Optional[asyncio.Task] = None       # browser-like /status liveness ping
+        self._status_ping_sec = float(os.environ.get("PINNACLE_STATUS_PING_SEC", "30"))
+        self._subscribe_gap_sec = float(os.environ.get("PINNACLE_SUBSCRIBE_GAP_SEC", "3"))
         # ── REST-mode state ──
         self._refresh_task: Optional[asyncio.Task] = None
         self._refresh_sec = float(os.environ.get("PINNACLE_REFRESH_SEC", "15"))
@@ -138,6 +142,9 @@ class PinnacleAdapter(BookAdapter):
             self._refresh_task.cancel()
         if self._ws_watchdog_task and not self._ws_watchdog_task.done():
             self._ws_watchdog_task.cancel()
+        for t in (self._reconciler_task, self._status_task):
+            if t and not t.done():
+                t.cancel()
         if self._client is not None:
             try:
                 self._client.loop_stop()
@@ -172,11 +179,7 @@ class PinnacleAdapter(BookAdapter):
                 self._seeded.add(lid)                     # add before await so concurrent /odds don't double-seed
                 await self._refresh_league(lid)
             if not self._ws_started and self._active_leagues:
-                self._start_ws()                          # LAZY connect: only when /odds first names a league
-            elif self._connected:                         # already up → subscribe any newly-seen leagues
-                for lid in list(self._active_leagues.keys()):
-                    if lid not in self._subscribed:
-                        self._subscribe_league(lid)
+                self._start_ws()                          # LAZY connect (the reconciler subscribes leagues gradually)
         out: dict[str, Selection] = {}
         with self._cache_lock:
             for sid in selection_ids:
@@ -226,7 +229,9 @@ class PinnacleAdapter(BookAdapter):
         try:
             self._client.connect_async(WS_HOST, 443, keepalive=60)
             self._client.loop_start()                    # background network thread
-            self._ws_watchdog_task = asyncio.create_task(self._ws_watchdog())   # reconnect cap
+            self._ws_watchdog_task = asyncio.create_task(self._ws_watchdog())     # reconnect cap
+            self._reconciler_task = asyncio.create_task(self._sub_reconciler())   # staggered subscribes
+            self._status_task = asyncio.create_task(self._status_ping())          # browser-like liveness ping
             print(f"[PINNACLE WS] connecting wss://{WS_HOST}{WS_PATH} (MQTT). Real-time PUSH; "
                   "id = '<leagueId>:<matchupId>:<designation>'.")
         except Exception as ex:
@@ -254,9 +259,7 @@ class PinnacleAdapter(BookAdapter):
         self._connected = ok
         if ok:
             print("[PINNACLE WS] connected (rc=0).")
-            self._subscribed.clear()                      # resubscribe everything on (re)connect
-            for lid in list(self._active_leagues.keys()):
-                self._subscribe_league(lid)
+            self._subscribed.clear()                      # the reconciler re-subscribes active leagues gradually
         else:
             print(f"[PINNACLE WS] connect REJECTED (rc={rc}) — bad/stale session? Refresh PINNACLE_WS_PASSWORD.")
 
@@ -292,6 +295,32 @@ class PinnacleAdapter(BookAdapter):
         if c is not None:
             # loop_stop() must NOT run inside the paho loop thread (this can be called from a callback) → offload.
             threading.Thread(target=c.loop_stop, daemon=True).start()
+
+    async def _sub_reconciler(self) -> None:
+        """Subscribe to pending (active-but-unsubscribed) leagues ONE AT A TIME with a gap, so the WS
+        subscribe pattern looks like a user navigating league to league — not a single scripted burst.
+        Also re-subscribes after a reconnect (on_connect clears _subscribed; we refill gradually)."""
+        while not self._ws_gave_up:
+            try:
+                await asyncio.sleep(self._subscribe_gap_sec)
+            except asyncio.CancelledError:
+                break
+            if not self._connected:
+                continue
+            pending = [l for l in list(self._active_leagues.keys()) if l not in self._subscribed]
+            if pending:
+                self._subscribe_league(pending[0])        # one per tick = staggered, organic-looking
+
+    async def _status_ping(self) -> None:
+        """Browser-like liveness: GET /status periodically (the page does this). Makes the headless session
+        emit the same background heartbeat a real tab does. CAMOUFLAGE ONLY — /status carries no session, so
+        it does NOT refresh/extend the x-session; that needs the separate token-refresh call (TODO)."""
+        while not self._ws_gave_up:
+            try:
+                await asyncio.sleep(self._status_ping_sec)
+            except asyncio.CancelledError:
+                break
+            await self._http_get("/status")
 
     def _on_message(self, client, userdata, msg, *a) -> None:
         try:
