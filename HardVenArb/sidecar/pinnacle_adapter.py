@@ -192,8 +192,10 @@ class PinnacleAdapter(BookAdapter):
         except (TypeError, AttributeError):
             self._client = mqtt.Client(client_id=cid, transport="websockets")   # paho < 2.0
         self._client.username_pw_set(self._ws_user, self._ws_pass)
+        # The real browser's WS upgrade carries ONLY Origin + User-Agent (NO x-api-key, NO cookies — auth is
+        # entirely in the MQTT CONNECT username/password). Match it exactly to avoid a needless fingerprint diff.
         self._client.ws_set_options(path=WS_PATH, headers={
-            "Origin": "https://www.pinnacle.bet", "User-Agent": USER_AGENT, "x-api-key": self._api_key})
+            "Origin": "https://www.pinnacle.bet", "User-Agent": USER_AGENT})
         try:
             self._client.tls_set()                       # wss
         except Exception:
