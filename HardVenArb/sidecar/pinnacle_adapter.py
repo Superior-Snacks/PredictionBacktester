@@ -97,6 +97,7 @@ class PinnacleAdapter(BookAdapter):
         self._cache_lock = threading.Lock()               # paho thread writes; asyncio reads
         self._active_leagues: dict[str, float] = {}       # leagueId -> unix ts last requested via /odds
         self._subscribed: set[str] = set()                # leagueIds subscribed on the WS
+        self._seeded: set[str] = set()                    # leagueIds REST-seeded once (pre-match snapshot)
         self._http: Optional[httpx.AsyncClient] = None     # for catalog() (+ rest mode)
         # ── WS state ──
         self._client = None
@@ -163,6 +164,13 @@ class PinnacleAdapter(BookAdapter):
             if p:
                 self._active_leagues[p[0]] = now
         if self._mode == "ws":
+            # REST-seed each new league ONCE: the WS streams CHANGES, not an on-subscribe snapshot, so a
+            # stable pre-match line never arrives over the WS until it moves. One /markets/straight snapshot
+            # populates every current game (pre-match + live); the WS keeps them fresh after. Mimics the
+            # browser exactly (initial REST snapshot, then WS — no re-polling).
+            for lid in [l for l in list(self._active_leagues.keys()) if l not in self._seeded]:
+                self._seeded.add(lid)                     # add before await so concurrent /odds don't double-seed
+                await self._refresh_league(lid)
             if not self._ws_started and self._active_leagues:
                 self._start_ws()                          # LAZY connect: only when /odds first names a league
             elif self._connected:                         # already up → subscribe any newly-seen leagues
