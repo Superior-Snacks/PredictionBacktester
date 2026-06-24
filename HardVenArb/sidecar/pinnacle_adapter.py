@@ -101,6 +101,9 @@ class PinnacleAdapter(BookAdapter):
         # ── WS state ──
         self._client = None
         self._connected = False
+        self._ws_started = False                          # LAZY: WS connects only on the first /odds w/ a league
+        self._ws_gave_up = False                          # reconnect CAP tripped → stop retrying a dead session
+        self._ws_watchdog_task: Optional[asyncio.Task] = None
         # ── REST-mode state ──
         self._refresh_task: Optional[asyncio.Task] = None
         self._refresh_sec = float(os.environ.get("PINNACLE_REFRESH_SEC", "15"))
@@ -110,6 +113,8 @@ class PinnacleAdapter(BookAdapter):
         self._rate_limited = False
         self._rl_total = 0
         self._last_hb = 0.0
+        self._side_map: dict = {}                          # rest mode: lid -> (ts, {matchupId:{order:side}})
+        self._side_map_ttl = 300.0                         # re-fetch /matchups at most every 5min (lineups static)
 
     # ── lifecycle ──────────────────────────────────────────────────────────────
     async def startup(self) -> None:
@@ -124,11 +129,14 @@ class PinnacleAdapter(BookAdapter):
             print(f"[PINNACLE] ready — REST poll mode (gentle serial, {self._refresh_sec:g}s). "
                   "Odds id = '<leagueId>:<matchupId>:<designation>'.")
         else:
-            self._start_ws()
+            print("[PINNACLE] ready — WS mode (LAZY: connects to Pinnacle on the FIRST /odds that names a "
+                  "league; nothing is sent before that). Odds id = '<leagueId>:<matchupId>:<designation>'.")
 
     async def shutdown(self) -> None:
         if self._refresh_task and not self._refresh_task.done():
             self._refresh_task.cancel()
+        if self._ws_watchdog_task and not self._ws_watchdog_task.done():
+            self._ws_watchdog_task.cancel()
         if self._client is not None:
             try:
                 self._client.loop_stop()
@@ -150,15 +158,17 @@ class PinnacleAdapter(BookAdapter):
 
     async def odds(self, selection_ids: list[str]) -> dict[str, Selection]:
         now = time.time()
-        new: list[str] = []
         for sid in selection_ids:
             p = self._parse_sid(sid)
             if p:
                 self._active_leagues[p[0]] = now
-                if self._mode == "ws" and p[0] not in self._subscribed:
-                    new.append(p[0])
-        for lid in new:
-            self._subscribe_league(lid)
+        if self._mode == "ws":
+            if not self._ws_started and self._active_leagues:
+                self._start_ws()                          # LAZY connect: only when /odds first names a league
+            elif self._connected:                         # already up → subscribe any newly-seen leagues
+                for lid in list(self._active_leagues.keys()):
+                    if lid not in self._subscribed:
+                        self._subscribe_league(lid)
         out: dict[str, Selection] = {}
         with self._cache_lock:
             for sid in selection_ids:
@@ -174,6 +184,7 @@ class PinnacleAdapter(BookAdapter):
 
     # ── WS (MQTT) odds source ────────────────────────────────────────────────
     def _start_ws(self) -> None:
+        self._ws_started = True
         try:
             import paho.mqtt.client as mqtt
         except Exception:
@@ -207,6 +218,7 @@ class PinnacleAdapter(BookAdapter):
         try:
             self._client.connect_async(WS_HOST, 443, keepalive=60)
             self._client.loop_start()                    # background network thread
+            self._ws_watchdog_task = asyncio.create_task(self._ws_watchdog())   # reconnect cap
             print(f"[PINNACLE WS] connecting wss://{WS_HOST}{WS_PATH} (MQTT). Real-time PUSH; "
                   "id = '<leagueId>:<matchupId>:<designation>'.")
         except Exception as ex:
@@ -219,7 +231,7 @@ class PinnacleAdapter(BookAdapter):
                 (f"matchups/reg/lg/{lid}/live/both", 0)]
 
     def _subscribe_league(self, lid: str) -> None:
-        if not self._client or lid in self._subscribed:
+        if not self._client or not self._connected or lid in self._subscribed:
             return
         try:
             for topic, qos in self._topics_for(lid):
@@ -230,15 +242,48 @@ class PinnacleAdapter(BookAdapter):
             print(f"[PINNACLE WS] subscribe {lid} error: {ex}")
 
     def _on_connect(self, client, userdata, flags, rc, *a) -> None:
-        self._connected = (rc == 0) or (getattr(rc, "value", None) == 0)
-        print(f"[PINNACLE WS] connected (rc={rc}).")
-        self._subscribed.clear()                          # resubscribe everything on (re)connect
-        for lid in list(self._active_leagues.keys()):
-            self._subscribe_league(lid)
+        ok = (rc == 0) or (getattr(rc, "value", None) == 0)
+        self._connected = ok
+        if ok:
+            print("[PINNACLE WS] connected (rc=0).")
+            self._subscribed.clear()                      # resubscribe everything on (re)connect
+            for lid in list(self._active_leagues.keys()):
+                self._subscribe_league(lid)
+        else:
+            print(f"[PINNACLE WS] connect REJECTED (rc={rc}) — bad/stale session? Refresh PINNACLE_WS_PASSWORD.")
 
     def _on_disconnect(self, client, userdata, rc, *a) -> None:
         self._connected = False
-        print(f"[PINNACLE WS] disconnected (rc={rc}) — paho will auto-reconnect; books go stale until then.")
+        print(f"[PINNACLE WS] disconnected (rc={rc}) — auto-reconnecting (books go stale until back).")
+
+    async def _ws_watchdog(self) -> None:
+        """Reconnect CAP: if the WS can't stay connected for PINNACLE_WS_GIVEUP_SEC (default 120s), STOP
+        reconnecting — so a dead/stale session (or a Cloudflare-blocked upgrade) isn't retried forever. One
+        time-based check covers every failure mode (auth-reject, blocked upgrade, persistent drops)."""
+        grace = float(os.environ.get("PINNACLE_WS_GIVEUP_SEC", "120"))
+        started, last_ok = time.time(), 0.0
+        while not self._ws_gave_up:
+            try:
+                await asyncio.sleep(5)
+            except asyncio.CancelledError:
+                break
+            if self._connected:
+                last_ok = time.time()
+            elif time.time() - (last_ok or started) > grace:
+                self._give_up_ws(grace)
+                break
+
+    def _give_up_ws(self, grace: float = 0.0) -> None:
+        if self._ws_gave_up:
+            return
+        self._ws_gave_up = True
+        print(f"[PINNACLE WS] GIVING UP — no healthy connection for {grace:.0f}s. Stopping reconnects so a "
+              "dead/stale session isn't hammered. Refresh PINNACLE_WS_USERNAME/PASSWORD (re-capture from a fresh "
+              "login) and restart, or set PINNACLE_ODDS_MODE=rest. Books go stale → the C# gate clears them.")
+        c = self._client
+        if c is not None:
+            # loop_stop() must NOT run inside the paho loop thread (this can be called from a callback) → offload.
+            threading.Thread(target=c.loop_stop, daemon=True).start()
 
     def _on_message(self, client, userdata, msg, *a) -> None:
         try:
@@ -321,15 +366,7 @@ class PinnacleAdapter(BookAdapter):
         markets = await self._http_get(f"/leagues/{lid}/markets/straight", count_429=True)
         if not markets:
             return
-        # join matchups (participant alignment, by order) so REST participantId-prices map to a designation
-        matchups = await self._http_get(f"/leagues/{lid}/matchups") or []
-        order_to_side = {}
-        for m in matchups:
-            sides = {}
-            for p in sorted((m.get("participants") or []), key=lambda x: x.get("order", 0)):
-                if p.get("alignment") in _SIDES:
-                    sides[p.get("order")] = p.get("alignment")
-            order_to_side[m.get("id")] = sides
+        order_to_side = await self._side_map_for(lid)   # cached ~5min — don't re-fetch /matchups every poll
         now = time.time()
         for mk in markets:
             if mk.get("type") != "moneyline" or mk.get("period") != 0:
@@ -351,6 +388,23 @@ class PinnacleAdapter(BookAdapter):
                 with self._cache_lock:
                     self._cache[token] = Selection(token, decimal_odds=dec, max_stake=max_stake,
                                                    status="open", ts=now)
+
+    async def _side_map_for(self, lid: str) -> dict:
+        """matchupId -> {participant order: alignment}. Cached for ~5min (PINNACLE side-map TTL) so REST mode
+        does NOT re-fetch /matchups on every poll (lineups change rarely) — halves the request count."""
+        cached = self._side_map.get(lid)
+        if cached and time.time() - cached[0] < self._side_map_ttl:
+            return cached[1]
+        matchups = await self._http_get(f"/leagues/{lid}/matchups") or []
+        m: dict = {}
+        for g in matchups:
+            sides = {}
+            for p in sorted((g.get("participants") or []), key=lambda x: x.get("order", 0)):
+                if p.get("alignment") in _SIDES:
+                    sides[p.get("order")] = p.get("alignment")
+            m[g.get("id")] = sides
+        self._side_map[lid] = (time.time(), m)
+        return m
 
     # ── HTTP (catalog + rest mode) ───────────────────────────────────────────
     async def _http_get(self, path: str, count_429: bool = False):
