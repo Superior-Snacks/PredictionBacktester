@@ -424,6 +424,14 @@ class PinnacleAdapter(BookAdapter):
         if r.status_code in (401, 403):
             print(f"[PINNACLE] AUTH {r.status_code} on {path} — refresh PINNACLE_SESSION (re-capture token).")
             return None
+        if r.status_code in (301, 302, 303, 307, 308):
+            loc = r.headers.get("location", "")
+            if "guest" in loc.lower():
+                print(f"[PINNACLE] {path}: redirected to the GUEST endpoint → your x-session is EXPIRED/invalid. "
+                      "Re-capture PINNACLE_SESSION (+ PINNACLE_WS_PASSWORD) from a fresh browser login, then restart.")
+            else:
+                print(f"[PINNACLE] GET {path} HTTP {r.status_code} → {loc}")
+            return None
         if r.status_code != 200:
             print(f"[PINNACLE] GET {path} HTTP {r.status_code}")
             return None
