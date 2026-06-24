@@ -45,6 +45,9 @@ def load_adapter() -> BookAdapter:
     if name == "bookmaker":
         from bookmaker_adapter import BookmakerAdapter   # lazy: only needs Playwright when selected
         return BookmakerAdapter()
+    if name == "pinnacle":
+        from pinnacle_adapter import PinnacleAdapter      # clean httpx (no browser); replays x-session headers
+        return PinnacleAdapter()
     # Register more books here as you build them, e.g.:
     #   if name == "mybook": from mybook_adapter import MyBookPlaywrightAdapter; return MyBookPlaywrightAdapter()
     raise ValueError(f"Unknown HARDVEN_BOOK={name!r} (no adapter registered)")
