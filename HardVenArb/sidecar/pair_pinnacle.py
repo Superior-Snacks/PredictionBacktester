@@ -129,22 +129,23 @@ def index_catalog(selections: list[dict]) -> dict:
 
 
 def _pick_game(games: list, entry: dict, time_tol_sec: float):
-    """From the Pinnacle games sharing a team-set, pick the one matching the Kalshi market's date/time. With
-    a ticker TIME → closest start within time_tol (doubleheader); else closest date within ±1 day. None if
-    the nearest is still too far. ISO-aware mirror of pair_auto._pick_game."""
+    """From the Pinnacle games sharing a team-set, pick the one matching the Kalshi market's date/time.
+
+    When the Kalshi ticker carries a game TIME (all baseball / most team sports), that time is AUTHORITATIVE:
+    take the closest start, but ONLY if within time_tol — else None. This rejects the NEXT-DAY game in a daily
+    series (same teams ~24h apart): Pinnacle lists only the near game, and the ±1-day date guard alone would
+    wrongly let tomorrow's Kalshi ticker grab today's Pinnacle game (the KBO/NPB June-27→June-26 mispair).
+    Doubleheaders still work — two same-day starts, the ticker time picks the right one. Tickers with NO time
+    (combat/tennis, listed by date only) fall back to the closest date within ±1 day."""
     if not games:
         return None
-    if len(games) == 1:
-        g = games[0]
-        return g if _date_close(entry.get("settlement_date", ""), g.get("start", ""), days=1) else None
     kdt = _kalshi_dt(entry)
     if kdt is not None:
         scored = [(abs((pd - kdt).total_seconds()), g) for g in games if (pd := _pin_dt(g.get("start", "")))]
-        if scored:
-            diff, best = min(scored, key=lambda x: x[0])
-            if diff <= time_tol_sec:
-                return best
-        # no time-close game → fall through to the date-only match below
+        if not scored:
+            return None
+        diff, best = min(scored, key=lambda x: x[0])
+        return best if diff <= time_tol_sec else None
     sd = entry.get("settlement_date", "")
     cands = [g for g in games if _date_close(sd, g.get("start", ""), days=1)]
     if not cands:
