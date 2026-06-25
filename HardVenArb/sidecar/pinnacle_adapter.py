@@ -112,6 +112,7 @@ class PinnacleAdapter(BookAdapter):
         self._session_ka_task: Optional[asyncio.Task] = None   # session keepalive (vs inactivity logout)
         self._session_ka_sec = float(os.environ.get("PINNACLE_SESSION_KEEPALIVE_SEC", "240"))
         self._session_expired = False                          # terminal: a guest-redirect → stop everything
+        self._debug_ws = os.environ.get("PINNACLE_DEBUG_WS") == "1"  # log each WS cache update (prove live=WS)
         # ── REST-mode state ──
         self._refresh_task: Optional[asyncio.Task] = None
         self._refresh_sec = float(os.environ.get("PINNACLE_REFRESH_SEC", "15"))
@@ -389,6 +390,9 @@ class PinnacleAdapter(BookAdapter):
         if updates:
             with self._cache_lock:
                 self._cache.update(updates)
+            if self._debug_ws:
+                legs = " ".join(f"{k.rsplit(':', 1)[-1]}={v.decimal_odds:.3f}" for k, v in updates.items())
+                print(f"[PINNACLE WS-UPD] {data.get('op')} {lid}:{mid}  {legs}")
 
     # ── REST fallback odds source (designation read directly from each price, like the WS) ──
     async def _refresh_loop(self) -> None:
