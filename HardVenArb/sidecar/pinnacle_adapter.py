@@ -111,6 +111,7 @@ class PinnacleAdapter(BookAdapter):
         self._subscribe_gap_sec = float(os.environ.get("PINNACLE_SUBSCRIBE_GAP_SEC", "3"))
         self._session_ka_task: Optional[asyncio.Task] = None   # session keepalive (vs inactivity logout)
         self._session_ka_sec = float(os.environ.get("PINNACLE_SESSION_KEEPALIVE_SEC", "240"))
+        self._session_expired = False                          # terminal: a guest-redirect → stop everything
         # ── REST-mode state ──
         self._refresh_task: Optional[asyncio.Task] = None
         self._refresh_sec = float(os.environ.get("PINNACLE_REFRESH_SEC", "15"))
@@ -284,16 +285,17 @@ class PinnacleAdapter(BookAdapter):
             if self._connected:
                 last_ok = time.time()
             elif time.time() - (last_ok or started) > grace:
-                self._give_up_ws(grace)
+                self._give_up_ws(f"no healthy WS for {grace:.0f}s")
                 break
 
-    def _give_up_ws(self, grace: float = 0.0) -> None:
+    def _give_up_ws(self, reason: str = "") -> None:
         if self._ws_gave_up:
             return
-        self._ws_gave_up = True
-        print(f"[PINNACLE WS] GIVING UP — no healthy connection for {grace:.0f}s. Stopping reconnects so a "
-              "dead/stale session isn't hammered. Refresh PINNACLE_WS_USERNAME/PASSWORD (re-capture from a fresh "
-              "login) and restart, or set PINNACLE_ODDS_MODE=rest. Books go stale → the C# gate clears them.")
+        self._ws_gave_up = True                       # stops ALL background loops (they check `not _ws_gave_up`)
+        why = f" ({reason})" if reason else ""
+        print(f"[PINNACLE] STOPPING the WS + keepalive{why} — a dead/stale session isn't worth re-trying. "
+              "Refresh PINNACLE_SESSION + PINNACLE_WS_PASSWORD (= newsession|dGGR) and restart, or keep a "
+              "browser open to hold the session (or PINNACLE_ODDS_MODE=rest). Books go stale → C# clears them.")
         c = self._client
         if c is not None:
             # loop_stop() must NOT run inside the paho loop thread (this can be called from a callback) → offload.
@@ -336,9 +338,15 @@ class PinnacleAdapter(BookAdapter):
                 await asyncio.sleep(self._session_ka_sec)
             except asyncio.CancelledError:
                 break
-            for lid in list(self._active_leagues.keys()):
+            leagues = list(self._active_leagues.keys())
+            for lid in leagues:
+                if self._ws_gave_up:
+                    break                                     # session died mid-cycle → stop immediately
                 await self._refresh_league(lid)
                 await asyncio.sleep(random.uniform(0, self._jitter_ms / 1000.0))   # gentle spacing
+            if leagues and not self._ws_gave_up:
+                print(f"[PINNACLE] session-keepalive: re-fetched {len(leagues)} league(s) (authed → resets the "
+                      f"inactivity timer; cache={len(self._cache)} sel)")
 
     def _on_message(self, client, userdata, msg, *a) -> None:
         try:
@@ -482,8 +490,9 @@ class PinnacleAdapter(BookAdapter):
         if r.status_code in (301, 302, 303, 307, 308):
             loc = r.headers.get("location", "")
             if "guest" in loc.lower():
-                print(f"[PINNACLE] {path}: redirected to the GUEST endpoint → your x-session is EXPIRED/invalid. "
-                      "Re-capture PINNACLE_SESSION (+ PINNACLE_WS_PASSWORD) from a fresh browser login, then restart.")
+                print(f"[PINNACLE] {path}: redirected to the GUEST endpoint → your x-session is EXPIRED/invalid.")
+                self._session_expired = True
+                self._give_up_ws("session expired — guest redirect")   # stop keepalive + WS; don't hammer a dead session
             else:
                 print(f"[PINNACLE] GET {path} HTTP {r.status_code} → {loc}")
             return None
