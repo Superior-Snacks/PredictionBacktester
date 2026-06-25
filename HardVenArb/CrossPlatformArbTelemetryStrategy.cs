@@ -79,6 +79,10 @@ public class CrossPlatformArbTelemetryStrategy
     private readonly decimal _arbThreshold;
     private readonly decimal _depthFloor;
 
+    // HARDVEN_DEBUG_PRICES=1 → on every arb OPEN, dump the full 4-leg breakdown (both sides' ask/bid ladders
+    // + Pinnacle decimal odds) so a suspiciously-deep window can be inspected leg-by-leg against the venues.
+    private readonly bool _debugPrices = Environment.GetEnvironmentVariable("HARDVEN_DEBUG_PRICES") == "1";
+
     // bookKey → pair indices (fast lookup on every delta)
     private readonly Dictionary<string, List<int>> _bookKeyToPairs;
     private readonly ReaderWriterLockSlim _indexLock = new(LockRecursionPolicy.NoRecursion);
@@ -184,6 +188,8 @@ public class CrossPlatformArbTelemetryStrategy
         _csvWriterTask     = Task.Run(RunCsvWriterAsync);
         _exitCsvWriterTask = Task.Run(RunExitCsvWriterAsync);
         DebugLog.Discovery($"CrossPlatformArbTelemetryStrategy: initialized with {pairs.Count} pairs, threshold={arbThreshold}");
+        if (_debugPrices)
+            Console.WriteLine("[CROSS] HARDVEN_DEBUG_PRICES=1 — dumping the full 4-leg price breakdown on each arb open.");
     }
 
     // ── Public interface ──────────────────────────────────────────────────────
@@ -573,6 +579,10 @@ public class CrossPlatformArbTelemetryStrategy
         if (invokeOnArbOpened)
             OnArbOpened?.Invoke(pair.PairId, bestNet, bestType, bestDepth, kLegPrice, pLegPrice);
 
+        if (_debugPrices && invokeOnArbOpened)
+            DumpPrices(pair, bestType, bestNet, bestGross, bestKFee, bestPFee,
+                       kYes, kNo, pYes, pNo, kMidSum, pMidSum);
+
         var posPrefix = pair.PairId + "\x00";
         foreach (var kvp in _hypotheticalPositions)
         {
@@ -735,6 +745,47 @@ public class CrossPlatformArbTelemetryStrategy
             );
             DebugLog.Discovery($"CloseWindow {pair.Label}: created hypothetical position dts={w.DaysToSettlement} profit={profit:0.0000} shares={maxDepth:0.0}");
         }
+    }
+
+    // ── Deep price debug (HARDVEN_DEBUG_PRICES=1) ─────────────────────────────
+    // Dumps all four legs the instant a window opens, so a too-good gap can be read off directly:
+    // is the Kalshi side really cheap (and is its depth one fat level or spread up the ladder), and does
+    // the Pinnacle decimal odds match what the venue shows? Pinn YES = the leg paired to the Kalshi-YES
+    // outcome; Pinn NO = its opposite. The arb only uses one side of each book (the "chosen" line).
+    private void DumpPrices(CrossPair pair, string bestType, decimal net, decimal gross,
+        decimal kFee, decimal pFee, LocalOrderBook kYes, LocalOrderBook kNo,
+        LocalOrderBook pYes, LocalOrderBook pNo, decimal kMidSum, decimal pMidSum)
+    {
+        string chosen = bestType == "K_NO_P_YES" ? "Kalshi NO + Pinn YES" : "Kalshi YES + Pinn NO";
+        var sb = new StringBuilder();
+        sb.AppendLine($"[PRICES] {pair.Label} | ARB {bestType} net={net:0.0000} (gross={gross:0.0000} fees K={kFee:0.0000} H={pFee:0.0000})");
+        sb.AppendLine($"  Kalshi YES  K:{pair.KalshiTicker}     {FmtKalshi(kYes)}");
+        sb.AppendLine($"  Kalshi NO   K:{pair.KalshiTicker}_NO  {FmtKalshi(kNo)}");
+        sb.AppendLine($"  Pinn   YES  H:{pair.HardVenYesTokenId}  {FmtHardVen(pYes)}");
+        sb.AppendLine($"  Pinn   NO   H:{pair.HardVenNoTokenId}   {FmtHardVen(pNo)}");
+        sb.Append($"  kMidSum={kMidSum:0.0000}  pMidSum={pMidSum:0.0000}  | chosen: {chosen}");
+        Console.WriteLine(sb.ToString());
+    }
+
+    private static long BookAgeMs(LocalOrderBook b) =>
+        b.LastDeltaAt > DateTime.MinValue ? (long)(DateTime.UtcNow - b.LastDeltaAt).TotalMilliseconds : -1;
+
+    // Kalshi (native binary, fast WS): show ask/bid + cumulative top-3 + the actual top-5 ask ladder so we
+    // can see whether the headline depth sits at the best price or is spread across worse levels.
+    private static string FmtKalshi(LocalOrderBook b)
+    {
+        decimal ask = b.GetBestAskPrice(), bid = b.GetBestBidPrice();
+        string ladder = string.Join(" | ", b.GetTopAskLevels(5).Select(l => $"{l.Price:0.0000}×{l.Size:0.#}"));
+        return $"ask={ask:0.0000} bid={bid:0.0000} top3={b.GetTopAskVolume(3):0.#} age={BookAgeMs(b)}ms  asks[{ladder}]";
+    }
+
+    // Pinnacle (single ask level = the moneyline; vig in the price): show implied ask, the decimal odds it
+    // came from (1/ask, comparable to the site), and the max-risk-derived size.
+    private static string FmtHardVen(LocalOrderBook b)
+    {
+        decimal ask = b.GetBestAskPrice();
+        decimal dec = ask > 0m ? Math.Round(1m / ask, 4) : 0m;
+        return $"ask={ask:0.0000} (dec {dec:0.0000}) maxc={b.GetBestAskSize():0.#} age={BookAgeMs(b)}ms";
     }
 
     // ── CSV infrastructure ────────────────────────────────────────────────────

@@ -153,6 +153,20 @@ public class LocalOrderBook
             return _asks.Take(levels).Sum(kv => kv.Value);
     }
 
+    /// <summary>Top N ask levels (lowest price first) as (price, size) — read-only, for diagnostics/debug dumps.</summary>
+    public IReadOnlyList<(decimal Price, decimal Size)> GetTopAskLevels(int levels)
+    {
+        lock (_bookLock)
+            return _asks.Take(levels).Select(kv => (kv.Key, kv.Value)).ToList();
+    }
+
+    /// <summary>Top N bid levels (highest price first) as (price, size) — read-only, for diagnostics/debug dumps.</summary>
+    public IReadOnlyList<(decimal Price, decimal Size)> GetTopBidLevels(int levels)
+    {
+        lock (_bookLock)
+            return _bids.Reverse().Take(levels).Select(kv => (kv.Key, kv.Value)).ToList();
+    }
+
     /// <summary>Returns total ask volume at price levels at or below <paramref name="limitPrice"/>.</summary>
     public decimal GetAskVolumeAtOrBelow(decimal limitPrice)
     {
