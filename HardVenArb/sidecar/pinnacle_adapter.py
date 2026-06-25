@@ -121,8 +121,6 @@ class PinnacleAdapter(BookAdapter):
         self._rate_limited = False
         self._rl_total = 0
         self._last_hb = 0.0
-        self._side_map: dict = {}                          # rest mode: lid -> (ts, {matchupId:{order:side}})
-        self._side_map_ttl = 300.0                         # re-fetch /matchups at most every 5min (lineups static)
 
     # ── lifecycle ──────────────────────────────────────────────────────────────
     async def startup(self) -> None:
@@ -392,7 +390,7 @@ class PinnacleAdapter(BookAdapter):
             with self._cache_lock:
                 self._cache.update(updates)
 
-    # ── REST fallback odds source (designation via participant order) ─────────
+    # ── REST fallback odds source (designation read directly from each price, like the WS) ──
     async def _refresh_loop(self) -> None:
         while True:
             try:
@@ -429,7 +427,6 @@ class PinnacleAdapter(BookAdapter):
         markets = await self._http_get(f"/leagues/{lid}/markets/straight", count_429=True)
         if not markets:
             return
-        order_to_side = await self._side_map_for(lid)   # cached ~5min — don't re-fetch /matchups every poll
         now = time.time()
         for mk in markets:
             if mk.get("type") != "moneyline" or mk.get("period") != 0:
@@ -438,10 +435,15 @@ class PinnacleAdapter(BookAdapter):
             if not (2 <= len(prices) <= 3):
                 continue
             mid = mk.get("matchupId")
-            sides = order_to_side.get(mid, {})
             max_stake = _max_risk(mk.get("limits"))
-            for idx, pr in enumerate(prices):
-                desig = sides.get(idx) or (_SIDES[idx] if idx < len(_SIDES) else None)   # fallback by order
+            for pr in prices:
+                # REST /markets/straight prices carry `designation` (home/away/draw) DIRECTLY — exactly like
+                # the WS payload — so read it straight (game moneylines have participantId=None anyway). The OLD
+                # code IGNORED this and mapped prices to participants by ARRAY POSITION, which silently INVERTED
+                # home/away: Pinnacle orders the price array [home, away] but the participant `order` is
+                # [away, home], so e.g. PHI@WSH put Philadelphia's favourite price onto Washington's token →
+                # a phantom 19pt cross-venue "arb". This now matches the WS path; no /matchups fetch needed.
+                desig = pr.get("designation")
                 if desig not in _SIDES:
                     continue
                 dec = american_to_decimal(pr.get("price"))
@@ -451,23 +453,6 @@ class PinnacleAdapter(BookAdapter):
                 with self._cache_lock:
                     self._cache[token] = Selection(token, decimal_odds=dec, max_stake=max_stake,
                                                    status="open", ts=now)
-
-    async def _side_map_for(self, lid: str) -> dict:
-        """matchupId -> {participant order: alignment}. Cached for ~5min (PINNACLE side-map TTL) so REST mode
-        does NOT re-fetch /matchups on every poll (lineups change rarely) — halves the request count."""
-        cached = self._side_map.get(lid)
-        if cached and time.time() - cached[0] < self._side_map_ttl:
-            return cached[1]
-        matchups = await self._http_get(f"/leagues/{lid}/matchups") or []
-        m: dict = {}
-        for g in matchups:
-            sides = {}
-            for p in sorted((g.get("participants") or []), key=lambda x: x.get("order", 0)):
-                if p.get("alignment") in _SIDES:
-                    sides[p.get("order")] = p.get("alignment")
-            m[g.get("id")] = sides
-        self._side_map[lid] = (time.time(), m)
-        return m
 
     # ── HTTP (catalog + rest mode) ───────────────────────────────────────────
     async def _http_get(self, path: str, count_429: bool = False):
