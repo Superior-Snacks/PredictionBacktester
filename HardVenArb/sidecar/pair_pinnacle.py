@@ -58,6 +58,18 @@ def _league_id(sid: str) -> int:
     return int(p[0]) if p and p[0].isdigit() else 10 ** 9
 
 
+# Kalshi abbreviates a few MLB teams to forms that AREN'T a substring of the Pinnacle full name, so plain
+# containment (Kalshi ⊆ Pinnacle) misses them. The Athletics are the notorious case — no city in the name,
+# so Kalshi "A's" → norm "a s", which is not in "athletics"/"oakland athletics". Canonicalize the Kalshi
+# side to a token Pinnacle's name still CONTAINS ("athletics"), so containment then scores 100. Add entries
+# here as new abbreviation mismatches surface (the price gate / a manual check is the backstop).
+_TEAM_ALIASES = {"a s": "athletics", "as": "athletics", "oakland": "athletics", "sacramento": "athletics"}
+
+
+def _canon(key: str) -> str:
+    return _TEAM_ALIASES.get(key, key)
+
+
 # ── ISO-8601 UTC start_time (vs bookmaker's "YYYYMMDDHH:MM:SS") ─────────────────
 def _pin_dt(start: str):
     """Pinnacle start_time '2026-06-25T16:10:00Z' → naive UTC datetime; None if unparseable."""
@@ -196,6 +208,8 @@ def main() -> None:
             unmatched.append(f"{tk} (couldn't parse Kalshi outcome)")
             continue
         yes_outcome, teams, is_tie = key
+        teams = frozenset(_canon(t) for t in teams)   # fold Kalshi team abbreviations (A's → athletics)
+        yes_outcome = _canon(yes_outcome)
         expected = set() if args.no_league_anchor else _expected_sports(tk)   # league anchor by series
 
         # MATCH: exact team-set first (rare — Kalshi city ≠ Pinnacle full name), then the bipartite matcher.
@@ -214,9 +228,12 @@ def main() -> None:
                 anchor_rejected += 1
                 unmatched.append(f"{tk}  {sorted(teams)} (teams matched but no "
                                  f"{'/'.join(sorted(expected))} game — league-anchored out)")
+            elif fscore >= args.fuzzy_threshold:
+                unmatched.append(f"{tk}  {sorted(teams)} (best leg {fscore:.0f}; pass --fuzzy to accept)")
             else:
-                hint = "" if fscore >= 100 else f" (best leg {fscore:.0f}; pass --fuzzy to accept)"
-                unmatched.append(f"{tk}  {sorted(teams)}{hint}")
+                # below the fuzzy threshold = no real counterpart → almost always a game not on Pinnacle's
+                # board yet (Pinnacle lists ~today's slate; future-dated Kalshi games fill on a later re-run).
+                unmatched.append(f"{tk}  {sorted(teams)} (best leg {fscore:.0f} — not on Pinnacle's board)")
             continue
         # pick the game whose start matches the Kalshi ticker time (doubleheader) — date fallback inside
         entry = _pick_game(games, e, args.time_tol_hours * 3600)
