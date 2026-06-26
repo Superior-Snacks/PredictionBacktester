@@ -219,17 +219,27 @@ class PinnacleAdapter(BookAdapter):
                 self._start_ws()                          # LAZY connect (the reconciler subscribes leagues gradually)
         return self._read_cache(selection_ids, now)
 
+    def _feed_live(self) -> bool:
+        """True only while the Pinnacle feed is GENUINELY live — WS connected, session not expired, and (browser
+        source) logged in. Drives the ts-freshness stamp below: while live, a stable price is still fresh (the WS
+        would push any change/suspend); when NOT live, we serve the STORED ts so it AGES → the C# freshness gate
+        clears the book → NO arb is ever computed on a frozen/stale Pinnacle number after a logout/disconnect."""
+        return (self._connected and not self._session_expired
+                and (self._session_source != "browser" or self._session_ready))
+
     def _read_cache(self, selection_ids: list[str], now: float) -> dict[str, Selection]:
         out: dict[str, Selection] = {}
+        live = self._feed_live()
         with self._cache_lock:
             for sid in selection_ids:
                 s = self._cache.get(sid)
                 if not s:
                     continue
-                # WS push: stamp ts=now WHILE CONNECTED (connection = freshness; a stable price won't re-tick
-                # but is still live — Pinnacle pushes any change/suspend). Disconnected → serve stored ts → ages
-                # → C# clears. REST mode: the poller already stamps ts on each fetch, so serve it as-is.
-                ts = (now if self._connected else s.ts) if self._mode == "ws" else s.ts
+                # WS push: stamp ts=now WHILE the feed is LIVE (connection = freshness; a stable price won't
+                # re-tick but is still live — Pinnacle pushes any change/suspend). Not live (disconnected / given
+                # up / logged out) → serve stored ts → it ages → C# clears. REST mode: the poller already stamps
+                # ts on each fetch, so serve it as-is.
+                ts = now if (self._mode == "ws" and live) else s.ts
                 out[sid] = Selection(s.selection_id, s.decimal_odds, s.max_stake, "open", ts)
         return out
 
@@ -380,11 +390,15 @@ class PinnacleAdapter(BookAdapter):
     def _give_up_ws(self, reason: str = "") -> None:
         if self._ws_gave_up:
             return
+        # State changes FIRST (before any print) — a print can throw on a cp1252 Windows console, and these must
+        # not be skipped. CRITICAL: loop_stop() does NOT fire on_disconnect, so drop _connected ourselves →
+        # _read_cache stops stamping ts=now → frozen prices AGE → C# clears the books (no arb on stale numbers).
         self._ws_gave_up = True                       # stops ALL background loops (they check `not _ws_gave_up`)
+        self._connected = False
         why = f" ({reason})" if reason else ""
-        print(f"[PINNACLE] STOPPING the WS + keepalive{why} — a dead/stale session isn't worth re-trying. "
+        print(f"[PINNACLE] STOPPING the WS + keepalive{why} - a dead/stale session isn't worth re-trying. "
               "Refresh PINNACLE_SESSION + PINNACLE_WS_PASSWORD (= newsession|dGGR) and restart, or keep a "
-              "browser open to hold the session (or PINNACLE_ODDS_MODE=rest). Books go stale → C# clears them.")
+              "browser open to hold the session (or PINNACLE_ODDS_MODE=rest). Books go stale -> C# clears them.")
         c = self._client
         if c is not None:
             # loop_stop() must NOT run inside the paho loop thread (this can be called from a callback) → offload.
@@ -495,6 +509,10 @@ class PinnacleAdapter(BookAdapter):
             leagues = [lg for lg, ts in self._active_leagues.items() if now - ts <= self._active_ttl]
             if not leagues:
                 continue
+            # Logged out → idle (don't poll Pinnacle with a dead session). The loop keeps sleeping, not calling;
+            # it auto-resumes when a fresh login lands (browser source) or the session is restored.
+            if self._session_expired or (self._session_source == "browser" and not self._session_ready):
+                continue
             self._rate_limited = False
             t0 = time.perf_counter()
             try:
@@ -571,6 +589,7 @@ class PinnacleAdapter(BookAdapter):
             if "guest" in loc.lower():
                 print(f"[PINNACLE] {path}: redirected to the GUEST endpoint → your x-session is EXPIRED/invalid.")
                 self._session_expired = True
+                self._session_ready = False    # gate odds() seeding + the rest poller → STOP poking Pinnacle when logged out
                 self._give_up_ws("session expired — guest redirect")   # stop keepalive + WS; don't hammer a dead session
             else:
                 print(f"[PINNACLE] GET {path} HTTP {r.status_code} → {loc}")
