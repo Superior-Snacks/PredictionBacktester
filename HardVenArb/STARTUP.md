@@ -37,6 +37,23 @@ $env:HARDVEN_BOOK="bookmaker"; python -m uvicorn app:app --port 8787
 
 Sanity check (Terminal 2, optional): `Invoke-RestMethod "http://127.0.0.1:8787/catalog" | ConvertTo-Json -Depth 4 | Select-Object -First 20` → should list today's games.
 
+### 1-PIN. Pinnacle with a managed login window (`HARDVEN_BOOK=pinnacle`, `PINNACLE_SESSION_SOURCE=browser`)
+
+Instead of hand-scraping `x-session` into `.env`, the sidecar can open a Pinnacle window, let you log in, capture the live session, and hold it open so it doesn't expire:
+
+```powershell
+cd HardVenArb/sidecar
+$env:HARDVEN_BOOK="pinnacle"; $env:PINNACLE_SESSION_SOURCE="browser"
+# leagues to watch (baseball ids + tennis sport-auto-discovery):
+$env:PINNACLE_CATALOG_LEAGUES="246"; $env:PINNACLE_CATALOG_SPORTS="33"
+python -m uvicorn app:app --port 8787
+```
+- A Chrome window opens on pinnacle.bet. **Log in**, then **click into any sport once** so the page opens its odds WebSocket (that frame yields the WS login). The persistent profile (`.pinnacle_profile`) remembers you, so most restarts capture automatically — no re-login.
+- Watch for `[PINNACLE SESSION] captured WS login …` then the `SESSION CAPTURED — the bot is GO` banner. The feed stays idle until then; the C# bot logs `[HARDVEN] sidecar session READY` once odds flow.
+- **Leave the window + uvicorn running.** The open tab holds the session (gentle auto-activity + the adapter's authed-REST keepalive guard against the inactivity logout). The bot replays the captured session over its own clean httpx/paho feed — the window only mints + holds it; it does not serve odds.
+- Readiness check: `Invoke-RestMethod "http://127.0.0.1:8787/health" | ConvertTo-Json -Depth 4` → `session_ready` + a masked `session` block.
+- Knobs: `PINNACLE_HEADLESS=1` (no window — only after a profile exists & login persists), `PINNACLE_CHANNEL` (default `chrome`), `PINNACLE_USER_DATA_DIR`, `PINNACLE_BROWSER_ACTIVITY_SEC` (default 200).
+
 ## 2. Build the pair list  (Terminal 2)
 
 ```powershell

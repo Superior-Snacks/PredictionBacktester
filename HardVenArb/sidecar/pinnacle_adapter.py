@@ -124,6 +124,12 @@ class PinnacleAdapter(BookAdapter):
         self._session_ka_sec = float(os.environ.get("PINNACLE_SESSION_KEEPALIVE_SEC", "240"))
         self._session_expired = False                          # terminal: a guest-redirect → stop everything
         self._debug_ws = os.environ.get("PINNACLE_DEBUG_WS") == "1"  # log each WS cache update (prove live=WS)
+        # ── session SOURCE: "env" (DEFAULT — creds from PINNACLE_SESSION/.env, paste-the-token) or "browser"
+        # (a managed, logged-in Playwright window mints + HOLDS the session and feeds creds in LIVE; see
+        # pinnacle_session.py). In browser mode the feed stays idle until login is captured (_session_ready).
+        self._session_source = os.environ.get("PINNACLE_SESSION_SOURCE", "env").strip().lower()
+        self._browser = None                                   # PinnacleBrowserSession when source == "browser"
+        self._session_ready = self._session_source != "browser"  # env mode = ready now; browser waits for login
         # ── REST-mode state ──
         self._refresh_task: Optional[asyncio.Task] = None
         self._refresh_sec = float(os.environ.get("PINNACLE_REFRESH_SEC", "15"))
@@ -142,6 +148,15 @@ class PinnacleAdapter(BookAdapter):
                      "user-agent": USER_AGENT, "x-api-key": self._api_key,
                      "x-device-uuid": self._device, "x-session": self._session},
             timeout=15.0)
+        if self._session_source == "browser":
+            # Launch the managed login window FIRST (non-blocking) and let creds arrive via the callback. The
+            # feed (REST seed + WS) gates itself on _session_ready, so startup returns promptly → FastAPI serves
+            # /health right away (the C# bot sees the sidecar is up, session_ready=false) while you log in.
+            from pinnacle_session import PinnacleBrowserSession
+            self._browser = PinnacleBrowserSession(self._on_browser_creds)
+            await self._browser.start()
+            print("[PINNACLE] session source = BROWSER — log in to the window; the feed waits for capture, "
+                  "then seeds + connects automatically.")
         if self._mode == "rest":
             self._refresh_task = asyncio.create_task(self._refresh_loop())
             print(f"[PINNACLE] ready — REST poll mode (gentle serial, {self._refresh_sec:g}s). "
@@ -164,6 +179,11 @@ class PinnacleAdapter(BookAdapter):
                 self._client.disconnect()
             except Exception:
                 pass
+        if self._browser is not None:
+            try:
+                await self._browser.stop()
+            except Exception:
+                pass
         if self._http:
             try:
                 await self._http.aclose()
@@ -183,6 +203,10 @@ class PinnacleAdapter(BookAdapter):
             p = self._parse_sid(sid)
             if p:
                 self._active_leagues[p[0]] = now
+        # BROWSER session source, not logged in yet → no valid creds to seed/connect with. Serve the (empty)
+        # cache so /odds still answers; the C# freshness gate keeps the books cleared until odds flow.
+        if self._session_source == "browser" and not self._session_ready:
+            return self._read_cache(selection_ids, now)
         if self._mode == "ws":
             # REST-seed each new league ONCE: the WS streams CHANGES, not an on-subscribe snapshot, so a
             # stable pre-match line never arrives over the WS until it moves. One /markets/straight snapshot
@@ -193,6 +217,9 @@ class PinnacleAdapter(BookAdapter):
                 await self._refresh_league(lid)
             if not self._ws_started and self._active_leagues:
                 self._start_ws()                          # LAZY connect (the reconciler subscribes leagues gradually)
+        return self._read_cache(selection_ids, now)
+
+    def _read_cache(self, selection_ids: list[str], now: float) -> dict[str, Selection]:
         out: dict[str, Selection] = {}
         with self._cache_lock:
             for sid in selection_ids:
@@ -205,6 +232,58 @@ class PinnacleAdapter(BookAdapter):
                 ts = (now if self._connected else s.ts) if self._mode == "ws" else s.ts
                 out[sid] = Selection(s.selection_id, s.decimal_odds, s.max_stake, "open", ts)
         return out
+
+    # ── browser session source: receive live creds + expose status ────────────────
+    def _on_browser_creds(self, creds: dict) -> None:
+        """Callback from PinnacleBrowserSession on every credential change. Pushes the freshest x-session /
+        device / api-key into the live httpx headers and the WS password into paho (so its next reconnect
+        authenticates with the latest token). A NEW x-session (e.g. guest→logged-in, or a rotation after a
+        give-up) clears the terminal latches so the feed can come back to life."""
+        old_session = self._session
+        sess = creds.get("session") or ""
+        if sess:
+            self._session = sess
+            if self._http is not None:
+                self._http.headers["x-session"] = sess
+        dev = creds.get("device") or ""
+        if dev:
+            self._device = dev
+            if self._http is not None:
+                self._http.headers["x-device-uuid"] = dev
+        key = creds.get("api_key") or ""
+        if key:
+            self._api_key = key
+            if self._http is not None:
+                self._http.headers["x-api-key"] = key
+        ws_user = creds.get("ws_user") or ""
+        ws_pass = creds.get("ws_pass") or ""
+        if ws_user:
+            self._ws_user = ws_user
+        if ws_pass:
+            self._ws_pass = ws_pass
+            if self._client is not None:                  # live paho client → use fresh creds on next reconnect
+                try:
+                    self._client.username_pw_set(self._ws_user, self._ws_pass)
+                except Exception:
+                    pass
+        was_ready = self._session_ready
+        self._session_ready = bool(creds.get("ready"))
+        if self._session_ready and sess and sess != old_session:
+            # a genuinely fresh session → recover from any terminal give-up so the next /odds restarts the feed
+            self._session_expired = False
+            if self._ws_gave_up:
+                self._ws_gave_up = False
+                self._ws_started = False                  # next odds() relands _start_ws() with the new creds
+                self._seeded.clear()                      # re-seed pre-match snapshots under the new session
+        if self._session_ready and not was_ready:
+            print("[PINNACLE] OK browser session ready — feed will seed + connect on the next /odds.")
+
+    def session_status(self) -> dict:
+        st = {"source": self._session_source, "ready": self._session_ready,
+              "mode": self._mode, "ws_connected": self._connected, "cache_sel": len(self._cache)}
+        if self._browser is not None:
+            st["browser"] = self._browser.status()
+        return st
 
     # ── WS (MQTT) odds source ────────────────────────────────────────────────
     def _start_ws(self) -> None:

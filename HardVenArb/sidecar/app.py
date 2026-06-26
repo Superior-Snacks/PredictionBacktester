@@ -73,9 +73,26 @@ class BetRequest(BaseModel):
     max_odds: float
 
 
+def _session_state() -> dict | None:
+    """Adapter session readiness (Pinnacle browser-source exposes session_status(); others have no session
+    gate → treated as always ready). Surfaced on /health + /odds so the C# bot knows when login is captured."""
+    fn = getattr(adapter, "session_status", None)
+    if not callable(fn):
+        return None
+    try:
+        return fn()
+    except Exception:
+        return None
+
+
 @app.get("/health")
 async def health():
-    return {"ok": True, "book": adapter.name, "ts": time.time()}
+    h = {"ok": True, "book": adapter.name, "ts": time.time()}
+    s = _session_state()
+    if s is not None:
+        h["session_ready"] = bool(s.get("ready", True))
+        h["session"] = s
+    return h
 
 
 # ── M0: odds (the only endpoint telemetry needs) ──────────────────────────────
@@ -85,7 +102,11 @@ async def odds(selections: str = Query(..., description="comma-separated selecti
     if not ids:
         raise HTTPException(400, "no selections")
     result = await adapter.odds(ids)
-    return {"selections": {sid: sel.to_api() for sid, sel in result.items()}, "ts": time.time()}
+    resp = {"selections": {sid: sel.to_api() for sid, sel in result.items()}, "ts": time.time()}
+    s = _session_state()
+    if s is not None:
+        resp["session_ready"] = bool(s.get("ready", True))   # rides along so the C# /odds poll sees readiness
+    return resp
 
 
 # ── Pairing: catalog ──────────────────────────────────────────────────────────

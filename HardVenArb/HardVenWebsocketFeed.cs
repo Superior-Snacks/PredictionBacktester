@@ -38,6 +38,11 @@ public class HardVenWebsocketFeed
     /// <summary>True while the last sidecar poll succeeded.</summary>
     public volatile bool IsConnected = false;
 
+    /// <summary>Sidecar session readiness (browser-source books: false until the Pinnacle login is captured).
+    /// Surfaced on /odds + /health; true for adapters with no session gate. Logged on transition.</summary>
+    public volatile bool SessionReady = true;
+    private int _lastSessionReady = -1;   // -1 unknown, 0 false, 1 true — for one-line transition logging
+
     private long _lastMessageTicks = DateTime.UtcNow.Ticks;
     /// <summary>UTC time of the last successful sidecar response (watchdog staleness check).</summary>
     public DateTime LastMessageAt => new DateTime(Volatile.Read(ref _lastMessageTicks), DateTimeKind.Utc);
@@ -138,6 +143,26 @@ public class HardVenWebsocketFeed
     private void ApplyOdds(string json)
     {
         using var doc = JsonDocument.Parse(json);
+
+        // Session-ready handshake: the sidecar reports whether its book session is live (Pinnacle browser
+        // login captured). Books only flow once it's true, but logging the flip tells the operator the bot
+        // saw the sidecar come ready (or drop). Absent field → ready (adapters with no session gate).
+        if (doc.RootElement.TryGetProperty("session_ready", out var sr) &&
+            (sr.ValueKind == JsonValueKind.True || sr.ValueKind == JsonValueKind.False))
+        {
+            bool ready = sr.GetBoolean();
+            SessionReady = ready;
+            int cur = ready ? 1 : 0;
+            if (cur != _lastSessionReady)
+            {
+                if (ready)
+                    Console.WriteLine("[HARDVEN] sidecar session READY — book login captured; odds will flow.");
+                else if (_lastSessionReady == 1)
+                    Console.WriteLine("[HARDVEN] sidecar session DROPPED — waiting for re-login (books cleared).");
+                _lastSessionReady = cur;
+            }
+        }
+
         if (!doc.RootElement.TryGetProperty("selections", out var sels) ||
             sels.ValueKind != JsonValueKind.Object)
             return;
