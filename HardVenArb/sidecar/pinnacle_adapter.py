@@ -93,6 +93,10 @@ class PinnacleAdapter(BookAdapter):
         self._ws_pass = os.environ.get("PINNACLE_WS_PASSWORD", "")
         self._catalog_leagues = [x.strip() for x in
                                  os.environ.get("PINNACLE_CATALOG_LEAGUES", "").split(",") if x.strip()]
+        # sport ids whose leagues are EPHEMERAL (tennis=33: per-tournament-per-round, change daily/intraday) →
+        # auto-discover today's leagues via /sports/{id}/leagues each catalog() call, instead of hand-listing.
+        self._catalog_sports = [x.strip() for x in
+                                os.environ.get("PINNACLE_CATALOG_SPORTS", "").split(",") if x.strip()]
         self._cache: dict[str, Selection] = {}            # "{lid}:{mid}:{designation}" -> Selection
         self._cache_lock = threading.Lock()               # paho thread writes; asyncio reads
         self._active_leagues: dict[str, float] = {}       # leagueId -> unix ts last requested via /odds
@@ -494,12 +498,27 @@ class PinnacleAdapter(BookAdapter):
             return None
 
     # ── pairing catalog (REST matchups; designation-keyed to match the WS odds) ──
+    async def _catalog_league_ids(self) -> list[str]:
+        """League ids to catalog: explicit PINNACLE_CATALOG_LEAGUES (stable ids — baseball 246/6227/187703)
+        PLUS every current league of each PINNACLE_CATALOG_SPORTS (auto-discovery for sports whose 'leagues'
+        are ephemeral tournament-rounds — tennis=33 → today's ITF/ATP/WTA events). Doubles leagues are skipped
+        (the bot pairs 2-player singles vs Kalshi singles). Re-resolved per catalog() call so it tracks the
+        board with no hand-editing."""
+        ids = list(self._catalog_leagues)
+        for sid in self._catalog_sports:
+            for l in (await self._http_get(f"/sports/{sid}/leagues") or []):
+                if (l.get("matchupCount") or 0) > 0 and "doubles" not in (l.get("name", "") or "").lower():
+                    ids.append(str(l.get("id")))
+        return list(dict.fromkeys(ids))   # dedupe, preserve order
+
     async def catalog(self) -> list[CatalogEntry]:
-        if not self._catalog_leagues:
-            print("[PINNACLE] catalog(): set PINNACLE_CATALOG_LEAGUES (CSV league ids, e.g. 246 for MLB).")
+        league_ids = await self._catalog_league_ids()
+        if not league_ids:
+            print("[PINNACLE] catalog(): set PINNACLE_CATALOG_LEAGUES (CSV league ids, e.g. 246=MLB) and/or "
+                  "PINNACLE_CATALOG_SPORTS (CSV sport ids, e.g. 33=Tennis) for auto-discovery.")
             return []
         out: list[CatalogEntry] = []
-        for lid in self._catalog_leagues:
+        for i, lid in enumerate(league_ids):
             matchups = await self._http_get(f"/leagues/{lid}/matchups") or []
             for m in matchups:
                 mid = m.get("id")
@@ -525,6 +544,8 @@ class PinnacleAdapter(BookAdapter):
                         sport=sport, league=league_name, event=event, market="moneyline",
                         selection_name=p.get("name", ""), start_time=m.get("startTime"),
                         three_way=three_way))
+            if i + 1 < len(league_ids) and self._jitter_ms > 0:
+                await asyncio.sleep(random.uniform(0, self._jitter_ms / 1000.0))   # gentle between many leagues
         return out
 
     # ── M1 (later): betting + wallet confirmation ──
