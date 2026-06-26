@@ -124,6 +124,7 @@ class PinnacleAdapter(BookAdapter):
         self._session_ka_sec = float(os.environ.get("PINNACLE_SESSION_KEEPALIVE_SEC", "240"))
         self._session_expired = False                          # terminal: a guest-redirect → stop everything
         self._debug_ws = os.environ.get("PINNACLE_DEBUG_WS") == "1"  # log each WS cache update (prove live=WS)
+        self._debug_status = os.environ.get("PINNACLE_DEBUG_STATUS") == "1"  # log market OFFLINE/suspend transitions
         # ── session SOURCE: "env" (DEFAULT — creds from PINNACLE_SESSION/.env, paste-the-token) or "browser"
         # (a managed, logged-in Playwright window mints + HOLDS the session and feeds creds in LIVE; see
         # pinnacle_session.py). In browser mode the feed stays idle until login is captured (_session_ready).
@@ -240,7 +241,9 @@ class PinnacleAdapter(BookAdapter):
                 # up / logged out) → serve stored ts → it ages → C# clears. REST mode: the poller already stamps
                 # ts on each fetch, so serve it as-is.
                 ts = now if (self._mode == "ws" and live) else s.ts
-                out[sid] = Selection(s.selection_id, s.decimal_odds, s.max_stake, "open", ts)
+                # Pass through the cached STATUS ("open" / "suspended") so an OFFLINE Pinnacle market reaches
+                # the C# as suspended → empty book → no arb. (Was hardcoded "open", which hid suspensions.)
+                out[sid] = Selection(s.selection_id, s.decimal_odds, s.max_stake, s.status, ts)
         return out
 
     # ── browser session source: receive live creds + expose status ────────────────
@@ -475,14 +478,20 @@ class PinnacleAdapter(BookAdapter):
                     del self._cache[k]
             return
         now = time.time()
+        # Pinnacle pushes the WHOLE matchup record on any sub-market change, so we can read AVAILABILITY off it:
+        # find this matchup's full-game (period 0) moneyline. AVAILABLE = it's present, its status is open
+        # (status ∈ {None, "open"} — guest API shows null for some priced markets, "open" for live matches),
+        # and a side has a real price. OFFLINE/SUSPENDED = the market is non-open, gone from the record, or a
+        # side's price vanished → we must SUSPEND those tokens, not leave the last "open" price sitting stale
+        # (a stale "open" leg vs a live Kalshi leg = phantom arb — the whole point of this change).
+        markets = rec.get("markets") or []
+        ml = next((mk for mk in markets if mk.get("type") == "moneyline" and mk.get("period") == 0), None)
+        ml_status = ml.get("status") if ml else None
+        available = ml is not None and ml_status in (None, "open")
         updates: dict[str, Selection] = {}
-        for mk in rec.get("markets") or []:
-            if mk.get("type") != "moneyline" or mk.get("period") != 0:
-                continue
-            if mk.get("status") and mk.get("status") != "open":
-                continue
-            max_stake = _max_risk(mk.get("limits"))
-            for pr in mk.get("prices") or []:
+        if available:
+            max_stake = _max_risk(ml.get("limits"))
+            for pr in ml.get("prices") or []:
                 desig = pr.get("designation")
                 if desig not in _SIDES:
                     continue
@@ -491,12 +500,27 @@ class PinnacleAdapter(BookAdapter):
                     continue
                 token = f"{lid}:{mid}:{desig}"
                 updates[token] = Selection(token, decimal_odds=dec, max_stake=max_stake, status="open", ts=now)
-        if updates:
-            with self._cache_lock:
-                self._cache.update(updates)
-            if self._debug_ws:
-                legs = " ".join(f"{k.rsplit(':', 1)[-1]}={v.decimal_odds:.3f}" for k, v in updates.items())
-                print(f"[PINNACLE WS-UPD] {data.get('op')} {lid}:{mid}  {legs}")
+        # Reconcile only when we have POSITIVE evidence about the moneyline: it was found (open → apply prices,
+        # one side missing → suspend that side) OR it was non-open OR it's absent from a record that DOES carry
+        # other markets (full record, moneyline pulled). A record with NO markets is ambiguous (could be a
+        # score/clock-only push) → leave tokens be and let the staleness gate handle it.
+        reconcile = available or (ml is not None) or (ml is None and len(markets) > 0)
+        suspended = 0
+        with self._cache_lock:
+            if reconcile:
+                for k in [k for k in self._cache if k.startswith(prefix) and k not in updates]:
+                    old = self._cache[k]
+                    if old.status != "suspended":
+                        suspended += 1
+                    self._cache[k] = Selection(old.selection_id, old.decimal_odds, old.max_stake,
+                                               status="suspended", ts=now)
+            self._cache.update(updates)
+        if updates and self._debug_ws:
+            legs = " ".join(f"{k.rsplit(':', 1)[-1]}={v.decimal_odds:.3f}" for k, v in updates.items())
+            print(f"[PINNACLE WS-UPD] {data.get('op')} {lid}:{mid}  {legs}")
+        if suspended and (self._debug_ws or self._debug_status):
+            print(f"[PINNACLE STATUS] {lid}:{mid} moneyline OFFLINE "
+                  f"(status={ml_status!r}{' / absent' if ml is None else ''}) → {suspended} leg(s) suspended")
 
     # ── REST fallback odds source (designation read directly from each price, like the WS) ──
     async def _refresh_loop(self) -> None:
@@ -548,6 +572,9 @@ class PinnacleAdapter(BookAdapter):
                 continue
             mid = mk.get("matchupId")
             max_stake = _max_risk(mk.get("limits"))
+            # Same availability rule as the WS path: open status (∈ {None, "open"}) → seed as buyable; a
+            # non-open (offline/suspended) market is seeded as "suspended" so the C# clears it, not as a live ask.
+            seed_status = "open" if mk.get("status") in (None, "open") else "suspended"
             for pr in prices:
                 # REST /markets/straight prices carry `designation` (home/away/draw) DIRECTLY — exactly like
                 # the WS payload — so read it straight (game moneylines have participantId=None anyway). The OLD
@@ -564,7 +591,7 @@ class PinnacleAdapter(BookAdapter):
                 token = f"{lid}:{mid}:{desig}"
                 with self._cache_lock:
                     self._cache[token] = Selection(token, decimal_odds=dec, max_stake=max_stake,
-                                                   status="open", ts=now)
+                                                   status=seed_status, ts=now)
 
     # ── HTTP (catalog + rest mode) ───────────────────────────────────────────
     async def _http_get(self, path: str, count_429: bool = False):
