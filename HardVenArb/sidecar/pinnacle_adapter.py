@@ -81,6 +81,13 @@ def _max_risk(limits) -> float:
     return 0.0
 
 
+def _strip_units(name: str) -> str:
+    """Drop Pinnacle's per-matchup unit suffix: 'Zizou Bergs (Sets)' / 'Toby Samuel (Games)' -> the bare name.
+    The winner matchup is sometimes labelled '(Sets)' (no clean variant exists), so we keep it but clean the
+    name for pairing. Names without a '(' are returned unchanged (baseball etc.)."""
+    return (name or "").split("(")[0].strip()
+
+
 class PinnacleAdapter(BookAdapter):
     name = "pinnacle"
 
@@ -520,19 +527,30 @@ class PinnacleAdapter(BookAdapter):
         out: list[CatalogEntry] = []
         for i, lid in enumerate(league_ids):
             matchups = await self._http_get(f"/leagues/{lid}/matchups") or []
+            straight = await self._http_get(f"/leagues/{lid}/markets/straight") or []
+            # Catalog ONLY matchups that actually carry an AVAILABLE full-game moneyline — the SAME filter the
+            # odds path uses, so every cataloged token is one the odds cache will populate. This is the robust
+            # tennis discriminator: Pinnacle lists a "(Games)" (and sometimes a "(Sets)") DERIVATIVE matchup per
+            # match with the SAME players, and the /matchups `hasMoneyline` flag is UNRELIABLE live (True even
+            # when the market is suspended) → keying off the real market avoids double-pairing. The winner is
+            # whichever matchup (clean OR "(Sets)"-labelled) has the live moneyline; the "(Games)" one (no live
+            # moneyline) and the tournament outright (a many-way moneyline) are both excluded by this set.
+            winner_mids = {mk.get("matchupId") for mk in straight
+                           if mk.get("type") == "moneyline" and mk.get("period") == 0
+                           and 2 <= len(mk.get("prices") or []) <= 3}
             for m in matchups:
-                mid = m.get("id")
-                p0 = next((p for p in (m.get("periods") or []) if p.get("period") == 0), None)
-                if not (p0 and p0.get("hasMoneyline")):
+                if m.get("id") not in winner_mids:
                     continue
                 parts = m.get("participants") or []
                 if len(parts) < 2:
                     continue
+                if any("/" in (p.get("name") or "") for p in parts):
+                    continue   # DOUBLES ("A / B" pairs) sit inside singles leagues too — Kalshi is singles-only
                 lg = m.get("league") or {}
                 sport = ((lg.get("sport") or {}).get("name")) or ""
                 league_name = lg.get("name") or str(lid)
-                home = next((p.get("name", "") for p in parts if p.get("alignment") == "home"), "")
-                away = next((p.get("name", "") for p in parts if p.get("alignment") == "away"), "")
+                home = _strip_units(next((p.get("name", "") for p in parts if p.get("alignment") == "home"), ""))
+                away = _strip_units(next((p.get("name", "") for p in parts if p.get("alignment") == "away"), ""))
                 event = f"{home} vs {away}"
                 three_way = sport.strip().lower() == "soccer"
                 for p in parts:
@@ -540,9 +558,9 @@ class PinnacleAdapter(BookAdapter):
                     if desig not in _SIDES:
                         continue
                     out.append(CatalogEntry(
-                        selection_id=f"{lid}:{mid}:{desig}",
+                        selection_id=f"{lid}:{m.get('id')}:{desig}",
                         sport=sport, league=league_name, event=event, market="moneyline",
-                        selection_name=p.get("name", ""), start_time=m.get("startTime"),
+                        selection_name=_strip_units(p.get("name", "")), start_time=m.get("startTime"),
                         three_way=three_way))
             if i + 1 < len(league_ids) and self._jitter_ms > 0:
                 await asyncio.sleep(random.uniform(0, self._jitter_ms / 1000.0))   # gentle between many leagues

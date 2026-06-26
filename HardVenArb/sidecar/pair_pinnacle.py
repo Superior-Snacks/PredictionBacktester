@@ -63,7 +63,8 @@ def _league_id(sid: str) -> int:
 # so Kalshi "A's" → norm "a s", which is not in "athletics"/"oakland athletics". Canonicalize the Kalshi
 # side to a token Pinnacle's name still CONTAINS ("athletics"), so containment then scores 100. Add entries
 # here as new abbreviation mismatches surface (the price gate / a manual check is the backstop).
-_TEAM_ALIASES = {"a s": "athletics", "as": "athletics", "oakland": "athletics", "sacramento": "athletics"}
+_TEAM_ALIASES = {"a s": "athletics", "as": "athletics", "oakland": "athletics", "sacramento": "athletics",
+                 "chicago ws": "white sox"}   # Kalshi "Chicago WS" ⊄ Pinnacle "Chicago White Sox" (scores 82)
 
 
 def _canon(key: str) -> str:
