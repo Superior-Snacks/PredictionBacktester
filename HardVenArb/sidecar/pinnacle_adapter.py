@@ -52,6 +52,10 @@ import httpx
 from book_adapter import BookAdapter, BetResult, CatalogEntry, Selection
 
 REST_BASE = os.environ.get("PINNACLE_API_BASE", "https://api.arcadia.pinnacle.com/0.1")
+# GUEST API: same board structure (sports/leagues/matchups/markets, incl. price `designation`) served with ONLY
+# the public x-api-key — NO user session. Used for catalog/pairing so enumeration never depends on the authed
+# x-session (which may be stale, not-yet-captured in browser mode, or logged out). Authed REST is for live odds.
+GUEST_BASE = os.environ.get("PINNACLE_GUEST_BASE", "https://guest.api.arcadia.pinnacle.com/0.1")
 WS_HOST = os.environ.get("PINNACLE_WS_HOST", "api.arcadia.pinnacle.com")
 WS_PATH = os.environ.get("PINNACLE_WS_PATH", "/ws")
 DEFAULT_API_KEY = "CmX2KcMrXuFmNg6YFbmTxE0y9CIrOi0R"   # static public site client key (not a per-user secret)
@@ -109,7 +113,8 @@ class PinnacleAdapter(BookAdapter):
         self._active_leagues: dict[str, float] = {}       # leagueId -> unix ts last requested via /odds
         self._subscribed: set[str] = set()                # leagueIds subscribed on the WS
         self._seeded: set[str] = set()                    # leagueIds REST-seeded once (pre-match snapshot)
-        self._http: Optional[httpx.AsyncClient] = None     # for catalog() (+ rest mode)
+        self._http: Optional[httpx.AsyncClient] = None     # authed (live odds seed + rest mode)
+        self._guest_http: Optional[httpx.AsyncClient] = None  # guest (catalog/pairing — no session needed)
         # ── WS state ──
         self._client = None
         self._connected = False
@@ -155,11 +160,19 @@ class PinnacleAdapter(BookAdapter):
             # Launch the managed login window FIRST (non-blocking) and let creds arrive via the callback. The
             # feed (REST seed + WS) gates itself on _session_ready, so startup returns promptly → FastAPI serves
             # /health right away (the C# bot sees the sidecar is up, session_ready=false) while you log in.
-            from pinnacle_session import PinnacleBrowserSession
-            self._browser = PinnacleBrowserSession(self._on_browser_creds)
-            await self._browser.start()
-            print("[PINNACLE] session source = BROWSER — log in to the window; the feed waits for capture, "
-                  "then seeds + connects automatically.")
+            # A browser-launch failure (Chrome missing, profile locked, no display) must NOT kill the sidecar:
+            # catalog/pairing still works via the GUEST API, and you can fall back to PINNACLE_SESSION_SOURCE=env.
+            try:
+                from pinnacle_session import PinnacleBrowserSession
+                self._browser = PinnacleBrowserSession(self._on_browser_creds)
+                await self._browser.start()
+                print("[PINNACLE] session source = BROWSER — log in to the window; the feed waits for capture, "
+                      "then seeds + connects automatically.")
+            except Exception as ex:
+                self._browser = None
+                print(f"[PINNACLE] BROWSER session launch FAILED ({type(ex).__name__}: {ex}). Sidecar stays up — "
+                      "catalog/pairing still works (guest API); for live odds, fix the browser or set "
+                      "PINNACLE_SESSION_SOURCE=env with a fresh PINNACLE_SESSION.")
         if self._mode == "rest":
             self._refresh_task = asyncio.create_task(self._refresh_loop())
             print(f"[PINNACLE] ready — REST poll mode (gentle serial, {self._refresh_sec:g}s). "
@@ -190,6 +203,11 @@ class PinnacleAdapter(BookAdapter):
         if self._ws_dump_fh is not None:
             try:
                 self._ws_dump_fh.close()
+            except Exception:
+                pass
+        if self._guest_http:
+            try:
+                await self._guest_http.aclose()
             except Exception:
                 pass
         if self._http:
@@ -664,7 +682,30 @@ class PinnacleAdapter(BookAdapter):
         except Exception:
             return None
 
-    # ── pairing catalog (REST matchups; designation-keyed to match the WS odds) ──
+    async def _guest_get(self, path: str):
+        """GET structural data from the GUEST API (public key, NO user session) — for catalog/pairing, which is
+        just names/leagues/markets and must NOT depend on (or trip the give-up on) the authed x-session. Lazy
+        client; follows redirects (the guest host is the redirect target, so it never bounces to itself)."""
+        if self._guest_http is None:
+            self._guest_http = httpx.AsyncClient(
+                headers={"accept": "application/json", "content-type": "application/json",
+                         "origin": "https://www.pinnacle.bet", "referer": "https://www.pinnacle.bet/",
+                         "user-agent": USER_AGENT, "x-api-key": DEFAULT_API_KEY},
+                timeout=20.0, follow_redirects=True)
+        try:
+            r = await self._guest_http.get(GUEST_BASE + path)
+        except Exception as ex:
+            print(f"[PINNACLE] GUEST GET {path} error: {type(ex).__name__}: {ex}")
+            return None
+        if r.status_code != 200:
+            print(f"[PINNACLE] GUEST GET {path} HTTP {r.status_code}")
+            return None
+        try:
+            return r.json()
+        except Exception:
+            return None
+
+    # ── pairing catalog (GUEST API — designation-keyed to match the WS odds; no session needed) ──
     async def _catalog_league_ids(self) -> list[str]:
         """League ids to catalog: explicit PINNACLE_CATALOG_LEAGUES (stable ids — baseball 246/6227/187703)
         PLUS every current league of each PINNACLE_CATALOG_SPORTS (auto-discovery for sports whose 'leagues'
@@ -673,7 +714,7 @@ class PinnacleAdapter(BookAdapter):
         board with no hand-editing."""
         ids = list(self._catalog_leagues)
         for sid in self._catalog_sports:
-            for l in (await self._http_get(f"/sports/{sid}/leagues") or []):
+            for l in (await self._guest_get(f"/sports/{sid}/leagues") or []):
                 if (l.get("matchupCount") or 0) > 0 and "doubles" not in (l.get("name", "") or "").lower():
                     ids.append(str(l.get("id")))
         return list(dict.fromkeys(ids))   # dedupe, preserve order
@@ -686,8 +727,8 @@ class PinnacleAdapter(BookAdapter):
             return []
         out: list[CatalogEntry] = []
         for i, lid in enumerate(league_ids):
-            matchups = await self._http_get(f"/leagues/{lid}/matchups") or []
-            straight = await self._http_get(f"/leagues/{lid}/markets/straight") or []
+            matchups = await self._guest_get(f"/leagues/{lid}/matchups") or []
+            straight = await self._guest_get(f"/leagues/{lid}/markets/straight") or []
             # Catalog ONLY matchups that actually carry an AVAILABLE full-game moneyline — the SAME filter the
             # odds path uses, so every cataloged token is one the odds cache will populate. This is the robust
             # tennis discriminator: Pinnacle lists a "(Games)" (and sometimes a "(Sets)") DERIVATIVE matchup per
