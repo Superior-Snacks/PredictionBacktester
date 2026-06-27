@@ -1,2 +1,3 @@
-2026/06/27-17:41:15.064 8298 Creating DB C:\Users\jonin\dev\projects\PredictionBacktester\HardVenArb\sidecar\.pinnacle_profile\Default\Sync Data\LevelDB since it was missing.
-2026/06/27-17:41:15.083 8298 Reusing MANIFEST C:\Users\jonin\dev\projects\PredictionBacktester\HardVenArb\sidecar\.pinnacle_profile\Default\Sync Data\LevelDB/MANIFEST-000001
+2026/06/27-17:58:10.229 1a64 Reusing MANIFEST C:\Users\jonin\dev\projects\PredictionBacktester\HardVenArb\sidecar\.pinnacle_profile\Default\Sync Data\LevelDB/MANIFEST-000001
+2026/06/27-17:58:10.232 1a64 Recovering log #3
+2026/06/27-17:58:10.232 1a64 Reusing old log C:\Users\jonin\dev\projects\PredictionBacktester\HardVenArb\sidecar\.pinnacle_profile\Default\Sync Data\LevelDB/000003.log 
