@@ -1,0 +1,5 @@
+2026/06/27-17:41:15.192 6734 Creating DB C:\Users\jonin\dev\projects\PredictionBacktester\HardVenArb\sidecar\.pinnacle_profile\Default\Local Storage\leveldb since it was missing.
+2026/06/27-17:41:15.234 6734 Reusing MANIFEST C:\Users\jonin\dev\projects\PredictionBacktester\HardVenArb\sidecar\.pinnacle_profile\Default\Local Storage\leveldb/MANIFEST-000001
+2026/06/27-17:41:26.836 4e98 Level-0 table #5: started
+2026/06/27-17:41:26.856 4e98 Level-0 table #5: 839344 bytes OK
+2026/06/27-17:41:26.858 4e98 Delete type=0 #3

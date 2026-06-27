@@ -125,6 +125,8 @@ class PinnacleAdapter(BookAdapter):
         self._session_expired = False                          # terminal: a guest-redirect → stop everything
         self._debug_ws = os.environ.get("PINNACLE_DEBUG_WS") == "1"  # log each WS cache update (prove live=WS)
         self._debug_status = os.environ.get("PINNACLE_DEBUG_STATUS") == "1"  # log market OFFLINE/suspend transitions
+        self._ws_dump_path = os.environ.get("PINNACLE_WS_DUMP", "")          # JSONL dump of EVERY incoming WS record
+        self._ws_dump_fh = None                                              # (derivative recon: do Games matchups arrive?)
         # ── session SOURCE: "env" (DEFAULT — creds from PINNACLE_SESSION/.env, paste-the-token) or "browser"
         # (a managed, logged-in Playwright window mints + HOLDS the session and feeds creds in LIVE; see
         # pinnacle_session.py). In browser mode the feed stays idle until login is captured (_session_ready).
@@ -183,6 +185,11 @@ class PinnacleAdapter(BookAdapter):
         if self._browser is not None:
             try:
                 await self._browser.stop()
+            except Exception:
+                pass
+        if self._ws_dump_fh is not None:
+            try:
+                self._ws_dump_fh.close()
             except Exception:
                 pass
         if self._http:
@@ -472,6 +479,8 @@ class PinnacleAdapter(BookAdapter):
             return
         lid, mid = str(lid), str(mid)
         prefix = f"{lid}:{mid}:"
+        if self._ws_dump_path:
+            self._dump_ws_record(data, lid, mid)
         if data.get("op") == "del":
             with self._cache_lock:
                 for k in [k for k in self._cache if k.startswith(prefix)]:
@@ -521,6 +530,32 @@ class PinnacleAdapter(BookAdapter):
         if suspended and (self._debug_ws or self._debug_status):
             print(f"[PINNACLE STATUS] {lid}:{mid} moneyline OFFLINE "
                   f"(status={ml_status!r}{' / absent' if ml is None else ''}) → {suspended} leg(s) suspended")
+
+    def _dump_ws_record(self, data: dict, lid: str, mid: str) -> None:
+        """RECON (PINNACLE_WS_DUMP=<path>): append a compact summary of EVERY incoming WS record so we can see
+        whether the '(Games)' DERIVATIVE matchups (spread/total/team_total) arrive over the current league-level
+        subscription, or ride a different topic that needs an extra subscribe. Captures matchupId, the participant
+        names (the '(Games)'/'(Sets)' suffix tells us which matchup it is), units/parentId if present, and per
+        market its type/period/status/price-count/points-flag/designations. Single-writer (paho thread)."""
+        try:
+            rec = data.get("rec") or {}
+            mkts = []
+            for mk in rec.get("markets") or []:
+                prices = mk.get("prices") or []
+                mkts.append({"type": mk.get("type"), "period": mk.get("period"), "status": mk.get("status"),
+                             "n": len(prices),
+                             "pts": any(pr.get("points") is not None for pr in prices),
+                             "desig": [pr.get("designation") for pr in prices]})
+            line = json.dumps({"ts": round(time.time(), 3), "op": data.get("op"), "lid": lid, "mid": mid,
+                               "units": rec.get("units"), "parentId": rec.get("parentId"),
+                               "names": [p.get("name") for p in (rec.get("participants") or [])],
+                               "markets": mkts}, default=str)
+            if self._ws_dump_fh is None:
+                self._ws_dump_fh = open(self._ws_dump_path, "a", encoding="utf-8")
+            self._ws_dump_fh.write(line + "\n")
+            self._ws_dump_fh.flush()
+        except Exception as ex:
+            print(f"[PINNACLE] WS dump error: {type(ex).__name__}: {ex}")
 
     # ── REST fallback odds source (designation read directly from each price, like the WS) ──
     async def _refresh_loop(self) -> None:
