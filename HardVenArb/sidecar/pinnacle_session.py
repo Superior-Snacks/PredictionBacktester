@@ -107,6 +107,12 @@ class PinnacleBrowserSession:
         self._have_ws = False
         self._last_capture = 0.0
         self._ready_announced = False
+        # diagnostics: surface WHERE capture is stuck (x-session vs the MQTT-CONNECT WS login)
+        self._status_task: Optional[asyncio.Task] = None
+        self._seen_req = False
+        self._seen_ws = False
+        self._logged_session = False
+        self._ws_urls_seen: set = set()
 
     # ── readiness / status ───────────────────────────────────────────────────────
     @property
@@ -149,6 +155,7 @@ class PinnacleBrowserSession:
         except Exception as ex:
             print(f"[PINNACLE SESSION] initial navigation slow/failed ({ex}); the window is open — browse manually.")
         self._activity_task = asyncio.create_task(self._activity_loop())
+        self._status_task = asyncio.create_task(self._status_loop())
         print("\n" + "=" * 78)
         print("[PINNACLE SESSION] LOG IN in the Pinnacle window that just opened.")
         print("  - If the saved profile already remembers you, capture is automatic.")
@@ -157,8 +164,9 @@ class PinnacleBrowserSession:
         print("=" * 78 + "\n")
 
     async def stop(self) -> None:
-        if self._activity_task and not self._activity_task.done():
-            self._activity_task.cancel()
+        for t in (self._activity_task, self._status_task):
+            if t and not t.done():
+                t.cancel()
         try:
             if self._ctx is not None:
                 await self._ctx.close()
@@ -175,11 +183,17 @@ class PinnacleBrowserSession:
         try:
             if "arcadia.pinnacle.com" not in (request.url or ""):
                 return
+            if not self._seen_req:
+                self._seen_req = True
+                print("[PINNACLE SESSION] seeing Arcadia API requests from the page (auth headers visible).")
             h = request.headers                          # Playwright lowercases header names
             sess = h.get("x-session")
             dev = h.get("x-device-uuid")
             key = h.get("x-api-key")
             changed = False
+            if sess and not self._logged_session:
+                self._logged_session = True
+                print("[PINNACLE SESSION] captured x-session (REST auth ready).")
             if sess and sess != self._session:
                 self._session = sess; changed = True
             if dev and dev != self._device:
@@ -201,10 +215,17 @@ class PinnacleBrowserSession:
             pass
 
     def _on_websocket(self, ws) -> None:
+        url = getattr(ws, "url", "") or ""
+        if url and url not in self._ws_urls_seen and len(self._ws_urls_seen) < 10:
+            self._ws_urls_seen.add(url)                   # log every distinct WS the PAGE opens (worker test)
+            print(f"[PINNACLE SESSION] WS opened by page: {url[:90]}")
         if self._have_ws:
             return
-        if "arcadia.pinnacle.com" not in (getattr(ws, "url", "") or ""):
+        if "arcadia.pinnacle.com" not in url:
             return                                       # only the Arcadia MQTT socket
+        if not self._seen_ws:
+            self._seen_ws = True
+            print("[PINNACLE SESSION] Arcadia WS visible to Playwright — watching its frames for the MQTT CONNECT.")
         try:
             ws.on("framesent", self._on_ws_frame)
         except Exception:
@@ -244,6 +265,25 @@ class PinnacleBrowserSession:
             print("  x-session + WS login captured; the adapter feed will seed + connect with them.")
             print("  Keep this window OPEN — it holds the session. Do not log out.")
             print("=" * 78 + "\n")
+
+    # ── diagnostics: heartbeat showing WHERE capture is stuck ─────────────────────
+    async def _status_loop(self) -> None:
+        """Until ready, print every 15s what's captured so far so a stuck capture is obvious: x-session comes
+        from the page's REST calls (appears once logged in); the WS login comes from the MQTT CONNECT frame
+        (appears once you BROWSE a sport — that opens the odds socket). If 'WS login' never flips to YES even
+        after browsing, the odds socket likely runs in a Web Worker that page.on('websocket') can't see (→ we
+        switch to CDP frame capture)."""
+        while True:
+            try:
+                await asyncio.sleep(15)
+            except asyncio.CancelledError:
+                break
+            if self.ready:
+                break
+            print(f"[PINNACLE SESSION] waiting for capture — x-session: {'YES' if self._session else 'no'}, "
+                  f"WS login: {'YES' if self._have_ws else 'no'}"
+                  f"{'  (Arcadia WS not yet seen by Playwright)' if not self._seen_ws else ''}. "
+                  "Make sure you're logged IN and have BROWSED to a sport.")
 
     # ── keepalive: gentle human-like activity ─────────────────────────────────────
     async def _activity_loop(self) -> None:

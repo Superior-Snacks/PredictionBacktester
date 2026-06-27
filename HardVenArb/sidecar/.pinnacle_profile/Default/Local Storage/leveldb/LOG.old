@@ -1,3 +1,6 @@
-2026/06/27-17:55:03.819 8360 Reusing MANIFEST C:\Users\jonin\dev\projects\PredictionBacktester\HardVenArb\sidecar\.pinnacle_profile\Default\Local Storage\leveldb/MANIFEST-000001
-2026/06/27-17:55:03.827 8360 Recovering log #4
-2026/06/27-17:55:03.830 8360 Reusing old log C:\Users\jonin\dev\projects\PredictionBacktester\HardVenArb\sidecar\.pinnacle_profile\Default\Local Storage\leveldb/000004.log 
+2026/06/27-17:58:10.290 5634 Reusing MANIFEST C:\Users\jonin\dev\projects\PredictionBacktester\HardVenArb\sidecar\.pinnacle_profile\Default\Local Storage\leveldb/MANIFEST-000001
+2026/06/27-17:58:10.296 5634 Recovering log #4
+2026/06/27-17:58:10.299 5634 Reusing old log C:\Users\jonin\dev\projects\PredictionBacktester\HardVenArb\sidecar\.pinnacle_profile\Default\Local Storage\leveldb/000004.log 
+2026/06/27-17:59:10.321 74bc Level-0 table #8: started
+2026/06/27-17:59:10.331 74bc Level-0 table #8: 13528 bytes OK
+2026/06/27-17:59:10.333 74bc Delete type=0 #4
