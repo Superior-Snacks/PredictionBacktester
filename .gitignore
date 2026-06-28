@@ -10,6 +10,9 @@
 *.userosscache
 *.sln.docstates
 .bookmaker_profile
+.pinnacle_profile/
+# any browser profile dir the sidecar creates (Chrome profile holds cookies/session — never commit)
+*_profile/
 
 # SQLite Database Files
 *.db

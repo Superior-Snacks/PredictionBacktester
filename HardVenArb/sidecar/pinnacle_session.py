@@ -37,6 +37,7 @@ import asyncio
 import os
 import random
 import time
+from pathlib import Path
 from typing import Callable, Optional
 
 
@@ -90,10 +91,19 @@ class PinnacleBrowserSession:
     def __init__(self, on_creds: Callable[[dict], None]) -> None:
         self._on_creds = on_creds
         self._login_url = os.environ.get("PINNACLE_LOGIN_URL", "https://www.pinnacle.bet/en/")
-        self._user_data = os.environ.get("PINNACLE_USER_DATA_DIR", ".pinnacle_profile")
+        # ABSOLUTE, module-anchored profile dir so the SAME saved profile is reused no matter what CWD the
+        # sidecar is launched from (a CWD-relative ".pinnacle_profile" would silently fragment into a fresh
+        # login per launch dir). A relative env override is anchored too. Gitignored (holds cookies/session).
+        _default_profile = Path(__file__).resolve().parent / ".pinnacle_profile"
+        self._user_data = str(Path(os.environ.get("PINNACLE_USER_DATA_DIR") or _default_profile).expanduser().resolve())
         self._headless = os.environ.get("PINNACLE_HEADLESS") == "1"     # DEFAULT headful (you log in)
         self._channel = os.environ.get("PINNACLE_CHANNEL", "chrome")
         self._activity_sec = float(os.environ.get("PINNACLE_BROWSER_ACTIVITY_SEC", "200"))
+        # sport pages the organic loop occasionally browses to (real session). Default = the home page only
+        # (always valid); override with PINNACLE_BROWSE_URLS once you've confirmed the sport-page URLs.
+        self._browse_urls = [u.strip() for u in os.environ.get("PINNACLE_BROWSE_URLS", "").split(",") if u.strip()] \
+            or [self._login_url]
+        self._organic = None
         self._pw = None
         self._ctx = None
         self._page = None
@@ -134,6 +144,9 @@ class PinnacleBrowserSession:
     # ── lifecycle ────────────────────────────────────────────────────────────────
     async def start(self) -> None:
         from playwright.async_api import async_playwright
+        reused = Path(self._user_data).exists()
+        print(f"[PINNACLE SESSION] {'reusing SAVED' if reused else 'creating NEW'} Chrome profile: {self._user_data}"
+              + ("" if reused else " (log in once; it'll be remembered next run)"))
         self._pw = await async_playwright().start()
         launch = dict(user_data_dir=self._user_data, headless=self._headless,
                       viewport={"width": 1400, "height": 900},
@@ -154,7 +167,9 @@ class PinnacleBrowserSession:
             await self._page.goto(self._login_url, wait_until="domcontentloaded", timeout=60_000)
         except Exception as ex:
             print(f"[PINNACLE SESSION] initial navigation slow/failed ({ex}); the window is open — browse manually.")
-        self._activity_task = asyncio.create_task(self._activity_loop())
+        from organic import OrganicActivity
+        self._organic = OrganicActivity(self._page, browse_urls=self._browse_urls, max_gap=self._activity_sec)
+        self._activity_task = asyncio.create_task(self._organic.run())   # human-like idle (replaces the nudge)
         self._status_task = asyncio.create_task(self._status_loop())
         print("\n" + "=" * 78)
         print("[PINNACLE SESSION] LOG IN in the Pinnacle window that just opened.")
@@ -285,18 +300,13 @@ class PinnacleBrowserSession:
                   f"{'  (Arcadia WS not yet seen by Playwright)' if not self._seen_ws else ''}. "
                   "Make sure you're logged IN and have BROWSED to a sport.")
 
-    # ── keepalive: gentle human-like activity ─────────────────────────────────────
-    async def _activity_loop(self) -> None:
-        while True:
-            try:
-                await asyncio.sleep(self._activity_sec)
-            except asyncio.CancelledError:
-                break
-            if self._page is None:
-                continue
-            try:
-                # Tiny nudge so a UI-inactivity logout doesn't trigger. The open tab + its own heartbeats are
-                # the real anchor; this is belt-and-suspenders, deliberately small and infrequent.
-                await self._page.mouse.move(random.randint(4, 40), random.randint(4, 40))
-            except Exception:
-                pass
+    # ── execution interlock (delegates to the organic loop) ───────────────────────
+    def pause_activity(self) -> None:
+        """Pause organic idle behaviour before placing a bet (so an in-flight scroll/move can't fight the bet
+        click on the single page). Resume after. No-op until the organic loop is running."""
+        if self._organic:
+            self._organic.pause()
+
+    def resume_activity(self) -> None:
+        if self._organic:
+            self._organic.resume()
