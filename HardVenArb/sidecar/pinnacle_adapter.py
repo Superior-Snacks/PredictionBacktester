@@ -237,9 +237,19 @@ class PinnacleAdapter(BookAdapter):
 
     @staticmethod
     def _parse_sid(sid: str):
-        parts = sid.split(":")
-        if len(parts) == 3 and parts[0] and parts[1] and parts[2] in _SIDES:
-            return parts[0], parts[1], parts[2]   # leagueId, matchupId, designation
+        """Token → tuple whose [1] is the leagueId (used to track active leagues), for BOTH shapes:
+        moneyline 3-seg → ('moneyline', lid, mid, designation);
+        derivative 5-seg → ('spread'|'total', lid, mid, points: float, side). None if neither."""
+        p = sid.split(":")
+        if len(p) == 3 and p[0] and p[1] and p[2] in _SIDES:
+            return ("moneyline", p[0], p[1], p[2])
+        if len(p) == 5 and p[0] and p[1] and p[2] in ("spread", "total"):
+            try:
+                pts = float(p[3])
+            except ValueError:
+                return None
+            if (p[2] == "spread" and p[4] in ("home", "away")) or (p[2] == "total" and p[4] in ("over", "under")):
+                return (p[2], p[0], p[1], pts, p[4])
         return None
 
     async def odds(self, selection_ids: list[str]) -> dict[str, Selection]:
@@ -247,7 +257,7 @@ class PinnacleAdapter(BookAdapter):
         for sid in selection_ids:
             p = self._parse_sid(sid)
             if p:
-                self._active_leagues[p[0]] = now
+                self._active_leagues[p[1]] = now   # p[1] = leagueId for both moneyline + derivative tokens
         # BROWSER session source, not logged in yet → no valid creds to seed/connect with. Serve the (empty)
         # cache so /odds still answers; the C# freshness gate keeps the books cleared until odds flow.
         if self._session_source == "browser" and not self._session_ready:
@@ -543,33 +553,18 @@ class PinnacleAdapter(BookAdapter):
                     del self._cache[k]
             return
         now = time.time()
-        # Pinnacle pushes the WHOLE matchup record on any sub-market change, so we can read AVAILABILITY off it:
-        # find this matchup's full-game (period 0) moneyline. AVAILABLE = it's present, its status is open
-        # (status ∈ {None, "open"} — guest API shows null for some priced markets, "open" for live matches),
-        # and a side has a real price. OFFLINE/SUSPENDED = the market is non-open, gone from the record, or a
-        # side's price vanished → we must SUSPEND those tokens, not leave the last "open" price sitting stale
-        # (a stale "open" leg vs a live Kalshi leg = phantom arb — the whole point of this change).
+        # Pinnacle pushes the WHOLE matchup record on any sub-market change, so the markets list is the full
+        # current state. Build a token for every OPEN period-0 moneyline / spread / total price (`_market_tokens`
+        # mirrors pair_derivatives' keying). RECONCILE: any cached token for this matchup NOT in this push (a
+        # line pulled, a market suspended, a side's price gone) is marked SUSPENDED so a stale "open" leg can't
+        # sit against a live Kalshi leg (phantom arb). A marketless push (score/clock heartbeat) is ambiguous →
+        # leave tokens to the staleness gate.
         markets = rec.get("markets") or []
-        ml = next((mk for mk in markets if mk.get("type") == "moneyline" and mk.get("period") == 0), None)
-        ml_status = ml.get("status") if ml else None
-        available = ml is not None and ml_status in (None, "open")
         updates: dict[str, Selection] = {}
-        if available:
-            max_stake = _max_risk(ml.get("limits"))
-            for pr in ml.get("prices") or []:
-                desig = pr.get("designation")
-                if desig not in _SIDES:
-                    continue
-                dec = american_to_decimal(pr.get("price"))
-                if dec <= 1.0:
-                    continue
-                token = f"{lid}:{mid}:{desig}"
-                updates[token] = Selection(token, decimal_odds=dec, max_stake=max_stake, status="open", ts=now)
-        # Reconcile only when we have POSITIVE evidence about the moneyline: it was found (open → apply prices,
-        # one side missing → suspend that side) OR it was non-open OR it's absent from a record that DOES carry
-        # other markets (full record, moneyline pulled). A record with NO markets is ambiguous (could be a
-        # score/clock-only push) → leave tokens be and let the staleness gate handle it.
-        reconcile = available or (ml is not None) or (ml is None and len(markets) > 0)
+        for mk in markets:
+            for token, sel in self._market_tokens(lid, mid, mk, now):
+                updates[token] = sel
+        reconcile = len(markets) > 0
         suspended = 0
         with self._cache_lock:
             if reconcile:
@@ -581,11 +576,39 @@ class PinnacleAdapter(BookAdapter):
                                                status="suspended", ts=now)
             self._cache.update(updates)
         if updates and self._debug_ws:
-            legs = " ".join(f"{k.rsplit(':', 1)[-1]}={v.decimal_odds:.3f}" for k, v in updates.items())
+            legs = " ".join(f"{k.split(':', 2)[-1]}={v.decimal_odds:.3f}" for k, v in list(updates.items())[:6])
             print(f"[PINNACLE WS-UPD] {data.get('op')} {lid}:{mid}  {legs}")
         if suspended and (self._debug_ws or self._debug_status):
-            print(f"[PINNACLE STATUS] {lid}:{mid} moneyline OFFLINE "
-                  f"(status={ml_status!r}{' / absent' if ml is None else ''}) → {suspended} leg(s) suspended")
+            print(f"[PINNACLE STATUS] {lid}:{mid} → {suspended} leg(s) offline/suspended")
+
+    def _market_tokens(self, lid: str, mid, mk: dict, now: float):
+        """Yield (token, Selection) for each price of an OPEN, full-game (period 0) moneyline / spread / total
+        market. Token keys MIRROR pair_derivatives.py: moneyline '{lid}:{mid}:{designation}' (home/away/draw);
+        spread/total '{lid}:{mid}:{type}:{points:g}:{designation}' (home/away or over/under). Skips non-open
+        markets, foreign types, and bad/missing prices → those tokens get suspended by the reconcile instead."""
+        t = mk.get("type")
+        if mk.get("period") != 0 or t not in ("moneyline", "spread", "total"):
+            return
+        if mk.get("status") not in (None, "open"):
+            return
+        max_stake = _max_risk(mk.get("limits"))
+        for pr in mk.get("prices") or []:
+            desig = pr.get("designation")
+            dec = american_to_decimal(pr.get("price"))
+            if dec <= 1.0:
+                continue
+            if t == "moneyline":
+                if desig not in _SIDES:
+                    continue
+                token = f"{lid}:{mid}:{desig}"
+            else:
+                pts = pr.get("points")
+                if pts is None:
+                    continue
+                if not ((t == "spread" and desig in ("home", "away")) or (t == "total" and desig in ("over", "under"))):
+                    continue
+                token = f"{lid}:{mid}:{t}:{float(pts):g}:{desig}"
+            yield token, Selection(token, decimal_odds=dec, max_stake=max_stake, status="open", ts=now)
 
     def _dump_ws_record(self, data: dict, lid: str, mid: str) -> None:
         """RECON (PINNACLE_WS_DUMP=<path>): append a compact summary of EVERY incoming WS record so we can see
@@ -651,38 +674,21 @@ class PinnacleAdapter(BookAdapter):
                       f"(cache={len(self._cache)} sel){rl}")
 
     async def _refresh_league(self, lid: str) -> None:
+        """One-shot pre-match SNAPSHOT seed of a league (moneyline + spread + total). Prices carry `designation`
+        (home/away/draw or over/under) and `points` DIRECTLY — exactly like the WS — via the SAME `_market_tokens`
+        builder, so REST-seeded tokens key identically to WS tokens and to pair_derivatives. (Reads designation
+        straight; the OLD code's array-position map silently INVERTED home/away — fixed long ago.)"""
         markets = await self._http_get(f"/leagues/{lid}/markets/straight", count_429=True)
         if not markets:
             return
         now = time.time()
         for mk in markets:
-            if mk.get("type") != "moneyline" or mk.get("period") != 0:
-                continue
-            prices = mk.get("prices") or []
-            if not (2 <= len(prices) <= 3):
-                continue
             mid = mk.get("matchupId")
-            max_stake = _max_risk(mk.get("limits"))
-            # Same availability rule as the WS path: open status (∈ {None, "open"}) → seed as buyable; a
-            # non-open (offline/suspended) market is seeded as "suspended" so the C# clears it, not as a live ask.
-            seed_status = "open" if mk.get("status") in (None, "open") else "suspended"
-            for pr in prices:
-                # REST /markets/straight prices carry `designation` (home/away/draw) DIRECTLY — exactly like
-                # the WS payload — so read it straight (game moneylines have participantId=None anyway). The OLD
-                # code IGNORED this and mapped prices to participants by ARRAY POSITION, which silently INVERTED
-                # home/away: Pinnacle orders the price array [home, away] but the participant `order` is
-                # [away, home], so e.g. PHI@WSH put Philadelphia's favourite price onto Washington's token →
-                # a phantom 19pt cross-venue "arb". This now matches the WS path; no /matchups fetch needed.
-                desig = pr.get("designation")
-                if desig not in _SIDES:
-                    continue
-                dec = american_to_decimal(pr.get("price"))
-                if dec <= 1.0:
-                    continue
-                token = f"{lid}:{mid}:{desig}"
+            if mid is None:
+                continue
+            for token, sel in self._market_tokens(lid, mid, mk, now):
                 with self._cache_lock:
-                    self._cache[token] = Selection(token, decimal_odds=dec, max_stake=max_stake,
-                                                   status=seed_status, ts=now)
+                    self._cache[token] = sel
 
     # ── HTTP (catalog + rest mode) ───────────────────────────────────────────
     async def _http_get(self, path: str, count_429: bool = False):

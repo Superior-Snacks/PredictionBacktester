@@ -308,6 +308,49 @@ if (File.Exists(manualPath))
     }
 }
 
+// Also load derivative_pairs.json (spread/total LINES from pair_derivatives.py) — SAME schema, kept in a
+// separate file so the moneyline pairs stay clean. Merged into manualPairs here so the run prices the lines
+// too (the sidecar resolves the {lid}:{mid}:{type}:{points}:{side} tokens). NOTE: hot-reload watches
+// cross_pairs.json only — re-run pair_derivatives.py + restart to refresh derivative lines.
+string derivSrc  = Path.Combine(sourceDir, "derivative_pairs.json");
+string derivOut  = Path.Combine(AppContext.BaseDirectory, "derivative_pairs.json");
+string derivPath = isDevBuild && File.Exists(derivSrc) ? derivSrc
+                   : (File.Exists(derivOut) ? derivOut : "derivative_pairs.json");
+if (File.Exists(derivPath))
+{
+    try
+    {
+        using var derivDoc = JsonDocument.Parse(File.ReadAllText(derivPath));
+        int before = manualPairs.Count, derivExcluded = 0;
+        foreach (var el in derivDoc.RootElement.EnumerateArray())
+        {
+            string kTicker  = el.TryGetProperty("kalshi_ticker",  out var kt)  ? (kt.GetString()  ?? "") : "";
+            if (IsExcludedTicker(kTicker)) { derivExcluded++; continue; }
+            string yesToken = el.TryGetProperty("hardven_yes_token", out var yt)  ? (yt.GetString()  ?? "") : "";
+            string noToken  = el.TryGetProperty("hardven_no_token",  out var nt)  ? (nt.GetString()  ?? "") : "";
+            string label    = el.TryGetProperty("label",          out var lb)  ? (lb.GetString()  ?? "") : kTicker;
+            string eventId  = el.TryGetProperty("event_id",       out var eid) ? (eid.GetString() ?? "") : "";
+            DateOnly? settlementDate = null;
+            if (el.TryGetProperty("settlement_date", out var sd3) && DateOnly.TryParse(sd3.GetString(), out var d3))
+                settlementDate = d3;
+            bool isNegRisk = el.TryGetProperty("is_neg_risk", out var nr) && nr.ValueKind == JsonValueKind.True;
+            decimal hardvenMinSize = el.TryGetProperty("hardven_min_size", out var ms) && ms.TryGetDecimal(out decimal msv) && msv > 0 ? msv : 1.0m;
+            if (!string.IsNullOrEmpty(kTicker) && !string.IsNullOrEmpty(yesToken) && !string.IsNullOrEmpty(noToken))
+            {
+                // pairId includes the YES token prefix → unique per line (many lines share one kTicker prefix).
+                string pairId = $"MANUAL_{kTicker}__{yesToken[..Math.Min(8, yesToken.Length)]}";
+                manualPairs.Add(new CrossPair(pairId, label, kTicker, yesToken, noToken, eventId, settlementDate, isNegRisk, hardvenMinSize, false));
+            }
+        }
+        Console.WriteLine($"[CONFIG] {manualPairs.Count - before} derivative pair(s) loaded from derivative_pairs.json"
+                          + (derivExcluded > 0 ? $" ({derivExcluded} skipped by --exclude)" : ""));
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"[CONFIG WARN] Could not parse derivative_pairs.json: {ex.Message}");
+    }
+}
+
 // ══════════════════════════════════════════════════════════════════════════════
 //  BOT EXECUTION (Normal Mode)
 // ══════════════════════════════════════════════════════════════════════════════
