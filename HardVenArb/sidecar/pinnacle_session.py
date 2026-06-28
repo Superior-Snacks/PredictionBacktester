@@ -192,6 +192,10 @@ class PinnacleBrowserSession:
                 await self._pw.stop()
         except Exception:
             pass
+        # NULL state so start() can cleanly RE-OPEN on the next scheduled window (lifecycle cycles start/stop).
+        # Captured creds are intentionally kept (the adapter still has them); the reopened profile re-emits them.
+        self._pw = self._ctx = self._page = self._organic = None
+        self._activity_task = self._status_task = None
 
     # ── capture: REST headers (x-session / device / api-key) ──────────────────────
     def _on_request(self, request) -> None:

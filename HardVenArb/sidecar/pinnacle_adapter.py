@@ -140,6 +140,12 @@ class PinnacleAdapter(BookAdapter):
         self._session_ready = self._session_source != "browser"  # env mode = ready now; browser waits for login
         self._balance = 0.0                                    # last wallet amount (account currency, e.g. EUR)
         self._balance_currency = ""
+        # LIFECYCLE: opt-in schedule-driven open/close of the browser (human session rhythm). Off = hold open.
+        self._lifecycle_on = os.environ.get("PINNACLE_LIFECYCLE") == "1"
+        self._lifecycle_sports = [int(s) for s in os.environ.get("PINNACLE_LIFECYCLE_SPORTS", "3,33").split(",")
+                                  if s.strip().isdigit()]
+        self._lifecycle = None
+        self._lifecycle_task = None
         # ── REST-mode state ──
         self._refresh_task: Optional[asyncio.Task] = None
         self._refresh_sec = float(os.environ.get("PINNACLE_REFRESH_SEC", "15"))
@@ -167,9 +173,20 @@ class PinnacleAdapter(BookAdapter):
             try:
                 from pinnacle_session import PinnacleBrowserSession
                 self._browser = PinnacleBrowserSession(self._on_browser_creds)
-                await self._browser.start()
-                print("[PINNACLE] session source = BROWSER — log in to the window; the feed waits for capture, "
-                      "then seeds + connects automatically.")
+                if self._lifecycle_on:
+                    # schedule-driven: the lifecycle task opens/closes the browser per the game windows (the
+                    # window opens it the first time too — don't start it here). Stays dark until the first one.
+                    from lifecycle import PinnacleLifecycle
+                    self._lifecycle = PinnacleLifecycle(self._browser, self._lifecycle_sports,
+                                                        on_open=self._on_session_opening,
+                                                        on_close=self._on_session_closed)
+                    self._lifecycle_task = asyncio.create_task(self._lifecycle.run())
+                    print(f"[PINNACLE] session source = BROWSER + LIFECYCLE (sports={self._lifecycle_sports}) — "
+                          "the browser opens/closes on the game schedule; dark between windows.")
+                else:
+                    await self._browser.start()
+                    print("[PINNACLE] session source = BROWSER — log in to the window; the feed waits for "
+                          "capture, then seeds + connects automatically.")
             except Exception as ex:
                 self._browser = None
                 print(f"[PINNACLE] BROWSER session launch FAILED ({type(ex).__name__}: {ex}). Sidecar stays up — "
@@ -188,7 +205,7 @@ class PinnacleAdapter(BookAdapter):
             self._refresh_task.cancel()
         if self._ws_watchdog_task and not self._ws_watchdog_task.done():
             self._ws_watchdog_task.cancel()
-        for t in (self._reconciler_task, self._status_task, self._session_ka_task):
+        for t in (self._reconciler_task, self._status_task, self._session_ka_task, self._lifecycle_task):
             if t and not t.done():
                 t.cancel()
         if self._client is not None:
@@ -324,7 +341,25 @@ class PinnacleAdapter(BookAdapter):
               "balance": self._balance, "currency": self._balance_currency}
         if self._browser is not None:
             st["browser"] = self._browser.status()
+        if self._lifecycle is not None:
+            st["lifecycle"] = self._lifecycle.status()
         return st
+
+    # ── lifecycle hooks (called by PinnacleLifecycle on scheduled open/close) ──────
+    def _on_session_opening(self) -> None:
+        """A scheduled window is opening the browser → RESET the feed latches so the WS restarts fresh once
+        creds arrive — unconditionally, since a reopened profile may re-issue the SAME x-session (the value-
+        change check in _on_browser_creds wouldn't fire). session_ready stays False until creds are captured."""
+        self._ws_gave_up = False
+        self._ws_started = False
+        self._session_expired = False
+        self._seeded.clear()
+
+    def _on_session_closed(self) -> None:
+        """A scheduled window closed the browser → stand the feed DOWN: gate odds (no creds now) and stop the
+        WS/keepalive so we don't poke Pinnacle during the dark stretch. The C# freshness gate clears the books."""
+        self._session_ready = False
+        self._give_up_ws("scheduled dark window")
 
     # ── WS (MQTT) odds source ────────────────────────────────────────────────
     def _start_ws(self) -> None:
