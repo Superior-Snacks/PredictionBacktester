@@ -30,6 +30,13 @@ public class HardVenWebsocketFeed
     // bookmaker session dies the sidecar re-serves the frozen last quote with a frozen ts → it ages past
     // this and the book is cleared. Override with HARDVEN_QUOTE_MAX_AGE_MS (default 30000).
     private readonly double _quoteMaxAgeSec;
+
+    // FX: HardVen depth/size (max_contracts) is denominated in the BOOK's currency (Pinnacle account = EUR),
+    // but Kalshi is USD. The arb PRICE (1/odds) is unitless so it needs no conversion, but SIZE does — else
+    // Min(KalshiDepth, HardVenDepth) and the Capital/Profit columns mix EUR-payout units with USD ones (off by
+    // the FX rate on Pinnacle-binding windows). Multiply HardVen size by HARDVEN_FX_TO_USD (USD per book-unit;
+    // default 1.0 = a USD book / no-op) so all downstream depth is USD-equivalent. ~1.08 for an EUR account.
+    private readonly decimal _fxToUsd;
     private int _staleAccum;            // stale quotes seen during the in-progress poll
     private int _lastStaleCount = -1;   // last reported count, for transition logging
     /// <summary>Count of HardVen quotes whose sidecar timestamp is older than the freshness window (stale).</summary>
@@ -65,6 +72,12 @@ public class HardVenWebsocketFeed
         double maxAgeMs = double.TryParse(Environment.GetEnvironmentVariable("HARDVEN_QUOTE_MAX_AGE_MS"),
             NumberStyles.Any, CultureInfo.InvariantCulture, out var m) && m > 0 ? m : 30_000;
         _quoteMaxAgeSec = maxAgeMs / 1000.0;
+
+        _fxToUsd = decimal.TryParse(Environment.GetEnvironmentVariable("HARDVEN_FX_TO_USD"),
+            NumberStyles.Any, CultureInfo.InvariantCulture, out var fx) && fx > 0m ? fx : 1.0m;
+        if (_fxToUsd != 1.0m)
+            Console.WriteLine($"[HARDVEN] FX: converting book size to USD-equivalent ×{_fxToUsd} " +
+                              "(price unitless, left as-is).");
     }
 
     /// <summary>Adds selection ids to poll (hot-reload). Safe from any thread.</summary>
@@ -178,7 +191,8 @@ public class HardVenWebsocketFeed
             string status = s.TryGetProperty("status", out var st) ? (st.GetString() ?? "open") : "open";
             decimal odds  = s.TryGetProperty("decimal_odds", out var od) && od.TryGetDecimal(out var o) ? o : 0m;
             decimal size  = s.TryGetProperty("max_contracts", out var mc) && mc.TryGetDecimal(out var c) ? c : 0m;
-            decimal price = odds > 0m ? Math.Round(1m / odds, 6) : 0m;   // per-$1-contract cost = 1/odds
+            size *= _fxToUsd;   // EUR(book)-payout units → USD-equivalent so depth/capital/profit aren't FX-skewed
+            decimal price = odds > 0m ? Math.Round(1m / odds, 6) : 0m;   // per-$1-contract cost = 1/odds (unitless)
 
             // FRESHNESS GATE: the sidecar serves the LAST-known quote (same status/price) when its bookmaker
             // fetch fails (dead Cloudflare/login session), with the per-selection 'ts' frozen at the last

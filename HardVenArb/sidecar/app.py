@@ -118,7 +118,12 @@ async def catalog():
 # ── M1: betting + wallet confirmation ─────────────────────────────────────────
 @app.get("/balance")
 async def balance():
-    return {"balance": await adapter.balance()}
+    amt = await adapter.balance()
+    resp = {"balance": amt}
+    s = _session_state()
+    if s is not None and s.get("currency"):
+        resp["currency"] = s.get("currency")   # account currency (e.g. EUR) — Kalshi is USD; FX-convert at M1
+    return resp
 
 
 @app.post("/bet")

@@ -138,6 +138,8 @@ class PinnacleAdapter(BookAdapter):
         self._session_source = os.environ.get("PINNACLE_SESSION_SOURCE", "env").strip().lower()
         self._browser = None                                   # PinnacleBrowserSession when source == "browser"
         self._session_ready = self._session_source != "browser"  # env mode = ready now; browser waits for login
+        self._balance = 0.0                                    # last wallet amount (account currency, e.g. EUR)
+        self._balance_currency = ""
         # ── REST-mode state ──
         self._refresh_task: Optional[asyncio.Task] = None
         self._refresh_sec = float(os.environ.get("PINNACLE_REFRESH_SEC", "15"))
@@ -318,7 +320,8 @@ class PinnacleAdapter(BookAdapter):
 
     def session_status(self) -> dict:
         st = {"source": self._session_source, "ready": self._session_ready,
-              "mode": self._mode, "ws_connected": self._connected, "cache_sel": len(self._cache)}
+              "mode": self._mode, "ws_connected": self._connected, "cache_sel": len(self._cache),
+              "balance": self._balance, "currency": self._balance_currency}
         if self._browser is not None:
             st["browser"] = self._browser.status()
         return st
@@ -769,7 +772,22 @@ class PinnacleAdapter(BookAdapter):
 
     # ── M1 (later): betting + wallet confirmation ──
     async def balance(self) -> float:
-        return 0.0  # TODO(M1)
+        """Account cash balance via the authed wallet endpoint — same X-Session/X-Device-UUID/X-API-Key headers
+        as the odds feed (the page polls this constantly, so it's a normal call). Returns the numeric amount
+        (0.0 if unavailable). The account currency (EUR here — NOT USD; Kalshi is USD) is stashed for /health +
+        the min-balance floor; cross-venue stake sizing must FX-convert at M1. Gated on a live session so it
+        can't hit the authed endpoint with a stale token pre-login (which would trip the give-up)."""
+        if self._session_source == "browser" and not self._session_ready:
+            return 0.0
+        data = await self._http_get("/wallet/balance")
+        if not isinstance(data, dict):
+            return 0.0
+        try:
+            self._balance = float(data.get("amount") or 0.0)
+        except (TypeError, ValueError):
+            self._balance = 0.0
+        self._balance_currency = data.get("currency") or self._balance_currency
+        return self._balance
 
     async def place_bet(self, selection_id: str, stake: float, max_odds: float) -> BetResult:
         return BetResult(accepted=False, reason="place_bet not implemented (M1)")
