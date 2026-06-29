@@ -54,7 +54,16 @@ record ActiveWindow(
     string   OpenedBy      = "",   // which side's price move CREATED the arb: KALSHI / HARDVEN / BOTH / INITIAL
     decimal  OpenKLeg      = -1m,  // the Kalshi leg price at open (for held/move comparison at close)
     decimal  OpenPLeg      = -1m   // the HardVen leg price at open
-);
+)
+{
+    // First eval at which each leg's ask rose ABOVE its open price (moved against you → LEFT the "within the
+    // arb" zone). MaxValue = never left → within the whole window. Drives the per-leg "time HELD WITHIN the arb"
+    // = (LeftWithinAt ?? closeTime) − StartTime — how long after open each side stayed at-or-better than its
+    // opening price (the capturable-target window for that leg). Mutable so it updates free each eval and
+    // `with`-copies carry it forward.
+    public DateTime KLeftWithinAt { get; set; } = DateTime.MaxValue;
+    public DateTime PLeftWithinAt { get; set; } = DateTime.MaxValue;
+}
 
 record HypotheticalPosition(
     string    PairId,
@@ -543,6 +552,9 @@ public class CrossPlatformArbTelemetryStrategy
                 {
                     bool betterCost  = bestNet   < existing.BestNetCost;
                     bool betterDepth = bestDepth > Math.Min(existing.KalshiDepth, existing.HardVenDepth);
+                    // each leg of THIS window's fixed ArbType, at the current asks — to detect a move against you
+                    decimal kLegNow = existing.ArbType == "K_YES_P_NO" ? kYesAsk : kNoAsk;
+                    decimal pLegNow = existing.ArbType == "K_YES_P_NO" ? pNoAsk  : pYesAsk;
                     _activeWindows[pair.PairId] = existing with
                     {
                         BestGrossCost = betterCost  ? bestGross    : existing.BestGrossCost,
@@ -552,7 +564,10 @@ public class CrossPlatformArbTelemetryStrategy
                         HardVenFees      = betterCost  ? bestPFee     : existing.HardVenFees,
                         KalshiDepth   = betterDepth ? bestKDepth   : existing.KalshiDepth,
                         HardVenDepth     = betterDepth ? bestPDepth   : existing.HardVenDepth,
-                        UpdateCount   = existing.UpdateCount + 1
+                        UpdateCount   = existing.UpdateCount + 1,
+                        // FIRST eval each leg moves above its open price = when it left "within the arb" (latch once)
+                        KLeftWithinAt = (existing.KLeftWithinAt == DateTime.MaxValue && existing.OpenKLeg >= 0m && kLegNow > existing.OpenKLeg) ? evalNow : existing.KLeftWithinAt,
+                        PLeftWithinAt = (existing.PLeftWithinAt == DateTime.MaxValue && existing.OpenPLeg >= 0m && pLegNow > existing.OpenPLeg) ? evalNow : existing.PLeftWithinAt
                     };
                     if (betterCost)
                         DebugLog.Discovery($"EvaluatePair {pair.Label}: ARB UPDATE better net={bestNet:0.0000} (was {existing.BestNetCost:0.0000})");
@@ -646,6 +661,13 @@ public class CrossPlatformArbTelemetryStrategy
         long durationMs = (long)(endTime - w.StartTime).TotalMilliseconds;
         if (durationMs < 5) return;
 
+        // per-leg "time HELD WITHIN the arb" = how long after open each side stayed at-or-better than its open
+        // price before first moving against you (MaxValue latch = never left → whole window). The OPTIMISTIC
+        // capturability signal: unlike HardVenLegAgeMsAtClose (frozen-price age, resets on ANY move incl. an
+        // improving one), a move to a BETTER price keeps the leg "within" — this is the leg's capturable window.
+        long kWithinMs = (long)(((w.KLeftWithinAt == DateTime.MaxValue ? endTime : w.KLeftWithinAt) - w.StartTime).TotalMilliseconds);
+        long pWithinMs = (long)(((w.PLeftWithinAt == DateTime.MaxValue ? endTime : w.PLeftWithinAt) - w.StartTime).TotalMilliseconds);
+
         var pair = _pairs.FirstOrDefault(p => p.PairId == pairId);
         if (pair == null)
         {
@@ -722,7 +744,9 @@ public class CrossPlatformArbTelemetryStrategy
             kLegAgeMs >= 0 ? kLegAgeMs.ToString() : "",
             pLegAgeMs >= 0 ? pLegAgeMs.ToString() : "",
             (closedBy == "PRICE" && pHeld) ? "1" : "0",
-            Quote(hardvenLegId)
+            Quote(hardvenLegId),
+            kWithinMs,
+            pWithinMs
         );
 
         EnqueueCsvRow(row);
@@ -807,7 +831,8 @@ public class CrossPlatformArbTelemetryStrategy
                 "UpdateCount,ClosedBy," +
                 "DaysToSettlement,AprHoldToSettle," +
                 "RestChecked,RestConfirmed,RestKalshiAsk,RestHardVenAsk,RestDelayMs," +
-                "OpenedBy,ClosedBySide,KalshiLegAgeMsAtClose,HardVenLegAgeMsAtClose,HardVenLegHeld,HardVenLegId";
+                "OpenedBy,ClosedBySide,KalshiLegAgeMsAtClose,HardVenLegAgeMsAtClose,HardVenLegHeld,HardVenLegId," +
+                "KalshiLegWithinMs,HardVenLegWithinMs";   // time each leg stayed ≤ its open price (held within the arb)
             _csvChannel.Writer.TryWrite(header);
         }
         _csvChannel.Writer.TryWrite(row);

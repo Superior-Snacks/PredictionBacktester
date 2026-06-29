@@ -63,15 +63,25 @@ def load(path: str) -> list[dict]:
         return list(csv.DictReader(fh))
 
 
-def capturable(r: dict, hardven_ms: float, kalshi_ms: float):
-    """HARDVEN_MS = the slow leg's capture time, drives BOTH branches (window open long enough OR HardVen leg
-    already held long enough). KALSHI_MS = the fast leg's minimum when Kalshi closes the window."""
+def capturable(r: dict, hardven_ms: float, kalshi_ms: float, use_within: bool):
+    """WITHIN model (newer CSVs with per-leg within-times — the accurate one): capturable iff EACH leg stayed
+    'within the arb' (ask ≤ its open price) long enough to place it — HardVen > hardven_ms AND Kalshi >
+    kalshi_ms. Both windows start at open, so you place the fast Kalshi leg first then the slow HardVen leg.
+    LEGACY model (older CSVs): window open > hardven_ms, OR Kalshi-closed + dur > kalshi_ms + the HardVen leg's
+    FROZEN-price age > hardven_ms (conservative — any wiggle resets it)."""
+    if use_within:
+        hw, kw = _f(r.get("HardVenLegWithinMs")), _f(r.get("KalshiLegWithinMs"))
+        if hw <= hardven_ms:
+            return False, "HardVen left-within <%gs" % (hardven_ms / 1000)
+        if kw <= kalshi_ms:
+            return False, "Kalshi left-within <%gs" % (kalshi_ms / 1000)
+        return True, "both legs held within"
     dur = _f(r.get("DurationMs"))
-    if dur > hardven_ms:                                              # window open long enough to place HardVen
+    if dur > hardven_ms:
         return True, "open >%gs" % (hardven_ms / 1000)
     if (r.get("ClosedBySide") == "KALSHI" and dur > kalshi_ms
-            and _f(r.get("HardVenLegAgeMsAtClose")) > hardven_ms):    # HardVen leg already held that long
-        return True, "Kalshi-closed, HardVen held >%gs" % (hardven_ms / 1000)
+            and _f(r.get("HardVenLegAgeMsAtClose")) > hardven_ms):
+        return True, "Kalshi-closed, HardVen frozen >%gs" % (hardven_ms / 1000)
     return False, "too fast / HardVen leg not held"
 
 
@@ -88,6 +98,9 @@ def main() -> None:
                          "the HardVen leg already held this long when Kalshi closes it (default 6)")
     ap.add_argument("--kalshi-secs", type=float, default=0.2,
                     help="SECONDS the fast Kalshi leg needs (min window duration when Kalshi closes it; default 0.2)")
+    ap.add_argument("--metric", choices=("auto", "within", "legacy"), default="auto",
+                    help="capturability model: 'within' = per-leg held-within-arb times (newer CSVs, accurate); "
+                         "'legacy' = duration + HardVen frozen-age; 'auto' = within if the columns exist (default)")
     a = ap.parse_args()
     hardven_ms, kalshi_ms = a.hardven_secs * 1000, a.kalshi_secs * 1000
 
@@ -100,6 +113,11 @@ def main() -> None:
         print(f"{path}: empty.")
         return
 
+    has_within = bool(rows[0].get("HardVenLegWithinMs") is not None and rows[0].get("KalshiLegWithinMs") is not None)
+    use_within = a.metric == "within" or (a.metric == "auto" and has_within)
+    if a.metric == "within" and not has_within:
+        print("[WARN] --metric within but the CSV lacks HardVenLegWithinMs/KalshiLegWithinMs → using legacy.")
+        use_within = False
     times = [r.get("StartTime", "") for r in rows if r.get("StartTime")]
     span = f"{times[0][:19]} → {times[-1][11:19]}" if times else "?"
     print("=" * 78)
@@ -114,7 +132,7 @@ def main() -> None:
         edge = _f(r.get("NetProfitPerShare"))
         if edge < a.min_edge:
             continue
-        ok, why = capturable(r, hardven_ms, kalshi_ms)
+        ok, why = capturable(r, hardven_ms, kalshi_ms, use_within)
         reasons[("capturable: " + why) if ok else "not capturable"] += 1
         if not ok:
             continue
@@ -138,8 +156,12 @@ def main() -> None:
         })
 
     n_cap = len(cap_rows)
-    print(f"\n1. CAPTURABILITY  (dur>{a.hardven_secs:g}s  OR  Kalshi-closed + dur>{a.kalshi_secs:g}s + "
-          f"HardVen-held>{a.hardven_secs:g}s)")
+    if use_within:
+        print(f"\n1. CAPTURABILITY  [within model]  (HardVen held-within >{a.hardven_secs:g}s  AND  "
+              f"Kalshi held-within >{a.kalshi_secs:g}s — each leg placeable)")
+    else:
+        print(f"\n1. CAPTURABILITY  [legacy model]  (dur>{a.hardven_secs:g}s  OR  Kalshi-closed + "
+              f"dur>{a.kalshi_secs:g}s + HardVen-frozen>{a.hardven_secs:g}s){'  — no within-times in this CSV' if not has_within else ''}")
     for k, v in reasons.most_common():
         print(f"   {v:>4}  {k}")
     print(f"   ----")
