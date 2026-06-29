@@ -34,6 +34,7 @@ CONFIG (env): PINNACLE_LOGIN_URL (default https://www.pinnacle.bet/en/), PINNACL
 from __future__ import annotations
 
 import asyncio
+import base64
 import os
 import random
 import time
@@ -123,6 +124,10 @@ class PinnacleBrowserSession:
         self._seen_ws = False
         self._logged_session = False
         self._ws_urls_seen: set = set()
+        self._debug_storage = os.environ.get("PINNACLE_DEBUG_STORAGE") == "1"   # dump localStorage on capture
+        self._logged_storage = False
+        self._cdp = None
+        self._cdp_ws_reqs: set = set()
 
     # ── readiness / status ───────────────────────────────────────────────────────
     @property
@@ -163,6 +168,7 @@ class PinnacleBrowserSession:
         self._ctx.on("page", self._wire_page)            # wire WS capture on any future page/tab too
         self._page = self._ctx.pages[0] if self._ctx.pages else await self._ctx.new_page()
         self._wire_page(self._page)
+        await self._start_cdp_capture()                  # 2nd WS-login capture path (sees worker WS page.on misses)
         try:
             await self._page.goto(self._login_url, wait_until="domcontentloaded", timeout=60_000)
         except Exception as ex:
@@ -251,11 +257,17 @@ class PinnacleBrowserSession:
             pass
 
     def _on_ws_frame(self, payload) -> None:
+        if self._have_ws or not isinstance(payload, (bytes, bytearray)):  # MQTT is binary; text isn't CONNECT
+            return
+        self._handle_connect_bytes(bytes(payload), "page.on")
+
+    def _handle_connect_bytes(self, buf: bytes, src: str) -> None:
+        """Shared by the page.on AND CDP capture paths: parse an MQTT CONNECT → WS username (account id) +
+        '|suffix'. Idempotent (first hit wins). The WS password is reconstructed as '{x-session}|{suffix}' on
+        every rotation, so the suffix is all we need to keep from here."""
         if self._have_ws:
             return
-        if not isinstance(payload, (bytes, bytearray)):  # MQTT is binary; text frames aren't CONNECT
-            return
-        parsed = parse_mqtt_connect(bytes(payload))
+        parsed = parse_mqtt_connect(buf)
         if not parsed:
             return
         user = parsed.get("username") or ""
@@ -263,10 +275,98 @@ class PinnacleBrowserSession:
         if not user or "|" not in pw:
             return
         self._ws_user = user
-        self._ws_suffix = pw.rsplit("|", 1)[1]           # stable per device/build → reused on every rotation
+        self._ws_suffix = pw.rsplit("|", 1)[1]
         self._have_ws = True
-        print(f"[PINNACLE SESSION] captured WS login (account {user[:3]}***, suffix '{self._ws_suffix}').")
+        print(f"[PINNACLE SESSION] captured WS login via {src} (account {user[:3]}***, suffix '{self._ws_suffix}').")
         self._emit()
+
+    # ── capture: CDP (Network domain) — sees WebSockets page.on('websocket') misses (incl. Web Workers) ──
+    async def _start_cdp_capture(self) -> None:
+        """The robust second path: Pinnacle's odds WS likely runs in a Web Worker that page.on('websocket')
+        can't see, so the MQTT CONNECT (which carries the WS login) may only be visible at the CDP Network
+        level. We enable Network on the PAGE target and AUTO-ATTACH to workers so a worker WS is at least
+        DETECTED (and on many Chrome builds its frames surface here). Binary frames (MQTT) arrive base64-encoded
+        → decoded before parsing. Best-effort: runs ALONGSIDE page.on; whichever sees the CONNECT first wins.
+        (Playwright's CDPSession can't send Network.enable to a child worker target — so for a confirmed worker
+        WS the storage probe / a follow-up is the fallback; the worker-attach log makes that case obvious.)"""
+        try:
+            self._cdp = await self._ctx.new_cdp_session(self._page)
+        except Exception as ex:
+            print(f"[PINNACLE SESSION] CDP unavailable ({type(ex).__name__}: {ex}); page.on capture only.")
+            return
+        self._cdp.on("Network.webSocketCreated", self._on_cdp_ws_created)
+        self._cdp.on("Network.webSocketFrameSent", self._on_cdp_ws_frame)
+        self._cdp.on("Target.attachedToTarget", self._on_cdp_target)
+        try:
+            await self._cdp.send("Network.enable")
+            await self._cdp.send("Target.setAutoAttach",
+                                 {"autoAttach": True, "waitForDebuggerOnStart": False, "flatten": True})
+            print("[PINNACLE SESSION] CDP Network capture armed (worker-aware) — 2nd path for the WS login.")
+        except Exception as ex:
+            print(f"[PINNACLE SESSION] CDP enable failed ({type(ex).__name__}: {ex}); page.on capture only.")
+
+    def _on_cdp_ws_created(self, params: dict) -> None:
+        url = params.get("url", "") or ""
+        if url and url not in self._ws_urls_seen and len(self._ws_urls_seen) < 12:
+            self._ws_urls_seen.add(url)
+            print(f"[PINNACLE SESSION] WS seen via CDP: {url[:90]}")
+        if "arcadia.pinnacle.com" in url:
+            self._cdp_ws_reqs.add(params.get("requestId"))
+            if not self._seen_ws:
+                self._seen_ws = True
+                print("[PINNACLE SESSION] Arcadia WS visible via CDP — watching frames for the MQTT CONNECT.")
+
+    def _on_cdp_ws_frame(self, params: dict) -> None:
+        # Parse EVERY sent frame (parse_mqtt_connect self-validates on byte 0x10 + structure) — don't gate on
+        # requestId, so a frame still gets a shot even if we never saw its 'created' event.
+        if self._have_ws:
+            return
+        resp = params.get("response") or {}
+        data = resp.get("payloadData")
+        if not data:
+            return
+        try:
+            buf = base64.b64decode(data) if resp.get("opcode") == 2 else data.encode("utf-8", "replace")
+        except Exception:
+            return
+        self._handle_connect_bytes(buf, "CDP")
+
+    def _on_cdp_target(self, params: dict) -> None:
+        info = params.get("targetInfo") or {}
+        if info.get("type") in ("worker", "service_worker", "shared_worker"):
+            print(f"[PINNACLE SESSION] worker target attached: {info.get('type')} {(info.get('url') or '')[:70]} "
+                  "— if the WS login never captures, the odds WS is likely IN HERE (storage probe is the fallback).")
+
+    async def _probe_storage(self) -> None:
+        """Fallback for a worker-hosted WS we can't frame-capture: the page JS builds the MQTT password
+        '{x-session}|{suffix}' client-side, so the suffix (often the whole password) lives in localStorage/
+        sessionStorage. Once x-session is known, scan storage for a value STARTING WITH it + containing '|' →
+        that's the WS password → grab the suffix. PINNACLE_DEBUG_STORAGE=1 dumps all keys (masked) so the
+        account-id key can be pinned down on the first login (the suffix alone isn't enough — we also need the
+        username/account id, which the CONNECT frame gives directly)."""
+        if self._have_ws or not self._session or self._page is None:
+            return
+        try:
+            store = await self._page.evaluate(
+                "() => { const o={}; for (const s of [localStorage, sessionStorage]) { "
+                "for (let i=0;i<s.length;i++){ const k=s.key(i); o[k]=s.getItem(k); } } return o; }")
+        except Exception:
+            return
+        if self._debug_storage and store and not self._logged_storage:
+            self._logged_storage = True
+            print("[PINNACLE SESSION] --- storage dump (find the account-id + suffix keys) ---")
+            for k, v in store.items():
+                vs = v if isinstance(v, str) else str(v)
+                print(f"   {k} = {vs[:24]}…({len(vs)})")
+        for k, v in (store or {}).items():
+            if isinstance(v, str) and self._session and v.startswith(self._session) and "|" in v[len(self._session):]:
+                suffix = v.rsplit("|", 1)[1]
+                if suffix and not self._ws_suffix:
+                    self._ws_suffix = suffix
+                    print(f"[PINNACLE SESSION] WS password found in storage '{k}' → suffix '{suffix}' "
+                          "(still need the account id for the username — see the storage dump).")
+                    self._emit()
+                return
 
     # ── push creds to the adapter ─────────────────────────────────────────────────
     def _emit(self) -> None:
@@ -299,6 +399,7 @@ class PinnacleBrowserSession:
                 break
             if self.ready:
                 break
+            await self._probe_storage()                  # worker-WS fallback: mine the suffix from storage
             print(f"[PINNACLE SESSION] waiting for capture — x-session: {'YES' if self._session else 'no'}, "
                   f"WS login: {'YES' if self._have_ws else 'no'}"
                   f"{'  (Arcadia WS not yet seen by Playwright)' if not self._seen_ws else ''}. "
