@@ -190,6 +190,7 @@ Trade pagination uses timestamp-shifting to bypass the 3000-offset API limit.
 | Script | Purpose |
 |--------|---------|
 | `analyze_kalshi_arb.py` | Kalshi ArbTelemetry CSV analysis (9 sections, fraud checks, resolution, production sim) |
+| `analyze_cross_arb.py` | CrossArbTelemetry (Kalshi↔HardVen/Pinnacle) analysis: capturability framework, edge, FX-corrected profit (full-depth opportunity vs bankroll-constrained) |
 | `ping_kalshi.py` | Latency benchmarking: DNS, TCP, TLS, REST, WebSocket, ICMP vs Kalshi |
 | `fetch_token_id.py` | Search Polymarket events API for token IDs by name |
 | `time_trades.py` | Measure real settlement delay (buy→sell round-trip) on Polymarket |
