@@ -20,8 +20,17 @@ the CSV's pre-computed columns. Reported two ways:
   A) FULL DEPTH (unlimited capital) — the size of the OPPORTUNITY.
   B) BANKROLL-CONSTRAINED — what your actual Pinnacle (EUR) + Kalshi (USD) bankrolls could capture per window.
 
+NET EV (§6) — the failed-HardVen-leg HEDGE model. Models Kalshi-first execution: you commit the fast,
+reversible Kalshi leg at OPEN, then fire the slow, irreversible HardVen leg. If HardVen held within the arb
+long enough (HardVenLegWithinMs > --hardven-secs) you complete → WIN; if it left first you're naked on Kalshi
+and must UNWIND it (sell the held leg back at the bid) at --hedge-secs. The unwind is priced from the
+CrossArbHedgeMonitor_*.csv tape (per-arb post-open Kalshi bid trajectory). NET EV = Σ(wins) − Σ(miss hedge
+cost) — the per-attempt expected value, the number that says whether the strategy survives its miss rate.
+Needs the within-columns AND a hedge tape (both produced by the updated bot); older CSVs fall back gracefully.
+
   python analyze_cross_arb.py                       # latest CrossArbTelemetry_*.csv in CWD
   python analyze_cross_arb.py --file path.csv --fx 1.08 --pinnacle-bankroll 50 --kalshi-bankroll 422
+  python analyze_cross_arb.py --hedge-secs 6 --max-bet 300   # net-EV w/ hedge tape (auto-discovered)
 """
 from __future__ import annotations
 
@@ -30,8 +39,15 @@ import csv
 import glob
 import os
 import statistics as st
+import sys
 from collections import Counter, defaultdict
 from datetime import datetime
+
+# The report uses unicode (→ × € ─ ≥ ¢ ⚠); force UTF-8 stdout so the Windows cp1252 console doesn't crash.
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
 
 
 def _f(v, d=0.0):
@@ -85,6 +101,32 @@ def capturable(r: dict, hardven_ms: float, kalshi_ms: float, use_within: bool):
     return False, "too fast / HardVen leg not held"
 
 
+def kalshi_fee(p: float) -> float:
+    """Kalshi per-contract fee: 0.07 × p × (1−p). Charged on BOTH the entry and the unwind."""
+    return 0.07 * p * (1.0 - p)
+
+
+def group_hedge(samples: list[dict]) -> dict:
+    """CrossArbHedgeMonitor rows → {(PairId, OpenTime): [samples sorted by OffsetMs]}. The key joins to a main
+    telemetry window on (PairId, StartTime) — OpenTime == that window's StartTime."""
+    g: dict = defaultdict(list)
+    for s in samples:
+        g[(s.get("PairId", ""), s.get("OpenTime", ""))].append(s)
+    for k in g:
+        g[k].sort(key=lambda s: _f(s.get("OffsetMs")))
+    return g
+
+
+def sample_at(samples: list[dict], target_ms: float):
+    """Nearest sample at-or-after target_ms (the realization instant); if the tape ends before target, the last
+    sample. Returns (sample, actual_offset_ms) or (None, None)."""
+    if not samples:
+        return None, None
+    after = [s for s in samples if _f(s.get("OffsetMs")) >= target_ms]
+    s = after[0] if after else samples[-1]
+    return s, _f(s.get("OffsetMs"))
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--file", help="CrossArbTelemetry CSV (default: newest in CWD)")
@@ -101,6 +143,12 @@ def main() -> None:
     ap.add_argument("--metric", choices=("auto", "within", "legacy"), default="auto",
                     help="capturability model: 'within' = per-leg held-within-arb times (newer CSVs, accurate); "
                          "'legacy' = duration + HardVen frozen-age; 'auto' = within if the columns exist (default)")
+    ap.add_argument("--hedge-file", help="CrossArbHedgeMonitor CSV (default: newest in CWD)")
+    ap.add_argument("--hedge-secs", type=float, default=6.0,
+                    help="SECONDS after open at which you realize the HardVen leg missed and unwind the Kalshi "
+                         "leg — the realization delay the hedge is priced at (default 6)")
+    ap.add_argument("--max-bet", type=float, default=300.0,
+                    help="max $ capital deployed per single arb (per-bet cap, separate from total bankroll; default 300)")
     a = ap.parse_args()
     hardven_ms, kalshi_ms = a.hardven_secs * 1000, a.kalshi_secs * 1000
 
@@ -216,6 +264,141 @@ def main() -> None:
     print(f"   • Depth = Pinnacle max-risk LIMIT, not guaranteed fill; real captures are partial (competition).")
     print(f"   • FX ×{a.fx:g} applied to HardVen(EUR) depth — correct for PRE-C#-fix CSVs; use --fx 1.0 for newer ones.")
     print(f"   • Edge is already net of Kalshi fees; HardVen vig is in the odds (no separate fee).")
+
+    # ── 6. NET EV — failed-HardVen-leg hedge model ───────────────────────────────
+    # Kalshi-first execution: you commit the fast, reversible Kalshi leg at OPEN, then fire the slow HardVen
+    # leg. If HardVen HELD within the arb long enough (HardVenLegWithinMs > hardven-secs) you complete → WIN.
+    # If it left first, you're naked on Kalshi and must UNWIND it (sell the held leg back at the bid) at
+    # --hedge-secs. The hedge tape (CrossArbHedgeMonitor) prices that unwind. NET EV = wins − miss hedge cost.
+    print("\n6. NET EV  —  FAILED-HARDVEN-LEG HEDGE MODEL  (Kalshi-first: commit Kalshi, unwind it if HardVen misses)")
+    if not has_within:
+        print("   ⚠ this CSV has no per-leg within-times → can't split win vs miss. Run the updated bot.")
+        print("=" * 78)
+        return
+    hpath = a.hedge_file or (sorted(glob.glob("CrossArbHedgeMonitor_*.csv")) or [None])[-1]
+    if not hpath or not os.path.exists(hpath):
+        print("   ⚠ no CrossArbHedgeMonitor_*.csv found (pass --hedge-file) → can't price the unwind. Run the updated bot.")
+        print("=" * 78)
+        return
+    hedge = group_hedge(load(hpath))
+    target_ms = a.hedge_secs * 1000
+    print(f"   hedge tape: {os.path.basename(hpath)}  |  realize HardVen miss at {a.hedge_secs:g}s  |  per-bet cap ${a.max_bet:g}")
+
+    wins, misses = [], []
+    no_entry = no_hedge_data = recovered = 0
+    for r in rows:
+        edge = _f(r.get("NetProfitPerShare"))
+        if edge < a.min_edge:
+            continue
+        hw, kw = _f(r.get("HardVenLegWithinMs")), _f(r.get("KalshiLegWithinMs"))
+        # Kalshi-first: you commit Kalshi at open. If it didn't even hold kalshi-secs, the entry price is
+        # unreliable (Kalshi snapped away instantly) → treat as no clean entry, neither win nor hedge.
+        if kw <= kalshi_ms:
+            no_entry += 1
+            continue
+        # sizing — shared by win & miss: market depth ∩ both bankrolls ∩ per-bet cap
+        kdepth = _f(r.get("KalshiDepth"))
+        hdepth_usd = _f(r.get("HardVenDepth")) * a.fx
+        exec_depth = min(kdepth, hdepth_usd)
+        net = _f(r.get("BestNetCost"), 1.0)
+        kp, hp = _legs(r.get("BestLegPrices"))
+        k_aff = a.kalshi_bankroll / kp if kp > 0 else exec_depth
+        p_aff = a.pinnacle_bankroll / hp if hp > 0 else exec_depth
+        b_aff = a.max_bet / net if net > 0 else exec_depth
+        contracts = max(0.0, min(exec_depth, k_aff, p_aff, b_aff))
+        day = r.get("StartTime", "")[:10]
+
+        if hw > hardven_ms:                                          # HardVen held → complete the arb → WIN
+            wins.append({"label": r.get("Label", "")[:40], "contracts": contracts,
+                         "profit": edge * contracts, "capital": net * contracts, "date": day})
+            continue
+
+        # MISS — unwind the committed Kalshi leg at the realization instant
+        samples = hedge.get((r.get("PairId", ""), r.get("StartTime", "")))
+        if not samples:
+            no_hedge_data += 1
+            continue
+        s, actual_ms = sample_at(samples, target_ms)
+        entry = _f(s.get("EntryKalshiAsk")) or kp
+        unwind = _f(s.get("KalshiUnwindBid"))
+        hv_now = _f(s.get("HardVenLegNow"))
+        # if the HardVen leg came back INTO the arb by now, you'd COMPLETE late instead of hedging
+        if hv_now > 0 and entry + hv_now + kalshi_fee(entry) < 1.0:
+            recovered += 1
+            late_edge = 1.0 - (entry + hv_now + kalshi_fee(entry))
+            wins.append({"label": r.get("Label", "")[:40], "contracts": contracts,
+                         "profit": late_edge * contracts, "capital": net * contracts, "date": day})
+            continue
+        fees = kalshi_fee(entry) + kalshi_fee(unwind)               # Kalshi charges on entry AND unwind
+        pnl_share = unwind - entry - fees                           # negative = realized loss on the miss
+        # break-even FIX: does the unwind bid later recover to ≥ break-even (within the monitored tape)?
+        fix_ms = None
+        for s2 in samples:
+            off = _f(s2.get("OffsetMs"))
+            if off < actual_ms:
+                continue
+            ub = _f(s2.get("KalshiUnwindBid"))
+            if ub - entry - (kalshi_fee(entry) + kalshi_fee(ub)) >= 0:
+                fix_ms = off
+                break
+        misses.append({"label": r.get("Label", "")[:40], "contracts": contracts, "pnl_share": pnl_share,
+                       "pnl": pnl_share * contracts, "at_ms": actual_ms, "fix_ms": fix_ms,
+                       "capital": entry * contracts, "date": day})
+
+    n_win, n_miss = len(wins), len(misses)
+    n_att = n_win + n_miss
+    if not n_att:
+        print(f"   No attemptable windows (skipped: {no_entry} no-entry, {no_hedge_data} no hedge-tape match).")
+        print("=" * 78)
+        return
+
+    win_profit = sum(w["profit"] for w in wins)
+    hedge_pnl = sum(m["pnl"] for m in misses)
+    net_ev = win_profit + hedge_pnl
+    miss_loss = sum(-m["pnl"] for m in misses if m["pnl"] < 0)
+    miss_gain = sum(m["pnl"] for m in misses if m["pnl"] > 0)
+    cap_spent = sum(w["capital"] for w in wins) + sum(m["capital"] for m in misses)
+
+    print(f"   attempts {n_att}  →  {n_win} wins ({100*n_win/n_att:.0f}%)  |  {n_miss} misses ({100*n_miss/n_att:.0f}%)"
+          + (f"   [{recovered} HardVen recovered → completed late]" if recovered else ""))
+    if no_entry or no_hedge_data:
+        print(f"   (excluded: {no_entry} no-clean-Kalshi-entry, {no_hedge_data} miss w/ no hedge-tape match)")
+    print(f"   win profit       +${win_profit:9,.2f}   ({n_win} × avg ${win_profit/max(n_win,1):.2f})")
+    print(f"   miss hedge P/L    ${hedge_pnl:+9,.2f}   (realized loss ${miss_loss:,.2f}"
+          + (f", favorable-unwind +${miss_gain:,.2f}" if miss_gain else "") + ")")
+    print(f"   {'─'*44}")
+    print(f"   NET EV            ${net_ev:+9,.2f}   over {n_att} attempts  =  ${net_ev/n_att:+.4f}/attempt")
+    if cap_spent:
+        print(f"   capital deployed  ${cap_spent:9,.0f}   →  net return {100*net_ev/cap_spent:+.2f}%")
+
+    if misses:
+        pnls = [m["pnl_share"] for m in misses]
+        print(f"\n   UNWIND @ {a.hedge_secs:g}s (per share):  avg {st.mean(pnls):+.4f}   median {st.median(pnls):+.4f}"
+              f"   best {max(pnls):+.4f}   worst {min(pnls):+.4f}")
+        fixable = [m for m in misses if m["fix_ms"] is not None and m["pnl"] < 0]
+        losers = [m for m in misses if m["pnl"] < 0]
+        if losers and fixable:
+            fix_secs = sorted((m["fix_ms"] - m["at_ms"]) / 1000 for m in fixable)
+            print(f"   BREAK-EVEN FIX:  {len(fixable)}/{len(losers)} loss-positions later recovered to ≥ break-even "
+                  f"(median +{fix_secs[len(fix_secs)//2]:.1f}s after unwind) → for these, WAITING beats unwinding at {a.hedge_secs:g}s.")
+        elif losers:
+            print(f"   BREAK-EVEN FIX:  none of the {len(losers)} loss-positions recovered within the tape "
+                  f"→ the {a.hedge_secs:g}s unwind was the floor (hold-to-settlement is the only 'fix').")
+
+    by_day = defaultdict(lambda: [0, 0, 0.0, 0.0])    # date → [n_win, n_miss, win_profit, hedge_pnl]
+    for w in wins:
+        d = by_day[w["date"]]; d[0] += 1; d[2] += w["profit"]
+    for m in misses:
+        d = by_day[m["date"]]; d[1] += 1; d[3] += m["pnl"]
+    if len(by_day) > 1:
+        print("\n   DAILY (net = win profit + miss hedge P/L):")
+        for day in sorted(by_day):
+            nw, nm, wp, hpl = by_day[day]
+            print(f"     {day}:  {nw}W / {nm}M    net ${wp+hpl:+,.2f}")
+
+    print(f"\n   NOTE: NET EV is the per-ATTEMPT expected value (decision metric), NOT realized $ — capital locks "
+          f"until settlement, so concurrent throughput is bankroll-limited (see §3B).")
+    print("=" * 78)
 
 
 if __name__ == "__main__":

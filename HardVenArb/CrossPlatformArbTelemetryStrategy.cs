@@ -65,20 +65,6 @@ record ActiveWindow(
     public DateTime PLeftWithinAt { get; set; } = DateTime.MaxValue;
 }
 
-record HypotheticalPosition(
-    string    PairId,
-    string    Label,
-    string    ArbType,
-    DateTime  EntryTime,
-    DateOnly? SettlementDate,
-    decimal   EntryCostPerShare,
-    decimal   Shares,
-    decimal   CapitalRequired,
-    int       DaysToSettlement,
-    decimal   AprHoldToSettle,
-    bool      ExitSignalLogged = false
-);
-
 // ── Strategy ──────────────────────────────────────────────────────────────────
 
 public class CrossPlatformArbTelemetryStrategy
@@ -98,8 +84,37 @@ public class CrossPlatformArbTelemetryStrategy
 
     // pairId → open window (null = no arb active)
     private readonly Dictionary<string, ActiveWindow?> _activeWindows;
-    private readonly ConcurrentDictionary<string, HypotheticalPosition?> _hypotheticalPositions = new();
+    // pairId → post-open hedge monitor (prices the Kalshi unwind if the slow HardVen leg fails). One per pair;
+    // a new arb open resets it. Outlives the arb window (which usually closes in <1s) up to HedgeHorizonMs.
+    private readonly ConcurrentDictionary<string, HedgeMonitor> _hedgeMonitors = new();
     private readonly ConcurrentDictionary<string, (decimal Cost, string Type, decimal Depth)> _nearMiss = new();
+
+    // ── Hedge monitor ──────────────────────────────────────────────────────────
+    // Tracks ONE arb-open event's post-open price trajectory so the analyzer can price the WORST-CASE hedge
+    // when the slow, irreversible HardVen leg fails to fill: in the Kalshi-first model you commit the fast,
+    // reversible Kalshi leg at open, then fire HardVen; if HardVen misses you must UNWIND the Kalshi leg by
+    // selling it back (or buying the opposite leg to lock). This monitor samples the unwind price for
+    // HedgeHorizonMs after open — independent of the arb window, which usually closes in <1s — and the
+    // analyzer's --hedge-secs picks the realization instant. OpenTime == the window StartTime (the join key).
+    private sealed class HedgeMonitor
+    {
+        public string   PairId = "";
+        public string   Label = "";
+        public string   ArbType = "";          // K_YES_P_NO = hold Kalshi YES; K_NO_P_YES = hold Kalshi NO
+        public DateTime OpenTime;
+        public decimal  EntryKalshiAsk;          // price paid for the committed Kalshi leg at open
+        public decimal  EntryHardVenAsk;         // the HardVen leg price at open (the leg that may fail)
+        public decimal  EntryNetCost;
+        public decimal  EntryDepth;
+        public DateTime LastSampleAt = DateTime.MinValue;
+    }
+
+    // How long after an arb opens to keep sampling the unwind price (covers the 6–12s realization delay plus a
+    // look at whether the position can be "fixed" back to break-even). HARDVEN_HEDGE_MONITOR_SECS overrides.
+    private static readonly int HedgeHorizonMs =
+        int.TryParse(Environment.GetEnvironmentVariable("HARDVEN_HEDGE_MONITOR_SECS"), out var hs) && hs > 0
+            ? hs * 1000 : 30_000;
+    private const int HedgeSampleIntervalMs = 200;   // throttle: at most one sample per pair per 200ms
 
     // Per-pair last-seen leg asks + when each last CHANGED — to attribute which side opened/closed a window.
     // Kalshi = fast WS side (ms); HardVen = slow ~9s poll. Updated under _windowLock on every evaluation.
@@ -132,9 +147,6 @@ public class CrossPlatformArbTelemetryStrategy
     // future reversible-exchange venue that DOES charge commission; a back-only book doesn't.)
     private decimal HardVenFee(decimal p, string tokenId) => 0m;
 
-    private const decimal HurdleRateApr        = 0.20m;
-    private const decimal MinProfitCaptureRatio = 0.70m;
-
     // ── WS drop counters ─────────────────────────────────────────────────────
     private int _kalshiWsDrops;
     private int _hardvenWsDrops;
@@ -147,10 +159,10 @@ public class CrossPlatformArbTelemetryStrategy
     private readonly string _csvPath;
     private bool _headerWritten;
 
-    private readonly Channel<string> _exitCsvChannel =
+    private readonly Channel<string> _hedgeCsvChannel =
         Channel.CreateUnbounded<string>(new UnboundedChannelOptions { SingleReader = true });
-    private readonly string _exitCsvPath;
-    private bool _exitHeaderWritten;
+    private readonly string _hedgeCsvPath;
+    private bool _hedgeHeaderWritten;
 
     // ── Public stats ──────────────────────────────────────────────────────────
     public int OpenArbs   => _activeWindows.Values.Count(w => w != null);
@@ -175,8 +187,8 @@ public class CrossPlatformArbTelemetryStrategy
         _arbThreshold = arbThreshold;
         _depthFloor   = depthFloor;
         string ts    = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
-        _csvPath     = $"CrossArbTelemetry_{ts}.csv";
-        _exitCsvPath = $"CrossArbExitMonitor_{ts}.csv";
+        _csvPath      = $"CrossArbTelemetry_{ts}.csv";
+        _hedgeCsvPath = $"CrossArbHedgeMonitor_{ts}.csv";
 
         _bookKeyToPairs = new Dictionary<string, List<int>>(StringComparer.Ordinal);
         _activeWindows  = new Dictionary<string, ActiveWindow?>(StringComparer.Ordinal);
@@ -194,8 +206,8 @@ public class CrossPlatformArbTelemetryStrategy
             _activeWindows[p.PairId] = null;
         }
 
-        _csvWriterTask     = Task.Run(RunCsvWriterAsync);
-        _exitCsvWriterTask = Task.Run(RunExitCsvWriterAsync);
+        _csvWriterTask      = Task.Run(RunCsvWriterAsync);
+        _hedgeCsvWriterTask = Task.Run(RunHedgeCsvWriterAsync);
         DebugLog.Discovery($"CrossPlatformArbTelemetryStrategy: initialized with {pairs.Count} pairs, threshold={arbThreshold}");
         if (_debugPrices)
             Console.WriteLine("[CROSS] HARDVEN_DEBUG_PRICES=1 — dumping the full 4-leg price breakdown on each arb open.");
@@ -464,6 +476,7 @@ public class CrossPlatformArbTelemetryStrategy
         DebugLog.Discovery($"EvaluatePair {pair.Label}: {bestType} net={bestNet:0.0000} depth={bestDepth:0.0} isArb={isArb}");
 
         bool invokeOnArbOpened = false;
+        DateTime? windowJustOpened = null;   // set to the new window's StartTime when an arb opens (hedge-monitor anchor)
         int currentKalshiDrops = Volatile.Read(ref _kalshiWsDrops);
         int currentHardVenDrops   = Volatile.Read(ref _hardvenWsDrops);
 
@@ -517,10 +530,11 @@ public class CrossPlatformArbTelemetryStrategy
                                     : kOpenMoved ? "KALSHI"
                                     : pOpenMoved ? "HARDVEN" : "OTHER";
 
+                    DateTime openTime = DateTime.UtcNow;
                     var w = new ActiveWindow(
                         PairId:            pair.PairId,
                         ArbType:           bestType,
-                        StartTime:         DateTime.UtcNow,
+                        StartTime:         openTime,
                         EntryGrossCost:    bestGross,
                         EntryNetCost:      bestNet,
                         EntryLegPrices:    legPricesNow,
@@ -547,6 +561,7 @@ public class CrossPlatformArbTelemetryStrategy
                     _activeWindows[pair.PairId] = w;
                     DebugLog.Discovery($"EvaluatePair {pair.Label}: ARB OPEN {bestType} net={bestNet:0.0000} depth={bestDepth:0.0} kAge={kAge}ms pAge={pAge}ms");
                     invokeOnArbOpened = true;
+                    windowJustOpened   = openTime;
                 }
                 else
                 {
@@ -598,59 +613,43 @@ public class CrossPlatformArbTelemetryStrategy
             DumpPrices(pair, bestType, bestNet, bestGross, bestKFee, bestPFee,
                        kYes, kNo, pYes, pNo, kMidSum, pMidSum);
 
-        var posPrefix = pair.PairId + "\x00";
-        foreach (var kvp in _hypotheticalPositions)
+        // ── Hedge-monitor sampling ──────────────────────────────────────────────
+        // On a fresh arb open, (re)arm a monitor anchored to this window's StartTime. Then — independent of
+        // whether the window is still open (it usually closes in <1s) — sample the Kalshi unwind price for
+        // HedgeHorizonMs so the analyzer can price the worst-case hedge if the HardVen leg failed to fill.
+        if (windowJustOpened is { } openedAt)
         {
-            if (kvp.Value == null || !kvp.Key.StartsWith(posPrefix, StringComparison.Ordinal)) continue;
-            decimal kBid = kvp.Value.ArbType == "K_YES_P_NO" ? kYesBid : kNoBid;
-            decimal pBid = kvp.Value.ArbType == "K_YES_P_NO" ? pNoBid  : pYesBid;
-            EvaluateExit(kvp.Key, pair, kvp.Value, kBid, pBid);
-        }
-    }
-
-    // ── Exit position monitoring ──────────────────────────────────────────────
-
-    private void EvaluateExit(string posKey, CrossPair pair, HypotheticalPosition pos, decimal kBid, decimal pBid)
-    {
-        decimal bidSum = kBid + pBid;
-        if (bidSum <= 0m) return;
-
-        string  hardvenToken     = pos.ArbType == "K_YES_P_NO" ? pair.HardVenNoTokenId : pair.HardVenYesTokenId;
-        decimal exitFees      = (KalshiFee(kBid) + HardVenFee(pBid, hardvenToken)) * pos.Shares;
-        double  daysElapsed   = Math.Max((DateTime.UtcNow - pos.EntryTime).TotalDays, 1.0 / 1440.0);
-        double  daysRemaining = Math.Max(pos.DaysToSettlement - daysElapsed, 0.001);
-
-        decimal profitIfExit = (bidSum - pos.EntryCostPerShare) * pos.Shares - exitFees;
-        decimal realizedApr  = profitIfExit / pos.CapitalRequired * (365m / (decimal)daysElapsed);
-        decimal aprRemaining = (1.00m - bidSum) / bidSum * (365m / (decimal)daysRemaining);
-        decimal holdProfit   = (1.00m - pos.EntryCostPerShare) * pos.Shares;
-        decimal captureRatio = holdProfit > 0m ? profitIfExit / holdProfit : 0m;
-
-        bool exitDecision = profitIfExit > 0m
-                         && aprRemaining  < HurdleRateApr
-                         && captureRatio  >= MinProfitCaptureRatio;
-
-        DebugLog.Discovery($"EvaluateExit {pair.Label}: bidSum={bidSum:0.0000} profit={profitIfExit:+0.0000;-0.0000} aprRemaining={aprRemaining:P1} capture={captureRatio:P0} exit={exitDecision}");
-
-        if (exitDecision && !pos.ExitSignalLogged)
-        {
-            _hypotheticalPositions[posKey] = pos with { ExitSignalLogged = true };
-            Console.WriteLine($"[EXIT SIGNAL] {pair.Label} | {pos.ArbType} | " +
-                              $"bid_sum={bidSum:0.0000} profit={profitIfExit:+0.00;-0.00} capture={captureRatio:P0} " +
-                              $"realized_APR={realizedApr:P1} apr_remaining={aprRemaining:P1} " +
-                              $"(<{HurdleRateApr:P0} hurdle, ≥{MinProfitCaptureRatio:P0} capture) | " +
-                              $"{daysElapsed:F1}d elapsed / {daysRemaining:F1}d remaining");
-            EnqueueExitCsvRow(pos, bidSum, exitFees, profitIfExit, realizedApr, aprRemaining,
-                              daysElapsed, daysRemaining, "HURDLE_BREACHED");
+            _hedgeMonitors[pair.PairId] = new HedgeMonitor
+            {
+                PairId         = pair.PairId,
+                Label          = pair.Label,
+                ArbType        = bestType,
+                OpenTime       = openedAt,
+                EntryKalshiAsk = kLegPrice,   // the committed Kalshi leg's entry ask
+                EntryHardVenAsk   = pLegPrice,   // the HardVen leg that may fail
+                EntryNetCost   = bestNet,
+                EntryDepth     = bestDepth
+            };
         }
 
-        if (pos.SettlementDate.HasValue && daysRemaining <= 0.5)
+        if (_hedgeMonitors.TryGetValue(pair.PairId, out var hm))
         {
-            _hypotheticalPositions[posKey] = null;
-            decimal settleProfit  = (1.00m - pos.EntryCostPerShare) * pos.Shares;
-            decimal settleRealApr = settleProfit / pos.CapitalRequired * (365m / (decimal)daysElapsed);
-            EnqueueExitCsvRow(pos, 1.00m, 0m, settleProfit, settleRealApr, 0m,
-                              daysElapsed, daysRemaining, "SETTLEMENT");
+            DateTime hnow   = DateTime.UtcNow;
+            long offsetMs   = (long)(hnow - hm.OpenTime).TotalMilliseconds;
+            if (offsetMs > HedgeHorizonMs)
+            {
+                _hedgeMonitors.TryRemove(pair.PairId, out _);
+            }
+            else if ((hnow - hm.LastSampleAt).TotalMilliseconds >= HedgeSampleIntervalMs)
+            {
+                hm.LastSampleAt = hnow;
+                bool holdYes        = hm.ArbType == "K_YES_P_NO";
+                decimal unwindBid   = holdYes ? kYesBid : kNoBid;     // sell the held Kalshi leg back
+                decimal oppositeAsk = holdYes ? kNoAsk  : kYesAsk;    // or buy the opposite leg to lock
+                decimal hardvenNow  = holdYes ? pNoAsk  : pYesAsk;    // the HardVen leg now (did it return?)
+                decimal unwindDepth = holdYes ? kYes.GetTopBidVolume(3) : kNo.GetTopBidVolume(3);
+                EnqueueHedgeSample(hm, offsetMs, unwindBid, oppositeAsk, hardvenNow, unwindDepth);
+            }
         }
     }
 
@@ -750,25 +749,6 @@ public class CrossPlatformArbTelemetryStrategy
         );
 
         EnqueueCsvRow(row);
-
-        bool staleAtOpen = (w.KalshiBookAgeMs > 30_000) || (w.HardVenBookAgeMs > 30_000);
-        if (w.DaysToSettlement > 0 && maxDepth >= _depthFloor && profit > 0m && !staleAtOpen && !dropDuring)
-        {
-            string posKey = $"{pairId}\x00{w.StartTime.Ticks}";
-            _hypotheticalPositions[posKey] = new HypotheticalPosition(
-                PairId:            pairId,
-                Label:             pair.Label,
-                ArbType:           w.ArbType,
-                EntryTime:         w.StartTime,
-                SettlementDate:    pair.SettlementDate,
-                EntryCostPerShare: w.BestNetCost,
-                Shares:            maxDepth,
-                CapitalRequired:   maxDepth * w.BestNetCost,
-                DaysToSettlement:  w.DaysToSettlement,
-                AprHoldToSettle:   w.AprHoldToSettle
-            );
-            DebugLog.Discovery($"CloseWindow {pair.Label}: created hypothetical position dts={w.DaysToSettlement} profit={profit:0.0000} shares={maxDepth:0.0}");
-        }
     }
 
     // ── Deep price debug (HARDVEN_DEBUG_PRICES=1) ─────────────────────────────
@@ -838,43 +818,38 @@ public class CrossPlatformArbTelemetryStrategy
         _csvChannel.Writer.TryWrite(row);
     }
 
-    private void EnqueueExitCsvRow(HypotheticalPosition pos, decimal bidSum, decimal exitFees,
-        decimal profitIfExit, decimal realizedApr, decimal aprRemaining,
-        double daysElapsed, double daysRemaining, string trigger)
+    // One post-open sample of the Kalshi unwind trajectory. Columns the analyzer joins on (PairId, OpenTime)
+    // and reads at OffsetMs ≈ --hedge-secs to price the worst-case hedge of a failed HardVen leg.
+    //   KalshiUnwindBid   = bid of the held Kalshi leg now → sell-back price (flatten); per-share unwind P/L
+    //                       = KalshiUnwindBid − EntryKalshiAsk − Kalshi entry+exit fees (can be +ve on revert)
+    //   KalshiOppositeAsk = ask of the opposite Kalshi leg → buy-to-lock alternative (holds to settlement)
+    //   HardVenLegNow     = the HardVen leg's price now → if it returned within the arb, you'd COMPLETE not hedge
+    private void EnqueueHedgeSample(HedgeMonitor hm, long offsetMs, decimal unwindBid,
+        decimal oppositeAsk, decimal hardvenNow, decimal unwindDepth)
     {
-        if (!_exitHeaderWritten)
+        if (!_hedgeHeaderWritten)
         {
-            _exitHeaderWritten = true;
-            _exitCsvChannel.Writer.TryWrite(
-                "EntryTime,ExitSnapshotTime,PairId,Label,ArbType," +
-                "DaysToSettlement,AprHoldToSettle," +
-                "DaysElapsed,DaysRemaining," +
-                "EntryCostPerShare,Shares,CapitalRequired," +
-                "BidSum,ExitFees,ProfitIfExit," +
-                "RealizedApr,AprRemaining,ExitDecision,Trigger");
+            _hedgeHeaderWritten = true;
+            _hedgeCsvChannel.Writer.TryWrite(
+                "OpenTime,PairId,Label,ArbType,OffsetMs," +
+                "EntryKalshiAsk,KalshiUnwindBid,KalshiOppositeAsk," +
+                "EntryHardVenAsk,HardVenLegNow,KalshiUnwindDepth,EntryNetCost");
         }
         string row = string.Join(",",
-            pos.EntryTime.ToString("yyyy-MM-dd HH:mm:ss.fff"),
-            DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss.fff"),
-            Quote(pos.PairId),
-            Quote(pos.Label),
-            pos.ArbType,
-            pos.DaysToSettlement,
-            pos.AprHoldToSettle.ToString("0.0000"),
-            daysElapsed.ToString("F2"),
-            daysRemaining.ToString("F2"),
-            pos.EntryCostPerShare.ToString("0.0000"),
-            pos.Shares.ToString("0.00"),
-            pos.CapitalRequired.ToString("0.00"),
-            bidSum.ToString("0.0000"),
-            exitFees.ToString("0.0000"),
-            profitIfExit.ToString("0.0000"),
-            realizedApr.ToString("0.0000"),
-            aprRemaining.ToString("0.0000"),
-            aprRemaining < HurdleRateApr ? "1" : "0",
-            trigger
+            hm.OpenTime.ToString("yyyy-MM-dd HH:mm:ss.fff"),
+            Quote(hm.PairId),
+            Quote(hm.Label),
+            hm.ArbType,
+            offsetMs,
+            hm.EntryKalshiAsk.ToString("0.0000"),
+            unwindBid.ToString("0.0000"),
+            oppositeAsk.ToString("0.0000"),
+            hm.EntryHardVenAsk.ToString("0.0000"),
+            hardvenNow.ToString("0.0000"),
+            unwindDepth.ToString("0.00"),
+            hm.EntryNetCost.ToString("0.0000")
         );
-        _exitCsvChannel.Writer.TryWrite(row);
+        _hedgeCsvChannel.Writer.TryWrite(row);
     }
 
     public async Task ShutdownAsync()
@@ -893,23 +868,15 @@ public class CrossPlatformArbTelemetryStrategy
             }
         }
 
-        foreach (var (_, pos) in _hypotheticalPositions)
-        {
-            if (pos == null) continue;
-            double daysElapsed   = (DateTime.UtcNow - pos.EntryTime).TotalDays;
-            double daysRemaining = Math.Max(pos.DaysToSettlement - daysElapsed, 0.0);
-            EnqueueExitCsvRow(pos, 0m, 0m, 0m, 0m,
-                pos.AprHoldToSettle, daysElapsed, daysRemaining, "SHUTDOWN");
-        }
-
+        // Hedge samples are streamed live (no per-position summary to flush), so just close the channels.
         _csvChannel.Writer.TryComplete();
-        _exitCsvChannel.Writer.TryComplete();
-        try { await Task.WhenAll(_csvWriterTask, _exitCsvWriterTask); }
+        _hedgeCsvChannel.Writer.TryComplete();
+        try { await Task.WhenAll(_csvWriterTask, _hedgeCsvWriterTask); }
         catch (Exception ex) { DebugLog.Discovery($"ShutdownAsync: CSV writer task threw — {ex.Message}"); }
     }
 
     private readonly Task _csvWriterTask;
-    private readonly Task _exitCsvWriterTask;
+    private readonly Task _hedgeCsvWriterTask;
 
     private async Task RunCsvWriterAsync()
     {
@@ -929,12 +896,12 @@ public class CrossPlatformArbTelemetryStrategy
         }
     }
 
-    private async Task RunExitCsvWriterAsync()
+    private async Task RunHedgeCsvWriterAsync()
     {
         try
         {
-            using var sw = new StreamWriter(_exitCsvPath, append: false, Encoding.UTF8) { AutoFlush = false };
-            await foreach (var line in _exitCsvChannel.Reader.ReadAllAsync())
+            using var sw = new StreamWriter(_hedgeCsvPath, append: false, Encoding.UTF8) { AutoFlush = false };
+            await foreach (var line in _hedgeCsvChannel.Reader.ReadAllAsync())
             {
                 await sw.WriteLineAsync(line);
                 await sw.FlushAsync();
@@ -942,8 +909,8 @@ public class CrossPlatformArbTelemetryStrategy
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[EXIT CSV ERROR] {ex.Message}");
-            DebugLog.Discovery($"RunExitCsvWriterAsync exception: {ex}");
+            Console.WriteLine($"[HEDGE CSV ERROR] {ex.Message}");
+            DebugLog.Discovery($"RunHedgeCsvWriterAsync exception: {ex}");
         }
     }
 }
