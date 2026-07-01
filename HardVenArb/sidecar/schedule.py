@@ -14,7 +14,9 @@ Standalone for planning/preview (`python schedule.py`) AND importable by the bot
 
 WINDOW MODEL: each game contributes an interval [start - LEAD, start + DURATION + TRAIL]; intervals that
 overlap OR sit within MIN_GAP of each other merge into one window (so the bot never closes for a pointless
-short gap). DURATION is per-sport (a baseball game runs longer than a best-of-3). All knobs are CLI flags.
+short gap). DURATION is per-sport (a baseball game runs longer than a best-of-3). Then SELECT the blocks
+worth a session: drop any with fewer than MIN_GAMES matches, and keep the densest MAX_BLOCKS (the "3-4 blocks
+where the most matches happen"). All knobs are CLI flags.
 
 Times are computed in UTC (Pinnacle startTime is ISO-UTC) and DISPLAYED in the machine's local timezone.
 """
@@ -52,26 +54,37 @@ def _utcnow() -> datetime:
 
 # ── window math (PURE — unit-testable, no network) ───────────────────────────────────────────────────────
 def compute_windows(starts: list[tuple[datetime, str]], lead_min: int = 25, trail_min: int = 45,
-                    min_gap_min: int = 60, duration: dict | None = None) -> list[tuple[datetime, datetime]]:
-    """starts = [(utc_start, sport), ...] -> merged [(open, close), ...] in UTC. Each game spans
-    [start-lead, start+dur+trail]; intervals overlapping or within min_gap merge into one window."""
+                    min_gap_min: int = 60, duration: dict | None = None,
+                    min_games: int = 1, max_blocks: int | None = None
+                    ) -> list[tuple[datetime, datetime, int]]:
+    """starts = [(utc_start, sport), ...] -> selected [(open, close, games), ...] in UTC. Each game spans
+    [start-lead, start+dur+trail]; intervals overlapping or within min_gap merge into one window (games = how
+    many matches landed in it). Then SELECT the blocks worth a session: drop any with fewer than `min_games`
+    matches (not worth a login + warm-up for one isolated game), and if more than `max_blocks` remain keep the
+    DENSEST `max_blocks` (most matches; ties → earlier first), restored to chronological order. Defaults
+    (min_games=1, max_blocks=None) keep every merged block — selection is opt-in."""
     duration = duration or DURATION
     intervals = sorted(
         (s - timedelta(minutes=lead_min), s + timedelta(minutes=duration.get(sport, DEFAULT_DURATION) + trail_min))
         for s, sport in starts)
-    merged: list[list[datetime]] = []
+    merged: list[list] = []
     for o, c in intervals:
         if merged and o <= merged[-1][1] + timedelta(minutes=min_gap_min):
             merged[-1][1] = max(merged[-1][1], c)
+            merged[-1][2] += 1
         else:
-            merged.append([o, c])
-    return [(o, c) for o, c in merged]
+            merged.append([o, c, 1])
+    kept = [w for w in merged if w[2] >= min_games]
+    if max_blocks is not None and len(kept) > max_blocks:
+        # rank by match count (densest first; ties → earlier), take the top N, restore chronological order
+        kept = sorted(sorted(kept, key=lambda w: (-w[2], w[0]))[:max_blocks], key=lambda w: w[0])
+    return [(o, c, g) for o, c, g in kept]
 
 
 def active_window(windows, now: datetime | None = None):
-    """The window containing `now` (UTC naive), or None."""
+    """The window (open, close, games) containing `now` (UTC naive), or None."""
     now = now or _utcnow()
-    return next(((o, c) for o, c in windows if o <= now <= c), None)
+    return next((w for w in windows if w[0] <= now <= w[1]), None)
 
 
 def status(windows, now: datetime | None = None) -> tuple[str, float | None]:
@@ -81,7 +94,7 @@ def status(windows, now: datetime | None = None) -> tuple[str, float | None]:
     cur = active_window(windows, now)
     if cur:
         return "OPEN", (cur[1] - now).total_seconds()
-    upcoming = [o for o, _ in windows if o > now]
+    upcoming = [w[0] for w in windows if w[0] > now]
     return "CLOSED", ((min(upcoming) - now).total_seconds() if upcoming else None)
 
 
@@ -139,9 +152,13 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--sports", default="3,33", help="Pinnacle sport ids (default 3=baseball,33=tennis)")
     ap.add_argument("--horizon", type=int, default=36, help="plan this many hours ahead (default 36)")
-    ap.add_argument("--lead", type=int, default=25, help="open this many min before a block's first game")
+    ap.add_argument("--lead", type=int, default=15, help="open this many min before a block's first game (default 15)")
     ap.add_argument("--trail", type=int, default=45, help="close this many min after the last game's end")
     ap.add_argument("--min-gap", type=int, default=60, help="merge blocks less than this many min apart")
+    ap.add_argument("--min-games", type=int, default=1,
+                    help="drop blocks with fewer than this many matches (default 1 = keep all)")
+    ap.add_argument("--max-blocks", type=int, default=4,
+                    help="keep at most this many blocks, the densest by match count (default 4; 0 = unlimited)")
     ap.add_argument("--write", action="store_true", help="also write work_windows.json for the bot")
     args = ap.parse_args()
 
@@ -153,13 +170,18 @@ def main() -> None:
         bysport[sp] = bysport.get(sp, 0) + 1
     print(f"[SCHED] {len(starts)} games: " + ", ".join(f"{k}={v}" for k, v in sorted(bysport.items())))
 
-    windows = compute_windows(starts, args.lead, args.trail, args.min_gap)
-    print(f"\n[SCHED] {len(windows)} work window(s) (local time):")
+    max_blocks = args.max_blocks or None      # 0 = unlimited
+    all_merged = compute_windows(starts, args.lead, args.trail, args.min_gap)                 # pre-selection
+    windows = compute_windows(starts, args.lead, args.trail, args.min_gap,
+                              min_games=args.min_games, max_blocks=max_blocks)                 # selected
+    dropped = len(all_merged) - len(windows)
+    sel = f" (selected the densest {len(windows)} of {len(all_merged)}; dropped {dropped})" if dropped else ""
+    print(f"\n[SCHED] {len(windows)} work window(s){sel} (local time):")
     now = _utcnow()
-    for o, c in windows:
+    for o, c, g in windows:
         live = "  <== NOW" if o <= now <= c else ""
         dur = _hm((c - o).total_seconds())
-        print(f"   {_local(o):%a %d %b %H:%M} -> {_local(c):%H:%M}  ({dur}){live}")
+        print(f"   {_local(o):%a %d %b %H:%M} -> {_local(c):%H:%M}  ({dur}, {g} match{'es' if g != 1 else ''}){live}")
 
     state, secs = status(windows, now)
     if state == "OPEN":
@@ -169,8 +191,8 @@ def main() -> None:
               else "\n[SCHED] NOW: CLOSED — no upcoming games in the horizon.")
 
     if args.write:
-        OUT.write_text(json.dumps([{"open": o.isoformat() + "Z", "close": c.isoformat() + "Z"}
-                                   for o, c in windows], indent=2), encoding="utf-8")
+        OUT.write_text(json.dumps([{"open": o.isoformat() + "Z", "close": c.isoformat() + "Z", "games": g}
+                                   for o, c, g in windows], indent=2), encoding="utf-8")
         print(f"[SCHED] wrote {len(windows)} window(s) -> {OUT}")
 
 

@@ -144,6 +144,17 @@ class PinnacleAdapter(BookAdapter):
         self._lifecycle_on = os.environ.get("PINNACLE_LIFECYCLE") == "1"
         self._lifecycle_sports = [int(s) for s in os.environ.get("PINNACLE_LIFECYCLE_SPORTS", "3,33").split(",")
                                   if s.strip().isdigit()]
+
+        def _cfg_int(name: str, default: int) -> int:
+            try:
+                return int((os.environ.get(name) or "").strip() or default)
+            except ValueError:
+                return default
+        # window shaping (block selection): open PINNACLE_LEAD_MIN before a block, keep the densest
+        # PINNACLE_MAX_BLOCKS (0 = unlimited) with ≥ PINNACLE_MIN_GAMES matches each.
+        self._lifecycle_lead = _cfg_int("PINNACLE_LEAD_MIN", 15)
+        self._lifecycle_max_blocks = _cfg_int("PINNACLE_MAX_BLOCKS", 4)
+        self._lifecycle_min_games = _cfg_int("PINNACLE_MIN_GAMES", 1)
         self._lifecycle = None
         self._lifecycle_task = None
         # ── REST-mode state ──
@@ -179,9 +190,13 @@ class PinnacleAdapter(BookAdapter):
                     from lifecycle import PinnacleLifecycle
                     self._lifecycle = PinnacleLifecycle(self._browser, self._lifecycle_sports,
                                                         on_open=self._on_session_opening,
-                                                        on_close=self._on_session_closed)
+                                                        on_close=self._on_session_closed,
+                                                        lead_min=self._lifecycle_lead,
+                                                        min_games=self._lifecycle_min_games,
+                                                        max_blocks=(self._lifecycle_max_blocks or None))
                     self._lifecycle_task = asyncio.create_task(self._lifecycle.run())
-                    print(f"[PINNACLE] session source = BROWSER + LIFECYCLE (sports={self._lifecycle_sports}) — "
+                    print(f"[PINNACLE] session source = BROWSER + LIFECYCLE (sports={self._lifecycle_sports}, "
+                          f"lead {self._lifecycle_lead}m, densest {self._lifecycle_max_blocks} blocks) — "
                           "the browser opens/closes on the game schedule; dark between windows.")
                 else:
                     await self._browser.start()
