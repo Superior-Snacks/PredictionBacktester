@@ -380,6 +380,9 @@ FodyWeavers.xsd
 quote_audit_*.jsonl
 live_debug_*.jsonl
 
+# Pinnacle sidecar WS frame dump (debug capture — may hold LIVE session data; never commit)
+pin_ws_dump*.jsonl
+
 # huge gz files
 *.gz
 *.json
