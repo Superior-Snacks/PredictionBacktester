@@ -4,8 +4,9 @@ analyze_cross_arb.py — read CrossArbTelemetry_*.csv (Kalshi ↔ HardVen/Pinnac
 the capturability framework: how many windows were CAPTURABLE, at what PRICE/edge, and the estimated PROFIT
 (both at full market depth and constrained by a real bankroll).
 
-CAPTURABILITY — one knob: --hardven-secs (default 6) = the slow HardVen leg's capture time; --kalshi-secs
-(default 0.2) = the fast Kalshi leg's. A window is capturable iff BOTH legs could be on before it closed:
+CAPTURABILITY — one knob: --hardven-secs (default 8 = measured Pinnacle bet-placement top ~7-8s) = the slow
+HardVen leg's capture time; --kalshi-secs (default 0.2) = the fast Kalshi leg's. A window is capturable iff
+BOTH legs could be on before it closed:
     DurationMs > hardven-secs                                       (window open long enough to place HardVen)
   OR (ClosedBySide == KALSHI and DurationMs > kalshi-secs           (the fast Kalshi side had its time)
       and HardVenLegAgeMsAtClose > hardven-secs)                    (HardVen leg already held that long)
@@ -137,9 +138,10 @@ def main() -> None:
     ap.add_argument("--pinnacle-bankroll", type=float, default=50.0, help="HardVen/Pinnacle bankroll (EUR)")
     ap.add_argument("--kalshi-bankroll", type=float, default=422.0, help="Kalshi bankroll (USD)")
     ap.add_argument("--min-edge", type=float, default=0.0, help="ignore windows with edge below this (e.g. 0.005)")
-    ap.add_argument("--hardven-secs", type=float, default=6.0,
+    ap.add_argument("--hardven-secs", type=float, default=8.0,
                     help="SECONDS the slow HardVen leg needs to capture — the window must be open this long, OR "
-                         "the HardVen leg already held this long when Kalshi closes it (default 6)")
+                         "the HardVen leg already held this long when Kalshi closes it (default 8 = measured "
+                         "Pinnacle bet-placement top ~7-8s)")
     ap.add_argument("--kalshi-secs", type=float, default=0.2,
                     help="SECONDS the fast Kalshi leg needs (min window duration when Kalshi closes it; default 0.2)")
     ap.add_argument("--metric", choices=("auto", "within", "legacy"), default="auto",
