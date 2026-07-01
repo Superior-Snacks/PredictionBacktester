@@ -145,10 +145,10 @@ def main() -> None:
                          "'legacy' = duration + HardVen frozen-age; 'auto' = within if the columns exist (default)")
     ap.add_argument("--hedge-file", help="CrossArbHedgeMonitor CSV (default: newest in CWD)")
     ap.add_argument("--hedge-secs", type=float, default=6.0,
-                    help="SECONDS after open at which you realize the HardVen leg missed and unwind the Kalshi "
-                         "leg — the realization delay the hedge is priced at (default 6)")
+                    help="§6 ONLY (needs the hedge tape): SECONDS after open at which you realize the HardVen leg "
+                         "missed and unwind the Kalshi leg — the realization delay the hedge is priced at (default 6)")
     ap.add_argument("--max-bet", type=float, default=300.0,
-                    help="max $ capital deployed per single arb (per-bet cap, separate from total bankroll; default 300)")
+                    help="§6 ONLY: max $ capital deployed per single arb (per-bet cap, separate from bankroll; default 300)")
     a = ap.parse_args()
     hardven_ms, kalshi_ms = a.hardven_secs * 1000, a.kalshi_secs * 1000
 
@@ -273,11 +273,14 @@ def main() -> None:
     print("\n6. NET EV  —  FAILED-HARDVEN-LEG HEDGE MODEL  (Kalshi-first: commit Kalshi, unwind it if HardVen misses)")
     if not has_within:
         print("   ⚠ this CSV has no per-leg within-times → can't split win vs miss. Run the updated bot.")
+        print("     --hedge-secs / --max-bet ONLY drive §6, so they have no effect on this file; "
+              "for §1–5 use --hardven-secs.")
         print("=" * 78)
         return
     hpath = a.hedge_file or (sorted(glob.glob("CrossArbHedgeMonitor_*.csv")) or [None])[-1]
     if not hpath or not os.path.exists(hpath):
         print("   ⚠ no CrossArbHedgeMonitor_*.csv found (pass --hedge-file) → can't price the unwind. Run the updated bot.")
+        print("     (so --hedge-secs / --max-bet have no effect here — §6 needs the hedge tape.)")
         print("=" * 78)
         return
     hedge = group_hedge(load(hpath))
