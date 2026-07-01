@@ -33,7 +33,7 @@ to be). Needs the within-columns AND a hedge tape (both produced by the updated 
 
   python analyze_cross_arb.py                       # latest CrossArbTelemetry_*.csv in CWD
   python analyze_cross_arb.py --file path.csv --fx 1.08 --pinnacle-bankroll 50 --kalshi-bankroll 422
-  python analyze_cross_arb.py --hedge-secs 6 --max-bet 300   # net-EV w/ hedge tape (auto-discovered)
+  python analyze_cross_arb.py --hedge-secs 8 --max-bet 300   # net-EV w/ hedge tape (auto-discovered)
 """
 from __future__ import annotations
 
@@ -148,9 +148,11 @@ def main() -> None:
                     help="capturability model: 'within' = per-leg held-within-arb times (newer CSVs, accurate); "
                          "'legacy' = duration + HardVen frozen-age; 'auto' = within if the columns exist (default)")
     ap.add_argument("--hedge-file", help="CrossArbHedgeMonitor CSV (default: newest in CWD)")
-    ap.add_argument("--hedge-secs", type=float, default=6.0,
+    ap.add_argument("--hedge-secs", type=float, default=8.0,
                     help="§6 ONLY (needs the hedge tape): SECONDS after open at which you realize the HardVen leg "
-                         "missed and unwind the Kalshi leg — the realization delay the hedge is priced at (default 6)")
+                         "missed and unwind the Kalshi leg. Default 8 = WORST CASE — the odds-change cancel may "
+                         "not confirm until the full ~8s placement window, so pricing the unwind that late is the "
+                         "conservative (longest-exposure) estimate.")
     ap.add_argument("--max-bet", type=float, default=300.0,
                     help="§6 ONLY: max $ capital deployed per single arb (per-bet cap, separate from bankroll; default 300)")
     a = ap.parse_args()
