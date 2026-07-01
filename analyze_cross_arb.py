@@ -25,8 +25,10 @@ reversible Kalshi leg at OPEN, then fire the slow, irreversible HardVen leg. If 
 long enough (HardVenLegWithinMs > --hardven-secs) you complete → WIN; if it left first you're naked on Kalshi
 and must UNWIND it (sell the held leg back at the bid) at --hedge-secs. The unwind is priced from the
 CrossArbHedgeMonitor_*.csv tape (per-arb post-open Kalshi bid trajectory). NET EV = Σ(wins) − Σ(miss hedge
-cost) — the per-attempt expected value, the number that says whether the strategy survives its miss rate.
-Needs the within-columns AND a hedge tape (both produced by the updated bot); older CSVs fall back gracefully.
+cost) — the per-attempt expected value, the number that says whether the strategy survives its miss rate. A
+HEDGE BUDGET line puts the MEASURED avg per-share unwind next to the break-even floor `−(wins/misses)×edge`,
+so the actual hedge cost reads straight off as profitable / net-negative (how the hedge DID vs how good it had
+to be). Needs the within-columns AND a hedge tape (both produced by the updated bot); older CSVs fall back gracefully.
 
   python analyze_cross_arb.py                       # latest CrossArbTelemetry_*.csv in CWD
   python analyze_cross_arb.py --file path.csv --fx 1.08 --pinnacle-bankroll 50 --kalshi-bankroll 422
@@ -312,7 +314,7 @@ def main() -> None:
         day = r.get("StartTime", "")[:10]
 
         if hw > hardven_ms:                                          # HardVen held → complete the arb → WIN
-            wins.append({"label": r.get("Label", "")[:40], "contracts": contracts,
+            wins.append({"label": r.get("Label", "")[:40], "contracts": contracts, "edge": edge,
                          "profit": edge * contracts, "capital": net * contracts, "date": day})
             continue
 
@@ -329,7 +331,7 @@ def main() -> None:
         if hv_now > 0 and entry + hv_now + kalshi_fee(entry) < 1.0:
             recovered += 1
             late_edge = 1.0 - (entry + hv_now + kalshi_fee(entry))
-            wins.append({"label": r.get("Label", "")[:40], "contracts": contracts,
+            wins.append({"label": r.get("Label", "")[:40], "contracts": contracts, "edge": late_edge,
                          "profit": late_edge * contracts, "capital": net * contracts, "date": day})
             continue
         fees = kalshi_fee(entry) + kalshi_fee(unwind)               # Kalshi charges on entry AND unwind
@@ -378,6 +380,15 @@ def main() -> None:
         pnls = [m["pnl_share"] for m in misses]
         print(f"\n   UNWIND @ {a.hedge_secs:g}s (per share):  avg {st.mean(pnls):+.4f}   median {st.median(pnls):+.4f}"
               f"   best {max(pnls):+.4f}   worst {min(pnls):+.4f}")
+        # How the hedge DID vs how good it HAD to be — per window (size-agnostic). The misses' avg unwind P/L
+        # must clear the floor the wins can fund: floor = -(wins/misses) × avg winning edge. (NET EV above is
+        # the size-WEIGHTED $ version; this line reads the per-share UNWIND number straight off as pass/fail.)
+        avg_win_edge = st.mean([w["edge"] for w in wins]) if wins else 0.0
+        floor = -(n_win / n_miss) * avg_win_edge
+        margin = st.mean(pnls) - floor
+        mark = "✓ profitable" if margin >= 0 else "✗ net-negative"
+        print(f"   HEDGE BUDGET:  avg unwind {st.mean(pnls):+.4f}/share  vs floor {floor:+.4f} "
+              f"((wins/misses)×edge)  →  {margin:+.4f} margin  {mark}")
         fixable = [m for m in misses if m["fix_ms"] is not None and m["pnl"] < 0]
         losers = [m for m in misses if m["pnl"] < 0]
         if losers and fixable:
