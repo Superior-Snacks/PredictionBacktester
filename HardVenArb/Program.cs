@@ -310,8 +310,8 @@ if (File.Exists(manualPath))
 
 // Also load derivative_pairs.json (spread/total LINES from pair_derivatives.py) — SAME schema, kept in a
 // separate file so the moneyline pairs stay clean. Merged into manualPairs here so the run prices the lines
-// too (the sidecar resolves the {lid}:{mid}:{type}:{points}:{side} tokens). NOTE: hot-reload watches
-// cross_pairs.json only — re-run pair_derivatives.py + restart to refresh derivative lines.
+// too (the sidecar resolves the {lid}:{mid}:{type}:{points}:{side} tokens). Hot-reloaded alongside
+// cross_pairs.json (below), so a daily auto-pair refreshes the derivative lines live too.
 string derivSrc  = Path.Combine(sourceDir, "derivative_pairs.json");
 string derivOut  = Path.Combine(AppContext.BaseDirectory, "derivative_pairs.json");
 string derivPath = isDevBuild && File.Exists(derivSrc) ? derivSrc
@@ -788,7 +788,8 @@ if (executor != null)
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-//  HOT-RELOAD: watch cross_pairs.json for new pairs every 30s
+//  HOT-RELOAD: re-read cross_pairs.json + derivative_pairs.json every 15 min for new pairs — so a daily
+//  auto-pair (pairing_scheduler in the sidecar) is picked up live without a restart.
 // ══════════════════════════════════════════════════════════════════════════════
 _ = Task.Run(async () =>
 {
@@ -796,15 +797,19 @@ _ = Task.Run(async () =>
     {
         await Task.Delay(900_000, cts.Token).ContinueWith(_ => { });
         if (cts.Token.IsCancellationRequested) break;
-        if (!File.Exists(manualPath))
+        // Reload BOTH pair files: cross_pairs.json (moneyline) and derivative_pairs.json (spread/total). Same
+        // schema + same knownPairIds dedup → only pairs NEW since the last read are added (daily re-pair).
+        foreach (var reloadPath in new[] { manualPath, derivPath })
         {
-            DebugLog.Write($"Hot-reload: {manualPath} not found, skipping");
+        if (!File.Exists(reloadPath))
+        {
+            DebugLog.Write($"Hot-reload: {reloadPath} not found, skipping");
             continue;
         }
-        DebugLog.Write($"Hot-reload: reading {manualPath}");
+        DebugLog.Write($"Hot-reload: reading {reloadPath}");
         try
         {
-            using var doc = JsonDocument.Parse(File.ReadAllText(manualPath));
+            using var doc = JsonDocument.Parse(File.ReadAllText(reloadPath));
             var newPairs    = new List<CrossPair>();
             var newKTickers = new List<string>();
             var newPTokens  = new List<string>();
@@ -867,8 +872,9 @@ _ = Task.Run(async () =>
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[HOT-RELOAD] Error reading {manualPath}: {ex.Message}");
+            Console.WriteLine($"[HOT-RELOAD] Error reading {reloadPath}: {ex.Message}");
         }
+        }   // foreach reloadPath (cross_pairs.json + derivative_pairs.json)
     }
 });
 

@@ -160,6 +160,14 @@ class PinnacleAdapter(BookAdapter):
         self._lifecycle_min_games = _cfg_int("PINNACLE_MIN_GAMES", 1)
         self._lifecycle = None
         self._lifecycle_task = None
+
+        # AUTO-PAIR: opt-in scheduled re-pairing (startup + daily at HARDVEN_PAIR_HOUR local). Account-free
+        # (Kalshi public + Pinnacle guest + the sidecar /catalog); the C# bot hot-reloads the result.
+        self._auto_pair = os.environ.get("HARDVEN_AUTO_PAIR") == "1"
+        self._pair_hour = _cfg_int("HARDVEN_PAIR_HOUR", 5)
+        self._pair_startup_delay = _cfg_int("HARDVEN_PAIR_STARTUP_DELAY", 8)
+        self._pairing = None
+        self._pairing_task = None
         # ── REST-mode state ──
         self._refresh_task: Optional[asyncio.Task] = None
         self._refresh_sec = float(os.environ.get("PINNACLE_REFRESH_SEC", "15"))
@@ -218,12 +226,21 @@ class PinnacleAdapter(BookAdapter):
             print("[PINNACLE] ready — WS mode (LAZY: connects to Pinnacle on the FIRST /odds that names a "
                   "league; nothing is sent before that). Odds id = '<leagueId>:<matchupId>:<designation>'.")
 
+        # AUTO-PAIR: schedule the daily re-pairing pipeline (account-free; independent of the session/mode).
+        if self._auto_pair:
+            from pairing_scheduler import PairingScheduler
+            self._pairing = PairingScheduler(hour=self._pair_hour, initial_delay=self._pair_startup_delay)
+            self._pairing_task = asyncio.create_task(self._pairing.run())
+            print(f"[PINNACLE] AUTO-PAIR on — pairing at startup (+{self._pair_startup_delay}s) then daily "
+                  f"{self._pair_hour:02d}:00 local. cross_pairs.json + derivative_pairs.json hot-reload into the bot.")
+
     async def shutdown(self) -> None:
         if self._refresh_task and not self._refresh_task.done():
             self._refresh_task.cancel()
         if self._ws_watchdog_task and not self._ws_watchdog_task.done():
             self._ws_watchdog_task.cancel()
-        for t in (self._reconciler_task, self._status_task, self._session_ka_task, self._lifecycle_task):
+        for t in (self._reconciler_task, self._status_task, self._session_ka_task,
+                  self._lifecycle_task, self._pairing_task):
             if t and not t.done():
                 t.cancel()
         if self._client is not None:
