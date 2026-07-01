@@ -189,6 +189,7 @@ public class HardVenWebsocketFeed
 
             var s        = prop.Value;
             string status = s.TryGetProperty("status", out var st) ? (st.GetString() ?? "open") : "open";
+            bool   live   = s.TryGetProperty("live", out var lv) && lv.ValueKind == JsonValueKind.True;  // in-play vs pre-match
             decimal odds  = s.TryGetProperty("decimal_odds", out var od) && od.TryGetDecimal(out var o) ? o : 0m;
             decimal size  = s.TryGetProperty("max_contracts", out var mc) && mc.TryGetDecimal(out var c) ? c : 0m;
             size *= _fxToUsd;   // EUR(book)-payout units → USD-equivalent so depth/capital/profit aren't FX-skewed
@@ -213,6 +214,7 @@ public class HardVenWebsocketFeed
                 : "[]";
             using var sd = JsonDocument.Parse($"{{\"bids\":[],\"asks\":{asks}}}");
             book.ProcessBookUpdate(sd.RootElement.GetProperty("bids"), sd.RootElement.GetProperty("asks"));
+            book.IsLive = live;   // in-play (live game) vs pre-match tag — read by the telemetry per window
             if (fresh) book.MarkDeltaReceived();   // only advance the staleness clock on a genuinely recent quote
             _telemetry.OnBookUpdate(bookKey);
         }

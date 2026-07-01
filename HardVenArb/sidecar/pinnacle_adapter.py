@@ -332,7 +332,7 @@ class PinnacleAdapter(BookAdapter):
                 ts = now if (self._mode == "ws" and live) else s.ts
                 # Pass through the cached STATUS ("open" / "suspended") so an OFFLINE Pinnacle market reaches
                 # the C# as suspended → empty book → no arb. (Was hardcoded "open", which hid suspensions.)
-                out[sid] = Selection(s.selection_id, s.decimal_odds, s.max_stake, s.status, ts)
+                out[sid] = Selection(s.selection_id, s.decimal_odds, s.max_stake, s.status, ts, s.live)
         return out
 
     # ── browser session source: receive live creds + expose status ────────────────
@@ -567,12 +567,13 @@ class PinnacleAdapter(BookAdapter):
             data = json.loads(msg.payload.decode("utf-8"))
         except Exception:
             return
+        live = "/live/" in (getattr(msg, "topic", "") or "")   # topic = IN-PLAY (…/live/*) vs pre-match (…/pre)
         try:
-            self._apply(data)
+            self._apply(data, live)
         except Exception as ex:
             print(f"[PINNACLE WS] apply error: {type(ex).__name__}: {ex}")
 
-    def _apply(self, data: dict) -> None:
+    def _apply(self, data: dict, live: bool = False) -> None:
         rec = data.get("rec") or {}
         mid = rec.get("id") if rec.get("id") is not None else data.get("pk")
         lid = (rec.get("league") or {}).get("id")
@@ -597,7 +598,7 @@ class PinnacleAdapter(BookAdapter):
         markets = rec.get("markets") or []
         updates: dict[str, Selection] = {}
         for mk in markets:
-            for token, sel in self._market_tokens(lid, mid, mk, now):
+            for token, sel in self._market_tokens(lid, mid, mk, now, live):
                 updates[token] = sel
         reconcile = len(markets) > 0
         suspended = 0
@@ -616,11 +617,11 @@ class PinnacleAdapter(BookAdapter):
         if suspended and (self._debug_ws or self._debug_status):
             print(f"[PINNACLE STATUS] {lid}:{mid} → {suspended} leg(s) offline/suspended")
 
-    def _market_tokens(self, lid: str, mid, mk: dict, now: float):
+    def _market_tokens(self, lid: str, mid, mk: dict, now: float, live: bool = False):
         """Yield (token, Selection) for each price of an OPEN, full-game (period 0) moneyline / spread / total
-        market. Token keys MIRROR pair_derivatives.py: moneyline '{lid}:{mid}:{designation}' (home/away/draw);
-        spread/total '{lid}:{mid}:{type}:{points:g}:{designation}' (home/away or over/under). Skips non-open
-        markets, foreign types, and bad/missing prices → those tokens get suspended by the reconcile instead."""
+        market. `live` = IN-PLAY (came over a …/live/* topic) vs pre-match (…/pre or REST seed). Token keys
+        MIRROR pair_derivatives.py: moneyline '{lid}:{mid}:{designation}' (home/away/draw); spread/total
+        '{lid}:{mid}:{type}:{points:g}:{designation}'. Skips non-open markets, foreign types, bad prices."""
         t = mk.get("type")
         if mk.get("period") != 0 or t not in ("moneyline", "spread", "total"):
             return
@@ -643,7 +644,7 @@ class PinnacleAdapter(BookAdapter):
                 if not ((t == "spread" and desig in ("home", "away")) or (t == "total" and desig in ("over", "under"))):
                     continue
                 token = f"{lid}:{mid}:{t}:{float(pts):g}:{desig}"
-            yield token, Selection(token, decimal_odds=dec, max_stake=max_stake, status="open", ts=now)
+            yield token, Selection(token, decimal_odds=dec, max_stake=max_stake, status="open", ts=now, live=live)
 
     def _dump_ws_record(self, data: dict, lid: str, mid: str) -> None:
         """RECON (PINNACLE_WS_DUMP=<path>): append a compact summary of EVERY incoming WS record so we can see

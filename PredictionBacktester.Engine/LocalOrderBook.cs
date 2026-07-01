@@ -30,6 +30,10 @@ public class LocalOrderBook
 {
     public string AssetId { get; private set; }
 
+    /// <summary>True when the venue reports this market as IN-PLAY (live) rather than pre-match. Set by the
+    /// feed from the venue's live/pre signal; default false. Venue-agnostic tag for telemetry/analysis.</summary>
+    public bool IsLive { get; set; }
+
     private bool _hasReceivedDelta = false;
     private long _lastDeltaAtTicks = 0;
     private bool _isDead = false;

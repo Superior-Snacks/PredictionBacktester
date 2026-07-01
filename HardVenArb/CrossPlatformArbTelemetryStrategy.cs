@@ -648,11 +648,12 @@ public class CrossPlatformArbTelemetryStrategy
             {
                 hm.LastSampleAt = hnow;
                 bool holdYes        = hm.ArbType == "K_YES_P_NO";
-                decimal unwindBid   = holdYes ? kYesBid : kNoBid;     // sell the held Kalshi leg back
+                decimal unwindBid   = holdYes ? kYesBid : kNoBid;     // sell the held Kalshi leg back (Kalshi-first)
                 decimal oppositeAsk = holdYes ? kNoAsk  : kYesAsk;    // or buy the opposite leg to lock
+                decimal entryAskNow = holdYes ? kYesAsk : kNoAsk;     // buy the ENTRY leg now (HardVen-first late-complete)
                 decimal hardvenNow  = holdYes ? pNoAsk  : pYesAsk;    // the HardVen leg now (did it return?)
                 decimal unwindDepth = holdYes ? kYes.GetTopBidVolume(3) : kNo.GetTopBidVolume(3);
-                EnqueueHedgeSample(hm, offsetMs, unwindBid, oppositeAsk, hardvenNow, unwindDepth);
+                EnqueueHedgeSample(hm, offsetMs, unwindBid, oppositeAsk, entryAskNow, hardvenNow, unwindDepth);
             }
         }
     }
@@ -681,6 +682,10 @@ public class CrossPlatformArbTelemetryStrategy
         // the bookmaker selection_id this arb's book leg actually used — the exact join key for the audit
         // tape (verify_arbs.py): K_NO_P_YES backs HardVen YES, K_YES_P_NO backs HardVen NO.
         string hardvenLegId = w.ArbType == "K_YES_P_NO" ? pair.HardVenNoTokenId : pair.HardVenYesTokenId;
+        // IN-PLAY tag: was the HardVen game live (vs pre-match) when this window closed? Pre-match legs are stable
+        // (near-instant capture); live legs are volatile (the ~8s placement / auto-cancel model). Drives per-window
+        // timing in the analyzer so a stable pre-match hold isn't judged by the same clock as a live flicker.
+        bool hvInPlay = _books.TryGetValue($"H:{hardvenLegId}", out var hvBook) && hvBook.IsLive;
 
         decimal fees     = w.KalshiFees + w.HardVenFees;
         decimal profit   = 1m - w.BestNetCost;
@@ -749,7 +754,8 @@ public class CrossPlatformArbTelemetryStrategy
             (closedBy == "PRICE" && pHeld) ? "1" : "0",
             Quote(hardvenLegId),
             kWithinMs,
-            pWithinMs
+            pWithinMs,
+            hvInPlay ? "1" : "0"
         );
 
         EnqueueCsvRow(row);
@@ -816,7 +822,8 @@ public class CrossPlatformArbTelemetryStrategy
                 "DaysToSettlement,AprHoldToSettle," +
                 "RestChecked,RestConfirmed,RestKalshiAsk,RestHardVenAsk,RestDelayMs," +
                 "OpenedBy,ClosedBySide,KalshiLegAgeMsAtClose,HardVenLegAgeMsAtClose,HardVenLegHeld,HardVenLegId," +
-                "KalshiLegWithinMs,HardVenLegWithinMs";   // time each leg stayed ≤ its open price (held within the arb)
+                "KalshiLegWithinMs,HardVenLegWithinMs," +   // time each leg stayed ≤ its open price (held within the arb)
+                "HardVenInPlay";                            // 1 = HardVen game was LIVE/in-play, 0 = pre-match
             _csvChannel.Writer.TryWrite(header);
         }
         _csvChannel.Writer.TryWrite(row);
@@ -829,14 +836,14 @@ public class CrossPlatformArbTelemetryStrategy
     //   KalshiOppositeAsk = ask of the opposite Kalshi leg → buy-to-lock alternative (holds to settlement)
     //   HardVenLegNow     = the HardVen leg's price now → if it returned within the arb, you'd COMPLETE not hedge
     private void EnqueueHedgeSample(HedgeMonitor hm, long offsetMs, decimal unwindBid,
-        decimal oppositeAsk, decimal hardvenNow, decimal unwindDepth)
+        decimal oppositeAsk, decimal entryAskNow, decimal hardvenNow, decimal unwindDepth)
     {
         if (!_hedgeHeaderWritten)
         {
             _hedgeHeaderWritten = true;
             _hedgeCsvChannel.Writer.TryWrite(
                 "OpenTime,PairId,Label,ArbType,OffsetMs," +
-                "EntryKalshiAsk,KalshiUnwindBid,KalshiOppositeAsk," +
+                "EntryKalshiAsk,KalshiUnwindBid,KalshiOppositeAsk,KalshiEntryAskNow," +
                 "EntryHardVenAsk,HardVenLegNow,KalshiUnwindDepth,EntryNetCost");
         }
         string row = string.Join(",",
@@ -848,6 +855,7 @@ public class CrossPlatformArbTelemetryStrategy
             hm.EntryKalshiAsk.ToString("0.0000"),
             unwindBid.ToString("0.0000"),
             oppositeAsk.ToString("0.0000"),
+            entryAskNow.ToString("0.0000"),      // current ask of the ENTRY leg — HardVen-first late-completion cost
             hm.EntryHardVenAsk.ToString("0.0000"),
             hardvenNow.ToString("0.0000"),
             unwindDepth.ToString("0.00"),

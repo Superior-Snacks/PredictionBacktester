@@ -23,6 +23,7 @@ class Selection:
     max_stake: float             # book's max accepted stake (cash) at these odds
     status: str = "open"         # "open" | "suspended" | "settled"
     ts: float = 0.0              # unix seconds when observed (staleness)
+    live: bool = False           # IN-PLAY (live game) vs pre-match — drives the timing model (live=slow, pre=~instant)
 
     @property
     def implied_price(self) -> float:
