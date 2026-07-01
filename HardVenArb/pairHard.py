@@ -10,15 +10,17 @@ for you to add by hand.
 
 Kalshi's "Sports" category is mostly props/futures/esports (World Cup goalscorers, season win totals,
 draft picks, spreads, set/half winners, CS2/Valorant maps). So instead of the whole category, this
-allowlists the per-game match-winner series (KXMLBGAME, KXNFLGAME, tennis KX*MATCH, KXBOXING,
-KXUFCFIGHT, …). Tune CLASSIC_SERIES below, or use --series / --all.
+allowlists the per-game match-winner series. DEFAULT scope = the ACTIVE sports' moneyline series from the
+unified catalog (sidecar/sports.py, honoring HARDVEN_SPORTS) — the same sports the schedule/lifecycle run.
+Use --classic for the broad built-in CLASSIC_SERIES set (every sport), or --series / --all to override.
 
 The HardVenArb bot SKIPS any entry whose hardven_yes_token/hardven_no_token is empty (the loader
 requires non-empty tokens), so it's safe to run with blanks and fill the bookmaker ids per pair as you
 go (see sidecar/README "Recon" for where the bookmaker selection id comes from).
 
 Usage:
-  python pairHard.py                      # classic-sports allowlist, settling within 10 days
+  python pairHard.py                      # ACTIVE sports (sports.py / HARDVEN_SPORTS), settling within 10 days
+  python pairHard.py --classic            # broad built-in allowlist (every sport)
   python pairHard.py --days 21            # widen the window
   python pairHard.py --series KXMLBGAME   # only these series (prefix match)
   python pairHard.py --all                # every Sports market (no allowlist) — noisy, for exploring
@@ -50,6 +52,9 @@ import sys
 from pathlib import Path
 
 import requests
+
+sys.path.insert(0, str(Path(__file__).parent / "sidecar"))   # share the unified sport catalog with the sidecar
+import sports as sports_cfg
 
 if hasattr(sys.stdout, "reconfigure"):   # Windows console: allow non-ASCII in prints
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -139,9 +144,14 @@ def main() -> None:
                     help="comma-separated series-ticker prefixes to keep (overrides the allowlist)")
     ap.add_argument("--all", action="store_true",
                     help="keep ALL Sports markets (no series allowlist) — noisy")
+    ap.add_argument("--classic", action="store_true",
+                    help="use the broad built-in CLASSIC_SERIES allowlist (every sport) instead of the ACTIVE "
+                         "sports from sports.py / HARDVEN_SPORTS")
     args = ap.parse_args()
 
     custom = [s.strip().upper() for s in args.series.split(",") if s.strip()]
+    # default scope = the ACTIVE sports' moneyline series (unified config); --classic = the broad built-in set
+    allowlist = CLASSIC_SERIES if args.classic else sports_cfg.moneyline_series()
     horizon = dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=args.days)
 
     print("[KALSHI] fetching open events…")
@@ -155,7 +165,7 @@ def main() -> None:
             return True
         if custom:
             return any(st.startswith(p) for p in custom)
-        return st in CLASSIC_SERIES
+        return st in allowlist
 
     entries, kept_series = [], {}
     for ev in sports:

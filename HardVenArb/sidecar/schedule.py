@@ -35,15 +35,17 @@ import httpx
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from pair_pinnacle import _pin_dt   # ISO-UTC start -> naive UTC datetime (reused so parsing can't drift)
+import sports as sports_cfg         # unified sport catalog (ids, names, durations, series)
 
 GUEST_BASE = os.environ.get("PINNACLE_GUEST_BASE", "https://guest.api.arcadia.pinnacle.com/0.1")
 GUEST_KEY = os.environ.get("PINNACLE_API_KEY", "CmX2KcMrXuFmNg6YFbmTxE0y9CIrOi0R")
 OUT = Path(__file__).resolve().parent.parent / "work_windows.json"
 
-SPORT_NAME = {3: "baseball", 33: "tennis"}
-# per-sport game length (minutes) used for the window's tail; over-estimating just keeps the bot open a touch
-# longer (safer for live arbs) than closing mid-game.
-DURATION = {"baseball": 210, "tennis": 180}
+# Pinnacle id -> name and name -> game-length (window tail). From the unified catalog (sports.py) so the sport
+# set lives in ONE place; over-estimating the duration just keeps the bot open a touch longer (safer for live
+# arbs) than closing mid-game.
+SPORT_NAME = sports_cfg.name_by_id()
+DURATION = sports_cfg.duration_by_name()
 DEFAULT_DURATION = 180
 
 
@@ -150,7 +152,8 @@ def _hm(secs: float | None) -> str:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--sports", default="3,33", help="Pinnacle sport ids (default 3=baseball,33=tennis)")
+    ap.add_argument("--sports", default=",".join(str(i) for i in sports_cfg.pinnacle_ids()),
+                    help="Pinnacle sport ids (default = active sports from sports.py / HARDVEN_SPORTS)")
     ap.add_argument("--horizon", type=int, default=36, help="plan this many hours ahead (default 36)")
     ap.add_argument("--lead", type=int, default=15, help="open this many min before a block's first game (default 15)")
     ap.add_argument("--trail", type=int, default=45, help="close this many min after the last game's end")

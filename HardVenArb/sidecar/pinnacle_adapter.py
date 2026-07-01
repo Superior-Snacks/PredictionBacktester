@@ -50,6 +50,7 @@ from typing import Optional
 import httpx
 
 from book_adapter import BookAdapter, BetResult, CatalogEntry, Selection
+import sports as sports_cfg   # unified sport catalog (active sport ids default the lifecycle set)
 
 REST_BASE = os.environ.get("PINNACLE_API_BASE", "https://api.arcadia.pinnacle.com/0.1")
 # GUEST API: same board structure (sports/leagues/matchups/markets, incl. price `designation`) served with ONLY
@@ -142,7 +143,9 @@ class PinnacleAdapter(BookAdapter):
         self._balance_currency = ""
         # LIFECYCLE: opt-in schedule-driven open/close of the browser (human session rhythm). Off = hold open.
         self._lifecycle_on = os.environ.get("PINNACLE_LIFECYCLE") == "1"
-        self._lifecycle_sports = [int(s) for s in os.environ.get("PINNACLE_LIFECYCLE_SPORTS", "3,33").split(",")
+        # default the lifecycle sport ids from the unified catalog (respects HARDVEN_SPORTS); env still overrides
+        _default_sports = ",".join(str(i) for i in sports_cfg.pinnacle_ids())
+        self._lifecycle_sports = [int(s) for s in os.environ.get("PINNACLE_LIFECYCLE_SPORTS", _default_sports).split(",")
                                   if s.strip().isdigit()]
 
         def _cfg_int(name: str, default: int) -> int:

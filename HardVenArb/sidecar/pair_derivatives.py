@@ -44,6 +44,7 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from pair_auto import _norm, _book_name, _team_sim, _kalshi_dt, fuzz   # proven name/date primitives
 from pair_pinnacle import _canon, _pin_dt                              # baseball aliases + ISO start parse
+import sports as sports_cfg                                           # unified sport catalog (spread/total series)
 
 KALSHI_BASE = "https://api.elections.kalshi.com/trade-api/v2"
 GUEST_BASE = os.environ.get("PINNACLE_GUEST_BASE", "https://guest.api.arcadia.pinnacle.com/0.1")
@@ -51,12 +52,9 @@ GUEST_KEY = os.environ.get("PINNACLE_API_KEY", "CmX2KcMrXuFmNg6YFbmTxE0y9CIrOi0R
 HERE = Path(__file__).resolve().parent
 OUT = HERE.parent / "derivative_pairs.json"
 
-# Kalshi series -> ("spread"|"total", Pinnacle sport id). Baseball=3, Tennis=33.
-KALSHI_SERIES = {
-    "KXMLBSPREAD": ("spread", 3), "KXMLBTOTAL": ("total", 3),
-    "KXKBOSPREAD": ("spread", 3), "KXKBOTOTAL": ("total", 3),
-    "KXATPGSPREAD": ("spread", 33), "KXATPGTOTAL": ("total", 33),
-}
+# Kalshi spread/total series -> ("spread"|"total", Pinnacle sport id), from the unified catalog (sports.py /
+# HARDVEN_SPORTS). Baseball=3, Tennis=33.
+KALSHI_SERIES = sports_cfg.derivative_series()
 SPORT_IDS = sorted({sid for _, sid in KALSHI_SERIES.values()})
 
 
