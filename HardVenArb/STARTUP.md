@@ -97,6 +97,67 @@ Healthy startup looks like:
 
 ---
 
+## Staged testing — bring it up one piece at a time
+
+Test **additively**: start from the baseline (everything optional OFF), verify one stage, then flip **exactly one** toggle and verify the next. Every feature has an independent switch, so a failure is unambiguous. Baseline = no lifecycle, no auto-pair (`PINNACLE_LIFECYCLE` and `HARDVEN_AUTO_PAIR` unset); default sports; hedge + keep-awake on (harmless).
+
+| # | Stage | Toggle | Off / baseline |
+|---|-------|--------|----------------|
+| 1 | Sport config | `HARDVEN_SPORTS` | unset = all enabled |
+| 2 | Schedule / blocks | `--lead/--max-blocks/--min-games` (preview) → `PINNACLE_LEAD_MIN/MAX_BLOCKS/MIN_GAMES` | defaults 15 / 4 / 1 |
+| 3 | Pairing | manual cmds → `HARDVEN_AUTO_PAIR=1` | manual |
+| 4 | Odds + telemetry | `--telemetry` (the bot) | — |
+| 5 | Hedge tape | `HARDVEN_HEDGE_MONITOR_SECS` | `0` = off |
+| 6 | Lifecycle | `PINNACLE_LIFECYCLE=1` | unset = held open |
+| 7 | Organic gestures | `PINNACLE_ORGANIC` | `0` = off |
+| 8 | Robustness | `HARDVEN_KEEP_AWAKE` (supervisor always on) | `0` = keep-awake off |
+
+**Stage 1 — Sport config** (no bot, no login).
+```powershell
+python sidecar/sports.py                      # then:  $env:HARDVEN_SPORTS="tennis"; python sidecar/sports.py
+```
+- ✅ Default → `active: ['baseball', 'tennis']  pinnacle ids: [3, 33]`; `=tennis` → `[33]`, derivatives only `KXATPG*`.
+- ❌ `unknown key(s) [...]` → typo in `HARDVEN_SPORTS`; empty list → check the `CATALOG` in `sports.py`.
+
+**Stage 2 — Schedule / block selection** (no bot, no login; guest API).
+```powershell
+python sidecar/schedule.py                     # vary: --max-blocks 2  --min-games 3  --lead 30
+```
+- ✅ Prints the blocks in **local** time with per-block match counts + `selected densest X of Y; dropped Z`, then a `NOW: OPEN/CLOSED` line. Changing the knobs visibly changes the selection.
+- ❌ `0 games` → guest API/network down or wrong sports; blocks look merged/split wrong → tune `--min-gap` / `--lead`.
+
+**Stage 3 — Pairing** (sidecar must be running for the moneyline fill's `/catalog`).
+```powershell
+python pairHard.py ; python sidecar/pair_pinnacle.py --write ; python sidecar/pair_derivatives.py --write
+```
+- ✅ `cross_pairs.json` entries have **non-blank** `hardven_yes_token`/`hardven_no_token`; `[OK] wrote N …`; `derivative_pairs.json` has lines. Then flip `HARDVEN_AUTO_PAIR=1` on the sidecar and watch `[PAIR SCHED] startup pairing run … complete`.
+- ❌ Tokens still blank → `pair_pinnacle` couldn't reach `/catalog` (sidecar down) or no name match (read the `unmatched` summary; try `--fuzzy`); `scaffold 0 kept` → no in-window Kalshi markets (`--days` wider).
+
+**Stage 4 — Odds + bot telemetry** (the core M0; needs the sidecar serving odds — logged-in post-KYC, or guest pre-match).
+```powershell
+dotnet run --project HardVenArb -- --telemetry
+```
+- ✅ `[KALSHI AUTH OK]`, `N manual pair(s) loaded`, `Kalshi books N/N | HardVen books N/N`, near-miss lines (`A` = dashboard, `N` = near-miss). `Open arbs: 0` while quiet is normal.
+- ❌ `HardVen books 0/N` → sidecar not serving odds / session not ready (check `/health` `session_ready`); `Kalshi books 0/N` → Kalshi WS/auth.
+
+**Stage 5 — Hedge tape.** Toggle `HARDVEN_HEDGE_MONITOR_SECS` (`0` = off, `30` = on).
+- ✅ With it on: a `CrossArbHedgeMonitor_*.csv` appears; after a window opens it gains rows (`OffsetMs`, `KalshiUnwindBid`); `python analyze_cross_arb.py` prints a §6 NET-EV board. With `=0`: **no** hedge CSV is written.
+- ❌ Hedge CSV present but empty → no arb window has opened yet (fine if quiet); analyzer §6 says "run the updated bot" → that CSV predates the within/hedge columns.
+
+**Stage 6 — Lifecycle.** Toggle `PINNACLE_LIFECYCLE=1` on the sidecar.
+- ✅ `[PINNACLE LIFECYCLE] N work window(s) planned`; the browser **OPENs** ~`PINNACLE_LEAD_MIN` before a block and `window CLOSED → dark` after; `/health` → `session.lifecycle` shows OPEN/dark + seconds. Cross-check against `python sidecar/schedule.py`.
+- ❌ Never opens → no windows in the horizon (Stage 2) or wrong sports; open 24/7 → `PINNACLE_LIFECYCLE` isn't `1`.
+
+**Stage 7 — Organic gestures.** Toggle `PINNACLE_ORGANIC` (default on; `0` = off). Watch the tab (headful / VNC).
+- ✅ Irregular idle gaps, **curved** mouse moves, multi-notch scrolls; no error spam. With `=0`: no movement, log says `organic activity OFF`.
+- ❌ `[error]` in the loop → a page/selector hiccup (best-effort — must never crash the loop; if it does, capture it).
+
+**Stage 8 — Robustness.** Supervisor is **always on**; test it by disturbing a feed. Keep-awake toggle `HARDVEN_KEEP_AWAKE` (default on, Windows).
+- ✅ Restart the sidecar (Ctrl+C + relaunch) while the bot runs → HardVen books go stale then **recover**, and the bot **stays up** (no `[SHUTDOWN]`). A real feed drop logs `[SUPERVISOR] <feed> feed … restarting (#n) in Xs`. Keep-awake logs `[KEEP-AWAKE] Suppressing system sleep`.
+- ❌ Bot prints `[SHUTDOWN]` on a feed drop → the old self-shutdown; should not happen now — capture the lines above it.
+
+---
+
 ## Daily refresh (new games appear, old ones settle)
 
 Just re-run step 2 — league discovery is dynamic (`GetLeagues`), so no id-wrangling:
@@ -217,12 +278,13 @@ cause is throttling/swapping (server) vs a network blip (not the server).
 | `HARDVEN_POLL_MS` | `3000` | **Bot:** how often the bot pulls the latest cached book from the sidecar. `/odds` is an instant cache read now, so this is cheap. (Quote *freshness* is set by `BOOKMAKER_REFRESH_SEC`, not this.) |
 | `HARDVEN_SPORTS` | all enabled | **Sidecar:** the active sports (comma keys, e.g. `baseball,tennis`) — one source for schedule/lifecycle + pairing. Catalog in `sidecar/sports.py`. |
 | `HARDVEN_FX_TO_USD` | `1.0` | **Bot:** USD per HardVen book-unit (EUR→USD size). `~1.08` for the EUR account; price is left unitless. Depth/capital/profit only. |
-| `HARDVEN_HEDGE_MONITOR_SECS` | `30` | **Bot:** how long after an arb opens to sample the Kalshi unwind price into `CrossArbHedgeMonitor_*.csv` (the failed-leg hedge tape). |
+| `HARDVEN_HEDGE_MONITOR_SECS` | `30` | **Bot:** seconds to sample the Kalshi unwind price into `CrossArbHedgeMonitor_*.csv` (the failed-leg hedge tape). **`0` = OFF** (no hedge CSV — clean baseline). |
 | `HARDVEN_KEEP_AWAKE` | `1` | **Bot:** Windows-only — suppress system sleep while running (the unattended-laptop fix). `0` to disable. |
 | `PINNACLE_LIFECYCLE` | unset | **Sidecar:** `1` = open the browser only during game windows, dark between (human rhythm). Unset = held open (M0/manual). |
 | `PINNACLE_LEAD_MIN` | `15` | **Sidecar:** open this many minutes before a block's first game (lifecycle). |
 | `PINNACLE_MAX_BLOCKS` | `4` | **Sidecar:** keep only the densest N game-blocks per day (0 = all). The "3–4 blocks where the most matches happen." |
 | `PINNACLE_MIN_GAMES` | `1` | **Sidecar:** skip a block with fewer than this many matches (no login for one isolated game). |
+| `PINNACLE_ORGANIC` | on | **Sidecar:** `0` = disable the human-like mouse/scroll activity in the login window (the session still holds via the REST keepalive). |
 | `HARDVEN_AUTO_PAIR` | unset | **Sidecar:** `1` = re-run the pairing pipeline at startup + daily (account-free). Off = pair manually (§2). |
 | `HARDVEN_PAIR_HOUR` | `5` | **Sidecar:** local hour for the daily auto-pair run. |
 | `HARDVEN_PAIR_STARTUP_DELAY` | `8` | **Sidecar:** seconds to wait before the startup auto-pair (lets the sidecar's `/catalog` server come up). |

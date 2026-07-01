@@ -110,10 +110,13 @@ public class CrossPlatformArbTelemetryStrategy
     }
 
     // How long after an arb opens to keep sampling the unwind price (covers the 6–12s realization delay plus a
-    // look at whether the position can be "fixed" back to break-even). HARDVEN_HEDGE_MONITOR_SECS overrides.
+    // look at whether the position can be "fixed" back to break-even). HARDVEN_HEDGE_MONITOR_SECS: a positive
+    // number overrides the 30s window; 0 = DISABLED (no hedge tape — a clean baseline / isolate other
+    // telemetry); unset or invalid = 30s default.
     private static readonly int HedgeHorizonMs =
-        int.TryParse(Environment.GetEnvironmentVariable("HARDVEN_HEDGE_MONITOR_SECS"), out var hs) && hs > 0
+        int.TryParse(Environment.GetEnvironmentVariable("HARDVEN_HEDGE_MONITOR_SECS"), out var hs) && hs >= 0
             ? hs * 1000 : 30_000;
+    private static readonly bool HedgeMonitorEnabled = HedgeHorizonMs > 0;
     private const int HedgeSampleIntervalMs = 200;   // throttle: at most one sample per pair per 200ms
 
     // Per-pair last-seen leg asks + when each last CHANGED — to attribute which side opened/closed a window.
@@ -207,7 +210,8 @@ public class CrossPlatformArbTelemetryStrategy
         }
 
         _csvWriterTask      = Task.Run(RunCsvWriterAsync);
-        _hedgeCsvWriterTask = Task.Run(RunHedgeCsvWriterAsync);
+        // skip the hedge CSV entirely when disabled (HARDVEN_HEDGE_MONITOR_SECS=0) so no empty file is written
+        _hedgeCsvWriterTask = HedgeMonitorEnabled ? Task.Run(RunHedgeCsvWriterAsync) : Task.CompletedTask;
         DebugLog.Discovery($"CrossPlatformArbTelemetryStrategy: initialized with {pairs.Count} pairs, threshold={arbThreshold}");
         if (_debugPrices)
             Console.WriteLine("[CROSS] HARDVEN_DEBUG_PRICES=1 — dumping the full 4-leg price breakdown on each arb open.");
@@ -617,7 +621,7 @@ public class CrossPlatformArbTelemetryStrategy
         // On a fresh arb open, (re)arm a monitor anchored to this window's StartTime. Then — independent of
         // whether the window is still open (it usually closes in <1s) — sample the Kalshi unwind price for
         // HedgeHorizonMs so the analyzer can price the worst-case hedge if the HardVen leg failed to fill.
-        if (windowJustOpened is { } openedAt)
+        if (HedgeMonitorEnabled && windowJustOpened is { } openedAt)
         {
             _hedgeMonitors[pair.PairId] = new HedgeMonitor
             {

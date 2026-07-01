@@ -63,7 +63,7 @@ using PredictionBacktester.Engine.LiveExecution;
 //  Optional env vars (runtime / telemetry):
 //    HARDVEN_SIDECAR_URL           HardVen odds sidecar base URL (default http://127.0.0.1:8787)
 //    HARDVEN_FX_TO_USD             USD per HardVen book-unit for EUR→USD size (default 1.0; ~1.08 for the EUR account)
-//    HARDVEN_HEDGE_MONITOR_SECS    seconds to sample the post-open Kalshi unwind price for the hedge tape (default 30)
+//    HARDVEN_HEDGE_MONITOR_SECS    seconds to sample the post-open Kalshi unwind price for the hedge tape (default 30; 0 = off)
 //    HARDVEN_KEEP_AWAKE            1 = suppress system sleep while running (default 1, Windows-only); 0 to disable
 //
 //  cross_pairs.json: verified Kalshi↔HardVen market pairs; auto-populated on scan,

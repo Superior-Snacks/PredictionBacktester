@@ -173,9 +173,14 @@ class PinnacleBrowserSession:
             await self._page.goto(self._login_url, wait_until="domcontentloaded", timeout=60_000)
         except Exception as ex:
             print(f"[PINNACLE SESSION] initial navigation slow/failed ({ex}); the window is open — browse manually.")
-        from organic import OrganicActivity
-        self._organic = OrganicActivity(self._page, browse_urls=self._browse_urls, max_gap=self._activity_sec)
-        self._activity_task = asyncio.create_task(self._organic.run())   # human-like idle (replaces the nudge)
+        # Human-like idle activity (replaces the old nudge). PINNACLE_ORGANIC=0 disables it — the session still
+        # holds via the authed-REST keepalive, so this is a clean toggle for isolating the gestures in testing.
+        if os.environ.get("PINNACLE_ORGANIC") != "0":
+            from organic import OrganicActivity
+            self._organic = OrganicActivity(self._page, browse_urls=self._browse_urls, max_gap=self._activity_sec)
+            self._activity_task = asyncio.create_task(self._organic.run())
+        else:
+            print("[PINNACLE SESSION] PINNACLE_ORGANIC=0 — organic activity OFF (session held by REST keepalive only).")
         self._status_task = asyncio.create_task(self._status_loop())
         print("\n" + "=" * 78)
         print("[PINNACLE SESSION] LOG IN in the Pinnacle window that just opened.")
