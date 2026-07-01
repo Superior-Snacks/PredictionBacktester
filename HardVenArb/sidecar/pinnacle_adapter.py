@@ -653,17 +653,24 @@ class PinnacleAdapter(BookAdapter):
         market its type/period/status/price-count/points-flag/designations. Single-writer (paho thread)."""
         try:
             rec = data.get("rec") or {}
+            full = os.environ.get("PINNACLE_WS_DUMP_FULL") == "1"
             mkts = []
             for mk in rec.get("markets") or []:
                 prices = mk.get("prices") or []
                 mkts.append({"type": mk.get("type"), "period": mk.get("period"), "status": mk.get("status"),
+                             "la": mk.get("la"),               # line-active flag — leading 'currently offline' suspect
+                             "keys": sorted(mk.keys()),        # ALL market fields, to spot any OTHER suspend signal
                              "n": len(prices),
                              "pts": any(pr.get("points") is not None for pr in prices),
-                             "desig": [pr.get("designation") for pr in prices]})
-            line = json.dumps({"ts": round(time.time(), 3), "op": data.get("op"), "lid": lid, "mid": mid,
-                               "units": rec.get("units"), "parentId": rec.get("parentId"),
-                               "names": [p.get("name") for p in (rec.get("participants") or [])],
-                               "markets": mkts}, default=str)
+                             "desig": [pr.get("designation") for pr in prices],
+                             "price_keys": sorted(prices[0].keys()) if prices else []})  # per-price fields (per-price status?)
+            out = {"ts": round(time.time(), 3), "op": data.get("op"), "lid": lid, "mid": mid,
+                   "units": rec.get("units"), "parentId": rec.get("parentId"),
+                   "names": [p.get("name") for p in (rec.get("participants") or [])],
+                   "markets": mkts}
+            if full:
+                out["raw"] = rec                               # PINNACLE_WS_DUMP_FULL=1: complete record, deep inspection
+            line = json.dumps(out, default=str)
             if self._ws_dump_fh is None:
                 self._ws_dump_fh = open(self._ws_dump_path, "a", encoding="utf-8")
             self._ws_dump_fh.write(line + "\n")

@@ -24,7 +24,8 @@ the CSV's pre-computed columns. Reported two ways:
 NET EV (§6) — the failed-HardVen-leg HEDGE model. Models Kalshi-first execution: you commit the fast,
 reversible Kalshi leg at OPEN, then fire the slow, irreversible HardVen leg. If HardVen held within the arb
 long enough (HardVenLegWithinMs > --hardven-secs) you complete → WIN; if it left first you're naked on Kalshi
-and must UNWIND it (sell the held leg back at the bid) at --hedge-secs. The unwind is priced from the
+and must UNWIND it (sell the held leg back at the bid) ~when it left the arb (≈ Pinnacle auto-cancels the bet)
++ --hedge-react-secs reaction, per window, capped at --hedge-secs. The unwind is priced from the
 CrossArbHedgeMonitor_*.csv tape (per-arb post-open Kalshi bid trajectory). NET EV = Σ(wins) − Σ(miss hedge
 cost) — the per-attempt expected value, the number that says whether the strategy survives its miss rate. A
 HEDGE BUDGET line puts the MEASURED avg per-share unwind next to the break-even floor `−(wins/misses)×edge`,
@@ -138,6 +139,9 @@ def main() -> None:
     ap.add_argument("--pinnacle-bankroll", type=float, default=50.0, help="HardVen/Pinnacle bankroll (EUR)")
     ap.add_argument("--kalshi-bankroll", type=float, default=422.0, help="Kalshi bankroll (USD)")
     ap.add_argument("--min-edge", type=float, default=0.0, help="ignore windows with edge below this (e.g. 0.005)")
+    ap.add_argument("--max-edge", type=float, default=0.0,
+                    help="ignore windows with edge ABOVE this (0 = off) — a cross-venue edge >~3-5%% is almost "
+                         "always a STALE/suspended leg, not a real arb; e.g. --max-edge 0.03 drops the phantoms")
     ap.add_argument("--hardven-secs", type=float, default=8.0,
                     help="SECONDS the slow HardVen leg needs to capture — the window must be open this long, OR "
                          "the HardVen leg already held this long when Kalshi closes it (default 8 = measured "
@@ -155,6 +159,10 @@ def main() -> None:
                          "conservative (longest-exposure) estimate.")
     ap.add_argument("--max-bet", type=float, default=300.0,
                     help="§6 ONLY: max $ capital deployed per single arb (per-bet cap, separate from bankroll; default 300)")
+    ap.add_argument("--hedge-react-secs", type=float, default=1.0,
+                    help="§6: unwind the Kalshi leg this many SECONDS after the HardVen leg LEAVES the arb (≈ when "
+                         "Pinnacle auto-cancels the bet), per window, capped at --hedge-secs. Default 1 — more "
+                         "realistic than a fixed delay. Set ≥ --hedge-secs to force the fixed worst-case model.")
     a = ap.parse_args()
     hardven_ms, kalshi_ms = a.hardven_secs * 1000, a.kalshi_secs * 1000
 
@@ -184,7 +192,7 @@ def main() -> None:
     cap_rows, reasons = [], Counter()
     for r in rows:
         edge = _f(r.get("NetProfitPerShare"))
-        if edge < a.min_edge:
+        if edge < a.min_edge or (a.max_edge and edge > a.max_edge):   # --max-edge drops stale-leg phantoms
             continue
         ok, why = capturable(r, hardven_ms, kalshi_ms, use_within)
         reasons[("capturable: " + why) if ok else "not capturable"] += 1
@@ -290,14 +298,15 @@ def main() -> None:
         print("=" * 78)
         return
     hedge = group_hedge(load(hpath))
-    target_ms = a.hedge_secs * 1000
-    print(f"   hedge tape: {os.path.basename(hpath)}  |  realize HardVen miss at {a.hedge_secs:g}s  |  per-bet cap ${a.max_bet:g}")
+    react_ms, cap_ms = a.hedge_react_secs * 1000, a.hedge_secs * 1000
+    real_lbl = f"cancel+{a.hedge_react_secs:g}s (≤{a.hedge_secs:g}s)"   # per-window realization: leg-left + react, capped
+    print(f"   hedge tape: {os.path.basename(hpath)}  |  realize HardVen miss at {real_lbl}  |  per-bet cap ${a.max_bet:g}")
 
     wins, misses = [], []
     no_entry = no_hedge_data = recovered = 0
     for r in rows:
         edge = _f(r.get("NetProfitPerShare"))
-        if edge < a.min_edge:
+        if edge < a.min_edge or (a.max_edge and edge > a.max_edge):   # --max-edge drops stale-leg phantoms
             continue
         hw, kw = _f(r.get("HardVenLegWithinMs")), _f(r.get("KalshiLegWithinMs"))
         # Kalshi-first: you commit Kalshi at open. If it didn't even hold kalshi-secs, the entry price is
@@ -327,6 +336,8 @@ def main() -> None:
         if not samples:
             no_hedge_data += 1
             continue
+        # realize the unwind at (when this leg LEFT the arb ≈ Pinnacle cancel) + react, capped at the worst case
+        target_ms = min(hw + react_ms, cap_ms)
         s, actual_ms = sample_at(samples, target_ms)
         entry = _f(s.get("EntryKalshiAsk")) or kp
         unwind = _f(s.get("KalshiUnwindBid"))
@@ -382,7 +393,7 @@ def main() -> None:
 
     if misses:
         pnls = [m["pnl_share"] for m in misses]
-        print(f"\n   UNWIND @ {a.hedge_secs:g}s (per share):  avg {st.mean(pnls):+.4f}   median {st.median(pnls):+.4f}"
+        print(f"\n   UNWIND @ {real_lbl} (per share):  avg {st.mean(pnls):+.4f}   median {st.median(pnls):+.4f}"
               f"   best {max(pnls):+.4f}   worst {min(pnls):+.4f}")
         # How the hedge DID vs how good it HAD to be — per window (size-agnostic). The misses' avg unwind P/L
         # must clear the floor the wins can fund: floor = -(wins/misses) × avg winning edge. (NET EV above is
@@ -398,10 +409,10 @@ def main() -> None:
         if losers and fixable:
             fix_secs = sorted((m["fix_ms"] - m["at_ms"]) / 1000 for m in fixable)
             print(f"   BREAK-EVEN FIX:  {len(fixable)}/{len(losers)} loss-positions later recovered to ≥ break-even "
-                  f"(median +{fix_secs[len(fix_secs)//2]:.1f}s after unwind) → for these, WAITING beats unwinding at {a.hedge_secs:g}s.")
+                  f"(median +{fix_secs[len(fix_secs)//2]:.1f}s after unwind) → for these, WAITING beats unwinding at {real_lbl}.")
         elif losers:
             print(f"   BREAK-EVEN FIX:  none of the {len(losers)} loss-positions recovered within the tape "
-                  f"→ the {a.hedge_secs:g}s unwind was the floor (hold-to-settlement is the only 'fix').")
+                  f"→ the {real_lbl} unwind was the floor (hold-to-settlement is the only 'fix').")
 
     by_day = defaultdict(lambda: [0, 0, 0.0, 0.0])    # date → [n_win, n_miss, win_profit, hedge_pnl]
     for w in wins:
