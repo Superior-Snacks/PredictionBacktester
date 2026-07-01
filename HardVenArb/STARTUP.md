@@ -1,8 +1,9 @@
 # HardVenArb — Startup Protocol
 
-Kalshi ↔ bookmaker.eu cross-arb telemetry bot. Runs **locally on Windows** (the bookmaker side is tethered
-to a real Chrome to get past Cloudflare — not the Linux server). Three pieces: **sidecar** (browser +
-odds API), **pairHard/pair_auto** (build the pair list), **the C# bot** (Kalshi WS + telemetry).
+Kalshi ↔ sportsbook cross-arb telemetry bot (current venue **Pinnacle**; bookmaker.eu supported as an
+alternate). Runs **locally on Windows** (the Pinnacle side runs a managed Chrome login window on a
+residential IP). Three pieces: **sidecar** (browser + odds API), **pairHard → pair_pinnacle →
+pair_derivatives** (build the pair list), **the C# bot** (Kalshi WS + telemetry).
 
 ---
 
@@ -55,8 +56,10 @@ python -m uvicorn app:app --port 8787
 - Readiness check: `Invoke-RestMethod "http://127.0.0.1:8787/health" | ConvertTo-Json -Depth 4` → `session_ready` + a masked `session` block.
 - Knobs: `PINNACLE_HEADLESS=1` (no window — only after a profile exists & login persists), `PINNACLE_CHANNEL` (default `chrome`), `PINNACLE_USER_DATA_DIR`, `PINNACLE_BROWSER_ACTIVITY_SEC` (default 200).
 - **Pairing needs NO login.** `catalog()`/`pair_pinnacle.py` use Pinnacle's GUEST API (public key, no session), so you can build the pair list anytime — even before logging into the window. The browser login is only for the live odds feed. (If you ever see `[PAIR] 0 Pinnacle games in /catalog`, the sidecar isn't running or `PINNACLE_CATALOG_SPORTS`/`PINNACLE_CATALOG_LEAGUES` aren't set — it is NOT a login problem.)
-- **Derivative lines (spread/total):** `python sidecar/pair_derivatives.py --write` pairs Kalshi spread/total ↔ Pinnacle handicap/over-under (MLB/KBO/ATP) into `derivative_pairs.json` (guest API, no login). The bot loads it at startup alongside `cross_pairs.json` and the sidecar resolves the `{lid}:{mid}:{type}:{points}:{side}` tokens. Hot-reload watches `cross_pairs.json` only → re-run the pairer + restart to refresh lines.
-- **Lifecycle (human session rhythm):** set **`PINNACLE_LIFECYCLE=1`** to have the sidecar OPEN the browser only during game windows (computed by `schedule.py` from the slate) and go DARK between them / overnight — instead of holding it open 24/7. `PINNACLE_LIFECYCLE_SPORTS` (default `3,33` = baseball,tennis). Lifecycle state shows on `/health` under `session.lifecycle`. Default (unset) = browser stays open (M0/manual). Caveat: a long dark gap may log the Pinnacle session out → the next window needs a manual re-login (fine while login is manual).
+- **Derivative lines (spread/total):** `python sidecar/pair_derivatives.py --write` pairs Kalshi spread/total ↔ Pinnacle handicap/over-under (MLB/KBO/ATP) into `derivative_pairs.json` (guest API, no login). The bot loads it at startup alongside `cross_pairs.json` and the sidecar resolves the `{lid}:{mid}:{type}:{points}:{side}` tokens. **Hot-reloaded alongside `cross_pairs.json` (both files, every ~15 min)** → a re-pair refreshes the derivative lines live, no restart.
+- **Sports config (one place):** **`HARDVEN_SPORTS`** (comma keys, e.g. `baseball,tennis` or just `tennis`; unset = all enabled) is the single source of which sports run — it drives the schedule/lifecycle sport ids AND the pairing (moneyline + derivatives) in lockstep. Add/edit a sport in `sidecar/sports.py` (Pinnacle id, duration, Kalshi series). Everything downstream follows.
+- **Lifecycle (human session rhythm):** set **`PINNACLE_LIFECYCLE=1`** to have the sidecar OPEN the browser only during game windows (computed by `schedule.py` from the slate) and go DARK between them / overnight — instead of holding it open 24/7. Sport ids default from `HARDVEN_SPORTS` (override `PINNACLE_LIFECYCLE_SPORTS`). **Window shaping:** `PINNACLE_LEAD_MIN` (open this many min before a block's first game, default 15), `PINNACLE_MAX_BLOCKS` (keep only the densest N blocks, default 4; 0 = all), `PINNACLE_MIN_GAMES` (skip blocks with fewer matches, default 1). Preview with `python sidecar/schedule.py` (shows the selected blocks + match counts). Lifecycle state shows on `/health` under `session.lifecycle`. Default (unset) = browser stays open (M0/manual). Caveat: a long dark gap may log the Pinnacle session out → the next window needs a manual re-login (fine while login is manual).
+- **Auto-pairing (continuous runs):** set **`HARDVEN_AUTO_PAIR=1`** to have the sidecar re-run the whole pairing pipeline (scaffold → moneyline fill → derivatives) at startup **and once per day** at `HARDVEN_PAIR_HOUR` (local hour, default 5) — so a bot left running gets fresh pairs each day without manual steps. Account-free (Kalshi public + Pinnacle guest); respects `HARDVEN_SPORTS`; results hot-reload into the bot. Off by default (manual pairing below is unchanged).
 - **Currency / FX:** the Pinnacle account is **EUR**, Kalshi is **USD**. Arb *detection* is unaffected (it compares unitless probabilities — `1/odds` and the Kalshi 0–1 price), but *depth/capital/profit* mix EUR-payout units with USD. Set **`HARDVEN_FX_TO_USD`** (USD per book-unit, e.g. `1.08`) so HardVen size is converted to USD-equivalent (price is left unitless). Default `1.0` = a USD book. Update it occasionally; the rate moves <1%/day.
 - **Availability:** the adapter tracks each moneyline's status — a market that goes OFFLINE/suspended (status not `open`/`null`, or the moneyline drops out of the pushed record) is marked `suspended` → the C# clears that book so no arb fires on it. Run with `PINNACLE_DEBUG_STATUS=1` to log offline/suspend transitions (and capture the exact offline status string). Note: tennis "(Games)" tabs show "moneyline unavailable" because that derivative simply has no moneyline market (only spread/total) — pairing already excludes it.
 
@@ -64,12 +67,14 @@ python -m uvicorn app:app --port 8787
 
 ```powershell
 cd HardVenArb
-python pairHard.py                              # scaffold Kalshi side: all in-season moneylines (CLASSIC_SERIES)
-python sidecar/pair_auto.py --fuzzy --write     # fill the bookmaker side (soccer 3-way + fuzzy team names)
+python pairHard.py                              # scaffold Kalshi side: the ACTIVE sports' moneylines (HARDVEN_SPORTS)
+python sidecar/pair_pinnacle.py --write         # fill the Pinnacle side (team/player match, guest /catalog)
+python sidecar/pair_derivatives.py --write      # spread/total → derivative_pairs.json (independent, guest API)
 ```
-- `pairHard.py` **overwrites** `cross_pairs.json` with fresh blanks → **always run `pair_auto` right after.**
-- `--days 20` widens the window; `--series KX…,KX…` narrows to specific sports.
-- `pair_auto` preview (no `--write`) first if you want to eyeball matches; check the `unmatched` summary.
+- `pairHard.py` **overwrites** `cross_pairs.json` with fresh blanks → **always run `pair_pinnacle.py` right after.**
+- `pairHard.py` scopes to the active sports (`HARDVEN_SPORTS` / `sports.py`); `--classic` = the broad built-in allowlist (every sport), `--series KX…,KX…` = specific series, `--days 20` widens the settle window.
+- `pair_pinnacle.py` preview (no `--write`) first if you want to eyeball matches; check the `unmatched` summary. Add `--fuzzy` for sub-100 name variants (tagged `"fuzzy": true`).
+- **Or skip all three:** set `HARDVEN_AUTO_PAIR=1` on the sidecar (see §1-PIN) and it runs this pipeline at startup + daily.
 
 ## 3. Run the bot  (Terminal 3 — or reuse Terminal 2)
 
@@ -86,8 +91,9 @@ Healthy startup looks like:
 [TELEMETRY] --- TOP 10 CLOSEST ... ---   (near-miss list; "Open arbs: 0" is normal)
 ```
 - Keys: **`N`** = near-miss report, **`A`** = status dashboard.
-- Windows are logged to `CrossArbTelemetry_*.csv` (repo root).
-- The bot **hot-reloads `cross_pairs.json` every 30s**, so you can re-run pair_auto without restarting it.
+- Output (repo root): `CrossArbTelemetry_*.csv` (every arb window) + `CrossArbHedgeMonitor_*.csv` (post-open Kalshi unwind trajectory for the failed-leg hedge model — feeds `analyze_cross_arb.py` §6).
+- The bot **hot-reloads `cross_pairs.json` + `derivative_pairs.json` every ~15 min**, so a re-pair (manual `pair_pinnacle.py` / `pair_derivatives.py`, or `HARDVEN_AUTO_PAIR`) is picked up without a restart.
+- **Robustness (unattended runs):** each feed is supervised — a WS drop / machine sleep-wake / sidecar blip **restarts** that feed instead of shutting the bot down; only a double-Ctrl+C quits. On Windows the bot also suppresses system sleep while running (`HARDVEN_KEEP_AWAKE=0` to disable).
 
 ---
 
@@ -95,8 +101,9 @@ Healthy startup looks like:
 
 Just re-run step 2 — league discovery is dynamic (`GetLeagues`), so no id-wrangling:
 ```powershell
-python pairHard.py ; python sidecar/pair_auto.py --fuzzy --write
+python pairHard.py ; python sidecar/pair_pinnacle.py --write ; python sidecar/pair_derivatives.py --write
 ```
+Or set `HARDVEN_AUTO_PAIR=1` on the sidecar and it does this at startup + daily at `HARDVEN_PAIR_HOUR` (§1-PIN) — no manual refresh.
 
 ---
 
@@ -208,6 +215,17 @@ cause is throttling/swapping (server) vs a network blip (not the server).
 |-----|---------|------|
 | `HARDVEN_QUOTE_MAX_AGE_MS` | `30000` | **Bot:** a HardVen quote older than this (sidecar `ts`) is treated as STALE → its book is cleared so no phantom arb can fire after a session drop. |
 | `HARDVEN_POLL_MS` | `3000` | **Bot:** how often the bot pulls the latest cached book from the sidecar. `/odds` is an instant cache read now, so this is cheap. (Quote *freshness* is set by `BOOKMAKER_REFRESH_SEC`, not this.) |
+| `HARDVEN_SPORTS` | all enabled | **Sidecar:** the active sports (comma keys, e.g. `baseball,tennis`) — one source for schedule/lifecycle + pairing. Catalog in `sidecar/sports.py`. |
+| `HARDVEN_FX_TO_USD` | `1.0` | **Bot:** USD per HardVen book-unit (EUR→USD size). `~1.08` for the EUR account; price is left unitless. Depth/capital/profit only. |
+| `HARDVEN_HEDGE_MONITOR_SECS` | `30` | **Bot:** how long after an arb opens to sample the Kalshi unwind price into `CrossArbHedgeMonitor_*.csv` (the failed-leg hedge tape). |
+| `HARDVEN_KEEP_AWAKE` | `1` | **Bot:** Windows-only — suppress system sleep while running (the unattended-laptop fix). `0` to disable. |
+| `PINNACLE_LIFECYCLE` | unset | **Sidecar:** `1` = open the browser only during game windows, dark between (human rhythm). Unset = held open (M0/manual). |
+| `PINNACLE_LEAD_MIN` | `15` | **Sidecar:** open this many minutes before a block's first game (lifecycle). |
+| `PINNACLE_MAX_BLOCKS` | `4` | **Sidecar:** keep only the densest N game-blocks per day (0 = all). The "3–4 blocks where the most matches happen." |
+| `PINNACLE_MIN_GAMES` | `1` | **Sidecar:** skip a block with fewer than this many matches (no login for one isolated game). |
+| `HARDVEN_AUTO_PAIR` | unset | **Sidecar:** `1` = re-run the pairing pipeline at startup + daily (account-free). Off = pair manually (§2). |
+| `HARDVEN_PAIR_HOUR` | `5` | **Sidecar:** local hour for the daily auto-pair run. |
+| `HARDVEN_PAIR_STARTUP_DELAY` | `8` | **Sidecar:** seconds to wait before the startup auto-pair (lets the sidecar's `/catalog` server come up). |
 | `BOOKMAKER_REFRESH_SEC` | `2` | **Sidecar:** background loop cadence — how often it re-fetches the active leagues' schedules into the cache. This is the real quote-freshness floor. |
 | `BOOKMAKER_SCHEDULE_CHUNK_LEAGUES` | `4` | **Sidecar:** leagues per concurrent GetSchedule request. The background fetch splits the active leagues into chunks fired in parallel (Promise.all) so wall-time ≈ slowest chunk, not sum. Lower = more parallelism (watch for rate-limits). |
 | `BOOKMAKER_ACTIVE_TTL_SEC` | `120` | **Sidecar:** a league stops being refreshed if no `/odds` request has asked for it in this long (keeps the background fetch scoped to what the bot actually wants). |
@@ -230,10 +248,10 @@ cause is throttling/swapping (server) vs a network blip (not the server).
 
 ## Gotchas (all learned the hard way)
 
-- **Keep the machine awake.** Sleep drops the Kalshi WS and the bot shuts down (a feed exiting cancels everything). Disable sleep: `powercfg /change standby-timeout-ac 0`.
+- **Machine sleep / feed drops are now survived.** The bot suppresses system sleep while running (Windows, `HARDVEN_KEEP_AWAKE`) and each feed is supervised — a WS drop / sleep-wake / sidecar blip **restarts** the feed instead of shutting the bot down (only a double-Ctrl+C quits). Belt-and-suspenders on a laptop: `powercfg /change standby-timeout-ac 0`.
 - **uvicorn does NOT hot-reload Python.** Edited the adapter/parser? Restart the sidecar.
 - **Bookmaker session expires** (Cloudflare `cf_clearance`/`__cf_bm`, hours). The sidecar now **auto-recovers**: a keep-alive ping every `BOOKMAKER_KEEPALIVE_SEC` keeps it warm, and any odds 401/403/429/5xx fires a cooldown-guarded page reload that re-clears the *managed* challenge and re-captures `rtqname` — no manual click needed for the common case. Only an **interactive** challenge (captcha) needs a human (VNC). The Kalshi side keeps running regardless.
 - **Stale HardVen quotes can't make phantom arbs anymore.** If the bookmaker side freezes (session dead, page mid-recovery), the sidecar re-serves the last quote with a frozen `ts`; the bot treats any quote older than `HARDVEN_QUOTE_MAX_AGE_MS` (30s) as stale and **clears that book** (logs `[HARDVEN] WARNING: N/M quotes STALE…`, then `…fresh again` on recovery). So a long run goes *quiet* during an outage instead of logging fat fakes — telemetry stays trustworthy. (Pre-2026-06-19 CSVs predate this fix and are poisoned.)
-- **`pairHard` overwrites `cross_pairs.json`** (fresh blanks) → re-run `pair_auto` after, every time.
+- **`pairHard` overwrites `cross_pairs.json`** (fresh blanks) → re-run `pair_pinnacle.py` after, every time (or use `HARDVEN_AUTO_PAIR`).
 - **Fuzzy pairs are tagged `"fuzzy": true`** (MLB/WNBA/KBO/cricket team-name variants). They're fine for telemetry; the settlement back-test must validate them before any real-money M1.
 - **Telemetry only.** No orders are placed (`--telemetry`). "Open arbs" that sit open for tens of seconds on thin/obscure markets are usually stale-quote phantoms, not executable — observe, don't trust.

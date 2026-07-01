@@ -60,11 +60,19 @@ using PredictionBacktester.Engine.LiveExecution;
 //                               WebSocket feed connects directly (no proxy).
 //                               Omit if running from an unrestricted IP (e.g. US cloud server).
 //
+//  Optional env vars (runtime / telemetry):
+//    HARDVEN_SIDECAR_URL           HardVen odds sidecar base URL (default http://127.0.0.1:8787)
+//    HARDVEN_FX_TO_USD             USD per HardVen book-unit for EUR→USD size (default 1.0; ~1.08 for the EUR account)
+//    HARDVEN_HEDGE_MONITOR_SECS    seconds to sample the post-open Kalshi unwind price for the hedge tape (default 30)
+//    HARDVEN_KEEP_AWAKE            1 = suppress system sleep while running (default 1, Windows-only); 0 to disable
+//
 //  cross_pairs.json: verified Kalshi↔HardVen market pairs; auto-populated on scan,
 //                    must be non-empty for arb detection to fire.
+//                    (Sidecar-side pairing + the unattended feed supervisor / keep-awake are documented in STARTUP.md.)
 //
-//  Output: CrossArbTelemetry_*.csv   — all detected arb windows (always)
-//          CrossArbExecution_*.csv   — order execution results   (when executor active)
+//  Output: CrossArbTelemetry_*.csv    — all detected arb windows (always)
+//          CrossArbHedgeMonitor_*.csv — post-open Kalshi unwind trajectory for the failed-leg hedge model (analyze_cross_arb.py §6)
+//          CrossArbExecution_*.csv    — order execution results (when executor active)
 // ══════════════════════════════════════════════════════════════════════════════
 
 // ══════════════════════════════════════════════════════════════════════════════
