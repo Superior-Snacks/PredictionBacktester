@@ -184,7 +184,9 @@ def main() -> None:
     for o, c, g in windows:
         live = "  <== NOW" if o <= now <= c else ""
         dur = _hm((c - o).total_seconds())
-        print(f"   {_local(o):%a %d %b %H:%M} -> {_local(c):%H:%M}  ({dur}, {g} match{'es' if g != 1 else ''}){live}")
+        lo, lc = _local(o), _local(c)
+        c_fmt = f"{lc:%H:%M}" if lc.date() == lo.date() else f"{lc:%a %d %b %H:%M}"   # show date if it spills to another day
+        print(f"   {lo:%a %d %b %H:%M} -> {c_fmt}  ({dur}, {g} match{'es' if g != 1 else ''}){live}")
 
     state, secs = status(windows, now)
     if state == "OPEN":
