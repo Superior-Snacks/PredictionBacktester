@@ -136,9 +136,11 @@ public class KalshiWebsocketFeed
                     ArrayPool<byte>.Shared.Return(buf);
                 }
             }
-            catch (OperationCanceledException) { break; }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }  // real shutdown only
             catch (Exception ex)
             {
+                // includes a socket-abort OperationCanceledException (ct NOT cancelled — e.g. after machine
+                // sleep/wake): treat as transient and RECONNECT, never exit (exiting used to kill the whole bot).
                 Console.WriteLine($"[KALSHI WS ERROR] {ex.GetType().Name}: {ex.Message} — reconnecting in 5s...");
                 DebugLog.Feed($"KalshiWebsocketFeed exception: {ex}");
             }

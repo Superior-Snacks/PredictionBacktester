@@ -880,43 +880,19 @@ _ = Task.Run(async () =>
     catch (Exception ex) { Console.WriteLine($"[BOOK REFRESH ERROR] {ex.Message}"); }
 });
 
-var kalshiWsTask = Task.Run(async () =>
-{
-    try { await kalshiFeed.RunAsync(cts.Token); }
-    catch (Exception ex)
-    {
-        Console.WriteLine($"[FATAL] Kalshi feed crashed: {ex.Message}");
-        DebugLog.Write($"Kalshi feed exception: {ex}");
-    }
-    finally
-    {
-        if (!cts.IsCancellationRequested)
-        {
-            Console.WriteLine("[SHUTDOWN CAUSE] Kalshi feed returned on its own (not a signal) — this triggered the shutdown.");
-            cts.Cancel();
-        }
-    }
-});
+// Keep the machine awake for unattended day-long runs (laptop residential deploy). Windows-only; no-op
+// elsewhere; HARDVEN_KEEP_AWAKE=0 disables. Released after the feeds stop.
+bool keepAwakeOn = (Environment.GetEnvironmentVariable("HARDVEN_KEEP_AWAKE") ?? "1") != "0";
+var keepAwakeTask = keepAwakeOn ? KeepAwake.RunAsync(cts.Token) : Task.CompletedTask;
 
-var hardvenWsTask = Task.Run(async () =>
-{
-    try { await hardvenFeed.RunAsync(cts.Token); }
-    catch (Exception ex)
-    {
-        Console.WriteLine($"[FATAL] HardVen feed crashed: {ex.Message}");
-        DebugLog.Write($"HardVen feed exception: {ex}");
-    }
-    finally
-    {
-        if (!cts.IsCancellationRequested)
-        {
-            Console.WriteLine("[SHUTDOWN CAUSE] HardVen feed returned on its own (not a signal) — this triggered the shutdown.");
-            cts.Cancel();
-        }
-    }
-});
+// Feed SUPERVISORS: a feed that returns or throws while we are NOT shutting down is RESTARTED (capped backoff)
+// instead of cancelling the whole bot. Survives WS drops, machine sleep/wake, and sidecar blips across a
+// day-long run. Only a deliberate cts.Cancel() (double Ctrl+C) ends the run now.
+var kalshiWsTask  = Task.Run(() => SuperviseFeedAsync("Kalshi",  kalshiFeed.RunAsync,  cts.Token));
+var hardvenWsTask = Task.Run(() => SuperviseFeedAsync("HardVen", hardvenFeed.RunAsync, cts.Token));
 
 await Task.WhenAll(kalshiWsTask, hardvenWsTask);
+try { await keepAwakeTask; } catch { /* releases sleep-suppression in its own finally */ }
 
 DebugLog.Write("WS feeds stopped — beginning shutdown sequence");
 try { await telemetry.ShutdownAsync(); }
@@ -983,4 +959,89 @@ static async Task CheckHardVenProxyAsync(string socksProxy, bool isLive)
         Console.WriteLine($"[PROXY CHECK WARN] localIP={localIp} proxyIP={proxyIp} — same IP! Proxy may not be tunneling traffic");
 }
 
+// Restart-loop wrapper for a WS/poll feed: run it, and if it returns or throws while we are NOT shutting down,
+// restart it with capped exponential backoff (a healthy long run resets the backoff). A feed that returns
+// IMMEDIATELY and cleanly a few times = disabled/misconfigured (e.g. HardVen with no sidecar URL) → stop
+// supervising just that feed (the bot keeps running the other side). Only cancellation of `token` ends it.
+static async Task SuperviseFeedAsync(string name, Func<CancellationToken, Task> runAsync, CancellationToken token)
+{
+    const int minBackoffSec = 2, maxBackoffSec = 30, giveUpAfterFastCleanExits = 5;
+    int backoffSec = minBackoffSec, restarts = 0, fastCleanExits = 0;
+    while (!token.IsCancellationRequested)
+    {
+        var started = DateTime.UtcNow;
+        bool crashed = false;
+        try
+        {
+            await runAsync(token);
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            break;   // graceful shutdown
+        }
+        catch (Exception ex)
+        {
+            crashed = true;
+            Console.WriteLine($"[SUPERVISOR] {name} feed crashed: {ex.GetType().Name}: {ex.Message}");
+            DebugLog.Write($"{name} feed exception (before restart #{restarts + 1}): {ex}");
+        }
+        if (token.IsCancellationRequested) break;
+
+        var ranFor = DateTime.UtcNow - started;
+        if (!crashed && ranFor < TimeSpan.FromSeconds(3))
+        {
+            if (++fastCleanExits >= giveUpAfterFastCleanExits)
+            {
+                Console.WriteLine($"[SUPERVISOR] {name} feed returned immediately {fastCleanExits}x (disabled/misconfigured) " +
+                                  "— stopping its supervisor; the bot keeps running.");
+                return;
+            }
+        }
+        else
+        {
+            fastCleanExits = 0;
+        }
+
+        // reset the backoff if the feed had been running healthily (a long, stable session that just dropped)
+        backoffSec = ranFor > TimeSpan.FromMinutes(2) ? minBackoffSec : Math.Min(maxBackoffSec, backoffSec * 2);
+        restarts++;
+        Console.WriteLine($"[SUPERVISOR] {name} feed stopped after {ranFor.TotalSeconds:0}s — restarting (#{restarts}) in {backoffSec}s.");
+        try { await Task.Delay(TimeSpan.FromSeconds(backoffSec), token); }
+        catch (OperationCanceledException) { break; }
+    }
+    DebugLog.Write($"{name} feed supervisor exited after {restarts} restart(s).");
+}
+
 // LoadHardVenConfig() removed — HardVen creds load via HardVenApiConfig.FromEnvironment() (project-local).
+
+// Suppress system sleep while the bot runs (unattended day-long runs on the laptop). Windows-only via
+// SetThreadExecutionState; a periodic ES_SYSTEM_REQUIRED poke resets the idle timer (thread-independent, so it
+// survives the task-pool thread that runs the loop). No-op off Windows — servers don't sleep.
+static class KeepAwake
+{
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+    private static extern uint SetThreadExecutionState(uint esFlags);
+    private const uint ES_CONTINUOUS = 0x80000000, ES_SYSTEM_REQUIRED = 0x00000001;
+
+    public static Task RunAsync(CancellationToken token)
+    {
+        if (!OperatingSystem.IsWindows()) return Task.CompletedTask;
+        Console.WriteLine("[KEEP-AWAKE] Suppressing system sleep while the bot runs (HARDVEN_KEEP_AWAKE=0 to disable).");
+        return Task.Run(async () =>
+        {
+            try
+            {
+                while (!token.IsCancellationRequested)
+                {
+                    if (OperatingSystem.IsWindows()) SetThreadExecutionState(ES_SYSTEM_REQUIRED);  // poke idle timer
+                    await Task.Delay(TimeSpan.FromSeconds(30), token);
+                }
+            }
+            catch (OperationCanceledException) { }
+            finally
+            {
+                if (OperatingSystem.IsWindows()) SetThreadExecutionState(ES_CONTINUOUS);   // release the request
+            }
+        }, token);
+    }
+}
