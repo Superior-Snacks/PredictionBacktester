@@ -89,12 +89,14 @@ class OrganicActivity:
                     _clampy(self._y + random.uniform(-150, 150)))
         return (float(random.randint(*_VIEW_X)), float(random.randint(*_VIEW_Y)))
 
-    async def _human_move(self, tx: float, ty: float) -> None:
+    async def _human_move(self, tx: float, ty: float, clamp: bool = True) -> None:
         """Move the cursor along a CURVED path with ease-in/ease-out speed, per-point micro-tremor, and an
         occasional overshoot-then-correct. Emits one mouse.move per sampled point with a short sleep between —
-        so it takes real (variable) time, unlike Playwright's steps= (which fires all points back-to-back)."""
+        so it takes real (variable) time, unlike Playwright's steps= (which fires all points back-to-back).
+        clamp=False reaches on-screen targets outside the idle box (e.g. the far-left sport nav, for a click approach)."""
+        cx, cy = (_clampx, _clampy) if clamp else ((lambda v: v), (lambda v: v))
         x0, y0 = self._x, self._y
-        tx, ty = _clampx(tx), _clampy(ty)
+        tx, ty = cx(tx), cy(ty)
         dx, dy = tx - x0, ty - y0
         dist = math.hypot(dx, dy)
         if dist < 2.0:
@@ -120,12 +122,12 @@ class OrganicActivity:
             bx, by = _cubic((x0, y0), c1, c2, aim, t)
             bx += random.uniform(-1.2, 1.2)                        # hand micro-tremor
             by += random.uniform(-1.2, 1.2)
-            await self._page.mouse.move(_clampx(bx), _clampy(by))
+            await self._page.mouse.move(cx(bx), cy(by))
             await asyncio.sleep(max(0.004, total / steps * random.uniform(0.6, 1.4)))
         if overshoot:
             for _ in range(random.randint(2, 4)):                 # small corrective settle onto the true target
-                await self._page.mouse.move(_clampx(tx + random.uniform(-1.0, 1.0)),
-                                            _clampy(ty + random.uniform(-1.0, 1.0)))
+                await self._page.mouse.move(cx(tx + random.uniform(-1.0, 1.0)),
+                                            cy(ty + random.uniform(-1.0, 1.0)))
                 await asyncio.sleep(random.uniform(0.012, 0.03))
         self._x, self._y = tx, ty
 
@@ -157,19 +159,31 @@ class OrganicActivity:
                 await asyncio.sleep(random.uniform(0.08, 0.28))
 
     async def _nav_click(self, slug: str, label: str) -> bool:
-        """Click the sport's nav link — a real SPA soft-navigation between sports (e.g. tennis↔baseball), like a
-        user flipping between them. A genuine TRUSTED click (the interaction Pinnacle's idle logout most likely
-        counts), and it's SAFE: sport nav links are plain `<a href>` navigations, never bet controls. Returns
-        True if a link was found + clicked. Best-effort — a miss just returns False (the caller falls back)."""
-        for sel in (f'a[href*="/{slug}/matchups"]', f'a[href*="/{slug}/"]'):
+        """Click the sport's nav row to soft-navigate to its page — a real TRUSTED click (the interaction the
+        ~30-min idle logout counts; safe, it's a plain `<a href>`, never a bet control). Verified Pinnacle markup:
+        `<a data-gtm-id="sports_nav_top_Tennis" href="/en/tennis/matchups/">`. Clicks the LEFT of the row
+        (icon/label = NAVIGATE); the right-edge chevron only expands the league dropdown, so we avoid it via a
+        left-biased click position. False if nothing matched (caller falls back to a full goto)."""
+        selectors = (f'a[data-gtm-id="sports_nav_top_{label}"]',       # stable GTM id (verified)
+                     f'a[href="/en/{slug}/matchups/"]',                # exact href
+                     f'a[href*="/{slug}/matchups"]')                   # loose href
+        for sel in selectors:
             try:
                 loc = self._page.locator(sel)
                 if await loc.count() > 0:
-                    await loc.first.click(timeout=4000)
+                    tgt = loc.first
+                    try:                                  # human-APPROACH the row (curved move) THEN click — not a teleport
+                        box = await tgt.bounding_box()
+                        if box:
+                            await self._human_move(box["x"] + 12, box["y"] + box["height"] / 2, clamp=False)
+                    except Exception:
+                        pass
+                    # click the LEFT (icon/label) to navigate, NOT the right-edge chevron that opens the dropdown
+                    await tgt.click(position={"x": 12, "y": 12}, timeout=4000)
                     return True
             except Exception:
                 pass
-        try:                                                  # fallback: match the visible sport name on a link
+        try:                                                  # last resort: a link with the visible sport name
             loc = self._page.get_by_role("link", name=re.compile(rf"\b{re.escape(label)}\b", re.I))
             if await loc.count() > 0:
                 await loc.first.click(timeout=4000)
