@@ -408,16 +408,20 @@ class PinnacleAdapter(BookAdapter):
                     pass
         was_ready = self._session_ready
         self._session_ready = bool(creds.get("ready"))
-        if self._session_ready and sess and sess != old_session:
-            # a genuinely fresh session → recover from any terminal give-up so the next /odds restarts the feed
+        # A NEW live session begins on the ready FALSE→TRUE transition (initial login OR recovery-after-logout) OR
+        # when the token ROTATES while already live. NB: on initial login the session value is stored above before
+        # `ready` flips true, so `sess != old_session` is false by now — the became_ready check is what catches it.
+        became_ready = self._session_ready and not was_ready
+        rotated = self._session_ready and bool(sess) and sess != old_session
+        if became_ready or rotated:
             self._session_expired = False
             self._ws_auth_rejects = self._rest_auth_fails = 0   # fresh creds → clear the death streaks
-            self._mark_session_started("browser login")         # (re)start age tracking for this session
-            if self._ws_gave_up:
+            self._mark_session_started("browser login" if became_ready else "session rotated")  # (re)start age tracking
+            if self._ws_gave_up:                          # recover from a terminal give-up so /odds restarts the feed
                 self._ws_gave_up = False
                 self._ws_started = False                  # next odds() relands _start_ws() with the new creds
                 self._seeded.clear()                      # re-seed pre-match snapshots under the new session
-        if self._session_ready and not was_ready:
+        if became_ready:
             print("[PINNACLE] OK browser session ready — feed will seed + connect on the next /odds.")
 
     def session_status(self) -> dict:

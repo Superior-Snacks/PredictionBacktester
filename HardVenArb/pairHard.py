@@ -51,6 +51,7 @@ import json
 import sys
 from pathlib import Path
 
+
 import requests
 
 sys.path.insert(0, str(Path(__file__).parent / "sidecar"))   # share the unified sport catalog with the sidecar
