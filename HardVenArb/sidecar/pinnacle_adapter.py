@@ -201,6 +201,8 @@ class PinnacleAdapter(BookAdapter):
         self._session_started_at = 0.0                    # unix time the CURRENT session became live (0 = none)
         self._session_age_task: Optional[asyncio.Task] = None
         self._session_age_log_sec = float(os.environ.get("PINNACLE_SESSION_AGE_LOG_SEC", "300"))
+        self._survive_min = float(os.environ.get("PINNACLE_SESSION_SURVIVE_MIN", "35"))  # milestone: past the ~30m danger zone
+        self._survive_logged = False                      # one-time "SURVIVED" flag per session (unattended pass/fail)
 
     # ── lifecycle ──────────────────────────────────────────────────────────────
     async def startup(self) -> None:
@@ -595,6 +597,7 @@ class PinnacleAdapter(BookAdapter):
         """Stamp the moment a session became live (env token at startup, or a fresh browser capture) so the age
         heartbeat + the give-up log can report exactly how long it was held — i.e. Pinnacle's real logout window."""
         self._session_started_at = time.time()
+        self._survive_logged = False                      # arm the "SURVIVED past Nm" milestone for this session
         print(f"[PINNACLE] session established ({how}) — age tracking started.")
 
     async def _session_age_heartbeat(self) -> None:
@@ -610,6 +613,10 @@ class PinnacleAdapter(BookAdapter):
                 ws = "connected" if self._connected else ("GAVE-UP" if self._ws_gave_up else "down")
                 print(f"[PINNACLE] session held {held_m:.0f}m  (ready={self._session_ready}, ws={ws}, "
                       f"cache={len(self._cache)} sel)")
+                if not self._survive_logged and held_m >= self._survive_min:
+                    self._survive_logged = True           # unattended pass signal — glance for this line when you're back
+                    print(f"[PINNACLE] *** SESSION SURVIVED past {self._survive_min:.0f}m — keepalive is HOLDING "
+                          "(was logging out at ~30m). ***")
 
     async def _status_ping(self) -> None:
         """Browser-like liveness: GET /status periodically (the page does this). Makes the headless session
