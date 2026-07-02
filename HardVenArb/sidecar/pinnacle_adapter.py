@@ -659,12 +659,15 @@ class PinnacleAdapter(BookAdapter):
             for mk in rec.get("markets") or []:
                 prices = mk.get("prices") or []
                 mkts.append({"type": mk.get("type"), "period": mk.get("period"), "status": mk.get("status"),
-                             "la": mk.get("la"),               # line-active flag — leading 'currently offline' suspect
+                             # 'la' was a dead guess (never present). The real 'currently offline' suspects are
+                             # cutoffAt (betting-cutoff time) and limits→max_stake (0 = pulled) on a status:open market.
+                             "cutoffAt": mk.get("cutoffAt"),   # ISO cutoff — if past → offline even when status=open
+                             "max_stake": _max_risk(mk.get("limits")),  # 0 = limits pulled → effectively unbettable
                              "keys": sorted(mk.keys()),        # ALL market fields, to spot any OTHER suspend signal
                              "n": len(prices),
                              "pts": any(pr.get("points") is not None for pr in prices),
                              "desig": [pr.get("designation") for pr in prices],
-                             "price_keys": sorted(prices[0].keys()) if prices else []})  # per-price fields (per-price status?)
+                             "price0": prices[0] if prices else None})  # full first price (spot any per-price suspend field)
             out = {"ts": round(time.time(), 3), "op": data.get("op"), "lid": lid, "mid": mid,
                    "units": rec.get("units"), "parentId": rec.get("parentId"),
                    "names": [p.get("name") for p in (rec.get("participants") or [])],
