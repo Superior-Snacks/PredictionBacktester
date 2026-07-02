@@ -190,7 +190,7 @@ Trade pagination uses timestamp-shifting to bypass the 3000-offset API limit.
 | Script | Purpose |
 |--------|---------|
 | `analyze_kalshi_arb.py` | Kalshi ArbTelemetry CSV analysis (9 sections, fraud checks, resolution, production sim) |
-| `analyze_cross_arb.py` | CrossArbTelemetry (Kalshi↔HardVen/Pinnacle) analysis: capturability framework, edge, FX-corrected profit (full-depth opportunity vs bankroll-constrained), NET-EV failed-leg hedge model (§6, joins CrossArbHedgeMonitor tape; `--hedge-secs`/`--max-bet`) |
+| `analyze_cross_arb.py` | CrossArbTelemetry (Kalshi↔HardVen/Pinnacle) analysis: regime-aware capturability (`--hardven-secs-prelive` 1s pre-live / `--hardven-secs` 8s in-play), ENTRY-based edge/profit (not cherry-picked best), FX-corrected (full-depth vs bankroll-constrained). §6 NET-EV, two execution models: Kalshi-first hedge (CrossArbHedgeMonitor tape, `--hedge-secs`/`--max-bet`) vs `--hardven-first` (auto-cancel = free miss). `--pre-live` / `--in-play` = regime filter (mutually exclusive) |
 | `ping_kalshi.py` | Latency benchmarking: DNS, TCP, TLS, REST, WebSocket, ICMP vs Kalshi |
 | `fetch_token_id.py` | Search Polymarket events API for token IDs by name |
 | `time_trades.py` | Measure real settlement delay (buy→sell round-trip) on Polymarket |

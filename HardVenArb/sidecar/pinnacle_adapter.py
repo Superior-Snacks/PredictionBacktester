@@ -45,6 +45,7 @@ import os
 import random
 import threading
 import time
+from datetime import datetime
 from typing import Optional
 
 import httpx
@@ -84,6 +85,16 @@ def _max_risk(limits) -> float:
             except (TypeError, ValueError):
                 return 0.0
     return 0.0
+
+
+def _cutoff_ts(cutoff) -> Optional[float]:
+    """Parse Pinnacle's ISO-8601 `cutoffAt` (betting-close time, UTC) → unix seconds. None if absent/bad."""
+    if not cutoff:
+        return None
+    try:
+        return datetime.fromisoformat(str(cutoff).replace("Z", "+00:00")).timestamp()
+    except (TypeError, ValueError):
+        return None
 
 
 def _strip_units(name: str) -> str:
@@ -332,7 +343,15 @@ class PinnacleAdapter(BookAdapter):
                 ts = now if (self._mode == "ws" and live) else s.ts
                 # Pass through the cached STATUS ("open" / "suspended") so an OFFLINE Pinnacle market reaches
                 # the C# as suspended → empty book → no arb. (Was hardcoded "open", which hid suspensions.)
-                out[sid] = Selection(s.selection_id, s.decimal_odds, s.max_stake, s.status, ts, s.live)
+                status = s.status
+                # OFFLINE gate (poll-time): a matchup that closes betting STOPS being pushed, so its cached
+                # "open" token is never reconciled away, and the GLOBAL-liveness stamp above keeps serving it
+                # FRESH (ts=now) even 8 min after Pinnacle went silent on it → phantom arb on a frozen line.
+                # cutoffAt is the authoritative betting-close time: once it passes, force suspended here so the
+                # C# gets an empty book — independent of push activity, with the WS still connected.
+                if s.cutoff and s.cutoff <= now:
+                    status = "suspended"
+                out[sid] = Selection(s.selection_id, s.decimal_odds, s.max_stake, status, ts, s.live, s.cutoff)
         return out
 
     # ── browser session source: receive live creds + expose status ────────────────
@@ -627,6 +646,14 @@ class PinnacleAdapter(BookAdapter):
             return
         if mk.get("status") not in (None, "open"):
             return
+        # OFFLINE gate: Pinnacle keeps status="open" and shows the last price after betting closes — the
+        # `cutoffAt` (betting-close time) is the real "currently offline" tag (confirmed 2026-07-02: 785 open
+        # markets sat 20–88 min past cutoff, still displaying a frozen unbettable line). Skip cutoff-passed
+        # markets so the reconcile step suspends them → a stale line can't hold a phantom arb. `now` is
+        # wall-clock UTC epoch, matching cutoffAt. (limits/max_stake is NOT a signal — never 0 in practice.)
+        cutoff = _cutoff_ts(mk.get("cutoffAt"))
+        if cutoff is not None and cutoff <= now:
+            return
         max_stake = _max_risk(mk.get("limits"))
         for pr in mk.get("prices") or []:
             desig = pr.get("designation")
@@ -644,7 +671,8 @@ class PinnacleAdapter(BookAdapter):
                 if not ((t == "spread" and desig in ("home", "away")) or (t == "total" and desig in ("over", "under"))):
                     continue
                 token = f"{lid}:{mid}:{t}:{float(pts):g}:{desig}"
-            yield token, Selection(token, decimal_odds=dec, max_stake=max_stake, status="open", ts=now, live=live)
+            yield token, Selection(token, decimal_odds=dec, max_stake=max_stake, status="open", ts=now,
+                                   live=live, cutoff=cutoff or 0.0)
 
     def _dump_ws_record(self, data: dict, lid: str, mid: str) -> None:
         """RECON (PINNACLE_WS_DUMP=<path>): append a compact summary of EVERY incoming WS record so we can see

@@ -4,37 +4,47 @@ analyze_cross_arb.py — read CrossArbTelemetry_*.csv (Kalshi ↔ HardVen/Pinnac
 the capturability framework: how many windows were CAPTURABLE, at what PRICE/edge, and the estimated PROFIT
 (both at full market depth and constrained by a real bankroll).
 
-CAPTURABILITY — one knob: --hardven-secs (default 8 = measured Pinnacle bet-placement top ~7-8s) = the slow
-HardVen leg's capture time; --kalshi-secs (default 0.2) = the fast Kalshi leg's. A window is capturable iff
-BOTH legs could be on before it closed:
-    DurationMs > hardven-secs                                       (window open long enough to place HardVen)
+CAPTURABILITY — the HardVen leg's placement time is REGIME-AWARE (chosen per-row via the HardVenInPlay column):
+--hardven-secs-prelive (default 1 = near-instant; a stable pre-match line clears fast) for PRE-LIVE windows,
+--hardven-secs (default 8 = measured live bet-placement top ~7-8s) for IN-PLAY. --kalshi-secs (default 0.2) =
+the fast Kalshi leg's. A window is capturable iff BOTH legs could be on before it closed:
+    DurationMs > place-secs                                         (window open long enough to place HardVen)
   OR (ClosedBySide == KALSHI and DurationMs > kalshi-secs           (the fast Kalshi side had its time)
-      and HardVenLegAgeMsAtClose > hardven-secs)                    (HardVen leg already held that long)
+      and HardVenLegAgeMsAtClose > place-secs)                      (HardVen leg already held that long)
+
+REGIME/MODE FLAGS: --pre-live / --in-play analyze ONLY pre-match (HardVenInPlay=0, favorable) / in-play
+(=1, hard) windows (mutually exclusive). --hardven-first switches §6 to the HardVen-first model (see §6).
+
+EDGE is ENTRY-based (1 − EntryNetCost = what was true at OPEN), NOT the best-based NetProfitPerShare/BestNetCost
+(the single most-divergent tick over the window → cherry-picked, wildly inflated on long frozen windows).
 
 CURRENCY: HardVen depth is in the Pinnacle ACCOUNT currency (EUR); Kalshi is USD. The arb PRICE/edge is
 unitless (probabilities), so detection is unaffected — but SIZE/$ are not. We convert HardVen depth to USD
 (× --fx) before combining. NOTE: CSVs written BEFORE the C# HARDVEN_FX_TO_USD fix have raw-EUR depth → use
 --fx 1.08; CSVs written AFTER it are already USD → use --fx 1.0.
 
-PROFIT is recomputed from raw (KalshiDepth, HardVenDepth, BestNetCost, edge) so it's FX-correct regardless of
-the CSV's pre-computed columns. Reported two ways:
+PROFIT is recomputed from raw (KalshiDepth, HardVenDepth, EntryNetCost, entry edge) so it's FX-correct and
+honest (entry, not cherry-picked best) regardless of the CSV's pre-computed columns. Reported two ways:
   A) FULL DEPTH (unlimited capital) — the size of the OPPORTUNITY.
   B) BANKROLL-CONSTRAINED — what your actual Pinnacle (EUR) + Kalshi (USD) bankrolls could capture per window.
 
-NET EV (§6) — the failed-HardVen-leg HEDGE model. Models Kalshi-first execution: you commit the fast,
-reversible Kalshi leg at OPEN, then fire the slow, irreversible HardVen leg. If HardVen held within the arb
-long enough (HardVenLegWithinMs > --hardven-secs) you complete → WIN; if it left first you're naked on Kalshi
-and must UNWIND it (sell the held leg back at the bid) ~when it left the arb (≈ Pinnacle auto-cancels the bet)
-+ --hedge-react-secs reaction, per window, capped at --hedge-secs. The unwind is priced from the
-CrossArbHedgeMonitor_*.csv tape (per-arb post-open Kalshi bid trajectory). NET EV = Σ(wins) − Σ(miss hedge
-cost) — the per-attempt expected value, the number that says whether the strategy survives its miss rate. A
-HEDGE BUDGET line puts the MEASURED avg per-share unwind next to the break-even floor `−(wins/misses)×edge`,
-so the actual hedge cost reads straight off as profitable / net-negative (how the hedge DID vs how good it had
-to be). Needs the within-columns AND a hedge tape (both produced by the updated bot); older CSVs fall back gracefully.
+NET EV (§6) — two execution models (both split WIN vs MISS by the per-leg within-times, entry-edge sized):
+  • KALSHI-FIRST (default): commit the fast reversible Kalshi leg at OPEN, then fire the slow HardVen leg. If
+    HardVen held within the arb long enough you complete → WIN; if it left, you're naked on Kalshi and must
+    UNWIND it (sell back at the bid) ~when it left + --hedge-react-secs, capped at --hedge-secs, priced from the
+    CrossArbHedgeMonitor_*.csv tape. Every miss pays TWO Kalshi fees → fee-dominated. A HEDGE BUDGET line puts
+    the measured avg unwind next to the break-even floor −(wins/misses)×edge (how the hedge DID vs had to be).
+  • HARDVEN-FIRST (--hardven-first): fire the slow irreversible HardVen leg FIRST. If its odds move during
+    placement, Pinnacle AUTO-CANCELS = $0 free miss (no Kalshi fee-on-miss — the key advantage). If it fills,
+    complete the fast Kalshi leg; only the rare case where Kalshi already left leaves you NAKED (completed at
+    the tape's KalshiEntryAskNow). NET EV = Σ(wins) + Σ(naked P/L); free auto-cancels contribute $0.
+NET EV is the per-ATTEMPT expected value — the number that says whether the strategy survives its miss rate.
+Needs the within-columns; Kalshi-first also needs the hedge tape (HardVen-first only for naked misses). Older
+CSVs fall back gracefully.
 
   python analyze_cross_arb.py                       # latest CrossArbTelemetry_*.csv in CWD
-  python analyze_cross_arb.py --file path.csv --fx 1.08 --pinnacle-bankroll 50 --kalshi-bankroll 422
-  python analyze_cross_arb.py --hedge-secs 8 --max-bet 300   # net-EV w/ hedge tape (auto-discovered)
+  python analyze_cross_arb.py --file path.csv --fx 1.0 --pinnacle-bankroll 50 --kalshi-bankroll 422
+  python analyze_cross_arb.py --pre-live --hardven-first   # pre-match only, HardVen-first EV (the target strategy)
 """
 from __future__ import annotations
 
@@ -65,6 +75,19 @@ def _legs(s: str):
     """BestLegPrices 'kalshi|hardven' → (kalshi_price, hardven_price). These are the per-$1-payout costs."""
     p = (s or "").split("|")
     return (_f(p[0]), _f(p[1])) if len(p) == 2 else (0.0, 0.0)
+
+
+def _is_prelive(r: dict) -> bool:
+    """Pre-live (pre-match) window: the Pinnacle leg was NOT in-play. HardVenInPlay: '0'=pre, '1'=in-play.
+    Absent column → treated as in-play (conservative: the slower placement time)."""
+    return r.get("HardVenInPlay") == "0"
+
+
+def _hv_ms(r: dict, a) -> float:
+    """Regime-aware HardVen placement time (ms). PRE-LIVE is near-instant (~1s, --hardven-secs-prelive — the
+    Pinnacle line is stable so the bet is accepted almost immediately); IN-PLAY is the slow ~8s (--hardven-secs,
+    the measured live bet-placement top). Applied per-row via HardVenInPlay."""
+    return (a.hardven_secs_prelive if _is_prelive(r) else a.hardven_secs) * 1000
 
 
 def _span_min(times: list[str]) -> float:
@@ -145,7 +168,11 @@ def main() -> None:
     ap.add_argument("--hardven-secs", type=float, default=8.0,
                     help="SECONDS the slow HardVen leg needs to capture — the window must be open this long, OR "
                          "the HardVen leg already held this long when Kalshi closes it (default 8 = measured "
-                         "Pinnacle bet-placement top ~7-8s)")
+                         "Pinnacle bet-placement top ~7-8s). Applies to IN-PLAY windows.")
+    ap.add_argument("--hardven-secs-prelive", type=float, default=1.0,
+                    help="SECONDS the HardVen leg needs for PRE-LIVE windows (default 1 = near-instant; the "
+                         "pre-match line is stable so the bet clears fast). Chosen per-row via HardVenInPlay; "
+                         "in-play windows use --hardven-secs.")
     ap.add_argument("--kalshi-secs", type=float, default=0.2,
                     help="SECONDS the fast Kalshi leg needs (min window duration when Kalshi closes it; default 0.2)")
     ap.add_argument("--metric", choices=("auto", "within", "legacy"), default="auto",
@@ -163,8 +190,21 @@ def main() -> None:
                     help="§6: unwind the Kalshi leg this many SECONDS after the HardVen leg LEAVES the arb (≈ when "
                          "Pinnacle auto-cancels the bet), per window, capped at --hedge-secs. Default 1 — more "
                          "realistic than a fixed delay. Set ≥ --hedge-secs to force the fixed worst-case model.")
+    ap.add_argument("--hardven-first", action="store_true",
+                    help="§6: model HARDVEN-FIRST execution. Fire the slow irreversible HardVen leg FIRST — if its "
+                         "odds move during placement, Pinnacle AUTO-CANCELS = $0 free miss (no Kalshi fee-on-miss); "
+                         "if it fills, complete the fast Kalshi leg. Only the rare case where Kalshi already left "
+                         "leaves you NAKED (priced from the tape's KalshiEntryAskNow). Default = Kalshi-first "
+                         "(commit Kalshi, unwind at 2 fees on every miss — fee-dominated).")
+    regime_grp = ap.add_mutually_exclusive_group()
+    regime_grp.add_argument("--pre-live", action="store_true",
+                    help="analyze ONLY pre-live (pre-match) windows — HardVenInPlay=0. The FAVORABLE regime: stable "
+                         "lines, ~1s placement, low miss rate. (Requires the HardVenInPlay column.)")
+    regime_grp.add_argument("--in-play", action="store_true",
+                    help="analyze ONLY in-play (live-match) windows — HardVenInPlay=1. The HARD regime: volatile, "
+                         "~8s placement, high miss rate. (Requires the HardVenInPlay column; excludes --pre-live.)")
     a = ap.parse_args()
-    hardven_ms, kalshi_ms = a.hardven_secs * 1000, a.kalshi_secs * 1000
+    kalshi_ms = a.kalshi_secs * 1000   # HardVen placement time is per-row/regime via _hv_ms (1s pre-live / 8s in-play)
 
     path = a.file or (sorted(glob.glob("CrossArbTelemetry_*.csv")) or [None])[-1]
     if not path or not os.path.exists(path):
@@ -175,6 +215,20 @@ def main() -> None:
         print(f"{path}: empty.")
         return
 
+    has_inplay = rows[0].get("HardVenInPlay") is not None
+    if a.pre_live or a.in_play:
+        want_pre = a.pre_live
+        flag = "--pre-live" if want_pre else "--in-play"
+        if not has_inplay:
+            print(f"[WARN] {flag} but this CSV has no HardVenInPlay column → can't filter; using all windows.")
+        else:
+            rows = [r for r in rows if _is_prelive(r)] if want_pre else \
+                   [r for r in rows if r.get("HardVenInPlay") == "1"]
+            if not rows:
+                print(f"{path}: no {'pre-live' if want_pre else 'in-play'} (HardVenInPlay="
+                      f"{'0' if want_pre else '1'}) windows.")
+                return
+
     has_within = bool(rows[0].get("HardVenLegWithinMs") is not None and rows[0].get("KalshiLegWithinMs") is not None)
     use_within = a.metric == "within" or (a.metric == "auto" and has_within)
     if a.metric == "within" and not has_within:
@@ -182,27 +236,36 @@ def main() -> None:
         use_within = False
     times = [r.get("StartTime", "") for r in rows if r.get("StartTime")]
     span = f"{times[0][:19]} → {times[-1][11:19]}" if times else "?"
+    n_pre = sum(1 for r in rows if _is_prelive(r))
+    n_live = len(rows) - n_pre
+    regime = ("PRE-LIVE ONLY" if a.pre_live else "IN-PLAY ONLY" if a.in_play else
+              (f"{n_pre} pre-live + {n_live} in-play" if has_inplay else "regime unknown (no HardVenInPlay col)"))
+    mode = "HardVen-first" if a.hardven_first else "Kalshi-first"
     print("=" * 78)
     print(f"CROSS-PLATFORM ARB TELEMETRY  —  {os.path.basename(path)}")
     print(f"{len(rows)} windows  |  {span}  |  FX HardVen(EUR)→USD ×{a.fx:g}  |  "
           f"bankroll: Pinnacle €{a.pinnacle_bankroll:g} + Kalshi ${a.kalshi_bankroll:g}")
+    print(f"regime: {regime}  |  §6 exec: {mode}  |  HardVen place: "
+          f"{a.hardven_secs_prelive:g}s pre-live / {a.hardven_secs:g}s in-play")
     print("=" * 78)
 
     # ── per-window enrichment ────────────────────────────────────────────────────
+    # EDGE/NET/LEGS are ENTRY-based (what was true at OPEN), NOT Best-based (NetProfitPerShare/BestNetCost is the
+    # single most-divergent tick over the whole window → cherry-picked/inflated, esp. on long frozen windows).
     cap_rows, reasons = [], Counter()
     for r in rows:
-        edge = _f(r.get("NetProfitPerShare"))
+        edge = 1.0 - _f(r.get("EntryNetCost"), 1.0)                   # honest entry edge (1 − net cost at open)
         if edge < a.min_edge or (a.max_edge and edge > a.max_edge):   # --max-edge drops stale-leg phantoms
             continue
-        ok, why = capturable(r, hardven_ms, kalshi_ms, use_within)
+        ok, why = capturable(r, _hv_ms(r, a), kalshi_ms, use_within)
         reasons[("capturable: " + why) if ok else "not capturable"] += 1
         if not ok:
             continue
         kdepth = _f(r.get("KalshiDepth"))
         hdepth_usd = _f(r.get("HardVenDepth")) * a.fx                 # EUR-payout units → USD-equivalent
         exec_depth = min(kdepth, hdepth_usd)                          # market-limited matched pairs
-        net = _f(r.get("BestNetCost"), 1.0)
-        kp, hp = _legs(r.get("BestLegPrices"))                        # per-pair leg costs (Kalshi $, HardVen €)
+        net = _f(r.get("EntryNetCost"), 1.0)
+        kp, hp = _legs(r.get("EntryLegPrices"))                       # per-pair leg costs at open (Kalshi $, HardVen €)
         # bankroll caps: each matched pair stakes kp on Kalshi (USD) and hp on Pinnacle (EUR)
         k_aff = a.kalshi_bankroll / kp if kp > 0 else exec_depth
         p_aff = a.pinnacle_bankroll / hp if hp > 0 else exec_depth
@@ -219,11 +282,12 @@ def main() -> None:
 
     n_cap = len(cap_rows)
     if use_within:
-        print(f"\n1. CAPTURABILITY  [within model]  (HardVen held-within >{a.hardven_secs:g}s  AND  "
-              f"Kalshi held-within >{a.kalshi_secs:g}s — each leg placeable)")
+        print(f"\n1. CAPTURABILITY  [within model]  (HardVen held-within >{a.hardven_secs_prelive:g}s pre-live / "
+              f">{a.hardven_secs:g}s in-play  AND  Kalshi held-within >{a.kalshi_secs:g}s — each leg placeable)")
     else:
-        print(f"\n1. CAPTURABILITY  [legacy model]  (dur>{a.hardven_secs:g}s  OR  Kalshi-closed + "
-              f"dur>{a.kalshi_secs:g}s + HardVen-frozen>{a.hardven_secs:g}s){'  — no within-times in this CSV' if not has_within else ''}")
+        print(f"\n1. CAPTURABILITY  [legacy model]  (dur>{a.hardven_secs_prelive:g}s pre-live / >{a.hardven_secs:g}s "
+              f"in-play  OR  Kalshi-closed + dur>{a.kalshi_secs:g}s + HardVen-frozen"
+              f"){'  — no within-times in this CSV' if not has_within else ''}")
     for k, v in reasons.most_common():
         print(f"   {v:>4}  {k}")
     print(f"   ----")
@@ -254,7 +318,7 @@ def main() -> None:
     print(f"   B) BANKROLL-CONSTRAINED (€{a.pinnacle_bankroll:g} Pinnacle / ${a.kalshi_bankroll:g} Kalshi) — what YOU capture:")
     print(f"        PER WINDOW:  avg ${st.mean(capped):.2f}   median ${st.median(capped):.2f}   max ${max(capped):.2f}")
     print(f"        binding constraint: " + ", ".join(f"{k} {v}×" for k, v in binds.most_common()))
-    print(f"        → your €{a.pinnacle_bankroll:g} caps each arb to ~{a.pinnacle_bankroll/st.mean([_legs(r.get('BestLegPrices'))[1] for r in rows if _legs(r.get('BestLegPrices'))[1]>0]):.0f} "
+    print(f"        → your €{a.pinnacle_bankroll:g} caps each arb to ~{a.pinnacle_bankroll/st.mean([_legs(r.get('EntryLegPrices'))[1] for r in rows if _legs(r.get('EntryLegPrices'))[1]>0]):.0f} "
           f"contract-pairs, so profit/arb is small and scales with BANKROLL, not arb COUNT.")
     print(f"        ⚠ do NOT sum these {n_cap} windows (${sum(capped):,.0f}): that assumes capital RECYCLES instantly.")
     print(f"          A position locks until the match settles (hours), so one ~{_span_min(times):.0f}-min session "
@@ -279,12 +343,14 @@ def main() -> None:
     print(f"   • FX ×{a.fx:g} applied to HardVen(EUR) depth — correct for PRE-C#-fix CSVs; use --fx 1.0 for newer ones.")
     print(f"   • Edge is already net of Kalshi fees; HardVen vig is in the odds (no separate fee).")
 
-    # ── 6. NET EV — failed-HardVen-leg hedge model ───────────────────────────────
-    # Kalshi-first execution: you commit the fast, reversible Kalshi leg at OPEN, then fire the slow HardVen
-    # leg. If HardVen HELD within the arb long enough (HardVenLegWithinMs > hardven-secs) you complete → WIN.
-    # If it left first, you're naked on Kalshi and must UNWIND it (sell the held leg back at the bid) at
-    # --hedge-secs. The hedge tape (CrossArbHedgeMonitor) prices that unwind. NET EV = wins − miss hedge cost.
-    print("\n6. NET EV  —  FAILED-HARDVEN-LEG HEDGE MODEL  (Kalshi-first: commit Kalshi, unwind it if HardVen misses)")
+    # ── 6. NET EV — execution model (Kalshi-first hedge, or HardVen-first auto-cancel) ───────────
+    # KALSHI-FIRST (default): commit the fast reversible Kalshi leg at OPEN, then fire the slow HardVen leg. If
+    # HardVen HELD within the arb long enough you complete → WIN; if it left, you're naked on Kalshi and UNWIND
+    # it (2 fees) — fee-dominated. HARDVEN-FIRST (--hardven-first): fire the slow irreversible HardVen leg first;
+    # if its odds move it AUTO-CANCELS = $0 free miss (no Kalshi fee-on-miss); complete Kalshi if HardVen fills.
+    title = ("HARDVEN-FIRST  (fire HardVen first; auto-cancel = free miss; complete Kalshi if it fills)"
+             if a.hardven_first else "FAILED-HARDVEN-LEG HEDGE  (Kalshi-first: commit Kalshi, unwind if HardVen misses)")
+    print(f"\n6. NET EV  —  {title}")
     if not has_within:
         print("   ⚠ this CSV has no per-leg within-times → can't split win vs miss. Run the updated bot.")
         print("     --hedge-secs / --max-bet ONLY drive §6, so they have no effect on this file; "
@@ -292,23 +358,109 @@ def main() -> None:
         print("=" * 78)
         return
     hpath = a.hedge_file or (sorted(glob.glob("CrossArbHedgeMonitor_*.csv")) or [None])[-1]
-    if not hpath or not os.path.exists(hpath):
+    have_tape = bool(hpath and os.path.exists(hpath))
+    hedge = group_hedge(load(hpath)) if have_tape else {}
+    react_ms, cap_ms = a.hedge_react_secs * 1000, a.hedge_secs * 1000
+    real_lbl = f"cancel+{a.hedge_react_secs:g}s (≤{a.hedge_secs:g}s)"   # per-window realization: leg-left + react, capped
+
+    if a.hardven_first:
+        # HARDVEN-FIRST. hw > place-time ⇒ HardVen odds held during placement ⇒ bet accepted; else it AUTO-CANCELS
+        # (no position, $0 free miss). If accepted, complete the fast Kalshi leg: kw > place-time ⇒ Kalshi still in
+        # the arb when you complete ⇒ WIN at the honest ENTRY edge (Best is cherry-picked). Otherwise Kalshi left
+        # first ⇒ NAKED on HardVen ⇒ complete at the later, worse Kalshi ask (KalshiEntryAskNow from the tape).
+        tape_note = os.path.basename(hpath) if have_tape else "NONE → naked misses unpriced"
+        print(f"   place {a.hardven_secs_prelive:g}s pre-live / {a.hardven_secs:g}s in-play  |  per-bet cap "
+              f"${a.max_bet:g}  |  naked-completion tape: {tape_note}")
+        wins, naked = [], []
+        free_miss = no_hedge = 0
+        for r in rows:
+            e_edge = 1.0 - _f(r.get("EntryNetCost"), 1.0)             # HONEST entry edge (not best-based NetProfitPerShare)
+            if e_edge < a.min_edge or (a.max_edge and e_edge > a.max_edge):
+                continue
+            hw, kw = _f(r.get("HardVenLegWithinMs")), _f(r.get("KalshiLegWithinMs"))
+            hv_ms = _hv_ms(r, a)
+            if hw <= hv_ms:                                           # HardVen odds moved during placement → AUTO-CANCEL
+                free_miss += 1                                       #   → no position, $0. The key advantage.
+                continue
+            net = _f(r.get("EntryNetCost"), 1.0)                      # entry-honest sizing
+            ek, eh = _legs(r.get("EntryLegPrices"))                   # ek=Kalshi entry $, eh=HardVen entry (locked at open)
+            exec_depth = min(_f(r.get("KalshiDepth")), _f(r.get("HardVenDepth")) * a.fx)
+            k_aff = a.kalshi_bankroll / ek if ek > 0 else exec_depth
+            p_aff = a.pinnacle_bankroll / eh if eh > 0 else exec_depth
+            b_aff = a.max_bet / net if net > 0 else exec_depth
+            contracts = max(0.0, min(exec_depth, k_aff, p_aff, b_aff))
+            day = r.get("StartTime", "")[:10]
+            if kw > hv_ms:                                           # Kalshi still in the arb when you complete → WIN
+                wins.append({"label": r.get("Label", "")[:40], "contracts": contracts, "edge": e_edge,
+                             "profit": e_edge * contracts, "capital": net * contracts, "date": day})
+                continue
+            # NAKED: HardVen filled but Kalshi already left → complete the Kalshi leg at the later (worse) ask
+            samples = hedge.get((r.get("PairId", ""), r.get("StartTime", "")))
+            if not samples:
+                no_hedge += 1
+                continue
+            s, actual_ms = sample_at(samples, min(kw + react_ms, cap_ms))   # realize when Kalshi left + react
+            k_now = _f(s.get("KalshiEntryAskNow")) or ek             # entry-leg (Kalshi) ask now = completion price
+            pnl_share = 1.0 - (eh + k_now + kalshi_fee(k_now))       # HardVen locked at open + Kalshi now + fee
+            naked.append({"label": r.get("Label", "")[:40], "contracts": contracts, "pnl_share": pnl_share,
+                          "pnl": pnl_share * contracts, "capital": eh * contracts, "date": day})
+
+        n_win, n_naked = len(wins), len(naked)
+        n_att = n_win + n_naked + free_miss
+        if not n_att:
+            print(f"   No attemptable windows (skipped: {no_hedge} naked w/ no hedge-tape match).")
+            print("=" * 78)
+            return
+        win_profit = sum(w["profit"] for w in wins)
+        naked_pnl = sum(n["pnl"] for n in naked)
+        net_ev = win_profit + naked_pnl                              # free auto-cancels contribute $0
+        cap_spent = sum(w["capital"] for w in wins) + sum(n["capital"] for n in naked)
+        print(f"   attempts {n_att}  →  {n_win} wins ({100*n_win/n_att:.0f}%)  |  "
+              f"{free_miss} free auto-cancel ({100*free_miss/n_att:.0f}%, $0)  |  {n_naked} naked "
+              f"({100*n_naked/n_att:.0f}%)" + (f"   [{no_hedge} naked unpriced, no tape]" if no_hedge else ""))
+        print(f"   win profit       +${win_profit:9,.2f}   ({n_win} × avg ${win_profit/max(n_win,1):.2f}, ENTRY edge)")
+        print(f"   naked P/L         ${naked_pnl:+9,.2f}   (complete at worse Kalshi ask; auto-cancels cost $0)")
+        print(f"   {'─'*44}")
+        print(f"   NET EV            ${net_ev:+9,.2f}   over {n_att} attempts  =  ${net_ev/n_att:+.4f}/attempt")
+        if cap_spent:
+            print(f"   capital deployed  ${cap_spent:9,.0f}   →  net return {100*net_ev/cap_spent:+.2f}%")
+        if naked:
+            npnls = [n["pnl_share"] for n in naked]
+            print(f"   NAKED completion (per share):  avg {st.mean(npnls):+.4f}   worst {min(npnls):+.4f}   "
+                  f"({n_naked} of {n_win+n_naked} fills)")
+        print(f"   → Miss cost here is the FREE auto-cancel ({free_miss}× $0), NOT a 2-fee unwind. Drop "
+              f"--hardven-first to see the fee-dominated Kalshi-first version for contrast.")
+        by_day = defaultdict(lambda: [0, 0, 0.0, 0.0])
+        for w in wins:
+            d = by_day[w["date"]]; d[0] += 1; d[2] += w["profit"]
+        for n in naked:
+            d = by_day[n["date"]]; d[1] += 1; d[3] += n["pnl"]
+        if len(by_day) > 1:
+            print("\n   DAILY (net = win profit + naked P/L; free auto-cancels $0):")
+            for day in sorted(by_day):
+                nw, nn, wp, npl = by_day[day]
+                print(f"     {day}:  {nw}W / {nn}naked    net ${wp+npl:+,.2f}")
+        print(f"\n   NOTE: NET EV is per-ATTEMPT EV (incl. free auto-cancels). Capital locks until settlement "
+              f"(§3B), so concurrent throughput is bankroll-limited.")
+        print("=" * 78)
+        return
+
+    # Kalshi-first (default): needs the hedge tape to price the unwind
+    if not have_tape:
         print("   ⚠ no CrossArbHedgeMonitor_*.csv found (pass --hedge-file) → can't price the unwind. Run the updated bot.")
         print("     (so --hedge-secs / --max-bet have no effect here — §6 needs the hedge tape.)")
         print("=" * 78)
         return
-    hedge = group_hedge(load(hpath))
-    react_ms, cap_ms = a.hedge_react_secs * 1000, a.hedge_secs * 1000
-    real_lbl = f"cancel+{a.hedge_react_secs:g}s (≤{a.hedge_secs:g}s)"   # per-window realization: leg-left + react, capped
     print(f"   hedge tape: {os.path.basename(hpath)}  |  realize HardVen miss at {real_lbl}  |  per-bet cap ${a.max_bet:g}")
 
     wins, misses = [], []
     no_entry = no_hedge_data = recovered = 0
     for r in rows:
-        edge = _f(r.get("NetProfitPerShare"))
+        edge = 1.0 - _f(r.get("EntryNetCost"), 1.0)                  # honest entry edge (Best is cherry-picked)
         if edge < a.min_edge or (a.max_edge and edge > a.max_edge):   # --max-edge drops stale-leg phantoms
             continue
         hw, kw = _f(r.get("HardVenLegWithinMs")), _f(r.get("KalshiLegWithinMs"))
+        hv_ms = _hv_ms(r, a)                                          # regime placement time (1s pre-live / 8s in-play)
         # Kalshi-first: you commit Kalshi at open. If it didn't even hold kalshi-secs, the entry price is
         # unreliable (Kalshi snapped away instantly) → treat as no clean entry, neither win nor hedge.
         if kw <= kalshi_ms:
@@ -318,15 +470,15 @@ def main() -> None:
         kdepth = _f(r.get("KalshiDepth"))
         hdepth_usd = _f(r.get("HardVenDepth")) * a.fx
         exec_depth = min(kdepth, hdepth_usd)
-        net = _f(r.get("BestNetCost"), 1.0)
-        kp, hp = _legs(r.get("BestLegPrices"))
+        net = _f(r.get("EntryNetCost"), 1.0)
+        kp, hp = _legs(r.get("EntryLegPrices"))
         k_aff = a.kalshi_bankroll / kp if kp > 0 else exec_depth
         p_aff = a.pinnacle_bankroll / hp if hp > 0 else exec_depth
         b_aff = a.max_bet / net if net > 0 else exec_depth
         contracts = max(0.0, min(exec_depth, k_aff, p_aff, b_aff))
         day = r.get("StartTime", "")[:10]
 
-        if hw > hardven_ms:                                          # HardVen held → complete the arb → WIN
+        if hw > hv_ms:                                               # HardVen held → complete the arb → WIN
             wins.append({"label": r.get("Label", "")[:40], "contracts": contracts, "edge": edge,
                          "profit": edge * contracts, "capital": net * contracts, "date": day})
             continue

@@ -24,6 +24,7 @@ class Selection:
     status: str = "open"         # "open" | "suspended" | "settled"
     ts: float = 0.0              # unix seconds when observed (staleness)
     live: bool = False           # IN-PLAY (live game) vs pre-match — drives the timing model (live=slow, pre=~instant)
+    cutoff: float = 0.0          # betting-close time (unix secs); 0 = unknown. Past cutoff = offline/unbettable.
 
     @property
     def implied_price(self) -> float:
