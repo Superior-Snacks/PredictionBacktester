@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import math
 import random
+import re
 from collections import Counter
 
 # Movement box (viewport-ish). Matches the old code's target range; all points are clamped into it.
@@ -54,6 +55,14 @@ class OrganicActivity:
                  long_gap_chance: float = 0.15, long_gap_max: float = 900.0):
         self._page = page
         self._urls = list(browse_urls or [])
+        # sport slugs parsed from the browse URLs (…/en/<sport>/…) → click the sport nav to flip between them
+        # (a real soft-navigation, and a genuine CLICK — the interaction Pinnacle's ~30-min idle logout counts).
+        self._sports: list[tuple[str, str]] = []
+        for u in self._urls:
+            m = re.search(r"/en/([a-z][a-z-]*)/", u)
+            if m and m.group(1) not in [s[0] for s in self._sports]:
+                slug = m.group(1)
+                self._sports.append((slug, slug.replace("-", " ").title()))
         self._min_gap, self._max_gap = min_gap, max_gap
         self._long_gap_chance, self._long_gap_max = long_gap_chance, long_gap_max
         self._gate = asyncio.Event()
@@ -132,6 +141,49 @@ class OrganicActivity:
             await self._page.mouse.wheel(0, direction * step)
             await asyncio.sleep(random.uniform(0.03, 0.13))
 
+    async def _keyscroll(self) -> None:
+        """Scroll with the KEYBOARD (ArrowDown / PageDown, sometimes back up) — fires `keydown` events, distinct
+        from the wheel's `wheel` event, and the interaction an idle-timer is most likely to count. A few presses
+        with human gaps; harmless (arrows/page just scroll, no navigation, no clicks on controls)."""
+        down = random.choice(("ArrowDown", "PageDown"))
+        for _ in range(random.randint(2, 6)):
+            await self._page.keyboard.press(down)
+            await asyncio.sleep(random.uniform(0.08, 0.28))
+        if random.random() < 0.5:                             # sometimes scroll back up a touch
+            up = "ArrowUp" if down == "ArrowDown" else "PageUp"
+            await asyncio.sleep(random.uniform(0.3, 1.2))
+            for _ in range(random.randint(1, 3)):
+                await self._page.keyboard.press(up)
+                await asyncio.sleep(random.uniform(0.08, 0.28))
+
+    async def _nav_click(self, slug: str, label: str) -> bool:
+        """Click the sport's nav link — a real SPA soft-navigation between sports (e.g. tennis↔baseball), like a
+        user flipping between them. A genuine TRUSTED click (the interaction Pinnacle's idle logout most likely
+        counts), and it's SAFE: sport nav links are plain `<a href>` navigations, never bet controls. Returns
+        True if a link was found + clicked. Best-effort — a miss just returns False (the caller falls back)."""
+        for sel in (f'a[href*="/{slug}/matchups"]', f'a[href*="/{slug}/"]'):
+            try:
+                loc = self._page.locator(sel)
+                if await loc.count() > 0:
+                    await loc.first.click(timeout=4000)
+                    return True
+            except Exception:
+                pass
+        try:                                                  # fallback: match the visible sport name on a link
+            loc = self._page.get_by_role("link", name=re.compile(rf"\b{re.escape(label)}\b", re.I))
+            if await loc.count() > 0:
+                await loc.first.click(timeout=4000)
+                return True
+        except Exception:
+            pass
+        return False
+
+    async def _nav_click_random(self) -> bool:
+        if not self._sports:
+            return False
+        slug, label = random.choice(self._sports)
+        return await self._nav_click(slug, label)
+
     # ── the loop ──────────────────────────────────────────────────────────────────
     def _next_gap(self) -> float:
         """Mostly short irregular gaps; occasionally a long 'stepped away' one. Never a fixed cadence."""
@@ -141,23 +193,31 @@ class OrganicActivity:
 
     async def tick(self) -> str:
         """Do ONE organic action; returns its name (so a test can drive it deterministically). All actions are
-        best-effort — a failure on a weird page must never crash the loop."""
+        best-effort — a failure on a weird page must never crash the loop. Weighted toward the INTERACTION types
+        an idle-timer counts (keyboard scroll = keydown, sport nav = click), since mouse-move + wheel + authed
+        API were MEASURED not to reset Pinnacle's ~30-min session logout (2026-07-02: logged out at 32m)."""
         roll = random.random()
         try:
-            if roll < 0.40:
-                name = "idle"                       # most ticks: do nothing (a human isn't always acting)
-            elif roll < 0.65:
+            if roll < 0.30:
+                name = "idle"                       # a human isn't always acting
+            elif roll < 0.50:
                 name = "mouse"
                 await self._human_move(*self._pick_target())
-            elif roll < 0.88:
-                name = "scroll"
+            elif roll < 0.65:
+                name = "scroll"                     # wheel scroll (kept for variety)
                 await self._scroll_burst(random.randint(200, 850), direction=1)
                 if random.random() < 0.5:
                     await asyncio.sleep(random.uniform(0.4, 2.0))
                     await self._scroll_burst(random.randint(100, 450), direction=-1)   # glance back up
-            elif self._urls:
-                name = "navigate"
-                await self._page.goto(random.choice(self._urls), wait_until="domcontentloaded", timeout=30_000)
+            elif roll < 0.85:
+                name = "keyscroll"                  # KEYBOARD scroll → keydown events (interaction keepalive)
+                await self._keyscroll()
+            elif self._sports or self._urls:
+                name = "navclick"                   # flip sport via a real nav CLICK (soft-nav) → click keepalive
+                if not await self._nav_click_random():
+                    name = "navigate"               # fallback: full-load a browse URL (robust if selectors miss)
+                    if self._urls:
+                        await self._page.goto(random.choice(self._urls), wait_until="domcontentloaded", timeout=30_000)
             else:
                 name = "mouse"
                 await self._human_move(*self._pick_target())
