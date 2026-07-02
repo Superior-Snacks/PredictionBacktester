@@ -144,17 +144,21 @@ class OrganicActivity:
             await asyncio.sleep(random.uniform(0.03, 0.13))
 
     async def _keyscroll(self) -> None:
-        """Scroll with the KEYBOARD (ArrowDown / PageDown, sometimes back up) — fires `keydown` events, distinct
-        from the wheel's `wheel` event, and the interaction an idle-timer is most likely to count. A few presses
-        with human gaps; harmless (arrows/page just scroll, no navigation, no clicks on controls)."""
+        """Scroll with the KEYBOARD (ArrowDown / PageDown), then RETURN toward the top so we never drift to the
+        dead bottom of the page and sit there (where the content + sport nav aren't visible). Net movement is
+        up-biased → rests near the top. Fires `keydown` events (the interaction the idle-timer counts); harmless
+        (arrows/page/Home just scroll, no navigation, no clicks on controls)."""
         down = random.choice(("ArrowDown", "PageDown"))
-        for _ in range(random.randint(2, 6)):
+        up = "ArrowUp" if down == "ArrowDown" else "PageUp"
+        n = random.randint(2, 5)
+        for _ in range(n):
             await self._page.keyboard.press(down)
             await asyncio.sleep(random.uniform(0.08, 0.28))
-        if random.random() < 0.5:                             # sometimes scroll back up a touch
-            up = "ArrowUp" if down == "ArrowDown" else "PageUp"
-            await asyncio.sleep(random.uniform(0.3, 1.2))
-            for _ in range(random.randint(1, 3)):
+        await asyncio.sleep(random.uniform(0.3, 1.2))         # pause to "read", then go back up
+        if random.random() < 0.4:
+            await self._page.keyboard.press("Home")           # snap to the top (a user returning to the list head)
+        else:
+            for _ in range(n + random.randint(1, 2)):         # up MORE than down → net toward the top
                 await self._page.keyboard.press(up)
                 await asyncio.sleep(random.uniform(0.08, 0.28))
 
@@ -218,11 +222,11 @@ class OrganicActivity:
                 name = "mouse"
                 await self._human_move(*self._pick_target())
             elif roll < 0.65:
-                name = "scroll"                     # wheel scroll (kept for variety)
-                await self._scroll_burst(random.randint(200, 850), direction=1)
-                if random.random() < 0.5:
-                    await asyncio.sleep(random.uniform(0.4, 2.0))
-                    await self._scroll_burst(random.randint(100, 450), direction=-1)   # glance back up
+                name = "scroll"                     # wheel scroll DOWN to browse, then BACK UP ≥ as far → rest near top
+                down_px = random.randint(200, 850)
+                await self._scroll_burst(down_px, direction=1)
+                await asyncio.sleep(random.uniform(0.4, 2.0))
+                await self._scroll_burst(down_px + random.randint(0, 300), direction=-1)   # up ≥ down → toward the top
             elif roll < 0.85:
                 name = "keyscroll"                  # KEYBOARD scroll → keydown events (interaction keepalive)
                 await self._keyscroll()
