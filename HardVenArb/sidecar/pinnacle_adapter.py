@@ -195,6 +195,12 @@ class PinnacleAdapter(BookAdapter):
         self._rate_limited = False
         self._rl_total = 0
         self._last_hb = 0.0
+        # session-lifetime instrumentation — measures Pinnacle's REAL inactivity-logout window (env
+        # PINNACLE_SESSION_AGE_LOG_SEC, default 300s = 5m). A periodic "session held Xm" heartbeat + a final
+        # "held Xm before this stop" on give-up turn the 2h keepalive/idle test into a precise measurement.
+        self._session_started_at = 0.0                    # unix time the CURRENT session became live (0 = none)
+        self._session_age_task: Optional[asyncio.Task] = None
+        self._session_age_log_sec = float(os.environ.get("PINNACLE_SESSION_AGE_LOG_SEC", "300"))
 
     # ── lifecycle ──────────────────────────────────────────────────────────────
     async def startup(self) -> None:
@@ -244,6 +250,12 @@ class PinnacleAdapter(BookAdapter):
             print("[PINNACLE] ready — WS mode (LAZY: connects to Pinnacle on the FIRST /odds that names a "
                   "league; nothing is sent before that). Odds id = '<leagueId>:<matchupId>:<designation>'.")
 
+        # session-age heartbeat (persistent across logout/recovery). Env mode is live from startup → mark now;
+        # browser mode marks on capture (_on_browser_creds).
+        self._session_age_task = asyncio.create_task(self._session_age_heartbeat())
+        if self._session_source != "browser":
+            self._mark_session_started("env token")
+
         # AUTO-PAIR: schedule the daily re-pairing pipeline (account-free; independent of the session/mode).
         if self._auto_pair:
             from pairing_scheduler import PairingScheduler
@@ -258,7 +270,7 @@ class PinnacleAdapter(BookAdapter):
         if self._ws_watchdog_task and not self._ws_watchdog_task.done():
             self._ws_watchdog_task.cancel()
         for t in (self._reconciler_task, self._status_task, self._session_ka_task,
-                  self._lifecycle_task, self._pairing_task):
+                  self._lifecycle_task, self._pairing_task, self._session_age_task):
             if t and not t.done():
                 t.cancel()
         if self._client is not None:
@@ -400,6 +412,7 @@ class PinnacleAdapter(BookAdapter):
             # a genuinely fresh session → recover from any terminal give-up so the next /odds restarts the feed
             self._session_expired = False
             self._ws_auth_rejects = self._rest_auth_fails = 0   # fresh creds → clear the death streaks
+            self._mark_session_started("browser login")         # (re)start age tracking for this session
             if self._ws_gave_up:
                 self._ws_gave_up = False
                 self._ws_started = False                  # next odds() relands _start_ws() with the new creds
@@ -546,7 +559,11 @@ class PinnacleAdapter(BookAdapter):
         # _read_cache stops stamping ts=now → frozen prices AGE → C# clears the books (no arb on stale numbers).
         self._ws_gave_up = True                       # stops ALL background loops (they check `not _ws_gave_up`)
         self._connected = False
+        held_m = (time.time() - self._session_started_at) / 60 if self._session_started_at > 0 else -1.0
+        self._session_started_at = 0.0                # session ended → stop age tracking (re-marks on recovery)
         why = f" ({reason})" if reason else ""
+        if held_m >= 0:
+            print(f"[PINNACLE] *** SESSION HELD {held_m:.0f}m before this stop ***{why}")
         print(f"[PINNACLE] STOPPING the WS + keepalive{why} - a dead/stale session isn't worth re-trying. "
               "Refresh PINNACLE_SESSION + PINNACLE_WS_PASSWORD (= newsession|dGGR) and restart, or keep a "
               "browser open to hold the session (or PINNACLE_ODDS_MODE=rest). Books go stale -> C# clears them.")
@@ -569,6 +586,26 @@ class PinnacleAdapter(BookAdapter):
             pending = [l for l in list(self._active_leagues.keys()) if l not in self._subscribed]
             if pending:
                 self._subscribe_league(pending[0])        # one per tick = staggered, organic-looking
+
+    def _mark_session_started(self, how: str) -> None:
+        """Stamp the moment a session became live (env token at startup, or a fresh browser capture) so the age
+        heartbeat + the give-up log can report exactly how long it was held — i.e. Pinnacle's real logout window."""
+        self._session_started_at = time.time()
+        print(f"[PINNACLE] session established ({how}) — age tracking started.")
+
+    async def _session_age_heartbeat(self) -> None:
+        """Persistent: every PINNACLE_SESSION_AGE_LOG_SEC, log how long the current session has been held (with
+        WS/ready state). Quiet when there's no session. Survives give-up + recovery so a 2h test reads cleanly."""
+        while True:
+            try:
+                await asyncio.sleep(self._session_age_log_sec)
+            except asyncio.CancelledError:
+                break
+            if self._session_started_at > 0:
+                held_m = (time.time() - self._session_started_at) / 60
+                ws = "connected" if self._connected else ("GAVE-UP" if self._ws_gave_up else "down")
+                print(f"[PINNACLE] session held {held_m:.0f}m  (ready={self._session_ready}, ws={ws}, "
+                      f"cache={len(self._cache)} sel)")
 
     async def _status_ping(self) -> None:
         """Browser-like liveness: GET /status periodically (the page does this). Makes the headless session

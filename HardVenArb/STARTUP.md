@@ -288,6 +288,7 @@ cause is throttling/swapping (server) vs a network blip (not the server).
 | `PINNACLE_WS_AUTH_GIVEUP` | `2` | **Sidecar:** consecutive WS CONNACK auth-rejects (rc 4/5) before treating the session as DEAD and stopping the feed. |
 | `PINNACLE_REST_AUTH_GIVEUP` | `3` | **Sidecar:** consecutive REST 401/403 on authed calls before declaring the session dead (the guest-redirect's backstop). |
 | `PINNACLE_WS_WARN_SEC` | `120` | **Sidecar:** log a "still reconnecting" warning after this long down. Transient drops (network/server) auto-reconnect **forever** like a real tab — only genuine session death stops the feed. (Old `PINNACLE_WS_GIVEUP_SEC` still read for compat.) |
+| `PINNACLE_SESSION_AGE_LOG_SEC` | `300` | **Sidecar:** cadence of the `session held Xm` heartbeat. On logout/give-up it prints `*** SESSION HELD Xm before this stop ***` — measures Pinnacle's real inactivity-logout window for the endurance test. |
 | `HARDVEN_AUTO_PAIR` | unset | **Sidecar:** `1` = re-run the pairing pipeline at startup + daily (account-free). Off = pair manually (§2). |
 | `HARDVEN_PAIR_HOUR` | `5` | **Sidecar:** local hour for the daily auto-pair run. |
 | `HARDVEN_PAIR_STARTUP_DELAY` | `8` | **Sidecar:** seconds to wait before the startup auto-pair (lets the sidecar's `/catalog` server come up). |
