@@ -196,11 +196,12 @@ class OrganicActivity:
             pass
         return False
 
-    async def _nav_click_random(self) -> bool:
+    async def _nav_click_random(self):
+        """Click a random sport's nav row → returns the slug clicked, or None if nothing matched (caller falls back)."""
         if not self._sports:
-            return False
+            return None
         slug, label = random.choice(self._sports)
-        return await self._nav_click(slug, label)
+        return slug if await self._nav_click(slug, label) else None
 
     # ── the loop ──────────────────────────────────────────────────────────────────
     def _next_gap(self) -> float:
@@ -232,10 +233,15 @@ class OrganicActivity:
                 await self._keyscroll()
             elif self._sports or self._urls:
                 name = "navclick"                   # flip sport via a real nav CLICK (soft-nav) → click keepalive
-                if not await self._nav_click_random():
+                clicked = await self._nav_click_random()
+                if clicked:
+                    print(f"[PINNACLE ORGANIC] nav-click → {clicked}")
+                else:
                     name = "navigate"               # fallback: full-load a browse URL (robust if selectors miss)
                     if self._urls:
-                        await self._page.goto(random.choice(self._urls), wait_until="domcontentloaded", timeout=30_000)
+                        url = random.choice(self._urls)
+                        await self._page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+                        print(f"[PINNACLE ORGANIC] nav-click missed (no link matched) → goto {url}")
             else:
                 name = "mouse"
                 await self._human_move(*self._pick_target())
