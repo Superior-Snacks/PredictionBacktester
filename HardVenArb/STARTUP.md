@@ -285,6 +285,9 @@ cause is throttling/swapping (server) vs a network blip (not the server).
 | `PINNACLE_MAX_BLOCKS` | `4` | **Sidecar:** keep only the densest N game-blocks per day (0 = all). The "3–4 blocks where the most matches happen." |
 | `PINNACLE_MIN_GAMES` | `1` | **Sidecar:** skip a block with fewer than this many matches (no login for one isolated game). |
 | `PINNACLE_ORGANIC` | on | **Sidecar:** `0` = disable the human-like mouse/scroll activity in the login window (the session still holds via the REST keepalive). |
+| `PINNACLE_WS_AUTH_GIVEUP` | `2` | **Sidecar:** consecutive WS CONNACK auth-rejects (rc 4/5) before treating the session as DEAD and stopping the feed. |
+| `PINNACLE_REST_AUTH_GIVEUP` | `3` | **Sidecar:** consecutive REST 401/403 on authed calls before declaring the session dead (the guest-redirect's backstop). |
+| `PINNACLE_WS_WARN_SEC` | `120` | **Sidecar:** log a "still reconnecting" warning after this long down. Transient drops (network/server) auto-reconnect **forever** like a real tab — only genuine session death stops the feed. (Old `PINNACLE_WS_GIVEUP_SEC` still read for compat.) |
 | `HARDVEN_AUTO_PAIR` | unset | **Sidecar:** `1` = re-run the pairing pipeline at startup + daily (account-free). Off = pair manually (§2). |
 | `HARDVEN_PAIR_HOUR` | `5` | **Sidecar:** local hour for the daily auto-pair run. |
 | `HARDVEN_PAIR_STARTUP_DELAY` | `8` | **Sidecar:** seconds to wait before the startup auto-pair (lets the sidecar's `/catalog` server come up). |

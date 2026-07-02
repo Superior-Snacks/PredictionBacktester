@@ -131,7 +131,14 @@ class PinnacleAdapter(BookAdapter):
         self._client = None
         self._connected = False
         self._ws_started = False                          # LAZY: WS connects only on the first /odds w/ a league
-        self._ws_gave_up = False                          # reconnect CAP tripped → stop retrying a dead session
+        self._ws_gave_up = False                          # SESSION-DEATH latch → stop retrying a DEAD session
+        # Give up ONLY on genuine session death, NEVER on a transient drop (a real browser tab retries those
+        # forever). Death signals: WS CONNACK auth-reject (rc 4/5) N× in a row, REST 401/403 M× in a row, or a
+        # REST guest-redirect. A transient network/server drop keeps auto-reconnecting (paho 1–60s) — see _ws_watchdog.
+        self._ws_auth_rejects = 0                         # consecutive WS CONNACK auth rejections (rc 4/5)
+        self._rest_auth_fails = 0                         # consecutive REST 401/403 on AUTHED calls
+        self._ws_auth_giveup = int(os.environ.get("PINNACLE_WS_AUTH_GIVEUP", "2"))
+        self._rest_auth_giveup = int(os.environ.get("PINNACLE_REST_AUTH_GIVEUP", "3"))
         self._ws_watchdog_task: Optional[asyncio.Task] = None
         self._reconciler_task: Optional[asyncio.Task] = None   # staggered league subscribes (organic timing)
         self._status_task: Optional[asyncio.Task] = None       # browser-like /status liveness ping
@@ -392,6 +399,7 @@ class PinnacleAdapter(BookAdapter):
         if self._session_ready and sess and sess != old_session:
             # a genuinely fresh session → recover from any terminal give-up so the next /odds restarts the feed
             self._session_expired = False
+            self._ws_auth_rejects = self._rest_auth_fails = 0   # fresh creds → clear the death streaks
             if self._ws_gave_up:
                 self._ws_gave_up = False
                 self._ws_started = False                  # next odds() relands _start_ws() with the new creds
@@ -417,6 +425,7 @@ class PinnacleAdapter(BookAdapter):
         self._ws_gave_up = False
         self._ws_started = False
         self._session_expired = False
+        self._ws_auth_rejects = self._rest_auth_fails = 0
         self._seeded.clear()
 
     def _on_session_closed(self) -> None:
@@ -461,7 +470,7 @@ class PinnacleAdapter(BookAdapter):
         try:
             self._client.connect_async(WS_HOST, 443, keepalive=60)
             self._client.loop_start()                    # background network thread
-            self._ws_watchdog_task = asyncio.create_task(self._ws_watchdog())     # reconnect cap
+            self._ws_watchdog_task = asyncio.create_task(self._ws_watchdog())     # WS health monitor (no give-up)
             self._reconciler_task = asyncio.create_task(self._sub_reconciler())   # staggered subscribes
             self._status_task = asyncio.create_task(self._status_ping())          # browser-like liveness ping
             self._session_ka_task = asyncio.create_task(self._session_keepalive()) # vs inactivity logout
@@ -488,34 +497,46 @@ class PinnacleAdapter(BookAdapter):
             print(f"[PINNACLE WS] subscribe {lid} error: {ex}")
 
     def _on_connect(self, client, userdata, flags, rc, *a) -> None:
-        ok = (rc == 0) or (getattr(rc, "value", None) == 0)
+        rc_val = getattr(rc, "value", rc)
+        ok = (rc_val == 0)
         self._connected = ok
         if ok:
+            self._ws_auth_rejects = 0                      # healthy connect clears the auth-fail streak
             print("[PINNACLE WS] connected (rc=0).")
             self._subscribed.clear()                      # the reconciler re-subscribes active leagues gradually
-        else:
-            print(f"[PINNACLE WS] connect REJECTED (rc={rc}) — bad/stale session? Refresh PINNACLE_WS_PASSWORD.")
+        elif rc_val in (4, 5):                            # CONNACK 4=bad user/pass, 5=not authorized → SESSION DEAD
+            self._ws_auth_rejects += 1
+            print(f"[PINNACLE WS] connect REJECTED (rc={rc}) — session/WS-password invalid "
+                  f"({self._ws_auth_rejects}/{self._ws_auth_giveup}).")
+            if self._ws_auth_rejects >= self._ws_auth_giveup:
+                self._give_up_ws(f"WS auth rejected {self._ws_auth_rejects}x (session dead)")
+        else:                                             # rc=3 server-unavailable etc. → TRANSIENT, let paho retry
+            print(f"[PINNACLE WS] connect failed (rc={rc}) — transient, auto-reconnecting.")
 
     def _on_disconnect(self, client, userdata, rc, *a) -> None:
         self._connected = False
         print(f"[PINNACLE WS] disconnected (rc={rc}) — auto-reconnecting (books go stale until back).")
 
     async def _ws_watchdog(self) -> None:
-        """Reconnect CAP: if the WS can't stay connected for PINNACLE_WS_GIVEUP_SEC (default 120s), STOP
-        reconnecting — so a dead/stale session (or a Cloudflare-blocked upgrade) isn't retried forever. One
-        time-based check covers every failure mode (auth-reject, blocked upgrade, persistent drops)."""
-        grace = float(os.environ.get("PINNACLE_WS_GIVEUP_SEC", "120"))
-        started, last_ok = time.time(), 0.0
+        """WS health MONITOR (no longer a give-up cap). A TRANSIENT drop — network blip, server-unavailable
+        (CONNACK rc=3), Cloudflare hiccup, clean disconnect — keeps auto-reconnecting FOREVER via paho's 1–60s
+        backoff, exactly like a real browser tab left open; we do NOT give up on it. Only genuine SESSION DEATH
+        stops the WS: a CONNACK auth-reject (rc 4/5, in _on_connect) or the REST guest-redirect / repeated
+        401-403. This loop just LOGS a prolonged outage once (so an operator knows), then keeps watching."""
+        warn_after = float(os.environ.get("PINNACLE_WS_WARN_SEC")
+                           or os.environ.get("PINNACLE_WS_GIVEUP_SEC", "120"))   # old env name kept for compat
+        last_ok, warned = time.time(), False
         while not self._ws_gave_up:
             try:
                 await asyncio.sleep(5)
             except asyncio.CancelledError:
                 break
             if self._connected:
-                last_ok = time.time()
-            elif time.time() - (last_ok or started) > grace:
-                self._give_up_ws(f"no healthy WS for {grace:.0f}s")
-                break
+                last_ok, warned = time.time(), False
+            elif not warned and time.time() - last_ok > warn_after:
+                warned = True
+                print(f"[PINNACLE WS] down >{warn_after:.0f}s — still auto-reconnecting (transient; a DEAD "
+                      "session would have stopped it). Books stay stale until it recovers.")
 
     def _give_up_ws(self, reason: str = "") -> None:
         if self._ws_gave_up:
@@ -558,7 +579,7 @@ class PinnacleAdapter(BookAdapter):
                 await asyncio.sleep(self._status_ping_sec)
             except asyncio.CancelledError:
                 break
-            await self._http_get("/status")
+            await self._http_get("/status", authed=False)   # camouflage only — carries no session; never an auth signal
 
     async def _session_keepalive(self) -> None:
         """Keep the x-session alive vs the ~90-min INACTIVITY logout (an idle session — only /status, no
@@ -765,14 +786,14 @@ class PinnacleAdapter(BookAdapter):
                     self._cache[token] = sel
 
     # ── HTTP (catalog + rest mode) ───────────────────────────────────────────
-    async def _http_get(self, path: str, count_429: bool = False):
+    async def _http_get(self, path: str, count_429: bool = False, authed: bool = True):
         if not self._http:
             return None
         try:
             r = await self._http.get(REST_BASE + path)
         except Exception as ex:
             print(f"[PINNACLE] GET {path} error: {type(ex).__name__}: {ex}")
-            return None
+            return None    # network error = TRANSIENT — never a session-death signal (don't touch the fail streak)
         if r.status_code == 429:
             if count_429:
                 self._rate_limited = True
@@ -780,7 +801,19 @@ class PinnacleAdapter(BookAdapter):
             print(f"[PINNACLE] *** RATE LIMITED (429) on {path} *** — raise PINNACLE_REFRESH_SEC / fewer leagues.")
             return None
         if r.status_code in (401, 403):
-            print(f"[PINNACLE] AUTH {r.status_code} on {path} — refresh PINNACLE_SESSION (re-capture token).")
+            # A single AUTHED 401/403 can be a blip; REPEATED = a dead session (the guest-redirect's sibling for
+            # servers that 401 instead of 302). Give up after N in a row so we STOP poking a dead session, but a
+            # lone blip just logs and keeps going (transient). Unauthed paths (/status) never count.
+            if authed:
+                self._rest_auth_fails += 1
+                print(f"[PINNACLE] AUTH {r.status_code} on {path} ({self._rest_auth_fails}/{self._rest_auth_giveup}) "
+                      "— session may be invalid.")
+                if self._rest_auth_fails >= self._rest_auth_giveup:
+                    self._session_expired = True
+                    self._session_ready = False
+                    self._give_up_ws(f"REST auth {r.status_code} x{self._rest_auth_fails} (session dead)")
+            else:
+                print(f"[PINNACLE] AUTH {r.status_code} on {path}.")
             return None
         if r.status_code in (301, 302, 303, 307, 308):
             loc = r.headers.get("location", "")
@@ -795,6 +828,8 @@ class PinnacleAdapter(BookAdapter):
         if r.status_code != 200:
             print(f"[PINNACLE] GET {path} HTTP {r.status_code}")
             return None
+        if authed:
+            self._rest_auth_fails = 0                       # a good AUTHED response clears the auth-fail streak
         try:
             return r.json()
         except Exception:
