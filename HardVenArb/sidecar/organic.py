@@ -52,7 +52,9 @@ def _cubic(p0, p1, p2, p3, t: float):
 class OrganicActivity:
     def __init__(self, page, browse_urls: list[str] | None = None,
                  min_gap: float = 20.0, max_gap: float = 150.0,
-                 long_gap_chance: float = 0.15, long_gap_max: float = 900.0):
+                 long_gap_chance: float = 0.10, long_gap_max: float = 240.0):   # cap the "stepped away" gap at 4m
+                 # ↑ keepalive-critical: the ~30-min idle logout means an interaction must land well inside 30m.
+                 # A 15-min long gap (old default 900) could time it out on its own → capped to 4m.
         self._page = page
         self._urls = list(browse_urls or [])
         # sport slugs parsed from the browse URLs (…/en/<sport>/…) → click the sport nav to flip between them
@@ -233,15 +235,18 @@ class OrganicActivity:
                 await self._keyscroll()
             elif self._sports or self._urls:
                 name = "navclick"                   # flip sport via a real nav CLICK (soft-nav) → click keepalive
-                clicked = await self._nav_click_random()
-                if clicked:
-                    print(f"[PINNACLE ORGANIC] nav-click → {clicked}")
-                else:
-                    name = "navigate"               # fallback: full-load a browse URL (robust if selectors miss)
-                    if self._urls:
+                try:
+                    clicked = await self._nav_click_random()
+                    if clicked:
+                        print(f"[PINNACLE ORGANIC] nav-click → {clicked}")
+                    elif self._urls:
+                        name = "navigate"           # fallback: full-load a browse URL (robust if selectors miss)
                         url = random.choice(self._urls)
                         await self._page.goto(url, wait_until="domcontentloaded", timeout=30_000)
                         print(f"[PINNACLE ORGANIC] nav-click missed (no link matched) → goto {url}")
+                except Exception as ex:                 # surface WHY it isn't firing (was silently swallowed as 'error')
+                    name = "error"
+                    print(f"[PINNACLE ORGANIC] nav-click ERROR: {type(ex).__name__}: {ex}")
             else:
                 name = "mouse"
                 await self._human_move(*self._pick_target())

@@ -99,7 +99,8 @@ class PinnacleBrowserSession:
         self._user_data = str(Path(os.environ.get("PINNACLE_USER_DATA_DIR") or _default_profile).expanduser().resolve())
         self._headless = os.environ.get("PINNACLE_HEADLESS") == "1"     # DEFAULT headful (you log in)
         self._channel = os.environ.get("PINNACLE_CHANNEL", "chrome")
-        self._activity_sec = float(os.environ.get("PINNACLE_BROWSER_ACTIVITY_SEC", "200"))
+        self._activity_sec = float(os.environ.get("PINNACLE_BROWSER_ACTIVITY_SEC", "120"))  # max normal gap; keepalive-dense
+        self._relogin_min = float(os.environ.get("PINNACLE_RELOGIN_MIN", "20"))  # periodic page reload to re-mint the session (< ~30m TTL; 0=off)
         # sport pages the organic loop occasionally browses to (real session). Default = the home page only
         # (always valid); override with PINNACLE_BROWSE_URLS once you've confirmed the sport-page URLs.
         self._browse_urls = [u.strip() for u in os.environ.get("PINNACLE_BROWSE_URLS", "").split(",") if u.strip()] \
@@ -120,6 +121,7 @@ class PinnacleBrowserSession:
         self._ready_announced = False
         # diagnostics: surface WHERE capture is stuck (x-session vs the MQTT-CONNECT WS login)
         self._status_task: Optional[asyncio.Task] = None
+        self._session_refresh_task: Optional[asyncio.Task] = None
         self._seen_req = False
         self._seen_ws = False
         self._logged_session = False
@@ -155,7 +157,14 @@ class PinnacleBrowserSession:
         self._pw = await async_playwright().start()
         launch = dict(user_data_dir=self._user_data, headless=self._headless,
                       viewport={"width": 1400, "height": 900},
-                      args=["--disable-blink-features=AutomationControlled"],
+                      args=["--disable-blink-features=AutomationControlled",
+                            # KEEP THE SESSION ALIVE WHEN BACKGROUNDED: Chrome throttles/freezes background-tab
+                            # timers, which stops Pinnacle's own setInterval session-refresh → ~30-min logout when
+                            # you walk away and the window drops behind others. These keep its timers running.
+                            # (Launch flags aren't visible to page JS → no detection cost.)
+                            "--disable-background-timer-throttling",
+                            "--disable-backgrounding-occluded-windows",
+                            "--disable-renderer-backgrounding"],
                       ignore_default_args=["--enable-automation"])
         try:
             self._ctx = await self._pw.chromium.launch_persistent_context(channel=self._channel, **launch)
@@ -185,6 +194,10 @@ class PinnacleBrowserSession:
         else:
             print("[PINNACLE SESSION] PINNACLE_ORGANIC=0 — organic activity OFF (session held by REST keepalive only).")
         self._status_task = asyncio.create_task(self._status_loop())
+        if self._relogin_min > 0:
+            self._session_refresh_task = asyncio.create_task(self._session_refresh_loop())
+            print(f"[PINNACLE SESSION] session-refresh keepalive ON — page reload every {self._relogin_min:g}m to re-mint "
+                  "(the reliable fix vs the ~30m idle logout; PINNACLE_RELOGIN_MIN=0 to disable).")
         print("\n" + "=" * 78)
         print("[PINNACLE SESSION] LOG IN in the Pinnacle window that just opened.")
         print("  - If the saved profile already remembers you, capture is automatic.")
@@ -193,7 +206,7 @@ class PinnacleBrowserSession:
         print("=" * 78 + "\n")
 
     async def stop(self) -> None:
-        for t in (self._activity_task, self._status_task):
+        for t in (self._activity_task, self._status_task, self._session_refresh_task):
             if t and not t.done():
                 t.cancel()
         try:
@@ -209,7 +222,7 @@ class PinnacleBrowserSession:
         # NULL state so start() can cleanly RE-OPEN on the next scheduled window (lifecycle cycles start/stop).
         # Captured creds are intentionally kept (the adapter still has them); the reopened profile re-emits them.
         self._pw = self._ctx = self._page = self._organic = None
-        self._activity_task = self._status_task = None
+        self._activity_task = self._status_task = self._session_refresh_task = None
 
     # ── capture: REST headers (x-session / device / api-key) ──────────────────────
     def _on_request(self, request) -> None:
@@ -412,6 +425,28 @@ class PinnacleBrowserSession:
                   f"WS login: {'YES' if self._have_ws else 'no'}"
                   f"{'  (Arcadia WS not yet seen by Playwright)' if not self._seen_ws else ''}. "
                   "Make sure you're logged IN and have BROWSED to a sport.")
+
+    async def _session_refresh_loop(self) -> None:
+        """GUARANTEED keepalive vs the ~30-min idle logout: every PINNACLE_RELOGIN_MIN (default 20, safely under
+        30) RELOAD the page. A reload re-runs the login via the saved profile → refreshes the session server-side
+        and re-emits a fresh x-session, which the adapter picks up via _on_browser_creds (same recovery path as a
+        sidecar restart). Reliable because it fires on a fixed schedule — unlike synthetic gestures, which don't
+        reset Pinnacle's timer. Pauses organic activity across the reload so a gesture can't fight it."""
+        while True:
+            try:
+                await asyncio.sleep(self._relogin_min * 60)
+            except asyncio.CancelledError:
+                break
+            if self._page is None:
+                continue
+            try:
+                self.pause_activity()
+                await self._page.reload(wait_until="domcontentloaded", timeout=45_000)
+                print(f"[PINNACLE SESSION] session refresh — reloaded to re-mint (next in {self._relogin_min:g}m).")
+            except Exception as ex:
+                print(f"[PINNACLE SESSION] session refresh reload error: {type(ex).__name__}: {ex}")
+            finally:
+                self.resume_activity()
 
     # ── execution interlock (delegates to the organic loop) ───────────────────────
     def pause_activity(self) -> None:

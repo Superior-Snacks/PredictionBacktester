@@ -83,6 +83,38 @@ def compute_windows(starts: list[tuple[datetime, str]], lead_min: int = 25, trai
     return [(o, c, g) for o, c, g in kept]
 
 
+def compute_sessions(starts: list[tuple[datetime, str]], session_hours: float = 2.0, lead_min: int = 15,
+                     trail_min: int = 45, min_games: int = 2, max_blocks: int = 4
+                     ) -> list[tuple[datetime, datetime, int]]:
+    """DISCRETE ~session_hours sessions at PEAK game-START density — the right model for CONTINUOUS sports
+    (tennis runs worldwide all day, so gap-merging collapses the whole slate into ONE window). Greedily take the
+    session_hours span containing the MOST game starts, claim those games, repeat up to max_blocks; drop clusters
+    with fewer than min_games. Each session = [first_start - lead, last_start + trail]. Chronological order."""
+    win = timedelta(hours=session_hours)
+    remaining = sorted(s for s, _ in starts)
+    sessions: list[tuple[datetime, datetime, int]] = []
+    while remaining and len(sessions) < max_blocks:
+        best_i, best_n = 0, 0
+        for i, t in enumerate(remaining):                 # densest window always starts at a game (count changes there)
+            n = 0
+            for u in remaining[i:]:
+                if u <= t + win:
+                    n += 1
+                else:
+                    break
+            if n > best_n:
+                best_n, best_i = n, i
+        if best_n < min_games:
+            break
+        t0 = remaining[best_i]
+        claimed = [u for u in remaining if t0 <= u <= t0 + win]
+        open_t = min(claimed) - timedelta(minutes=lead_min)
+        close_t = max(claimed) + timedelta(minutes=trail_min)
+        sessions.append((open_t, close_t, len(claimed)))
+        remaining = [u for u in remaining if not (open_t <= u <= close_t)]   # non-overlapping: drop everything in this span
+    return sorted(sessions, key=lambda w: w[0])
+
+
 def active_window(windows, now: datetime | None = None):
     """The window (open, close, games) containing `now` (UTC naive), or None."""
     now = now or _utcnow()
@@ -162,6 +194,10 @@ def main() -> None:
                     help="drop blocks with fewer than this many matches (default 1 = keep all)")
     ap.add_argument("--max-blocks", type=int, default=4,
                     help="keep at most this many blocks, the densest by match count (default 4; 0 = unlimited)")
+    ap.add_argument("--session-hours", type=float, default=0.0,
+                    help="SESSION mode: carve the densest N fixed ~this-many-hour sessions by game-START density "
+                         "(for continuous sports like tennis where gap-merge collapses the day into one block). "
+                         "0 = OFF (use the gap-merge window model). Try 2.")
     ap.add_argument("--write", action="store_true", help="also write work_windows.json for the bot")
     args = ap.parse_args()
 
@@ -174,11 +210,16 @@ def main() -> None:
     print(f"[SCHED] {len(starts)} games: " + ", ".join(f"{k}={v}" for k, v in sorted(bysport.items())))
 
     max_blocks = args.max_blocks or None      # 0 = unlimited
-    all_merged = compute_windows(starts, args.lead, args.trail, args.min_gap)                 # pre-selection
-    windows = compute_windows(starts, args.lead, args.trail, args.min_gap,
-                              min_games=args.min_games, max_blocks=max_blocks)                 # selected
-    dropped = len(all_merged) - len(windows)
-    sel = f" (selected the densest {len(windows)} of {len(all_merged)}; dropped {dropped})" if dropped else ""
+    if args.session_hours > 0:                 # SESSION mode: discrete density sessions (continuous-sport friendly)
+        windows = compute_sessions(starts, args.session_hours, args.lead, args.trail,
+                                   min_games=args.min_games, max_blocks=args.max_blocks or 4)
+        sel = f" (densest {len(windows)} × ~{args.session_hours:g}h sessions by game-start density)"
+    else:                                      # WINDOW mode: gap-merged blocks (good for clustered sports)
+        all_merged = compute_windows(starts, args.lead, args.trail, args.min_gap)
+        windows = compute_windows(starts, args.lead, args.trail, args.min_gap,
+                                  min_games=args.min_games, max_blocks=max_blocks)
+        dropped = len(all_merged) - len(windows)
+        sel = f" (selected the densest {len(windows)} of {len(all_merged)}; dropped {dropped})" if dropped else ""
     print(f"\n[SCHED] {len(windows)} work window(s){sel} (local time):")
     now = _utcnow()
     for o, c, g in windows:

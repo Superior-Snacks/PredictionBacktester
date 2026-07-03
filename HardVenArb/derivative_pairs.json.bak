@@ -1,41 +1,5 @@
 [
   {
-    "kalshi_ticker": "KXATPGSPREAD-26JUL02DUCCOB-COB2",
-    "market_type": "spread",
-    "line": 1.5,
-    "label": "James Duckworth vs Flavio Cobolli \u2014 Flavio Cobolli -1.5",
-    "event_id": "KXATPGSPREAD-26JUL02DUCCOB",
-    "settlement_date": "2026-07-02",
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "3335:1632262809:spread:-1.5:away",
-    "hardven_no_token": "3335:1632262809:spread:1.5:home"
-  },
-  {
-    "kalshi_ticker": "KXATPGSPREAD-26JUL02JACBUB-BUB8",
-    "market_type": "spread",
-    "line": 7.5,
-    "label": "Kyrian Jacquet vs Alexander Bublik \u2014 Alexander Bublik -7.5",
-    "event_id": "KXATPGSPREAD-26JUL02JACBUB",
-    "settlement_date": "2026-07-02",
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "3335:1632242992:spread:-7.5:away",
-    "hardven_no_token": "3335:1632242992:spread:7.5:home"
-  },
-  {
-    "kalshi_ticker": "KXATPGSPREAD-26JUL02LEHMOL-LEH9",
-    "market_type": "spread",
-    "line": 8.5,
-    "label": "Jiri Lehecka vs Alex Molcan \u2014 Jiri Lehecka -8.5",
-    "event_id": "KXATPGSPREAD-26JUL02LEHMOL",
-    "settlement_date": "2026-07-02",
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "3335:1632262757:spread:-8.5:home",
-    "hardven_no_token": "3335:1632262757:spread:8.5:away"
-  },
-  {
     "kalshi_ticker": "KXATPGSPREAD-26JUL02MENDIM-MEN2",
     "market_type": "spread",
     "line": 1.5,
@@ -48,76 +12,16 @@
     "hardven_no_token": "3335:1632244193:spread:1.5:away"
   },
   {
-    "kalshi_ticker": "KXATPGSPREAD-26JUL02TIACHO-TIA6",
+    "kalshi_ticker": "KXATPGSPREAD-26JUL02TIACHO-TIA9",
     "market_type": "spread",
-    "line": 5.5,
-    "label": "Frances Tiafoe vs Jan Choinski \u2014 Frances Tiafoe -5.5",
+    "line": 8.5,
+    "label": "Frances Tiafoe vs Jan Choinski \u2014 Frances Tiafoe -8.5",
     "event_id": "KXATPGSPREAD-26JUL02TIACHO",
     "settlement_date": "2026-07-02",
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "3335:1632263642:spread:-5.5:home",
-    "hardven_no_token": "3335:1632263642:spread:5.5:away"
-  },
-  {
-    "kalshi_ticker": "KXATPGTOTAL-26JUL02DUCCOB-44",
-    "market_type": "total",
-    "line": 43.5,
-    "label": "James Duckworth vs Flavio Cobolli \u2014 Over 43.5",
-    "event_id": "KXATPGTOTAL-26JUL02DUCCOB",
-    "settlement_date": "2026-07-02",
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "3335:1632262809:total:43.5:over",
-    "hardven_no_token": "3335:1632262809:total:43.5:under"
-  },
-  {
-    "kalshi_ticker": "KXATPGTOTAL-26JUL02MENDIM-42",
-    "market_type": "total",
-    "line": 41.5,
-    "label": "Jakub Mensik vs Grigor Dimitrov \u2014 Over 41.5",
-    "event_id": "KXATPGTOTAL-26JUL02MENDIM",
-    "settlement_date": "2026-07-02",
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "3335:1632244193:total:41.5:over",
-    "hardven_no_token": "3335:1632244193:total:41.5:under"
-  },
-  {
-    "kalshi_ticker": "KXATPGTOTAL-26JUL02TIACHO-42",
-    "market_type": "total",
-    "line": 41.5,
-    "label": "Frances Tiafoe vs Jan Choinski \u2014 Over 41.5",
-    "event_id": "KXATPGTOTAL-26JUL02TIACHO",
-    "settlement_date": "2026-07-02",
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "3335:1632263642:total:41.5:over",
-    "hardven_no_token": "3335:1632263642:total:41.5:under"
-  },
-  {
-    "kalshi_ticker": "KXMLBSPREAD-26JUL021235PITPHI-PHI2",
-    "market_type": "spread",
-    "line": 1.5,
-    "label": "Philadelphia Phillies vs Pittsburgh Pirates \u2014 Philadelphia -1.5",
-    "event_id": "KXMLBSPREAD-26JUL021235PITPHI",
-    "settlement_date": "2026-07-02",
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "246:1632270801:spread:-1.5:home",
-    "hardven_no_token": "246:1632270801:spread:1.5:away"
-  },
-  {
-    "kalshi_ticker": "KXMLBSPREAD-26JUL021235PITPHI-PHI3",
-    "market_type": "spread",
-    "line": 2.5,
-    "label": "Philadelphia Phillies vs Pittsburgh Pirates \u2014 Philadelphia -2.5",
-    "event_id": "KXMLBSPREAD-26JUL021235PITPHI",
-    "settlement_date": "2026-07-02",
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "246:1632270801:spread:-2.5:home",
-    "hardven_no_token": "246:1632270801:spread:2.5:away"
+    "hardven_yes_token": "3335:1632263642:spread:-8.5:home",
+    "hardven_no_token": "3335:1632263642:spread:8.5:away"
   },
   {
     "kalshi_ticker": "KXMLBSPREAD-26JUL021235PITPHI-PIT2",
@@ -132,6 +36,30 @@
     "hardven_no_token": "246:1632270801:spread:1.5:home"
   },
   {
+    "kalshi_ticker": "KXMLBSPREAD-26JUL021235PITPHI-PIT3",
+    "market_type": "spread",
+    "line": 2.5,
+    "label": "Philadelphia Phillies vs Pittsburgh Pirates \u2014 Pittsburgh -2.5",
+    "event_id": "KXMLBSPREAD-26JUL021235PITPHI",
+    "settlement_date": "2026-07-02",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "246:1632270801:spread:-2.5:away",
+    "hardven_no_token": "246:1632270801:spread:2.5:home"
+  },
+  {
+    "kalshi_ticker": "KXMLBSPREAD-26JUL021235PITPHI-PIT4",
+    "market_type": "spread",
+    "line": 3.5,
+    "label": "Philadelphia Phillies vs Pittsburgh Pirates \u2014 Pittsburgh -3.5",
+    "event_id": "KXMLBSPREAD-26JUL021235PITPHI",
+    "settlement_date": "2026-07-02",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "246:1632270801:spread:-3.5:away",
+    "hardven_no_token": "246:1632270801:spread:3.5:home"
+  },
+  {
     "kalshi_ticker": "KXMLBSPREAD-26JUL021410CINMIL-CIN2",
     "market_type": "spread",
     "line": 1.5,
@@ -140,8 +68,20 @@
     "settlement_date": "2026-07-02",
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "246:1632128271:spread:-1.5:away",
-    "hardven_no_token": "246:1632128271:spread:1.5:home"
+    "hardven_yes_token": "246:1632273065:spread:-1.5:away",
+    "hardven_no_token": "246:1632273065:spread:1.5:home"
+  },
+  {
+    "kalshi_ticker": "KXMLBSPREAD-26JUL021410CINMIL-CIN3",
+    "market_type": "spread",
+    "line": 2.5,
+    "label": "Milwaukee Brewers vs Cincinnati Reds \u2014 Cincinnati -2.5",
+    "event_id": "KXMLBSPREAD-26JUL021410CINMIL",
+    "settlement_date": "2026-07-02",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "246:1632273065:spread:-2.5:away",
+    "hardven_no_token": "246:1632273065:spread:2.5:home"
   },
   {
     "kalshi_ticker": "KXMLBSPREAD-26JUL021410CINMIL-MIL2",
@@ -152,20 +92,8 @@
     "settlement_date": "2026-07-02",
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "246:1632128271:spread:-1.5:home",
-    "hardven_no_token": "246:1632128271:spread:1.5:away"
-  },
-  {
-    "kalshi_ticker": "KXMLBSPREAD-26JUL021410CINMIL-MIL3",
-    "market_type": "spread",
-    "line": 2.5,
-    "label": "Milwaukee Brewers vs Cincinnati Reds \u2014 Milwaukee -2.5",
-    "event_id": "KXMLBSPREAD-26JUL021410CINMIL",
-    "settlement_date": "2026-07-02",
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "246:1632128271:spread:-2.5:home",
-    "hardven_no_token": "246:1632128271:spread:2.5:away"
+    "hardven_yes_token": "246:1632273065:spread:-1.5:home",
+    "hardven_no_token": "246:1632273065:spread:1.5:away"
   },
   {
     "kalshi_ticker": "KXMLBSPREAD-26JUL021510MIACOL-COL2",
@@ -204,16 +132,28 @@
     "hardven_no_token": "246:1632130708:spread:2.5:home"
   },
   {
-    "kalshi_ticker": "KXMLBTOTAL-26JUL021235PITPHI-10",
+    "kalshi_ticker": "KXMLBTOTAL-26JUL021235PITPHI-5",
     "market_type": "total",
-    "line": 9.5,
-    "label": "Philadelphia Phillies vs Pittsburgh Pirates \u2014 Over 9.5",
+    "line": 4.5,
+    "label": "Philadelphia Phillies vs Pittsburgh Pirates \u2014 Over 4.5",
     "event_id": "KXMLBTOTAL-26JUL021235PITPHI",
     "settlement_date": "2026-07-02",
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "246:1632270801:total:9.5:over",
-    "hardven_no_token": "246:1632270801:total:9.5:under"
+    "hardven_yes_token": "246:1632270801:total:4.5:over",
+    "hardven_no_token": "246:1632270801:total:4.5:under"
+  },
+  {
+    "kalshi_ticker": "KXMLBTOTAL-26JUL021235PITPHI-6",
+    "market_type": "total",
+    "line": 5.5,
+    "label": "Philadelphia Phillies vs Pittsburgh Pirates \u2014 Over 5.5",
+    "event_id": "KXMLBTOTAL-26JUL021235PITPHI",
+    "settlement_date": "2026-07-02",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "246:1632270801:total:5.5:over",
+    "hardven_no_token": "246:1632270801:total:5.5:under"
   },
   {
     "kalshi_ticker": "KXMLBTOTAL-26JUL021235PITPHI-7",
@@ -240,18 +180,6 @@
     "hardven_no_token": "246:1632270801:total:7.5:under"
   },
   {
-    "kalshi_ticker": "KXMLBTOTAL-26JUL021235PITPHI-9",
-    "market_type": "total",
-    "line": 8.5,
-    "label": "Philadelphia Phillies vs Pittsburgh Pirates \u2014 Over 8.5",
-    "event_id": "KXMLBTOTAL-26JUL021235PITPHI",
-    "settlement_date": "2026-07-02",
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "246:1632270801:total:8.5:over",
-    "hardven_no_token": "246:1632270801:total:8.5:under"
-  },
-  {
     "kalshi_ticker": "KXMLBTOTAL-26JUL021410CINMIL-6",
     "market_type": "total",
     "line": 5.5,
@@ -260,8 +188,8 @@
     "settlement_date": "2026-07-02",
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "246:1632128271:total:5.5:over",
-    "hardven_no_token": "246:1632128271:total:5.5:under"
+    "hardven_yes_token": "246:1632273065:total:5.5:over",
+    "hardven_no_token": "246:1632273065:total:5.5:under"
   },
   {
     "kalshi_ticker": "KXMLBTOTAL-26JUL021410CINMIL-7",
@@ -272,8 +200,8 @@
     "settlement_date": "2026-07-02",
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "246:1632128271:total:6.5:over",
-    "hardven_no_token": "246:1632128271:total:6.5:under"
+    "hardven_yes_token": "246:1632273065:total:6.5:over",
+    "hardven_no_token": "246:1632273065:total:6.5:under"
   },
   {
     "kalshi_ticker": "KXMLBTOTAL-26JUL021410CINMIL-8",
@@ -284,8 +212,8 @@
     "settlement_date": "2026-07-02",
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "246:1632128271:total:7.5:over",
-    "hardven_no_token": "246:1632128271:total:7.5:under"
+    "hardven_yes_token": "246:1632273065:total:7.5:over",
+    "hardven_no_token": "246:1632273065:total:7.5:under"
   },
   {
     "kalshi_ticker": "KXMLBTOTAL-26JUL021410CINMIL-9",
@@ -296,8 +224,8 @@
     "settlement_date": "2026-07-02",
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "246:1632128271:total:8.5:over",
-    "hardven_no_token": "246:1632128271:total:8.5:under"
+    "hardven_yes_token": "246:1632273065:total:8.5:over",
+    "hardven_no_token": "246:1632273065:total:8.5:under"
   },
   {
     "kalshi_ticker": "KXMLBTOTAL-26JUL021510MIACOL-11",
@@ -372,6 +300,18 @@
     "hardven_no_token": "3336:1632263562:spread:4.5:away"
   },
   {
+    "kalshi_ticker": "KXATPGSPREAD-26JUL03JODMOC-JOD6",
+    "market_type": "spread",
+    "line": 5.5,
+    "label": "Rafael Jodar vs Shintaro Mochizuki \u2014 Rafael Jodar -5.5",
+    "event_id": "KXATPGSPREAD-26JUL03JODMOC",
+    "settlement_date": "2026-07-03",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "3336:1632282587:spread:-5.5:home",
+    "hardven_no_token": "3336:1632282587:spread:5.5:away"
+  },
+  {
     "kalshi_ticker": "KXATPGSPREAD-26JUL03RINDJO-DJO7",
     "market_type": "spread",
     "line": 6.5,
@@ -442,6 +382,30 @@
     "hardven_min_size": 1.0,
     "hardven_yes_token": "3336:1632262594:total:41.5:over",
     "hardven_no_token": "3336:1632262594:total:41.5:under"
+  },
+  {
+    "kalshi_ticker": "KXATPGTOTAL-26JUL03JODMOC-38",
+    "market_type": "total",
+    "line": 37.5,
+    "label": "Rafael Jodar vs Shintaro Mochizuki \u2014 Over 37.5",
+    "event_id": "KXATPGTOTAL-26JUL03JODMOC",
+    "settlement_date": "2026-07-03",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "3336:1632282587:total:37.5:over",
+    "hardven_no_token": "3336:1632282587:total:37.5:under"
+  },
+  {
+    "kalshi_ticker": "KXATPGTOTAL-26JUL03RINDJO-36",
+    "market_type": "total",
+    "line": 35.5,
+    "label": "Arthur Rinderknech vs Novak Djokovic \u2014 Over 35.5",
+    "event_id": "KXATPGTOTAL-26JUL03RINDJO",
+    "settlement_date": "2026-07-03",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "3336:1632269413:total:35.5:over",
+    "hardven_no_token": "3336:1632269413:total:35.5:under"
   },
   {
     "kalshi_ticker": "KXATPGTOTAL-26JUL03SAFFON-39",
@@ -1044,6 +1008,18 @@
     "hardven_no_token": "246:1632138366:total:9.5:under"
   },
   {
+    "kalshi_ticker": "KXMLBTOTAL-26JUL021915STLATL-11",
+    "market_type": "total",
+    "line": 10.5,
+    "label": "Atlanta Braves vs St. Louis Cardinals \u2014 Over 10.5",
+    "event_id": "KXMLBTOTAL-26JUL021915STLATL",
+    "settlement_date": "2026-07-03",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "246:1632138366:total:10.5:over",
+    "hardven_no_token": "246:1632138366:total:10.5:under"
+  },
+  {
     "kalshi_ticker": "KXMLBTOTAL-26JUL021915STLATL-8",
     "market_type": "total",
     "line": 7.5,
@@ -1150,6 +1126,18 @@
     "hardven_min_size": 1.0,
     "hardven_yes_token": "246:1632130815:total:8.5:over",
     "hardven_no_token": "246:1632130815:total:8.5:under"
+  },
+  {
+    "kalshi_ticker": "KXMLBTOTAL-26JUL022140LAASEA-6",
+    "market_type": "total",
+    "line": 5.5,
+    "label": "Seattle Mariners vs Los Angeles Angels \u2014 Over 5.5",
+    "event_id": "KXMLBTOTAL-26JUL022140LAASEA",
+    "settlement_date": "2026-07-03",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "246:1632130824:total:5.5:over",
+    "hardven_no_token": "246:1632130824:total:5.5:under"
   },
   {
     "kalshi_ticker": "KXMLBTOTAL-26JUL022140LAASEA-7",
@@ -1260,6 +1248,18 @@
     "hardven_no_token": "3336:1632283431:spread:5.5:away"
   },
   {
+    "kalshi_ticker": "KXATPGSPREAD-26JUL04GIRZVE-ZVE7",
+    "market_type": "spread",
+    "line": 6.5,
+    "label": "Marcos Giron vs Alexander Zverev \u2014 Alexander Zverev -6.5",
+    "event_id": "KXATPGSPREAD-26JUL04GIRZVE",
+    "settlement_date": "2026-07-04",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "3336:1632284712:spread:-6.5:away",
+    "hardven_no_token": "3336:1632284712:spread:6.5:home"
+  },
+  {
     "kalshi_ticker": "KXATPGTOTAL-26JUL04DESVA-35",
     "market_type": "total",
     "line": 34.5,
@@ -1270,5 +1270,29 @@
     "hardven_min_size": 1.0,
     "hardven_yes_token": "3336:1632283640:total:34.5:over",
     "hardven_no_token": "3336:1632283640:total:34.5:under"
+  },
+  {
+    "kalshi_ticker": "KXATPGTOTAL-26JUL04FRISON-39",
+    "market_type": "total",
+    "line": 38.5,
+    "label": "Taylor Fritz vs Lorenzo Sonego \u2014 Over 38.5",
+    "event_id": "KXATPGTOTAL-26JUL04FRISON",
+    "settlement_date": "2026-07-04",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "3336:1632283431:total:38.5:over",
+    "hardven_no_token": "3336:1632283431:total:38.5:under"
+  },
+  {
+    "kalshi_ticker": "KXATPGTOTAL-26JUL04GIRZVE-34",
+    "market_type": "total",
+    "line": 33.5,
+    "label": "Marcos Giron vs Alexander Zverev \u2014 Over 33.5",
+    "event_id": "KXATPGTOTAL-26JUL04GIRZVE",
+    "settlement_date": "2026-07-04",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "3336:1632284712:total:33.5:over",
+    "hardven_no_token": "3336:1632284712:total:33.5:under"
   }
 ]

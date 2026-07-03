@@ -176,6 +176,7 @@ class PinnacleAdapter(BookAdapter):
         self._lifecycle_lead = _cfg_int("PINNACLE_LEAD_MIN", 15)
         self._lifecycle_max_blocks = _cfg_int("PINNACLE_MAX_BLOCKS", 4)
         self._lifecycle_min_games = _cfg_int("PINNACLE_MIN_GAMES", 1)
+        self._lifecycle_session_hours = float(os.environ.get("PINNACLE_SESSION_HOURS", "0"))  # >0 = discrete Nh density-sessions
         self._lifecycle = None
         self._lifecycle_task = None
 
@@ -230,11 +231,14 @@ class PinnacleAdapter(BookAdapter):
                                                         on_close=self._on_session_closed,
                                                         lead_min=self._lifecycle_lead,
                                                         min_games=self._lifecycle_min_games,
-                                                        max_blocks=(self._lifecycle_max_blocks or None))
+                                                        max_blocks=(self._lifecycle_max_blocks or None),
+                                                        session_hours=self._lifecycle_session_hours)
                     self._lifecycle_task = asyncio.create_task(self._lifecycle.run())
+                    mode = (f"{self._lifecycle_session_hours:g}h density-sessions" if self._lifecycle_session_hours > 0
+                            else f"gap-merge, densest {self._lifecycle_max_blocks} blocks")
                     print(f"[PINNACLE] session source = BROWSER + LIFECYCLE (sports={self._lifecycle_sports}, "
-                          f"lead {self._lifecycle_lead}m, densest {self._lifecycle_max_blocks} blocks) — "
-                          "the browser opens/closes on the game schedule; dark between windows.")
+                          f"{mode}, lead {self._lifecycle_lead}m) — the browser opens/closes on the game "
+                          "schedule; dark between sessions.")
                 else:
                     await self._browser.start()
                     print("[PINNACLE] session source = BROWSER — log in to the window; the feed waits for "

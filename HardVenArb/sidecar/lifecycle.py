@@ -28,7 +28,7 @@ class PinnacleLifecycle:
                  on_close: Callable[[], None] | None = None, recompute_sec: float = 3600.0,
                  poll_cap_sec: float = 600.0, horizon_hours: int = 36,
                  lead_min: int = 15, trail_min: int = 45, min_gap_min: int = 60,
-                 min_games: int = 1, max_blocks: int | None = 4):
+                 min_games: int = 1, max_blocks: int | None = 4, session_hours: float = 0.0):
         self._browser = browser
         self._sports = sports
         self._on_open = on_open or (lambda: None)
@@ -42,6 +42,7 @@ class PinnacleLifecycle:
         self._min_gap_min = min_gap_min
         self._min_games = min_games
         self._max_blocks = max_blocks
+        self._session_hours = session_hours   # >0 = discrete density-session mode (continuous sports); 0 = gap-merge windows
         self._windows: list = []
         self._win_ts = 0.0
         self._open = False
@@ -57,16 +58,22 @@ class PinnacleLifecycle:
             print(f"[PINNACLE LIFECYCLE] slate fetch failed ({type(ex).__name__}: {ex}); keeping "
                   f"last {len(self._windows)} window(s)")
             return
-        new = sched.compute_windows(starts, self._lead_min, self._trail_min, self._min_gap_min,
-                                    min_games=self._min_games, max_blocks=self._max_blocks)
+        if self._session_hours > 0:                # discrete ~Nh sessions by game-START density (continuous sports)
+            new = sched.compute_sessions(starts, self._session_hours, self._lead_min, self._trail_min,
+                                         min_games=self._min_games, max_blocks=self._max_blocks or 4)
+            mode = f"{self._session_hours:g}h density-sessions"
+        else:                                      # gap-merged windows (clustered sports)
+            new = sched.compute_windows(starts, self._lead_min, self._trail_min, self._min_gap_min,
+                                        min_games=self._min_games, max_blocks=self._max_blocks)
+            mode = f"gap-merge, densest {self._max_blocks}"
         if not new and self._windows:
             print("[PINNACLE LIFECYCLE] slate returned 0 usable windows; keeping last windows (transient?)")
             return
         self._windows = new
         self._win_ts = sched._utcnow().timestamp()
         games_kept = sum(w[2] for w in self._windows)
-        print(f"[PINNACLE LIFECYCLE] {len(self._windows)} work window(s) planned "
-              f"(lead {self._lead_min}m, densest {self._max_blocks}; {games_kept}/{len(starts)} games in-window).")
+        print(f"[PINNACLE LIFECYCLE] {len(self._windows)} session(s) planned "
+              f"({mode}, lead {self._lead_min}m; {games_kept}/{len(starts)} games in-window).")
 
     async def tick(self, now=None) -> float | None:
         """One decision step: open if `now` is inside a window and we're closed; close if outside and we're
