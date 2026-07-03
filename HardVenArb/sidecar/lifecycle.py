@@ -28,7 +28,8 @@ class PinnacleLifecycle:
                  on_close: Callable[[], None] | None = None, recompute_sec: float = 3600.0,
                  poll_cap_sec: float = 600.0, horizon_hours: int = 36,
                  lead_min: int = 15, trail_min: int = 45, min_gap_min: int = 60,
-                 min_games: int = 1, max_blocks: int | None = 4, session_hours: float = 0.0):
+                 min_games: int = 1, max_blocks: int | None = 4, session_hours: float = 0.0,
+                 manual_plan: str | None = None):
         self._browser = browser
         self._sports = sports
         self._on_open = on_open or (lambda: None)
@@ -43,6 +44,7 @@ class PinnacleLifecycle:
         self._min_games = min_games
         self._max_blocks = max_blocks
         self._session_hours = session_hours   # >0 = discrete density-session mode (continuous sports); 0 = gap-merge windows
+        self._manual_plan = manual_plan       # path to a hand-written test plan (overrides the slate) — for cycle testing
         self._windows: list = []
         self._win_ts = 0.0
         self._open = False
@@ -52,6 +54,19 @@ class PinnacleLifecycle:
     async def _refresh_windows(self) -> None:
         """Recompute work windows from the live slate. On a fetch failure OR a transient empty result, KEEP the
         last windows (don't yank the browser shut mid-session over a guest-API blip)."""
+        if self._manual_plan:                        # TEST override: a hand-written plan; no slate fetch/compute
+            if self._windows:                        # relative offsets are anchored on first load → keep them
+                return
+            try:
+                self._windows = sched.load_manual_plan(self._manual_plan)
+                self._win_ts = sched._utcnow().timestamp()
+                print(f"[PINNACLE LIFECYCLE] *** MANUAL TEST PLAN *** ({self._manual_plan}) — {len(self._windows)} window(s):")
+                for o, c, _ in self._windows:
+                    print(f"     open {sched._local(o):%H:%M:%S} → close {sched._local(c):%H:%M:%S}  "
+                          f"({(c - o).total_seconds() / 60:.1f}m open)")
+            except Exception as ex:
+                print(f"[PINNACLE LIFECYCLE] manual plan load FAILED ({type(ex).__name__}: {ex}) — check {self._manual_plan}")
+            return
         try:
             starts = await asyncio.to_thread(sched.fetch_starts, self._sports, self._horizon)
         except Exception as ex:

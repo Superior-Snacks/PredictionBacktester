@@ -115,6 +115,25 @@ def compute_sessions(starts: list[tuple[datetime, str]], session_hours: float = 
     return sorted(sessions, key=lambda w: w[0])
 
 
+def load_manual_plan(path: str, base: datetime | None = None) -> list[tuple[datetime, datetime, int]]:
+    """Load a MANUAL test plan that OVERRIDES the game slate — for quickly verifying the lifecycle's
+    open→wait→close→wait→open cycle WITHOUT waiting for real games. Each entry is either RELATIVE (easy for
+    testing): {"open_in": <min from base>, "close_in": <min from base>} — base defaults to now (plan-load time);
+    or ABSOLUTE: {"open": <ISO-UTC>, "close": <ISO-UTC>}. Returns [(open_utc, close_utc, games), ...] sorted."""
+    base = base or _utcnow()
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    out: list[tuple[datetime, datetime, int]] = []
+    for e in data:
+        if "open_in" in e or "close_in" in e:
+            o = base + timedelta(minutes=float(e["open_in"]))
+            c = base + timedelta(minutes=float(e["close_in"]))
+        else:
+            o, c = _pin_dt(e.get("open", "")), _pin_dt(e.get("close", ""))
+        if o and c and c > o:
+            out.append((o, c, int(e.get("games", 1))))
+    return sorted(out, key=lambda w: w[0])
+
+
 def active_window(windows, now: datetime | None = None):
     """The window (open, close, games) containing `now` (UTC naive), or None."""
     now = now or _utcnow()
