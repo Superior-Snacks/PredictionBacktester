@@ -37,6 +37,7 @@ import asyncio
 import base64
 import os
 import random
+import re
 import time
 from pathlib import Path
 from typing import Callable, Optional
@@ -101,6 +102,16 @@ class PinnacleBrowserSession:
         self._channel = os.environ.get("PINNACLE_CHANNEL", "chrome")
         self._activity_sec = float(os.environ.get("PINNACLE_BROWSER_ACTIVITY_SEC", "120"))  # max normal gap; keepalive-dense
         self._relogin_min = float(os.environ.get("PINNACLE_RELOGIN_MIN", "20"))  # periodic page reload to re-mint the session (< ~30m TTL; 0=off)
+        # UNATTENDED AUTO-LOGIN: on (re)open, if the page is sitting on a login form (session dropped across a
+        # dark gap or a hard expiry), submit the Chrome-profile-AUTOFILLED credentials by pressing Enter. NO
+        # credentials are typed or stored here — the saved profile fills email+password; we only submit, and
+        # ONLY when the password field is already non-empty (so first-time MANUAL setup is untouched). Default
+        # ON; PINNACLE_AUTO_LOGIN=0 disables (revert to manual login).
+        self._auto_login = os.environ.get("PINNACLE_AUTO_LOGIN") != "0"
+        self._login_check_sec = float(os.environ.get("PINNACLE_LOGIN_CHECK_SEC", "8"))         # how often to look for a login form
+        self._login_submit_cooldown = float(os.environ.get("PINNACLE_LOGIN_SUBMIT_COOLDOWN", "30"))  # min gap between submit attempts
+        self._last_login_submit = 0.0
+        self._login_task: Optional[asyncio.Task] = None
         # sport pages the organic loop occasionally browses to (real session). Default = the home page only
         # (always valid); override with PINNACLE_BROWSE_URLS once you've confirmed the sport-page URLs.
         self._browse_urls = [u.strip() for u in os.environ.get("PINNACLE_BROWSE_URLS", "").split(",") if u.strip()] \
@@ -198,6 +209,10 @@ class PinnacleBrowserSession:
             self._session_refresh_task = asyncio.create_task(self._session_refresh_loop())
             print(f"[PINNACLE SESSION] session-refresh keepalive ON — page reload every {self._relogin_min:g}m to re-mint "
                   "(the reliable fix vs the ~30m idle logout; PINNACLE_RELOGIN_MIN=0 to disable).")
+        if self._auto_login:
+            self._login_task = asyncio.create_task(self._login_watch_loop())
+            print("[PINNACLE SESSION] auto-login watcher ON — presses Enter on an autofilled login form to re-auth "
+                  "unattended across dark gaps (profile fills the credentials; PINNACLE_AUTO_LOGIN=0 to disable).")
         print("\n" + "=" * 78)
         print("[PINNACLE SESSION] LOG IN in the Pinnacle window that just opened.")
         print("  - If the saved profile already remembers you, capture is automatic.")
@@ -206,7 +221,7 @@ class PinnacleBrowserSession:
         print("=" * 78 + "\n")
 
     async def stop(self) -> None:
-        for t in (self._activity_task, self._status_task, self._session_refresh_task):
+        for t in (self._activity_task, self._status_task, self._session_refresh_task, self._login_task):
             if t and not t.done():
                 t.cancel()
         try:
@@ -222,7 +237,7 @@ class PinnacleBrowserSession:
         # NULL state so start() can cleanly RE-OPEN on the next scheduled window (lifecycle cycles start/stop).
         # Captured creds are intentionally kept (the adapter still has them); the reopened profile re-emits them.
         self._pw = self._ctx = self._page = self._organic = None
-        self._activity_task = self._status_task = self._session_refresh_task = None
+        self._activity_task = self._status_task = self._session_refresh_task = self._login_task = None
 
     # ── capture: REST headers (x-session / device / api-key) ──────────────────────
     def _on_request(self, request) -> None:
@@ -447,6 +462,73 @@ class PinnacleBrowserSession:
                 print(f"[PINNACLE SESSION] session refresh reload error: {type(ex).__name__}: {ex}")
             finally:
                 self.resume_activity()
+            if self._auto_login:
+                await self._ensure_logged_in()   # a hard-expired session shows the login form right after reload
+
+    # ── unattended re-login (press Enter on the profile-autofilled form) ───────────
+    async def _ensure_logged_in(self) -> bool:
+        """If a visible password field is present AND already autofilled, the page is on a login form (session
+        dropped) → submit by pressing Enter (button-click fallback if the form lingers). Safe gate: a visible
+        `input[type=password]` only exists on the login page, and we act ONLY when it's already non-empty, so
+        this is a no-op on normal betting pages AND during first-time MANUAL setup (empty form). No credentials
+        are typed — Chrome's saved profile fills them; we only submit. Never raises. Returns True on submit."""
+        if self._page is None:
+            return False
+        try:
+            pw = self._page.locator("input[type=password]:visible").first
+            if await pw.count() == 0:
+                return False
+            val = await pw.input_value()
+        except Exception:
+            return False
+        if not val:
+            return False                                   # empty form → manual setup / not autofilled; leave it
+        if time.time() - self._last_login_submit < self._login_submit_cooldown:
+            return False                                   # don't hammer the login form
+        self._last_login_submit = time.time()
+        print("[PINNACLE SESSION] login form detected + autofilled — submitting (Enter) for unattended re-login.")
+        try:
+            await pw.press("Enter")                        # field already filled by the profile; Enter submits
+            await asyncio.sleep(2.5)
+            if await self._page.locator("input[type=password]:visible").count() > 0:
+                await self._click_login_button()           # Enter didn't clear the form → explicit submit button
+        except Exception as ex:
+            print(f"[PINNACLE SESSION] auto-login submit error: {type(ex).__name__}: {ex}")
+        return True
+
+    async def _click_login_button(self) -> None:
+        """Fallback submit: click a visible Log In / Sign In button (role/name first, then a submit button)."""
+        try:
+            b = self._page.get_by_role("button", name=re.compile(r"log\s*in|sign\s*in", re.I))
+            if await b.count() > 0:
+                await b.first.click(timeout=3000)
+                print("[PINNACLE SESSION] auto-login: clicked Log In button (role/name).")
+                return
+        except Exception:
+            pass
+        for sel in ('button[type="submit"]:visible', 'input[type="submit"]:visible'):
+            try:
+                b = self._page.locator(sel).first
+                if await b.count() > 0:
+                    await b.click(timeout=3000)
+                    print(f"[PINNACLE SESSION] auto-login: clicked submit ({sel}).")
+                    return
+            except Exception:
+                continue
+
+    async def _login_watch_loop(self) -> None:
+        """Unattended re-login watcher: periodically look for an autofilled login form and submit it. Covers
+        initial open, reopen after a dark gap that logged us out, and a mid-session logout. The `:visible` +
+        non-empty gate in _ensure_logged_in makes each tick a no-op unless a real, filled login form is up."""
+        while True:
+            try:
+                await asyncio.sleep(self._login_check_sec)
+            except asyncio.CancelledError:
+                break
+            try:
+                await self._ensure_logged_in()
+            except Exception:
+                pass
 
     # ── execution interlock (delegates to the organic loop) ───────────────────────
     def pause_activity(self) -> None:
