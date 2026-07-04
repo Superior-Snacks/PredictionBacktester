@@ -487,32 +487,49 @@ class PinnacleBrowserSession:
             return False                                   # don't hammer the login form
         self._last_login_submit = time.time()
         print("[PINNACLE SESSION] login form detected + autofilled — submitting (Enter) for unattended re-login.")
+        self.pause_activity()                              # don't let an organic gesture fight the submit
         try:
-            await pw.press("Enter")                        # field already filled by the profile; Enter submits
+            # HUMAN BEAT: a real user reads the page and pauses before submitting; a sub-second auto-submit at a
+            # fixed offset is the robotic tell. Randomize the think-time so it's neither instant nor a constant.
+            await asyncio.sleep(random.uniform(1.4, 4.2))
+            await self._human_approach(pw)                 # drift the cursor to the field first (real mouse path)
+            await asyncio.sleep(random.uniform(0.15, 0.5))
+            await pw.press("Enter")                        # field is profile-filled; Enter submits (common human flow)
             await asyncio.sleep(2.5)
             if await self._page.locator("input[type=password]:visible").count() > 0:
-                await self._click_login_button()           # Enter didn't clear the form → explicit submit button
+                await self._click_login_button()           # Enter didn't submit → click the button (with approach)
         except Exception as ex:
             print(f"[PINNACLE SESSION] auto-login submit error: {type(ex).__name__}: {ex}")
+        finally:
+            self.resume_activity()
         return True
 
-    async def _click_login_button(self) -> None:
-        """Fallback submit: click a visible Log In / Sign In button (role/name first, then a submit button)."""
+    async def _human_approach(self, locator) -> None:
+        """Best-effort: move the mouse to a locator's centre along organic's HUMAN path before acting, so a
+        submit/click is preceded by a real cursor approach (hover), not a teleport. No-op if organic or the
+        element box is unavailable. Never raises."""
         try:
-            b = self._page.get_by_role("button", name=re.compile(r"log\s*in|sign\s*in", re.I))
-            if await b.count() > 0:
-                await b.first.click(timeout=3000)
-                print("[PINNACLE SESSION] auto-login: clicked Log In button (role/name).")
-                return
+            box = await locator.bounding_box()
+            if box and self._organic is not None and hasattr(self._organic, "_human_move"):
+                await self._organic._human_move(box["x"] + box["width"] * 0.5,
+                                                box["y"] + box["height"] * 0.5, clamp=False)
         except Exception:
             pass
-        for sel in ('button[type="submit"]:visible', 'input[type="submit"]:visible'):
+
+    async def _click_login_button(self) -> None:
+        """Fallback submit: click a visible Log In / Sign In button, cursor-approaching it first (human path)."""
+        for loc in (self._page.get_by_role("button", name=re.compile(r"log\s*in|sign\s*in", re.I)),
+                    self._page.locator('button[type="submit"]:visible'),
+                    self._page.locator('input[type="submit"]:visible')):
             try:
-                b = self._page.locator(sel).first
-                if await b.count() > 0:
-                    await b.click(timeout=3000)
-                    print(f"[PINNACLE SESSION] auto-login: clicked submit ({sel}).")
-                    return
+                b = loc.first
+                if await b.count() == 0:
+                    continue
+                await self._human_approach(b)
+                await asyncio.sleep(random.uniform(0.1, 0.35))
+                await b.click(timeout=3000)
+                print("[PINNACLE SESSION] auto-login: clicked submit button (cursor-approached).")
+                return
             except Exception:
                 continue
 
