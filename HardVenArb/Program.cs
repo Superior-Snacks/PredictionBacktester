@@ -659,6 +659,78 @@ var hardvenFeed   = new HardVenWebsocketFeed(HARDVEN_SIDECAR_URL, hardvenSubscri
                                              state, telemetry, HARDVEN_BATCH_SIZE, HARDVEN_PING_INTERVAL_MS);
 
 // ══════════════════════════════════════════════════════════════════════════════
+//  DISCORD HEARTBEAT + HEALTH ALERTS  (ALL modes — the unattended "is it up?" net)
+// ══════════════════════════════════════════════════════════════════════════════
+// Runs in EVERY mode, telemetry included (the executor watchdog above is dry/live-only and console-only).
+// Posts a startup ping, a periodic heartbeat, and EDGE-triggered alerts for: HardVen session logout
+// (SessionReady flip — the Pinnacle login dropping), HardVen feed down, Kalshi feed down (+ recovery each).
+// This is the operator's remote proof-of-life for a multi-day unattended telemetry run. No-op without a webhook.
+if (discord.Enabled)
+{
+    int heartbeatMin = int.TryParse(Environment.GetEnvironmentVariable("DISCORD_HEARTBEAT_MIN"), out var hm) && hm > 0
+        ? hm : 30;
+    long arbsLogged = 0;
+    telemetry.OnArbOpened += (_, _, _, _, _, _) => Interlocked.Increment(ref arbsLogged);
+    var startedAt = DateTime.UtcNow;
+    _ = discord.AlertAsync($"🟢 {modeLabel} started — {pairs.Count} pair(s), sidecar {HARDVEN_SIDECAR_URL}. " +
+                           $"Heartbeat every {heartbeatMin}m.");
+    _ = Task.Run(async () =>
+    {
+        // Start "healthy" so we only alert on a real DROP, not on the first tick before books have flowed.
+        bool lastSession = true, lastHardVen = true, lastKalshi = true;
+        var  lastHeartbeat = DateTime.UtcNow;
+        try
+        {
+            while (!cts.Token.IsCancellationRequested)
+            {
+                await Task.Delay(15_000, cts.Token).ContinueWith(_ => { });
+                if (cts.Token.IsCancellationRequested) break;
+                var nowDt = DateTime.UtcNow;
+
+                bool darkNow   = hardvenFeed.ScheduledDark;  // lifecycle dark window — planned close, NOT a logout
+                bool sessionOk = hardvenFeed.SessionReady || darkNow;   // treat a scheduled dark as "not a problem"
+                bool hvOk      = hardvenFeed.IsConnected;     // sidecar serving odds
+                bool kOk       = kalshiFeed.IsConnected;
+
+                // ── edge-triggered transition alerts ──
+                // A scheduled dark window flips SessionReady off by design → folded into sessionOk above so we
+                // DON'T alert on planned closes; we alert only on an UNEXPECTED logout during an open window.
+                if (!sessionOk && lastSession)
+                    _ = discord.AlertAsync("🔴 HardVen session lost during an OPEN window — Pinnacle logged out unexpectedly. Books frozen until re-auth.");
+                else if (sessionOk && !lastSession)
+                    _ = discord.AlertAsync("🟢 HardVen session ready again — login re-captured.");
+                if (!hvOk && lastHardVen)
+                    _ = discord.AlertAsync("🔴 HardVen feed down — sidecar unreachable or not serving odds.");
+                else if (hvOk && !lastHardVen)
+                    _ = discord.AlertAsync("🟢 HardVen feed back up.");
+                if (!kOk && lastKalshi)
+                    _ = discord.AlertAsync("🔴 Kalshi feed down.");
+                else if (kOk && !lastKalshi)
+                    _ = discord.AlertAsync("🟢 Kalshi feed back up.");
+                lastSession = sessionOk; lastHardVen = hvOk; lastKalshi = kOk;
+
+                // ── periodic heartbeat ──
+                if ((nowDt - lastHeartbeat).TotalMinutes >= heartbeatMin)
+                {
+                    lastHeartbeat = nowDt;
+                    int kReady = state.Books.Count(kv => kv.Key.StartsWith("K:") && kv.Value.HasReceivedDelta);
+                    int pReady = state.Books.Count(kv => kv.Key.StartsWith("H:") && kv.Value.HasReceivedDelta);
+                    int kTotal = state.Books.Count(kv => kv.Key.StartsWith("K:"));
+                    int pTotal = state.Books.Count(kv => kv.Key.StartsWith("H:"));
+                    var up = nowDt - startedAt;
+                    string sessTag = darkNow ? "dark (scheduled)" : hardvenFeed.SessionReady ? "ready" : "DOWN";
+                    _ = discord.AlertAsync(
+                        $"💓 up {up.Days}d{up.Hours}h{up.Minutes}m │ session {sessTag} │ " +
+                        $"books K={kReady}/{kTotal} H={pReady}/{pTotal} │ WS K={(kOk ? "ok" : "down")} H={(hvOk ? "ok" : "down")} │ " +
+                        $"openArbs={telemetry.OpenArbs} arbsLogged={Interlocked.Read(ref arbsLogged)}");
+                }
+            }
+        }
+        catch (Exception ex) { Console.WriteLine($"[DISCORD HEARTBEAT ERROR] {ex.Message}"); }
+    });
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
 //  CONNECTION WATCHDOG  (live / dry-run only)
 // ══════════════════════════════════════════════════════════════════════════════
 if (executor != null)

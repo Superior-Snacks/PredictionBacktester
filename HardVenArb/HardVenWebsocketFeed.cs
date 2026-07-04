@@ -50,6 +50,11 @@ public class HardVenWebsocketFeed
     public volatile bool SessionReady = true;
     private int _lastSessionReady = -1;   // -1 unknown, 0 false, 1 true — for one-line transition logging
 
+    /// <summary>True when the sidecar's browser is intentionally down for a scheduled dark window (lifecycle
+    /// close) — as opposed to an unexpected logout. Lets the operator heartbeat stay quiet on a planned close.
+    /// Absent field (no lifecycle) → false.</summary>
+    public volatile bool ScheduledDark = false;
+
     private long _lastMessageTicks = DateTime.UtcNow.Ticks;
     /// <summary>UTC time of the last successful sidecar response (watchdog staleness check).</summary>
     public DateTime LastMessageAt => new DateTime(Volatile.Read(ref _lastMessageTicks), DateTimeKind.Utc);
@@ -175,6 +180,10 @@ public class HardVenWebsocketFeed
                 _lastSessionReady = cur;
             }
         }
+
+        // scheduled_dark: sidecar's browser is intentionally down for a lifecycle dark window (not a logout).
+        ScheduledDark = doc.RootElement.TryGetProperty("scheduled_dark", out var sdark) &&
+                        sdark.ValueKind == JsonValueKind.True;
 
         if (!doc.RootElement.TryGetProperty("selections", out var sels) ||
             sels.ValueKind != JsonValueKind.Object)

@@ -440,7 +440,11 @@ class PinnacleAdapter(BookAdapter):
         if self._browser is not None:
             st["browser"] = self._browser.status()
         if self._lifecycle is not None:
-            st["lifecycle"] = self._lifecycle.status()
+            lc = self._lifecycle.status()
+            st["lifecycle"] = lc
+            # scheduled_dark = the browser is intentionally DOWN for a dark window (not a logout). Lets the C#
+            # heartbeat stay quiet on a planned close and alert ONLY on an unexpected drop during an open window.
+            st["scheduled_dark"] = (lc.get("state") == "dark")
         return st
 
     # ── lifecycle hooks (called by PinnacleLifecycle on scheduled open/close) ──────
@@ -458,7 +462,7 @@ class PinnacleAdapter(BookAdapter):
         """A scheduled window closed the browser → stand the feed DOWN: gate odds (no creds now) and stop the
         WS/keepalive so we don't poke Pinnacle during the dark stretch. The C# freshness gate clears the books."""
         self._session_ready = False
-        self._give_up_ws("scheduled dark window")
+        self._give_up_ws("scheduled dark window", clean=True)
 
     # ── WS (MQTT) odds source ────────────────────────────────────────────────
     def _start_ws(self) -> None:
@@ -564,7 +568,7 @@ class PinnacleAdapter(BookAdapter):
                 print(f"[PINNACLE WS] down >{warn_after:.0f}s — still auto-reconnecting (transient; a DEAD "
                       "session would have stopped it). Books stay stale until it recovers.")
 
-    def _give_up_ws(self, reason: str = "") -> None:
+    def _give_up_ws(self, reason: str = "", clean: bool = False) -> None:
         if self._ws_gave_up:
             return
         # State changes FIRST (before any print) — a print can throw on a cp1252 Windows console, and these must
@@ -577,9 +581,14 @@ class PinnacleAdapter(BookAdapter):
         why = f" ({reason})" if reason else ""
         if held_m >= 0:
             print(f"[PINNACLE] *** SESSION HELD {held_m:.0f}m before this stop ***{why}")
-        print(f"[PINNACLE] STOPPING the WS + keepalive{why} - a dead/stale session isn't worth re-trying. "
-              "Refresh PINNACLE_SESSION + PINNACLE_WS_PASSWORD (= newsession|dGGR) and restart, or keep a "
-              "browser open to hold the session (or PINNACLE_ODDS_MODE=rest). Books go stale -> C# clears them.")
+        if clean:
+            # EXPECTED stop (scheduled dark window / lifecycle close) — the session was fine; nothing to refresh.
+            print(f"[PINNACLE] standing the WS + keepalive DOWN{why} — expected close, session was healthy. "
+                  "Books go stale -> C# clears them; reopens on the next window.")
+        else:
+            print(f"[PINNACLE] STOPPING the WS + keepalive{why} - a dead/stale session isn't worth re-trying. "
+                  "Refresh PINNACLE_SESSION + PINNACLE_WS_PASSWORD (= newsession|dGGR) and restart, or keep a "
+                  "browser open to hold the session (or PINNACLE_ODDS_MODE=rest). Books go stale -> C# clears them.")
         c = self._client
         if c is not None:
             # loop_stop() must NOT run inside the paho loop thread (this can be called from a callback) → offload.

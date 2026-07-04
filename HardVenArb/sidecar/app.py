@@ -106,6 +106,8 @@ async def odds(selections: str = Query(..., description="comma-separated selecti
     s = _session_state()
     if s is not None:
         resp["session_ready"] = bool(s.get("ready", True))   # rides along so the C# /odds poll sees readiness
+        if "scheduled_dark" in s:
+            resp["scheduled_dark"] = bool(s.get("scheduled_dark"))   # planned close (no alert) vs unexpected logout
     return resp
 
 
