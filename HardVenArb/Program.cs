@@ -759,6 +759,83 @@ if (discord.Enabled)
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
+//  DISCORD COMMAND LISTENER  (remote 'status' / 'close'|'end' from the #alerts channel)
+// ══════════════════════════════════════════════════════════════════════════════
+// Query or stop the bot from your phone in the same channel it posts to. Needs a BOT token + channel id
+// (webhooks are send-only). No-op without them; every action is best-effort so it never disrupts the run.
+{
+    var cmdStartedAt = DateTime.UtcNow;
+
+    async Task<string> RunAnalyzerSummaryAsync()
+    {
+        try
+        {
+            string py = Environment.GetEnvironmentVariable("HARDVEN_PYTHON") ?? "python";
+            var psi = new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = py,
+                WorkingDirectory = Directory.GetCurrentDirectory(),   // repo root: CSVs + analyze_cross_arb.py live here
+                RedirectStandardOutput = true, RedirectStandardError = true,
+                UseShellExecute = false, CreateNoWindow = true,
+            };
+            psi.ArgumentList.Add("analyze_cross_arb.py");
+            psi.ArgumentList.Add("--summary");
+            using var proc = System.Diagnostics.Process.Start(psi);
+            if (proc == null) return "";
+            var outTask = proc.StandardOutput.ReadToEndAsync();
+            var errTask = proc.StandardError.ReadToEndAsync();
+            using var toCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            try { await proc.WaitForExitAsync(toCts.Token); }
+            catch (OperationCanceledException) { try { proc.Kill(true); } catch { } return "(analyzer timed out)"; }
+            string outp = (await outTask).Trim();
+            if (outp.Length == 0) outp = (await errTask).Trim();
+            return outp;
+        }
+        catch (Exception ex) { return $"(analyzer error: {ex.Message})"; }
+    }
+
+    async Task<string> BuildStatusAsync()
+    {
+        int kReady = state.Books.Count(kv => kv.Key.StartsWith("K:") && kv.Value.HasReceivedDelta);
+        int pReady = state.Books.Count(kv => kv.Key.StartsWith("H:") && kv.Value.HasReceivedDelta);
+        int kTotal = state.Books.Count(kv => kv.Key.StartsWith("K:"));
+        int pTotal = state.Books.Count(kv => kv.Key.StartsWith("H:"));
+        string sess = hardvenFeed.ScheduledDark ? "dark (scheduled)"
+                    : hardvenFeed.SessionReady ? "ready" : "DOWN";
+        var up = DateTime.UtcNow - cmdStartedAt;
+        string live = $"📊 **status** — session {sess} | books K={kReady}/{kTotal} H={pReady}/{pTotal} | " +
+                      $"WS K={(kalshiFeed.IsConnected ? "ok" : "down")} H={(hardvenFeed.IsConnected ? "ok" : "down")} | " +
+                      $"openArbs={telemetry.OpenArbs} pairs={telemetry.TotalPairs} | up {up.Days}d{up.Hours}h{up.Minutes}m";
+        string analysis = await RunAnalyzerSummaryAsync();
+        string combined = string.IsNullOrWhiteSpace(analysis)
+            ? live + "\n(no telemetry logged yet)"
+            : live + "\n```\n" + analysis + "\n```";
+        return combined.Length > 1900 ? combined[..1900] + "…" : combined;
+    }
+
+    async Task ShutdownHookAsync()
+    {
+        // Sentinel tells the supervisor this was a DELIBERATE stop (don't restart). CSV is flushed by the normal
+        // shutdown path after cts cancels the feeds.
+        try { await File.WriteAllTextAsync(Path.Combine(sourceDir, ".stop_requested"), DateTime.UtcNow.ToString("o")); }
+        catch (Exception ex) { Console.WriteLine($"[DISCORD CMD] could not write stop sentinel: {ex.Message}"); }
+        cts.Cancel();
+    }
+
+    var cmdListener = new DiscordCommandListener(
+        Environment.GetEnvironmentVariable("DISCORD_BOT_TOKEN"),
+        Environment.GetEnvironmentVariable("DISCORD_CHANNEL_ID"),
+        reply:      msg => discord.AlertAsync(msg),
+        onStatus:   BuildStatusAsync,
+        onShutdown: ShutdownHookAsync);
+    if (cmdListener.Enabled)
+    {
+        Console.WriteLine("[DISCORD CMD] remote commands enabled: status / close / end");
+        _ = Task.Run(() => cmdListener.RunAsync(cts.Token));
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
 //  CONNECTION WATCHDOG  (live / dry-run only)
 // ══════════════════════════════════════════════════════════════════════════════
 if (executor != null)

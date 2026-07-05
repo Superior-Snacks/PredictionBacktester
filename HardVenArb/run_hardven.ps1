@@ -33,6 +33,11 @@ $sideDir  = Join-Path $hvDir "sidecar"
 if (-not $LogDir) { $LogDir = Join-Path $hvDir "logs" }
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 
+# Deliberate-stop sentinel: the bot writes this on a Discord 'close'/'end' so we DON'T restart it. Clear any
+# leftover from a prior run so a stale file can't kill a fresh start.
+$stopSentinel = Join-Path $hvDir ".stop_requested"
+Remove-Item $stopSentinel -Force -ErrorAction SilentlyContinue
+
 # ── 1. Build the bot once (Release) so each restart is instant ────────────────────
 Write-Host "[SUPERVISOR] building HardVenArb (Release)..." -ForegroundColor Cyan
 & dotnet build -c Release (Join-Path $hvDir "HardVenArb.csproj") --nologo
@@ -90,6 +95,11 @@ try {
         foreach ($name in @('sidecar','bot')) {
             $p = $procs[$name].Proc
             if ($p -and $p.HasExited) {
+                if ($name -eq 'bot' -and (Test-Path $stopSentinel)) {
+                    Write-Host "[SUPERVISOR] bot requested shutdown (Discord close/end) - NOT restarting; stopping all." -ForegroundColor Cyan
+                    Remove-Item $stopSentinel -Force -ErrorAction SilentlyContinue
+                    return   # unwinds to the finally block -> stops the sidecar + Chrome, exits the supervisor
+                }
                 Write-Host "[SUPERVISOR] $name exited (code $($p.ExitCode)) - restarting in 3s" -ForegroundColor Yellow
                 Start-Sleep -Seconds 3
                 $procs[$name].Proc = Start-Logged $name $procs[$name]

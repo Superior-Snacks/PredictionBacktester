@@ -292,6 +292,10 @@ cause is throttling/swapping (server) vs a network blip (not the server).
 | `PINNACLE_LOGIN_CHECK_SEC` | `8` | **Sidecar:** how often the auto-login watcher looks for a login form. |
 | `PINNACLE_LOGIN_SUBMIT_COOLDOWN` | `30` | **Sidecar:** minimum seconds between auto-login submit attempts (avoids hammering the form). |
 | `DISCORD_HEARTBEAT_MIN` | `30` | **Bot:** cadence of the Discord `💓` heartbeat (uptime / books / WS / arbsLogged). Startup ping + session-lost / feed-down edge alerts fire regardless. Needs `DISCORD_WEBHOOK_URL`. Works in **every** mode incl. `--telemetry`. |
+| `DISCORD_DOWN_GRACE_SEC` | `90` | **Bot:** a signal (session / feed) must be down this long before a 🔴 alert — absorbs startup warm-up + scheduled-reopen re-capture gaps, so it alerts only on a genuinely STUCK problem. |
+| `DISCORD_BOT_TOKEN` | unset | **Bot:** a Discord BOT token (not the webhook) so the bot can READ the channel for commands. Enables remote `status` / `close` / `end`. Requires the bot in your server with View Channel + Read Message History and the **MESSAGE CONTENT INTENT** enabled. Paired with `DISCORD_CHANNEL_ID`. |
+| `DISCORD_CHANNEL_ID` | unset | **Bot:** the #alerts channel id the command listener polls (right-click the channel → Copy Channel ID; needs Developer Mode). Both this and `DISCORD_BOT_TOKEN` must be set to enable commands. |
+| `HARDVEN_PYTHON` | `python` | **Bot:** python executable used to run `analyze_cross_arb.py --summary` for the `status` reply. Set to a venv python if `python` isn't on PATH. |
 | `PINNACLE_ORGANIC` | on | **Sidecar:** `0` = disable the human-like mouse/scroll activity in the login window (the session still holds via the REST keepalive). |
 | `PINNACLE_WS_AUTH_GIVEUP` | `2` | **Sidecar:** consecutive WS CONNACK auth-rejects (rc 4/5) before treating the session as DEAD and stopping the feed. |
 | `PINNACLE_REST_AUTH_GIVEUP` | `3` | **Sidecar:** consecutive REST 401/403 on authed calls before declaring the session dead (the guest-redirect's backstop). |

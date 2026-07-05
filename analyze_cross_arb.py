@@ -154,6 +154,27 @@ def sample_at(samples: list[dict], target_ms: float):
     return s, _f(s.get("OffsetMs"))
 
 
+def _print_summary(path, span, n_total, n_pre, n_live, n_cap, cap_rows) -> None:
+    """Compact digest for the bot's Discord 'status' reply: windows, capturability, and per-regime edge + est
+    bankroll-capped profit. PRE-LIVE first (the favorable regime). ENTRY-based numbers (not cherry-picked Best)."""
+    def block(name, rs):
+        if not rs:
+            return f"{name}: 0 capturable"
+        e = [c["edge"] for c in rs]
+        prof = sum(c["profit_capped"] for c in rs)
+        return (f"{name}: {len(rs)} cap | edge avg {100 * st.mean(e):.2f}c max {100 * max(e):.2f}c "
+                f"| est profit ${prof:.2f}")
+    pre = [c for c in cap_rows if c["prelive"]]
+    liv = [c for c in cap_rows if not c["prelive"]]
+    cap_pct = f"{100 * n_cap / n_total:.0f}%" if n_total else "0%"
+    print("\n".join([
+        f"HardVenArb status — {os.path.basename(path)}",
+        f"span {span} | windows {n_total} ({n_pre} pre-live, {n_live} in-play) | capturable {n_cap} ({cap_pct})",
+        block("PRE-LIVE", pre),
+        block("in-play", liv),
+    ]))
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--file", help="CrossArbTelemetry CSV (default: newest in CWD)")
@@ -203,6 +224,9 @@ def main() -> None:
     regime_grp.add_argument("--in-play", action="store_true",
                     help="analyze ONLY in-play (live-match) windows — HardVenInPlay=1. The HARD regime: volatile, "
                          "~8s placement, high miss rate. (Requires the HardVenInPlay column; excludes --pre-live.)")
+    ap.add_argument("--summary", action="store_true",
+                    help="print a COMPACT digest (windows, capturability, pre-live/in-play edge + est profit) and "
+                         "exit — for the bot's Discord 'status' reply. Skips the full 9-section report.")
     a = ap.parse_args()
     kalshi_ms = a.kalshi_secs * 1000   # HardVen placement time is per-row/regime via _hv_ms (1s pre-live / 8s in-play)
 
@@ -241,13 +265,14 @@ def main() -> None:
     regime = ("PRE-LIVE ONLY" if a.pre_live else "IN-PLAY ONLY" if a.in_play else
               (f"{n_pre} pre-live + {n_live} in-play" if has_inplay else "regime unknown (no HardVenInPlay col)"))
     mode = "HardVen-first" if a.hardven_first else "Kalshi-first"
-    print("=" * 78)
-    print(f"CROSS-PLATFORM ARB TELEMETRY  —  {os.path.basename(path)}")
-    print(f"{len(rows)} windows  |  {span}  |  FX HardVen(EUR)→USD ×{a.fx:g}  |  "
-          f"bankroll: Pinnacle €{a.pinnacle_bankroll:g} + Kalshi ${a.kalshi_bankroll:g}")
-    print(f"regime: {regime}  |  §6 exec: {mode}  |  HardVen place: "
-          f"{a.hardven_secs_prelive:g}s pre-live / {a.hardven_secs:g}s in-play")
-    print("=" * 78)
+    if not a.summary:                               # compact 'status' mode skips the full banner
+        print("=" * 78)
+        print(f"CROSS-PLATFORM ARB TELEMETRY  —  {os.path.basename(path)}")
+        print(f"{len(rows)} windows  |  {span}  |  FX HardVen(EUR)→USD ×{a.fx:g}  |  "
+              f"bankroll: Pinnacle €{a.pinnacle_bankroll:g} + Kalshi ${a.kalshi_bankroll:g}")
+        print(f"regime: {regime}  |  §6 exec: {mode}  |  HardVen place: "
+              f"{a.hardven_secs_prelive:g}s pre-live / {a.hardven_secs:g}s in-play")
+        print("=" * 78)
 
     # ── per-window enrichment ────────────────────────────────────────────────────
     # EDGE/NET/LEGS are ENTRY-based (what was true at OPEN), NOT Best-based (NetProfitPerShare/BestNetCost is the
@@ -278,9 +303,13 @@ def main() -> None:
             "profit_full": edge * exec_depth, "profit_capped": edge * capped_depth,
             "capital_full": net * exec_depth, "dur": _f(r.get("DurationMs")),
             "held": r.get("HardVenLegHeld") == "1", "closed": r.get("ClosedBySide", ""),
+            "prelive": _is_prelive(r),
         })
 
     n_cap = len(cap_rows)
+    if a.summary:                                   # compact Discord 'status' digest — key numbers, pre-live first
+        _print_summary(path, span, len(rows), n_pre, n_live, n_cap, cap_rows)
+        return
     if use_within:
         print(f"\n1. CAPTURABILITY  [within model]  (HardVen held-within >{a.hardven_secs_prelive:g}s pre-live / "
               f">{a.hardven_secs:g}s in-play  AND  Kalshi held-within >{a.kalshi_secs:g}s — each leg placeable)")
