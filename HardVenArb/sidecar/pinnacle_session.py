@@ -136,6 +136,7 @@ class PinnacleBrowserSession:
         self._seen_req = False
         self._seen_ws = False
         self._logged_session = False
+        self._ever_logged_in = False   # have we EVER captured a session with this profile? (evidence creds are saved)
         self._ws_urls_seen: set = set()
         self._debug_storage = os.environ.get("PINNACLE_DEBUG_STORAGE") == "1"   # dump localStorage on capture
         self._logged_storage = False
@@ -254,6 +255,7 @@ class PinnacleBrowserSession:
             changed = False
             if sess and not self._logged_session:
                 self._logged_session = True
+                self._ever_logged_in = True   # profile just proved it holds a live login → auto-login may submit later
                 print("[PINNACLE SESSION] captured x-session (REST auth ready).")
             if sess and sess != self._session:
                 self._session = sess; changed = True
@@ -465,13 +467,28 @@ class PinnacleBrowserSession:
             if self._auto_login:
                 await self._ensure_logged_in()   # a hard-expired session shows the login form right after reload
 
-    # ── unattended re-login (press Enter on the profile-autofilled form) ───────────
+    # ── unattended re-login (submit the profile-autofilled form) ───────────────────
+    def _profile_has_saved_login(self) -> bool:
+        """True if the persistent Chrome profile has a saved-credentials store on disk — evidence that an
+        autofilled login form is REAL (not first-time setup). Chrome writes 'Login Data' once a password is
+        saved. This is what lets us submit even when Chrome hides the autofilled value from JS until a gesture."""
+        try:
+            base = Path(self._user_data)
+            for p in (base / "Default" / "Login Data", base / "Default" / "Login Data For Account"):
+                if p.exists() and p.stat().st_size > 0:
+                    return True
+        except Exception:
+            pass
+        return False
+
     async def _ensure_logged_in(self) -> bool:
-        """If a visible password field is present AND already autofilled, the page is on a login form (session
-        dropped) → submit by pressing Enter (button-click fallback if the form lingers). Safe gate: a visible
-        `input[type=password]` only exists on the login page, and we act ONLY when it's already non-empty, so
-        this is a no-op on normal betting pages AND during first-time MANUAL setup (empty form). No credentials
-        are typed — Chrome's saved profile fills them; we only submit. Never raises. Returns True on submit."""
+        """If a visible password field is present and we have EVIDENCE the profile holds saved credentials, the
+        page is on a login form (session dropped) → submit it (click to commit autofill, then Enter; button-click
+        fallback if it lingers). Evidence = a readable non-empty value OR a session already captured this run OR
+        the profile's saved-login store on disk. Why not require a readable value: Chrome commonly hides the
+        AUTOFILLED value from `.value` until a user gesture, so the field looks filled but reads empty. With NO
+        evidence (empty + never logged in + no saved-login store) this is genuine first-time MANUAL setup → no-op,
+        so we never submit blanks. No credentials are typed — the profile fills them. Never raises."""
         if self._page is None:
             return False
         try:
@@ -481,20 +498,26 @@ class PinnacleBrowserSession:
             val = await pw.input_value()
         except Exception:
             return False
-        if not val:
-            return False                                   # empty form → manual setup / not autofilled; leave it
+        has_creds = bool(val) or self._ever_logged_in or self._profile_has_saved_login()
+        if not has_creds:
+            return False                                   # empty form + no saved creds → first-time setup; leave it
         if time.time() - self._last_login_submit < self._login_submit_cooldown:
             return False                                   # don't hammer the login form
         self._last_login_submit = time.time()
-        print("[PINNACLE SESSION] login form detected + autofilled — submitting (Enter) for unattended re-login.")
+        print(f"[PINNACLE SESSION] login form detected — submitting saved credentials for unattended re-login "
+              f"(value_readable={bool(val)}).")
         self.pause_activity()                              # don't let an organic gesture fight the submit
         try:
             # HUMAN BEAT: a real user reads the page and pauses before submitting; a sub-second auto-submit at a
             # fixed offset is the robotic tell. Randomize the think-time so it's neither instant nor a constant.
             await asyncio.sleep(random.uniform(1.4, 4.2))
             await self._human_approach(pw)                 # drift the cursor to the field first (real mouse path)
-            await asyncio.sleep(random.uniform(0.15, 0.5))
-            await pw.press("Enter")                        # field is profile-filled; Enter submits (common human flow)
+            try:
+                await pw.click()                           # focus + COMMIT Chrome's autofill (value often hidden until a gesture)
+            except Exception:
+                pass
+            await asyncio.sleep(random.uniform(0.3, 0.7))
+            await pw.press("Enter")                        # submit (common human flow for a filled login)
             await asyncio.sleep(2.5)
             if await self._page.locator("input[type=password]:visible").count() > 0:
                 await self._click_login_button()           # Enter didn't submit → click the button (with approach)

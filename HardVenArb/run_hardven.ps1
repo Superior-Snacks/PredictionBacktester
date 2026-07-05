@@ -27,8 +27,9 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$hvDir   = $PSScriptRoot                          # ...\HardVenArb
-$sideDir = Join-Path $hvDir "sidecar"
+$hvDir    = $PSScriptRoot                          # ...\HardVenArb
+$repoRoot = Split-Path -Parent $hvDir             # ...\PredictionBacktester (holds .env; where `dotnet run` is normally invoked)
+$sideDir  = Join-Path $hvDir "sidecar"
 if (-not $LogDir) { $LogDir = Join-Path $hvDir "logs" }
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 
@@ -45,7 +46,7 @@ if ($Sports) { $botArgs += ($Sports -split '[,\s]+' | Where-Object { $_ }) }
 
 $procs = [ordered]@{
     sidecar = @{ Exe = $Python; Argv = @('-m','uvicorn','app:app','--port',"$Port"); Cwd = $sideDir; Proc = $null }
-    bot     = @{ Exe = $botExe; Argv = $botArgs;                                       Cwd = $hvDir;   Proc = $null }
+    bot     = @{ Exe = $botExe; Argv = $botArgs;                                       Cwd = $repoRoot; Proc = $null }
 }
 
 function Start-Logged($name, $spec) {
