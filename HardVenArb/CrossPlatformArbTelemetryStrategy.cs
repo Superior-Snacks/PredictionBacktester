@@ -159,13 +159,31 @@ public class CrossPlatformArbTelemetryStrategy
     // ── CSV channels ─────────────────────────────────────────────────────────
     private readonly Channel<string> _csvChannel =
         Channel.CreateUnbounded<string>(new UnboundedChannelOptions { SingleReader = true });
-    private readonly string _csvPath;
-    private bool _headerWritten;
+    private readonly string _csvBaseName;   // DAILY rotation: file = "{base}_{yyyyMMdd}.csv" (local date)
 
     private readonly Channel<string> _hedgeCsvChannel =
         Channel.CreateUnbounded<string>(new UnboundedChannelOptions { SingleReader = true });
-    private readonly string _hedgeCsvPath;
-    private bool _hedgeHeaderWritten;
+    private readonly string _hedgeCsvBaseName;
+
+    // Column headers — written by the writer task each time it opens a NEW/empty dated file (kept here so
+    // rotation re-emits them). Must stay in lockstep with the row builders below.
+    private const string CsvHeader =
+        "StartTime,EndTime,DurationMs,PairId,Label,ArbType," +
+        "EntryGrossCost,EntryNetCost,EntryLegPrices," +
+        "BestGrossCost,BestNetCost,BestLegPrices,TotalFees,KalshiFees,HardVenFees,NetProfitPerShare," +
+        "KalshiDepth,HardVenDepth,MaxDepth,TotalCapitalRequired,TotalPotentialProfit," +
+        "KalshiBookAgeMs,HardVenBookAgeMs,KalshiMidSum,HardVenMidSum," +
+        "KalshiWsDropsAtOpen,HardVenWsDropsAtOpen,DropDuringWindow," +
+        "UpdateCount,ClosedBy," +
+        "DaysToSettlement,AprHoldToSettle," +
+        "RestChecked,RestConfirmed,RestKalshiAsk,RestHardVenAsk,RestDelayMs," +
+        "OpenedBy,ClosedBySide,KalshiLegAgeMsAtClose,HardVenLegAgeMsAtClose,HardVenLegHeld,HardVenLegId," +
+        "KalshiLegWithinMs,HardVenLegWithinMs," +
+        "HardVenInPlay";
+    private const string HedgeCsvHeader =
+        "OpenTime,PairId,Label,ArbType,OffsetMs," +
+        "EntryKalshiAsk,KalshiUnwindBid,KalshiOppositeAsk,KalshiEntryAskNow," +
+        "EntryHardVenAsk,HardVenLegNow,KalshiUnwindDepth,EntryNetCost";
 
     // ── Public stats ──────────────────────────────────────────────────────────
     public int OpenArbs   => _activeWindows.Values.Count(w => w != null);
@@ -189,9 +207,8 @@ public class CrossPlatformArbTelemetryStrategy
         _books        = books;
         _arbThreshold = arbThreshold;
         _depthFloor   = depthFloor;
-        string ts    = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
-        _csvPath      = $"CrossArbTelemetry_{ts}.csv";
-        _hedgeCsvPath = $"CrossArbHedgeMonitor_{ts}.csv";
+        _csvBaseName      = "CrossArbTelemetry";
+        _hedgeCsvBaseName = "CrossArbHedgeMonitor";
 
         _bookKeyToPairs = new Dictionary<string, List<int>>(StringComparer.Ordinal);
         _activeWindows  = new Dictionary<string, ActiveWindow?>(StringComparer.Ordinal);
@@ -808,24 +825,7 @@ public class CrossPlatformArbTelemetryStrategy
 
     private void EnqueueCsvRow(string row)
     {
-        if (!_headerWritten)
-        {
-            _headerWritten = true;
-            string header =
-                "StartTime,EndTime,DurationMs,PairId,Label,ArbType," +
-                "EntryGrossCost,EntryNetCost,EntryLegPrices," +
-                "BestGrossCost,BestNetCost,BestLegPrices,TotalFees,KalshiFees,HardVenFees,NetProfitPerShare," +
-                "KalshiDepth,HardVenDepth,MaxDepth,TotalCapitalRequired,TotalPotentialProfit," +
-                "KalshiBookAgeMs,HardVenBookAgeMs,KalshiMidSum,HardVenMidSum," +
-                "KalshiWsDropsAtOpen,HardVenWsDropsAtOpen,DropDuringWindow," +
-                "UpdateCount,ClosedBy," +
-                "DaysToSettlement,AprHoldToSettle," +
-                "RestChecked,RestConfirmed,RestKalshiAsk,RestHardVenAsk,RestDelayMs," +
-                "OpenedBy,ClosedBySide,KalshiLegAgeMsAtClose,HardVenLegAgeMsAtClose,HardVenLegHeld,HardVenLegId," +
-                "KalshiLegWithinMs,HardVenLegWithinMs," +   // time each leg stayed ≤ its open price (held within the arb)
-                "HardVenInPlay";                            // 1 = HardVen game was LIVE/in-play, 0 = pre-match
-            _csvChannel.Writer.TryWrite(header);
-        }
+        // Header is emitted by the writer task per dated file (see DrainWithDailyRotationAsync) — just queue the row.
         _csvChannel.Writer.TryWrite(row);
     }
 
@@ -838,14 +838,7 @@ public class CrossPlatformArbTelemetryStrategy
     private void EnqueueHedgeSample(HedgeMonitor hm, long offsetMs, decimal unwindBid,
         decimal oppositeAsk, decimal entryAskNow, decimal hardvenNow, decimal unwindDepth)
     {
-        if (!_hedgeHeaderWritten)
-        {
-            _hedgeHeaderWritten = true;
-            _hedgeCsvChannel.Writer.TryWrite(
-                "OpenTime,PairId,Label,ArbType,OffsetMs," +
-                "EntryKalshiAsk,KalshiUnwindBid,KalshiOppositeAsk,KalshiEntryAskNow," +
-                "EntryHardVenAsk,HardVenLegNow,KalshiUnwindDepth,EntryNetCost");
-        }
+        // Header emitted by the writer task per dated file (DrainWithDailyRotationAsync) — just queue the row.
         string row = string.Join(",",
             hm.OpenTime.ToString("yyyy-MM-dd HH:mm:ss.fff"),
             Quote(hm.PairId),
@@ -890,16 +883,51 @@ public class CrossPlatformArbTelemetryStrategy
     private readonly Task _csvWriterTask;
     private readonly Task _hedgeCsvWriterTask;
 
+    // File boundary = LOCAL calendar day (matches how the operator reads "per day" and the day-bounded schedule).
+    private static string CsvDate() => DateTime.Now.ToString("yyyyMMdd");
+
+    // Open the dated file APPEND (restart-safe: a same-day restart keeps the day's rows), writing the header
+    // only when the file is new/empty. Returns the writer.
+    private static async Task<StreamWriter> OpenDatedCsvAsync(string baseName, string date, string header)
+    {
+        string path  = $"{baseName}_{date}.csv";
+        bool   isNew = !File.Exists(path) || new FileInfo(path).Length == 0;
+        var    sw    = new StreamWriter(path, append: true, Encoding.UTF8) { AutoFlush = false };
+        if (isNew) { await sw.WriteLineAsync(header); await sw.FlushAsync(); }
+        return sw;
+    }
+
+    // Shared drain loop with DAILY rotation: when the local day rolls over, close the current file and open the
+    // next day's — so an unattended multi-day run produces one CSV per calendar day.
+    private static async Task DrainWithDailyRotationAsync(
+        System.Threading.Channels.ChannelReader<string> reader, string baseName, string header, string tag)
+    {
+        string date = CsvDate();
+        var sw = await OpenDatedCsvAsync(baseName, date, header);
+        try
+        {
+            await foreach (var line in reader.ReadAllAsync())
+            {
+                string today = CsvDate();
+                if (today != date)                              // day rolled over → rotate to a fresh file
+                {
+                    await sw.FlushAsync(); sw.Dispose();
+                    date = today;
+                    sw = await OpenDatedCsvAsync(baseName, date, header);
+                    Console.WriteLine($"[{tag}] rotated to {baseName}_{date}.csv");
+                }
+                await sw.WriteLineAsync(line);
+                await sw.FlushAsync();
+            }
+        }
+        finally { try { await sw.FlushAsync(); } catch { } sw.Dispose(); }
+    }
+
     private async Task RunCsvWriterAsync()
     {
         try
         {
-            using var sw = new StreamWriter(_csvPath, append: false, Encoding.UTF8) { AutoFlush = false };
-            await foreach (var line in _csvChannel.Reader.ReadAllAsync())
-            {
-                await sw.WriteLineAsync(line);
-                await sw.FlushAsync();
-            }
+            await DrainWithDailyRotationAsync(_csvChannel.Reader, _csvBaseName, CsvHeader, "CROSS CSV");
         }
         catch (Exception ex)
         {
@@ -912,12 +940,7 @@ public class CrossPlatformArbTelemetryStrategy
     {
         try
         {
-            using var sw = new StreamWriter(_hedgeCsvPath, append: false, Encoding.UTF8) { AutoFlush = false };
-            await foreach (var line in _hedgeCsvChannel.Reader.ReadAllAsync())
-            {
-                await sw.WriteLineAsync(line);
-                await sw.FlushAsync();
-            }
+            await DrainWithDailyRotationAsync(_hedgeCsvChannel.Reader, _hedgeCsvBaseName, HedgeCsvHeader, "HEDGE CSV");
         }
         catch (Exception ex)
         {

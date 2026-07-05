@@ -29,7 +29,7 @@ class PinnacleLifecycle:
                  poll_cap_sec: float = 600.0, horizon_hours: int = 36,
                  lead_min: int = 15, trail_min: int = 45, min_gap_min: int = 60,
                  min_games: int = 1, max_blocks: int | None = 4, session_hours: float = 0.0,
-                 manual_plan: str | None = None):
+                 manual_plan: str | None = None, today_only: bool = True):
         self._browser = browser
         self._sports = sports
         self._on_open = on_open or (lambda: None)
@@ -45,6 +45,7 @@ class PinnacleLifecycle:
         self._max_blocks = max_blocks
         self._session_hours = session_hours   # >0 = discrete density-session mode (continuous sports); 0 = gap-merge windows
         self._manual_plan = manual_plan       # path to a hand-written test plan (overrides the slate) — for cycle testing
+        self._today_only = today_only         # plan only the CURRENT local day's games (tomorrow's slate is incomplete)
         self._windows: list = []
         self._win_ts = 0.0
         self._open = False
@@ -73,6 +74,9 @@ class PinnacleLifecycle:
             print(f"[PINNACLE LIFECYCLE] slate fetch failed ({type(ex).__name__}: {ex}); keeping "
                   f"last {len(self._windows)} window(s)")
             return
+        fetched = len(starts)
+        if self._today_only:                       # plan only TODAY (local) — tomorrow's slate is incomplete
+            starts = sched.filter_to_local_day(starts)
         if self._session_hours > 0:                # discrete ~Nh sessions by game-START density (continuous sports)
             new = sched.compute_sessions(starts, self._session_hours, self._lead_min, self._trail_min,
                                          min_games=self._min_games, max_blocks=self._max_blocks or 4)
@@ -87,8 +91,9 @@ class PinnacleLifecycle:
         self._windows = new
         self._win_ts = sched._utcnow().timestamp()
         games_kept = sum(w[2] for w in self._windows)
+        scope = f"today-only {len(starts)}/{fetched} games" if self._today_only else f"{len(starts)} games"
         print(f"[PINNACLE LIFECYCLE] {len(self._windows)} session(s) planned "
-              f"({mode}, lead {self._lead_min}m; {games_kept}/{len(starts)} games in-window).")
+              f"({mode}, lead {self._lead_min}m; {scope}; {games_kept} in-window).")
 
     async def tick(self, now=None) -> float | None:
         """One decision step: open if `now` is inside a window and we're closed; close if outside and we're

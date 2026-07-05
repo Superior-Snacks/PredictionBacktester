@@ -134,6 +134,15 @@ def load_manual_plan(path: str, base: datetime | None = None) -> list[tuple[date
     return sorted(out, key=lambda w: w[0])
 
 
+def filter_to_local_day(starts: list[tuple[datetime, str]], day=None) -> list[tuple[datetime, str]]:
+    """Keep only games whose LOCAL start date == `day` (default: today, local). For per-DAY block planning:
+    tomorrow's slate is still filling in, so it shouldn't compete for today's block budget or pull the densest-N
+    selection into an incomplete next day. The lifecycle recomputes hourly, so this rolls to the new day on its
+    own. `starts` are naive-UTC (from _pin_dt); compared in local time via _local()."""
+    day = day or _local(_utcnow()).date()
+    return [(s, sp) for (s, sp) in starts if _local(s).date() == day]
+
+
 def active_window(windows, now: datetime | None = None):
     """The window (open, close, games) containing `now` (UTC naive), or None."""
     now = now or _utcnow()
@@ -217,12 +226,18 @@ def main() -> None:
                     help="SESSION mode: carve the densest N fixed ~this-many-hour sessions by game-START density "
                          "(for continuous sports like tennis where gap-merge collapses the day into one block). "
                          "0 = OFF (use the gap-merge window model). Try 2.")
+    ap.add_argument("--today-only", action="store_true",
+                    help="plan blocks for the CURRENT LOCAL DAY only (drop tomorrow's games so an incomplete "
+                         "next-day slate can't skew the densest-N selection). Matches the bot's default.")
     ap.add_argument("--write", action="store_true", help="also write work_windows.json for the bot")
     args = ap.parse_args()
 
     sports = [int(s) for s in args.sports.split(",") if s.strip()]
     print(f"[SCHED] fetching slate (sports={sports}, horizon={args.horizon}h) from the guest board …")
     starts = fetch_starts(sports, args.horizon)
+    if args.today_only:
+        starts = filter_to_local_day(starts)
+        print(f"[SCHED] today-only: {len(starts)} game(s) remain on the current local day.")
     bysport = {}
     for _, sp in starts:
         bysport[sp] = bysport.get(sp, 0) + 1

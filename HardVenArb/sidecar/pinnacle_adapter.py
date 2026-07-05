@@ -178,6 +178,7 @@ class PinnacleAdapter(BookAdapter):
         self._lifecycle_min_games = _cfg_int("PINNACLE_MIN_GAMES", 1)
         self._lifecycle_session_hours = float(os.environ.get("PINNACLE_SESSION_HOURS", "0"))  # >0 = discrete Nh density-sessions
         self._lifecycle_manual_plan = os.environ.get("PINNACLE_MANUAL_PLAN", "").strip() or None  # test override (short cycle)
+        self._lifecycle_today_only = os.environ.get("PINNACLE_SESSION_TODAY_ONLY", "1") != "0"  # plan only today's games (default ON)
         self._lifecycle = None
         self._lifecycle_task = None
 
@@ -234,7 +235,8 @@ class PinnacleAdapter(BookAdapter):
                                                         min_games=self._lifecycle_min_games,
                                                         max_blocks=(self._lifecycle_max_blocks or None),
                                                         session_hours=self._lifecycle_session_hours,
-                                                        manual_plan=self._lifecycle_manual_plan)
+                                                        manual_plan=self._lifecycle_manual_plan,
+                                                        today_only=self._lifecycle_today_only)
                     self._lifecycle_task = asyncio.create_task(self._lifecycle.run())
                     mode = (f"MANUAL PLAN {self._lifecycle_manual_plan}" if self._lifecycle_manual_plan
                             else f"{self._lifecycle_session_hours:g}h density-sessions" if self._lifecycle_session_hours > 0

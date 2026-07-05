@@ -279,8 +279,11 @@ string outputDirFile = Path.Combine(AppContext.BaseDirectory, "cross_pairs.json"
 string sourceDir     = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../.."));
 string sourceDirFile = Path.Combine(sourceDir, "cross_pairs.json");
 bool   isDevBuild    = Directory.GetFiles(sourceDir, "*.csproj").Length > 0;
-string manualPath    = isDevBuild && File.Exists(sourceDirFile) ? sourceDirFile : outputDirFile;
-if (!File.Exists(manualPath)) manualPath = "cross_pairs.json";
+// Dev build → the auto-pairer writes cross_pairs.json to the SOURCE dir (HardVenArb/). Point the reload path
+// there even when the file doesn't exist YET (the first auto-pair run creates it), so the hot-reload actually
+// finds it — otherwise a fresh setup with HARDVEN_AUTO_PAIR would freeze onto a CWD path and never load pairs.
+string manualPath = isDevBuild ? sourceDirFile
+                               : (File.Exists(outputDirFile) ? outputDirFile : "cross_pairs.json");
 if (File.Exists(manualPath))
 {
     try
@@ -322,8 +325,8 @@ if (File.Exists(manualPath))
 // cross_pairs.json (below), so a daily auto-pair refreshes the derivative lines live too.
 string derivSrc  = Path.Combine(sourceDir, "derivative_pairs.json");
 string derivOut  = Path.Combine(AppContext.BaseDirectory, "derivative_pairs.json");
-string derivPath = isDevBuild && File.Exists(derivSrc) ? derivSrc
-                   : (File.Exists(derivOut) ? derivOut : "derivative_pairs.json");
+string derivPath = isDevBuild ? derivSrc
+                              : (File.Exists(derivOut) ? derivOut : "derivative_pairs.json");
 if (File.Exists(derivPath))
 {
     try
@@ -669,6 +672,11 @@ if (discord.Enabled)
 {
     int heartbeatMin = int.TryParse(Environment.GetEnvironmentVariable("DISCORD_HEARTBEAT_MIN"), out var hm) && hm > 0
         ? hm : 30;
+    // A down signal must persist this long before we cry 🔴 — so we skip startup warm-up (pre-first-login) and
+    // the brief re-capture gap after every scheduled reopen, and alert ONLY when something is genuinely stuck
+    // (e.g. auto-login couldn't recover the session). Default 90s.
+    double downGraceSec = double.TryParse(Environment.GetEnvironmentVariable("DISCORD_DOWN_GRACE_SEC"), out var gs) && gs > 0
+        ? gs : 90;
     long arbsLogged = 0;
     telemetry.OnArbOpened += (_, _, _, _, _, _) => Interlocked.Increment(ref arbsLogged);
     var startedAt = DateTime.UtcNow;
@@ -676,9 +684,33 @@ if (discord.Enabled)
                            $"Heartbeat every {heartbeatMin}m.");
     _ = Task.Run(async () =>
     {
-        // Start "healthy" so we only alert on a real DROP, not on the first tick before books have flowed.
-        bool lastSession = true, lastHardVen = true, lastKalshi = true;
-        var  lastHeartbeat = DateTime.UtcNow;
+        // Debounced down/up tracking per signal. everUp gates out the startup warm-up (nothing is "lost" until
+        // it was up at least once); downSince + downGraceSec suppress the brief re-capture gap on every scheduled
+        // reopen; alerted latches so a stuck signal fires 🔴 exactly once (and its 🟢 recovery once).
+        var downSince = new Dictionary<string, DateTime?> { ["session"] = null, ["hardven"] = null, ["kalshi"] = null };
+        var everUp    = new Dictionary<string, bool>      { ["session"] = false, ["hardven"] = false, ["kalshi"] = false };
+        var alerted   = new Dictionary<string, bool>      { ["session"] = false, ["hardven"] = false, ["kalshi"] = false };
+        var lastHeartbeat = DateTime.UtcNow;
+
+        void Track(string key, bool up, DateTime now, string downMsg, string upMsg, string? establishedMsg)
+        {
+            if (up)
+            {
+                if (!everUp[key]) { everUp[key] = true; if (establishedMsg != null) _ = discord.AlertAsync(establishedMsg); }
+                if (alerted[key]) { alerted[key] = false; _ = discord.AlertAsync(upMsg); }   // recovered after a 🔴
+                downSince[key] = null;
+            }
+            else if (everUp[key])                          // ignore down-time before the first-ever success
+            {
+                downSince[key] ??= now;
+                if (!alerted[key] && (now - downSince[key]!.Value).TotalSeconds >= downGraceSec)
+                {
+                    alerted[key] = true;                   // fire the 🔴 once; 🟢 recovery clears it
+                    _ = discord.AlertAsync(downMsg);
+                }
+            }
+        }
+
         try
         {
             while (!cts.Token.IsCancellationRequested)
@@ -692,22 +724,18 @@ if (discord.Enabled)
                 bool hvOk      = hardvenFeed.IsConnected;     // sidecar serving odds
                 bool kOk       = kalshiFeed.IsConnected;
 
-                // ── edge-triggered transition alerts ──
-                // A scheduled dark window flips SessionReady off by design → folded into sessionOk above so we
-                // DON'T alert on planned closes; we alert only on an UNEXPECTED logout during an open window.
-                if (!sessionOk && lastSession)
-                    _ = discord.AlertAsync("🔴 HardVen session lost during an OPEN window — Pinnacle logged out unexpectedly. Books frozen until re-auth.");
-                else if (sessionOk && !lastSession)
-                    _ = discord.AlertAsync("🟢 HardVen session ready again — login re-captured.");
-                if (!hvOk && lastHardVen)
-                    _ = discord.AlertAsync("🔴 HardVen feed down — sidecar unreachable or not serving odds.");
-                else if (hvOk && !lastHardVen)
-                    _ = discord.AlertAsync("🟢 HardVen feed back up.");
-                if (!kOk && lastKalshi)
-                    _ = discord.AlertAsync("🔴 Kalshi feed down.");
-                else if (kOk && !lastKalshi)
-                    _ = discord.AlertAsync("🟢 Kalshi feed back up.");
-                lastSession = sessionOk; lastHardVen = hvOk; lastKalshi = kOk;
+                // Alert only on a STUCK problem: startup warm-up + scheduled-reopen re-capture gaps are absorbed
+                // by everUp + the grace window, so an auto-login that recovers within grace stays silent.
+                Track("session", sessionOk, nowDt,
+                    $"🔴 HardVen session down >{downGraceSec:0}s — Pinnacle logged out and auto-login hasn't recovered it. May need a manual login.",
+                    "🟢 HardVen session recovered — login re-captured, books flowing.",
+                    "🟢 HardVen session established — login captured.");
+                Track("hardven", hvOk, nowDt,
+                    $"🔴 HardVen feed down >{downGraceSec:0}s — sidecar unreachable or not serving odds.",
+                    "🟢 HardVen feed back up.", null);
+                Track("kalshi", kOk, nowDt,
+                    $"🔴 Kalshi feed down >{downGraceSec:0}s.",
+                    "🟢 Kalshi feed back up.", null);
 
                 // ── periodic heartbeat ──
                 if ((nowDt - lastHeartbeat).TotalMinutes >= heartbeatMin)
@@ -873,9 +901,13 @@ if (executor != null)
 // ══════════════════════════════════════════════════════════════════════════════
 _ = Task.Run(async () =>
 {
+    // Start FREQUENT then back off to 15 min: the startup auto-pair finishes ~1-2 min in, so we want to load its
+    // fresh cross_pairs.json quickly (90s → 3m → 6m → … → 15m), not wait a full 15 min for the first pass.
+    int reloadDelayMs = 90_000;
     while (!cts.Token.IsCancellationRequested)
     {
-        await Task.Delay(900_000, cts.Token).ContinueWith(_ => { });
+        await Task.Delay(reloadDelayMs, cts.Token).ContinueWith(_ => { });
+        reloadDelayMs = Math.Min(reloadDelayMs * 2, 900_000);
         if (cts.Token.IsCancellationRequested) break;
         // Reload BOTH pair files: cross_pairs.json (moneyline) and derivative_pairs.json (spread/total). Same
         // schema + same knownPairIds dedup → only pairs NEW since the last read are added (daily re-pair).
