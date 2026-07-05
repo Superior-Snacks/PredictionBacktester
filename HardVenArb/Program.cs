@@ -833,6 +833,36 @@ if (discord.Enabled)
         Console.WriteLine("[DISCORD CMD] remote commands enabled: status / close / end");
         _ = Task.Run(() => cmdListener.RunAsync(cts.Token));
     }
+
+    // AUTO-STATUS after each session block (WEBHOOK-ONLY — no bot token needed). When a scheduled window closes
+    // (ScheduledDark flips false→true) AND we actually collected during it, post the digest — a per-block summary
+    // with zero interaction. Best-effort; never disrupts the run.
+    if (discord.Enabled)
+    {
+        Console.WriteLine("[DISCORD] auto-status ON — a summary posts after each session block.");
+        _ = Task.Run(async () =>
+        {
+            bool wasDark = hardvenFeed.ScheduledDark, sawReady = false;
+            while (!cts.Token.IsCancellationRequested)
+            {
+                try { await Task.Delay(15_000, cts.Token).ContinueWith(_ => { }); } catch { break; }
+                if (cts.Token.IsCancellationRequested) break;
+                bool dark = hardvenFeed.ScheduledDark;
+                if (!dark && hardvenFeed.SessionReady) sawReady = true;          // live during this open block
+                if (dark && !wasDark && sawReady)                                // block just ended (had a session)
+                {
+                    sawReady = false;                                            // arm for the next block
+                    try
+                    {
+                        await Task.Delay(5_000, cts.Token).ContinueWith(_ => { });   // let the block's last rows flush
+                        _ = discord.AlertAsync("🗓️ **session block ended** —\n" + await BuildStatusAsync());
+                    }
+                    catch (Exception ex) { Console.WriteLine($"[BLOCK STATUS ERROR] {ex.Message}"); }
+                }
+                wasDark = dark;
+            }
+        });
+    }
 }
 
 // ══════════════════════════════════════════════════════════════════════════════

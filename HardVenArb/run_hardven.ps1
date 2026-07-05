@@ -23,7 +23,9 @@ param(
     [int]   $Port   = 8787,            # sidecar port (must match HARDVEN_SIDECAR_URL)
     [string]$Sports = "",              # optional C# sport/league filter args, comma or space separated
     [string]$Python = "python",        # python launcher (set to your venv python if needed)
-    [string]$LogDir = ""               # default: HardVenArb\logs
+    [string]$LogDir = "",              # default: HardVenArb\logs
+    [int]   $DailyRestartHour = 6      # recycle the BOT once/day at this local hour (after the ~5am re-pair) so it
+                                       # reloads ONLY today's pairs + drops stale ones; -1 disables. Sidecar untouched.
 )
 
 $ErrorActionPreference = "Stop"
@@ -90,8 +92,24 @@ try {
 
     # ── 3. Supervise: restart whichever process dies ──────────────────────────────
     Write-Host "[SUPERVISOR] both up. Restarting either on crash. Ctrl+C to stop both." -ForegroundColor Cyan
+    if ($DailyRestartHour -ge 0) {
+        Write-Host "[SUPERVISOR] daily bot recycle at ${DailyRestartHour}:00 local - reloads today's pairs, drops stale ones (sidecar/session untouched)." -ForegroundColor Cyan
+    }
+    $lastRecycleDay = (Get-Date).Date          # today = already 'fresh'; first recycle is tomorrow's hour
     while ($true) {
         Start-Sleep -Seconds 5
+
+        # Daily BOT recycle: once per day at/after $DailyRestartHour, restart just the bot so it reloads ONLY the
+        # freshly re-paired file (drops yesterday's settled pairs + any day-old state). Sidecar keeps the session.
+        $now = Get-Date
+        if ($DailyRestartHour -ge 0 -and $now.Hour -ge $DailyRestartHour -and $now.Date -ne $lastRecycleDay) {
+            $lastRecycleDay = $now.Date
+            Write-Host "[SUPERVISOR] daily bot recycle - restarting the bot to reload today's pairs." -ForegroundColor Cyan
+            Stop-Tree $procs.bot.Proc
+            Start-Sleep -Seconds 2
+            $procs.bot.Proc = Start-Logged 'bot' $procs.bot
+        }
+
         foreach ($name in @('sidecar','bot')) {
             $p = $procs[$name].Proc
             if ($p -and $p.HasExited) {
