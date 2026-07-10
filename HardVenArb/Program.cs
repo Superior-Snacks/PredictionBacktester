@@ -661,6 +661,24 @@ var kalshiFeed = new KalshiWebsocketFeed(orderClient, kalshiConfig, kalshiSubscr
 var hardvenFeed   = new HardVenWebsocketFeed(HARDVEN_SIDECAR_URL, hardvenSubscribeTokens,
                                              state, telemetry, HARDVEN_BATCH_SIZE, HARDVEN_PING_INTERVAL_MS);
 
+// Uptime baseline = the whole RUN's start (the supervisor writes .run_started), so the daily 6am bot recycle
+// doesn't reset "up 0d0h" — which read like a crash. A FRESH file (<5m old) = a genuine start; older = a
+// recycle/crash-restart mid-run. Falls back to now if the file is missing (e.g. launched without the supervisor).
+DateTime runStartedAt = DateTime.UtcNow;
+bool isFreshStart = true;
+try
+{
+    string rsPath = Path.Combine(sourceDir, ".run_started");
+    if (File.Exists(rsPath) &&
+        DateTime.TryParse(File.ReadAllText(rsPath).Trim(), null,
+            System.Globalization.DateTimeStyles.RoundtripKind, out var rs))
+    {
+        runStartedAt  = rs.ToUniversalTime();
+        isFreshStart  = (DateTime.UtcNow - runStartedAt).TotalMinutes < 5;
+    }
+}
+catch { }
+
 // ══════════════════════════════════════════════════════════════════════════════
 //  DISCORD HEARTBEAT + HEALTH ALERTS  (ALL modes — the unattended "is it up?" net)
 // ══════════════════════════════════════════════════════════════════════════════
@@ -679,9 +697,11 @@ if (discord.Enabled)
         ? gs : 90;
     long arbsLogged = 0;
     telemetry.OnArbOpened += (_, _, _, _, _, _) => Interlocked.Increment(ref arbsLogged);
-    var startedAt = DateTime.UtcNow;
-    _ = discord.AlertAsync($"🟢 {modeLabel} started — {pairs.Count} pair(s), sidecar {HARDVEN_SIDECAR_URL}. " +
-                           $"Heartbeat every {heartbeatMin}m.");
+    // Fresh run → "started"; a mid-run recycle/restart → a quieter "reloaded" note so the morning recycle doesn't
+    // read like a crash (and the uptime below is the RUN's, not this process's).
+    _ = discord.AlertAsync(isFreshStart
+        ? $"🟢 {modeLabel} started — {pairs.Count} pair(s), sidecar {HARDVEN_SIDECAR_URL}. Heartbeat every {heartbeatMin}m."
+        : $"🔄 {modeLabel} reloaded (daily recycle / restart) — {pairs.Count} pair(s), run uptime unbroken.");
     _ = Task.Run(async () =>
     {
         // Debounced down/up tracking per signal. everUp gates out the startup warm-up (nothing is "lost" until
@@ -745,7 +765,7 @@ if (discord.Enabled)
                     int pReady = state.Books.Count(kv => kv.Key.StartsWith("H:") && kv.Value.HasReceivedDelta);
                     int kTotal = state.Books.Count(kv => kv.Key.StartsWith("K:"));
                     int pTotal = state.Books.Count(kv => kv.Key.StartsWith("H:"));
-                    var up = nowDt - startedAt;
+                    var up = nowDt - runStartedAt;
                     string sessTag = darkNow ? "dark (scheduled)" : hardvenFeed.SessionReady ? "ready" : "DOWN";
                     _ = discord.AlertAsync(
                         $"💓 up {up.Days}d{up.Hours}h{up.Minutes}m │ session {sessTag} │ " +
@@ -764,7 +784,6 @@ if (discord.Enabled)
 // Query or stop the bot from your phone in the same channel it posts to. Needs a BOT token + channel id
 // (webhooks are send-only). No-op without them; every action is best-effort so it never disrupts the run.
 {
-    var cmdStartedAt = DateTime.UtcNow;
 
     async Task<string> RunAnalyzerSummaryAsync()
     {
@@ -777,7 +796,10 @@ if (discord.Enabled)
                 WorkingDirectory = Directory.GetCurrentDirectory(),   // repo root: CSVs + analyze_cross_arb.py live here
                 RedirectStandardOutput = true, RedirectStandardError = true,
                 UseShellExecute = false, CreateNoWindow = true,
+                StandardOutputEncoding = System.Text.Encoding.UTF8,   // else the em-dash/arrow return as cp1252 mojibake (ÔÇö/ÔåÆ)
+                StandardErrorEncoding = System.Text.Encoding.UTF8,
             };
+            psi.Environment["PYTHONUTF8"] = "1";                      // force Python to emit UTF-8 on the pipe
             psi.ArgumentList.Add("analyze_cross_arb.py");
             psi.ArgumentList.Add("--summary");
             using var proc = System.Diagnostics.Process.Start(psi);
@@ -802,7 +824,7 @@ if (discord.Enabled)
         int pTotal = state.Books.Count(kv => kv.Key.StartsWith("H:"));
         string sess = hardvenFeed.ScheduledDark ? "dark (scheduled)"
                     : hardvenFeed.SessionReady ? "ready" : "DOWN";
-        var up = DateTime.UtcNow - cmdStartedAt;
+        var up = DateTime.UtcNow - runStartedAt;
         string live = $"📊 **status** — session {sess} | books K={kReady}/{kTotal} H={pReady}/{pTotal} | " +
                       $"WS K={(kalshiFeed.IsConnected ? "ok" : "down")} H={(hardvenFeed.IsConnected ? "ok" : "down")} | " +
                       $"openArbs={telemetry.OpenArbs} pairs={telemetry.TotalPairs} | up {up.Days}d{up.Hours}h{up.Minutes}m";

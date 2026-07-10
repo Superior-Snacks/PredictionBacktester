@@ -852,6 +852,24 @@ class PinnacleAdapter(BookAdapter):
                     self._cache[token] = sel
 
     # ── HTTP (catalog + rest mode) ───────────────────────────────────────────
+    def _rest_death_check(self, reason: str) -> None:
+        """A REST-replay auth failure (401/403 streak or guest-redirect) wants to declare the session dead. But
+        the ODDS WS is the TRUE liveness signal: while paho is CONNECTED, the login is alive and odds are flowing
+        (a genuine logout drops/auth-rejects the WS too). So a REST auth failure WHILE THE WS IS UP is just a
+        STALE REPLAY x-session — re-sync it from the browser's latest token and DO NOT declare death. This fixes
+        the false 'session DOWN' seen while the page stayed logged in (the REST replay 401'd while the WS kept
+        streaming odds). Only when the WS is ALSO down is this a real logout."""
+        if self._connected:
+            self._rest_auth_fails = 0                       # WS healthy → not a logout; stop the fail streak
+            if self._http is not None and self._session:
+                self._http.headers["x-session"] = self._session   # re-apply the browser's freshest x-session
+            print(f"[PINNACLE] {reason}, but the odds WS is CONNECTED — re-synced the REST x-session; NOT a logout "
+                  "(the browser still holds the session).")
+            return
+        self._session_expired = True
+        self._session_ready = False                         # WS is ALSO down → a genuine logout
+        self._give_up_ws(f"{reason} (session dead — WS also down)")
+
     async def _http_get(self, path: str, count_429: bool = False, authed: bool = True):
         if not self._http:
             return None
@@ -875,19 +893,15 @@ class PinnacleAdapter(BookAdapter):
                 print(f"[PINNACLE] AUTH {r.status_code} on {path} ({self._rest_auth_fails}/{self._rest_auth_giveup}) "
                       "— session may be invalid.")
                 if self._rest_auth_fails >= self._rest_auth_giveup:
-                    self._session_expired = True
-                    self._session_ready = False
-                    self._give_up_ws(f"REST auth {r.status_code} x{self._rest_auth_fails} (session dead)")
+                    self._rest_death_check(f"REST auth {r.status_code} x{self._rest_auth_fails}")
             else:
                 print(f"[PINNACLE] AUTH {r.status_code} on {path}.")
             return None
         if r.status_code in (301, 302, 303, 307, 308):
             loc = r.headers.get("location", "")
             if "guest" in loc.lower():
-                print(f"[PINNACLE] {path}: redirected to the GUEST endpoint → your x-session is EXPIRED/invalid.")
-                self._session_expired = True
-                self._session_ready = False    # gate odds() seeding + the rest poller → STOP poking Pinnacle when logged out
-                self._give_up_ws("session expired — guest redirect")   # stop keepalive + WS; don't hammer a dead session
+                print(f"[PINNACLE] {path}: redirected to the GUEST endpoint → the replayed x-session looks EXPIRED.")
+                self._rest_death_check("session expired — guest redirect")   # only a real logout if the WS is also down
             else:
                 print(f"[PINNACLE] GET {path} HTTP {r.status_code} → {loc}")
             return None

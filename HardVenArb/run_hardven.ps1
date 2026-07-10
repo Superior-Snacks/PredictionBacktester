@@ -40,6 +40,12 @@ New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 $stopSentinel = Join-Path $hvDir ".stop_requested"
 Remove-Item $stopSentinel -Force -ErrorAction SilentlyContinue
 
+# Run-start timestamp (UTC ISO): the bot reads this for its uptime baseline so the heartbeat's "up Xd" and the
+# start/recycle labelling stay CONTINUOUS across the daily 6am bot recycle (the RUN keeps going; only the process
+# restarts). Written ONCE per supervisor start; the recycle does not touch it.
+$runStarted = Join-Path $hvDir ".run_started"
+[System.DateTime]::UtcNow.ToString("o") | Set-Content -Path $runStarted -Encoding ascii
+
 # ── 1. Build the bot once (Release) so each restart is instant ────────────────────
 Write-Host "[SUPERVISOR] building HardVenArb (Release)..." -ForegroundColor Cyan
 & dotnet build -c Release (Join-Path $hvDir "HardVenArb.csproj") --nologo

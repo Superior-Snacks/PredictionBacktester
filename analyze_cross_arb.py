@@ -258,8 +258,15 @@ def main() -> None:
     if a.metric == "within" and not has_within:
         print("[WARN] --metric within but the CSV lacks HardVenLegWithinMs/KalshiLegWithinMs → using legacy.")
         use_within = False
-    times = [r.get("StartTime", "") for r in rows if r.get("StartTime")]
-    span = f"{times[0][:19]} → {times[-1][11:19]}" if times else "?"
+    # SORT so the span is min→max (rows aren't guaranteed ordered); show the end's DATE only if it spilled to a
+    # different day (else just its time) — avoids the backwards-looking "21:24 → 12:27" across midnight.
+    times = sorted(r.get("StartTime", "") for r in rows if r.get("StartTime"))
+    if times:
+        t0, t1 = times[0], times[-1]
+        end = t1[11:19] if t1[:10] == t0[:10] else t1[:19]
+        span = f"{t0[:19]} → {end}"
+    else:
+        span = "?"
     n_pre = sum(1 for r in rows if _is_prelive(r))
     n_live = len(rows) - n_pre
     regime = ("PRE-LIVE ONLY" if a.pre_live else "IN-PLAY ONLY" if a.in_play else
