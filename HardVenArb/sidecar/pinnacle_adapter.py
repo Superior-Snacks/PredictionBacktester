@@ -149,6 +149,9 @@ class PinnacleAdapter(BookAdapter):
         self._session_expired = False                          # terminal: a guest-redirect → stop everything
         self._debug_ws = os.environ.get("PINNACLE_DEBUG_WS") == "1"  # log each WS cache update (prove live=WS)
         self._debug_status = os.environ.get("PINNACLE_DEBUG_STATUS") == "1"  # log market OFFLINE/suspend transitions
+        if self._debug_ws:
+            print("[PINNACLE] WARNING: PINNACLE_DEBUG_WS=1 logs EVERY WS odds update — the log grows ~18MB/day "
+                  "(90MB over a week). Unset it for production / long unattended runs.")
         self._ws_dump_path = os.environ.get("PINNACLE_WS_DUMP", "")          # JSONL dump of EVERY incoming WS record
         self._ws_dump_fh = None                                              # (derivative recon: do Games matchups arrive?)
         # ── session SOURCE: "env" (DEFAULT — creds from PINNACLE_SESSION/.env, paste-the-token) or "browser"

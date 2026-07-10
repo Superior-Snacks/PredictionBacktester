@@ -679,6 +679,20 @@ try
 }
 catch { }
 
+// HONEST book count: "LIVE" = received a delta, not resolved/halted (IsDead), and updated within the fresh
+// window — i.e. currently providing pricing. The old "HasReceivedDelta" count only ever LATCHED up (never
+// decremented), so it read a misleading constant (e.g. HardVen stuck at 772) even when most books were stale
+// overnight. This reflects real coverage right now. `HARDVEN_BOOK_FRESH_SEC` (default 120) sets the window.
+double bookFreshSec = double.TryParse(Environment.GetEnvironmentVariable("HARDVEN_BOOK_FRESH_SEC"), out var bfs) && bfs > 0
+    ? bfs : 120;
+int LiveBooks(string prefix)
+{
+    var now = DateTime.UtcNow;
+    return state.Books.Count(kv => kv.Key.StartsWith(prefix) && kv.Value.HasReceivedDelta
+        && !kv.Value.IsDead && (now - kv.Value.LastDeltaAt).TotalSeconds <= bookFreshSec);
+}
+int TotalBooks(string prefix) => state.Books.Count(kv => kv.Key.StartsWith(prefix));
+
 // ══════════════════════════════════════════════════════════════════════════════
 //  DISCORD HEARTBEAT + HEALTH ALERTS  (ALL modes — the unattended "is it up?" net)
 // ══════════════════════════════════════════════════════════════════════════════
@@ -761,15 +775,13 @@ if (discord.Enabled)
                 if ((nowDt - lastHeartbeat).TotalMinutes >= heartbeatMin)
                 {
                     lastHeartbeat = nowDt;
-                    int kReady = state.Books.Count(kv => kv.Key.StartsWith("K:") && kv.Value.HasReceivedDelta);
-                    int pReady = state.Books.Count(kv => kv.Key.StartsWith("H:") && kv.Value.HasReceivedDelta);
-                    int kTotal = state.Books.Count(kv => kv.Key.StartsWith("K:"));
-                    int pTotal = state.Books.Count(kv => kv.Key.StartsWith("H:"));
+                    int kLive = LiveBooks("K:"), pLive = LiveBooks("H:");
+                    int kTotal = TotalBooks("K:"), pTotal = TotalBooks("H:");
                     var up = nowDt - runStartedAt;
                     string sessTag = darkNow ? "dark (scheduled)" : hardvenFeed.SessionReady ? "ready" : "DOWN";
                     _ = discord.AlertAsync(
                         $"💓 up {up.Days}d{up.Hours}h{up.Minutes}m │ session {sessTag} │ " +
-                        $"books K={kReady}/{kTotal} H={pReady}/{pTotal} │ WS K={(kOk ? "ok" : "down")} H={(hvOk ? "ok" : "down")} │ " +
+                        $"live books K={kLive}/{kTotal} H={pLive}/{pTotal} │ WS K={(kOk ? "ok" : "down")} H={(hvOk ? "ok" : "down")} │ " +
                         $"openArbs={telemetry.OpenArbs} arbsLogged={Interlocked.Read(ref arbsLogged)}");
                 }
             }
@@ -818,14 +830,12 @@ if (discord.Enabled)
 
     async Task<string> BuildStatusAsync()
     {
-        int kReady = state.Books.Count(kv => kv.Key.StartsWith("K:") && kv.Value.HasReceivedDelta);
-        int pReady = state.Books.Count(kv => kv.Key.StartsWith("H:") && kv.Value.HasReceivedDelta);
-        int kTotal = state.Books.Count(kv => kv.Key.StartsWith("K:"));
-        int pTotal = state.Books.Count(kv => kv.Key.StartsWith("H:"));
+        int kLive = LiveBooks("K:"), pLive = LiveBooks("H:");
+        int kTotal = TotalBooks("K:"), pTotal = TotalBooks("H:");
         string sess = hardvenFeed.ScheduledDark ? "dark (scheduled)"
                     : hardvenFeed.SessionReady ? "ready" : "DOWN";
         var up = DateTime.UtcNow - runStartedAt;
-        string live = $"📊 **status** — session {sess} | books K={kReady}/{kTotal} H={pReady}/{pTotal} | " +
+        string live = $"📊 **status** — session {sess} | live books K={kLive}/{kTotal} H={pLive}/{pTotal} | " +
                       $"WS K={(kalshiFeed.IsConnected ? "ok" : "down")} H={(hardvenFeed.IsConnected ? "ok" : "down")} | " +
                       $"openArbs={telemetry.OpenArbs} pairs={telemetry.TotalPairs} | up {up.Days}d{up.Hours}h{up.Minutes}m";
         string analysis = await RunAnalyzerSummaryAsync();
