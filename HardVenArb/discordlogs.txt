@@ -1,0 +1,331 @@
+
+CrossArbBot
+APP
+ — Yesterday at 1:00 AM
+[HardVenArb] 💓 up 0d19h0m │ session ready │ books K=214/774 H=772/774 │ WS K=ok H=ok │ openArbs=36 arbsLogged=351
+CrossArbBot
+APP
+ — Yesterday at 1:30 AM
+[HardVenArb] 💓 up 0d19h30m │ session ready │ books K=186/774 H=772/774 │ WS K=ok H=ok │ openArbs=36 arbsLogged=351
+CrossArbBot
+APP
+ — Yesterday at 2:01 AM
+[HardVenArb] 💓 up 0d20h0m │ session ready │ books K=154/774 H=772/774 │ WS K=ok H=ok │ openArbs=36 arbsLogged=351
+CrossArbBot
+APP
+ — Yesterday at 2:31 AM
+[HardVenArb] 💓 up 0d20h30m │ session ready │ books K=138/774 H=772/774 │ WS K=ok H=ok │ openArbs=36 arbsLogged=351
+CrossArbBot
+APP
+ — Yesterday at 3:01 AM
+[HardVenArb] 💓 up 0d21h0m │ session ready │ books K=106/774 H=772/774 │ WS K=ok H=ok │ openArbs=36 arbsLogged=351
+CrossArbBot
+APP
+ — Yesterday at 3:31 AM
+[HardVenArb] 💓 up 0d21h30m │ session ready │ books K=60/774 H=772/774 │ WS K=ok H=ok │ openArbs=0 arbsLogged=351
+CrossArbBot
+APP
+ — Yesterday at 3:45 AM
+[HardVenArb] 🗓️ session block ended —
+📊 status — session dark (scheduled) | books K=76/774 H=772/774 | WS K=ok H=ok | openArbs=0 pairs=387 | up 0d21h45m
+HardVenArb status ÔÇö CrossArbTelemetry_20260709.csv
+span 2026-07-08 21:24:06 ÔåÆ 12:27:42 | windows 37 (37 pre-live, 0 in-play) | capturable 37 (100%)
+PRE-LIVE: 37 cap | edge avg 1.18c max 4.95c | est profit $51.30
+in-play: 0 capturable
+CrossArbBot
+APP
+ — Yesterday at 4:01 AM
+[HardVenArb] 💓 up 0d22h0m │ session dark (scheduled) │ books K=78/774 H=772/774 │ WS K=ok H=ok │ openArbs=0 arbsLogged=351
+CrossArbBot
+APP
+ — Yesterday at 4:31 AM
+[HardVenArb] 💓 up 0d22h30m │ session dark (scheduled) │ books K=78/774 H=772/774 │ WS K=ok H=ok │ openArbs=0 arbsLogged=351
+CrossArbBot
+APP
+ — Yesterday at 5:01 AM
+[HardVenArb] 💓 up 0d23h1m │ session dark (scheduled) │ books K=62/774 H=772/774 │ WS K=ok H=ok │ openArbs=0 arbsLogged=351
+CrossArbBot
+APP
+ — Yesterday at 5:31 AM
+[HardVenArb] 💓 up 0d23h31m │ session ready │ books K=46/774 H=772/774 │ WS K=ok H=ok │ openArbs=1 arbsLogged=352
+CrossArbBot
+APP
+ — Yesterday at 6:00 AM
+[HardVenArb] 🟢 TELEMETRY started — 314 pair(s), sidecar http://127.0.0.1:8787/. Heartbeat every 30m.
+[HardVenArb] 🟢 HardVen session established — login captured.
+[HardVenArb] 🗓️ session block ended —
+📊 status — session dark (scheduled) | books K=584/628 H=620/628 | WS K=ok H=ok | openArbs=0 pairs=314 | up 0d0h5m
+HardVenArb status ÔÇö CrossArbTelemetry_20260709.csv
+span 2026-07-08 21:24:06 ÔåÆ 06:05:14 | windows 49 (39 pre-live, 10 in-play) | capturable 39 (80%)
+PRE-LIVE: 38 cap | edge avg 1.21c max 4.95c | est profit $62.32
+in-play: 1 cap | edge avg 0.90c max 0.90c | est profit $0.52
+CrossArbBot
+APP
+ — Yesterday at 6:30 AM
+[HardVenArb] 💓 up 0d0h30m │ session dark (scheduled) │ books K=614/628 H=620/628 │ WS K=ok H=ok │ openArbs=0 arbsLogged=10
+CrossArbBot
+APP
+ — Yesterday at 7:00 AM
+[HardVenArb] 💓 up 0d1h0m │ session dark (scheduled) │ books K=614/628 H=620/628 │ WS K=ok H=ok │ openArbs=0 arbsLogged=10
+CrossArbBot
+APP
+ — Yesterday at 7:30 AM
+[HardVenArb] 💓 up 0d1h30m │ session dark (scheduled) │ books K=74/628 H=620/628 │ WS K=ok H=ok │ openArbs=0 arbsLogged=10
+CrossArbBot
+APP
+ — Yesterday at 8:00 AM
+[HardVenArb] 💓 up 0d2h0m │ session ready │ books K=316/628 H=620/628 │ WS K=ok H=ok │ openArbs=0 arbsLogged=10
+CrossArbBot
+APP
+ — Yesterday at 8:30 AM
+[HardVenArb] 💓 up 0d2h30m │ session ready │ books K=436/628 H=620/628 │ WS K=ok H=ok │ openArbs=0 arbsLogged=10
+CrossArbBot
+APP
+ — Yesterday at 9:00 AM
+[HardVenArb] 💓 up 0d3h0m │ session ready │ books K=578/628 H=620/628 │ WS K=ok H=ok │ openArbs=0 arbsLogged=10
+CrossArbBot
+APP
+ — Yesterday at 9:30 AM
+[HardVenArb] 💓 up 0d3h30m │ session ready │ books K=586/628 H=620/628 │ WS K=ok H=ok │ openArbs=3 arbsLogged=35
+CrossArbBot
+APP
+ — Yesterday at 10:00 AM
+[HardVenArb] 💓 up 0d4h0m │ session ready │ books K=562/628 H=620/628 │ WS K=ok H=ok │ openArbs=4 arbsLogged=59
+CrossArbBot
+APP
+ — Yesterday at 10:30 AM
+[HardVenArb] 💓 up 0d4h30m │ session ready │ books K=540/628 H=620/628 │ WS K=ok H=ok │ openArbs=10 arbsLogged=81
+CrossArbBot
+APP
+ — Yesterday at 11:00 AM
+[HardVenArb] 💓 up 0d5h0m │ session ready │ books K=514/628 H=620/628 │ WS K=ok H=ok │ openArbs=11 arbsLogged=96
+CrossArbBot
+APP
+ — Yesterday at 11:30 AM
+[HardVenArb] 💓 up 0d5h30m │ session ready │ books K=490/628 H=620/628 │ WS K=ok H=ok │ openArbs=12 arbsLogged=202
+CrossArbBot
+APP
+ — Yesterday at 12:00 PM
+[HardVenArb] 💓 up 0d6h0m │ session ready │ books K=466/628 H=620/628 │ WS K=ok H=ok │ openArbs=12 arbsLogged=205
+CrossArbBot
+APP
+ — Yesterday at 12:30 PM
+[HardVenArb] 💓 up 0d6h30m │ session ready │ books K=412/628 H=620/628 │ WS K=ok H=ok │ openArbs=13 arbsLogged=207
+[HardVenArb] 🗓️ session block ended —
+📊 status — session dark (scheduled) | books K=406/628 H=620/628 | WS K=ok H=ok | openArbs=13 pairs=314 | up 0d6h36m
+HardVenArb status ÔÇö CrossArbTelemetry_20260709.csv
+span 2026-07-08 21:24:06 ÔåÆ 12:09:15 | windows 232 (222 pre-live, 10 in-play) | capturable 110 (47%)
+PRE-LIVE: 109 cap | edge avg 1.44c max 7.15c | est profit $193.94
+in-play: 1 cap | edge avg 0.90c max 0.90c | est profit $0.52
+CrossArbBot
+APP
+ — Yesterday at 12:46 PM
+[HardVenArb] 🔴 HardVen session down >90s — Pinnacle logged out and auto-login hasn't recovered it. May need a manual login.
+CrossArbBot
+APP
+ — Yesterday at 1:00 PM
+[HardVenArb] 💓 up 0d7h0m │ session DOWN │ books K=368/628 H=620/628 │ WS K=ok H=ok │ openArbs=6 arbsLogged=207
+CrossArbBot
+APP
+ — Yesterday at 1:30 PM
+[HardVenArb] 💓 up 0d7h30m │ session DOWN │ books K=330/628 H=620/628 │ WS K=ok H=ok │ openArbs=6 arbsLogged=207
+CrossArbBot
+APP
+ — Yesterday at 1:46 PM
+[HardVenArb] 🟢 HardVen session recovered — login re-captured, books flowing.
+CrossArbBot
+APP
+ — Yesterday at 2:00 PM
+[HardVenArb] 💓 up 0d8h0m │ session ready │ books K=320/628 H=620/628 │ WS K=ok H=ok │ openArbs=7 arbsLogged=209
+CrossArbBot
+APP
+ — Yesterday at 2:30 PM
+[HardVenArb] 💓 up 0d8h30m │ session ready │ books K=310/628 H=620/628 │ WS K=ok H=ok │ openArbs=9 arbsLogged=216
+CrossArbBot
+APP
+ — Yesterday at 3:00 PM
+[HardVenArb] 💓 up 0d9h0m │ session ready │ books K=302/628 H=620/628 │ WS K=ok H=ok │ openArbs=12 arbsLogged=230
+CrossArbBot
+APP
+ — Yesterday at 3:30 PM
+[HardVenArb] 💓 up 0d9h30m │ session ready │ books K=294/628 H=620/628 │ WS K=ok H=ok │ openArbs=15 arbsLogged=242
+CrossArbBot
+APP
+ — Yesterday at 4:00 PM
+[HardVenArb] 💓 up 0d10h0m │ session ready │ books K=220/628 H=620/628 │ WS K=ok H=ok │ openArbs=2 arbsLogged=273
+CrossArbBot
+APP
+ — Yesterday at 4:30 PM
+[HardVenArb] 💓 up 0d10h30m │ session ready │ books K=260/628 H=620/628 │ WS K=ok H=ok │ openArbs=3 arbsLogged=281
+CrossArbBot
+APP
+ — Yesterday at 5:00 PM
+[HardVenArb] 💓 up 0d11h0m │ session ready │ books K=250/628 H=620/628 │ WS K=ok H=ok │ openArbs=3 arbsLogged=281
+CrossArbBot
+APP
+ — Yesterday at 5:30 PM
+[HardVenArb] 💓 up 0d11h30m │ session ready │ books K=236/628 H=620/628 │ WS K=ok H=ok │ openArbs=4 arbsLogged=291
+CrossArbBot
+APP
+ — Yesterday at 6:00 PM
+[HardVenArb] 💓 up 0d12h0m │ session ready │ books K=218/628 H=620/628 │ WS K=ok H=ok │ openArbs=5 arbsLogged=293
+CrossArbBot
+APP
+ — Yesterday at 6:30 PM
+[HardVenArb] 💓 up 0d12h30m │ session ready │ books K=200/628 H=620/628 │ WS K=ok H=ok │ openArbs=5 arbsLogged=293
+CrossArbBot
+APP
+ — Yesterday at 7:00 PM
+[HardVenArb] 💓 up 0d13h0m │ session ready │ books K=198/628 H=620/628 │ WS K=ok H=ok │ openArbs=5 arbsLogged=293
+CrossArbBot
+APP
+ — Yesterday at 7:30 PM
+[HardVenArb] 💓 up 0d13h30m │ session ready │ books K=194/628 H=620/628 │ WS K=ok H=ok │ openArbs=5 arbsLogged=293
+CrossArbBot
+APP
+ — Yesterday at 8:00 PM
+[HardVenArb] 💓 up 0d14h0m │ session ready │ books K=176/628 H=620/628 │ WS K=ok H=ok │ openArbs=5 arbsLogged=293
+CrossArbBot
+APP
+ — Yesterday at 8:30 PM
+[HardVenArb] 💓 up 0d14h30m │ session ready │ books K=132/628 H=620/628 │ WS K=ok H=ok │ openArbs=5 arbsLogged=293
+CrossArbBot
+APP
+ — Yesterday at 9:00 PM
+[HardVenArb] 💓 up 0d15h0m │ session ready │ books K=116/628 H=620/628 │ WS K=ok H=ok │ openArbs=5 arbsLogged=293
+CrossArbBot
+APP
+ — Yesterday at 9:30 PM
+[HardVenArb] 💓 up 0d15h30m │ session ready │ books K=116/628 H=620/628 │ WS K=ok H=ok │ openArbs=5 arbsLogged=293
+CrossArbBot
+APP
+ — Yesterday at 10:00 PM
+[HardVenArb] 💓 up 0d16h0m │ session ready │ books K=116/628 H=620/628 │ WS K=ok H=ok │ openArbs=5 arbsLogged=293
+CrossArbBot
+APP
+ — Yesterday at 10:30 PM
+[HardVenArb] 💓 up 0d16h30m │ session ready │ books K=116/628 H=620/628 │ WS K=ok H=ok │ openArbs=5 arbsLogged=293
+CrossArbBot
+APP
+ — Yesterday at 11:00 PM
+[HardVenArb] 💓 up 0d17h0m │ session ready │ books K=116/628 H=620/628 │ WS K=ok H=ok │ openArbs=5 arbsLogged=294
+CrossArbBot
+APP
+ — Yesterday at 11:30 PM
+[HardVenArb] 💓 up 0d17h30m │ session ready │ books K=116/628 H=620/628 │ WS K=ok H=ok │ openArbs=5 arbsLogged=294
+CrossArbBot
+APP
+ — 12:00 AM
+[HardVenArb] 💓 up 0d18h0m │ session ready │ books K=116/628 H=620/628 │ WS K=ok H=ok │ openArbs=5 arbsLogged=294
+CrossArbBot
+APP
+ — 12:30 AM
+[HardVenArb] 💓 up 0d18h30m │ session ready │ books K=116/628 H=620/628 │ WS K=ok H=ok │ openArbs=5 arbsLogged=294
+CrossArbBot
+APP
+ — 1:00 AM
+[HardVenArb] 💓 up 0d19h0m │ session ready │ books K=116/628 H=620/628 │ WS K=ok H=ok │ openArbs=5 arbsLogged=294
+CrossArbBot
+APP
+ — 1:30 AM
+[HardVenArb] 💓 up 0d19h30m │ session ready │ books K=86/628 H=620/628 │ WS K=ok H=ok │ openArbs=5 arbsLogged=294
+CrossArbBot
+APP
+ — 2:00 AM
+[HardVenArb] 💓 up 0d20h0m │ session ready │ books K=70/628 H=620/628 │ WS K=ok H=ok │ openArbs=5 arbsLogged=294
+CrossArbBot
+APP
+ — 2:31 AM
+[HardVenArb] 💓 up 0d20h30m │ session ready │ books K=70/628 H=620/628 │ WS K=ok H=ok │ openArbs=5 arbsLogged=294
+CrossArbBot
+APP
+ — 3:01 AM
+[HardVenArb] 💓 up 0d21h0m │ session ready │ books K=56/628 H=620/628 │ WS K=ok H=ok │ openArbs=5 arbsLogged=294
+CrossArbBot
+APP
+ — 3:10 AM
+[HardVenArb] 🗓️ session block ended —
+📊 status — session dark (scheduled) | books K=56/628 H=620/628 | WS K=ok H=ok | openArbs=5 pairs=314 | up 0d21h10m
+HardVenArb status ÔÇö CrossArbTelemetry_20260709.csv
+span 2026-07-08 21:24:06 ÔåÆ 22:38:26 | windows 327 (317 pre-live, 10 in-play) | capturable 175 (54%)
+PRE-LIVE: 174 cap | edge avg 1.38c max 7.23c | est profit $331.50
+in-play: 1 cap | edge avg 0.90c max 0.90c | est profit $0.52
+CrossArbBot
+APP
+ — 3:31 AM
+[HardVenArb] 💓 up 0d21h30m │ session dark (scheduled) │ books K=40/628 H=620/628 │ WS K=ok H=ok │ openArbs=5 arbsLogged=294
+CrossArbBot
+APP
+ — 4:01 AM
+[HardVenArb] 💓 up 0d22h0m │ session dark (scheduled) │ books K=40/628 H=620/628 │ WS K=ok H=ok │ openArbs=5 arbsLogged=294
+CrossArbBot
+APP
+ — 4:31 AM
+[HardVenArb] 💓 up 0d22h30m │ session dark (scheduled) │ books K=26/628 H=620/628 │ WS K=ok H=ok │ openArbs=5 arbsLogged=294
+CrossArbBot
+APP
+ — 5:01 AM
+[HardVenArb] 💓 up 0d23h1m │ session dark (scheduled) │ books K=26/628 H=620/628 │ WS K=ok H=ok │ openArbs=5 arbsLogged=294
+CrossArbBot
+APP
+ — 5:31 AM
+[HardVenArb] 💓 up 0d23h31m │ session dark (scheduled) │ books K=26/628 H=620/628 │ WS K=ok H=ok │ openArbs=5 arbsLogged=294
+CrossArbBot
+APP
+ — 6:00 AM
+[HardVenArb] 🟢 TELEMETRY started — 222 pair(s), sidecar http://127.0.0.1:8787/. Heartbeat every 30m.
+[HardVenArb] 🟢 HardVen session established — login captured.
+CrossArbBot
+APP
+ — 6:30 AM
+[HardVenArb] 💓 up 0d0h30m │ session dark (scheduled) │ books K=442/444 H=0/444 │ WS K=ok H=ok │ openArbs=0 arbsLogged=0
+CrossArbBot
+APP
+ — 7:00 AM
+[HardVenArb] 💓 up 0d1h0m │ session ready │ books K=430/444 H=434/444 │ WS K=ok H=ok │ openArbs=0 arbsLogged=0
+CrossArbBot
+APP
+ — 7:25 AM
+[HardVenArb] 🗓️ session block ended —
+📊 status — session dark (scheduled) | books K=442/444 H=434/444 | WS K=ok H=ok | openArbs=2 pairs=222 | up 0d1h25m
+HardVenArb status ÔÇö CrossArbTelemetry_20260710.csv
+span 2026-07-10 07:09:24 ÔåÆ 07:12:27 | windows 7 (7 pre-live, 0 in-play) | capturable 7 (100%)
+PRE-LIVE: 7 cap | edge avg 0.88c max 1.51c | est profit $4.46
+in-play: 0 capturable
+[HardVenArb] 💓 up 0d1h30m │ session dark (scheduled) │ books K=440/444 H=434/444 │ WS K=ok H=ok │ openArbs=0 arbsLogged=9
+CrossArbBot
+APP
+ — 7:46 AM
+[HardVenArb] 🔴 HardVen session down >90s — Pinnacle logged out and auto-login hasn't recovered it. May need a manual login.
+CrossArbBot
+APP
+ — 8:00 AM
+[HardVenArb] 💓 up 0d2h0m │ session DOWN │ books K=436/444 H=434/444 │ WS K=ok H=ok │ openArbs=0 arbsLogged=9
+CrossArbBot
+APP
+ — 8:30 AM
+[HardVenArb] 💓 up 0d2h30m │ session DOWN │ books K=432/444 H=434/444 │ WS K=ok H=ok │ openArbs=0 arbsLogged=9
+CrossArbBot
+APP
+ — 9:00 AM
+[HardVenArb] 💓 up 0d3h0m │ session DOWN │ books K=422/444 H=434/444 │ WS K=ok H=ok │ openArbs=0 arbsLogged=9
+CrossArbBot
+APP
+ — 9:30 AM
+[HardVenArb] 💓 up 0d3h30m │ session DOWN │ books K=408/444 H=434/444 │ WS K=ok H=ok │ openArbs=0 arbsLogged=9
+CrossArbBot
+APP
+ — 10:00 AM
+[HardVenArb] 💓 up 0d4h0m │ session DOWN │ books K=394/444 H=434/444 │ WS K=ok H=ok │ openArbs=0 arbsLogged=9
+CrossArbBot
+APP
+ — 10:30 AM
+[HardVenArb] 💓 up 0d4h30m │ session DOWN │ books K=378/444 H=434/444 │ WS K=ok H=ok │ openArbs=0 arbsLogged=9
+CrossArbBot
+APP
+ — 11:00 AM
+[HardVenArb] 💓 up 0d5h0m │ session DOWN │ books K=366/444 H=434/444 │ WS K=ok H=ok │ openArbs=0 arbsLogged=9
+CrossArbBot
+APP
+ — 11:30 AM
+[HardVenArb] 💓 up 0d5h30m │ session DOWN │ books K=338/444 H=434/444 │ WS K=ok H=ok │ openArbs=0 arbsLogged=9
