@@ -139,6 +139,15 @@ class PinnacleAdapter(BookAdapter):
         self._rest_auth_fails = 0                         # consecutive REST 401/403 on AUTHED calls
         self._ws_auth_giveup = int(os.environ.get("PINNACLE_WS_AUTH_GIVEUP", "2"))
         self._rest_auth_giveup = int(os.environ.get("PINNACLE_REST_AUTH_GIVEUP", "3"))
+        # A WS auth-reject with a still-LOGGED-IN browser is a stale x-session in paho's creds (a session rotation
+        # paho reconnected through), NOT a dead login. Recover by forcing a browser RE-MINT (reload → fresh
+        # x-session → pushed to paho), letting paho retry — instead of a permanent give-up. Cap the re-mints per
+        # outage so a genuinely dead session still ends. See _on_connect (rc 4/5).
+        self._loop: Optional[asyncio.AbstractEventLoop] = None   # main loop, captured in _start_ws (paho callbacks are off-loop)
+        self._ws_remints = 0                              # re-mints attempted this outage (reset on a clean connect)
+        self._ws_remint_cap = int(os.environ.get("PINNACLE_WS_REMINT_CAP", "6"))
+        self._last_remint = 0.0
+        self._remint_throttle_sec = float(os.environ.get("PINNACLE_WS_REMINT_THROTTLE_SEC", "30"))
         self._ws_watchdog_task: Optional[asyncio.Task] = None
         self._reconciler_task: Optional[asyncio.Task] = None   # staggered league subscribes (organic timing)
         self._status_task: Optional[asyncio.Task] = None       # browser-like /status liveness ping
@@ -503,6 +512,7 @@ class PinnacleAdapter(BookAdapter):
         self._client.on_disconnect = self._on_disconnect
         self._client.on_message = self._on_message
         try:
+            self._loop = asyncio.get_running_loop()       # so paho's off-loop callbacks can schedule a re-mint
             self._client.connect_async(WS_HOST, 443, keepalive=60)
             self._client.loop_start()                    # background network thread
             self._ws_watchdog_task = asyncio.create_task(self._ws_watchdog())     # WS health monitor (no give-up)
@@ -537,16 +547,55 @@ class PinnacleAdapter(BookAdapter):
         self._connected = ok
         if ok:
             self._ws_auth_rejects = 0                      # healthy connect clears the auth-fail streak
+            self._ws_remints = 0                           # recovered → re-arm the per-outage re-mint budget
             print("[PINNACLE WS] connected (rc=0).")
             self._subscribed.clear()                      # the reconciler re-subscribes active leagues gradually
-        elif rc_val in (4, 5):                            # CONNACK 4=bad user/pass, 5=not authorized → SESSION DEAD
+        elif rc_val in (4, 5):                            # CONNACK 4=bad user/pass, 5=not authorized
             self._ws_auth_rejects += 1
             print(f"[PINNACLE WS] connect REJECTED (rc={rc}) — session/WS-password invalid "
                   f"({self._ws_auth_rejects}/{self._ws_auth_giveup}).")
             if self._ws_auth_rejects >= self._ws_auth_giveup:
-                self._give_up_ws(f"WS auth rejected {self._ws_auth_rejects}x (session dead)")
+                # The WS password is {x-session}|{suffix}. A reject while the BROWSER is still logged in is almost
+                # always a STALE x-session in paho's creds (Pinnacle rotated it and paho reconnected before the
+                # browser propagated the new one) — NOT a dead login. Force a browser re-mint (reload → fresh
+                # x-session → _on_browser_creds pushes it to paho) and let paho keep retrying. Only give up if the
+                # browser has no session, or re-mints keep failing (cap) — then it's a genuine logout.
+                if self._browser_has_session() and self._ws_remints < self._ws_remint_cap:
+                    self._ws_auth_rejects = 0             # give the re-mint a fresh streak (paho keeps reconnecting)
+                    if self._request_remint():           # only counts a re-mint that ACTUALLY fired (else throttled)
+                        self._ws_remints += 1
+                        print(f"[PINNACLE WS] auth-reject but the browser is LOGGED IN — forcing a WS-cred re-mint "
+                              f"({self._ws_remints}/{self._ws_remint_cap}); NOT giving up.")
+                else:
+                    self._give_up_ws(f"WS auth rejected {self._ws_auth_rejects}x "
+                                     f"({'re-mint cap hit' if self._browser_has_session() else 'browser logged out too'})")
         else:                                             # rc=3 server-unavailable etc. → TRANSIENT, let paho retry
             print(f"[PINNACLE WS] connect failed (rc={rc}) — transient, auto-reconnecting.")
+
+    def _browser_has_session(self) -> bool:
+        """True if the managed browser still holds a live login (so a WS auth-reject is a stale-token rotation,
+        recoverable by a re-mint — not a genuine logout)."""
+        if self._browser is None:
+            return False
+        try:
+            return bool(self._browser.status().get("has_session"))
+        except Exception:
+            return False
+
+    def _request_remint(self) -> bool:
+        """Schedule an on-demand browser re-mint (reload → fresh x-session) from the paho callback thread. Throttled
+        so overlapping auth-rejects during the reload don't stack reloads. Returns True only when it actually fired
+        (so the caller counts it toward the cap); False when throttled or not ready."""
+        now = time.time()
+        if self._loop is None or self._browser is None or now - self._last_remint < self._remint_throttle_sec:
+            return False
+        self._last_remint = now
+        try:
+            asyncio.run_coroutine_threadsafe(self._browser.force_remint(), self._loop)
+            return True
+        except Exception as ex:
+            print(f"[PINNACLE] WS re-mint schedule error: {type(ex).__name__}: {ex}")
+            return False
 
     def _on_disconnect(self, client, userdata, rc, *a) -> None:
         self._connected = False

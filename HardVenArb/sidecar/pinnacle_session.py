@@ -467,6 +467,23 @@ class PinnacleBrowserSession:
             if self._auto_login:
                 await self._ensure_logged_in()   # a hard-expired session shows the login form right after reload
 
+    async def force_remint(self) -> None:
+        """On-demand re-mint: reload the page so the saved profile issues a FRESH x-session, which the adapter
+        picks up (and pushes into the paho WS password). Triggered when the odds WS gets auth-rejected on a
+        session rotation — the same action as the periodic keepalive, on demand. Best-effort; never raises."""
+        if self._page is None:
+            return
+        try:
+            self.pause_activity()
+            await self._page.reload(wait_until="domcontentloaded", timeout=45_000)
+            print("[PINNACLE SESSION] force re-mint — reloaded to refresh the x-session (WS auth-reject recovery).")
+        except Exception as ex:
+            print(f"[PINNACLE SESSION] force re-mint error: {type(ex).__name__}: {ex}")
+        finally:
+            self.resume_activity()
+        if self._auto_login:
+            await self._ensure_logged_in()
+
     # ── unattended re-login (submit the profile-autofilled form) ───────────────────
     def _profile_has_saved_login(self) -> bool:
         """True if the persistent Chrome profile has a saved-credentials store on disk — evidence that an

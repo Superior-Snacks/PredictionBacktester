@@ -1,17 +1,5 @@
 [
   {
-    "kalshi_ticker": "KXATPGSPREAD-26JUL10FERZVE-ZVE7",
-    "market_type": "spread",
-    "line": 6.5,
-    "label": "Arthur Fery vs Alexander Zverev \u2014 Alexander Zverev -6.5",
-    "event_id": "KXATPGSPREAD-26JUL10FERZVE",
-    "settlement_date": "2026-07-10",
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "3337:1632418553:spread:-6.5:away",
-    "hardven_no_token": "3337:1632418553:spread:6.5:home"
-  },
-  {
     "kalshi_ticker": "KXATPGSPREAD-26JUL10SINDJO-SIN5",
     "market_type": "spread",
     "line": 4.5,
@@ -20,20 +8,8 @@
     "settlement_date": "2026-07-10",
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "3337:1632397632:spread:-4.5:home",
-    "hardven_no_token": "3337:1632397632:spread:4.5:away"
-  },
-  {
-    "kalshi_ticker": "KXATPGTOTAL-26JUL10FERZVE-36",
-    "market_type": "total",
-    "line": 35.5,
-    "label": "Arthur Fery vs Alexander Zverev \u2014 Over 35.5",
-    "event_id": "KXATPGTOTAL-26JUL10FERZVE",
-    "settlement_date": "2026-07-10",
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "3337:1632418553:total:35.5:over",
-    "hardven_no_token": "3337:1632418553:total:35.5:under"
+    "hardven_yes_token": "3337:1632397634:spread:-4.5:home",
+    "hardven_no_token": "3337:1632397634:spread:4.5:away"
   },
   {
     "kalshi_ticker": "KXATPGTOTAL-26JUL10SINDJO-39",
@@ -44,8 +20,8 @@
     "settlement_date": "2026-07-10",
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "3337:1632397632:total:38.5:over",
-    "hardven_no_token": "3337:1632397632:total:38.5:under"
+    "hardven_yes_token": "3337:1632397634:total:38.5:over",
+    "hardven_no_token": "3337:1632397634:total:38.5:under"
   },
   {
     "kalshi_ticker": "KXMLBSPREAD-26JUL101840MILPIT-MIL2",
@@ -204,6 +180,18 @@
     "hardven_no_token": "246:1632298158:spread:1.5:home"
   },
   {
+    "kalshi_ticker": "KXMLBSPREAD-26JUL101910CHCCIN-CHC3",
+    "market_type": "spread",
+    "line": 2.5,
+    "label": "Cincinnati Reds vs Chicago Cubs \u2014 Chicago C -2.5",
+    "event_id": "KXMLBSPREAD-26JUL101910CHCCIN",
+    "settlement_date": "2026-07-11",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "246:1632298158:spread:-2.5:away",
+    "hardven_no_token": "246:1632298158:spread:2.5:home"
+  },
+  {
     "kalshi_ticker": "KXMLBSPREAD-26JUL101910CHCCIN-CIN2",
     "market_type": "spread",
     "line": 1.5,
@@ -214,18 +202,6 @@
     "hardven_min_size": 1.0,
     "hardven_yes_token": "246:1632298158:spread:-1.5:home",
     "hardven_no_token": "246:1632298158:spread:1.5:away"
-  },
-  {
-    "kalshi_ticker": "KXMLBSPREAD-26JUL101910CHCCIN-CIN3",
-    "market_type": "spread",
-    "line": 2.5,
-    "label": "Cincinnati Reds vs Chicago Cubs \u2014 Cincinnati -2.5",
-    "event_id": "KXMLBSPREAD-26JUL101910CHCCIN",
-    "settlement_date": "2026-07-11",
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "246:1632298158:spread:-2.5:home",
-    "hardven_no_token": "246:1632298158:spread:2.5:away"
   },
   {
     "kalshi_ticker": "KXMLBSPREAD-26JUL101910CLEMIA-CLE2",
@@ -276,18 +252,6 @@
     "hardven_no_token": "246:1632307213:spread:1.5:home"
   },
   {
-    "kalshi_ticker": "KXMLBSPREAD-26JUL101910SEATB-SEA3",
-    "market_type": "spread",
-    "line": 2.5,
-    "label": "Tampa Bay Rays vs Seattle Mariners \u2014 Seattle -2.5",
-    "event_id": "KXMLBSPREAD-26JUL101910SEATB",
-    "settlement_date": "2026-07-11",
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "246:1632307213:spread:-2.5:away",
-    "hardven_no_token": "246:1632307213:spread:2.5:home"
-  },
-  {
     "kalshi_ticker": "KXMLBSPREAD-26JUL101910SEATB-TB2",
     "market_type": "spread",
     "line": 1.5,
@@ -298,6 +262,18 @@
     "hardven_min_size": 1.0,
     "hardven_yes_token": "246:1632307213:spread:-1.5:home",
     "hardven_no_token": "246:1632307213:spread:1.5:away"
+  },
+  {
+    "kalshi_ticker": "KXMLBSPREAD-26JUL101910SEATB-TB3",
+    "market_type": "spread",
+    "line": 2.5,
+    "label": "Tampa Bay Rays vs Seattle Mariners \u2014 Tampa Bay -2.5",
+    "event_id": "KXMLBSPREAD-26JUL101910SEATB",
+    "settlement_date": "2026-07-11",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "246:1632307213:spread:-2.5:home",
+    "hardven_no_token": "246:1632307213:spread:2.5:away"
   },
   {
     "kalshi_ticker": "KXMLBSPREAD-26JUL101915BOSNYM-BOS2",
@@ -334,6 +310,114 @@
     "hardven_min_size": 1.0,
     "hardven_yes_token": "246:1632299668:spread:-2.5:home",
     "hardven_no_token": "246:1632299668:spread:2.5:away"
+  },
+  {
+    "kalshi_ticker": "KXMLBSPREAD-26JUL101940ATHCWS-ATH2",
+    "market_type": "spread",
+    "line": 1.5,
+    "label": "Chicago White Sox vs Athletics \u2014 A's -1.5",
+    "event_id": "KXMLBSPREAD-26JUL101940ATHCWS",
+    "settlement_date": "2026-07-11",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "246:1632307223:spread:-1.5:away",
+    "hardven_no_token": "246:1632307223:spread:1.5:home"
+  },
+  {
+    "kalshi_ticker": "KXMLBSPREAD-26JUL101940ATHCWS-CWS2",
+    "market_type": "spread",
+    "line": 1.5,
+    "label": "Chicago White Sox vs Athletics \u2014 Chicago WS -1.5",
+    "event_id": "KXMLBSPREAD-26JUL101940ATHCWS",
+    "settlement_date": "2026-07-11",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "246:1632307223:spread:-1.5:home",
+    "hardven_no_token": "246:1632307223:spread:1.5:away"
+  },
+  {
+    "kalshi_ticker": "KXMLBSPREAD-26JUL101940ATHCWS-CWS3",
+    "market_type": "spread",
+    "line": 2.5,
+    "label": "Chicago White Sox vs Athletics \u2014 Chicago WS -2.5",
+    "event_id": "KXMLBSPREAD-26JUL101940ATHCWS",
+    "settlement_date": "2026-07-11",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "246:1632307223:spread:-2.5:home",
+    "hardven_no_token": "246:1632307223:spread:2.5:away"
+  },
+  {
+    "kalshi_ticker": "KXMLBSPREAD-26JUL102005HOUTEX-HOU2",
+    "market_type": "spread",
+    "line": 1.5,
+    "label": "Texas Rangers vs Houston Astros \u2014 Houston -1.5",
+    "event_id": "KXMLBSPREAD-26JUL102005HOUTEX",
+    "settlement_date": "2026-07-11",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "246:1632298167:spread:-1.5:away",
+    "hardven_no_token": "246:1632298167:spread:1.5:home"
+  },
+  {
+    "kalshi_ticker": "KXMLBSPREAD-26JUL102005HOUTEX-HOU3",
+    "market_type": "spread",
+    "line": 2.5,
+    "label": "Texas Rangers vs Houston Astros \u2014 Houston -2.5",
+    "event_id": "KXMLBSPREAD-26JUL102005HOUTEX",
+    "settlement_date": "2026-07-11",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "246:1632298167:spread:-2.5:away",
+    "hardven_no_token": "246:1632298167:spread:2.5:home"
+  },
+  {
+    "kalshi_ticker": "KXMLBSPREAD-26JUL102005HOUTEX-TEX2",
+    "market_type": "spread",
+    "line": 1.5,
+    "label": "Texas Rangers vs Houston Astros \u2014 Texas -1.5",
+    "event_id": "KXMLBSPREAD-26JUL102005HOUTEX",
+    "settlement_date": "2026-07-11",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "246:1632298167:spread:-1.5:home",
+    "hardven_no_token": "246:1632298167:spread:1.5:away"
+  },
+  {
+    "kalshi_ticker": "KXMLBSPREAD-26JUL102010LAAMIN-LAA2",
+    "market_type": "spread",
+    "line": 1.5,
+    "label": "Minnesota Twins vs Los Angeles Angels \u2014 Los Angeles A -1.5",
+    "event_id": "KXMLBSPREAD-26JUL102010LAAMIN",
+    "settlement_date": "2026-07-11",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "246:1632299681:spread:-1.5:away",
+    "hardven_no_token": "246:1632299681:spread:1.5:home"
+  },
+  {
+    "kalshi_ticker": "KXMLBSPREAD-26JUL102010LAAMIN-MIN2",
+    "market_type": "spread",
+    "line": 1.5,
+    "label": "Minnesota Twins vs Los Angeles Angels \u2014 Minnesota -1.5",
+    "event_id": "KXMLBSPREAD-26JUL102010LAAMIN",
+    "settlement_date": "2026-07-11",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "246:1632299681:spread:-1.5:home",
+    "hardven_no_token": "246:1632299681:spread:1.5:away"
+  },
+  {
+    "kalshi_ticker": "KXMLBSPREAD-26JUL102010LAAMIN-MIN3",
+    "market_type": "spread",
+    "line": 2.5,
+    "label": "Minnesota Twins vs Los Angeles Angels \u2014 Minnesota -2.5",
+    "event_id": "KXMLBSPREAD-26JUL102010LAAMIN",
+    "settlement_date": "2026-07-11",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "246:1632299681:spread:-2.5:home",
+    "hardven_no_token": "246:1632299681:spread:2.5:away"
   },
   {
     "kalshi_ticker": "KXMLBSPREAD-26JUL102015ATLSTL-ATL2",
@@ -540,6 +624,18 @@
     "hardven_no_token": "246:1632298148:total:9.5:under"
   },
   {
+    "kalshi_ticker": "KXMLBTOTAL-26JUL101840PHIDET-11",
+    "market_type": "total",
+    "line": 10.5,
+    "label": "Detroit Tigers vs Philadelphia Phillies \u2014 Over 10.5",
+    "event_id": "KXMLBTOTAL-26JUL101840PHIDET",
+    "settlement_date": "2026-07-11",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "246:1632298148:total:10.5:over",
+    "hardven_no_token": "246:1632298148:total:10.5:under"
+  },
+  {
     "kalshi_ticker": "KXMLBTOTAL-26JUL101840PHIDET-8",
     "market_type": "total",
     "line": 7.5,
@@ -636,16 +732,16 @@
     "hardven_no_token": "246:1632299664:total:10.5:under"
   },
   {
-    "kalshi_ticker": "KXMLBTOTAL-26JUL101905KCBAL-9",
+    "kalshi_ticker": "KXMLBTOTAL-26JUL101905KCBAL-12",
     "market_type": "total",
-    "line": 8.5,
-    "label": "Baltimore Orioles vs Kansas City Royals \u2014 Over 8.5",
+    "line": 11.5,
+    "label": "Baltimore Orioles vs Kansas City Royals \u2014 Over 11.5",
     "event_id": "KXMLBTOTAL-26JUL101905KCBAL",
     "settlement_date": "2026-07-11",
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "246:1632299664:total:8.5:over",
-    "hardven_no_token": "246:1632299664:total:8.5:under"
+    "hardven_yes_token": "246:1632299664:total:11.5:over",
+    "hardven_no_token": "246:1632299664:total:11.5:under"
   },
   {
     "kalshi_ticker": "KXMLBTOTAL-26JUL101910CHCCIN-10",
@@ -804,6 +900,126 @@
     "hardven_no_token": "246:1632299668:total:8.5:under"
   },
   {
+    "kalshi_ticker": "KXMLBTOTAL-26JUL101940ATHCWS-10",
+    "market_type": "total",
+    "line": 9.5,
+    "label": "Chicago White Sox vs Athletics \u2014 Over 9.5",
+    "event_id": "KXMLBTOTAL-26JUL101940ATHCWS",
+    "settlement_date": "2026-07-11",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "246:1632307223:total:9.5:over",
+    "hardven_no_token": "246:1632307223:total:9.5:under"
+  },
+  {
+    "kalshi_ticker": "KXMLBTOTAL-26JUL101940ATHCWS-11",
+    "market_type": "total",
+    "line": 10.5,
+    "label": "Chicago White Sox vs Athletics \u2014 Over 10.5",
+    "event_id": "KXMLBTOTAL-26JUL101940ATHCWS",
+    "settlement_date": "2026-07-11",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "246:1632307223:total:10.5:over",
+    "hardven_no_token": "246:1632307223:total:10.5:under"
+  },
+  {
+    "kalshi_ticker": "KXMLBTOTAL-26JUL101940ATHCWS-8",
+    "market_type": "total",
+    "line": 7.5,
+    "label": "Chicago White Sox vs Athletics \u2014 Over 7.5",
+    "event_id": "KXMLBTOTAL-26JUL101940ATHCWS",
+    "settlement_date": "2026-07-11",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "246:1632307223:total:7.5:over",
+    "hardven_no_token": "246:1632307223:total:7.5:under"
+  },
+  {
+    "kalshi_ticker": "KXMLBTOTAL-26JUL101940ATHCWS-9",
+    "market_type": "total",
+    "line": 8.5,
+    "label": "Chicago White Sox vs Athletics \u2014 Over 8.5",
+    "event_id": "KXMLBTOTAL-26JUL101940ATHCWS",
+    "settlement_date": "2026-07-11",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "246:1632307223:total:8.5:over",
+    "hardven_no_token": "246:1632307223:total:8.5:under"
+  },
+  {
+    "kalshi_ticker": "KXMLBTOTAL-26JUL102005HOUTEX-10",
+    "market_type": "total",
+    "line": 9.5,
+    "label": "Texas Rangers vs Houston Astros \u2014 Over 9.5",
+    "event_id": "KXMLBTOTAL-26JUL102005HOUTEX",
+    "settlement_date": "2026-07-11",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "246:1632298167:total:9.5:over",
+    "hardven_no_token": "246:1632298167:total:9.5:under"
+  },
+  {
+    "kalshi_ticker": "KXMLBTOTAL-26JUL102005HOUTEX-8",
+    "market_type": "total",
+    "line": 7.5,
+    "label": "Texas Rangers vs Houston Astros \u2014 Over 7.5",
+    "event_id": "KXMLBTOTAL-26JUL102005HOUTEX",
+    "settlement_date": "2026-07-11",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "246:1632298167:total:7.5:over",
+    "hardven_no_token": "246:1632298167:total:7.5:under"
+  },
+  {
+    "kalshi_ticker": "KXMLBTOTAL-26JUL102005HOUTEX-9",
+    "market_type": "total",
+    "line": 8.5,
+    "label": "Texas Rangers vs Houston Astros \u2014 Over 8.5",
+    "event_id": "KXMLBTOTAL-26JUL102005HOUTEX",
+    "settlement_date": "2026-07-11",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "246:1632298167:total:8.5:over",
+    "hardven_no_token": "246:1632298167:total:8.5:under"
+  },
+  {
+    "kalshi_ticker": "KXMLBTOTAL-26JUL102010LAAMIN-10",
+    "market_type": "total",
+    "line": 9.5,
+    "label": "Minnesota Twins vs Los Angeles Angels \u2014 Over 9.5",
+    "event_id": "KXMLBTOTAL-26JUL102010LAAMIN",
+    "settlement_date": "2026-07-11",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "246:1632299681:total:9.5:over",
+    "hardven_no_token": "246:1632299681:total:9.5:under"
+  },
+  {
+    "kalshi_ticker": "KXMLBTOTAL-26JUL102010LAAMIN-11",
+    "market_type": "total",
+    "line": 10.5,
+    "label": "Minnesota Twins vs Los Angeles Angels \u2014 Over 10.5",
+    "event_id": "KXMLBTOTAL-26JUL102010LAAMIN",
+    "settlement_date": "2026-07-11",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "246:1632299681:total:10.5:over",
+    "hardven_no_token": "246:1632299681:total:10.5:under"
+  },
+  {
+    "kalshi_ticker": "KXMLBTOTAL-26JUL102010LAAMIN-9",
+    "market_type": "total",
+    "line": 8.5,
+    "label": "Minnesota Twins vs Los Angeles Angels \u2014 Over 8.5",
+    "event_id": "KXMLBTOTAL-26JUL102010LAAMIN",
+    "settlement_date": "2026-07-11",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "246:1632299681:total:8.5:over",
+    "hardven_no_token": "246:1632299681:total:8.5:under"
+  },
+  {
     "kalshi_ticker": "KXMLBTOTAL-26JUL102015ATLSTL-10",
     "market_type": "total",
     "line": 9.5,
@@ -852,16 +1068,16 @@
     "hardven_no_token": "246:1632315069:total:8.5:under"
   },
   {
-    "kalshi_ticker": "KXMLBTOTAL-26JUL102140TORSD-7",
+    "kalshi_ticker": "KXMLBTOTAL-26JUL102140TORSD-10",
     "market_type": "total",
-    "line": 6.5,
-    "label": "San Diego Padres vs Toronto Blue Jays \u2014 Over 6.5",
+    "line": 9.5,
+    "label": "San Diego Padres vs Toronto Blue Jays \u2014 Over 9.5",
     "event_id": "KXMLBTOTAL-26JUL102140TORSD",
     "settlement_date": "2026-07-11",
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "246:1632307245:total:6.5:over",
-    "hardven_no_token": "246:1632307245:total:6.5:under"
+    "hardven_yes_token": "246:1632307245:total:9.5:over",
+    "hardven_no_token": "246:1632307245:total:9.5:under"
   },
   {
     "kalshi_ticker": "KXMLBTOTAL-26JUL102140TORSD-8",
@@ -934,6 +1150,18 @@
     "hardven_min_size": 1.0,
     "hardven_yes_token": "246:1632314973:total:9.5:over",
     "hardven_no_token": "246:1632314973:total:9.5:under"
+  },
+  {
+    "kalshi_ticker": "KXMLBTOTAL-26JUL102215COLSF-7",
+    "market_type": "total",
+    "line": 6.5,
+    "label": "San Francisco Giants vs Colorado Rockies \u2014 Over 6.5",
+    "event_id": "KXMLBTOTAL-26JUL102215COLSF",
+    "settlement_date": "2026-07-11",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "246:1632314973:total:6.5:over",
+    "hardven_no_token": "246:1632314973:total:6.5:under"
   },
   {
     "kalshi_ticker": "KXMLBTOTAL-26JUL102215COLSF-8",
