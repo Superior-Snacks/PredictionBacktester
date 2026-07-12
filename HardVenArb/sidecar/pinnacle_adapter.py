@@ -201,6 +201,10 @@ class PinnacleAdapter(BookAdapter):
         self._pair_startup_delay = _cfg_int("HARDVEN_PAIR_STARTUP_DELAY", 8)
         self._pairing = None
         self._pairing_task = None
+        # in-play diagnostics: count WS messages per topic-class so a run reveals whether /live (in-play) is
+        # actually being delivered (in-play arbs went missing after day 1 — see _refresh_league live-preserve fix).
+        self._ws_live_msgs = 0
+        self._ws_pre_msgs = 0
         # ── REST-mode state ──
         self._refresh_task: Optional[asyncio.Task] = None
         self._refresh_sec = float(os.environ.get("PINNACLE_REFRESH_SEC", "15"))
@@ -728,8 +732,10 @@ class PinnacleAdapter(BookAdapter):
                 await self._refresh_league(lid)
                 await asyncio.sleep(random.uniform(0, self._jitter_ms / 1000.0))   # gentle spacing
             if leagues and not self._ws_gave_up:
+                live_sel = sum(1 for s in self._cache.values() if getattr(s, "live", False))
                 print(f"[PINNACLE] session-keepalive: re-fetched {len(leagues)} league(s) (authed → resets the "
-                      f"inactivity timer; cache={len(self._cache)} sel)")
+                      f"inactivity timer; cache={len(self._cache)} sel, {live_sel} live) | "
+                      f"WS msgs live={self._ws_live_msgs}/pre={self._ws_pre_msgs}")
 
     def _on_message(self, client, userdata, msg, *a) -> None:
         try:
@@ -737,6 +743,10 @@ class PinnacleAdapter(BookAdapter):
         except Exception:
             return
         live = "/live/" in (getattr(msg, "topic", "") or "")   # topic = IN-PLAY (…/live/*) vs pre-match (…/pre)
+        if live:
+            self._ws_live_msgs += 1
+        else:
+            self._ws_pre_msgs += 1
         try:
             self._apply(data, live)
         except Exception as ex:
@@ -912,6 +922,13 @@ class PinnacleAdapter(BookAdapter):
                 continue
             for token, sel in self._market_tokens(lid, mid, mk, now):
                 with self._cache_lock:
+                    old = self._cache.get(token)
+                    # A REST /markets/straight snapshot is PRE-MATCH-blind — it must NOT downgrade an IN-PLAY tag
+                    # the WS set (this 4-min keepalive re-seed was clobbering live→pre-live, so in-play arbs
+                    # vanished after the first live game). Keep live once the WS has flagged it; the game's `del`
+                    # clears it when it ends.
+                    if old is not None and old.live and not sel.live:
+                        sel.live = True
                     self._cache[token] = sel
 
     # ── HTTP (catalog + rest mode) ───────────────────────────────────────────
