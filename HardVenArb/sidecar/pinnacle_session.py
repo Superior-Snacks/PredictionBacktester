@@ -282,10 +282,9 @@ class PinnacleBrowserSession:
         if url and url not in self._ws_urls_seen and len(self._ws_urls_seen) < 10:
             self._ws_urls_seen.add(url)                   # log every distinct WS the PAGE opens (worker test)
             print(f"[PINNACLE SESSION] WS opened by page: {url[:90]}")
-        if self._have_ws:
-            return
         if "arcadia.pinnacle.com" not in url:
-            return                                       # only the Arcadia MQTT socket
+            return                                       # only the Arcadia MQTT socket — wire EVERY open (not just
+                                                          # the first) so a reload's fresh CONNECT re-captures the suffix
         if not self._seen_ws:
             self._seen_ws = True
             print("[PINNACLE SESSION] Arcadia WS visible to Playwright — watching its frames for the MQTT CONNECT.")
@@ -295,16 +294,16 @@ class PinnacleBrowserSession:
             pass
 
     def _on_ws_frame(self, payload) -> None:
-        if self._have_ws or not isinstance(payload, (bytes, bytearray)):  # MQTT is binary; text isn't CONNECT
+        if not isinstance(payload, (bytes, bytearray)):  # MQTT is binary; text isn't CONNECT
             return
         self._handle_connect_bytes(bytes(payload), "page.on")
 
     def _handle_connect_bytes(self, buf: bytes, src: str) -> None:
         """Shared by the page.on AND CDP capture paths: parse an MQTT CONNECT → WS username (account id) +
-        '|suffix'. Idempotent (first hit wins). The WS password is reconstructed as '{x-session}|{suffix}' on
-        every rotation, so the suffix is all we need to keep from here."""
-        if self._have_ws:
-            return
+        '|suffix'. LATEST-WINS (not first-wins): re-capture on EVERY CONNECT so a rotated suffix — Pinnacle issues
+        a new one on a fresh login/session — is picked up. The WS password is reconstructed as
+        '{x-session}|{suffix}', so a stale cached suffix after a re-login is exactly what auth-rejects paho on
+        reconnect; re-capturing it here keeps the reconstructed password valid across reopens/reloads."""
         parsed = parse_mqtt_connect(buf)
         if not parsed:
             return
@@ -312,10 +311,15 @@ class PinnacleBrowserSession:
         pw = parsed.get("password") or ""
         if not user or "|" not in pw:
             return
+        new_suffix = pw.rsplit("|", 1)[1]
+        if self._have_ws and user == self._ws_user and new_suffix == self._ws_suffix:
+            return                                        # unchanged → nothing to re-emit
+        was = self._have_ws
         self._ws_user = user
-        self._ws_suffix = pw.rsplit("|", 1)[1]
+        self._ws_suffix = new_suffix
         self._have_ws = True
-        print(f"[PINNACLE SESSION] captured WS login via {src} (account {user[:3]}***, suffix '{self._ws_suffix}').")
+        print(f"[PINNACLE SESSION] {'re-captured' if was else 'captured'} WS login via {src} "
+              f"(account {user[:3]}***, suffix '{new_suffix}').")
         self._emit()
 
     # ── capture: CDP (Network domain) — sees WebSockets page.on('websocket') misses (incl. Web Workers) ──
@@ -356,9 +360,7 @@ class PinnacleBrowserSession:
 
     def _on_cdp_ws_frame(self, params: dict) -> None:
         # Parse EVERY sent frame (parse_mqtt_connect self-validates on byte 0x10 + structure) — don't gate on
-        # requestId, so a frame still gets a shot even if we never saw its 'created' event.
-        if self._have_ws:
-            return
+        # requestId or _have_ws, so a reload's fresh CONNECT re-captures a rotated suffix (latest-wins).
         resp = params.get("response") or {}
         data = resp.get("payloadData")
         if not data:

@@ -422,6 +422,7 @@ class PinnacleAdapter(BookAdapter):
         ws_pass = creds.get("ws_pass") or ""
         if ws_user:
             self._ws_user = ws_user
+        ws_pass_changed = bool(ws_pass) and ws_pass != self._ws_pass   # a re-captured suffix rotates this
         if ws_pass:
             self._ws_pass = ws_pass
             if self._client is not None:                  # live paho client → use fresh creds on next reconnect
@@ -444,6 +445,16 @@ class PinnacleAdapter(BookAdapter):
                 self._ws_gave_up = False
                 self._ws_started = False                  # next odds() relands _start_ws() with the new creds
                 self._seeded.clear()                      # re-seed pre-match snapshots under the new session
+        # A re-captured SUFFIX changes the WS password WITHOUT changing the x-session (so neither became_ready nor
+        # rotated fires) — but a given-up odds WS must still restart with it, since a stale suffix is a top cause
+        # of the CONNACK auth-reject. Restart on any fresh WS creds after a give-up.
+        if self._ws_gave_up and self._session_ready and ws_pass_changed:
+            self._ws_gave_up = False
+            self._ws_started = False
+            self._ws_auth_rejects = self._ws_remints = 0
+            self._session_expired = False
+            self._seeded.clear()
+            print("[PINNACLE] re-captured WS creds (suffix) → restarting the odds WS (was given up).")
         if became_ready:
             print("[PINNACLE] OK browser session ready — feed will seed + connect on the next /odds.")
 
