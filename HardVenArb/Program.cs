@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using HardVenArb;
 using PredictionBacktester.Engine;
@@ -402,10 +403,11 @@ if (isLive || isDryRun)
     // HardVen venue is a stub (scaffold). It constructs without creds; read-only calls return benign
     // defaults so the bot boots, and order placement throws NotImplementedException until implemented.
     var hardvenConfig = HardVenApiConfig.FromEnvironment();
-    if (!hardvenConfig.IsConfigured)
-        Console.WriteLine("[WARN] HARDVEN_* not set — HardVen is a stub venue (no live orders). " +
-                          "Implement HardVenOrderClient + HardVenWebsocketFeed to enable execution.");
-    var hardvenOrderClient = new HardVenOrderClient(hardvenConfig);
+    // HardVen balance/bets route through the sidecar (it owns the Pinnacle session). FX: the account is EUR,
+    // Kalshi USD — convert the wallet balance the same way the feed converts depth (HARDVEN_FX_TO_USD).
+    decimal hardvenFxToUsd = decimal.TryParse(Environment.GetEnvironmentVariable("HARDVEN_FX_TO_USD"),
+        NumberStyles.Any, CultureInfo.InvariantCulture, out var _hvfx) && _hvfx > 0m ? _hvfx : 1.0m;
+    var hardvenOrderClient = new HardVenOrderClient(hardvenConfig, HARDVEN_SIDECAR_URL, hardvenFxToUsd);
     const decimal MAX_BET_USD          = 30m;    // max combined dollar cost per arb entry
     const decimal BALANCE_BUFFER_PCT   = 0.20m;  // per-platform reserve (fraction of maxBet)
     const decimal EXECUTION_THRESHOLD  = 0.995m; // net-cost ceiling for arb detection
@@ -429,7 +431,9 @@ if (isLive || isDryRun)
         try
         {
             long kBal = await orderClient.GetBalanceCentsAsync();
-            Console.WriteLine($"[CRED CHECK] Kalshi=${kBal / 100m:0.00} — credentials OK (HardVen=stub)");
+            decimal hvBal = await hardvenOrderClient.GetUsdcBalanceAsync();   // via sidecar /balance (0 if sidecar down)
+            string hvNote = hvBal > 0m ? $"HardVen=${hvBal:0.00} (FX→USD)" : "HardVen=$0.00 (sidecar down or no wallet)";
+            Console.WriteLine($"[CRED CHECK] Kalshi=${kBal / 100m:0.00} — credentials OK; {hvNote}");
         }
         catch (Exception ex)
         {

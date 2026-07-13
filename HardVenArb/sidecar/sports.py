@@ -44,6 +44,18 @@ CATALOG: dict[str, Sport] = {
         spread=("KXATPGSPREAD",),   # games handicap — ATP only (WTA/ITF have no Kalshi games markets)
         total=("KXATPGTOTAL",),
     ),
+    "soccer": Sport(
+        key="soccer", pinnacle_id=29, duration_min=150,   # 90' + half + stoppage + settle tail
+        # 3-way (home/draw/away) — the catalog + pair_pinnacle tag soccer three_way and pair NO-only
+        # (Kalshi NO + Pinnacle back-this-outcome). All confirmed "Team/Team/Tie" per-game winner series.
+        # In-season drivers: MLS, Liga MX, UCL qualifiers (July), World Cup (live now, "Regulation Time
+        # Moneyline"). Plus USL/USL Cup + off-season club leagues (La Liga 2, Chile Primera, Bolivia Primera)
+        # that fill when they run.
+        moneyline=("KXWCGAME", "KXMLSGAME", "KXLIGAMXGAME", "KXUCLGAME",
+                   "KXUSLGAME", "KXUSLCUPGAME", "KXLALIGA2GAME", "KXCHLLDPGAME", "KXBOLPDIVGAME"),
+        spread=(),   # soccer Asian-handicap / goal-totals derivatives = future work (3-way base needs its own pairing)
+        total=(),
+    ),
 }
 
 

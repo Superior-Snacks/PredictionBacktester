@@ -1,6 +1,25 @@
 # HardVenArb — HardVen (sportsbook) side: implementation TODO
 
-Status: **scaffold only.** The Kalshi side + executor + telemetry are cloned and build clean. The
+> **CURRENT STATE (2026-07-13).** Venue = **Pinnacle** (Arcadia private API via a managed-browser sidecar),
+> NOT bookmaker.eu (the original POC below; kept for reference). Where this doc says "bookmaker.eu / STOMP /
+> GetGameView", read "Pinnacle sidecar (`pinnacle_adapter.py`)".
+> - **M0 observe-only: DONE + running.** Odds (pre-match AND in-play) flow → `H:` books → telemetry CSV.
+>   In-play arbs confirmed working 2026-07-13 (see `project_hardven_telemetry_reading`).
+> - **Soccer: ADDED** (`sports.py` id 29, 3-way NO-only). Baseball + tennis + soccer.
+> - **Balance checking: WIRED.** `HardVenOrderClient.GetUsdcBalanceAsync` → sidecar `GET /balance` → real
+>   Pinnacle wallet, FX→USD (`HARDVEN_FX_TO_USD`). Executor gates every buy on the real HardVen balance.
+> - **Bet placement: DEFERRED — will go through the browser UI (bet slip), not a guessed REST API.**
+>   Safety contract scaffolded in `place_bet()`: hard gate `HARDVEN_BET_ENABLE` (default OFF → preview only),
+>   hard cap `HARDVEN_MAX_STAKE` (default 10), bet serialization lock, session-ready check; `_place_via_ui()`
+>   raises until built. **Locked decisions (2026-07-13):** full-auto BOTH legs (Pinnacle placed FIRST,
+>   confirm actual odds/stake, then Kalshi); stake $5–10; real sends only behind the enable gate.
+> - **Remaining M1 (the "later" betting effort):** (1) `_place_via_ui()` — browser bet-slip automation
+>   (add selection → stake → accept-odds dialog if still ≥ max_odds → capture betId/actual odds); (2) executor
+>   leg-ordering inversion (HardVen-first) + slippage recompute + no-reverse recovery + stranded-directional
+>   policy + pre-live gate (§D); (3) a simulated HardVen fill so `--dry-run` can exercise execution end-to-end;
+>   (4) `open_bets()`/`bet()` (My Bets read) for confirmation + settlement.
+
+Status (original): **scaffold only.** The Kalshi side + executor + telemetry are cloned and build clean. The
 HardVen venue is an open stub (`IHardVenOrderExecutor` / `HardVenOrderClient` / `HardVenWebsocketFeed`).
 This doc is the plan to make the HardVen side real.
 

@@ -22,8 +22,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "272518:1632499255:away",
+    "hardven_no_token": "272518:1632499255:home"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL12BARREI-BAR",
@@ -204,8 +204,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "272518:1632499267:away",
+    "hardven_no_token": "272518:1632499267:home"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL12HOUJOR-HOU",
@@ -230,8 +230,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "272518:1632485261:away",
+    "hardven_no_token": "272518:1632485261:home"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL12SANSCH-SAN",
@@ -256,8 +256,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "272518:1632486593:away",
+    "hardven_no_token": "272518:1632486593:home"
   },
   {
     "kalshi_ticker": "KXATPMATCH-26JUL12ALTGAS-ALT",
@@ -438,8 +438,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "3648:1632492969:away",
+    "hardven_no_token": "3648:1632492969:home"
   },
   {
     "kalshi_ticker": "KXATPMATCH-26JUL12DODCAR-CAR",
@@ -516,8 +516,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "3327:1632486579:away",
+    "hardven_no_token": "3327:1632486579:home"
   },
   {
     "kalshi_ticker": "KXATPMATCH-26JUL12FARWAW-FAR",
@@ -568,8 +568,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "3327:1632485345:away",
+    "hardven_no_token": "3327:1632485345:home"
   },
   {
     "kalshi_ticker": "KXATPMATCH-26JUL12KOPPRI-KOP",
@@ -594,8 +594,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "3327:1632486581:away",
+    "hardven_no_token": "3327:1632486581:home"
   },
   {
     "kalshi_ticker": "KXATPMATCH-26JUL12LAJVAN-LAJ",
@@ -620,8 +620,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "3327:1632485344:away",
+    "hardven_no_token": "3327:1632485344:home"
   },
   {
     "kalshi_ticker": "KXATPMATCH-26JUL12MARHAN-HAN",
@@ -776,8 +776,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "3291:1632485253:home",
+    "hardven_no_token": "3291:1632485253:away"
   },
   {
     "kalshi_ticker": "KXATPMATCH-26JUL12SVRDIM-DIM",
@@ -854,8 +854,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "9458:1632486519:away",
+    "hardven_no_token": "9458:1632486519:home"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL13ARSDAL-ARS",
@@ -880,8 +880,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "198735:1632502510:away",
+    "hardven_no_token": "198735:1632502510:home"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL13BOUGAN-BOU",
@@ -906,8 +906,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "198735:1632503617:away",
+    "hardven_no_token": "198735:1632503617:home"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL13BOUZHA-BOU",
@@ -932,8 +932,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "9175:1632502433:away",
+    "hardven_no_token": "9175:1632502433:home"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL13CHOSUR-CHO",
@@ -958,8 +958,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "236969:1632502541:away",
+    "hardven_no_token": "236969:1632502541:home"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL13FORRAF-FOR",
@@ -984,8 +984,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "236969:1632510018:away",
+    "hardven_no_token": "236969:1632510018:home"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL13GIUALM-ALM",
@@ -1010,8 +1010,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "226801:1632502414:home",
+    "hardven_no_token": "226801:1632502414:away"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL13GREVAN-GRE",
@@ -1036,8 +1036,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "214335:1632485183:away",
+    "hardven_no_token": "214335:1632485183:home"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL13HOLWAT-HOL",
@@ -1062,8 +1062,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "9175:1632502562:away",
+    "hardven_no_token": "9175:1632502562:home"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL13INCSTE-INC",
@@ -1088,8 +1088,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "214335:1632485182:away",
+    "hardven_no_token": "214335:1632485182:home"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL13KRUMAR-KRU",
@@ -1114,8 +1114,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "236964:1632502437:away",
+    "hardven_no_token": "236964:1632502437:home"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL13KUMLAG-KUM",
@@ -1140,8 +1140,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "226801:1632502411:away",
+    "hardven_no_token": "226801:1632502411:home"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL13LANSHE-LAN",
@@ -1166,8 +1166,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "236969:1632507514:away",
+    "hardven_no_token": "236969:1632507514:home"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL13MONANG-ANG",
@@ -1192,8 +1192,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "9458:1632485285:home",
+    "hardven_no_token": "9458:1632485285:away"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL13MORFAN-FAN",
@@ -1218,8 +1218,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "236969:1632503644:home",
+    "hardven_no_token": "236969:1632503644:away"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL13MUNLEO-LEO",
@@ -1244,8 +1244,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "226801:1632507521:home",
+    "hardven_no_token": "226801:1632507521:away"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL13NAPBAL-BAL",
@@ -1270,8 +1270,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "9458:1632485284:home",
+    "hardven_no_token": "9458:1632485284:away"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL13NOGBRO-BRO",
@@ -1296,8 +1296,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "236964:1632502436:home",
+    "hardven_no_token": "236964:1632502436:away"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL13OUALIN-LIN",
@@ -1322,8 +1322,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "226801:1632502388:home",
+    "hardven_no_token": "226801:1632502388:away"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL13PALGON-GON",
@@ -1348,8 +1348,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "226801:1632502537:home",
+    "hardven_no_token": "226801:1632502537:away"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL13PERTOB-PER",
@@ -1374,8 +1374,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "214335:1632486507:away",
+    "hardven_no_token": "214335:1632486507:home"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL13POLMIY-MIY",
@@ -1400,8 +1400,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "198735:1632502425:home",
+    "hardven_no_token": "198735:1632502425:away"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL13RADIVA-IVA",
@@ -1426,8 +1426,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "226801:1632507512:home",
+    "hardven_no_token": "226801:1632507512:away"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL13REHJUS-JUS",
@@ -1452,8 +1452,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "9458:1632486521:home",
+    "hardven_no_token": "9458:1632486521:away"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL13RODALK-ALK",
@@ -1478,8 +1478,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "214335:1632475433:home",
+    "hardven_no_token": "214335:1632475433:away"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL13ROZISO-ISO",
@@ -1504,8 +1504,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "198735:1632502417:home",
+    "hardven_no_token": "198735:1632502417:away"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL13SANLOP-LOP",
@@ -1556,8 +1556,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "9175:1632502429:home",
+    "hardven_no_token": "9175:1632502429:away"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL13TROGEO-GEO",
@@ -1582,8 +1582,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "198735:1632502538:home",
+    "hardven_no_token": "198735:1632502538:away"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL13VUKBRO-BRO",
@@ -1608,8 +1608,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "9175:1632507535:home",
+    "hardven_no_token": "9175:1632507535:away"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL13WINKIR-KIR",
@@ -1634,8 +1634,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "198735:1632507523:home",
+    "hardven_no_token": "198735:1632507523:away"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL13YIBMAR-MAR",
@@ -1660,8 +1660,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "236969:1632507533:home",
+    "hardven_no_token": "236969:1632507533:away"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL13ZHUDLI-DLI",
@@ -1686,8 +1686,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "236969:1632507555:home",
+    "hardven_no_token": "236969:1632507555:away"
   },
   {
     "kalshi_ticker": "KXATPMATCH-26JUL13COLSKA-COL",
@@ -1712,8 +1712,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "3291:1632508247:away",
+    "hardven_no_token": "3291:1632508247:home"
   },
   {
     "kalshi_ticker": "KXATPMATCH-26JUL13FAUDAM-DAM",
@@ -1738,34 +1738,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
-    "kalshi_ticker": "KXATPMATCH-26JUL13SANDAN-DAN",
-    "label": "Will Taro Daniel win the Sanchez Jover vs Daniel: Qualification Final match?",
-    "event_title": "Sanchez Jover vs Daniel",
-    "kalshi_outcome": "Taro Daniel",
-    "event_id": "KXATPMATCH-26JUL13SANDAN",
-    "settlement_date": "2026-07-13",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "9108:1632508597:away",
-    "hardven_no_token": "9108:1632508597:home"
-  },
-  {
-    "kalshi_ticker": "KXATPMATCH-26JUL13SANDAN-SAN",
-    "label": "Will Carlos Sanchez Jover win the Sanchez Jover vs Daniel: Qualification Final match?",
-    "event_title": "Sanchez Jover vs Daniel",
-    "kalshi_outcome": "Carlos Sanchez Jover",
-    "event_id": "KXATPMATCH-26JUL13SANDAN",
-    "settlement_date": "2026-07-13",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "9108:1632510072:home",
+    "hardven_no_token": "9108:1632510072:away"
   },
   {
     "kalshi_ticker": "KXITFMATCH-26JUL12LORTER-LOR",
@@ -1838,32 +1812,6 @@
     "event_title": "Benitez vs Pinheiro da Cruz Junior",
     "kalshi_outcome": "Glauco Pinheiro da Cruz Junior",
     "event_id": "KXITFMATCH-26JUL13BENPIN",
-    "settlement_date": "2026-07-13",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
-    "kalshi_ticker": "KXITFMATCH-26JUL13BERWAL-BER",
-    "label": "Will Adrien Berrut win the Berrut vs Walch: M25 Uriage Round of 32 match?",
-    "event_title": "Berrut vs Walch",
-    "kalshi_outcome": "Adrien Berrut",
-    "event_id": "KXITFMATCH-26JUL13BERWAL",
-    "settlement_date": "2026-07-13",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
-    "kalshi_ticker": "KXITFMATCH-26JUL13BERWAL-WAL",
-    "label": "Will Antoine Walch win the Berrut vs Walch: M25 Uriage Round of 32 match?",
-    "event_title": "Berrut vs Walch",
-    "kalshi_outcome": "Antoine Walch",
-    "event_id": "KXITFMATCH-26JUL13BERWAL",
     "settlement_date": "2026-07-13",
     "kalshi_yes_price": null,
     "is_neg_risk": false,
@@ -2002,32 +1950,6 @@
     "hardven_no_token": ""
   },
   {
-    "kalshi_ticker": "KXITFMATCH-26JUL13KOZHUS-HUS",
-    "label": "Will Alex Huszar win the Kozlovsky vs Huszar: M25 Kramsach Round of 16 match?",
-    "event_title": "Kozlovsky vs Huszar",
-    "kalshi_outcome": "Alex Huszar",
-    "event_id": "KXITFMATCH-26JUL13KOZHUS",
-    "settlement_date": "2026-07-13",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
-    "kalshi_ticker": "KXITFMATCH-26JUL13KOZHUS-KOZ",
-    "label": "Will Matyas Kozlovsky win the Kozlovsky vs Huszar: M25 Kramsach Round of 16 match?",
-    "event_title": "Kozlovsky vs Huszar",
-    "kalshi_outcome": "Matyas Kozlovsky",
-    "event_id": "KXITFMATCH-26JUL13KOZHUS",
-    "settlement_date": "2026-07-13",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
     "kalshi_ticker": "KXITFMATCH-26JUL13LIMMEN-LIM",
     "label": "Will Enzo Lima win the Lima vs Meneo: M15 Villa Constitucion Round of 16 match?",
     "event_title": "Lima vs Meneo",
@@ -2046,58 +1968,6 @@
     "event_title": "Lima vs Meneo",
     "kalshi_outcome": "Tadeo Meneo",
     "event_id": "KXITFMATCH-26JUL13LIMMEN",
-    "settlement_date": "2026-07-13",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
-    "kalshi_ticker": "KXITFMATCH-26JUL13MARVAL-MAR",
-    "label": "Will Daniel Marincas win the Marincas vs Valdoleiros: M15 Castelo Branco Round of 16 match?",
-    "event_title": "Marincas vs Valdoleiros",
-    "kalshi_outcome": "Daniel Marincas",
-    "event_id": "KXITFMATCH-26JUL13MARVAL",
-    "settlement_date": "2026-07-13",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
-    "kalshi_ticker": "KXITFMATCH-26JUL13MARVAL-VAL",
-    "label": "Will Guilherme Valdoleiros win the Marincas vs Valdoleiros: M15 Castelo Branco Round of 16 match?",
-    "event_title": "Marincas vs Valdoleiros",
-    "kalshi_outcome": "Guilherme Valdoleiros",
-    "event_id": "KXITFMATCH-26JUL13MARVAL",
-    "settlement_date": "2026-07-13",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
-    "kalshi_ticker": "KXITFMATCH-26JUL13MCHAND-AND",
-    "label": "Will Timothee Andriveau win the M'chich vs Andriveau: M25 Uriage Round of 32 match?",
-    "event_title": "M'chich vs Andriveau",
-    "kalshi_outcome": "Timothee Andriveau",
-    "event_id": "KXITFMATCH-26JUL13MCHAND",
-    "settlement_date": "2026-07-13",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
-    "kalshi_ticker": "KXITFMATCH-26JUL13MCHAND-MCH",
-    "label": "Will Andrea M'chich win the M'chich vs Andriveau: M25 Uriage Round of 32 match?",
-    "event_title": "M'chich vs Andriveau",
-    "kalshi_outcome": "Andrea M'chich",
-    "event_id": "KXITFMATCH-26JUL13MCHAND",
     "settlement_date": "2026-07-13",
     "kalshi_yes_price": null,
     "is_neg_risk": false,
@@ -2262,32 +2132,6 @@
     "hardven_no_token": ""
   },
   {
-    "kalshi_ticker": "KXITFMATCH-26JUL13VRTKLA-KLA",
-    "label": "Will Valentin Klaunzner win the Vrtilka vs Klaunzner: M25 Kramsach Round of 16 match?",
-    "event_title": "Vrtilka vs Klaunzner",
-    "kalshi_outcome": "Valentin Klaunzner",
-    "event_id": "KXITFMATCH-26JUL13VRTKLA",
-    "settlement_date": "2026-07-13",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
-    "kalshi_ticker": "KXITFMATCH-26JUL13VRTKLA-VRT",
-    "label": "Will Jakub Vrtilka win the Vrtilka vs Klaunzner: M25 Kramsach Round of 16 match?",
-    "event_title": "Vrtilka vs Klaunzner",
-    "kalshi_outcome": "Jakub Vrtilka",
-    "event_id": "KXITFMATCH-26JUL13VRTKLA",
-    "settlement_date": "2026-07-13",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
     "kalshi_ticker": "KXITFMATCH-26JUL13ZEICAS-CAS",
     "label": "Will Leonel Cesar Castro win the Zeitune vs Castro: M15 Villa Constitucion Round of 32 match?",
     "event_title": "Zeitune vs Castro",
@@ -2444,32 +2288,6 @@
     "hardven_no_token": ""
   },
   {
-    "kalshi_ticker": "KXITFWMATCH-26JUL13BULEVT-BUL",
-    "label": "Will Arina Bulatova win the Bulatova vs Evtimova: W50 Darmstadt Round of 32 match?",
-    "event_title": "Bulatova vs Evtimova",
-    "kalshi_outcome": "Arina Bulatova",
-    "event_id": "KXITFWMATCH-26JUL13BULEVT",
-    "settlement_date": "2026-07-13",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
-    "kalshi_ticker": "KXITFWMATCH-26JUL13BULEVT-EVT",
-    "label": "Will Dia Evtimova win the Bulatova vs Evtimova: W50 Darmstadt Round of 32 match?",
-    "event_title": "Bulatova vs Evtimova",
-    "kalshi_outcome": "Dia Evtimova",
-    "event_id": "KXITFWMATCH-26JUL13BULEVT",
-    "settlement_date": "2026-07-13",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
     "kalshi_ticker": "KXITFWMATCH-26JUL13CABPLE-CAB",
     "label": "Will Lizette Cabrera win the Cabrera vs Plekhanova: W75 Granby Round of 32 match?",
     "event_title": "Cabrera vs Plekhanova",
@@ -2492,8 +2310,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "9200:1632507509:away",
+    "hardven_no_token": "9200:1632507509:home"
   },
   {
     "kalshi_ticker": "KXITFWMATCH-26JUL13CERBOU-BOU",
@@ -2852,32 +2670,6 @@
     "event_title": "Kuhl vs Sekerkova",
     "kalshi_outcome": "Veronika Sekerkova",
     "event_id": "KXITFWMATCH-26JUL13KUHSEK",
-    "settlement_date": "2026-07-13",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
-    "kalshi_ticker": "KXITFWMATCH-26JUL13KUMCHA-CHA",
-    "label": "Will Wilva Chan win the Kumari vs Chan: W15 Hillcrest Round of 16 match?",
-    "event_title": "Kumari vs Chan",
-    "kalshi_outcome": "Wilva Chan",
-    "event_id": "KXITFWMATCH-26JUL13KUMCHA",
-    "settlement_date": "2026-07-13",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
-    "kalshi_ticker": "KXITFWMATCH-26JUL13KUMCHA-KUM",
-    "label": "Will Jeetesh Kumari win the Kumari vs Chan: W15 Hillcrest Round of 16 match?",
-    "event_title": "Kumari vs Chan",
-    "kalshi_outcome": "Jeetesh Kumari",
-    "event_id": "KXITFWMATCH-26JUL13KUMCHA",
     "settlement_date": "2026-07-13",
     "kalshi_yes_price": null,
     "is_neg_risk": false,
@@ -3506,8 +3298,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "288057:1632507540:home",
+    "hardven_no_token": "288057:1632507540:away"
   },
   {
     "kalshi_ticker": "KXWTACHALLENGERMATCH-26JUL13AVDFEI-AVD",
@@ -3532,8 +3324,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "288057:1632515978:away",
+    "hardven_no_token": "288057:1632515978:home"
   },
   {
     "kalshi_ticker": "KXWTACHALLENGERMATCH-26JUL13BAIPRO-BAI",
@@ -3558,8 +3350,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "286088:1632507539:away",
+    "hardven_no_token": "286088:1632507539:home"
   },
   {
     "kalshi_ticker": "KXWTACHALLENGERMATCH-26JUL13GASBAN-BAN",
@@ -3584,8 +3376,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "286088:1632502440:home",
+    "hardven_no_token": "286088:1632502440:away"
   },
   {
     "kalshi_ticker": "KXWTACHALLENGERMATCH-26JUL13GJOCHI-CHI",
@@ -3610,8 +3402,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "272542:1632507543:home",
+    "hardven_no_token": "272542:1632507543:away"
   },
   {
     "kalshi_ticker": "KXWTACHALLENGERMATCH-26JUL13HERJAK-HER",
@@ -3636,34 +3428,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
-    "kalshi_ticker": "KXWTACHALLENGERMATCH-26JUL13KABPER-KAB",
-    "label": "Will Yasmine Kabbaj win the Kabbaj vs Perelygina: Round Of 32 match?",
-    "event_title": "Kabbaj vs Perelygina",
-    "kalshi_outcome": "Yasmine Kabbaj",
-    "event_id": "KXWTACHALLENGERMATCH-26JUL13KABPER",
-    "settlement_date": "2026-07-13",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "288057:1632516046:home",
-    "hardven_no_token": "288057:1632516046:away"
-  },
-  {
-    "kalshi_ticker": "KXWTACHALLENGERMATCH-26JUL13KABPER-PER",
-    "label": "Will Ekaterina Perelygina win the Kabbaj vs Perelygina: Round Of 32 match?",
-    "event_title": "Kabbaj vs Perelygina",
-    "kalshi_outcome": "Ekaterina Perelygina",
-    "event_id": "KXWTACHALLENGERMATCH-26JUL13KABPER",
-    "settlement_date": "2026-07-13",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "288057:1632502449:away",
+    "hardven_no_token": "288057:1632502449:home"
   },
   {
     "kalshi_ticker": "KXWTACHALLENGERMATCH-26JUL13KNUKUR-KNU",
@@ -3688,8 +3454,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "286088:1632502443:away",
+    "hardven_no_token": "286088:1632502443:home"
   },
   {
     "kalshi_ticker": "KXWTACHALLENGERMATCH-26JUL13KOTURG-KOT",
@@ -3714,8 +3480,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "272542:1632513166:away",
+    "hardven_no_token": "272542:1632513166:home"
   },
   {
     "kalshi_ticker": "KXWTACHALLENGERMATCH-26JUL13LANMAL-LAN",
@@ -3740,8 +3506,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "272542:1632507578:away",
+    "hardven_no_token": "272542:1632507578:home"
   },
   {
     "kalshi_ticker": "KXWTACHALLENGERMATCH-26JUL13OKATAR-OKA",
@@ -3766,8 +3532,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "286088:1632509973:away",
+    "hardven_no_token": "286088:1632509973:home"
   },
   {
     "kalshi_ticker": "KXWTACHALLENGERMATCH-26JUL13PENTHA-PEN",
@@ -3792,8 +3558,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "286088:1632515951:away",
+    "hardven_no_token": "286088:1632515951:home"
   },
   {
     "kalshi_ticker": "KXWTACHALLENGERMATCH-26JUL13RAMNOH-NOH",
@@ -3818,8 +3584,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "272542:1632502450:home",
+    "hardven_no_token": "272542:1632502450:away"
   },
   {
     "kalshi_ticker": "KXWTACHALLENGERMATCH-26JUL13RINAST-AST",
@@ -3870,8 +3636,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "272542:1632507541:away",
+    "hardven_no_token": "272542:1632507541:home"
   },
   {
     "kalshi_ticker": "KXWTACHALLENGERMATCH-26JUL13TIKBEN-BEN",
@@ -3896,8 +3662,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "288057:1632507548:home",
+    "hardven_no_token": "288057:1632507548:away"
   },
   {
     "kalshi_ticker": "KXWTACHALLENGERMATCH-26JUL13VANLEE-LEE",
@@ -3922,8 +3688,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "286088:1632515958:home",
+    "hardven_no_token": "286088:1632515958:away"
   },
   {
     "kalshi_ticker": "KXWTAMATCH-26JUL13ARAZID-ARA",
@@ -3974,8 +3740,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "288043:1632502460:away",
+    "hardven_no_token": "288043:1632502460:home"
   },
   {
     "kalshi_ticker": "KXWTAMATCH-26JUL13BADKAL-BAD",
@@ -4052,8 +3818,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "236781:1632499215:away",
+    "hardven_no_token": "236781:1632499215:home"
   },
   {
     "kalshi_ticker": "KXWTAMATCH-26JUL13GRAPAR-GRA",
@@ -4078,8 +3844,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "288043:1632507549:away",
+    "hardven_no_token": "288043:1632507549:home"
   },
   {
     "kalshi_ticker": "KXWTAMATCH-26JUL13HODDAR-DAR",
@@ -4104,8 +3870,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "288043:1632507551:home",
+    "hardven_no_token": "288043:1632507551:away"
   },
   {
     "kalshi_ticker": "KXWTAMATCH-26JUL13ITOKOR-ITO",
@@ -4208,34 +3974,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
-    "kalshi_ticker": "KXWTAMATCH-26JUL13LEPIBR-IBR",
-    "label": "Will Alevtina Ibragimova win the Lepchenko vs Ibragimova: Qualification Final match?",
-    "event_title": "Lepchenko vs Ibragimova",
-    "kalshi_outcome": "Alevtina Ibragimova",
-    "event_id": "KXWTAMATCH-26JUL13LEPIBR",
-    "settlement_date": "2026-07-13",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "236786:1632513236:away",
-    "hardven_no_token": "236786:1632513236:home"
-  },
-  {
-    "kalshi_ticker": "KXWTAMATCH-26JUL13LEPIBR-LEP",
-    "label": "Will Varvara Lepchenko win the Lepchenko vs Ibragimova: Qualification Final match?",
-    "event_title": "Lepchenko vs Ibragimova",
-    "kalshi_outcome": "Varvara Lepchenko",
-    "event_id": "KXWTAMATCH-26JUL13LEPIBR",
-    "settlement_date": "2026-07-13",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "288043:1632509985:away",
+    "hardven_no_token": "288043:1632509985:home"
   },
   {
     "kalshi_ticker": "KXWTAMATCH-26JUL13LINHON-HON",
@@ -4260,8 +4000,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "288043:1632507550:home",
+    "hardven_no_token": "288043:1632507550:away"
   },
   {
     "kalshi_ticker": "KXWTAMATCH-26JUL13MATMIC-MAT",
@@ -4286,8 +4026,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "288043:1632502461:away",
+    "hardven_no_token": "288043:1632502461:home"
   },
   {
     "kalshi_ticker": "KXWTAMATCH-26JUL13MONMAS-MAS",
@@ -4338,8 +4078,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "288043:1632509986:home",
+    "hardven_no_token": "288043:1632509986:away"
   },
   {
     "kalshi_ticker": "KXWTAMATCH-26JUL13PODMAR-MAR",
@@ -4364,8 +4104,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "236781:1632485348:home",
+    "hardven_no_token": "236781:1632485348:away"
   },
   {
     "kalshi_ticker": "KXWTAMATCH-26JUL13QUERUS-QUE",
@@ -4546,8 +4286,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "288043:1632502459:home",
+    "hardven_no_token": "288043:1632502459:away"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL13ARSMAR-ARS",
@@ -4572,8 +4312,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "9175:1632502428:away",
+    "hardven_no_token": "9175:1632502428:home"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL13KENSHE-KEN",
@@ -4598,8 +4338,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "236964:1632502564:away",
+    "hardven_no_token": "236964:1632502564:home"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL13WOLFEN-FEN",
@@ -4624,8 +4364,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "236964:1632509969:home",
+    "hardven_no_token": "236964:1632509969:away"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL13WONTUN-TUN",
@@ -4650,8 +4390,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "236964:1632502438:home",
+    "hardven_no_token": "236964:1632502438:away"
   },
   {
     "kalshi_ticker": "KXATPMATCH-26JUL14CINHAL-CIN",
@@ -5170,8 +4910,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "187703:1632370495:home",
+    "hardven_no_token": "187703:1632370495:away"
   },
   {
     "kalshi_ticker": "KXNPBGAME-26JUL140500CHISAI-CHI",
@@ -5196,8 +4936,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "187703:1632373698:home",
+    "hardven_no_token": "187703:1632373698:away"
   },
   {
     "kalshi_ticker": "KXNPBGAME-26JUL140500HANCHU-CHU",
@@ -5222,8 +4962,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "187703:1632373700:away",
+    "hardven_no_token": "187703:1632373700:home"
   },
   {
     "kalshi_ticker": "KXNPBGAME-26JUL140500ORITOH-ORI",
@@ -5248,8 +4988,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "187703:1632373697:home",
+    "hardven_no_token": "187703:1632373697:away"
   },
   {
     "kalshi_ticker": "KXNPBGAME-26JUL140500YOKHIR-HIR",
@@ -5300,8 +5040,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "187703:1632373699:away",
+    "hardven_no_token": "187703:1632373699:home"
   },
   {
     "kalshi_ticker": "KXWTAMATCH-26JUL14PUTJEA-JEA",

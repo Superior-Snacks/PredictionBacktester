@@ -118,8 +118,13 @@ class PinnacleAdapter(BookAdapter):
                                  os.environ.get("PINNACLE_CATALOG_LEAGUES", "").split(",") if x.strip()]
         # sport ids whose leagues are EPHEMERAL (tennis=33: per-tournament-per-round, change daily/intraday) →
         # auto-discover today's leagues via /sports/{id}/leagues each catalog() call, instead of hand-listing.
+        # DEFAULT from the unified catalog (sports.py, honors HARDVEN_SPORTS) so adding a sport there flows into
+        # pairing with no separate env edit — same single-source-of-truth as _lifecycle_sports below. An explicit
+        # PINNACLE_CATALOG_SPORTS still overrides (backward compat / to narrow catalog scope).
+        _default_catalog_sports = ",".join(str(i) for i in sports_cfg.pinnacle_ids())
         self._catalog_sports = [x.strip() for x in
-                                os.environ.get("PINNACLE_CATALOG_SPORTS", "").split(",") if x.strip()]
+                                os.environ.get("PINNACLE_CATALOG_SPORTS", _default_catalog_sports).split(",")
+                                if x.strip()]
         self._cache: dict[str, Selection] = {}            # "{lid}:{mid}:{designation}" -> Selection
         self._cache_lock = threading.Lock()               # paho thread writes; asyncio reads
         self._active_leagues: dict[str, float] = {}       # leagueId -> unix ts last requested via /odds
@@ -171,6 +176,17 @@ class PinnacleAdapter(BookAdapter):
         self._session_ready = self._session_source != "browser"  # env mode = ready now; browser waits for login
         self._balance = 0.0                                    # last wallet amount (account currency, e.g. EUR)
         self._balance_currency = ""
+        # ── BETTING (M1) SAFETY CONTRACT — established BEFORE any placement code so real money can never fire
+        # without the explicit gate. Actual placement goes through the browser UI (bet slip) and is DEFERRED;
+        # until then place_bet() previews only. HARDVEN_BET_ENABLE=1 is required for a real send; HARDVEN_MAX_STAKE
+        # hard-caps the per-bet stake (account currency); _bet_lock serialises bets (one browser session = one at a
+        # time). See HARDVEN_TODO §D/E.
+        self._bet_enabled = os.environ.get("HARDVEN_BET_ENABLE") == "1"
+        try:
+            self._max_stake = float(os.environ.get("HARDVEN_MAX_STAKE") or 10.0)
+        except ValueError:
+            self._max_stake = 10.0
+        self._bet_lock = asyncio.Lock()
         # LIFECYCLE: opt-in schedule-driven open/close of the browser (human session rhythm). Off = hold open.
         self._lifecycle_on = os.environ.get("PINNACLE_LIFECYCLE") == "1"
         # default the lifecycle sport ids from the unified catalog (respects HARDVEN_SPORTS); env still overrides
@@ -1119,10 +1135,43 @@ class PinnacleAdapter(BookAdapter):
         return self._balance
 
     async def place_bet(self, selection_id: str, stake: float, max_odds: float) -> BetResult:
-        return BetResult(accepted=False, reason="place_bet not implemented (M1)")
+        """Place a back bet on `selection_id` for `stake` (account currency), accepting only if the offered odds
+        are >= max_odds (i.e. price <= requested). SAFETY-GATED SCAFFOLD:
+
+          1. stake > HARDVEN_MAX_STAKE            → reject (hard cap, never overridden).
+          2. session not ready                    → reject (can't place without a live login).
+          3. HARDVEN_BET_ENABLE != 1 (DEFAULT)    → PREVIEW: log the intended bet, place NOTHING.
+          4. enabled                              → serialise on _bet_lock, then _place_via_ui() — the browser
+                                                     bet-slip automation, DEFERRED (raises until built).
+
+        This guarantees real money can never fire without the explicit env gate AND an implemented UI path."""
+        # 1. hard stake cap
+        if stake > self._max_stake:
+            return BetResult(accepted=False, stake=stake,
+                             reason=f"stake {stake:.2f} > HARDVEN_MAX_STAKE {self._max_stake:.2f} (hard cap)")
+        # 2. must have a live session
+        if self._session_source == "browser" and not self._session_ready:
+            return BetResult(accepted=False, stake=stake, reason="no live Pinnacle session (login not captured)")
+        # 3. preview default — nothing is placed unless explicitly enabled
+        if not self._bet_enabled:
+            print(f"[PINNACLE BET] PREVIEW (HARDVEN_BET_ENABLE!=1) — WOULD place {stake:.2f} on {selection_id} "
+                  f"@ max_odds>={max_odds:.4f}. No bet placed.")
+            return BetResult(accepted=False, stake=stake,
+                             reason="preview only — set HARDVEN_BET_ENABLE=1 to place real bets")
+        # 4. real placement — serialise (one browser session) and go through the UI (deferred)
+        async with self._bet_lock:
+            print(f"[PINNACLE BET] LIVE — placing {stake:.2f} on {selection_id} @ max_odds>={max_odds:.4f}")
+            return await self._place_via_ui(selection_id, stake, max_odds)
+
+    async def _place_via_ui(self, selection_id: str, stake: float, max_odds: float) -> BetResult:
+        """Fill + submit the Pinnacle bet slip in the managed browser (add selection → set stake → handle the
+        'odds changed, accept?' dialog, accepting only if still >= max_odds → capture the confirmation: bet id,
+        actual accepted odds, stake). DEFERRED — bet placement will be driven through the UI (see HARDVEN_TODO
+        §B/§D). Raising here (rather than returning rejected) makes an accidental enable fail LOUD, not silent."""
+        raise NotImplementedError("Pinnacle bet placement via the browser UI is not implemented yet (deferred M1).")
 
     async def open_bets(self) -> list[dict]:
-        return []  # TODO(M1)
+        return []  # TODO(M1): read My Bets from the UI/authed endpoint for fill confirmation + settlement
 
     async def bet(self, bet_id: str) -> Optional[dict]:
-        return None  # TODO(M1)
+        return None  # TODO(M1): single-bet status by id (confirmation / settlement)
