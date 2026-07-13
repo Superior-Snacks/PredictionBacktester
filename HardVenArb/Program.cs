@@ -777,11 +777,14 @@ if (discord.Enabled)
                     lastHeartbeat = nowDt;
                     int kLive = LiveBooks("K:"), pLive = LiveBooks("H:");
                     int kTotal = TotalBooks("K:"), pTotal = TotalBooks("H:");
+                    // How many HardVen books are IN-PLAY (IsLive) right now — if this stays 0 while games are live,
+                    // the paired tokens aren't following games into in-play (why in-play arbs never log).
+                    int pInplay = state.Books.Count(kv => kv.Key.StartsWith("H:") && kv.Value.IsLive);
                     var up = nowDt - runStartedAt;
                     string sessTag = darkNow ? "dark (scheduled)" : hardvenFeed.SessionReady ? "ready" : "DOWN";
                     _ = discord.AlertAsync(
                         $"💓 up {up.Days}d{up.Hours}h{up.Minutes}m │ session {sessTag} │ " +
-                        $"live books K={kLive}/{kTotal} H={pLive}/{pTotal} │ WS K={(kOk ? "ok" : "down")} H={(hvOk ? "ok" : "down")} │ " +
+                        $"live books K={kLive}/{kTotal} H={pLive}/{pTotal} (H in-play={pInplay}) │ WS K={(kOk ? "ok" : "down")} H={(hvOk ? "ok" : "down")} │ " +
                         $"openArbs={telemetry.OpenArbs} arbsLogged={Interlocked.Read(ref arbsLogged)}");
                 }
             }

@@ -28,19 +28,30 @@ ROOT = SIDECAR.parent                     # HardVenArb/ (where pairHard.py + the
 
 
 class PairingScheduler:
-    def __init__(self, hour: int = 5, initial_delay: float = 8.0):
+    def __init__(self, hour: int = 5, initial_delay: float = 8.0, interval_min: int = 0):
         self._hour = hour % 24
         self._initial_delay = max(0.0, initial_delay)
+        # >0 = re-pair every N minutes (subsumes the daily cadence). Intraday re-pairing is what actually gets
+        # LIVE games paired: Pinnacle adds matchups (esp. tennis ITF/challenger) all day, and a match that
+        # appears after the daily 5am run would otherwise never pair until the next 5am — by then it's over.
+        # The re-pair is account-free (Kalshi public + Pinnacle guest /catalog) and MERGE-safe (pairHard carries
+        # over filled pairs), so a frequent re-run can't drop a working live pairing.
+        self._interval_min = max(0, interval_min)
 
     async def run(self) -> None:
         try:
             await asyncio.sleep(self._initial_delay)     # let the sidecar HTTP server come up (/catalog)
             await self._pair_once("startup")
             while True:
-                secs = self._secs_until_next()
-                print(f"[PAIR SCHED] next daily re-pair at {self._hour:02d}:00 local (in {secs / 3600:.1f}h).")
-                await asyncio.sleep(secs)
-                await self._pair_once("daily")
+                if self._interval_min > 0:
+                    print(f"[PAIR SCHED] next re-pair in {self._interval_min} min (intraday cadence).")
+                    await asyncio.sleep(self._interval_min * 60)
+                    await self._pair_once("interval")
+                else:
+                    secs = self._secs_until_next()
+                    print(f"[PAIR SCHED] next daily re-pair at {self._hour:02d}:00 local (in {secs / 3600:.1f}h).")
+                    await asyncio.sleep(secs)
+                    await self._pair_once("daily")
         except asyncio.CancelledError:
             pass
 

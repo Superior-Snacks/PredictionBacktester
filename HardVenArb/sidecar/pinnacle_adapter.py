@@ -199,12 +199,18 @@ class PinnacleAdapter(BookAdapter):
         self._auto_pair = os.environ.get("HARDVEN_AUTO_PAIR") == "1"
         self._pair_hour = _cfg_int("HARDVEN_PAIR_HOUR", 5)
         self._pair_startup_delay = _cfg_int("HARDVEN_PAIR_STARTUP_DELAY", 8)
+        # intraday re-pair cadence (min): pairs LIVE/late-appearing games that the daily 5am run would miss.
+        # Default 90 min — gentle (a handful of guest /catalog calls per run) and merge-safe (pairHard carries
+        # filled pairs). Set HARDVEN_PAIR_INTERVAL_MIN=0 to restore daily-only re-pairing.
+        self._pair_interval_min = _cfg_int("HARDVEN_PAIR_INTERVAL_MIN", 90)
         self._pairing = None
         self._pairing_task = None
         # in-play diagnostics: count WS messages per topic-class so a run reveals whether /live (in-play) is
         # actually being delivered (in-play arbs went missing after day 1 — see _refresh_league live-preserve fix).
         self._ws_live_msgs = 0
         self._ws_pre_msgs = 0
+        self._requested_ids: set = set()   # selection ids the C# bot actually asks for (the PAIRED tokens) — to
+                                           # measure how many WATCHED tokens are live vs the whole cache being live
         # ── REST-mode state ──
         self._refresh_task: Optional[asyncio.Task] = None
         self._refresh_sec = float(os.environ.get("PINNACLE_REFRESH_SEC", "15"))
@@ -286,10 +292,13 @@ class PinnacleAdapter(BookAdapter):
         # AUTO-PAIR: schedule the daily re-pairing pipeline (account-free; independent of the session/mode).
         if self._auto_pair:
             from pairing_scheduler import PairingScheduler
-            self._pairing = PairingScheduler(hour=self._pair_hour, initial_delay=self._pair_startup_delay)
+            self._pairing = PairingScheduler(hour=self._pair_hour, initial_delay=self._pair_startup_delay,
+                                             interval_min=self._pair_interval_min)
             self._pairing_task = asyncio.create_task(self._pairing.run())
-            print(f"[PINNACLE] AUTO-PAIR on — pairing at startup (+{self._pair_startup_delay}s) then daily "
-                  f"{self._pair_hour:02d}:00 local. cross_pairs.json + derivative_pairs.json hot-reload into the bot.")
+            cadence = (f"every {self._pair_interval_min} min (intraday — pairs live/late-appearing games)"
+                       if self._pair_interval_min > 0 else f"daily {self._pair_hour:02d}:00 local")
+            print(f"[PINNACLE] AUTO-PAIR on — pairing at startup (+{self._pair_startup_delay}s) then {cadence}. "
+                  f"cross_pairs.json + derivative_pairs.json hot-reload into the bot.")
 
     async def shutdown(self) -> None:
         if self._refresh_task and not self._refresh_task.done():
@@ -346,6 +355,7 @@ class PinnacleAdapter(BookAdapter):
 
     async def odds(self, selection_ids: list[str]) -> dict[str, Selection]:
         now = time.time()
+        self._requested_ids.update(selection_ids)   # remember the WATCHED (paired) tokens for the live diagnostic
         for sid in selection_ids:
             p = self._parse_sid(sid)
             if p:
@@ -733,9 +743,18 @@ class PinnacleAdapter(BookAdapter):
                 await asyncio.sleep(random.uniform(0, self._jitter_ms / 1000.0))   # gentle spacing
             if leagues and not self._ws_gave_up:
                 live_sel = sum(1 for s in self._cache.values() if getattr(s, "live", False))
+                # Of the tokens the C# bot actually WATCHES (paired), how many are live right now? If this stays
+                # 0 while `live_sel` (the whole cache) is high, the paired games' live data isn't reaching their
+                # tokens — the systematic in-play miss. Sample a few live watched ids (or overall) to compare.
+                watched_live = [sid for sid in self._requested_ids
+                                if (s := self._cache.get(sid)) is not None and getattr(s, "live", False)]
+                sample = watched_live[:6] if watched_live else \
+                    [sid for sid, s in self._cache.items() if getattr(s, "live", False)][:6]
                 print(f"[PINNACLE] session-keepalive: re-fetched {len(leagues)} league(s) (authed → resets the "
                       f"inactivity timer; cache={len(self._cache)} sel, {live_sel} live) | "
-                      f"WS msgs live={self._ws_live_msgs}/pre={self._ws_pre_msgs}")
+                      f"WS msgs live={self._ws_live_msgs}/pre={self._ws_pre_msgs} | "
+                      f"WATCHED-live={len(watched_live)}/{len(self._requested_ids)} | "
+                      f"sample live{'(watched)' if watched_live else ''}: {sample}")
 
     def _on_message(self, client, userdata, msg, *a) -> None:
         try:

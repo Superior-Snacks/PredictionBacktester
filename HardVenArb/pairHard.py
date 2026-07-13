@@ -148,6 +148,10 @@ def main() -> None:
     ap.add_argument("--classic", action="store_true",
                     help="use the broad built-in CLASSIC_SERIES allowlist (every sport) instead of the ACTIVE "
                          "sports from sports.py / HARDVEN_SPORTS")
+    ap.add_argument("--fresh", action="store_true",
+                    help="force a full rebuild with BLANK Pinnacle tokens (default: MERGE — carry over already-"
+                         "filled hardven_*_token for tickers that are still open, so an intraday re-pair can't drop "
+                         "a working pairing whose live moneyline is momentarily suspended at catalog time)")
     args = ap.parse_args()
 
     custom = [s.strip().upper() for s in args.series.split(",") if s.strip()]
@@ -199,14 +203,35 @@ def main() -> None:
                 "hardven_no_token":  "",
             })
 
+    # MERGE (default): carry over already-filled Pinnacle tokens for tickers that are STILL open, so an intraday
+    # re-pair (which rebuilds this scaffold from scratch) can't drop a working live pairing whose moneyline is
+    # momentarily suspended on Pinnacle's board at catalog time. --fresh forces the old blank rebuild. Only the
+    # two hardven_* tokens + the three_way/fuzzy tags are carried; all Kalshi fields stay FRESH from this fetch.
+    carried = 0
+    if not args.fresh and OUT.exists():
+        try:
+            prev = {e.get("kalshi_ticker"): e for e in json.loads(OUT.read_text(encoding="utf-8"))}
+        except (ValueError, OSError):
+            prev = {}
+        for e in entries:
+            p = prev.get(e["kalshi_ticker"])
+            if p and p.get("hardven_yes_token") and p.get("hardven_no_token"):
+                e["hardven_yes_token"] = p["hardven_yes_token"]
+                e["hardven_no_token"] = p["hardven_no_token"]
+                for flag in ("three_way", "fuzzy"):
+                    if p.get(flag):
+                        e[flag] = p[flag]
+                carried += 1
+
     entries.sort(key=lambda e: (e["settlement_date"], e["kalshi_ticker"]))
 
     if OUT.exists():
         OUT.replace(OUT.with_suffix(".json.bak"))
     OUT.write_text(json.dumps(entries, indent=2), encoding="utf-8")
 
-    print(f"[OK] wrote {len(entries)} classic sports-game markets to {OUT.name} "
-          f"(Kalshi side filled; add hardven_*_token by hand).")
+    mode = "fresh rebuild" if args.fresh else f"merged ({carried} filled pair(s) carried over)"
+    print(f"[OK] wrote {len(entries)} classic sports-game markets to {OUT.name} — {mode} "
+          f"(Kalshi side filled; Pinnacle tokens filled by pair_pinnacle).")
     if kept_series:
         print("     kept series: " + ", ".join(f"{k}={v}" for k, v in sorted(kept_series.items(), key=lambda x: -x[1])))
     else:
