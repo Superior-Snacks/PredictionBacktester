@@ -1084,11 +1084,16 @@ class PinnacleAdapter(BookAdapter):
             # when the market is suspended) → keying off the real market avoids double-pairing. The winner is
             # whichever matchup (clean OR "(Sets)"-labelled) has the live moneyline; the "(Games)" one (no live
             # moneyline) and the tournament outright (a many-way moneyline) are both excluded by this set.
-            winner_mids = {mk.get("matchupId") for mk in straight
-                           if mk.get("type") == "moneyline" and mk.get("period") == 0
-                           and 2 <= len(mk.get("prices") or []) <= 3}
+            # matchupId -> the moneyline's price designations. A dict (not a set) so the 3-way DRAW leg can be
+            # emitted: soccer matchups expose only 2 PARTICIPANTS (home/away), but the moneyline PRICES carry a
+            # third 'draw' designation (which the odds path already tokenises as '{lid}:{mid}:draw' — _SIDES
+            # includes 'draw'). Without emitting a draw catalog entry the pairing's Tie leg can never match.
+            winner_desigs = {mk.get("matchupId"): [pr.get("designation") for pr in (mk.get("prices") or [])]
+                             for mk in straight
+                             if mk.get("type") == "moneyline" and mk.get("period") == 0
+                             and 2 <= len(mk.get("prices") or []) <= 3}
             for m in matchups:
-                if m.get("id") not in winner_mids:
+                if m.get("id") not in winner_desigs:
                     continue
                 parts = m.get("participants") or []
                 if len(parts) < 2:
@@ -1110,6 +1115,14 @@ class PinnacleAdapter(BookAdapter):
                         selection_id=f"{lid}:{m.get('id')}:{desig}",
                         sport=sport, league=league_name, event=event, market="moneyline",
                         selection_name=_strip_units(p.get("name", "")), start_time=m.get("startTime"),
+                        three_way=three_way))
+                # 3-way DRAW leg: not a participant — synthesise it from the moneyline's 'draw' price so the
+                # Tie pairing (Kalshi NO(Tie) + Pinnacle back-Draw) can complete. Odds already serve this token.
+                if three_way and "draw" in winner_desigs[m.get("id")]:
+                    out.append(CatalogEntry(
+                        selection_id=f"{lid}:{m.get('id')}:draw",
+                        sport=sport, league=league_name, event=event, market="moneyline",
+                        selection_name="Draw", start_time=m.get("startTime"),
                         three_way=three_way))
             if i + 1 < len(league_ids) and self._jitter_ms > 0:
                 await asyncio.sleep(random.uniform(0, self._jitter_ms / 1000.0))   # gentle between many leagues
