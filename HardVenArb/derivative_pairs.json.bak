@@ -20,8 +20,8 @@
     "settlement_date": "2026-07-14",
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "3327:1632514468:spread:-1.5:home",
-    "hardven_no_token": "3327:1632514468:spread:1.5:away"
+    "hardven_yes_token": "3327:1632514470:spread:-1.5:home",
+    "hardven_no_token": "3327:1632514470:spread:1.5:away"
   },
   {
     "kalshi_ticker": "KXATPGSPREAD-26JUL14NEUPRA-NEU4",
@@ -44,8 +44,8 @@
     "settlement_date": "2026-07-14",
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "3327:1632514468:total:22.5:over",
-    "hardven_no_token": "3327:1632514468:total:22.5:under"
+    "hardven_yes_token": "3327:1632514470:total:22.5:over",
+    "hardven_no_token": "3327:1632514470:total:22.5:under"
   },
   {
     "kalshi_ticker": "KXATPGTOTAL-26JUL14NEUPRA-22",
