@@ -125,6 +125,14 @@ class PinnacleAdapter(BookAdapter):
         self._catalog_sports = [x.strip() for x in
                                 os.environ.get("PINNACLE_CATALOG_SPORTS", _default_catalog_sports).split(",")
                                 if x.strip()]
+        # DRIFT GUARD: an explicit PINNACLE_CATALOG_SPORTS that omits an ENABLED sport (HARDVEN_SPORTS) is the
+        # silent-0-pairs trap — that sport SCHEDULES + SCAFFOLDS but its games never enter /catalog, so pairing
+        # matches them against the wrong board → 0 fills. Warn loudly at startup (only when explicitly set + short).
+        _missing_cat = [str(i) for i in sports_cfg.pinnacle_ids() if str(i) not in self._catalog_sports]
+        if os.environ.get("PINNACLE_CATALOG_SPORTS") and _missing_cat:
+            print(f"[PINNACLE] *** WARNING: PINNACLE_CATALOG_SPORTS={self._catalog_sports} is MISSING enabled sport "
+                  f"id(s) {_missing_cat} (from HARDVEN_SPORTS). Those sports will schedule + scaffold but NEVER "
+                  f"PAIR (catalog skips them → 0 pairs). Add them, or UNSET PINNACLE_CATALOG_SPORTS to track sports.py.")
         self._cache: dict[str, Selection] = {}            # "{lid}:{mid}:{designation}" -> Selection
         self._cache_lock = threading.Lock()               # paho thread writes; asyncio reads
         self._active_leagues: dict[str, float] = {}       # leagueId -> unix ts last requested via /odds
