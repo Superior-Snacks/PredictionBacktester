@@ -110,6 +110,12 @@ class PinnacleBrowserSession:
         self._auto_login = os.environ.get("PINNACLE_AUTO_LOGIN") != "0"
         self._login_check_sec = float(os.environ.get("PINNACLE_LOGIN_CHECK_SEC", "8"))         # how often to look for a login form
         self._login_submit_cooldown = float(os.environ.get("PINNACLE_LOGIN_SUBMIT_COOLDOWN", "30"))  # min gap between submit attempts
+        # Don't re-login while the session is already LIVE. A logged-in Pinnacle tab emits authed API requests
+        # constantly (each refreshes _last_capture); a login form present ALONGSIDE recent authed traffic means
+        # we're logged in via cookies (a stray/autofilled form), and submitting it needlessly ROTATES the session
+        # → the guest-redirect cascade + WS auth-reject churn seen 2026-07-14. So skip the submit while a capture
+        # is this fresh; only re-login once authed traffic has been silent this long (a genuine logout).
+        self._login_healthy_grace = float(os.environ.get("PINNACLE_LOGIN_HEALTHY_GRACE", "180"))
         self._last_login_submit = 0.0
         self._login_task: Optional[asyncio.Task] = None
         # sport pages the organic loop occasionally browses to (real session). Default = the home page only
@@ -484,6 +490,10 @@ class PinnacleBrowserSession:
         finally:
             self.resume_activity()
         if self._auto_login:
+            # Let the reload's cookie re-mint emit authed traffic (refreshing _last_capture) BEFORE checking the
+            # form, so _ensure_logged_in's healthy-session guard can skip a redundant login when the reload already
+            # restored the session, and only submit on a genuine hard logout. Avoids the re-mint→re-login churn.
+            await asyncio.sleep(4)
             await self._ensure_logged_in()
 
     # ── unattended re-login (submit the profile-autofilled form) ───────────────────
@@ -520,6 +530,11 @@ class PinnacleBrowserSession:
         has_creds = bool(val) or self._ever_logged_in or self._profile_has_saved_login()
         if not has_creds:
             return False                                   # empty form + no saved creds → first-time setup; leave it
+        # ALREADY LOGGED IN? If we captured authed traffic recently, a visible login form is a stray/autofilled
+        # widget, NOT a logout — submitting it would rotate the live session. Only re-login once authed traffic
+        # has gone silent (a real logout). This is what stops the post-capture re-login churn.
+        if self._logged_session and self._last_capture and (time.time() - self._last_capture) < self._login_healthy_grace:
+            return False
         if time.time() - self._last_login_submit < self._login_submit_cooldown:
             return False                                   # don't hammer the login form
         self._last_login_submit = time.time()
