@@ -36,18 +36,6 @@
     "hardven_no_token": "3327:1632499193:spread:1.5:home"
   },
   {
-    "kalshi_ticker": "KXATPGSPREAD-26JUL12KOPPRI-PRI6",
-    "market_type": "spread",
-    "line": 5.5,
-    "label": "Vit Kopriva vs Dino Prizmic \u2014 Dino Prizmic -5.5",
-    "event_id": "KXATPGSPREAD-26JUL12KOPPRI",
-    "settlement_date": "2026-07-13",
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "3327:1632499200:spread:-5.5:away",
-    "hardven_no_token": "3327:1632499200:spread:5.5:home"
-  },
-  {
     "kalshi_ticker": "KXATPGSPREAD-26JUL12LAJVAN-VAN2",
     "market_type": "spread",
     "line": 1.5,
@@ -80,32 +68,32 @@
     "settlement_date": "2026-07-13",
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "3291:1632508244:spread:-4.5:home",
-    "hardven_no_token": "3291:1632508244:spread:4.5:away"
+    "hardven_yes_token": "3291:1632508248:spread:-4.5:home",
+    "hardven_no_token": "3291:1632508248:spread:4.5:away"
   },
   {
-    "kalshi_ticker": "KXATPGSPREAD-26JUL13FAUDAM-FAU2",
+    "kalshi_ticker": "KXATPGSPREAD-26JUL13FAUDAM-FAU5",
     "market_type": "spread",
-    "line": 1.5,
-    "label": "Thomas Faurel vs Miguel Damas \u2014 Thomas Faurel -1.5",
+    "line": 4.5,
+    "label": "Thomas Faurel vs Miguel Damas \u2014 Thomas Faurel -4.5",
     "event_id": "KXATPGSPREAD-26JUL13FAUDAM",
     "settlement_date": "2026-07-13",
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "9108:1632510073:spread:-1.5:home",
-    "hardven_no_token": "9108:1632510073:spread:1.5:away"
+    "hardven_yes_token": "9108:1632510073:spread:-4.5:home",
+    "hardven_no_token": "9108:1632510073:spread:4.5:away"
   },
   {
-    "kalshi_ticker": "KXATPGSPREAD-26JUL13SANDAN-DAN7",
+    "kalshi_ticker": "KXATPGSPREAD-26JUL13SANDAN-DAN4",
     "market_type": "spread",
-    "line": 6.5,
-    "label": "Carlos Sanchez Jover vs Taro Daniel \u2014 Taro Daniel -6.5",
+    "line": 3.5,
+    "label": "Carlos Sanchez Jover vs Taro Daniel \u2014 Taro Daniel -3.5",
     "event_id": "KXATPGSPREAD-26JUL13SANDAN",
     "settlement_date": "2026-07-13",
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "9108:1632508598:spread:-6.5:away",
-    "hardven_no_token": "9108:1632508598:spread:6.5:home"
+    "hardven_yes_token": "9108:1632508598:spread:-3.5:away",
+    "hardven_no_token": "9108:1632508598:spread:3.5:home"
   },
   {
     "kalshi_ticker": "KXATPGTOTAL-26JUL12DEJGAU-22",
@@ -130,18 +118,6 @@
     "hardven_min_size": 1.0,
     "hardven_yes_token": "3327:1632499187:total:21.5:over",
     "hardven_no_token": "3327:1632499187:total:21.5:under"
-  },
-  {
-    "kalshi_ticker": "KXATPGTOTAL-26JUL12FELKEC-23",
-    "market_type": "total",
-    "line": 22.5,
-    "label": "Kilian Feldbausch vs Miomir Kecmanovic \u2014 Over 22.5",
-    "event_id": "KXATPGTOTAL-26JUL12FELKEC",
-    "settlement_date": "2026-07-13",
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "3291:1632499177:total:22.5:over",
-    "hardven_no_token": "3291:1632499177:total:22.5:under"
   },
   {
     "kalshi_ticker": "KXATPGTOTAL-26JUL12KOPPRI-23",
@@ -178,29 +154,5 @@
     "hardven_min_size": 1.0,
     "hardven_yes_token": "3291:1632499165:total:22.5:over",
     "hardven_no_token": "3291:1632499165:total:22.5:under"
-  },
-  {
-    "kalshi_ticker": "KXATPGTOTAL-26JUL13COLSKA-21",
-    "market_type": "total",
-    "line": 20.5,
-    "label": "Raphael Collignon vs Timofey Skatov \u2014 Over 20.5",
-    "event_id": "KXATPGTOTAL-26JUL13COLSKA",
-    "settlement_date": "2026-07-13",
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "3291:1632508244:total:20.5:over",
-    "hardven_no_token": "3291:1632508244:total:20.5:under"
-  },
-  {
-    "kalshi_ticker": "KXATPGTOTAL-26JUL13FAUDAM-22",
-    "market_type": "total",
-    "line": 21.5,
-    "label": "Thomas Faurel vs Miguel Damas \u2014 Over 21.5",
-    "event_id": "KXATPGTOTAL-26JUL13FAUDAM",
-    "settlement_date": "2026-07-13",
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "9108:1632510073:total:21.5:over",
-    "hardven_no_token": "9108:1632510073:total:21.5:under"
   }
 ]
