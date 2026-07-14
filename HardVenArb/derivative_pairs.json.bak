@@ -1,1 +1,62 @@
-[]
+[
+  {
+    "kalshi_ticker": "KXATPGSPREAD-26JUL12FARWAW-WAW2",
+    "market_type": "spread",
+    "line": 1.5,
+    "label": "Jaime Faria vs Stan Wawrinka \u2014 Stan Wawrinka -1.5",
+    "event_id": "KXATPGSPREAD-26JUL12FARWAW",
+    "settlement_date": "2026-07-13",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "3291:1632499163:spread:-1.5:away",
+    "hardven_no_token": "3291:1632499163:spread:1.5:home"
+  },
+  {
+    "kalshi_ticker": "KXATPGSPREAD-26JUL14GOMMCD-GOM2",
+    "market_type": "spread",
+    "line": 1.5,
+    "label": "Federico Agustin Gomez vs Niels Mcdonald \u2014 Federico Agustin Gomez -1.5",
+    "event_id": "KXATPGSPREAD-26JUL14GOMMCD",
+    "settlement_date": "2026-07-14",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "3327:1632514468:spread:-1.5:home",
+    "hardven_no_token": "3327:1632514468:spread:1.5:away"
+  },
+  {
+    "kalshi_ticker": "KXATPGSPREAD-26JUL14NEUPRA-NEU4",
+    "market_type": "spread",
+    "line": 3.5,
+    "label": "Lukas Neumayer vs Juan Carlos Prado Angelo \u2014 Lukas Neumayer -3.5",
+    "event_id": "KXATPGSPREAD-26JUL14NEUPRA",
+    "settlement_date": "2026-07-14",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "3327:1632542086:spread:-3.5:home",
+    "hardven_no_token": "3327:1632542086:spread:3.5:away"
+  },
+  {
+    "kalshi_ticker": "KXATPGTOTAL-26JUL14GOMMCD-23",
+    "market_type": "total",
+    "line": 22.5,
+    "label": "Federico Agustin Gomez vs Niels Mcdonald \u2014 Over 22.5",
+    "event_id": "KXATPGTOTAL-26JUL14GOMMCD",
+    "settlement_date": "2026-07-14",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "3327:1632514468:total:22.5:over",
+    "hardven_no_token": "3327:1632514468:total:22.5:under"
+  },
+  {
+    "kalshi_ticker": "KXATPGTOTAL-26JUL14NEUPRA-22",
+    "market_type": "total",
+    "line": 21.5,
+    "label": "Lukas Neumayer vs Juan Carlos Prado Angelo \u2014 Over 21.5",
+    "event_id": "KXATPGTOTAL-26JUL14NEUPRA",
+    "settlement_date": "2026-07-14",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "3327:1632542086:total:21.5:over",
+    "hardven_no_token": "3327:1632542086:total:21.5:under"
+  }
+]
