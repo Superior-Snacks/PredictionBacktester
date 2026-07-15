@@ -12,18 +12,6 @@
     "hardven_no_token": "3649:1632542697:spread:2.5:home"
   },
   {
-    "kalshi_ticker": "KXATPGSPREAD-26JUL15BORDIM-BOR5",
-    "market_type": "spread",
-    "line": 4.5,
-    "label": "Nuno Borges vs Grigor Dimitrov \u2014 Nuno Borges -4.5",
-    "event_id": "KXATPGSPREAD-26JUL15BORDIM",
-    "settlement_date": "2026-07-15",
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "3649:1632542702:spread:-4.5:home",
-    "hardven_no_token": "3649:1632542702:spread:4.5:away"
-  },
-  {
     "kalshi_ticker": "KXATPGSPREAD-26JUL15CARUGO-CAR3",
     "market_type": "spread",
     "line": 2.5,
@@ -166,18 +154,6 @@
     "hardven_min_size": 1.0,
     "hardven_yes_token": "3649:1632542697:total:22.5:over",
     "hardven_no_token": "3649:1632542697:total:22.5:under"
-  },
-  {
-    "kalshi_ticker": "KXATPGTOTAL-26JUL15BORDIM-19",
-    "market_type": "total",
-    "line": 18.5,
-    "label": "Nuno Borges vs Grigor Dimitrov \u2014 Over 18.5",
-    "event_id": "KXATPGTOTAL-26JUL15BORDIM",
-    "settlement_date": "2026-07-15",
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "3649:1632542702:total:18.5:over",
-    "hardven_no_token": "3649:1632542702:total:18.5:under"
   },
   {
     "kalshi_ticker": "KXATPGTOTAL-26JUL15CARUGO-23",
