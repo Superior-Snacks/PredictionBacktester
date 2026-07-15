@@ -121,6 +121,9 @@ class PinnacleAdapter(BookAdapter):
         self._window_ws_read = os.environ.get("PINNACLE_WINDOW_WS_READ") == "1"
         self._browser_odds_last = 0.0    # unix ts of the last odds PUBLISH off the browser WS (feeds _feed_live)
         self._browser_odds_msgs = 0      # count of applied browser-WS odds messages (diagnostic)
+        self._browser_odds_mid_ts: dict = {}   # "lid:mid" -> last ts the READER actually pushed odds for it
+                                               # (coverage truth — distinct from /odds freshness, which _read_cache
+                                               # re-stamps for any SERVED token; see /debug/reader + coverage_check)
         try:
             self._browser_odds_ttl = float(os.environ.get("PINNACLE_WINDOW_WS_TTL") or 30.0)
         except ValueError:
@@ -862,10 +865,29 @@ class PinnacleAdapter(BookAdapter):
             self._ws_pre_msgs += 1
         self._browser_odds_last = time.time()      # marks the browser-WS feed LIVE for _feed_live()
         self._browser_odds_msgs += 1
+        rec = data.get("rec") or {}
+        mid = rec.get("id") if rec.get("id") is not None else data.get("pk")
+        lid = (rec.get("league") or {}).get("id")
+        if lid is not None and mid is not None:
+            self._browser_odds_mid_ts[f"{lid}:{mid}"] = self._browser_odds_last   # coverage truth (per matchup)
         try:
             self._apply(data, live)
         except Exception as ex:
             print(f"[PINNACLE WINDOW-WS] apply error: {type(ex).__name__}: {ex}")
+
+    def reader_live_mids(self, ttl: float = 30.0) -> list:
+        """Matchups ('lid:mid') the browser-WS READER has actually pushed odds for within `ttl` seconds — the
+        ground truth for coverage (NOT /odds freshness, which _read_cache re-stamps for any served token). Prunes
+        stale entries as it goes so the dict stays bounded."""
+        now = time.time()
+        out = []
+        for k in list(self._browser_odds_mid_ts.keys()):
+            age = now - self._browser_odds_mid_ts[k]
+            if age < ttl:
+                out.append(k)
+            elif age > 900:                        # forget matchups silent >15 min (settled / off the board)
+                del self._browser_odds_mid_ts[k]
+        return out
 
     def _apply(self, data: dict, live: bool = False) -> None:
         rec = data.get("rec") or {}

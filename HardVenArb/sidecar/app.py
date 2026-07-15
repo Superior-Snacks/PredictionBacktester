@@ -117,6 +117,15 @@ async def catalog():
     return {"selections": [c.to_api() for c in await adapter.catalog()]}
 
 
+@app.get("/debug/reader")
+async def debug_reader(ttl: float = 30.0):
+    """Coverage diagnostic: the matchups ('lid:mid') the browser-WS reader has actually pushed odds for within
+    `ttl`s. Used by coverage_check.py to compare the reader's live slate against the guest board (ground truth)."""
+    fn = getattr(adapter, "reader_live_mids", None)
+    mids = fn(ttl) if fn else []
+    return {"live_mids": mids, "count": len(mids)}
+
+
 # ── M1: betting + wallet confirmation ─────────────────────────────────────────
 @app.get("/balance")
 async def balance():
