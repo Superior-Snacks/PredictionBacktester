@@ -765,9 +765,24 @@ class PinnacleAdapter(BookAdapter):
                 break
             if self._session_started_at > 0:
                 held_m = (time.time() - self._session_started_at) / 60
-                ws = "connected" if self._connected else ("GAVE-UP" if self._ws_gave_up else "down")
+                if self._connected:
+                    ws = "connected"
+                elif self._window_ws_read and self._feed_live():
+                    ws = "window-reader"                  # the browser-WS reader is the live odds source (no paho)
+                elif self._ws_gave_up:
+                    ws = "GAVE-UP"
+                else:
+                    ws = "down"
+                extra = ""
+                if self._window_ws_read:
+                    now = time.time()
+                    snap = list(self._cache.values())
+                    fresh = sum(1 for s in snap if s.ts and now - s.ts < self._browser_odds_ttl)
+                    live_n = sum(1 for s in snap if s.live)
+                    extra = (f" | reader: applied={self._browser_odds_msgs}, "
+                             f"{fresh}/{len(snap)} fresh, {live_n} live, feed_live={self._feed_live()}")
                 print(f"[PINNACLE] session held {held_m:.0f}m  (ready={self._session_ready}, ws={ws}, "
-                      f"cache={len(self._cache)} sel)")
+                      f"cache={len(self._cache)} sel){extra}")
                 if not self._survive_logged and held_m >= self._survive_min:
                     self._survive_logged = True           # unattended pass signal — glance for this line when you're back
                     print(f"[PINNACLE] *** SESSION SURVIVED past {self._survive_min:.0f}m — keepalive is HOLDING "

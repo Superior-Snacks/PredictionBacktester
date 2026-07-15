@@ -36,18 +36,6 @@
     "hardven_no_token": "3328:1632547656:spread:3.5:away"
   },
   {
-    "kalshi_ticker": "KXATPGSPREAD-26JUL15ETCMER-ETC3",
-    "market_type": "spread",
-    "line": 2.5,
-    "label": "Tomas Martin Etcheverry vs Daniel Merida Aguilar \u2014 Tomas Martin Etcheverry -2.5",
-    "event_id": "KXATPGSPREAD-26JUL15ETCMER",
-    "settlement_date": "2026-07-15",
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "3328:1632547566:spread:-2.5:home",
-    "hardven_no_token": "3328:1632547566:spread:2.5:away"
-  },
-  {
     "kalshi_ticker": "KXATPGSPREAD-26JUL15GOMARN-ARN5",
     "market_type": "spread",
     "line": 4.5,
@@ -56,20 +44,20 @@
     "settlement_date": "2026-07-15",
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "3328:1632548877:spread:-4.5:away",
-    "hardven_no_token": "3328:1632548877:spread:4.5:home"
+    "hardven_yes_token": "3328:1632548879:spread:-4.5:away",
+    "hardven_no_token": "3328:1632548879:spread:4.5:home"
   },
   {
-    "kalshi_ticker": "KXATPGSPREAD-26JUL15HANVAC-HAN2",
+    "kalshi_ticker": "KXATPGSPREAD-26JUL15HANVAC-VAC2",
     "market_type": "spread",
     "line": 1.5,
-    "label": "Yannick Hanfmann vs Valentin Vacherot \u2014 Yannick Hanfmann -1.5",
+    "label": "Yannick Hanfmann vs Valentin Vacherot \u2014 Valentin Vacherot -1.5",
     "event_id": "KXATPGSPREAD-26JUL15HANVAC",
     "settlement_date": "2026-07-15",
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "3292:1632538705:spread:-1.5:home",
-    "hardven_no_token": "3292:1632538705:spread:1.5:away"
+    "hardven_yes_token": "3292:1632538707:spread:-1.5:away",
+    "hardven_no_token": "3292:1632538707:spread:1.5:home"
   },
   {
     "kalshi_ticker": "KXATPGSPREAD-26JUL15KYMTSI-TSI4",
@@ -84,16 +72,16 @@
     "hardven_no_token": "3292:1632544923:spread:3.5:home"
   },
   {
-    "kalshi_ticker": "KXATPGSPREAD-26JUL15PRADZU-DZU4",
+    "kalshi_ticker": "KXATPGSPREAD-26JUL15PRADZU-DZU7",
     "market_type": "spread",
-    "line": 3.5,
-    "label": "Juan Carlos Prado Angelo vs Damir Dzumhur \u2014 Damir Dzumhur -3.5",
+    "line": 6.5,
+    "label": "Juan Carlos Prado Angelo vs Damir Dzumhur \u2014 Damir Dzumhur -6.5",
     "event_id": "KXATPGSPREAD-26JUL15PRADZU",
     "settlement_date": "2026-07-15",
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "3328:1632548892:spread:-3.5:away",
-    "hardven_no_token": "3328:1632548892:spread:3.5:home"
+    "hardven_yes_token": "3328:1632548894:spread:-6.5:away",
+    "hardven_no_token": "3328:1632548894:spread:6.5:home"
   },
   {
     "kalshi_ticker": "KXATPGSPREAD-26JUL15PRIMOL-PRI4",
@@ -106,18 +94,6 @@
     "hardven_min_size": 1.0,
     "hardven_yes_token": "3328:1632545531:spread:-3.5:home",
     "hardven_no_token": "3328:1632545531:spread:3.5:away"
-  },
-  {
-    "kalshi_ticker": "KXATPGSPREAD-26JUL15TRANAV-NAV6",
-    "market_type": "spread",
-    "line": 5.5,
-    "label": "Stefano Travaglia vs Mariano Navone \u2014 Mariano Navone -5.5",
-    "event_id": "KXATPGSPREAD-26JUL15TRANAV",
-    "settlement_date": "2026-07-15",
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "3649:1632542632:spread:-5.5:away",
-    "hardven_no_token": "3649:1632542632:spread:5.5:home"
   },
   {
     "kalshi_ticker": "KXATPGSPREAD-26JUL15TRUDAV-DAV5",
@@ -188,8 +164,8 @@
     "settlement_date": "2026-07-15",
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "3328:1632547566:total:22.5:over",
-    "hardven_no_token": "3328:1632547566:total:22.5:under"
+    "hardven_yes_token": "3328:1632547568:total:22.5:over",
+    "hardven_no_token": "3328:1632547568:total:22.5:under"
   },
   {
     "kalshi_ticker": "KXATPGTOTAL-26JUL15GOMARN-22",
@@ -200,20 +176,20 @@
     "settlement_date": "2026-07-15",
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "3328:1632548877:total:21.5:over",
-    "hardven_no_token": "3328:1632548877:total:21.5:under"
+    "hardven_yes_token": "3328:1632548879:total:21.5:over",
+    "hardven_no_token": "3328:1632548879:total:21.5:under"
   },
   {
-    "kalshi_ticker": "KXATPGTOTAL-26JUL15HANVAC-24",
+    "kalshi_ticker": "KXATPGTOTAL-26JUL15HANVAC-29",
     "market_type": "total",
-    "line": 23.5,
-    "label": "Yannick Hanfmann vs Valentin Vacherot \u2014 Over 23.5",
+    "line": 28.5,
+    "label": "Yannick Hanfmann vs Valentin Vacherot \u2014 Over 28.5",
     "event_id": "KXATPGTOTAL-26JUL15HANVAC",
     "settlement_date": "2026-07-15",
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "3292:1632538705:total:23.5:over",
-    "hardven_no_token": "3292:1632538705:total:23.5:under"
+    "hardven_yes_token": "3292:1632538707:total:28.5:over",
+    "hardven_no_token": "3292:1632538707:total:28.5:under"
   },
   {
     "kalshi_ticker": "KXATPGTOTAL-26JUL15KYMTSI-23",
@@ -236,8 +212,8 @@
     "settlement_date": "2026-07-15",
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "3328:1632548892:total:21.5:over",
-    "hardven_no_token": "3328:1632548892:total:21.5:under"
+    "hardven_yes_token": "3328:1632548894:total:21.5:over",
+    "hardven_no_token": "3328:1632548894:total:21.5:under"
   },
   {
     "kalshi_ticker": "KXATPGTOTAL-26JUL15PRIMOL-22",
@@ -250,18 +226,6 @@
     "hardven_min_size": 1.0,
     "hardven_yes_token": "3328:1632545531:total:21.5:over",
     "hardven_no_token": "3328:1632545531:total:21.5:under"
-  },
-  {
-    "kalshi_ticker": "KXATPGTOTAL-26JUL15TRANAV-20",
-    "market_type": "total",
-    "line": 19.5,
-    "label": "Stefano Travaglia vs Mariano Navone \u2014 Over 19.5",
-    "event_id": "KXATPGTOTAL-26JUL15TRANAV",
-    "settlement_date": "2026-07-15",
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "3649:1632542632:total:19.5:over",
-    "hardven_no_token": "3649:1632542632:total:19.5:under"
   },
   {
     "kalshi_ticker": "KXATPGTOTAL-26JUL15VANDRO-23",

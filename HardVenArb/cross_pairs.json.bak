@@ -22,8 +22,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "3292:1632523385:away",
+    "hardven_no_token": "3292:1632523385:home"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL14DRATRO-DRA",
@@ -76,32 +76,6 @@
     "hardven_min_size": 1.0,
     "hardven_yes_token": "9176:1632524873:home",
     "hardven_no_token": "9176:1632524873:away"
-  },
-  {
-    "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL15GENDE-DE",
-    "label": "Will Pieter de Lange win the Gentzsch vs de Lange: Round Of 16 match?",
-    "event_title": "Gentzsch vs de Lange",
-    "kalshi_outcome": "Pieter de Lange",
-    "event_id": "KXATPCHALLENGERMATCH-26JUL15GENDE",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "272520:1632541262:away",
-    "hardven_no_token": "272520:1632541262:home"
-  },
-  {
-    "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL15GENDE-GEN",
-    "label": "Will Tom Gentzsch win the Gentzsch vs de Lange: Round Of 16 match?",
-    "event_title": "Gentzsch vs de Lange",
-    "kalshi_outcome": "Tom Gentzsch",
-    "event_id": "KXATPCHALLENGERMATCH-26JUL15GENDE",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "272520:1632541262:home",
-    "hardven_no_token": "272520:1632541262:away"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL15HOLMAY-HOL",
@@ -780,32 +754,6 @@
     "hardven_no_token": ""
   },
   {
-    "kalshi_ticker": "KXATPMATCH-26JUL15TRANAV-NAV",
-    "label": "Will Mariano Navone win the Travaglia vs Navone: Round Of 16 match?",
-    "event_title": "Travaglia vs Navone",
-    "kalshi_outcome": "Mariano Navone",
-    "event_id": "KXATPMATCH-26JUL15TRANAV",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "3649:1632530857:away",
-    "hardven_no_token": "3649:1632530857:home"
-  },
-  {
-    "kalshi_ticker": "KXATPMATCH-26JUL15TRANAV-TRA",
-    "label": "Will Stefano Travaglia win the Travaglia vs Navone: Round Of 16 match?",
-    "event_title": "Travaglia vs Navone",
-    "kalshi_outcome": "Stefano Travaglia",
-    "event_id": "KXATPMATCH-26JUL15TRANAV",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "3649:1632530857:home",
-    "hardven_no_token": "3649:1632530857:away"
-  },
-  {
     "kalshi_ticker": "KXATPMATCH-26JUL15TRUDAV-DAV",
     "label": "Will Alejandro Davidovich Fokina win the Trungelliti vs Davidovich Fokina: Round Of 16 match?",
     "event_title": "Trungelliti vs Davidovich Fokina",
@@ -882,58 +830,6 @@
     "hardven_min_size": 1.0,
     "hardven_yes_token": "226819:1632524842:away",
     "hardven_no_token": "226819:1632524842:home"
-  },
-  {
-    "kalshi_ticker": "KXITFMATCH-26JUL15ANTHEI-ANT",
-    "label": "Will Richard Antoni win the Antoni vs Heinrich: M15 Uslar Round of 32 match?",
-    "event_title": "Antoni vs Heinrich",
-    "kalshi_outcome": "Richard Antoni",
-    "event_id": "KXITFMATCH-26JUL15ANTHEI",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
-    "kalshi_ticker": "KXITFMATCH-26JUL15ANTHEI-HEI",
-    "label": "Will Sebastian Heinrich win the Antoni vs Heinrich: M15 Uslar Round of 32 match?",
-    "event_title": "Antoni vs Heinrich",
-    "kalshi_outcome": "Sebastian Heinrich",
-    "event_id": "KXITFMATCH-26JUL15ANTHEI",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
-    "kalshi_ticker": "KXITFMATCH-26JUL15BERBAR-BAR",
-    "label": "Will Paul Barbier Gazeu win the Bertimon vs Barbier Gazeu: M15 Monastir Round of 32 match?",
-    "event_title": "Bertimon vs Barbier Gazeu",
-    "kalshi_outcome": "Paul Barbier Gazeu",
-    "event_id": "KXITFMATCH-26JUL15BERBAR",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
-    "kalshi_ticker": "KXITFMATCH-26JUL15BERBAR-BER",
-    "label": "Will Maxence Bertimon win the Bertimon vs Barbier Gazeu: M15 Monastir Round of 32 match?",
-    "event_title": "Bertimon vs Barbier Gazeu",
-    "kalshi_outcome": "Maxence Bertimon",
-    "event_id": "KXITFMATCH-26JUL15BERBAR",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
   },
   {
     "kalshi_ticker": "KXITFMATCH-26JUL15BOCSEK-BOC",
@@ -1090,32 +986,6 @@
     "hardven_min_size": 1.0,
     "hardven_yes_token": "214250:1632528576:home",
     "hardven_no_token": "214250:1632528576:away"
-  },
-  {
-    "kalshi_ticker": "KXITFMATCH-26JUL15CHOCHE-CHE",
-    "label": "Will Yan Cheng CHEN win the Cho vs CHEN: M15 Wuning Round of 32 match?",
-    "event_title": "Cho vs CHEN",
-    "kalshi_outcome": "Yan Cheng CHEN",
-    "event_id": "KXITFMATCH-26JUL15CHOCHE",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
-    "kalshi_ticker": "KXITFMATCH-26JUL15CHOCHE-CHO",
-    "label": "Will Min Hyuk Cho win the Cho vs CHEN: M15 Wuning Round of 32 match?",
-    "event_title": "Cho vs CHEN",
-    "kalshi_outcome": "Min Hyuk Cho",
-    "event_id": "KXITFMATCH-26JUL15CHOCHE",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
   },
   {
     "kalshi_ticker": "KXITFMATCH-26JUL15CIRFIL-CIR",
@@ -1430,32 +1300,6 @@
     "hardven_no_token": "272333:1632527748:home"
   },
   {
-    "kalshi_ticker": "KXITFMATCH-26JUL15FUMGSC-FUM",
-    "label": "Will Filiberto Fumagalli win the Fumagalli vs Gschwendtner: M15 Nova Gorica Round of 32 match?",
-    "event_title": "Fumagalli vs Gschwendtner",
-    "kalshi_outcome": "Filiberto Fumagalli",
-    "event_id": "KXITFMATCH-26JUL15FUMGSC",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
-    "kalshi_ticker": "KXITFMATCH-26JUL15FUMGSC-GSC",
-    "label": "Will Jeremy Gschwendtner win the Fumagalli vs Gschwendtner: M15 Nova Gorica Round of 32 match?",
-    "event_title": "Fumagalli vs Gschwendtner",
-    "kalshi_outcome": "Jeremy Gschwendtner",
-    "event_id": "KXITFMATCH-26JUL15FUMGSC",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
     "kalshi_ticker": "KXITFMATCH-26JUL15GAIDEL-DEL",
     "label": "Will Andrew Delgado win the Gaines Jr vs Delgado: M15 Rochester NY Round of 32 match?",
     "event_title": "Gaines Jr vs Delgado",
@@ -1638,32 +1482,6 @@
     "hardven_no_token": "272058:1632541209:away"
   },
   {
-    "kalshi_ticker": "KXITFMATCH-26JUL15HRIJIL-HRI",
-    "label": "Will Matic Hribar win the Hribar vs Jilly: M15 Nova Gorica Round of 32 match?",
-    "event_title": "Hribar vs Jilly",
-    "kalshi_outcome": "Matic Hribar",
-    "event_id": "KXITFMATCH-26JUL15HRIJIL",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
-    "kalshi_ticker": "KXITFMATCH-26JUL15HRIJIL-JIL",
-    "label": "Will Adam Jilly win the Hribar vs Jilly: M15 Nova Gorica Round of 32 match?",
-    "event_title": "Hribar vs Jilly",
-    "kalshi_outcome": "Adam Jilly",
-    "event_id": "KXITFMATCH-26JUL15HRIJIL",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
     "kalshi_ticker": "KXITFMATCH-26JUL15IVAPAP-IVA",
     "label": "Will Kalin Ivanovski win the Ivanovski vs Papamalamis: M25 Kramsach Round of 32 match?",
     "event_title": "Ivanovski vs Papamalamis",
@@ -1688,84 +1506,6 @@
     "hardven_min_size": 1.0,
     "hardven_yes_token": "226918:1632516319:away",
     "hardven_no_token": "226918:1632516319:home"
-  },
-  {
-    "kalshi_ticker": "KXITFMATCH-26JUL15IZQSIL-IZQ",
-    "label": "Will Rafael Izquierdo Luque win the Izquierdo Luque vs Silva: M15 Castelo Branco Round of 32 match?",
-    "event_title": "Izquierdo Luque vs Silva",
-    "kalshi_outcome": "Rafael Izquierdo Luque",
-    "event_id": "KXITFMATCH-26JUL15IZQSIL",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
-    "kalshi_ticker": "KXITFMATCH-26JUL15IZQSIL-SIL",
-    "label": "Will Joao Dinis Silva win the Izquierdo Luque vs Silva: M15 Castelo Branco Round of 32 match?",
-    "event_title": "Izquierdo Luque vs Silva",
-    "kalshi_outcome": "Joao Dinis Silva",
-    "event_id": "KXITFMATCH-26JUL15IZQSIL",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
-    "kalshi_ticker": "KXITFMATCH-26JUL15JEFROB-JEF",
-    "label": "Will Henry Jefferson win the Jefferson vs Robertson: M25 Hillcrest Round of 32 match?",
-    "event_title": "Jefferson vs Robertson",
-    "kalshi_outcome": "Henry Jefferson",
-    "event_id": "KXITFMATCH-26JUL15JEFROB",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "235891:1632530005:home",
-    "hardven_no_token": "235891:1632530005:away"
-  },
-  {
-    "kalshi_ticker": "KXITFMATCH-26JUL15JEFROB-ROB",
-    "label": "Will Charlie Robertson win the Jefferson vs Robertson: M25 Hillcrest Round of 32 match?",
-    "event_title": "Jefferson vs Robertson",
-    "kalshi_outcome": "Charlie Robertson",
-    "event_id": "KXITFMATCH-26JUL15JEFROB",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
-    "kalshi_ticker": "KXITFMATCH-26JUL15KAMTIM-KAM",
-    "label": "Will Udit Kamboj win the Kamboj vs Timini: M25 Hillcrest Round of 32 match?",
-    "event_title": "Kamboj vs Timini",
-    "kalshi_outcome": "Udit Kamboj",
-    "event_id": "KXITFMATCH-26JUL15KAMTIM",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "235891:1632529998:home",
-    "hardven_no_token": "235891:1632529998:away"
-  },
-  {
-    "kalshi_ticker": "KXITFMATCH-26JUL15KAMTIM-TIM",
-    "label": "Will Andreas Timini win the Kamboj vs Timini: M25 Hillcrest Round of 32 match?",
-    "event_title": "Kamboj vs Timini",
-    "kalshi_outcome": "Andreas Timini",
-    "event_id": "KXITFMATCH-26JUL15KAMTIM",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
   },
   {
     "kalshi_ticker": "KXITFMATCH-26JUL15LARSCH-LAR",
@@ -2080,32 +1820,6 @@
     "hardven_no_token": "272333:1632541237:home"
   },
   {
-    "kalshi_ticker": "KXITFMATCH-26JUL15MINTOM-MIN",
-    "label": "Will Ryo Minakata win the Minakata vs Tomida: M15 Wuning Round of 32 match?",
-    "event_title": "Minakata vs Tomida",
-    "kalshi_outcome": "Ryo Minakata",
-    "event_id": "KXITFMATCH-26JUL15MINTOM",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
-    "kalshi_ticker": "KXITFMATCH-26JUL15MINTOM-TOM",
-    "label": "Will Yuta Tomida win the Minakata vs Tomida: M15 Wuning Round of 32 match?",
-    "event_title": "Minakata vs Tomida",
-    "kalshi_outcome": "Yuta Tomida",
-    "event_id": "KXITFMATCH-26JUL15MINTOM",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
     "kalshi_ticker": "KXITFMATCH-26JUL15MUTSUN-MUT",
     "label": "Will Shu Muto win the Muto vs Sun: M15 Wuning Round of 32 match?",
     "event_title": "Muto vs Sun",
@@ -2262,32 +1976,6 @@
     "hardven_no_token": "238017:1632541271:away"
   },
   {
-    "kalshi_ticker": "KXITFMATCH-26JUL15PISDER-DER",
-    "label": "Will Timofei Derepasko win the Pisanu vs Derepasko: M15 Kursumlijska Banja Round of 32 match?",
-    "event_title": "Pisanu vs Derepasko",
-    "kalshi_outcome": "Timofei Derepasko",
-    "event_id": "KXITFMATCH-26JUL15PISDER",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
-    "kalshi_ticker": "KXITFMATCH-26JUL15PISDER-PIS",
-    "label": "Will Mattias Pisanu win the Pisanu vs Derepasko: M15 Kursumlijska Banja Round of 32 match?",
-    "event_title": "Pisanu vs Derepasko",
-    "kalshi_outcome": "Mattias Pisanu",
-    "event_id": "KXITFMATCH-26JUL15PISDER",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
     "kalshi_ticker": "KXITFMATCH-26JUL15POEMAT-MAT",
     "label": "Will Kaspar Mathes win the Poertner vs Mathes: M15 Uslar Round of 32 match?",
     "event_title": "Poertner vs Mathes",
@@ -2312,32 +2000,6 @@
     "hardven_min_size": 1.0,
     "hardven_yes_token": "226819:1632541277:home",
     "hardven_no_token": "226819:1632541277:away"
-  },
-  {
-    "kalshi_ticker": "KXITFMATCH-26JUL15POHCOR-COR",
-    "label": "Will Sven Corbinais win the Pohjola vs Corbinais: M15 Uslar Round of 32 match?",
-    "event_title": "Pohjola vs Corbinais",
-    "kalshi_outcome": "Sven Corbinais",
-    "event_id": "KXITFMATCH-26JUL15POHCOR",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
-    "kalshi_ticker": "KXITFMATCH-26JUL15POHCOR-POH",
-    "label": "Will Peetu Pohjola win the Pohjola vs Corbinais: M15 Uslar Round of 32 match?",
-    "event_title": "Pohjola vs Corbinais",
-    "kalshi_outcome": "Peetu Pohjola",
-    "event_id": "KXITFMATCH-26JUL15POHCOR",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
   },
   {
     "kalshi_ticker": "KXITFMATCH-26JUL15POPMIC-MIC",
@@ -2366,32 +2028,6 @@
     "hardven_no_token": "272333:1632541212:away"
   },
   {
-    "kalshi_ticker": "KXITFMATCH-26JUL15RAPROT-RAP",
-    "label": "Will Daniele Rapagnetta win the Rapagnetta vs Rottoli: M15 Gubbio Round of 32 match?",
-    "event_title": "Rapagnetta vs Rottoli",
-    "kalshi_outcome": "Daniele Rapagnetta",
-    "event_id": "KXITFMATCH-26JUL15RAPROT",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
-    "kalshi_ticker": "KXITFMATCH-26JUL15RAPROT-ROT",
-    "label": "Will Lorenzo Rottoli win the Rapagnetta vs Rottoli: M15 Gubbio Round of 32 match?",
-    "event_title": "Rapagnetta vs Rottoli",
-    "kalshi_outcome": "Lorenzo Rottoli",
-    "event_id": "KXITFMATCH-26JUL15RAPROT",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
     "kalshi_ticker": "KXITFMATCH-26JUL15RENMEL-MEL",
     "label": "Will Alejandro Melero Kretzer win the Rengifo vs Melero Kretzer: M15 Kursumlijska Banja Round of 32 match?",
     "event_title": "Rengifo vs Melero Kretzer",
@@ -2410,32 +2046,6 @@
     "event_title": "Rengifo vs Melero Kretzer",
     "kalshi_outcome": "Frazier Rengifo",
     "event_id": "KXITFMATCH-26JUL15RENMEL",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
-    "kalshi_ticker": "KXITFMATCH-26JUL15ROBABI-ABI",
-    "label": "Will Mohamed Ali Abibsi win the Robert vs Abibsi: M15 Monastir Round of 32 match?",
-    "event_title": "Robert vs Abibsi",
-    "kalshi_outcome": "Mohamed Ali Abibsi",
-    "event_id": "KXITFMATCH-26JUL15ROBABI",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
-    "kalshi_ticker": "KXITFMATCH-26JUL15ROBABI-ROB",
-    "label": "Will Nicolas Robert win the Robert vs Abibsi: M15 Monastir Round of 32 match?",
-    "event_title": "Robert vs Abibsi",
-    "kalshi_outcome": "Nicolas Robert",
-    "event_id": "KXITFMATCH-26JUL15ROBABI",
     "settlement_date": "2026-07-15",
     "kalshi_yes_price": null,
     "is_neg_risk": false,
@@ -2470,32 +2080,6 @@
     "hardven_no_token": "210059:1632533505:away"
   },
   {
-    "kalshi_ticker": "KXITFMATCH-26JUL15RODAGU-AGU",
-    "label": "Will Federico Aguilar Cardozo win the Rodriguez vs Aguilar Cardozo: M15 Villa Constitucion Round of 16 match?",
-    "event_title": "Rodriguez vs Aguilar Cardozo",
-    "kalshi_outcome": "Federico Aguilar Cardozo",
-    "event_id": "KXITFMATCH-26JUL15RODAGU",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
-    "kalshi_ticker": "KXITFMATCH-26JUL15RODAGU-ROD",
-    "label": "Will Lorenzo Joaquin Rodriguez win the Rodriguez vs Aguilar Cardozo: M15 Villa Constitucion Round of 16 match?",
-    "event_title": "Rodriguez vs Aguilar Cardozo",
-    "kalshi_outcome": "Lorenzo Joaquin Rodriguez",
-    "event_id": "KXITFMATCH-26JUL15RODAGU",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
     "kalshi_ticker": "KXITFMATCH-26JUL15ROTLOK-LOK",
     "label": "Will Russell Lokko win the Rottgering vs Lokko: M25 Louisville KY Round of 32 match?",
     "event_title": "Rottgering vs Lokko",
@@ -2520,84 +2104,6 @@
     "hardven_min_size": 1.0,
     "hardven_yes_token": "238017:1632533562:home",
     "hardven_no_token": "238017:1632533562:away"
-  },
-  {
-    "kalshi_ticker": "KXITFMATCH-26JUL15SCHLIE-LIE",
-    "label": "Will Johan Oscar Lien win the Schlageter vs Lien: M15 Uslar Round of 32 match?",
-    "event_title": "Schlageter vs Lien",
-    "kalshi_outcome": "Johan Oscar Lien",
-    "event_id": "KXITFMATCH-26JUL15SCHLIE",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
-    "kalshi_ticker": "KXITFMATCH-26JUL15SCHLIE-SCH",
-    "label": "Will Justin Schlageter win the Schlageter vs Lien: M15 Uslar Round of 32 match?",
-    "event_title": "Schlageter vs Lien",
-    "kalshi_outcome": "Justin Schlageter",
-    "event_id": "KXITFMATCH-26JUL15SCHLIE",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
-    "kalshi_ticker": "KXITFMATCH-26JUL15SNIBRE-BRE",
-    "label": "Will Matei Florin Breazu win the Snitari vs Breazu: M15 Slobozia Round of 32 match?",
-    "event_title": "Snitari vs Breazu",
-    "kalshi_outcome": "Matei Florin Breazu",
-    "event_id": "KXITFMATCH-26JUL15SNIBRE",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
-    "kalshi_ticker": "KXITFMATCH-26JUL15SNIBRE-SNI",
-    "label": "Will Ilia Snitari win the Snitari vs Breazu: M15 Slobozia Round of 32 match?",
-    "event_title": "Snitari vs Breazu",
-    "kalshi_outcome": "Ilia Snitari",
-    "event_id": "KXITFMATCH-26JUL15SNIBRE",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
-    "kalshi_ticker": "KXITFMATCH-26JUL15SOSKLO-KLO",
-    "label": "Will Denis Klok win the Sosedkin vs Klok: M15 Kursumlijska Banja Round of 32 match?",
-    "event_title": "Sosedkin vs Klok",
-    "kalshi_outcome": "Denis Klok",
-    "event_id": "KXITFMATCH-26JUL15SOSKLO",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "225116:1632524840:away",
-    "hardven_no_token": "225116:1632524840:home"
-  },
-  {
-    "kalshi_ticker": "KXITFMATCH-26JUL15SOSKLO-SOS",
-    "label": "Will Fedor Sosedkin win the Sosedkin vs Klok: M15 Kursumlijska Banja Round of 32 match?",
-    "event_title": "Sosedkin vs Klok",
-    "kalshi_outcome": "Fedor Sosedkin",
-    "event_id": "KXITFMATCH-26JUL15SOSKLO",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "225116:1632524840:home",
-    "hardven_no_token": "225116:1632524840:away"
   },
   {
     "kalshi_ticker": "KXITFMATCH-26JUL15STAKOZ-KOZ",
@@ -2704,84 +2210,6 @@
     "hardven_no_token": ""
   },
   {
-    "kalshi_ticker": "KXITFMATCH-26JUL15XIALEE-LEE",
-    "label": "Will Duckhee Lee win the Xia vs Lee: M15 Wuning Round of 32 match?",
-    "event_title": "Xia vs Lee",
-    "kalshi_outcome": "Duckhee Lee",
-    "event_id": "KXITFMATCH-26JUL15XIALEE",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "272058:1632541310:away",
-    "hardven_no_token": "272058:1632541310:home"
-  },
-  {
-    "kalshi_ticker": "KXITFMATCH-26JUL15XIALEE-XIA",
-    "label": "Will Yue Xia win the Xia vs Lee: M15 Wuning Round of 32 match?",
-    "event_title": "Xia vs Lee",
-    "kalshi_outcome": "Yue Xia",
-    "event_id": "KXITFMATCH-26JUL15XIALEE",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "272058:1632541310:home",
-    "hardven_no_token": "272058:1632541310:away"
-  },
-  {
-    "kalshi_ticker": "KXITFMATCH-26JUL15ZEILES-LES",
-    "label": "Will Tomas Jordi Leston win the Zeitune vs Leston: M15 Villa Constitucion Round of 16 match?",
-    "event_title": "Zeitune vs Leston",
-    "kalshi_outcome": "Tomas Jordi Leston",
-    "event_id": "KXITFMATCH-26JUL15ZEILES",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
-    "kalshi_ticker": "KXITFMATCH-26JUL15ZEILES-ZEI",
-    "label": "Will Maximo Zeitune win the Zeitune vs Leston: M15 Villa Constitucion Round of 16 match?",
-    "event_title": "Zeitune vs Leston",
-    "kalshi_outcome": "Maximo Zeitune",
-    "event_id": "KXITFMATCH-26JUL15ZEILES",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
-    "kalshi_ticker": "KXITFMATCH-26JUL15ZHAZHA2-ZHA",
-    "label": "Will Minghui Zhang win the Zhang vs Zhao: M15 Wuning Round of 32 match?",
-    "event_title": "Zhang vs Zhao",
-    "kalshi_outcome": "Minghui Zhang",
-    "event_id": "KXITFMATCH-26JUL15ZHAZHA2",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
-    "kalshi_ticker": "KXITFMATCH-26JUL15ZHAZHA2-ZHA2",
-    "label": "Will Zhao Zhao win the Zhang vs Zhao: M15 Wuning Round of 32 match?",
-    "event_title": "Zhang vs Zhao",
-    "kalshi_outcome": "Zhao Zhao",
-    "event_id": "KXITFMATCH-26JUL15ZHAZHA2",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
     "kalshi_ticker": "KXITFWMATCH-26JUL15ALVBON-ALV",
     "label": "Will Carolina Alves win the Alves vs Bonardi: W35 Sao Paulo Round of 32 match?",
     "event_title": "Alves vs Bonardi",
@@ -2806,58 +2234,6 @@
     "hardven_min_size": 1.0,
     "hardven_yes_token": "7674:1632527756:away",
     "hardven_no_token": "7674:1632527756:home"
-  },
-  {
-    "kalshi_ticker": "KXITFWMATCH-26JUL15APPSPI-APP",
-    "label": "Will Emily Appleton win the Appleton vs Spink: W50 Nottingham Round of 16 match?",
-    "event_title": "Appleton vs Spink",
-    "kalshi_outcome": "Emily Appleton",
-    "event_id": "KXITFWMATCH-26JUL15APPSPI",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "213649:1632551750:home",
-    "hardven_no_token": "213649:1632551750:away"
-  },
-  {
-    "kalshi_ticker": "KXITFWMATCH-26JUL15APPSPI-SPI",
-    "label": "Will Indianna Spink win the Appleton vs Spink: W50 Nottingham Round of 16 match?",
-    "event_title": "Appleton vs Spink",
-    "kalshi_outcome": "Indianna Spink",
-    "event_id": "KXITFWMATCH-26JUL15APPSPI",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "213649:1632551750:away",
-    "hardven_no_token": "213649:1632551750:home"
-  },
-  {
-    "kalshi_ticker": "KXITFWMATCH-26JUL15BRODAE-BRO",
-    "label": "Will Tessa Johanna Brockmann win the Brockmann vs Daems: W50 Darmstadt Round of 32 match?",
-    "event_title": "Brockmann vs Daems",
-    "kalshi_outcome": "Tessa Johanna Brockmann",
-    "event_id": "KXITFWMATCH-26JUL15BRODAE",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "9205:1632530585:home",
-    "hardven_no_token": "9205:1632530585:away"
-  },
-  {
-    "kalshi_ticker": "KXITFWMATCH-26JUL15BRODAE-DAE",
-    "label": "Will Josy Daems win the Brockmann vs Daems: W50 Darmstadt Round of 32 match?",
-    "event_title": "Brockmann vs Daems",
-    "kalshi_outcome": "Josy Daems",
-    "event_id": "KXITFWMATCH-26JUL15BRODAE",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
   },
   {
     "kalshi_ticker": "KXITFWMATCH-26JUL15BULGIZ-BUL",
@@ -2938,58 +2314,6 @@
     "hardven_no_token": "7674:1632543996:home"
   },
   {
-    "kalshi_ticker": "KXITFWMATCH-26JUL15CAPROM-CAP",
-    "label": "Will Martina Capurro Taborda win the Capurro Taborda vs Romero: W35 Sao Paulo Round of 32 match?",
-    "event_title": "Capurro Taborda vs Romero",
-    "kalshi_outcome": "Martina Capurro Taborda",
-    "event_id": "KXITFWMATCH-26JUL15CAPROM",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "7674:1632527758:home",
-    "hardven_no_token": "7674:1632527758:away"
-  },
-  {
-    "kalshi_ticker": "KXITFWMATCH-26JUL15CAPROM-ROM",
-    "label": "Will Camila Romero win the Capurro Taborda vs Romero: W35 Sao Paulo Round of 32 match?",
-    "event_title": "Capurro Taborda vs Romero",
-    "kalshi_outcome": "Camila Romero",
-    "event_id": "KXITFWMATCH-26JUL15CAPROM",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
-    "kalshi_ticker": "KXITFWMATCH-26JUL15COLSLA-COL",
-    "label": "Will Kylie Collins win the Collins vs Slama: W75 Granby Round of 32 match?",
-    "event_title": "Collins vs Slama",
-    "kalshi_outcome": "Kylie Collins",
-    "event_id": "KXITFWMATCH-26JUL15COLSLA",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "9200:1632528648:home",
-    "hardven_no_token": "9200:1632528648:away"
-  },
-  {
-    "kalshi_ticker": "KXITFWMATCH-26JUL15COLSLA-SLA",
-    "label": "Will Mia Slama win the Collins vs Slama: W75 Granby Round of 32 match?",
-    "event_title": "Collins vs Slama",
-    "kalshi_outcome": "Mia Slama",
-    "event_id": "KXITFWMATCH-26JUL15COLSLA",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "9200:1632528648:away",
-    "hardven_no_token": "9200:1632528648:home"
-  },
-  {
     "kalshi_ticker": "KXITFWMATCH-26JUL15CROGRU-CRO",
     "label": "Will Kayla Cross win the Cross vs Grubor: W75 Granby Round of 16 match?",
     "event_title": "Cross vs Grubor",
@@ -3014,32 +2338,6 @@
     "hardven_min_size": 1.0,
     "hardven_yes_token": "9201:1632543990:away",
     "hardven_no_token": "9201:1632543990:home"
-  },
-  {
-    "kalshi_ticker": "KXITFWMATCH-26JUL15DEKDIA-DEK",
-    "label": "Will Rikke De Koning win the De Koning vs Diabate: W15 Kursumlijska Banja Round of 32 match?",
-    "event_title": "De Koning vs Diabate",
-    "kalshi_outcome": "Rikke De Koning",
-    "event_id": "KXITFWMATCH-26JUL15DEKDIA",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
-    "kalshi_ticker": "KXITFWMATCH-26JUL15DEKDIA-DIA",
-    "label": "Will Emira Diabate win the De Koning vs Diabate: W15 Kursumlijska Banja Round of 32 match?",
-    "event_title": "De Koning vs Diabate",
-    "kalshi_outcome": "Emira Diabate",
-    "event_id": "KXITFWMATCH-26JUL15DEKDIA",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
   },
   {
     "kalshi_ticker": "KXITFWMATCH-26JUL15ESTBAB-BAB",
@@ -3146,32 +2444,6 @@
     "hardven_no_token": ""
   },
   {
-    "kalshi_ticker": "KXITFWMATCH-26JUL15GUZPAR-GUZ",
-    "label": "Will Dana Guzman win the Guzman vs Pareja: W35 Dallas TX Round of 32 match?",
-    "event_title": "Guzman vs Pareja",
-    "kalshi_outcome": "Dana Guzman",
-    "event_id": "KXITFWMATCH-26JUL15GUZPAR",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "206910:1632530832:home",
-    "hardven_no_token": "206910:1632530832:away"
-  },
-  {
-    "kalshi_ticker": "KXITFWMATCH-26JUL15GUZPAR-PAR",
-    "label": "Will Julieta Pareja win the Guzman vs Pareja: W35 Dallas TX Round of 32 match?",
-    "event_title": "Guzman vs Pareja",
-    "kalshi_outcome": "Julieta Pareja",
-    "event_id": "KXITFWMATCH-26JUL15GUZPAR",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "206910:1632530832:away",
-    "hardven_no_token": "206910:1632530832:home"
-  },
-  {
     "kalshi_ticker": "KXITFWMATCH-26JUL15IYECHA-CHA",
     "label": "Will Hanna Chang win the Iyengar vs Chang: W35 Dallas TX Round of 32 match?",
     "event_title": "Iyengar vs Chang",
@@ -3246,34 +2518,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
-    "kalshi_ticker": "KXITFWMATCH-26JUL15JOSKRO-JOS",
-    "label": "Will Celina Joseph win the Joseph vs Krolitzky: W15 Hillcrest Round of 32 match?",
-    "event_title": "Joseph vs Krolitzky",
-    "kalshi_outcome": "Celina Joseph",
-    "event_id": "KXITFWMATCH-26JUL15JOSKRO",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
-    "kalshi_ticker": "KXITFWMATCH-26JUL15JOSKRO-KRO",
-    "label": "Will Shelly Krolitzky win the Joseph vs Krolitzky: W15 Hillcrest Round of 32 match?",
-    "event_title": "Joseph vs Krolitzky",
-    "kalshi_outcome": "Shelly Krolitzky",
-    "event_id": "KXITFWMATCH-26JUL15JOSKRO",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "9205:1632530591:home",
+    "hardven_no_token": "9205:1632530591:away"
   },
   {
     "kalshi_ticker": "KXITFWMATCH-26JUL15KINHOS-HOS",
@@ -3346,32 +2592,6 @@
     "event_title": "Konishi Camargo Silva vs Pedone",
     "kalshi_outcome": "Giorgia Pedone",
     "event_id": "KXITFWMATCH-26JUL15KONPED",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
-    "kalshi_ticker": "KXITFWMATCH-26JUL15KOVAND-AND",
-    "label": "Will Maria Andrienko win the Kovacic vs Andrienko: W15 Krsko Round of 32 match?",
-    "event_title": "Kovacic vs Andrienko",
-    "kalshi_outcome": "Maria Andrienko",
-    "event_id": "KXITFWMATCH-26JUL15KOVAND",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
-    "kalshi_ticker": "KXITFWMATCH-26JUL15KOVAND-KOV",
-    "label": "Will Nala Kovacic win the Kovacic vs Andrienko: W15 Krsko Round of 32 match?",
-    "event_title": "Kovacic vs Andrienko",
-    "kalshi_outcome": "Nala Kovacic",
-    "event_id": "KXITFWMATCH-26JUL15KOVAND",
     "settlement_date": "2026-07-15",
     "kalshi_yes_price": null,
     "is_neg_risk": false,
@@ -3458,84 +2678,6 @@
     "hardven_no_token": "205724:1632533580:home"
   },
   {
-    "kalshi_ticker": "KXITFWMATCH-26JUL15KUZREY-KUZ",
-    "label": "Will Katarina Kuzmova win the Kuzmova vs Rey Garcia: W75 Vitoria Gasteiz Round of 32 match?",
-    "event_title": "Kuzmova vs Rey Garcia",
-    "kalshi_outcome": "Katarina Kuzmova",
-    "event_id": "KXITFWMATCH-26JUL15KUZREY",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "205724:1632541188:home",
-    "hardven_no_token": "205724:1632541188:away"
-  },
-  {
-    "kalshi_ticker": "KXITFWMATCH-26JUL15KUZREY-REY",
-    "label": "Will Alba Rey Garcia win the Kuzmova vs Rey Garcia: W75 Vitoria Gasteiz Round of 32 match?",
-    "event_title": "Kuzmova vs Rey Garcia",
-    "kalshi_outcome": "Alba Rey Garcia",
-    "event_id": "KXITFWMATCH-26JUL15KUZREY",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "205724:1632541188:away",
-    "hardven_no_token": "205724:1632541188:home"
-  },
-  {
-    "kalshi_ticker": "KXITFWMATCH-26JUL15LANSCH-LAN",
-    "label": "Will Cindy Langlais win the Langlais vs Schueller: W15 Krsko Round of 32 match?",
-    "event_title": "Langlais vs Schueller",
-    "kalshi_outcome": "Cindy Langlais",
-    "event_id": "KXITFWMATCH-26JUL15LANSCH",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
-    "kalshi_ticker": "KXITFWMATCH-26JUL15LANSCH-SCH",
-    "label": "Will Ava Schueller win the Langlais vs Schueller: W15 Krsko Round of 32 match?",
-    "event_title": "Langlais vs Schueller",
-    "kalshi_outcome": "Ava Schueller",
-    "event_id": "KXITFWMATCH-26JUL15LANSCH",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
-    "kalshi_ticker": "KXITFWMATCH-26JUL15LEOBRO-BRO",
-    "label": "Will Amelie Brooks win the Leonard vs Brooks: W50 Nottingham Round of 16 match?",
-    "event_title": "Leonard vs Brooks",
-    "kalshi_outcome": "Amelie Brooks",
-    "event_id": "KXITFWMATCH-26JUL15LEOBRO",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
-    "kalshi_ticker": "KXITFWMATCH-26JUL15LEOBRO-LEO",
-    "label": "Will Manon Leonard win the Leonard vs Brooks: W50 Nottingham Round of 16 match?",
-    "event_title": "Leonard vs Brooks",
-    "kalshi_outcome": "Manon Leonard",
-    "event_id": "KXITFWMATCH-26JUL15LEOBRO",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
     "kalshi_ticker": "KXITFWMATCH-26JUL15LLEHOV-HOV",
     "label": "Will Liv Hovde win the LLEWELLYN vs Hovde: W35 Dallas TX Round of 32 match?",
     "event_title": "LLEWELLYN vs Hovde",
@@ -3588,32 +2730,6 @@
     "hardven_no_token": "9205:1632547688:home"
   },
   {
-    "kalshi_ticker": "KXITFWMATCH-26JUL15MANTAB-MAN",
-    "label": "Will Elizabeth Mandlik win the Mandlik vs Tabunshchyk: W75 Granby Round of 32 match?",
-    "event_title": "Mandlik vs Tabunshchyk",
-    "kalshi_outcome": "Elizabeth Mandlik",
-    "event_id": "KXITFWMATCH-26JUL15MANTAB",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "9200:1632530827:home",
-    "hardven_no_token": "9200:1632530827:away"
-  },
-  {
-    "kalshi_ticker": "KXITFWMATCH-26JUL15MANTAB-TAB",
-    "label": "Will Anna Tabunshchyk win the Mandlik vs Tabunshchyk: W75 Granby Round of 32 match?",
-    "event_title": "Mandlik vs Tabunshchyk",
-    "kalshi_outcome": "Anna Tabunshchyk",
-    "event_id": "KXITFWMATCH-26JUL15MANTAB",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "9200:1632530827:away",
-    "hardven_no_token": "9200:1632530827:home"
-  },
-  {
     "kalshi_ticker": "KXITFWMATCH-26JUL15MARYAM-MAR",
     "label": "Will Rebecca Marino win the Marino vs Yamaguchi: W75 Granby Round of 32 match?",
     "event_title": "Marino vs Yamaguchi",
@@ -3662,8 +2778,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "7674:1632555939:away",
+    "hardven_no_token": "7674:1632555939:home"
   },
   {
     "kalshi_ticker": "KXITFWMATCH-26JUL15MAXRAB-MAX",
@@ -3690,32 +2806,6 @@
     "hardven_min_size": 1.0,
     "hardven_yes_token": "206910:1632543992:away",
     "hardven_no_token": "206910:1632543992:home"
-  },
-  {
-    "kalshi_ticker": "KXITFWMATCH-26JUL15NAGSIS-NAG",
-    "label": "Will Adrienn Nagy win the Nagy vs Siskova: W75 Olomouc Round of 32 match?",
-    "event_title": "Nagy vs Siskova",
-    "kalshi_outcome": "Adrienn Nagy",
-    "event_id": "KXITFWMATCH-26JUL15NAGSIS",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "9190:1632541318:home",
-    "hardven_no_token": "9190:1632541318:away"
-  },
-  {
-    "kalshi_ticker": "KXITFWMATCH-26JUL15NAGSIS-SIS",
-    "label": "Will Anna Siskova win the Nagy vs Siskova: W75 Olomouc Round of 32 match?",
-    "event_title": "Nagy vs Siskova",
-    "kalshi_outcome": "Anna Siskova",
-    "event_id": "KXITFWMATCH-26JUL15NAGSIS",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "9190:1632541318:away",
-    "hardven_no_token": "9190:1632541318:home"
   },
   {
     "kalshi_ticker": "KXITFWMATCH-26JUL15NGIDES-DES",
@@ -3768,32 +2858,6 @@
     "hardven_min_size": 1.0,
     "hardven_yes_token": "205724:1632533579:away",
     "hardven_no_token": "205724:1632533579:home"
-  },
-  {
-    "kalshi_ticker": "KXITFWMATCH-26JUL15OUNWUX-OUN",
-    "label": "Will Salakthip Ounmuang win the Ounmuang vs Wu: W15 Luan Round of 32 match?",
-    "event_title": "Ounmuang vs Wu",
-    "kalshi_outcome": "Salakthip Ounmuang",
-    "event_id": "KXITFWMATCH-26JUL15OUNWUX",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
-    "kalshi_ticker": "KXITFWMATCH-26JUL15OUNWUX-WUX",
-    "label": "Will Ru Xi Wu win the Ounmuang vs Wu: W15 Luan Round of 32 match?",
-    "event_title": "Ounmuang vs Wu",
-    "kalshi_outcome": "Ru Xi Wu",
-    "event_id": "KXITFWMATCH-26JUL15OUNWUX",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
   },
   {
     "kalshi_ticker": "KXITFWMATCH-26JUL15OXFCHA-CHA",
@@ -3926,32 +2990,6 @@
     "hardven_no_token": "225220:1632530839:home"
   },
   {
-    "kalshi_ticker": "KXITFWMATCH-26JUL15PISGIA-GIA",
-    "label": "Will Carla Giambelli win the Pistola vs Giambelli: W35 Torino Round of 32 match?",
-    "event_title": "Pistola vs Giambelli",
-    "kalshi_outcome": "Carla Giambelli",
-    "event_id": "KXITFWMATCH-26JUL15PISGIA",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
-    "kalshi_ticker": "KXITFWMATCH-26JUL15PISGIA-PIS",
-    "label": "Will Ilary Pistola win the Pistola vs Giambelli: W35 Torino Round of 32 match?",
-    "event_title": "Pistola vs Giambelli",
-    "kalshi_outcome": "Ilary Pistola",
-    "event_id": "KXITFWMATCH-26JUL15PISGIA",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
     "kalshi_ticker": "KXITFWMATCH-26JUL15REELEE-LEE",
     "label": "Will Eunhye Lee win the Reed vs Lee: W35 Dallas TX Round of 32 match?",
     "event_title": "Reed vs Lee",
@@ -3976,32 +3014,6 @@
     "hardven_min_size": 1.0,
     "hardven_yes_token": "206910:1632543997:home",
     "hardven_no_token": "206910:1632543997:away"
-  },
-  {
-    "kalshi_ticker": "KXITFWMATCH-26JUL15RICSZA-RIC",
-    "label": "Will Beatrice Ricci win the Ricci vs Szabo: W35 Torino Round of 32 match?",
-    "event_title": "Ricci vs Szabo",
-    "kalshi_outcome": "Beatrice Ricci",
-    "event_id": "KXITFWMATCH-26JUL15RICSZA",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
-    "kalshi_ticker": "KXITFWMATCH-26JUL15RICSZA-SZA",
-    "label": "Will Briana Szabo win the Ricci vs Szabo: W35 Torino Round of 32 match?",
-    "event_title": "Ricci vs Szabo",
-    "kalshi_outcome": "Briana Szabo",
-    "event_id": "KXITFWMATCH-26JUL15RICSZA",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
   },
   {
     "kalshi_ticker": "KXITFWMATCH-26JUL15SAINAI-NAI",
@@ -4082,32 +3094,6 @@
     "hardven_no_token": "9205:1632524832:home"
   },
   {
-    "kalshi_ticker": "KXITFWMATCH-26JUL15SEDSUP-SED",
-    "label": "Will Petra Sedlackova win the Sedlackova vs Supova: W75 Olomouc Round of 32 match?",
-    "event_title": "Sedlackova vs Supova",
-    "kalshi_outcome": "Petra Sedlackova",
-    "event_id": "KXITFWMATCH-26JUL15SEDSUP",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
-    "kalshi_ticker": "KXITFWMATCH-26JUL15SEDSUP-SUP",
-    "label": "Will Kali Supova win the Sedlackova vs Supova: W75 Olomouc Round of 32 match?",
-    "event_title": "Sedlackova vs Supova",
-    "kalshi_outcome": "Kali Supova",
-    "event_id": "KXITFWMATCH-26JUL15SEDSUP",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
     "kalshi_ticker": "KXITFWMATCH-26JUL15SEMALE-ALE",
     "label": "Will Avery Alexander win the Sema vs Alexander: W75 Granby Round of 32 match?",
     "event_title": "Sema vs Alexander",
@@ -4152,32 +3138,6 @@
     "event_title": "Solakov vs Konjikusic",
     "kalshi_outcome": "Leticia Solakov",
     "event_id": "KXITFWMATCH-26JUL15SOLKON",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
-    "kalshi_ticker": "KXITFWMATCH-26JUL15TEPJOV-JOV",
-    "label": "Will Mirjana Jovanovic win the Tepic vs Jovanovic: W15 Kursumlijska Banja Round of 32 match?",
-    "event_title": "Tepic vs Jovanovic",
-    "kalshi_outcome": "Mirjana Jovanovic",
-    "event_id": "KXITFWMATCH-26JUL15TEPJOV",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
-    "kalshi_ticker": "KXITFWMATCH-26JUL15TEPJOV-TEP",
-    "label": "Will Nina Tepic win the Tepic vs Jovanovic: W15 Kursumlijska Banja Round of 32 match?",
-    "event_title": "Tepic vs Jovanovic",
-    "kalshi_outcome": "Nina Tepic",
-    "event_id": "KXITFWMATCH-26JUL15TEPJOV",
     "settlement_date": "2026-07-15",
     "kalshi_yes_price": null,
     "is_neg_risk": false,
@@ -4247,8 +3207,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "187731:1632533484:home",
+    "hardven_no_token": "187731:1632533484:away"
   },
   {
     "kalshi_ticker": "KXITFWMATCH-26JUL15TSYWEC-WEC",
@@ -4368,32 +3328,6 @@
     "hardven_no_token": "205724:1632533578:away"
   },
   {
-    "kalshi_ticker": "KXWTACHALLENGERMATCH-26JUL15ANDRIS-AND",
-    "label": "Will Erika Andreeva win the Andreeva vs Ristic: Round Of 16 match?",
-    "event_title": "Andreeva vs Ristic",
-    "kalshi_outcome": "Erika Andreeva",
-    "event_id": "KXWTACHALLENGERMATCH-26JUL15ANDRIS",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "288059:1632526409:home",
-    "hardven_no_token": "288059:1632526409:away"
-  },
-  {
-    "kalshi_ticker": "KXWTACHALLENGERMATCH-26JUL15ANDRIS-RIS",
-    "label": "Will Mia Ristic win the Andreeva vs Ristic: Round Of 16 match?",
-    "event_title": "Andreeva vs Ristic",
-    "kalshi_outcome": "Mia Ristic",
-    "event_id": "KXWTACHALLENGERMATCH-26JUL15ANDRIS",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "288059:1632526409:away",
-    "hardven_no_token": "288059:1632526409:home"
-  },
-  {
     "kalshi_ticker": "KXWTACHALLENGERMATCH-26JUL15ASTNOH-AST",
     "label": "Will Darya Astakhova win the Astakhova vs Noha Akugue: Round Of 16 match?",
     "event_title": "Astakhova vs Noha Akugue",
@@ -4446,32 +3380,6 @@
     "hardven_no_token": "288059:1632541178:home"
   },
   {
-    "kalshi_ticker": "KXWTACHALLENGERMATCH-26JUL15GRAPER-GRA",
-    "label": "Will Julia Grabher win the Grabher vs Perelygina: Round Of 16 match?",
-    "event_title": "Grabher vs Perelygina",
-    "kalshi_outcome": "Julia Grabher",
-    "event_id": "KXWTACHALLENGERMATCH-26JUL15GRAPER",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
-    "kalshi_ticker": "KXWTACHALLENGERMATCH-26JUL15GRAPER-PER",
-    "label": "Will Ekaterina Perelygina win the Grabher vs Perelygina: Round Of 16 match?",
-    "event_title": "Grabher vs Perelygina",
-    "kalshi_outcome": "Ekaterina Perelygina",
-    "event_id": "KXWTACHALLENGERMATCH-26JUL15GRAPER",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
     "kalshi_ticker": "KXWTACHALLENGERMATCH-26JUL15JONURG-JON",
     "label": "Will Francesca Jones win the Jones vs Urgesi: Round Of 16 match?",
     "event_title": "Jones vs Urgesi",
@@ -4522,32 +3430,6 @@
     "hardven_min_size": 1.0,
     "hardven_yes_token": "286090:1632515882:away",
     "hardven_no_token": "286090:1632515882:home"
-  },
-  {
-    "kalshi_ticker": "KXWTACHALLENGERMATCH-26JUL15PENFAL-FAL",
-    "label": "Will Aliona Falei win the Penickova vs Falei: Round Of 16 match?",
-    "event_title": "Penickova vs Falei",
-    "kalshi_outcome": "Aliona Falei",
-    "event_id": "KXWTACHALLENGERMATCH-26JUL15PENFAL",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "286090:1632547555:away",
-    "hardven_no_token": "286090:1632547555:home"
-  },
-  {
-    "kalshi_ticker": "KXWTACHALLENGERMATCH-26JUL15PENFAL-PEN",
-    "label": "Will Kristina Penickova win the Penickova vs Falei: Round Of 16 match?",
-    "event_title": "Penickova vs Falei",
-    "kalshi_outcome": "Kristina Penickova",
-    "event_id": "KXWTACHALLENGERMATCH-26JUL15PENFAL",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "286090:1632547555:home",
-    "hardven_no_token": "286090:1632547555:away"
   },
   {
     "kalshi_ticker": "KXWTAMATCH-26JUL15AVAMAR-AVA",
@@ -5027,8 +3909,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "232648:1632555641:away",
+    "hardven_no_token": "232648:1632555641:home"
   },
   {
     "kalshi_ticker": "KXITFMATCH-26JUL15DELBEA-DEL",
@@ -5131,8 +4013,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "232648:1632555640:home",
+    "hardven_no_token": "232648:1632555640:away"
   },
   {
     "kalshi_ticker": "KXITFMATCH-26JUL15HAZSIN-SIN",
@@ -5157,8 +4039,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "232648:1632550104:away",
+    "hardven_no_token": "232648:1632550104:home"
   },
   {
     "kalshi_ticker": "KXITFMATCH-26JUL15HULCHA-HUL",
@@ -5313,8 +4195,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "232648:1632555659:away",
+    "hardven_no_token": "232648:1632555659:home"
   },
   {
     "kalshi_ticker": "KXITFMATCH-26JUL15VIISAC-VII",
@@ -5339,8 +4221,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "232648:1632555660:away",
+    "hardven_no_token": "232648:1632555660:home"
   },
   {
     "kalshi_ticker": "KXITFMATCH-26JUL15VOLDEL-VOL",
@@ -5417,8 +4299,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "191959:1632556042:home",
+    "hardven_no_token": "191959:1632556042:away"
   },
   {
     "kalshi_ticker": "KXITFWMATCH-26JUL15DASYAN-YAN",
@@ -5443,8 +4325,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "191959:1632556041:home",
+    "hardven_no_token": "191959:1632556041:away"
   },
   {
     "kalshi_ticker": "KXITFWMATCH-26JUL15LINRUS-RUS",
@@ -5599,8 +4481,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "191959:1632556043:home",
+    "hardven_no_token": "191959:1632556043:away"
   },
   {
     "kalshi_ticker": "KXITFWMATCH-26JUL15SUBWAR-WAR",
@@ -5625,8 +4507,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "191959:1632556039:home",
+    "hardven_no_token": "191959:1632556039:away"
   },
   {
     "kalshi_ticker": "KXITFWMATCH-26JUL15TAYTSA-TSA",
@@ -5651,8 +4533,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "191959:1632556038:away",
+    "hardven_no_token": "191959:1632556038:home"
   },
   {
     "kalshi_ticker": "KXITFWMATCH-26JUL15UEMTHO-UEM",
@@ -5677,8 +4559,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "191959:1632556037:away",
+    "hardven_no_token": "191959:1632556037:home"
   },
   {
     "kalshi_ticker": "KXITFWMATCH-26JUL15WEBFAI-WEB",
@@ -5703,8 +4585,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "191959:1632556040:away",
+    "hardven_no_token": "191959:1632556040:home"
   },
   {
     "kalshi_ticker": "KXITFWMATCH-26JUL15YOSSAT-YOS",
@@ -5712,6 +4594,58 @@
     "event_title": "Yoshimoto vs Sato",
     "kalshi_outcome": "Natsuki Yoshimoto",
     "event_id": "KXITFWMATCH-26JUL15YOSSAT",
+    "settlement_date": "2026-07-16",
+    "kalshi_yes_price": null,
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "",
+    "hardven_no_token": ""
+  },
+  {
+    "kalshi_ticker": "KXWTAMATCH-26JUL16KORANN-ANN",
+    "label": "Will Ann Li win the Korneeva vs Li: Round Of 16 match?",
+    "event_title": "Korneeva vs Li",
+    "kalshi_outcome": "Ann Li",
+    "event_id": "KXWTAMATCH-26JUL16KORANN",
+    "settlement_date": "2026-07-16",
+    "kalshi_yes_price": null,
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "",
+    "hardven_no_token": ""
+  },
+  {
+    "kalshi_ticker": "KXWTAMATCH-26JUL16KORANN-KOR",
+    "label": "Will Alina Korneeva win the Korneeva vs Li: Round Of 16 match?",
+    "event_title": "Korneeva vs Li",
+    "kalshi_outcome": "Alina Korneeva",
+    "event_id": "KXWTAMATCH-26JUL16KORANN",
+    "settlement_date": "2026-07-16",
+    "kalshi_yes_price": null,
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "",
+    "hardven_no_token": ""
+  },
+  {
+    "kalshi_ticker": "KXWTAMATCH-26JUL16TAUTON-TAU",
+    "label": "Will Clara Tauson win the Tauson vs Tona: Round Of 16 match?",
+    "event_title": "Tauson vs Tona",
+    "kalshi_outcome": "Clara Tauson",
+    "event_id": "KXWTAMATCH-26JUL16TAUTON",
+    "settlement_date": "2026-07-16",
+    "kalshi_yes_price": null,
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "",
+    "hardven_no_token": ""
+  },
+  {
+    "kalshi_ticker": "KXWTAMATCH-26JUL16TAUTON-TON",
+    "label": "Will Miriana Tona win the Tauson vs Tona: Round Of 16 match?",
+    "event_title": "Tauson vs Tona",
+    "kalshi_outcome": "Miriana Tona",
+    "event_id": "KXWTAMATCH-26JUL16TAUTON",
     "settlement_date": "2026-07-16",
     "kalshi_yes_price": null,
     "is_neg_risk": false,
@@ -5738,6 +4672,32 @@
     "event_title": "Udvardy vs Kawa",
     "kalshi_outcome": "Panna Udvardy",
     "event_id": "KXWTAMATCH-26JUL16UDVKAW",
+    "settlement_date": "2026-07-16",
+    "kalshi_yes_price": null,
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "",
+    "hardven_no_token": ""
+  },
+  {
+    "kalshi_ticker": "KXWTAMATCH-26JUL16VALSAS-SAS",
+    "label": "Will Aliaksandra Sasnovich win the Valentova vs Sasnovich: Round Of 16 match?",
+    "event_title": "Valentova vs Sasnovich",
+    "kalshi_outcome": "Aliaksandra Sasnovich",
+    "event_id": "KXWTAMATCH-26JUL16VALSAS",
+    "settlement_date": "2026-07-16",
+    "kalshi_yes_price": null,
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "",
+    "hardven_no_token": ""
+  },
+  {
+    "kalshi_ticker": "KXWTAMATCH-26JUL16VALSAS-VAL",
+    "label": "Will Tereza Valentova win the Valentova vs Sasnovich: Round Of 16 match?",
+    "event_title": "Valentova vs Sasnovich",
+    "kalshi_outcome": "Tereza Valentova",
+    "event_id": "KXWTAMATCH-26JUL16VALSAS",
     "settlement_date": "2026-07-16",
     "kalshi_yes_price": null,
     "is_neg_risk": false,
