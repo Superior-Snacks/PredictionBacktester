@@ -109,6 +109,12 @@ class PinnacleAdapter(BookAdapter):
 
     def __init__(self) -> None:
         self._mode = os.environ.get("PINNACLE_ODDS_MODE", "ws").strip().lower()
+        # Toggle the sidecar's OWN dedicated paho odds WS (the second, non-browser MQTT-over-WSS connection).
+        # Default ON. Set PINNACLE_DEDICATED_WS=0 to stop the sidecar opening it — for the window-WS-reading work
+        # (read odds from the browser's own WS instead) or to drop the extra connection entirely. Browser
+        # session + catalog + pairing are unaffected; with it off and no alternative odds source wired, the cache
+        # serves nothing fresh so the C# books stay empty (expected during the reading-path bring-up).
+        self._dedicated_ws = os.environ.get("PINNACLE_DEDICATED_WS", "1") != "0"
         self._api_key = os.environ.get("PINNACLE_API_KEY", DEFAULT_API_KEY)
         self._session = os.environ.get("PINNACLE_SESSION", "")
         self._device = os.environ.get("PINNACLE_DEVICE_UUID", "")
@@ -303,6 +309,10 @@ class PinnacleAdapter(BookAdapter):
             self._refresh_task = asyncio.create_task(self._refresh_loop())
             print(f"[PINNACLE] ready — REST poll mode (gentle serial, {self._refresh_sec:g}s). "
                   "Odds id = '<leagueId>:<matchupId>:<designation>'.")
+        elif not self._dedicated_ws:
+            print("[PINNACLE] ready — WS mode, but DEDICATED WS DISABLED (PINNACLE_DEDICATED_WS=0): the sidecar "
+                  "will NOT open its own paho odds connection. Session/catalog/pairing run as normal; odds must "
+                  "come from another source (the browser-window WS reader). Set =1 to re-enable.")
         else:
             print("[PINNACLE] ready — WS mode (LAZY: connects to Pinnacle on the FIRST /odds that names a "
                   "league; nothing is sent before that). Odds id = '<leagueId>:<matchupId>:<designation>'.")
@@ -530,6 +540,8 @@ class PinnacleAdapter(BookAdapter):
     # ── WS (MQTT) odds source ────────────────────────────────────────────────
     def _start_ws(self) -> None:
         self._ws_started = True
+        if not self._dedicated_ws:
+            return   # dedicated WS disabled (PINNACLE_DEDICATED_WS=0) — no paho connection; announced at startup
         try:
             import paho.mqtt.client as mqtt
         except Exception:
