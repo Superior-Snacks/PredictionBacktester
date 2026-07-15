@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import os
 import random
 import re
@@ -81,6 +82,32 @@ def parse_mqtt_connect(buf: bytes) -> Optional[dict]:
         if (flags >> 6) & 1:                         # password present
             p, i = rd(i); password = p.decode("utf-8", "replace")
         return {"client_id": cid.decode("utf-8", "replace"), "username": username, "password": password}
+    except Exception:
+        return None
+
+
+def parse_mqtt_publish(buf: bytes):
+    """Parse an MQTT 3.1.1 PUBLISH packet → (topic, payload_bytes); None if `buf` isn't a PUBLISH (fixed-header
+    high nibble == 3). Used by the browser-WS-read feasibility probe to confirm odds frames flow off the page's
+    own WS and for which league (the odds payload is JSON {op, pk, rec:{league:{id}...}})."""
+    if not buf or (buf[0] >> 4) != 3:
+        return None
+    try:
+        qos = (buf[0] >> 1) & 0x03
+        i = 1
+        mult = 1
+        while True:                                   # skip the remaining-length varint
+            b = buf[i]; i += 1
+            if not (b & 0x80):
+                break
+            mult *= 128
+            if mult > 128 ** 3:
+                return None
+        n = (buf[i] << 8) | buf[i + 1]; i += 2         # topic length + topic
+        topic = buf[i:i + n].decode("utf-8", "replace"); i += n
+        if qos > 0:
+            i += 2                                     # packet identifier (QoS 1/2 only)
+        return topic, buf[i:]
     except Exception:
         return None
 
@@ -148,6 +175,16 @@ class PinnacleBrowserSession:
         self._logged_storage = False
         self._cdp = None
         self._cdp_ws_reqs: set = set()
+        # WINDOW-WS READ FEASIBILITY PROBE (PINNACLE_WS_READ_PROBE=1): go/no-go for reading odds off the page's
+        # OWN WS (instead of the dedicated paho conn) — count received PUBLISH (odds) frames + their leagues.
+        self._ws_read_probe = os.environ.get("PINNACLE_WS_READ_PROBE") == "1"
+        self._probe_recv_total = 0       # all received CDP WS frames on the Arcadia socket
+        self._probe_recv_publish = 0     # of those, MQTT PUBLISH (an odds update)
+        self._probe_leagues: set = set() # distinct league ids seen in PUBLISH topics
+        self._probe_topics: set = set()  # distinct topic shapes (capped)
+        self._probe_odds_ok = False      # confirmed a PUBLISH payload parses as odds JSON
+        self._probe_start = 0.0
+        self._probe_task = None
 
     # ── readiness / status ───────────────────────────────────────────────────────
     @property
@@ -345,13 +382,72 @@ class PinnacleBrowserSession:
         self._cdp.on("Network.webSocketCreated", self._on_cdp_ws_created)
         self._cdp.on("Network.webSocketFrameSent", self._on_cdp_ws_frame)
         self._cdp.on("Target.attachedToTarget", self._on_cdp_target)
+        if self._ws_read_probe:
+            self._cdp.on("Network.webSocketFrameReceived", self._on_cdp_ws_frame_recv)
         try:
             await self._cdp.send("Network.enable")
             await self._cdp.send("Target.setAutoAttach",
                                  {"autoAttach": True, "waitForDebuggerOnStart": False, "flatten": True})
             print("[PINNACLE SESSION] CDP Network capture armed (worker-aware) — 2nd path for the WS login.")
+            if self._ws_read_probe:
+                self._probe_start = time.time()
+                self._probe_task = asyncio.create_task(self._ws_read_probe_loop())
+                print("[WS-READ-PROBE] ON — counting received odds frames off the page's OWN WS (go/no-go for the "
+                      "window-per-sport read). Summary every 15s. Browse a sport so its odds WS opens.")
         except Exception as ex:
             print(f"[PINNACLE SESSION] CDP enable failed ({type(ex).__name__}: {ex}); page.on capture only.")
+
+    def _on_cdp_ws_frame_recv(self, params: dict) -> None:
+        """PROBE: count SERVER->CLIENT frames on the Arcadia WS and how many are MQTT PUBLISH (odds), plus the
+        distinct leagues in their topics. Counting only (fast, off-loop-safe); the loop below logs the verdict."""
+        if params.get("requestId") not in self._cdp_ws_reqs:
+            return                                        # only the Arcadia odds socket (skip localhost/devtools WS)
+        resp = params.get("response") or {}
+        data = resp.get("payloadData")
+        if not data:
+            return
+        try:
+            buf = base64.b64decode(data) if resp.get("opcode") == 2 else data.encode("utf-8", "replace")
+        except Exception:
+            return
+        self._probe_recv_total += 1
+        parsed = parse_mqtt_publish(buf)
+        if not parsed:
+            return                                        # CONNACK / SUBACK / PINGRESP etc. — not an odds update
+        topic, payload = parsed
+        self._probe_recv_publish += 1
+        if len(self._probe_topics) < 40:
+            self._probe_topics.add(topic[:48])
+        m = re.search(r"/lg/(\d+)", topic) or re.search(r"(\d{3,})", topic)
+        if m:
+            self._probe_leagues.add(m.group(1))
+        if not self._probe_odds_ok:                       # confirm ONCE that a PUBLISH payload is real odds JSON
+            try:
+                obj = json.loads(payload.decode("utf-8", "replace"))
+                if isinstance(obj, dict) and ("op" in obj or "rec" in obj):
+                    self._probe_odds_ok = True
+                    print(f"[WS-READ-PROBE] CONFIRMED odds JSON in a received PUBLISH — topic='{topic[:60]}' "
+                          f"keys={list(obj)[:6]}")
+            except Exception:
+                pass
+
+    async def _ws_read_probe_loop(self) -> None:
+        """PROBE verdict logger: every 15s report received-frame / PUBLISH / league counts so BOTH 'odds flow'
+        and 'no frames at all' (worker-hidden) are visible. Runs until the session stops."""
+        while True:
+            try:
+                await asyncio.sleep(15)
+            except asyncio.CancelledError:
+                break
+            el = time.time() - self._probe_start
+            n, pub, lg = self._probe_recv_total, self._probe_recv_publish, len(self._probe_leagues)
+            verdict = ("GREEN — odds flow off the page WS" if pub > 0 and self._probe_odds_ok
+                       else "AMBER — WS frames but no odds PUBLISH yet (open a sport with live odds?)" if n > 0
+                       else "RED — NO received frames captured (odds WS likely worker-hidden → plan in-page shim)")
+            print(f"[WS-READ-PROBE] {el:.0f}s | recv={n} PUBLISH(odds)={pub} leagues={lg} "
+                  f"odds_json={'yes' if self._probe_odds_ok else 'no'} | {verdict}"
+                  + (f" | leagues: {sorted(self._probe_leagues)[:10]}" if lg else "")
+                  + (f" | topics: {sorted(self._probe_topics)[:4]}" if self._probe_topics else ""))
 
     def _on_cdp_ws_created(self, params: dict) -> None:
         url = params.get("url", "") or ""
