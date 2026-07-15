@@ -115,6 +115,16 @@ class PinnacleAdapter(BookAdapter):
         # session + catalog + pairing are unaffected; with it off and no alternative odds source wired, the cache
         # serves nothing fresh so the C# books stay empty (expected during the reading-path bring-up).
         self._dedicated_ws = os.environ.get("PINNACLE_DEDICATED_WS", "1") != "0"
+        # WINDOW-WS READER (PINNACLE_WINDOW_WS_READ=1): take live odds from the browser's OWN WS (parsed in
+        # PinnacleBrowserSession, handed here via _on_browser_odds) instead of the dedicated paho conn — same
+        # cache path (_apply). Typically paired with PINNACLE_DEDICATED_WS=0 (browser WS is the only odds source).
+        self._window_ws_read = os.environ.get("PINNACLE_WINDOW_WS_READ") == "1"
+        self._browser_odds_last = 0.0    # unix ts of the last odds PUBLISH off the browser WS (feeds _feed_live)
+        self._browser_odds_msgs = 0      # count of applied browser-WS odds messages (diagnostic)
+        try:
+            self._browser_odds_ttl = float(os.environ.get("PINNACLE_WINDOW_WS_TTL") or 30.0)
+        except ValueError:
+            self._browser_odds_ttl = 30.0
         self._api_key = os.environ.get("PINNACLE_API_KEY", DEFAULT_API_KEY)
         self._session = os.environ.get("PINNACLE_SESSION", "")
         self._device = os.environ.get("PINNACLE_DEVICE_UUID", "")
@@ -275,7 +285,9 @@ class PinnacleAdapter(BookAdapter):
             # catalog/pairing still works via the GUEST API, and you can fall back to PINNACLE_SESSION_SOURCE=env.
             try:
                 from pinnacle_session import PinnacleBrowserSession
-                self._browser = PinnacleBrowserSession(self._on_browser_creds)
+                self._browser = PinnacleBrowserSession(
+                    self._on_browser_creds,
+                    on_odds=self._on_browser_odds if self._window_ws_read else None)
                 if self._lifecycle_on:
                     # schedule-driven: the lifecycle task opens/closes the browser per the game windows (the
                     # window opens it the first time too — don't start it here). Stays dark until the first one.
@@ -310,12 +322,15 @@ class PinnacleAdapter(BookAdapter):
             print(f"[PINNACLE] ready — REST poll mode (gentle serial, {self._refresh_sec:g}s). "
                   "Odds id = '<leagueId>:<matchupId>:<designation>'.")
         elif not self._dedicated_ws:
-            print("[PINNACLE] ready — WS mode, but DEDICATED WS DISABLED (PINNACLE_DEDICATED_WS=0): the sidecar "
-                  "will NOT open its own paho odds connection. Session/catalog/pairing run as normal; odds must "
-                  "come from another source (the browser-window WS reader). Set =1 to re-enable.")
+            src = ("odds come from the browser-window WS READER (PINNACLE_WINDOW_WS_READ=1) — keep a sport board "
+                   "open so its WS stays subscribed." if self._window_ws_read else
+                   "no odds source active — set PINNACLE_WINDOW_WS_READ=1 for the browser-window reader, or =1 here.")
+            print("[PINNACLE] ready — WS mode, DEDICATED WS DISABLED (PINNACLE_DEDICATED_WS=0): the sidecar will "
+                  f"NOT open its own paho odds connection. Session/catalog/pairing run as normal; {src}")
         else:
+            extra = " + WINDOW-WS READER also on" if self._window_ws_read else ""
             print("[PINNACLE] ready — WS mode (LAZY: connects to Pinnacle on the FIRST /odds that names a "
-                  "league; nothing is sent before that). Odds id = '<leagueId>:<matchupId>:<designation>'.")
+                  f"league; nothing is sent before that){extra}. Odds id = '<leagueId>:<matchupId>:<designation>'.")
 
         # session-age heartbeat (persistent across logout/recovery). Env mode is live from startup → mark now;
         # browser mode marks on capture (_on_browser_creds).
@@ -415,8 +430,17 @@ class PinnacleAdapter(BookAdapter):
         source) logged in. Drives the ts-freshness stamp below: while live, a stable price is still fresh (the WS
         would push any change/suspend); when NOT live, we serve the STORED ts so it AGES → the C# freshness gate
         clears the book → NO arb is ever computed on a frozen/stale Pinnacle number after a logout/disconnect."""
-        return (self._connected and not self._session_expired
-                and (self._session_source != "browser" or self._session_ready))
+        if self._session_expired:
+            return False
+        if self._session_source == "browser" and not self._session_ready:
+            return False
+        if self._connected:
+            return True                                   # dedicated paho WS connected
+        # WINDOW-WS READER path: the browser's own WS is delivering odds (no paho) — live while odds are recent.
+        if self._window_ws_read and self._browser_odds_last and \
+                (time.time() - self._browser_odds_last) < self._browser_odds_ttl:
+            return True
+        return False
 
     def _read_cache(self, selection_ids: list[str], now: float) -> dict[str, Selection]:
         out: dict[str, Selection] = {}
@@ -806,6 +830,27 @@ class PinnacleAdapter(BookAdapter):
             self._apply(data, live)
         except Exception as ex:
             print(f"[PINNACLE WS] apply error: {type(ex).__name__}: {ex}")
+
+    def _on_browser_odds(self, topic: str, payload: bytes) -> None:
+        """WINDOW-WS READER: an odds PUBLISH parsed off the BROWSER's own WS (PinnacleBrowserSession, via CDP) —
+        route it into the SAME cache path the dedicated paho feed uses. The payload shape is identical
+        ({op, pk, rec:{league{id}, markets...}}); the topic decides pre-match vs in-play. Called on the main
+        loop (sync) from the CDP frame handler, so _apply's cache-lock is uncontended. Never raises."""
+        try:
+            data = json.loads(payload.decode("utf-8"))
+        except Exception:
+            return
+        live = "/live/" in (topic or "")
+        if live:
+            self._ws_live_msgs += 1
+        else:
+            self._ws_pre_msgs += 1
+        self._browser_odds_last = time.time()      # marks the browser-WS feed LIVE for _feed_live()
+        self._browser_odds_msgs += 1
+        try:
+            self._apply(data, live)
+        except Exception as ex:
+            print(f"[PINNACLE WINDOW-WS] apply error: {type(ex).__name__}: {ex}")
 
     def _apply(self, data: dict, live: bool = False) -> None:
         rec = data.get("rec") or {}

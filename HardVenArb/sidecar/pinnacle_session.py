@@ -112,13 +112,45 @@ def parse_mqtt_publish(buf: bytes):
         return None
 
 
+def drain_mqtt_packets(buf: bytearray) -> list:
+    """Pull every COMPLETE MQTT packet (full bytes incl. fixed header) off the FRONT of `buf`, consuming them,
+    and return them as a list. Leaves an incomplete trailing packet in `buf` for the next call. This is the
+    STREAM parser the window-WS reader needs: CDP delivers raw WS frames that are NOT 1:1 with MQTT packets (a
+    big PUBLISH spans frames; a frame may hold several packets), so odds are parsed from the accumulated byte
+    stream, not per-frame. Raises ValueError on a length desync so the caller can resync (clear the buffer)."""
+    out = []
+    while len(buf) >= 2:
+        rem = 0; mult = 1; i = 1; vbytes = 0; ok = False
+        while i < len(buf):
+            byte = buf[i]; i += 1; vbytes += 1
+            rem += (byte & 0x7F) * mult
+            if not (byte & 0x80):
+                ok = True
+                break
+            mult *= 128
+            if vbytes >= 4:
+                raise ValueError("MQTT remaining-length varint too long (stream desync)")
+        if not ok:
+            break                                      # varint not fully arrived yet — wait for more bytes
+        if rem > 8_000_000:
+            raise ValueError("absurd MQTT packet length (stream desync)")
+        total = i + rem
+        if len(buf) < total:
+            break                                      # packet body not fully arrived yet
+        out.append(bytes(buf[:total]))
+        del buf[:total]
+    return out
+
+
 class PinnacleBrowserSession:
     """Headed Playwright window that mints + holds the Pinnacle session and pushes captured creds to the
     adapter via the `on_creds` callback. `on_creds(creds: dict)` is called on every change with keys:
     session, device, api_key, ws_user, ws_pass, ready."""
 
-    def __init__(self, on_creds: Callable[[dict], None]) -> None:
+    def __init__(self, on_creds: Callable[[dict], None],
+                 on_odds: Optional[Callable[[str, bytes], None]] = None) -> None:
         self._on_creds = on_creds
+        self._on_odds = on_odds                        # window-WS reader: called per odds PUBLISH (topic, payload)
         self._login_url = os.environ.get("PINNACLE_LOGIN_URL", "https://www.pinnacle.bet/en/")
         # ABSOLUTE, module-anchored profile dir so the SAME saved profile is reused no matter what CWD the
         # sidecar is launched from (a CWD-relative ".pinnacle_profile" would silently fragment into a fresh
@@ -175,9 +207,12 @@ class PinnacleBrowserSession:
         self._logged_storage = False
         self._cdp = None
         self._cdp_ws_reqs: set = set()
-        # WINDOW-WS READ FEASIBILITY PROBE (PINNACLE_WS_READ_PROBE=1): go/no-go for reading odds off the page's
-        # OWN WS (instead of the dedicated paho conn) — count received PUBLISH (odds) frames + their leagues.
+        # WINDOW-WS READER (PINNACLE_WINDOW_WS_READ=1): the real thing — parse odds PUBLISH off the page's own WS
+        # and hand each to the adapter via on_odds. The FEASIBILITY PROBE (PINNACLE_WS_READ_PROBE=1) is the same
+        # capture minus the on_odds handoff, plus the periodic verdict log. Either arms the received-frame path.
+        self._window_ws_read = on_odds is not None
         self._ws_read_probe = os.environ.get("PINNACLE_WS_READ_PROBE") == "1"
+        self._ws_stream_buf: dict = {}   # per-Arcadia-WS-requestId byte buffer for MQTT stream reassembly
         self._probe_recv_total = 0       # all received CDP WS frames on the Arcadia socket
         self._probe_recv_publish = 0     # of those, MQTT PUBLISH (an odds update)
         self._probe_leagues: set = set() # distinct league ids seen in PUBLISH topics
@@ -382,61 +417,82 @@ class PinnacleBrowserSession:
         self._cdp.on("Network.webSocketCreated", self._on_cdp_ws_created)
         self._cdp.on("Network.webSocketFrameSent", self._on_cdp_ws_frame)
         self._cdp.on("Target.attachedToTarget", self._on_cdp_target)
-        if self._ws_read_probe:
+        if self._ws_read_probe or self._window_ws_read:
             self._cdp.on("Network.webSocketFrameReceived", self._on_cdp_ws_frame_recv)
+            self._cdp.on("Network.webSocketClosed", self._on_cdp_ws_closed)
         try:
             await self._cdp.send("Network.enable")
             await self._cdp.send("Target.setAutoAttach",
                                  {"autoAttach": True, "waitForDebuggerOnStart": False, "flatten": True})
             print("[PINNACLE SESSION] CDP Network capture armed (worker-aware) — 2nd path for the WS login.")
-            if self._ws_read_probe:
+            if self._ws_read_probe or self._window_ws_read:
                 self._probe_start = time.time()
                 self._probe_task = asyncio.create_task(self._ws_read_probe_loop())
-                print("[WS-READ-PROBE] ON — counting received odds frames off the page's OWN WS (go/no-go for the "
-                      "window-per-sport read). Summary every 15s. Browse a sport so its odds WS opens.")
+                mode = "READER (odds → adapter)" if self._window_ws_read else "PROBE (count only)"
+                print(f"[WS-READ] window-WS {mode} armed — parsing odds PUBLISH off the page's OWN WS. Summary "
+                      "every 15s. Keep a sport board open so its odds WS stays subscribed.")
         except Exception as ex:
             print(f"[PINNACLE SESSION] CDP enable failed ({type(ex).__name__}: {ex}); page.on capture only.")
 
+    def _on_cdp_ws_closed(self, params: dict) -> None:
+        self._ws_stream_buf.pop(params.get("requestId"), None)   # free the reassembly buffer for a closed WS
+
     def _on_cdp_ws_frame_recv(self, params: dict) -> None:
-        """PROBE: count SERVER->CLIENT frames on the Arcadia WS and how many are MQTT PUBLISH (odds), plus the
-        distinct leagues in their topics. Counting only (fast, off-loop-safe); the loop below logs the verdict."""
-        if params.get("requestId") not in self._cdp_ws_reqs:
+        """Feed each SERVER->CLIENT frame on the Arcadia WS into a per-connection byte buffer, drain COMPLETE MQTT
+        packets from it (frames are NOT 1:1 with packets), and for each PUBLISH hand the odds to the adapter
+        (reader) + tally the probe counters. Sync + fast (runs on the loop; the drain is a cheap byte-walk)."""
+        reqid = params.get("requestId")
+        if reqid not in self._cdp_ws_reqs:
             return                                        # only the Arcadia odds socket (skip localhost/devtools WS)
         resp = params.get("response") or {}
         data = resp.get("payloadData")
         if not data:
             return
+        op = resp.get("opcode")
+        if op is not None and op >= 8:
+            return                                        # control frame (close/ping/pong) — not MQTT data
         try:
-            buf = base64.b64decode(data) if resp.get("opcode") == 2 else data.encode("utf-8", "replace")
+            chunk = base64.b64decode(data) if op in (0, 2) else data.encode("utf-8", "replace")
         except Exception:
             return
-        self._probe_recv_total += 1
-        parsed = parse_mqtt_publish(buf)
-        if not parsed:
-            return                                        # CONNACK / SUBACK / PINGRESP etc. — not an odds update
-        topic, payload = parsed
-        # WS frames are NOT 1:1 with MQTT packets — a large odds PUBLISH fragments across WS frames, and a
-        # continuation fragment that starts with an ASCII byte like '6' (0x36) has high-nibble 3 so it LOOKS like
-        # a PUBLISH and mis-parses JSON as the topic. Reject those: a real topic here is a clean path
-        # (matchups/reg/sp/33/live/ld, matchups/{id}). The real reader will need a byte-STREAM MQTT parser, not
-        # this per-frame one — but for the probe, validating the topic gives an accurate odds/league count.
-        if not (3 <= len(topic) <= 120 and re.match(r"^[\w./-]+$", topic)):
-            return
-        self._probe_recv_publish += 1
-        if len(self._probe_topics) < 40:
-            self._probe_topics.add(topic[:48])
-        m = re.search(r"/(?:sp|lg)/(\d+)", topic) or re.search(r"matchups/(\d+)", topic)
-        if m:
-            self._probe_leagues.add(m.group(1))
-        if not self._probe_odds_ok:                       # confirm ONCE that a PUBLISH payload is real odds JSON
-            try:
-                obj = json.loads(payload.decode("utf-8", "replace"))
-                if isinstance(obj, dict) and ("op" in obj or "rec" in obj):
-                    self._probe_odds_ok = True
-                    print(f"[WS-READ-PROBE] CONFIRMED odds JSON in a received PUBLISH — topic='{topic[:60]}' "
-                          f"keys={list(obj)[:6]}")
-            except Exception:
-                pass
+        buf = self._ws_stream_buf.get(reqid)
+        if buf is None:
+            buf = bytearray(); self._ws_stream_buf[reqid] = buf
+        buf += chunk
+        if len(buf) > 8_000_000:                          # runaway (desync) — drop and resync from the next frame
+            buf.clear(); return
+        try:
+            packets = drain_mqtt_packets(buf)
+        except ValueError:
+            buf.clear(); return                           # length desync — resync
+        for pkt in packets:
+            self._probe_recv_total += 1
+            parsed = parse_mqtt_publish(pkt)
+            if not parsed:
+                continue                                  # CONNACK / SUBACK / PINGRESP / PUBACK — not odds
+            topic, payload = parsed
+            if not (3 <= len(topic) <= 120 and re.match(r"^[\w./-]+$", topic)):
+                continue                                  # defensive: a mis-framed packet
+            self._probe_recv_publish += 1
+            if len(self._probe_topics) < 40:
+                self._probe_topics.add(topic[:48])
+            m = re.search(r"/(?:sp|lg)/(\d+)", topic) or re.search(r"matchups/(\d+)", topic)
+            if m:
+                self._probe_leagues.add(m.group(1))
+            if not self._probe_odds_ok:                   # confirm ONCE that a PUBLISH payload is real odds JSON
+                try:
+                    obj = json.loads(payload.decode("utf-8", "replace"))
+                    if isinstance(obj, dict) and ("op" in obj or "rec" in obj):
+                        self._probe_odds_ok = True
+                        print(f"[WS-READ] CONFIRMED odds JSON in a received PUBLISH — topic='{topic[:60]}' "
+                              f"keys={list(obj)[:6]}")
+                except Exception:
+                    pass
+            if self._on_odds is not None:                 # READER: route the odds into the adapter's cache path
+                try:
+                    self._on_odds(topic, payload)
+                except Exception:
+                    pass
 
     async def _ws_read_probe_loop(self) -> None:
         """PROBE verdict logger: every 15s report received-frame / PUBLISH / league counts so BOTH 'odds flow'
@@ -451,7 +507,8 @@ class PinnacleBrowserSession:
             verdict = ("GREEN — odds flow off the page WS" if pub > 0 and self._probe_odds_ok
                        else "AMBER — WS frames but no odds PUBLISH yet (open a sport with live odds?)" if n > 0
                        else "RED — NO received frames captured (odds WS likely worker-hidden → plan in-page shim)")
-            print(f"[WS-READ-PROBE] {el:.0f}s | recv={n} PUBLISH(odds)={pub} leagues={lg} "
+            tag = "WS-READ" if self._window_ws_read else "WS-READ-PROBE"
+            print(f"[{tag}] {el:.0f}s | recv={n} PUBLISH(odds)={pub} leagues={lg} "
                   f"odds_json={'yes' if self._probe_odds_ok else 'no'} | {verdict}"
                   + (f" | leagues: {sorted(self._probe_leagues)[:10]}" if lg else "")
                   + (f" | topics: {sorted(self._probe_topics)[:4]}" if self._probe_topics else ""))
