@@ -415,10 +415,17 @@ class PinnacleBrowserSession:
         if not parsed:
             return                                        # CONNACK / SUBACK / PINGRESP etc. — not an odds update
         topic, payload = parsed
+        # WS frames are NOT 1:1 with MQTT packets — a large odds PUBLISH fragments across WS frames, and a
+        # continuation fragment that starts with an ASCII byte like '6' (0x36) has high-nibble 3 so it LOOKS like
+        # a PUBLISH and mis-parses JSON as the topic. Reject those: a real topic here is a clean path
+        # (matchups/reg/sp/33/live/ld, matchups/{id}). The real reader will need a byte-STREAM MQTT parser, not
+        # this per-frame one — but for the probe, validating the topic gives an accurate odds/league count.
+        if not (3 <= len(topic) <= 120 and re.match(r"^[\w./-]+$", topic)):
+            return
         self._probe_recv_publish += 1
         if len(self._probe_topics) < 40:
             self._probe_topics.add(topic[:48])
-        m = re.search(r"/lg/(\d+)", topic) or re.search(r"(\d{3,})", topic)
+        m = re.search(r"/(?:sp|lg)/(\d+)", topic) or re.search(r"matchups/(\d+)", topic)
         if m:
             self._probe_leagues.add(m.group(1))
         if not self._probe_odds_ok:                       # confirm ONCE that a PUBLISH payload is real odds JSON
