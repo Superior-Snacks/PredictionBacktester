@@ -936,32 +936,6 @@
     "hardven_no_token": ""
   },
   {
-    "kalshi_ticker": "KXITFMATCH-26JUL15CARSEI-CAR",
-    "label": "Will Jerald Carroll win the Carroll vs Seidman: M25 Louisville KY Round of 32 match?",
-    "event_title": "Carroll vs Seidman",
-    "kalshi_outcome": "Jerald Carroll",
-    "event_id": "KXITFMATCH-26JUL15CARSEI",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "238017:1632541307:home",
-    "hardven_no_token": "238017:1632541307:away"
-  },
-  {
-    "kalshi_ticker": "KXITFMATCH-26JUL15CARSEI-SEI",
-    "label": "Will Lev Seidman win the Carroll vs Seidman: M25 Louisville KY Round of 32 match?",
-    "event_title": "Carroll vs Seidman",
-    "kalshi_outcome": "Lev Seidman",
-    "event_id": "KXITFMATCH-26JUL15CARSEI",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "238017:1632541307:away",
-    "hardven_no_token": "238017:1632541307:home"
-  },
-  {
     "kalshi_ticker": "KXITFMATCH-26JUL15CHEARC-ARC",
     "label": "Will Mario Arce Fernandez win the Chepelev vs Arce Fernandez: M25 Gandia Round of 32 match?",
     "event_title": "Chepelev vs Arce Fernandez",
@@ -1534,32 +1508,6 @@
     "hardven_no_token": "226819:1632524844:home"
   },
   {
-    "kalshi_ticker": "KXITFMATCH-26JUL15LEGSTO-LEG",
-    "label": "Will Timo Legout win the Legout vs Stoot: M25 Louisville KY Round of 32 match?",
-    "event_title": "Legout vs Stoot",
-    "kalshi_outcome": "Timo Legout",
-    "event_id": "KXITFMATCH-26JUL15LEGSTO",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "238017:1632541171:home",
-    "hardven_no_token": "238017:1632541171:away"
-  },
-  {
-    "kalshi_ticker": "KXITFMATCH-26JUL15LEGSTO-STO",
-    "label": "Will Nikolas Stoot win the Legout vs Stoot: M25 Louisville KY Round of 32 match?",
-    "event_title": "Legout vs Stoot",
-    "kalshi_outcome": "Nikolas Stoot",
-    "event_id": "KXITFMATCH-26JUL15LEGSTO",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "238017:1632541171:away",
-    "hardven_no_token": "238017:1632541171:home"
-  },
-  {
     "kalshi_ticker": "KXITFMATCH-26JUL15LEOTSI-LEO",
     "label": "Will Vasco Leote Prata win the Leote Prata vs Tsitsipas: M15 Castelo Branco Round of 32 match?",
     "event_title": "Leote Prata vs Tsitsipas",
@@ -1662,32 +1610,6 @@
     "hardven_min_size": 1.0,
     "hardven_yes_token": "238017:1632550035:away",
     "hardven_no_token": "238017:1632550035:home"
-  },
-  {
-    "kalshi_ticker": "KXITFMATCH-26JUL15MANDAV-DAV",
-    "label": "Will Teodor Davidov win the Manning vs Davidov: M25 Louisville KY Round of 32 match?",
-    "event_title": "Manning vs Davidov",
-    "kalshi_outcome": "Teodor Davidov",
-    "event_id": "KXITFMATCH-26JUL15MANDAV",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "238017:1632547746:away",
-    "hardven_no_token": "238017:1632547746:home"
-  },
-  {
-    "kalshi_ticker": "KXITFMATCH-26JUL15MANDAV-MAN",
-    "label": "Will William Manning win the Manning vs Davidov: M25 Louisville KY Round of 32 match?",
-    "event_title": "Manning vs Davidov",
-    "kalshi_outcome": "William Manning",
-    "event_id": "KXITFMATCH-26JUL15MANDAV",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "238017:1632547746:home",
-    "hardven_no_token": "238017:1632547746:away"
   },
   {
     "kalshi_ticker": "KXITFMATCH-26JUL15MARSIC-MAR",
@@ -2912,32 +2834,6 @@
     "hardven_no_token": "187731:1632541219:home"
   },
   {
-    "kalshi_ticker": "KXITFWMATCH-26JUL15PAQIVA-IVA",
-    "label": "Will Valentina Ivanov win the Paquet vs Ivanov: W75 Olomouc Round of 32 match?",
-    "event_title": "Paquet vs Ivanov",
-    "kalshi_outcome": "Valentina Ivanov",
-    "event_id": "KXITFWMATCH-26JUL15PAQIVA",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "9190:1632549962:away",
-    "hardven_no_token": "9190:1632549962:home"
-  },
-  {
-    "kalshi_ticker": "KXITFWMATCH-26JUL15PAQIVA-PAQ",
-    "label": "Will Chloe Paquet win the Paquet vs Ivanov: W75 Olomouc Round of 32 match?",
-    "event_title": "Paquet vs Ivanov",
-    "kalshi_outcome": "Chloe Paquet",
-    "event_id": "KXITFWMATCH-26JUL15PAQIVA",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "9190:1632549962:home",
-    "hardven_no_token": "9190:1632549962:away"
-  },
-  {
     "kalshi_ticker": "KXITFWMATCH-26JUL15PERDIG-DIG",
     "label": "Will Chiara Di Genova win the Perez Alarcon vs Di Genova: W35 Sao Paulo Round of 32 match?",
     "event_title": "Perez Alarcon vs Di Genova",
@@ -3120,32 +3016,6 @@
     "hardven_no_token": "9200:1632530824:away"
   },
   {
-    "kalshi_ticker": "KXITFWMATCH-26JUL15SOLKON-KON",
-    "label": "Will Petra Konjikusic win the Solakov vs Konjikusic: W15 Kursumlijska Banja Round of 32 match?",
-    "event_title": "Solakov vs Konjikusic",
-    "kalshi_outcome": "Petra Konjikusic",
-    "event_id": "KXITFWMATCH-26JUL15SOLKON",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
-    "kalshi_ticker": "KXITFWMATCH-26JUL15SOLKON-SOL",
-    "label": "Will Leticia Solakov win the Solakov vs Konjikusic: W15 Kursumlijska Banja Round of 32 match?",
-    "event_title": "Solakov vs Konjikusic",
-    "kalshi_outcome": "Leticia Solakov",
-    "event_id": "KXITFWMATCH-26JUL15SOLKON",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
     "kalshi_ticker": "KXITFWMATCH-26JUL15TORGON-GON",
     "label": "Will Justina Maria Gonzalez Daniele win the Torres Murcia vs Gonzalez Daniele: W35 Sao Paulo Round of 32 match?",
     "event_title": "Torres Murcia vs Gonzalez Daniele",
@@ -3220,34 +3090,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
-    "kalshi_ticker": "KXITFWMATCH-26JUL15UDVMOC-MOC",
-    "label": "Will Carlotta Moccia win the Udvardy vs Moccia: W15 Krsko Round of 32 match?",
-    "event_title": "Udvardy vs Moccia",
-    "kalshi_outcome": "Carlotta Moccia",
-    "event_id": "KXITFWMATCH-26JUL15UDVMOC",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "219801:1632541248:away",
-    "hardven_no_token": "219801:1632541248:home"
-  },
-  {
-    "kalshi_ticker": "KXITFWMATCH-26JUL15UDVMOC-UDV",
-    "label": "Will Luca Udvardy win the Udvardy vs Moccia: W15 Krsko Round of 32 match?",
-    "event_title": "Udvardy vs Moccia",
-    "kalshi_outcome": "Luca Udvardy",
-    "event_id": "KXITFWMATCH-26JUL15UDVMOC",
-    "settlement_date": "2026-07-15",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "219801:1632541248:home",
-    "hardven_no_token": "219801:1632541248:away"
+    "hardven_yes_token": "187731:1632533484:away",
+    "hardven_no_token": "187731:1632533484:home"
   },
   {
     "kalshi_ticker": "KXITFWMATCH-26JUL15URRSTE-STE",
@@ -3922,8 +3766,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "232648:1632555641:home",
+    "hardven_no_token": "232648:1632555641:away"
   },
   {
     "kalshi_ticker": "KXITFMATCH-26JUL15FERSIK-FER",
@@ -4026,8 +3870,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "232648:1632555640:away",
+    "hardven_no_token": "232648:1632555640:home"
   },
   {
     "kalshi_ticker": "KXITFMATCH-26JUL15HULCHA-CHA",
@@ -4052,8 +3896,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "232648:1632550104:home",
+    "hardven_no_token": "232648:1632550104:away"
   },
   {
     "kalshi_ticker": "KXITFMATCH-26JUL15JONBOB-BOB",
@@ -4208,8 +4052,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "232648:1632555659:home",
+    "hardven_no_token": "232648:1632555659:away"
   },
   {
     "kalshi_ticker": "KXITFMATCH-26JUL15VOLDEL-DEL",
@@ -4234,8 +4078,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "232648:1632555660:home",
+    "hardven_no_token": "232648:1632555660:away"
   },
   {
     "kalshi_ticker": "KXITFMATCH-26JUL15WILFAL-FAL",
@@ -4312,8 +4156,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "191959:1632556042:away",
+    "hardven_no_token": "191959:1632556042:home"
   },
   {
     "kalshi_ticker": "KXITFWMATCH-26JUL15LINRUS-LIN",
@@ -4338,8 +4182,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "191959:1632556041:away",
+    "hardven_no_token": "191959:1632556041:home"
   },
   {
     "kalshi_ticker": "KXITFWMATCH-26JUL15LUXWON-LUX",
@@ -4494,8 +4338,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "191959:1632556043:away",
+    "hardven_no_token": "191959:1632556043:home"
   },
   {
     "kalshi_ticker": "KXITFWMATCH-26JUL15TAYTSA-TAY",
@@ -4520,8 +4364,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "191959:1632556039:away",
+    "hardven_no_token": "191959:1632556039:home"
   },
   {
     "kalshi_ticker": "KXITFWMATCH-26JUL15UEMTHO-THO",
@@ -4546,8 +4390,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "191959:1632556038:home",
+    "hardven_no_token": "191959:1632556038:away"
   },
   {
     "kalshi_ticker": "KXITFWMATCH-26JUL15WEBFAI-FAI",
@@ -4572,8 +4416,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "191959:1632556037:home",
+    "hardven_no_token": "191959:1632556037:away"
   },
   {
     "kalshi_ticker": "KXITFWMATCH-26JUL15YOSSAT-SAT",
@@ -4598,8 +4442,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "191959:1632556040:home",
+    "hardven_no_token": "191959:1632556040:away"
   },
   {
     "kalshi_ticker": "KXWTAMATCH-26JUL16KORANN-ANN",

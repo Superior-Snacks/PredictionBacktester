@@ -8,8 +8,8 @@
     "settlement_date": "2026-07-15",
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "3649:1632542697:spread:-2.5:away",
-    "hardven_no_token": "3649:1632542697:spread:2.5:home"
+    "hardven_yes_token": "3649:1632542699:spread:-2.5:away",
+    "hardven_no_token": "3649:1632542699:spread:2.5:home"
   },
   {
     "kalshi_ticker": "KXATPGSPREAD-26JUL15CARUGO-CAR3",
@@ -128,8 +128,8 @@
     "settlement_date": "2026-07-15",
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "3649:1632542697:total:22.5:over",
-    "hardven_no_token": "3649:1632542697:total:22.5:under"
+    "hardven_yes_token": "3649:1632542699:total:22.5:over",
+    "hardven_no_token": "3649:1632542699:total:22.5:under"
   },
   {
     "kalshi_ticker": "KXATPGTOTAL-26JUL15CARUGO-23",
