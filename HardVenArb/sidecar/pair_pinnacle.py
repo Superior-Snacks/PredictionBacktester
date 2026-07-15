@@ -37,6 +37,7 @@ from pair_auto import (
     _norm, _book_name, kalshi_key, _pick_book_team, _best_book_game, _better_listing,
     _expected_sports, _kalshi_dt, fetch_catalog, price_validate, fuzz,
 )
+from env_util import atomic_write_json
 
 
 # ── Pinnacle selection_id = "{leagueId}:{matchupId}:{designation}" ──────────────
@@ -288,7 +289,7 @@ def main() -> None:
 
     valid = sum(1 for e in pairs if e.get("hardven_yes_token") and e.get("hardven_no_token"))
     if args.write and (filled or gate[1] or gate[2]):
-        Path(args.pairs).write_text(json.dumps(pairs, indent=2), encoding="utf-8")
+        atomic_write_json(args.pairs, pairs)   # atomic → the C# hot-reload never reads a partial cross_pairs.json
         print(f"\n[PAIR] wrote {valid} filled pair(s) → {args.pairs}")
     elif not args.write:
         print("\n[PAIR] dry-run (no file written). Re-run with --write to save.")

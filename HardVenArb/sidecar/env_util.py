@@ -16,8 +16,41 @@ overwrite vars already set in the environment.
 """
 from __future__ import annotations
 
+import json
 import os
+import tempfile
+import time
 from pathlib import Path
+
+
+def atomic_write_json(path, obj, indent: int = 2, retries: int = 25) -> None:
+    """Write `obj` as JSON to `path` ATOMICALLY: serialise to a temp file in the SAME directory, fsync, then
+    os.replace it onto `path` (an atomic rename). A concurrent reader — the C# bot's ~15-min hot-reload — then
+    always sees the OLD or the NEW complete file, never a half-written one. Fixes the '[HOT-RELOAD] Object
+    reference not set to an instance of an object' that fired right after a re-pair overwrote the file in place
+    (or, for the old replace→write dance, while the file was momentarily ABSENT). On Windows os.replace can hit a
+    brief sharing-violation while a reader holds the target open, so it's retried."""
+    p = Path(path)
+    fd, tmp = tempfile.mkstemp(dir=str(p.parent), prefix=p.name + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(obj, f, indent=indent)
+            f.flush()
+            os.fsync(f.fileno())
+        for attempt in range(retries):
+            try:
+                os.replace(tmp, str(p))
+                return
+            except PermissionError:                      # Windows: reader briefly holds the target open
+                if attempt == retries - 1:
+                    raise
+                time.sleep(0.1)
+    finally:
+        try:
+            if os.path.exists(tmp):
+                os.unlink(tmp)                           # only reached if the replace never succeeded
+        except OSError:
+            pass
 
 
 def _candidate_paths() -> list[Path]:

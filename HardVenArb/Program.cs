@@ -1067,7 +1067,20 @@ _ = Task.Run(async () =>
         DebugLog.Write($"Hot-reload: reading {reloadPath}");
         try
         {
-            using var doc = JsonDocument.Parse(File.ReadAllText(reloadPath));
+            // Share-tolerant read: FileShare.Delete lets the pairers' atomic os.replace(temp → file) rename the
+            // file WHILE we hold it open (we keep reading the complete old file). Combined with the pairers now
+            // writing atomically, the hot-reload can never see a half-written file — fixes the mid-write NRE.
+            string reloadJson;
+            using (var fs = new FileStream(reloadPath, FileMode.Open, FileAccess.Read,
+                                           FileShare.ReadWrite | FileShare.Delete))
+            using (var sr = new StreamReader(fs))
+                reloadJson = sr.ReadToEnd();
+            if (string.IsNullOrWhiteSpace(reloadJson))
+            {
+                DebugLog.Write($"Hot-reload: {reloadPath} empty (mid-write?), skipping this cycle");
+                continue;
+            }
+            using var doc = JsonDocument.Parse(reloadJson);
             var newPairs    = new List<CrossPair>();
             var newKTickers = new List<string>();
             var newPTokens  = new List<string>();

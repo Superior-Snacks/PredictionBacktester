@@ -33,6 +33,7 @@ import datetime as dt
 import json
 import os
 import re
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -43,6 +44,7 @@ import requests
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from pair_auto import _norm, _book_name, _team_sim, _kalshi_dt, fuzz   # proven name/date primitives
+from env_util import atomic_write_json
 from pair_pinnacle import _canon, _pin_dt                              # baseball aliases + ISO start parse
 import sports as sports_cfg                                           # unified sport catalog (spread/total series)
 
@@ -313,8 +315,8 @@ def main() -> None:
 
     if args.write:
         if OUT.exists():
-            OUT.replace(OUT.with_suffix(".json.bak"))
-        OUT.write_text(json.dumps(pairs, indent=2), encoding="utf-8")
+            shutil.copy2(OUT, OUT.with_suffix(".json.bak"))   # COPY (not move) → OUT stays present during backup
+        atomic_write_json(OUT, pairs)                         # atomic → the C# hot-reload never reads a partial file
         print(f"\n[DERIV] wrote {len(pairs)} derivative pair(s) -> {OUT}")
     else:
         print("\n[DERIV] dry-run (no file written). Re-run with --write to save.")

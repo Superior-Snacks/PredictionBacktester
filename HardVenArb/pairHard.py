@@ -48,6 +48,7 @@ the opposite side. The bot backs whichever side makes the cross-venue net < $1.
 import argparse
 import datetime as dt
 import json
+import shutil
 import sys
 from pathlib import Path
 
@@ -56,6 +57,7 @@ import requests
 
 sys.path.insert(0, str(Path(__file__).parent / "sidecar"))   # share the unified sport catalog with the sidecar
 import sports as sports_cfg
+from env_util import atomic_write_json
 
 if hasattr(sys.stdout, "reconfigure"):   # Windows console: allow non-ASCII in prints
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -226,8 +228,8 @@ def main() -> None:
     entries.sort(key=lambda e: (e["settlement_date"], e["kalshi_ticker"]))
 
     if OUT.exists():
-        OUT.replace(OUT.with_suffix(".json.bak"))
-    OUT.write_text(json.dumps(entries, indent=2), encoding="utf-8")
+        shutil.copy2(OUT, OUT.with_suffix(".json.bak"))   # COPY (not move) → OUT stays present during the backup
+    atomic_write_json(OUT, entries)                        # atomic overwrite → the C# hot-reload never reads a partial file
 
     mode = "fresh rebuild" if args.fresh else f"merged ({carried} filled pair(s) carried over)"
     print(f"[OK] wrote {len(entries)} classic sports-game markets to {OUT.name} — {mode} "
