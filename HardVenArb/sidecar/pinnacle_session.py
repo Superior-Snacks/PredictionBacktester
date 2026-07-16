@@ -207,6 +207,10 @@ class PinnacleBrowserSession:
         self._logged_storage = False
         self._cdp = None
         self._cdp_ws_reqs: set = set()
+        self._cdp_sessions: list = []          # per-tab CDP sessions (multi-tab WS capture: a persistent context
+                                               # has no Browser handle for one browser-level session, so we attach
+                                               # a CDP session PER PAGE and merge frames by globally-unique requestId)
+        self._cdp_attached_pages: set = set()  # id(page) already CDP-armed → idempotent attach
         # WINDOW-WS READER (PINNACLE_WINDOW_WS_READ=1): the real thing — parse odds PUBLISH off the page's own WS
         # and hand each to the adapter via on_odds. The FEASIBILITY PROBE (PINNACLE_WS_READ_PROBE=1) is the same
         # capture minus the on_odds handoff, plus the periodic verdict log. Either arms the received-frame path.
@@ -299,9 +303,11 @@ class PinnacleBrowserSession:
         print("  - Browse to ANY sport once so the page opens its odds WebSocket (that yields the WS login).")
         print("  The C# bot stays idle until /health reports session_ready=true. Keep this window OPEN.")
         print("=" * 78 + "\n")
+        await self._open_test_tabs()                     # PINNACLE_TAB_TEST: multi-tab background-WS survival test
 
     async def stop(self) -> None:
-        for t in (self._activity_task, self._status_task, self._session_refresh_task, self._login_task):
+        for t in (self._activity_task, self._status_task, self._session_refresh_task, self._login_task,
+                  self._probe_task):
             if t and not t.done():
                 t.cancel()
         try:
@@ -318,6 +324,11 @@ class PinnacleBrowserSession:
         # Captured creds are intentionally kept (the adapter still has them); the reopened profile re-emits them.
         self._pw = self._ctx = self._page = self._organic = None
         self._activity_task = self._status_task = self._session_refresh_task = self._login_task = None
+        self._probe_task = self._cdp = None
+        self._cdp_sessions = []
+        self._cdp_attached_pages = set()
+        self._cdp_ws_reqs = set()
+        self._ws_stream_buf = {}
 
     # ── capture: REST headers (x-session / device / api-key) ──────────────────────
     def _on_request(self, request) -> None:
@@ -408,32 +419,85 @@ class PinnacleBrowserSession:
         level. We enable Network on the PAGE target and AUTO-ATTACH to workers so a worker WS is at least
         DETECTED (and on many Chrome builds its frames surface here). Binary frames (MQTT) arrive base64-encoded
         → decoded before parsing. Best-effort: runs ALONGSIDE page.on; whichever sees the CONNECT first wins.
-        (Playwright's CDPSession can't send Network.enable to a child worker target — so for a confirmed worker
-        WS the storage probe / a follow-up is the fallback; the worker-attach log makes that case obvious.)"""
-        try:
-            self._cdp = await self._ctx.new_cdp_session(self._page)
-        except Exception as ex:
-            print(f"[PINNACLE SESSION] CDP unavailable ({type(ex).__name__}: {ex}); page.on capture only.")
-            return
-        self._cdp.on("Network.webSocketCreated", self._on_cdp_ws_created)
-        self._cdp.on("Network.webSocketFrameSent", self._on_cdp_ws_frame)
-        self._cdp.on("Target.attachedToTarget", self._on_cdp_target)
+
+        MULTI-TAB: a persistent context exposes no Browser handle for a single browser-level CDP session, so we
+        attach a per-page session to the primary page AND to every future tab (via the context 'page' event).
+        A league page is board-scoped and subscriptions don't accumulate, so full-slate coverage means one tab
+        per league; every tab's frames merge into the SHARED reader buffers keyed by globally-unique requestId."""
+        self._cdp_sessions = []
+        ok = await self._attach_cdp_to_page(self._page, primary=True)
+        if not ok:
+            return                                       # CDP unavailable → page.on capture only (old behaviour)
+        # Cover every tab the user opens later: arm a CDP session as each page is created.
+        self._ctx.on("page", lambda p: asyncio.create_task(self._attach_cdp_to_page(p)))
         if self._ws_read_probe or self._window_ws_read:
-            self._cdp.on("Network.webSocketFrameReceived", self._on_cdp_ws_frame_recv)
-            self._cdp.on("Network.webSocketClosed", self._on_cdp_ws_closed)
+            self._probe_start = time.time()
+            self._probe_task = asyncio.create_task(self._ws_read_probe_loop())
+            mode = "READER (odds → adapter)" if self._window_ws_read else "PROBE (count only)"
+            print(f"[WS-READ] window-WS {mode} armed (multi-tab) — parsing odds PUBLISH off EVERY tab's OWN WS. "
+                  "Summary every 15s. Keep sport boards open (one league per tab for full coverage).")
+
+    async def _attach_cdp_to_page(self, page, primary: bool = False) -> bool:
+        """Arm CDP Network capture on ONE page/tab: WS-created + sent-frame (MQTT CONNECT → WS login) always, and
+        received-frame (odds PUBLISH → reader) when the probe/reader is on. Called for the primary page and, via
+        the context 'page' event, for every tab the user opens — so a one-league-per-tab layout streams all their
+        odds into the shared reader. Idempotent per page (guarded by id(page)). Returns False only if CDP itself
+        is unavailable on the primary page. Never raises."""
+        if id(page) in self._cdp_attached_pages:
+            return True                                  # already armed (primary + page-event can both fire)
+        self._cdp_attached_pages.add(id(page))
         try:
-            await self._cdp.send("Network.enable")
-            await self._cdp.send("Target.setAutoAttach",
-                                 {"autoAttach": True, "waitForDebuggerOnStart": False, "flatten": True})
-            print("[PINNACLE SESSION] CDP Network capture armed (worker-aware) — 2nd path for the WS login.")
-            if self._ws_read_probe or self._window_ws_read:
-                self._probe_start = time.time()
-                self._probe_task = asyncio.create_task(self._ws_read_probe_loop())
-                mode = "READER (odds → adapter)" if self._window_ws_read else "PROBE (count only)"
-                print(f"[WS-READ] window-WS {mode} armed — parsing odds PUBLISH off the page's OWN WS. Summary "
-                      "every 15s. Keep a sport board open so its odds WS stays subscribed.")
+            cdp = await self._ctx.new_cdp_session(page)
         except Exception as ex:
-            print(f"[PINNACLE SESSION] CDP enable failed ({type(ex).__name__}: {ex}); page.on capture only.")
+            self._cdp_attached_pages.discard(id(page))
+            if primary:
+                print(f"[PINNACLE SESSION] CDP unavailable ({type(ex).__name__}: {ex}); page.on capture only.")
+            return False
+        cdp.on("Network.webSocketCreated", self._on_cdp_ws_created)
+        cdp.on("Network.webSocketFrameSent", self._on_cdp_ws_frame)
+        cdp.on("Target.attachedToTarget", self._on_cdp_target)
+        if self._ws_read_probe or self._window_ws_read:
+            cdp.on("Network.webSocketFrameReceived", self._on_cdp_ws_frame_recv)
+            cdp.on("Network.webSocketClosed", self._on_cdp_ws_closed)
+        try:
+            await cdp.send("Network.enable")
+            await cdp.send("Target.setAutoAttach",
+                           {"autoAttach": True, "waitForDebuggerOnStart": False, "flatten": True})
+        except Exception as ex:
+            self._cdp_attached_pages.discard(id(page))
+            if primary:
+                print(f"[PINNACLE SESSION] CDP enable failed ({type(ex).__name__}: {ex}); page.on capture only.")
+            return False
+        self._cdp_sessions.append(cdp)
+        page.on("close", lambda: self._cdp_attached_pages.discard(id(page)))  # allow re-arm if id is reused
+        if primary:
+            self._cdp = cdp
+            print("[PINNACLE SESSION] CDP Network capture armed (worker-aware, multi-tab) — 2nd path for the WS login.")
+        else:
+            print(f"[PINNACLE SESSION] CDP armed on a new tab (tabs captured: {len(self._cdp_sessions)}).")
+        return True
+
+    async def _open_test_tabs(self) -> None:
+        """PINNACLE_TAB_TEST=<url1>,<url2>[,...] — open each URL in its OWN tab to test multi-tab WS survival.
+        In a real headed window only one tab is foregrounded, so the rest are BACKGROUND tabs; watch the
+        [WS-READ] 'active(<45s)' line. If the BACKGROUND tabs' league ids stay listed while only one tab is
+        focused, background-tab WS survive → one-league-per-tab coverage is viable (the anti-throttle launch
+        flags are what should keep those tabs' odds sockets alive). Tabs are left open; focus/navigate by hand."""
+        urls = [u.strip() for u in os.environ.get("PINNACLE_TAB_TEST", "").split(",") if u.strip()]
+        if not urls:
+            return
+        print(f"[TAB-TEST] opening {len(urls)} tab(s) for the background-WS survival test:")
+        for u in urls:
+            try:
+                pg = await self._ctx.new_page()
+                await self._attach_cdp_to_page(pg)       # arm BEFORE navigation so we catch webSocketCreated
+                await pg.goto(u, wait_until="domcontentloaded", timeout=60_000)
+                print(f"[TAB-TEST]   opened tab → {u[:80]}")
+                await asyncio.sleep(2.0)                  # let its odds WS subscribe before opening the next
+            except Exception as ex:
+                print(f"[TAB-TEST]   tab open failed for {u[:60]} ({type(ex).__name__}: {ex})")
+        print("[TAB-TEST] tabs open. Focus ONE tab; watch [WS-READ] active(<45s). If ALL league ids stay listed "
+              "while only one tab is focused, background tabs survive → multi-tab coverage works.")
 
     def _on_cdp_ws_closed(self, params: dict) -> None:
         self._ws_stream_buf.pop(params.get("requestId"), None)   # free the reassembly buffer for a closed WS
