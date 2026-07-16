@@ -1140,8 +1140,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "214251:1632575969:away",
+    "hardven_no_token": "214251:1632575969:home"
   },
   {
     "kalshi_ticker": "KXITFMATCH-26JUL16CHEFIT-CHE",
@@ -1480,32 +1480,6 @@
     "hardven_min_size": 1.0,
     "hardven_yes_token": "238018:1632565575:home",
     "hardven_no_token": "238018:1632565575:away"
-  },
-  {
-    "kalshi_ticker": "KXITFMATCH-26JUL16HOUKIM-HOU",
-    "label": "Will Chun-Chien Hou win the Hou vs Kim: M15 Wuning Round of 16 match?",
-    "event_title": "Hou vs Kim",
-    "kalshi_outcome": "Chun-Chien Hou",
-    "event_id": "KXITFMATCH-26JUL16HOUKIM",
-    "settlement_date": "2026-07-16",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "272060:1632565551:home",
-    "hardven_no_token": "272060:1632565551:away"
-  },
-  {
-    "kalshi_ticker": "KXITFMATCH-26JUL16HOUKIM-KIM",
-    "label": "Will Jangjun Kim win the Hou vs Kim: M15 Wuning Round of 16 match?",
-    "event_title": "Hou vs Kim",
-    "kalshi_outcome": "Jangjun Kim",
-    "event_id": "KXITFMATCH-26JUL16HOUKIM",
-    "settlement_date": "2026-07-16",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
   },
   {
     "kalshi_ticker": "KXITFMATCH-26JUL16IZQDAR-DAR",
@@ -1894,8 +1868,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "214251:1632565628:home",
+    "hardven_no_token": "214251:1632565628:away"
   },
   {
     "kalshi_ticker": "KXITFMATCH-26JUL16MCCSYE-MCC",
@@ -4758,32 +4732,6 @@
     "hardven_no_token": "286090:1632543912:home"
   },
   {
-    "kalshi_ticker": "KXWTACHALLENGERMATCH-26JUL16HERVAN-HER",
-    "label": "Will Polona Hercog win the Hercog vs Vandromme: Round Of 16 match?",
-    "event_title": "Hercog vs Vandromme",
-    "kalshi_outcome": "Polona Hercog",
-    "event_id": "KXWTACHALLENGERMATCH-26JUL16HERVAN",
-    "settlement_date": "2026-07-16",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "288059:1632548667:home",
-    "hardven_no_token": "288059:1632548667:away"
-  },
-  {
-    "kalshi_ticker": "KXWTACHALLENGERMATCH-26JUL16HERVAN-VAN",
-    "label": "Will Jeline Vandromme win the Hercog vs Vandromme: Round Of 16 match?",
-    "event_title": "Hercog vs Vandromme",
-    "kalshi_outcome": "Jeline Vandromme",
-    "event_id": "KXWTACHALLENGERMATCH-26JUL16HERVAN",
-    "settlement_date": "2026-07-16",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "288059:1632548667:away",
-    "hardven_no_token": "288059:1632548667:home"
-  },
-  {
     "kalshi_ticker": "KXWTACHALLENGERMATCH-26JUL16KHOPRO-KHO",
     "label": "Will Daria Khomutsianskaya win the Khomutsianskaya vs Prozorova: Round Of 16 match?",
     "event_title": "Khomutsianskaya vs Prozorova",
@@ -5066,8 +5014,8 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "9176:1632543964:home",
+    "hardven_no_token": "9176:1632543964:away"
   },
   {
     "kalshi_ticker": "KXATPMATCH-26JUL17BORDAR-BOR",
