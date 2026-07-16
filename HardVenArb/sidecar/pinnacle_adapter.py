@@ -1159,6 +1159,47 @@ class PinnacleAdapter(BookAdapter):
             markets = await self._http_get(f"/leagues/{lid}/markets/straight", count_429=True)
         return self._apply_straight_markets(lid, markets, time.time()) if markets else 0
 
+    def _straight_prices(self, lid: str, markets: list) -> dict:
+        """{token: decimal_odds} for a /markets/straight payload — same `_market_tokens` keying as the cache, so
+        two sources (authed vs guest) are directly comparable per token. Used by the debug snapshot below."""
+        now = time.time()
+        out: dict[str, float] = {}
+        for mk in markets or []:
+            mid = mk.get("matchupId")
+            if mid is None:
+                continue
+            for token, sel in self._market_tokens(str(lid), mid, mk, now):
+                out[token] = round(sel.decimal_odds, 4)
+        return out
+
+    async def straight_snapshot(self, lid: str, source: str = "authed") -> dict:
+        """DEBUG: current /markets/straight prices for a league from `source` ("authed"|"guest") as
+        {token: decimal}. Drives probe_reseed_delay.py, which polls BOTH sources over time to measure how far the
+        public guest feed lags the logged-in authed feed (the reason the re-seed defaults to authed)."""
+        if str(source).lower() == "guest":
+            markets = await self._guest_get(f"/leagues/{lid}/markets/straight")
+        else:
+            markets = await self._http_get(f"/leagues/{lid}/markets/straight")
+        return {"ts": time.time(), "source": str(source).lower(), "prices": self._straight_prices(lid, markets)}
+
+    async def browser_fetch_straight_probe(self, lid: str) -> dict:
+        """DEBUG (feasibility probe): try fetching the AUTHED /markets/straight from INSIDE the logged-in browser
+        page (genuine Chrome TLS + the page's own origin/cookies) rather than the sidecar's httpx. The risk is a
+        CORS preflight the page's fetch trips but the app's own fetch doesn't. Returns the browser fetch result
+        (ok/status/n_markets/sample or error) plus what the sidecar's httpx sees right now for cross-check. GREEN
+        (ok=true, n_markets>0) ⇒ the re-seed can be moved into the browser for zero non-Chrome footprint."""
+        if self._browser is None:
+            return {"ok": False, "error": "no browser session (needs PINNACLE_SESSION_SOURCE=browser)"}
+        url = f"{REST_BASE}/leagues/{lid}/markets/straight"
+        headers = {"x-session": self._session, "x-device-uuid": self._device, "x-api-key": self._api_key}
+        res = await self._browser.fetch_via_page(url, headers)
+        try:
+            httpx_markets = await self._http_get(f"/leagues/{lid}/markets/straight")
+            res["httpx_n_markets"] = len(httpx_markets or [])   # cross-check vs the sidecar's own authed call
+        except Exception:
+            res["httpx_n_markets"] = None
+        return res
+
     async def _reader_reseed_loop(self) -> None:
         """Pure-reader-mode price backstop (see _reader_reseed_sec). Every cycle, re-fetch each active league's
         straight markets (authed by default → real prices) so STABLE pre-match lines and TAIL leagues (no tab)

@@ -126,6 +126,27 @@ async def debug_reader(ttl: float = 30.0):
     return {"live_mids": mids, "count": len(mids)}
 
 
+@app.get("/debug/straight")
+async def debug_straight(lid: str, source: str = "authed"):
+    """{token: decimal} for a league's straight markets from `source` (authed|guest). probe_reseed_delay.py polls
+    BOTH over time to measure how far the public guest feed lags the logged-in authed feed."""
+    fn = getattr(adapter, "straight_snapshot", None)
+    if not fn:
+        raise HTTPException(400, "adapter has no straight_snapshot")
+    return await fn(lid, source)
+
+
+@app.get("/debug/browser_fetch")
+async def debug_browser_fetch(lid: str):
+    """Feasibility probe: fetch the AUTHED /markets/straight from INSIDE the logged-in browser page (genuine
+    Chrome TLS) to test moving the re-seed off httpx. GREEN (ok=true, n_markets>0) ⇒ browser-fetch re-seed is
+    viable for zero non-Chrome footprint; an error (esp. CORS) ⇒ stick with the authed httpx re-seed."""
+    fn = getattr(adapter, "browser_fetch_straight_probe", None)
+    if not fn:
+        raise HTTPException(400, "adapter has no browser_fetch_straight_probe")
+    return await fn(lid)
+
+
 # ── M1: betting + wallet confirmation ─────────────────────────────────────────
 @app.get("/balance")
 async def balance():

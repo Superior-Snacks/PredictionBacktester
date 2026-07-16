@@ -514,6 +514,30 @@ class PinnacleBrowserSession:
         except Exception:
             pass
 
+    async def fetch_via_page(self, url: str, headers: dict, timeout_ms: int = 15000) -> dict:
+        """Feasibility probe: run fetch() INSIDE the logged-in page (genuine Chrome TLS + the page's own origin/
+        cookies) so we can test moving the re-seed off the sidecar's httpx into the browser. Returns diagnostics
+        {ok, status, n_markets, sample} or {ok:false, error} (a CORS/preflight block on the page's fetch is the
+        thing this is checking for). Never raises."""
+        if self._page is None:
+            return {"ok": False, "error": "no page"}
+        js = """async ([url, headers]) => {
+          try {
+            const r = await fetch(url, {headers, credentials: 'include'});
+            let body = null;
+            try { body = await r.json(); } catch (e) {}
+            const n = Array.isArray(body) ? body.length : (body ? -1 : 0);
+            const s = (Array.isArray(body) && body[0]) ? body[0] : null;
+            return {ok: r.ok, status: r.status, n_markets: n,
+                    sample: s ? {type: s.type, period: s.period, matchupId: s.matchupId,
+                                 prices: (s.prices || []).length} : null};
+          } catch (e) { return {ok: false, error: String(e)}; }
+        }"""
+        try:
+            return await asyncio.wait_for(self._page.evaluate(js, [url, headers]), timeout=timeout_ms / 1000.0)
+        except Exception as ex:
+            return {"ok": False, "error": f"{type(ex).__name__}: {ex}"}
+
     async def _open_test_tabs(self) -> None:
         """PINNACLE_TAB_TEST=<url1>,<url2>[,...] — open each URL in its OWN tab to test multi-tab WS survival.
         In a real headed window only one tab is foregrounded, so the rest are BACKGROUND tabs; watch the

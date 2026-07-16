@@ -347,6 +347,18 @@ cause is throttling/swapping (server) vs a network blip (not the server).
 
 ---
 
+## Diagnostics / probes (reader mode)
+
+Run these while the sidecar is up (pinnacle book, browser logged in). They need the live session, so they can't be run offline.
+
+- **`coverage_check.py`** — reader coverage vs the guest board (covered / GAP / not-bettable). `python coverage_check.py [--ttl 120]`.
+- **`GET /debug/reader?ttl=`** — the matchups the reader has actually pushed within `ttl`s (coverage truth).
+- **`GET /debug/straight?lid=<lid>&source=authed|guest`** — a league's current straight-market prices from either feed (the building block below).
+- **`probe_reseed_delay.py`** — quantifies how far the **guest feed lags the authed feed** (the reason the re-seed defaults to `authed`). `python probe_reseed_delay.py --lid 3649 --secs 300` (or `--from-pairs`). Reports median / p90 / max guest catch-up lag + the typical disagreement in implied-prob cents. Small lag + tiny disagreement ⇒ guest is fine; multi-second lag or fat cents ⇒ keep `authed`.
+- **`GET /debug/browser_fetch?lid=<lid>`** — feasibility probe for moving the re-seed *inside* the browser (`page.evaluate` fetch → genuine Chrome TLS, zero non-Chrome footprint). `ok:true, n_markets>0` ⇒ viable; an error (esp. CORS) ⇒ stick with the authed-httpx re-seed. `curl "127.0.0.1:8787/debug/browser_fetch?lid=3649"`.
+
+---
+
 ## Gotchas (all learned the hard way)
 
 - **Machine sleep / feed drops are now survived.** The bot suppresses system sleep while running (Windows, `HARDVEN_KEEP_AWAKE`) and each feed is supervised — a WS drop / sleep-wake / sidecar blip **restarts** the feed instead of shutting the bot down (only a double-Ctrl+C quits). Belt-and-suspenders on a laptop: `powercfg /change standby-timeout-ac 0`.
