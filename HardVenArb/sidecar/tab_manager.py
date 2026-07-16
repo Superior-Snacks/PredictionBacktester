@@ -75,6 +75,31 @@ class LeagueTabManager:
             except Exception as ex:
                 print(f"[TAB-MGR] tick error: {type(ex).__name__}: {ex}")
 
+    def covered_lids(self) -> set:
+        """Leagues this manager currently holds a tab for (live WS coverage). Used to tag /odds prices as
+        WS-verified vs screening-only for verify-on-detection."""
+        return set(self._tabs.keys())
+
+    async def request_verify(self, lid: str) -> str:
+        """VERIFY-ON-DETECTION: promptly open a tab for `lid` (jump the gap queue) so its live WS can confirm an
+        arb the bot spotted on screening-only (httpx-re-seed) prices. Returns a status: 'already-open' | 'opened'
+        | 'no-url' (not a paired league) | 'at-cap' (raise HARDVEN_TAB_MAX) | 'open-failed'."""
+        lid = str(lid)
+        if lid in self._tabs:
+            return "already-open"
+        url = self._load_paired().get(lid)
+        if not url:
+            return "no-url"
+        if len(self._tabs) >= self._max:
+            return "at-cap"
+        pg = await self._session.open_tab(url)
+        if pg is None:
+            return "open-failed"
+        self._tabs[lid] = pg
+        print(f"[TAB-MGR] VERIFY — opened tab on demand for league {lid} -> {url[:70]} "
+              f"(tabs={len(self._tabs)}/{self._max})")
+        return "opened"
+
     def _load_paired(self) -> dict[str, str]:
         """{leagueId: url} for every filled pair that carries a league URL (written by pair_pinnacle)."""
         try:

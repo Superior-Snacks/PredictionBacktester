@@ -8,20 +8,8 @@
     "settlement_date": "2026-07-16",
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "3292:1632542629:spread:-2.5:home",
-    "hardven_no_token": "3292:1632542629:spread:2.5:away"
-  },
-  {
-    "kalshi_ticker": "KXATPGSPREAD-26JUL15TABMID-TAB5",
-    "market_type": "spread",
-    "line": 4.5,
-    "label": "Alejandro Tabilo vs Lautaro Midon \u2014 Alejandro Tabilo -4.5",
-    "event_id": "KXATPGSPREAD-26JUL15TABMID",
-    "settlement_date": "2026-07-16",
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "3649:1632541147:spread:-4.5:home",
-    "hardven_no_token": "3649:1632541147:spread:4.5:away"
+    "hardven_yes_token": "3292:1632542631:spread:-2.5:home",
+    "hardven_no_token": "3292:1632542631:spread:2.5:away"
   },
   {
     "kalshi_ticker": "KXATPGSPREAD-26JUL16BURUGO-BUR2",
@@ -60,30 +48,6 @@
     "hardven_no_token": "3326:1632569358:spread:3.5:home"
   },
   {
-    "kalshi_ticker": "KXATPGSPREAD-26JUL16FARRUU-RUU5",
-    "market_type": "spread",
-    "line": 4.5,
-    "label": "Jaime Faria vs Casper Ruud \u2014 Casper Ruud -4.5",
-    "event_id": "KXATPGSPREAD-26JUL16FARRUU",
-    "settlement_date": "2026-07-16",
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "3292:1632548748:spread:-4.5:away",
-    "hardven_no_token": "3292:1632548748:spread:4.5:home"
-  },
-  {
-    "kalshi_ticker": "KXATPGSPREAD-26JUL16MERDRO-MER2",
-    "market_type": "spread",
-    "line": 1.5,
-    "label": "Daniel Merida Aguilar vs Titouan Droguet \u2014 Daniel Merida -1.5",
-    "event_id": "KXATPGSPREAD-26JUL16MERDRO",
-    "settlement_date": "2026-07-16",
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "3326:1632571804:spread:-1.5:home",
-    "hardven_no_token": "3326:1632571804:spread:1.5:away"
-  },
-  {
     "kalshi_ticker": "KXATPGSPREAD-26JUL16MOLDAV-DAV3",
     "market_type": "spread",
     "line": 2.5,
@@ -96,28 +60,16 @@
     "hardven_no_token": "3326:1632573922:spread:2.5:home"
   },
   {
-    "kalshi_ticker": "KXATPGTOTAL-26JUL15BUBHAL-24",
-    "market_type": "total",
-    "line": 23.5,
-    "label": "Alexander Bublik vs Quentin Halys \u2014 Over 23.5",
-    "event_id": "KXATPGTOTAL-26JUL15BUBHAL",
+    "kalshi_ticker": "KXATPGSPREAD-26JUL16SHESTR-STR2",
+    "market_type": "spread",
+    "line": 1.5,
+    "label": "Alexander Shevchenko vs Dominic Stephan Stricker \u2014 Dominic Stricker -1.5",
+    "event_id": "KXATPGSPREAD-26JUL16SHESTR",
     "settlement_date": "2026-07-16",
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "3292:1632542629:total:23.5:over",
-    "hardven_no_token": "3292:1632542629:total:23.5:under"
-  },
-  {
-    "kalshi_ticker": "KXATPGTOTAL-26JUL15TABMID-22",
-    "market_type": "total",
-    "line": 21.5,
-    "label": "Alejandro Tabilo vs Lautaro Midon \u2014 Over 21.5",
-    "event_id": "KXATPGTOTAL-26JUL15TABMID",
-    "settlement_date": "2026-07-16",
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "3649:1632541147:total:21.5:over",
-    "hardven_no_token": "3649:1632541147:total:21.5:under"
+    "hardven_yes_token": "3292:1632546284:spread:-1.5:away",
+    "hardven_no_token": "3292:1632546284:spread:1.5:home"
   },
   {
     "kalshi_ticker": "KXATPGTOTAL-26JUL16BURUGO-22",
@@ -156,28 +108,16 @@
     "hardven_no_token": "3326:1632569358:total:21.5:under"
   },
   {
-    "kalshi_ticker": "KXATPGTOTAL-26JUL16FARRUU-22",
+    "kalshi_ticker": "KXATPGTOTAL-26JUL16MERDRO-18",
     "market_type": "total",
-    "line": 21.5,
-    "label": "Jaime Faria vs Casper Ruud \u2014 Over 21.5",
-    "event_id": "KXATPGTOTAL-26JUL16FARRUU",
-    "settlement_date": "2026-07-16",
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "3292:1632548748:total:21.5:over",
-    "hardven_no_token": "3292:1632548748:total:21.5:under"
-  },
-  {
-    "kalshi_ticker": "KXATPGTOTAL-26JUL16MERDRO-23",
-    "market_type": "total",
-    "line": 22.5,
-    "label": "Daniel Merida Aguilar vs Titouan Droguet \u2014 Over 22.5",
+    "line": 17.5,
+    "label": "Daniel Merida Aguilar vs Titouan Droguet \u2014 Over 17.5",
     "event_id": "KXATPGTOTAL-26JUL16MERDRO",
     "settlement_date": "2026-07-16",
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "3326:1632571804:total:22.5:over",
-    "hardven_no_token": "3326:1632571804:total:22.5:under"
+    "hardven_yes_token": "3326:1632571806:total:17.5:over",
+    "hardven_no_token": "3326:1632571806:total:17.5:under"
   },
   {
     "kalshi_ticker": "KXATPGTOTAL-26JUL16MOLDAV-22",

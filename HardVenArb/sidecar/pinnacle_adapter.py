@@ -950,6 +950,36 @@ class PinnacleAdapter(BookAdapter):
         except Exception as ex:
             print(f"[PINNACLE WINDOW-WS] apply error: {type(ex).__name__}: {ex}")
 
+    def ws_verified_map(self, selection_ids: list, ttl: float | None = None) -> dict:
+        """Per-selection: is its league under LIVE WS coverage (a manager tab, OR its matchup pushed over the WS
+        recently) vs SCREENING-ONLY (an httpx-re-seed of an untabbed tail league)? The C# side uses this for
+        verify-on-detection — an arb on a screening-only leg fires /verify to promote a live tab before it's
+        trusted. Only meaningful in pure-reader mode; paho/REST subscribe every active league → all True."""
+        if not (self._window_ws_read and not self._dedicated_ws):
+            return {sid: True for sid in selection_ids}
+        ttl = ttl if ttl is not None else self._browser_ws_heartbeat_ttl
+        tab_lids = self._tab_manager.covered_lids() if self._tab_manager is not None else set()
+        now = time.time()
+        pushed = self._browser_odds_mid_ts
+        out = {}
+        for sid in selection_ids:
+            p = sid.split(":")
+            lid = p[0] if p else ""
+            mk = f"{p[0]}:{p[1]}" if len(p) >= 2 else ""
+            out[sid] = (lid in tab_lids) or (mk in pushed and (now - pushed[mk]) < ttl)
+        return out
+
+    async def request_league_verify(self, lid: str) -> dict:
+        """VERIFY-ON-DETECTION: promote league `lid` to a live WS tab on demand (the C# bot calls this when it
+        spots an arb on a screening-only leg). Delegates to the tab manager; no-op if it isn't running."""
+        if self._tab_manager is None:
+            return {"status": "no-tab-manager", "lid": str(lid)}
+        try:
+            status = await self._tab_manager.request_verify(str(lid))
+        except Exception as ex:
+            return {"status": f"error: {type(ex).__name__}", "lid": str(lid)}
+        return {"status": status, "lid": str(lid)}
+
     def reader_live_mids(self, ttl: float = 30.0) -> list:
         """Matchups ('lid:mid') the browser-WS READER has actually pushed odds for within `ttl` seconds — the
         ground truth for coverage (NOT /odds freshness, which _read_cache re-stamps for any served token). Prunes
@@ -1173,14 +1203,25 @@ class PinnacleAdapter(BookAdapter):
         return out
 
     async def straight_snapshot(self, lid: str, source: str = "authed") -> dict:
-        """DEBUG: current /markets/straight prices for a league from `source` ("authed"|"guest") as
-        {token: decimal}. Drives probe_reseed_delay.py, which polls BOTH sources over time to measure how far the
-        public guest feed lags the logged-in authed feed (the reason the re-seed defaults to authed)."""
-        if str(source).lower() == "guest":
+        """DEBUG: current /markets/straight prices for a league from `source` as {token: decimal}. Sources:
+          "cache"  — read the sidecar's LIVE cache (WS-fed for a covered league) → ZERO extra Pinnacle requests
+          "authed" — one logged-in REST call (real-time, any league; adds authed load)
+          "guest"  — one public REST call (no session)
+        Drives probe_reseed_delay.py, which polls two sources over time to measure the guest-vs-authed lag. The
+        "cache" source lets the probe use the already-live WS prices as the authed truth so it only adds the
+        (public, low-risk) guest calls."""
+        src = str(source).lower()
+        if src == "cache":
+            prefix = f"{lid}:"
+            with self._cache_lock:
+                prices = {tok: round(s.decimal_odds, 4) for tok, s in self._cache.items()
+                          if tok.startswith(prefix) and s.status == "open"}
+            return {"ts": time.time(), "source": "cache", "prices": prices}
+        if src == "guest":
             markets = await self._guest_get(f"/leagues/{lid}/markets/straight")
         else:
             markets = await self._http_get(f"/leagues/{lid}/markets/straight")
-        return {"ts": time.time(), "source": str(source).lower(), "prices": self._straight_prices(lid, markets)}
+        return {"ts": time.time(), "source": src, "prices": self._straight_prices(lid, markets)}
 
     async def browser_fetch_straight_probe(self, lid: str) -> dict:
         """DEBUG (feasibility probe): try fetching the AUTHED /markets/straight from INSIDE the logged-in browser

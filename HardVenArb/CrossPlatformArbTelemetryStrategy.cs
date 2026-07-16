@@ -156,6 +156,37 @@ public class CrossPlatformArbTelemetryStrategy
 
     private readonly object _windowLock = new();
 
+    // ── VERIFY-ON-DETECTION ─────────────────────────────────────────────────────
+    // The sidecar tags each /odds price 'wv' = under live WS coverage (a tab / recent push) vs SCREENING-ONLY
+    // (an httpx re-seed of an untabbed tail league). We record it per HardVen token; when a window opens on a
+    // screening-only leg we ask the sidecar to promote that league to a live tab (_requestHardVenVerify) so the
+    // arb gets confirmed on real-time prices, and we log HardVenWsVerified so analysis can trust WS-confirmed
+    // windows. Absent 'wv' (paho/REST mode, other adapters) → treated as verified (no-op).
+    private readonly ConcurrentDictionary<string, bool> _hardvenVerified = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, DateTime> _verifyRequested = new(StringComparer.Ordinal);
+    private readonly Action<string>? _requestHardVenVerify;
+    private static readonly TimeSpan VerifyDedupe = TimeSpan.FromSeconds(60);
+
+    /// <summary>Feed hook: record a HardVen token's WS-verified flag from the /odds 'wv' tag (default true).</summary>
+    public void SetHardVenVerified(string token, bool verified) => _hardvenVerified[token] = verified;
+
+    /// <summary>Is this HardVen token under live WS coverage? Unknown token → true (safe default; non-reader mode
+    /// never emits 'wv', so nothing is treated as screening-only there).</summary>
+    private bool IsHardVenVerified(string token) =>
+        !_hardvenVerified.TryGetValue(token, out var v) || v;
+
+    /// <summary>Ask the sidecar to promote a league to a live WS tab (verify-on-detection), deduped per league.</summary>
+    private void RequestVerify(string hardvenToken)
+    {
+        if (_requestHardVenVerify == null || string.IsNullOrEmpty(hardvenToken)) return;
+        int c = hardvenToken.IndexOf(':');
+        string lid = c > 0 ? hardvenToken.Substring(0, c) : hardvenToken;
+        var now = DateTime.UtcNow;
+        if (_verifyRequested.TryGetValue(lid, out var last) && now - last < VerifyDedupe) return;
+        _verifyRequested[lid] = now;
+        try { _requestHardVenVerify(lid); } catch { /* best-effort */ }
+    }
+
     // ── CSV channels ─────────────────────────────────────────────────────────
     private readonly Channel<string> _csvChannel =
         Channel.CreateUnbounded<string>(new UnboundedChannelOptions { SingleReader = true });
@@ -201,12 +232,14 @@ public class CrossPlatformArbTelemetryStrategy
         IReadOnlyList<CrossPair> pairs,
         ConcurrentDictionary<string, LocalOrderBook> books,
         decimal arbThreshold = 0.995m,
-        decimal depthFloor   = 1m)
+        decimal depthFloor   = 1m,
+        Action<string>? requestHardVenVerify = null)
     {
         _pairs        = pairs;
         _books        = books;
         _arbThreshold = arbThreshold;
         _depthFloor   = depthFloor;
+        _requestHardVenVerify = requestHardVenVerify;
         _csvBaseName      = "CrossArbTelemetry";
         _hedgeCsvBaseName = "CrossArbHedgeMonitor";
 

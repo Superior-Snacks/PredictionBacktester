@@ -102,13 +102,34 @@ async def odds(selections: str = Query(..., description="comma-separated selecti
     if not ids:
         raise HTTPException(400, "no selections")
     result = await adapter.odds(ids)
-    resp = {"selections": {sid: sel.to_api() for sid, sel in result.items()}, "ts": time.time()}
+    # wv = per-selection "WS-verified" (live WS coverage) vs screening-only (httpx re-seed of an untabbed tail
+    # league). The C# bot fires /verify on an arb whose leg is wv=false, then trusts it only once WS-confirmed.
+    wv_fn = getattr(adapter, "ws_verified_map", None)
+    wv = wv_fn(list(result.keys())) if wv_fn else {}
+    sels = {}
+    for sid, sel in result.items():
+        d = sel.to_api()
+        if sid in wv:
+            d["wv"] = bool(wv[sid])
+        sels[sid] = d
+    resp = {"selections": sels, "ts": time.time()}
     s = _session_state()
     if s is not None:
         resp["session_ready"] = bool(s.get("ready", True))   # rides along so the C# /odds poll sees readiness
         if "scheduled_dark" in s:
             resp["scheduled_dark"] = bool(s.get("scheduled_dark"))   # planned close (no alert) vs unexpected logout
     return resp
+
+
+# ── Verify-on-detection: promote a league to a live WS tab on demand ──────────
+@app.post("/verify")
+async def verify_league(lid: str):
+    """The C# bot calls this when it spots an arb on a screening-only (wv=false) leg — the sidecar opens a live
+    WS tab for that league so the arb can be confirmed on real-time prices before it's trusted/executed."""
+    fn = getattr(adapter, "request_league_verify", None)
+    if not fn:
+        raise HTTPException(400, "adapter has no request_league_verify")
+    return await fn(lid)
 
 
 # ── Pairing: catalog ──────────────────────────────────────────────────────────
