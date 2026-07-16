@@ -146,6 +146,13 @@ class PinnacleAdapter(BookAdapter):
         except ValueError:
             self._reader_reseed_sec = 90.0
         self._reader_reseed_task: Optional[asyncio.Task] = None
+        # Re-seed SOURCE: "authed" (DEFAULT) hits /markets/straight on the logged-in session → REAL, non-delayed
+        # prices (the guest feed can lag enough to swamp a 1¢ pre-live edge). It's the single most common request
+        # the real web app makes (normal endpoint/headers/cadence), a SHORT authed GET — not the persistent
+        # non-Chrome socket we removed — so the footprint is low + mostly pre-existing (balance already authed).
+        # "guest" = public API (no session, zero account link) if you prefer that trade. The authed path is made
+        # safe in reader mode by _rest_death_check treating the live reader WS as "up" (a re-seed blip won't kill).
+        self._reseed_source = os.environ.get("PINNACLE_RESEED_SOURCE", "authed").strip().lower()
         self._api_key = os.environ.get("PINNACLE_API_KEY", DEFAULT_API_KEY)
         self._session = os.environ.get("PINNACLE_SESSION", "")
         self._device = os.environ.get("PINNACLE_DEVICE_UUID", "")
@@ -364,9 +371,11 @@ class PinnacleAdapter(BookAdapter):
                   f"NOT open its own paho odds connection. Session/catalog/pairing run as normal; {src}")
             if self._window_ws_read:
                 self._reader_reseed_task = asyncio.create_task(self._reader_reseed_loop())
-                print(f"[PINNACLE] reader price backstop ON — guest re-seed of every active league every "
-                      f"{self._reader_reseed_sec:g}s (keeps stable/tail pre-live lines fresh; the WS gives live "
-                      "in-play deltas). _read_cache serves the REAL per-token ts so frozen books age out.")
+                print(f"[PINNACLE] reader price backstop ON — {self._reseed_source} re-seed of every active league "
+                      f"every {self._reader_reseed_sec:g}s (keeps stable/tail pre-live lines fresh; the WS gives "
+                      "live in-play deltas). _read_cache serves the REAL per-token ts so frozen books age out."
+                      + ("" if self._reseed_source == "guest" else
+                         " (authed = real prices; guest can lag a thin edge — PINNACLE_RESEED_SOURCE=guest to switch)"))
         else:
             extra = " + WINDOW-WS READER also on" if self._window_ws_read else ""
             print("[PINNACLE] ready — WS mode (LAZY: connects to Pinnacle on the FIRST /odds that names a "
@@ -467,8 +476,8 @@ class PinnacleAdapter(BookAdapter):
             for lid in [l for l in list(self._active_leagues.keys()) if l not in self._seeded]:
                 self._seeded.add(lid)                     # add before await so concurrent /odds don't double-seed
                 if self._window_ws_read and not self._dedicated_ws:
-                    await self._reseed_league_guest(lid)  # reader mode: seed from the PUBLIC guest API (no authed
-                else:                                     # dependency; the re-seed loop then keeps it fresh)
+                    await self._reseed_league(lid)        # reader mode: seed from PINNACLE_RESEED_SOURCE (authed
+                else:                                     # by default → real prices); loop then keeps it fresh
                     await self._refresh_league(lid)
             if not self._ws_started and self._active_leagues:
                 self._start_ws()                          # LAZY connect (the reconciler subscribes leagues gradually)
@@ -1140,24 +1149,29 @@ class PinnacleAdapter(BookAdapter):
         if markets:
             self._apply_straight_markets(lid, markets, time.time())
 
-    async def _reseed_league_guest(self, lid: str) -> int:
-        """Reader-mode re-seed via the GUEST API (public — no session, so it can't trip the death-check and isn't
-        tied to the account). Same market shape + `_market_tokens` keying as the authed path, so the reader's WS
-        tokens and these re-seed tokens are interchangeable in the cache."""
-        markets = await self._guest_get(f"/leagues/{lid}/markets/straight")
+    async def _reseed_league(self, lid: str) -> int:
+        """Reader-mode re-seed of one league's straight markets from PINNACLE_RESEED_SOURCE — "authed" (default,
+        real logged-in prices) or "guest" (public, no session). Same `_market_tokens` keying either way, so the
+        reader's WS tokens and these re-seed tokens are interchangeable in the cache. Returns tokens applied."""
+        if self._reseed_source == "guest":
+            markets = await self._guest_get(f"/leagues/{lid}/markets/straight")
+        else:
+            markets = await self._http_get(f"/leagues/{lid}/markets/straight", count_429=True)
         return self._apply_straight_markets(lid, markets, time.time()) if markets else 0
 
     async def _reader_reseed_loop(self) -> None:
         """Pure-reader-mode price backstop (see _reader_reseed_sec). Every cycle, re-fetch each active league's
-        straight markets from the GUEST API so STABLE pre-match lines and TAIL leagues (no tab) keep an up-to-date
-        price + fresh ts — which is what lets _read_cache serve the REAL per-token ts (no global 'fresh' lie) so a
-        league that truly stops updating ages out instead of showing a phantom. Guest data is public odds; live
-        execution (deferred) still verifies on the authed session."""
+        straight markets (authed by default → real prices) so STABLE pre-match lines and TAIL leagues (no tab)
+        keep an up-to-date price + fresh ts — which is what lets _read_cache serve the REAL per-token ts (no global
+        'fresh' lie) so a league that truly stops updating ages out instead of showing a phantom."""
         while True:
             try:
                 await asyncio.sleep(self._reader_reseed_sec)
             except asyncio.CancelledError:
                 break
+            # authed re-seed needs a live session; guest is public → runs regardless
+            if self._reseed_source != "guest" and self._session_source == "browser" and not self._session_ready:
+                continue
             leagues = list(self._active_leagues.keys())
             if not leagues:
                 continue
@@ -1165,7 +1179,7 @@ class PinnacleAdapter(BookAdapter):
             applied = 0
             for lid in leagues:
                 try:
-                    applied += await self._reseed_league_guest(lid)
+                    applied += await self._reseed_league(lid)
                 except Exception as ex:
                     print(f"[PINNACLE] reader re-seed error {lid}: {type(ex).__name__}: {ex}")
                 if self._jitter_ms > 0:
@@ -1173,7 +1187,7 @@ class PinnacleAdapter(BookAdapter):
             if time.time() - self._last_hb >= 30:
                 self._last_hb = time.time()
                 print(f"[PINNACLE] reader re-seed: {len(leagues)} league(s), {applied} token(s) "
-                      f"in {time.perf_counter() - t0:.2f}s (guest snapshot; cadence {self._reader_reseed_sec:g}s).")
+                      f"in {time.perf_counter() - t0:.2f}s ({self._reseed_source}; cadence {self._reader_reseed_sec:g}s).")
 
     # ── HTTP (catalog + rest mode) ───────────────────────────────────────────
     def _rest_death_check(self, reason: str) -> None:
@@ -1182,12 +1196,20 @@ class PinnacleAdapter(BookAdapter):
         (a genuine logout drops/auth-rejects the WS too). So a REST auth failure WHILE THE WS IS UP is just a
         STALE REPLAY x-session — re-sync it from the browser's latest token and DO NOT declare death. This fixes
         the false 'session DOWN' seen while the page stayed logged in (the REST replay 401'd while the WS kept
-        streaming odds). Only when the WS is ALSO down is this a real logout."""
-        if self._connected:
-            self._rest_auth_fails = 0                       # WS healthy → not a logout; stop the fail streak
+        streaming odds). Only when the WS is ALSO down is this a real logout. The "WS is up" signal covers BOTH
+        the dedicated paho WS (`_connected`) AND the browser-window READER (its Arcadia WS alive) — so an authed
+        re-seed blip in reader mode (where `_connected` is always False) can't false-kill a logged-in session."""
+        try:
+            reader_alive = (self._window_ws_read and self._browser is not None
+                            and self._browser.odds_ws_alive(self._browser_ws_heartbeat_ttl))
+        except Exception:
+            reader_alive = False
+        if self._connected or reader_alive:
+            self._rest_auth_fails = 0                       # odds WS healthy → not a logout; stop the fail streak
             if self._http is not None and self._session:
                 self._http.headers["x-session"] = self._session   # re-apply the browser's freshest x-session
-            print(f"[PINNACLE] {reason}, but the odds WS is CONNECTED — re-synced the REST x-session; NOT a logout "
+            src = "paho WS" if self._connected else "browser reader WS"
+            print(f"[PINNACLE] {reason}, but the odds {src} is LIVE — re-synced the REST x-session; NOT a logout "
                   "(the browser still holds the session).")
             return
         self._session_expired = True
