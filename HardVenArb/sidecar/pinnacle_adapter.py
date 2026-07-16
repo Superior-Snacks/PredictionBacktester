@@ -128,6 +128,14 @@ class PinnacleAdapter(BookAdapter):
             self._browser_odds_ttl = float(os.environ.get("PINNACLE_WINDOW_WS_TTL") or 30.0)
         except ValueError:
             self._browser_odds_ttl = 30.0
+        # Connection-heartbeat TTL for the reader's _feed_live: a stable pre-match line stops re-pushing, so the
+        # odds-recency TTL above false-deads it. odds_ws_alive() instead tracks ANY Arcadia frame (odds OR MQTT
+        # keepalive), staying live through a quiet spell; this bounds how long after a real drop the feed reads
+        # live (comfortably above the MQTT keepalive interval so pings keep it fresh).
+        try:
+            self._browser_ws_heartbeat_ttl = float(os.environ.get("PINNACLE_WINDOW_WS_HEARTBEAT_TTL") or 150.0)
+        except ValueError:
+            self._browser_ws_heartbeat_ttl = 150.0
         self._api_key = os.environ.get("PINNACLE_API_KEY", DEFAULT_API_KEY)
         self._session = os.environ.get("PINNACLE_SESSION", "")
         self._device = os.environ.get("PINNACLE_DEVICE_UUID", "")
@@ -439,10 +447,19 @@ class PinnacleAdapter(BookAdapter):
             return False
         if self._connected:
             return True                                   # dedicated paho WS connected
-        # WINDOW-WS READER path: the browser's own WS is delivering odds (no paho) — live while odds are recent.
-        if self._window_ws_read and self._browser_odds_last and \
-                (time.time() - self._browser_odds_last) < self._browser_odds_ttl:
-            return True
+        # WINDOW-WS READER path: liveness = the browser's Arcadia WS is still CONNECTED (delivering frames, incl.
+        # MQTT keepalive), a connection heartbeat — NOT an odds-recency gate. This keeps a stable pre-match line
+        # LIVE through a quiet spell (no line moving) while still ageing out on a real socket drop / logout. Falls
+        # back to the odds-recency gate if the session handle is momentarily unavailable.
+        if self._window_ws_read:
+            if self._browser is not None:
+                try:
+                    if self._browser.odds_ws_alive(self._browser_ws_heartbeat_ttl):
+                        return True
+                except Exception:
+                    pass
+            if self._browser_odds_last and (time.time() - self._browser_odds_last) < self._browser_odds_ttl:
+                return True
         return False
 
     def _read_cache(self, selection_ids: list[str], now: float) -> dict[str, Selection]:
@@ -782,8 +799,12 @@ class PinnacleAdapter(BookAdapter):
                     snap = list(self._cache.values())
                     fresh = sum(1 for s in snap if s.ts and now - s.ts < self._browser_odds_ttl)
                     live_n = sum(1 for s in snap if s.live)
+                    hb = ""                                # WS-connection heartbeat age (why feed_live holds when quiet)
+                    if self._browser is not None:
+                        laf = getattr(self._browser, "_arcadia_last_frame", 0.0)
+                        hb = f", ws_hb={now - laf:.0f}s" if laf else ", ws_hb=none"
                     extra = (f" | reader: applied={self._browser_odds_msgs}, "
-                             f"{fresh}/{len(snap)} fresh, {live_n} live, feed_live={self._feed_live()}")
+                             f"{fresh}/{len(snap)} fresh, {live_n} live{hb}, feed_live={self._feed_live()}")
                 print(f"[PINNACLE] session held {held_m:.0f}m  (ready={self._session_ready}, ws={ws}, "
                       f"cache={len(self._cache)} sel){extra}")
                 if not self._survive_logged and held_m >= self._survive_min:

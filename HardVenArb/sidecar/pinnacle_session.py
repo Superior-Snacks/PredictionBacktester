@@ -225,6 +225,8 @@ class PinnacleBrowserSession:
         self._probe_odds_ok = False      # confirmed a PUBLISH payload parses as odds JSON
         self._probe_start = 0.0
         self._probe_task = None
+        self._arcadia_last_frame = 0.0   # ts of the last ANY frame on an Arcadia WS (odds OR MQTT keepalive) —
+                                         # a CONNECTION heartbeat for odds_ws_alive() (survives quiet odds spells)
 
     # ── readiness / status ───────────────────────────────────────────────────────
     @property
@@ -242,6 +244,18 @@ class PinnacleBrowserSession:
             "last_capture_age_sec": round(time.time() - self._last_capture, 1) if self._last_capture else None,
             "headless": self._headless,
         }
+
+    def odds_ws_alive(self, ttl: float = 150.0) -> bool:
+        """CONNECTION-based liveness for the window-WS reader: True while the browser's Arcadia odds WS is OPEN and
+        exchanging frames. Two conditions: at least one Arcadia socket is currently open (a clean webSocketClosed
+        empties the set → immediate false), AND a frame arrived within `ttl`s. Because MQTT keepalive PINGRESP
+        arrives even when NO line is moving, this stays True through a quiet-but-connected feed — so a stable
+        pre-match price correctly reads LIVE — and flips false only on a real drop (no frames, not even pings, for
+        ttl) or logout. Superior to an odds-recency gate, which false-deads a stable line the moment it stops
+        ticking. Requires the received-frame path to be armed (probe or reader mode)."""
+        if not self._cdp_ws_reqs:
+            return False                                  # no Arcadia odds WS open (clean close detected)
+        return self._arcadia_last_frame > 0 and (time.time() - self._arcadia_last_frame) < ttl
 
     # ── lifecycle ────────────────────────────────────────────────────────────────
     async def start(self) -> None:
@@ -500,7 +514,9 @@ class PinnacleBrowserSession:
               "while only one tab is focused, background tabs survive → multi-tab coverage works.")
 
     def _on_cdp_ws_closed(self, params: dict) -> None:
-        self._ws_stream_buf.pop(params.get("requestId"), None)   # free the reassembly buffer for a closed WS
+        reqid = params.get("requestId")
+        self._ws_stream_buf.pop(reqid, None)          # free the reassembly buffer for a closed WS
+        self._cdp_ws_reqs.discard(reqid)              # drop it from the OPEN set so odds_ws_alive sees the close
 
     def _on_cdp_ws_frame_recv(self, params: dict) -> None:
         """Feed each SERVER->CLIENT frame on the Arcadia WS into a per-connection byte buffer, drain COMPLETE MQTT
@@ -509,6 +525,7 @@ class PinnacleBrowserSession:
         reqid = params.get("requestId")
         if reqid not in self._cdp_ws_reqs:
             return                                        # only the Arcadia odds socket (skip localhost/devtools WS)
+        self._arcadia_last_frame = time.time()            # ANY frame (odds OR MQTT keepalive/pong) = WS heartbeat
         resp = params.get("response") or {}
         data = resp.get("payloadData")
         if not data:
