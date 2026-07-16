@@ -35,7 +35,8 @@ TENNIS_SERIES = ("KXATP", "KXWTA", "KXITF")
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--sidecar", default=os.environ.get("HARDVEN_SIDECAR_URL", "http://127.0.0.1:8787"))
-    ap.add_argument("--ttl", type=float, default=30.0, help="seconds; a matchup the reader pushed within this is 'live'")
+    ap.add_argument("--ttl", type=float, default=120.0, help="seconds; a matchup the reader pushed within this is "
+                    "'live' (pre-match lines tick slowly, so 30s undercounts — 120s is safer)")
     args = ap.parse_args()
 
     d = json.load(open(os.path.join(HERE, "cross_pairs.json"), encoding="utf-8-sig"))

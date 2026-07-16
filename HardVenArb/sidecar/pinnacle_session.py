@@ -215,7 +215,8 @@ class PinnacleBrowserSession:
         self._ws_stream_buf: dict = {}   # per-Arcadia-WS-requestId byte buffer for MQTT stream reassembly
         self._probe_recv_total = 0       # all received CDP WS frames on the Arcadia socket
         self._probe_recv_publish = 0     # of those, MQTT PUBLISH (an odds update)
-        self._probe_leagues: set = set() # distinct league ids seen in PUBLISH topics
+        self._probe_leagues: dict = {}   # league id -> last ts we saw a PUBLISH for it (CURRENTLY-active, not
+                                         # accumulated) — so a multi-league test shows which leagues STILL stream
         self._probe_topics: set = set()  # distinct topic shapes (capped)
         self._probe_odds_ok = False      # confirmed a PUBLISH payload parses as odds JSON
         self._probe_start = 0.0
@@ -478,7 +479,7 @@ class PinnacleBrowserSession:
                 self._probe_topics.add(topic[:48])
             m = re.search(r"/(?:sp|lg)/(\d+)", topic) or re.search(r"matchups/(\d+)", topic)
             if m:
-                self._probe_leagues.add(m.group(1))
+                self._probe_leagues[m.group(1)] = time.time()
             if not self._probe_odds_ok:                   # confirm ONCE that a PUBLISH payload is real odds JSON
                 try:
                     obj = json.loads(payload.decode("utf-8", "replace"))
@@ -502,16 +503,17 @@ class PinnacleBrowserSession:
                 await asyncio.sleep(15)
             except asyncio.CancelledError:
                 break
-            el = time.time() - self._probe_start
-            n, pub, lg = self._probe_recv_total, self._probe_recv_publish, len(self._probe_leagues)
+            now = time.time()
+            el = now - self._probe_start
+            active = sorted(k for k, ts in self._probe_leagues.items() if now - ts < 45)   # streaming in last 45s
+            n, pub = self._probe_recv_total, self._probe_recv_publish
             verdict = ("GREEN — odds flow off the page WS" if pub > 0 and self._probe_odds_ok
                        else "AMBER — WS frames but no odds PUBLISH yet (open a sport with live odds?)" if n > 0
                        else "RED — NO received frames captured (odds WS likely worker-hidden → plan in-page shim)")
             tag = "WS-READ" if self._window_ws_read else "WS-READ-PROBE"
-            print(f"[{tag}] {el:.0f}s | recv={n} PUBLISH(odds)={pub} leagues={lg} "
+            print(f"[{tag}] {el:.0f}s | recv={n} PUBLISH(odds)={pub} ACTIVE-leagues={len(active)} "
                   f"odds_json={'yes' if self._probe_odds_ok else 'no'} | {verdict}"
-                  + (f" | leagues: {sorted(self._probe_leagues)[:10]}" if lg else "")
-                  + (f" | topics: {sorted(self._probe_topics)[:4]}" if self._probe_topics else ""))
+                  + (f" | active(<45s): {active[:12]}" if active else ""))
 
     def _on_cdp_ws_created(self, params: dict) -> None:
         url = params.get("url", "") or ""
