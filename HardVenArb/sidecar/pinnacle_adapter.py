@@ -208,6 +208,8 @@ class PinnacleAdapter(BookAdapter):
         # pinnacle_session.py). In browser mode the feed stays idle until login is captured (_session_ready).
         self._session_source = os.environ.get("PINNACLE_SESSION_SOURCE", "env").strip().lower()
         self._browser = None                                   # PinnacleBrowserSession when source == "browser"
+        self._tab_manager = None                               # LeagueTabManager when HARDVEN_TAB_MANAGER=1 (reader)
+        self._tab_manager_on = os.environ.get("HARDVEN_TAB_MANAGER") == "1"
         self._session_ready = self._session_source != "browser"  # env mode = ready now; browser waits for login
         self._balance = 0.0                                    # last wallet amount (account currency, e.g. EUR)
         self._balance_currency = ""
@@ -319,10 +321,22 @@ class PinnacleAdapter(BookAdapter):
                     print(f"[PINNACLE] session source = BROWSER + LIFECYCLE (sports={self._lifecycle_sports}, "
                           f"{mode}, lead {self._lifecycle_lead}m) — the browser opens/closes on the game "
                           "schedule; dark between sessions.")
+                    if self._tab_manager_on:
+                        print("[PINNACLE] HARDVEN_TAB_MANAGER=1 IGNORED under PINNACLE_LIFECYCLE (the browser cycles "
+                              "per block) — run the tab manager in the non-lifecycle window-reader mode.")
                 else:
                     await self._browser.start()
                     print("[PINNACLE] session source = BROWSER — log in to the window; the feed waits for "
                           "capture, then seeds + connects automatically.")
+                    if self._tab_manager_on and self._window_ws_read:
+                        from tab_manager import LeagueTabManager
+                        pairs_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                                  "cross_pairs.json")
+                        self._tab_manager = LeagueTabManager(self._browser, self.reader_live_mids, pairs_path)
+                        self._tab_manager.start()
+                    elif self._tab_manager_on:
+                        print("[PINNACLE] HARDVEN_TAB_MANAGER=1 needs PINNACLE_WINDOW_WS_READ=1 (the reader) to be "
+                              "useful — not starting the tab manager.")
             except Exception as ex:
                 self._browser = None
                 print(f"[PINNACLE] BROWSER session launch FAILED ({type(ex).__name__}: {ex}). Sidecar stays up — "
@@ -373,6 +387,11 @@ class PinnacleAdapter(BookAdapter):
             try:
                 self._client.loop_stop()
                 self._client.disconnect()
+            except Exception:
+                pass
+        if self._tab_manager is not None:
+            try:
+                await self._tab_manager.stop()               # cancel the loop + close its tabs before the browser
             except Exception:
                 pass
         if self._browser is not None:

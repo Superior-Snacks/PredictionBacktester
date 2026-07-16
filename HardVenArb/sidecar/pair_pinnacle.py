@@ -25,7 +25,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
+import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -72,6 +74,23 @@ def _canon(key: str) -> str:
     return _TEAM_ALIASES.get(key, key)
 
 
+# ── league URL (for the browser-WS tab manager: open one tab per gap league) ────
+def _slugify(s: str) -> str:
+    """Pinnacle URL slug from a display name: strip accents (their name field is already ASCII-folded, e.g.
+    'Bastad' for Båstad), collapse every non-alphanumeric run to a single hyphen, lowercase. VERIFIED against
+    the live site: 'ATP Bastad - R16' → 'atp-bastad-r16', 'ITF Men Uriage - R16' → 'itf-men-uriage-r16'."""
+    s = unicodedata.normalize("NFKD", s or "").encode("ascii", "ignore").decode("ascii")
+    return re.sub(r"[^a-zA-Z0-9]+", "-", s).strip("-").lower()
+
+
+def _league_url(sport: str, league_name: str) -> str:
+    """Pinnacle matchups-board URL for a league — '/en/{sport}/{league}/matchups/'. Navigating a tab here makes
+    the page subscribe that league's WS (LEAGUE-scoped topics matchups/reg/lg/{lid}/…), which is how the tab
+    manager gives the reader full-slate coverage. Empty string if either name is missing (no URL written)."""
+    sp, lg = _slugify(sport), _slugify(league_name)
+    return f"https://www.pinnacle.bet/en/{sp}/{lg}/matchups/" if (sp and lg) else ""
+
+
 # ── ISO-8601 UTC start_time (vs bookmaker's "YYYYMMDDHH:MM:SS") ─────────────────
 def _pin_dt(start: str):
     """Pinnacle start_time '2026-06-25T16:10:00Z' → naive UTC datetime; None if unparseable."""
@@ -109,7 +128,8 @@ def index_catalog(selections: list[dict]) -> dict:
             continue
         g = games.setdefault(gid, {"start": (s.get("start_time") or ""), "three_way": False,
                                    "teams": {}, "draw": None, "league": _league_id(sid),
-                                   "sport": (s.get("sport") or "")})
+                                   "sport": (s.get("sport") or ""),
+                                   "league_name": (s.get("league") or "")})   # display name → URL slug
         if s.get("three_way"):
             g["three_way"] = True
         name = s.get("selection_name", "")
@@ -193,7 +213,14 @@ def main() -> None:
               "city ('Kansas City') never equals a Pinnacle full name ('Kansas City Royals'). "
               "Install it:  pip install rapidfuzz")
 
-    book = index_catalog(fetch_catalog(args.sidecar, args.catalog_timeout))
+    cat = fetch_catalog(args.sidecar, args.catalog_timeout)
+    book = index_catalog(cat)
+    # leagueId -> (sport, league display name) for the tab-manager URL, from the SAME catalog fetch.
+    lid_meta: dict[str, tuple[str, str]] = {}
+    for s in cat:
+        lid = (s.get("selection_id", "") or "").split(":")[0]
+        if lid and lid not in lid_meta and (s.get("league") or s.get("sport")):
+            lid_meta[lid] = (s.get("sport") or "", s.get("league") or "")
     print(f"[PAIR] {sum(len(v) for v in book.values())} Pinnacle games ({len(book)} matchups) in /catalog")
 
     pairs = json.loads(Path(args.pairs).read_text(encoding="utf-8"))
@@ -287,8 +314,21 @@ def main() -> None:
             print(f"[PAIR] price-gate (tol={args.price_tol}): {gate[0]} consistent | {gate[1]} inverted-fixed | "
                   f"{gate[2]} wrong-game rejected | {gate[3]} unvalidated (no price)")
 
+    # league URL for the browser-WS tab manager (one tab per gap league). Backfills EVERY filled pair — new AND
+    # previously-filled (pre-dating this field) — that lacks a URL, keyed by the token's leagueId.
+    url_n = 0
+    for e in pairs:
+        tok = e.get("hardven_yes_token") or ""
+        if tok.count(":") >= 2 and not e.get("hardven_league_url"):
+            meta = lid_meta.get(tok.split(":")[0])
+            if meta and (u := _league_url(*meta)):
+                e["hardven_league_url"] = u
+                url_n += 1
+    if url_n:
+        print(f"[PAIR] tagged {url_n} pair(s) with a league URL (tab manager)")
+
     valid = sum(1 for e in pairs if e.get("hardven_yes_token") and e.get("hardven_no_token"))
-    if args.write and (filled or gate[1] or gate[2]):
+    if args.write and (filled or gate[1] or gate[2] or url_n):
         atomic_write_json(args.pairs, pairs)   # atomic → the C# hot-reload never reads a partial cross_pairs.json
         print(f"\n[PAIR] wrote {valid} filled pair(s) → {args.pairs}")
     elif not args.write:

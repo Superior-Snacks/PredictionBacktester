@@ -491,6 +491,29 @@ class PinnacleBrowserSession:
             print(f"[PINNACLE SESSION] CDP armed on a new tab (tabs captured: {len(self._cdp_sessions)}).")
         return True
 
+    async def open_tab(self, url: str):
+        """Open a NEW tab, arm CDP capture on it BEFORE navigating (so its odds WS is caught from
+        webSocketCreated), navigate to `url`, and return the page. This is how the league tab manager gives the
+        reader league-scoped coverage (one tab per gap league). Returns None on failure. Never raises."""
+        if self._ctx is None:
+            return None
+        try:
+            pg = await self._ctx.new_page()
+            await self._attach_cdp_to_page(pg)           # arm BEFORE navigation so we catch webSocketCreated
+            await pg.goto(url, wait_until="domcontentloaded", timeout=60_000)
+            return pg
+        except Exception as ex:
+            print(f"[PINNACLE SESSION] open_tab failed for {url[:70]} ({type(ex).__name__}: {ex}).")
+            return None
+
+    async def close_tab(self, page) -> None:
+        """Close a tab opened by the tab manager (its CDP state is freed by the page 'close' handler). Best-effort."""
+        try:
+            if page is not None:
+                await page.close()
+        except Exception:
+            pass
+
     async def _open_test_tabs(self) -> None:
         """PINNACLE_TAB_TEST=<url1>,<url2>[,...] — open each URL in its OWN tab to test multi-tab WS survival.
         In a real headed window only one tab is foregrounded, so the rest are BACKGROUND tabs; watch the
@@ -502,14 +525,10 @@ class PinnacleBrowserSession:
             return
         print(f"[TAB-TEST] opening {len(urls)} tab(s) for the background-WS survival test:")
         for u in urls:
-            try:
-                pg = await self._ctx.new_page()
-                await self._attach_cdp_to_page(pg)       # arm BEFORE navigation so we catch webSocketCreated
-                await pg.goto(u, wait_until="domcontentloaded", timeout=60_000)
+            pg = await self.open_tab(u)
+            if pg is not None:
                 print(f"[TAB-TEST]   opened tab → {u[:80]}")
-                await asyncio.sleep(2.0)                  # let its odds WS subscribe before opening the next
-            except Exception as ex:
-                print(f"[TAB-TEST]   tab open failed for {u[:60]} ({type(ex).__name__}: {ex})")
+            await asyncio.sleep(2.0)                      # let its odds WS subscribe before opening the next
         print("[TAB-TEST] tabs open. Focus ONE tab; watch [WS-READ] active(<45s). If ALL league ids stay listed "
               "while only one tab is focused, background tabs survive → multi-tab coverage works.")
 
