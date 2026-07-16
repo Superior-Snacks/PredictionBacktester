@@ -136,6 +136,16 @@ class PinnacleAdapter(BookAdapter):
             self._browser_ws_heartbeat_ttl = float(os.environ.get("PINNACLE_WINDOW_WS_HEARTBEAT_TTL") or 150.0)
         except ValueError:
             self._browser_ws_heartbeat_ttl = 150.0
+        # READER-MODE PRICE BACKSTOP: the browser WS is CHANGES-ONLY, so a STABLE pre-match line never re-pushes
+        # and a TAIL league (no tab, not on the board) would freeze at its one-time seed. So in pure-reader mode
+        # a loop re-fetches every active league's straight markets from the GUEST API on this cadence. MUST be
+        # comfortably < the C# HARDVEN_BOOK_FRESH_SEC gate (120) so a re-seeded stable line never ages out
+        # between cycles (accounting for the walk time across all active leagues).
+        try:
+            self._reader_reseed_sec = float(os.environ.get("PINNACLE_READER_RESEED_SEC") or 90.0)
+        except ValueError:
+            self._reader_reseed_sec = 90.0
+        self._reader_reseed_task: Optional[asyncio.Task] = None
         self._api_key = os.environ.get("PINNACLE_API_KEY", DEFAULT_API_KEY)
         self._session = os.environ.get("PINNACLE_SESSION", "")
         self._device = os.environ.get("PINNACLE_DEVICE_UUID", "")
@@ -352,6 +362,11 @@ class PinnacleAdapter(BookAdapter):
                    "no odds source active — set PINNACLE_WINDOW_WS_READ=1 for the browser-window reader, or =1 here.")
             print("[PINNACLE] ready — WS mode, DEDICATED WS DISABLED (PINNACLE_DEDICATED_WS=0): the sidecar will "
                   f"NOT open its own paho odds connection. Session/catalog/pairing run as normal; {src}")
+            if self._window_ws_read:
+                self._reader_reseed_task = asyncio.create_task(self._reader_reseed_loop())
+                print(f"[PINNACLE] reader price backstop ON — guest re-seed of every active league every "
+                      f"{self._reader_reseed_sec:g}s (keeps stable/tail pre-live lines fresh; the WS gives live "
+                      "in-play deltas). _read_cache serves the REAL per-token ts so frozen books age out.")
         else:
             extra = " + WINDOW-WS READER also on" if self._window_ws_read else ""
             print("[PINNACLE] ready — WS mode (LAZY: connects to Pinnacle on the FIRST /odds that names a "
@@ -380,7 +395,8 @@ class PinnacleAdapter(BookAdapter):
         if self._ws_watchdog_task and not self._ws_watchdog_task.done():
             self._ws_watchdog_task.cancel()
         for t in (self._reconciler_task, self._status_task, self._session_ka_task,
-                  self._lifecycle_task, self._pairing_task, self._session_age_task):
+                  self._lifecycle_task, self._pairing_task, self._session_age_task,
+                  self._reader_reseed_task):
             if t and not t.done():
                 t.cancel()
         if self._client is not None:
@@ -450,7 +466,10 @@ class PinnacleAdapter(BookAdapter):
             # browser exactly (initial REST snapshot, then WS — no re-polling).
             for lid in [l for l in list(self._active_leagues.keys()) if l not in self._seeded]:
                 self._seeded.add(lid)                     # add before await so concurrent /odds don't double-seed
-                await self._refresh_league(lid)
+                if self._window_ws_read and not self._dedicated_ws:
+                    await self._reseed_league_guest(lid)  # reader mode: seed from the PUBLIC guest API (no authed
+                else:                                     # dependency; the re-seed loop then keeps it fresh)
+                    await self._refresh_league(lid)
             if not self._ws_started and self._active_leagues:
                 self._start_ws()                          # LAZY connect (the reconciler subscribes leagues gradually)
         return self._read_cache(selection_ids, now)
@@ -484,6 +503,13 @@ class PinnacleAdapter(BookAdapter):
     def _read_cache(self, selection_ids: list[str], now: float) -> dict[str, Selection]:
         out: dict[str, Selection] = {}
         live = self._feed_live()
+        # PURE-READER MODE serves the REAL per-token ts: the browser WS is changes-only and coverage is PARTIAL
+        # (only tab'd/board leagues stream), so a GLOBAL "fresh while connected" stamp would serve a frozen
+        # TAIL-league seed as fresh → phantom arb. Instead every active league is re-seeded from the guest API
+        # (<gate cadence) so a genuinely-live token's ts stays recent; a token that stops updating (league gone,
+        # market pulled) ages out via the C# gate. paho/legacy modes keep the global stamp (they subscribe every
+        # active league, so nothing is frozen).
+        reader_mode = self._window_ws_read and not self._dedicated_ws
         with self._cache_lock:
             for sid in selection_ids:
                 s = self._cache.get(sid)
@@ -493,7 +519,7 @@ class PinnacleAdapter(BookAdapter):
                 # re-tick but is still live — Pinnacle pushes any change/suspend). Not live (disconnected / given
                 # up / logged out) → serve stored ts → it ages → C# clears. REST mode: the poller already stamps
                 # ts on each fetch, so serve it as-is.
-                ts = now if (self._mode == "ws" and live) else s.ts
+                ts = s.ts if reader_mode else (now if (self._mode == "ws" and live) else s.ts)
                 # Pass through the cached STATUS ("open" / "suspended") so an OFFLINE Pinnacle market reaches
                 # the C# as suspended → empty book → no arb. (Was hardcoded "open", which hid suspensions.)
                 status = s.status
@@ -1084,15 +1110,12 @@ class PinnacleAdapter(BookAdapter):
                 print(f"[PINNACLE] refresh: {len(leagues)} leagues (serial) in {dt:.2f}s "
                       f"(cache={len(self._cache)} sel){rl}")
 
-    async def _refresh_league(self, lid: str) -> None:
-        """One-shot pre-match SNAPSHOT seed of a league (moneyline + spread + total). Prices carry `designation`
-        (home/away/draw or over/under) and `points` DIRECTLY — exactly like the WS — via the SAME `_market_tokens`
-        builder, so REST-seeded tokens key identically to WS tokens and to pair_derivatives. (Reads designation
-        straight; the OLD code's array-position map silently INVERTED home/away — fixed long ago.)"""
-        markets = await self._http_get(f"/leagues/{lid}/markets/straight", count_429=True)
-        if not markets:
-            return
-        now = time.time()
+    def _apply_straight_markets(self, lid: str, markets: list, now: float) -> int:
+        """Upsert every OPEN period-0 moneyline/spread/total token from a /markets/straight snapshot into the
+        cache (shared by the AUTHED seed `_refresh_league` and the GUEST reader re-seed `_reseed_league_guest`).
+        Each token's ts=now marks it fresh; a token no longer in the snapshot is left to age out via its ts (no
+        reconcile here — the WS `_apply` does the explicit suspend). Returns the token count applied."""
+        n = 0
         for mk in markets:
             mid = mk.get("matchupId")
             if mid is None:
@@ -1100,13 +1123,57 @@ class PinnacleAdapter(BookAdapter):
             for token, sel in self._market_tokens(lid, mid, mk, now):
                 with self._cache_lock:
                     old = self._cache.get(token)
-                    # A REST /markets/straight snapshot is PRE-MATCH-blind — it must NOT downgrade an IN-PLAY tag
-                    # the WS set (this 4-min keepalive re-seed was clobbering live→pre-live, so in-play arbs
-                    # vanished after the first live game). Keep live once the WS has flagged it; the game's `del`
-                    # clears it when it ends.
+                    # A /markets/straight snapshot is PRE-MATCH-blind — it must NOT downgrade an IN-PLAY tag the
+                    # WS set (this re-seed was clobbering live→pre-live, so in-play arbs vanished after the first
+                    # live game). Keep live once the WS has flagged it; the game's `del` clears it when it ends.
                     if old is not None and old.live and not sel.live:
                         sel.live = True
                     self._cache[token] = sel
+                    n += 1
+        return n
+
+    async def _refresh_league(self, lid: str) -> None:
+        """One-shot pre-match SNAPSHOT seed of a league (moneyline + spread + total) via the AUTHED API. Prices
+        carry `designation` (home/away/draw or over/under) and `points` DIRECTLY — exactly like the WS — via the
+        SAME `_market_tokens` builder, so seeded tokens key identically to WS tokens and to pair_derivatives."""
+        markets = await self._http_get(f"/leagues/{lid}/markets/straight", count_429=True)
+        if markets:
+            self._apply_straight_markets(lid, markets, time.time())
+
+    async def _reseed_league_guest(self, lid: str) -> int:
+        """Reader-mode re-seed via the GUEST API (public — no session, so it can't trip the death-check and isn't
+        tied to the account). Same market shape + `_market_tokens` keying as the authed path, so the reader's WS
+        tokens and these re-seed tokens are interchangeable in the cache."""
+        markets = await self._guest_get(f"/leagues/{lid}/markets/straight")
+        return self._apply_straight_markets(lid, markets, time.time()) if markets else 0
+
+    async def _reader_reseed_loop(self) -> None:
+        """Pure-reader-mode price backstop (see _reader_reseed_sec). Every cycle, re-fetch each active league's
+        straight markets from the GUEST API so STABLE pre-match lines and TAIL leagues (no tab) keep an up-to-date
+        price + fresh ts — which is what lets _read_cache serve the REAL per-token ts (no global 'fresh' lie) so a
+        league that truly stops updating ages out instead of showing a phantom. Guest data is public odds; live
+        execution (deferred) still verifies on the authed session."""
+        while True:
+            try:
+                await asyncio.sleep(self._reader_reseed_sec)
+            except asyncio.CancelledError:
+                break
+            leagues = list(self._active_leagues.keys())
+            if not leagues:
+                continue
+            t0 = time.perf_counter()
+            applied = 0
+            for lid in leagues:
+                try:
+                    applied += await self._reseed_league_guest(lid)
+                except Exception as ex:
+                    print(f"[PINNACLE] reader re-seed error {lid}: {type(ex).__name__}: {ex}")
+                if self._jitter_ms > 0:
+                    await asyncio.sleep(random.uniform(0, self._jitter_ms / 1000.0))
+            if time.time() - self._last_hb >= 30:
+                self._last_hb = time.time()
+                print(f"[PINNACLE] reader re-seed: {len(leagues)} league(s), {applied} token(s) "
+                      f"in {time.perf_counter() - t0:.2f}s (guest snapshot; cadence {self._reader_reseed_sec:g}s).")
 
     # ── HTTP (catalog + rest mode) ───────────────────────────────────────────
     def _rest_death_check(self, reason: str) -> None:
