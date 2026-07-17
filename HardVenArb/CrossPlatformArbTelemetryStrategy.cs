@@ -172,9 +172,11 @@ public class CrossPlatformArbTelemetryStrategy
     /// <summary>Feed hook: record a HardVen token's WS-verified flag from the /odds 'wv' tag (default true).</summary>
     public void SetHardVenVerified(string token, bool verified) => _hardvenVerified[token] = verified;
 
-    /// <summary>Is this HardVen token under live WS coverage? Unknown token → true (safe default; non-reader mode
-    /// never emits 'wv', so nothing is treated as screening-only there).</summary>
-    private bool IsHardVenVerified(string token) =>
+    /// <summary>Is this HardVen token under live WS coverage (wv=true) vs SCREENING-ONLY (an httpx re-seed of an
+    /// untabbed tail league)? Unknown token → true (safe default; non-reader mode never emits 'wv', so nothing is
+    /// treated as screening-only there). The executor gates real placement on this so a bet never fires on an
+    /// unverified screening-only price.</summary>
+    public bool IsHardVenVerified(string token) =>
         !_hardvenVerified.TryGetValue(token, out var v) || v;
 
     /// <summary>Ask the sidecar to promote a league to a live WS tab (verify-on-detection), deduped per league.</summary>

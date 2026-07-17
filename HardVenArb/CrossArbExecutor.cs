@@ -69,6 +69,13 @@ public class CrossArbExecutor
     // (only once the in-play execution model exists). Telemetry-only mode never reaches here.
     private readonly bool _preLiveOnly = Environment.GetEnvironmentVariable("HARDVEN_PRELIVE_ONLY") != "0";
 
+    // WS-VERIFY gate: never place a real bet on a HardVen leg whose price is SCREENING-ONLY (an httpx re-seed of
+    // an untabbed tail league, possibly stale/delayed) — only on a leg confirmed on the live browser WS
+    // (sidecar tag wv=true). The telemetry fires /verify on the same window open to promote that league to a live
+    // tab, so once it's WS-covered the re-opened arb executes. No-op in non-reader mode (wv always true).
+    // HARDVEN_REQUIRE_WS_VERIFIED=0 disables (e.g. paho/dedicated-WS mode where everything is already live).
+    private readonly bool _requireWsVerified = Environment.GetEnvironmentVariable("HARDVEN_REQUIRE_WS_VERIFIED") != "0";
+
     // When venue time-skew exceeds this value, block and REST-verify before firing.
     private const double StaleGateMs = 5_000.0;
     // When either book's absolute age exceeds this, REST-verify regardless of relative skew.
@@ -656,6 +663,17 @@ public class CrossArbExecutor
         if (_preLiveOnly && chosenHardVenBook.IsLive)
         {
             Console.WriteLine($"[EXEC SKIP] {pair.Label}: IN-PLAY (HARDVEN_PRELIVE_ONLY=1) — pre-live only for now");
+            return;
+        }
+
+        // WS-VERIFY gate: the chosen HardVen leg's price must be confirmed on the live browser WS, not a
+        // screening-only httpx re-seed of an untabbed tail league. If unverified, skip — the telemetry has
+        // already fired /verify on this window open (promoting the league to a live tab), so the re-opened arb
+        // will pass once it's WS-covered. Never risks real money on a possibly-stale screening price.
+        if (_requireWsVerified && !_telemetry.IsHardVenVerified(hardvenToken))
+        {
+            Console.WriteLine($"[EXEC SKIP] {pair.Label}: HardVen leg NOT WS-verified (screening-only) — " +
+                              "awaiting verify tab; will execute once WS-confirmed");
             return;
         }
 
