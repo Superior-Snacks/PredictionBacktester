@@ -39,7 +39,8 @@ public record PositionStatus(
 
 // Summary of what RecoverUnhedgedAsync did with the unhedged delta.
 public record RecoveryResult(
-    string  Outcome,        // HEDGE_COMPLETED | REVERSED_KALSHI | REVERSED_HARDVEN | DUST_ABSORBED_KALSHI | DUST_ABSORBED_HARDVEN | ORPHANED | HALT
+    string  Outcome,        // HEDGE_COMPLETED | REVERSED_KALSHI | HELD_HARDVEN (excess Pinnacle held to settlement —
+                            // never reversed) | DUST_ABSORBED_KALSHI | DUST_ABSORBED_HARDVEN | ORPHANED | HALT
     decimal RecoveredQty,   // contracts/shares successfully hedged or reversed
     decimal LossUsd         // realized loss from the cleanup action
 );
@@ -127,6 +128,10 @@ public class CrossArbExecutor
     private readonly CancellationTokenSource _cts  = new();
     private          int     _totalExecuted        = 0;
     private          int     _earlyExitsCompleted  = 0;
+    // EARLY EXIT closes a position early by selling BOTH legs to lock profit before settlement. The Pinnacle
+    // leg is IRREVERSIBLE (can't be sold back), and the model is HOLD-TO-SETTLEMENT / only-adjust-Kalshi, so
+    // early exit is OFF by default. HARDVEN_EARLY_EXIT=1 re-enables it (only meaningful on a reversible venue).
+    private readonly bool    _earlyExitEnabled = Environment.GetEnvironmentVariable("HARDVEN_EARLY_EXIT") == "1";
     private          int     _triesRemaining       = -1;  // -1 = unlimited
     private          int     _tryLimit             = -1;  // original N, for display
     private          CancellationTokenSource? _outerCts;
@@ -161,18 +166,15 @@ public class CrossArbExecutor
     private const  decimal  CleanupDustUsd         = 0.25m; // absorb silently (no halt) if reversal fails and value < $0.25
 
     // Recovery / halt policy (configurable from the constructor; defaults preserve prior behavior).
-    // Ops rule: the only halts are daily-loss tripwire, manual, and network errors. A naked leg is
-    // always worked (hedge if net ≤ _hedgeMaxNet, else relentless reverse); if it still can't flatten
-    // (venue paused/closed) the pair is orphaned and the bot keeps trading — it never halts.
+    // Ops rule: the only halts are daily-loss tripwire, manual, and network errors. A naked leg is always
+    // worked, but ONLY on the KALSHI side — Kalshi is the exchange leg we can adjust: excess KALSHI is reversed
+    // (sold back); excess PINNACLE (Kalshi under-filled) is hedged UP on Kalshi if net ≤ _hedgeMaxNet, else HELD
+    // to settlement. The Pinnacle bet is irreversible, so it is NEVER sold back and never orphaned.
     private readonly bool    _perTradeTripwire;     // halt on a single fill landing >N× worse than its edge
     private readonly decimal _tradeMaxLossMult;     // the N above (was the const 3.0)
     private readonly decimal _hedgeMaxNet;          // complete a hedge only if net ≤ this (1.0 = break-even)
-    private readonly int     _reverseFloorCents;    // relentless reverse sweeps the book down to this price
+    private readonly int     _reverseFloorCents;    // Kalshi reverse sweeps the book down to this price (Kalshi only)
     private readonly int     _reverseMaxAttempts;   // sweep attempts before orphaning the remainder
-    // Dollar-denominated HardVen FAK can sweep far past the intended count on thin books (e.g. 106 shares
-    // when balanced=20). An over-fill that large must be reversed, not matched with a Kalshi hedge that
-    // would open a huge unintended position. Guard: if pUnhedged > balancedQty × this fraction, reverse.
-    private const  decimal  MaxHedgeOverfillFraction   = 0.25m;
     // Cap the HardVen IOC limit buffer to this fraction of the ask price. Without the cap, the flat
     // halfAllow buffer doubles the dollar budget on cheap legs (ask=0.05 → limit=0.10+).
     private const  decimal  MaxHardVenLimitBufferPct      = 0.15m;
@@ -1324,12 +1326,14 @@ public class CrossArbExecutor
                 bool kReversed = recovery?.Outcome == "REVERSED_KALSHI";
                 string reconcileOrderId = (kUnhedged == 0 || kReversed) ? kOrderId : "";
                 decimal reversedKalshiQty = kReversed ? recovery!.RecoveredQty : 0m;
-                // pFilled (not balancedQty) whenever HardVen was left intact on the venue: an absorbed HardVen
-                // dust, OR a Case-A recovery that only touched Kalshi (reversed / absorbed the Kalshi
-                // excess, HardVen untouched). Keeps a fractional HardVen under-fill remainder — now possible
-                // since balancedQty floors to whole sets — from tripping reconcile's >0.5 HardVen tolerance.
+                // pFilled (not balancedQty) whenever the Pinnacle position was left INTACT on the venue:
+                //   * Case-A recovery only touched Kalshi (reversed/absorbed the Kalshi excess), OR
+                //   * Case-B recovery — Pinnacle is NEVER reversed now, so both HELD_HARDVEN (excess held to
+                //     settlement) and HEDGE_COMPLETED (excess hedged up on Kalshi) leave Pinnacle at pFilled.
+                // Using pFilled keeps the held/intact excess from tripping reconcile's >0.5 HardVen over-read halt.
                 decimal expectedHardVenVenue =
-                    recovery?.Outcome is "DUST_ABSORBED_HARDVEN" or "REVERSED_KALSHI" or "DUST_ABSORBED_KALSHI"
+                    recovery?.Outcome is "REVERSED_KALSHI" or "DUST_ABSORBED_KALSHI"
+                                      or "HELD_HARDVEN" or "HEDGE_COMPLETED" or "DUST_ABSORBED_HARDVEN"
                         ? pFilled : balancedQty;
                 // A HardVen overfill reversal (bought too many, sold the excess in-trade) can race the
                 // pre-trade snapshot and poison reconcile's delta check — flag it so reconcile trusts
@@ -1876,12 +1880,12 @@ public class CrossArbExecutor
             }
 
             bool hasHardVenBook = _books.TryGetValue($"H:{hardvenToken}", out var pBook);
-            if (!hasHardVenBook)
-            {
-                DebugLog.Trades($"RecoverUnhedgedAsync {pair.Label}: HardVen book missing for {hardvenToken} — skipping hedge, falling through to reverse");
-                Emit(execLog, $"[RECOVER] {pair.Label} | HardVen book missing — skipping hedge, falling through to reverse");
-            }
-            bool skipHedgeA = kUnhedgedValue < CleanupHedgeSkipUsd || !hasHardVenBook;
+            // MODEL: recovery only ever adjusts KALSHI. An excess Kalshi leg is REVERSED on Kalshi (below) — we
+            // never BUY more Pinnacle to hedge it (that would place another irreversible sportsbook bet). So the
+            // buy-Pinnacle hedge that follows is intentionally bypassed (skipHedgeA=true); kept only so the diff
+            // stays small — it is dead code and can be deleted once the no-Pinnacle-buy model is settled.
+            bool skipHedgeA = true;
+            _ = hasHardVenBook; _ = pBook;   // silence "assigned but unused" now that the hedge path is bypassed
 
             if (!skipHedgeA)
             {
@@ -2049,223 +2053,102 @@ public class CrossArbExecutor
             return new RecoveryResult("ORPHANED", kRevFilled, kRevLoss);
         }
 
-        // ── Case B: HardVen filled more — own excess HardVen shares ────────────────
+        // ── Case B: HardVen (Pinnacle) filled more than Kalshi (Kalshi under-filled) ──
+        // The Pinnacle bet is IRREVERSIBLE — a placed sportsbook bet stands — so we ONLY ever adjust KALSHI:
+        // hedge as much of the excess as we can by BUYING MORE KALSHI, and HOLD whatever we can't hedge
+        // (sub-1-contract, hedge net too poor, exposure cap, missing/short Kalshi fill) as a directional Pinnacle
+        // position to settlement. We NEVER sell the Pinnacle leg back and NEVER orphan it (a held bet is
+        // intentional, not a stuck error). Pinnacle therefore always ends at pFilled → reconcile expects pFilled.
         if (pUnhedged > 0)
         {
-            decimal pUnhedgedValue = pUnhedged * pActualPrice;
-
-            // Shared helper: sell the entire HardVen excess and record it. Used by the over-fill guard
-            // and the exposure backstop so neither duplicates the sell/journal/lock logic.
-            // Returns null when the sell filled nothing; caller falls through to hedge/reverse/halt.
-            async Task<RecoveryResult?> ReverseExcessHardVenAsync(string reason)
+            // Record the leftover excess Pinnacle as HELD to settlement (no reversal, no halt, no orphan).
+            async Task<RecoveryResult> HoldHardVenAsync(decimal qty, string reason)
             {
-                var (revSold, revPrice) = await PlaceHardVenSellAsync(hardvenToken, pUnhedged, pair.IsNegRisk, execLog);
-                if (revSold <= 0m) return null;
-                decimal reversalLoss = Math.Max(0m, revSold * (pActualPrice - revPrice));
-                lock (_cleanupLock) { _totalCleanupCostUsd += reversalLoss; }
+                decimal val = qty * pActualPrice;
+                lock (_cleanupLock) { _totalCleanupCostUsd += val; }   // theoretical worst case if the held leg loses
                 await JournalAsync(JsonSerializer.Serialize(new {
-                    t = DateTime.UtcNow, @event = "CLEANUP_REVERSED", execId,
+                    t = DateTime.UtcNow, @event = "HELD_HARDVEN", execId,
                     pair = pair.PairId, leg = "hardven", reason,
-                    soldShares = Math.Round(revSold, 6), soldPrice = Math.Round(revPrice, 6),
-                    reversalLossUsd = Math.Round(reversalLoss, 4)
+                    qty = Math.Round(qty, 6), heldValueUsd = Math.Round(val, 4)
                 }));
                 Console.ForegroundColor = ConsoleColor.Yellow;
-                Emit(execLog, $"[RECOVER] {pair.Label} | reversed {revSold:0.00} excess HardVen @ {revPrice:0.0000} ({reason}) loss=${reversalLoss:0.00}");
+                Emit(execLog, $"[RECOVER HOLD] {pair.Label} | holding {qty:0.00} unhedged Pinnacle share(s) to settlement ({reason}) — Pinnacle is never reversed");
                 Console.ResetColor();
-                return new RecoveryResult("REVERSED_HARDVEN", revSold, reversalLoss);
+                return new RecoveryResult("HELD_HARDVEN", qty, val);
             }
 
-            if (pUnhedgedValue < CleanupDustUsd)
+            int    hedgeQty      = (int)Math.Floor(pUnhedged);
+            string kHedgeKey     = arbType == "K_YES_P_NO" ? $"K:{pair.KalshiTicker}" : $"K:{pair.KalshiTicker}_NO";
+            bool   hasKalshiBook = _books.TryGetValue(kHedgeKey, out var kHedgeBook);
+
+            // No whole contract to hedge (sub-1-share) or no Kalshi book to hedge on → hold the whole excess.
+            if (hedgeQty < 1 || !hasKalshiBook)
+                return await HoldHardVenAsync(pUnhedged, hedgeQty < 1 ? "SUB_1_CONTRACT" : "NO_KALSHI_BOOK");
+
+            decimal currentKalshiAsk = kHedgeBook!.GetBestAskPrice();
+            decimal hedgeNet = currentKalshiAsk + pActualPrice + KalshiFee(currentKalshiAsk) + HardVenFee(pActualPrice, hardvenToken);
+            DebugLog.Trades($"RecoverUnhedgedAsync {pair.Label}: pUnhedged={pUnhedged} kalshiAsk={currentKalshiAsk:0.0000} hedgeNet={hedgeNet:0.0000}");
+
+            // Hedge net worse than allowed → locking a hedge loss is worse than holding the directional bet.
+            if (hedgeNet > _hedgeMaxNet)
+                return await HoldHardVenAsync(pUnhedged, $"HEDGE_NET_{hedgeNet:0.000}_gt_maxNet");
+
+            // Hedge would breach the exposure cap → hold rather than enlarge exposure.
+            decimal hedgeCost = hedgeQty * currentKalshiAsk;
+            bool breachesCap;
+            lock (_exposureLock) breachesCap = _totalExposure + hedgeCost > _maxExposureUsd;
+            if (breachesCap)
             {
-                lock (_cleanupLock) { _totalCleanupCostUsd += pUnhedgedValue; }
-                await JournalAsync(JsonSerializer.Serialize(new {
-                    t = DateTime.UtcNow, @event = "CLEANUP_DUST", execId,
-                    pair = pair.PairId, leg = "hardven", qty = pUnhedged, absorbedUsd = pUnhedgedValue
-                }));
-                Console.ForegroundColor = ConsoleColor.DarkYellow;
-                Emit(execLog, $"[CLEANUP DUST] {pair.Label} | Absorbing {pUnhedged:0.00} HardVen dust (${pUnhedgedValue:0.00}) — no halt");
-                Console.ResetColor();
-                return new RecoveryResult("DUST_ABSORBED_HARDVEN", pUnhedged, pUnhedgedValue);
+                Emit(execLog, $"[RECOVER] {pair.Label} | hedge ${hedgeCost:0.00} would breach the ${_maxExposureUsd:0.00} exposure cap — holding");
+                return await HoldHardVenAsync(pUnhedged, "EXPOSURE_CAP");
             }
 
-            // Fix 1 — over-fill guard: a HardVen fill far above the balanced size is an accidental
-            // over-buy. Never enlarge the position by hedging it on Kalshi — reverse the excess.
-            if (pUnhedged > balancedQty * MaxHedgeOverfillFraction)
+            // Hedge the whole-contract part on Kalshi (buy more Kalshi to match the excess Pinnacle).
+            int currentKCents = Math.Max(1, (int)Math.Ceiling(currentKalshiAsk * 100) + RecoveryHedgeSlippageCents);
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            Emit(execLog, $"[RECOVER] {pair.Label} | pExcess={pUnhedged:0.0000} hedgeQty={hedgeQty} hedgeNet={hedgeNet:0.0000} — hedging on Kalshi (Pinnacle held)");
+            Console.ResetColor();
+            var (_, _, kFill2) = await PlaceKalshiLegAsync(
+                pair.KalshiTicker, kalshiSide, currentKCents, hedgeQty, execId + "_RH", execLog);
+            decimal additional = Math.Min((decimal)hedgeQty, Math.Max(0m, kFill2));
+            if (additional > 0m)
             {
-                var r = await ReverseExcessHardVenAsync("OVERFILL");
-                if (r is not null) return r;
-                Emit(execLog, $"[RECOVER] {pair.Label} | over-fill reverse sold 0 — falling through");
-            }
-
-            string kHedgeKey = arbType == "K_YES_P_NO" ? $"K:{pair.KalshiTicker}" : $"K:{pair.KalshiTicker}_NO";
-            bool hasKalshiBook = _books.TryGetValue(kHedgeKey, out var kHedgeBook);
-            if (!hasKalshiBook)
-            {
-                DebugLog.Trades($"RecoverUnhedgedAsync {pair.Label}: Kalshi book missing for {kHedgeKey} — skipping hedge, falling through to reverse");
-                Emit(execLog, $"[RECOVER] {pair.Label} | Kalshi book missing — skipping hedge, falling through to reverse");
-            }
-            bool skipHedgeB = pUnhedgedValue < CleanupHedgeSkipUsd || !hasKalshiBook;
-
-            if (!skipHedgeB)
-            {
-                decimal currentKalshiAsk = kHedgeBook!.GetBestAskPrice();
-                int currentKCents = Math.Max(1, (int)Math.Ceiling(currentKalshiAsk * 100) + RecoveryHedgeSlippageCents);
-                decimal hedgeNet = currentKalshiAsk + pActualPrice + KalshiFee(currentKalshiAsk) + HardVenFee(pActualPrice, hardvenToken);
-                DebugLog.Trades($"RecoverUnhedgedAsync {pair.Label}: pUnhedged={pUnhedged} kalshiAsk={currentKalshiAsk:0.0000} hedgeNet={hedgeNet:0.0000}");
-
-                if (hedgeNet <= _hedgeMaxNet)
+                if (_openPositions.TryGetValue(pair.PairId, out var pos))
                 {
-                    int hedgeQty = (int)Math.Floor(pUnhedged);
-                    if (hedgeQty == 0)
+                    decimal newK = pos.KalshiContracts + additional;
+                    _openPositions[pair.PairId] = pos with
                     {
-                        // Entire position is sub-1-share — Kalshi min is 1 contract, can't hedge
-                        decimal fracValue = pUnhedged * pActualPrice;
-                        lock (_cleanupLock) { _totalCleanupCostUsd += fracValue; }
-                        await JournalAsync(JsonSerializer.Serialize(new {
-                            t = DateTime.UtcNow, @event = "CLEANUP_DUST", execId,
-                            pair = pair.PairId, leg = "hardven_fractional", qty = pUnhedged, absorbedUsd = fracValue
-                        }));
-                        Console.ForegroundColor = ConsoleColor.DarkYellow;
-                        Emit(execLog, $"[CLEANUP DUST] {pair.Label} | Absorbing {pUnhedged:0.0000} fractional HardVen dust (${fracValue:0.00}) — sub-1-share, can't hedge on Kalshi");
-                        Console.ResetColor();
-                        return new RecoveryResult("DUST_ABSORBED_HARDVEN", pUnhedged, fracValue);
-                    }
-
-                    // Fix 3 — capital backstop: never let a recovery hedge push total open exposure
-                    // past the cap. _totalExposure holds each open position's reservation until it
-                    // closes, so this is real cumulative exposure, not just in-flight reservations.
-                    decimal hedgeCost = hedgeQty * currentKalshiAsk;
-                    bool breachesCap;
-                    lock (_exposureLock) breachesCap = _totalExposure + hedgeCost > _maxExposureUsd;
-                    if (breachesCap)
-                    {
-                        Console.ForegroundColor = ConsoleColor.Yellow;
-                        Emit(execLog, $"[RECOVER] {pair.Label} | hedge ${hedgeCost:0.00} would push exposure " +
-                                      $"${_totalExposure:0.00}→${_totalExposure + hedgeCost:0.00} past cap ${_maxExposureUsd:0.00} — reversing instead");
-                        Console.ResetColor();
-                        var r = await ReverseExcessHardVenAsync("EXPOSURE_CAP");
-                        if (r is not null) return r;
-                        Emit(execLog, $"[RECOVER] {pair.Label} | exposure-cap reverse sold 0 — proceeding as last resort");
-                    }
-
-                    Console.ForegroundColor = ConsoleColor.Yellow;
-                    Emit(execLog, $"[RECOVER] {pair.Label} | pExcess={pUnhedged:0.0000} hedgeQty={hedgeQty} hedgeNet={hedgeNet:0.0000} — completing hedge on Kalshi");
-                    Console.ResetColor();
-
-                    var (_, _, kFill2) = await PlaceKalshiLegAsync(
-                        pair.KalshiTicker, kalshiSide, currentKCents, hedgeQty, execId + "_RH", execLog);
-                    if (kFill2 > 0)
-                    {
-                        decimal additional    = Math.Min((decimal)hedgeQty, kFill2);
-                        decimal remainderQty  = pUnhedged - additional;
-                        if (_openPositions.TryGetValue(pair.PairId, out var pos))
-                        {
-                            decimal newK = pos.KalshiContracts + additional;
-                            _openPositions[pair.PairId] = pos with
-                            {
-                                KalshiContracts  = newK,
-                                HardVenShares       = pos.HardVenShares + additional,
-                                // currentKalshiAsk is the IOC limit used — best proxy for fill price
-                                KalshiEntryPrice = newK > 0
-                                    ? (pos.KalshiContracts * pos.KalshiEntryPrice + additional * currentKalshiAsk) / newK
-                                    : currentKalshiAsk
-                            };
-                        }
-                        else
-                            _openPositions[pair.PairId] = new ArbPosition(
-                                pair.PairId, arbType, additional, additional,
-                                currentKalshiAsk, pActualPrice, DateTime.UtcNow, execId);
-                        // Keep the exposure reservation aligned with the contracts the hedge added,
-                        // so the cap stays accurate for future trades and the close-time release matches.
-                        lock (_exposureLock) { _totalExposure += additional * currentKalshiAsk; }
-                        await JournalAsync(JsonSerializer.Serialize(new {
-                            t = DateTime.UtcNow, @event = "CLEANUP_HEDGE_COMPLETED", execId,
-                            pair = pair.PairId, leg = "kalshi",
-                            hedgedQty = additional, remainderQty = Math.Round(remainderQty, 6),
-                            kFillPrice = Math.Round(currentKalshiAsk, 6)
-                        }));
-                        if (remainderQty > 0m)
-                        {
-                            decimal remValue = remainderQty * pActualPrice;
-                            // Sub-1-share or negligible value: genuinely can't hedge on Kalshi (min 1 contract)
-                            if (remainderQty < 1.0m || remValue < CleanupDustUsd)
-                            {
-                                lock (_cleanupLock) { _totalCleanupCostUsd += remValue; }
-                                await JournalAsync(JsonSerializer.Serialize(new {
-                                    t = DateTime.UtcNow, @event = "CLEANUP_DUST", execId,
-                                    pair = pair.PairId, leg = "hardven_partial_hedge_remainder",
-                                    qty = Math.Round(remainderQty, 6), absorbedUsd = Math.Round(remValue, 4)
-                                }));
-                                DebugLog.Trades($"RecoverUnhedgedAsync {pair.Label}: absorbing {remainderQty:0.0000} remainder (${remValue:0.00})");
-                            }
-                            else
-                            {
-                                // Partial Kalshi hedge left HardVen shares unhedged — sell them back
-                                // (PlaceHardVenSellAsync sweeps at the floor with settlement retries), orphan
-                                // only if it still won't fill. Never halt.
-                                var (rSold, rPx) = await PlaceHardVenSellAsync(hardvenToken, remainderQty, pair.IsNegRisk, execLog);
-                                if (rSold > 0m)
-                                {
-                                    decimal rLoss = Math.Max(0m, rSold * (pActualPrice - rPx));
-                                    if (rLoss > 0m) lock (_cleanupLock) { _totalCleanupCostUsd += rLoss; }
-                                    await JournalAsync(JsonSerializer.Serialize(new {
-                                        t = DateTime.UtcNow, @event = "CLEANUP_REVERSED", execId,
-                                        pair = pair.PairId, leg = "hardven_partial_hedge_remainder",
-                                        qty = Math.Round(rSold, 6), reversalPrice = Math.Round(rPx, 6), loss = Math.Round(rLoss, 4)
-                                    }));
-                                }
-                                decimal stillP = remainderQty - rSold;
-                                if (stillP >= 1.0m)
-                                {
-                                    await OrphanPairAsync(pair, "hardven_partial_hedge_remainder", stillP, stillP * pActualPrice, execId, execLog);
-                                    return new RecoveryResult("ORPHANED", additional, 0);
-                                }
-                            }
-                        }
-                        Console.ForegroundColor = ConsoleColor.Green;
-                        Emit(execLog, $"[RECOVER OK] {pair.Label} | hedge completed +{additional} sets via Kalshi retry");
-                        Console.ResetColor();
-                        return new RecoveryResult("HEDGE_COMPLETED", additional, 0);
-                    }
-                    Emit(execLog, $"[RECOVER] {pair.Label} | Kalshi hedge retry failed — reversing HardVen excess");
+                        KalshiContracts  = newK,
+                        HardVenShares    = pos.HardVenShares + additional,
+                        // currentKalshiAsk is the IOC limit used — best proxy for fill price
+                        KalshiEntryPrice = newK > 0
+                            ? (pos.KalshiContracts * pos.KalshiEntryPrice + additional * currentKalshiAsk) / newK
+                            : currentKalshiAsk
+                    };
                 }
                 else
-                {
-                    Emit(execLog, $"[RECOVER] {pair.Label} | hedgeNet={hedgeNet:0.0000} >= 1.0 — reversing {pUnhedged:0.00} HardVen shares directly");
-                }
-            }
-            else if (pUnhedgedValue < CleanupHedgeSkipUsd)
-            {
-                Emit(execLog, $"[CLEANUP SKIP HEDGE] {pair.Label} | pExcess={pUnhedged:0.00} value=${pUnhedgedValue:0.00} < ${CleanupHedgeSkipUsd:0.00} — reversing directly");
-            }
-
-            // Reverse: sell excess HardVen shares back
-            var (soldShares, soldPrice) = await PlaceHardVenSellAsync(hardvenToken, pUnhedged, pair.IsNegRisk, execLog);
-            if (soldShares > 0)
-            {
-                decimal reversalLoss = soldShares * (pActualPrice - soldPrice);
-                if (reversalLoss > 0)
-                    lock (_cleanupLock) { _totalCleanupCostUsd += reversalLoss; }
+                    _openPositions[pair.PairId] = new ArbPosition(
+                        pair.PairId, arbType, additional, additional,
+                        currentKalshiAsk, pActualPrice, DateTime.UtcNow, execId);
+                // Keep the exposure reservation aligned with the contracts the hedge added.
+                lock (_exposureLock) { _totalExposure += additional * currentKalshiAsk; }
                 await JournalAsync(JsonSerializer.Serialize(new {
-                    t = DateTime.UtcNow, @event = "CLEANUP_REVERSED", execId,
-                    pair = pair.PairId, leg = "hardven", qty = pUnhedged,
-                    entryPrice = pActualPrice, reversalPrice = soldPrice,
-                    loss = Math.Max(0m, reversalLoss)
+                    t = DateTime.UtcNow, @event = "CLEANUP_HEDGE_COMPLETED", execId,
+                    pair = pair.PairId, leg = "kalshi", hedgedQty = additional, kFillPrice = Math.Round(currentKalshiAsk, 6)
                 }));
-                Console.ForegroundColor = ConsoleColor.Yellow;
-                Emit(execLog, $"[RECOVER REVERSED] {pair.Label} | sold {soldShares:0.00} HardVen shares @ ${soldPrice:0.0000}");
+                Console.ForegroundColor = ConsoleColor.Green;
+                Emit(execLog, $"[RECOVER OK] {pair.Label} | hedged +{additional} on Kalshi (Pinnacle held)");
                 Console.ResetColor();
-                return new RecoveryResult("REVERSED_HARDVEN", soldShares, Math.Max(0m, reversalLoss));
             }
-            // PlaceHardVenSellAsync already swept at the 1¢ floor with settlement retries; a zero return
-            // means the venue/token genuinely won't fill now. Orphan (not halt) and keep trading.
-            await JournalAsync(JsonSerializer.Serialize(new {
-                t = DateTime.UtcNow, @event = "CLEANUP_REVERSE_FAILED", execId,
-                pair = pair.PairId, leg = "hardven",
-                qty = pUnhedged, reason = "zero_fill"
-            }));
-            await OrphanPairAsync(pair, "hardven", pUnhedged, pUnhedgedValue, execId, execLog);
-            return new RecoveryResult("ORPHANED", 0, pUnhedgedValue);
+            else
+                Emit(execLog, $"[RECOVER] {pair.Label} | Kalshi hedge filled 0 — holding the excess Pinnacle");
+
+            // Anything still unhedged (Kalshi hedge shortfall + the sub-1-share remainder) is HELD to settlement.
+            decimal stillUnhedged = pUnhedged - additional;
+            if (stillUnhedged > 0m)
+                return await HoldHardVenAsync(stillUnhedged, additional > 0m ? "PARTIAL_HEDGE_REMAINDER" : "KALSHI_HEDGE_FILLED_0");
+
+            return new RecoveryResult("HEDGE_COMPLETED", additional, 0);
         }
 
         return new RecoveryResult("NONE", 0, 0);
@@ -3140,6 +3023,10 @@ public class CrossArbExecutor
 
     private async Task CheckEarlyExitAsync(string pairId, ArbPosition pos)
     {
+        // Early exit sells BOTH legs to close before settlement — but the Pinnacle leg is irreversible, so this
+        // is OFF by default (hold-to-settlement model). Both entry points funnel here, so this one gate covers
+        // the monitor loop and the book-update path.
+        if (!_earlyExitEnabled) return;
         bool breakEvenMode = _minBuy;
         if (!breakEvenMode && EarlyExitThreshold <= 0m) return;
 
