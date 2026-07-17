@@ -224,6 +224,10 @@ public class HardVenWebsocketFeed
             using var sd = JsonDocument.Parse($"{{\"bids\":[],\"asks\":{asks}}}");
             book.ProcessBookUpdate(sd.RootElement.GetProperty("bids"), sd.RootElement.GetProperty("asks"));
             book.IsLive = live;   // in-play (live game) vs pre-match tag — read by the telemetry per window
+            // wv = under LIVE WS coverage (a tab / recent push) vs SCREENING-ONLY (httpx re-seed of an untabbed
+            // tail league). Absent (paho/REST mode, other adapters) → true. Drives verify-on-detection.
+            bool wv = !s.TryGetProperty("wv", out var wvEl) || wvEl.ValueKind == JsonValueKind.True;
+            _telemetry.SetHardVenVerified(prop.Name, wv);
             if (fresh) book.MarkDeltaReceived();   // only advance the staleness clock on a genuinely recent quote
             _telemetry.OnBookUpdate(bookKey);
         }

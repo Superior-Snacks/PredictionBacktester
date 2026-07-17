@@ -53,7 +53,9 @@ record ActiveWindow(
     long     RestDelayMs   = -1,
     string   OpenedBy      = "",   // which side's price move CREATED the arb: KALSHI / HARDVEN / BOTH / INITIAL
     decimal  OpenKLeg      = -1m,  // the Kalshi leg price at open (for held/move comparison at close)
-    decimal  OpenPLeg      = -1m   // the HardVen leg price at open
+    decimal  OpenPLeg      = -1m,  // the HardVen leg price at open
+    bool     HardVenWsVerified = false  // HardVen leg was under LIVE WS coverage at some point in the window
+                                        // (not screening-only) → the arb is confirmed on real-time prices
 )
 {
     // First eval at which each leg's ask rose ABOVE its open price (moved against you → LEFT the "within the
@@ -210,7 +212,7 @@ public class CrossPlatformArbTelemetryStrategy
         "RestChecked,RestConfirmed,RestKalshiAsk,RestHardVenAsk,RestDelayMs," +
         "OpenedBy,ClosedBySide,KalshiLegAgeMsAtClose,HardVenLegAgeMsAtClose,HardVenLegHeld,HardVenLegId," +
         "KalshiLegWithinMs,HardVenLegWithinMs," +
-        "HardVenInPlay";
+        "HardVenInPlay,HardVenWsVerified";
     private const string HedgeCsvHeader =
         "OpenTime,PairId,Label,ArbType,OffsetMs," +
         "EntryKalshiAsk,KalshiUnwindBid,KalshiOppositeAsk,KalshiEntryAskNow," +
@@ -584,6 +586,13 @@ public class CrossPlatformArbTelemetryStrategy
                                     : kOpenMoved ? "KALSHI"
                                     : pOpenMoved ? "HARDVEN" : "OTHER";
 
+                    // VERIFY-ON-DETECTION: the CHOSEN HardVen leg (K_NO_P_YES holds Pinnacle YES; K_YES_P_NO holds
+                    // Pinnacle NO). If it's screening-only (no live WS tab), ask the sidecar to promote its league
+                    // to a tab so this arb gets confirmed on real-time prices, and flag the window accordingly.
+                    string chosenHvToken = bestType == "K_NO_P_YES" ? pair.HardVenYesTokenId : pair.HardVenNoTokenId;
+                    bool hvVerified = IsHardVenVerified(chosenHvToken);
+                    if (!hvVerified) RequestVerify(chosenHvToken);
+
                     DateTime openTime = DateTime.UtcNow;
                     var w = new ActiveWindow(
                         PairId:            pair.PairId,
@@ -610,7 +619,8 @@ public class CrossPlatformArbTelemetryStrategy
                         UpdateCount:       1,
                         OpenedBy:          openedBy,
                         OpenKLeg:          kLegPrice,
-                        OpenPLeg:          pLegPrice
+                        OpenPLeg:          pLegPrice,
+                        HardVenWsVerified: hvVerified
                     );
                     _activeWindows[pair.PairId] = w;
                     DebugLog.Discovery($"EvaluatePair {pair.Label}: ARB OPEN {bestType} net={bestNet:0.0000} depth={bestDepth:0.0} kAge={kAge}ms pAge={pAge}ms");
@@ -634,6 +644,11 @@ public class CrossPlatformArbTelemetryStrategy
                         KalshiDepth   = betterDepth ? bestKDepth   : existing.KalshiDepth,
                         HardVenDepth     = betterDepth ? bestPDepth   : existing.HardVenDepth,
                         UpdateCount   = existing.UpdateCount + 1,
+                        // verify-on-detection: latch true once the leg's league gains live WS coverage (the tab
+                        // we requested arrived) — so a window that opened screening-only but got WS-confirmed reads
+                        // as verified.
+                        HardVenWsVerified = existing.HardVenWsVerified ||
+                            IsHardVenVerified(existing.ArbType == "K_NO_P_YES" ? pair.HardVenYesTokenId : pair.HardVenNoTokenId),
                         // FIRST eval each leg moves above its open price = when it left "within the arb" (latch once)
                         KLeftWithinAt = (existing.KLeftWithinAt == DateTime.MaxValue && existing.OpenKLeg >= 0m && kLegNow > existing.OpenKLeg) ? evalNow : existing.KLeftWithinAt,
                         PLeftWithinAt = (existing.PLeftWithinAt == DateTime.MaxValue && existing.OpenPLeg >= 0m && pLegNow > existing.OpenPLeg) ? evalNow : existing.PLeftWithinAt
@@ -805,7 +820,8 @@ public class CrossPlatformArbTelemetryStrategy
             Quote(hardvenLegId),
             kWithinMs,
             pWithinMs,
-            hvInPlay ? "1" : "0"
+            hvInPlay ? "1" : "0",
+            w.HardVenWsVerified ? "1" : "0"
         );
 
         EnqueueCsvRow(row);

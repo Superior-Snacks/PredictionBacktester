@@ -386,7 +386,22 @@ foreach (var ticker in kalshiSubscribeTickers) state.InitKalshiMarket(ticker);
 foreach (var token  in hardvenSubscribeTokens)    state.InitHardVenToken(token);
 
 // ── Telemetry strategy ────────────────────────────────────────────────────────
-var telemetry = new CrossPlatformArbTelemetryStrategy(pairs, state.Books, ARB_THRESHOLD, DEPTH_FLOOR);
+// VERIFY-ON-DETECTION: when a window opens on a screening-only HardVen leg (sidecar tag wv=false, i.e. an
+// httpx re-seed of an untabbed tail league), ask the sidecar to promote that league to a LIVE WS tab so the
+// arb gets confirmed on real-time prices before it's trusted. Fire-and-forget POST; deduped per league in the
+// strategy. No-op unless the sidecar is in reader mode (only then does any price carry wv=false).
+var verifyHttp = new HttpClient { Timeout = TimeSpan.FromSeconds(8) };
+Action<string> requestHardVenVerify = lid => _ = Task.Run(async () =>
+{
+    try
+    {
+        using var resp = await verifyHttp.PostAsync($"{HARDVEN_SIDECAR_URL}/verify?lid={Uri.EscapeDataString(lid)}", null);
+        var body = await resp.Content.ReadAsStringAsync();
+        Console.WriteLine($"[VERIFY] league {lid}: {body}");
+    }
+    catch (Exception ex) { DebugLog.Feed($"verify POST failed for {lid}: {ex.GetType().Name}: {ex.Message}"); }
+});
+var telemetry = new CrossPlatformArbTelemetryStrategy(pairs, state.Books, ARB_THRESHOLD, DEPTH_FLOOR, requestHardVenVerify);
 
 // ── REST verifier — confirms arb windows via independent REST calls ───────────
 var restVerifier = new CrossArbRestVerifier(orderClient, telemetry, hardvenProxy, HARDVEN_SIDECAR_URL);
