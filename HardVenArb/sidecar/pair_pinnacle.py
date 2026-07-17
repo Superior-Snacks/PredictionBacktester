@@ -215,12 +215,18 @@ def main() -> None:
 
     cat = fetch_catalog(args.sidecar, args.catalog_timeout)
     book = index_catalog(cat)
-    # leagueId -> (sport, league display name) for the tab-manager URL, from the SAME catalog fetch.
+    # From the SAME catalog fetch: leagueId -> (sport, league name) for the tab-manager URL, and
+    # matchupId -> ISO start_time so the tab manager can rank gaps by SOONEST game start (near-term games get
+    # the dedicated live-WS tabs; the rest ride the roving tail tab).
     lid_meta: dict[str, tuple[str, str]] = {}
+    mid_start: dict[str, str] = {}
     for s in cat:
-        lid = (s.get("selection_id", "") or "").split(":")[0]
+        p = (s.get("selection_id", "") or "").split(":")
+        lid = p[0] if p else ""
         if lid and lid not in lid_meta and (s.get("league") or s.get("sport")):
             lid_meta[lid] = (s.get("sport") or "", s.get("league") or "")
+        if len(p) >= 2 and p[1] and s.get("start_time"):
+            mid_start.setdefault(p[1], s.get("start_time"))
     print(f"[PAIR] {sum(len(v) for v in book.values())} Pinnacle games ({len(book)} matchups) in /catalog")
 
     pairs = json.loads(Path(args.pairs).read_text(encoding="utf-8"))
@@ -314,21 +320,27 @@ def main() -> None:
             print(f"[PAIR] price-gate (tol={args.price_tol}): {gate[0]} consistent | {gate[1]} inverted-fixed | "
                   f"{gate[2]} wrong-game rejected | {gate[3]} unvalidated (no price)")
 
-    # league URL for the browser-WS tab manager (one tab per gap league). Backfills EVERY filled pair — new AND
-    # previously-filled (pre-dating this field) — that lacks a URL, keyed by the token's leagueId.
-    url_n = 0
+    # tab-manager metadata: league URL (one tab per gap league) + ISO start_time (rank gaps by soonest start).
+    # Backfills EVERY filled pair — new AND previously-filled (pre-dating these fields) — that lacks them.
+    url_n = start_n = 0
     for e in pairs:
         tok = e.get("hardven_yes_token") or ""
-        if tok.count(":") >= 2 and not e.get("hardven_league_url"):
-            meta = lid_meta.get(tok.split(":")[0])
+        if tok.count(":") < 2:
+            continue
+        parts = tok.split(":")
+        if not e.get("hardven_league_url"):
+            meta = lid_meta.get(parts[0])
             if meta and (u := _league_url(*meta)):
                 e["hardven_league_url"] = u
                 url_n += 1
-    if url_n:
-        print(f"[PAIR] tagged {url_n} pair(s) with a league URL (tab manager)")
+        if not e.get("hardven_start_time") and parts[1] in mid_start:
+            e["hardven_start_time"] = mid_start[parts[1]]
+            start_n += 1
+    if url_n or start_n:
+        print(f"[PAIR] tagged {url_n} pair(s) with a league URL, {start_n} with a start_time (tab manager)")
 
     valid = sum(1 for e in pairs if e.get("hardven_yes_token") and e.get("hardven_no_token"))
-    if args.write and (filled or gate[1] or gate[2] or url_n):
+    if args.write and (filled or gate[1] or gate[2] or url_n or start_n):
         atomic_write_json(args.pairs, pairs)   # atomic → the C# hot-reload never reads a partial cross_pairs.json
         print(f"\n[PAIR] wrote {valid} filled pair(s) → {args.pairs}")
     elif not args.write:

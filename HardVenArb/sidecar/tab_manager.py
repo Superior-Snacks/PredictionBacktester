@@ -28,6 +28,7 @@ import asyncio
 import json
 import os
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -57,6 +58,7 @@ class LeagueTabManager:
         self._rove_lid: Optional[str] = None
         self._rove_cursor = 0
         self._last_rove = 0.0
+        self._league_start: dict[str, float] = {}   # lid -> soonest game start ts (ranks which gaps get tabs)
 
     def start(self) -> None:
         if self._task is None or self._task.done():
@@ -129,18 +131,44 @@ class LeagueTabManager:
               f"(tabs={len(self._tabs)}/{self._max})")
         return "opened"
 
+    @staticmethod
+    def _parse_ts(s: str):
+        """ISO datetime ('2026-07-17T16:10:00Z') or a bare date ('2026-07-17') → unix ts; None if unparseable."""
+        if not s:
+            return None
+        try:
+            return datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            try:
+                return datetime.strptime(s[:10], "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp()
+            except ValueError:
+                return None
+
+    def _sort_key(self, lid: str) -> float:
+        """Ranking key = the league's soonest game start (∞ if unknown → ranked last)."""
+        return self._league_start.get(lid, float("inf"))
+
     def _load_paired(self) -> dict[str, str]:
-        """{leagueId: url} for every filled pair that carries a league URL (written by pair_pinnacle)."""
+        """{leagueId: url} for every filled pair that carries a league URL (written by pair_pinnacle). Side effect:
+        refreshes self._league_start = the SOONEST game start per league (from hardven_start_time, or the
+        day-granular settlement_date as a fallback) so gaps + the rove sweep can be ranked soonest-first."""
         try:
             data = json.loads(Path(self._pairs_path).read_text(encoding="utf-8-sig"))
         except Exception:
             return {}
         out: dict[str, str] = {}
+        starts: dict[str, float] = {}
         for e in data:
             tok = e.get("hardven_yes_token") or ""
             url = e.get("hardven_league_url") or ""
-            if tok.count(":") >= 2 and url:
-                out.setdefault(tok.split(":")[0], url)   # first URL seen for the league wins (all identical)
+            if tok.count(":") < 2 or not url:
+                continue
+            lid = tok.split(":")[0]
+            out.setdefault(lid, url)                  # first URL seen for the league wins (all identical)
+            ts = self._parse_ts(e.get("hardven_start_time") or e.get("settlement_date") or "")
+            if ts is not None:
+                starts[lid] = min(starts.get(lid, ts), ts)   # soonest game in the league
+        self._league_start = starts
         return out
 
     async def _tick(self) -> None:
@@ -152,9 +180,11 @@ class LeagueTabManager:
             if lid not in paired:
                 await self._session.close_tab(self._tabs.pop(lid))
                 print(f"[TAB-MGR] closed tab for de-paired league {lid} (tabs={len(self._tabs)})")
-        # 2. leagues already covered (featured board / a dedicated tab / the rove) → not gaps
+        # 2. leagues already covered (featured board / a dedicated tab / the rove) → not gaps; rank SOONEST-first
         covered = self._covered_now()
-        gaps = [lid for lid in paired if lid not in covered and lid not in self._tabs and lid != self._rove_lid]
+        gaps = sorted((lid for lid in paired
+                       if lid not in covered and lid not in self._tabs and lid != self._rove_lid),
+                      key=self._sort_key)
         now = time.time()
         if now - self._last_log > 60:
             self._last_log = now
@@ -188,8 +218,9 @@ class LeagueTabManager:
         if self._rove_page is not None and (now - self._last_rove) < self._rove_dwell:
             return                                            # still dwelling on the current league
         covered = self._covered_now()
-        tail = sorted(lid for lid in paired
-                      if lid not in self._tabs and lid not in covered and lid != self._rove_lid)
+        tail = sorted((lid for lid in paired
+                       if lid not in self._tabs and lid not in covered and lid != self._rove_lid),
+                      key=self._sort_key)                     # sweep soonest-start tail leagues first
         if not tail:
             return                                            # nothing to sweep (all paired leagues are covered)
         self._rove_cursor = (self._rove_cursor + 1) % len(tail)
