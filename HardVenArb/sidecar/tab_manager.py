@@ -33,9 +33,11 @@ from typing import Callable, Optional
 
 
 class LeagueTabManager:
-    def __init__(self, session, live_mids_fn: Callable[[float], list], pairs_path: str) -> None:
+    def __init__(self, session, live_mids_fn: Callable[[float], list], pairs_path: str,
+                 board_lids_fn: Optional[Callable[[], set]] = None) -> None:
         self._session = session                  # PinnacleBrowserSession (open_tab / close_tab)
         self._live_mids = live_mids_fn           # callable(ttl) -> list['lid:mid'] the reader delivered
+        self._board_lids = board_lids_fn         # callable() -> set(lid) the FEATURED BOARD streams (sp/ topics)
         self._pairs_path = pairs_path
         self._tabs: dict[str, object] = {}       # leagueId -> page (tabs THIS manager opened)
         self._max = int(os.environ.get("HARDVEN_TAB_MAX", "12"))
@@ -45,12 +47,23 @@ class LeagueTabManager:
         self._task: Optional[asyncio.Task] = None
         self._last_log = 0.0
         self._cap_warned = False
+        # ROVING TAIL TAB: one extra tab beyond the `_max` dedicated tabs that SWEEPS the overflow tail (paired
+        # leagues the dedicated tabs + board don't cover), re-pointing itself league→league every dwell. Gives the
+        # tail opportunistic live-WS touches AND makes the browser actually visit those leagues (so the authed
+        # re-seed to them reads as organic browsing, not API-only). Off with HARDVEN_TAB_ROVE=0.
+        self._rove_enabled = os.environ.get("HARDVEN_TAB_ROVE", "1") != "0"
+        self._rove_dwell = float(os.environ.get("HARDVEN_ROVE_DWELL_SEC", "20"))
+        self._rove_page = None
+        self._rove_lid: Optional[str] = None
+        self._rove_cursor = 0
+        self._last_rove = 0.0
 
     def start(self) -> None:
         if self._task is None or self._task.done():
             self._task = asyncio.create_task(self.run())
-            print(f"[TAB-MGR] league tab manager ON — one tab per gap league (max {self._max}, "
-                  f"tick {self._interval:g}s, cover-ttl {self._cover_ttl:g}s).")
+            rove = f" + 1 roving tail tab ({self._rove_dwell:g}s/league)" if self._rove_enabled else ""
+            print(f"[TAB-MGR] league tab manager ON - {self._max} dedicated gap tabs{rove} "
+                  f"(tick {self._interval:g}s, cover-ttl {self._cover_ttl:g}s).")
 
     async def stop(self) -> None:
         if self._task and not self._task.done():
@@ -59,6 +72,10 @@ class LeagueTabManager:
         for lid, pg in list(self._tabs.items()):
             await self._session.close_tab(pg)
         self._tabs.clear()
+        if self._rove_page is not None:
+            await self._session.close_tab(self._rove_page)
+            self._rove_page = None
+            self._rove_lid = None
 
     async def run(self) -> None:
         try:
@@ -76,9 +93,21 @@ class LeagueTabManager:
                 print(f"[TAB-MGR] tick error: {type(ex).__name__}: {ex}")
 
     def covered_lids(self) -> set:
-        """Leagues this manager currently holds a tab for (live WS coverage). Used to tag /odds prices as
-        WS-verified vs screening-only for verify-on-detection."""
-        return set(self._tabs.keys())
+        """Leagues under live WS coverage RIGHT NOW — the dedicated tabs plus the roving tab's current league.
+        Used to tag /odds prices as WS-verified vs screening-only for verify-on-detection."""
+        lids = set(self._tabs.keys())
+        if self._rove_lid:
+            lids.add(self._rove_lid)
+        return lids
+
+    def _covered_now(self) -> set:
+        """Leagues already fed → NOT gaps (so we never open a dedicated tab for them): the reader's recent pushes
+        (board / dedicated tabs / rove) UNION the FEATURED-BOARD leagues (sport-level topics, generous TTL so a
+        briefly-quiet featured league isn't redundantly re-tabbed)."""
+        cov = {k.split(":")[0] for k in self._live_mids(self._cover_ttl)}
+        if self._board_lids is not None:
+            cov |= self._board_lids()
+        return cov
 
     async def request_verify(self, lid: str) -> str:
         """VERIFY-ON-DETECTION: promptly open a tab for `lid` (jump the gap queue) so its live WS can confirm an
@@ -96,7 +125,7 @@ class LeagueTabManager:
         if pg is None:
             return "open-failed"
         self._tabs[lid] = pg
-        print(f"[TAB-MGR] VERIFY — opened tab on demand for league {lid} -> {url[:70]} "
+        print(f"[TAB-MGR] VERIFY - opened tab on demand for league {lid} -> {url[:70]} "
               f"(tabs={len(self._tabs)}/{self._max})")
         return "opened"
 
@@ -118,32 +147,68 @@ class LeagueTabManager:
         paired = self._load_paired()
         if not paired:
             return
-        # 1. prune tabs whose league is no longer paired (game settled / dropped from today's slate)
+        # 1. prune dedicated tabs whose league is no longer paired (game settled / off today's slate)
         for lid in list(self._tabs):
             if lid not in paired:
                 await self._session.close_tab(self._tabs.pop(lid))
                 print(f"[TAB-MGR] closed tab for de-paired league {lid} (tabs={len(self._tabs)})")
-        # 2. leagues the reader is currently delivering (board OR one of our tabs) → not gaps
-        covered = {k.split(":")[0] for k in self._live_mids(self._cover_ttl)}
-        gaps = [lid for lid in paired if lid not in covered and lid not in self._tabs]
+        # 2. leagues already covered (featured board / a dedicated tab / the rove) → not gaps
+        covered = self._covered_now()
+        gaps = [lid for lid in paired if lid not in covered and lid not in self._tabs and lid != self._rove_lid]
         now = time.time()
         if now - self._last_log > 60:
             self._last_log = now
-            print(f"[TAB-MGR] paired-leagues={len(paired)} covered={len(covered & set(paired))} "
-                  f"tabs={len(self._tabs)} gaps={len(gaps)}")
-        if not gaps:
+            nboard = len(self._board_lids() & set(paired)) if self._board_lids is not None else 0
+            rv = f" rove={self._rove_lid}" if self._rove_enabled else ""
+            print(f"[TAB-MGR] paired={len(paired)} covered={len(covered & set(paired))} "
+                  f"(board={nboard}) tabs={len(self._tabs)}/{self._max} gaps={len(gaps)}{rv}")
+        # 3. DEDICATED tabs: give the top gap leagues persistent tabs, one per tick, up to the cap
+        if gaps and len(self._tabs) < self._max:
+            lid = gaps[0]
+            pg = await self._session.open_tab(paired[lid])
+            if pg is not None:
+                self._tabs[lid] = pg
+                self._cap_warned = False
+                print(f"[TAB-MGR] opened dedicated tab for gap league {lid} -> {paired[lid][:70]} "
+                      f"(tabs={len(self._tabs)}/{self._max}, {len(gaps) - 1} gap(s) left)")
+        elif gaps and len(self._tabs) >= self._max and not self._cap_warned:
+            self._cap_warned = True
+            where = "swept by the roving tail tab" if self._rove_enabled else \
+                    "left uncovered (raise HARDVEN_TAB_MAX or set HARDVEN_TAB_ROVE=1)"
+            print(f"[TAB-MGR] {len(gaps)} gap league(s) beyond the {self._max}-tab cap - {where}.")
+        # 4. ROVING tail tab: sweep the overflow (gaps the dedicated tabs can't hold)
+        if self._rove_enabled:
+            await self._rove_tick(paired)
+
+    async def _rove_tick(self, paired: dict[str, str]) -> None:
+        """The single roving tab: dwell on the current tail league for HARDVEN_ROVE_DWELL_SEC, then re-point to the
+        next overflow-tail league (paired, not board/dedicated-covered). Sweeps the whole tail over time, giving it
+        opportunistic live-WS touches and making the browser genuinely visit those leagues."""
+        now = time.time()
+        if self._rove_page is not None and (now - self._last_rove) < self._rove_dwell:
+            return                                            # still dwelling on the current league
+        covered = self._covered_now()
+        tail = sorted(lid for lid in paired
+                      if lid not in self._tabs and lid not in covered and lid != self._rove_lid)
+        if not tail:
+            return                                            # nothing to sweep (all paired leagues are covered)
+        self._rove_cursor = (self._rove_cursor + 1) % len(tail)
+        lid = tail[self._rove_cursor]
+        url = paired.get(lid)
+        if not url:
             return
-        if len(self._tabs) >= self._max:
-            if not self._cap_warned:
-                self._cap_warned = True
-                print(f"[TAB-MGR] {len(gaps)} gap league(s) but at tab cap {self._max} — leaving them uncovered "
-                      "(raise HARDVEN_TAB_MAX if the machine can take more tabs/WS).")
-            return
-        self._cap_warned = False
-        # 3. open ONE gap tab this tick (organic pacing; the rest follow on later ticks)
-        lid = gaps[0]
-        pg = await self._session.open_tab(paired[lid])
-        if pg is not None:
-            self._tabs[lid] = pg
-            print(f"[TAB-MGR] opened tab for gap league {lid} → {paired[lid][:70]} "
-                  f"(tabs={len(self._tabs)}/{self._max}, {len(gaps) - 1} gap(s) left)")
+        if self._rove_page is None:
+            pg = await self._session.open_tab(url)
+            if pg is None:
+                return
+            self._rove_page = pg
+            print(f"[TAB-MGR] ROVE tab opened -> league {lid} (sweeping {len(tail)} tail leagues, "
+                  f"{self._rove_dwell:g}s each)")
+        else:
+            if not await self._session.navigate_tab(self._rove_page, url):
+                self._rove_page = None                        # navigation died (tab closed?) -> recreate next tick
+                self._rove_lid = None
+                return
+            print(f"[TAB-MGR] ROVE -> league {lid} ({len(tail)} tail leagues in rotation)")
+        self._rove_lid = lid
+        self._last_rove = now

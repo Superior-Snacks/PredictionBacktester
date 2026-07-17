@@ -514,6 +514,19 @@ class PinnacleBrowserSession:
         except Exception:
             pass
 
+    async def navigate_tab(self, page, url: str) -> bool:
+        """Re-point an EXISTING tab to `url` (the roving tail tab reuses one page, sweeping league to league). The
+        page's CDP session persists across navigations, so the new league's odds WS is captured just like a fresh
+        tab (old WS closes, new one opens — both on the same session). Returns False on failure. Never raises."""
+        if page is None:
+            return False
+        try:
+            await page.goto(url, wait_until="domcontentloaded", timeout=60_000)
+            return True
+        except Exception as ex:
+            print(f"[PINNACLE SESSION] navigate_tab failed for {url[:70]} ({type(ex).__name__}: {ex}).")
+            return False
+
     async def fetch_via_page(self, url: str, headers: dict, timeout_ms: int = 15000) -> dict:
         """Feasibility probe: run fetch() INSIDE the logged-in page (genuine Chrome TLS + the page's own origin/
         cookies) so we can test moving the re-seed off the sidecar's httpx into the browser. Returns diagnostics

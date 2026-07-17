@@ -144,7 +144,9 @@ async def debug_reader(ttl: float = 30.0):
     `ttl`s. Used by coverage_check.py to compare the reader's live slate against the guest board (ground truth)."""
     fn = getattr(adapter, "reader_live_mids", None)
     mids = fn(ttl) if fn else []
-    return {"live_mids": mids, "count": len(mids)}
+    bfn = getattr(adapter, "board_lids", None)
+    board = sorted(bfn()) if bfn else []   # leagues the FEATURED BOARD streams (sport-level topics)
+    return {"live_mids": mids, "count": len(mids), "board_lids": board, "board_count": len(board)}
 
 
 @app.get("/debug/straight")

@@ -124,6 +124,14 @@ class PinnacleAdapter(BookAdapter):
         self._browser_odds_mid_ts: dict = {}   # "lid:mid" -> last ts the READER actually pushed odds for it
                                                # (coverage truth — distinct from /odds freshness, which _read_cache
                                                # re-stamps for any SERVED token; see /debug/reader + coverage_check)
+        self._board_odds_lid_ts: dict = {}     # lid -> last ts seen on a SPORT-LEVEL topic (matchups/…/sp/{id}/…)
+                                               # = the FEATURED BOARD's leagues (main page); a league tab uses
+                                               # /lg/{lid}/ topics, so this is board-only → the tab manager skips
+                                               # opening a DEDICATED tab for a league the board already streams
+        try:
+            self._board_lid_ttl = float(os.environ.get("PINNACLE_BOARD_LID_TTL") or 300.0)
+        except ValueError:
+            self._board_lid_ttl = 300.0
         try:
             self._browser_odds_ttl = float(os.environ.get("PINNACLE_WINDOW_WS_TTL") or 30.0)
         except ValueError:
@@ -349,7 +357,8 @@ class PinnacleAdapter(BookAdapter):
                         from tab_manager import LeagueTabManager
                         pairs_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                                                   "cross_pairs.json")
-                        self._tab_manager = LeagueTabManager(self._browser, self.reader_live_mids, pairs_path)
+                        self._tab_manager = LeagueTabManager(self._browser, self.reader_live_mids, pairs_path,
+                                                             board_lids_fn=self.board_lids)
                         self._tab_manager.start()
                     elif self._tab_manager_on:
                         print("[PINNACLE] HARDVEN_TAB_MANAGER=1 needs PINNACLE_WINDOW_WS_READ=1 (the reader) to be "
@@ -945,6 +954,8 @@ class PinnacleAdapter(BookAdapter):
         lid = (rec.get("league") or {}).get("id")
         if lid is not None and mid is not None:
             self._browser_odds_mid_ts[f"{lid}:{mid}"] = self._browser_odds_last   # coverage truth (per matchup)
+            if "/sp/" in (topic or ""):        # SPORT-level topic = the featured board (main page), not a league tab
+                self._board_odds_lid_ts[str(lid)] = self._browser_odds_last       # → this league is board-covered
         try:
             self._apply(data, live)
         except Exception as ex:
@@ -979,6 +990,22 @@ class PinnacleAdapter(BookAdapter):
         except Exception as ex:
             return {"status": f"error: {type(ex).__name__}", "lid": str(lid)}
         return {"status": status, "lid": str(lid)}
+
+    def board_lids(self, ttl: float | None = None) -> set:
+        """Leagues the FEATURED BOARD (main page) is streaming — those seen on a SPORT-level topic
+        (matchups/…/sp/{id}/…) within `ttl`. The tab manager excludes these from its dedicated-tab candidates so
+        it never doubles up on a league the board already covers. Prunes as it goes. Featured leagues are the
+        active/popular ones (they push often), so a generous TTL keeps a briefly-quiet one from re-appearing."""
+        ttl = ttl if ttl is not None else self._board_lid_ttl
+        now = time.time()
+        out = set()
+        for lid in list(self._board_odds_lid_ts.keys()):
+            age = now - self._board_odds_lid_ts[lid]
+            if age < ttl:
+                out.add(lid)
+            elif age > max(ttl, 900):
+                del self._board_odds_lid_ts[lid]
+        return out
 
     def reader_live_mids(self, ttl: float = 30.0) -> list:
         """Matchups ('lid:mid') the browser-WS READER has actually pushed odds for within `ttl` seconds — the
