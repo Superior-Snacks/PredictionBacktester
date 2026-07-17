@@ -63,6 +63,12 @@ public class CrossArbExecutor
     private readonly ConcurrentDictionary<string, LocalOrderBook> _books;
     private readonly CrossArbRestVerifier? _restVerifier;
 
+    // PRE-LIVE-ONLY execution gate (pre-live-first phase). Pre-live lines are stable, so both legs are filled
+    // SIMULTANEOUSLY (the current parallel model). In-play lines move fast and need the Pinnacle-FIRST sequential
+    // model, which isn't built yet — so skip in-play arbs for now. HARDVEN_PRELIVE_ONLY=0 re-enables in-play
+    // (only once the in-play execution model exists). Telemetry-only mode never reaches here.
+    private readonly bool _preLiveOnly = Environment.GetEnvironmentVariable("HARDVEN_PRELIVE_ONLY") != "0";
+
     // When venue time-skew exceeds this value, block and REST-verify before firing.
     private const double StaleGateMs = 5_000.0;
     // When either book's absolute age exceeds this, REST-verify regardless of relative skew.
@@ -641,6 +647,16 @@ public class CrossArbExecutor
         {
             kalshiSide = "no";
             hardvenToken  = pair.HardVenYesTokenId;
+        }
+
+        // PRE-LIVE-ONLY gate: the chosen HardVen leg's match is in-play → skip (simultaneous fill only holds for
+        // stable pre-live lines; in-play needs the Pinnacle-first model, not built yet). Both HardVen legs share
+        // the match state, so checking the chosen one is enough.
+        var chosenHardVenBook = arbType == "K_YES_P_NO" ? pNo : pYes;
+        if (_preLiveOnly && chosenHardVenBook.IsLive)
+        {
+            Console.WriteLine($"[EXEC SKIP] {pair.Label}: IN-PLAY (HARDVEN_PRELIVE_ONLY=1) — pre-live only for now");
+            return;
         }
 
         // Venue time-skew: if one book is significantly stale, REST-verify current prices

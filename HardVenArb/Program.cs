@@ -469,8 +469,11 @@ if (isLive || isDryRun)
     }
     PredictionBacktester.Engine.LiveExecution.IKalshiOrderExecutor kalshiExec =
         isDryRun ? venueClient! : orderClient;
-    // Stub venue: same client in all modes (no HardVen sim in this scaffold).
-    IHardVenOrderExecutor hardvenExec = hardvenOrderClient;
+    // HardVen leg: the PAPER sim in dry-run (simulates Pinnacle fills — no browser, no real bet), the live
+    // sidecar client in --live (its mutating path still throws until the UI bet-slip is built).
+    IHardVenOrderExecutor hardvenExec = isDryRun
+        ? new SimulatedHardVenClient(fillProfile!)
+        : hardvenOrderClient;
     // Total combined open-exposure cap. $1,000 = full deployment of the $500/platform capital;
     // the per-platform balance/buffer checks still gate each side so neither venue overdraws.
     decimal       maxExposureUsd     = 1000m;
