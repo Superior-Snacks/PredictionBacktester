@@ -664,7 +664,7 @@ public class CrossArbExecutor
         var chosenHardVenBook = arbType == "K_YES_P_NO" ? pNo : pYes;
         if (_preLiveOnly && chosenHardVenBook.IsLive)
         {
-            Console.WriteLine($"[EXEC SKIP] {pair.Label}: IN-PLAY (HARDVEN_PRELIVE_ONLY=1) — pre-live only for now");
+            Console.WriteLine($"[EXEC SKIP] {pair.Label}: IN-PLAY — pre-live-only gate is ON (HARDVEN_PRELIVE_ONLY=0 to allow in-play)");
             return;
         }
 
