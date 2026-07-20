@@ -170,12 +170,20 @@ do not depend on the AI being right.
       `MarkDeltaReceived` + `_telemetry.OnBookUpdate`. Suspended/missing → empty ask (no arb). Program.cs
       points at `HARDVEN_SIDECAR_URL` (env, default `http://127.0.0.1:8787`). Builds clean; sidecar `/odds`
       shape verified to match. Poll cadence = `HARDVEN_PING_INTERVAL_MS` (9 s).
-- [ ] `HardVenOrderClient.SubmitOrderAsync` → convert contracts↔stake (`stake = contracts / O`), POST
-      `/bet`, return a response the executor can parse as a fill (mirror the JSON shape the executor expects,
-      or adapt the executor's HardVen-fill parsing).
-- [ ] `GetUsdcBalanceAsync` → `/balance`. `GetTokenBalanceAsync`/`GetOrderAsync` → `/bets` (open-bet
-      confirmation = your "wallet" check). `UpdateBalanceAllowanceAsync` → no-op (or refresh cache).
-- [ ] `GetTakerFeeAsync→0`, `GetFeeParamsAsync→(0,1)`, `GetTickSizeAsync→` nominal/odds-step.
+- [x] `HardVenOrderClient.SubmitOrderAsync` (DONE 2026-07-20) → `stakeUsd = size × price`,
+      `stakeAcct = floor(stakeUsd / HARDVEN_FX_TO_USD, 2dp)`, `max_odds = 1/price`; POST `/bet`; reply mapped
+      to the `success/orderID/status/takingAmount/makingAmount` shape `ExtractHardVenFill` parses, recomputed
+      from the ACTUALLY accepted stake/odds so slippage surfaces as fewer filled shares. Stake **floors** (never
+      nearest-rounds) so the irreversible leg is never over-bought. `side != 0` (SELL) **throws** — a placed bet
+      can't be laid off, and faking success would leave the bot thinking it had flattened.
+- [x] `GetUsdcBalanceAsync` → `/balance` (was already live). `GetOrderAsync` → `/bets/{id}` and
+      `GetTokenBalanceAsync` → `/bets/open` (DONE 2026-07-20), both tolerant of the not-yet-implemented
+      Python side (404 / `[]` → "unknown" / 0 = flat, so reconcile trusts its own fill record).
+      `UpdateBalanceAllowanceAsync` = no-op (no allowance concept on a sportsbook).
+- [x] `GetTakerFeeAsync→0`, `GetFeeParamsAsync→(0,1)`, `GetTickSizeAsync→"0.01"` (vig is inside the odds).
+- **Remaining on this layer = the PYTHON half only:** `_place_via_ui()` + `open_bets()`/`bet()`. The C# chain
+  is complete and rehearsable today via `HARDVEN_LIVE_BET_PATH=1` (see TESTING.md Phase 4) — it drives the real
+  sidecar `/bet` with Kalshi simulated, and the preview rejection exercises the recovery path.
 
 ### D. Executor changes (the non-trivial work — `CrossArbExecutor.cs`)
 **Keep ONE execution core — drive the differences off venue CAPABILITIES, not venue identity.** The

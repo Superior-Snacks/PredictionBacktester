@@ -1507,13 +1507,13 @@ class PinnacleAdapter(BookAdapter):
             return BetResult(accepted=False, stake=stake, reason="no live Pinnacle session (login not captured)")
         # 3. preview default — nothing is placed unless explicitly enabled
         if not self._bet_enabled:
-            print(f"[PINNACLE BET] PREVIEW (HARDVEN_BET_ENABLE!=1) — WOULD place {stake:.2f} on {selection_id} "
+            print(f"[PINNACLE BET] PREVIEW (HARDVEN_BET_ENABLE!=1) - WOULD place {stake:.2f} on {selection_id} "
                   f"@ max_odds>={max_odds:.4f}. No bet placed.")
             return BetResult(accepted=False, stake=stake,
-                             reason="preview only — set HARDVEN_BET_ENABLE=1 to place real bets")
+                             reason="preview only - set HARDVEN_BET_ENABLE=1 to place real bets")
         # 4. real placement — serialise (one browser session) and go through the UI (deferred)
         async with self._bet_lock:
-            print(f"[PINNACLE BET] LIVE — placing {stake:.2f} on {selection_id} @ max_odds>={max_odds:.4f}")
+            print(f"[PINNACLE BET] LIVE - placing {stake:.2f} on {selection_id} @ max_odds>={max_odds:.4f}")
             return await self._place_via_ui(selection_id, stake, max_odds)
 
     async def _place_via_ui(self, selection_id: str, stake: float, max_odds: float) -> BetResult:

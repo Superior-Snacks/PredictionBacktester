@@ -62,6 +62,37 @@ python -m uvicorn app:app --port 8787
 - **Soccer (3-way, added 2026-07-13):** enabled by default (`sports.py` id 29). Soccer is 1X2 (home/draw/away), so each match pairs as **up to 3 separate 2-leg NO-only arbs** — Pinnacle YES (back an outcome) + Kalshi NO — for Home, Away, **and Draw**. The draw leg is synthesised in `catalog()` from the moneyline's `draw` price (Pinnacle lists only 2 participants). Series: World Cup / MLS / Liga MX / UCL-quals / USL etc. **Watch the first soccer runs for mispairs** — 3-way pairs relax the HardVen mid-sum sanity check, so a fat `EntryNetCost` on a soccer window is a mispair suspect, not free money.
 - **Lifecycle (human session rhythm):** set **`PINNACLE_LIFECYCLE=1`** to have the sidecar OPEN the browser only during game windows (computed by `schedule.py` from the slate) and go DARK between them / overnight — instead of holding it open 24/7. Sport ids default from `HARDVEN_SPORTS` (override `PINNACLE_LIFECYCLE_SPORTS`). **Window shaping:** `PINNACLE_LEAD_MIN` (open this many min before a block's first game, default 15), `PINNACLE_MAX_BLOCKS` (keep only the densest N blocks, default 4; 0 = all), `PINNACLE_MIN_GAMES` (skip blocks with fewer matches, default 1). Preview with `python sidecar/schedule.py` (shows the selected blocks + match counts). Lifecycle state shows on `/health` under `session.lifecycle`. Default (unset) = browser stays open (M0/manual). Caveat: a long dark gap may log the Pinnacle session out → the next window needs a manual re-login (fine while login is manual).
 - **Auto-pairing (continuous runs):** set **`HARDVEN_AUTO_PAIR=1`** to have the sidecar re-run the whole pairing pipeline (scaffold → moneyline fill → derivatives) at startup **and every `HARDVEN_PAIR_INTERVAL_MIN` minutes (default 90)** — so LIVE and late-appearing games (esp. tennis ITF/challenger + soccer, which the board adds all day) get paired within the hour instead of only at a daily run. Set `HARDVEN_PAIR_INTERVAL_MIN=0` to fall back to daily-only at `HARDVEN_PAIR_HOUR` (local hour, default 5). Account-free (Kalshi public + Pinnacle guest); respects `HARDVEN_SPORTS`; results hot-reload into the bot. Off by default (manual pairing below is unchanged). **`pairHard` is now MERGE-additive** — a re-pair carries over already-filled Pinnacle tokens for still-open games, so a frequent re-run can't drop a working (esp. live) pairing whose odds are momentarily suspended at catalog time (`--fresh` forces the old blank rebuild).
+- **Bet-slip flow capture (`/capture/*`).** The bot places bets by driving the UI, and the selectors for that
+  can't be invented — they have to come from the real page. With the sidecar up and logged in:
+  ```
+  curl -X POST 127.0.0.1:8787/capture/start     # arm
+  #   ... place ONE small bet BY HAND in the managed browser ...
+  curl -X POST 127.0.0.1:8787/capture/stop      # disarm
+  python sidecar/bet_capture.py                 # digest of the latest capture
+  ```
+  Records per stage: the interaction (+ ranked selector candidates, `data-test-id` first), the DOM regions that
+  changed, a screenshot, and any non-GET network call (the bet POST + response). Mutations are only recorded
+  in a 3s window after a real interaction, and only when *element* nodes change — otherwise the live odds board
+  (which rewrites price text constantly) drowns out the slip.
+  > **⚠ `bet_capture_*.jsonl` and `*_shots/` hold LIVE account data** (balance, bet ids, whatever is on screen).
+  > Gitignored — never commit or paste wholesale. `bet_capture.py <file>` redacts by default; `--raw` doesn't.
+- **Stake ladder (sizing).** The HardVen stake is snapped DOWN to a round rung — multiples of **10** below 100,
+  of **50** below 300 (so 250 is a rung), of **100** above — and capped at `HARDVEN_MAX_DEPTH_FRACTION` (default
+  1/3) of what Pinnacle would accept. Round stakes look like a human; a bot staking €37.42 does not, and betting
+  near the book's max is what gets an account limited. Denominated in the **book's account currency (EUR)** —
+  that is the number typed into the bet slip. Below the €10 minimum rung the trade is **skipped**
+  (`[EXEC SKIP] … ladder: no valid rung`), never placed off-ladder.
+  > **⚠ Three caps must agree or the ladder never fires.** `--max-bet` (`maxBetUsd`, combined USD cost per
+  > entry, default `10`) and `HARDVEN_MAX_STAKE` (sidecar hard cap, default `10` EUR) both bind *below* the
+  > smallest rung at their defaults, so every arb skips. Rough rule: a rung of **R** EUR needs
+  > `maxBetUsd ≈ R × FX × pricePerSet / hardvenLegPrice` — for an even-odds match that is **≈ 2 × R × FX**.
+  >
+  > | target rung | `--max-bet` (≈) | `HARDVEN_MAX_STAKE` (≥) |
+  > |---|---|---|
+  > | €10  | `$22`  | `10`  |
+  > | €50  | `$110` | `50`  |
+  > | €100 | `$220` | `100` |
+  > | €250 | `$540` | `250` |
 - **Currency / FX:** the Pinnacle account is **EUR**, Kalshi is **USD**. Arb *detection* is unaffected (it compares unitless probabilities — `1/odds` and the Kalshi 0–1 price), but *depth/capital/profit* mix EUR-payout units with USD. Set **`HARDVEN_FX_TO_USD`** (USD per book-unit, e.g. `1.08`) so HardVen size is converted to USD-equivalent (price is left unitless). Default `1.0` = a USD book. Update it occasionally; the rate moves <1%/day.
 - **Availability:** the adapter tracks each moneyline's status — a market that goes OFFLINE/suspended (status not `open`/`null`, or the moneyline drops out of the pushed record) is marked `suspended` → the C# clears that book so no arb fires on it. Run with `PINNACLE_DEBUG_STATUS=1` to log offline/suspend transitions (and capture the exact offline status string). Note: tennis "(Games)" tabs show "moneyline unavailable" because that derivative simply has no moneyline market (only spread/total) — pairing already excludes it.
 
@@ -281,7 +312,10 @@ cause is throttling/swapping (server) vs a network blip (not the server).
 | `HARDVEN_SPORTS` | all enabled | **Sidecar:** the active sports (comma keys, e.g. `baseball,tennis`) — one source for schedule/lifecycle + pairing. Catalog in `sidecar/sports.py`. |
 | `HARDVEN_FX_TO_USD` | `1.0` | **Bot + Sidecar:** USD per HardVen book-unit (EUR→USD). Applied to feed depth AND the wallet balance (`GetUsdcBalanceAsync` → sidecar `/balance` × FX). `~1.08` for the EUR account; price is left unitless. |
 | `HARDVEN_BET_ENABLE` | unset | **Sidecar (real money):** `1` = allow real bet placement. **Default OFF → `place_bet()` PREVIEWS only** (logs the intended bet, places nothing). Placement itself goes through the browser UI and is DEFERRED — even with this on, `_place_via_ui()` raises until built. |
-| `HARDVEN_MAX_STAKE` | `10` | **Sidecar (real money):** hard per-bet stake cap (account currency); a stake above it is rejected outright. Never overridden. |
+| `HARDVEN_MAX_STAKE` | `10` | **Sidecar (real money):** hard per-bet stake cap (account currency); a stake above it is rejected outright. Never overridden. Note this is EUR — at `HARDVEN_FX_TO_USD=1.08` it caps a bet at ~$10.80 staked. |
+| `HARDVEN_MAX_DEPTH_FRACTION` | `0.3333` | **Bot (sizing):** never take more than this fraction of what Pinnacle would accept on a selection. Betting at/near the posted max is the classic arber tell and is what gets an account stake-limited. Raise cautiously; `1.0` removes the protection. |
+| `HARDVEN_CURRENCY` | `EUR` | **Bot (display only):** label for the stake ladder in `[LADDER]` log lines. Does not change any arithmetic — that is driven by `HARDVEN_FX_TO_USD`. |
+| `HARDVEN_LIVE_BET_PATH` | unset | **Bot (dress rehearsal), `--dry-run` only:** `1` = route the HardVen leg to the REAL sidecar `/bet` instead of `SimulatedHardVenClient`, while Kalshi stays simulated. Exercises the whole live placement chain (contracts→stake conversion, POST, reply parsing, recovery on the result) with no money at risk — the sidecar still refuses to place without `HARDVEN_BET_ENABLE=1` *and* a built `_place_via_ui()`, so it replies `accepted=false` and the bot runs its recovery path. Ignored outside `--dry-run`. |
 | `HARDVEN_PRELIVE_ONLY` | `1` | **Bot (executor):** pre-live-first phase — SKIP in-play arbs (`[EXEC SKIP] IN-PLAY`). Pre-live lines are stable so both legs fill simultaneously (the current parallel model); in-play needs the not-yet-built Pinnacle-first sequential model. Set `0` only once that exists. No effect in `--telemetry`. |
 | `HARDVEN_REQUIRE_WS_VERIFIED` | `1` | **Bot (executor):** never place on a HardVen leg whose price is SCREENING-ONLY (an httpx re-seed of an untabbed tail league, `wv=false`) — only on a leg confirmed on the live browser WS. On an unverified leg it logs `[EXEC SKIP] … NOT WS-verified` and skips; the telemetry has already fired `/verify` to promote that league to a live tab, so the re-opened arb executes once WS-covered. No-op in non-reader mode (wv always true). `0` disables. |
 | `HARDVEN_EARLY_EXIT` | unset | **Bot (executor):** early exit (close a position before settlement by selling BOTH legs) is **OFF** by default — the Pinnacle bet is irreversible, so the model is HOLD-TO-SETTLEMENT / only-adjust-Kalshi. `1` re-enables it (only meaningful on a reversible venue). |

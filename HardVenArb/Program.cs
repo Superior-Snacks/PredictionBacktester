@@ -470,10 +470,25 @@ if (isLive || isDryRun)
     PredictionBacktester.Engine.LiveExecution.IKalshiOrderExecutor kalshiExec =
         isDryRun ? venueClient! : orderClient;
     // HardVen leg: the PAPER sim in dry-run (simulates Pinnacle fills — no browser, no real bet), the live
-    // sidecar client in --live (its mutating path still throws until the UI bet-slip is built).
-    IHardVenOrderExecutor hardvenExec = isDryRun
+    // sidecar client in --live.
+    //
+    // HARDVEN_LIVE_BET_PATH=1 is the DRESS REHEARSAL: in dry-run, use the REAL sidecar client so the whole
+    // placement chain executes for real — contracts→stake conversion, POST /bet, reply parsing, recovery on
+    // the result — while Kalshi stays simulated. No money can move: Kalshi is a sim, and the sidecar refuses
+    // to place unless HARDVEN_BET_ENABLE=1 with an implemented _place_via_ui(). It replies accepted=false,
+    // so the bot sees a failed HardVen leg and runs the (simulated) Kalshi recovery — which is precisely the
+    // path to rehearse. Ignored outside dry-run.
+    bool liveBetPath = Environment.GetEnvironmentVariable("HARDVEN_LIVE_BET_PATH") == "1";
+    IHardVenOrderExecutor hardvenExec = isDryRun && !liveBetPath
         ? new SimulatedHardVenClient(fillProfile!)
         : hardvenOrderClient;
+    if (isDryRun && liveBetPath)
+    {
+        Console.ForegroundColor = ConsoleColor.Yellow;
+        Console.WriteLine("[DRESS REHEARSAL] HARDVEN_LIVE_BET_PATH=1 — HardVen leg routes to the REAL sidecar " +
+                          "/bet (Kalshi stays simulated). Placement is still blocked by the sidecar's own gates.");
+        Console.ResetColor();
+    }
     // Total combined open-exposure cap. $1,000 = full deployment of the $500/platform capital;
     // the per-platform balance/buffer checks still gate each side so neither venue overdraws.
     decimal       maxExposureUsd     = 1000m;
@@ -506,7 +521,9 @@ if (isLive || isDryRun)
         minPlausibleNet:     MIN_PLAUSIBLE_NET,
         discord:             discord,
         lowBalanceAlertUsd:  LOW_BALANCE_ALERT_USD,
-        executionWindowWeeks: execWindowWeeks);
+        executionWindowWeeks: execWindowWeeks,
+        hardvenFxToUsd:       hardvenFxToUsd,
+        hardvenCurrency:      Environment.GetEnvironmentVariable("HARDVEN_CURRENCY") ?? "EUR");
     telemetry.OnArbOpened  += executor.OnArbOpened;
     telemetry.BookUpdated  += executor.OnBookUpdate;  // event-driven early exit checks
     await executor.InitializeBalancesAsync();

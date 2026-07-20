@@ -61,6 +61,35 @@ profile with a partial-fill or Kalshi-leg-fail rate (see `Simulation/FailureScen
 
 ---
 
+## Phase 4 — preview dress rehearsal (`--dry-run` + `HARDVEN_LIVE_BET_PATH=1`), 2026-07-20
+
+Drives the **real** HardVen placement chain against the live sidecar while Kalshi stays simulated. Nothing can
+be placed: the sidecar refuses without `HARDVEN_BET_ENABLE=1` **and** a built `_place_via_ui()` (which raises),
+so it replies `accepted=false` → the bot books a failed HardVen leg and runs recovery. That failure IS the
+test — it proves every layer up to the click.
+
+```
+# sidecar already up + logged in; HARDVEN_BET_ENABLE must stay unset
+HARDVEN_LIVE_BET_PATH=1 HARDVEN_PRELIVE_ONLY=0 \
+  dotnet run --project HardVenArb -- --dry-run --scenario Clean --try 5
+```
+(`HARDVEN_PRELIVE_ONLY=0` only so an arb actually fires while pre-live windows are scarce — **put it back to
+`1` afterwards**. Set it in the shell, not `.env`, or it won't be picked up / will linger.)
+
+| # | Change | PASS signal | FAIL signal |
+|---|--------|-------------|-------------|
+| C1 | Dress-rehearsal wiring active | `[DRESS REHEARSAL] HARDVEN_LIVE_BET_PATH=1 …` banner at startup | banner absent → still on the sim client |
+| C2 | Contracts→stake conversion | sidecar logs `[PINNACLE BET] PREVIEW … WOULD place <stake> on <sel> @ max_odds>=<odds>`; stake ≈ `shares × price / FX`, `max_odds` ≈ `1/price` | stake off by ~the FX rate (EUR/USD mix-up), or `max_odds` inverted |
+| C3 | Rejection parsed, not crashed | `[FILL P WARN] … success=false — preview only …` | an unhandled exception on the HardVen leg |
+| C4 | Recovery runs on the failed leg | Kalshi excess → `REVERSED_KALSHI` (cheap side, as designed) | `REVERSED_HARDVEN`, or a halt |
+| C5 | Stake cap enforced | a size needing > `HARDVEN_MAX_STAKE` is rejected with `stake … > HARDVEN_MAX_STAKE … (hard cap)` | an oversized stake previewing as acceptable |
+
+**Conversion is already unit-verified** (`scratchpad/verify_conv.py`): round-trip contracts→stake→contracts is
+exact to the book's 2-dp stake granularity, and the stake is **floored, never nearest-rounded**, so the
+irreversible leg is never over-bought (worst case under-fills ~1.5% on a €0.48 long-odds bet).
+
+---
+
 ## Data to collect (feeds the eventual betting + UI work)
 
 1. **`CrossArbTelemetry_YYYYMMDD.csv`** — the pre-live window tape, now with **`HardVenWsVerified`**. Analyze:

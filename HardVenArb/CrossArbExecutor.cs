@@ -104,6 +104,10 @@ public class CrossArbExecutor
     // ── Configuration ─────────────────────────────────────────────────────────
     private readonly decimal _maxBetUsd;           // max combined dollar cost per arb entry
     private readonly decimal _balanceBufferPct;    // fraction of maxBetUsd kept as per-platform reserve
+    // FX + currency label for the HardVen leg. The stake ladder is denominated in the BOOK's account currency
+    // (Pinnacle = EUR) because that is the number typed into the bet slip — see StakeLadder.
+    private readonly decimal _hardvenFxToUsd;
+    private readonly string  _hardvenCurrency;
     private readonly decimal _maxExposureUsd;
     private readonly bool    _minBuy;              // --min-buy: cap every arb to exactly 1 contract
     private readonly decimal _executionThreshold;
@@ -329,8 +333,12 @@ public class CrossArbExecutor
         decimal minPlausibleNet     = 0.90m,
         DiscordNotifier? discord    = null,
         decimal lowBalanceAlertUsd  = 15m,
-        int     executionWindowWeeks = 0)
+        int     executionWindowWeeks = 0,
+        decimal hardvenFxToUsd      = 1.0m,
+        string  hardvenCurrency     = "EUR")
     {
+        _hardvenFxToUsd      = hardvenFxToUsd > 0m ? hardvenFxToUsd : 1.0m;
+        _hardvenCurrency     = hardvenCurrency;
         _kalshi              = kalshi;
         _hardven                = hardven;
         _telemetry           = telemetry;
@@ -855,15 +863,66 @@ public class CrossArbExecutor
             return;
         }
 
-        // Depth gate: only fire if both venues can fill the full order at our limit prices.
-        // Measures volume at or below each limit — not top-N regardless of price — so a book
-        // with 12 contracts at 15¢ doesn't count toward a 9¢ HardVen limit.
+        // Depth gate + stake ladder. Measures volume at or below each limit — not top-N regardless of price —
+        // so a book with 12 contracts at 15¢ doesn't count toward a 9¢ HardVen limit.
+        //
+        // The ladder (StakeLadder) then sizes the actual bet: capped at MaxDepthFraction of what Pinnacle
+        // would accept (never bet near the book's max — that is what gets an account limited) and snapped
+        // DOWN to a round rung (a bot staking €37.42 is a signature; real bettors stake round numbers).
+        // Snapping down keeps any residue on the reversible Kalshi side.
         {
             var kBook = arbType == "K_YES_P_NO" ? kYes : kNo;
             var pBook = arbType == "K_YES_P_NO" ? pNo  : pYes;
             decimal kLimitDec     = kLegAsk + 0.01m;   // mirrors kPriceCents calc above
             decimal kDepthAtLimit = kBook.GetAskVolumeAtOrBelow(kLimitDec);
             decimal pDepthAtLimit = pBook.GetAskVolumeAtOrBelow(pLimitAsk);
+
+            var (ladderContracts, ladderStake) = StakeLadder.SizeBet(
+                hardvenPrice:    pLegAsk,
+                fxToUsd:         _hardvenFxToUsd,
+                contractCeiling: contracts,
+                kalshiDepth:     kDepthAtLimit,
+                hardvenDepth:    pDepthAtLimit);
+
+            if (ladderContracts < hardvenMinContracts || ladderContracts <= 0)
+            {
+                lock (_balanceLock) { _kalshiBalanceUsd += kalshiCost; _hardvenBalanceUsd += hardvenCost; }
+                Console.WriteLine(
+                    $"[EXEC SKIP] {pair.Label} | ladder: no valid rung — want≤{contracts} " +
+                    $"K≤{kLimitDec:0.00}={kDepthAtLimit:0.0} P≤{pLimitAsk:0.0000}={pDepthAtLimit:0.0} " +
+                    $"(×{StakeLadder.MaxDepthFraction:0.###} cap) → {ladderContracts} contracts / " +
+                    $"{ladderStake:0.00} stake, min rung {StakeLadder.MinRung:0}");
+                await JournalAsync(JsonSerializer.Serialize(new {
+                    t = DateTime.UtcNow, @event = "EXEC_SKIP", pairId, arbType,
+                    reason = "NO_LADDER_RUNG", wanted = contracts, ladderContracts,
+                    ladderStake = Math.Round(ladderStake, 2),
+                    kDepthAtLimit = Math.Round(kDepthAtLimit, 2),
+                    pDepthAtLimit = Math.Round(pDepthAtLimit, 2),
+                    depthFraction = StakeLadder.MaxDepthFraction
+                }));
+                return;
+            }
+
+            if (ladderContracts != contracts)
+            {
+                // Release the over-reservation made at the pre-ladder size, then re-reserve at the rung.
+                decimal newKalshiCost  = kLegAsk * ladderContracts;
+                decimal newHardVenCost = pLegAsk * ladderContracts;
+                lock (_balanceLock)
+                {
+                    _kalshiBalanceUsd  += kalshiCost  - newKalshiCost;
+                    _hardvenBalanceUsd += hardvenCost - newHardVenCost;
+                }
+                Console.WriteLine(
+                    $"[LADDER] {pair.Label} | {contracts} → {ladderContracts} contracts " +
+                    $"(stake {ladderStake:0.00} {_hardvenCurrency}, ≤{StakeLadder.MaxDepthFraction:0.###} of book max)");
+                contracts     = ladderContracts;
+                hardvenShares = contracts;
+                kalshiCost    = newKalshiCost;
+                hardvenCost   = newHardVenCost;
+                estimatedCost = kalshiCost + hardvenCost;
+            }
+
             if (Math.Min(kDepthAtLimit, pDepthAtLimit) < contracts)
             {
                 lock (_balanceLock) { _kalshiBalanceUsd += kalshiCost; _hardvenBalanceUsd += hardvenCost; }

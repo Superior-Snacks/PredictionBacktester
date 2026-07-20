@@ -383,6 +383,11 @@ live_debug_*.jsonl
 # Pinnacle sidecar WS frame dump (debug capture — may hold LIVE session data; never commit)
 pin_ws_dump*.jsonl
 
+# Bet-slip flow capture (sidecar /capture/start). Records the logged-in page: DOM, screenshots of the
+# account UI, and the bet POST — holds balance/bet ids/session data. NEVER commit.
+bet_capture_*.jsonl
+bet_capture_*_shots/
+
 # huge gz files
 *.gz
 *.json

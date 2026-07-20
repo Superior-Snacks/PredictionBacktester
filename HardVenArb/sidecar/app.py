@@ -18,6 +18,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
 
+from bet_capture import BetSlipRecorder
 from book_adapter import BookAdapter
 from env_util import load_dotenv_upwards
 from mock_adapter import MockBookAdapter
@@ -168,6 +169,45 @@ async def debug_browser_fetch(lid: str):
     if not fn:
         raise HTTPException(400, "adapter has no browser_fetch_straight_probe")
     return await fn(lid)
+
+
+# ── M1: bet-slip flow capture (arms the browser to record ONE manual bet) ─────
+_recorder = BetSlipRecorder()
+
+
+def _managed_page():
+    """The sidecar's logged-in Playwright page. NOTE: `adapter._session` is the x-session STRING; the browser
+    session object is `adapter._browser` (a PinnacleBrowserSession, present only when
+    PINNACLE_SESSION_SOURCE=browser)."""
+    br = getattr(adapter, "_browser", None)
+    return getattr(br, "_page", None) if br else None
+
+
+@app.post("/capture/start")
+async def capture_start():
+    """Arm the bet-slip recorder, then place ONE small bet BY HAND in the managed browser. Records the
+    interaction sequence, the DOM regions that change at each stage, screenshots, and the bet POST -- the raw
+    material for writing `_place_via_ui()` against real markup. Places nothing itself."""
+    page = _managed_page()
+    if page is None:
+        raise HTTPException(400, "no managed browser page (PINNACLE_SESSION_SOURCE=browser and logged in?)")
+    res = await _recorder.start(page)
+    if not res.get("ok"):
+        raise HTTPException(400, res.get("error", "capture failed to start"))
+    return res
+
+
+@app.post("/capture/stop")
+async def capture_stop():
+    res = await _recorder.stop()
+    if not res.get("ok"):
+        raise HTTPException(400, res.get("error", "capture not running"))
+    return res
+
+
+@app.get("/capture/status")
+async def capture_status():
+    return _recorder.status()
 
 
 # ── M1: betting + wallet confirmation ─────────────────────────────────────────
