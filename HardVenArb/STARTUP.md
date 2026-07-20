@@ -64,11 +64,19 @@ python -m uvicorn app:app --port 8787
 - **Auto-pairing (continuous runs):** set **`HARDVEN_AUTO_PAIR=1`** to have the sidecar re-run the whole pairing pipeline (scaffold → moneyline fill → derivatives) at startup **and every `HARDVEN_PAIR_INTERVAL_MIN` minutes (default 90)** — so LIVE and late-appearing games (esp. tennis ITF/challenger + soccer, which the board adds all day) get paired within the hour instead of only at a daily run. Set `HARDVEN_PAIR_INTERVAL_MIN=0` to fall back to daily-only at `HARDVEN_PAIR_HOUR` (local hour, default 5). Account-free (Kalshi public + Pinnacle guest); respects `HARDVEN_SPORTS`; results hot-reload into the bot. Off by default (manual pairing below is unchanged). **`pairHard` is now MERGE-additive** — a re-pair carries over already-filled Pinnacle tokens for still-open games, so a frequent re-run can't drop a working (esp. live) pairing whose odds are momentarily suspended at catalog time (`--fresh` forces the old blank rebuild).
 - **Bet-slip flow capture (`/capture/*`).** The bot places bets by driving the UI, and the selectors for that
   can't be invented — they have to come from the real page. With the sidecar up and logged in:
-  ```
+  ```bash
   curl -X POST 127.0.0.1:8787/capture/start     # arm
   #   ... place ONE small bet BY HAND in the managed browser ...
   curl -X POST 127.0.0.1:8787/capture/stop      # disarm
   python sidecar/bet_capture.py                 # digest of the latest capture
+  ```
+  ```powershell
+  # PowerShell: `curl` is an alias for Invoke-WebRequest and has no -X. Use Invoke-RestMethod (parses the
+  # JSON reply) or call curl.exe explicitly.
+  Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8787/capture/start
+  Invoke-RestMethod            -Uri http://127.0.0.1:8787/capture/status
+  Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8787/capture/stop
+  python sidecar/bet_capture.py
   ```
   Records per stage: the interaction (+ ranked selector candidates, `data-test-id` first), the DOM regions that
   changed, a screenshot, and any non-GET network call (the bet POST + response). Mutations are only recorded

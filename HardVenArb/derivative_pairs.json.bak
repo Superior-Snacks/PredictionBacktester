@@ -1,17 +1,5 @@
 [
   {
-    "kalshi_ticker": "KXATPGSPREAD-26JUL19KOPBUS-BUS4",
-    "market_type": "spread",
-    "line": 3.5,
-    "label": "Vit Kopriva vs Ignacio Buse \u2014 Ignacio Buse -3.5",
-    "event_id": "KXATPGSPREAD-26JUL19KOPBUS",
-    "settlement_date": "2026-07-19",
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "2865:1632679592:spread:-3.5:away",
-    "hardven_no_token": "2865:1632679592:spread:3.5:home"
-  },
-  {
     "kalshi_ticker": "KXATPGSPREAD-26JUL19CHODEJ-DEJ2",
     "market_type": "spread",
     "line": 1.5,
@@ -22,18 +10,6 @@
     "hardven_min_size": 1.0,
     "hardven_yes_token": "125386:1632679558:spread:-1.5:away",
     "hardven_no_token": "125386:1632679558:spread:1.5:home"
-  },
-  {
-    "kalshi_ticker": "KXATPGSPREAD-26JUL19FERVAN-VAN5",
-    "market_type": "spread",
-    "line": 4.5,
-    "label": "Frederico Ferreira Silva vs Luca Van Assche \u2014 Luca Van Assche -4.5",
-    "event_id": "KXATPGSPREAD-26JUL19FERVAN",
-    "settlement_date": "2026-07-20",
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "125386:1632679563:spread:-4.5:away",
-    "hardven_no_token": "125386:1632679563:spread:4.5:home"
   },
   {
     "kalshi_ticker": "KXATPGSPREAD-26JUL19GAUCAR-CAR4",
@@ -82,6 +58,18 @@
     "hardven_min_size": 1.0,
     "hardven_yes_token": "125386:1632679558:total:22.5:over",
     "hardven_no_token": "125386:1632679558:total:22.5:under"
+  },
+  {
+    "kalshi_ticker": "KXATPGTOTAL-26JUL19FERVAN-26",
+    "market_type": "total",
+    "line": 25.5,
+    "label": "Frederico Ferreira Silva vs Luca Van Assche \u2014 Over 25.5",
+    "event_id": "KXATPGTOTAL-26JUL19FERVAN",
+    "settlement_date": "2026-07-20",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "125386:1632679563:total:25.5:over",
+    "hardven_no_token": "125386:1632679563:total:25.5:under"
   },
   {
     "kalshi_ticker": "KXATPGTOTAL-26JUL19GAUCAR-23",
