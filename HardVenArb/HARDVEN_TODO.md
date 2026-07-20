@@ -181,7 +181,14 @@ do not depend on the AI being right.
       Python side (404 / `[]` → "unknown" / 0 = flat, so reconcile trusts its own fill record).
       `UpdateBalanceAllowanceAsync` = no-op (no allowance concept on a sportsbook).
 - [x] `GetTakerFeeAsync→0`, `GetFeeParamsAsync→(0,1)`, `GetTickSizeAsync→"0.01"` (vig is inside the odds).
-- **Remaining on this layer = the PYTHON half only:** `_place_via_ui()` + `open_bets()`/`bet()`. The C# chain
+- [x] **`_place_via_ui()` (DONE 2026-07-20)** — drives the **Quick Bet popover** (`#quick-bet-portal`; requires
+      Quick Bet mode ON + Decimal odds, both asserted). Since the odds button carries no matchup/market id, it
+      **probes and verifies**: click a candidate (which places nothing), read the popover back, proceed only if
+      matchup + side + `"money line"` all match the `/catalog` entry; else close and try the next. Rejects
+      handicap/total labels (`+1.5`, over/under) and the tennis `(Games)` shell — without that it silently bet
+      the handicap whenever Pinnacle suspended the moneyline. Bet id + accepted price come from the app's own
+      `POST /bets/straight` response; no response in 15s = state UNKNOWN, never retried blindly.
+- **Remaining on this layer = `open_bets()`/`bet()`** (My Bets read, for crash recovery + settlement). The C# chain
   is complete and rehearsable today via `HARDVEN_LIVE_BET_PATH=1` (see TESTING.md Phase 4) — it drives the real
   sidecar `/bet` with Kalshi simulated, and the preview rejection exercises the recovery path.
 

@@ -46,6 +46,7 @@ import random
 import threading
 import time
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
 import httpx
@@ -102,6 +103,157 @@ def _strip_units(name: str) -> str:
     The winner matchup is sometimes labelled '(Sets)' (no clean variant exists), so we keep it but clean the
     name for pairing. Names without a '(' are returned unchanged (baseball etc.)."""
     return (name or "").split("(")[0].strip()
+
+
+# ── UI bet placement (in-page scripts) ────────────────────────────────────────
+# Captured from a real manual bet 2026-07-20. The Quick Bet popover is `#quick-bet-portal`; the stake box is
+# `input[aria-label="Currency Input"]`; submit is a button reading "Place Bet". Everything else in that subtree
+# is a CSS-module build hash (`matchupName-LaAwbv3B5f`, `placeBet-ljO7MdYdT4`, ...) that rotates on deploy, so
+# these scripts match on the STABLE prefix and always fall back to visible text.
+_UI_POPOVER = "#quick-bet-portal"
+
+_UI_READ_POPOVER = r"""
+  const readPop = () => {
+    const p = document.querySelector("#quick-bet-portal");
+    if (!p || !(p.textContent || "").trim()) return null;
+    const t = (n) => ((n && n.textContent) || "").replace(/\s+/g, " ").trim();
+    const cls = (el) => (typeof el.className === "string" ? el.className : "");
+    let matchup = "", label = "", price = "";
+    for (const el of p.querySelectorAll("div,span")) {
+      const c = cls(el);
+      if (!matchup && c.includes("matchupName-")) matchup = t(el);
+      if (!label && c.includes("priceLabelAlt-")) label = t(el);
+      if (!price && /(^|\s)price-/.test(c) && !c.includes("priceLabel")) {
+        const m = t(el).match(/\d{1,3}\.\d{2,3}/); if (m) price = m[0];
+      }
+    }
+    // Fallbacks when the hashed class names change: derive from visible text.
+    const all = t(p);
+    if (!price) { const m = all.match(/\b\d{1,3}\.\d{2,3}\b/); if (m) price = m[0]; }
+    if (!label) {
+      for (const el of p.querySelectorAll("span,div")) {
+        const s = t(el);
+        if (s && s.length < 60 && s !== matchup && /[A-Za-z]/.test(s) && !/\d{1,3}\.\d{2,3}/.test(s)) { label = s; break; }
+      }
+    }
+    return {matchup, label, price, all};
+  };
+"""
+
+# Probe-and-verify: click a candidate odds button, read what the popover says was selected, and only keep it
+# when the matchup AND the side match. Clicking places nothing, so probing is safe.
+_UI_SELECT_JS = r"""
+async (args) => {
+  const {nameA, nameB, side, rejectSuffixes, requireMarket} = args;
+  const norm = (s) => (s || "").toLowerCase().replace(/\s+/g, " ").trim();
+  const surname = (s) => { const p = norm(s).split(" ").filter(Boolean); return p[p.length - 1] || ""; };
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  __READ__
+  const closePop = () => {
+    const p = document.querySelector("#quick-bet-portal");
+    if (!p) return;
+    const x = p.querySelector('button[aria-label*="Remove"], button[aria-label*="Close"], i.icon-x');
+    if (x) (x.closest("button") || x).click();
+  };
+  const A = surname(nameA), B = surname(nameB), S = surname(side);
+  if (!A || !B || !S) return {ok: false, error: "incomplete expected names"};
+
+  // Candidate buttons: those whose surrounding row mentions BOTH participants.
+  const btns = Array.from(document.querySelectorAll("button.market-btn"));
+  const cands = [];
+  for (const b of btns) {
+    let row = b, hops = 0;
+    while (row && hops++ < 9) {
+      const t = norm(row.textContent || "");
+      if (t.includes(A) && t.includes(B)) { cands.push({btn: b, rowText: t}); break; }
+      row = row.parentElement;
+    }
+  }
+  if (!cands.length) return {ok: false, error: `no row on this page mentions both "${A}" and "${B}"`};
+
+  closePop();
+  await sleep(150);
+  const tried = [];
+  for (const c of cands.slice(0, 12)) {
+    c.btn.scrollIntoView({block: "center"});
+    c.btn.click();
+    let pop = null;
+    for (let i = 0; i < 24 && !pop; i++) { await sleep(100); pop = readPop(); }
+    if (!pop) { tried.push("no popover"); continue; }
+    const m = norm(pop.matchup || pop.all), lab = norm(pop.label);
+    const matchupOk = m.includes(A) && m.includes(B);
+    const sideOk = lab.includes(S);
+    // The side name alone is NOT enough: "Adam Walton +1.5 (Sets)" (handicap) and "Adam Walton (Games)" both
+    // contain it. Pinnacle suspends individual moneylines constantly, and without these two checks the probe
+    // would fall through to whatever OTHER market on the same row still mentions the player -- silently
+    // betting a handicap/total at completely different odds. Confirmed by test 2026-07-20.
+    const marketOk = !requireMarket || norm(pop.all).includes(norm(requireMarket));
+    const derivative = /[+-]\s*\d+(\.\d+)?/.test(lab) || /\b(over|under|total)\b/.test(lab);
+    const rejected = (rejectSuffixes || []).some((sfx) => lab.includes(norm(sfx)));
+    if (matchupOk && sideOk && marketOk && !derivative && !rejected) {
+      return {ok: true, price: parseFloat(pop.price || "0"), matchup: pop.matchup, label: pop.label};
+    }
+    tried.push(`matchup=${matchupOk} side=${sideOk} market=${marketOk} deriv=${derivative} ` +
+               `rejected=${rejected} label="${pop.label}"`);
+    closePop();
+    await sleep(200);
+  }
+  return {ok: false, error: `no candidate matched (${cands.length} tried): ` + tried.slice(0, 4).join(" | ")};
+}
+""".replace("__READ__", _UI_READ_POPOVER)
+
+_UI_STAKE_JS = r"""
+async (args) => {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  __READ__
+  const p = document.querySelector("#quick-bet-portal");
+  if (!p) return {ok: false, error: "popover gone"};
+  const inp = p.querySelector('input[aria-label="Currency Input"]') || p.querySelector('input[type="text"]');
+  if (!inp) return {ok: false, error: "stake input not found"};
+  // React controlled input: set through the native setter or the value is reverted on re-render.
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+  inp.focus();
+  setter.call(inp, "");
+  inp.dispatchEvent(new Event("input", {bubbles: true}));
+  await sleep(60);
+  setter.call(inp, String(args.stake));
+  inp.dispatchEvent(new Event("input", {bubbles: true}));
+  inp.dispatchEvent(new Event("change", {bubbles: true}));
+  await sleep(350);
+  if (String(inp.value).replace(/[^\d.]/g, "") !== String(args.stake))
+    return {ok: false, error: `stake did not take (input reads "${inp.value}")`};
+  let maxBet = null;
+  const m = ((p.textContent || "").match(/Max Bet:?\s*[A-Z]{0,3}\s*([\d,]+(?:\.\d+)?)/i));
+  if (m) maxBet = parseFloat(m[1].replace(/,/g, ""));
+  return {ok: true, value: inp.value, maxBet};
+}
+""".replace("__READ__", _UI_READ_POPOVER)
+
+_UI_SUBMIT_JS = r"""
+() => {
+  const p = document.querySelector("#quick-bet-portal");
+  if (!p) return {ok: false, error: "popover gone before submit"};
+  let btn = null;
+  for (const b of p.querySelectorAll("button")) {
+    const t = ((b.textContent || "").replace(/\s+/g, " ").trim());
+    if (/^place bet$/i.test(t)) { btn = b; break; }
+  }
+  if (!btn) return {ok: false, error: "Place Bet button not found"};
+  if (btn.disabled) return {ok: false, error: "Place Bet button is disabled"};
+  btn.click();
+  return {ok: true};
+}
+"""
+
+_UI_CLOSE_JS = r"""
+() => {
+  const p = document.querySelector("#quick-bet-portal");
+  if (!p) return true;
+  const x = p.querySelector('button[aria-label*="Remove"], button[aria-label*="Close"], i.icon-x');
+  if (x) (x.closest("button") || x).click();
+  return true;
+}
+"""
 
 
 class PinnacleAdapter(BookAdapter):
@@ -1517,11 +1669,178 @@ class PinnacleAdapter(BookAdapter):
             return await self._place_via_ui(selection_id, stake, max_odds)
 
     async def _place_via_ui(self, selection_id: str, stake: float, max_odds: float) -> BetResult:
-        """Fill + submit the Pinnacle bet slip in the managed browser (add selection → set stake → handle the
-        'odds changed, accept?' dialog, accepting only if still >= max_odds → capture the confirmation: bet id,
-        actual accepted odds, stake). DEFERRED — bet placement will be driven through the UI (see HARDVEN_TODO
-        §B/§D). Raising here (rather than returning rejected) makes an accidental enable fail LOUD, not silent."""
-        raise NotImplementedError("Pinnacle bet placement via the browser UI is not implemented yet (deferred M1).")
+        """Place the bet by driving the real UI: open the league page, click the selection's Money Line button,
+        VERIFY the Quick Bet popover really is the intended market, enter the stake, submit.
+
+        THE WRONG-MARKET PROBLEM (why this is written the way it is). Captured from a real bet 2026-07-20: the
+        odds button carries NO matchup id, no designation, no data attributes -- only `market-btn`, a set of
+        rotating build-hash classes, and an aria-label containing the live price. Nothing in the board DOM ties
+        a row to a matchupId. So a button can only be found positionally, and adjacent rows are near-identical
+        ("Bicknell (Sets)" sits directly above "Bicknell (Games)" -- same names, different matchup). A
+        positional miss would not error; it would silently bet the wrong market with real money.
+
+        THE DEFENCE: clicking an odds button PLACES NOTHING -- it only opens the Quick Bet popover, which
+        states exactly what was selected. So we PROBE rather than trust our aim: click a candidate, read the
+        popover back, and only proceed when the matchup, the side, and the price all match what the caller
+        asked for. A mismatch closes the popover and tries the next candidate; if none match, nothing is placed.
+
+        Requires Quick Bet mode (the popover) and Decimal odds display -- both asserted, not assumed.
+        """
+        parts = selection_id.split(":")
+        if len(parts) != 3:
+            return BetResult(accepted=False, stake=stake,
+                             reason=f"UI placement handles straight moneyline tokens only, got '{selection_id}'")
+        lid, mid, desig = parts
+        if desig not in ("home", "away"):
+            return BetResult(accepted=False, stake=stake, reason=f"unknown designation '{desig}'")
+
+        exp = await self._expected_selection(selection_id)
+        if not exp:
+            return BetResult(accepted=False, stake=stake,
+                             reason=f"no catalog entry for {selection_id} -- cannot verify the market before betting")
+        url = self._league_url_for(lid)
+        if not url:
+            return BetResult(accepted=False, stake=stake, reason=f"no league URL known for lid {lid}")
+
+        page = await self._bet_tab(url)
+        if page is None:
+            return BetResult(accepted=False, stake=stake, reason="could not open a betting tab")
+
+        # Authoritative bet id / accepted price come from the app's own POST response, not from scraping.
+        placed: dict = {}
+
+        def _on_resp(resp):
+            try:
+                if "/bets/straight" in resp.url and resp.url.rstrip("/").endswith("straight") \
+                        and resp.request.method == "POST":
+                    placed["status"] = resp.status
+                    placed["_resp"] = resp
+            except Exception:
+                pass
+
+        try:
+            sel_ok = await page.evaluate(_UI_SELECT_JS, {
+                "nameA": exp["nameA"], "nameB": exp["nameB"], "side": exp["side"],
+                "rejectSuffixes": ["(games)"],      # the tennis Games shell is a different matchup, never ours
+                "requireMarket": "money line",      # the paired token is always the period-0 moneyline
+            })
+            if not sel_ok or not sel_ok.get("ok"):
+                await page.evaluate(_UI_CLOSE_JS)
+                return BetResult(accepted=False, stake=stake,
+                                 reason=f"could not select the intended market: {sel_ok and sel_ok.get('error')}")
+
+            shown = float(sel_ok.get("price") or 0)
+            if shown <= 1.0 or shown > 1000:
+                await page.evaluate(_UI_CLOSE_JS)
+                return BetResult(accepted=False, stake=stake,
+                                 reason=f"popover price {shown} is not decimal odds -- set the site to Decimal Odds")
+            if shown < max_odds - 1e-9:
+                await page.evaluate(_UI_CLOSE_JS)
+                return BetResult(accepted=False, stake=stake,
+                                 reason=f"odds moved: offered {shown:.4f} < required {max_odds:.4f}")
+
+            filled = await page.evaluate(_UI_STAKE_JS, {"stake": stake})
+            if not filled or not filled.get("ok"):
+                await page.evaluate(_UI_CLOSE_JS)
+                return BetResult(accepted=False, stake=stake,
+                                 reason=f"stake entry failed: {filled and filled.get('error')}")
+            max_bet = filled.get("maxBet")
+            if max_bet and stake > float(max_bet):
+                await page.evaluate(_UI_CLOSE_JS)
+                return BetResult(accepted=False, stake=stake,
+                                 reason=f"stake {stake:.2f} exceeds the book's max bet {float(max_bet):.2f}")
+
+            page.on("response", _on_resp)
+            submitted = await page.evaluate(_UI_SUBMIT_JS)
+            if not submitted or not submitted.get("ok"):
+                await page.evaluate(_UI_CLOSE_JS)
+                return BetResult(accepted=False, stake=stake,
+                                 reason=f"submit failed: {submitted and submitted.get('error')}")
+
+            # Wait for the app's own POST /bets/straight to come back.
+            body: dict = {}
+            for _ in range(60):                     # up to ~15s
+                await asyncio.sleep(0.25)
+                if "_resp" in placed:
+                    try:
+                        body = await placed["_resp"].json()
+                    except Exception:
+                        body = {}
+                    break
+            if "_resp" not in placed:
+                print(f"[PINNACLE BET] NO CONFIRMATION for {selection_id} - bet MAY have been placed; "
+                      f"reconcile against My Bets before retrying")
+                return BetResult(accepted=False, stake=stake,
+                                 reason="no bet response within 15s -- state UNKNOWN, do not retry blindly")
+            if placed.get("status") != 200:
+                return BetResult(accepted=False, stake=stake,
+                                 reason=f"bet rejected by Pinnacle (HTTP {placed.get('status')})")
+
+            bet_id = str(body.get("betId") or body.get("id") or "") or None
+            got = body.get("price") or shown
+            print(f"[PINNACLE BET] PLACED {stake:.2f} on {selection_id} @ {got} (bet {bet_id})")
+            return BetResult(accepted=True, bet_id=bet_id, actual_odds=float(got), stake=stake)
+        except Exception as e:
+            return BetResult(accepted=False, stake=stake, reason=f"UI placement error: {e}")
+        finally:
+            try:
+                page.remove_listener("response", _on_resp)
+            except Exception:
+                pass
+
+    # ── UI placement helpers ──────────────────────────────────────────────────
+    async def _expected_selection(self, selection_id: str) -> Optional[dict]:
+        """What the popover MUST show for this token, from the Pinnacle catalog (authoritative Pinnacle naming,
+        not the Kalshi-side label). Cached briefly -- catalog() is a guest call."""
+        now = time.time()
+        if now - getattr(self, "_cat_cache_ts", 0) > 120:
+            try:
+                self._cat_cache = {c.selection_id: c for c in await self.catalog()}
+                self._cat_cache_ts = now
+            except Exception:
+                self._cat_cache = getattr(self, "_cat_cache", {})
+        entry = getattr(self, "_cat_cache", {}).get(selection_id)
+        if not entry:
+            return None
+        ev = entry.event or ""
+        for sep in (" vs ", " - ", " v "):
+            if sep in ev:
+                a, b = ev.split(sep, 1)
+                return {"nameA": a.strip(), "nameB": b.strip(), "side": (entry.selection_name or "").strip()}
+        return None
+
+    def _league_url_for(self, lid: str) -> str:
+        """League page URL for a league id, from the pairing file (pair_pinnacle writes hardven_league_url)."""
+        cached = getattr(self, "_lid_urls", None)
+        if cached is None or time.time() - getattr(self, "_lid_urls_ts", 0) > 300:
+            urls: dict = {}
+            try:
+                path = Path(__file__).parent.parent / "cross_pairs.json"
+                for e in json.loads(path.read_text(encoding="utf-8")):
+                    tok, u = e.get("hardven_yes_token") or "", e.get("hardven_league_url") or ""
+                    if u and tok.count(":") >= 2:
+                        urls.setdefault(tok.split(":")[0], u)
+            except Exception:
+                pass
+            self._lid_urls, self._lid_urls_ts = urls, time.time()
+            cached = urls
+        return cached.get(lid, "")
+
+    async def _bet_tab(self, url: str):
+        """One reusable tab for placing bets, kept off the reader tabs so a bet never disturbs odds coverage."""
+        if self._browser is None:
+            return None
+        page = getattr(self, "_bet_page", None)
+        try:
+            if page is not None and not page.is_closed():
+                if not url.rstrip("/") in (page.url or "").rstrip("/"):
+                    await self._browser.navigate_tab(page, url)
+                return page
+        except Exception:
+            page = None
+        page = await self._browser.open_tab(url)
+        self._bet_page = page
+        return page
 
     async def open_bets(self) -> list[dict]:
         return []  # TODO(M1): read My Bets from the UI/authed endpoint for fill confirmation + settlement
