@@ -159,17 +159,35 @@ async (args) => {
   if (!A || !B || !S) return {ok: false, error: "incomplete expected names"};
 
   // Candidate buttons: those whose surrounding row mentions BOTH participants.
-  const btns = Array.from(document.querySelectorAll("button.market-btn"));
-  const cands = [];
-  for (const b of btns) {
-    let row = b, hops = 0;
-    while (row && hops++ < 9) {
-      const t = norm(row.textContent || "");
-      if (t.includes(A) && t.includes(B)) { cands.push({btn: b, rowText: t}); break; }
-      row = row.parentElement;
+  const collect = () => {
+    const out = [];
+    for (const b of document.querySelectorAll("button.market-btn")) {
+      let row = b, hops = 0;
+      while (row && hops++ < 9) {
+        const t = norm(row.textContent || "");
+        if (t.includes(A) && t.includes(B)) { out.push({btn: b, rowText: t}); break; }
+        row = row.parentElement;
+      }
     }
+    return out;
+  };
+  // The match may be below the fold, and if the board is virtualised the row is not merely off-screen -- it is
+  // not in the DOM at all until scrolled near. So sweep the page before concluding the market is absent.
+  let cands = collect();
+  let scanned = 0;
+  if (!cands.length) {
+    const step = Math.max(400, Math.floor(window.innerHeight * 0.8));
+    for (let y = 0; y <= document.body.scrollHeight && !cands.length && scanned < 40; y += step, scanned++) {
+      window.scrollTo(0, y);
+      await sleep(180);
+      cands = collect();
+    }
+    window.scrollTo(0, 0);
+    await sleep(120);
+    if (cands.length) cands = collect();          // re-query: virtualised nodes may have been recycled
   }
-  if (!cands.length) return {ok: false, error: `no row on this page mentions both "${A}" and "${B}"`};
+  if (!cands.length)
+    return {ok: false, error: `no row mentions both "${A}" and "${B}" (scanned ${scanned} viewport(s))`};
 
   closePop();
   await sleep(150);
@@ -242,6 +260,24 @@ _UI_SUBMIT_JS = r"""
   if (btn.disabled) return {ok: false, error: "Place Bet button is disabled"};
   btn.click();
   return {ok: true};
+}
+"""
+
+# After submit, Pinnacle may show an "odds changed -- accept?" confirmation. That flow was NOT present in the
+# 2026-07-20 capture, so its markup is unknown. This DETECTS it (a new actionable button appearing in the
+# popover while no bet response has arrived) and reports the popover text, rather than clicking something
+# unverified. Not clicking = no bet placed = safe. Capture a bet that hits this prompt to learn the markup.
+_UI_PROMPT_JS = r"""
+() => {
+  const p = document.querySelector("#quick-bet-portal");
+  if (!p) return {prompt: false};
+  const t = (p.textContent || "").replace(/\s+/g, " ").trim();
+  const btns = Array.from(p.querySelectorAll("button"))
+    .map((b) => (b.textContent || "").replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+  const actionable = btns.filter((s) => /accept|confirm|changed|new price|ok\b/i.test(s));
+  const changed = /odds (have )?changed|price (has )?changed|accept/i.test(t);
+  return {prompt: actionable.length > 0 || changed, buttons: btns, text: t.slice(0, 400)};
 }
 """
 
@@ -1668,7 +1704,8 @@ class PinnacleAdapter(BookAdapter):
             print(f"[PINNACLE BET] LIVE - placing {stake:.2f} on {selection_id} @ max_odds>={max_odds:.4f}")
             return await self._place_via_ui(selection_id, stake, max_odds)
 
-    async def _place_via_ui(self, selection_id: str, stake: float, max_odds: float) -> BetResult:
+    async def _place_via_ui(self, selection_id: str, stake: float, max_odds: float,
+                            submit: bool = True) -> BetResult:
         """Place the bet by driving the real UI: open the league page, click the selection's Money Line button,
         VERIFY the Quick Bet popover really is the intended market, enter the stake, submit.
 
@@ -1750,6 +1787,16 @@ class PinnacleAdapter(BookAdapter):
                 return BetResult(accepted=False, stake=stake,
                                  reason=f"stake {stake:.2f} exceeds the book's max bet {float(max_bet):.2f}")
 
+            # VERIFY-ONLY: everything above is the whole risk surface (navigation, finding the row, confirming
+            # the popover really is the intended market, stake entry). Stopping here exercises it for free.
+            if not submit:
+                await page.evaluate(_UI_CLOSE_JS)
+                print(f"[PINNACLE BET] VERIFY-ONLY OK {selection_id} @ {shown} stake {stake:.2f} "
+                      f"(max bet {max_bet}) - popover matched, NOTHING placed")
+                return BetResult(accepted=False, stake=stake, actual_odds=shown,
+                                 reason=f"verify-only: would place {stake:.2f} @ {shown} on "
+                                        f"'{sel_ok.get('label')}' ({sel_ok.get('matchup')}); max bet {max_bet}")
+
             page.on("response", _on_resp)
             submitted = await page.evaluate(_UI_SUBMIT_JS)
             if not submitted or not submitted.get("ok"):
@@ -1757,8 +1804,9 @@ class PinnacleAdapter(BookAdapter):
                 return BetResult(accepted=False, stake=stake,
                                  reason=f"submit failed: {submitted and submitted.get('error')}")
 
-            # Wait for the app's own POST /bets/straight to come back.
+            # Wait for the app's own POST /bets/straight to come back, watching for an accept-odds prompt.
             body: dict = {}
+            prompt: dict = {}
             for _ in range(60):                     # up to ~15s
                 await asyncio.sleep(0.25)
                 if "_resp" in placed:
@@ -1767,6 +1815,21 @@ class PinnacleAdapter(BookAdapter):
                     except Exception:
                         body = {}
                     break
+                if not prompt:
+                    try:
+                        pr = await page.evaluate(_UI_PROMPT_JS)
+                        if pr and pr.get("prompt"):
+                            prompt = pr
+                    except Exception:
+                        pass
+            if "_resp" not in placed and prompt:
+                await page.evaluate(_UI_CLOSE_JS)
+                print(f"[PINNACLE BET] ACCEPT-ODDS PROMPT hit on {selection_id} - NOT auto-accepting unknown "
+                      f"markup; no bet placed. buttons={prompt.get('buttons')}")
+                return BetResult(accepted=False, stake=stake,
+                                 reason="odds-changed prompt appeared; markup unverified so it was NOT accepted "
+                                        f"(no bet placed). buttons={prompt.get('buttons')} "
+                                        f"text={prompt.get('text', '')[:160]}")
             if "_resp" not in placed:
                 print(f"[PINNACLE BET] NO CONFIRMATION for {selection_id} - bet MAY have been placed; "
                       f"reconcile against My Bets before retrying")
@@ -1787,6 +1850,28 @@ class PinnacleAdapter(BookAdapter):
                 page.remove_listener("response", _on_resp)
             except Exception:
                 pass
+
+    async def verify_bet_ui(self, selection_id: str, stake: float, max_odds: float,
+                            submit: bool = False) -> BetResult:
+        """Manual single-bet test harness (sidecar `POST /bet/test`). Runs the REAL placement path so what is
+        exercised is what will run live -- but defaults to `submit=False`, which stops just before clicking
+        Place Bet. That covers the whole risk surface (navigate, find the row, verify the popover is the
+        intended market, enter the stake) for free.
+
+        Deliberately bypasses the `HARDVEN_BET_ENABLE` gate ONLY when submit is False, so verification can be
+        rehearsed without ever arming real betting. `submit=True` still requires the gate."""
+        if stake > self._max_stake:
+            return BetResult(accepted=False, stake=stake,
+                             reason=f"stake {stake:.2f} > HARDVEN_MAX_STAKE {self._max_stake:.2f} (hard cap)")
+        if self._session_source == "browser" and not self._session_ready:
+            return BetResult(accepted=False, stake=stake, reason="no live Pinnacle session")
+        if submit and not self._bet_enabled:
+            return BetResult(accepted=False, stake=stake,
+                             reason="submit=true requires HARDVEN_BET_ENABLE=1")
+        async with self._bet_lock:
+            mode = "LIVE SUBMIT" if submit else "VERIFY-ONLY"
+            print(f"[PINNACLE BET] TEST ({mode}) {selection_id} stake={stake:.2f} max_odds>={max_odds:.4f}")
+            return await self._place_via_ui(selection_id, stake, max_odds, submit=submit)
 
     # ── UI placement helpers ──────────────────────────────────────────────────
     async def _expected_selection(self, selection_id: str) -> Optional[dict]:

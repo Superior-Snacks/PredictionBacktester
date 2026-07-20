@@ -62,6 +62,21 @@ python -m uvicorn app:app --port 8787
 - **Soccer (3-way, added 2026-07-13):** enabled by default (`sports.py` id 29). Soccer is 1X2 (home/draw/away), so each match pairs as **up to 3 separate 2-leg NO-only arbs** — Pinnacle YES (back an outcome) + Kalshi NO — for Home, Away, **and Draw**. The draw leg is synthesised in `catalog()` from the moneyline's `draw` price (Pinnacle lists only 2 participants). Series: World Cup / MLS / Liga MX / UCL-quals / USL etc. **Watch the first soccer runs for mispairs** — 3-way pairs relax the HardVen mid-sum sanity check, so a fat `EntryNetCost` on a soccer window is a mispair suspect, not free money.
 - **Lifecycle (human session rhythm):** set **`PINNACLE_LIFECYCLE=1`** to have the sidecar OPEN the browser only during game windows (computed by `schedule.py` from the slate) and go DARK between them / overnight — instead of holding it open 24/7. Sport ids default from `HARDVEN_SPORTS` (override `PINNACLE_LIFECYCLE_SPORTS`). **Window shaping:** `PINNACLE_LEAD_MIN` (open this many min before a block's first game, default 15), `PINNACLE_MAX_BLOCKS` (keep only the densest N blocks, default 4; 0 = all), `PINNACLE_MIN_GAMES` (skip blocks with fewer matches, default 1). Preview with `python sidecar/schedule.py` (shows the selected blocks + match counts). Lifecycle state shows on `/health` under `session.lifecycle`. Default (unset) = browser stays open (M0/manual). Caveat: a long dark gap may log the Pinnacle session out → the next window needs a manual re-login (fine while login is manual).
 - **Auto-pairing (continuous runs):** set **`HARDVEN_AUTO_PAIR=1`** to have the sidecar re-run the whole pairing pipeline (scaffold → moneyline fill → derivatives) at startup **and every `HARDVEN_PAIR_INTERVAL_MIN` minutes (default 90)** — so LIVE and late-appearing games (esp. tennis ITF/challenger + soccer, which the board adds all day) get paired within the hour instead of only at a daily run. Set `HARDVEN_PAIR_INTERVAL_MIN=0` to fall back to daily-only at `HARDVEN_PAIR_HOUR` (local hour, default 5). Account-free (Kalshi public + Pinnacle guest); respects `HARDVEN_SPORTS`; results hot-reload into the bot. Off by default (manual pairing below is unchanged). **`pairHard` is now MERGE-additive** — a re-pair carries over already-filled Pinnacle tokens for still-open games, so a frequent re-run can't drop a working (esp. live) pairing whose odds are momentarily suspended at catalog time (`--fresh` forces the old blank rebuild).
+- **Single-bet test harness (`POST /bet/test`).** Runs the REAL UI placement path, so what you exercise is what
+  runs live. **`submit=false` is the default** and stops just before clicking Place Bet — it navigates, finds the
+  row, verifies the popover is the intended market, and enters the stake, placing **nothing**. Every attempt is
+  captured (`record=true` default), so repeated runs build the evidence needed to spot flow variations before
+  they cause a wrong bet.
+  ```powershell
+  # dress rehearsal - places nothing, no HARDVEN_BET_ENABLE needed
+  Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8787/bet/test -ContentType application/json `
+    -Body '{"selection_id":"221012:1632685298:home","stake":2}'
+  # for real (additionally requires HARDVEN_BET_ENABLE=1)
+  Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8787/bet/test -ContentType application/json `
+    -Body '{"selection_id":"221012:1632685298:home","stake":2,"max_odds":1.5,"submit":true}'
+  ```
+  `max_odds` is the FLOOR on acceptable decimal odds (default `1.01` = take whatever is offered). Run the
+  verify-only form against many different matches — that is the cheap way to find navigation/layout edge cases.
 - **Bet-slip flow capture (`/capture/*`).** The bot places bets by driving the UI, and the selectors for that
   can't be invented — they have to come from the real page. With the sidecar up and logged in:
   ```bash

@@ -210,6 +210,43 @@ async def capture_status():
     return _recorder.status()
 
 
+class BetTestRequest(BaseModel):
+    selection_id: str
+    stake: float = 2.0
+    max_odds: float = 1.01     # floor on acceptable decimal odds; 1.01 = accept whatever is offered
+    submit: bool = False       # False = full dress rehearsal, stops before clicking Place Bet
+    record: bool = True        # capture the attempt (builds the library for spotting flow variations)
+
+
+@app.post("/bet/test")
+async def bet_test(req: BetTestRequest):
+    """Manual single-bet harness for testing UI placement. Runs the REAL path, so what you exercise is what
+    runs live. `submit=false` (DEFAULT) stops just before clicking Place Bet -- it navigates, finds the row,
+    verifies the popover is the intended market, and enters the stake, placing nothing. `submit=true`
+    additionally requires HARDVEN_BET_ENABLE=1.
+
+    With `record=true` each attempt is captured to its own bet_capture_*.jsonl + screenshots, so repeated runs
+    accumulate the evidence needed to spot flow variations (accept-odds prompts, suspended markets, live vs
+    pre-match layouts) BEFORE they cause a wrong bet."""
+    fn = getattr(adapter, "verify_bet_ui", None)
+    if not callable(fn):
+        raise HTTPException(400, "adapter has no verify_bet_ui (Pinnacle adapter only)")
+    page = _managed_page()
+    recording = False
+    if req.record and page is not None and not _recorder.status()["active"]:
+        recording = (await _recorder.start(page)).get("ok", False)
+    try:
+        res = await fn(req.selection_id, req.stake, req.max_odds, submit=req.submit)
+    finally:
+        if recording:
+            await _recorder.stop()
+    out = res.to_api()
+    out["submitted"] = req.submit
+    if recording:
+        out["capture"] = _recorder.status()["file"]
+    return out
+
+
 # ── M1: betting + wallet confirmation ─────────────────────────────────────────
 @app.get("/balance")
 async def balance():
