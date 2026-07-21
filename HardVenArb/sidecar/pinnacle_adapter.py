@@ -437,7 +437,7 @@ class PinnacleAdapter(BookAdapter):
         self._browser = None                                   # PinnacleBrowserSession when source == "browser"
         self._tab_manager = None                               # LeagueTabManager when HARDVEN_TAB_MANAGER=1 (reader)
         self._tab_organic = None                               # TabOrganic: light per-tab human activity
-        self._bet_page = None                                  # cold last-resort bet tab (see _resolve_bet_page)
+        self._bet_page = None                                  # cold last-resort bet tab (see _select_bet_tab)
         self._tab_manager_on = os.environ.get("HARDVEN_TAB_MANAGER") == "1"
         self._session_ready = self._session_source != "browser"  # env mode = ready now; browser waits for login
         self._balance = 0.0                                    # last wallet amount (account currency, e.g. EUR)
@@ -1776,15 +1776,9 @@ class PinnacleAdapter(BookAdapter):
         # can't steal focus or re-point the tab mid-bet. Resumed in the finally.
         self._pause_all_organic()
 
-        # Bet on the tab that already shows this league (natural), else the roving tail tab.
-        page, tab_kind = await self._resolve_bet_page(lid, url)
-        if page is None:
-            self._resume_all_organic()
-            return BetResult(accepted=False, stake=stake, reason="could not open a betting tab")
-        print(f"[PINNACLE BET] using {tab_kind} tab for {selection_id}")
-
         # Authoritative bet id / accepted price come from the app's own POST response, not from scraping.
         placed: dict = {}
+        page = None
 
         def _on_resp(resp):
             try:
@@ -1796,15 +1790,14 @@ class PinnacleAdapter(BookAdapter):
                 pass
 
         try:
-            sel_ok = await page.evaluate(_UI_SELECT_JS, {
-                "nameA": exp["nameA"], "nameB": exp["nameB"], "side": exp["side"],
-                "rejectSuffixes": ["(games)"],      # the tennis Games shell is a different matchup, never ours
-                "requireMarket": "money line",      # the paired token is always the period-0 moneyline
-            })
-            if not sel_ok or not sel_ok.get("ok"):
-                await page.evaluate(_UI_CLOSE_JS)
+            # Choose the tab to bet on and VERIFY the intended market on it, most natural first: the primary
+            # board when it's showing the league, else a reader tab already on it, else the roving tail tab.
+            # Selection places nothing (only opens the popover), so trying tabs in turn is safe.
+            page, tab_kind, sel_ok = await self._select_bet_tab(lid, url, exp)
+            if page is None or not sel_ok or not sel_ok.get("ok"):
                 return BetResult(accepted=False, stake=stake,
                                  reason=f"could not select the intended market: {sel_ok and sel_ok.get('error')}")
+            print(f"[PINNACLE BET] using {tab_kind} tab for {selection_id}")
 
             shown = float(sel_ok.get("price") or 0)
             if shown <= 1.0 or shown > 1000:
@@ -1886,10 +1879,11 @@ class PinnacleAdapter(BookAdapter):
         except Exception as e:
             return BetResult(accepted=False, stake=stake, reason=f"UI placement error: {e}")
         finally:
-            try:
-                page.remove_listener("response", _on_resp)
-            except Exception:
-                pass
+            if page is not None:
+                try:
+                    page.remove_listener("response", _on_resp)
+                except Exception:
+                    pass
             self._resume_all_organic()
 
     async def verify_bet_ui(self, selection_id: str, stake: float, max_odds: float,
@@ -1952,27 +1946,99 @@ class PinnacleAdapter(BookAdapter):
             cached = urls
         return cached.get(lid, "")
 
-    async def _resolve_bet_page(self, lid: str, url: str):
-        """Pick the tab to bet on, most natural first (returns (page, kind)):
-          1. the tab ALREADY showing this league — a dedicated reader tab, or the rove tab when it's parked here.
-             A real bettor places on the league they're watching; that tab is already present + scrolled in, so
-             it needs less navigation than a cold tab. Just bring it to front.
-          2. else the roving TAIL tab (the user's 'last tab'): navigate it to the league and bet there.
-          3. else a cold dedicated bet tab (only when the tab manager is off / roving disabled)."""
+    def _primary_page(self):
+        """The main board tab (session anchor). Betting here needs no navigation — the placement flow was
+        captured on the board — so it neither disturbs the featured-board WS subscription nor the session."""
+        br = self._browser
+        return getattr(br, "_page", None) if br is not None else None
+
+    def _on_board(self, lid: str, ttl: float = 90.0) -> bool:
+        """True when the FEATURED BOARD is actively streaming this league RIGHT NOW (a sport-topic push within
+        `ttl`). Since board_lids is fed from the primary page's own sp/ subscription, a FRESH hit means the
+        primary board is currently showing the league — the precondition for betting on it without navigating."""
+        try:
+            return str(lid) in self.board_lids(ttl=ttl)
+        except Exception:
+            return False
+
+    async def _try_select_on(self, page, args: dict):
+        """Bring `page` to front and verify the intended market on it. Selection PLACES NOTHING (it only opens
+        the Quick Bet popover), so this is safe to attempt on several tabs in turn. Closes the popover on a
+        miss. Returns the sel result (dict with ok/price/…) or None if the page is unusable."""
+        if page is None:
+            return None
+        try:
+            if page.is_closed():
+                return None
+        except Exception:
+            return None
+        try:
+            await page.bring_to_front()
+        except Exception:
+            pass
+        try:
+            r = await page.evaluate(_UI_SELECT_JS, args)
+        except Exception as e:
+            return {"ok": False, "error": f"select eval error: {e}"}
+        if not r or not r.get("ok"):
+            try:
+                await page.evaluate(_UI_CLOSE_JS)
+            except Exception:
+                pass
+        return r
+
+    async def _select_bet_tab(self, lid: str, url: str, exp: dict):
+        """Pick the tab to bet on and verify the market on it, most natural first (returns (page, kind, sel_ok)):
+          1. the PRIMARY BOARD page, when the featured board is currently streaming this league — no navigation,
+             so it doesn't disturb board coverage or the session anchor, and it's the surface the placement flow
+             was captured on. This is 'use the board when possible'.
+          2. a reader tab already showing the league (a dedicated tab, or the rove parked there) — for GAP
+             leagues the board isn't covering (which is exactly when there IS a dedicated tab).
+          3. the roving TAIL tab, navigated to the league (the 'last tab' fallback, e.g. the board roamed away).
+          4. a cold bet tab (tab manager off).
+        Because selection places nothing, a miss on one candidate just closes the popover and tries the next —
+        so a stale board hit (primary roamed) falls through safely to the rove tab. Returns the last failure if
+        none verify, so the caller can report why."""
+        args = {"nameA": exp["nameA"], "nameB": exp["nameB"], "side": exp["side"],
+                "rejectSuffixes": ["(games)"],      # the tennis Games shell is a different matchup, never ours
+                "requireMarket": "money line"}      # the paired token is always the period-0 moneyline
+        last = (None, None, None)
         tm = self._tab_manager
+
+        # 1. the primary board page, when it's actively showing this league (no navigation)
+        if self._on_board(lid):
+            primary = self._primary_page()
+            if primary is not None:
+                r = await self._try_select_on(primary, args)
+                if r and r.get("ok"):
+                    return primary, "board", r
+                last = (primary, "board", r)
+
+        # 2. a reader tab already on the league (gap leagues: dedicated tab / rove parked here)
         if tm is not None:
             page, kind = tm.page_for_lid(lid)
             if page is not None:
-                try:
-                    if not page.is_closed():
-                        await page.bring_to_front()
-                        return page, kind
-                except Exception:
-                    pass
-            page = await tm.acquire_rove_for_bet(url)
-            if page is not None:
-                return page, "rove-nav"
-        return await self._bet_tab(url), "cold"
+                r = await self._try_select_on(page, args)
+                if r and r.get("ok"):
+                    return page, kind, r
+                last = (page, kind, r)
+
+        # 3. borrow the roving tail tab and navigate it to the league
+        if tm is not None:
+            rpage = await tm.acquire_rove_for_bet(url)
+            if rpage is not None:
+                r = await self._try_select_on(rpage, args)
+                if r and r.get("ok"):
+                    return rpage, "rove-nav", r
+                last = (rpage, "rove-nav", r)
+
+        # 4. cold last-resort tab
+        cold = await self._bet_tab(url)
+        if cold is not None:
+            r = await self._try_select_on(cold, args)
+            return cold, "cold", r
+
+        return last
 
     async def _bet_tab(self, url: str):
         """Cold last-resort tab for placing bets (tab manager off / roving disabled)."""

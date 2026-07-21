@@ -19,7 +19,10 @@
       "Bash(curl -s \"https://gamma-api.polymarket.com/events?active=true&closed=false&order=volume24hr&ascending=false&limit=5&offset=0\")",
       "Bash(curl -s \"https://gamma-api.polymarket.com/events?active=true&closed=false&order=volume24hr&ascending=false&limit=3&offset=0\")",
       "Bash(python verify_historical_arbs.py)",
-      "Bash(ls c:/Users/jonin/dev/projects/PredictionBacktester/*.slnx c:/Users/jonin/dev/projects/PredictionBacktester/*.sln)"
+      "Bash(ls c:/Users/jonin/dev/projects/PredictionBacktester/*.slnx c:/Users/jonin/dev/projects/PredictionBacktester/*.sln)",
+      "Bash(python -c ' *)",
+      "Bash(rm -f C:/Users/jonin/AppData/Local/Temp/claude/c--Users-jonin-dev-projects-PredictionBacktester/4c4e916e-b7bd-438b-978b-c071e9914bde/scratchpad/board.html C:/Users/jonin/AppData/Local/Temp/claude/c--Users-jonin-dev-projects-PredictionBacktester/4c4e916e-b7bd-438b-978b-c071e9914bde/scratchpad/empty.html)",
+      "Bash(dotnet build *)"
     ]
   }
 }
