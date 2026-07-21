@@ -60,6 +60,11 @@ class LeagueTabManager:
         self._last_rove = 0.0
         self._league_start: dict[str, float] = {}   # lid -> soonest game start ts (ranks which gaps get tabs)
         self._held = False                          # frozen during a bet: don't open/close/navigate tabs
+        # RECLAIM: a dedicated tab whose league LATER appears on the featured board is redundant (the board now
+        # covers it). Close it once it's been board-covered continuously for this long (sustained, not a blip
+        # from the primary page glancing at another sport) so the slot can cover a still-uncovered league.
+        self._board_reclaim_sec = float(os.environ.get("HARDVEN_TAB_BOARD_RECLAIM_SEC", "120"))
+        self._tab_board_since: dict[str, float] = {}   # lid -> when its tab's league first went continuously board
 
     def start(self) -> None:
         if self._task is None or self._task.done():
@@ -227,20 +232,36 @@ class LeagueTabManager:
         paired = self._load_paired()
         if not paired:
             return
+        now = time.time()
+        board = self._board_lids() if self._board_lids is not None else set()
         # 1. prune dedicated tabs whose league is no longer paired (game settled / off today's slate)
         for lid in list(self._tabs):
             if lid not in paired:
                 await self._session.close_tab(self._tabs.pop(lid))
+                self._tab_board_since.pop(lid, None)
                 print(f"[TAB-MGR] closed tab for de-paired league {lid} (tabs={len(self._tabs)})")
+        # 1b. RECLAIM tabs the featured board has taken over: a league we opened a tab for (because it WASN'T on
+        # the board) that later appears there and STAYS ≥ board_reclaim_sec is now redundant — close it so the
+        # slot covers a still-uncovered league instead. Sustained (timer) so a transient board_lids blip from the
+        # primary page glancing at another sport doesn't churn tabs. Its coverage continues via the board.
+        for lid in list(self._tabs):
+            if lid in board:
+                self._tab_board_since.setdefault(lid, now)
+                if now - self._tab_board_since[lid] >= self._board_reclaim_sec:
+                    await self._session.close_tab(self._tabs.pop(lid))
+                    self._tab_board_since.pop(lid, None)
+                    print(f"[TAB-MGR] reclaimed tab for league {lid} - now on the featured board (redundant); "
+                          f"slot freed for an uncovered league (tabs={len(self._tabs)}/{self._max})")
+            else:
+                self._tab_board_since.pop(lid, None)          # dropped off the board → reset the timer
         # 2. leagues already covered (featured board / a dedicated tab / the rove) → not gaps; rank SOONEST-first
         covered = self._covered_now()
         gaps = sorted((lid for lid in paired
                        if lid not in covered and lid not in self._tabs and lid != self._rove_lid),
                       key=self._sort_key)
-        now = time.time()
         if now - self._last_log > 60:
             self._last_log = now
-            nboard = len(self._board_lids() & set(paired)) if self._board_lids is not None else 0
+            nboard = len(board & set(paired))
             rv = f" rove={self._rove_lid}" if self._rove_enabled else ""
             print(f"[TAB-MGR] paired={len(paired)} covered={len(covered & set(paired))} "
                   f"(board={nboard}) tabs={len(self._tabs)}/{self._max} gaps={len(gaps)}{rv}")
