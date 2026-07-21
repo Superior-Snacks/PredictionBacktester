@@ -267,3 +267,141 @@ class OrganicActivity:
             if not self._gate.is_set():                      # paused during the sleep → don't act this tick
                 continue
             await self.tick()
+
+
+class TabOrganic:
+    """Light, per-tab human activity across the READER tabs (the dedicated league tabs + the roving tail), so
+    the browser doesn't present as 1 lively tab + 12 dead scraper tabs. A real multi-tab bettor glances between
+    open leagues, scrolls, occasionally opens a bet slip and closes it again.
+
+    DELIBERATELY LIGHTER than the primary `OrganicActivity`. The ~30-min idle logout is SESSION-WIDE and already
+    held by the primary tab's loop, so this is about NATURALNESS, not keepalive — occasional touches, not a busy
+    loop across 13 headed Chromes. Each action = bring one random reader tab to front, do one small gesture.
+
+    THE ONE MARKET-TOUCHING GESTURE IS HARD-GUARDED. `_popover` clicks an odds button (which only OPENS the
+    Quick Bet popover — it places nothing; confirmed from the 2026-07-20 capture) and then clicks the popover's
+    Remove/X. It NEVER locates or clicks a "Place Bet" control — the submit button is not referenced anywhere in
+    this class — so it is structurally incapable of submitting a bet, even if the close were to fail.
+
+    INTERLOCK: `pause()` is called around every real bet, so per-tab activity can't steal focus (via
+    bring_to_front) or fight a click while money is being placed. While paused the loop blocks.
+    """
+
+    def __init__(self, tabs_fn, close_js: str, open_probe_js: str,
+                 min_gap: float = 30.0, max_gap: float = 90.0, popover_chance: float = 0.15):
+        self._tabs_fn = tabs_fn                  # callable() -> list[(page, lid|None)] of live reader tabs
+        self._close_js = close_js                # JS that clicks only the popover's Remove/X (never Place Bet)
+        self._open_js = open_probe_js            # JS that clicks a random odds button (opens popover only)
+        self._min_gap, self._max_gap = min_gap, max_gap
+        self._popover_chance = max(0.0, min(1.0, popover_chance))
+        self._gate = asyncio.Event()
+        self._gate.set()
+        self._task: asyncio.Task | None = None
+        self.actions = Counter()
+
+    def pause(self) -> None:
+        self._gate.clear()
+
+    def resume(self) -> None:
+        self._gate.set()
+
+    def start(self) -> None:
+        if self._task is None or self._task.done():
+            self._task = asyncio.create_task(self.run())
+            print(f"[PINNACLE TAB-ORGANIC] ON — light per-tab activity (gaps {self._min_gap:g}-{self._max_gap:g}s, "
+                  f"popover {self._popover_chance:.0%}).")
+
+    async def stop(self) -> None:
+        if self._task and not self._task.done():
+            self._task.cancel()
+            try:
+                await self._task
+            except (asyncio.CancelledError, Exception):
+                pass
+        self._task = None
+
+    async def run(self) -> None:
+        while True:
+            try:
+                await self._gate.wait()
+                await asyncio.sleep(random.uniform(self._min_gap, self._max_gap))
+            except asyncio.CancelledError:
+                break
+            if not self._gate.is_set():
+                continue
+            try:
+                await self._act()
+            except Exception:
+                self.actions["error"] += 1
+
+    async def _live_tabs(self) -> list:
+        out = []
+        for t in (self._tabs_fn() or []):
+            page = t[0] if t else None
+            if page is None:
+                continue
+            try:
+                if not page.is_closed():
+                    out.append(t)
+            except Exception:
+                pass
+        return out
+
+    async def _act(self) -> str:
+        tabs = await self._live_tabs()
+        if not tabs:
+            self.actions["idle"] += 1
+            return "idle"
+        page = random.choice(tabs)[0]
+        try:
+            await page.bring_to_front()                       # a user glancing at another open tab
+        except Exception:
+            pass
+        # Re-check the gate: a bet may have started during bring_to_front. Never gesture into a live bet.
+        if not self._gate.is_set():
+            return "glance"
+        roll = random.random()
+        try:
+            if roll < 0.45:
+                await self._scroll(page); name = "scroll"
+            elif roll < 0.78:
+                await self._move(page); name = "mouse"
+            elif roll < 0.78 + self._popover_chance:
+                await self._popover(page); name = "popover"
+            else:
+                name = "glance"                               # the bring_to_front alone
+        except Exception:
+            name = "error"
+        self.actions[name] += 1
+        return name
+
+    async def _scroll(self, page) -> None:
+        for _ in range(random.randint(2, 5)):
+            await page.mouse.wheel(0, random.randint(40, 160))
+            await asyncio.sleep(random.uniform(0.04, 0.14))
+        await asyncio.sleep(random.uniform(0.4, 1.6))         # "read"
+        for _ in range(random.randint(2, 6)):                 # drift back toward the top
+            await page.mouse.wheel(0, -random.randint(40, 160))
+            await asyncio.sleep(random.uniform(0.04, 0.14))
+
+    async def _move(self, page) -> None:
+        x, y = random.randint(140, 1100), random.randint(140, 680)
+        for _ in range(random.randint(8, 18)):
+            await page.mouse.move(x + random.uniform(-3, 3), y + random.uniform(-3, 3))
+            await asyncio.sleep(random.uniform(0.01, 0.04))
+
+    async def _popover(self, page) -> None:
+        """HARD-GUARDED open+dismiss. Opens the Quick Bet popover on a random market and closes it. There is no
+        reference to a Place Bet control anywhere in this path, so nothing can be submitted."""
+        r = None
+        try:
+            r = await page.evaluate(self._open_js)
+        except Exception:
+            return
+        if not r or not r.get("ok"):
+            return
+        await asyncio.sleep(random.uniform(0.6, 1.8))         # "look at the slip"
+        try:
+            await page.evaluate(self._close_js)               # Remove/X only — never Place Bet
+        except Exception:
+            pass

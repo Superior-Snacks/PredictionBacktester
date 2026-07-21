@@ -291,6 +291,20 @@ _UI_CLOSE_JS = r"""
 }
 """
 
+# Per-tab organic ONLY. Clicks a random odds button, which merely OPENS the Quick Bet popover (places nothing).
+# Deliberately references NO stake input and NO Place Bet control, so the organic open+dismiss gesture cannot
+# submit a bet. The popover is closed again by _UI_CLOSE_JS.
+_UI_RANDOM_OPEN_JS = r"""
+() => {
+  const btns = Array.from(document.querySelectorAll("button.market-btn"));
+  if (!btns.length) return {ok: false};
+  const b = btns[Math.floor(Math.random() * btns.length)];
+  try { b.scrollIntoView({block: "center"}); } catch (e) {}
+  b.click();
+  return {ok: true};
+}
+"""
+
 
 class PinnacleAdapter(BookAdapter):
     name = "pinnacle"
@@ -422,6 +436,8 @@ class PinnacleAdapter(BookAdapter):
         self._session_source = os.environ.get("PINNACLE_SESSION_SOURCE", "env").strip().lower()
         self._browser = None                                   # PinnacleBrowserSession when source == "browser"
         self._tab_manager = None                               # LeagueTabManager when HARDVEN_TAB_MANAGER=1 (reader)
+        self._tab_organic = None                               # TabOrganic: light per-tab human activity
+        self._bet_page = None                                  # cold last-resort bet tab (see _resolve_bet_page)
         self._tab_manager_on = os.environ.get("HARDVEN_TAB_MANAGER") == "1"
         self._session_ready = self._session_source != "browser"  # env mode = ready now; browser waits for login
         self._balance = 0.0                                    # last wallet amount (account currency, e.g. EUR)
@@ -548,6 +564,18 @@ class PinnacleAdapter(BookAdapter):
                         self._tab_manager = LeagueTabManager(self._browser, self.reader_live_mids, pairs_path,
                                                              board_lids_fn=self.board_lids)
                         self._tab_manager.start()
+                        # Light per-tab human activity across the reader tabs so the browser isn't 1 live tab +
+                        # N dead ones. Off with HARDVEN_TAB_ORGANIC=0. Interlocked with bets via _pause_all_organic.
+                        if os.environ.get("HARDVEN_TAB_ORGANIC", "1") != "0":
+                            from organic import TabOrganic
+                            try:
+                                pop_chance = float(os.environ.get("HARDVEN_TAB_POPOVER_CHANCE", "0.15"))
+                            except ValueError:
+                                pop_chance = 0.15
+                            self._tab_organic = TabOrganic(
+                                self._tab_manager.reader_tabs, _UI_CLOSE_JS, _UI_RANDOM_OPEN_JS,
+                                popover_chance=pop_chance)
+                            self._tab_organic.start()
                     elif self._tab_manager_on:
                         print("[PINNACLE] HARDVEN_TAB_MANAGER=1 needs PINNACLE_WINDOW_WS_READ=1 (the reader) to be "
                               "useful — not starting the tab manager.")
@@ -609,6 +637,11 @@ class PinnacleAdapter(BookAdapter):
             try:
                 self._client.loop_stop()
                 self._client.disconnect()
+            except Exception:
+                pass
+        if self._tab_organic is not None:
+            try:
+                await self._tab_organic.stop()
             except Exception:
                 pass
         if self._tab_manager is not None:
@@ -1739,9 +1772,16 @@ class PinnacleAdapter(BookAdapter):
         if not url:
             return BetResult(accepted=False, stake=stake, reason=f"no league URL known for lid {lid}")
 
-        page = await self._bet_tab(url)
+        # Freeze all human-activity loops for the bet BEFORE touching a tab, so per-tab organic / the tab sweep
+        # can't steal focus or re-point the tab mid-bet. Resumed in the finally.
+        self._pause_all_organic()
+
+        # Bet on the tab that already shows this league (natural), else the roving tail tab.
+        page, tab_kind = await self._resolve_bet_page(lid, url)
         if page is None:
+            self._resume_all_organic()
             return BetResult(accepted=False, stake=stake, reason="could not open a betting tab")
+        print(f"[PINNACLE BET] using {tab_kind} tab for {selection_id}")
 
         # Authoritative bet id / accepted price come from the app's own POST response, not from scraping.
         placed: dict = {}
@@ -1850,6 +1890,7 @@ class PinnacleAdapter(BookAdapter):
                 page.remove_listener("response", _on_resp)
             except Exception:
                 pass
+            self._resume_all_organic()
 
     async def verify_bet_ui(self, selection_id: str, stake: float, max_odds: float,
                             submit: bool = False) -> BetResult:
@@ -1911,21 +1952,69 @@ class PinnacleAdapter(BookAdapter):
             cached = urls
         return cached.get(lid, "")
 
+    async def _resolve_bet_page(self, lid: str, url: str):
+        """Pick the tab to bet on, most natural first (returns (page, kind)):
+          1. the tab ALREADY showing this league — a dedicated reader tab, or the rove tab when it's parked here.
+             A real bettor places on the league they're watching; that tab is already present + scrolled in, so
+             it needs less navigation than a cold tab. Just bring it to front.
+          2. else the roving TAIL tab (the user's 'last tab'): navigate it to the league and bet there.
+          3. else a cold dedicated bet tab (only when the tab manager is off / roving disabled)."""
+        tm = self._tab_manager
+        if tm is not None:
+            page, kind = tm.page_for_lid(lid)
+            if page is not None:
+                try:
+                    if not page.is_closed():
+                        await page.bring_to_front()
+                        return page, kind
+                except Exception:
+                    pass
+            page = await tm.acquire_rove_for_bet(url)
+            if page is not None:
+                return page, "rove-nav"
+        return await self._bet_tab(url), "cold"
+
     async def _bet_tab(self, url: str):
-        """One reusable tab for placing bets, kept off the reader tabs so a bet never disturbs odds coverage."""
+        """Cold last-resort tab for placing bets (tab manager off / roving disabled)."""
         if self._browser is None:
             return None
-        page = getattr(self, "_bet_page", None)
+        page = self._bet_page
         try:
             if page is not None and not page.is_closed():
                 if not url.rstrip("/") in (page.url or "").rstrip("/"):
                     await self._browser.navigate_tab(page, url)
+                await page.bring_to_front()
                 return page
         except Exception:
             page = None
         page = await self._browser.open_tab(url)
         self._bet_page = page
         return page
+
+    def _pause_all_organic(self) -> None:
+        """Freeze ALL human-activity loops for a bet: the primary tab's organic, the per-tab organic, and the
+        tab manager's open/close/navigate churn. So nothing steals focus (bring_to_front) or fights a click
+        while money is being placed."""
+        try:
+            if self._browser is not None:
+                self._browser.pause_activity()
+        except Exception:
+            pass
+        if self._tab_organic is not None:
+            self._tab_organic.pause()
+        if self._tab_manager is not None:
+            self._tab_manager.hold(True)
+
+    def _resume_all_organic(self) -> None:
+        try:
+            if self._browser is not None:
+                self._browser.resume_activity()
+        except Exception:
+            pass
+        if self._tab_organic is not None:
+            self._tab_organic.resume()
+        if self._tab_manager is not None:
+            self._tab_manager.hold(False)
 
     async def open_bets(self) -> list[dict]:
         return []  # TODO(M1): read My Bets from the UI/authed endpoint for fill confirmation + settlement

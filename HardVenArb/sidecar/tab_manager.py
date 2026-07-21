@@ -59,6 +59,7 @@ class LeagueTabManager:
         self._rove_cursor = 0
         self._last_rove = 0.0
         self._league_start: dict[str, float] = {}   # lid -> soonest game start ts (ranks which gaps get tabs)
+        self._held = False                          # frozen during a bet: don't open/close/navigate tabs
 
     def start(self) -> None:
         if self._task is None or self._task.done():
@@ -101,6 +102,55 @@ class LeagueTabManager:
         if self._rove_lid:
             lids.add(self._rove_lid)
         return lids
+
+    # ── betting integration ───────────────────────────────────────────────────
+    def hold(self, on: bool) -> None:
+        """Freeze tab churn during a bet. While held, `_tick` opens/closes/navigates nothing — so a tab the
+        executor is placing on can't be re-pointed or closed out from under the bet. Released after."""
+        self._held = bool(on)
+
+    def page_for_lid(self, lid: str):
+        """The already-open tab showing league `lid`, if any → (page, kind). A dedicated tab or the roving tail
+        when it currently sits on `lid`. Lets the executor bet on the tab that already has the arb (natural: a
+        user bets on the league they're watching) instead of a cold hidden tab. (None, None) if not covered."""
+        lid = str(lid)
+        pg = self._tabs.get(lid)
+        if pg is not None:
+            return pg, "dedicated"
+        if self._rove_lid == lid and self._rove_page is not None:
+            return self._rove_page, "rove"
+        return None, None
+
+    def reader_tabs(self) -> list:
+        """[(page, lid|None), …] for every live reader tab — the per-tab organic loop rotates over these."""
+        out: list = [(pg, lid) for lid, pg in self._tabs.items()]
+        if self._rove_page is not None:
+            out.append((self._rove_page, self._rove_lid))
+        return out
+
+    async def acquire_rove_for_bet(self, url: str):
+        """Point the roving tail tab at `url` to place a bet — the fallback when no tab holds the league (the
+        user's 'use the last tab to navigate and bet'). Call `hold(True)` first so the sweep won't fight it; the
+        rove resumes sweeping the tail after `hold(False)`. Returns the page, or None if roving is disabled/failed."""
+        if not self._rove_enabled:
+            return None
+        if self._rove_page is None:
+            pg = await self._session.open_tab(url)
+            if pg is None:
+                return None
+            self._rove_page = pg
+        else:
+            try:
+                await self._rove_page.bring_to_front()
+            except Exception:
+                pass
+            if not await self._session.navigate_tab(self._rove_page, url):
+                self._rove_page = None
+                self._rove_lid = None
+                return None
+        self._rove_lid = None           # now parked on a bet league, not a swept tail league
+        self._last_rove = time.time()
+        return self._rove_page
 
     def _covered_now(self) -> set:
         """Leagues already fed → NOT gaps (so we never open a dedicated tab for them): the reader's recent pushes
@@ -172,6 +222,8 @@ class LeagueTabManager:
         return out
 
     async def _tick(self) -> None:
+        if self._held:            # a bet is in flight — don't open/close/navigate any tab under it
+            return
         paired = self._load_paired()
         if not paired:
             return
