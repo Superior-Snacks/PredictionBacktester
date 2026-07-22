@@ -107,3 +107,72 @@ irreversible leg is never over-bought (worst case under-fills ~1.5% on a €0.48
   unverified tail) and only fires on clean pre-live WS-verified arbs. Fewer executions is correct.
 - Everything is `--dry-run`: no real money. When these all pass, the remaining live pieces are the UI bet-slip
   (`_place_via_ui`) and live fill-confirmation — which is exactly what the captured data above informs.
+
+---
+
+# M1 LIVE TEST PLAN (2026-07-22) — everything built 07-20/21/22, in money-risk order
+
+Run these **in order**. Each stage is a gate for the next: don't put real money on the line until the no-money
+stages are green. Stages 1–4 risk **nothing**; only Stage 5 places real bets.
+
+**Prereqs for all stages:** sidecar up, browser logged in, **Quick Bet mode ON**, **Decimal odds** selected, a
+live/soon **tennis** slate (pre-live windows to act on).
+
+## Stage 1 — sidecar layer, no execution (`--telemetry`, watch the sidecar log + headed browser)
+
+| # | What | PASS | FAIL |
+|---|------|------|------|
+| L1 | Per-tab organic runs | startup logs `[PINNACLE TAB-ORGANIC] ON …`; over minutes the reader tabs get brought to front + scrolled (visible in the headed Chrome); no crash | no `TAB-ORGANIC ON` line; a console crash; or a popover left open on a tab |
+| L2 | **Popover gesture is money-safe** (the critical one) | when the open+dismiss gesture fires, the Quick Bet popover opens then **closes within ~2s**; **balance never moves**; **nothing appears in My Bets** from organic | any bet placed by organic; a popover left open; balance changes with no bet you made |
+| L3 | No dedicated tab duplicates the board | `/debug/reader` `board_lids` vs `[TAB-MGR]` opens: **no** `opened dedicated tab` for a league in `board_lids` | a dedicated tab persists for a league that's in `board_lids` |
+| L4 | Board **reclaim** as the day moves | when a tabbed gap league later gets featured and stays ≥120s → `[TAB-MGR] reclaimed tab for league … now on the featured board`; the freed slot opens a **different non-board** gap | redundant tab persists >2–3 min after its league joined the board; or reclaim **thrashes** (same league open/close within seconds → raise `HARDVEN_TAB_BOARD_RECLAIM_SEC`) |
+
+## Stage 2 — UI placement, VERIFY-ONLY, no money (`POST /bet/test`, `submit:false`)
+
+Drives the **real** placement path but stops before Place Bet. `{"selection_id":"<lid:mid:home|away>","stake":2}`.
+Each attempt auto-captures to `bet_capture_*.jsonl` (read with `python sidecar/bet_capture.py`).
+
+| # | What | PASS | FAIL |
+|---|------|------|------|
+| L5 | Verify-only happy path | `[PINNACLE BET] VERIFY-ONLY OK … popover matched, NOTHING placed`; the reply names the matched matchup + side + price + max bet; **balance unchanged**, **nothing in My Bets** | places a bet; crashes; or can't find a market that IS on screen |
+| L6 | Bet-tab selection order | `[PINNACLE BET] using board tab …` for a league **on the board**; `using dedicated/rove` for a gap league; `using rove-nav` when the board roamed off. Primary board is **not navigated away** | opens a cold hidden tab for a board league; navigates the primary board page away |
+| L7 | **Wrong-market defense** (real slate) | pick a match whose moneyline is suspended or that has a `(Games)` row → refuses (`could not select the intended market`), **never** selects the handicap/total/Games shell | selects a handicap/`+1.5`/over-under/Games line |
+| L8 | Scroll-to-find | verify-only on a match far down the league page → scrolls, finds, verifies | reports "no row … scanned N viewport(s)" for a match that IS on the page |
+| L9 | Decimal-odds guard | on Decimal it proceeds; flip the site to American → refuses `… not decimal odds` | proceeds on American (would misread the price) |
+| L10 | Stake entry (React input) | the stake box shows `2`, max bet parsed, `filled ok` | stake reverts to empty / doesn't take |
+
+## Stage 3 — dry-run execution + the new gates (paper, no money) (`--dry-run`, live sidecar)
+
+| # | What | PASS | FAIL |
+|---|------|------|------|
+| L11 | Favorite-on-Kalshi gate | tennis arb with Kalshi holding the **underdog** → `[EXEC SKIP] … UNDERDOG on Kalshi` + journal `UNDERDOG_ON_KALSHI`; **favorite-side** arbs execute | an underdog-on-Kalshi tennis arb executes while the gate is ON |
+| L12 | `H` live toggle | press `H` → `… hedge OFF …`; underdog arbs now execute; `H` again → `… ON …`, they skip again | key does nothing; state doesn't change behavior |
+| L13 | Stake ladder | executed size lands on a rung (10/20/…/50/…); `[LADDER] N → M contracts (stake … ≤1/3 of book max)`. **Config trap:** at default `--max-bet`/`HARDVEN_MAX_STAKE`=10 every arb hits `[EXEC SKIP] … ladder: no valid rung` — raise `--max-bet≈$22` for the €10 rung | an off-ladder stake (e.g. 37); size > 1/3 of book depth; or no fires even after raising the caps |
+| L14 | Recovery still green with the gates on | force an under-fill (`--scenario FlakyKalshi`, `HARDVEN_PRELIVE_ONLY=0` in the shell): `[RECOVER OK] hedged on Kalshi (Pinnacle held)`, no `REVERSED_HARDVEN`, no halt (re-confirms 07-18 under the new code) | any Pinnacle sell; a reconcile halt |
+
+## Stage 4 — dress rehearsal: REAL `/bet` call, still no money (`--dry-run` + `HARDVEN_LIVE_BET_PATH=1`)
+
+`HARDVEN_BET_ENABLE` stays **unset**. Kalshi simulated; the HardVen leg hits the real sidecar `/bet`, which
+refuses (preview) → the bot books a failed leg → runs recovery.
+
+| # | What | PASS | FAIL |
+|---|------|------|------|
+| L15 | Whole placement chain, dry | `[DRESS REHEARSAL] HARDVEN_LIVE_BET_PATH=1 …` banner; on an arb the sidecar logs `[PINNACLE BET] PREVIEW … WOULD place`; bot sees `success=false` → `[RECOVER …]`; **no money moves** | a `NotImplementedException`; a real bet; recovery reverses Pinnacle |
+
+## Stage 5 — FIRST REAL BETS, supervised, tiny (`HARDVEN_BET_ENABLE=1`, `HARDVEN_MAX_STAKE=10`)
+
+Do these **watching the screen**, one at a time. Start with `POST /bet/test {…,"submit":true,"stake":2}` (a
+single €2 bet, no full arb) before letting the executor place both legs.
+
+| # | What | PASS | FAIL |
+|---|------|------|------|
+| L16 | Single supervised micro-bet | `[PINNACLE BET] PLACED … @ <odds> (bet <id>)`; POST returned **200**; the bet shows in Pinnacle **My Bets** at the **right match + side + stake**; accepted odds ≥ your floor | wrong match/side/stake; odds worse than floor accepted; **no confirmation within 15s → state UNKNOWN, do NOT retry — reconcile by hand** |
+| L17 | Accept-odds prompt (if it appears) | the "odds changed?" prompt → bot does **not** auto-accept (unknown markup) → `accepted=false`, logs the prompt buttons; **no bet**. (Capture it so we can build proper handling) | it clicks the prompt / places at moved odds |
+| L18 | Full live arb, both legs | executor fires a pre-live favorite-on-Kalshi tennis arb → Pinnacle (real) + Kalshi (real) both confirm → held to settlement → settles as expected | one leg fills, the other doesn't and recovery mishandles; wrong-market; naked exposure |
+| L19 | **Retirement/void observation** (the risk you accepted) | over several bets, catch a tennis retirement → Pinnacle **voids** (stake back) while Kalshi **settles**; with favorite-on-Kalshi the residual is **not a loss** (the Kalshi favorite pays) | a **net loss** on a void → an underdog-on-Kalshi bet slipped through (check the gate) or the hedge premise is off |
+
+## Optional / parked
+- **Flicker fix:** on the pre-live tail, `HARDVEN_QUOTE_MAX_AGE_MS≈100000` stops the stale-flicker (re-seed 90s
+  vs quote-gate 30s). Set it and confirm stable pre-live tail books stop blinking.
+- **`HELD_HARDVEN` branch:** `--dry-run --scenario BothVenuesFlaky` → `[RECOVER HOLD] … holding N unhedged
+  Pinnacle share(s) to settlement` + journal `HELD_HARDVEN` (only when the Kalshi hedge ALSO can't complete).
