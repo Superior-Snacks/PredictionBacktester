@@ -77,6 +77,55 @@ public class CrossArbExecutor
     // HARDVEN_REQUIRE_WS_VERIFIED=0 disables (e.g. paho/dedicated-WS mode where everything is already live).
     private readonly bool _requireWsVerified = Environment.GetEnvironmentVariable("HARDVEN_REQUIRE_WS_VERIFIED") != "0";
 
+    // FAVORITE-ON-KALSHI gate (tennis retirement/void hedge). On a mid-match RETIREMENT the sportsbook usually
+    // VOIDS the bet (stake back) while Kalshi still settles the advancing player. So if the Kalshi leg we buy
+    // holds the FAVOURITE (the more-likely-to-advance side), a void leaves a favourable residual — the Kalshi
+    // bet on the favourite usually still pays — instead of the naked loss you'd take holding the underdog on
+    // Kalshi. We therefore only fire when the Kalshi ask on the bought side > _favoriteMin (>0.5 = favourite).
+    // This SKIPS the underdog-on-Kalshi direction for gated sports (~half of tennis arbs) — the accepted price
+    // of the hedge. HARDVEN_FAVORITE_KALSHI_SPORTS: "tennis" (default) | "all" | "off"/"" (disabled).
+    // Scope (which sports the gate covers when ON) + a runtime on/off flag the H key toggles live. The env
+    // starts it: "tennis"/"all" → ON with that scope; "off"/"" → starts OFF (scope still defaults to tennis so
+    // the H key can turn it on). HARDVEN_FAVORITE_MIN is the favourite threshold.
+    private readonly string  _favoriteScope = ParseFavoriteScope();
+    private          bool    _favoriteGateOn = ParseFavoriteOn();
+    private readonly decimal _favoriteMin    = ParseFavoriteMin();
+    private static string ParseFavoriteScope()
+    {
+        string raw = (Environment.GetEnvironmentVariable("HARDVEN_FAVORITE_KALSHI_SPORTS") ?? "tennis").Trim().ToLowerInvariant();
+        return raw is "" or "off" or "0" or "none" ? "tennis" : raw;
+    }
+    private static bool ParseFavoriteOn()
+    {
+        string raw = (Environment.GetEnvironmentVariable("HARDVEN_FAVORITE_KALSHI_SPORTS") ?? "tennis").Trim().ToLowerInvariant();
+        return raw is not ("" or "off" or "0" or "none");
+    }
+    private static decimal ParseFavoriteMin() =>
+        decimal.TryParse(Environment.GetEnvironmentVariable("HARDVEN_FAVORITE_MIN"), out var fm) && fm > 0m && fm < 1m ? fm : 0.5m;
+
+    /// <summary>Runtime state of the favorite-on-Kalshi hedge gate (H key). True = skipping underdog-on-Kalshi.</summary>
+    public bool FavoriteGateOn => _favoriteGateOn;
+    /// <summary>Flip the favorite-on-Kalshi hedge gate at runtime (H key). Returns the new state.</summary>
+    public bool ToggleFavoriteGate() { _favoriteGateOn = !_favoriteGateOn; return _favoriteGateOn; }
+
+    // Sport inferred from the Kalshi ticker (CrossPair carries no sport). Tennis match series are the ATP/WTA/ITF
+    // tours (incl. challengers, whose tickers already contain ATP/WTA) — the sports where mid-match retirement,
+    // and thus the sportsbook void, actually happens.
+    private static bool IsTennis(string kalshiTicker)
+    {
+        string t = (kalshiTicker ?? "").ToUpperInvariant();
+        return t.Contains("ATP") || t.Contains("WTA") || t.Contains("ITF") || t.Contains("TENNIS");
+    }
+
+    private bool FavoriteGateApplies(CrossPair pair)
+    {
+        if (!_favoriteGateOn) return false;
+        if (_favoriteScope == "all") return true;
+        foreach (var s in _favoriteScope.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            if (s == "tennis" && IsTennis(pair.KalshiTicker)) return true;
+        return false;
+    }
+
     // When venue time-skew exceeds this value, block and REST-verify before firing.
     private const double StaleGateMs = 5_000.0;
     // When either book's absolute age exceeds this, REST-verify regardless of relative skew.
@@ -684,6 +733,22 @@ public class CrossArbExecutor
         {
             Console.WriteLine($"[EXEC SKIP] {pair.Label}: HardVen leg NOT WS-verified (screening-only) — " +
                               "awaiting verify tab; will execute once WS-confirmed");
+            return;
+        }
+
+        // FAVORITE-ON-KALSHI gate (tennis retirement/void hedge): only fire when the Kalshi leg we buy is the
+        // FAVOURITE (its ask > _favoriteMin). kLegAsk ≈ the implied probability of the outcome we're paid on, so
+        // > 0.5 means that outcome is the favourite. On a mid-match retirement the sportsbook voids (stake back)
+        // while Kalshi settles the advancing player — holding the more-likely winner on Kalshi makes a void a
+        // favourable residual, not a naked loss. Skips the underdog-on-Kalshi direction for gated sports.
+        if (FavoriteGateApplies(pair) && kLegAsk <= _favoriteMin)
+        {
+            Console.WriteLine($"[EXEC SKIP] {pair.Label}: UNDERDOG on Kalshi (K leg {kLegAsk:0.0000} ≤ {_favoriteMin:0.00}) — " +
+                              "favorite-on-Kalshi hedge is ON for tennis (retirement-void protection)");
+            await JournalAsync(JsonSerializer.Serialize(new {
+                t = DateTime.UtcNow, @event = "EXEC_SKIP", pairId, arbType,
+                reason = "UNDERDOG_ON_KALSHI", kLegAsk = Math.Round(kLegAsk, 4), favoriteMin = _favoriteMin
+            }));
             return;
         }
 

@@ -576,6 +576,7 @@ Console.CancelKeyPress += (_, e) =>
 // ── Key toggles ────────────────────────────────────────────────────────────
 // Bare keypresses (no Ctrl) — works in tmux, SSH, and screen sessions.
 Console.WriteLine("[KEYS] N=NearMiss  A=StatusDash" +
+    (executor != null ? "  H=FavHedge" : "") +
     (isDryRun ? "  U=InjectMismatch  K=SimReconnect  E=InjectErrors  X=DropHardVenBook" : "") +
     (isDebug  ? "  │  G=Discovery  T=Trades  W=Balance  F=Feed  R=Books" : ""));
 _ = Task.Run(() =>
@@ -591,6 +592,14 @@ _ = Task.Run(() =>
             {
                 case ConsoleKey.N: DebugLog.NearMissEnabled   = !DebugLog.NearMissEnabled;   break;
                 case ConsoleKey.A: DebugLog.StatusDashEnabled = !DebugLog.StatusDashEnabled; break;
+                case ConsoleKey.H when executor != null:
+                {
+                    bool on = executor.ToggleFavoriteGate();
+                    Console.WriteLine(on
+                        ? "[KEYS] Favorite-on-Kalshi hedge ON — skipping the underdog-on-Kalshi direction (tennis retirement-void protection)"
+                        : "[KEYS] Favorite-on-Kalshi hedge OFF — taking both directions by best edge (no void hedge)");
+                    break;
+                }
                 case ConsoleKey.G when isDebug: DebugLog.DiscoveryEnabled = !DebugLog.DiscoveryEnabled; break;
                 case ConsoleKey.T when isDebug: DebugLog.TradesEnabled    = !DebugLog.TradesEnabled;    break;
                 case ConsoleKey.W when isDebug: DebugLog.BalanceEnabled   = !DebugLog.BalanceEnabled;   break;
