@@ -2133,8 +2133,8 @@ class PinnacleAdapter(BookAdapter):
                     tried.append("no box")
                     continue
                 pop = None
-                for _ in range(24):
-                    await asyncio.sleep(0.1)
+                for _ in range(15):                       # popover renders in ~0.3-0.5s; 1.5s is ample
+                    await asyncio.sleep(0.08)
                     try:
                         pop = await page.evaluate(_UI_READ_POP_JS)
                     except Exception:

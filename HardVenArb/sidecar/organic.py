@@ -120,6 +120,8 @@ class OrganicActivity:
         steps = int(max(12, min(48, dist / 9)))
         total = random.uniform(0.16, 0.42) * (0.6 + dist / 900)   # bigger moves take longer (Fitts-ish)
         for i in range(1, steps + 1):
+            if not self._gate.is_set():                           # a bet started → stop moving THIS instant
+                return
             t = _smoothstep(i / steps)
             bx, by = _cubic((x0, y0), c1, c2, aim, t)
             bx += random.uniform(-1.2, 1.2)                        # hand micro-tremor
@@ -138,7 +140,7 @@ class OrganicActivity:
         flicks the trackpad repeatedly), not a single big deltaY jump."""
         remaining = total
         for _ in range(random.randint(3, 8)):
-            if remaining <= 0:
+            if remaining <= 0 or not self._gate.is_set():        # stop scrolling the moment a bet pauses us
                 break
             step = min(remaining, random.randint(40, 140))
             remaining -= step
@@ -154,13 +156,19 @@ class OrganicActivity:
         up = "ArrowUp" if down == "ArrowDown" else "PageUp"
         n = random.randint(2, 5)
         for _ in range(n):
+            if not self._gate.is_set():
+                return
             await self._page.keyboard.press(down)
             await asyncio.sleep(random.uniform(0.08, 0.28))
         await asyncio.sleep(random.uniform(0.3, 1.2))         # pause to "read", then go back up
+        if not self._gate.is_set():
+            return
         if random.random() < 0.4:
             await self._page.keyboard.press("Home")           # snap to the top (a user returning to the list head)
         else:
             for _ in range(n + random.randint(1, 2)):         # up MORE than down → net toward the top
+                if not self._gate.is_set():
+                    return
                 await self._page.keyboard.press(up)
                 await asyncio.sleep(random.uniform(0.08, 0.28))
 
@@ -378,16 +386,22 @@ class TabOrganic:
 
     async def _scroll(self, page) -> None:
         for _ in range(random.randint(2, 5)):
+            if not self._gate.is_set():
+                return
             await page.mouse.wheel(0, random.randint(40, 160))
             await asyncio.sleep(random.uniform(0.04, 0.14))
         await asyncio.sleep(random.uniform(0.4, 1.6))         # "read"
         for _ in range(random.randint(2, 6)):                 # drift back toward the top
+            if not self._gate.is_set():
+                return
             await page.mouse.wheel(0, -random.randint(40, 160))
             await asyncio.sleep(random.uniform(0.04, 0.14))
 
     async def _move(self, page) -> None:
         x, y = random.randint(140, 1100), random.randint(140, 680)
         for _ in range(random.randint(8, 18)):
+            if not self._gate.is_set():
+                return
             await page.mouse.move(x + random.uniform(-3, 3), y + random.uniform(-3, 3))
             await asyncio.sleep(random.uniform(0.01, 0.04))
 
@@ -406,6 +420,8 @@ class TabOrganic:
         steps = int(max(10, min(36, dist / 10)))
         total = random.uniform(0.14, 0.32) * (0.6 + dist / 900)
         for i in range(1, steps + 1):
+            if not self._gate.is_set():
+                return
             t = _smoothstep(i / steps)
             bx, by = _cubic((x0, y0), c1, c2, (tx, ty), t)
             try:
