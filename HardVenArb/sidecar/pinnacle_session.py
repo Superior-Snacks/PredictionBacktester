@@ -194,6 +194,7 @@ class PinnacleBrowserSession:
         self._ws_suffix = ""
         self._have_ws = False
         self._last_capture = 0.0
+        self._last_main_refresh = 0.0     # last time the MAIN board page was (re)loaded — its keepalive clock
         self._ready_announced = False
         # diagnostics: surface WHERE capture is stuck (x-session vs the MQTT-CONNECT WS login)
         self._status_task: Optional[asyncio.Task] = None
@@ -234,6 +235,12 @@ class PinnacleBrowserSession:
         # READY needs the x-session (REST auth) AND the WS login (account id + suffix → MQTT password). The
         # WS pieces only appear once the page opens its odds WebSocket, which it does after you browse a sport.
         return bool(self._session and self._ws_user and self._ws_suffix)
+
+    def main_page_age(self) -> Optional[float]:
+        """Seconds since the MAIN board page was last (re)loaded — its keepalive clock (reloaded every
+        PINNACLE_RELOGIN_MIN). None if it hasn't loaded yet. Surfaced so the tab manager's freshness line can
+        show the main page alongside the dedicated tabs + rove."""
+        return (time.time() - self._last_main_refresh) if self._last_main_refresh else None
 
     def status(self) -> dict:
         return {
@@ -289,6 +296,7 @@ class PinnacleBrowserSession:
         await self._start_cdp_capture()                  # 2nd WS-login capture path (sees worker WS page.on misses)
         try:
             await self._page.goto(self._login_url, wait_until="domcontentloaded", timeout=60_000)
+            self._last_main_refresh = time.time()
         except Exception as ex:
             print(f"[PINNACLE SESSION] initial navigation slow/failed ({ex}); the window is open — browse manually.")
         # Human-like idle activity (replaces the old nudge). PINNACLE_ORGANIC=0 disables it — the session still
@@ -766,6 +774,7 @@ class PinnacleBrowserSession:
             try:
                 self.pause_activity()
                 await self._page.reload(wait_until="domcontentloaded", timeout=45_000)
+                self._last_main_refresh = time.time()
                 print(f"[PINNACLE SESSION] session refresh — reloaded to re-mint (next in {self._relogin_min:g}m).")
             except Exception as ex:
                 print(f"[PINNACLE SESSION] session refresh reload error: {type(ex).__name__}: {ex}")
@@ -786,6 +795,7 @@ class PinnacleBrowserSession:
         try:
             self.pause_activity()
             await self._page.reload(wait_until="domcontentloaded", timeout=45_000)
+            self._last_main_refresh = time.time()
             print("[PINNACLE SESSION] force re-mint — reloaded to refresh the x-session (WS auth-reject recovery).")
         except Exception as ex:
             print(f"[PINNACLE SESSION] force re-mint error: {type(ex).__name__}: {ex}")

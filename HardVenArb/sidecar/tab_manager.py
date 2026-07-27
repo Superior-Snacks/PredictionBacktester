@@ -273,13 +273,27 @@ class LeagueTabManager:
             self._last_log = now
             nboard = len(board & set(paired))
             rv = f" rove={self._rove_lid}" if self._rove_enabled else ""
-            # per-tab freshness so it's visible which tab was kept alive and which is aging toward the logout
+            # Freshness of EVERY managed tab so it's visible which is kept alive and which is aging toward the
+            # logout: the MAIN board page (reloaded by the session every PINNACLE_RELOGIN_MIN), the ROVE tab
+            # (self-refreshing — it navigates every dwell), and each dedicated tab (per-tab keepalive).
+            main_age = None
+            try:
+                fn = getattr(self._session, "main_page_age", None)
+                if callable(fn):
+                    main_age = fn()
+            except Exception:
+                main_age = None
+            main_s = f" main_idle_min={int(main_age / 60)}" if main_age is not None else ""
+            rove_s = ""
+            if self._rove_enabled and self._rove_page is not None:
+                rove_s = f" rove_idle_sec={int(now - self._last_rove)}"
             ka = ""
             if self._tabs:
                 ages = {lid: int((now - self._tab_alive.get(lid, now)) / 60) for lid in self._tabs}
                 ka = " tab_idle_min=" + ",".join(f"{lid}:{m}" for lid, m in sorted(ages.items()))
             print(f"[TAB-MGR] paired={len(paired)} covered={len(covered & set(paired))} "
-                  f"(board={nboard}) tabs={len(self._tabs)}/{self._max} gaps={len(gaps)}{rv}{ka}")
+                  f"(board={nboard}) tabs={len(self._tabs)}/{self._max} gaps={len(gaps)}{rv}"
+                  f"{main_s}{rove_s}{ka}")
         # 3. DEDICATED tabs: give the top gap leagues persistent tabs, one per tick, up to the cap
         if gaps and len(self._tabs) < self._max:
             lid = gaps[0]
