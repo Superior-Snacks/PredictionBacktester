@@ -65,6 +65,13 @@ class LeagueTabManager:
         # from the primary page glancing at another sport) so the slot can cover a still-uncovered league.
         self._board_reclaim_sec = float(os.environ.get("HARDVEN_TAB_BOARD_RECLAIM_SEC", "120"))
         self._tab_board_since: dict[str, float] = {}   # lid -> when its tab's league first went continuously board
+        # PER-TAB KEEPALIVE: dedicated tabs are opened once and then just SIT — unlike the main board (reloaded
+        # every PINNACLE_RELOGIN_MIN) and the rove tab (navigates every dwell), nothing re-auths them, so they hit
+        # Pinnacle's ~30min idle logout (seen as a mass authed-REST guest-redirect + a re-seed returning 0 tokens).
+        # Track each dedicated tab's last refresh; reload the stalest one past this age (well under the logout
+        # window). A reload = navigate to its own league URL = re-auth the tab AND re-subscribe its odds WS.
+        self._keepalive_sec = float(os.environ.get("HARDVEN_TAB_KEEPALIVE_MIN", "15")) * 60.0
+        self._tab_alive: dict[str, float] = {}         # lid -> last time its dedicated tab was opened/reloaded
 
     def start(self) -> None:
         if self._task is None or self._task.done():
@@ -182,6 +189,7 @@ class LeagueTabManager:
         if pg is None:
             return "open-failed"
         self._tabs[lid] = pg
+        self._tab_alive[lid] = time.time()
         print(f"[TAB-MGR] VERIFY - opened tab on demand for league {lid} -> {url[:70]} "
               f"(tabs={len(self._tabs)}/{self._max})")
         return "opened"
@@ -239,6 +247,7 @@ class LeagueTabManager:
             if lid not in paired:
                 await self._session.close_tab(self._tabs.pop(lid))
                 self._tab_board_since.pop(lid, None)
+                self._tab_alive.pop(lid, None)
                 print(f"[TAB-MGR] closed tab for de-paired league {lid} (tabs={len(self._tabs)})")
         # 1b. RECLAIM tabs the featured board has taken over: a league we opened a tab for (because it WASN'T on
         # the board) that later appears there and STAYS ≥ board_reclaim_sec is now redundant — close it so the
@@ -250,6 +259,7 @@ class LeagueTabManager:
                 if now - self._tab_board_since[lid] >= self._board_reclaim_sec:
                     await self._session.close_tab(self._tabs.pop(lid))
                     self._tab_board_since.pop(lid, None)
+                    self._tab_alive.pop(lid, None)
                     print(f"[TAB-MGR] reclaimed tab for league {lid} - now on the featured board (redundant); "
                           f"slot freed for an uncovered league (tabs={len(self._tabs)}/{self._max})")
             else:
@@ -263,14 +273,20 @@ class LeagueTabManager:
             self._last_log = now
             nboard = len(board & set(paired))
             rv = f" rove={self._rove_lid}" if self._rove_enabled else ""
+            # per-tab freshness so it's visible which tab was kept alive and which is aging toward the logout
+            ka = ""
+            if self._tabs:
+                ages = {lid: int((now - self._tab_alive.get(lid, now)) / 60) for lid in self._tabs}
+                ka = " tab_idle_min=" + ",".join(f"{lid}:{m}" for lid, m in sorted(ages.items()))
             print(f"[TAB-MGR] paired={len(paired)} covered={len(covered & set(paired))} "
-                  f"(board={nboard}) tabs={len(self._tabs)}/{self._max} gaps={len(gaps)}{rv}")
+                  f"(board={nboard}) tabs={len(self._tabs)}/{self._max} gaps={len(gaps)}{rv}{ka}")
         # 3. DEDICATED tabs: give the top gap leagues persistent tabs, one per tick, up to the cap
         if gaps and len(self._tabs) < self._max:
             lid = gaps[0]
             pg = await self._session.open_tab(paired[lid])
             if pg is not None:
                 self._tabs[lid] = pg
+                self._tab_alive[lid] = now
                 self._cap_warned = False
                 print(f"[TAB-MGR] opened dedicated tab for gap league {lid} -> {paired[lid][:70]} "
                       f"(tabs={len(self._tabs)}/{self._max}, {len(gaps) - 1} gap(s) left)")
@@ -279,6 +295,19 @@ class LeagueTabManager:
             where = "swept by the roving tail tab" if self._rove_enabled else \
                     "left uncovered (raise HARDVEN_TAB_MAX or set HARDVEN_TAB_ROVE=1)"
             print(f"[TAB-MGR] {len(gaps)} gap league(s) beyond the {self._max}-tab cap - {where}.")
+        # 3b. PER-TAB KEEPALIVE: reload the stalest dedicated tab whose session is aging toward the idle logout.
+        # The main board + the rove refresh themselves; these dedicated tabs otherwise never do → they log out.
+        # One per tick, staggered — navigating to its own league URL re-auths the tab AND re-subscribes its WS.
+        due = [(lid, self._tab_alive.get(lid, now)) for lid in self._tabs]
+        due = [(lid, ts) for lid, ts in due if now - ts >= self._keepalive_sec]
+        if due:
+            lid, ts = min(due, key=lambda kv: kv[1])          # stalest first
+            url = paired.get(lid)
+            self._tab_alive[lid] = now                        # bump regardless → bounded retry (not every tick)
+            if url and await self._session.navigate_tab(self._tabs[lid], url):
+                print(f"[TAB-MGR] keepalive reload league {lid} (idle {int((now - ts) / 60)}m) - re-auth + re-subscribe")
+            else:
+                print(f"[TAB-MGR] keepalive reload FAILED for league {lid} (idle {int((now - ts) / 60)}m) - will retry")
         # 4. ROVING tail tab: sweep the overflow (gaps the dedicated tabs can't hold)
         if self._rove_enabled:
             await self._rove_tick(paired)

@@ -423,6 +423,17 @@ class PinnacleAdapter(BookAdapter):
         self._session_ka_task: Optional[asyncio.Task] = None   # session keepalive (vs inactivity logout)
         self._session_ka_sec = float(os.environ.get("PINNACLE_SESSION_KEEPALIVE_SEC", "240"))
         self._session_expired = False                          # terminal: a guest-redirect → stop everything
+        # MASS-LOGOUT DETECTION (K2): a SINGLE authed-REST guest-redirect while the reader WS is live is a stale
+        # replay blip (re-synced, not a logout). But a BURST — many leagues guest-redirecting in one window, or a
+        # re-seed that suddenly returns 0 tokens — means the ACCOUNT x-session genuinely expired, even though board
+        # odds keep streaming off the WS (board data is public, so "odds flowing" ≠ "logged in"). That burst forces
+        # a real re-login. (Bet-safety while logged out is already covered: /balance guest-redirects → 0 → the
+        # executor can't fund a buy → no bet.)
+        self._guest_redirect_ts: list = []
+        self._mass_logout_n = int(os.environ.get("PINNACLE_MASS_LOGOUT_REDIRECTS", "4"))
+        self._mass_logout_window = float(os.environ.get("PINNACLE_MASS_LOGOUT_WINDOW", "30"))
+        self._last_mass_logout = 0.0
+        self._mass_logout_throttle = float(os.environ.get("PINNACLE_MASS_LOGOUT_THROTTLE", "120"))
         self._debug_ws = os.environ.get("PINNACLE_DEBUG_WS") == "1"  # log each WS cache update (prove live=WS)
         self._debug_status = os.environ.get("PINNACLE_DEBUG_STATUS") == "1"  # log market OFFLINE/suspend transitions
         if self._debug_ws:
@@ -1520,6 +1531,38 @@ class PinnacleAdapter(BookAdapter):
                       f"in {time.perf_counter() - t0:.2f}s ({self._reseed_source}; cadence {self._reader_reseed_sec:g}s).")
 
     # ── HTTP (catalog + rest mode) ───────────────────────────────────────────
+    def _note_guest_redirect(self) -> bool:
+        """Record an authed-REST guest-redirect and decide if it's a MASS event = a real logout. Returns True if
+        the mass-logout path was taken (so the caller SKIPS the per-blip re-sync). A burst of guest-redirects in a
+        short window (default 4 in 30s) means the account x-session expired — the board WS staying live does NOT
+        prove otherwise. One re-seed cycle of a dozen dead leagues trips this immediately."""
+        now = time.time()
+        self._guest_redirect_ts.append(now)
+        self._guest_redirect_ts = [t for t in self._guest_redirect_ts if now - t <= self._mass_logout_window]
+        if len(self._guest_redirect_ts) >= self._mass_logout_n:
+            self._handle_mass_logout(f"{len(self._guest_redirect_ts)} guest-redirects in "
+                                     f"{self._mass_logout_window:g}s")
+            return True
+        return False
+
+    def _handle_mass_logout(self, reason: str) -> None:
+        """A real account logout was detected. Force a genuine re-login (reload the main page + submit the login
+        form, bypassing the 'recent capture = healthy' guard — that guard is fooled because a logged-out page keeps
+        SENDING its dead x-session, refreshing _last_capture). Throttled so a redirect storm fires it once. Loud so
+        it's visible in the log; the executor's balance gate keeps money safe until the re-login lands."""
+        now = time.time()
+        if now - self._last_mass_logout < self._mass_logout_throttle:
+            return                                              # already handling this storm
+        self._last_mass_logout = now
+        self._guest_redirect_ts.clear()
+        print(f"[PINNACLE] *** LIKELY LOGOUT: {reason} - board odds still stream (public) but ALL authed REST is "
+              "guest-redirecting. Forcing a real re-login (reload + submit). No bets can fund until it lands.")
+        if self._browser is not None:
+            try:
+                asyncio.get_event_loop().create_task(self._browser.force_remint(force_login=True))
+            except Exception as ex:
+                print(f"[PINNACLE] mass-logout re-login could not be scheduled: {type(ex).__name__}: {ex}")
+
     def _rest_death_check(self, reason: str) -> None:
         """A REST-replay auth failure (401/403 streak or guest-redirect) wants to declare the session dead. But
         the ODDS WS is the TRUE liveness signal: while paho is CONNECTED, the login is alive and odds are flowing
@@ -1577,7 +1620,10 @@ class PinnacleAdapter(BookAdapter):
             loc = r.headers.get("location", "")
             if "guest" in loc.lower():
                 print(f"[PINNACLE] {path}: redirected to the GUEST endpoint → the replayed x-session looks EXPIRED.")
-                self._rest_death_check("session expired — guest redirect")   # only a real logout if the WS is also down
+                # A BURST of these = a real logout (forces re-login). A lone blip while the WS is live = stale
+                # replay → re-sync only. _note_guest_redirect returns True when it took the mass-logout path.
+                if not self._note_guest_redirect():
+                    self._rest_death_check("session expired — guest redirect")
             else:
                 print(f"[PINNACLE] GET {path} HTTP {r.status_code} → {loc}")
             return None

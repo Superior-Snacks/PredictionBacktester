@@ -774,10 +774,13 @@ class PinnacleBrowserSession:
             if self._auto_login:
                 await self._ensure_logged_in()   # a hard-expired session shows the login form right after reload
 
-    async def force_remint(self) -> None:
+    async def force_remint(self, force_login: bool = False) -> None:
         """On-demand re-mint: reload the page so the saved profile issues a FRESH x-session, which the adapter
         picks up (and pushes into the paho WS password). Triggered when the odds WS gets auth-rejected on a
-        session rotation — the same action as the periodic keepalive, on demand. Best-effort; never raises."""
+        session rotation, OR when the adapter detects a mass authed-REST guest-redirect (a real logout). Best-
+        effort; never raises. `force_login=True` (the mass-logout path) tells `_ensure_logged_in` to submit the
+        login form even if `_last_capture` looks fresh — because a logged-out page keeps SENDING its dead
+        x-session, so 'recent capture' is not proof of a live login there."""
         if self._page is None:
             return
         try:
@@ -793,7 +796,7 @@ class PinnacleBrowserSession:
             # form, so _ensure_logged_in's healthy-session guard can skip a redundant login when the reload already
             # restored the session, and only submit on a genuine hard logout. Avoids the re-mint→re-login churn.
             await asyncio.sleep(4)
-            await self._ensure_logged_in()
+            await self._ensure_logged_in(force=force_login)
 
     # ── unattended re-login (submit the profile-autofilled form) ───────────────────
     def _profile_has_saved_login(self) -> bool:
@@ -809,7 +812,7 @@ class PinnacleBrowserSession:
             pass
         return False
 
-    async def _ensure_logged_in(self) -> bool:
+    async def _ensure_logged_in(self, force: bool = False) -> bool:
         """If a visible password field is present and we have EVIDENCE the profile holds saved credentials, the
         page is on a login form (session dropped) → submit it (click to commit autofill, then Enter; button-click
         fallback if it lingers). Evidence = a readable non-empty value OR a session already captured this run OR
@@ -831,8 +834,11 @@ class PinnacleBrowserSession:
             return False                                   # empty form + no saved creds → first-time setup; leave it
         # ALREADY LOGGED IN? If we captured authed traffic recently, a visible login form is a stray/autofilled
         # widget, NOT a logout — submitting it would rotate the live session. Only re-login once authed traffic
-        # has gone silent (a real logout). This is what stops the post-capture re-login churn.
-        if self._logged_session and self._last_capture and (time.time() - self._last_capture) < self._login_healthy_grace:
+        # has gone silent (a real logout). This is what stops the post-capture re-login churn. EXCEPTION: `force`
+        # (the mass-guest-redirect path) bypasses this — there we have POSITIVE evidence of a logout, and this very
+        # guard is what masked it (a logged-out page keeps sending its dead x-session, so _last_capture stays fresh).
+        if (not force) and self._logged_session and self._last_capture \
+                and (time.time() - self._last_capture) < self._login_healthy_grace:
             return False
         if time.time() - self._last_login_submit < self._login_submit_cooldown:
             return False                                   # don't hammer the login form
