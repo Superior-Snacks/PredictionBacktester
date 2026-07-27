@@ -41,8 +41,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import os
 import random
+import re
 import threading
 import time
 from datetime import datetime
@@ -140,85 +142,58 @@ _UI_READ_POPOVER = r"""
   };
 """
 
-# Probe-and-verify: click a candidate odds button, read what the popover says was selected, and only keep it
-# when the matchup AND the side match. Clicking places nothing, so probing is safe.
-_UI_SELECT_JS = r"""
-async (args) => {
-  const {nameA, nameB, side, rejectSuffixes, requireMarket} = args;
+# Candidate odds buttons: the INDICES (among `button.market-btn`) whose surrounding row mentions BOTH
+# participants. Python then REAL-mouse-clicks the chosen one — a synthetic JS `.click()` fires no pointer
+# events, so Pinnacle's Quick Bet / side bet-slip misfires; a real click behaves like a user.
+_UI_CANDIDATES_JS = r"""
+(args) => {
   const norm = (s) => (s || "").toLowerCase().replace(/\s+/g, " ").trim();
-  const surname = (s) => { const p = norm(s).split(" ").filter(Boolean); return p[p.length - 1] || ""; };
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  __READ__
-  const closePop = () => {
-    const p = document.querySelector("#quick-bet-portal");
-    if (!p) return;
-    const x = p.querySelector('button[aria-label*="Remove"], button[aria-label*="Close"], i.icon-x');
-    if (x) (x.closest("button") || x).click();
-  };
-  const A = surname(nameA), B = surname(nameB), S = surname(side);
-  if (!A || !B || !S) return {ok: false, error: "incomplete expected names"};
-
-  // Candidate buttons: those whose surrounding row mentions BOTH participants.
-  const collect = () => {
-    const out = [];
-    for (const b of document.querySelectorAll("button.market-btn")) {
-      let row = b, hops = 0;
-      while (row && hops++ < 9) {
-        const t = norm(row.textContent || "");
-        if (t.includes(A) && t.includes(B)) { out.push({btn: b, rowText: t}); break; }
-        row = row.parentElement;
-      }
+  const A = norm(args.A), B = norm(args.B);
+  const out = [];
+  const btns = Array.from(document.querySelectorAll("button.market-btn"));
+  btns.forEach((b, i) => {
+    let row = b, hops = 0;
+    while (row && hops++ < 9) {
+      const t = norm(row.textContent || "");
+      if (t.includes(A) && t.includes(B)) { out.push(i); return; }
+      row = row.parentElement;
     }
-    return out;
-  };
-  // The match may be below the fold, and if the board is virtualised the row is not merely off-screen -- it is
-  // not in the DOM at all until scrolled near. So sweep the page before concluding the market is absent.
-  let cands = collect();
-  let scanned = 0;
-  if (!cands.length) {
-    const step = Math.max(400, Math.floor(window.innerHeight * 0.8));
-    for (let y = 0; y <= document.body.scrollHeight && !cands.length && scanned < 40; y += step, scanned++) {
-      window.scrollTo(0, y);
-      await sleep(180);
-      cands = collect();
-    }
-    window.scrollTo(0, 0);
-    await sleep(120);
-    if (cands.length) cands = collect();          // re-query: virtualised nodes may have been recycled
-  }
-  if (!cands.length)
-    return {ok: false, error: `no row mentions both "${A}" and "${B}" (scanned ${scanned} viewport(s))`};
-
-  closePop();
-  await sleep(150);
-  const tried = [];
-  for (const c of cands.slice(0, 12)) {
-    c.btn.scrollIntoView({block: "center"});
-    c.btn.click();
-    let pop = null;
-    for (let i = 0; i < 24 && !pop; i++) { await sleep(100); pop = readPop(); }
-    if (!pop) { tried.push("no popover"); continue; }
-    const m = norm(pop.matchup || pop.all), lab = norm(pop.label);
-    const matchupOk = m.includes(A) && m.includes(B);
-    const sideOk = lab.includes(S);
-    // The side name alone is NOT enough: "Adam Walton +1.5 (Sets)" (handicap) and "Adam Walton (Games)" both
-    // contain it. Pinnacle suspends individual moneylines constantly, and without these two checks the probe
-    // would fall through to whatever OTHER market on the same row still mentions the player -- silently
-    // betting a handicap/total at completely different odds. Confirmed by test 2026-07-20.
-    const marketOk = !requireMarket || norm(pop.all).includes(norm(requireMarket));
-    const derivative = /[+-]\s*\d+(\.\d+)?/.test(lab) || /\b(over|under|total)\b/.test(lab);
-    const rejected = (rejectSuffixes || []).some((sfx) => lab.includes(norm(sfx)));
-    if (matchupOk && sideOk && marketOk && !derivative && !rejected) {
-      return {ok: true, price: parseFloat(pop.price || "0"), matchup: pop.matchup, label: pop.label};
-    }
-    tried.push(`matchup=${matchupOk} side=${sideOk} market=${marketOk} deriv=${derivative} ` +
-               `rejected=${rejected} label="${pop.label}"`);
-    closePop();
-    await sleep(200);
-  }
-  return {ok: false, error: `no candidate matched (${cands.length} tried): ` + tried.slice(0, 4).join(" | ")};
+  });
+  return out;
 }
-""".replace("__READ__", _UI_READ_POPOVER)
+"""
+
+# Read what the Quick Bet popover currently shows (matchup, side label, decimal price, max bet). Verification of
+# matchup/side/market happens in Python (`_verify_pop`).
+_UI_READ_POP_JS = r"""
+() => {
+  const p = document.querySelector("#quick-bet-portal");
+  if (!p || !(p.textContent || "").trim()) return null;
+  const t = (n) => ((n && n.textContent) || "").replace(/\s+/g, " ").trim();
+  const cls = (el) => (typeof el.className === "string" ? el.className : "");
+  let matchup = "", label = "", price = "";
+  for (const el of p.querySelectorAll("div,span")) {
+    const c = cls(el);
+    if (!matchup && c.includes("matchupName-")) matchup = t(el);
+    if (!label && c.includes("priceLabelAlt-")) label = t(el);
+    if (!price && /(^|\s)price-/.test(c) && !c.includes("priceLabel")) {
+      const m = t(el).match(/\d{1,3}\.\d{2,3}/); if (m) price = m[0];
+    }
+  }
+  const all = t(p);
+  if (!price) { const m = all.match(/\b\d{1,3}\.\d{2,3}\b/); if (m) price = m[0]; }
+  if (!label) {
+    for (const el of p.querySelectorAll("span,div")) {
+      const s = t(el);
+      if (s && s.length < 60 && s !== matchup && /[A-Za-z]/.test(s) && !/\d{1,3}\.\d{2,3}/.test(s)) { label = s; break; }
+    }
+  }
+  let maxBet = null;
+  const mm = all.match(/Max Bet:?\s*[A-Z]{0,3}\s*([\d,]+(?:\.\d+)?)/i);
+  if (mm) maxBet = parseFloat(mm[1].replace(/,/g, ""));
+  return {matchup, label, price, all, maxBet};
+}
+"""
 
 _UI_STAKE_JS = r"""
 async (args) => {
@@ -246,22 +221,6 @@ async (args) => {
   return {ok: true, value: inp.value, maxBet};
 }
 """.replace("__READ__", _UI_READ_POPOVER)
-
-_UI_SUBMIT_JS = r"""
-() => {
-  const p = document.querySelector("#quick-bet-portal");
-  if (!p) return {ok: false, error: "popover gone before submit"};
-  let btn = null;
-  for (const b of p.querySelectorAll("button")) {
-    const t = ((b.textContent || "").replace(/\s+/g, " ").trim());
-    if (/^place bet$/i.test(t)) { btn = b; break; }
-  }
-  if (!btn) return {ok: false, error: "Place Bet button not found"};
-  if (btn.disabled) return {ok: false, error: "Place Bet button is disabled"};
-  btn.click();
-  return {ok: true};
-}
-"""
 
 # After submit, Pinnacle may show an "odds changed -- accept?" confirmation. That flow was NOT present in the
 # 2026-07-20 capture, so its markup is unknown. This DETECTS it (a new actionable button appearing in the
@@ -449,6 +408,7 @@ class PinnacleAdapter(BookAdapter):
         self._tab_manager = None                               # LeagueTabManager when HARDVEN_TAB_MANAGER=1 (reader)
         self._tab_organic = None                               # TabOrganic: light per-tab human activity
         self._bet_page = None                                  # cold last-resort bet tab (see _select_bet_tab)
+        self._bet_cursor = None                                # tracked mouse pos for human-like placement moves
         self._tab_manager_on = os.environ.get("HARDVEN_TAB_MANAGER") == "1"
         self._session_ready = self._session_source != "browser"  # env mode = ready now; browser waits for login
         self._balance = 0.0                                    # last wallet amount (account currency, e.g. EUR)
@@ -1876,12 +1836,23 @@ class PinnacleAdapter(BookAdapter):
                                  reason=f"verify-only: would place {stake:.2f} @ {shown} on "
                                         f"'{sel_ok.get('label')}' ({sel_ok.get('matchup')}); max bet {max_bet}")
 
+            # Real human click on Place Bet (a synthetic JS .click misfires the slip, same as the odds button).
+            place = page.locator("#quick-bet-portal").get_by_role(
+                "button", name=re.compile(r"place\s*bet", re.I)).first
+            try:
+                if await place.count() == 0:
+                    await page.evaluate(_UI_CLOSE_JS)
+                    return BetResult(accepted=False, stake=stake, reason="submit failed: Place Bet button not found")
+                if await place.is_disabled():
+                    await page.evaluate(_UI_CLOSE_JS)
+                    return BetResult(accepted=False, stake=stake, reason="submit failed: Place Bet button disabled")
+            except Exception:
+                pass
             page.on("response", _on_resp)
-            submitted = await page.evaluate(_UI_SUBMIT_JS)
-            if not submitted or not submitted.get("ok"):
+            await asyncio.sleep(random.uniform(0.3, 0.8))    # a person reads the slip before committing
+            if not await self._human_click_loc(page, place):
                 await page.evaluate(_UI_CLOSE_JS)
-                return BetResult(accepted=False, stake=stake,
-                                 reason=f"submit failed: {submitted and submitted.get('error')}")
+                return BetResult(accepted=False, stake=stake, reason="submit failed: could not click Place Bet")
 
             # Wait for the app's own POST /bets/straight to come back, watching for an accept-odds prompt.
             body: dict = {}
@@ -2007,10 +1978,104 @@ class PinnacleAdapter(BookAdapter):
         except Exception:
             return False
 
-    async def _try_select_on(self, page, args: dict):
-        """Bring `page` to front and verify the intended market on it. Selection PLACES NOTHING (it only opens
-        the Quick Bet popover), so this is safe to attempt on several tabs in turn. Closes the popover on a
-        miss. Returns the sel result (dict with ok/price/…) or None if the page is unusable."""
+    # ── human-like mouse (placement clicks look like a person, and fire REAL pointer events) ──
+    @staticmethod
+    def _surname(s: str) -> str:
+        parts = (s or "").lower().split()
+        return parts[-1] if parts else ""
+
+    async def _human_move_page(self, page, tx: float, ty: float) -> None:
+        """Curved, eased mouse move to (tx,ty), tracking our own cursor (Playwright doesn't expose it). Makes a
+        placement approach look like a person reaching for the button, not a teleport."""
+        start = self._bet_cursor or (tx + random.uniform(-200, 200), ty + random.uniform(-150, 150))
+        x0, y0 = start
+        dx, dy = tx - x0, ty - y0
+        dist = math.hypot(dx, dy)
+        if dist < 2:
+            self._bet_cursor = (tx, ty)
+            return
+        pxu, pyu = -dy / dist, dx / dist
+        bow = random.uniform(0.05, 0.20) * dist * random.choice((-1.0, 1.0))
+        c1 = (x0 + dx * 0.30 + pxu * bow, y0 + dy * 0.30 + pyu * bow)
+        c2 = (x0 + dx * 0.65 + pxu * bow, y0 + dy * 0.65 + pyu * bow)
+        steps = int(max(10, min(40, dist / 10)))
+        total = random.uniform(0.14, 0.34) * (0.6 + dist / 900)
+        for i in range(1, steps + 1):
+            t = i / steps
+            s = t * t * (3 - 2 * t)                       # smoothstep ease
+            u = 1 - s
+            bx = u*u*u*x0 + 3*u*u*s*c1[0] + 3*u*s*s*c2[0] + s*s*s*tx + random.uniform(-1, 1)
+            by = u*u*u*y0 + 3*u*u*s*c1[1] + 3*u*s*s*c2[1] + s*s*s*ty + random.uniform(-1, 1)
+            try:
+                await page.mouse.move(bx, by)
+            except Exception:
+                break
+            await asyncio.sleep(max(0.004, total / steps * random.uniform(0.6, 1.4)))
+        self._bet_cursor = (tx, ty)
+
+    async def _human_click_loc(self, page, loc) -> bool:
+        """Scroll `loc` into view, approach it with a curved human move, and click with REAL pointer events
+        (mouse down+up). Unlike a synthetic JS `.click()` (no pointer events → the Quick Bet / side-slip
+        misfires), this behaves like a user. False if the element has no box."""
+        try:
+            await loc.scroll_into_view_if_needed(timeout=4000)
+        except Exception:
+            pass
+        try:
+            box = await loc.bounding_box()
+        except Exception:
+            box = None
+        if not box:
+            return False
+        cx = box["x"] + box["width"] * random.uniform(0.35, 0.65)
+        cy = box["y"] + box["height"] * random.uniform(0.35, 0.65)
+        await self._human_move_page(page, cx, cy)
+        await asyncio.sleep(random.uniform(0.04, 0.14))
+        try:
+            await page.mouse.down()
+            await asyncio.sleep(random.uniform(0.03, 0.09))
+            await page.mouse.up()
+        except Exception:
+            return False
+        return True
+
+    async def _human_scroll(self, page, notches: int = 1) -> None:
+        """A few small wheel notches (a person browsing), used to surface an off-screen / virtualised row."""
+        for _ in range(random.randint(2, 5) * max(1, notches)):
+            try:
+                await page.mouse.wheel(0, random.randint(120, 260))
+            except Exception:
+                return
+            await asyncio.sleep(random.uniform(0.05, 0.16))
+
+    def _verify_pop(self, pop: dict, A: str, B: str, S: str,
+                    require_market: str = "money line", reject=("(games)",)) -> dict:
+        """Same wrong-market defence the JS used to do, now in Python (the click moved to a real mouse action).
+        matchup+side alone is NOT enough — a handicap ('Adam Walton +1.5 (Sets)') or the Games shell also carries
+        the side name; require the moneyline text AND reject derivative/Games labels, or a suspended moneyline
+        would silently fall through to a handicap at different odds."""
+        m = (pop.get("matchup") or pop.get("all") or "").lower()
+        lab = (pop.get("label") or "").lower()
+        allt = (pop.get("all") or "").lower()
+        matchup_ok = A in m and B in m
+        side_ok = S in lab
+        market_ok = require_market in allt
+        derivative = bool(re.search(r"[+-]\s*\d+(\.\d+)?", lab)) or bool(re.search(r"\b(over|under|total)\b", lab))
+        rejected = any(r.lower() in lab for r in reject)
+        try:
+            price = float(pop.get("price") or 0)
+        except (TypeError, ValueError):
+            price = 0.0
+        ok = matchup_ok and side_ok and market_ok and not derivative and not rejected
+        why = (f"matchup={matchup_ok} side={side_ok} market={market_ok} deriv={derivative} "
+               f"rejected={rejected} label='{pop.get('label')}'")
+        return {"ok": ok, "price": price, "why": why}
+
+    async def _try_select_on(self, page, exp: dict):
+        """Bring `page` to front, find the intended moneyline's odds button, and click it with a REAL human mouse
+        action (opens the Quick Bet popover correctly — a JS `.click()` misfires it). Probes candidates: click,
+        read the popover, verify matchup+side+market; on a miss close and try the next. Selection PLACES NOTHING,
+        so it's safe to attempt on several tabs. Returns the sel result (ok/price/…) or None if the page is dead."""
         if page is None:
             return None
         try:
@@ -2022,16 +2087,65 @@ class PinnacleAdapter(BookAdapter):
             await page.bring_to_front()
         except Exception:
             pass
+        A, B, S = self._surname(exp["nameA"]), self._surname(exp["nameB"]), self._surname(exp["side"])
+        if not (A and B and S):
+            return {"ok": False, "error": "incomplete expected names"}
+
+        # Find candidate buttons; scroll to surface off-screen / virtualised rows before concluding it's absent.
         try:
-            r = await page.evaluate(_UI_SELECT_JS, args)
+            idxs = await page.evaluate(_UI_CANDIDATES_JS, {"A": A, "B": B})
         except Exception as e:
-            return {"ok": False, "error": f"select eval error: {e}"}
-        if not r or not r.get("ok"):
+            return {"ok": False, "error": f"candidate scan error: {e}"}
+        scanned = 0
+        while not idxs and scanned < 12:
+            await self._human_scroll(page, 1)
+            await asyncio.sleep(0.2)
+            try:
+                idxs = await page.evaluate(_UI_CANDIDATES_JS, {"A": A, "B": B})
+            except Exception:
+                idxs = []
+            scanned += 1
+        if not idxs:
+            try:
+                await page.evaluate("() => window.scrollTo(0, 0)")
+            except Exception:
+                pass
+            return {"ok": False, "error": f'no row mentions both "{A}" and "{B}" (scanned {scanned} viewport(s))'}
+
+        btns = page.locator("button.market-btn")
+        try:
+            await page.evaluate(_UI_CLOSE_JS)                 # start clean
+        except Exception:
+            pass
+        tried = []
+        for i in idxs[:12]:
+            loc = btns.nth(i)
+            if not await self._human_click_loc(page, loc):   # REAL mouse click → correct Quick Bet behaviour
+                tried.append("no box")
+                continue
+            pop = None
+            for _ in range(24):
+                await asyncio.sleep(0.1)
+                try:
+                    pop = await page.evaluate(_UI_READ_POP_JS)
+                except Exception:
+                    pop = None
+                if pop:
+                    break
+            if not pop:
+                tried.append("no popover")
+                continue
+            v = self._verify_pop(pop, A, B, S)
+            if v["ok"]:
+                return {"ok": True, "price": v["price"], "matchup": pop.get("matchup"),
+                        "label": pop.get("label"), "maxBet": pop.get("maxBet")}
+            tried.append(v["why"])
             try:
                 await page.evaluate(_UI_CLOSE_JS)
             except Exception:
                 pass
-        return r
+            await asyncio.sleep(random.uniform(0.15, 0.35))
+        return {"ok": False, "error": f"no candidate matched ({len(idxs)}): " + " | ".join(str(x) for x in tried[:4])}
 
     async def _select_bet_tab(self, lid: str, url: str, exp: dict):
         """Pick the tab to bet on and verify the market on it, most natural first (returns (page, kind, sel_ok)):
@@ -2045,9 +2159,6 @@ class PinnacleAdapter(BookAdapter):
         Because selection places nothing, a miss on one candidate just closes the popover and tries the next —
         so a stale board hit (primary roamed) falls through safely to the rove tab. Returns the last failure if
         none verify, so the caller can report why."""
-        args = {"nameA": exp["nameA"], "nameB": exp["nameB"], "side": exp["side"],
-                "rejectSuffixes": ["(games)"],      # the tennis Games shell is a different matchup, never ours
-                "requireMarket": "money line"}      # the paired token is always the period-0 moneyline
         last = (None, None, None)
         tm = self._tab_manager
 
@@ -2055,7 +2166,7 @@ class PinnacleAdapter(BookAdapter):
         if self._on_board(lid):
             primary = self._primary_page()
             if primary is not None:
-                r = await self._try_select_on(primary, args)
+                r = await self._try_select_on(primary, exp)
                 if r and r.get("ok"):
                     return primary, "board", r
                 last = (primary, "board", r)
@@ -2064,7 +2175,7 @@ class PinnacleAdapter(BookAdapter):
         if tm is not None:
             page, kind = tm.page_for_lid(lid)
             if page is not None:
-                r = await self._try_select_on(page, args)
+                r = await self._try_select_on(page, exp)
                 if r and r.get("ok"):
                     return page, kind, r
                 last = (page, kind, r)
@@ -2073,7 +2184,7 @@ class PinnacleAdapter(BookAdapter):
         if tm is not None:
             rpage = await tm.acquire_rove_for_bet(url)
             if rpage is not None:
-                r = await self._try_select_on(rpage, args)
+                r = await self._try_select_on(rpage, exp)
                 if r and r.get("ok"):
                     return rpage, "rove-nav", r
                 last = (rpage, "rove-nav", r)
@@ -2081,7 +2192,7 @@ class PinnacleAdapter(BookAdapter):
         # 4. cold last-resort tab
         cold = await self._bet_tab(url)
         if cold is not None:
-            r = await self._try_select_on(cold, args)
+            r = await self._try_select_on(cold, exp)
             return cold, "cold", r
 
         return last
