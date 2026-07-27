@@ -298,6 +298,7 @@ class TabOrganic:
         self._gate.set()
         self._task: asyncio.Task | None = None
         self.actions = Counter()
+        self._cursor = None                      # tracked mouse pos for the curved approach on the popover click
 
     def pause(self) -> None:
         self._gate.clear()
@@ -390,18 +391,82 @@ class TabOrganic:
             await page.mouse.move(x + random.uniform(-3, 3), y + random.uniform(-3, 3))
             await asyncio.sleep(random.uniform(0.01, 0.04))
 
-    async def _popover(self, page) -> None:
-        """HARD-GUARDED open+dismiss. Opens the Quick Bet popover on a random market and closes it. There is no
-        reference to a Place Bet control anywhere in this path, so nothing can be submitted."""
-        r = None
+    async def _move_to(self, page, tx: float, ty: float) -> None:
+        """Curved eased approach to (tx,ty), tracking our cursor — reuses the module's bezier/ease helpers."""
+        x0, y0 = self._cursor or (tx + random.uniform(-160, 160), ty + random.uniform(-120, 120))
+        dx, dy = tx - x0, ty - y0
+        dist = math.hypot(dx, dy)
+        if dist < 2:
+            self._cursor = (tx, ty)
+            return
+        pxu, pyu = -dy / dist, dx / dist
+        bow = random.uniform(0.05, 0.20) * dist * random.choice((-1.0, 1.0))
+        c1 = (x0 + dx * 0.30 + pxu * bow, y0 + dy * 0.30 + pyu * bow)
+        c2 = (x0 + dx * 0.65 + pxu * bow, y0 + dy * 0.65 + pyu * bow)
+        steps = int(max(10, min(36, dist / 10)))
+        total = random.uniform(0.14, 0.32) * (0.6 + dist / 900)
+        for i in range(1, steps + 1):
+            t = _smoothstep(i / steps)
+            bx, by = _cubic((x0, y0), c1, c2, (tx, ty), t)
+            try:
+                await page.mouse.move(bx + random.uniform(-1, 1), by + random.uniform(-1, 1))
+            except Exception:
+                break
+            await asyncio.sleep(max(0.004, total / steps * random.uniform(0.6, 1.4)))
+        self._cursor = (tx, ty)
+
+    async def _human_click(self, page, loc) -> bool:
+        """Scroll `loc` into view, approach with a curved move, and click with REAL pointer events (down+up) —
+        a synthetic JS .click() fires no pointer events, so Pinnacle's Quick Bet / side-slip misfires."""
         try:
-            r = await page.evaluate(self._open_js)
+            await loc.scroll_into_view_if_needed(timeout=3000)
+        except Exception:
+            pass
+        try:
+            box = await loc.bounding_box()
+        except Exception:
+            box = None
+        if not box:
+            return False
+        cx = box["x"] + box["width"] * random.uniform(0.35, 0.65)
+        cy = box["y"] + box["height"] * random.uniform(0.35, 0.65)
+        await self._move_to(page, cx, cy)
+        await asyncio.sleep(random.uniform(0.04, 0.14))
+        try:
+            await page.mouse.down()
+            await asyncio.sleep(random.uniform(0.03, 0.09))
+            await page.mouse.up()
+        except Exception:
+            return False
+        return True
+
+    async def _popover(self, page) -> None:
+        """HARD-GUARDED open+dismiss with a REAL mouse click (like the placement path), so it opens the Quick Bet
+        popover correctly instead of a JS .click() that misfires the slip. Clicks a RANDOM odds button
+        (`market-btn` is the odds-button set only — never a Place Bet control), looks, then dismisses via the
+        Remove/X. Nothing can be submitted."""
+        try:
+            btns = page.locator("button.market-btn")
+            n = await btns.count()
         except Exception:
             return
-        if not r or not r.get("ok"):
+        if not n:
+            return
+        if not await self._human_click(page, btns.nth(random.randrange(n))):
             return
         await asyncio.sleep(random.uniform(0.6, 1.8))         # "look at the slip"
+        # dismiss with a real click on the Remove/X; fall back to the JS close, then Escape
+        try:
+            x = page.locator('#quick-bet-portal button[aria-label*="Remove"], '
+                             '#quick-bet-portal button[aria-label*="Close"]').first
+            if await x.count() > 0 and await self._human_click(page, x):
+                return
+        except Exception:
+            pass
         try:
             await page.evaluate(self._close_js)               # Remove/X only — never Place Bet
         except Exception:
-            pass
+            try:
+                await page.keyboard.press("Escape")
+            except Exception:
+                pass
