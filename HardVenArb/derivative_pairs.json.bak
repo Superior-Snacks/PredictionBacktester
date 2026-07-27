@@ -12,18 +12,6 @@
     "hardven_no_token": "4356:1632981710:spread:1.5:away"
   },
   {
-    "kalshi_ticker": "KXATPGSPREAD-26JUL27FRIBER-FRI4",
-    "market_type": "spread",
-    "line": 3.5,
-    "label": "Taylor Fritz vs Zizou Bergs \u2014 Taylor Fritz -3.5",
-    "event_id": "KXATPGSPREAD-26JUL27FRIBER",
-    "settlement_date": "2026-07-27",
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "4356:1632981705:spread:-3.5:home",
-    "hardven_no_token": "4356:1632981705:spread:3.5:away"
-  },
-  {
     "kalshi_ticker": "KXATPGSPREAD-26JUL27MAJPAU-PAU4",
     "market_type": "spread",
     "line": 3.5,

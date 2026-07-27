@@ -142,24 +142,19 @@ _UI_READ_POPOVER = r"""
   };
 """
 
-# Candidate odds buttons: the INDICES (among `button.market-btn`) whose surrounding row mentions BOTH
-# participants. Python then REAL-mouse-clicks the chosen one — a synthetic JS `.click()` fires no pointer
-# events, so Pinnacle's Quick Bet / side bet-slip misfires; a real click behaves like a user.
-_UI_CANDIDATES_JS = r"""
-(args) => {
-  const norm = (s) => (s || "").toLowerCase().replace(/\s+/g, " ").trim();
-  const A = norm(args.A), B = norm(args.B);
-  const out = [];
-  const btns = Array.from(document.querySelectorAll("button.market-btn"));
-  btns.forEach((b, i) => {
-    let row = b, hops = 0;
-    while (row && hops++ < 9) {
-      const t = norm(row.textContent || "");
-      if (t.includes(A) && t.includes(B)) { out.push(i); return; }
-      row = row.parentElement;
-    }
-  });
-  return out;
+# Does THIS odds button's surrounding row mention BOTH participants? Run per ElementHandle (not by index):
+# the live board inserts/removes rows constantly, so a positional index goes stale between find and click and
+# lands on the wrong button (a handicap to the right of the moneyline). A handle tracks the real element.
+_ROW_MATCH_JS = r"""
+(el, a) => {
+  const norm = (s) => (s || "").toLowerCase().replace(/\s+/g, " ");
+  let row = el, hops = 0;
+  while (row && hops++ < 9) {
+    const t = norm(row.textContent || "");
+    if (t.includes(a.A) && t.includes(a.B)) return true;
+    row = row.parentElement;
+  }
+  return false;
 }
 """
 
@@ -2014,9 +2009,11 @@ class PinnacleAdapter(BookAdapter):
         self._bet_cursor = (tx, ty)
 
     async def _human_click_loc(self, page, loc) -> bool:
-        """Scroll `loc` into view, approach it with a curved human move, and click with REAL pointer events
-        (mouse down+up). Unlike a synthetic JS `.click()` (no pointer events → the Quick Bet / side-slip
-        misfires), this behaves like a user. False if the element has no box."""
+        """Curved human approach toward the element, then a RELIABLE real click. `loc.click()` re-resolves the
+        element's LIVE position at click time — so the constantly-reordering board (odds ticking, rows inserted)
+        can't make us land on the button that slid into stale coordinates (a handicap next to the moneyline) —
+        and it fires the full pointer-event sequence, so the Quick Bet opens correctly (unlike a synthetic JS
+        `.click()` with no pointer events). Works on both an ElementHandle and a Locator."""
         try:
             await loc.scroll_into_view_if_needed(timeout=4000)
         except Exception:
@@ -2025,16 +2022,11 @@ class PinnacleAdapter(BookAdapter):
             box = await loc.bounding_box()
         except Exception:
             box = None
-        if not box:
-            return False
-        cx = box["x"] + box["width"] * random.uniform(0.35, 0.65)
-        cy = box["y"] + box["height"] * random.uniform(0.35, 0.65)
-        await self._human_move_page(page, cx, cy)
-        await asyncio.sleep(random.uniform(0.04, 0.14))
+        if box:                                            # curved human approach toward the button (visual only)
+            await self._human_move_page(page, box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+            await asyncio.sleep(random.uniform(0.04, 0.12))
         try:
-            await page.mouse.down()
-            await asyncio.sleep(random.uniform(0.03, 0.09))
-            await page.mouse.up()
+            await loc.click(timeout=5000, delay=random.randint(30, 90))
         except Exception:
             return False
         return True
@@ -2091,61 +2083,87 @@ class PinnacleAdapter(BookAdapter):
         if not (A and B and S):
             return {"ok": False, "error": "incomplete expected names"}
 
-        # Find candidate buttons; scroll to surface off-screen / virtualised rows before concluding it's absent.
-        try:
-            idxs = await page.evaluate(_UI_CANDIDATES_JS, {"A": A, "B": B})
-        except Exception as e:
-            return {"ok": False, "error": f"candidate scan error: {e}"}
+        # Candidate buttons as STABLE ElementHandles (never positional indices — the live board reorders, so an
+        # index lands on the wrong button). Filter to those whose row mentions both players; scroll to surface
+        # off-screen/virtualised rows before concluding it's absent.
+        async def _find():
+            out = []
+            try:
+                handles = await page.query_selector_all("button.market-btn")
+            except Exception:
+                return out
+            for h in handles:
+                keep = False
+                try:
+                    keep = bool(await h.evaluate(_ROW_MATCH_JS, {"A": A, "B": B}))
+                except Exception:
+                    keep = False
+                if keep:
+                    out.append(h)
+                else:
+                    try:
+                        await h.dispose()
+                    except Exception:
+                        pass
+            return out
+
+        cands = await _find()
         scanned = 0
-        while not idxs and scanned < 12:
+        while not cands and scanned < 10:
             await self._human_scroll(page, 1)
             await asyncio.sleep(0.2)
-            try:
-                idxs = await page.evaluate(_UI_CANDIDATES_JS, {"A": A, "B": B})
-            except Exception:
-                idxs = []
+            cands = await _find()
             scanned += 1
-        if not idxs:
+        if not cands:
             try:
                 await page.evaluate("() => window.scrollTo(0, 0)")
             except Exception:
                 pass
             return {"ok": False, "error": f'no row mentions both "{A}" and "{B}" (scanned {scanned} viewport(s))'}
 
-        btns = page.locator("button.market-btn")
         try:
             await page.evaluate(_UI_CLOSE_JS)                 # start clean
         except Exception:
             pass
         tried = []
-        for i in idxs[:12]:
-            loc = btns.nth(i)
-            if not await self._human_click_loc(page, loc):   # REAL mouse click → correct Quick Bet behaviour
-                tried.append("no box")
-                continue
-            pop = None
-            for _ in range(24):
-                await asyncio.sleep(0.1)
-                try:
-                    pop = await page.evaluate(_UI_READ_POP_JS)
-                except Exception:
-                    pop = None
-                if pop:
+        result = {"ok": False, "error": "no candidate matched"}
+        try:
+            for h in cands[:14]:
+                if not await self._human_click_loc(page, h):  # REAL mouse click on the actual element
+                    tried.append("no box")
+                    continue
+                pop = None
+                for _ in range(24):
+                    await asyncio.sleep(0.1)
+                    try:
+                        pop = await page.evaluate(_UI_READ_POP_JS)
+                    except Exception:
+                        pop = None
+                    if pop:
+                        break
+                if not pop:
+                    tried.append("no popover")
+                    continue
+                v = self._verify_pop(pop, A, B, S)
+                if v["ok"]:
+                    result = {"ok": True, "price": v["price"], "matchup": pop.get("matchup"),
+                              "label": pop.get("label"), "maxBet": pop.get("maxBet")}
                     break
-            if not pop:
-                tried.append("no popover")
-                continue
-            v = self._verify_pop(pop, A, B, S)
-            if v["ok"]:
-                return {"ok": True, "price": v["price"], "matchup": pop.get("matchup"),
-                        "label": pop.get("label"), "maxBet": pop.get("maxBet")}
-            tried.append(v["why"])
-            try:
-                await page.evaluate(_UI_CLOSE_JS)
-            except Exception:
-                pass
-            await asyncio.sleep(random.uniform(0.15, 0.35))
-        return {"ok": False, "error": f"no candidate matched ({len(idxs)}): " + " | ".join(str(x) for x in tried[:4])}
+                tried.append(v["why"])
+                try:
+                    await page.evaluate(_UI_CLOSE_JS)
+                except Exception:
+                    pass
+                await asyncio.sleep(random.uniform(0.15, 0.35))
+            if not result["ok"]:
+                result["error"] = f"no candidate matched ({len(cands)}): " + " | ".join(str(x) for x in tried[:4])
+        finally:
+            for h in cands:
+                try:
+                    await h.dispose()
+                except Exception:
+                    pass
+        return result
 
     async def _select_bet_tab(self, lid: str, url: str, exp: dict):
         """Pick the tab to bet on and verify the market on it, most natural first (returns (page, kind, sel_ok)):

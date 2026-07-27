@@ -416,8 +416,9 @@ class TabOrganic:
         self._cursor = (tx, ty)
 
     async def _human_click(self, page, loc) -> bool:
-        """Scroll `loc` into view, approach with a curved move, and click with REAL pointer events (down+up) —
-        a synthetic JS .click() fires no pointer events, so Pinnacle's Quick Bet / side-slip misfires."""
+        """Curved approach then a RELIABLE real click. `loc.click()` re-resolves the element's live position at
+        click time (immune to the board reordering) and fires the full pointer-event sequence (opens the Quick
+        Bet correctly, unlike a synthetic JS .click() with no pointer events)."""
         try:
             await loc.scroll_into_view_if_needed(timeout=3000)
         except Exception:
@@ -426,16 +427,11 @@ class TabOrganic:
             box = await loc.bounding_box()
         except Exception:
             box = None
-        if not box:
-            return False
-        cx = box["x"] + box["width"] * random.uniform(0.35, 0.65)
-        cy = box["y"] + box["height"] * random.uniform(0.35, 0.65)
-        await self._move_to(page, cx, cy)
-        await asyncio.sleep(random.uniform(0.04, 0.14))
+        if box:
+            await self._move_to(page, box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+            await asyncio.sleep(random.uniform(0.04, 0.12))
         try:
-            await page.mouse.down()
-            await asyncio.sleep(random.uniform(0.03, 0.09))
-            await page.mouse.up()
+            await loc.click(timeout=4000, delay=random.randint(30, 90))
         except Exception:
             return False
         return True
