@@ -58,6 +58,7 @@ _SCROLL_ANCHOR_JS = r"""
   const w = window.innerWidth, h = window.innerHeight;
   const btns = document.querySelectorAll("button.market-btn");
   for (const b of btns) {
+    if (b.closest && b.closest('[class*="carousel"]')) continue;   // skip the top featured strip (own h-scroll)
     const r = b.getBoundingClientRect();
     const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
     if (r.width > 1 && r.height > 1 && cx > 0 && cx < w && cy > 70 && cy < h - 20) {

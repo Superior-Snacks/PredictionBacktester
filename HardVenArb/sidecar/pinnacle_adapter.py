@@ -151,10 +151,15 @@ _UI_READ_POPOVER = r"""
 _ROW_MATCH_JS = r"""
 (el, a) => {
   const norm = (s) => (s || "").toLowerCase().replace(/\s+/g, " ");
-  const isOdds = (b) => /\d{1,3}\.\d{2,3}/.test(b.textContent || "");
-  // ONLY odds buttons: they show a decimal price. The player-NAME and match-title elements carry the same
-  // `market-btn` class but no price — clicking them opens the side bet-slip / navigates to the match page, not
-  // the Quick Bet. Skipping them keeps the probe on real odds. (seen 2026-07-28: bot clicked player names first)
+  // odds button = shows a PRICE: decimal (1.396) OR American (-347/+268). The player-NAME / match-title elements
+  // carry the same `market-btn` class but no price — clicking them opens the side bet-slip / navigates, not the
+  // Quick Bet. Accepting American too means the finder still locates the row when the site is on American odds,
+  // so placement fails cleanly at the decimal guard ("not decimal odds") instead of a confusing "no row".
+  const isOdds = (b) => { const t = b.textContent || ""; return /\d{1,3}\.\d{2,3}/.test(t) || /[+-]\d{2,4}\b/.test(t); };
+  // The TOP CAROUSEL of "Match Winner" featured cards carries market-btns whose click ADDS TO THE BET SLIP (not
+  // Quick Bet) — never a valid probe target (it silently pollutes the slip; seen 2026-07-28: Tsitsipas 2.220
+  // landed in the slip during a Saito/Perry search) and its buttons also mislead the scroll anchor. Exclude it.
+  if (el.closest && el.closest('[class*="carousel"]')) return false;
   if (!isOdds(el)) return false;
   const cap = a.maxBtns || 10;
   let row = el, hops = 0;
@@ -180,17 +185,24 @@ _UI_READ_POP_JS = r"""
   if (!p || !(p.textContent || "").trim()) return null;
   const t = (n) => ((n && n.textContent) || "").replace(/\s+/g, " ").trim();
   const cls = (el) => (typeof el.className === "string" ? el.className : "");
-  let matchup = "", label = "", price = "";
+  let matchup = "", label = "", price = "", american = false;
   for (const el of p.querySelectorAll("div,span")) {
     const c = cls(el);
     if (!matchup && c.includes("matchupName-")) matchup = t(el);
     if (!label && c.includes("priceLabelAlt-")) label = t(el);
-    if (!price && /(^|\s)price-/.test(c) && !c.includes("priceLabel")) {
-      const m = t(el).match(/\d{1,3}\.\d{2,3}/); if (m) price = m[0];
+    if (!price && !american && /(^|\s)price-/.test(c) && !c.includes("priceLabel")) {
+      const s = t(el);
+      const m = s.match(/\d{1,3}\.\d{2,3}/);
+      if (m) price = m[0];
+      else if (/^[+-]\d{2,4}$/.test(s)) american = true;   // American odds in the price slot -> not decimal
     }
   }
   const all = t(p);
-  if (!price) { const m = all.match(/\b\d{1,3}\.\d{2,3}\b/); if (m) price = m[0]; }
+  // fallback ONLY when no decimal was found AND it isn't American — and strip from 'Max Bet' on, so the max-bet
+  // / payout figure (e.g. "Max Bet: EUR 394.87") can't masquerade as the odds and wrongly pass the decimal guard.
+  if (!price && !american) {
+    const m = all.replace(/Max Bet[\s\S]*/i, "").match(/\b\d{1,3}\.\d{2,3}\b/); if (m) price = m[0];
+  }
   if (!label) {
     for (const el of p.querySelectorAll("span,div")) {
       const s = t(el);
@@ -200,7 +212,7 @@ _UI_READ_POP_JS = r"""
   let maxBet = null;
   const mm = all.match(/Max Bet:?\s*[A-Z]{0,3}\s*([\d,]+(?:\.\d+)?)/i);
   if (mm) maxBet = parseFloat(mm[1].replace(/,/g, ""));
-  return {matchup, label, price, all, maxBet};
+  return {matchup, label, price, american, all, maxBet};
 }
 """
 
@@ -284,6 +296,7 @@ _SCROLL_ANCHOR_JS = r"""
   const w = window.innerWidth, h = window.innerHeight;
   const btns = document.querySelectorAll("button.market-btn");
   for (const b of btns) {
+    if (b.closest && b.closest('[class*="carousel"]')) continue;   // skip the top featured strip (own h-scroll)
     const r = b.getBoundingClientRect();
     const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
     if (r.width > 1 && r.height > 1 && cx > 0 && cx < w && cy > 70 && cy < h - 20) {
@@ -1854,10 +1867,12 @@ class PinnacleAdapter(BookAdapter):
             print(f"[PINNACLE BET] using {tab_kind} tab for {selection_id}")
 
             shown = float(sel_ok.get("price") or 0)
-            if shown <= 1.0 or shown > 1000:
+            if sel_ok.get("american") or shown <= 1.0 or shown > 1000:
                 await page.evaluate(_UI_CLOSE_JS)
                 return BetResult(accepted=False, stake=stake,
-                                 reason=f"popover price {shown} is not decimal odds -- set the site to Decimal Odds")
+                                 reason="the site is on American odds -- set it to Decimal Odds"
+                                 if sel_ok.get("american") else
+                                 f"popover price {shown} is not decimal odds -- set the site to Decimal Odds")
             if shown < max_odds - 1e-9:
                 await page.evaluate(_UI_CLOSE_JS)
                 return BetResult(accepted=False, stake=stake,
@@ -2090,30 +2105,31 @@ class PinnacleAdapter(BookAdapter):
             return False
         return True
 
-    async def _human_scroll(self, page, notches: int = 1) -> None:
-        """A few small wheel notches (a person browsing), used to surface an off-screen / virtualised row.
-
-        HUMAN + CORRECT-PANE. A wheel event scrolls whatever is UNDER THE POINTER. The featured-board league view
-        scrolls its OWN inner pane, not the page — so wheeling from wherever the cursor happens to be would move
-        the wrong thing (often nothing) and the target row would never surface. A person rests the pointer over
-        the list before spinning the wheel; we do the same: curve the cursor onto a currently-visible odds row
-        (guaranteed inside the scroll pane) first. This both looks human and guarantees the wheel hits the pane
-        holding the games. Falls back to the content-area centre when no row is on screen. Position it ONCE — the
-        pane's on-screen location doesn't move as its content scrolls, so the cursor stays over it."""
+    async def _position_over_list(self, page) -> bool:
+        """Rest the cursor over the MAIN match list (a currently-visible odds row, top carousel excluded) so a
+        wheel scrolls THAT list — the featured-board view scrolls its OWN inner pane, not the page, so wheeling
+        from a random spot moves the wrong thing (or the horizontal carousel) and the target row never surfaces.
+        Done ONCE before a sweep — the list's on-screen position doesn't move as its content scrolls, so the
+        cursor stays over it (re-moving each notch is what made scrolling look clunky). Returns True if anchored
+        on a row; falls back to the content-area centre when no row is on screen."""
         try:
             a = await page.evaluate(_SCROLL_ANCHOR_JS)
         except Exception:
             a = None
         if a and a.get("found"):
-            # rest over the ROW BODY (nudge left of the odds button — still inside the pane, over no control)
+            # rest over the ROW BODY (nudge left of the odds button — still inside the list, over no control)
             tx = max(40.0, float(a["x"]) - random.uniform(20, 90))
             ty = float(a["y"]) + random.uniform(-8, 8)
             await self._human_move_page(page, tx, ty)
-        elif a and a.get("w"):
-            # no visible row (scrolled past the list / none rendered yet) — rest in the content area over the pane
+            return True
+        if a and a.get("w"):
             await self._human_move_page(page, float(a["w"]) * random.uniform(0.35, 0.60),
                                         float(a["h"]) * random.uniform(0.35, 0.60))
-        for _ in range(random.randint(2, 5) * max(1, notches)):
+        return False
+
+    async def _wheel(self, page, notches: int = 1) -> None:
+        """A few small wheel notches at the CURRENT cursor position (call _position_over_list first)."""
+        for _ in range(random.randint(2, 4) * max(1, notches)):
             try:
                 await page.mouse.wheel(0, random.randint(120, 260))
             except Exception:
@@ -2188,9 +2204,13 @@ class PinnacleAdapter(BookAdapter):
             return out
 
         cands = await _find()
+        positioned = False
         scanned = 0
         while not cands and scanned < 10:
-            await self._human_scroll(page, 1)
+            if not positioned:
+                await self._position_over_list(page)   # park the cursor over the LIST once (not 10 curved moves)
+                positioned = True
+            await self._wheel(page)                    # then just spin the wheel; the row surfaces if it's there
             await asyncio.sleep(0.2)
             cands = await _find()
             scanned += 1
@@ -2227,7 +2247,8 @@ class PinnacleAdapter(BookAdapter):
                 v = self._verify_pop(pop, A, B, S)
                 if v["ok"]:
                     result = {"ok": True, "price": v["price"], "matchup": pop.get("matchup"),
-                              "label": pop.get("label"), "maxBet": pop.get("maxBet")}
+                              "label": pop.get("label"), "maxBet": pop.get("maxBet"),
+                              "american": bool(pop.get("american"))}
                     break
                 tried.append(v["why"])
                 try:

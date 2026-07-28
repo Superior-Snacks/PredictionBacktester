@@ -20,20 +20,8 @@
     "settlement_date": "2026-07-27",
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "4356:1632981710:spread:-1.5:home",
-    "hardven_no_token": "4356:1632981710:spread:1.5:away"
-  },
-  {
-    "kalshi_ticker": "KXATPGSPREAD-26JUL27MAJPAU-MAJ2",
-    "market_type": "spread",
-    "line": 1.5,
-    "label": "Kamil Majchrzak vs Tommy Paul \u2014 Kamil Majchrzak -1.5",
-    "event_id": "KXATPGSPREAD-26JUL27MAJPAU",
-    "settlement_date": "2026-07-27",
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "4356:1632981719:spread:-1.5:home",
-    "hardven_no_token": "4356:1632981719:spread:1.5:away"
+    "hardven_yes_token": "4356:1632981717:spread:-1.5:home",
+    "hardven_no_token": "4356:1632981717:spread:1.5:away"
   },
   {
     "kalshi_ticker": "KXATPGSPREAD-26JUL27MANTIE-TIE4",
@@ -80,8 +68,8 @@
     "settlement_date": "2026-07-27",
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "4356:1632981710:total:23.5:over",
-    "hardven_no_token": "4356:1632981710:total:23.5:under"
+    "hardven_yes_token": "4356:1632981717:total:23.5:over",
+    "hardven_no_token": "4356:1632981717:total:23.5:under"
   },
   {
     "kalshi_ticker": "KXATPGTOTAL-26JUL27MANTIE-23",
@@ -108,16 +96,16 @@
     "hardven_no_token": "4356:1632981697:total:22.5:under"
   },
   {
-    "kalshi_ticker": "KXATPGSPREAD-26JUL26BROMOU-JBRO2",
+    "kalshi_ticker": "KXATPGSPREAD-26JUL26BROMOU-MOU2",
     "market_type": "spread",
     "line": 1.5,
-    "label": "Jenson Brooksby vs Corentin Moutet \u2014 Jenson Brooksby -1.5",
+    "label": "Jenson Brooksby vs Corentin Moutet \u2014 Corentin Moutet -1.5",
     "event_id": "KXATPGSPREAD-26JUL26BROMOU",
     "settlement_date": "2026-07-28",
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "197382:1632989620:spread:-1.5:home",
-    "hardven_no_token": "197382:1632989620:spread:1.5:away"
+    "hardven_yes_token": "197382:1632989620:spread:-1.5:away",
+    "hardven_no_token": "197382:1632989620:spread:1.5:home"
   },
   {
     "kalshi_ticker": "KXATPGSPREAD-26JUL26SHAHIJ-SHA2",
@@ -190,18 +178,6 @@
     "hardven_min_size": 1.0,
     "hardven_yes_token": "4356:1632990451:spread:-4.5:away",
     "hardven_no_token": "4356:1632990451:spread:4.5:home"
-  },
-  {
-    "kalshi_ticker": "KXATPGTOTAL-26JUL26BROMOU-24",
-    "market_type": "total",
-    "line": 23.5,
-    "label": "Jenson Brooksby vs Corentin Moutet \u2014 Over 23.5",
-    "event_id": "KXATPGTOTAL-26JUL26BROMOU",
-    "settlement_date": "2026-07-28",
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "197382:1632989620:total:23.5:over",
-    "hardven_no_token": "197382:1632989620:total:23.5:under"
   },
   {
     "kalshi_ticker": "KXATPGTOTAL-26JUL26SHAHIJ-24",
