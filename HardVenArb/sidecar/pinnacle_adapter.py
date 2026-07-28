@@ -142,16 +142,23 @@ _UI_READ_POPOVER = r"""
   };
 """
 
-# Does THIS odds button's surrounding row mention BOTH participants? Run per ElementHandle (not by index):
-# the live board inserts/removes rows constantly, so a positional index goes stale between find and click and
-# lands on the wrong button (a handicap to the right of the moneyline). A handle tracks the real element.
+# Is THIS odds button in the intended MATCH? Run per ElementHandle (not by index — the live board reorders, so
+# an index goes stale between find and click). Climb to the FIRST ancestor holding BOTH participants, then guard
+# that it's a single match block (a handful of odds buttons) — NOT a league/board section that merely contains
+# both names among 20 other matches. Without that guard a busy board matched EVERY button (114 candidates) and
+# the probe never reached the target. From the real DOM: a match block holds ~6 market-btns; a league holds
+# dozens. (measured 2026-07-28)
 _ROW_MATCH_JS = r"""
 (el, a) => {
   const norm = (s) => (s || "").toLowerCase().replace(/\s+/g, " ");
+  const cap = a.maxBtns || 10;
   let row = el, hops = 0;
   while (row && hops++ < 9) {
     const t = norm(row.textContent || "");
-    if (t.includes(a.A) && t.includes(a.B)) return true;
+    if (t.includes(a.A) && t.includes(a.B)) {
+      // first ancestor with both names → accept only if it's match-sized, not a multi-match container
+      return row.querySelectorAll("button.market-btn").length <= cap;
+    }
     row = row.parentElement;
   }
   return false;
@@ -2095,7 +2102,7 @@ class PinnacleAdapter(BookAdapter):
             for h in handles:
                 keep = False
                 try:
-                    keep = bool(await h.evaluate(_ROW_MATCH_JS, {"A": A, "B": B}))
+                    keep = bool(await h.evaluate(_ROW_MATCH_JS, {"A": A, "B": B, "maxBtns": 10}))
                 except Exception:
                     keep = False
                 if keep:
@@ -2128,7 +2135,7 @@ class PinnacleAdapter(BookAdapter):
         tried = []
         result = {"ok": False, "error": "no candidate matched"}
         try:
-            for h in cands[:14]:
+            for h in cands[:20]:
                 if not await self._human_click_loc(page, h):  # REAL mouse click on the actual element
                     tried.append("no box")
                     continue
