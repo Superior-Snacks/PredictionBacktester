@@ -151,13 +151,20 @@ _UI_READ_POPOVER = r"""
 _ROW_MATCH_JS = r"""
 (el, a) => {
   const norm = (s) => (s || "").toLowerCase().replace(/\s+/g, " ");
+  const isOdds = (b) => /\d{1,3}\.\d{2,3}/.test(b.textContent || "");
+  // ONLY odds buttons: they show a decimal price. The player-NAME and match-title elements carry the same
+  // `market-btn` class but no price — clicking them opens the side bet-slip / navigates to the match page, not
+  // the Quick Bet. Skipping them keeps the probe on real odds. (seen 2026-07-28: bot clicked player names first)
+  if (!isOdds(el)) return false;
   const cap = a.maxBtns || 10;
   let row = el, hops = 0;
   while (row && hops++ < 9) {
     const t = norm(row.textContent || "");
     if (t.includes(a.A) && t.includes(a.B)) {
-      // first ancestor with both names → accept only if it's match-sized, not a multi-match container
-      return row.querySelectorAll("button.market-btn").length <= cap;
+      // first ancestor with both names → accept only if it's match-sized (count ODDS buttons only, so
+      // player-name buttons don't inflate the match-vs-league test), not a multi-match container
+      const odds = Array.from(row.querySelectorAll("button.market-btn")).filter(isOdds).length;
+      return odds <= cap;
     }
     row = row.parentElement;
   }

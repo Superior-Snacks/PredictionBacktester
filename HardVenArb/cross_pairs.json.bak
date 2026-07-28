@@ -486,8 +486,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "221514:1632949570:home",
+    "hardven_no_token": "221514:1632949570:away",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/wta-125k-vancouver-r1/matchups/",
+    "hardven_start_time": "2026-07-28T21:00:00Z"
   },
   {
     "kalshi_ticker": "KXWTACHALLENGERMATCH-26JUL26BREVAG-BRE",
@@ -544,8 +546,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "221514:1632942031:away",
+    "hardven_no_token": "221514:1632942031:home",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/wta-125k-vancouver-r1/matchups/",
+    "hardven_start_time": "2026-07-28T23:00:00Z"
   },
   {
     "kalshi_ticker": "KXWTACHALLENGERMATCH-26JUL26DARCRO-CRO",
@@ -602,8 +606,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "221514:1632949569:home",
+    "hardven_no_token": "221514:1632949569:away",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/wta-125k-vancouver-r1/matchups/",
+    "hardven_start_time": "2026-07-28T19:00:00Z"
   },
   {
     "kalshi_ticker": "KXWTACHALLENGERMATCH-26JUL26JONZHA-JON",
@@ -1044,8 +1050,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "9336:1632977517:away",
+    "hardven_no_token": "9336:1632977517:home",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/atp-challenger-vancouver-r1/matchups/",
+    "hardven_start_time": "2026-07-29T00:30:00Z"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL27BONBIC-BIC",
@@ -1072,8 +1080,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "9336:1632977648:home",
+    "hardven_no_token": "9336:1632977648:away",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/atp-challenger-vancouver-r1/matchups/",
+    "hardven_start_time": "2026-07-28T20:00:00Z"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL27HOLGRE-GRE",
@@ -1100,8 +1110,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "9336:1632977647:home",
+    "hardven_no_token": "9336:1632977647:away",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/atp-challenger-vancouver-r1/matchups/",
+    "hardven_start_time": "2026-07-28T21:30:00Z"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL27HSUMMO-HSU",
@@ -1128,8 +1140,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "9336:1632977644:away",
+    "hardven_no_token": "9336:1632977644:home",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/atp-challenger-vancouver-r1/matchups/",
+    "hardven_start_time": "2026-07-28T23:00:00Z"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL27MILVAN-MIL",
@@ -1156,8 +1170,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "199609:1633014396:away",
+    "hardven_no_token": "199609:1633014396:home",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/atp-challenger-vancouver-qualifiers/matchups/",
+    "hardven_start_time": "2026-07-28T17:00:00Z"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL27MOCBRO-BRO",
@@ -1184,8 +1200,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "9336:1632977515:home",
+    "hardven_no_token": "9336:1632977515:away",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/atp-challenger-vancouver-r1/matchups/",
+    "hardven_start_time": "2026-07-28T23:00:00Z"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL27PINSAM-PIN",
@@ -1212,8 +1230,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "9336:1632977926:away",
+    "hardven_no_token": "9336:1632977926:home",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/atp-challenger-vancouver-r1/matchups/",
+    "hardven_start_time": "2026-07-28T23:00:00Z"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL27RICLLA-LLA",
@@ -1240,8 +1260,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "9336:1632977925:home",
+    "hardven_no_token": "9336:1632977925:away",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/atp-challenger-vancouver-r1/matchups/",
+    "hardven_start_time": "2026-07-29T02:00:00Z"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL27SEKCHI-CHI",
@@ -1268,8 +1290,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "9336:1633011503:home",
+    "hardven_no_token": "9336:1633011503:away",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/atp-challenger-vancouver-r1/matchups/",
+    "hardven_start_time": "2026-07-28T21:30:00Z"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL27SWECHA-CHA",
@@ -1296,8 +1320,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "9336:1632977646:home",
+    "hardven_no_token": "9336:1632977646:away",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/atp-challenger-vancouver-r1/matchups/",
+    "hardven_start_time": "2026-07-28T20:00:00Z"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL27WENCAS-CAS",
@@ -1324,8 +1350,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "9336:1632977645:home",
+    "hardven_no_token": "9336:1632977645:away",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/atp-challenger-vancouver-r1/matchups/",
+    "hardven_start_time": "2026-07-28T23:00:00Z"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL27WOLZHA-WOL",
@@ -1404,8 +1432,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "9351:1632969110:away",
+    "hardven_no_token": "9351:1632969110:home",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/atp-challenger-liberec-r1/matchups/",
+    "hardven_start_time": "2026-07-28T14:15:00Z"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL28BITILK-BIT",
@@ -1432,8 +1462,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "288113:1633007141:away",
+    "hardven_no_token": "288113:1633007141:home",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/atp-challenger-samsun-r1/matchups/",
+    "hardven_start_time": "2026-07-28T15:15:00Z"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL28CANPEL-CAN",
@@ -1460,8 +1492,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "9401:1632949566:away",
+    "hardven_no_token": "9401:1632949566:home",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/atp-challenger-san-marino-r1/matchups/",
+    "hardven_start_time": "2026-07-28T18:30:00Z"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL28DAHMAR-DAH",
@@ -1488,8 +1522,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "236976:1632976457:away",
+    "hardven_no_token": "236976:1632976457:home",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/atp-challenger-bonn-r1/matchups/",
+    "hardven_start_time": "2026-07-28T16:00:00Z"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL28GENREI-GEN",
@@ -1516,8 +1552,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "236976:1632976453:away",
+    "hardven_no_token": "236976:1632976453:home",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/atp-challenger-bonn-r1/matchups/",
+    "hardven_start_time": "2026-07-28T13:45:00Z"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL28HARCHU-CHU",
@@ -1544,8 +1582,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "199609:1633014398:home",
+    "hardven_no_token": "199609:1633014398:away",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/atp-challenger-vancouver-qualifiers/matchups/",
+    "hardven_start_time": "2026-07-28T20:00:00Z"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL28MATTRO-MAT",
@@ -1572,8 +1612,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "199609:1633014397:away",
+    "hardven_no_token": "199609:1633014397:home",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/atp-challenger-vancouver-qualifiers/matchups/",
+    "hardven_start_time": "2026-07-28T18:30:00Z"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL28MONJOR-JOR",
@@ -1600,8 +1642,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "9401:1633005894:home",
+    "hardven_no_token": "9401:1633005894:away",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/atp-challenger-san-marino-r1/matchups/",
+    "hardven_start_time": "2026-07-28T16:30:00Z"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL28ROMVIR-ROM",
@@ -1628,8 +1672,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "9401:1632969158:away",
+    "hardven_no_token": "9401:1632969158:home",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/atp-challenger-san-marino-r1/matchups/",
+    "hardven_start_time": "2026-07-28T16:00:00Z"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL28RONNIC-NIC",
@@ -1656,8 +1702,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "9351:1633007545:home",
+    "hardven_no_token": "9351:1633007545:away",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/atp-challenger-liberec-r1/matchups/",
+    "hardven_start_time": "2026-07-28T15:15:00Z"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL28ZHULAN-LAN",
@@ -1684,8 +1732,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "199609:1633014303:home",
+    "hardven_no_token": "199609:1633014303:away",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/atp-challenger-vancouver-qualifiers/matchups/",
+    "hardven_start_time": "2026-07-28T17:00:00Z"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL28ZINPOL-POL",
@@ -1712,8 +1762,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "199609:1633014304:home",
+    "hardven_no_token": "199609:1633014304:away",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/atp-challenger-vancouver-qualifiers/matchups/",
+    "hardven_start_time": "2026-07-28T21:30:00Z"
   },
   {
     "kalshi_ticker": "KXITFMATCH-26JUL28ALBESC-ALB",
@@ -1792,8 +1844,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "236320:1633014374:home",
+    "hardven_no_token": "236320:1633014374:away",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-men-huamantla-r1/matchups/",
+    "hardven_start_time": "2026-07-28T17:30:00Z"
   },
   {
     "kalshi_ticker": "KXITFMATCH-26JUL28CORPLA-COR",
@@ -1820,8 +1874,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "214648:1633005321:away",
+    "hardven_no_token": "214648:1633005321:home",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-men-xativa-r1/matchups/",
+    "hardven_start_time": "2026-07-28T17:00:00Z"
   },
   {
     "kalshi_ticker": "KXITFMATCH-26JUL28DEAVOE-DEA",
@@ -1874,8 +1930,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "221462:1633023665:away",
+    "hardven_no_token": "221462:1633023665:home",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-men-aldershot-r1/matchups/",
+    "hardven_start_time": "2026-07-28T12:00:00Z"
   },
   {
     "kalshi_ticker": "KXITFMATCH-26JUL28DUSFIL-DUS",
@@ -2032,8 +2090,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "214638:1633011533:home",
+    "hardven_no_token": "214638:1633011533:away",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-men-bolzano-r1/matchups/",
+    "hardven_start_time": "2026-07-28T14:07:00Z"
   },
   {
     "kalshi_ticker": "KXITFMATCH-26JUL28LESMEN-LES",
@@ -2138,8 +2198,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "214638:1632999038:away",
+    "hardven_no_token": "214638:1632999038:home",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-men-bolzano-r1/matchups/",
+    "hardven_start_time": "2026-07-28T17:11:00Z"
   },
   {
     "kalshi_ticker": "KXITFMATCH-26JUL28NAGBRA-BRA",
@@ -2192,8 +2254,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "227326:1633014334:away",
+    "hardven_no_token": "227326:1633014334:home",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-men-sao-paulo-r1/matchups/",
+    "hardven_start_time": "2026-07-28T18:21:00Z"
   },
   {
     "kalshi_ticker": "KXITFMATCH-26JUL28OSOCHA-CHA",
@@ -2220,8 +2284,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "227326:1633014249:home",
+    "hardven_no_token": "227326:1633014249:away",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-men-sao-paulo-r1/matchups/",
+    "hardven_start_time": "2026-07-28T17:30:00Z"
   },
   {
     "kalshi_ticker": "KXITFMATCH-26JUL28PATPAL-PAL",
@@ -2274,8 +2340,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "214638:1633006033:home",
+    "hardven_no_token": "214638:1633006033:away",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-men-bolzano-r1/matchups/",
+    "hardven_start_time": "2026-07-28T14:41:00Z"
   },
   {
     "kalshi_ticker": "KXITFMATCH-26JUL28PERZAH-PER",
@@ -2302,8 +2370,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "214613:1633009762:away",
+    "hardven_no_token": "214613:1633009762:home",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-men-wetzlar-r1/matchups/",
+    "hardven_start_time": "2026-07-28T14:30:00Z"
   },
   {
     "kalshi_ticker": "KXITFMATCH-26JUL28RODBRU-BRU",
@@ -2330,8 +2400,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "236320:1633011547:home",
+    "hardven_no_token": "236320:1633011547:away",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-men-huamantla-r1/matchups/",
+    "hardven_start_time": "2026-07-28T17:30:00Z"
   },
   {
     "kalshi_ticker": "KXITFMATCH-26JUL28RODGAM-GAM",
@@ -2384,34 +2456,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
-    "kalshi_ticker": "KXITFMATCH-26JUL28ROUSTR-ROU",
-    "label": "Will Felix Roussel win the Roussel vs Strode: M15 Huamantla Round of 32 match?",
-    "event_title": "Roussel vs Strode",
-    "kalshi_outcome": "Felix Roussel",
-    "event_id": "KXITFMATCH-26JUL28ROUSTR",
-    "settlement_date": "2026-07-28",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
-    "kalshi_ticker": "KXITFMATCH-26JUL28ROUSTR-STR",
-    "label": "Will Elijah Strode win the Roussel vs Strode: M15 Huamantla Round of 32 match?",
-    "event_title": "Roussel vs Strode",
-    "kalshi_outcome": "Elijah Strode",
-    "event_id": "KXITFMATCH-26JUL28ROUSTR",
-    "settlement_date": "2026-07-28",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "227326:1633011506:home",
+    "hardven_no_token": "227326:1633011506:away",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-men-sao-paulo-r1/matchups/",
+    "hardven_start_time": "2026-07-28T17:30:00Z"
   },
   {
     "kalshi_ticker": "KXITFMATCH-26JUL28SEIWOE-SEI",
@@ -2464,34 +2512,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
-    "kalshi_ticker": "KXITFMATCH-26JUL28TABSPI-SPI",
-    "label": "Will Denis Constantin Spiridon win the Tabacco vs Spiridon: M25 Bolzano Round of 32 match?",
-    "event_title": "Tabacco vs Spiridon",
-    "kalshi_outcome": "Denis Constantin Spiridon",
-    "event_id": "KXITFMATCH-26JUL28TABSPI",
-    "settlement_date": "2026-07-28",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
-    "kalshi_ticker": "KXITFMATCH-26JUL28TABSPI-TAB",
-    "label": "Will Giorgio Tabacco win the Tabacco vs Spiridon: M25 Bolzano Round of 32 match?",
-    "event_title": "Tabacco vs Spiridon",
-    "kalshi_outcome": "Giorgio Tabacco",
-    "event_id": "KXITFMATCH-26JUL28TABSPI",
-    "settlement_date": "2026-07-28",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "227326:1633006001:home",
+    "hardven_no_token": "227326:1633006001:away",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-men-sao-paulo-r1/matchups/",
+    "hardven_start_time": "2026-07-28T17:30:00Z"
   },
   {
     "kalshi_ticker": "KXITFMATCH-26JUL28TALMON-MON",
@@ -2648,8 +2672,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "237957:1633014300:away",
+    "hardven_no_token": "237957:1633014300:home",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-women-huamantla-r1/matchups/",
+    "hardven_start_time": "2026-07-28T17:30:00Z"
   },
   {
     "kalshi_ticker": "KXITFWMATCH-26JUL28ANGCRO-ANG",
@@ -2702,8 +2728,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "9411:1633011618:away",
+    "hardven_no_token": "9411:1633011618:home",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-women-hechingen-r1/matchups/",
+    "hardven_start_time": "2026-07-28T15:30:00Z"
   },
   {
     "kalshi_ticker": "KXITFWMATCH-26JUL28BULVIG-BUL",
@@ -2756,8 +2784,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "10067:1633011557:away",
+    "hardven_no_token": "10067:1633011557:home",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-women-florence-r1/matchups/",
+    "hardven_start_time": "2026-07-28T17:30:00Z"
   },
   {
     "kalshi_ticker": "KXITFWMATCH-26JUL28CLAFOS-CLA",
@@ -2784,8 +2814,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "237957:1633014299:away",
+    "hardven_no_token": "237957:1633014299:home",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-women-huamantla-r1/matchups/",
+    "hardven_start_time": "2026-07-28T17:30:00Z"
   },
   {
     "kalshi_ticker": "KXITFWMATCH-26JUL28COLKOI-COL",
@@ -2812,8 +2844,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "221070:1633011550:away",
+    "hardven_no_token": "221070:1633011550:home",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-women-lexington-r1/matchups/",
+    "hardven_start_time": "2026-07-28T17:00:00Z"
   },
   {
     "kalshi_ticker": "KXITFWMATCH-26JUL28DIGMIK-DIG",
@@ -2840,8 +2874,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "273492:1633018784:away",
+    "hardven_no_token": "273492:1633018784:home",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-women-knokke-heist-r1/matchups/",
+    "hardven_start_time": "2026-07-28T16:00:00Z"
   },
   {
     "kalshi_ticker": "KXITFWMATCH-26JUL28ELJSIM-ELJ",
@@ -2894,8 +2930,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "227189:1633011584:away",
+    "hardven_no_token": "227189:1633011584:home",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-women-gran-canaria-r1/matchups/",
+    "hardven_start_time": "2026-07-28T16:30:00Z"
   },
   {
     "kalshi_ticker": "KXITFWMATCH-26JUL28HERMAN-HER",
@@ -2922,8 +2960,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "10067:1633031151:away",
+    "hardven_no_token": "10067:1633031151:home",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-women-florence-r1/matchups/",
+    "hardven_start_time": "2026-07-28T15:30:00Z"
   },
   {
     "kalshi_ticker": "KXITFWMATCH-26JUL28HRDMAR-HRD",
@@ -2950,8 +2990,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "237957:1633011561:away",
+    "hardven_no_token": "237957:1633011561:home",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-women-huamantla-r1/matchups/",
+    "hardven_start_time": "2026-07-28T17:30:00Z"
   },
   {
     "kalshi_ticker": "KXITFWMATCH-26JUL28IVAAKL-AKL",
@@ -2978,8 +3020,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "221070:1633014378:home",
+    "hardven_no_token": "221070:1633014378:away",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-women-lexington-r1/matchups/",
+    "hardven_start_time": "2026-07-28T17:00:00Z"
   },
   {
     "kalshi_ticker": "KXITFWMATCH-26JUL28JAUDAN-DAN",
@@ -3006,8 +3050,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "10067:1633031161:home",
+    "hardven_no_token": "10067:1633031161:away",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-women-florence-r1/matchups/",
+    "hardven_start_time": "2026-07-28T15:30:00Z"
   },
   {
     "kalshi_ticker": "KXITFWMATCH-26JUL28JEOPRE-JEO",
@@ -3034,8 +3080,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "221070:1633031124:away",
+    "hardven_no_token": "221070:1633031124:home",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-women-lexington-r1/matchups/",
+    "hardven_start_time": "2026-07-28T16:00:00Z"
   },
   {
     "kalshi_ticker": "KXITFWMATCH-26JUL28KONALV-ALV",
@@ -3088,8 +3136,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "221070:1633014376:home",
+    "hardven_no_token": "221070:1633014376:away",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-women-lexington-r1/matchups/",
+    "hardven_start_time": "2026-07-28T17:00:00Z"
   },
   {
     "kalshi_ticker": "KXITFWMATCH-26JUL28LAREST-EST",
@@ -3220,8 +3270,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "10067:1633014295:home",
+    "hardven_no_token": "10067:1633014295:away",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-women-florence-r1/matchups/",
+    "hardven_start_time": "2026-07-28T17:30:00Z"
   },
   {
     "kalshi_ticker": "KXITFWMATCH-26JUL28SAFPRI-PRI",
@@ -3248,8 +3300,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "237957:1633014390:home",
+    "hardven_no_token": "237957:1633014390:away",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-women-huamantla-r1/matchups/",
+    "hardven_start_time": "2026-07-28T17:30:00Z"
   },
   {
     "kalshi_ticker": "KXITFWMATCH-26JUL28SAIPER-PER",
@@ -3276,8 +3330,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "221070:1633011551:home",
+    "hardven_no_token": "221070:1633011551:away",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-women-lexington-r1/matchups/",
+    "hardven_start_time": "2026-07-28T17:00:00Z"
   },
   {
     "kalshi_ticker": "KXITFWMATCH-26JUL28SCHGOB-GOB",
@@ -3434,8 +3490,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "10067:1633014385:home",
+    "hardven_no_token": "10067:1633014385:away",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-women-florence-r1/matchups/",
+    "hardven_start_time": "2026-07-28T17:30:00Z"
   },
   {
     "kalshi_ticker": "KXITFWMATCH-26JUL28ZORROM-ROM",
@@ -3518,8 +3576,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "221514:1633025354:away",
+    "hardven_no_token": "221514:1633025354:home",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/wta-125k-vancouver-r1/matchups/",
+    "hardven_start_time": "2026-07-28T21:30:00Z"
   },
   {
     "kalshi_ticker": "KXWTACHALLENGERMATCH-26JUL28UCHKUR-KUR",
@@ -3546,8 +3606,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "221514:1633025353:home",
+    "hardven_no_token": "221514:1633025353:away",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/wta-125k-vancouver-r1/matchups/",
+    "hardven_start_time": "2026-07-28T20:00:00Z"
   },
   {
     "kalshi_ticker": "KXWTAMATCH-26JUL28BUCKUD-BUC",
@@ -3660,8 +3722,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "197382:1633006076:away",
+    "hardven_no_token": "197382:1633006076:home",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/atp-los-cabos-r1/matchups/",
+    "hardven_start_time": "2026-07-29T01:00:00Z"
   },
   {
     "kalshi_ticker": "KXATPMATCH-26JUL28KWONGEA-GEA",
@@ -3688,8 +3752,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "197382:1632984248:home",
+    "hardven_no_token": "197382:1632984248:away",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/atp-los-cabos-r1/matchups/",
+    "hardven_start_time": "2026-07-29T02:30:00Z"
   },
   {
     "kalshi_ticker": "KXATPMATCH-26JUL28MAYDUC-DUC",
@@ -3716,8 +3782,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "197382:1632984249:home",
+    "hardven_no_token": "197382:1632984249:away",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/atp-los-cabos-r1/matchups/",
+    "hardven_start_time": "2026-07-29T01:00:00Z"
   },
   {
     "kalshi_ticker": "KXATPMATCH-26JUL29ATMTAB-ATM",
@@ -3744,8 +3812,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "4357:1633006080:away",
+    "hardven_no_token": "4357:1633006080:home",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/atp-washington-r16/matchups/",
+    "hardven_start_time": "2026-07-29T14:00:00Z"
   },
   {
     "kalshi_ticker": "KXATPMATCH-26JUL29VUKMUS-MUS",
@@ -3772,8 +3842,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "4357:1633005954:home",
+    "hardven_no_token": "4357:1633005954:away",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/atp-washington-r16/matchups/",
+    "hardven_start_time": "2026-07-29T14:00:00Z"
   },
   {
     "kalshi_ticker": "KXITFMATCH-26JUL28BEAVII-BEA",
@@ -3800,8 +3872,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "232635:1633025335:away",
+    "hardven_no_token": "232635:1633025335:home",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-men-brisbane-r1/matchups/",
+    "hardven_start_time": "2026-07-29T01:00:00Z"
   },
   {
     "kalshi_ticker": "KXITFMATCH-26JUL28BRUKOM-BRU",
@@ -3828,8 +3902,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "237513:1633005256:away",
+    "hardven_no_token": "237513:1633005256:home",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-men-bali-r1/matchups/",
+    "hardven_start_time": "2026-07-29T02:00:00Z"
   },
   {
     "kalshi_ticker": "KXITFMATCH-26JUL28CHADEL-CHA",
@@ -3856,8 +3932,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "232635:1632999053:away",
+    "hardven_no_token": "232635:1632999053:home",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-men-brisbane-r1/matchups/",
+    "hardven_start_time": "2026-07-29T01:00:00Z"
   },
   {
     "kalshi_ticker": "KXITFMATCH-26JUL28CHAHEI-CHA",
@@ -3884,8 +3962,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "237513:1632999051:away",
+    "hardven_no_token": "237513:1632999051:home",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-men-bali-r1/matchups/",
+    "hardven_start_time": "2026-07-29T03:30:00Z"
   },
   {
     "kalshi_ticker": "KXITFMATCH-26JUL28DELTAK-DEL",
@@ -3912,8 +3992,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "232635:1633005259:away",
+    "hardven_no_token": "232635:1633005259:home",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-men-brisbane-r1/matchups/",
+    "hardven_start_time": "2026-07-29T00:00:00Z"
   },
   {
     "kalshi_ticker": "KXITFMATCH-26JUL28IBRMAR-IBR",
@@ -3940,8 +4022,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "232635:1632999642:away",
+    "hardven_no_token": "232635:1632999642:home",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-men-brisbane-r1/matchups/",
+    "hardven_start_time": "2026-07-29T00:00:00Z"
   },
   {
     "kalshi_ticker": "KXITFMATCH-26JUL28JOVATK-ATK",
@@ -3968,8 +4052,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "232635:1633025386:home",
+    "hardven_no_token": "232635:1633025386:away",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-men-brisbane-r1/matchups/",
+    "hardven_start_time": "2026-07-29T00:00:00Z"
   },
   {
     "kalshi_ticker": "KXITFMATCH-26JUL28LAZCRI-CRI",
@@ -4022,8 +4108,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "237513:1632999638:home",
+    "hardven_no_token": "237513:1632999638:away",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-men-bali-r1/matchups/",
+    "hardven_start_time": "2026-07-29T01:00:00Z"
   },
   {
     "kalshi_ticker": "KXITFMATCH-26JUL28MCLMEH-MCL",
@@ -4050,8 +4138,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "232635:1633025356:away",
+    "hardven_no_token": "232635:1633025356:home",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-men-brisbane-r1/matchups/",
+    "hardven_start_time": "2026-07-29T01:00:00Z"
   },
   {
     "kalshi_ticker": "KXITFMATCH-26JUL28NIRVEN-NIR",
@@ -4078,8 +4168,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "237513:1633006052:away",
+    "hardven_no_token": "237513:1633006052:home",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-men-bali-r1/matchups/",
+    "hardven_start_time": "2026-07-29T01:00:00Z"
   },
   {
     "kalshi_ticker": "KXITFMATCH-26JUL28PADSAT-PAD",
@@ -4106,8 +4198,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "232635:1633014445:away",
+    "hardven_no_token": "232635:1633014445:home",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-men-brisbane-r1/matchups/",
+    "hardven_start_time": "2026-07-29T02:30:00Z"
   },
   {
     "kalshi_ticker": "KXITFMATCH-26JUL28SIKCHA-CHA",
@@ -4134,8 +4228,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "232635:1633031051:home",
+    "hardven_no_token": "232635:1633031051:away",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-men-brisbane-r1/matchups/",
+    "hardven_start_time": "2026-07-29T02:15:00Z"
   },
   {
     "kalshi_ticker": "KXITFMATCH-26JUL28STEOCO-OCO",
@@ -4162,8 +4258,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "232635:1633025334:home",
+    "hardven_no_token": "232635:1633025334:away",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-men-brisbane-r1/matchups/",
+    "hardven_start_time": "2026-07-29T01:00:00Z"
   },
   {
     "kalshi_ticker": "KXITFMATCH-26JUL28STOSUR-STO",
@@ -4190,8 +4288,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "237513:1633005255:away",
+    "hardven_no_token": "237513:1633005255:home",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-men-bali-r1/matchups/",
+    "hardven_start_time": "2026-07-29T01:00:00Z"
   },
   {
     "kalshi_ticker": "KXITFMATCH-26JUL28SUSTRI-SUS",
@@ -4218,8 +4318,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "237513:1632999050:away",
+    "hardven_no_token": "237513:1632999050:home",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-men-bali-r1/matchups/",
+    "hardven_start_time": "2026-07-29T02:00:00Z"
   },
   {
     "kalshi_ticker": "KXITFMATCH-26JUL28TOMBEC-BEC",
@@ -4246,8 +4348,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "237513:1633005254:home",
+    "hardven_no_token": "237513:1633005254:away",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-men-bali-r1/matchups/",
+    "hardven_start_time": "2026-07-29T02:00:00Z"
   },
   {
     "kalshi_ticker": "KXITFMATCH-26JUL28VOLBOU-BOU",
@@ -4274,8 +4378,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "232635:1633014444:home",
+    "hardven_no_token": "232635:1633014444:away",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-men-brisbane-r1/matchups/",
+    "hardven_start_time": "2026-07-29T00:00:00Z"
   },
   {
     "kalshi_ticker": "KXITFMATCH-26JUL28WENJON-JON",
@@ -4328,8 +4434,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "232635:1633005257:home",
+    "hardven_no_token": "232635:1633005257:away",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-men-brisbane-r1/matchups/",
+    "hardven_start_time": "2026-07-29T02:30:00Z"
   },
   {
     "kalshi_ticker": "KXITFMATCH-26JUL29RATDAC-DAC",
@@ -4356,8 +4464,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "237513:1632999637:home",
+    "hardven_no_token": "237513:1632999637:away",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-men-bali-r1/matchups/",
+    "hardven_start_time": "2026-07-29T04:30:00Z"
   },
   {
     "kalshi_ticker": "KXITFWMATCH-26JUL28APISYM-API",
@@ -4514,8 +4624,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "191958:1633005287:away",
+    "hardven_no_token": "191958:1633005287:home",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-women-brisbane-r1/matchups/",
+    "hardven_start_time": "2026-07-29T00:00:00Z"
   },
   {
     "kalshi_ticker": "KXITFWMATCH-26JUL28TSACOO-COO",
@@ -4594,8 +4706,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "191958:1633006017:home",
+    "hardven_no_token": "191958:1633006017:away",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-women-brisbane-r1/matchups/",
+    "hardven_start_time": "2026-07-29T01:00:00Z"
   },
   {
     "kalshi_ticker": "KXITFWMATCH-26JUL28WANTHO-THO",
@@ -4622,8 +4736,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "191958:1633005286:home",
+    "hardven_no_token": "191958:1633005286:away",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-women-brisbane-r1/matchups/",
+    "hardven_start_time": "2026-07-29T02:30:00Z"
   },
   {
     "kalshi_ticker": "KXITFWMATCH-26JUL28YANLIN-LIN",
@@ -4650,8 +4766,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "191958:1633006016:home",
+    "hardven_no_token": "191958:1633006016:away",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-women-brisbane-r1/matchups/",
+    "hardven_start_time": "2026-07-29T02:30:00Z"
   },
   {
     "kalshi_ticker": "KXWTACHALLENGERMATCH-26JUL28WONSAK-SAK",
@@ -4756,8 +4874,10 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
+    "hardven_yes_token": "5005:1633005914:home",
+    "hardven_no_token": "5005:1633005914:away",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/wta-washington-r16/matchups/",
+    "hardven_start_time": "2026-07-29T14:00:00Z"
   },
   {
     "kalshi_ticker": "KXWTAMATCH-26JUL29OSOZAK-OSO",
