@@ -24,6 +24,18 @@
     "hardven_no_token": "4356:1632981710:spread:1.5:away"
   },
   {
+    "kalshi_ticker": "KXATPGSPREAD-26JUL27MAJPAU-MAJ2",
+    "market_type": "spread",
+    "line": 1.5,
+    "label": "Kamil Majchrzak vs Tommy Paul \u2014 Kamil Majchrzak -1.5",
+    "event_id": "KXATPGSPREAD-26JUL27MAJPAU",
+    "settlement_date": "2026-07-27",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "4356:1632981719:spread:-1.5:home",
+    "hardven_no_token": "4356:1632981719:spread:1.5:away"
+  },
+  {
     "kalshi_ticker": "KXATPGSPREAD-26JUL27MANTIE-TIE4",
     "market_type": "spread",
     "line": 3.5,

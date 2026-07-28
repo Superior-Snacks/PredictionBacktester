@@ -52,11 +52,14 @@ def _cubic(p0, p1, p2, p3, t: float):
 class OrganicActivity:
     def __init__(self, page, browse_urls: list[str] | None = None,
                  min_gap: float = 20.0, max_gap: float = 150.0,
-                 long_gap_chance: float = 0.10, long_gap_max: float = 240.0):   # cap the "stepped away" gap at 4m
+                 long_gap_chance: float = 0.10, long_gap_max: float = 240.0,   # cap the "stepped away" gap at 4m
+                 trim_fn=None):
                  # ↑ keepalive-critical: the ~30-min idle logout means an interaction must land well inside 30m.
                  # A 15-min long gap (old default 900) could time it out on its own → capped to 4m.
         self._page = page
         self._urls = list(browse_urls or [])
+        self._trim_fn = trim_fn          # async(page, source) -> clears the board's side betslip if a Remove-all
+                                         # button is present (safe: only PENDING cards). None = off.
         # sport slugs parsed from the browse URLs (…/en/<sport>/…) → click the sport nav to flip between them
         # (a real soft-navigation, and a genuine CLICK — the interaction Pinnacle's ~30-min idle logout counts).
         self._sports: list[tuple[str, str]] = []
@@ -260,6 +263,13 @@ class OrganicActivity:
                 await self._human_move(*self._pick_target())
         except Exception:
             name = "error"
+        # Always tidy the board's side betslip (no-op read when empty) — clears any stray selection left by a
+        # manual click / earlier misfire. Gate-checked so it never runs into a bet; pure cleanup, never crashes.
+        if self._trim_fn is not None and self._gate.is_set():
+            try:
+                await self._trim_fn(self._page, source="idle")
+            except Exception:
+                pass
         self.actions[name] += 1
         return name
 
@@ -296,10 +306,13 @@ class TabOrganic:
     """
 
     def __init__(self, tabs_fn, close_js: str, open_probe_js: str,
-                 min_gap: float = 30.0, max_gap: float = 90.0, popover_chance: float = 0.15):
+                 min_gap: float = 30.0, max_gap: float = 90.0, popover_chance: float = 0.15,
+                 trim_fn=None):
         self._tabs_fn = tabs_fn                  # callable() -> list[(page, lid|None)] of live reader tabs
         self._close_js = close_js                # JS that clicks only the popover's Remove/X (never Place Bet)
         self._open_js = open_probe_js            # JS that clicks a random odds button (opens popover only)
+        self._trim_fn = trim_fn                  # async(page, source) -> clears the side betslip if the Remove-all
+                                                 # button is present (safe: only PENDING cards). None = off.
         self._min_gap, self._max_gap = min_gap, max_gap
         self._popover_chance = max(0.0, min(1.0, popover_chance))
         self._gate = asyncio.Event()
@@ -381,6 +394,14 @@ class TabOrganic:
                 name = "glance"                               # the bring_to_front alone
         except Exception:
             name = "error"
+        # Always tidy THIS tab's side betslip while we're looking at it (no-op read when it's empty). Catches any
+        # stray selection a misfire dropped in — including one the popover gesture above may have left. Gate-checked
+        # so it never runs into a bet; pure cleanup, never lets a hiccup break the loop.
+        if self._trim_fn is not None and self._gate.is_set():
+            try:
+                await self._trim_fn(page, source="idle")
+            except Exception:
+                pass
         self.actions[name] += 1
         return name
 

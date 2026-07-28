@@ -259,6 +259,22 @@ _UI_CLOSE_JS = r"""
 }
 """
 
+# Read the SIDE betslip's state so _trim_betslip knows whether there is anything to clear and whether the
+# confirm modal is showing. Reads only -- clicks are done as REAL mouse actions (Locators), never here, so this
+# eval can never remove a selection or dismiss a dialog by itself. Test-ids captured from a real Remove-all flow
+# (bet_capture 2026-07-28): Betslip-RemoveAllButton, Betslip-RemoveAllModal(+ -ConfirmButton/-CancelButton).
+_BETSLIP_STATE_JS = r"""
+() => {
+  const q = (s) => document.querySelector(s);
+  return {
+    hasRemoveAll: !!q('[data-test-id="Betslip-RemoveAllButton"]'),
+    cards: document.querySelectorAll('[data-test-id="Betslip-Card"]').length,
+    modalOpen: !!q('[data-test-id="Betslip-RemoveAllModal"]'),
+    confirmReady: !!q('[data-test-id="Betslip-RemoveAllModal-ConfirmButton"]'),
+  };
+}
+"""
+
 # Per-tab organic ONLY. Clicks a random odds button, which merely OPENS the Quick Bet popover (places nothing).
 # Deliberately references NO stake input and NO Place Bet control, so the organic open+dismiss gesture cannot
 # submit a bet. The popover is closed again by _UI_CLOSE_JS.
@@ -432,6 +448,9 @@ class PinnacleAdapter(BookAdapter):
             self._max_stake = float(os.environ.get("HARDVEN_MAX_STAKE") or 10.0)
         except ValueError:
             self._max_stake = 10.0
+        # Post-bet hygiene: sweep stray selections out of the SIDE betslip via its 'Remove all' -> confirm flow
+        # (probing/misfires can drop selections there). On by default; disable with HARDVEN_BETSLIP_TRIM=0.
+        self._betslip_trim = os.environ.get("HARDVEN_BETSLIP_TRIM", "1") != "0"
         self._bet_lock = asyncio.Lock()
         # LIFECYCLE: opt-in schedule-driven open/close of the browser (human session rhythm). Off = hold open.
         self._lifecycle_on = os.environ.get("PINNACLE_LIFECYCLE") == "1"
@@ -509,7 +528,8 @@ class PinnacleAdapter(BookAdapter):
                 from pinnacle_session import PinnacleBrowserSession
                 self._browser = PinnacleBrowserSession(
                     self._on_browser_creds,
-                    on_odds=self._on_browser_odds if self._window_ws_read else None)
+                    on_odds=self._on_browser_odds if self._window_ws_read else None,
+                    on_idle_trim=self._trim_betslip)
                 if self._lifecycle_on:
                     # schedule-driven: the lifecycle task opens/closes the browser per the game windows (the
                     # window opens it the first time too — don't start it here). Stays dark until the first one.
@@ -554,7 +574,7 @@ class PinnacleAdapter(BookAdapter):
                                 pop_chance = 0.15
                             self._tab_organic = TabOrganic(
                                 self._tab_manager.reader_tabs, _UI_CLOSE_JS, _UI_RANDOM_OPEN_JS,
-                                popover_chance=pop_chance)
+                                popover_chance=pop_chance, trim_fn=self._trim_betslip)
                             self._tab_organic.start()
                     elif self._tab_manager_on:
                         print("[PINNACLE] HARDVEN_TAB_MANAGER=1 needs PINNACLE_WINDOW_WS_READ=1 (the reader) to be "
@@ -1910,6 +1930,12 @@ class PinnacleAdapter(BookAdapter):
                     page.remove_listener("response", _on_resp)
                 except Exception:
                     pass
+                # Post-bet hygiene: clear any stray selection probing left in the side betslip. Runs while organic
+                # is STILL paused (resume is below), so nothing fights the trim clicks. Never affects the result.
+                try:
+                    await self._trim_betslip(page, source="post-bet")
+                except Exception as e:
+                    print(f"[PINNACLE BET] betslip trim skipped: {e}")
             self._resume_all_organic()
 
     async def verify_bet_ui(self, selection_id: str, stake: float, max_odds: float,
@@ -2245,6 +2271,77 @@ class PinnacleAdapter(BookAdapter):
         page = await self._browser.open_tab(url)
         self._bet_page = page
         return page
+
+    async def _trim_betslip(self, page, source: str = "post-bet") -> dict:
+        """Sweep stray selections out of the SIDE betslip via its own 'Remove all' -> confirm-modal flow, then
+        verify the slip emptied. Called after every placement attempt (`source='post-bet'`) AND while the bot is
+        idly roaming tabs (`source='idle'`), so a stray selection never lingers -- probing / misfires / a manual
+        stray click can drop selections into the side slip, which then clutter it.
+
+        SAFE against real money. 'Remove all' only discards PENDING (unsubmitted) selection cards -- an accepted
+        bet lives server-side and is confirmed by its own POST /bets/straight 200, not by anything in this slip,
+        so trimming cannot cancel a placed bet. The button only exists while there ARE removable selections, so
+        an empty / accepted-only slip is a clean no-op. Real mouse clicks (not JS .click) for the same reason
+        odds buttons need them: the site's handlers expect a full pointer sequence. Pure cleanup -- every caller
+        swallows any exception so a trim hiccup can never change a BetResult or crash the organic loop."""
+        if not self._betslip_trim:
+            return {"trimmed": False, "reason": "disabled"}
+        if page is None:
+            return {"trimmed": False, "reason": "no page"}
+        try:
+            if page.is_closed():
+                return {"trimmed": False, "reason": "page closed"}
+        except Exception:
+            return {"trimmed": False, "reason": "page closed"}
+        try:
+            st = await page.evaluate(_BETSLIP_STATE_JS)
+        except Exception as e:
+            return {"trimmed": False, "reason": f"state read failed: {e}"}
+        if not st.get("hasRemoveAll"):
+            return {"trimmed": False, "reason": "nothing to remove", "cards": st.get("cards", 0)}
+
+        before = int(st.get("cards", 0) or 0)
+        # 1. click 'Remove all' (a real mouse action, consistent with the odds/Place Bet clicks)
+        ra = page.locator('[data-test-id="Betslip-RemoveAllButton"]').first
+        try:
+            if await ra.count() == 0:
+                return {"trimmed": False, "reason": "remove-all vanished"}
+        except Exception:
+            return {"trimmed": False, "reason": "remove-all query failed"}
+        if not await self._human_click_loc(page, ra):
+            return {"trimmed": False, "reason": "remove-all click failed"}
+
+        # 2. wait for the confirm modal, then click its Confirm (NEVER Cancel)
+        confirm = page.locator('[data-test-id="Betslip-RemoveAllModal-ConfirmButton"]').first
+        appeared = False
+        for _ in range(15):                     # modal renders fast; ~1.2s ceiling
+            await asyncio.sleep(0.08)
+            try:
+                if await confirm.count() > 0:
+                    appeared = True
+                    break
+            except Exception:
+                pass
+        if not appeared:
+            return {"trimmed": False, "reason": "confirm modal did not appear", "before": before}
+        if not await self._human_click_loc(page, confirm):
+            return {"trimmed": False, "reason": "confirm click failed", "before": before}
+
+        # 3. verify the slip actually emptied (modal gone AND cards cleared)
+        after = before
+        for _ in range(15):
+            await asyncio.sleep(0.08)
+            try:
+                st2 = await page.evaluate(_BETSLIP_STATE_JS)
+            except Exception:
+                break
+            after = int(st2.get("cards", after) or 0)
+            if not st2.get("modalOpen") and after == 0:
+                break
+        ok = after < before
+        print(f"[PINNACLE] betslip trim ({source}): cards {before} -> {after}"
+              + ("" if ok else " (WARNING: not cleared)"))
+        return {"trimmed": ok, "before": before, "after": after}
 
     def _pause_all_organic(self) -> None:
         """Freeze ALL human-activity loops for a bet: the primary tab's organic, the per-tab organic, and the

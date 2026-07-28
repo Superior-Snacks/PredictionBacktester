@@ -148,9 +148,11 @@ class PinnacleBrowserSession:
     session, device, api_key, ws_user, ws_pass, ready."""
 
     def __init__(self, on_creds: Callable[[dict], None],
-                 on_odds: Optional[Callable[[str, bytes], None]] = None) -> None:
+                 on_odds: Optional[Callable[[str, bytes], None]] = None,
+                 on_idle_trim: Optional[Callable] = None) -> None:
         self._on_creds = on_creds
         self._on_odds = on_odds                        # window-WS reader: called per odds PUBLISH (topic, payload)
+        self._on_idle_trim = on_idle_trim              # async(page, source) -> tidy the board's side betslip while idle
         self._login_url = os.environ.get("PINNACLE_LOGIN_URL", "https://www.pinnacle.bet/en/")
         # ABSOLUTE, module-anchored profile dir so the SAME saved profile is reused no matter what CWD the
         # sidecar is launched from (a CWD-relative ".pinnacle_profile" would silently fragment into a fresh
@@ -303,7 +305,8 @@ class PinnacleBrowserSession:
         # holds via the authed-REST keepalive, so this is a clean toggle for isolating the gestures in testing.
         if os.environ.get("PINNACLE_ORGANIC") != "0":
             from organic import OrganicActivity
-            self._organic = OrganicActivity(self._page, browse_urls=self._browse_urls, max_gap=self._activity_sec)
+            self._organic = OrganicActivity(self._page, browse_urls=self._browse_urls, max_gap=self._activity_sec,
+                                            trim_fn=self._on_idle_trim)
             sports = [s[0] for s in self._organic._sports]
             print(f"[PINNACLE ORGANIC] active — sports to flip: {sports or '(NONE — set PINNACLE_BROWSE_URLS to sport /matchups/ pages)'} | "
                   f"browse_urls={len(self._browse_urls)} | gaps ≤{self._activity_sec:g}s")
