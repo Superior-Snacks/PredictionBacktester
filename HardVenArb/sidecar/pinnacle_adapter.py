@@ -275,6 +275,25 @@ _BETSLIP_STATE_JS = r"""
 }
 """
 
+# Find a CURRENTLY-VISIBLE odds row to rest the cursor over before wheel-scrolling. A wheel event scrolls
+# whatever element is under the pointer; the featured board scrolls its OWN inner pane (not the page), so we must
+# put the cursor over that pane (a visible odds row is guaranteed inside it) or the wheel moves the wrong thing.
+# Returns the centre of the first visible `market-btn` (+ viewport dims), or found:false if none are on screen.
+_SCROLL_ANCHOR_JS = r"""
+() => {
+  const w = window.innerWidth, h = window.innerHeight;
+  const btns = document.querySelectorAll("button.market-btn");
+  for (const b of btns) {
+    const r = b.getBoundingClientRect();
+    const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+    if (r.width > 1 && r.height > 1 && cx > 0 && cx < w && cy > 70 && cy < h - 20) {
+      return {x: cx, y: cy, w: w, h: h, found: true};
+    }
+  }
+  return {x: null, y: null, w: w, h: h, found: false};
+}
+"""
+
 # Per-tab organic ONLY. Clicks a random odds button, which merely OPENS the Quick Bet popover (places nothing).
 # Deliberately references NO stake input and NO Place Bet control, so the organic open+dismiss gesture cannot
 # submit a bet. The popover is closed again by _UI_CLOSE_JS.
@@ -2072,7 +2091,28 @@ class PinnacleAdapter(BookAdapter):
         return True
 
     async def _human_scroll(self, page, notches: int = 1) -> None:
-        """A few small wheel notches (a person browsing), used to surface an off-screen / virtualised row."""
+        """A few small wheel notches (a person browsing), used to surface an off-screen / virtualised row.
+
+        HUMAN + CORRECT-PANE. A wheel event scrolls whatever is UNDER THE POINTER. The featured-board league view
+        scrolls its OWN inner pane, not the page — so wheeling from wherever the cursor happens to be would move
+        the wrong thing (often nothing) and the target row would never surface. A person rests the pointer over
+        the list before spinning the wheel; we do the same: curve the cursor onto a currently-visible odds row
+        (guaranteed inside the scroll pane) first. This both looks human and guarantees the wheel hits the pane
+        holding the games. Falls back to the content-area centre when no row is on screen. Position it ONCE — the
+        pane's on-screen location doesn't move as its content scrolls, so the cursor stays over it."""
+        try:
+            a = await page.evaluate(_SCROLL_ANCHOR_JS)
+        except Exception:
+            a = None
+        if a and a.get("found"):
+            # rest over the ROW BODY (nudge left of the odds button — still inside the pane, over no control)
+            tx = max(40.0, float(a["x"]) - random.uniform(20, 90))
+            ty = float(a["y"]) + random.uniform(-8, 8)
+            await self._human_move_page(page, tx, ty)
+        elif a and a.get("w"):
+            # no visible row (scrolled past the list / none rendered yet) — rest in the content area over the pane
+            await self._human_move_page(page, float(a["w"]) * random.uniform(0.35, 0.60),
+                                        float(a["h"]) * random.uniform(0.35, 0.60))
         for _ in range(random.randint(2, 5) * max(1, notches)):
             try:
                 await page.mouse.wheel(0, random.randint(120, 260))

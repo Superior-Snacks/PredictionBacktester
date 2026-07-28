@@ -49,6 +49,44 @@ def _cubic(p0, p1, p2, p3, t: float):
             a * p0[1] + b * p1[1] + c * p2[1] + d * p3[1])
 
 
+# A wheel event scrolls whatever is UNDER THE POINTER. The featured-board league view scrolls its OWN inner pane,
+# not the page — so an idle wheel-scroll from a random cursor spot moves the wrong thing (often nothing), which
+# is itself un-human (a visible no-op scroll). Before wheeling, rest the cursor over a currently-visible odds row
+# (guaranteed inside the pane). Same JS the placement sweep uses; kept local to avoid an organic<->adapter cycle.
+_SCROLL_ANCHOR_JS = r"""
+() => {
+  const w = window.innerWidth, h = window.innerHeight;
+  const btns = document.querySelectorAll("button.market-btn");
+  for (const b of btns) {
+    const r = b.getBoundingClientRect();
+    const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+    if (r.width > 1 && r.height > 1 && cx > 0 && cx < w && cy > 70 && cy < h - 20) {
+      return {x: cx, y: cy, w: w, h: h, found: true};
+    }
+  }
+  return {x: null, y: null, w: w, h: h, found: false};
+}
+"""
+
+
+async def _scroll_anchor_point(page):
+    """(x, y) over a visible odds row (inside the board's inner scroll pane) so a wheel hits THAT pane; a
+    content-area centre when no row is on screen; or None if the viewport can't be read. A normal full-page
+    league view has no inner pane, so wheeling over a row just scrolls the page — correct either way."""
+    try:
+        a = await page.evaluate(_SCROLL_ANCHOR_JS)
+    except Exception:
+        return None
+    if not a:
+        return None
+    if a.get("found"):
+        # rest over the ROW BODY (nudge left of the odds button — still inside the pane, over no control)
+        return (max(40.0, float(a["x"]) - random.uniform(20, 90)), float(a["y"]) + random.uniform(-8, 8))
+    if a.get("w"):
+        return (float(a["w"]) * random.uniform(0.35, 0.60), float(a["h"]) * random.uniform(0.35, 0.60))
+    return None
+
+
 class OrganicActivity:
     def __init__(self, page, browse_urls: list[str] | None = None,
                  min_gap: float = 20.0, max_gap: float = 150.0,
@@ -140,7 +178,11 @@ class OrganicActivity:
 
     async def _scroll_burst(self, total: int, direction: int) -> None:
         """Scroll `total` px as a HANDFUL of smaller wheel notches with variable gaps (a human spins the wheel /
-        flicks the trackpad repeatedly), not a single big deltaY jump."""
+        flicks the trackpad repeatedly), not a single big deltaY jump. Rest the cursor over the game list first,
+        so the wheel scrolls the featured board's OWN inner pane (not the page) — like a person would."""
+        pt = await _scroll_anchor_point(self._page)
+        if pt is not None and self._gate.is_set():
+            await self._human_move(pt[0], pt[1], clamp=False)
         remaining = total
         for _ in range(random.randint(3, 8)):
             if remaining <= 0 or not self._gate.is_set():        # stop scrolling the moment a bet pauses us
@@ -406,6 +448,10 @@ class TabOrganic:
         return name
 
     async def _scroll(self, page) -> None:
+        # rest over the game list first so the wheel scrolls the board's OWN inner pane (not the page)
+        pt = await _scroll_anchor_point(page)
+        if pt is not None and self._gate.is_set():
+            await self._move_to(page, pt[0], pt[1])
         for _ in range(random.randint(2, 5)):
             if not self._gate.is_set():
                 return
