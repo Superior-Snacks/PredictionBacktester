@@ -143,6 +143,17 @@ Each attempt auto-captures to `bet_capture_*.jsonl` (read with `python sidecar/b
 
 ## Stage 3 — dry-run execution + the new gates (paper, no money) (`--dry-run`, live sidecar)
 
+**Triggering arbs deterministically — the `I`/`O` inject keys (dry-run only).** The gates only run on a detected
+arb, and real pre-live arbs are scarce + you can't choose which side Kalshi holds. So dry-run has two inject keys
+that fire a *synthetic* arb through the **real** executor path (all gates, **simulated fills — no money**):
+- **`I`** = inject a **FAVOURITE**-on-Kalshi arb (kAsk 0.55) → should pass the favourite gate → ladder → fills.
+- **`O`** = inject an **UNDERDOG**-on-Kalshi arb (kAsk 0.45) → should hit the favourite-gate **skip** when it's ON.
+
+Each key picks an eligible **pre-live** pair whose 4 books are subscribed (so the pre-live gate passes and fresh
+books aren't stale-overridden — the gates trust the injected prices). If you see `inject: no eligible PRE-LIVE
+pair …`, wait for a tennis pair's books to go live and retry. Prereq for L13: raise `--max-bet` (≈$22) or every
+inject skips with `ladder: no valid rung`.
+
 | # | What | PASS | FAIL |
 |---|------|------|------|
 | L11 | Favorite-on-Kalshi gate | tennis arb with Kalshi holding the **underdog** → `[EXEC SKIP] … UNDERDOG on Kalshi` + journal `UNDERDOG_ON_KALSHI`; **favorite-side** arbs execute | an underdog-on-Kalshi tennis arb executes while the gate is ON |

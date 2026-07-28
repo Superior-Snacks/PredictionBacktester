@@ -37,6 +37,8 @@ using PredictionBacktester.Engine.LiveExecution;
 //    K   simulate WS reconnect            (dry-run only; closes arb windows, resumes after 500ms)
 //    E   inject 6 Kalshi REST errors      (dry-run only; triggers VENUE_MAINTENANCE halt at 5+)
 //    X   drop first pair's HardVen YES book  (dry-run only; simulates book-missing during recovery)
+//    I   inject a FAVOURITE-on-Kalshi test arb (dry-run only; fires the real gates on a pre-live pair, sim fills)
+//    O   inject an UNDERDOG-on-Kalshi test arb  (dry-run only; should hit the favourite-gate skip when it's ON)
 //
 //  --debug additional key toggles:
 //    G   toggle Discovery logs  — arb window detection events
@@ -641,6 +643,39 @@ _ = Task.Run(() =>
                         Console.WriteLine($"[KEYS] Removed HardVen YES book for {firstP.Label} — recovery will see missing book");
                     else
                         Console.WriteLine("[KEYS] No pair loaded or HardVen YES book not found in state.Books");
+                    break;
+                }
+                case ConsoleKey.I when isDryRun:   // inject a FAVOURITE-on-Kalshi test arb
+                case ConsoleKey.O when isDryRun:   // inject an UNDERDOG-on-Kalshi test arb
+                {
+                    // DRY-RUN gate tester: fire a synthetic arb through the REAL executor path (all gates,
+                    // simulated fills — no money) so L11/L13/L14 can be exercised without waiting for a real
+                    // window. Prices come from the detection event and the gates trust them (no WS re-read),
+                    // so kAsk chooses the side: >0.5 favourite (proceeds), <0.5 underdog (favourite-gate skip).
+                    if (executor == null) { Console.WriteLine("[KEYS] Executor not active — start --dry-run first"); break; }
+                    bool favorite = key == ConsoleKey.I;
+                    // Pick an eligible pair: not 3-way, all 4 books subscribed, and PRE-LIVE (so the pre-live gate
+                    // passes and fresh books aren't stale-REST-overridden, which would replace our chosen prices).
+                    CrossPair? inj = null;
+                    foreach (var p in pairs)
+                    {
+                        if (p.ThreeWay) continue;
+                        if (!state.Books.ContainsKey($"K:{p.KalshiTicker}") || !state.Books.ContainsKey($"K:{p.KalshiTicker}_NO")) continue;
+                        if (!state.Books.TryGetValue($"H:{p.HardVenYesTokenId}", out var yBook) || yBook.IsLive) continue;
+                        if (!state.Books.TryGetValue($"H:{p.HardVenNoTokenId}",  out var nBook) || nBook.IsLive) continue;
+                        inj = p; break;
+                    }
+                    if (inj == null)
+                    {
+                        Console.WriteLine("[KEYS] inject: no eligible PRE-LIVE pair with all 4 books subscribed right now — wait for a tennis pair to go live, then retry");
+                        break;
+                    }
+                    decimal kAsk = favorite ? 0.55m : 0.45m;   // Kalshi YES ask: >0.5 favourite, <0.5 underdog
+                    decimal pAsk = favorite ? 0.42m : 0.52m;   // net ~0.97 < 1.0 -> a genuine arb either way
+                    decimal net  = kAsk + pAsk;
+                    Console.WriteLine($"[KEYS] INJECT test arb -> {inj.Label} | {(favorite ? "FAVOURITE" : "UNDERDOG")} on Kalshi " +
+                                      $"(kAsk={kAsk:0.00} pAsk={pAsk:0.00} net={net:0.00}) | K_YES_P_NO | dry-run, simulated fills");
+                    executor.OnArbOpened(inj.PairId, net, "K_YES_P_NO", 500m, kAsk, pAsk);
                     break;
                 }
             }
