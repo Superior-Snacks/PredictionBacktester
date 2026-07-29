@@ -284,34 +284,6 @@
     "hardven_start_time": "2026-07-28T22:00:00Z"
   },
   {
-    "kalshi_ticker": "KXATPMATCH-26JUL27FILJOD-FIL",
-    "label": "Will Arthur Fils win the Fils vs Jodar: Round Of 32 match?",
-    "event_title": "Fils vs Jodar",
-    "kalshi_outcome": "Arthur Fils",
-    "event_id": "KXATPMATCH-26JUL27FILJOD",
-    "settlement_date": "2026-07-27",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "4356:1632977877:home",
-    "hardven_no_token": "4356:1632977877:away",
-    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/atp-washington-r1/matchups/"
-  },
-  {
-    "kalshi_ticker": "KXATPMATCH-26JUL27FILJOD-JOD",
-    "label": "Will Rafael Jodar win the Fils vs Jodar: Round Of 32 match?",
-    "event_title": "Fils vs Jodar",
-    "kalshi_outcome": "Rafael Jodar",
-    "event_id": "KXATPMATCH-26JUL27FILJOD",
-    "settlement_date": "2026-07-27",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "4356:1632977877:away",
-    "hardven_no_token": "4356:1632977877:home",
-    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/atp-washington-r1/matchups/"
-  },
-  {
     "kalshi_ticker": "KXATPMATCH-26JUL27GIRHEW-GIR",
     "label": "Will Marcos Giron win the Giron vs Hewitt: Round Of 32 match?",
     "event_title": "Giron vs Hewitt",
@@ -340,34 +312,6 @@
     "hardven_league_url": "https://www.pinnacle.bet/en/tennis/atp-washington-r1/matchups/"
   },
   {
-    "kalshi_ticker": "KXATPMATCH-26JUL27MANTIE-MAN",
-    "label": "Will Adrian Mannarino win the Mannarino vs Tien: Round Of 32 match?",
-    "event_title": "Mannarino vs Tien",
-    "kalshi_outcome": "Adrian Mannarino",
-    "event_id": "KXATPMATCH-26JUL27MANTIE",
-    "settlement_date": "2026-07-27",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "4356:1632977873:home",
-    "hardven_no_token": "4356:1632977873:away",
-    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/atp-washington-r1/matchups/"
-  },
-  {
-    "kalshi_ticker": "KXATPMATCH-26JUL27MANTIE-TIE",
-    "label": "Will Learner Tien win the Mannarino vs Tien: Round Of 32 match?",
-    "event_title": "Mannarino vs Tien",
-    "kalshi_outcome": "Learner Tien",
-    "event_id": "KXATPMATCH-26JUL27MANTIE",
-    "settlement_date": "2026-07-27",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "4356:1632977873:away",
-    "hardven_no_token": "4356:1632977873:home",
-    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/atp-washington-r1/matchups/"
-  },
-  {
     "kalshi_ticker": "KXATPMATCH-26JUL27NAKETC-ETC",
     "label": "Will Tomas Martin Etcheverry win the Nakashima vs Etcheverry: Round Of 32 match?",
     "event_title": "Nakashima vs Etcheverry",
@@ -380,7 +324,7 @@
     "hardven_yes_token": "4356:1632977585:away",
     "hardven_no_token": "4356:1632977585:home",
     "hardven_league_url": "https://www.pinnacle.bet/en/tennis/atp-washington-r1/matchups/",
-    "hardven_start_time": "2026-07-28T19:00:00Z"
+    "hardven_start_time": "2026-07-28T19:31:40Z"
   },
   {
     "kalshi_ticker": "KXATPMATCH-26JUL27NAKETC-NAK",
@@ -395,7 +339,7 @@
     "hardven_yes_token": "4356:1632977585:home",
     "hardven_no_token": "4356:1632977585:away",
     "hardven_league_url": "https://www.pinnacle.bet/en/tennis/atp-washington-r1/matchups/",
-    "hardven_start_time": "2026-07-28T19:00:00Z"
+    "hardven_start_time": "2026-07-28T19:31:40Z"
   },
   {
     "kalshi_ticker": "KXATPMATCH-26JUL27SVAMEN-MEN",
@@ -470,7 +414,7 @@
     "hardven_yes_token": "221514:1632942029:home",
     "hardven_no_token": "221514:1632942029:away",
     "hardven_league_url": "https://www.pinnacle.bet/en/tennis/wta-125k-vancouver-r1/matchups/",
-    "hardven_start_time": "2026-07-28T19:05:00Z"
+    "hardven_start_time": "2026-07-28T20:05:00Z"
   },
   {
     "kalshi_ticker": "KXWTACHALLENGERMATCH-26JUL26BREVAG-VAG",
@@ -485,7 +429,7 @@
     "hardven_yes_token": "221514:1632942029:away",
     "hardven_no_token": "221514:1632942029:home",
     "hardven_league_url": "https://www.pinnacle.bet/en/tennis/wta-125k-vancouver-r1/matchups/",
-    "hardven_start_time": "2026-07-28T19:05:00Z"
+    "hardven_start_time": "2026-07-28T20:05:00Z"
   },
   {
     "kalshi_ticker": "KXWTACHALLENGERMATCH-26JUL26CABCOS-CAB",
@@ -500,7 +444,7 @@
     "hardven_yes_token": "221514:1632942031:home",
     "hardven_no_token": "221514:1632942031:away",
     "hardven_league_url": "https://www.pinnacle.bet/en/tennis/wta-125k-vancouver-r1/matchups/",
-    "hardven_start_time": "2026-07-29T01:00:00Z"
+    "hardven_start_time": "2026-07-29T02:00:00Z"
   },
   {
     "kalshi_ticker": "KXWTACHALLENGERMATCH-26JUL26CABCOS-COS",
@@ -515,7 +459,7 @@
     "hardven_yes_token": "221514:1632942031:away",
     "hardven_no_token": "221514:1632942031:home",
     "hardven_league_url": "https://www.pinnacle.bet/en/tennis/wta-125k-vancouver-r1/matchups/",
-    "hardven_start_time": "2026-07-29T01:00:00Z"
+    "hardven_start_time": "2026-07-29T02:00:00Z"
   },
   {
     "kalshi_ticker": "KXWTACHALLENGERMATCH-26JUL26DARCRO-CRO",
@@ -650,7 +594,7 @@
     "hardven_yes_token": "221514:1632938227:away",
     "hardven_no_token": "221514:1632938227:home",
     "hardven_league_url": "https://www.pinnacle.bet/en/tennis/wta-125k-vancouver-r1/matchups/",
-    "hardven_start_time": "2026-07-29T01:00:00Z"
+    "hardven_start_time": "2026-07-29T02:00:00Z"
   },
   {
     "kalshi_ticker": "KXWTACHALLENGERMATCH-26JUL26MINING-MIN",
@@ -665,7 +609,7 @@
     "hardven_yes_token": "221514:1632938227:home",
     "hardven_no_token": "221514:1632938227:away",
     "hardven_league_url": "https://www.pinnacle.bet/en/tennis/wta-125k-vancouver-r1/matchups/",
-    "hardven_start_time": "2026-07-29T01:00:00Z"
+    "hardven_start_time": "2026-07-29T02:00:00Z"
   },
   {
     "kalshi_ticker": "KXWTAMATCH-26JUL27EALZHE-EAL",
@@ -978,7 +922,7 @@
     "hardven_yes_token": "9336:1632977647:away",
     "hardven_no_token": "9336:1632977647:home",
     "hardven_league_url": "https://www.pinnacle.bet/en/tennis/atp-challenger-vancouver-r1/matchups/",
-    "hardven_start_time": "2026-07-28T22:00:00Z"
+    "hardven_start_time": "2026-07-28T23:00:00Z"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL27HOLGRE-HOL",
@@ -993,7 +937,7 @@
     "hardven_yes_token": "9336:1632977647:home",
     "hardven_no_token": "9336:1632977647:away",
     "hardven_league_url": "https://www.pinnacle.bet/en/tennis/atp-challenger-vancouver-r1/matchups/",
-    "hardven_start_time": "2026-07-28T22:00:00Z"
+    "hardven_start_time": "2026-07-28T23:00:00Z"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL27HSUMMO-HSU",
@@ -1026,34 +970,6 @@
     "hardven_start_time": "2026-07-28T23:30:00Z"
   },
   {
-    "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL27MILVAN-MIL",
-    "label": "Will Daniel Milavsky win the Milavsky vs Vandecasteele: Qualification Final match?",
-    "event_title": "Milavsky vs Vandecasteele",
-    "kalshi_outcome": "Daniel Milavsky",
-    "event_id": "KXATPCHALLENGERMATCH-26JUL27MILVAN",
-    "settlement_date": "2026-07-28",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "199609:1633014396:home",
-    "hardven_no_token": "199609:1633014396:away",
-    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/atp-challenger-vancouver-qualifiers/matchups/"
-  },
-  {
-    "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL27MILVAN-VAN",
-    "label": "Will Quinn Vandecasteele win the Milavsky vs Vandecasteele: Qualification Final match?",
-    "event_title": "Milavsky vs Vandecasteele",
-    "kalshi_outcome": "Quinn Vandecasteele",
-    "event_id": "KXATPCHALLENGERMATCH-26JUL27MILVAN",
-    "settlement_date": "2026-07-28",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "199609:1633014396:away",
-    "hardven_no_token": "199609:1633014396:home",
-    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/atp-challenger-vancouver-qualifiers/matchups/"
-  },
-  {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL27MOCBRO-BRO",
     "label": "Will Charles Broom win the Mochizuki vs Broom: Round Of 32 match?",
     "event_title": "Mochizuki vs Broom",
@@ -1066,7 +982,7 @@
     "hardven_yes_token": "9336:1632977515:away",
     "hardven_no_token": "9336:1632977515:home",
     "hardven_league_url": "https://www.pinnacle.bet/en/tennis/atp-challenger-vancouver-r1/matchups/",
-    "hardven_start_time": "2026-07-28T23:30:00Z"
+    "hardven_start_time": "2026-07-29T00:30:00Z"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL27MOCBRO-MOC",
@@ -1081,7 +997,7 @@
     "hardven_yes_token": "9336:1632977515:home",
     "hardven_no_token": "9336:1632977515:away",
     "hardven_league_url": "https://www.pinnacle.bet/en/tennis/atp-challenger-vancouver-r1/matchups/",
-    "hardven_start_time": "2026-07-28T23:30:00Z"
+    "hardven_start_time": "2026-07-29T00:30:00Z"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL27PINSAM-PIN",
@@ -1096,7 +1012,7 @@
     "hardven_yes_token": "9336:1632977926:home",
     "hardven_no_token": "9336:1632977926:away",
     "hardven_league_url": "https://www.pinnacle.bet/en/tennis/atp-challenger-vancouver-r1/matchups/",
-    "hardven_start_time": "2026-07-28T23:30:00Z"
+    "hardven_start_time": "2026-07-29T00:30:00Z"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL27PINSAM-SAM",
@@ -1111,7 +1027,7 @@
     "hardven_yes_token": "9336:1632977926:away",
     "hardven_no_token": "9336:1632977926:home",
     "hardven_league_url": "https://www.pinnacle.bet/en/tennis/atp-challenger-vancouver-r1/matchups/",
-    "hardven_start_time": "2026-07-28T23:30:00Z"
+    "hardven_start_time": "2026-07-29T00:30:00Z"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL27RICLLA-LLA",
@@ -1156,7 +1072,7 @@
     "hardven_yes_token": "9336:1633011503:away",
     "hardven_no_token": "9336:1633011503:home",
     "hardven_league_url": "https://www.pinnacle.bet/en/tennis/atp-challenger-vancouver-r1/matchups/",
-    "hardven_start_time": "2026-07-28T22:00:00Z"
+    "hardven_start_time": "2026-07-28T23:00:00Z"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL27SEKCHI-SEK",
@@ -1171,7 +1087,7 @@
     "hardven_yes_token": "9336:1633011503:home",
     "hardven_no_token": "9336:1633011503:away",
     "hardven_league_url": "https://www.pinnacle.bet/en/tennis/atp-challenger-vancouver-r1/matchups/",
-    "hardven_start_time": "2026-07-28T22:00:00Z"
+    "hardven_start_time": "2026-07-28T23:00:00Z"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL27SWECHA-CHA",
@@ -1216,7 +1132,7 @@
     "hardven_yes_token": "9336:1632977645:away",
     "hardven_no_token": "9336:1632977645:home",
     "hardven_league_url": "https://www.pinnacle.bet/en/tennis/atp-challenger-vancouver-r1/matchups/",
-    "hardven_start_time": "2026-07-28T23:30:00Z"
+    "hardven_start_time": "2026-07-29T00:30:00Z"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL27WENCAS-WEN",
@@ -1231,7 +1147,7 @@
     "hardven_yes_token": "9336:1632977645:home",
     "hardven_no_token": "9336:1632977645:away",
     "hardven_league_url": "https://www.pinnacle.bet/en/tennis/atp-challenger-vancouver-r1/matchups/",
-    "hardven_start_time": "2026-07-28T23:30:00Z"
+    "hardven_start_time": "2026-07-29T00:30:00Z"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL27WOLZHA-WOL",
@@ -1258,34 +1174,6 @@
     "hardven_min_size": 1.0,
     "hardven_yes_token": "",
     "hardven_no_token": ""
-  },
-  {
-    "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL28CANPEL-CAN",
-    "label": "Will Carlo Alberto Caniato win the Caniato vs Pellegrino: Round Of 32 match?",
-    "event_title": "Caniato vs Pellegrino",
-    "kalshi_outcome": "Carlo Alberto Caniato",
-    "event_id": "KXATPCHALLENGERMATCH-26JUL28CANPEL",
-    "settlement_date": "2026-07-28",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "9401:1632949566:home",
-    "hardven_no_token": "9401:1632949566:away",
-    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/atp-challenger-san-marino-r1/matchups/"
-  },
-  {
-    "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL28CANPEL-PEL",
-    "label": "Will Andrea Pellegrino win the Caniato vs Pellegrino: Round Of 32 match?",
-    "event_title": "Caniato vs Pellegrino",
-    "kalshi_outcome": "Andrea Pellegrino",
-    "event_id": "KXATPCHALLENGERMATCH-26JUL28CANPEL",
-    "settlement_date": "2026-07-28",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "9401:1632949566:away",
-    "hardven_no_token": "9401:1632949566:home",
-    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/atp-challenger-san-marino-r1/matchups/"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL28HARCHU-CHU",
@@ -1330,7 +1218,7 @@
     "hardven_yes_token": "199609:1633014397:home",
     "hardven_no_token": "199609:1633014397:away",
     "hardven_league_url": "https://www.pinnacle.bet/en/tennis/atp-challenger-vancouver-qualifiers/matchups/",
-    "hardven_start_time": "2026-07-28T19:30:00Z"
+    "hardven_start_time": "2026-07-28T19:37:51Z"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL28MATTRO-TRO",
@@ -1345,35 +1233,7 @@
     "hardven_yes_token": "199609:1633014397:away",
     "hardven_no_token": "199609:1633014397:home",
     "hardven_league_url": "https://www.pinnacle.bet/en/tennis/atp-challenger-vancouver-qualifiers/matchups/",
-    "hardven_start_time": "2026-07-28T19:30:00Z"
-  },
-  {
-    "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL28ZHULAN-LAN",
-    "label": "Will Christian Langmo win the Zhu vs Langmo: Qualification Final match?",
-    "event_title": "Zhu vs Langmo",
-    "kalshi_outcome": "Christian Langmo",
-    "event_id": "KXATPCHALLENGERMATCH-26JUL28ZHULAN",
-    "settlement_date": "2026-07-28",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "199609:1633014303:away",
-    "hardven_no_token": "199609:1633014303:home",
-    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/atp-challenger-vancouver-qualifiers/matchups/"
-  },
-  {
-    "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL28ZHULAN-ZHU",
-    "label": "Will Evan Zhu win the Zhu vs Langmo: Qualification Final match?",
-    "event_title": "Zhu vs Langmo",
-    "kalshi_outcome": "Evan Zhu",
-    "event_id": "KXATPCHALLENGERMATCH-26JUL28ZHULAN",
-    "settlement_date": "2026-07-28",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "199609:1633014303:home",
-    "hardven_no_token": "199609:1633014303:away",
-    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/atp-challenger-vancouver-qualifiers/matchups/"
+    "hardven_start_time": "2026-07-28T19:37:51Z"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL28ZINPOL-POL",
@@ -1388,7 +1248,7 @@
     "hardven_yes_token": "199609:1633014304:away",
     "hardven_no_token": "199609:1633014304:home",
     "hardven_league_url": "https://www.pinnacle.bet/en/tennis/atp-challenger-vancouver-qualifiers/matchups/",
-    "hardven_start_time": "2026-07-28T21:30:00Z"
+    "hardven_start_time": "2026-07-28T19:43:00Z"
   },
   {
     "kalshi_ticker": "KXATPCHALLENGERMATCH-26JUL28ZINPOL-ZIN",
@@ -1403,7 +1263,7 @@
     "hardven_yes_token": "199609:1633014304:home",
     "hardven_no_token": "199609:1633014304:away",
     "hardven_league_url": "https://www.pinnacle.bet/en/tennis/atp-challenger-vancouver-qualifiers/matchups/",
-    "hardven_start_time": "2026-07-28T21:30:00Z"
+    "hardven_start_time": "2026-07-28T19:43:00Z"
   },
   {
     "kalshi_ticker": "KXITFMATCH-26JUL28BELSAK-BEL",
@@ -1442,9 +1302,7 @@
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
     "hardven_yes_token": "236320:1633014374:away",
-    "hardven_no_token": "236320:1633014374:home",
-    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-men-huamantla-r1/matchups/",
-    "hardven_start_time": "2026-07-28T19:30:00Z"
+    "hardven_no_token": "236320:1633014374:home"
   },
   {
     "kalshi_ticker": "KXITFMATCH-26JUL28BROALU-BRO",
@@ -1457,37 +1315,7 @@
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
     "hardven_yes_token": "236320:1633014374:home",
-    "hardven_no_token": "236320:1633014374:away",
-    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-men-huamantla-r1/matchups/",
-    "hardven_start_time": "2026-07-28T19:30:00Z"
-  },
-  {
-    "kalshi_ticker": "KXITFMATCH-26JUL28CORPLA-COR",
-    "label": "Will Carles Cordoba win the Cordoba vs Planella Hernandez: M15 Xativa Round of 32 match?",
-    "event_title": "Cordoba vs Planella Hernandez",
-    "kalshi_outcome": "Carles Cordoba",
-    "event_id": "KXITFMATCH-26JUL28CORPLA",
-    "settlement_date": "2026-07-28",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "214648:1633005321:home",
-    "hardven_no_token": "214648:1633005321:away",
-    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-men-xativa-r1/matchups/"
-  },
-  {
-    "kalshi_ticker": "KXITFMATCH-26JUL28CORPLA-PLA",
-    "label": "Will Sergio Planella Hernandez win the Cordoba vs Planella Hernandez: M15 Xativa Round of 32 match?",
-    "event_title": "Cordoba vs Planella Hernandez",
-    "kalshi_outcome": "Sergio Planella Hernandez",
-    "event_id": "KXITFMATCH-26JUL28CORPLA",
-    "settlement_date": "2026-07-28",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "214648:1633005321:away",
-    "hardven_no_token": "214648:1633005321:home",
-    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-men-xativa-r1/matchups/"
+    "hardven_no_token": "236320:1633014374:away"
   },
   {
     "kalshi_ticker": "KXITFMATCH-26JUL28DUSFIL-DUS",
@@ -1579,8 +1407,7 @@
     "hardven_min_size": 1.0,
     "hardven_yes_token": "214638:1633011533:away",
     "hardven_no_token": "214638:1633011533:home",
-    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-men-bolzano-r1/matchups/",
-    "hardven_start_time": "2026-07-28T14:07:00Z"
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-men-bolzano-r1/matchups/"
   },
   {
     "kalshi_ticker": "KXITFMATCH-26JUL28KOPBOR-KOP",
@@ -1594,62 +1421,7 @@
     "hardven_min_size": 1.0,
     "hardven_yes_token": "214638:1633011533:home",
     "hardven_no_token": "214638:1633011533:away",
-    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-men-bolzano-r1/matchups/",
-    "hardven_start_time": "2026-07-28T14:07:00Z"
-  },
-  {
-    "kalshi_ticker": "KXITFMATCH-26JUL28MECORL-MEC",
-    "label": "Will Michele Mecarelli win the Mecarelli vs Orlov: M25 Bolzano Round of 32 match?",
-    "event_title": "Mecarelli vs Orlov",
-    "kalshi_outcome": "Michele Mecarelli",
-    "event_id": "KXITFMATCH-26JUL28MECORL",
-    "settlement_date": "2026-07-28",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "214638:1632999038:home",
-    "hardven_no_token": "214638:1632999038:away",
     "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-men-bolzano-r1/matchups/"
-  },
-  {
-    "kalshi_ticker": "KXITFMATCH-26JUL28MECORL-ORL",
-    "label": "Will Vladyslav Orlov win the Mecarelli vs Orlov: M25 Bolzano Round of 32 match?",
-    "event_title": "Mecarelli vs Orlov",
-    "kalshi_outcome": "Vladyslav Orlov",
-    "event_id": "KXITFMATCH-26JUL28MECORL",
-    "settlement_date": "2026-07-28",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "214638:1632999038:away",
-    "hardven_no_token": "214638:1632999038:home",
-    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-men-bolzano-r1/matchups/"
-  },
-  {
-    "kalshi_ticker": "KXITFMATCH-26JUL28NAGBRA-BRA",
-    "label": "Will Liam Branger win the Nagel vs Branger: M15 Strasbourg Round of 32 match?",
-    "event_title": "Nagel vs Branger",
-    "kalshi_outcome": "Liam Branger",
-    "event_id": "KXITFMATCH-26JUL28NAGBRA",
-    "settlement_date": "2026-07-28",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
-    "kalshi_ticker": "KXITFMATCH-26JUL28NAGBRA-NAG",
-    "label": "Will Arthur Nagel win the Nagel vs Branger: M15 Strasbourg Round of 32 match?",
-    "event_title": "Nagel vs Branger",
-    "kalshi_outcome": "Arthur Nagel",
-    "event_id": "KXITFMATCH-26JUL28NAGBRA",
-    "settlement_date": "2026-07-28",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
   },
   {
     "kalshi_ticker": "KXITFMATCH-26JUL28OLIVER-OLI",
@@ -1662,9 +1434,7 @@
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
     "hardven_yes_token": "227326:1633014334:home",
-    "hardven_no_token": "227326:1633014334:away",
-    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-men-sao-paulo-r1/matchups/",
-    "hardven_start_time": "2026-07-28T18:48:35Z"
+    "hardven_no_token": "227326:1633014334:away"
   },
   {
     "kalshi_ticker": "KXITFMATCH-26JUL28OLIVER-VER",
@@ -1677,37 +1447,7 @@
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
     "hardven_yes_token": "227326:1633014334:away",
-    "hardven_no_token": "227326:1633014334:home",
-    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-men-sao-paulo-r1/matchups/",
-    "hardven_start_time": "2026-07-28T18:48:35Z"
-  },
-  {
-    "kalshi_ticker": "KXITFMATCH-26JUL28OSOCHA-CHA",
-    "label": "Will Pedro Henrique Chabalgoity win the Osorio vs Chabalgoity: M15 Sao Paulo Round of 32 match?",
-    "event_title": "Osorio vs Chabalgoity",
-    "kalshi_outcome": "Pedro Henrique Chabalgoity",
-    "event_id": "KXITFMATCH-26JUL28OSOCHA",
-    "settlement_date": "2026-07-28",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "227326:1633014249:away",
-    "hardven_no_token": "227326:1633014249:home",
-    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-men-sao-paulo-r1/matchups/"
-  },
-  {
-    "kalshi_ticker": "KXITFMATCH-26JUL28OSOCHA-OSO",
-    "label": "Will Juan Sebastian Osorio win the Osorio vs Chabalgoity: M15 Sao Paulo Round of 32 match?",
-    "event_title": "Osorio vs Chabalgoity",
-    "kalshi_outcome": "Juan Sebastian Osorio",
-    "event_id": "KXITFMATCH-26JUL28OSOCHA",
-    "settlement_date": "2026-07-28",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "227326:1633014249:home",
-    "hardven_no_token": "227326:1633014249:away",
-    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-men-sao-paulo-r1/matchups/"
+    "hardven_no_token": "227326:1633014334:home"
   },
   {
     "kalshi_ticker": "KXITFMATCH-26JUL28PATPAL-PAL",
@@ -1747,8 +1487,7 @@
     "hardven_min_size": 1.0,
     "hardven_yes_token": "214638:1633006033:away",
     "hardven_no_token": "214638:1633006033:home",
-    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-men-bolzano-r1/matchups/",
-    "hardven_start_time": "2026-07-28T14:41:00Z"
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-men-bolzano-r1/matchups/"
   },
   {
     "kalshi_ticker": "KXITFMATCH-26JUL28PENCRI-PEN",
@@ -1762,8 +1501,7 @@
     "hardven_min_size": 1.0,
     "hardven_yes_token": "214638:1633006033:home",
     "hardven_no_token": "214638:1633006033:away",
-    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-men-bolzano-r1/matchups/",
-    "hardven_start_time": "2026-07-28T14:41:00Z"
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-men-bolzano-r1/matchups/"
   },
   {
     "kalshi_ticker": "KXITFMATCH-26JUL28RODBRU-BRU",
@@ -1776,9 +1514,7 @@
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
     "hardven_yes_token": "236320:1633011547:away",
-    "hardven_no_token": "236320:1633011547:home",
-    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-men-huamantla-r1/matchups/",
-    "hardven_start_time": "2026-07-28T19:30:00Z"
+    "hardven_no_token": "236320:1633011547:home"
   },
   {
     "kalshi_ticker": "KXITFMATCH-26JUL28RODBRU-ROD",
@@ -1791,9 +1527,7 @@
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
     "hardven_yes_token": "236320:1633011547:home",
-    "hardven_no_token": "236320:1633011547:away",
-    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-men-huamantla-r1/matchups/",
-    "hardven_start_time": "2026-07-28T19:30:00Z"
+    "hardven_no_token": "236320:1633011547:away"
   },
   {
     "kalshi_ticker": "KXITFMATCH-26JUL28RODGAM-GAM",
@@ -1820,34 +1554,6 @@
     "hardven_min_size": 1.0,
     "hardven_yes_token": "",
     "hardven_no_token": ""
-  },
-  {
-    "kalshi_ticker": "KXITFMATCH-26JUL28RODPER-PER",
-    "label": "Will Jose Pereira win the Rodriguez vs Pereira: M15 Sao Paulo Round of 32 match?",
-    "event_title": "Rodriguez vs Pereira",
-    "kalshi_outcome": "Jose Pereira",
-    "event_id": "KXITFMATCH-26JUL28RODPER",
-    "settlement_date": "2026-07-28",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "227326:1633011506:away",
-    "hardven_no_token": "227326:1633011506:home",
-    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-men-sao-paulo-r1/matchups/"
-  },
-  {
-    "kalshi_ticker": "KXITFMATCH-26JUL28RODPER-ROD",
-    "label": "Will Lorenzo Joaquin Rodriguez win the Rodriguez vs Pereira: M15 Sao Paulo Round of 32 match?",
-    "event_title": "Rodriguez vs Pereira",
-    "kalshi_outcome": "Lorenzo Joaquin Rodriguez",
-    "event_id": "KXITFMATCH-26JUL28RODPER",
-    "settlement_date": "2026-07-28",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "227326:1633011506:home",
-    "hardven_no_token": "227326:1633011506:away",
-    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-men-sao-paulo-r1/matchups/"
   },
   {
     "kalshi_ticker": "KXITFMATCH-26JUL28SEIWOE-SEI",
@@ -1886,8 +1592,7 @@
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
     "hardven_yes_token": "227326:1633006001:away",
-    "hardven_no_token": "227326:1633006001:home",
-    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-men-sao-paulo-r1/matchups/"
+    "hardven_no_token": "227326:1633006001:home"
   },
   {
     "kalshi_ticker": "KXITFMATCH-26JUL28STOBAE-STO",
@@ -1900,8 +1605,7 @@
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
     "hardven_yes_token": "227326:1633006001:home",
-    "hardven_no_token": "227326:1633006001:away",
-    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-men-sao-paulo-r1/matchups/"
+    "hardven_no_token": "227326:1633006001:away"
   },
   {
     "kalshi_ticker": "KXITFMATCH-26JUL28WEBBRA-BRA",
@@ -1966,8 +1670,7 @@
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
     "hardven_yes_token": "237957:1633025325:home",
-    "hardven_no_token": "237957:1633025325:away",
-    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-women-huamantla-r1/matchups/"
+    "hardven_no_token": "237957:1633025325:away"
   },
   {
     "kalshi_ticker": "KXITFWMATCH-26JUL28AGUHAR-HAR",
@@ -1993,9 +1696,7 @@
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
     "hardven_yes_token": "237957:1633014300:home",
-    "hardven_no_token": "237957:1633014300:away",
-    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-women-huamantla-r1/matchups/",
-    "hardven_start_time": "2026-07-28T19:30:00Z"
+    "hardven_no_token": "237957:1633014300:away"
   },
   {
     "kalshi_ticker": "KXITFWMATCH-26JUL28ALOMAR-MAR",
@@ -2008,9 +1709,7 @@
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
     "hardven_yes_token": "237957:1633014300:away",
-    "hardven_no_token": "237957:1633014300:home",
-    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-women-huamantla-r1/matchups/",
-    "hardven_start_time": "2026-07-28T19:30:00Z"
+    "hardven_no_token": "237957:1633014300:home"
   },
   {
     "kalshi_ticker": "KXITFWMATCH-26JUL28ANGCRO-ANG",
@@ -2037,34 +1736,6 @@
     "hardven_min_size": 1.0,
     "hardven_yes_token": "",
     "hardven_no_token": ""
-  },
-  {
-    "kalshi_ticker": "KXITFWMATCH-26JUL28CARKHA-CAR",
-    "label": "Will Kaitlyn Carnicella win the Carnicella vs Khayrutdinova: W35 Florence SC Round of 32 match?",
-    "event_title": "Carnicella vs Khayrutdinova",
-    "kalshi_outcome": "Kaitlyn Carnicella",
-    "event_id": "KXITFWMATCH-26JUL28CARKHA",
-    "settlement_date": "2026-07-28",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "10067:1633011557:home",
-    "hardven_no_token": "10067:1633011557:away",
-    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-women-florence-r1/matchups/"
-  },
-  {
-    "kalshi_ticker": "KXITFWMATCH-26JUL28CARKHA-KHA",
-    "label": "Will Ekaterina Khayrutdinova win the Carnicella vs Khayrutdinova: W35 Florence SC Round of 32 match?",
-    "event_title": "Carnicella vs Khayrutdinova",
-    "kalshi_outcome": "Ekaterina Khayrutdinova",
-    "event_id": "KXITFWMATCH-26JUL28CARKHA",
-    "settlement_date": "2026-07-28",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "10067:1633011557:away",
-    "hardven_no_token": "10067:1633011557:home",
-    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-women-florence-r1/matchups/"
   },
   {
     "kalshi_ticker": "KXITFWMATCH-26JUL28COLKOI-COL",
@@ -2095,36 +1766,6 @@
     "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-women-lexington-r1/matchups/"
   },
   {
-    "kalshi_ticker": "KXITFWMATCH-26JUL28DIGMIK-DIG",
-    "label": "Will Tilwith Di Girolami win the Di Girolami vs Mikulskyte: W50 Knokke-Heist Round of 32 match?",
-    "event_title": "Di Girolami vs Mikulskyte",
-    "kalshi_outcome": "Tilwith Di Girolami",
-    "event_id": "KXITFWMATCH-26JUL28DIGMIK",
-    "settlement_date": "2026-07-28",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "273492:1633018784:home",
-    "hardven_no_token": "273492:1633018784:away",
-    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-women-knokke-heist-r1/matchups/",
-    "hardven_start_time": "2026-07-28T16:00:00Z"
-  },
-  {
-    "kalshi_ticker": "KXITFWMATCH-26JUL28DIGMIK-MIK",
-    "label": "Will Justina Mikulskyte win the Di Girolami vs Mikulskyte: W50 Knokke-Heist Round of 32 match?",
-    "event_title": "Di Girolami vs Mikulskyte",
-    "kalshi_outcome": "Justina Mikulskyte",
-    "event_id": "KXITFWMATCH-26JUL28DIGMIK",
-    "settlement_date": "2026-07-28",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "273492:1633018784:away",
-    "hardven_no_token": "273492:1633018784:home",
-    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-women-knokke-heist-r1/matchups/",
-    "hardven_start_time": "2026-07-28T16:00:00Z"
-  },
-  {
     "kalshi_ticker": "KXITFWMATCH-26JUL28HRDMAR-HRD",
     "label": "Will Luisa Hrda win the Hrda vs Martinez Solis: W15 Huamantla Round of 32 match?",
     "event_title": "Hrda vs Martinez Solis",
@@ -2135,9 +1776,7 @@
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
     "hardven_yes_token": "237957:1633011561:home",
-    "hardven_no_token": "237957:1633011561:away",
-    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-women-huamantla-r1/matchups/",
-    "hardven_start_time": "2026-07-28T18:52:16Z"
+    "hardven_no_token": "237957:1633011561:away"
   },
   {
     "kalshi_ticker": "KXITFWMATCH-26JUL28HRDMAR-MAR",
@@ -2150,37 +1789,7 @@
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
     "hardven_yes_token": "237957:1633011561:away",
-    "hardven_no_token": "237957:1633011561:home",
-    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-women-huamantla-r1/matchups/",
-    "hardven_start_time": "2026-07-28T18:52:16Z"
-  },
-  {
-    "kalshi_ticker": "KXITFWMATCH-26JUL28IVAAKL-AKL",
-    "label": "Will Ayana Akli win the Ivanova vs Akli: W75 Lexington KY Round of 32 match?",
-    "event_title": "Ivanova vs Akli",
-    "kalshi_outcome": "Ayana Akli",
-    "event_id": "KXITFWMATCH-26JUL28IVAAKL",
-    "settlement_date": "2026-07-28",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "221070:1633014378:away",
-    "hardven_no_token": "221070:1633014378:home",
-    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-women-lexington-r1/matchups/"
-  },
-  {
-    "kalshi_ticker": "KXITFWMATCH-26JUL28IVAAKL-IVA",
-    "label": "Will Dasha Ivanova win the Ivanova vs Akli: W75 Lexington KY Round of 32 match?",
-    "event_title": "Ivanova vs Akli",
-    "kalshi_outcome": "Dasha Ivanova",
-    "event_id": "KXITFWMATCH-26JUL28IVAAKL",
-    "settlement_date": "2026-07-28",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "221070:1633014378:home",
-    "hardven_no_token": "221070:1633014378:away",
-    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-women-lexington-r1/matchups/"
+    "hardven_no_token": "237957:1633011561:home"
   },
   {
     "kalshi_ticker": "KXITFWMATCH-26JUL28KULFRO-FRO",
@@ -2211,60 +1820,6 @@
     "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-women-lexington-r1/matchups/"
   },
   {
-    "kalshi_ticker": "KXITFWMATCH-26JUL28LAREST-EST",
-    "label": "Will Josefina Estevez win the Larraya Guidi vs Estevez: W35 Pergamino Round of 32 match?",
-    "event_title": "Larraya Guidi vs Estevez",
-    "kalshi_outcome": "Josefina Estevez",
-    "event_id": "KXITFWMATCH-26JUL28LAREST",
-    "settlement_date": "2026-07-28",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
-    "kalshi_ticker": "KXITFWMATCH-26JUL28LAREST-LAR",
-    "label": "Will Sol Ailin Larraya Guidi win the Larraya Guidi vs Estevez: W35 Pergamino Round of 32 match?",
-    "event_title": "Larraya Guidi vs Estevez",
-    "kalshi_outcome": "Sol Ailin Larraya Guidi",
-    "event_id": "KXITFWMATCH-26JUL28LAREST",
-    "settlement_date": "2026-07-28",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "",
-    "hardven_no_token": ""
-  },
-  {
-    "kalshi_ticker": "KXITFWMATCH-26JUL28NEWHAZ-HAZ",
-    "label": "Will Jordyn Hazelitt win the Newman vs Hazelitt: W35 Florence SC Round of 32 match?",
-    "event_title": "Newman vs Hazelitt",
-    "kalshi_outcome": "Jordyn Hazelitt",
-    "event_id": "KXITFWMATCH-26JUL28NEWHAZ",
-    "settlement_date": "2026-07-28",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "10067:1633014295:away",
-    "hardven_no_token": "10067:1633014295:home",
-    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-women-florence-r1/matchups/"
-  },
-  {
-    "kalshi_ticker": "KXITFWMATCH-26JUL28NEWHAZ-NEW",
-    "label": "Will Welles Newman win the Newman vs Hazelitt: W35 Florence SC Round of 32 match?",
-    "event_title": "Newman vs Hazelitt",
-    "kalshi_outcome": "Welles Newman",
-    "event_id": "KXITFWMATCH-26JUL28NEWHAZ",
-    "settlement_date": "2026-07-28",
-    "kalshi_yes_price": null,
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "10067:1633014295:home",
-    "hardven_no_token": "10067:1633014295:away",
-    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-women-florence-r1/matchups/"
-  },
-  {
     "kalshi_ticker": "KXITFWMATCH-26JUL28SAFPRI-PRI",
     "label": "Will Gabriella Price win the Saffar vs Price: W15 Huamantla Round of 32 match?",
     "event_title": "Saffar vs Price",
@@ -2275,9 +1830,7 @@
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
     "hardven_yes_token": "237957:1633014390:away",
-    "hardven_no_token": "237957:1633014390:home",
-    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-women-huamantla-r1/matchups/",
-    "hardven_start_time": "2026-07-28T19:30:00Z"
+    "hardven_no_token": "237957:1633014390:home"
   },
   {
     "kalshi_ticker": "KXITFWMATCH-26JUL28SAFPRI-SAF",
@@ -2290,9 +1843,7 @@
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
     "hardven_yes_token": "237957:1633014390:home",
-    "hardven_no_token": "237957:1633014390:away",
-    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-women-huamantla-r1/matchups/",
-    "hardven_start_time": "2026-07-28T19:30:00Z"
+    "hardven_no_token": "237957:1633014390:away"
   },
   {
     "kalshi_ticker": "KXITFWMATCH-26JUL28SAIPER-PER",
@@ -2306,8 +1857,7 @@
     "hardven_min_size": 1.0,
     "hardven_yes_token": "221070:1633011551:away",
     "hardven_no_token": "221070:1633011551:home",
-    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-women-lexington-r1/matchups/",
-    "hardven_start_time": "2026-07-28T19:00:00Z"
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-women-lexington-r1/matchups/"
   },
   {
     "kalshi_ticker": "KXITFWMATCH-26JUL28SAIPER-SAI",
@@ -2321,8 +1871,7 @@
     "hardven_min_size": 1.0,
     "hardven_yes_token": "221070:1633011551:home",
     "hardven_no_token": "221070:1633011551:away",
-    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-women-lexington-r1/matchups/",
-    "hardven_start_time": "2026-07-28T19:00:00Z"
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-women-lexington-r1/matchups/"
   },
   {
     "kalshi_ticker": "KXITFWMATCH-26JUL28VERREG-REG",
@@ -2417,7 +1966,7 @@
     "hardven_yes_token": "221514:1632938226:home",
     "hardven_no_token": "221514:1632938226:away",
     "hardven_league_url": "https://www.pinnacle.bet/en/tennis/wta-125k-vancouver-r1/matchups/",
-    "hardven_start_time": "2026-07-28T19:30:00Z"
+    "hardven_start_time": "2026-07-28T20:30:00Z"
   },
   {
     "kalshi_ticker": "KXWTACHALLENGERMATCH-26JUL26KINOKA-OKA",
@@ -2432,7 +1981,7 @@
     "hardven_yes_token": "221514:1632938226:away",
     "hardven_no_token": "221514:1632938226:home",
     "hardven_league_url": "https://www.pinnacle.bet/en/tennis/wta-125k-vancouver-r1/matchups/",
-    "hardven_start_time": "2026-07-28T19:30:00Z"
+    "hardven_start_time": "2026-07-28T20:30:00Z"
   },
   {
     "kalshi_ticker": "KXWTACHALLENGERMATCH-26JUL28HONSCH-HON",
@@ -2447,7 +1996,7 @@
     "hardven_yes_token": "221514:1633025354:home",
     "hardven_no_token": "221514:1633025354:away",
     "hardven_league_url": "https://www.pinnacle.bet/en/tennis/wta-125k-vancouver-r1/matchups/",
-    "hardven_start_time": "2026-07-28T22:00:00Z"
+    "hardven_start_time": "2026-07-28T23:00:00Z"
   },
   {
     "kalshi_ticker": "KXWTACHALLENGERMATCH-26JUL28HONSCH-SCH",
@@ -2462,7 +2011,7 @@
     "hardven_yes_token": "221514:1633025354:away",
     "hardven_no_token": "221514:1633025354:home",
     "hardven_league_url": "https://www.pinnacle.bet/en/tennis/wta-125k-vancouver-r1/matchups/",
-    "hardven_start_time": "2026-07-28T22:00:00Z"
+    "hardven_start_time": "2026-07-28T23:00:00Z"
   },
   {
     "kalshi_ticker": "KXWTACHALLENGERMATCH-26JUL28UCHKUR-KUR",
@@ -2663,6 +2212,32 @@
     "event_title": "Fritz vs Majchrzak",
     "kalshi_outcome": "Kamil Majchrzak",
     "event_id": "KXATPMATCH-26JUL29FRIMAJ",
+    "settlement_date": "2026-07-29",
+    "kalshi_yes_price": null,
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "",
+    "hardven_no_token": ""
+  },
+  {
+    "kalshi_ticker": "KXATPMATCH-26JUL29MICMAN-MAN",
+    "label": "Will Adrian Mannarino win the Michelsen vs Mannarino: Round Of 16 match?",
+    "event_title": "Michelsen vs Mannarino",
+    "kalshi_outcome": "Adrian Mannarino",
+    "event_id": "KXATPMATCH-26JUL29MICMAN",
+    "settlement_date": "2026-07-29",
+    "kalshi_yes_price": null,
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "",
+    "hardven_no_token": ""
+  },
+  {
+    "kalshi_ticker": "KXATPMATCH-26JUL29MICMAN-MIC",
+    "label": "Will Alex Michelsen win the Michelsen vs Mannarino: Round Of 16 match?",
+    "event_title": "Michelsen vs Mannarino",
+    "kalshi_outcome": "Alex Michelsen",
+    "event_id": "KXATPMATCH-26JUL29MICMAN",
     "settlement_date": "2026-07-29",
     "kalshi_yes_price": null,
     "is_neg_risk": false,
@@ -3293,6 +2868,34 @@
     "hardven_start_time": "2026-07-29T02:30:00Z"
   },
   {
+    "kalshi_ticker": "KXITFMATCH-26JUL29ALEROJ-ALE",
+    "label": "Will Yannick Theodor Alexandrescou win the Alexandrescou vs Rojas: M25 Pitesti Round of 32 match?",
+    "event_title": "Alexandrescou vs Rojas",
+    "kalshi_outcome": "Yannick Theodor Alexandrescou",
+    "event_id": "KXITFMATCH-26JUL29ALEROJ",
+    "settlement_date": "2026-07-29",
+    "kalshi_yes_price": null,
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "214618:1632999634:home",
+    "hardven_no_token": "214618:1632999634:away",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-men-pitesti-r1/matchups/",
+    "hardven_start_time": "2026-07-29T07:00:00Z"
+  },
+  {
+    "kalshi_ticker": "KXITFMATCH-26JUL29ALEROJ-ROJ",
+    "label": "Will Carles Rojas win the Alexandrescou vs Rojas: M25 Pitesti Round of 32 match?",
+    "event_title": "Alexandrescou vs Rojas",
+    "kalshi_outcome": "Carles Rojas",
+    "event_id": "KXITFMATCH-26JUL29ALEROJ",
+    "settlement_date": "2026-07-29",
+    "kalshi_yes_price": null,
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "",
+    "hardven_no_token": ""
+  },
+  {
     "kalshi_ticker": "KXITFMATCH-26JUL29BARIVA-BAR",
     "label": "Will Petr Bar Biryukov win the Bar Biryukov vs Ivanov: M15 Astana Round of 32 match?",
     "event_title": "Bar Biryukov vs Ivanov",
@@ -3313,6 +2916,36 @@
     "event_title": "Bar Biryukov vs Ivanov",
     "kalshi_outcome": "Saveliy Ivanov",
     "event_id": "KXITFMATCH-26JUL29BARIVA",
+    "settlement_date": "2026-07-29",
+    "kalshi_yes_price": null,
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "226804:1632999048:away",
+    "hardven_no_token": "226804:1632999048:home",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-men-astana-r1/matchups/",
+    "hardven_start_time": "2026-07-29T06:00:00Z"
+  },
+  {
+    "kalshi_ticker": "KXITFMATCH-26JUL29BERAND-AND",
+    "label": "Will Stefan Adrian Andreescu win the Berge Nourescu vs Andreescu: M25 Pitesti Round of 32 match?",
+    "event_title": "Berge Nourescu vs Andreescu",
+    "kalshi_outcome": "Stefan Adrian Andreescu",
+    "event_id": "KXITFMATCH-26JUL29BERAND",
+    "settlement_date": "2026-07-29",
+    "kalshi_yes_price": null,
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "214618:1632999045:away",
+    "hardven_no_token": "214618:1632999045:home",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-men-pitesti-r1/matchups/",
+    "hardven_start_time": "2026-07-29T07:00:00Z"
+  },
+  {
+    "kalshi_ticker": "KXITFMATCH-26JUL29BERAND-BER",
+    "label": "Will Alejandro Mateo Berge Nourescu win the Berge Nourescu vs Andreescu: M25 Pitesti Round of 32 match?",
+    "event_title": "Berge Nourescu vs Andreescu",
+    "kalshi_outcome": "Alejandro Mateo Berge Nourescu",
+    "event_id": "KXITFMATCH-26JUL29BERAND",
     "settlement_date": "2026-07-29",
     "kalshi_yes_price": null,
     "is_neg_risk": false,
@@ -3345,6 +2978,64 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
+    "hardven_yes_token": "226804:1632999049:away",
+    "hardven_no_token": "226804:1632999049:home",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-men-astana-r1/matchups/",
+    "hardven_start_time": "2026-07-29T06:00:00Z"
+  },
+  {
+    "kalshi_ticker": "KXITFMATCH-26JUL29BREBAT-BAT",
+    "label": "Will Tudor Batin win the Breazu vs Batin: M25 Pitesti Round of 32 match?",
+    "event_title": "Breazu vs Batin",
+    "kalshi_outcome": "Tudor Batin",
+    "event_id": "KXITFMATCH-26JUL29BREBAT",
+    "settlement_date": "2026-07-29",
+    "kalshi_yes_price": null,
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "214618:1632999632:away",
+    "hardven_no_token": "214618:1632999632:home",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-men-pitesti-r1/matchups/",
+    "hardven_start_time": "2026-07-29T07:00:00Z"
+  },
+  {
+    "kalshi_ticker": "KXITFMATCH-26JUL29BREBAT-BRE",
+    "label": "Will Matei Florin Breazu win the Breazu vs Batin: M25 Pitesti Round of 32 match?",
+    "event_title": "Breazu vs Batin",
+    "kalshi_outcome": "Matei Florin Breazu",
+    "event_id": "KXITFMATCH-26JUL29BREBAT",
+    "settlement_date": "2026-07-29",
+    "kalshi_yes_price": null,
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "",
+    "hardven_no_token": ""
+  },
+  {
+    "kalshi_ticker": "KXITFMATCH-26JUL29FITMUN-FIT",
+    "label": "Will Sergi Fita Juan win the Fita Juan vs Munk Mesa: M15 Xativa Round of 32 match?",
+    "event_title": "Fita Juan vs Munk Mesa",
+    "kalshi_outcome": "Sergi Fita Juan",
+    "event_id": "KXITFMATCH-26JUL29FITMUN",
+    "settlement_date": "2026-07-29",
+    "kalshi_yes_price": null,
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "214648:1633011539:home",
+    "hardven_no_token": "214648:1633011539:away",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-men-xativa-r1/matchups/",
+    "hardven_start_time": "2026-07-29T07:00:00Z"
+  },
+  {
+    "kalshi_ticker": "KXITFMATCH-26JUL29FITMUN-MUN",
+    "label": "Will Bernardo Munk Mesa win the Fita Juan vs Munk Mesa: M15 Xativa Round of 32 match?",
+    "event_title": "Fita Juan vs Munk Mesa",
+    "kalshi_outcome": "Bernardo Munk Mesa",
+    "event_id": "KXITFMATCH-26JUL29FITMUN",
+    "settlement_date": "2026-07-29",
+    "kalshi_yes_price": null,
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
     "hardven_yes_token": "",
     "hardven_no_token": ""
   },
@@ -3373,6 +3064,62 @@
     "kalshi_yes_price": null,
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
+    "hardven_yes_token": "226804:1633005934:away",
+    "hardven_no_token": "226804:1633005934:home",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-men-astana-r1/matchups/",
+    "hardven_start_time": "2026-07-29T06:00:00Z"
+  },
+  {
+    "kalshi_ticker": "KXITFMATCH-26JUL29HERLYN-HER",
+    "label": "Will Carles Hernandez win the Hernandez vs Lynch: M15 Xativa Round of 32 match?",
+    "event_title": "Hernandez vs Lynch",
+    "kalshi_outcome": "Carles Hernandez",
+    "event_id": "KXITFMATCH-26JUL29HERLYN",
+    "settlement_date": "2026-07-29",
+    "kalshi_yes_price": null,
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "214648:1633011537:home",
+    "hardven_no_token": "214648:1633011537:away",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-men-xativa-r1/matchups/",
+    "hardven_start_time": "2026-07-29T07:00:00Z"
+  },
+  {
+    "kalshi_ticker": "KXITFMATCH-26JUL29HERLYN-LYN",
+    "label": "Will Adam Lynch win the Hernandez vs Lynch: M15 Xativa Round of 32 match?",
+    "event_title": "Hernandez vs Lynch",
+    "kalshi_outcome": "Adam Lynch",
+    "event_id": "KXITFMATCH-26JUL29HERLYN",
+    "settlement_date": "2026-07-29",
+    "kalshi_yes_price": null,
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "",
+    "hardven_no_token": ""
+  },
+  {
+    "kalshi_ticker": "KXITFMATCH-26JUL29KUKBEL-BEL",
+    "label": "Will Alessandro Bellifemine win the Kukasian vs Bellifemine: M15 Kursumlijska Banja Round of 32 match?",
+    "event_title": "Kukasian vs Bellifemine",
+    "kalshi_outcome": "Alessandro Bellifemine",
+    "event_id": "KXITFMATCH-26JUL29KUKBEL",
+    "settlement_date": "2026-07-29",
+    "kalshi_yes_price": null,
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "",
+    "hardven_no_token": ""
+  },
+  {
+    "kalshi_ticker": "KXITFMATCH-26JUL29KUKBEL-KUK",
+    "label": "Will Artur Kukasian win the Kukasian vs Bellifemine: M15 Kursumlijska Banja Round of 32 match?",
+    "event_title": "Kukasian vs Bellifemine",
+    "kalshi_outcome": "Artur Kukasian",
+    "event_id": "KXITFMATCH-26JUL29KUKBEL",
+    "settlement_date": "2026-07-29",
+    "kalshi_yes_price": null,
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
     "hardven_yes_token": "",
     "hardven_no_token": ""
   },
@@ -3395,6 +3142,32 @@
     "event_title": "Philippov vs Gretskiy",
     "kalshi_outcome": "Evgeny Philippov",
     "event_id": "KXITFMATCH-26JUL29PHIGRE",
+    "settlement_date": "2026-07-29",
+    "kalshi_yes_price": null,
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "",
+    "hardven_no_token": ""
+  },
+  {
+    "kalshi_ticker": "KXITFMATCH-26JUL29PLAPER-PER",
+    "label": "Will Leon Peranovic win the Plans vs Peranovic: M15 Kursumlijska Banja Round of 32 match?",
+    "event_title": "Plans vs Peranovic",
+    "kalshi_outcome": "Leon Peranovic",
+    "event_id": "KXITFMATCH-26JUL29PLAPER",
+    "settlement_date": "2026-07-29",
+    "kalshi_yes_price": null,
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "",
+    "hardven_no_token": ""
+  },
+  {
+    "kalshi_ticker": "KXITFMATCH-26JUL29PLAPER-PLA",
+    "label": "Will Jorge Plans win the Plans vs Peranovic: M15 Kursumlijska Banja Round of 32 match?",
+    "event_title": "Plans vs Peranovic",
+    "kalshi_outcome": "Jorge Plans",
+    "event_id": "KXITFMATCH-26JUL29PLAPER",
     "settlement_date": "2026-07-29",
     "kalshi_yes_price": null,
     "is_neg_risk": false,
@@ -3459,6 +3232,32 @@
     "hardven_start_time": "2026-07-29T04:30:00Z"
   },
   {
+    "kalshi_ticker": "KXITFMATCH-26JUL29RYBTAN-RYB",
+    "label": "Will Savva Rybkin win the Rybkin vs Tan: M15 Kursumlijska Banja Round of 32 match?",
+    "event_title": "Rybkin vs Tan",
+    "kalshi_outcome": "Savva Rybkin",
+    "event_id": "KXITFMATCH-26JUL29RYBTAN",
+    "settlement_date": "2026-07-29",
+    "kalshi_yes_price": null,
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "",
+    "hardven_no_token": ""
+  },
+  {
+    "kalshi_ticker": "KXITFMATCH-26JUL29RYBTAN-TAN",
+    "label": "Will Beren Tan win the Rybkin vs Tan: M15 Kursumlijska Banja Round of 32 match?",
+    "event_title": "Rybkin vs Tan",
+    "kalshi_outcome": "Beren Tan",
+    "event_id": "KXITFMATCH-26JUL29RYBTAN",
+    "settlement_date": "2026-07-29",
+    "kalshi_yes_price": null,
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "",
+    "hardven_no_token": ""
+  },
+  {
     "kalshi_ticker": "KXITFMATCH-26JUL29SHEKHO-KHO",
     "label": "Will Mikhail Khodorchenko win the Shebekin vs Khodorchenko: M15 Astana Round of 32 match?",
     "event_title": "Shebekin vs Khodorchenko",
@@ -3505,6 +3304,60 @@
     "event_title": "Tazabekov vs Yerdilda",
     "kalshi_outcome": "Yerassyl Yerdilda",
     "event_id": "KXITFMATCH-26JUL29TAZYER",
+    "settlement_date": "2026-07-29",
+    "kalshi_yes_price": null,
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "226804:1633005252:away",
+    "hardven_no_token": "226804:1633005252:home",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-men-astana-r1/matchups/",
+    "hardven_start_time": "2026-07-29T06:00:00Z"
+  },
+  {
+    "kalshi_ticker": "KXITFMATCH-26JUL29VILFUE-FUE",
+    "label": "Will Matyas Fuele win the Villoslada vs Fuele: M15 Xativa Round of 32 match?",
+    "event_title": "Villoslada vs Fuele",
+    "kalshi_outcome": "Matyas Fuele",
+    "event_id": "KXITFMATCH-26JUL29VILFUE",
+    "settlement_date": "2026-07-29",
+    "kalshi_yes_price": null,
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "",
+    "hardven_no_token": ""
+  },
+  {
+    "kalshi_ticker": "KXITFMATCH-26JUL29VILFUE-VIL",
+    "label": "Will Edouard Villoslada win the Villoslada vs Fuele: M15 Xativa Round of 32 match?",
+    "event_title": "Villoslada vs Fuele",
+    "kalshi_outcome": "Edouard Villoslada",
+    "event_id": "KXITFMATCH-26JUL29VILFUE",
+    "settlement_date": "2026-07-29",
+    "kalshi_yes_price": null,
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "",
+    "hardven_no_token": ""
+  },
+  {
+    "kalshi_ticker": "KXITFMATCH-26JUL29VILNAH-NAH",
+    "label": "Will David Naharro win the Villacampa vs Naharro: M15 Xativa Round of 32 match?",
+    "event_title": "Villacampa vs Naharro",
+    "kalshi_outcome": "David Naharro",
+    "event_id": "KXITFMATCH-26JUL29VILNAH",
+    "settlement_date": "2026-07-29",
+    "kalshi_yes_price": null,
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "",
+    "hardven_no_token": ""
+  },
+  {
+    "kalshi_ticker": "KXITFMATCH-26JUL29VILNAH-VIL",
+    "label": "Will Inigo Villacampa win the Villacampa vs Naharro: M15 Xativa Round of 32 match?",
+    "event_title": "Villacampa vs Naharro",
+    "kalshi_outcome": "Inigo Villacampa",
+    "event_id": "KXITFMATCH-26JUL29VILNAH",
     "settlement_date": "2026-07-29",
     "kalshi_yes_price": null,
     "is_neg_risk": false,
@@ -3883,6 +3736,32 @@
     "hardven_no_token": ""
   },
   {
+    "kalshi_ticker": "KXITFWMATCH-26JUL29BATBAZ-BAT",
+    "label": "Will Kira Bataikina win the Bataikina vs Bazderova: W15 Astana Round of 32 match?",
+    "event_title": "Bataikina vs Bazderova",
+    "kalshi_outcome": "Kira Bataikina",
+    "event_id": "KXITFWMATCH-26JUL29BATBAZ",
+    "settlement_date": "2026-07-29",
+    "kalshi_yes_price": null,
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "",
+    "hardven_no_token": ""
+  },
+  {
+    "kalshi_ticker": "KXITFWMATCH-26JUL29BATBAZ-BAZ",
+    "label": "Will Anna Bazderova win the Bataikina vs Bazderova: W15 Astana Round of 32 match?",
+    "event_title": "Bataikina vs Bazderova",
+    "kalshi_outcome": "Anna Bazderova",
+    "event_id": "KXITFWMATCH-26JUL29BATBAZ",
+    "settlement_date": "2026-07-29",
+    "kalshi_yes_price": null,
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "",
+    "hardven_no_token": ""
+  },
+  {
     "kalshi_ticker": "KXITFWMATCH-26JUL29DESJAN-DES",
     "label": "Will Zeel Desai win the Desai vs Jang: W15 Astana Round of 32 match?",
     "event_title": "Desai vs Jang",
@@ -3909,6 +3788,88 @@
     "hardven_no_token": ""
   },
   {
+    "kalshi_ticker": "KXITFWMATCH-26JUL29GRAKOR-GRA",
+    "label": "Will Valentini Grammatikopoulou win the Grammatikopoulou vs Korhonen: W15 Savitaipale Round of 32 match?",
+    "event_title": "Grammatikopoulou vs Korhonen",
+    "kalshi_outcome": "Valentini Grammatikopoulou",
+    "event_id": "KXITFWMATCH-26JUL29GRAKOR",
+    "settlement_date": "2026-07-29",
+    "kalshi_yes_price": null,
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "214389:1633006106:home",
+    "hardven_no_token": "214389:1633006106:away",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-women-savitaipale-r1/matchups/",
+    "hardven_start_time": "2026-07-29T07:00:00Z"
+  },
+  {
+    "kalshi_ticker": "KXITFWMATCH-26JUL29GRAKOR-KOR",
+    "label": "Will Cara Korhonen win the Grammatikopoulou vs Korhonen: W15 Savitaipale Round of 32 match?",
+    "event_title": "Grammatikopoulou vs Korhonen",
+    "kalshi_outcome": "Cara Korhonen",
+    "event_id": "KXITFWMATCH-26JUL29GRAKOR",
+    "settlement_date": "2026-07-29",
+    "kalshi_yes_price": null,
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "",
+    "hardven_no_token": ""
+  },
+  {
+    "kalshi_ticker": "KXITFWMATCH-26JUL29HADMAS-HAD",
+    "label": "Will Imogen Haddad win the Haddad vs Maslenkova: W15 Savitaipale Round of 32 match?",
+    "event_title": "Haddad vs Maslenkova",
+    "kalshi_outcome": "Imogen Haddad",
+    "event_id": "KXITFWMATCH-26JUL29HADMAS",
+    "settlement_date": "2026-07-29",
+    "kalshi_yes_price": null,
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "",
+    "hardven_no_token": ""
+  },
+  {
+    "kalshi_ticker": "KXITFWMATCH-26JUL29HADMAS-MAS",
+    "label": "Will Milana Maslenkova win the Haddad vs Maslenkova: W15 Savitaipale Round of 32 match?",
+    "event_title": "Haddad vs Maslenkova",
+    "kalshi_outcome": "Milana Maslenkova",
+    "event_id": "KXITFWMATCH-26JUL29HADMAS",
+    "settlement_date": "2026-07-29",
+    "kalshi_yes_price": null,
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "",
+    "hardven_no_token": ""
+  },
+  {
+    "kalshi_ticker": "KXITFWMATCH-26JUL29HERNGI-HER",
+    "label": "Will Maria Herazo win the Herazo vs Ngijol Carre: W15 Kursumlijska Banja Round of 32 match?",
+    "event_title": "Herazo vs Ngijol Carre",
+    "kalshi_outcome": "Maria Herazo",
+    "event_id": "KXITFWMATCH-26JUL29HERNGI",
+    "settlement_date": "2026-07-29",
+    "kalshi_yes_price": null,
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "225220:1633006092:home",
+    "hardven_no_token": "225220:1633006092:away",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-women-kursumlijska-banja-r1/matchups/",
+    "hardven_start_time": "2026-07-29T07:00:00Z"
+  },
+  {
+    "kalshi_ticker": "KXITFWMATCH-26JUL29HERNGI-NGI",
+    "label": "Will Mathilde Ngijol Carre win the Herazo vs Ngijol Carre: W15 Kursumlijska Banja Round of 32 match?",
+    "event_title": "Herazo vs Ngijol Carre",
+    "kalshi_outcome": "Mathilde Ngijol Carre",
+    "event_id": "KXITFWMATCH-26JUL29HERNGI",
+    "settlement_date": "2026-07-29",
+    "kalshi_yes_price": null,
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "",
+    "hardven_no_token": ""
+  },
+  {
     "kalshi_ticker": "KXITFWMATCH-26JUL29HOSDYU-DYU",
     "label": "Will Ingkar Dyussebay win the Hosoki vs Dyussebay: W15 Astana Round of 32 match?",
     "event_title": "Hosoki vs Dyussebay",
@@ -3927,6 +3888,34 @@
     "event_title": "Hosoki vs Dyussebay",
     "kalshi_outcome": "Yuka Hosoki",
     "event_id": "KXITFWMATCH-26JUL29HOSDYU",
+    "settlement_date": "2026-07-29",
+    "kalshi_yes_price": null,
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "",
+    "hardven_no_token": ""
+  },
+  {
+    "kalshi_ticker": "KXITFWMATCH-26JUL29KOMZHE-KOM",
+    "label": "Will Margaux Komano win the Komano vs Zhenikhova: W15 Savitaipale Round of 32 match?",
+    "event_title": "Komano vs Zhenikhova",
+    "kalshi_outcome": "Margaux Komano",
+    "event_id": "KXITFWMATCH-26JUL29KOMZHE",
+    "settlement_date": "2026-07-29",
+    "kalshi_yes_price": null,
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "214389:1633011498:home",
+    "hardven_no_token": "214389:1633011498:away",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-women-savitaipale-r1/matchups/",
+    "hardven_start_time": "2026-07-29T07:00:00Z"
+  },
+  {
+    "kalshi_ticker": "KXITFWMATCH-26JUL29KOMZHE-ZHE",
+    "label": "Will Sonja Zhenikhova win the Komano vs Zhenikhova: W15 Savitaipale Round of 32 match?",
+    "event_title": "Komano vs Zhenikhova",
+    "kalshi_outcome": "Sonja Zhenikhova",
+    "event_id": "KXITFWMATCH-26JUL29KOMZHE",
     "settlement_date": "2026-07-29",
     "kalshi_yes_price": null,
     "is_neg_risk": false,
@@ -4017,6 +4006,34 @@
     "hardven_start_time": "2026-07-29T05:00:00Z"
   },
   {
+    "kalshi_ticker": "KXITFWMATCH-26JUL29MUNDJE-DJE",
+    "label": "Will Hana Djedovic win the Munk Mortensen vs Djedovic: W15 Kursumlijska Banja Round of 32 match?",
+    "event_title": "Munk Mortensen vs Djedovic",
+    "kalshi_outcome": "Hana Djedovic",
+    "event_id": "KXITFWMATCH-26JUL29MUNDJE",
+    "settlement_date": "2026-07-29",
+    "kalshi_yes_price": null,
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "225220:1633005987:away",
+    "hardven_no_token": "225220:1633005987:home",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-women-kursumlijska-banja-r1/matchups/",
+    "hardven_start_time": "2026-07-29T07:00:00Z"
+  },
+  {
+    "kalshi_ticker": "KXITFWMATCH-26JUL29MUNDJE-MUN",
+    "label": "Will Rebecca Munk Mortensen win the Munk Mortensen vs Djedovic: W15 Kursumlijska Banja Round of 32 match?",
+    "event_title": "Munk Mortensen vs Djedovic",
+    "kalshi_outcome": "Rebecca Munk Mortensen",
+    "event_id": "KXITFWMATCH-26JUL29MUNDJE",
+    "settlement_date": "2026-07-29",
+    "kalshi_yes_price": null,
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "",
+    "hardven_no_token": ""
+  },
+  {
     "kalshi_ticker": "KXITFWMATCH-26JUL29SOZMIL-MIL",
     "label": "Will Victoria Milovanova win the Sozaonova vs Milovanova: W15 Astana Round of 32 match?",
     "event_title": "Sozaonova vs Milovanova",
@@ -4045,6 +4062,34 @@
     "hardven_no_token": "9292:1633005911:away",
     "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-women-astana-r1/matchups/",
     "hardven_start_time": "2026-07-29T05:00:00Z"
+  },
+  {
+    "kalshi_ticker": "KXITFWMATCH-26JUL29VANBUL-BUL",
+    "label": "Will Arina Bulatova win the Van Zonneveld vs Bulatova: W15 Kursumlijska Banja Round of 32 match?",
+    "event_title": "Van Zonneveld vs Bulatova",
+    "kalshi_outcome": "Arina Bulatova",
+    "event_id": "KXITFWMATCH-26JUL29VANBUL",
+    "settlement_date": "2026-07-29",
+    "kalshi_yes_price": null,
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "225220:1633011488:away",
+    "hardven_no_token": "225220:1633011488:home",
+    "hardven_league_url": "https://www.pinnacle.bet/en/tennis/itf-women-kursumlijska-banja-r1/matchups/",
+    "hardven_start_time": "2026-07-29T07:00:00Z"
+  },
+  {
+    "kalshi_ticker": "KXITFWMATCH-26JUL29VANBUL-VAN",
+    "label": "Will Charlotte Van Zonneveld win the Van Zonneveld vs Bulatova: W15 Kursumlijska Banja Round of 32 match?",
+    "event_title": "Van Zonneveld vs Bulatova",
+    "kalshi_outcome": "Charlotte Van Zonneveld",
+    "event_id": "KXITFWMATCH-26JUL29VANBUL",
+    "settlement_date": "2026-07-29",
+    "kalshi_yes_price": null,
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "",
+    "hardven_no_token": ""
   },
   {
     "kalshi_ticker": "KXITFWMATCH-26JUL29YOSKIM-KIM",

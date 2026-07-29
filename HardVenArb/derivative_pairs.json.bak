@@ -1,27 +1,15 @@
 [
   {
-    "kalshi_ticker": "KXATPGSPREAD-26JUL27FILJOD-JOD2",
+    "kalshi_ticker": "KXATPGSPREAD-26JUL27DETSI-DE3",
     "market_type": "spread",
-    "line": 1.5,
-    "label": "Arthur Fils vs Rafael Jodar \u2014 Rafael Jodar -1.5",
-    "event_id": "KXATPGSPREAD-26JUL27FILJOD",
+    "line": 2.5,
+    "label": "Alex De Minaur vs Stefanos Tsitsipas \u2014 Alex de Minaur -2.5",
+    "event_id": "KXATPGSPREAD-26JUL27DETSI",
     "settlement_date": "2026-07-27",
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "4356:1632981717:spread:-1.5:away",
-    "hardven_no_token": "4356:1632981717:spread:1.5:home"
-  },
-  {
-    "kalshi_ticker": "KXATPGSPREAD-26JUL27MANTIE-MAN2",
-    "market_type": "spread",
-    "line": 1.5,
-    "label": "Adrian Mannarino vs Learner Tien \u2014 Adrian Mannarino -1.5",
-    "event_id": "KXATPGSPREAD-26JUL27MANTIE",
-    "settlement_date": "2026-07-27",
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "4356:1632981693:spread:-1.5:home",
-    "hardven_no_token": "4356:1632981693:spread:1.5:away"
+    "hardven_yes_token": "4356:1632981691:spread:-2.5:home",
+    "hardven_no_token": "4356:1632981691:spread:2.5:away"
   },
   {
     "kalshi_ticker": "KXATPGSPREAD-26JUL27NAKETC-NAK3",
@@ -32,8 +20,8 @@
     "settlement_date": "2026-07-27",
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "4356:1632981697:spread:-2.5:home",
-    "hardven_no_token": "4356:1632981697:spread:2.5:away"
+    "hardven_yes_token": "4356:1632981701:spread:-2.5:home",
+    "hardven_no_token": "4356:1632981701:spread:2.5:away"
   },
   {
     "kalshi_ticker": "KXATPGTOTAL-26JUL27DETSI-23",
@@ -48,30 +36,6 @@
     "hardven_no_token": "4356:1632981691:total:22.5:under"
   },
   {
-    "kalshi_ticker": "KXATPGTOTAL-26JUL27FILJOD-29",
-    "market_type": "total",
-    "line": 28.5,
-    "label": "Arthur Fils vs Rafael Jodar \u2014 Over 28.5",
-    "event_id": "KXATPGTOTAL-26JUL27FILJOD",
-    "settlement_date": "2026-07-27",
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "4356:1632981717:total:28.5:over",
-    "hardven_no_token": "4356:1632981717:total:28.5:under"
-  },
-  {
-    "kalshi_ticker": "KXATPGTOTAL-26JUL27MANTIE-28",
-    "market_type": "total",
-    "line": 27.5,
-    "label": "Adrian Mannarino vs Learner Tien \u2014 Over 27.5",
-    "event_id": "KXATPGTOTAL-26JUL27MANTIE",
-    "settlement_date": "2026-07-27",
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "4356:1632981693:total:27.5:over",
-    "hardven_no_token": "4356:1632981693:total:27.5:under"
-  },
-  {
     "kalshi_ticker": "KXATPGTOTAL-26JUL27NAKETC-23",
     "market_type": "total",
     "line": 22.5,
@@ -80,8 +44,8 @@
     "settlement_date": "2026-07-27",
     "is_neg_risk": false,
     "hardven_min_size": 1.0,
-    "hardven_yes_token": "4356:1632981697:total:22.5:over",
-    "hardven_no_token": "4356:1632981697:total:22.5:under"
+    "hardven_yes_token": "4356:1632981701:total:22.5:over",
+    "hardven_no_token": "4356:1632981701:total:22.5:under"
   },
   {
     "kalshi_ticker": "KXATPGSPREAD-26JUL26BROMOU-MOU2",
@@ -144,18 +108,6 @@
     "hardven_no_token": "197382:1632989609:spread:1.5:away"
   },
   {
-    "kalshi_ticker": "KXATPGSPREAD-26JUL27GIRHEW-GIR6",
-    "market_type": "spread",
-    "line": 5.5,
-    "label": "Marcos Giron vs Cruz Hewitt \u2014 Marcos Giron -5.5",
-    "event_id": "KXATPGSPREAD-26JUL27GIRHEW",
-    "settlement_date": "2026-07-28",
-    "is_neg_risk": false,
-    "hardven_min_size": 1.0,
-    "hardven_yes_token": "4356:1632990450:spread:-5.5:home",
-    "hardven_no_token": "4356:1632990450:spread:5.5:away"
-  },
-  {
     "kalshi_ticker": "KXATPGSPREAD-26JUL27SVAMEN-MEN5",
     "market_type": "spread",
     "line": 4.5,
@@ -202,6 +154,18 @@
     "hardven_min_size": 1.0,
     "hardven_yes_token": "197382:1632989609:total:23.5:over",
     "hardven_no_token": "197382:1632989609:total:23.5:under"
+  },
+  {
+    "kalshi_ticker": "KXATPGTOTAL-26JUL27GIRHEW-20",
+    "market_type": "total",
+    "line": 19.5,
+    "label": "Marcos Giron vs Cruz Hewitt \u2014 Over 19.5",
+    "event_id": "KXATPGTOTAL-26JUL27GIRHEW",
+    "settlement_date": "2026-07-28",
+    "is_neg_risk": false,
+    "hardven_min_size": 1.0,
+    "hardven_yes_token": "4356:1632990450:total:19.5:over",
+    "hardven_no_token": "4356:1632990450:total:19.5:under"
   },
   {
     "kalshi_ticker": "KXATPGSPREAD-26JUL28KOUWIN-KOU4",

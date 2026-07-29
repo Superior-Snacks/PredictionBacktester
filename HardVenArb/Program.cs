@@ -591,7 +591,7 @@ Console.CancelKeyPress += (_, e) =>
 // Bare keypresses (no Ctrl) — works in tmux, SSH, and screen sessions.
 Console.WriteLine("[KEYS] N=NearMiss  A=StatusDash" +
     (executor != null ? "  H=FavHedge" : "") +
-    (isDryRun ? "  U=InjectMismatch  K=SimReconnect  E=InjectErrors  X=DropHardVenBook" : "") +
+    (isDryRun ? "  I=InjectFavArb  O=InjectDogArb  U=InjectMismatch  K=SimReconnect  E=InjectErrors  X=DropHardVenBook" : "") +
     (isDebug  ? "  │  G=Discovery  T=Trades  W=Balance  F=Feed  R=Books" : ""));
 _ = Task.Run(() =>
 {
