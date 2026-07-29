@@ -428,7 +428,13 @@ if (isLive || isDryRun)
     const decimal MAX_BET_USD          = 30m;    // max combined dollar cost per arb entry
     const decimal BALANCE_BUFFER_PCT   = 0.20m;  // per-platform reserve (fraction of maxBet)
     const decimal EXECUTION_THRESHOLD  = 0.995m; // net-cost ceiling for arb detection
-    const decimal EXEC_NET_FLOOR       = 0.985m; // minimum net to attempt execution (1.5¢/set profit floor); Kalshi always gets ask+1¢ limit regardless
+    // Minimum net to attempt execution (the thin-margin slippage buffer). Default 0.985 = require ~1.5¢/set. On
+    // stable PRE-LIVE lines that settle within ~2 days, at price-taker size (no market impact), you can run it
+    // thin: HARDVEN_EXEC_NET_FLOOR closer to EXECUTION_THRESHOLD captures down to any positive edge after fees.
+    // Set it >= EXECUTION_THRESHOLD to disable the extra floor entirely (execute any detected arb). Kept above
+    // MIN_PLAUSIBLE_NET or the executable band [MIN_PLAUSIBLE_NET, floor] collapses and nothing fires.
+    decimal EXEC_NET_FLOOR = decimal.TryParse(Environment.GetEnvironmentVariable("HARDVEN_EXEC_NET_FLOOR"),
+        NumberStyles.Any, CultureInfo.InvariantCulture, out var _enf) && _enf > 0m ? _enf : 0.985m;
     const decimal MIN_PLAUSIBLE_NET    = 0.90m;  // reject arbs cheaper than this: a >10% "edge" signals a mispriced/mismatched pair (JOR), not a real arb
     const decimal LOW_BALANCE_ALERT_USD = 15m;   // Discord-alert when either venue's cash drops below this
 
