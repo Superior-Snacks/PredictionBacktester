@@ -481,14 +481,26 @@ if (isLive || isDryRun)
     // so the bot sees a failed HardVen leg and runs the (simulated) Kalshi recovery — which is precisely the
     // path to rehearse. Ignored outside dry-run.
     bool liveBetPath = Environment.GetEnvironmentVariable("HARDVEN_LIVE_BET_PATH") == "1";
+    // HARDVEN_DRYRUN_UI=1 = PROPER dry-run simulation: the simulated HardVen client first drives the REAL Pinnacle
+    // UI verify-only (locate the game, click the moneyline, verify the popover, enter the stake — nothing placed)
+    // and THEN simulates the fill. So a dry run exercises the true browser placement steps end-to-end, no money,
+    // while fills/scenarios stay simulated. Needs the logged-in sidecar. Ignored under LIVE_BET_PATH / non-dry-run.
+    bool dryRunUi = Environment.GetEnvironmentVariable("HARDVEN_DRYRUN_UI") == "1";
     IHardVenOrderExecutor hardvenExec = isDryRun && !liveBetPath
-        ? new SimulatedHardVenClient(fillProfile!)
+        ? new SimulatedHardVenClient(fillProfile!, dryRunUi ? hardvenOrderClient : null)
         : hardvenOrderClient;
     if (isDryRun && liveBetPath)
     {
         Console.ForegroundColor = ConsoleColor.Yellow;
         Console.WriteLine("[DRESS REHEARSAL] HARDVEN_LIVE_BET_PATH=1 — HardVen leg routes to the REAL sidecar " +
                           "/bet (Kalshi stays simulated). Placement is still blocked by the sidecar's own gates.");
+        Console.ResetColor();
+    }
+    else if (isDryRun && dryRunUi)
+    {
+        Console.ForegroundColor = ConsoleColor.Cyan;
+        Console.WriteLine("[DRYRUN UI] HARDVEN_DRYRUN_UI=1 — each HardVen BUY drives the REAL Pinnacle UI verify-only " +
+                          "(locate + click moneyline + verify), then the fill is simulated. Nothing is placed; needs the logged-in sidecar.");
         Console.ResetColor();
     }
     // Total combined open-exposure cap. $1,000 = full deployment of the $500/platform capital;

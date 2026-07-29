@@ -154,6 +154,12 @@ books aren't stale-overridden — the gates trust the injected prices). If you s
 pair …`, wait for a tennis pair's books to go live and retry. Prereq for L13: raise `--max-bet` (≈$22) or every
 inject skips with `ladder: no valid rung`.
 
+**Proper end-to-end sim — add `HARDVEN_DRYRUN_UI=1`.** Without it the HardVen fill is pure numbers (no browser).
+With it, each injected BUY first drives the **real Pinnacle UI verify-only** (locate the game → click the
+moneyline → verify the popover → enter the stake, **nothing placed**) — you watch it in the managed window —
+`[DRYRUN UI] Pinnacle moneyline located + verified @ X`, then the fill is simulated so the arb + recovery still
+run. A verify failure fails the leg (faithful). This makes the inject a true executor→browser integration test.
+
 | # | What | PASS | FAIL |
 |---|------|------|------|
 | L11 | Favorite-on-Kalshi gate | tennis arb with Kalshi holding the **underdog** → `[EXEC SKIP] … UNDERDOG on Kalshi` + journal `UNDERDOG_ON_KALSHI`; **favorite-side** arbs execute | an underdog-on-Kalshi tennis arb executes while the gate is ON |

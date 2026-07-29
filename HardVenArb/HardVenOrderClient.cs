@@ -4,6 +4,9 @@ using System.Text.Json;
 
 namespace HardVenArb;
 
+/// <summary>Result of a DRY-RUN UI verify-only drive (locate + click + popover-verify, nothing placed).</summary>
+public sealed record HardVenVerifyResult(bool Verified, decimal Odds, string Reason);
+
 /// <summary>
 /// Live client for the HardVen betting-site venue. It is a THIN HTTP client to the local sidecar
 /// (the same process that serves <c>GET /odds</c>) — the sidecar owns the Pinnacle session/auth, so all
@@ -207,6 +210,49 @@ public sealed class HardVenOrderClient : IHardVenOrderExecutor
             takingAmount = Math.Round(filledShares, 4).ToString(CultureInfo.InvariantCulture),   // shares received
             makingAmount = Math.Round(spentUsd, 4).ToString(CultureInfo.InvariantCulture),       // USD spent
         });
+    }
+
+    /// <summary>DRY-RUN "proper simulation" hook: drive the REAL Pinnacle UI verify-only — locate the game, click
+    /// the moneyline, read + verify the Quick Bet popover, enter the stake — via the sidecar <c>POST /bet/test</c>
+    /// with <c>submit=false</c>. It performs the true placement steps in the managed browser but PLACES NOTHING
+    /// (verify-only needs no <c>HARDVEN_BET_ENABLE</c>). Same contract→stake conversion as <see cref="SubmitOrderAsync"/>
+    /// so the stake/odds shown are what a real bet would use. Never throws — a UI hiccup returns Verified=false
+    /// with the reason, so the dry-run caller can fail the leg (faithful) without crashing.</summary>
+    public async Task<HardVenVerifyResult> VerifyPlacementAsync(string tokenId, decimal price, decimal size)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(_sidecarBase) || string.IsNullOrWhiteSpace(tokenId) || price <= 0m || size <= 0m)
+                return new HardVenVerifyResult(false, 0m, "verify skipped (no sidecar / bad args)");
+
+            decimal stakeUsd  = size * price;
+            decimal stakeAcct = Math.Floor(stakeUsd / _fxToUsd * 100m) / 100m;
+            if (stakeAcct <= 0m) stakeAcct = 0.01m;               // verify-only places nothing; a tiny stake still exercises the UI
+            decimal minOdds   = Math.Round(1m / price, 4);
+
+            var payload = JsonSerializer.Serialize(new
+            {
+                selection_id = tokenId, stake = stakeAcct, max_odds = minOdds, submit = false, record = false
+            });
+            using var content = new StringContent(payload, System.Text.Encoding.UTF8, "application/json");
+            using var resp    = await _http.PostAsync($"{_sidecarBase}/bet/test", content);
+            string body       = await resp.Content.ReadAsStringAsync();
+            if (!resp.IsSuccessStatusCode)
+                return new HardVenVerifyResult(false, 0m, $"/bet/test HTTP {(int)resp.StatusCode}: {Truncate(body)}");
+
+            using var doc = JsonDocument.Parse(body);
+            var root      = doc.RootElement;
+            string reason = root.TryGetProperty("reason", out var rsn) ? rsn.GetString() ?? "" : "";
+            decimal odds  = ReadDecimal(root, "actual_odds");
+            // verify-only OK = the popover matched the intended market ("verify-only: would place …"). A locate
+            // miss / American odds / wrong market yields a different reason → Verified=false.
+            bool verified = reason.StartsWith("verify-only", StringComparison.OrdinalIgnoreCase);
+            return new HardVenVerifyResult(verified, odds, reason);
+        }
+        catch (Exception ex)
+        {
+            return new HardVenVerifyResult(false, 0m, $"verify error: {ex.Message}");
+        }
     }
 
     /// <summary>Poll a placed bet via <c>GET /bets/{id}</c>, mapped to the <c>status</c>/<c>size_matched</c>

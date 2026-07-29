@@ -19,19 +19,50 @@ namespace HardVenArb;
 public sealed class SimulatedHardVenClient : IHardVenOrderExecutor
 {
     private readonly SimulatedFillProfile _profile;
+    private readonly HardVenOrderClient? _uiVerifier;                                 // dry-run "proper sim": drive the REAL UI verify-only
     private readonly ConcurrentDictionary<string, decimal> _positions = new();       // tokenId -> net shares held
     private readonly ConcurrentDictionary<string, (string Status, decimal Shares)> _orders = new();
 
-    public SimulatedHardVenClient(SimulatedFillProfile profile) => _profile = profile;
+    /// <param name="uiVerifier">When set (HARDVEN_DRYRUN_UI=1), each BUY first drives the REAL Pinnacle UI
+    /// verify-only (locate + click moneyline + verify popover + stake, nothing placed) before the fill is
+    /// simulated — a proper end-to-end dry run. A verify FAILURE fails the leg (faithful: a real bet couldn't
+    /// place), so the executor runs recovery. Null = pure numeric sim (no browser).</param>
+    public SimulatedHardVenClient(SimulatedFillProfile profile, HardVenOrderClient? uiVerifier = null)
+    {
+        _profile    = profile;
+        _uiVerifier = uiVerifier;
+    }
 
     public async Task<string> SubmitOrderAsync(
         string tokenId, decimal price, decimal size, int side,
         bool negRisk = false, string tickSize = "0.01", int feeRateBps = 0)
     {
+        bool    isSell    = side != 0;                                 // 0 = BUY; non-zero = SELL (recovery reversal)
+
+        // DRY-RUN "proper simulation": for a BUY, actually drive the Pinnacle UI (locate + click the moneyline +
+        // verify) with NOTHING placed, then simulate the fill. A verify failure = the real bet wouldn't place →
+        // fail the leg so recovery runs (faithful). SELL is never driven (no-reverse model; sim handles it).
+        if (!isSell && _uiVerifier != null)
+        {
+            var v = await _uiVerifier.VerifyPlacementAsync(tokenId, price, size);
+            if (v.Verified)
+                Console.WriteLine($"[DRYRUN UI] Pinnacle moneyline located + verified @ {v.Odds:0.000} — real UI drive OK, nothing placed; simulating fill");
+            else
+            {
+                Console.WriteLine($"[DRYRUN UI] Pinnacle verify FAILED — {v.Reason} — failing the leg (a real bet would not place)");
+                string failId = $"SIM_H_UIFAIL_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}";
+                _orders[failId] = ("canceled", 0m);
+                return JsonSerializer.Serialize(new
+                {
+                    success = false, orderID = failId, status = "canceled",
+                    takingAmount = "0", makingAmount = "0", reason = v.Reason,
+                });
+            }
+        }
+
         if (_profile.FillLatencyMsHardVen > 0)
             await Task.Delay(_profile.FillLatencyMsHardVen);
 
-        bool    isSell    = side != 0;                                 // 0 = BUY; non-zero = SELL (recovery reversal)
         decimal filled    = _profile.SimulateHardVenFill(Math.Abs(size));
         decimal fillPrice = _profile.GetHardVenFillPrice(price);
         decimal dollars   = Math.Round(filled * fillPrice, 4);
