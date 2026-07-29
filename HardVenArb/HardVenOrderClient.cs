@@ -228,7 +228,10 @@ public sealed class HardVenOrderClient : IHardVenOrderExecutor
             decimal stakeUsd  = size * price;
             decimal stakeAcct = Math.Floor(stakeUsd / _fxToUsd * 100m) / 100m;
             if (stakeAcct <= 0m) stakeAcct = 0.01m;               // verify-only places nothing; a tiny stake still exercises the UI
-            decimal minOdds   = Math.Round(1m / price, 4);
+            // Verify-only is a UI EXERCISE (locate + click + verify the popover), not a price gate — accept
+            // whatever odds are shown (1.01 floor). Deriving max_odds from a possibly-synthetic price would make
+            // the popover report "odds moved" and fail the drive whenever the real odds differ (e.g. a dry-run inject).
+            decimal minOdds   = 1.01m;
 
             var payload = JsonSerializer.Serialize(new
             {

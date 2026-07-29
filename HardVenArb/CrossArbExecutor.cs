@@ -608,7 +608,23 @@ public class CrossArbExecutor
 
     // ── Core execution ────────────────────────────────────────────────────────
 
-    private async Task ExecuteAsync(string pairId, string arbType, decimal detectedKAsk, decimal detectedPAsk)
+    /// <summary>DRY-RUN gate tester (the `I`/`O` inject keys): fire a SYNTHETIC arb straight into the execution
+    /// path with the DATA-QUALITY gates bypassed (`testMode`) — pre-live, WS-verify, and the stale-book REST
+    /// override all check REAL book state that is meaningless for a fabricated price and would otherwise skip the
+    /// arb before it reaches the gates under test (favourite / ladder / recovery). Everything else — favourite
+    /// gate, threshold, ladder sizing, simulated fills, recovery — runs exactly as live. Dry-run only.</summary>
+    public void InjectTestArb(string pairId, string arbType, decimal kAsk, decimal pAsk)
+    {
+        Console.WriteLine($"[INJECT] test arb {pairId} {arbType} K={kAsk:0.0000} P={pAsk:0.0000} " +
+                          "— bypassing pre-live / WS-verify / stale gates (synthetic price); favourite+ladder+recovery run as live");
+        _ = Task.Run(async () =>
+        {
+            try { await ExecuteAsync(pairId, arbType, kAsk, pAsk, testMode: true); }
+            catch (Exception ex) { Console.WriteLine($"[INJECT ERROR] {pairId}: {ex.Message}"); }
+        });
+    }
+
+    private async Task ExecuteAsync(string pairId, string arbType, decimal detectedKAsk, decimal detectedPAsk, bool testMode = false)
     {
         if (_halted || _connectionHalted)
         {
@@ -627,11 +643,11 @@ public class CrossArbExecutor
             Console.WriteLine($"[EXEC SKIP] {pairId}: already in-flight (previous attempt still running)");
             return;
         }
-        try   { await ExecuteLockedAsync(pairId, arbType, detectedKAsk, detectedPAsk); }
+        try   { await ExecuteLockedAsync(pairId, arbType, detectedKAsk, detectedPAsk, testMode); }
         finally { _inFlight.TryRemove(pairId, out _); }
     }
 
-    private async Task ExecuteLockedAsync(string pairId, string arbType, decimal kLegAsk, decimal pLegAsk)
+    private async Task ExecuteLockedAsync(string pairId, string arbType, decimal kLegAsk, decimal pLegAsk, bool testMode = false)
     {
         long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 
@@ -719,7 +735,7 @@ public class CrossArbExecutor
         // stable pre-live lines; in-play needs the Pinnacle-first model, not built yet). Both HardVen legs share
         // the match state, so checking the chosen one is enough.
         var chosenHardVenBook = arbType == "K_YES_P_NO" ? pNo : pYes;
-        if (_preLiveOnly && chosenHardVenBook.IsLive)
+        if (_preLiveOnly && !testMode && chosenHardVenBook.IsLive)
         {
             Console.WriteLine($"[EXEC SKIP] {pair.Label}: IN-PLAY — pre-live-only gate is ON (HARDVEN_PRELIVE_ONLY=0 to allow in-play)");
             return;
@@ -729,7 +745,7 @@ public class CrossArbExecutor
         // screening-only httpx re-seed of an untabbed tail league. If unverified, skip — the telemetry has
         // already fired /verify on this window open (promoting the league to a live tab), so the re-opened arb
         // will pass once it's WS-covered. Never risks real money on a possibly-stale screening price.
-        if (_requireWsVerified && !_telemetry.IsHardVenVerified(hardvenToken))
+        if (_requireWsVerified && !testMode && !_telemetry.IsHardVenVerified(hardvenToken))
         {
             Console.WriteLine($"[EXEC SKIP] {pair.Label}: HardVen leg NOT WS-verified (screening-only) — " +
                               "awaiting verify tab; will execute once WS-confirmed");
@@ -776,7 +792,7 @@ public class CrossArbExecutor
             double maxAgeMs = Math.Max(kAgeMs, pAgeMs);
             bool staleByAge = maxAgeMs >= AbsoluteStaleMs;
 
-            if ((venueSkewMs >= StaleGateMs || staleByAge) && _restVerifier != null)
+            if (!testMode && (venueSkewMs >= StaleGateMs || staleByAge) && _restVerifier != null)
             {
                 string reason = staleByAge && venueSkewMs < StaleGateMs
                     ? $"age={maxAgeMs:0}ms" : $"skew={venueSkewMs:0}ms";
@@ -939,8 +955,11 @@ public class CrossArbExecutor
             var kBook = arbType == "K_YES_P_NO" ? kYes : kNo;
             var pBook = arbType == "K_YES_P_NO" ? pNo  : pYes;
             decimal kLimitDec     = kLegAsk + 0.01m;   // mirrors kPriceCents calc above
-            decimal kDepthAtLimit = kBook.GetAskVolumeAtOrBelow(kLimitDec);
-            decimal pDepthAtLimit = pBook.GetAskVolumeAtOrBelow(pLimitAsk);
+            // testMode (inject key): the SYNTHETIC price won't have real depth at that limit (the real ask is
+            // elsewhere), so the depth read would return 0 → "no valid rung". Use a synthetic depth so the ladder
+            // sizes normally — 300 makes the 1/3-cap 100, exercising rung-snap (and the cap at higher --max-bet).
+            decimal kDepthAtLimit = testMode ? 300m : kBook.GetAskVolumeAtOrBelow(kLimitDec);
+            decimal pDepthAtLimit = testMode ? 300m : pBook.GetAskVolumeAtOrBelow(pLimitAsk);
 
             var (ladderContracts, ladderStake) = StakeLadder.SizeBet(
                 hardvenPrice:    pLegAsk,

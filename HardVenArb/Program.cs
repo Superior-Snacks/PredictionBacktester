@@ -660,34 +660,35 @@ _ = Task.Run(() =>
                 case ConsoleKey.I when isDryRun:   // inject a FAVOURITE-on-Kalshi test arb
                 case ConsoleKey.O when isDryRun:   // inject an UNDERDOG-on-Kalshi test arb
                 {
-                    // DRY-RUN gate tester: fire a synthetic arb through the REAL executor path (all gates,
-                    // simulated fills — no money) so L11/L13/L14 can be exercised without waiting for a real
-                    // window. Prices come from the detection event and the gates trust them (no WS re-read),
-                    // so kAsk chooses the side: >0.5 favourite (proceeds), <0.5 underdog (favourite-gate skip).
+                    // DRY-RUN gate tester: fire a synthetic arb through InjectTestArb, which runs the REAL executor
+                    // path with the DATA-QUALITY gates bypassed (pre-live / WS-verify / stale — meaningless for a
+                    // fabricated price) so it reaches the gates under test (favourite / ladder / recovery). Fills
+                    // are simulated (no money). kAsk chooses the side: >0.5 favourite (proceeds), <0.5 underdog (skip).
                     if (executor == null) { Console.WriteLine("[KEYS] Executor not active — start --dry-run first"); break; }
                     bool favorite = key == ConsoleKey.I;
-                    // Pick an eligible pair: not 3-way, all 4 books subscribed, and PRE-LIVE (so the pre-live gate
-                    // passes and fresh books aren't stale-REST-overridden, which would replace our chosen prices).
-                    CrossPair? inj = null;
-                    foreach (var p in pairs)
-                    {
-                        if (p.ThreeWay) continue;
-                        if (!state.Books.ContainsKey($"K:{p.KalshiTicker}") || !state.Books.ContainsKey($"K:{p.KalshiTicker}_NO")) continue;
-                        if (!state.Books.TryGetValue($"H:{p.HardVenYesTokenId}", out var yBook) || yBook.IsLive) continue;
-                        if (!state.Books.TryGetValue($"H:{p.HardVenNoTokenId}",  out var nBook) || nBook.IsLive) continue;
-                        inj = p; break;
-                    }
+                    // Need all 4 books subscribed (for sizing/depth). PREFER a pre-live pair (its Pinnacle moneyline
+                    // is live, so a DRYRUN_UI verify can locate it), but fall back to any subscribed pair since
+                    // testMode bypasses the pre-live gate anyway.
+                    var inj = pairs.FirstOrDefault(p => !p.ThreeWay
+                            && state.Books.ContainsKey($"K:{p.KalshiTicker}") && state.Books.ContainsKey($"K:{p.KalshiTicker}_NO")
+                            && state.Books.TryGetValue($"H:{p.HardVenYesTokenId}", out var y) && !y.IsLive
+                            && state.Books.TryGetValue($"H:{p.HardVenNoTokenId}",  out var n) && !n.IsLive)
+                        ?? pairs.FirstOrDefault(p => !p.ThreeWay
+                            && state.Books.ContainsKey($"K:{p.KalshiTicker}") && state.Books.ContainsKey($"K:{p.KalshiTicker}_NO")
+                            && state.Books.ContainsKey($"H:{p.HardVenYesTokenId}") && state.Books.ContainsKey($"H:{p.HardVenNoTokenId}"));
                     if (inj == null)
                     {
-                        Console.WriteLine("[KEYS] inject: no eligible PRE-LIVE pair with all 4 books subscribed right now — wait for a tennis pair to go live, then retry");
+                        Console.WriteLine("[KEYS] inject: no pair with all 4 books subscribed yet — wait a moment for books to load, then retry");
                         break;
                     }
                     decimal kAsk = favorite ? 0.55m : 0.45m;   // Kalshi YES ask: >0.5 favourite, <0.5 underdog
-                    decimal pAsk = favorite ? 0.42m : 0.52m;   // net ~0.97 < 1.0 -> a genuine arb either way
-                    decimal net  = kAsk + pAsk;
-                    Console.WriteLine($"[KEYS] INJECT test arb -> {inj.Label} | {(favorite ? "FAVOURITE" : "UNDERDOG")} on Kalshi " +
-                                      $"(kAsk={kAsk:0.00} pAsk={pAsk:0.00} net={net:0.00}) | K_YES_P_NO | dry-run, simulated fills");
-                    executor.OnArbOpened(inj.PairId, net, "K_YES_P_NO", 500m, kAsk, pAsk);
+                    // net = kAsk + pAsk + Kalshi fee(~0.017) must sit in the EXECUTABLE band [0.90, 0.985]:
+                    // favourite 0.55+0.40+0.017=0.967, underdog 0.45+0.50+0.017=0.967 — both clear the thin-margin
+                    // floor (0.985) and the too-good floor (0.90), so they actually reach sizing/ladder/fill.
+                    decimal pAsk = favorite ? 0.40m : 0.50m;
+                    Console.WriteLine($"[KEYS] INJECT {(favorite ? "FAVOURITE" : "UNDERDOG")}-on-Kalshi test arb -> {inj.Label} " +
+                                      $"(kAsk={kAsk:0.00} pAsk={pAsk:0.00}) | K_YES_P_NO");
+                    executor.InjectTestArb(inj.PairId, "K_YES_P_NO", kAsk, pAsk);
                     break;
                 }
             }
