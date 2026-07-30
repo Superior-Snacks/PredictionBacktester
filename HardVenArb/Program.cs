@@ -552,6 +552,15 @@ if (isLive || isDryRun)
     string execLabel  = isDryRun ? $"DRY RUN [{scenarioName}] — no real orders" : "LIVE";
     string minBuyTag  = minBuy ? "  MIN-BUY=1" : $"  maxBet=${MAX_BET_USD:0.00}";
     Console.WriteLine($"[EXECUTOR] {execLabel} |{minBuyTag} buffer={BALANCE_BUFFER_PCT:P0} maxExposure=${maxExposureUsd:0.00} threshold={EXECUTION_THRESHOLD:0.000} cooldown=120s");
+    // Show the EXECUTION GATES explicitly — "why did/didn't it fire" is otherwise invisible until a skip line
+    // appears, and the favourite gate's start state (env HARDVEN_FAVORITE_KALSHI_SPORTS, live-toggled by H) is
+    // easy to misremember mid-session.
+    Console.WriteLine($"[EXECUTOR] gates: favoriteOnKalshi={(executor.FavoriteGateOn ? "ON" : "OFF")} " +
+                      $"(min {Environment.GetEnvironmentVariable("HARDVEN_FAVORITE_MIN") ?? "0.5"}, scope " +
+                      $"{Environment.GetEnvironmentVariable("HARDVEN_FAVORITE_KALSHI_SPORTS") ?? "tennis"}, H toggles) | " +
+                      $"preLiveOnly={(Environment.GetEnvironmentVariable("HARDVEN_PRELIVE_ONLY") != "0" ? "ON" : "OFF")} | " +
+                      $"requireWsVerified={(Environment.GetEnvironmentVariable("HARDVEN_REQUIRE_WS_VERIFIED") != "0" ? "ON" : "OFF")} | " +
+                      $"execNetFloor={EXEC_NET_FLOOR:0.000}");
 }
 else // --telemetry
 {
