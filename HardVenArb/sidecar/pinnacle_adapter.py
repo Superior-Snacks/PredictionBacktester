@@ -1981,7 +1981,10 @@ class PinnacleAdapter(BookAdapter):
 
         Deliberately bypasses the `HARDVEN_BET_ENABLE` gate ONLY when submit is False, so verification can be
         rehearsed without ever arming real betting. `submit=True` still requires the gate."""
-        if stake > self._max_stake:
+        # The stake hard-cap guards a REAL placement — it does NOT apply to a verify-only drive (submit=False),
+        # which places nothing. Enforcing it on verify-only wrongly failed the DRYRUN_UI drive whenever the sized
+        # stake exceeded the cap (e.g. HARDVEN_MAX_STAKE below the 10 EUR ladder min rung).
+        if submit and stake > self._max_stake:
             return BetResult(accepted=False, stake=stake,
                              reason=f"stake {stake:.2f} > HARDVEN_MAX_STAKE {self._max_stake:.2f} (hard cap)")
         if self._session_source == "browser" and not self._session_ready:

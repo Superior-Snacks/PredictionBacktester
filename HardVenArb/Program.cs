@@ -603,6 +603,7 @@ _ = Task.Run(() =>
 {
     try
     {
+        _ = Console.KeyAvailable;   // probe once: throws NOW if stdin isn't a TTY, so the warning shows at startup
         while (!cts.Token.IsCancellationRequested)
         {
             if (!Console.KeyAvailable) { Thread.Sleep(50); continue; }
@@ -706,7 +707,12 @@ _ = Task.Run(() =>
     }
     catch (InvalidOperationException)
     {
-        DebugLog.Write("Key toggle listener unavailable — stdin is not a TTY");
+        Console.ForegroundColor = ConsoleColor.Yellow;
+        Console.WriteLine("[KEYS] DISABLED — stdin is not an interactive terminal (redirected / piped / no TTY). " +
+                          "The I/O/H/U/K/E/X keypress toggles will NOT fire — that is why an inject does nothing. " +
+                          "Run the bot DIRECTLY in a terminal (not via a pipe, `>` redirect, `< nul`, nohup, or a " +
+                          "run-config that detaches stdin) to use them.");
+        Console.ResetColor();
     }
 });
 
