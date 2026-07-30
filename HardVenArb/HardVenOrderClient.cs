@@ -29,7 +29,11 @@ public sealed class HardVenOrderClient : IHardVenOrderExecutor
     private readonly HardVenApiConfig _config;
     private readonly string _sidecarBase;   // e.g. http://127.0.0.1:8787 — the odds/balance/bet sidecar
     private readonly decimal _fxToUsd;      // USD per account-unit (EUR≈1.08); 1.0 = USD book / no-op
-    private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(15) };
+    private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(15) };      // fast read calls (balance, bets)
+    // UI-drive calls (/bet, /bet/test) navigate + find + click + verify in the managed browser — that can run to
+    // tens of seconds (board scroll-miss then rove-nav fallback), well past the 15s read timeout, which was
+    // canceling the verify mid-drive and failing the leg. Give them their own long-timeout client.
+    private readonly HttpClient _uiHttp = new() { Timeout = TimeSpan.FromSeconds(90) };
 
     public HardVenOrderClient(HardVenApiConfig config, string sidecarBaseUrl, decimal fxToUsd)
     {
@@ -172,7 +176,7 @@ public sealed class HardVenOrderClient : IHardVenOrderExecutor
         });
 
         using var content = new StringContent(payload, System.Text.Encoding.UTF8, "application/json");
-        using var resp    = await _http.PostAsync($"{_sidecarBase}/bet", content);
+        using var resp    = await _uiHttp.PostAsync($"{_sidecarBase}/bet", content);   // UI drive — long timeout
         string body       = await resp.Content.ReadAsStringAsync();
         if (!resp.IsSuccessStatusCode)
             throw new HttpRequestException($"HardVen /bet HTTP {(int)resp.StatusCode} — {Truncate(body)}");
@@ -238,7 +242,7 @@ public sealed class HardVenOrderClient : IHardVenOrderExecutor
                 selection_id = tokenId, stake = stakeAcct, max_odds = minOdds, submit = false, record = false
             });
             using var content = new StringContent(payload, System.Text.Encoding.UTF8, "application/json");
-            using var resp    = await _http.PostAsync($"{_sidecarBase}/bet/test", content);
+            using var resp    = await _uiHttp.PostAsync($"{_sidecarBase}/bet/test", content);   // UI drive — long timeout
             string body       = await resp.Content.ReadAsStringAsync();
             if (!resp.IsSuccessStatusCode)
                 return new HardVenVerifyResult(false, 0m, $"/bet/test HTTP {(int)resp.StatusCode}: {Truncate(body)}");

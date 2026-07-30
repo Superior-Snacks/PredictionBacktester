@@ -2270,30 +2270,22 @@ class PinnacleAdapter(BookAdapter):
         return result
 
     async def _select_bet_tab(self, lid: str, url: str, exp: dict):
-        """Pick the tab to bet on and verify the market on it, most natural first (returns (page, kind, sel_ok)):
-          1. the PRIMARY BOARD page, when the featured board is currently streaming this league — no navigation,
-             so it doesn't disturb board coverage or the session anchor, and it's the surface the placement flow
-             was captured on. This is 'use the board when possible'.
-          2. a reader tab already showing the league (a dedicated tab, or the rove parked there) — for GAP
-             leagues the board isn't covering (which is exactly when there IS a dedicated tab).
-          3. the roving TAIL tab, navigated to the league (the 'last tab' fallback, e.g. the board roamed away).
+        """Pick the tab to bet on and verify the market on it (returns (page, kind, sel_ok)). A FOCUSED single-
+        league page is preferred, because on it the target row is always present and the find is fast + reliable;
+        the featured BOARD is a big combined list where a specific match is slow and often un-findable (a blind
+        scroll-and-search), so it's demoted to a fallback (was tried first until 2026-07-30 — it wasted ~10s
+        scroll-missing on the board then fell to rove-nav anyway, and blew the C# 15s timeout doing it):
+          1. a reader tab already showing the league (a dedicated tab, or the rove parked there) — focused, no nav.
+          2. the roving TAIL tab, navigated to the league — a focused league page (fast, reliable find).
+          3. the PRIMARY BOARD page, when it's streaming this league — no navigation, but a blind scroll on the
+             big board list, so only if there's no focused tab (e.g. tab manager off / rove busy).
           4. a cold bet tab (tab manager off).
-        Because selection places nothing, a miss on one candidate just closes the popover and tries the next —
-        so a stale board hit (primary roamed) falls through safely to the rove tab. Returns the last failure if
-        none verify, so the caller can report why."""
+        Selection places nothing, so a miss on one candidate just closes the popover and tries the next. Returns
+        the last failure if none verify, so the caller can report why."""
         last = (None, None, None)
         tm = self._tab_manager
 
-        # 1. the primary board page, when it's actively showing this league (no navigation)
-        if self._on_board(lid):
-            primary = self._primary_page()
-            if primary is not None:
-                r = await self._try_select_on(primary, exp)
-                if r and r.get("ok"):
-                    return primary, "board", r
-                last = (primary, "board", r)
-
-        # 2. a reader tab already on the league (gap leagues: dedicated tab / rove parked here)
+        # 1. a reader tab already on the league (gap leagues: dedicated tab / rove parked here) — focused, no nav
         if tm is not None:
             page, kind = tm.page_for_lid(lid)
             if page is not None:
@@ -2302,7 +2294,7 @@ class PinnacleAdapter(BookAdapter):
                     return page, kind, r
                 last = (page, kind, r)
 
-        # 3. borrow the roving tail tab and navigate it to the league
+        # 2. borrow the roving tail tab and navigate it to the league — a focused league page, reliable find
         if tm is not None:
             rpage = await tm.acquire_rove_for_bet(url)
             if rpage is not None:
@@ -2310,6 +2302,15 @@ class PinnacleAdapter(BookAdapter):
                 if r and r.get("ok"):
                     return rpage, "rove-nav", r
                 last = (rpage, "rove-nav", r)
+
+        # 3. the primary board page (blind scroll on the big combined list) — fallback only
+        if self._on_board(lid):
+            primary = self._primary_page()
+            if primary is not None:
+                r = await self._try_select_on(primary, exp)
+                if r and r.get("ok"):
+                    return primary, "board", r
+                last = (primary, "board", r)
 
         # 4. cold last-resort tab
         cold = await self._bet_tab(url)
