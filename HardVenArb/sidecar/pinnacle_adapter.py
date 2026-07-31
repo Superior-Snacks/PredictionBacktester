@@ -434,6 +434,8 @@ class PinnacleAdapter(BookAdapter):
         self._ws_watchdog_task: Optional[asyncio.Task] = None
         self._reconciler_task: Optional[asyncio.Task] = None   # staggered league subscribes (organic timing)
         self._status_task: Optional[asyncio.Task] = None       # browser-like /status liveness ping
+        self._betslip_task: Optional[asyncio.Task] = None      # periodic betslip sweep (clears stray selections)
+        self._betslip_sweep_sec = float(os.environ.get("HARDVEN_BETSLIP_SWEEP_SEC", "25"))
         self._status_ping_sec = float(os.environ.get("PINNACLE_STATUS_PING_SEC", "30"))
         self._subscribe_gap_sec = float(os.environ.get("PINNACLE_SUBSCRIBE_GAP_SEC", "3"))
         self._session_ka_task: Optional[asyncio.Task] = None   # session keepalive (vs inactivity logout)
@@ -641,6 +643,11 @@ class PinnacleAdapter(BookAdapter):
         # session-age heartbeat (persistent across logout/recovery). Env mode is live from startup → mark now;
         # browser mode marks on capture (_on_browser_creds).
         self._session_age_task = asyncio.create_task(self._session_age_heartbeat())
+        # Betslip hygiene sweep: clears stray selections on every tab, independent of organic cadence.
+        if self._betslip_trim and self._session_source == "browser":
+            self._betslip_task = asyncio.create_task(self._betslip_sweep_loop())
+            print(f"[PINNACLE] betslip sweep ON — clearing stray side-betslip selections on every tab "
+                  f"every {self._betslip_sweep_sec:g}s (HARDVEN_BETSLIP_TRIM=0 to disable).")
         if self._session_source != "browser":
             self._mark_session_started("env token")
 
@@ -662,7 +669,7 @@ class PinnacleAdapter(BookAdapter):
             self._ws_watchdog_task.cancel()
         for t in (self._reconciler_task, self._status_task, self._session_ka_task,
                   self._lifecycle_task, self._pairing_task, self._session_age_task,
-                  self._reader_reseed_task):
+                  self._reader_reseed_task, self._betslip_task):
             if t and not t.done():
                 t.cancel()
         if self._client is not None:
@@ -2336,6 +2343,40 @@ class PinnacleAdapter(BookAdapter):
         page = await self._browser.open_tab(url)
         self._bet_page = page
         return page
+
+    async def _betslip_sweep_loop(self) -> None:
+        """Periodically clear the side betslip on EVERY open tab — 'if the Remove-all button is visible, press
+        it'. The organic-tick trim only fires when a gesture happens to land on the tab holding the stray
+        selections (one random reader tab every 30-90s, primary every 20-150s), so a manual slip could sit for
+        minutes; this sweep is independent of organic cadence and covers all tabs each pass.
+
+        Skips entirely while a bet is in flight (`_bet_lock` held) so it can never fight a placement — the
+        post-bet trim handles that case. Read-only when the slip is empty (no Remove-all button = no clicks)."""
+        while True:
+            try:
+                await asyncio.sleep(self._betslip_sweep_sec)
+                if not self._betslip_trim or self._bet_lock.locked():
+                    continue
+                pages = []
+                primary = self._primary_page()
+                if primary is not None:
+                    pages.append(primary)
+                if self._tab_manager is not None:
+                    try:
+                        pages.extend(p for p, _ in (self._tab_manager.reader_tabs() or []) if p is not None)
+                    except Exception:
+                        pass
+                for pg in pages:
+                    if self._bet_lock.locked():        # a bet started mid-sweep -> stop touching the browser
+                        break
+                    try:
+                        await self._trim_betslip(pg, source="sweep")
+                    except Exception:
+                        pass
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                pass                                   # pure hygiene: never let a hiccup kill the loop
 
     async def _trim_betslip(self, page, source: str = "post-bet") -> dict:
         """Sweep stray selections out of the SIDE betslip via its own 'Remove all' -> confirm-modal flow, then

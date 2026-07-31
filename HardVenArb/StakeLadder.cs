@@ -26,17 +26,26 @@ public static class StakeLadder
     /// <summary>Fraction of the book's accepted max we are willing to take. Default 1/3 — never bet the max.</summary>
     public static readonly decimal MaxDepthFraction = ReadFraction("HARDVEN_MAX_DEPTH_FRACTION", 1m / 3m);
 
-    /// <summary>Smallest rung. Below this there is no bet worth placing.</summary>
-    public const decimal MinRung = 10m;
+    /// <summary>Smallest rung. Below this there is no bet worth placing. Default 10; set
+    /// <c>HARDVEN_STAKE_MIN_RUNG</c> lower (e.g. 5) for small supervised test bets — 5 is still a round,
+    /// human stake. Values below 10 add exactly one extra rung at that value (5, then 10,20,…).</summary>
+    public static readonly decimal MinRung = ReadAmount("HARDVEN_STAKE_MIN_RUNG", 10m);
+
+    /// <summary>Hard cap on the account-currency stake, applied BEFORE snapping. 0 = no cap (default).
+    /// Set <c>HARDVEN_STAKE_MAX</c> to pin every bet to one rung — e.g. `MIN_RUNG=5` + `STAKE_MAX=5`
+    /// makes every bet exactly €5, which is the supervised-test configuration.</summary>
+    public static readonly decimal MaxStakeAccount = ReadAmount("HARDVEN_STAKE_MAX", 0m);
 
     /// <summary>
     /// Snap a stake DOWN to the nearest valid rung: multiples of 10 below 100, of 50 below 300 (so 250 is a
-    /// rung), of 100 above. Returns 0 when the ceiling cannot even fund the smallest rung — the caller must
-    /// then skip the trade rather than place an off-ladder bet.
+    /// rung), of 100 above — plus <see cref="MinRung"/> itself when it is below 10. Returns 0 when the ceiling
+    /// cannot even fund the smallest rung — the caller must then skip the trade rather than place an
+    /// off-ladder bet.
     /// </summary>
     public static decimal Snap(decimal maxStake)
     {
         if (maxStake < MinRung) return 0m;
+        if (maxStake < 10m)     return MinRung;                              // only when MinRung < 10 (e.g. 5)
         if (maxStake < 100m)    return Math.Floor(maxStake / 10m)  * 10m;    // 10,20,…,90
         if (maxStake < 300m)    return Math.Floor(maxStake / 50m)  * 50m;    // 100,150,200,250
         return                         Math.Floor(maxStake / 100m) * 100m;   // 300,400,…
@@ -66,9 +75,11 @@ public static class StakeLadder
         decimal ceiling = Math.Min(contractCeiling, Math.Min(kalshiDepth, hardvenAllowed));
         if (ceiling <= 0m) return (0, 0m);
 
-        // contracts → account-currency stake, snapped down to a rung.
+        // contracts → account-currency stake, capped, then snapped down to a rung.
         decimal stakeCeiling = ceiling * hardvenPrice / fxToUsd;
-        decimal stake        = Snap(stakeCeiling);
+        if (MaxStakeAccount > 0m && stakeCeiling > MaxStakeAccount)
+            stakeCeiling = MaxStakeAccount;                                   // supervised-test pin (HARDVEN_STAKE_MAX)
+        decimal stake = Snap(stakeCeiling);
         if (stake <= 0m) return (0, 0m);
 
         // Rung → contracts. Floor again: the contract count must not exceed what the rung actually buys,
@@ -79,6 +90,16 @@ public static class StakeLadder
         // Defensive: flooring above can only reduce, but never let rounding push us back over a hard ceiling.
         if (contracts > ceiling) contracts = (int)Math.Floor(ceiling);
         return (contracts, stake);
+    }
+
+    /// <summary>Read a positive account-currency amount from env; `fallback` when unset/invalid.</summary>
+    private static decimal ReadAmount(string envVar, decimal fallback)
+    {
+        string? raw = Environment.GetEnvironmentVariable(envVar);
+        if (decimal.TryParse(raw, System.Globalization.NumberStyles.Any,
+                System.Globalization.CultureInfo.InvariantCulture, out decimal v) && v > 0m)
+            return v;
+        return fallback;
     }
 
     private static decimal ReadFraction(string envVar, decimal fallback)

@@ -557,7 +557,7 @@ if (isLive || isDryRun)
     // easy to misremember mid-session.
     Console.WriteLine($"[EXECUTOR] gates: favoriteOnKalshi={(executor.FavoriteGateOn ? "ON" : "OFF")} " +
                       $"(min {Environment.GetEnvironmentVariable("HARDVEN_FAVORITE_MIN") ?? "0.5"}, scope " +
-                      $"{Environment.GetEnvironmentVariable("HARDVEN_FAVORITE_KALSHI_SPORTS") ?? "tennis"}, H toggles) | " +
+                      $"{executor.FavoriteScope}, H toggles) | " +
                       $"preLiveOnly={(Environment.GetEnvironmentVariable("HARDVEN_PRELIVE_ONLY") != "0" ? "ON" : "OFF")} | " +
                       $"requireWsVerified={(Environment.GetEnvironmentVariable("HARDVEN_REQUIRE_WS_VERIFIED") != "0" ? "ON" : "OFF")} | " +
                       $"execNetFloor={EXEC_NET_FLOOR:0.000}");

@@ -71,7 +71,7 @@ test — it proves every layer up to the click.
 ```
 # sidecar already up + logged in; HARDVEN_BET_ENABLE must stay unset
 HARDVEN_LIVE_BET_PATH=1 HARDVEN_PRELIVE_ONLY=0 \
-  dotnet run --project HardVenArb -- --dry-run --scenario Clean --try 5
+  dotnet run --project HardVenArb -- --dry-run --scenario HappyPath --try 5
 ```
 (`HARDVEN_PRELIVE_ONLY=0` only so an arb actually fires while pre-live windows are scarce — **put it back to
 `1` afterwards**. Set it in the shell, not `.env`, or it won't be picked up / will linger.)

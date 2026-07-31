@@ -105,6 +105,9 @@ public class CrossArbExecutor
 
     /// <summary>Runtime state of the favorite-on-Kalshi hedge gate (H key). True = skipping underdog-on-Kalshi.</summary>
     public bool FavoriteGateOn => _favoriteGateOn;
+    /// <summary>EFFECTIVE scope of the favourite gate ("tennis"/"all"/csv) — note a disabling env value
+    /// ("0"/"off"/"none") still maps to "tennis" so the H key can enable it live; report this, not the raw env.</summary>
+    public string FavoriteScope => _favoriteScope;
     /// <summary>Flip the favorite-on-Kalshi hedge gate at runtime (H key). Returns the new state.</summary>
     public bool ToggleFavoriteGate() { _favoriteGateOn = !_favoriteGateOn; return _favoriteGateOn; }
 
