@@ -10,6 +10,7 @@ BookAdapter subclass and registering it in load_adapter() below.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import time
@@ -94,6 +95,35 @@ async def health():
         h["session_ready"] = bool(s.get("ready", True))
         h["session"] = s
     return h
+
+
+@app.post("/shutdown")
+async def shutdown_sidecar():
+    """Graceful stop of the whole sidecar (closes the managed browser + Pinnacle session). Used by the bot's
+    `--stop-sidecar` so an UNATTENDED run tears everything down when it finishes (`--try N` reached or
+    `--stop-after` elapsed) instead of leaving a logged-in browser open for hours.
+
+    REFUSES while a bet is in flight — killing the browser mid-placement could leave a bet in an unknown state.
+    The sidecar binds to 127.0.0.1, so only local processes can call this."""
+    lock = getattr(adapter, "_bet_lock", None)
+    if lock is not None and lock.locked():
+        raise HTTPException(409, "a bet is in flight — refusing to shut down")
+
+    async def _stop():
+        await asyncio.sleep(0.25)          # let the HTTP response flush first
+        try:
+            # Bounded: a wedged browser must not leave the sidecar (and its Chrome windows) alive forever.
+            await asyncio.wait_for(adapter.shutdown(), timeout=20)
+            print("[SIDECAR] shutdown complete — browser + session closed. Exiting.")
+        except asyncio.TimeoutError:
+            print("[SIDECAR] shutdown timed out after 20s — forcing exit (a Chrome window may survive; close it).")
+        except Exception as e:
+            print(f"[SIDECAR] shutdown error ({type(e).__name__}: {e}) — forcing exit.")
+        os._exit(0)
+
+    asyncio.create_task(_stop())
+    print("[SIDECAR] /shutdown received — closing browser + session, then exiting.")
+    return {"stopping": True}
 
 
 # ── M0: odds (the only endpoint telemetry needs) ──────────────────────────────

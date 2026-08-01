@@ -20,6 +20,10 @@ using PredictionBacktester.Engine.LiveExecution;
 //
 //  Exactly one mode flag is required. All others are optional.
 //  --try N         execute exactly N complete arbs then shut down; works with --dry-run or --live.
+//  --stop-after D  wall-clock cap on the run: "2h", "90m", "3600s", or a bare number = minutes. Pair with
+//                  --try N for an unattended wait: ends on the Nth arb OR the clock, whichever is first.
+//  --stop-sidecar  on a clean exit, POST /shutdown to the sidecar so the managed browser + Pinnacle session
+//                  close too (refused while a bet is in flight). For unattended runs.
 //  --min-buy       cap every arb to exactly 1 contract regardless of maxBet (useful for initial live shakedown).
 //  --single-entry  one open position per pair at a time; re-entry allowed once the position closes (exit or settlement).
 //  --wN            rolling execution window: only execute arbs whose Kalshi close date is within N weeks of today
@@ -141,6 +145,27 @@ int? tryN = null;
 int tryIdx = Array.IndexOf(args, "--try");
 if (tryIdx >= 0 && tryIdx + 1 < args.Length && int.TryParse(args[tryIdx + 1], out int parsedN) && parsedN > 0)
     tryN = parsedN;
+
+// --stop-after <dur>: hard wall-clock cap on the run ("2h", "90m", "3600s", or a bare number = minutes).
+// For unattended waits on a thin slate: pair with `--try 1` so the bot ends either when an arb fires OR when
+// the clock runs out, whichever comes first.
+TimeSpan? stopAfter = null;
+int stopIdx = Array.IndexOf(args, "--stop-after");
+if (stopIdx >= 0 && stopIdx + 1 < args.Length)
+{
+    string raw = args[stopIdx + 1].Trim().ToLowerInvariant();
+    string num = raw.TrimEnd('h', 'm', 's');
+    if (double.TryParse(num, NumberStyles.Any, CultureInfo.InvariantCulture, out double qty) && qty > 0)
+        stopAfter = raw.EndsWith("h") ? TimeSpan.FromHours(qty)
+                  : raw.EndsWith("s") ? TimeSpan.FromSeconds(qty)
+                  : TimeSpan.FromMinutes(qty);          // "m" or bare number
+    if (stopAfter is null)
+        Console.WriteLine($"[WARN] --stop-after '{args[stopIdx + 1]}' not understood (use 2h / 90m / 3600s) — ignored.");
+}
+
+// --stop-sidecar: on a clean exit, POST /shutdown to the sidecar so the managed browser + Pinnacle session
+// close too. For unattended runs that would otherwise leave a logged-in browser open for hours.
+bool stopSidecar = args.Contains("--stop-sidecar");
 
 // --min-buy: cap every arb to 1 contract regardless of maxBet sizing
 bool minBuy = args.Contains("--min-buy");
@@ -1281,6 +1306,21 @@ var keepAwakeTask = keepAwakeOn ? KeepAwake.RunAsync(cts.Token) : Task.Completed
 var kalshiWsTask  = Task.Run(() => SuperviseFeedAsync("Kalshi",  kalshiFeed.RunAsync,  cts.Token));
 var hardvenWsTask = Task.Run(() => SuperviseFeedAsync("HardVen", hardvenFeed.RunAsync, cts.Token));
 
+// --stop-after: wall-clock watchdog. Cancels the same cts a double-Ctrl+C would, so the normal shutdown
+// sequence (telemetry flush → executor flush → optional sidecar stop) runs unchanged.
+if (stopAfter is TimeSpan limit)
+{
+    Console.WriteLine($"[STOP-AFTER] run ends in {limit.TotalMinutes:0} min ({DateTime.Now.Add(limit):HH:mm}) " +
+                      (tryN is int n ? $"or after {n} executed arb(s), whichever comes first." : "unless stopped sooner."));
+    _ = Task.Run(async () =>
+    {
+        try { await Task.Delay(limit, cts.Token); }
+        catch (OperationCanceledException) { return; }   // stopped earlier (--try hit / Ctrl+C) — nothing to do
+        Console.WriteLine($"\n[STOP-AFTER] {limit.TotalMinutes:0} min elapsed — shutting down.");
+        cts.Cancel();
+    });
+}
+
 await Task.WhenAll(kalshiWsTask, hardvenWsTask);
 try { await keepAwakeTask; } catch { /* releases sleep-suppression in its own finally */ }
 
@@ -1300,6 +1340,34 @@ if (executor != null)
         DebugLog.Write($"executor.ShutdownAsync exception: {ex}");
     }
 }
+// --stop-sidecar: tear down the sidecar too (closes the managed browser + Pinnacle session). Done LAST, after
+// telemetry/executor have flushed, so nothing is mid-write. The sidecar refuses (409) while a bet is in flight.
+if (stopSidecar)
+{
+    string url = $"{HARDVEN_SIDECAR_URL.TrimEnd('/')}/shutdown";
+    try
+    {
+        Console.WriteLine($"[SHUTDOWN] --stop-sidecar: POST {url}");
+        using var stopHttp = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+        using var resp = await stopHttp.PostAsync(url, null);
+        if (resp.IsSuccessStatusCode)
+            Console.WriteLine("[SHUTDOWN] sidecar stop requested — browser + Pinnacle session closing.");
+        else if ((int)resp.StatusCode == 404)
+            Console.WriteLine("[SHUTDOWN] sidecar has NO /shutdown endpoint (HTTP 404) — it is running an OLD build. "
+                            + "RESTART the sidecar to pick it up; stop this one by hand.");
+        else if ((int)resp.StatusCode == 409)
+            Console.WriteLine("[SHUTDOWN] sidecar refused: a bet is in flight (HTTP 409) — left running on purpose. "
+                            + "Check the position, then stop it by hand.");
+        else
+            Console.WriteLine($"[SHUTDOWN] sidecar refused to stop (HTTP {(int)resp.StatusCode}) — stop it by hand.");
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"[SHUTDOWN] could not reach the sidecar at {url} ({ex.GetType().Name}) — stop it by hand.");
+    }
+}
+else
+    DebugLog.Write("--stop-sidecar not set — leaving the sidecar (and its browser) running.");
 Console.WriteLine("\n[SHUTDOWN] Cross-platform arb bot stopped.");
 
 static async Task CheckHardVenProxyAsync(string socksProxy, bool isLive)
