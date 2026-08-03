@@ -585,6 +585,7 @@ if (isLive || isDryRun)
                       $"{executor.FavoriteScope}, H toggles) | " +
                       $"preLiveOnly={(Environment.GetEnvironmentVariable("HARDVEN_PRELIVE_ONLY") != "0" ? "ON" : "OFF")} | " +
                       $"requireWsVerified={(Environment.GetEnvironmentVariable("HARDVEN_REQUIRE_WS_VERIFIED") != "0" ? "ON" : "OFF")} | " +
+                      $"moneylineOnly={(Environment.GetEnvironmentVariable("HARDVEN_MONEYLINE_ONLY") != "0" ? "ON" : "OFF")} | " +
                       $"execNetFloor={EXEC_NET_FLOOR:0.000}");
 }
 else // --telemetry

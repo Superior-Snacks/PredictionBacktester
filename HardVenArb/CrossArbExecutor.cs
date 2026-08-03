@@ -76,6 +76,10 @@ public class CrossArbExecutor
     // tab, so once it's WS-covered the re-opened arb executes. No-op in non-reader mode (wv always true).
     // HARDVEN_REQUIRE_WS_VERIFIED=0 disables (e.g. paho/dedicated-WS mode where everything is already live).
     private readonly bool _requireWsVerified = Environment.GetEnvironmentVariable("HARDVEN_REQUIRE_WS_VERIFIED") != "0";
+    // Only execute selections the book can actually PLACE. The Pinnacle UI path handles straight moneylines
+    // (`lid:mid:home|away`) only; derivative tokens (spread/total) are rejected at placement, so executing them
+    // just fills+reverses the Kalshi leg. `0` allows them (for a book/adapter that can place derivatives).
+    private readonly bool _moneylineOnly = Environment.GetEnvironmentVariable("HARDVEN_MONEYLINE_ONLY") != "0";
 
     // FAVORITE-ON-KALSHI gate (tennis retirement/void hedge). On a mid-match RETIREMENT the sportsbook usually
     // VOIDS the bet (stake back) while Kalshi still settles the advancing player. So if the Kalshi leg we buy
@@ -732,6 +736,23 @@ public class CrossArbExecutor
         {
             kalshiSide = "no";
             hardvenToken  = pair.HardVenYesTokenId;
+        }
+
+        // PLACEABILITY gate. The UI book (Pinnacle via `_place_via_ui`) can only place STRAIGHT MONEYLINES —
+        // token `leagueId:matchupId:home|away`. A DERIVATIVE token (`…:spread:-2.5:home`, totals, etc.) is
+        // rejected at placement, so firing here would fill the Kalshi leg and immediately reverse it: ~2x Kalshi
+        // fees and a burnt window, every time. Derivatives stay in TELEMETRY (the tape is still useful) — only
+        // execution is gated. Set HARDVEN_MONEYLINE_ONLY=0 once the book can place derivatives (e.g. an API
+        // adapter, where a spread is just another selection id).
+        if (_moneylineOnly && hardvenToken.Split(':').Length != 3)
+        {
+            Console.WriteLine($"[EXEC SKIP] {pair.Label}: DERIVATIVE leg ({hardvenToken}) — the UI book places " +
+                              "straight moneylines only (HARDVEN_MONEYLINE_ONLY=0 to allow)");
+            await JournalAsync(JsonSerializer.Serialize(new {
+                t = DateTime.UtcNow, @event = "EXEC_SKIP", pairId, arbType,
+                reason = "DERIVATIVE_NOT_PLACEABLE", hardvenToken
+            }));
+            return;
         }
 
         // PRE-LIVE-ONLY gate: the chosen HardVen leg's match is in-play → skip (simultaneous fill only holds for
