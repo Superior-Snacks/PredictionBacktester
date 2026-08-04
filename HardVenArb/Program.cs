@@ -449,7 +449,11 @@ if (isLive || isDryRun)
     // Kalshi USD — convert the wallet balance the same way the feed converts depth (HARDVEN_FX_TO_USD).
     decimal hardvenFxToUsd = decimal.TryParse(Environment.GetEnvironmentVariable("HARDVEN_FX_TO_USD"),
         NumberStyles.Any, CultureInfo.InvariantCulture, out var _hvfx) && _hvfx > 0m ? _hvfx : 1.0m;
-    var hardvenOrderClient = new HardVenOrderClient(hardvenConfig, HARDVEN_SIDECAR_URL, hardvenFxToUsd);
+    // previewOnly on EVERY dry-run: the sidecar then refuses to place even when HARDVEN_BET_ENABLE=1 is armed
+    // in the environment for live trading. Without this, --dry-run + HARDVEN_LIVE_BET_PATH=1 reached the real
+    // placement path (observed 2026-08-04 — a real bet was attempted and only missed because the odds moved).
+    var hardvenOrderClient = new HardVenOrderClient(hardvenConfig, HARDVEN_SIDECAR_URL, hardvenFxToUsd,
+                                                    previewOnly: isDryRun);
     const decimal MAX_BET_USD          = 30m;    // max combined dollar cost per arb entry
     const decimal BALANCE_BUFFER_PCT   = 0.20m;  // per-platform reserve (fraction of maxBet)
     const decimal EXECUTION_THRESHOLD  = 0.995m; // net-cost ceiling for arb detection

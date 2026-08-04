@@ -20,7 +20,7 @@ from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
 
 from bet_capture import BetSlipRecorder
-from book_adapter import BookAdapter
+from book_adapter import BetResult, BookAdapter
 from env_util import load_dotenv_upwards
 from mock_adapter import MockBookAdapter
 
@@ -73,6 +73,11 @@ class BetRequest(BaseModel):
     selection_id: str
     stake: float
     max_odds: float
+    # PREVIEW LOCK: the CALLER declares this is a rehearsal (the bot sets it for every --dry-run). When true the
+    # sidecar refuses to place REGARDLESS of HARDVEN_BET_ENABLE — so a dry run can never place a real bet even
+    # when the env is armed for live trading. Without this, `--dry-run` + HARDVEN_LIVE_BET_PATH=1 + an armed
+    # HARDVEN_BET_ENABLE=1 reaches _place_via_ui for real (observed 2026-08-04; only saved by an odds move).
+    preview: bool = False
 
 
 def _session_state() -> dict | None:
@@ -290,6 +295,13 @@ async def balance():
 
 @app.post("/bet")
 async def place_bet(req: BetRequest):
+    # PREVIEW LOCK (caller-declared rehearsal) — checked BEFORE the adapter, so it holds for every book and
+    # cannot be defeated by an armed HARDVEN_BET_ENABLE. The bot sets preview=true on every --dry-run.
+    if req.preview:
+        print(f"[PINNACLE BET] PREVIEW-LOCKED (caller sent preview=true) - WOULD place {req.stake:.2f} on "
+              f"{req.selection_id} @ max_odds>={req.max_odds:.4f}. No bet placed.")
+        return BetResult(accepted=False, stake=req.stake,
+                         reason="preview-locked: caller declared a rehearsal (--dry-run) — no bet placed").to_api()
     return (await adapter.place_bet(req.selection_id, req.stake, req.max_odds)).to_api()
 
 

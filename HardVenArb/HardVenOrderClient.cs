@@ -35,11 +35,18 @@ public sealed class HardVenOrderClient : IHardVenOrderExecutor
     // canceling the verify mid-drive and failing the leg. Give them their own long-timeout client.
     private readonly HttpClient _uiHttp = new() { Timeout = TimeSpan.FromSeconds(90) };
 
-    public HardVenOrderClient(HardVenApiConfig config, string sidecarBaseUrl, decimal fxToUsd)
+    /// <summary>When true, every `/bet` carries `preview=true` so the sidecar REFUSES to place regardless of its
+    /// own `HARDVEN_BET_ENABLE`. Set for all `--dry-run` modes: a rehearsal must never be able to place a real
+    /// bet just because the env happens to be armed for live trading.</summary>
+    private readonly bool _previewOnly;
+
+    public HardVenOrderClient(HardVenApiConfig config, string sidecarBaseUrl, decimal fxToUsd,
+                              bool previewOnly = false)
     {
         _config      = config;
         _sidecarBase = (sidecarBaseUrl ?? "").TrimEnd('/');
         _fxToUsd     = fxToUsd > 0m ? fxToUsd : 1.0m;
+        _previewOnly = previewOnly;
     }
 
     // ── Read-only: live via the sidecar ────────────────────────────────────────
@@ -173,6 +180,7 @@ public sealed class HardVenOrderClient : IHardVenOrderExecutor
             selection_id = tokenId,
             stake        = stakeAcct,
             max_odds     = minOdds,
+            preview      = _previewOnly,   // dry-run: sidecar refuses to place even if HARDVEN_BET_ENABLE=1
         });
 
         using var content = new StringContent(payload, System.Text.Encoding.UTF8, "application/json");
