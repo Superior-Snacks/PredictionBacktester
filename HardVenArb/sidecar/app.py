@@ -174,6 +174,16 @@ async def catalog():
     return {"selections": [c.to_api() for c in await adapter.catalog()]}
 
 
+@app.get("/debug/probe_bets")
+async def debug_probe_bets():
+    """Read-only discovery: which authed endpoint LISTS bets? Feeds the open_bets()/bet() build (crash recovery
+    + settlement). Places nothing; cannot trip the session-death give-up (uses the raw client)."""
+    fn = getattr(adapter, "probe_bet_endpoints", None)
+    if not callable(fn):
+        raise HTTPException(400, "adapter has no probe_bet_endpoints (Pinnacle adapter only)")
+    return await fn()
+
+
 @app.get("/debug/visibility")
 async def debug_visibility():
     """What the SITE sees about each managed tab: document.visibilityState / hidden / hasFocus.

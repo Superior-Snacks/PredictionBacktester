@@ -47,7 +47,7 @@ import random
 import re
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -61,6 +61,10 @@ REST_BASE = os.environ.get("PINNACLE_API_BASE", "https://api.arcadia.pinnacle.co
 # the public x-api-key — NO user session. Used for catalog/pairing so enumeration never depends on the authed
 # x-session (which may be stale, not-yet-captured in browser mode, or logged out). Authed REST is for live odds.
 GUEST_BASE = os.environ.get("PINNACLE_GUEST_BASE", "https://guest.api.arcadia.pinnacle.com/0.1")
+# My Bets page. `GET /0.1/bets` is PAGE-SPECIFIC — the site only fires it from here, so calling it "off page"
+# is a correlation a server can notice (unlike /wallet/balance, which the page polls constantly, or
+# /markets/straight, which any league view fires). We navigate here and read the page's OWN response instead.
+BETS_URL = os.environ.get("PINNACLE_BETS_URL", "https://www.pinnacle.bet/en/account/bets")
 WS_HOST = os.environ.get("PINNACLE_WS_HOST", "api.arcadia.pinnacle.com")
 WS_PATH = os.environ.get("PINNACLE_WS_PATH", "/ws")
 DEFAULT_API_KEY = "CmX2KcMrXuFmNg6YFbmTxE0y9CIrOi0R"   # static public site client key (not a per-user secret)
@@ -485,6 +489,11 @@ class PinnacleAdapter(BookAdapter):
         # Post-bet hygiene: sweep stray selections out of the SIDE betslip via its 'Remove all' -> confirm flow
         # (probing/misfires can drop selections there). On by default; disable with HARDVEN_BETSLIP_TRIM=0.
         self._betslip_trim = os.environ.get("HARDVEN_BETSLIP_TRIM", "1") != "0"
+        # My Bets: read it by NAVIGATING to the account/bets page and capturing the site's own `GET /0.1/bets`,
+        # rather than calling that page-specific endpoint off-page (a correlation a server could notice).
+        # `0` = direct REST instead. `_bets_page` is the reusable tab for that read.
+        self._bets_via_page_on = os.environ.get("HARDVEN_BETS_VIA_PAGE", "1") != "0"
+        self._bets_page = None
         self._bet_lock = asyncio.Lock()
         # LIFECYCLE: opt-in schedule-driven open/close of the browser (human session rhythm). Off = hold open.
         self._lifecycle_on = os.environ.get("PINNACLE_LIFECYCLE") == "1"
@@ -2474,8 +2483,204 @@ class PinnacleAdapter(BookAdapter):
         if self._tab_manager is not None:
             self._tab_manager.hold(False)
 
+    async def probe_bet_endpoints(self) -> dict:
+        """DISCOVERY (read-only): find the authed endpoint that LISTS bets, so `open_bets()` can be a clean REST
+        read instead of scraping My Bets in the browser.
+
+        We know the namespace from the captured placement calls (`POST /bets/straight`, `/bets/straight/quote`,
+        `/bets/parlay/quote`, plus `/wallet/balance` and `/sessions/{id}`), but the bet_capture recorder skipped
+        GETs, so a listing endpoint was never recorded. This just tries the plausible paths.
+
+        Deliberately uses the RAW http client, NOT `_http_get`: a 401/403 on a wrong guess must not increment
+        `_rest_auth_fails`, which would otherwise trip the session-death give-up. Places nothing, changes nothing."""
+        if not self._http:
+            return {"error": "no authed http client (session not ready)"}
+        candidates = [
+            "/bets", "/bets/open", "/bets/running", "/bets/pending", "/bets/history", "/bets/settled",
+            "/bets/straight", "/bets/list", "/bets?status=open", "/bets?state=running",
+            "/wagers", "/wagers/open", "/tickets", "/account/bets", "/wallet/bets",
+        ]
+        out = []
+        for path in candidates:
+            try:
+                r = await self._http.get(REST_BASE + path)
+                body = ""
+                try:
+                    body = r.text[:220].replace("\n", " ")
+                except Exception:
+                    pass
+                out.append({"path": path, "status": r.status_code, "len": len(r.content or b""), "body": body})
+            except Exception as e:
+                out.append({"path": path, "error": f"{type(e).__name__}: {e}"})
+            await asyncio.sleep(0.25)          # gentle: this is the same authed session the feed uses
+        hits = [o for o in out if o.get("status") == 200]
+        print(f"[PINNACLE] bet-endpoint probe: {len(hits)} of {len(candidates)} returned 200 "
+              + (", ".join(h["path"] for h in hits) if hits else "(none — the listing is likely UI-only)"))
+        return {"base": REST_BASE, "results": out, "hits": [h["path"] for h in hits]}
+
+    # ── My Bets (crash recovery + settlement) — authed REST, no browser ────────
+    @staticmethod
+    def _iso_z(dt: datetime) -> str:
+        """Pinnacle's date params: '2026-08-04T20:15:09.973Z' (millisecond precision, literal Z)."""
+        return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+    @staticmethod
+    def _selection_token(sel: dict) -> Optional[str]:
+        """Rebuild the bot's selection id from a bet's selection. Straight moneyline is `lid:mid:designation`
+        (exactly the token the executor trades); spread/total carry the line, matching pair_derivatives' format."""
+        mu   = sel.get("matchup") or {}
+        lid  = ((mu.get("league") or {}).get("id"))
+        mid  = mu.get("id")
+        desig = sel.get("designation")
+        if lid is None or mid is None or not desig:
+            return None
+        mkt  = (sel.get("market") or {})
+        mtype = (mkt.get("type") or "moneyline").lower()
+        if mtype == "moneyline":
+            return f"{lid}:{mid}:{desig}"
+        pts = sel.get("points")
+        return f"{lid}:{mid}:{mtype}:{pts}:{desig}" if pts is not None else f"{lid}:{mid}:{mtype}:{desig}"
+
+    def _map_bet(self, b: dict) -> Optional[dict]:
+        """One API bet -> the shape HardVenOrderClient expects (`selection_id`, `stake`, `odds`) plus status
+        fields for settlement. PARLAYS ARE SKIPPED: they carry several selections under one stake, so they can't
+        be attributed to a single token — and the bot only ever places straights."""
+        sels = b.get("selections") or []
+        if len(sels) != 1:
+            return None
+        sel = sels[0]
+        token = self._selection_token(sel)
+        if not token:
+            return None
+        try:
+            stake = float(b.get("stake") or 0)
+        except (TypeError, ValueError):
+            stake = 0.0
+        try:                                   # the ACCEPTED price: prefer the selection's, fall back to the bet's
+            odds = float(sel.get("price") or b.get("price") or 0)
+        except (TypeError, ValueError):
+            odds = 0.0
+        return {
+            "bet_id":       str(b.get("id") or ""),
+            "selection_id": token,
+            "stake":        stake,
+            "odds":         odds,
+            "status":       (b.get("status") or sel.get("status") or "").lower(),
+            "outcome":      (b.get("outcome") or "").lower(),
+            "win_loss":     b.get("winLoss"),
+            "to_win":       b.get("toWin"),
+            "created_at":   b.get("createdAt"),
+            "settled_at":   b.get("settledAt"),
+        }
+
+    async def _fetch_bets(self, status: str, days: int = 35) -> list[dict]:
+        """GET /bets?status=…&startDate=…&endDate=… — the same call the My Bets page makes."""
+        now = datetime.now(timezone.utc)
+        path = (f"/bets?status={status}"
+                f"&startDate={self._iso_z(now - timedelta(days=days))}"
+                f"&endDate={self._iso_z(now)}")
+        data = await self._http_get(path)
+        if not isinstance(data, dict):
+            return []
+        out = []
+        for b in (data.get("bets") or []):
+            m = self._map_bet(b)
+            if m:
+                out.append(m)
+        return out
+
+    async def _bets_via_page(self) -> Optional[list[dict]]:
+        """Read My Bets the way a PERSON does: navigate a tab to the account/bets page and capture the page's
+        OWN `GET /0.1/bets` response. One request, fired by the site itself, perfectly correlated with a real
+        page load — instead of a lone off-page API call that no UI action explains.
+
+        Returns None (not []) when the browser route is unavailable/failed, so the caller can fall back to REST
+        rather than mistake a page problem for 'no open bets'. Skipped while a bet is in flight — never navigate
+        tabs mid-placement."""
+        if self._browser is None or self._bet_lock.locked():
+            return None
+        captured: dict = {}
+
+        def _on_resp(resp):
+            try:                                        # the page's own listing call (GET, /0.1/bets?…)
+                if "/bets?" in resp.url and "/0.1/bets" in resp.url and resp.request.method == "GET":
+                    captured["resp"] = resp
+            except Exception:
+                pass
+
+        page = None
+        try:
+            page = self._bets_page
+            if page is None or page.is_closed():
+                page = await self._browser.open_tab(BETS_URL)
+                self._bets_page = page
+                if page is None:
+                    return None
+                page.on("response", _on_resp)
+            else:
+                page.on("response", _on_resp)
+                await self._browser.navigate_tab(page, BETS_URL)   # re-navigate = the user refreshing their bets
+            for _ in range(40):                          # the SPA fetches within a couple of seconds
+                await asyncio.sleep(0.25)
+                if "resp" in captured:
+                    break
+            if "resp" not in captured:
+                return None
+            data = await captured["resp"].json()
+            if not isinstance(data, dict):
+                return None
+            out = [m for m in (self._map_bet(b) for b in (data.get("bets") or [])) if m]
+            print(f"[PINNACLE] My Bets read via the PAGE ({len(out)} unsettled) — no off-page API call.")
+            return out
+        except Exception as e:
+            print(f"[PINNACLE] My Bets page read failed ({type(e).__name__}: {e}) — falling back to REST.")
+            return None
+        finally:
+            if page is not None:
+                try:
+                    page.remove_listener("response", _on_resp)
+                except Exception:
+                    pass
+
     async def open_bets(self) -> list[dict]:
-        return []  # TODO(M1): read My Bets from the UI/authed endpoint for fill confirmation + settlement
+        """UNSETTLED bets = the real Pinnacle position, for crash recovery + reconcile. This is the book-side
+        answer to 'what do I actually hold?' — the counterpart of Kalshi's GetPositionsAsync. Until this existed
+        the adapter returned [] ('flat'), so the executor could only trust its own in-memory fill record.
+
+        PAGE-FIRST: `/0.1/bets` is only ever fired by the My Bets page, so we navigate there and read the site's
+        own response (HARDVEN_BETS_VIA_PAGE=0 to force the direct REST call instead). REST is the fallback when
+        the browser route isn't available — still correct, just less well-correlated traffic.
+
+        Returns [] on any error, which the C# client reads as flat — the SAFE reading (reconcile then falls back
+        to the in-memory record rather than believing a phantom position)."""
+        if self._session_source == "browser" and not self._session_ready:
+            return []
+        try:
+            if self._bets_via_page_on:
+                via_page = await self._bets_via_page()
+                if via_page is not None:
+                    return via_page
+            return await self._fetch_bets("unsettled")
+        except Exception as e:
+            print(f"[PINNACLE] open_bets failed ({type(e).__name__}: {e}) — reporting flat.")
+            return []
 
     async def bet(self, bet_id: str) -> Optional[dict]:
-        return None  # TODO(M1): single-bet status by id (confirmation / settlement)
+        """One bet by id — confirmation right after placing, and settlement later. Checks UNSETTLED first (the
+        common case just after a bet), then SETTLED so a resolved bet still resolves to its outcome."""
+        if not bet_id or (self._session_source == "browser" and not self._session_ready):
+            return None
+        want = str(bet_id)
+        try:
+            # UNSETTLED first via the normal open_bets() route (page-first, so no off-page call) — that's the
+            # common case: confirming a bet moments after placing it. Only a SETTLED lookup needs direct REST,
+            # since the settled view is behind a different page filter.
+            for b in await self.open_bets():
+                if b.get("bet_id") == want:
+                    return b
+            for b in await self._fetch_bets("settled"):
+                if b.get("bet_id") == want:
+                    return b
+        except Exception as e:
+            print(f"[PINNACLE] bet({bet_id}) failed ({type(e).__name__}: {e})")
+        return None
