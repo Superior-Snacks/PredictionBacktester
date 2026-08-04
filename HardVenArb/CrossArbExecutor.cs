@@ -995,11 +995,22 @@ public class CrossArbExecutor
             if (ladderContracts < hardvenMinContracts || ladderContracts <= 0)
             {
                 lock (_balanceLock) { _kalshiBalanceUsd += kalshiCost; _hardvenBalanceUsd += hardvenCost; }
+                // Say WHY when the binding constraint is the min rung rather than depth: a cheap (longshot)
+                // HardVen leg needs MANY contracts to reach the smallest stake, and that combined cost can blow
+                // past --max-bet. Surfacing the required --max-bet turns a mystery skip into a config decision.
+                string ladderHint = "";
+                if (pLegAsk > 0m && kDepthAtLimit > contracts && pDepthAtLimit * StakeLadder.MaxDepthFraction > contracts)
+                {
+                    decimal neededMaxBet = StakeLadder.MinRung * _hardvenFxToUsd * pricePerSet / pLegAsk;
+                    ladderHint = $" | min-rung bound: P={pLegAsk:0.0000} (odds {1m / pLegAsk:0.0}) needs "
+                               + $"~{StakeLadder.MinRung * _hardvenFxToUsd / pLegAsk:0} contracts for the "
+                               + $"{StakeLadder.MinRung:0} rung ⇒ --max-bet ≥ ${neededMaxBet:0} (now ${_maxBetUsd:0})";
+                }
                 Console.WriteLine(
                     $"[EXEC SKIP] {pair.Label} | ladder: no valid rung — want≤{contracts} " +
                     $"K≤{kLimitDec:0.00}={kDepthAtLimit:0.0} P≤{pLimitAsk:0.0000}={pDepthAtLimit:0.0} " +
                     $"(×{StakeLadder.MaxDepthFraction:0.###} cap) → {ladderContracts} contracts / " +
-                    $"{ladderStake:0.00} stake, min rung {StakeLadder.MinRung:0}");
+                    $"{ladderStake:0.00} stake, min rung {StakeLadder.MinRung:0}{ladderHint}");
                 await JournalAsync(JsonSerializer.Serialize(new {
                     t = DateTime.UtcNow, @event = "EXEC_SKIP", pairId, arbType,
                     reason = "NO_LADDER_RUNG", wanted = contracts, ladderContracts,
