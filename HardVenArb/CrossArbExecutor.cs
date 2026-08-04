@@ -76,6 +76,12 @@ public class CrossArbExecutor
     // tab, so once it's WS-covered the re-opened arb executes. No-op in non-reader mode (wv always true).
     // HARDVEN_REQUIRE_WS_VERIFIED=0 disables (e.g. paho/dedicated-WS mode where everything is already live).
     private readonly bool _requireWsVerified = Environment.GetEnvironmentVariable("HARDVEN_REQUIRE_WS_VERIFIED") != "0";
+    // How long to wait for the roving tab to bring a screening-only league under live WS coverage before giving
+    // up on THIS arb window. Pre-live lines hold for tens of seconds to minutes, so ~10s is affordable.
+    private readonly double _wsVerifyTimeoutSec =
+        double.TryParse(Environment.GetEnvironmentVariable("HARDVEN_WS_VERIFY_TIMEOUT_SEC"),
+                        System.Globalization.NumberStyles.Any,
+                        System.Globalization.CultureInfo.InvariantCulture, out var _wvt) && _wvt > 0 ? _wvt : 10.0;
     // Only execute selections the book can actually PLACE. The Pinnacle UI path handles straight moneylines
     // (`lid:mid:home|away`) only; derivative tokens (spread/total) are rejected at placement, so executing them
     // just fills+reverses the Kalshi leg. `0` allows them (for a book/adapter that can place derivatives).
@@ -771,9 +777,48 @@ public class CrossArbExecutor
         // will pass once it's WS-covered. Never risks real money on a possibly-stale screening price.
         if (_requireWsVerified && !testMode && !_telemetry.IsHardVenVerified(hardvenToken))
         {
-            Console.WriteLine($"[EXEC SKIP] {pair.Label}: HardVen leg NOT WS-verified (screening-only) — " +
-                              "awaiting verify tab; will execute once WS-confirmed");
-            return;
+            // VERIFY THIS WINDOW, don't abandon it. Commandeer the sidecar's ROVING tab, navigate straight to
+            // the league, wait for its live WS, then re-read and re-check. Beats the old behaviour (skip and
+            // hope a LATER window on that league happened to be covered) — which also depended on the DEDICATED
+            // tab pool, so it answered `at-cap` when full and blocked those leagues permanently.
+            if (_restVerifier == null)
+            {
+                Console.WriteLine($"[EXEC SKIP] {pair.Label}: HardVen leg NOT WS-verified and no REST verifier to confirm it");
+                return;
+            }
+            Console.WriteLine($"[WS-VERIFY] {pair.Label}: screening-only leg — roving tab → league, waiting for live WS…");
+            if (!await _restVerifier.VerifyNowAsync(hardvenToken, _wsVerifyTimeoutSec))
+            {
+                Console.WriteLine($"[EXEC SKIP] {pair.Label}: HardVen leg still NOT WS-verified after " +
+                                  $"{_wsVerifyTimeoutSec:0}s — skipping (screening price not trusted)");
+                await JournalAsync(JsonSerializer.Serialize(new {
+                    t = DateTime.UtcNow, @event = "EXEC_SKIP", pairId, arbType, reason = "WS_VERIFY_TIMEOUT"
+                }));
+                return;
+            }
+            // Live now — re-read BOTH legs and re-check, because seconds passed while the tab navigated.
+            var (vK, vP) = await _restVerifier.GetCurrentAsksAsync(pair, arbType);
+            if (vK <= 0m || vP <= 0m)
+            {
+                Console.WriteLine($"[EXEC SKIP] {pair.Label}: WS-verified but the re-read failed — skipping");
+                return;
+            }
+            decimal vNet = vK + vP + KalshiFee(vK) + HardVenFee(vP, hardvenToken);
+            if (vNet >= _executionThreshold)
+            {
+                Console.WriteLine($"[WS-VERIFY] {pair.Label}: arb GONE on live prices " +
+                                  $"(K={vK:0.0000} P={vP:0.0000} net=${vNet:0.0000}) — the screening price was stale");
+                await JournalAsync(JsonSerializer.Serialize(new {
+                    t = DateTime.UtcNow, @event = "EXEC_SKIP", pairId, arbType,
+                    reason = "WS_VERIFY_ARB_GONE", screenK = kLegAsk, screenP = pLegAsk, liveK = vK, liveP = vP,
+                    liveNet = Math.Round(vNet, 4)
+                }));
+                return;
+            }
+            Console.WriteLine($"[WS-VERIFY] {pair.Label}: CONFIRMED on live WS — K={vK:0.0000} P={vP:0.0000} " +
+                              $"net=${vNet:0.0000} (screening said K={kLegAsk:0.0000} P={pLegAsk:0.0000}) — proceeding");
+            kLegAsk = vK;                       // execute on the VERIFIED prices, never the screening ones
+            pLegAsk = vP;
         }
 
         // FAVORITE-ON-KALSHI gate (tennis retirement/void hedge): only fire when the Kalshi leg we buy is the

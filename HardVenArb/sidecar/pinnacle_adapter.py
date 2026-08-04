@@ -1249,6 +1249,65 @@ class PinnacleAdapter(BookAdapter):
             out[sid] = (lid in tab_lids) or (mk in pushed and (now - pushed[mk]) < ttl)
         return out
 
+    async def verify_now(self, selection_id: str, timeout: float = 10.0) -> dict:
+        """SYNCHRONOUS verify-then-trade: commandeer the ROVING tab, navigate straight to this selection's
+        league, and WAIT for its live WS to push a price for that matchup — so the caller can re-check and fire
+        on the SAME arb window.
+
+        Replaces the fire-and-forget `/verify`, which had two problems: it only skipped the current arb and hoped
+        a LATER window on that league would be covered, and it asked the DEDICATED tab pool for a slot — returning
+        `at-cap` whenever the pool was full, which permanently blocked those leagues instead of merely delaying
+        them. The rove tab has no such cap.
+
+        Returns {ok, verified, waited_ms, price, decimal_odds}. Declines while a bet is in flight — the rove tab
+        may be needed for placement and must not be navigated out from under it."""
+        sid = str(selection_id or "")
+        parts = sid.split(":")
+        if len(parts) < 2:
+            return {"ok": False, "verified": False, "error": f"bad selection_id '{sid}'"}
+        lid = parts[0]
+        if self.ws_verified_map([sid]).get(sid):
+            return {"ok": True, "verified": True, "waited_ms": 0, "how": "already-live"}
+        if self._bet_lock.locked():
+            return {"ok": False, "verified": False, "error": "bet in flight - not borrowing the rove tab"}
+        tm = self._tab_manager
+        if tm is None:
+            return {"ok": False, "verified": False, "error": "no tab manager (rove disabled)"}
+        url = self._league_url_for(lid)
+        if not url:
+            return {"ok": False, "verified": False, "error": f"no league URL known for lid {lid}"}
+
+        t0 = time.time()
+        tm.hold(True)                                  # stop the sweep fighting us for the rove tab
+        try:
+            page = await tm.acquire_rove_for_bet(url)
+            if page is None:
+                return {"ok": False, "verified": False, "error": "rove tab unavailable"}
+            deadline = t0 + max(1.0, float(timeout))
+            while time.time() < deadline:
+                await asyncio.sleep(0.25)
+                if self.ws_verified_map([sid]).get(sid):
+                    waited = int((time.time() - t0) * 1000)
+                    price = odds_dec = None
+                    try:
+                        s = (await self.odds([sid])).get(sid)
+                        if s is not None:
+                            price, odds_dec = s.implied_price, s.decimal_odds
+                        # leave the rove tab parked here: the bet path's page_for_lid now finds this league
+                    except Exception:
+                        pass
+                    print(f"[PINNACLE] verify-now: {sid} LIVE on the rove tab after {waited}ms "
+                          f"(odds {odds_dec})")
+                    return {"ok": True, "verified": True, "waited_ms": waited, "how": "rove-nav",
+                            "price": price, "decimal_odds": odds_dec}
+            waited = int((time.time() - t0) * 1000)
+            print(f"[PINNACLE] verify-now: {sid} still not WS-live after {waited}ms - caller should skip.")
+            return {"ok": True, "verified": False, "waited_ms": waited, "error": "timeout"}
+        except Exception as e:
+            return {"ok": False, "verified": False, "error": f"{type(e).__name__}: {e}"}
+        finally:
+            tm.hold(False)
+
     async def request_league_verify(self, lid: str) -> dict:
         """VERIFY-ON-DETECTION: promote league `lid` to a live WS tab on demand (the C# bot calls this when it
         spots an arb on a screening-only leg). Delegates to the tab manager; no-op if it isn't running."""

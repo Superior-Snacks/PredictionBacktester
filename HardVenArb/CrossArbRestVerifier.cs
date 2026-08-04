@@ -73,6 +73,34 @@ public class CrossArbRestVerifier
         return (kAsk, pAsk);
     }
 
+    /// <summary>SYNCHRONOUS WS-verify: ask the sidecar to point its ROVING tab at this selection's league and
+    /// wait for live WS coverage, so the caller can re-check and fire on the SAME arb window.
+    ///
+    /// <para>Replaces skip-and-hope. The old fire-and-forget <c>/verify</c> only promoted the league for some
+    /// FUTURE window, and asked the DEDICATED tab pool for a slot — answering <c>at-cap</c> whenever that pool
+    /// was full, which permanently blocked those leagues rather than delaying them. The rove tab is uncapped.</para>
+    ///
+    /// <para>Returns false on any failure (timeout, no rove tab, bet in flight) — the caller then skips, exactly
+    /// as before. Never throws.</para></summary>
+    public async Task<bool> VerifyNowAsync(string hardvenToken, double timeoutSec = 10.0)
+    {
+        if (string.IsNullOrWhiteSpace(hardvenToken)) return false;
+        try
+        {
+            string url = $"{_sidecarBase}/verify_now?selection_id={Uri.EscapeDataString(hardvenToken)}"
+                       + $"&timeout={timeoutSec.ToString(CultureInfo.InvariantCulture)}";
+            using var resp = await _http.PostAsync(url, null);
+            if (!resp.IsSuccessStatusCode) return false;
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+            return doc.RootElement.TryGetProperty("verified", out var v) && v.ValueKind == JsonValueKind.True;
+        }
+        catch (Exception ex)
+        {
+            DebugLog.Trades($"VerifyNowAsync {hardvenToken}: {ex.GetType().Name}: {ex.Message}");
+            return false;
+        }
+    }
+
     /// <summary>
     /// Fetches live bid prices for both held legs. Used by early-exit monitoring when
     /// WS books are stale. Returns (-1,-1) if either fetch fails.

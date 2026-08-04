@@ -169,6 +169,17 @@ async def verify_league(lid: str):
 
 
 # ── Pairing: catalog ──────────────────────────────────────────────────────────
+@app.post("/verify_now")
+async def verify_now(selection_id: str, timeout: float = 10.0):
+    """SYNCHRONOUS verify: point the roving tab at this selection's league and wait for live WS coverage, so the
+    bot can re-check and fire on the SAME arb window instead of skipping it. Unlike `/verify` (dedicated-tab
+    pool, can answer `at-cap`), the rove tab is uncapped."""
+    fn = getattr(adapter, "verify_now", None)
+    if not callable(fn):
+        raise HTTPException(400, "adapter has no verify_now (Pinnacle adapter only)")
+    return await fn(selection_id, timeout)
+
+
 @app.get("/catalog")
 async def catalog():
     return {"selections": [c.to_api() for c in await adapter.catalog()]}
