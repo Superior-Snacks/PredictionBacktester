@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+import os
 import random
 import re
 from collections import Counter
@@ -363,6 +364,9 @@ class TabOrganic:
         self._task: asyncio.Task | None = None
         self.actions = Counter()
         self._cursor = None                      # tracked mouse pos for the curved approach on the popover click
+        # Raise the OS window when glancing at a tab? Cosmetic only (focus emulation already reports the page
+        # visible+focused to the site); 0 stops the taskbar flashing on a Windows virtual desktop.
+        self._raise_windows = os.environ.get("HARDVEN_ORGANIC_FOCUS", "1") != "0"
 
     def pause(self) -> None:
         self._gate.clear()
@@ -418,10 +422,17 @@ class TabOrganic:
             self.actions["idle"] += 1
             return "idle"
         page = random.choice(tabs)[0]
-        try:
-            await page.bring_to_front()                       # a user glancing at another open tab
-        except Exception:
-            pass
+        # Raising the OS window is COSMETIC here: Playwright enables CDP focus emulation, so every page already
+        # reports visibilityState="visible" / hasFocus()=true to the site whatever the window is doing — the
+        # gesture buys no extra realism — and Playwright drives background tabs fine. On a Windows VIRTUAL
+        # DESKTOP the raise is refused by the foreground-lock anyway and just FLASHES the taskbar at the user.
+        # HARDVEN_ORGANIC_FOCUS=0 skips it: same gestures, no flashing. (The BET path still raises — see
+        # _try_select_on — where the tab really should be frontmost.)
+        if self._raise_windows:
+            try:
+                await page.bring_to_front()                   # a user glancing at another open tab
+            except Exception:
+                pass
         # Re-check the gate: a bet may have started during bring_to_front. Never gesture into a live bet.
         if not self._gate.is_set():
             return "glance"

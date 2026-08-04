@@ -152,10 +152,14 @@ class LeagueTabManager:
                 return None
             self._rove_page = pg
         else:
-            try:
-                await self._rove_page.bring_to_front()
-            except Exception:
-                pass
+            # Cosmetic raise (see HARDVEN_ORGANIC_FOCUS in organic.py): focus emulation already reports the page
+            # visible+focused to the site, and navigate_tab works on a background tab — so skipping this only
+            # stops the taskbar flashing when the window sits on another Windows virtual desktop.
+            if os.environ.get("HARDVEN_ORGANIC_FOCUS", "1") != "0":
+                try:
+                    await self._rove_page.bring_to_front()
+                except Exception:
+                    pass
             if not await self._session.navigate_tab(self._rove_page, url):
                 self._rove_page = None
                 self._rove_lid = None
