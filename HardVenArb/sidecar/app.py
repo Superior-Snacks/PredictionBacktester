@@ -174,6 +174,45 @@ async def catalog():
     return {"selections": [c.to_api() for c in await adapter.catalog()]}
 
 
+@app.get("/debug/visibility")
+async def debug_visibility():
+    """What the SITE sees about each managed tab: document.visibilityState / hidden / hasFocus.
+
+    Why it matters: a tab parked on another Windows VIRTUAL DESKTOP (or minimised / fully occluded) reports
+    `hidden`. A hidden tab is unremarkable on its own — but the organic layer SCROLLING and CLICKING a hidden
+    page is not something a real user does, and `bring_to_front` cannot fix it when Windows' foreground-lock
+    refuses the raise (you see a taskbar flash instead). Poll this from your OWN desktop — reading it does not
+    disturb the bot window, whereas opening DevTools on that window would change the very thing you're measuring.
+
+    visible => the placement/organic gestures are coherent with what the page reports (a virtual DISPLAY gives
+    this; a virtual DESKTOP usually does not)."""
+    out = []
+    js = ("() => ({vis: document.visibilityState, hidden: document.hidden, "
+          "focus: document.hasFocus(), w: window.innerWidth, h: window.innerHeight})")
+    br = getattr(adapter, "_browser", None)
+    pages = []
+    primary = getattr(br, "_page", None) if br else None
+    if primary is not None:
+        pages.append(("primary", primary))
+    tm = getattr(adapter, "_tab_manager", None)
+    if tm is not None:
+        try:
+            for pg, lid in (tm.reader_tabs() or []):
+                pages.append((f"reader:{lid}", pg))
+        except Exception:
+            pass
+    for name, pg in pages:
+        try:
+            if pg.is_closed():
+                out.append({"tab": name, "error": "closed"})
+                continue
+            out.append({"tab": name, **(await pg.evaluate(js))})
+        except Exception as e:
+            out.append({"tab": name, "error": f"{type(e).__name__}: {e}"})
+    n_vis = sum(1 for t in out if t.get("vis") == "visible")
+    return {"tabs": out, "visible_count": n_vis, "total": len(out)}
+
+
 @app.get("/debug/reader")
 async def debug_reader(ttl: float = 30.0):
     """Coverage diagnostic: the matchups ('lid:mid') the browser-WS reader has actually pushed odds for within

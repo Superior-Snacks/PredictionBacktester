@@ -273,9 +273,24 @@ class PinnacleBrowserSession:
         print(f"[PINNACLE SESSION] {'reusing SAVED' if reused else 'creating NEW'} Chrome profile: {self._user_data}"
               + ("" if reused else " (log in once; it'll be remembered next run)"))
         self._pw = await async_playwright().start()
+        # Park the browser WINDOW where it won't cover your desktop — e.g. a second monitor or a dummy-HDMI
+        # display. PINNACLE_WINDOW_POS="1920,0" puts it on a 1080p display to the right; PINNACLE_WINDOW_SIZE
+        # ="1920,1080" sizes it. Purely an OS window placement (Chrome flags aren't visible to page JS), so it
+        # changes NOTHING about the fingerprint — same Windows Chrome, same profile, still fully headed.
+        _pos  = (os.environ.get("PINNACLE_WINDOW_POS")  or "").strip()
+        _size = (os.environ.get("PINNACLE_WINDOW_SIZE") or "").strip()
+        _win_args = []
+        if _pos:
+            _win_args.append(f"--window-position={_pos}")
+        if _size:
+            _win_args.append(f"--window-size={_size}")
+        if _win_args:
+            print(f"[PINNACLE SESSION] window placement: {' '.join(_win_args)} "
+                  "(keeps the bot off your primary screen; no fingerprint change).")
         launch = dict(user_data_dir=self._user_data, headless=self._headless,
                       viewport={"width": 1400, "height": 900},
-                      args=["--disable-blink-features=AutomationControlled",
+                      args=[*_win_args,
+                            "--disable-blink-features=AutomationControlled",
                             # KEEP THE SESSION ALIVE WHEN BACKGROUNDED: Chrome throttles/freezes background-tab
                             # timers, which stops Pinnacle's own setInterval session-refresh → ~30-min logout when
                             # you walk away and the window drops behind others. These keep its timers running.
