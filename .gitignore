@@ -395,6 +395,10 @@ temp_crossarbjournal.jsonl
 # Pairing-file backups (regenerated each run; churny)
 *.bak
 
+# Aggregator shadow tape (AggregatorAdapter, HARDVEN_AGG_MODE=shadow) — book-vs-vendor price comparison,
+# one row per token transition. Regenerated per day, large, and vendor-specific. Read with analyze_agg_shadow.py.
+AggShadow_*.csv
+
 # huge gz files
 *.gz
 *.json

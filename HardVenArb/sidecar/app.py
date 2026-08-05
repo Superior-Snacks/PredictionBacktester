@@ -50,6 +50,12 @@ def load_adapter() -> BookAdapter:
     if name == "pinnacle":
         from pinnacle_adapter import PinnacleAdapter      # clean httpx (no browser); replays x-session headers
         return PinnacleAdapter()
+    if name == "aggregator":
+        # COMPOSITE: prices from a read-only odds aggregator, bets/balance through a real book's adapter
+        # (HARDVEN_AGG_PLACEMENT_BOOK, default pinnacle). Defaults to HARDVEN_AGG_MODE=shadow, which serves the
+        # inner book's own quotes unchanged and only LOGS the aggregator for comparison.
+        from aggregator_adapter import AggregatorAdapter
+        return AggregatorAdapter()
     # Register more books here as you build them, e.g.:
     #   if name == "mybook": from mybook_adapter import MyBookPlaywrightAdapter; return MyBookPlaywrightAdapter()
     raise ValueError(f"Unknown HARDVEN_BOOK={name!r} (no adapter registered)")

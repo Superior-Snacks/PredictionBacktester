@@ -1,0 +1,1331 @@
+Understanding API Requests & Quota
+Your subscription plan includes a monthly request allowance. This page explains exactly what counts as a request, which endpoints are free, and what happens when you reach your limit.
+
+What is 1 Request?
+1 Request = 1 call to a billable API endpoint, regardless of the response.
+
+Every successful call to a billable endpoint counts as exactly one request against your quota. The response size, number of items returned, query parameters, or HTTP status all have no effect on the count — a call that returns 1,000 events and a call that returns 0 events both consume exactly 1 request.
+
+Requests are counted per subscription, so all calls made with your API key accumulate against the same allowance.
+
+Which endpoints count?
+Billable endpoints (count toward your quota)
+Every call to these endpoints uses 1 request:
+
+/v4/players
+/v4/settlements
+/v4/fixtures
+/v4/fixture
+/v4/odds-by-tournaments
+/v4/languages
+/v4/sports
+/v4/bookmakers
+/v4/markets
+/v4/tournaments
+/v4/participants
+/v4/scores
+/v4/odds
+Free endpoints (do NOT count toward your quota)
+/v4/historical-odds — always free. Calls never increment your request count.
+Unmetered endpoints (do NOT count, and are never blocked)
+/v4/account — always accessible, even after your quota is exhausted. This ensures you can always check your subscription status and remaining quota.
+When is a request counted?
+A request is counted after the endpoint has finished processing, whether the response was successful or returned an error. This includes:
+
+200 OK — successful responses
+4xx — client errors (e.g. invalid parameters, resource not found)
+5xx — server errors
+Note
+
+Requests that are rejected before reaching the endpoint — for example, because your API key is invalid or your quota is already exhausted — are not counted.
+
+Reaching your limit
+When your accumulated request count reaches your plan's request_limit, every subsequent call to a billable or free endpoint (except /v4/account) will immediately return:
+
+HTTP/1.1 429 Too Many Requests
+
+{
+  "message": "Request limit exceeded",
+  "details": "You have exceeded your request limit of X requests.",
+  "code": "REQUEST_LIMIT_EXCEEDED"
+}
+You can continue to call /v4/account at any time to inspect your subscription, current usage, and when your quota resets.
+
+Checking your usage
+Call GET /v4/account at any time. The response includes, for your active subscription:
+
+request_limit — your plan's allowance
+request_count — how many billable requests you have consumed in the current period
+Tips to minimize request consumption
+Cache responses client-side when the underlying data changes infrequently (e.g. /v4/sports, /v4/bookmakers, /v4/markets, /v4/languages).
+Batch where possible — use /v4/fixtures with filters instead of many single-event calls when you need several events at once.
+Poll responsibly — each poll of a billable endpoint is 1 request, so align your polling interval with how often the data actually changes.
+
+GET account
+Retrieves account information for the authenticated user.
+
+Endpoint
+GET /v4/account
+Example Response
+{
+  "api_key": "Fdgvr5S28-bSRY5d-JV8yBYc-UJGWwwQPqG",
+  "created_at": "2025-07-14T13:29:48.525Z",
+  "language_code": "en",
+  "language_name": "English",
+  "current_subscription_id": "v6ZgCuxA-gMTn5Bd-nKPPvkycUK-xgmNehB",
+  "subscriptions": [
+    {
+      "subscription_id": "v6ZgCuxA-gMTn5Bd-nKPPvkycUK-xgmNehB",
+      "currency": "USD",
+      "price": null,
+      "valid_from": "2025-07-16T13:25:00.647Z",
+      "valid_until": null,
+      "auto_renew": false,
+      "is_active": true,
+      "created_at": "2025-07-16T13:25:00.647Z",
+      "bookmakers": {
+        "pinnacle": {
+          "has_live_odds": false,
+          "has_player_props": false
+        }
+      },
+      "sport_ids": [
+        10,
+        11,
+        12,
+        13,
+        14,
+        15
+      ],
+      "websocket_access": 0,
+      "request_limit": 500,
+      "rate_limit": null,
+      "request_count": 100,
+      "last_request": "2025-07-16T13:25:00.647Z"
+    }
+  ]
+}
+Response Fields Breakdown
+api_key (string) — Your API key used for authentication.
+language_code (string) — The identifier for the user's preferred language.
+language_name (string) — The name of the user's preferred language.
+subscriptions (array) — A list of subscriptions associated with the account. Each object includes:
+subscription_id (string) — The unique identifier for the subscription.
+currency (string) — The currency used for the subscription.
+price (number|null) — The price of the subscription.
+valid_from (ISO string) — The start date and time of the subscription in ISO format.
+valid_until (ISO string|null) — The end date and time of the subscription in ISO format or null if it is ongoing.
+auto_renew (boolean) — Indicates if the subscription will automatically renew.
+is_active (boolean) — Indicates if the subscription is currently active.
+bookmakers (object) — key = slug
+has_live_odds (boolean) — Indicates if the subscription includes live odds for this specific bookmaker.
+has_player_props (boolean) — Indicates if the subscription includes player props for this specific bookmaker.
+sport_ids (array) — A list of sport IDs associated with the subscription.
+websocket_access (number) — Indicates the level of access to websocket features
+request_limit (number) — The maximum number of requests allowed for the account.
+request_count (number) — The total number of requests made by the user.
+last_request (ISO string|null) — The timestamp of the last request made by the user.
+Notes
+
+Endpoint cooldown (rate limit): 1000ms
+1 request = 1 API request
+
+POST account
+Allows the client to update an account.
+
+Endpoint
+POST /v4/account
+Request Parameters
+language (string) — Specifies the language for the account interface.
+See the a2 values in the response from /languages
+Example Request
+POST /v4/account?language=en
+Example Response
+{
+  "message": "Language successfully updated to: en"
+}
+Response (200 OK)
+On a successful request, the server responds with a status code 200 and returns the same JSON object as GET account.
+
+Notes
+
+Endpoint cooldown (rate limit): 1000ms
+
+POST refresh-api-key
+Allows the client to refresh their API key.
+
+Endpoint
+POST /v4/account/refresh-api-key
+Example Response
+{
+  "api_key": "67hbdfu-oijd83Hdf-92kfd72bhfd-gbdvgl18bhsd"
+}
+Response (200 OK)
+On a successful request, the server responds with a status code 200 and returns a JSON object containing the following fields:
+
+api_key (string) — The newly generated API key.
+Notes
+
+Endpoint cooldown (rate limit): 1000ms
+
+GET languages
+Retrieves a list of supported languages available in the system.
+
+Endpoint
+GET /v4/languages
+Response (200 OK)
+On a successful request, the server responds with a status code 200 and returns a JSON object containing the following fields:
+
+a2 (string) — A 2-letter language code. This is the value you should use when sending a language parameter to any other endpoint.
+name (string) — The name of the language.
+Notes
+
+Endpoint cooldown (rate limit): 1000ms
+This endpoint does not require any request parameters.
+The returned data can be used to understand the available languages for localisation or user interface settings.
+
+GET sports
+Allows users to retrieve a list of sports available in the system.
+
+Endpoint
+GET /v4/sports
+Request Parameters
+language (string) — (Optional) The language that the sportName will be returned in.
+Example Request
+GET /v4/sports?language=en
+Example Response
+[
+  {
+    "sportId": 10,
+    "slug": "soccer",
+    "sportName": "Soccer"
+  },
+  {
+    "sportId": 11,
+    "slug": "basketball",
+    "sportName": "Basketball"
+  }
+]
+The response will have a status code 200 indicating that the request was successful. If there are no sports available, the array may be empty.
+
+Response (200 OK)
+On a successful request, the server responds with a status code 200 and returns a JSON array containing the list of sports.
+
+Each object in the array contains the following fields:
+
+sportId (number) — A unique identifier for the sport. This is the value you should use when sending the sport parameter to any other endpoints.
+slug (string) — A URL-friendly version of the sport's name.
+sportName (string) — The sport name.
+Notes
+
+Endpoint cooldown (rate limit): 1000ms
+
+GET bookmakers
+Retrieves a list of bookmakers available in the system.
+
+Endpoint
+GET /v4/bookmakers
+Sample Response
+[
+  {
+    "bookmakerName": "188BET",
+    "slug": "188bet",
+    "liveOdds": false,
+    "cloneOf": null
+  },
+  {
+    "bookmakerName": "18Bet",
+    "slug": "18bet",
+    "liveOdds": null,
+    "cloneOf": null
+  }
+]
+Response (200 OK)
+On a successful request, the server responds with a status code 200 and returns a JSON array containing details about each bookmaker. Each object in the array contains the following fields:
+
+bookmakerName (string) — The name of the bookmaker.
+slug (string) — A URL-friendly version of the bookmaker's name. This is the value you should use when sending a bookmaker parameter to any other endpoints.
+liveOdds (boolean|null) — Current live odds offered by the bookmaker.
+cloneOf (string|null) — Name of the bookmaker this bookmaker is a clone of.
+Notes
+
+Endpoint cooldown (rate limit): 1000ms
+The response will contain an array of bookmakers, and if no bookmakers are available, the array will be empty.
+Ensure that you handle the case where liveOdds may be null, indicating that live odds are not currently available for that bookmaker.
+
+GET tournaments
+Retrieves a list of leagues based on the specified sport and language.
+
+Endpoint
+GET /v4/tournaments
+Request Parameters
+sportId (number)* — The ID of the sport for which leagues are being requested. For example: 10.
+language (a2) — (Optional) The language in which the league information should be returned. By default, the value is en for English.
+Example Request
+GET /v4/tournaments?sportId=10&language=en
+Example Response
+[
+  {
+    "tournamentId": 1,
+    "tournamentSlug": "uefa-euro",
+    "tournamentName": "UEFA Euro",
+    "categorySlug": "international",
+    "categoryName": "International",
+    "futureFixtures": 0,
+    "upcomingFixtures": 0,
+    "liveFixtures": 0
+  },
+  {
+    "tournamentId": 7,
+    "tournamentSlug": "uefa-champions-league",
+    "tournamentName": "UEFA Champions League",
+    "categorySlug": "international-clubs",
+    "categoryName": "International Clubs",
+    "futureFixtures": 108,
+    "upcomingFixtures": 0,
+    "liveFixtures": 0
+  },
+  {
+    "tournamentId": 8,
+    "tournamentSlug": "laliga",
+    "tournamentName": "LaLiga",
+    "categorySlug": "spain",
+    "categoryName": "Spain",
+    "futureFixtures": 300,
+    "upcomingFixtures": 0,
+    "liveFixtures": 0
+  }
+]
+Response (200 OK)
+On a successful request, the server responds with a status code 200 and returns a JSON array containing league information. Each object in the array contains the following fields:
+
+tournamentId (number) — A unique identifier for the league.
+tournamentSlug (string) — A URL-friendly version of the league name.
+tournamentName (string) — The name of the league.
+categorySlug (string) — A URL-friendly version of the category name.
+categoryName (string) — The name of the category to which the league belongs.
+futureFixtures (number) — Amount of events starting more than 24 hours from now.
+upcomingFixtures (number) — Amount of events starting less than 24 hours from now.
+liveFixtures (number) — Amount of events currently in-play.
+Notes
+
+Endpoint cooldown (rate limit): 1000ms
+Ensure that the sportId is valid to receive relevant league data.
+The response will be an array, which may be empty if no leagues are found for the given parameters.
+
+GET fixtures
+Retrieves a list of events based on the specified parameters such as league ID, sport ID, participant ID, date range, and language.
+
+Endpoint
+GET /v4/fixtures
+Request
+Parameters
+tournamentId (number) — The unique identifier for the league. This ID must correspond to an existing league.
+sportId (number) — The unique identifier for the sport. This ID must correspond to an existing sport.
+participantId (number) — The unique identifier for the participant. This ID must correspond to an existing participant.
+from (string) — The start date and time for the events in ISO 8601 format (e.g., YYYY-MM-DDTHH:MM:SSZ)
+to (string) — The end date and time for the events in ISO 8601 format (e.g., YYYY-MM-DDTHH:MM:SSZ)
+language (a2) — (Optional) The language in which the league information should be returned. By default, the value is en for English
+statusId (number: 0,1,2,3) — The statusId that the returned events must have (0: Not yet started, 1: Live, 2: Finished, 3: Cancelled).
+hasOdds (boolean) — Whether the event has odds available.
+bookmakers (string) — (Optional) Comma-separated list of bookmaker slugs. Used to evaluate the hasOdds filter.
+Conditions
+tournamentId: Can be the only parameter provided.
+participantId: Can be the only parameter provided.
+sportId: Must be accompanied by any of:
+tournamentId
+participantId
+Both to and from, where both times are under 10 days apart.
+to and from:
+If tournamentId or participantId are provided, to and from aren't mandatory and providing only one is accepted.
+If only to and from are provided, they must be under 48 hours apart.
+Example Request
+GET /v4/fixtures?sportId=10&from=2026-04-12&to=2026-04-17&statusId=0&hasOdds=true&bookmakers=pinnacle
+Example Response
+[
+  {
+    "fixtureId": "id1000001761301153",
+    "participant1Id": 35,
+    "participant2Id": 34,
+    "sportId": 10,
+    "tournamentId": 17,
+    "seasonId": 130281,
+    "statusId": 0,
+    "hasOdds": true,
+    "startTime": "2026-04-13T19:00:00.000Z",
+    "trueStartTime": null,
+    "trueEndTime": null,
+    "updatedAt": "2026-04-06T23:17:08.202Z",
+    "externalProviders": {
+      "betradarId": 61301153,
+      "mollybetId": "2026-04-13,35,34",
+      "opticoddsId": "20260413A1B2C3D4",
+      "lsportsId": null,
+      "txoddsId": null,
+      "sofascoreId": 15676100,
+      "betgeniusId": 13670012,
+      "flashscoreId": "xK4pLm2n",
+      "pinnacleId": 1626291706,
+      "oddinId": null
+    },
+    "statusName": "Pre-Game",
+    "participant1Name": "Liverpool FC",
+    "participant1ShortName": "Liverpool",
+    "participant1Abbr": "LIV",
+    "participant2Name": "Manchester United",
+    "participant2ShortName": "Man Utd",
+    "participant2Abbr": "MNU",
+    "sportName": "Soccer",
+    "tournamentSlug": "premier-league",
+    "categorySlug": "england",
+    "categoryName": "England",
+    "tournamentName": "Premier League"
+  }
+]
+Response (200 OK)
+On a successful request, the server responds with a status code 200 and returns a JSON array containing event objects with the following fields:
+
+fixtureId (string) — The unique identifier for the event.
+participant1Id (number) — The ID of the first participant.
+participant2Id (number) — The ID of the second participant.
+sportId (number) — The ID of the sport associated with the event.
+tournamentId (number) — The ID of the league associated with the event.
+seasonId (number|null) — (Optional) The ID of the season.
+statusId (number) — The current status of the event.
+hasOdds (boolean) — Whether the event has odds available.
+startTime (string) — The start time of the event.
+trueStartTime (string|null) — The actual start time of the event, if available.
+trueEndTime (string|null) — The actual end time of the event, if available.
+updatedAt (string) — The timestamp of the last update to the event.
+statusName (string) — Human-readable fixture status (e.g., "Pre-Game", "In-Play", "Ended").
+participant1Name (string) — The name of the first participant (in your requested language).
+participant1ShortName (string) — Short display name of first participant. Translated if language parameter is set.
+participant1Abbr (string) — 3-letter abbreviation of first participant. Translated if language parameter is set.
+participant2Name (string) — The name of the second participant (in your requested language).
+participant2ShortName (string) — Short display name of second participant. Translated if language parameter is set.
+participant2Abbr (string) — 3-letter abbreviation of second participant. Translated if language parameter is set.
+sportName (string) — The name of the sport associated with the event.
+tournamentSlug (string) — URL-friendly tournament identifier.
+categorySlug (string) — Slug of the competition category (e.g., "england").
+categoryName (string) — The name of the category to which the league belongs.
+tournamentName (string) — The name of the league.
+externalProviders (object) — IDs from third-party providers:
+betradarId (number|null) — (Optional) The ID assigned by Betradar.
+mollybetId (string|null) — (Optional) The unique ID assigned by Mollybet.
+opticoddsId (string|null) — (Optional) The unique ID assigned by Opticodds.
+lsportsId (number|null) — (Optional) The unique ID assigned by LSports.
+txoddsId (number|null) — (Optional) The unique ID assigned by TXOdds.
+sofascoreId (number|null) — (Optional) The ID assigned by Sofascore.
+betgeniusId (number|null) — (Optional) The ID assigned by Betgenius.
+flashscoreId (string|null) — (Optional) The ID assigned by Flashscore.
+pinnacleId (number|null) — (Optional) The ID assigned by Pinnacle.
+oddinId (number|null) — (Optional) The ID assigned by Oddin.
+Notes
+
+Endpoint cooldown (rate limit): 2000ms
+All timestamps are in UTC (ISO 8601).
+
+GET fixture
+Retrieves a single fixture based on its fixture ID. The response includes detailed information about the fixture, including participant names, IDs, and external provider mappings. This endpoint does not return bookmaker odds for the given fixture.
+
+Endpoint
+GET /v4/fixture
+Request Parameters
+fixtureId* (string) — Unique ID of the fixture (e.g., id1000001761301153).
+language (string) — (Optional) Language code for translated labels (e.g., en, de, es). Default is en.
+Example Request
+GET /v4/fixture?fixtureId=id1000001761301153&language=en
+Sample Response
+{
+  "fixtureId": "id1000001761301153",
+  "participant1Id": 35,
+  "participant2Id": 34,
+  "sportId": 10,
+  "tournamentId": 17,
+  "seasonId": 130281,
+  "statusId": 0,
+  "hasOdds": true,
+  "startTime": "2026-04-13T19:00:00.000Z",
+  "trueStartTime": null,
+  "trueEndTime": null,
+  "updatedAt": "2026-04-06T23:17:08.202Z",
+  "externalProviders": {
+    "betradarId": 61301153,
+    "mollybetId": "2026-04-13,35,34",
+    "opticoddsId": "20260413A1B2C3D4",
+    "lsportsId": null,
+    "txoddsId": null,
+    "sofascoreId": 15676100,
+    "betgeniusId": 13670012,
+    "flashscoreId": "xK4pLm2n",
+    "pinnacleId": 1626291706,
+    "oddinId": null
+  },
+  "statusName": "Pre-Game",
+  "participant1Name": "Liverpool FC",
+  "participant1ShortName": "Liverpool",
+  "participant1Abbr": "LIV",
+  "participant2Name": "Manchester United",
+  "participant2ShortName": "Man Utd",
+  "participant2Abbr": "MNU",
+  "sportName": "Soccer",
+  "tournamentSlug": "premier-league",
+  "categorySlug": "england",
+  "categoryName": "England",
+  "tournamentName": "Premier League"
+}
+Response Fields Breakdown
+Top-Level Fields
+fixtureId (string) — Internal unique ID for the fixture.
+participant1Id (number) — ID of first participant.
+participant2Id (number) — ID of second participant.
+sportId (number) — ID representing the sport (e.g., 10 = Soccer, 12 = Tennis).
+tournamentId (number) — ID of the tournament.
+seasonId (number|null) — ID of the season, if applicable.
+statusId (number) — Fixture status code (e.g., 0 = Pre-Game, 1 = Scheduled, 2 = In-Play, 3 = Ended).
+hasOdds (boolean) — Whether odds data is available for this fixture.
+startTime (string) — ISO 8601 timestamp for scheduled start (UTC).
+trueStartTime (string|null) — Actual start time if different from scheduled (e.g., delayed kick-off).
+trueEndTime (string|null) — Actual end time of the fixture, if available.
+updatedAt (string) — ISO 8601 timestamp for last update (UTC).
+statusName (string) — Human-readable fixture status (e.g., "Pre-Game", "In-Play", "Ended").
+participant1Name (string) — Full name of first participant. Translated if language parameter is set.
+participant1ShortName (string) — Short display name of first participant. Translated if language parameter is set.
+participant1Abbr (string) — 3-letter abbreviation of first participant. Translated if language parameter is set.
+participant2Name (string) — Full name of second participant. Translated if language parameter is set.
+participant2ShortName (string) — Short display name of second participant. Translated if language parameter is set.
+participant2Abbr (string) — 3-letter abbreviation of second participant. Translated if language parameter is set.
+sportName (string) — Name of the sport.
+tournamentSlug (string) — URL-friendly tournament identifier.
+categorySlug (string) — Slug of the competition category (e.g., "england").
+categoryName (string) — Display name of the category (e.g., "England").
+tournamentName (string) — Full tournament name (translated if language parameter is set).
+externalProviders (object) — IDs from third-party providers.:
+betradarId (number|null) — ID from Betradar feed.
+mollybetId (string|null) — Mollybet composite identifier.
+opticoddsId (string|null) — OpticOdds identifier.
+lsportsId (number|null) — LSports identifier.
+txoddsId (number|null) — TXOdds identifier.
+sofascoreId (number|null) — Sofascore fixture ID.
+betgeniusId (number|null) — Betgenius fixture ID.
+flashscoreId (string|null) — Flashscore fixture ID.
+pinnacleId (number|null) — Pinnacle's internal fixture ID.
+oddinId (number|null) — Oddin fixture ID.
+Notes
+
+Endpoint cooldown (rate limit): 500ms
+All timestamps are in UTC (ISO 8601).
+This endpoint does not include bookmaker odds. Use the /v4/odds endpoint to retrieve odds for a fixture.
+
+GET markets
+Retrieves a list of markets available in the system.
+
+Endpoint
+GET /v4/markets
+Request Parameters
+language (a2) — (Optional) The language in which the league information should be returned. By default, the value is en for English.
+Example Request
+GET /v4/markets?language=en
+Example Response
+[
+  {
+    "marketId": 101,
+    "marketLength": 3,
+    "marketName": "Full Time Result",
+    "playerProp": false,
+    "sportId": 10,
+    "handicap": 0,
+    "period": "fulltime",
+    "marketType": "1x2",
+    "outcomes": [
+      {
+        "outcomeId": 101,
+        "outcomeName": "1"
+      },
+      {
+        "outcomeId": 102,
+        "outcomeName": "X"
+      },
+      {
+        "outcomeId": 103,
+        "outcomeName": "2"
+      }
+    ]
+  },
+  {
+    "marketId": 104,
+    "marketLength": 2,
+    "marketName": "Both Teams To Score",
+    "playerProp": false,
+    "sportId": 10,
+    "handicap": 0,
+    "period": "fulltime",
+    "marketType": "totals",
+    "outcomes": [
+      {
+        "outcomeId": 104,
+        "outcomeName": "Yes"
+      },
+      {
+        "outcomeId": 105,
+        "outcomeName": "No"
+      }
+    ]
+  },
+  {
+    "marketId": 106,
+    "marketLength": 2,
+    "marketName": "Over Under Full Time",
+    "playerProp": false,
+    "sportId": 10,
+    "handicap": 0.5,
+    "period": "fulltime",
+    "marketType": "totals",
+    "outcomes": [
+      {
+        "outcomeId": 106,
+        "outcomeName": "Over"
+      },
+      {
+        "outcomeId": 107,
+        "outcomeName": "Under"
+      }
+    ]
+  }
+]
+Response (200 OK)
+On a successful request, the server responds with a status code 200 and returns a JSON array containing market objects. Each market object includes the following fields:
+
+marketId (number) — The unique identifier for the market.
+marketLength (number) — The number of outcomes in the market.
+marketName (string) — The name of the market.
+playerProp (boolean) — Indicates if the market is a player prop.
+sportId (number) — The identifier for the associated sport.
+handicap (number) — The handicap value for the market.
+period (string) — The period of play that the market relates to.
+marketType (string) — The type of the market.
+outcomes (array) — An array of outcome objects associated with the market, where each outcome includes:
+outcomeId (number) — The unique identifier for the outcome.
+outcomeName (string) — The name of the outcome.
+Notes
+
+Endpoint cooldown (rate limit): 1000ms
+
+GET participants
+Retrieve a list of participants associated with a specific sport identified by the sportId.
+
+Endpoint
+GET /v4/participants
+Request Parameters
+sportId* (number) — A numeric identifier for the sport.
+language (a2) — (Optional) The language that the names will be returned in, if available. If not available, en is used.
+Example Request
+GET /v4/participants?sportId=11&language=en
+Example Response
+{
+  "3409": "Chicago Bulls",
+  "3410": "Milwaukee Bucks"
+}
+Response (200 OK)
+On a successful request, the server responds with a status code 200 and returns a JSON object where every key is the participantId and each value is the participant name.
+
+Notes
+
+Endpoint cooldown (rate limit): 1000ms
+
+GET odds
+Retrieves detailed odds and metadata for a specified sports event from various bookmakers.
+
+Endpoint
+GET /v4/odds
+Request Parameters
+fixtureId* (string) — Unique ID of the event
+bookmakers (string) — (Optional) Comma-separated list of bookmakers
+oddsFormat (string) — (Optional) Desired odds format. Options: fractional, decimal, american
+language (string) — (Optional) Language code for translated labels
+verbosity (number) — (Optional) Level of response detail. Higher value returns more verbose output.
+Example Request
+GET /v4/odds?fixtureId=id1000003969653792&bookmakers=pinnacle&language=en&verbosity=3
+Sample Response
+{
+  "fixtureId": "id1000003969653792",
+  "participant1Id": 1302,
+  "participant2Id": 4872,
+  "sportId": 10,
+  "tournamentId": 39,
+  "seasonId": 130951,
+  "statusId": 0,
+  "hasOdds": true,
+  "startTime": "2026-04-13T17:00:00.000Z",
+  "trueStartTime": null,
+  "trueEndTime": null,
+  "updatedAt": "2026-04-08T18:00:30.461Z",
+  "externalProviders": {
+    "betradarId": 69653792,
+    "mollybetId": "2026-04-13,625,676",
+    "opticoddsId": "20260413B49C7BD7",
+    "lsportsId": null,
+    "txoddsId": null,
+    "sofascoreId": 15676262,
+    "betgeniusId": 13679074,
+    "flashscoreId": "nDaPAq53",
+    "pinnacleId": 1627730447,
+    "oddinId": null
+  },
+  "statusName": "Pre-Game",
+  "participant1Name": "FC Fredericia",
+  "participant1ShortName": "Fredericia",
+  "participant1Abbr": "FRE",
+  "participant2Name": "Vejle BK",
+  "participant2ShortName": "Vejle",
+  "participant2Abbr": "VEJ",
+  "sportName": "Soccer",
+  "tournamentSlug": "superliga",
+  "categorySlug": "denmark",
+  "categoryName": "Denmark",
+  "tournamentName": "Superliga",
+  "bookmakerOdds": {
+    "pinnacle": {
+      "bookmakerIsActive": true,
+      "bookmakerFixtureId": "1627730447",
+      "fixturePath": "https://www.pinnacle.com/en/e/e/e/1627730447/#all",
+      "suspended": false,
+      "markets": {
+        "10286": {
+          "bookmakerMarketId": "1627730447/6020879114/1628099951",
+          "marketActive": true,
+          "outcomes": {
+            "10287": {
+              "players": {
+                "0": {
+                  "active": true,
+                  "betslip": null,
+                  "bookmakerOutcomeId": "1628099962",
+                  "bookmakerChangedAt": null,
+                  "changedAt": "2026-04-13T09:00:11.194Z",
+                  "limit": 125,
+                  "playerName": null,
+                  "price": 4.01,
+                  "priceAmerican": "301",
+                  "priceFractional": "301/100",
+                  "mainLine": false,
+                  "exchangeMeta": null
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+Response Fields Breakdown
+Top-Level Fields
+fixtureId string — Internal unique ID for the event.
+participant1Id number — The ID of the first participant.
+participant2Id number — The ID of the second participant.
+sportId number — Sport ID
+tournamentId number — League ID
+seasonId number|null — (Optional) The ID of the season.
+statusId number — The current status of the event.
+hasOdds boolean — Whether the event has odds available.
+startTime string — ISO 8601 start time.
+trueStartTime string|null — The actual start time of the event, if available.
+trueEndTime string|null — The actual end time of the event, if available.
+updatedAt string — ISO 8601 last update time.
+statusName string — Human-readable fixture status (e.g., "Pre-Game", "In-Play", "Ended").
+participant1Name string — The name of the first participant (in your requested language).
+participant1ShortName string — Short display name of first participant. Translated if language parameter is set.
+participant1Abbr string — 3-letter abbreviation of first participant. Translated if language parameter is set.
+participant2Name string — The name of the second participant (in your requested language).
+participant2ShortName string — Short display name of second participant. Translated if language parameter is set.
+participant2Abbr string — 3-letter abbreviation of second participant. Translated if language parameter is set.
+sportName string — Name of the sport.
+tournamentSlug string — URL-friendly tournament identifier.
+categorySlug string — Slug of the competition category (e.g., "england").
+categoryName string — Display name of the category (e.g., "England").
+tournamentName string — Full tournament name (translated if language parameter is set).
+externalProviders (object) — IDs from third-party providers:
+betradarId (number|null) — (Optional) The ID assigned by Betradar.
+mollybetId (string|null) — (Optional) The unique ID assigned by Mollybet.
+opticoddsId (string|null) — (Optional) The unique ID assigned by Opticodds.
+lsportsId (number|null) — (Optional) The unique ID assigned by LSports.
+txoddsId (number|null) — (Optional) The unique ID assigned by TXOdds.
+sofascoreId (number|null) — (Optional) The ID assigned by Sofascore.
+betgeniusId (number|null) — (Optional) The ID assigned by Betgenius.
+flashscoreId (string|null) — (Optional) The ID assigned by Flashscore.
+pinnacleId (number|null) — (Optional) The ID assigned by Pinnacle.
+oddinId (number|null) — (Optional) The ID assigned by Oddin.
+bookmakerOdds Object
+bookmakerIsActive boolean — Whether this bookmaker is currently active for this fixture (mostly indicates whether we collect the data from this bookmaker).
+bookmakerFixtureId string — The bookmaker's own fixture identifier.
+fixturePath string — Direct URL to the fixture on the bookmaker's website.
+suspended boolean — Whether all markets for this bookmaker are currently suspended.
+markets object — Object containing market IDs as keys and their corresponding market data:
+bookmakerMarketId string — The bookmaker's internal market identifier.
+marketActive boolean — Whether this specific market is currently active.
+outcomes object — Map of outcome IDs to outcome data:
+players object — Map of player IDs to player-level pricing:
+active boolean — Whether this selection is currently being offered.
+betslip string|null — Betslip deep-link or identifier, if available.
+bookmakerOutcomeId string — Outcome identifier from the bookmaker (e.g., "3.5/under", "home").
+bookmakerChangedAt string|null — ISO 8601 timestamp of the bookmaker's last reported change, if provided.
+changedAt string — ISO 8601 timestamp of the last recorded change in our system.
+limit number|null — Maximum bet amount allowed for this selection.
+playerName string|null — Player name for player-prop markets; null for standard markets.
+price number — Odds in decimal format.
+priceAmerican string — Odds in American format (e.g., "-201", "171").
+priceFractional string — Odds in fractional format (e.g., "49/99").
+mainLine boolean — Whether this is the primary/main line for the market.
+exchangeMeta any|null — Additional metadata for exchange-based bookmakers (e.g., liquidity, lay price).
+Notes
+
+Endpoint cooldown (rate limit): 500ms
+If no bookmakers parameter is specified, odds from all available bookmakers are included.
+All timestamps are in UTC (ISO 8601).
+All three price formats (price, priceAmerican, priceFractional) are always returned regardless of the oddsFormat query parameter.
+
+GET odds-by-tournaments
+Retrieves odds for all events in a specified league.
+
+Endpoint
+GET /v4/odds-by-tournaments
+Request Parameters
+tournamentIds* (string) — A comma-separated list of league IDs.
+bookmakers (string) — Docs.GetOddsByTournaments.bookmakers_param
+language (string) — (Optional) Language code for translated labels (e.g., en, de, es). Default is en.
+verbosity (number) — (Optional) The verbosity level to control the detail of the response.
+oddsFormat (string) — (Optional) Format of odds in the response. (e.g. decimal, american).
+Example Request
+GET /v4/odds-by-tournaments?tournamentIds=17&bookmakers=pinnacle&language=en&verbosity=3
+Example Response
+{
+  "fixtureId": "id1000001761301153",
+  "participant1Id": 35,
+  "participant2Id": 34,
+  "sportId": 10,
+  "tournamentId": 17,
+  "seasonId": 130281,
+  "statusId": 0,
+  "hasOdds": true,
+  "startTime": "2026-04-13T19:00:00.000Z",
+  "trueStartTime": null,
+  "trueEndTime": null,
+  "updatedAt": "2026-04-06T23:17:08.202Z",
+  "bookmakerOdds": {
+    "pinnacle": {
+      "bookmakerIsActive": true,
+      "bookmakerFixtureId": "1626291706",
+      "fixturePath": "https://www.pinnacle.com/en/e/e/e/1626291706/#all",
+      "suspended": false,
+      "markets": {
+        "1012": {
+          "bookmakerMarketId": "line/29/1980/1626291706/56152425451/0/totals",
+          "marketActive": true,
+          "outcomes": {
+            "1012": {
+              "players": {
+                "0": {
+                  "active": true,
+                  "betslip": null,
+                  "bookmakerOutcomeId": "3.5/over",
+                  "bookmakerChangedAt": "2026-04-13T09:24:46.990Z",
+                  "changedAt": "2026-04-13T09:24:47.424Z",
+                  "limit": 20000,
+                  "playerName": null,
+                  "price": 2.71,
+                  "priceAmerican": "171",
+                  "priceFractional": "171/100",
+                  "mainLine": false,
+                  "exchangeMeta": null
+                }
+              }
+            },
+            "1013": {
+              "players": {
+                "0": {
+                  "active": true,
+                  "betslip": null,
+                  "bookmakerOutcomeId": "3.5/under",
+                  "bookmakerChangedAt": "2026-04-13T09:11:04.603Z",
+                  "changedAt": "2026-04-13T09:11:05.099Z",
+                  "limit": 40241,
+                  "playerName": null,
+                  "price": 1.497,
+                  "priceAmerican": "-201",
+                  "priceFractional": "49/99",
+                  "mainLine": false,
+                  "exchangeMeta": null
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+Response (200 OK)
+On a successful request, the server responds with a status code 200 and returns a JSON object containing events with their associated odds.
+
+Top-Level Fields
+fixtureId (string) — The unique identifier of the event to retrieve scores for.
+participant1Id (number) — ID of first participant.
+participant2Id (number) — ID of second participant.
+sportId (number) — The unique identifier for the sport. This ID must correspond to an existing sport.
+tournamentId (number) — The unique identifier for the league. This ID must correspond to an existing league.
+seasonId (number|null) — ID of the season, if applicable.
+statusId (number) — Fixture status code (e.g., 0 = Pre-Game, 1 = Scheduled, 2 = In-Play, 3 = Ended).
+hasOdds (boolean) — Whether odds data is available for this fixture.
+startTime (string) — ISO 8601 start time.
+trueStartTime (string|null) — Actual start time if different from scheduled (e.g., delayed kick-off).
+trueEndTime (string|null) — Actual end time of the fixture, if available.
+updatedAt (string) — ISO 8601 timestamp for last update (UTC).
+bookmakerOdds (object) — Odds grouped by bookmaker slug:
+bookmakerIsActive (boolean) — Whether this bookmaker is currently active for this fixture (mostly indicates whether we collect the data from this bookmaker).
+bookmakerFixtureId (string) — Unique event ID used by the bookmaker.
+fixturePath (string) — Link to the bookmaker's betting page for the event.
+suspended (boolean) — Whether all markets for this bookmaker are currently suspended.
+markets (object) — Object containing market IDs as keys and their corresponding market data:
+bookmakerMarketId (string) — Internal market ID or path used by the bookmaker.
+marketActive (boolean) — Whether this specific market is currently active.
+outcomes (object) — Map of outcome IDs to outcome data:
+players (object) — Map of player IDs to player-level pricing:
+active (boolean) — Whether the odds are currently active.
+betslip (string|null) — Betslip deep-link or identifier, if available.
+bookmakerOutcomeId (string) — Bookmaker's outcome label.
+bookmakerChangedAt (string|null) — ISO 8601 timestamp of the bookmaker's last reported change, if provided.
+changedAt (string) — Timestamp of the last change to the odds.
+limit (number|null) — The maximum stake allowed for the odds.
+playerName (string|null) — Player name for player-prop markets; null for standard markets.
+price (number) — Odds in decimal format.
+priceAmerican (string) — Odds in American format (e.g., "-201", "171").
+priceFractional (string) — Odds in fractional format (e.g., "49/99").
+mainLine (boolean) — Whether this is the primary/main line for the market.
+exchangeMeta (any|null) — Additional metadata for exchange-based bookmakers (e.g., liquidity, lay price).
+Notes
+
+Endpoint cooldown (rate limit): 1000ms
+If no bookmakers parameter is specified, odds from all available bookmakers are included.
+All timestamps are in UTC (ISO 8601).
+All three price formats (price, priceAmerican, priceFractional) are always returned regardless of the oddsFormat query parameter.
+
+GET historical-odds
+Endpoint
+GET /v4/historical-odds
+Request Parameters
+fixtureId* (string) — Event ID to retrieve historical odds for.
+bookmakers* (string) — Comma-separated list of bookmaker slugs (max 3) to filter results. Example: pinnacle,bet365
+id (number) — (Optional) The unique ID of a specific historical odds entry to filter by.
+playerId (number) — (Optional) The playerId associated with the odds to narrow down results.
+outcomeId (number) — (Optional) The outcomeId to filter odds for a specific outcome.
+active (boolean) — (Optional) Filter based on whether the odds entry is currently active.
+Request Headers
+If-None-Match (string) — (Optional) Echo back the ETag from a previous response to make a conditional request. If the response would be identical, the server returns 304 Not Modified with an empty body instead of resending the payload. Only effective for events that are finished or cancelled (see "Conditional requests" below).
+Example Request
+GET /v4/historical-odds?fixtureId=id1000000758265379
+Example Response
+{
+  "fixtureId": "id1000000758265379",
+  "bookmakers": {
+    "pinnacle": {
+      "markets": {
+        "101": {
+          "outcomes": {
+            "101": {
+              "players": {
+                "0": [
+                  {
+                    "createdAt": "2025-04-16T21:12:10.506331+00:00",
+                    "price": 9.11,
+                    "limit": 1191.25,
+                    "active": false,
+                    "exchangeMeta": null
+                  },
+                  {
+                    "createdAt": "2025-04-16T20:50:58.321847+00:00",
+                    "price": 9.11,
+                    "limit": 1191.25,
+                    "active": true,
+                    "exchangeMeta": null
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "10168": {
+          "outcomes": {
+            "10168": {
+              "players": {
+                "0": [
+                  {
+                    "createdAt": "2025-04-16T20:16:45.057806+00:00",
+                    "price": 1.729,
+                    "limit": 13072.7023319616,
+                    "active": false,
+                    "exchangeMeta": null
+                  },
+                  {
+                    "createdAt": "2025-04-16T20:16:18.597131+00:00",
+                    "price": 1.729,
+                    "limit": 13072.7023319616,
+                    "active": true,
+                    "exchangeMeta": null
+                  },
+                  {
+                    "createdAt": "2025-04-16T20:15:51.441377+00:00",
+                    "price": 1.699,
+                    "limit": 13633.7625178827,
+                    "active": true,
+                    "exchangeMeta": null
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+Response (200 OK)
+On a successful request, the server responds with a status code 200 and returns a map of eventId to nested bookmaker odds history..
+
+bookmakers (object) — Odds grouped by bookmaker slug
+markets (object) — Each event contains market objects with outcomes.
+outcomes (object) — Outcome IDs with player data.
+players (object) — Players with odds data containing:
+id (number) — The unique identifier for the historical odds entry.
+createdAt (string) — The timestamp when the historical odds entry was created.
+price (number) — The price (odds) offered.
+limit (number) — The maximum stake allowed for the odds.
+active (boolean) — Whether the odds are currently active.
+exchangeMeta (object|null) — Exchange metadata if applicable, including back and lay prices.
+Response Headers (finished/cancelled events only)
+ETag — A short opaque string identifying the current response body. Example: "a1b2c3d4e5f6a7b8".
+Cache-Control — private, max-age=259200 (3 days).
+Response (304 Not Modified)
+Returned when the request includes an If-None-Match header whose value matches the current ETag for this event and filter combination. The response has an empty body; the client should reuse its previously cached payload.
+
+Conditional requests
+For events that are finished or cancelled the response is deterministic, so every 200 response includes an ETag header. Clients that poll the same event repeatedly can cache the body locally, then send If-None-Match: <etag> on subsequent requests to skip re-transferring and re-parsing an unchanged payload:
+
+GET /v4/historical-odds?fixtureId=id1000000758265379&bookmakers=pinnacle
+→ 200 OK
+  ETag: "a1b2c3d4e5f6a7b8"
+  Cache-Control: private, max-age=259200
+  { "fixtureId": "...", "bookmakers": { ... } }
+
+GET /v4/historical-odds?fixtureId=id1000000758265379&bookmakers=pinnacle
+If-None-Match: "a1b2c3d4e5f6a7b8"
+→ 304 Not Modified
+  ETag: "a1b2c3d4e5f6a7b8"
+The ETag is tied to the exact response, so it changes when query parameters (bookmakers, filters) change. Live and upcoming events do not emit an ETag because their odds history is still growing; conditional requests on those events are served as a normal 200 with the full body.
+
+Notes
+
+Endpoint cooldown (rate limit): 5000ms (a 304 response still counts against this limit).
+All historical odds data since January 2026 is available.
+
+GET settlements
+Returns settlement results for all available markets in a specific event.
+
+Endpoint
+GET /v4/settlements
+Request Parameters
+fixtureId* (string) — The unique ID of the event for which to return settlement data.
+playerId (number) — (Optional) The unique ID of the player to filter results by.
+outcomeId (number) — (Optional) The unique ID of the outcome to filter results by.
+Example Request
+GET /v4/settlements?fixtureId=id1000000761280685
+Example Response
+{
+  "fixtureId": "id1000000761280685",
+  "markets": {
+    "101": {
+      "outcomes": {
+        "101": {
+          "players": {
+            "0": {
+              "result": "WIN"
+            }
+          }
+        },
+        "102": {
+          "players": {
+            "0": {
+              "result": "LOSE"
+            }
+          }
+        },
+        "103": {
+          "players": {
+            "0": {
+              "result": "LOSE"
+            }
+          }
+        }
+      }
+    },
+    "106": {
+      "outcomes": {
+        "106": {
+          "players": {
+            "0": {
+              "result": "WIN"
+            }
+          }
+        },
+        "107": {
+          "players": {
+            "0": {
+              "result": "LOSE"
+            }
+          }
+        }
+      }
+    },
+    "1056": {
+      "outcomes": {
+        "1056": {
+          "players": {
+            "0": {
+              "result": "PUSH"
+            }
+          }
+        },
+        "1057": {
+          "players": {
+            "0": {
+              "result": "PUSH"
+            }
+          }
+        }
+      }
+    }
+  }
+}
+Response (200 OK)
+On a successful request, the server responds with a status code 200 — Returns the settlement result of each outcome per player for the given event.
+
+fixtureId (string) — The unique identifier of the event to retrieve scores for.
+markets (object) — A map of marketId to outcome and player result information.
+outcomes (object) — Map of outcome IDs to outcome data.
+players (object) — Each outcome maps to one or more players offering odds.
+result (string) — The final result of the player's outcome. Possible values are: WIN, LOSE, HALFWIN, HALFLOSS, PUSH, CANCELLED, UNDECIDED
+Notes
+
+Endpoint cooldown (rate limit): 2000ms
+
+GET scores
+Retrieves the score breakdown by period for a specified event.
+
+Endpoint
+GET /v4/scores
+Request Parameters
+fixtureId* (string) — The unique identifier of the event to retrieve scores for.
+Example Request
+GET /v4/scores?fixtureId=id65236323277832
+Example Response
+{
+  "fixtureId": "id65236323277832",
+  "scores": {
+    "0": {
+      "participant1Score": 0,
+      "participant2Score": 2,
+      "updatedAt": "2025-07-07T19:23:40.558913+00:00"
+    },
+    "1": {
+      "participant1Score": 3,
+      "participant2Score": 6,
+      "updatedAt": "2025-07-07T18:32:58.060019+00:00"
+    },
+    "2": {
+      "participant1Score": 5,
+      "participant2Score": 7,
+      "updatedAt": "2025-07-07T19:23:40.558913+00:00"
+    },
+    "3": {
+      "participant1Score": 2,
+      "participant2Score": 2,
+      "updatedAt": "2025-07-07T19:53:03.905144+00:00"
+    }
+  }
+}
+Response (200 OK)
+On a successful request, the server responds with a status code 200 and returns a JSON object containing scores grouped by period.
+
+fixtureId (string) — The unique identifier of the event to retrieve scores for.
+scores (object) — Scores returned for each period:
+participant1Score (number) — Score of the first participant for the given period.
+participant2Score (number) — Score of the second participant for the given period.
+updatedAt (string) — The timestamp when the score was last updated for the period.
+Notes
+
+Endpoint cooldown (rate limit): 1000ms
+
+Websocket API
+This WebSocket provides real-time updates for changes to individual events.
+
+Notes
+
+The WebSocket is only availabe by contacting us or via the b2b plan.
+Connection Details
+Endpoint: wss://api.oddspapi.io/v4/ws?apiKey=YOUR_API_KEY
+Direction: One-way (server → client)
+Authentication: API Key — YOUR_API_KEY
+Data Structure
+All messages include fixtureId. Only changed values are transmitted, except for complete players objects.
+
+{
+  "fixtureId": "string",
+  "betradarId": "number?",
+  "startTime": "number?",
+  "participant1Id": "number?",
+  "participant2Id": "number?",
+  "sportId": "number?",
+  "updatedAt": "string?",
+  "tournamentId": "number?",
+  "seasonId": "number|null",
+  "sofascoreId": "number|null",
+  "betgeniusId": "number|null",
+  "flashscoreId": "string|null",
+  "statusId": "number|null",
+  "bookmakerOdds": {
+    "bookmaker": {
+      "bookmakerFixtureId": "string|null",
+      "fixturePath": "string|null",
+      "markets": {
+        "marketId": {
+          "bookmakerMarketId": "string|null",
+          "outcomes": {
+            "outcomeId": {
+              "players": {
+                "playerId": {
+                  "limit": "number|null",
+                  "price": "number",
+                  "active": "boolean",
+                  "oddsId": "string|null",
+                  "betslip": "any|null",
+                  "playerId": "number",
+                  "changedAt": "string",
+                  "playerName": "string|null",
+                  "exchangeMeta": "any|null"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+Key Features
+Partial Updates: Only changed values are sent
+Complete Player Objects: Entire player object is retransmitted if any value changes
+Single Bookmaker Updates: Each message only contains updates for one bookmaker
+Timestamping: updatedAt changes with any top-level field update
+Examples
+Example 1: Event Metadata Update
+{
+  "fixtureId": "id2704726161008023",
+  "statusId": 1,
+  "updatedAt": "2025-06-11T16:55:28.415401+00:00"
+}
+Example 2: Player Odds Update
+{
+  "fixtureId": "id1100097561092987",
+  "bookmakerOdds": {
+    "starcasino.be": {
+      "markets": {
+        "111": {
+          "outcomes": {
+            "111": {
+              "players": {
+                "0": {
+                  "active": true,
+                  "betslip": null,
+                  "bookmakerOutcomeId": "2535416646",
+                  "changedAt": "2025-06-11T16:55:30.284055+00:00",
+                  "limit": null,
+                  "playerName": null,
+                  "price": 1.345,
+                  "exchangeMeta": {},
+                  "playerId": 0
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+Example 3: Bookmaker Info Update
+{
+  "fixtureId": "id1100023561139799",
+  "bookmakerOdds": {
+    "22bet": {
+      "bookmakerFixtureId": "265591179",
+      "fixturePath": "https://22bets.com/line/basketball/5226-e/265591179-kk-partizan-buducnost-podgorica"
+    }
+  }
+}
+Example 4: Multiple Market Update
+{
+  "fixtureId": "id1001509158796975",
+  "bookmakerOdds": {
+    "stake": {
+      "markets": {
+        "101": {
+          "outcomes": {
+            "101": {
+              "players": {
+                "0": {
+                  "active": true,
+                  "betslip": null,
+                  "bookmakerOutcomeId": "2535416646",
+                  "changedAt": "2025-06-11T16:55:30.284055+00:00",
+                  "limit": null,
+                  "playerName": null,
+                  "price": 1.345,
+                  "exchangeMeta": {},
+                  "playerId": 0
+                }
+              }
+            },
+            "102": {
+              "players": {
+                "0": {
+                  "active": true,
+                  "betslip": null,
+                  "bookmakerOutcomeId": "2535416646",
+                  "changedAt": "2025-06-11T16:55:30.284055+00:00",
+                  "limit": null,
+                  "playerName": null,
+                  "price": 1.345,
+                  "exchangeMeta": {},
+                  "playerId": 0
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+Example 5: Score Update
+{
+  "fixtureId": "id1000085362245214",
+  "scores": {
+    "periods": {
+      "2": {
+        "participant1Score": 0,
+        "participant2Score": 0,
+        "updatedAt": "2025-07-23T16:56:37.122614+00:00"
+      }
+    }
+  }
+}
