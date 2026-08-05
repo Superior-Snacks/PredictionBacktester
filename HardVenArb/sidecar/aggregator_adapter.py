@@ -92,6 +92,26 @@ class AggregatorAdapter(BookAdapter):
     async def startup(self) -> None:
         await self._inner.startup()
         await self._client.startup()
+        # QUOTA saver: pause the vendor's background polling whenever the inner book's session is down (a
+        # scheduled dark window / logout). The bot can't bet then, and in shadow mode there is nothing to
+        # compare against either. ODDSPAPI_PAUSE_WHEN_DARK=0 disables.
+        if os.environ.get("ODDSPAPI_PAUSE_WHEN_DARK", "1") == "1" and hasattr(self._client, "pause_check"):
+            def _dark() -> bool:
+                fn = getattr(self._inner, "session_status", None)
+                try:
+                    return not bool(fn().get("ready", True)) if callable(fn) else False
+                except Exception:
+                    return False
+            self._client.pause_check = _dark
+        # LIVE-mode wiring check: the C# freshness gate (HARDVEN_QUOTE_MAX_AGE_MS, default 30s) must be wider
+        # than the vendor poll cadence, or every quote ages out BETWEEN polls and the books flicker empty.
+        if self._mode == "live":
+            gate_ms = float(os.environ.get("HARDVEN_QUOTE_MAX_AGE_MS", "30000") or 30000)
+            poll_s  = float(getattr(self._client, "_poll_sec", 0) or 0)
+            if poll_s and gate_ms < poll_s * 2500:
+                print(f"[AGG] WARNING: HARDVEN_QUOTE_MAX_AGE_MS={gate_ms:.0f} is tighter than 2.5x the vendor "
+                      f"poll cadence ({poll_s:.0f}s). Quotes will expire between polls and the books will "
+                      f"flicker empty. Set HARDVEN_QUOTE_MAX_AGE_MS={int(poll_s * 3000)} (3x poll).")
         print(f"[AGG] mode={self._mode} provider={self._client.name} placement={self._inner.name} "
               f"limits={self._limits} ts_policy={self._ts_policy} shadow_csv={'on' if self._shadow_on else 'off'}")
         if self._mode == "shadow":

@@ -154,13 +154,25 @@ retryMs — those are rejected pre-endpoint and don't bill), warns at 90% used, 
 every error message** (httpx otherwise embeds the full URL, key included, in exception text).
 
 ```
-ODDSPAPI_KEY=...                  # required (client is safely IDLE without it)
+ODDSPAPI_KEY=...                  # required (client is safely IDLE without it; ODDSPAPI_API_KEY also accepted)
 ODDSPAPI_SPORTS=tennis,baseball   # slugs, resolved via /v4/sports
-ODDSPAPI_POLL_SEC=10              # odds-by-tournaments cadence (quota driver)
-ODDSPAPI_DISCOVERY_MIN=20         # fixtures-map refresh
+ODDSPAPI_POLL_SEC=60              # HOT-tier cadence (quota driver #1)
+ODDSPAPI_HOT_HORIZON_H=8          # a tournament is HOT when a watched PRE-LIVE game starts within this
+ODDSPAPI_COLD_POLL_SEC=600        # everything else (pre-live, inside the 48h horizon) polls this slowly
+ODDSPAPI_POLL_HORIZON_H=48        # beyond this: not polled at all; already-started games: never polled
+ODDSPAPI_DISCOVERY_MIN=45         # fixtures-map refresh
+ODDSPAPI_PAUSE_WHEN_DARK=1        # stop polling while the book session is down (lifecycle dark window)
 ODDSPAPI_HEARTBEAT_TTL_SEC=900    # slate-liveness window for the freshness stamp
 ODDSPAPI_BOOKMAKER=pinnacle
 ```
+
+**Live-mode wiring rule:** `HARDVEN_QUOTE_MAX_AGE_MS` (C# freshness gate, default 30s) must be ≥ ~3x
+`ODDSPAPI_POLL_SEC` or quotes expire between polls and the books flicker empty (the adapter warns at startup).
+A wide gate is safe **because** WS-verify re-reads both legs on the real Pinnacle WS before any fire.
+
+**Budget at defaults** (60s hot / 600s cold / pause-when-dark, typical slate ~5 hot + ~30 cold tournaments):
+~170 req/active-hour → ~60k/month at 12 active hours/day. `ODDSPAPI_POLL_SEC=120` roughly halves it. This is
+the number that picks the paid tier.
 
 **Verified live (probe census, 2026-08-05):** moneyline `bookmakerOutcomeId` **is** `"home"`/`"away"` on the
 `…/0/moneyline` path (and the period-1 `…/1/moneyline` right next to it is correctly ignored); spreads **are**

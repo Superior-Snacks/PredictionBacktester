@@ -98,8 +98,19 @@ class OddsPapiClient(AggregatorClient):
         # Both names accepted: ODDSPAPI_KEY (docs here) and ODDSPAPI_API_KEY (what the .env uses).
         self._key       = (os.environ.get("ODDSPAPI_KEY") or os.environ.get("ODDSPAPI_API_KEY") or "").strip()
         self._bookmaker = (os.environ.get("ODDSPAPI_BOOKMAKER") or "pinnacle").lower()
-        self._poll_sec  = max(2.0, float(os.environ.get("ODDSPAPI_POLL_SEC", "10") or 10))
-        self._disc_min  = max(5.0, float(os.environ.get("ODDSPAPI_DISCOVERY_MIN", "20") or 20))
+        self._poll_sec  = max(2.0, float(os.environ.get("ODDSPAPI_POLL_SEC", "60") or 60))
+        self._disc_min  = max(5.0, float(os.environ.get("ODDSPAPI_DISCOVERY_MIN", "45") or 45))
+        # HOT/COLD tiers -- the quota lever. A tournament is HOT when a watched PRE-LIVE fixture starts within
+        # ODDSPAPI_HOT_HORIZON_H (bets happen near start); hot tournaments poll every ODDSPAPI_POLL_SEC, the
+        # rest only every ODDSPAPI_COLD_POLL_SEC. Fixtures already STARTED are not polled at all (the bot is
+        # pre-live only; their lines are dead to us).
+        self._hot_h     = float(os.environ.get("ODDSPAPI_HOT_HORIZON_H", "8") or 8)
+        self._cold_poll = max(self._poll_sec, float(os.environ.get("ODDSPAPI_COLD_POLL_SEC", "600") or 600))
+        self._last_cold = 0.0
+        self._n_hot = self._n_cold = 0                # last-poll tier sizes, surfaced in health()
+        # Optional pause hook: the composite adapter points this at the inner book's session-readiness so a
+        # scheduled dark window (browser closed, bot can't bet anyway) stops burning quota. Returns True = pause.
+        self.pause_check = None
         self._hb_ttl    = float(os.environ.get("ODDSPAPI_HEARTBEAT_TTL_SEC", "900") or 900)
         # API hard limit, discovered empirically 2026-08-05: >5 tournamentIds -> 400 INVALID_PARAMETER
         # "Please provide a maximum of 5 tournament IDs". Each chunk is 1 billable request, so the number of
@@ -232,6 +243,9 @@ class OddsPapiClient(AggregatorClient):
                 if now < self._backoff_until:
                     await asyncio.sleep(15)
                     continue
+                if self.pause_check is not None and self.pause_check():
+                    await asyncio.sleep(30)           # dark window: the book can't bet, so don't spend quota
+                    continue
                 if not self._sport_ids:
                     await self._resolve_sports()
                 if not self._ml_market_ids:
@@ -329,16 +343,29 @@ class OddsPapiClient(AggregatorClient):
         return out
 
     async def _poll_odds(self) -> None:
-        watched = self._watched_mid_map()
-        horizon = time.time() + self._poll_horizon_h * 3600.0
-        tids = sorted({
-            self._fixtures[mid]["tid"] for mid in watched
-            if mid in self._fixtures and self._fixtures[mid].get("tid") is not None
-            # unknown start_ts (0.0) is included conservatively; a known far-future start is skipped
-            and not (self._fixtures[mid].get("start_ts") or 0.0) > horizon
-        })
+        now = time.time()
+        horizon = now + self._poll_horizon_h * 3600.0
+        hot_edge = now + self._hot_h * 3600.0
+        hot: set = set()
+        cold: set = set()
+        for mid, _toks in self._watched_mid_map().items():
+            fx = self._fixtures.get(mid)
+            if fx is None or fx.get("tid") is None:
+                continue
+            start = fx.get("start_ts") or 0.0
+            if start and start <= now:
+                continue                              # already started: pre-live only, its line is dead to us
+            if start and start > horizon:
+                continue                              # too far out to act on
+            (hot if (start and start <= hot_edge) else cold).add(fx["tid"])
+        cold -= hot                                   # a tournament with any near game polls at the hot cadence
+        tids = sorted(hot)
+        if cold and (now - self._last_cold) >= self._cold_poll:
+            tids += sorted(cold)
+            self._last_cold = now
+        self._n_hot, self._n_cold = len(hot), len(cold)
         if not tids:
-            return                                    # nothing mapped yet -> no billable call
+            return                                    # nothing pollable right now -> no billable call
         t0 = time.time()
         # Hard API limit: 5 tournamentIds per call, each chunk = 1 billable request.
         for i in range(0, len(tids), self._tids_per_call):
@@ -461,6 +488,8 @@ class OddsPapiClient(AggregatorClient):
         unmapped = [m for m in watched if m not in self._fixtures]
         return {
             "key_set": bool(self._key), "poll_sec": self._poll_sec,
+            "hot_tournaments": self._n_hot, "cold_tournaments": self._n_cold,
+            "cold_poll_sec": self._cold_poll, "hot_horizon_h": self._hot_h,
             "billable_session": self._billable, "errors": self._errors, "last_error": self._last_error,
             "last_poll_ms": round(self._last_poll_ms, 1),
             "watched_tokens": len(self._watched), "watched_mids": len(watched),
