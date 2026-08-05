@@ -1249,6 +1249,18 @@ class PinnacleAdapter(BookAdapter):
             out[sid] = (lid in tab_lids) or (mk in pushed and (now - pushed[mk]) < ttl)
         return out
 
+    def _league_ws_live(self, lid: str, ttl: float | None = None) -> bool:
+        """Has the browser WS pushed odds for ANY matchup in this league recently? That is the evidence the
+        league's subscription is genuinely up. Checking the ONE matchup we care about is too strict: the WS
+        sends deltas, so a stable pre-match line can stay silent for minutes even though the feed is healthy."""
+        ttl = ttl if ttl is not None else self._browser_ws_heartbeat_ttl
+        now = time.time()
+        pre = f"{lid}:"
+        for k, ts in list(self._browser_odds_mid_ts.items()):
+            if k.startswith(pre) and (now - ts) < ttl:
+                return True
+        return False
+
     async def verify_now(self, selection_id: str, timeout: float = 10.0) -> dict:
         """SYNCHRONOUS verify-then-trade: commandeer the ROVING tab, navigate straight to this selection's
         league, and WAIT for its live WS to push a price for that matchup — so the caller can re-check and fire
@@ -1280,13 +1292,16 @@ class PinnacleAdapter(BookAdapter):
         t0 = time.time()
         tm.hold(True)                                  # stop the sweep fighting us for the rove tab
         try:
-            page = await tm.acquire_rove_for_bet(url)
+            page = await tm.acquire_rove_for_bet(url, lid=lid)
             if page is None:
                 return {"ok": False, "verified": False, "error": "rove tab unavailable"}
             deadline = t0 + max(1.0, float(timeout))
             while time.time() < deadline:
                 await asyncio.sleep(0.25)
-                if self.ws_verified_map([sid]).get(sid):
+                # Require EVIDENCE the league's WS is really live, not just that we navigated. A stable pre-match
+                # line may never push its OWN matchup (the WS sends changes, not heartbeats), so accept a push for
+                # ANY matchup in this league — that proves the subscription is up and the price is live-sourced.
+                if self._league_ws_live(lid):
                     waited = int((time.time() - t0) * 1000)
                     price = odds_dec = None
                     try:
@@ -2371,7 +2386,7 @@ class PinnacleAdapter(BookAdapter):
 
         # 2. borrow the roving tail tab and navigate it to the league — a focused league page, reliable find
         if tm is not None:
-            rpage = await tm.acquire_rove_for_bet(url)
+            rpage = await tm.acquire_rove_for_bet(url, lid=lid)   # mark the league covered while we're parked here
             if rpage is not None:
                 r = await self._try_select_on(rpage, exp)
                 if r and r.get("ok"):

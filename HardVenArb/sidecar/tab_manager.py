@@ -140,7 +140,7 @@ class LeagueTabManager:
             out.append((self._rove_page, self._rove_lid))
         return out
 
-    async def acquire_rove_for_bet(self, url: str):
+    async def acquire_rove_for_bet(self, url: str, lid: Optional[str] = None):
         """Point the roving tail tab at `url` to place a bet — the fallback when no tab holds the league (the
         user's 'use the last tab to navigate and bet'). Call `hold(True)` first so the sweep won't fight it; the
         rove resumes sweeping the tail after `hold(False)`. Returns the page, or None if roving is disabled/failed."""
@@ -164,7 +164,11 @@ class LeagueTabManager:
                 self._rove_page = None
                 self._rove_lid = None
                 return None
-        self._rove_lid = None           # now parked on a bet league, not a swept tail league
+        # Record WHICH league we parked on. `covered_lids()` reads `_rove_lid`, so leaving it None told the rest
+        # of the system this tab covers nothing — which made verify-on-demand wait forever for a WS delta that a
+        # STABLE PRE-MATCH line never sends (the WS pushes changes, not heartbeats). Setting it is also more
+        # correct for `page_for_lid` (the bet path then finds this tab) and for gap selection (won't re-open it).
+        self._rove_lid = str(lid) if lid else None
         self._last_rove = time.time()
         return self._rove_page
 
