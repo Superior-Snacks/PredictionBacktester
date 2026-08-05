@@ -120,8 +120,12 @@ class OddsPapiClient(AggregatorClient):
         # pre-live gate only fires on matches settling soon anyway, so polling a tournament whose next
         # watched match is 5 days out is pure quota burn.
         self._poll_horizon_h = float(os.environ.get("ODDSPAPI_POLL_HORIZON_H", "48") or 48)
+        # Default = every sport the pairing pipeline covers, so a token from ANY filled pair can be mapped and
+        # polled. An out-of-season sport costs 1 billed 404 per discovery cycle; trim the list to save it.
         self._slugs     = [s.strip().lower() for s in
-                           (os.environ.get("ODDSPAPI_SPORTS") or "tennis,baseball").split(",") if s.strip()]
+                           (os.environ.get("ODDSPAPI_SPORTS")
+                            or "tennis,baseball,soccer,basketball,american-football,mma,boxing,cricket,aussie-rules"
+                            ).split(",") if s.strip()]
 
         self._http: Optional[httpx.AsyncClient] = None
         self._task: Optional[asyncio.Task] = None
@@ -311,10 +315,15 @@ class OddsPapiClient(AggregatorClient):
         to  = (now + timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ")   # sportId+from/to must span < 10 days
         found, no_pid = 0, 0
         for sid in self._sport_ids:
-            data = await self._get("/fixtures", {
-                "sportId": sid, "from": frm, "to": to,
-                "bookmakers": self._bookmaker, "hasOdds": "true",
-            })
+            try:
+                data = await self._get("/fixtures", {
+                    "sportId": sid, "from": frm, "to": to,
+                    "bookmakers": self._bookmaker, "hasOdds": "true",
+                })
+            except RuntimeError as ex:
+                if "FIXTURE_NOT_FOUND" in str(ex):
+                    continue                          # out-of-season sport: a normal empty result, not an error
+                raise
             for fx in (data or []):
                 pid = (fx.get("externalProviders") or {}).get("pinnacleId")
                 if pid is None:

@@ -399,6 +399,11 @@ temp_crossarbjournal.jsonl
 # one row per token transition. Regenerated per day, large, and vendor-specific. Read with analyze_agg_shadow.py.
 AggShadow_*.csv
 
+# BetInAsia recon dumps + browser profile — WS frames and API bodies WILL contain session/account data once
+# logged in. NEVER commit.
+betinasia_recon_*.jsonl
+.betinasia_profile/
+
 # huge gz files
 *.gz
 *.json
