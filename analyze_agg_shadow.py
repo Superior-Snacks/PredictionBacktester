@@ -99,6 +99,7 @@ def load(path):
                 "b_ts": _f(r.get("BookTs")),
                 "a_ts": _f(r.get("AggTs")),
                 "a_age": _f(r.get("AggAgeSec"), None) if r.get("AggAgeSec") not in ("", None) else None,
+                "a_chg_age": _f(r.get("AggChangedAgeSec"), None) if r.get("AggChangedAgeSec") not in ("", None) else None,
                 "b_live": r.get("BookLive", ""),
                 "a_live": r.get("AggLive", ""),
                 "b_status": r.get("BookStatus", ""),
@@ -286,6 +287,12 @@ def main():
         print("  vendor published NO per-line update time on any row.")
     print(f"  rows with no vendor ts: {n_no_ts}/{n_agg_rows}  ({_pct(n_no_ts, n_agg_rows):.1f}%)"
           + ("   <- staleness gate CANNOT work on these" if n_no_ts else ""))
+    chg = [r["a_chg_age"] for r in rows if r["a_chg_age"] is not None and r["a"] > 0]
+    if chg:
+        print(f"  line-change age (changedAt)  med: {_fmt(_quantile(chg, 0.5), 1, ' s')}   "
+              f"p90: {_fmt(_quantile(chg, 0.9), 1, ' s')}   max: {_fmt(max(chg), 1, ' s')}")
+        print("  (informational: how long lines sit between moves. Large values on stable pre-match lines are")
+        print("   normal -- this is why the client's freshness stamp is heartbeat-gated poll time, not changedAt.)")
     n_lim = sum(1 for r in rows if r["a_max"] is not None)
     print(f"  rows with vendor limit: {n_lim}/{n_agg_rows}  ({_pct(n_lim, n_agg_rows):.1f}%)"
           + ("" if n_lim else "   <- no limits: depth must come from the book (HARDVEN_AGG_LIMITS=inner)"))

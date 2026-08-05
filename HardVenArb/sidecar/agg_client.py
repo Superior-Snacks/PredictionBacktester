@@ -53,8 +53,15 @@ class AggQuote:
     decimal_odds: float
     book: str = ""                      # which sportsbook this line is FROM (vendor's book name)
     max_stake: Optional[float] = None   # None = vendor does not publish limits (very common)
-    ts: float = 0.0                     # VENDOR's last-update time for this line; 0.0 = not published
-    fetched_ts: float = 0.0             # when WE received it (diagnostics only -- never the freshness stamp)
+    ts: float = 0.0                     # the FRESHNESS stamp the C# gate sees; how a vendor computes it is its
+                                        # own policy (oddspapi: poll time gated on a slate-wide changedAt
+                                        # heartbeat -- a pure line-change clock would age out stable lines,
+                                        # pure fetch time would let a frozen scrape serve phantoms). 0.0 = the
+                                        # client refuses to claim freshness (quote ages out immediately).
+    fetched_ts: float = 0.0             # when WE received it (diagnostics only)
+    changed_ts: float = 0.0             # vendor's per-LINE last-change time (changedAt); 0.0 = not published.
+                                        # Diagnostic: line-age distribution in the shadow tape, and the raw
+                                        # material for the heartbeat policies above.
     live: bool = False                  # in-play
     status: str = "open"                # "open" | "suspended"
     cutoff: float = 0.0                 # betting-close unix secs; 0 = unknown
@@ -171,7 +178,7 @@ class MockAggregatorClient(AggregatorClient):
                 token=tok, decimal_odds=odds, book="mock",
                 max_stake=None if self._no_limits else 500.0,
                 ts=0.0 if self._no_ts else obs_ts,        # vendor clock = when the mock "saw" it
-                fetched_ts=now, live=live, status=status, cutoff=cutoff,
+                fetched_ts=now, changed_ts=obs_ts, live=live, status=status, cutoff=cutoff,
             )
         return out
 
@@ -185,8 +192,9 @@ def load_client() -> AggregatorClient:
     name = (os.environ.get("HARDVEN_AGG_PROVIDER") or "mock").lower()
     if name == "mock":
         return MockAggregatorClient()
-    # Register vendors as they are built, e.g.:
-    #   if name == "oddsjam":   from agg_oddsjam import OddsJamClient;     return OddsJamClient()
+    if name == "oddspapi":
+        from agg_oddspapi import OddsPapiClient       # lazy: needs httpx + an ODDSPAPI_KEY to do anything
+        return OddsPapiClient()
+    # Register more vendors as they are built, e.g.:
     #   if name == "opticodds": from agg_opticodds import OpticOddsClient; return OpticOddsClient()
-    #   if name == "theodds":   from agg_theodds import TheOddsApiClient;  return TheOddsApiClient()
     raise ValueError(f"Unknown HARDVEN_AGG_PROVIDER={name!r} (no aggregator client registered)")

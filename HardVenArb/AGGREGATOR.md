@@ -111,6 +111,50 @@ live — and re-run the shadow comparison offline.
 **9. Cost, and whether the licence permits automated betting on the output.**
 Some odds APIs restrict commercial/automated use in terms of service.
 
+## OddsPAPI — vendor #1 (docs reviewed 2026-08-05, `OddspapiDocks.txt`)
+
+Client: `sidecar/agg_oddspapi.py` (`HARDVEN_AGG_PROVIDER=oddspapi`). Probe: `sidecar/oddspapi_probe.py` —
+**run it first when the key lands** (~5 billable requests; `--account-only` for a free key check).
+
+How the checklist came out:
+
+| Question | Answer |
+|---|---|
+| Per-line update time | **YES** — `changedAt` per selection (+ `bookmakerChangedAt` when Pinnacle reports one). But it's a line-*change* clock, not a heartbeat — see below. |
+| Push vs poll | REST polling (cooldowns 0.5–2s/endpoint). **WebSocket exists but is b2b-plan only** (`websocket_access: 0` on the docs' example plan). |
+| Book-native ids | **YES — the jackpot answer.** `externalProviders.pinnacleId`/`bookmakerFixtureId` = our `mid`; `bookmakerOutcomeId` = Pinnacle's own designation (`"home"`, `"3.5/under"`). The token join is mechanical; **no `agg_map.json` needed.** Cross-book normalized ids (`fixtureId` + market/outcome ids) also exist → future Kalshi↔book pairing upgrade. |
+| Markets | Moneylines + totals/spreads. Fulltime is discriminated by Pinnacle's own market path (`…/0/moneyline`, period 0) so 1st-set/period markets can't leak in. |
+| Limits | **YES** — per-selection `limit`. Currency unstated → keep `HARDVEN_AGG_LIMITS=inner`. |
+| Suspended / live / cutoff | `suspended` + `marketActive` + `active` (three levels); `startTime` → cutoff. `statusId` enums **conflict between two doc pages** (1=Live vs 1=Scheduled) — the client treats `now >= startTime` as the in-play signal. |
+| Quota shape | 1 request = 1 call regardless of size; **`/v4/odds-by-tournaments` batches the whole slate into 1 request per poll.** Errors (4xx/5xx) bill too. `/v4/account` is unmetered (quota telemetry is free). |
+| Historical | **`/v4/historical-odds` is always free** (data since Jan 2026) — backtest the feed before paying for cadence. |
+
+**Freshness policy (the one place the generic contract needed vendor thinking):** stamping `ts = changedAt`
+would age every *stable* line out of the C# 30s gate (stable pre-match lines are this bot's whole habitat);
+stamping fetch time blindly would let a frozen scrape serve phantoms forever. The client serves **poll time
+while the slate heartbeat is alive** — any watched selection's `changedAt` within `ODDSPAPI_HEARTBEAT_TTL_SEC`
+(default 900) — else the stale `changedAt`, so a frozen scrape ages out. Same shape as
+`pinnacle_adapter._feed_live()`.
+
+**Quota math (decides the plan tier):** 1 poll = 1 request (all watched tournaments batched). At
+`ODDSPAPI_POLL_SEC=10` → ~8.6k req/day → **~260k/month**, plus ~6/hr discovery. The docs' example plan shows
+`request_limit: 500` *total* — a trial. Get the real tier's number before turning shadow on for days at a
+time; the client backs off 30 min on `REQUEST_LIMIT_EXCEEDED` and warns at 90% used.
+
+```
+ODDSPAPI_KEY=...                  # required (client is safely IDLE without it)
+ODDSPAPI_SPORTS=tennis,baseball   # slugs, resolved via /v4/sports
+ODDSPAPI_POLL_SEC=10              # odds-by-tournaments cadence (quota driver)
+ODDSPAPI_DISCOVERY_MIN=20         # fixtures-map refresh
+ODDSPAPI_HEARTBEAT_TTL_SEC=900    # slate-liveness window for the freshness stamp
+ODDSPAPI_BOOKMAKER=pinnacle
+```
+
+**Verify on first real call** (things the doc examples never actually show — the probe's section 4 census):
+moneyline `bookmakerOutcomeId` = `"home"`/`"away"` (inferred from a doc string; examples only show totals),
+spread format `"{points}/{side}"` (inferred), `limit` currency, REST auth style (we send both `?apiKey=` and
+`x-api-key`). Parser is unit-tested against the docs' exact totals payload + all three response shapes.
+
 ## Rollout order
 
 1. Shadow through one real slate (Mon–Wed). `analyze_agg_shadow.py` → all PASS.

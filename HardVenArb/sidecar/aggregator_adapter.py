@@ -202,7 +202,7 @@ class AggregatorAdapter(BookAdapter):
                 csv.writer(f).writerow([
                     "Time", "Token", "Mode", "Provider",
                     "BookOdds", "AggOdds", "DiffPct",
-                    "BookTs", "AggTs", "AggAgeSec",
+                    "BookTs", "AggTs", "AggAgeSec", "AggChangedAgeSec",
                     "BookLive", "AggLive", "BookStatus", "AggStatus",
                     "BookMaxStake", "AggMaxStake", "Present",
                 ])
@@ -233,6 +233,7 @@ class AggregatorAdapter(BookAdapter):
 
             diff_pct = round((a_odds / b_odds - 1.0) * 100.0, 4) if (b_odds > 0 and a_odds > 0) else ""
             a_ts     = float(q.ts) if (q is not None and q.ts) else 0.0
+            a_chg    = float(getattr(q, "changed_ts", 0.0) or 0.0) if q is not None else 0.0
             present  = ("both" if (ib is not None and q is not None)
                         else "book_only" if ib is not None else "agg_only")
             rows.append([
@@ -241,6 +242,7 @@ class AggregatorAdapter(BookAdapter):
                 b_odds or "", a_odds or "", diff_pct,
                 round(float(getattr(ib, "ts", 0.0) or 0.0), 3) or "", round(a_ts, 3) or "",
                 round(now - a_ts, 3) if a_ts else "",
+                round(now - a_chg, 3) if a_chg else "",
                 int(bool(getattr(ib, "live", False))) if ib is not None else "",
                 int(bool(q.live)) if q is not None else "",
                 getattr(ib, "status", "") if ib is not None else "",
