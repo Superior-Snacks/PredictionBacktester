@@ -37,4 +37,14 @@ public interface IHardVenOrderExecutor
 
     /// <summary>Fetches the market tick-size string (e.g. "0.01"). "0.01" on failure.</summary>
     Task<string> GetTickSizeAsync(string tokenId);
+
+    /// <summary>How did the venue leg on <paramref name="tokenId"/> actually FINISH — win, loss, or
+    /// <b>void</b>? Called when a position settles so the bot books the real outcome instead of assuming the
+    /// arb resolved symmetrically. A void (e.g. a tennis retirement refunds the sportsbook bet while the
+    /// exchange still settles) is otherwise invisible and silently misprices the trade.
+    ///
+    /// <para><paramref name="sinceUtcIso"/> is the position's entry time, used to pick the right bet.
+    /// Returns null when unavailable — the caller then logs the settlement without an outcome, as before.
+    /// Default implementation returns null so simulated/legacy clients need no change.</para></summary>
+    Task<string?> FindVenueBetAsync(string tokenId, string sinceUtcIso) => Task.FromResult<string?>(null);
 }

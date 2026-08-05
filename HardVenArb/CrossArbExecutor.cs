@@ -3151,6 +3151,67 @@ public class CrossArbExecutor
                         entryCostUsd = Math.Round(settledCost, 4),
                         heldSince    = pos.EntryTime
                     }));
+
+                    // How did the HARDVEN leg actually finish? Settlement is detected from KALSHI (its position
+                    // vanished), which says nothing about the sportsbook side. The case that matters is a VOID —
+                    // a tennis retirement refunds the Pinnacle stake while Kalshi still settles the advancing
+                    // player, so the trade is NOT the symmetric hedge it looks like. Without this the bot books
+                    // a wrong P&L silently. Best-effort: a failed lookup just omits the outcome, as before.
+                    try
+                    {
+                        string hvToken = pos.ArbType == "K_YES_P_NO" ? pair.HardVenNoTokenId : pair.HardVenYesTokenId;
+                        string? betJson = await _hardven.FindVenueBetAsync(hvToken, pos.EntryTime.ToString("o"));
+                        if (betJson != null)
+                        {
+                            using var bd  = JsonDocument.Parse(betJson);
+                            var br        = bd.RootElement;
+                            string outcome = br.TryGetProperty("outcome", out var oe) ? (oe.GetString() ?? "") : "";
+                            decimal winLoss = br.TryGetProperty("win_loss", out var wl) && wl.ValueKind == JsonValueKind.Number
+                                            ? wl.GetDecimal() : 0m;
+                            decimal hvStake = br.TryGetProperty("stake", out var st) && st.ValueKind == JsonValueKind.Number
+                                            ? st.GetDecimal() : 0m;
+                            // VOID = refunded: neither a win nor a loss. Pinnacle reports this as an outcome
+                            // outside win/loss (void/cancelled/push/refund) — treat anything unrecognised as a
+                            // void too, so a new string can't be silently booked as a normal result.
+                            bool isWin  = outcome.Equals("win",  StringComparison.OrdinalIgnoreCase);
+                            bool isLoss = outcome.Equals("loss", StringComparison.OrdinalIgnoreCase)
+                                       || outcome.Equals("lose", StringComparison.OrdinalIgnoreCase);
+                            bool isVoid = !isWin && !isLoss;
+                            decimal hvPnlUsd = winLoss * _hardvenFxToUsd;
+
+                            if (isVoid)
+                            {
+                                Console.ForegroundColor = ConsoleColor.Yellow;
+                                Console.WriteLine($"[SETTLEMENT VOID] {pair.Label} | HardVen leg outcome='{outcome}' " +
+                                                  $"(stake {hvStake:0.00} refunded) — the hedge did NOT resolve " +
+                                                  "symmetrically; the Kalshi leg settled ALONE. Check the net result.");
+                                Console.ResetColor();
+                                await _discord.AlertAsync(
+                                    $"⚠️ **Void on the sportsbook leg** — {pair.Label}\n" +
+                                    $"outcome=`{outcome}`, stake {hvStake:0.00} refunded, Kalshi settled alone. " +
+                                    "This is the retirement/void case — verify the net result by hand.");
+                            }
+                            else
+                            {
+                                Console.WriteLine($"[SETTLEMENT] {pair.Label} | HardVen leg {outcome.ToUpperInvariant()} " +
+                                                  $"{(hvPnlUsd >= 0 ? "+" : "")}{hvPnlUsd:0.00} USD-equiv");
+                            }
+                            await JournalAsync(JsonSerializer.Serialize(new {
+                                t = DateTime.UtcNow, @event = "SETTLEMENT_HARDVEN_OUTCOME",
+                                execId = pos.ExecId, pairId, label = pair.Label, token = hvToken,
+                                outcome, isVoid, hardvenStake = hvStake,
+                                hardvenWinLoss = winLoss, hardvenPnlUsd = Math.Round(hvPnlUsd, 4)
+                            }));
+                        }
+                        else
+                        {
+                            DebugLog.Trades($"Settlement {pair.Label}: no HardVen bet found for the outcome lookup");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        DebugLog.Trades($"Settlement outcome lookup {pair.Label}: {ex.GetType().Name}: {ex.Message}");
+                    }
                     await RefreshBalancesAsync();
                 }
             }

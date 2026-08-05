@@ -2724,6 +2724,45 @@ class PinnacleAdapter(BookAdapter):
             print(f"[PINNACLE] open_bets failed ({type(e).__name__}: {e}) — reporting flat.")
             return []
 
+    async def find_bet(self, selection_id: str, since_iso: str = "") -> Optional[dict]:
+        """Find the bet placed on `selection_id` at/after `since_iso` — SETTLED first, since this is called when
+        a position resolves. Lets the bot learn how its Pinnacle leg actually finished (win / loss / **VOID**)
+        without having to have threaded a bet id through the whole execution path.
+
+        Unambiguous in practice: the executor enforces one open position per pair plus a 120s per-pair cooldown,
+        so two bets on the SAME selection inside one settlement window can't happen. A 5-minute grace before
+        `since_iso` absorbs clock skew between the bot's entry timestamp and Pinnacle's createdAt."""
+        sid = str(selection_id or "")
+        if not sid or (self._session_source == "browser" and not self._session_ready):
+            return None
+        cutoff = None
+        if since_iso:
+            try:
+                cutoff = datetime.fromisoformat(str(since_iso).replace("Z", "+00:00")) - timedelta(minutes=5)
+            except Exception:
+                cutoff = None
+        try:
+            best = None
+            for status in ("settled", "unsettled"):
+                for b in await self._fetch_bets(status):
+                    if b.get("selection_id") != sid:
+                        continue
+                    if cutoff is not None:
+                        try:
+                            created = datetime.fromisoformat(str(b.get("created_at") or "").replace("Z", "+00:00"))
+                            if created < cutoff:
+                                continue
+                        except Exception:
+                            pass
+                    # newest wins if several somehow match
+                    if best is None or str(b.get("created_at") or "") > str(best.get("created_at") or ""):
+                        best = b
+                if best is not None:
+                    return best
+        except Exception as e:
+            print(f"[PINNACLE] find_bet({sid}) failed ({type(e).__name__}: {e})")
+        return None
+
     async def bet(self, bet_id: str) -> Optional[dict]:
         """One bet by id — confirmation right after placing, and settlement later. Checks UNSETTLED first (the
         common case just after a bet), then SETTLED so a resolved bet still resolves to its outcome."""

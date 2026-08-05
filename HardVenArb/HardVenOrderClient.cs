@@ -308,6 +308,28 @@ public sealed class HardVenOrderClient : IHardVenOrderExecutor
         }
     }
 
+    /// <summary>How the Pinnacle leg actually finished, via the sidecar's <c>GET /bets/find</c> (which searches
+    /// SETTLED first, then unsettled, for a bet on this selection placed at/after <paramref name="sinceUtcIso"/>).
+    /// Returns the raw JSON — the caller reads <c>outcome</c> ("win"/"loss"/void-ish) and <c>win_loss</c> (the
+    /// net amount; **0 on a void/refund**, which is the case that would otherwise be booked wrongly).
+    /// Null when there's no match or the call fails; never throws.</summary>
+    public async Task<string?> FindVenueBetAsync(string tokenId, string sinceUtcIso)
+    {
+        if (string.IsNullOrWhiteSpace(_sidecarBase) || string.IsNullOrWhiteSpace(tokenId)) return null;
+        try
+        {
+            string url = $"{_sidecarBase}/bets/find?selection_id={Uri.EscapeDataString(tokenId)}"
+                       + $"&since={Uri.EscapeDataString(sinceUtcIso ?? "")}";
+            using var resp = await _http.GetAsync(url);
+            if (!resp.IsSuccessStatusCode) return null;      // 404 = no matching bet
+            return await resp.Content.ReadAsStringAsync();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     private static string Truncate(string s) => s.Length <= 200 ? s : s[..200];
 
     public Task UpdateBalanceAllowanceAsync(string tokenId) => Task.CompletedTask;   // no allowance concept on a sportsbook

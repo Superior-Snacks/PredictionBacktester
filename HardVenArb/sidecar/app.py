@@ -365,6 +365,20 @@ async def place_bet(req: BetRequest):
     return (await adapter.place_bet(req.selection_id, req.stake, req.max_odds)).to_api()
 
 
+@app.get("/bets/find")
+async def find_bet(selection_id: str, since: str = ""):
+    """How did the Pinnacle leg on `selection_id` actually finish — win / loss / **void**? Called when a position
+    settles, so the bot books the TRUE outcome instead of assuming the arb resolved symmetrically. `since` is the
+    position's entry time (ISO); a 5-minute grace absorbs clock skew. 404 when no matching bet is found."""
+    fn = getattr(adapter, "find_bet", None)
+    if not callable(fn):
+        raise HTTPException(400, "adapter has no find_bet (Pinnacle adapter only)")
+    b = await fn(selection_id, since)
+    if b is None:
+        raise HTTPException(404, f"no bet found for {selection_id}")
+    return b
+
+
 @app.get("/bets/open")
 async def open_bets():
     return {"bets": await adapter.open_bets()}
