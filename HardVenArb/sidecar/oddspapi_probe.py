@@ -100,7 +100,11 @@ async def main() -> int:
             print("    compare against how many of these are actually live on the bot before judging)")
 
         print("\n3. THE ODDS  (one odds-by-tournaments batch)")
-        await client._poll_odds()
+        try:
+            await client._poll_odds()
+        except Exception as e:
+            print(f"   poll FAILED: {e}")
+            print("   (continuing to the census anyway -- it uses a single-tournament call)")
         served = await client.quotes(watched)
         print(f"   tokens with a live quote: {len(served)}/{len(watched)}")
         for tok, q in list(served.items())[:6]:

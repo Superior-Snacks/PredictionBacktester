@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import json
 import os
 import time
 from datetime import datetime, timedelta, timezone
@@ -65,7 +66,7 @@ def _parse_token(tok: str):
     """BOOK token -> (kind, lid, mid, points|None, side). Mirrors pinnacle_adapter._parse_sid (not imported:
     that module drags in the whole browser stack)."""
     p = tok.split(":")
-    if len(p) == 3 and p[0] and p[1] and p[2] in ("home", "away"):
+    if len(p) == 3 and p[0] and p[1] and p[2] in ("home", "away", "draw"):
         return ("moneyline", p[0], p[1], None, p[2])
     if len(p) == 5 and p[0] and p[1] and p[2] in ("spread", "total"):
         try:
@@ -94,11 +95,20 @@ class OddsPapiClient(AggregatorClient):
 
     def __init__(self) -> None:
         self._base      = (os.environ.get("ODDSPAPI_BASE") or "https://api.oddspapi.io/v4").rstrip("/")
-        self._key       = os.environ.get("ODDSPAPI_KEY", "").strip()
+        # Both names accepted: ODDSPAPI_KEY (docs here) and ODDSPAPI_API_KEY (what the .env uses).
+        self._key       = (os.environ.get("ODDSPAPI_KEY") or os.environ.get("ODDSPAPI_API_KEY") or "").strip()
         self._bookmaker = (os.environ.get("ODDSPAPI_BOOKMAKER") or "pinnacle").lower()
         self._poll_sec  = max(2.0, float(os.environ.get("ODDSPAPI_POLL_SEC", "10") or 10))
         self._disc_min  = max(5.0, float(os.environ.get("ODDSPAPI_DISCOVERY_MIN", "20") or 20))
         self._hb_ttl    = float(os.environ.get("ODDSPAPI_HEARTBEAT_TTL_SEC", "900") or 900)
+        # API hard limit, discovered empirically 2026-08-05: >5 tournamentIds -> 400 INVALID_PARAMETER
+        # "Please provide a maximum of 5 tournament IDs". Each chunk is 1 billable request, so the number of
+        # watched tournaments DIVIDED BY 5 is the real per-poll quota cost.
+        self._tids_per_call = max(1, int(os.environ.get("ODDSPAPI_TIDS_PER_CALL", "5") or 5))
+        # Only poll tournaments that hold a watched match starting inside this horizon. The executor's
+        # pre-live gate only fires on matches settling soon anyway, so polling a tournament whose next
+        # watched match is 5 days out is pure quota burn.
+        self._poll_horizon_h = float(os.environ.get("ODDSPAPI_POLL_HORIZON_H", "48") or 48)
         self._slugs     = [s.strip().lower() for s in
                            (os.environ.get("ODDSPAPI_SPORTS") or "tennis,baseball").split(",") if s.strip()]
 
@@ -149,31 +159,52 @@ class OddsPapiClient(AggregatorClient):
     # ── HTTP with cooldown spacing + quota accounting ─────────────────────────
     async def _get(self, path: str, params: dict, billable: bool = True):
         assert self._http is not None
-        cd = _COOLDOWN_SEC.get(path, 1.0)
-        wait = self._last_call.get(path, 0.0) + cd - time.time()
-        if wait > 0:
-            await asyncio.sleep(wait)
-        self._last_call[path] = time.time()
+        # +0.3s over the documented cooldown: the server measures the gap on ITS side, so spacing measured
+        # from our request start can land a few ms early (observed: 429 RATE_LIMITED retryMs=6).
+        cd = _COOLDOWN_SEC.get(path, 1.0) + 0.3
         # Auth style is not shown for REST in the docs (the WS uses ?apiKey=). Send both the query param and
         # a key header; trim to whichever the probe proves once a real key answers.
         p = dict(params or {})
         p["apiKey"] = self._key
-        r = await self._http.get(f"{self._base}{path}", params=p, headers={"x-api-key": self._key})
-        if billable:
-            self._billable += 1                       # 4xx/5xx count against quota too, per the docs
-        if r.status_code == 429:
-            body = ""
-            try:
-                body = r.text[:200]
-            except Exception:
-                pass
+        for attempt in range(4):
+            wait = self._last_call.get(path, 0.0) + cd - time.time()
+            if wait > 0:
+                await asyncio.sleep(wait)
+            self._last_call[path] = time.time()
+            r = await self._http.get(f"{self._base}{path}", params=p, headers={"x-api-key": self._key})
+            if r.status_code != 429:
+                break
+            body = self._redact(r)
             if "REQUEST_LIMIT_EXCEEDED" in body:
                 self._backoff_until = time.time() + 1800
                 print("[ODDSPAPI] MONTHLY QUOTA EXHAUSTED (429 REQUEST_LIMIT_EXCEEDED) - "
                       "pausing all polling for 30 min. Quotes will age out and the books will clear.")
-            raise RuntimeError(f"429 {body}")
-        r.raise_for_status()
+                raise RuntimeError(f"429 {body}")
+            # Cooldown 429 (RATE_LIMITED): rejected BEFORE the endpoint -> not billed. Honor retryMs + retry.
+            retry_s = 0.5
+            try:
+                retry_s = max(float(json.loads(r.text)["error"].get("retryMs", 500)) / 1000.0, 0.05)
+            except Exception:
+                pass
+            await asyncio.sleep(retry_s + 0.25)
+        if billable:
+            self._billable += 1                       # 4xx/5xx count against quota too, per the docs
+        if r.status_code == 429:
+            raise RuntimeError(f"429 after retries: {self._redact(r)}")
+        if r.status_code >= 400:
+            # NEVER raise httpx's own error: its message embeds the full request URL INCLUDING the apiKey
+            # query param, which then lands in logs/tracebacks. Raise a redacted error with the response
+            # body instead (the body is what actually says what was wrong).
+            raise RuntimeError(f"HTTP {r.status_code} on {path}: {self._redact(r)}")
         return r.json()
+
+    def _redact(self, r) -> str:
+        """First 300 chars of a response body with the API key scrubbed wherever it appears."""
+        try:
+            body = r.text[:300]
+        except Exception:
+            return ""
+        return body.replace(self._key, "***KEY***") if self._key else body
 
     async def _refresh_account(self) -> None:
         """Quota snapshot from the unmetered /account endpoint; never raises."""
@@ -299,15 +330,20 @@ class OddsPapiClient(AggregatorClient):
 
     async def _poll_odds(self) -> None:
         watched = self._watched_mid_map()
-        tids = sorted({self._fixtures[mid]["tid"] for mid in watched
-                       if mid in self._fixtures and self._fixtures[mid].get("tid") is not None})
+        horizon = time.time() + self._poll_horizon_h * 3600.0
+        tids = sorted({
+            self._fixtures[mid]["tid"] for mid in watched
+            if mid in self._fixtures and self._fixtures[mid].get("tid") is not None
+            # unknown start_ts (0.0) is included conservatively; a known far-future start is skipped
+            and not (self._fixtures[mid].get("start_ts") or 0.0) > horizon
+        })
         if not tids:
             return                                    # nothing mapped yet -> no billable call
         t0 = time.time()
-        # Chunk defensively (limit on tournamentIds length is undocumented); each chunk = 1 request.
-        for i in range(0, len(tids), 25):
+        # Hard API limit: 5 tournamentIds per call, each chunk = 1 billable request.
+        for i in range(0, len(tids), self._tids_per_call):
             data = await self._get("/odds-by-tournaments", {
-                "tournamentIds": ",".join(str(t) for t in tids[i:i + 25]),
+                "tournamentIds": ",".join(str(t) for t in tids[i:i + self._tids_per_call]),
                 "bookmakers": self._bookmaker, "verbosity": 3,
             })
             self._ingest_odds_payload(data)

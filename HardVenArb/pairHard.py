@@ -220,7 +220,7 @@ def main() -> None:
             if p and p.get("hardven_yes_token") and p.get("hardven_no_token"):
                 e["hardven_yes_token"] = p["hardven_yes_token"]
                 e["hardven_no_token"] = p["hardven_no_token"]
-                for flag in ("three_way", "fuzzy"):
+                for flag in ("three_way", "fuzzy", "oddspapi", "hardven_league_url", "hardven_start_time"):
                     if p.get(flag):
                         e[flag] = p[flag]
                 carried += 1

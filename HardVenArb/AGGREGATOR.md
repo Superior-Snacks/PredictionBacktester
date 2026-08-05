@@ -136,10 +136,22 @@ while the slate heartbeat is alive** — any watched selection's `changedAt` wit
 (default 900) — else the stale `changedAt`, so a frozen scrape ages out. Same shape as
 `pinnacle_adapter._feed_live()`.
 
-**Quota math (decides the plan tier):** 1 poll = 1 request (all watched tournaments batched). At
-`ODDSPAPI_POLL_SEC=10` → ~8.6k req/day → **~260k/month**, plus ~6/hr discovery. The docs' example plan shows
-`request_limit: 500` *total* — a trial. Get the real tier's number before turning shadow on for days at a
-time; the client backs off 30 min on `REQUEST_LIMIT_EXCEEDED` and warns at 90% used.
+**Quota math (measured live 2026-08-05, and it decides everything):** the API caps
+`tournamentIds` at **5 per call** (400 `INVALID_PARAMETER` above that; discovered empirically — not in the
+docs), so 1 poll = `ceil(active_tournaments / 5)` requests, ~3–4 on a typical slate even with the 48h horizon
+filter. **The current key's plan is 250 requests/month total** — that is ~1 hour of minute-cadence shadow, or
+~20 probe runs. It cannot support continuous polling of any kind. Options, in order of sense:
+1. **Free evaluation via `/v4/historical-odds`** (never billed): capture our own Pinnacle WS tape during a
+   slate, then pull the vendor's per-change history (`createdAt` per price move) for the same fixtures and
+   diff the move times offline — the entire follow-lag + agreement measurement for **zero quota**.
+2. **One deliberate shadow burst**: ~45 min at `ODDSPAPI_POLL_SEC=60` during a busy evening ≈ 150–180
+   requests — a single real AggShadow tape, then the month's quota is spent.
+3. **A paid tier for live mode**: even 60s cadence needs ~130k req/month at 3 chunks/poll. Price that (or the
+   b2b WS) before planning any `live` switch.
+
+The client backs off 30 min on `REQUEST_LIMIT_EXCEEDED`, honors per-endpoint cooldown 429s (`RATE_LIMITED`
+retryMs — those are rejected pre-endpoint and don't bill), warns at 90% used, and **redacts the API key from
+every error message** (httpx otherwise embeds the full URL, key included, in exception text).
 
 ```
 ODDSPAPI_KEY=...                  # required (client is safely IDLE without it)
@@ -150,10 +162,13 @@ ODDSPAPI_HEARTBEAT_TTL_SEC=900    # slate-liveness window for the freshness stam
 ODDSPAPI_BOOKMAKER=pinnacle
 ```
 
-**Verify on first real call** (things the doc examples never actually show — the probe's section 4 census):
-moneyline `bookmakerOutcomeId` = `"home"`/`"away"` (inferred from a doc string; examples only show totals),
-spread format `"{points}/{side}"` (inferred), `limit` currency, REST auth style (we send both `?apiKey=` and
-`x-api-key`). Parser is unit-tested against the docs' exact totals payload + all three response shapes.
+**Verified live (probe census, 2026-08-05):** moneyline `bookmakerOutcomeId` **is** `"home"`/`"away"` on the
+`…/0/moneyline` path (and the period-1 `…/1/moneyline` right next to it is correctly ignored); spreads **are**
+`"{points}/{side}"` (`"6.5/home"`, `"-1.5/home"`); teamTotals/alt-period markets ignored. 176/380 slate tokens
+quoted with real limits; effective matchup coverage ~86% (odds responses carry `bookmakerFixtureId` even where
+`/fixtures` has a null `pinnacleId`, so odds-level coverage beats discovery-level). A healthy tennis line
+showed `changedAt` 8h old — the heartbeat freshness design is necessary, not theoretical. Still unverified:
+`limit` currency. Parser is also unit-tested against the docs' exact payloads (16 checks).
 
 ## Rollout order
 
