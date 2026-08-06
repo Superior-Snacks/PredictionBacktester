@@ -182,6 +182,10 @@ class PinnacleBrowserSession:
         # → the guest-redirect cascade + WS auth-reject churn seen 2026-07-14. So skip the submit while a capture
         # is this fresh; only re-login once authed traffic has been silent this long (a genuine logout).
         self._login_healthy_grace = float(os.environ.get("PINNACLE_LOGIN_HEALTHY_GRACE", "180"))
+        # How long after the window opens we still accept "recent x-session traffic" ALONE as proof of a live
+        # login. Past this, a live login must ALSO have produced a WS login — see _ensure_logged_in.
+        self._ws_login_grace = float(os.environ.get("PINNACLE_WS_LOGIN_GRACE_SEC", "45"))
+        self._opened_at = 0.0          # when the browser window was (re)opened, for the grace above
         self._last_login_submit = 0.0
         self._login_task: Optional[asyncio.Task] = None
         # sport pages the organic loop occasionally browses to (real session). Default = the home page only
@@ -283,6 +287,7 @@ class PinnacleBrowserSession:
     # ── lifecycle ────────────────────────────────────────────────────────────────
     async def start(self) -> None:
         from playwright.async_api import async_playwright
+        self._opened_at = time.time()
         reused = Path(self._user_data).exists()
         print(f"[PINNACLE SESSION] {'reusing SAVED' if reused else 'creating NEW'} Chrome profile: {self._user_data}"
               + ("" if reused else " (log in once; it'll be remembered next run)"))
@@ -895,8 +900,26 @@ class PinnacleBrowserSession:
         # has gone silent (a real logout). This is what stops the post-capture re-login churn. EXCEPTION: `force`
         # (the mass-guest-redirect path) bypasses this — there we have POSITIVE evidence of a logout, and this very
         # guard is what masked it (a logged-out page keeps sending its dead x-session, so _last_capture stays fresh).
-        if (not force) and self._logged_session and self._last_capture \
-                and (time.time() - self._last_capture) < self._login_healthy_grace:
+        # `_last_capture` alone is NOT proof of a live login: a logged-OUT SPA keeps sending its dead
+        # x-session, so the timestamp never goes stale and this guard blocks the re-login forever (flagged
+        # 2026-07-24 as masking a real logout; hit for real 2026-08-06 — whether auto-login worked came down
+        # to a RACE between "captured x-session" and the watcher's first tick). A genuinely live login also
+        # produces a **WS login** (`_have_ws`) once the page opens its odds socket, and a logged-out page
+        # never does. So past a startup grace, require BOTH. Inside the grace, keep trusting the capture alone
+        # so we don't submit over a healthy session that simply hasn't opened its socket yet (the 2026-07-14
+        # churn bug). `force` still bypasses everything.
+        session_looks_live = (self._logged_session and self._last_capture
+                              and (time.time() - self._last_capture) < self._login_healthy_grace)
+        have_ws = bool(getattr(self, "_have_ws", False))
+        opened_at = float(getattr(self, "_opened_at", 0.0) or 0.0)
+        ws_grace = float(getattr(self, "_ws_login_grace", 45.0))
+        if session_looks_live and not have_ws and opened_at \
+                and (time.time() - opened_at) > ws_grace:
+            session_looks_live = False       # authed traffic but no WS login well after open ⇒ really logged out
+            print(f"[PINNACLE SESSION] authed traffic is flowing but NO WS login "
+                  f"{int(time.time() - opened_at)}s after open, and a login form is visible - "
+                  "treating this as a REAL logout (a logged-out page keeps sending its dead x-session).")
+        if (not force) and session_looks_live:
             return False
         if time.time() - self._last_login_submit < self._login_submit_cooldown:
             return False                                   # don't hammer the login form
