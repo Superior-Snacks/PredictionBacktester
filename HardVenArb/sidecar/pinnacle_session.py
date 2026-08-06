@@ -188,6 +188,12 @@ class PinnacleBrowserSession:
         # (always valid); override with PINNACLE_BROWSE_URLS once you've confirmed the sport-page URLs.
         self._browse_urls = [u.strip() for u in os.environ.get("PINNACLE_BROWSE_URLS", "").split(",") if u.strip()] \
             or [self._login_url]
+        # HOME PAGE: where the main board should SIT once we're logged in. Landing on the site root leaves the
+        # board showing whatever Pinnacle promotes, so the operator had to click through to the sport by hand
+        # every session — and until they did, the board's sport-topic WS wasn't streaming the sport we trade.
+        # Defaults to the first browsed sport's /matchups/ page; PINNACLE_HOME_URL overrides.
+        self._home_url = (os.environ.get("PINNACLE_HOME_URL") or "").strip() or self._derive_home_url()
+        self._went_home = False        # one-shot per session: don't fight the organic layer after the first hop
         self._organic = None
         self._pw = None
         self._ctx = None
@@ -944,6 +950,44 @@ class PinnacleBrowserSession:
             except Exception:
                 continue
 
+    def _derive_home_url(self) -> str:
+        """First browsed sport's matchups page, else the active sport from the shared catalog, else the site
+        root. Keeps 'which sport do we trade' in ONE place (HARDVEN_SPORTS) rather than a second env var."""
+        for u in self._browse_urls:
+            m = re.search(r"/en/([a-z][a-z-]*)/", u or "")
+            if m and m.group(1) not in ("account", "login"):
+                return f"https://www.pinnacle.bet/en/{m.group(1)}/matchups/"
+        try:
+            import sports as _sports_cfg
+            keys = [s.key for s in _sports_cfg.active()] if hasattr(_sports_cfg, "active") else []
+            if keys:
+                return f"https://www.pinnacle.bet/en/{keys[0]}/matchups/"
+        except Exception:
+            pass
+        return self._login_url
+
+    async def _go_home_once(self) -> None:
+        """Put the board on the sport we trade, once per session, as soon as we're logged in. Skipped if we're
+        already there (a reload keeps the URL) so this never fights the organic layer's own navigation."""
+        if self._went_home or self._page is None or not self._home_url:
+            return
+        try:
+            cur = (self._page.url or "").split("#")[0].split("?")[0].rstrip("/").lower()
+            if cur == self._home_url.split("#")[0].split("?")[0].rstrip("/").lower():
+                self._went_home = True
+                return
+            self.pause_activity()
+            await self._page.goto(self._home_url, wait_until="domcontentloaded", timeout=45_000)
+            self._went_home = True
+            self._last_main_refresh = time.time()
+            print(f"[PINNACLE SESSION] board moved to the trading sport: {self._home_url}")
+        except Exception as ex:
+            print(f"[PINNACLE SESSION] could not open {self._home_url} ({type(ex).__name__}: {ex}) - "
+                  "leaving the board where it is.")
+            self._went_home = True          # don't retry every tick; the organic layer will browse anyway
+        finally:
+            self.resume_activity()
+
     async def _login_watch_loop(self) -> None:
         """Unattended re-login watcher: periodically look for an autofilled login form and submit it. Covers
         initial open, reopen after a dark gap that logged us out, and a mid-session logout. The `:visible` +
@@ -955,6 +999,14 @@ class PinnacleBrowserSession:
                 break
             try:
                 await self._ensure_logged_in()
+            except Exception:
+                pass
+            # Once authed traffic proves we're in — however that happened, auto-login OR a manual login —
+            # move the board to the sport we actually trade. Hooked here rather than to the auto-login path
+            # so it still works on the sessions the operator logs in by hand.
+            try:
+                if not self._went_home and self._last_capture > 0:
+                    await self._go_home_once()
             except Exception:
                 pass
 

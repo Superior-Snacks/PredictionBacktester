@@ -46,6 +46,16 @@ from pathlib import Path
 from typing import Callable, Optional
 
 
+def _same_page(url: str | None) -> str:
+    """Canonical form for 'is this tab still on its league page'. The FRAGMENT must be stripped: Pinnacle
+    appends '#period:0' once the board renders, so a tab that never moved compares unequal to its own URL —
+    which made the off-station check re-navigate every tab on every tick, churning them and dropping each
+    league's WS subscription. The query string goes too (tracking params)."""
+    if not url:
+        return ""
+    return url.split("#")[0].split("?")[0].rstrip("/").lower()
+
+
 class LeagueTabManager:
     def __init__(self, session, live_mids_fn: Callable[[float], list], pairs_path: str,
                  board_lids_fn: Optional[Callable[[], set]] = None) -> None:
@@ -387,10 +397,10 @@ class LeagueTabManager:
         # (re-navigation also re-auths + re-subscribes). One per tick.
         for lid, pg in list(self._tabs.items()):
             try:
-                actual = (pg.url or "").split("?")[0].rstrip("/")
+                actual = _same_page(pg.url)
             except Exception:
                 continue
-            expected = (paired.get(lid) or "").split("?")[0].rstrip("/")
+            expected = _same_page(paired.get(lid))
             if expected and actual and actual != expected:
                 self._tab_alive[lid] = now                    # bump → bounded retry, not every tick
                 ok = await self._session.navigate_tab(pg, paired[lid])
@@ -484,8 +494,7 @@ class LeagueTabManager:
                 actual = (pg.url or "") if pg is not None else ""
             except Exception:
                 actual = "<gone>"
-            on_station = bool(expected and actual and
-                              actual.split("?")[0].rstrip("/") == expected.split("?")[0].rstrip("/"))
+            on_station = bool(expected and actual and _same_page(actual) == _same_page(expected))
             g = self._league_games.get(lid, {})
             soonest = self._league_start.get(lid)
             return {

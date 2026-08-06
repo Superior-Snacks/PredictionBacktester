@@ -254,11 +254,30 @@ class OrganicActivity:
         return False
 
     async def _nav_click_random(self):
-        """Click a random sport's nav row → returns the slug clicked, or None if nothing matched (caller falls back)."""
+        """Click a sport's nav row → the slug clicked, or None if nothing matched (caller falls back).
+
+        By DEFAULT this clicks the sport we are ALREADY on (the first browse URL's sport), so the main board
+        keeps getting the trusted CLICK the ~30-min idle logout requires — mouse-move/wheel/authed-API were
+        measured NOT to reset it (2026-07-02: logged out at 32m) — WITHOUT the board visibly ping-ponging
+        between sports, which is both a bot tell and a nuisance to watch. Set HARDVEN_ORGANIC_SPORT_FLIP=1
+        to restore the old behaviour of rotating across every browsed sport."""
         if not self._sports:
             return None
-        slug, label = random.choice(self._sports)
+        if os.environ.get("HARDVEN_ORGANIC_SPORT_FLIP", "0") == "1":
+            slug, label = random.choice(self._sports)
+        else:
+            slug, label = self._sports[0]        # stay put: re-click the current sport's own nav row
         return slug if await self._nav_click(slug, label) else None
+
+    def _sport_home(self) -> str:
+        """The browse URL for the sport we trade (first sport-bearing URL), else the first URL."""
+        if self._sports:
+            slug = self._sports[0][0]
+            for u in self._urls:
+                if f"/en/{slug}/" in u:
+                    return u
+            return f"https://www.pinnacle.bet/en/{slug}/matchups/"
+        return self._urls[0] if self._urls else "https://www.pinnacle.bet/en/"
 
     # ── the loop ──────────────────────────────────────────────────────────────────
     def _next_gap(self) -> float:
@@ -296,7 +315,11 @@ class OrganicActivity:
                         print(f"[PINNACLE ORGANIC] nav-click → {clicked}")
                     elif self._urls:
                         name = "navigate"           # fallback: full-load a browse URL (robust if selectors miss)
-                        url = random.choice(self._urls)
+                        # With sport-flip OFF, stay on the sport we trade: a random pick here would jump the
+                        # board to another sport by the back door, which is the behaviour we just removed.
+                        url = (random.choice(self._urls)
+                               if os.environ.get("HARDVEN_ORGANIC_SPORT_FLIP", "0") == "1"
+                               else self._sport_home())
                         await self._page.goto(url, wait_until="domcontentloaded", timeout=30_000)
                         print(f"[PINNACLE ORGANIC] nav-click missed (no link matched) → goto {url}")
                 except Exception as ex:                 # surface WHY it isn't firing (was silently swallowed as 'error')
