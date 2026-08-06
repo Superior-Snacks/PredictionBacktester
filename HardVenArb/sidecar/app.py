@@ -240,6 +240,18 @@ async def debug_visibility():
     return {"tabs": out, "visible_count": n_vis, "total": len(out)}
 
 
+@app.get("/debug/tabs")
+async def debug_tabs():
+    """The tab manager's own account of every tab: what it's SHOWING vs what it SHOULD show (on_station),
+    why it holds a slot (hot_games inside HARDVEN_TAB_HOT_HOURS), which paired leagues the featured board
+    covers, and the current hot ranking with each league's coverage source. The direct answer to "what is
+    happening on the bot's tabs and what is supposed to be on them"."""
+    tm = getattr(adapter, "_tab_manager", None)
+    if tm is None:
+        raise HTTPException(400, "no tab manager (HARDVEN_TAB_MANAGER=1 + browser session required)")
+    return tm.status()
+
+
 @app.get("/debug/reader")
 async def debug_reader(ttl: float = 30.0):
     """Coverage diagnostic: the matchups ('lid:mid') the browser-WS reader has actually pushed odds for within

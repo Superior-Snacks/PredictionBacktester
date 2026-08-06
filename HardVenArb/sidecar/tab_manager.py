@@ -16,11 +16,24 @@ covers, and never double-opens (a league we have a tab for, or that's being fed,
 The GAP model is push-based, so a board-covered league that goes QUIET for > HARDVEN_TAB_COVER_TTL looks like
 a gap and may get its own tab — harmless (capped), and it guarantees live CHANGES keep flowing for it.
 
+DEDICATED-TAB ELIGIBILITY (the HOT model): a league deserves a persistent tab only while it has PRE-LIVE
+games starting within HARDVEN_TAB_HOT_HOURS (8). Ranking = number of such hot games, most first (tiebreak:
+soonest start). A league whose games are all tomorrow — or all already started — is NOT tab-worthy: the
+ROVING tail tab sweeps it instead, and it gets promoted the moment it develops hot games. Leagues the
+FEATURED BOARD streams are never tabbed (the board carries the whole league), and a dedicated tab whose
+league LATER joins the board, loses its last hot game, or gets out-ranked at the periodic re-rank is closed
+so the slot covers something that needs it.
+
 ENABLE: HARDVEN_TAB_MANAGER=1 (only meaningful with PINNACLE_WINDOW_WS_READ=1 + a browser session). Knobs:
   HARDVEN_TAB_MAX            (12)  max concurrent manager tabs — the coverage-vs-machine-load ceiling
   HARDVEN_TAB_INTERVAL_SEC  (20)  tick period; also the pacing (≤1 tab opened per tick, organic)
   HARDVEN_TAB_COVER_TTL     (240) a league counts as covered if a matchup pushed within this many seconds
   HARDVEN_TAB_START_DELAY_SEC (45) delay before the first tick (let the board + first pairing settle)
+  HARDVEN_TAB_HOT_HOURS      (8)  a game is HOT when it starts within this many hours (and hasn't started)
+  HARDVEN_TAB_RESET_MIN      (60) periodic re-rank: close tabs no longer in the top-N hot ranking
+  HARDVEN_TAB_EVICT_GRACE_SEC (180) a freshly-opened tab can't be hot-evicted for this long (verify tabs)
+
+Introspection: status() → what every tab is showing vs what it SHOULD show (served on /debug/tabs).
 """
 from __future__ import annotations
 
@@ -72,6 +85,17 @@ class LeagueTabManager:
         # window). A reload = navigate to its own league URL = re-auth the tab AND re-subscribe its odds WS.
         self._keepalive_sec = float(os.environ.get("HARDVEN_TAB_KEEPALIVE_MIN", "15")) * 60.0
         self._tab_alive: dict[str, float] = {}         # lid -> last time its dedicated tab was opened/reloaded
+        # HOT model: only games starting within this window (and not yet started) make a league tab-worthy.
+        self._hot_hours = float(os.environ.get("HARDVEN_TAB_HOT_HOURS", "8"))
+        # Periodic re-rank ("the hourly full reset", as a reconcile): close tabs no longer in the top-N hot
+        # ranking. Continuous checks (de-pair / board / hot=0) fire every tick; this one is deliberately slow
+        # so a league flapping between rank N and N+1 doesn't churn tabs.
+        self._reset_sec = float(os.environ.get("HARDVEN_TAB_RESET_MIN", "60")) * 60.0
+        self._last_reset = time.time()
+        # A tab opened moments ago (e.g. by request_verify for an arb check) must not be hot-evicted before
+        # it has done its job.
+        self._evict_grace = float(os.environ.get("HARDVEN_TAB_EVICT_GRACE_SEC", "180"))
+        self._league_games: dict[str, dict] = {}       # lid -> {mid: (start_ts|None, precise: bool)}
 
     def start(self) -> None:
         if self._task is None or self._task.done():
@@ -216,31 +240,76 @@ class LeagueTabManager:
                 return None
 
     def _sort_key(self, lid: str) -> float:
-        """Ranking key = the league's soonest game start (∞ if unknown → ranked last)."""
+        """Rove-sweep ranking key = the league's soonest game start (∞ if unknown → ranked last)."""
         return self._league_start.get(lid, float("inf"))
 
+    @staticmethod
+    def _parse_start(e: dict):
+        """Pair entry → (start_ts, precise) using hardven_start_time (precise) or the day-granular
+        settlement_date fallback. None if neither parses."""
+        s = e.get("hardven_start_time") or ""
+        if s:
+            try:
+                return datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp(), True
+            except ValueError:
+                pass
+        s = e.get("settlement_date") or ""
+        try:
+            return datetime.strptime(s[:10], "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp(), False
+        except ValueError:
+            return None
+
     def _load_paired(self) -> dict[str, str]:
-        """{leagueId: url} for every filled pair that carries a league URL (written by pair_pinnacle). Side effect:
-        refreshes self._league_start = the SOONEST game start per league (from hardven_start_time, or the
-        day-granular settlement_date as a fallback) so gaps + the rove sweep can be ranked soonest-first."""
+        """{leagueId: url} for every filled pair that carries a league URL (written by pair_pinnacle). Side
+        effects: refreshes self._league_games = {lid: {matchupId: (start_ts, precise)}} (drives the HOT
+        ranking) and self._league_start = soonest start per league (rove-sweep order)."""
         try:
             data = json.loads(Path(self._pairs_path).read_text(encoding="utf-8-sig"))
         except Exception:
             return {}
         out: dict[str, str] = {}
         starts: dict[str, float] = {}
+        games: dict[str, dict] = {}
         for e in data:
             tok = e.get("hardven_yes_token") or ""
             url = e.get("hardven_league_url") or ""
             if tok.count(":") < 2 or not url:
                 continue
-            lid = tok.split(":")[0]
+            lid, mid = tok.split(":")[0], tok.split(":")[1]
             out.setdefault(lid, url)                  # first URL seen for the league wins (all identical)
-            ts = self._parse_ts(e.get("hardven_start_time") or e.get("settlement_date") or "")
-            if ts is not None:
-                starts[lid] = min(starts.get(lid, ts), ts)   # soonest game in the league
+            parsed = self._parse_start(e)
+            g = games.setdefault(lid, {})
+            if parsed is not None:
+                # keyed by GAME (matchupId), so the two mirror pairs of a 2-way market count once
+                if mid not in g or (parsed[1] and not g[mid][1]):
+                    g[mid] = parsed                   # a precise timestamp beats a day-granular one
+                starts[lid] = min(starts.get(lid, parsed[0]), parsed[0])
+            else:
+                g.setdefault(mid, (None, False))
         self._league_start = starts
+        self._league_games = games
         return out
+
+    def _hot_games(self, lid: str, now: float) -> int:
+        """How many of the league's paired games are HOT = pre-live AND starting within HARDVEN_TAB_HOT_HOURS.
+        Precise timestamps: now < start <= now+window (a started game is in-play — dead to a pre-live bot).
+        Day-granular fallbacks: hot iff that DAY overlaps the window (can't do better than the date).
+        Unknown start: not hot (conservative — the rove still sweeps the league)."""
+        edge = now + self._hot_hours * 3600.0
+        n = 0
+        for ts, precise in self._league_games.get(lid, {}).values():
+            if ts is None:
+                continue
+            if precise:
+                if now < ts <= edge:
+                    n += 1
+            elif ts <= edge and now < ts + 86400.0:
+                n += 1
+        return n
+
+    def _gap_key(self, now: float):
+        """Dedicated-tab ranking: MOST hot games first, then soonest start."""
+        return lambda lid: (-self._hot_games(lid, now), self._sort_key(lid))
 
     async def _tick(self) -> None:
         if self._held:            # a bet is in flight — don't open/close/navigate any tab under it
@@ -272,11 +341,58 @@ class LeagueTabManager:
                           f"slot freed for an uncovered league (tabs={len(self._tabs)}/{self._max})")
             else:
                 self._tab_board_since.pop(lid, None)          # dropped off the board → reset the timer
-        # 2. leagues already covered (featured board / a dedicated tab / the rove) → not gaps; rank SOONEST-first
+        # 1c. HOT eviction: a dedicated tab whose league no longer has any pre-live game inside the hot window
+        # (all started / settled / slid to tomorrow) is a wasted slot — close it; the rove sweeps it instead.
+        # Freshly-opened tabs get a grace period so a verify tab can't be evicted mid-job.
+        for lid in list(self._tabs):
+            if now - self._tab_alive.get(lid, now) < self._evict_grace:
+                continue
+            if self._hot_games(lid, now) == 0:
+                await self._session.close_tab(self._tabs.pop(lid))
+                self._tab_board_since.pop(lid, None)
+                self._tab_alive.pop(lid, None)
+                print(f"[TAB-MGR] closed tab for league {lid} - no pre-live game inside "
+                      f"{self._hot_hours:g}h (rove sweeps it now; tabs={len(self._tabs)}/{self._max})")
+        # 1d. PERIODIC RE-RANK (the "hourly full reset", done as a reconcile so coverage never blacks out):
+        # recompute the ideal top-N hot leagues; close tabs that are no longer in it. The normal opener below
+        # then refills the freed slots one per tick. Slow cadence on purpose - a league flapping between rank
+        # N and N+1 must not churn tabs every 20s.
+        if now - self._last_reset >= self._reset_sec and self._tabs:
+            self._last_reset = now
+            elig = [l for l in paired
+                    if l not in board and self._hot_games(l, now) > 0]
+            desired = set(sorted(elig, key=self._gap_key(now))[: self._max])
+            outranked = [l for l in self._tabs if l not in desired
+                         and now - self._tab_alive.get(l, now) >= self._evict_grace]
+            for lid in outranked:
+                await self._session.close_tab(self._tabs.pop(lid))
+                self._tab_board_since.pop(lid, None)
+                self._tab_alive.pop(lid, None)
+            if outranked:
+                print(f"[TAB-MGR] re-rank: closed {len(outranked)} out-ranked tab(s) "
+                      f"({','.join(outranked)}) - hotter leagues take the slots (tabs={len(self._tabs)}/{self._max})")
+        # 1e. OFF-STATION check: a dedicated tab that is no longer SHOWING its league (login redirect, error
+        # page, stray navigation) reads as covered but delivers nothing. Detect by URL and send it home
+        # (re-navigation also re-auths + re-subscribes). One per tick.
+        for lid, pg in list(self._tabs.items()):
+            try:
+                actual = (pg.url or "").split("?")[0].rstrip("/")
+            except Exception:
+                continue
+            expected = (paired.get(lid) or "").split("?")[0].rstrip("/")
+            if expected and actual and actual != expected:
+                self._tab_alive[lid] = now                    # bump → bounded retry, not every tick
+                ok = await self._session.navigate_tab(pg, paired[lid])
+                print(f"[TAB-MGR] tab for league {lid} was OFF-STATION ({actual[:70]}) - "
+                      f"{'sent home' if ok else 'renavigation FAILED'}")
+                break
+        # 2. gap selection: paired leagues that are uncovered (no board / tab / rove feed) AND currently HOT.
+        # A league with zero hot games is not tab-worthy - the roving tail sweeps it until it heats up.
         covered = self._covered_now()
         gaps = sorted((lid for lid in paired
-                       if lid not in covered and lid not in self._tabs and lid != self._rove_lid),
-                      key=self._sort_key)
+                       if lid not in covered and lid not in self._tabs and lid != self._rove_lid
+                       and self._hot_games(lid, now) > 0),
+                      key=self._gap_key(now))
         if now - self._last_log > 60:
             self._last_log = now
             nboard = len(board & set(paired))
@@ -297,12 +413,15 @@ class LeagueTabManager:
                 rove_s = f" rove_idle_sec={int(now - self._last_rove)}"
             ka = ""
             if self._tabs:
-                ages = {lid: int((now - self._tab_alive.get(lid, now)) / 60) for lid in self._tabs}
-                ka = " tab_idle_min=" + ",".join(f"{lid}:{m}" for lid, m in sorted(ages.items()))
-            print(f"[TAB-MGR] paired={len(paired)} covered={len(covered & set(paired))} "
+                # lid:hotgames/idlemin per dedicated tab - one glance shows WHY each tab holds its slot
+                parts = [f"{lid}:{self._hot_games(lid, now)}h/{int((now - self._tab_alive.get(lid, now)) / 60)}m"
+                         for lid in sorted(self._tabs)]
+                ka = " tabs[lid:hot/idle]=" + ",".join(parts)
+            n_hot = sum(1 for l in paired if self._hot_games(l, now) > 0)
+            print(f"[TAB-MGR] paired={len(paired)} hot_leagues={n_hot} covered={len(covered & set(paired))} "
                   f"(board={nboard}) tabs={len(self._tabs)}/{self._max} gaps={len(gaps)}{rv}"
                   f"{main_s}{rove_s}{ka}")
-        # 3. DEDICATED tabs: give the top gap leagues persistent tabs, one per tick, up to the cap
+        # 3. DEDICATED tabs: give the HOTTEST gap leagues persistent tabs, one per tick, up to the cap
         if gaps and len(self._tabs) < self._max:
             lid = gaps[0]
             pg = await self._session.open_tab(paired[lid])
@@ -310,7 +429,8 @@ class LeagueTabManager:
                 self._tabs[lid] = pg
                 self._tab_alive[lid] = now
                 self._cap_warned = False
-                print(f"[TAB-MGR] opened dedicated tab for gap league {lid} -> {paired[lid][:70]} "
+                print(f"[TAB-MGR] opened dedicated tab for league {lid} ({self._hot_games(lid, now)} hot "
+                      f"game(s) in {self._hot_hours:g}h) -> {paired[lid][:70]} "
                       f"(tabs={len(self._tabs)}/{self._max}, {len(gaps) - 1} gap(s) left)")
         elif gaps and len(self._tabs) >= self._max and not self._cap_warned:
             self._cap_warned = True
@@ -333,6 +453,58 @@ class LeagueTabManager:
         # 4. ROVING tail tab: sweep the overflow (gaps the dedicated tabs can't hold)
         if self._rove_enabled:
             await self._rove_tick(paired)
+
+    def status(self) -> dict:
+        """What every managed tab is SHOWING vs what it is SUPPOSED to show, and why it holds its slot.
+        Served on GET /debug/tabs - the operator's (and the bot's) view of tab state."""
+        now = time.time()
+        paired = dict(self._load_paired())
+        board = set()
+        if self._board_lids is not None:
+            try:
+                board = {str(b) for b in self._board_lids()}
+            except Exception:
+                pass
+        live = {k.split(":")[0] for k in (self._live_mids(self._cover_ttl) or [])}
+
+        def tab_row(lid: str, pg, kind: str) -> dict:
+            expected = paired.get(lid, "")
+            try:
+                actual = (pg.url or "") if pg is not None else ""
+            except Exception:
+                actual = "<gone>"
+            on_station = bool(expected and actual and
+                              actual.split("?")[0].rstrip("/") == expected.split("?")[0].rstrip("/"))
+            g = self._league_games.get(lid, {})
+            soonest = self._league_start.get(lid)
+            return {
+                "lid": lid, "kind": kind,
+                "expected_url": expected, "actual_url": actual[:120], "on_station": on_station,
+                "hot_games": self._hot_games(lid, now), "paired_games": len(g),
+                "soonest_start": (datetime.fromtimestamp(soonest, tz=timezone.utc).isoformat()
+                                  if soonest else None),
+                "ws_pushing": lid in live, "on_board": lid in board,
+                "opened_or_reloaded_min": round((now - self._tab_alive.get(lid, now)) / 60, 1)
+                                          if kind == "dedicated" else None,
+            }
+
+        tabs = [tab_row(lid, pg, "dedicated") for lid, pg in self._tabs.items()]
+        if self._rove_page is not None:
+            tabs.append(tab_row(self._rove_lid or "?", self._rove_page, "rove"))
+        hot_rank = sorted((l for l in paired if self._hot_games(l, now) > 0), key=self._gap_key(now))
+        return {
+            "config": {"max": self._max, "hot_hours": self._hot_hours,
+                       "reset_min": self._reset_sec / 60, "cover_ttl": self._cover_ttl},
+            "tabs": tabs,
+            "board_paired_lids": sorted(board & set(paired)),
+            "hot_ranking": [{"lid": l, "hot_games": self._hot_games(l, now),
+                             "covered_by": ("board" if l in board else "tab" if l in self._tabs
+                                            else "rove" if l == self._rove_lid
+                                            else "ws" if l in live else "NONE")}
+                            for l in hot_rank[:20]],
+            "paired_leagues": len(paired),
+            "held_for_bet": self._held,
+        }
 
     async def _rove_tick(self, paired: dict[str, str]) -> None:
         """The single roving tab: dwell on the current tail league for HARDVEN_ROVE_DWELL_SEC, then re-point to the
