@@ -515,6 +515,16 @@ class PinnacleAdapter(BookAdapter):
         self._lifecycle_session_hours = float(os.environ.get("PINNACLE_SESSION_HOURS", "0"))  # >0 = discrete Nh density-sessions
         self._lifecycle_manual_plan = os.environ.get("PINNACLE_MANUAL_PLAN", "").strip() or None  # test override (short cycle)
         self._lifecycle_today_only = os.environ.get("PINNACLE_SESSION_TODAY_ONLY", "1") != "0"  # plan only today's games (default ON)
+        # These four were previously stuck at the constructor defaults with no way to tune them from the env.
+        self._lifecycle_trail = _cfg_int("PINNACLE_TRAIL_MIN", 45)        # stay open this long past a block
+        self._lifecycle_min_gap = _cfg_int("PINNACLE_MIN_GAP_MIN", 60)    # merge blocks closer than this
+        self._lifecycle_horizon = _cfg_int("PINNACLE_HORIZON_HOURS", 36)  # how far ahead to plan
+        self._lifecycle_recompute = float(os.environ.get("PINNACLE_RECOMPUTE_SEC", "3600"))
+        # Schedule only around games PAIRED with a Kalshi market (an unpaired game can't be arbed, so it
+        # shouldn't buy a session). Falls back to the full board if the pairing file is empty/stale.
+        self._lifecycle_paired_only = os.environ.get("PINNACLE_SCHEDULE_PAIRED", "1") != "0"
+        # Human wobble on window edges (deterministic per window, so it can't drift across recomputes).
+        self._lifecycle_jitter = float(os.environ.get("PINNACLE_JITTER_MIN", "7"))
         self._lifecycle = None
         self._lifecycle_task = None
 
@@ -585,11 +595,17 @@ class PinnacleAdapter(BookAdapter):
                                                         on_open=self._on_session_opening,
                                                         on_close=self._on_session_closed,
                                                         lead_min=self._lifecycle_lead,
+                                                        trail_min=self._lifecycle_trail,
+                                                        min_gap_min=self._lifecycle_min_gap,
+                                                        horizon_hours=self._lifecycle_horizon,
+                                                        recompute_sec=self._lifecycle_recompute,
                                                         min_games=self._lifecycle_min_games,
                                                         max_blocks=(self._lifecycle_max_blocks or None),
                                                         session_hours=self._lifecycle_session_hours,
                                                         manual_plan=self._lifecycle_manual_plan,
-                                                        today_only=self._lifecycle_today_only)
+                                                        today_only=self._lifecycle_today_only,
+                                                        paired_only=self._lifecycle_paired_only,
+                                                        jitter_min=self._lifecycle_jitter)
                     self._lifecycle_task = asyncio.create_task(self._lifecycle.run())
                     mode = (f"MANUAL PLAN {self._lifecycle_manual_plan}" if self._lifecycle_manual_plan
                             else f"{self._lifecycle_session_hours:g}h density-sessions" if self._lifecycle_session_hours > 0

@@ -18,9 +18,11 @@ a login page and needs a manual re-login (fine while login is manual anyway; ful
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import Callable
 
 import schedule as sched
+from env_util import atomic_write_json
 
 
 class PinnacleLifecycle:
@@ -29,7 +31,8 @@ class PinnacleLifecycle:
                  poll_cap_sec: float = 600.0, horizon_hours: int = 36,
                  lead_min: int = 15, trail_min: int = 45, min_gap_min: int = 60,
                  min_games: int = 1, max_blocks: int | None = 4, session_hours: float = 0.0,
-                 manual_plan: str | None = None, today_only: bool = True):
+                 manual_plan: str | None = None, today_only: bool = True,
+                 paired_only: bool = True, jitter_min: float = 0.0):
         self._browser = browser
         self._sports = sports
         self._on_open = on_open or (lambda: None)
@@ -46,9 +49,14 @@ class PinnacleLifecycle:
         self._session_hours = session_hours   # >0 = discrete density-session mode (continuous sports); 0 = gap-merge windows
         self._manual_plan = manual_plan       # path to a hand-written test plan (overrides the slate) — for cycle testing
         self._today_only = today_only         # plan only the CURRENT local day's games (tomorrow's slate is incomplete)
+        # Schedule around games we can actually BET (paired with a Kalshi market). Unpaired board games buy a
+        # session with nothing to trade — and worse, can win the densest-block contest over a fully-paired one.
+        self._paired_only = paired_only
+        self._jitter_min = jitter_min         # +/- minutes of deterministic wobble on each window's edges
         self._windows: list = []
         self._win_ts = 0.0
         self._open = False
+        self._last_plan: dict = {}            # provenance of the current plan (mode, counts) for status()/file
         self.state = "init"
         self.next_change_secs = None
 
@@ -77,6 +85,10 @@ class PinnacleLifecycle:
         fetched = len(starts)
         if self._today_only:                       # plan only TODAY (local) — tomorrow's slate is incomplete
             starts = sched.filter_to_local_day(starts)
+        n_today = len(starts)
+        if self._paired_only:                      # only games with a Kalshi counterpart can produce an arb
+            starts = sched.filter_to_paired(starts)
+        n_paired = len(starts)
         if self._session_hours > 0:                # discrete ~Nh sessions by game-START density (continuous sports)
             new = sched.compute_sessions(starts, self._session_hours, self._lead_min, self._trail_min,
                                          min_games=self._min_games, max_blocks=self._max_blocks or 4)
@@ -85,15 +97,24 @@ class PinnacleLifecycle:
             new = sched.compute_windows(starts, self._lead_min, self._trail_min, self._min_gap_min,
                                         min_games=self._min_games, max_blocks=self._max_blocks)
             mode = f"gap-merge, densest {self._max_blocks}"
+        if self._jitter_min > 0:                   # human wobble; applied AFTER selection so blocks don't change
+            new = sched.apply_jitter(new, self._jitter_min)
         if not new and self._windows:
             print("[PINNACLE LIFECYCLE] slate returned 0 usable windows; keeping last windows (transient?)")
             return
         self._windows = new
         self._win_ts = sched._utcnow().timestamp()
         games_kept = sum(w[2] for w in self._windows)
-        scope = f"today-only {len(starts)}/{fetched} games" if self._today_only else f"{len(starts)} games"
+        scope = f"today-only {n_today}/{fetched} games" if self._today_only else f"{fetched} games"
+        if self._paired_only:
+            scope += f"; paired {n_paired}/{n_today}"
+        jit = f", jitter +/-{self._jitter_min:g}m" if self._jitter_min > 0 else ""
+        self._last_plan = {"mode": mode, "fetched": fetched, "today": n_today, "paired": n_paired,
+                           "in_window": games_kept, "jitter_min": self._jitter_min,
+                           "paired_only": self._paired_only, "today_only": self._today_only}
         print(f"[PINNACLE LIFECYCLE] {len(self._windows)} session(s) planned "
-              f"({mode}, lead {self._lead_min}m; {scope}; {games_kept} in-window).")
+              f"({mode}, lead {self._lead_min}m{jit}; {scope}; {games_kept} in-window).")
+        self._write_windows_file()
 
     async def tick(self, now=None) -> float | None:
         """One decision step: open if `now` is inside a window and we're closed; close if outside and we're
@@ -131,6 +152,43 @@ class PinnacleLifecycle:
                 print(f"[PINNACLE LIFECYCLE] error: {type(ex).__name__}: {ex}")
                 await asyncio.sleep(60)
 
+    def _write_windows_file(self) -> None:
+        """Publish the CURRENT plan to work_windows.json on every recompute.
+
+        This file used to be written ONLY by `schedule.py --write` and read by nobody — so the copy on disk
+        was a months-old preview that looked authoritative. Now it mirrors what the bot is actually doing
+        (atomic write, so a reader never sees a partial file). Still advisory: the lifecycle plans in memory
+        and does not read this back."""
+        try:
+            atomic_write_json(sched.OUT, {
+                "generated_at": sched._utcnow().isoformat() + "Z",
+                "plan": self._last_plan,
+                "windows": [{"open": o.isoformat() + "Z", "close": c.isoformat() + "Z", "games": g,
+                             "open_local": sched._local(o).strftime("%a %d %b %H:%M"),
+                             "close_local": sched._local(c).strftime("%a %d %b %H:%M")}
+                            for o, c, g in self._windows],
+            })
+        except Exception as ex:
+            print(f"[PINNACLE LIFECYCLE] could not write {Path(sched.OUT).name}: {type(ex).__name__}: {ex}")
+
     def status(self) -> dict:
-        return {"state": self.state, "open": self._open, "windows": len(self._windows),
-                "next_change_secs": round(self.next_change_secs) if self.next_change_secs is not None else None}
+        """State + the ACTUAL planned windows (not just a count) — the schedule half of "what is the bot
+        doing and why". Served on GET /debug/schedule."""
+        now = sched._utcnow()
+        cur = sched.active_window(self._windows, now)
+        return {
+            "state": self.state, "open": self._open, "windows": len(self._windows),
+            "next_change_secs": round(self.next_change_secs) if self.next_change_secs is not None else None,
+            "plan": self._last_plan,
+            "planned_at": (sched._utcnow().fromtimestamp(self._win_ts).isoformat() + "Z") if self._win_ts else None,
+            "current_window": ({"open": cur[0].isoformat() + "Z", "close": cur[1].isoformat() + "Z",
+                                "games": cur[2],
+                                "closes_in_min": round((cur[1] - now).total_seconds() / 60, 1)}
+                               if cur else None),
+            "windows_detail": [{"open": o.isoformat() + "Z", "close": c.isoformat() + "Z", "games": g,
+                                "open_local": sched._local(o).strftime("%a %d %b %H:%M"),
+                                "close_local": sched._local(c).strftime("%a %d %b %H:%M"),
+                                "duration_min": round((c - o).total_seconds() / 60),
+                                "state": ("NOW" if o <= now <= c else "past" if c < now else "upcoming")}
+                               for o, c, g in self._windows],
+        }

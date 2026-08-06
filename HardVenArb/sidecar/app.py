@@ -240,6 +240,17 @@ async def debug_visibility():
     return {"tabs": out, "visible_count": n_vis, "total": len(out)}
 
 
+@app.get("/debug/schedule")
+async def debug_schedule():
+    """The lifecycle's work-window plan: every planned session (local + UTC, games, duration, past/NOW/
+    upcoming), the current window with minutes-to-close, and the plan's provenance (mode, how many games were
+    fetched / kept for today / paired, jitter). The schedule half of "what is the bot doing and why"."""
+    lc = getattr(adapter, "_lifecycle", None)
+    if lc is None:
+        raise HTTPException(400, "lifecycle not running (PINNACLE_LIFECYCLE=1 required)")
+    return lc.status()
+
+
 @app.get("/debug/tabs")
 async def debug_tabs():
     """The tab manager's own account of every tab: what it's SHOWING vs what it SHOULD show (on_station),

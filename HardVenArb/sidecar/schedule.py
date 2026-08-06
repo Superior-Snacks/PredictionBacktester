@@ -23,6 +23,7 @@ Times are computed in UTC (Pinnacle startTime is ISO-UTC) and DISPLAYED in the m
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -66,9 +67,12 @@ def compute_windows(starts: list[tuple[datetime, str]], lead_min: int = 25, trai
     DENSEST `max_blocks` (most matches; ties → earlier first), restored to chronological order. Defaults
     (min_games=1, max_blocks=None) keep every merged block — selection is opt-in."""
     duration = duration or DURATION
+    # `starts` items are (start, sport) or the richer (start, sport, matchup_id) from fetch_starts — index
+    # rather than unpack so both shapes work and the paired filter can carry ids through.
     intervals = sorted(
-        (s - timedelta(minutes=lead_min), s + timedelta(minutes=duration.get(sport, DEFAULT_DURATION) + trail_min))
-        for s, sport in starts)
+        (it[0] - timedelta(minutes=lead_min),
+         it[0] + timedelta(minutes=duration.get(it[1], DEFAULT_DURATION) + trail_min))
+        for it in starts)
     merged: list[list] = []
     for o, c in intervals:
         if merged and o <= merged[-1][1] + timedelta(minutes=min_gap_min):
@@ -91,7 +95,7 @@ def compute_sessions(starts: list[tuple[datetime, str]], session_hours: float = 
     session_hours span containing the MOST game starts, claim those games, repeat up to max_blocks; drop clusters
     with fewer than min_games. Each session = [first_start - lead, last_start + trail]. Chronological order."""
     win = timedelta(hours=session_hours)
-    remaining = sorted(s for s, _ in starts)
+    remaining = sorted(it[0] for it in starts)          # (start, sport[, matchup_id]) → just the starts
     sessions: list[tuple[datetime, datetime, int]] = []
     while remaining and len(sessions) < max_blocks:
         best_i, best_n = 0, 0
@@ -140,7 +144,80 @@ def filter_to_local_day(starts: list[tuple[datetime, str]], day=None) -> list[tu
     selection into an incomplete next day. The lifecycle recomputes hourly, so this rolls to the new day on its
     own. `starts` are naive-UTC (from _pin_dt); compared in local time via _local()."""
     day = day or _local(_utcnow()).date()
-    return [(s, sp) for (s, sp) in starts if _local(s).date() == day]
+    return [it for it in starts if _local(it[0]).date() == day]   # keeps the item shape (may carry a matchup id)
+
+
+# ── schedule around what we can actually BET (paired games), not the whole board ──────────────────────────
+def paired_mids(pairs_path: str | None = None) -> set:
+    """Pinnacle matchupIds that are PAIRED with a Kalshi market (from cross_pairs.json tokens
+    '{lid}:{mid}:{...}'). These are the only games the bot can arb — everything else on the board is
+    scenery, and letting scenery drive the schedule buys sessions with nothing to trade."""
+    p = Path(pairs_path) if pairs_path else Path(__file__).resolve().parent.parent / "cross_pairs.json"
+    try:
+        data = json.loads(p.read_text(encoding="utf-8-sig"))
+    except Exception:
+        return set()
+    out = set()
+    for e in data:
+        for k in ("hardven_yes_token", "hardven_no_token"):
+            tok = e.get(k) or ""
+            if tok.count(":") >= 2:
+                out.add(tok.split(":")[1])
+    return out
+
+
+def filter_to_paired(starts, pairs_path: str | None = None, warn: bool = True):
+    """Keep only games whose matchupId is paired with a Kalshi market. Needs `starts` items carrying the id
+    (the 3-tuples fetch_starts returns); 2-tuple items have no id and are kept (can't judge them).
+
+    SAFETY: if the pairing file is missing/empty, or the filter would leave NOTHING, return the input
+    unchanged — a stale pairing file must never black out the whole schedule."""
+    mids = paired_mids(pairs_path)
+    if not mids:
+        if warn:
+            print("[SCHED] no paired matchups found (cross_pairs.json missing/empty) - scheduling on the FULL board.")
+        return starts
+    kept = [it for it in starts if len(it) < 3 or str(it[2]) in mids]
+    if not kept:
+        if warn:
+            print(f"[SCHED] paired filter removed ALL {len(starts)} game(s) - falling back to the full board "
+                  "(is the pairing stale? re-run pairHard.py + pair_pinnacle.py).")
+        return starts
+    return kept
+
+
+# ── jitter: a human doesn't clock in at exactly T-15:00 every single day ──────────────────────────────────
+def _jitter(anchor: datetime, salt: str, spread_min: float) -> timedelta:
+    """DETERMINISTIC offset in [-spread, +spread], derived from the window's own anchor time.
+
+    Deterministic is the whole point: the lifecycle recomputes hourly, and a fresh random() each pass would
+    keep sliding the boundary — the bot would flap open/closed around a transition and the "human" rhythm
+    would look like a machine twitching. Hashing the anchor gives the same offset every recompute while
+    still differing per window and per day."""
+    if spread_min <= 0:
+        return timedelta(0)
+    h = hashlib.sha256(f"{anchor.isoformat()}|{salt}".encode()).digest()
+    frac = int.from_bytes(h[:4], "big") / 0xFFFFFFFF          # 0.0 .. 1.0
+    return timedelta(minutes=(frac * 2.0 - 1.0) * spread_min)  # -spread .. +spread
+
+
+def apply_jitter(windows, spread_min: float = 0.0):
+    """Nudge each window's open/close by a stable pseudo-random amount so the session rhythm isn't
+    machine-precise. Applied AFTER block selection (never changes WHICH blocks are chosen), keeps each
+    window at least 10 minutes long, and trims any overlap jitter introduces so windows stay disjoint."""
+    if spread_min <= 0 or not windows:
+        return windows
+    out = []
+    for o, c, g in windows:
+        o2 = o + _jitter(o, "open", spread_min)
+        c2 = c + _jitter(o, "close", spread_min)
+        if c2 - o2 < timedelta(minutes=10):                   # jitter must never invert/erase a window
+            o2, c2 = o, c
+        if out and o2 < out[-1][1]:                           # keep windows disjoint after the nudge
+            o2 = out[-1][1] + timedelta(minutes=1)
+        if c2 > o2:
+            out.append((o2, c2, g))
+    return out
 
 
 def active_window(windows, now: datetime | None = None):
@@ -169,11 +246,11 @@ def _guest(client: httpx.Client, path: str):
         return None
 
 
-def fetch_starts(sports: list[int], horizon_hours: int = 36, back_hours: int = 4) -> list[tuple[datetime, str]]:
-    """Game start times (UTC) for the scoped sports from the guest board, within [now-back, now+horizon].
-    Only the MAIN matchup per game (parentId is None, type 'matchup') so each game counts once; doubles and
-    derivative '(Games)' children are skipped. `back_hours` keeps already-started games so live ones still
-    fall inside their window."""
+def fetch_starts(sports: list[int], horizon_hours: int = 36, back_hours: int = 4) -> list[tuple]:
+    """(start_utc, sport, matchup_id) for the scoped sports from the guest board, within [now-back,
+    now+horizon]. Only the MAIN matchup per game (parentId is None, type 'matchup') so each game counts once;
+    doubles and derivative '(Games)' children are skipped. `back_hours` keeps already-started games so live
+    ones still fall inside their window. The matchup id lets filter_to_paired() drop games we can't bet."""
     client = httpx.Client(headers={"accept": "application/json", "x-api-key": GUEST_KEY,
                                    "origin": "https://www.pinnacle.bet", "user-agent": "Mozilla/5.0"},
                           timeout=20.0, follow_redirects=True)
@@ -190,7 +267,7 @@ def fetch_starts(sports: list[int], horizon_hours: int = 36, back_hours: int = 4
                     continue   # skip "(Games)" derivative children + tournament specials
                 st = _pin_dt(m.get("startTime", ""))
                 if st and lo <= st <= hi:
-                    out.append((st, sport))
+                    out.append((st, sport, str(m.get("id"))))
             time.sleep(0.15)
     client.close()
     return out
@@ -229,6 +306,12 @@ def main() -> None:
     ap.add_argument("--today-only", action="store_true",
                     help="plan blocks for the CURRENT LOCAL DAY only (drop tomorrow's games so an incomplete "
                          "next-day slate can't skew the densest-N selection). Matches the bot's default.")
+    ap.add_argument("--all-games", action="store_true",
+                    help="schedule on the WHOLE board instead of only Kalshi-PAIRED games (default: paired "
+                         "only — unpaired games can't be arbed, so they shouldn't buy a session)")
+    ap.add_argument("--jitter", type=float, default=0.0,
+                    help="randomize each window's open/close by up to +/- this many minutes (deterministic "
+                         "per window, so it doesn't drift across recomputes). Try 7.")
     ap.add_argument("--write", action="store_true", help="also write work_windows.json for the bot")
     args = ap.parse_args()
 
@@ -238,8 +321,13 @@ def main() -> None:
     if args.today_only:
         starts = filter_to_local_day(starts)
         print(f"[SCHED] today-only: {len(starts)} game(s) remain on the current local day.")
+    if not args.all_games:
+        n_before = len(starts)
+        starts = filter_to_paired(starts)
+        print(f"[SCHED] paired-only: {len(starts)}/{n_before} game(s) are paired with a Kalshi market.")
     bysport = {}
-    for _, sp in starts:
+    for it in starts:
+        sp = it[1]
         bysport[sp] = bysport.get(sp, 0) + 1
     print(f"[SCHED] {len(starts)} games: " + ", ".join(f"{k}={v}" for k, v in sorted(bysport.items())))
 
@@ -254,6 +342,9 @@ def main() -> None:
                                   min_games=args.min_games, max_blocks=max_blocks)
         dropped = len(all_merged) - len(windows)
         sel = f" (selected the densest {len(windows)} of {len(all_merged)}; dropped {dropped})" if dropped else ""
+    if args.jitter > 0:
+        windows = apply_jitter(windows, args.jitter)
+        sel += f" [jitter +/-{args.jitter:g}m]"
     print(f"\n[SCHED] {len(windows)} work window(s){sel} (local time):")
     now = _utcnow()
     for o, c, g in windows:
