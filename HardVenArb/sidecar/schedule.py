@@ -217,6 +217,65 @@ def _jitter(anchor: datetime, salt: str, spread_min: float) -> timedelta:
     return timedelta(minutes=(frac * 2.0 - 1.0) * spread_min)  # -spread .. +spread
 
 
+# ── operator-pinned hours: "I find more arbs in the morning — be open then" ──────────────────────────────
+def parse_pin_hours(spec: str) -> list[tuple[int, int, int, int]]:
+    """'09:00-12:00' or '08:30-11:00,20:00-23:30' (LOCAL time) -> [(h1,m1,h2,m2), ...]. An end at or before
+    its start means the range crosses midnight ('22:00-02:00'). Bad chunks are skipped with a warning."""
+    out = []
+    for chunk in (spec or "").split(","):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        try:
+            a, b = chunk.split("-")
+            h1, m1 = (list(map(int, a.split(":"))) + [0])[:2]
+            h2, m2 = (list(map(int, b.split(":"))) + [0])[:2]
+            if not (0 <= h1 < 24 and 0 <= h2 < 24 and 0 <= m1 < 60 and 0 <= m2 < 60):
+                raise ValueError(chunk)
+            out.append((h1, m1, h2, m2))
+        except (ValueError, IndexError):
+            print(f"[SCHED] bad pin range {chunk!r} (want 'HH:MM-HH:MM' local) - skipped")
+    return out
+
+
+def pinned_windows(ranges: list[tuple[int, int, int, int]], now: datetime | None = None,
+                   days: int = 2) -> list[tuple[datetime, datetime, int]]:
+    """The next occurrences (today + tomorrow) of each pinned LOCAL range as UTC-naive windows, past ones
+    dropped. games=0 — a pin exists to WATCH LINES (pre-live arbs surface hours before a game starts), not
+    because games start inside it; the caller recounts after merging."""
+    now = now or _utcnow()
+    tz = datetime.now(timezone.utc).astimezone().tzinfo
+    today = _local(now).date()
+    out = []
+    for h1, m1, h2, m2 in ranges:
+        for d in range(days):
+            day = today + timedelta(days=d)
+            o_loc = datetime(day.year, day.month, day.day, h1, m1, tzinfo=tz)
+            c_loc = datetime(day.year, day.month, day.day, h2, m2, tzinfo=tz)
+            if c_loc <= o_loc:
+                c_loc += timedelta(days=1)                  # overnight range crosses midnight
+            o = o_loc.astimezone(timezone.utc).replace(tzinfo=None)
+            c = c_loc.astimezone(timezone.utc).replace(tzinfo=None)
+            if c > now:                                     # keep a pin we are currently inside; drop fully-past
+                out.append((o, c, 0))
+    return sorted(out, key=lambda w: w[0])
+
+
+def merge_windows(a: list, b: list) -> list:
+    """Union-merge two window lists into disjoint chronological windows (game counts summed; the lifecycle
+    recounts them via assign_games afterwards anyway). Used to fold operator pins into the computed plan —
+    an overlapping pin EXTENDS a computed window rather than duplicating it."""
+    ivs = sorted(list(a) + list(b), key=lambda w: w[0])
+    out: list[list] = []
+    for o, c, g in ivs:
+        if out and o <= out[-1][1]:
+            out[-1][1] = max(out[-1][1], c)
+            out[-1][2] += g
+        else:
+            out.append([o, c, g])
+    return [(o, c, g) for o, c, g in out]
+
+
 def assign_games(windows, starts):
     """Attribute every game to the window that will cover it → (per_window, left_behind).
 
@@ -364,6 +423,10 @@ def main() -> None:
     ap.add_argument("--jitter", type=float, default=0.0,
                     help="randomize each window's open/close by up to +/- this many minutes (deterministic "
                          "per window, so it doesn't drift across recomputes). Try 7.")
+    ap.add_argument("--pin", default="",
+                    help="operator-pinned LOCAL hours always included in the plan, e.g. '09:00-12:00' or "
+                         "'08:30-11:00,20:00-23:00' (immune to --min-games/--max-blocks; matches "
+                         "PINNACLE_PIN_HOURS in the bot)")
     ap.add_argument("--write", action="store_true", help="also write work_windows.json for the bot")
     args = ap.parse_args()
 
@@ -394,17 +457,24 @@ def main() -> None:
                                   min_games=args.min_games, max_blocks=max_blocks)
         dropped = len(all_merged) - len(windows)
         sel = f" (selected the densest {len(windows)} of {len(all_merged)}; dropped {dropped})" if dropped else ""
+    pins = pinned_windows(parse_pin_hours(args.pin)) if args.pin else []
+    if pins:
+        windows = merge_windows(windows, pins)
+        sel += f" [+{len(pins)} pinned]"
     if args.jitter > 0:
         windows = apply_jitter(windows, args.jitter)
         sel += f" [jitter +/-{args.jitter:g}m]"
+    per, _left = assign_games(windows, starts)
+    windows = [(o, c, len(per[i])) for i, (o, c, _n) in enumerate(windows)]
     print(f"\n[SCHED] {len(windows)} work window(s){sel} (local time):")
     now = _utcnow()
-    for o, c, g in windows:
+    for i, (o, c, g) in enumerate(windows):
         live = "  <== NOW" if o <= now <= c else ""
+        pin = "  [PINNED]" if any(po < c and o < pc for po, pc, _g2 in pins) else ""
         dur = _hm((c - o).total_seconds())
         lo, lc = _local(o), _local(c)
         c_fmt = f"{lc:%H:%M}" if lc.date() == lo.date() else f"{lc:%a %d %b %H:%M}"   # show date if it spills to another day
-        print(f"   {lo:%a %d %b %H:%M} -> {c_fmt}  ({dur}, {g} match{'es' if g != 1 else ''}){live}")
+        print(f"   {lo:%a %d %b %H:%M} -> {c_fmt}  ({dur}, {g} match{'es' if g != 1 else ''}){pin}{live}")
 
     state, secs = status(windows, now)
     if state == "OPEN":

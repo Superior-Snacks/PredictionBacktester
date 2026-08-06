@@ -33,7 +33,7 @@ class PinnacleLifecycle:
                  lead_min: int = 15, trail_min: int = 45, min_gap_min: int = 60,
                  min_games: int = 1, max_blocks: int | None = 4, session_hours: float = 0.0,
                  manual_plan: str | None = None, today_only: bool = True,
-                 paired_only: bool = True, jitter_min: float = 0.0):
+                 paired_only: bool = True, jitter_min: float = 0.0, pin_hours: str = ""):
         self._browser = browser
         self._sports = sports
         self._on_open = on_open or (lambda: None)
@@ -61,6 +61,11 @@ class PinnacleLifecycle:
         self._per_window: list = []           # games attributed to each window (parallel to _windows)
         self._left_behind: list = []          # games in NO window — what this schedule is giving up
         self._skipped: dict = {}              # why games never reached window selection (unpaired / other day)
+        # OPERATOR-PINNED HOURS ("more arbs show up in the morning"): local ranges that are ALWAYS part of the
+        # plan — merged after block selection so min_games/max_blocks can never drop them, and exempt from the
+        # slate entirely (a pin watches LINES of later games; pre-live arbs surface hours before start).
+        self._pin_ranges = sched.parse_pin_hours(pin_hours)
+        self._pinned_spans: list = []         # the pins' raw spans this plan, for labeling windows "pinned"
         self._notify = Notifier()             # Discord (no-op unless DISCORD_WEBHOOK_URL is set)
         self.state = "init"
         self.next_change_secs = None
@@ -111,6 +116,15 @@ class PinnacleLifecycle:
             new = sched.compute_windows(starts, self._lead_min, self._trail_min, self._min_gap_min,
                                         min_games=self._min_games, max_blocks=self._max_blocks)
             mode = f"gap-merge, densest {self._max_blocks}"
+        # OPERATOR PINS: merged AFTER selection (immune to min_games/max_blocks) and only when the horizon
+        # has ANY paired game at all — pinned hours on a truly empty slate would watch nothing.
+        self._pinned_spans = []
+        if self._pin_ranges and starts:
+            pins = sched.pinned_windows(self._pin_ranges)
+            if pins:
+                new = sched.merge_windows(new, pins)
+                self._pinned_spans = pins
+                mode += f" + {len(pins)} pinned"
         if self._jitter_min > 0:                   # human wobble; applied AFTER selection so blocks don't change
             new = sched.apply_jitter(new, self._jitter_min)
         if not new and self._windows:
@@ -118,8 +132,10 @@ class PinnacleLifecycle:
             return
         self._windows = new
         self._win_ts = sched._utcnow().timestamp()
-        # Attribute games to windows AFTER jitter, so "what this window is for" reflects the real boundaries.
+        # Attribute games to windows AFTER merge+jitter, so "what this window is for" reflects the real
+        # boundaries — and RECOUNT each window's games from the attribution (merge sums can drift).
         self._per_window, self._left_behind = sched.assign_games(self._windows, starts)
+        self._windows = [(o, c, len(self._per_window[i])) for i, (o, c, _n) in enumerate(self._windows)]
         games_kept = sum(w[2] for w in self._windows)
         scope = f"today-only {n_today}/{fetched} games" if self._today_only else f"{fetched} games"
         if self._paired_only:
@@ -171,6 +187,11 @@ class PinnacleLifecycle:
                 print(f"[PINNACLE LIFECYCLE] error: {type(ex).__name__}: {ex}")
                 await asyncio.sleep(60)
 
+    def _is_pinned(self, window) -> bool:
+        """Does this (possibly merged/jittered) window overlap an operator-pinned span?"""
+        o, c, _ = window
+        return any(po < c and o < pc for po, pc, _g in self._pinned_spans)
+
     # ── Discord: why we're coming up, and what we're giving up ────────────────
     def _games_for(self, window) -> list:
         """The games attributed to `window` (empty if the plan was recomputed since attribution)."""
@@ -185,8 +206,18 @@ class PinnacleLifecycle:
         o, c, n = window
         games = self._games_for(window)
         mins = max(0, round((c - now).total_seconds() / 60))
-        lines = [f"🟢 **LIVE** until {sched._local(c):%H:%M} local (~{mins}m) — {n} target game(s)",
+        pinned = self._is_pinned(window)
+        tag = " (operator hours)" if pinned else ""
+        lines = [f"🟢 **LIVE**{tag} until {sched._local(c):%H:%M} local (~{mins}m) — {n} target game(s)",
                  f"• Targets: {sched.describe_games(games, 8)}"]
+        if pinned:
+            # A pin's value is the LINES it watches: pre-live arbs surface hours before start, so list the
+            # paired games starting after this window whose prices are live right now.
+            watching = sorted((g for p in self._per_window for g in p if g[0] > c), key=lambda g: g[0])
+            watching += [g for g in self._left_behind if g[0] > c]
+            if watching:
+                lines.append(f"• Watching lines for {len(watching)} later game(s): "
+                             f"{sched.describe_games(watching, 5)}")
         # What we are NOT covering, and why. A skipped match the operator can see is a decision;
         # an invisible one is a bug they'd never catch.
         later = [g for g in self._left_behind if g[0] > c]
@@ -255,6 +286,7 @@ class PinnacleLifecycle:
                                 "close_local": sched._local(c).strftime("%a %d %b %H:%M"),
                                 "duration_min": round((c - o).total_seconds() / 60),
                                 "state": ("NOW" if o <= now <= c else "past" if c < now else "upcoming"),
+                                "pinned": self._is_pinned((o, c, g)),
                                 "targets": [{"start": g2[0].isoformat() + "Z", "label": sched._g(g2, 3),
                                              "mid": sched._g(g2, 2), "league": sched._g(g2, 4)}
                                             for g2 in sorted(self._per_window[i], key=lambda x: x[0])]

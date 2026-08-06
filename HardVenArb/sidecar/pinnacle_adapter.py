@@ -525,6 +525,9 @@ class PinnacleAdapter(BookAdapter):
         self._lifecycle_paired_only = os.environ.get("PINNACLE_SCHEDULE_PAIRED", "1") != "0"
         # Human wobble on window edges (deterministic per window, so it can't drift across recomputes).
         self._lifecycle_jitter = float(os.environ.get("PINNACLE_JITTER_MIN", "7"))
+        # Operator-pinned LOCAL hours always included in the plan (e.g. "09:00-12:00" or two ranges
+        # comma-separated) — "I find more arbs in the morning". Immune to min_games/max_blocks.
+        self._lifecycle_pin_hours = os.environ.get("PINNACLE_PIN_HOURS", "").strip()
         self._lifecycle = None
         self._lifecycle_task = None
 
@@ -605,7 +608,8 @@ class PinnacleAdapter(BookAdapter):
                                                         manual_plan=self._lifecycle_manual_plan,
                                                         today_only=self._lifecycle_today_only,
                                                         paired_only=self._lifecycle_paired_only,
-                                                        jitter_min=self._lifecycle_jitter)
+                                                        jitter_min=self._lifecycle_jitter,
+                                                        pin_hours=self._lifecycle_pin_hours)
                     self._lifecycle_task = asyncio.create_task(self._lifecycle.run())
                     mode = (f"MANUAL PLAN {self._lifecycle_manual_plan}" if self._lifecycle_manual_plan
                             else f"{self._lifecycle_session_hours:g}h density-sessions" if self._lifecycle_session_hours > 0
