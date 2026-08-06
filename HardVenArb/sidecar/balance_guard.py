@@ -46,9 +46,12 @@ class BalanceGuard:
     def start(self) -> None:
         if self._task is None or self._task.done():
             self._task = asyncio.create_task(self._run())
-            mode = "HALT" if self._enabled else "report-only"
-            print(f"[BALANCE] guard on ({mode}): book floor {self._min_book:g}, "
-                  f"kalshi floor ${self._min_kalshi:g}, every {self._check_sec:g}s")
+            # Wording matters: "guard on (HALT)" was read as "the bot has halted" (2026-08-06). Say what it
+            # WILL do on a breach, and say plainly that nothing has happened yet.
+            mode = ("will halt the schedule if a floor is breached" if self._enabled
+                    else "report-only, will NEVER halt")
+            print(f"[BALANCE] guard armed - {mode}. Floors: book {self._min_book:g}, "
+                  f"kalshi ${self._min_kalshi:g}. Checked every {self._check_sec:g}s. (Not halted.)")
 
     async def stop(self) -> None:
         if self._task and not self._task.done():

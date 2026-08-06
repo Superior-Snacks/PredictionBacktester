@@ -194,6 +194,9 @@ class PinnacleBrowserSession:
         # Defaults to the first browsed sport's /matchups/ page; PINNACLE_HOME_URL overrides.
         self._home_url = (os.environ.get("PINNACLE_HOME_URL") or "").strip() or self._derive_home_url()
         self._went_home = False        # one-shot per session: don't fight the organic layer after the first hop
+        # How long after a login SUBMIT the home-navigation must keep its hands off, so it can never abort an
+        # in-flight auth POST (the redirect + first authed calls take a few seconds).
+        self._home_settle_sec = float(os.environ.get("PINNACLE_HOME_SETTLE_SEC", "20"))
         self._organic = None
         self._pw = None
         self._ctx = None
@@ -967,9 +970,22 @@ class PinnacleBrowserSession:
         return self._login_url
 
     async def _go_home_once(self) -> None:
-        """Put the board on the sport we trade, once per session, as soon as we're logged in. Skipped if we're
-        already there (a reload keeps the URL) so this never fights the organic layer's own navigation."""
+        """Put the board on the sport we trade, once per session, as soon as we're REALLY logged in.
+
+        MUST NOT run while a login is in flight. First cut gated only on `_last_capture > 0` and navigated
+        straight over a submitted login form, aborting the in-flight auth POST (2026-08-06: the operator saw
+        the login spinner die and `WS login: no`). `_last_capture` is the wrong signal — this module's own
+        history records that it is 'the last time an x-session was SENT, not the last time it WORKED', and a
+        logged-OUT page keeps sending its dead session. So gate on the page state instead: no visible password
+        field, and nothing submitted within the settle window."""
         if self._went_home or self._page is None or not self._home_url:
+            return
+        if time.time() - self._last_login_submit < self._home_settle_sec:
+            return                                    # a submit is still settling — never navigate over it
+        try:
+            if await self._page.locator("input[type=password]:visible").count() > 0:
+                return                                # still on a login form ⇒ not logged in yet
+        except Exception:
             return
         try:
             cur = (self._page.url or "").split("#")[0].split("?")[0].rstrip("/").lower()
