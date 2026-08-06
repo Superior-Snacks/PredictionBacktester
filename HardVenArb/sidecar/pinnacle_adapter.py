@@ -674,7 +674,7 @@ class PinnacleAdapter(BookAdapter):
                                                   "cross_pairs.json")
                         self._tab_manager = LeagueTabManager(self._browser, self.reader_live_mids, pairs_path,
                                                              board_lids_fn=self.board_lids,
-                                                             board_dom_fn=self.board_dom_mids)
+                                                             board_dom_fn=self.board_all_lids)
                         print("[PINNACLE] tab manager ARMED under lifecycle — starts with each work window, "
                               "stops when the window closes (rove tab is what verify_now drives).")
                         # Per-tab human activity, same as the non-lifecycle path: N reader tabs that never
@@ -702,7 +702,7 @@ class PinnacleAdapter(BookAdapter):
                                                   "cross_pairs.json")
                         self._tab_manager = LeagueTabManager(self._browser, self.reader_live_mids, pairs_path,
                                                              board_lids_fn=self.board_lids,
-                                                             board_dom_fn=self.board_dom_mids)
+                                                             board_dom_fn=self.board_all_lids)
                         self._tab_manager.start()
                         # Light per-tab human activity across the reader tabs so the browser isn't 1 live tab +
                         # N dead ones. Off with HARDVEN_TAB_ORGANIC=0. Interlocked with bets via _pause_all_organic.
@@ -1527,6 +1527,121 @@ class PinnacleAdapter(BookAdapter):
                 "rendered_mids": sorted(set(raw.get("mids") or [])),
                 "header_lids": sorted(headers), "paired_slugs": lid_slug,
                 "note": "list is virtualised - only rendered rows stream; coverage is judged per MATCHUP"}
+
+    async def board_full_scan(self) -> dict:
+        """Scroll the board's virtualised list top-to-bottom to ENUMERATE EVERY league on it.
+
+        Why scroll rather than infer: the list only renders ~13 of N rows, so a single DOM read sees a
+        fraction of the board. Everything else we tried was an inference — 'it pushed recently' (misses
+        stable leagues, and is empty at startup) or 'it has a game today' (assumes the board carries the
+        whole day). Scrolling produces the actual list, which is both correct and CHECKABLE by eye.
+        Scrolling changes rendering only; the sport-topic subscription is unaffected (measured 2026-08-06),
+        so this cannot alter coverage — it only reveals it. Scroll position is restored afterwards."""
+        page = self._primary_page()
+        if page is None:
+            return {"error": "no primary page"}
+        settle = int(float(os.environ.get("PINNACLE_BOARD_SCAN_SETTLE_MS", "250")))
+        js = """async (settle) => {
+          const sleep = ms => new Promise(r => setTimeout(r, ms));
+          const seen = new Set();
+          const grab = () => {
+            document.querySelectorAll('a[href]').forEach(a => {
+              const h = a.getAttribute('href') || '';
+              if (/\\/matchups\\/?$/.test(h)) seen.add(h);
+            });
+            return seen.size;
+          };
+          // Find the scroller: the nearest ancestor of a row that actually overflows. Class names are
+          // build-hashed (list-mCW1NFV2s6), so never select on them.
+          let el = document.querySelector('.scrollbar-item');
+          while (el && !(el.scrollHeight > el.clientHeight + 40)) el = el.parentElement;
+          grab();
+          if (!el) return {leagues: [...seen], scrolled: false, height: 0, steps: 0,
+                           reached_bottom: false, settled: true};
+          const start = el.scrollTop, step = Math.max(200, el.clientHeight - 80);
+          let steps = 0, y = 0, reached = false, settled = false;
+          // Scroll to the bottom, THEN keep re-reading until a pass adds nothing new. A fixed step count
+          // silently truncates if the virtualised list renders slower than the step delay; "stop when the
+          // set stops growing AND we are at the bottom" is self-verifying instead.
+          while (steps < 80) {
+            el.scrollTop = y; await sleep(settle);
+            const before = seen.size; grab(); steps++;
+            const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 8;
+            if (atBottom) {
+              reached = true;
+              if (seen.size === before) { settled = true; break; }   // bottom AND nothing new -> complete
+            }
+            y = atBottom ? y : y + step;
+          }
+          el.scrollTop = start; await sleep(80);
+          return {leagues: [...seen], scrolled: true, height: el.scrollHeight, steps,
+                  reached_bottom: reached, settled,
+                  events: (document.querySelector('[data-test-id="Events.DateBar"]')||{}).innerText || ''};
+        }"""
+        try:
+            raw = await page.evaluate(js, settle)
+        except Exception as ex:
+            return {"error": f"{type(ex).__name__}: {ex}"}
+        self._league_url_for("")                        # populate lid -> url
+        lid_slug = {}
+        for lid, u in (getattr(self, "_lid_urls", None) or {}).items():
+            parts = [p for p in u.split("#")[0].split("?")[0].rstrip("/").split("/") if p]
+            if len(parts) >= 2:
+                lid_slug[lid] = parts[-2].lower()
+        board_slugs, matched = set(), set()
+        for h in raw.get("leagues") or []:
+            parts = [p for p in h.split("#")[0].split("?")[0].rstrip("/").split("/") if p]
+            if len(parts) >= 2:
+                s = parts[-2].lower()
+                board_slugs.add(s)
+                for lid, slug in lid_slug.items():
+                    if s == slug:
+                        matched.add(lid)
+        return {"scrolled": raw.get("scrolled"), "list_height_px": raw.get("height"),
+                "scroll_steps": raw.get("steps"),
+                # complete = we hit the bottom AND a further read added no new leagues
+                "reached_bottom": raw.get("reached_bottom"), "settled": raw.get("settled"),
+                "complete": bool(raw.get("reached_bottom") and raw.get("settled")),
+                "date_bar": (raw.get("events") or "").replace("\n", " ")[:60],
+                "leagues_on_board": sorted(board_slugs),
+                "matched_lids": sorted(matched),
+                "paired_not_on_board": sorted(l for l in lid_slug if l not in matched)}
+
+    async def board_all_lids(self, ttl: float | None = None) -> set:
+        """Paired leagues present on the board's league list, refreshed by a full scroll scan every
+        PINNACLE_BOARD_SCAN_MIN minutes (default 20). Cached between scans."""
+        ttl = ttl if ttl is not None else float(os.environ.get("PINNACLE_BOARD_SCAN_MIN", "20")) * 60.0
+        now = time.time()
+        if now - getattr(self, "_board_scan_ts", 0.0) < ttl:
+            return getattr(self, "_board_scan_lids", set())
+        self._board_scan_ts = now
+        try:
+            scan = await self.board_full_scan()
+        except Exception as ex:
+            print(f"[PINNACLE] board scroll-scan failed: {type(ex).__name__}: {ex}")
+            return getattr(self, "_board_scan_lids", set())
+        if scan.get("error"):
+            print(f"[PINNACLE] board scroll-scan: {scan['error']}")
+            return getattr(self, "_board_scan_lids", set())
+        out = set(scan.get("matched_lids") or [])
+        state = "complete" if scan.get("complete") else (
+            "TRUNCATED (never reached the bottom)" if not scan.get("reached_bottom")
+            else "TRUNCATED (list still growing when we stopped)")
+        print(f"[PINNACLE] board scroll-scan {state}: {len(scan.get('leagues_on_board') or [])} league(s) "
+              f"listed [{scan.get('date_bar')}] ({scan.get('scroll_steps')} steps, "
+              f"{scan.get('list_height_px')}px) - {len(out)} of ours are ON the board: {sorted(out)}")
+        if not scan.get("complete"):
+            # An incomplete scan UNDER-reports what the board carries. Trusting it would suppress nothing —
+            # it would instead leave leagues looking uncovered, which is the SAFE direction (extra tabs, no
+            # coverage hole). But do not CACHE it: keep the last good result and retry sooner.
+            print("[PINNACLE] scroll-scan incomplete - keeping the previous league set and retrying shortly "
+                  "(raise PINNACLE_BOARD_SCAN_SETTLE_MS if this repeats).")
+            self._board_scan_ts = now - max(0.0, ttl - 120.0)      # retry in ~2 min instead of the full TTL
+            return getattr(self, "_board_scan_lids", out)
+        self._board_scan_lids = out
+        if scan.get("paired_not_on_board"):
+            print(f"[PINNACLE] paired leagues NOT on the board (need tabs): {scan['paired_not_on_board']}")
+        return out
 
     async def board_dom_mids(self, ttl: float = 20.0) -> set:
         """Matchup ids the board is RENDERING right now (and therefore streaming). Cached briefly."""

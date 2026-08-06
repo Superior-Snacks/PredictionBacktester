@@ -347,6 +347,18 @@ async def debug_schedule():
     return lc.status()
 
 
+@app.get("/debug/board_scan")
+async def debug_board_scan():
+    """SCROLL the board's virtualised list end-to-end and report EVERY league on it, which of ours matched,
+    and which paired leagues are absent (those are the ones that legitimately need a dedicated tab). This is
+    the check-by-eye answer to 'is the board really covering that league?' — an observation, not an
+    inference. Runs on demand; the tab manager does the same scan every PINNACLE_BOARD_SCAN_MIN minutes."""
+    fn = getattr(adapter, "board_full_scan", None)
+    if not callable(fn):
+        raise HTTPException(400, "adapter has no board_full_scan (Pinnacle adapter only)")
+    return await fn()
+
+
 @app.get("/debug/board_dom")
 async def debug_board_dom():
     """What the MAIN BOARD is currently showing, and which paired leagues that matched (and how). Answers

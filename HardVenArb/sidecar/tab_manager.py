@@ -48,6 +48,18 @@ from pathlib import Path
 from typing import Callable, Optional
 
 
+def _dead(pg) -> bool:
+    """True if this page is gone (operator closed it, renderer crashed, browser cycled).
+
+    Checked EVERY tick because a closed tab is the one failure that is invisible and harmful: the league
+    stays in `_tabs`, so it is excluded from gap selection and looks covered, while nothing streams for it.
+    A silent coverage hole is worse than a redundant tab."""
+    try:
+        return pg is None or pg.is_closed()
+    except Exception:
+        return True
+
+
 def _same_page(url: str | None) -> str:
     """Canonical form for 'is this tab still on its league page'. The FRAGMENT must be stripped: Pinnacle
     appends '#period:0' once the board renders, so a tab that never moved compares unequal to its own URL —
@@ -71,7 +83,8 @@ class LeagueTabManager:
         # rendered; otherwise the uncovered ones need a tab. Refreshed once per tick into _board_mids.
         self._board_dom_fn = board_dom_fn
         self._board_mids: set = set()
-        self._board_dom: set = set()          # leagues the board covers via TODAY-slate membership
+        self._board_scanned: set = set()      # leagues enumerated by the periodic scroll scan
+        self._board_dom: set = set()          # leagues judged board-covered this tick
         # Treat "has a game today" as board coverage (the board IS the sport's Today list and its sport topic
         # carries all of it). Only applied while the board is demonstrably streaming, so a dead board can
         # never make everything look covered. HARDVEN_BOARD_COVERS_TODAY=0 reverts to push-only coverage.
@@ -401,17 +414,37 @@ class LeagueTabManager:
         # 2026-08-06, the board's sport topic (sp/33) streamed 12 leagues while only 2 were rendered — the
         # SPA virtualises RENDERING, not the subscription. Gating coverage on what's in the viewport would
         # deny board credit to 10 covered leagues and open exactly the redundant tabs we're trying to avoid.
+        # Board coverage, best source first:
+        #  1. SCROLL SCAN — the board's actual league list, enumerated by scrolling its virtualised list.
+        #     An observation, not an inference, and checkable by eye in the log.
+        #  2. fallback: today's slate (the board is the sport's Today list) while the board is streaming.
+        # Either way it is gated on the board demonstrably pushing, so a dead board never claims coverage.
+        pushing = self._board_lids() if self._board_lids is not None else set()
+        scanned: set = set()
         if self._board_dom_fn is not None:
             try:
-                self._board_mids = {str(x) for x in (await self._board_dom_fn() or set())}
+                scanned = {str(x) for x in (await self._board_dom_fn() or set())}
             except Exception:
-                pass
-        # Board coverage = today's slate, but ONLY while the board proves it is streaming (some league is
-        # pushing on its sport topic). A silent board must never make every league look covered.
-        pushing = self._board_lids() if self._board_lids is not None else set()
-        self._board_dom = ({lid for lid in paired if self._has_game_today(lid, now)}
-                           if (self._board_covers_today and pushing) else set())
+                scanned = set()
+        self._board_scanned = scanned
+        if scanned:
+            self._board_dom = scanned
+        elif self._board_covers_today and pushing:
+            self._board_dom = {lid for lid in paired if self._has_game_today(lid, now)}
+        else:
+            self._board_dom = set()
         board = pushing | self._board_dom
+        # 0. prune tabs that no longer EXIST (closed by hand, crashed renderer). Must run before anything
+        # else reads _tabs, or a closed tab keeps its league out of gap selection and silently un-covers it.
+        for lid in [l for l, pg in self._tabs.items() if _dead(pg)]:
+            self._tabs.pop(lid, None)
+            self._tab_board_since.pop(lid, None)
+            self._tab_alive.pop(lid, None)
+            print(f"[TAB-MGR] tab for league {lid} is GONE (closed externally) - dropped; "
+                  "the league is a gap again and will be re-opened if it still needs cover")
+        if self._rove_page is not None and _dead(self._rove_page):
+            print("[TAB-MGR] rove tab is GONE (closed externally) - will re-open on the next sweep")
+            self._rove_page, self._rove_lid = None, None
         # 1. prune dedicated tabs whose league is no longer paired (game settled / off today's slate)
         for lid in list(self._tabs):
             if lid not in paired:
@@ -593,7 +626,10 @@ class LeagueTabManager:
             # moved recently; 'showing' = the board is rendering it (covers stable-price leagues that push
             # nothing, which is what used to cause tabs for leagues clearly visible on the main page).
             "board_pushing_lids": sorted(board - self._board_dom),
-            "board_today_covered_lids": sorted(self._board_dom),   # on the board's Today slate
+            "board_covered_lids": sorted(self._board_dom),        # judged covered by the board this tick
+            "board_scanned_lids": sorted(self._board_scanned),  # from the scroll scan (authoritative)
+            "board_coverage_source": ("scroll-scan" if self._board_scanned else
+                                      "today-slate" if self._board_dom else "push-only"),
             "board_rendered_mids": len(self._board_mids),
             "hot_ranking": [{"lid": l, "hot_games": self._hot_games(l, now),
                              "covered_by": ("board" if l in board else "tab" if l in self._tabs

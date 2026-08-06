@@ -201,6 +201,10 @@ class PinnacleBrowserSession:
         # How long after a login SUBMIT the home-navigation must keep its hands off, so it can never abort an
         # in-flight auth POST (the redirect + first authed calls take a few seconds).
         self._home_settle_sec = float(os.environ.get("PINNACLE_HOME_SETTLE_SEC", "20"))
+        # How long the board may sit AWAY from the trading sport before it is walked back. Long enough that
+        # an operator can browse without being yanked, short enough that a stray click self-heals.
+        self._board_drift_sec = float(os.environ.get("PINNACLE_BOARD_DRIFT_SEC", "180"))
+        self._off_home_since = 0.0
         self._organic = None
         self._pw = None
         self._ctx = None
@@ -1027,6 +1031,50 @@ class PinnacleBrowserSession:
         finally:
             self.resume_activity()
 
+    async def _board_drift_check(self) -> None:
+        """Bring the main board back to the trading sport if it has WANDERED — e.g. the operator clicked
+        through to a match page or their account, or an organic gesture followed a link.
+
+        The board is the session anchor AND the sport-topic subscription, so leaving it elsewhere silently
+        drops board coverage for every league. Deliberately lazy: it must NOT fight a human who is actively
+        looking at something, so it only acts once the page has been off-sport for PINNACLE_BOARD_DRIFT_SEC
+        (default 180s) — long enough to browse, short enough that an accidental click self-heals. Never runs
+        while a login is settling or a bet holds the page."""
+        if self._page is None or not self._home_url:
+            return
+        if time.time() - self._last_login_submit < self._home_settle_sec:
+            return
+        try:
+            if self._organic is not None and not self._organic._gate.is_set():
+                return                                   # paused = a bet is in flight; don't touch the page
+        except Exception:
+            pass
+        try:
+            cur = (self._page.url or "").split("#")[0].split("?")[0].rstrip("/").lower()
+        except Exception:
+            return
+        home = self._home_url.split("#")[0].split("?")[0].rstrip("/").lower()
+        if cur == home:
+            self._off_home_since = 0.0
+            return
+        now = time.time()
+        if not getattr(self, "_off_home_since", 0.0):
+            self._off_home_since = now
+            return
+        if now - self._off_home_since < self._board_drift_sec:
+            return
+        self._off_home_since = 0.0
+        try:
+            self.pause_activity()
+            await self._page.goto(self._home_url, wait_until="domcontentloaded", timeout=45_000)
+            self._last_main_refresh = time.time()
+            print(f"[PINNACLE SESSION] board had drifted to {cur[:70]} for "
+                  f"{self._board_drift_sec:.0f}s - returned to the trading sport.")
+        except Exception as ex:
+            print(f"[PINNACLE SESSION] board drift return failed: {type(ex).__name__}: {ex}")
+        finally:
+            self.resume_activity()
+
     async def _login_watch_loop(self) -> None:
         """Unattended re-login watcher: periodically look for an autofilled login form and submit it. Covers
         initial open, reopen after a dark gap that logged us out, and a mid-session logout. The `:visible` +
@@ -1046,6 +1094,8 @@ class PinnacleBrowserSession:
             try:
                 if not self._went_home and self._last_capture > 0:
                     await self._go_home_once()
+                elif self._went_home:
+                    await self._board_drift_check()
             except Exception:
                 pass
 
