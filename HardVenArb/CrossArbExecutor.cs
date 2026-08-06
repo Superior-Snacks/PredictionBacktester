@@ -469,11 +469,33 @@ public class CrossArbExecutor
         if (_dryRun)
         {
             // Probe real balances so credential/connectivity issues surface in dry-run.
-            // Simulation still starts at $1,000 regardless of actual balance.
             await RefreshBalancesAsync(initial: true);
             await PrefetchFeeRatesAsync();
-            lock (_balanceLock) { _kalshiBalanceUsd = 1000m; _hardvenBalanceUsd = 1000m; }
-            Console.WriteLine("[BALANCE INIT] Dry-run: simulation seeded at $1,000.00 on each platform");
+            // Seed the simulation. Default $1,000/platform exercises the machinery repeatedly, which is what
+            // a stability soak wants — but it means the dry run TAKES ARBS A SMALL REAL BANKROLL COULD NOT
+            // FUND, so fire counts are optimistic. HARDVEN_DRYRUN_BALANCE=real mirrors the live balances
+            // instead (realistic fire counts); a number seeds that amount on both platforms.
+            decimal seed = 1000m;
+            bool useReal = string.Equals(Environment.GetEnvironmentVariable("HARDVEN_DRYRUN_BALANCE"),
+                                         "real", StringComparison.OrdinalIgnoreCase);
+            if (!useReal && decimal.TryParse(Environment.GetEnvironmentVariable("HARDVEN_DRYRUN_BALANCE"),
+                    System.Globalization.NumberStyles.Any,
+                    System.Globalization.CultureInfo.InvariantCulture, out var s) && s > 0m)
+                seed = s;
+            if (useReal)
+            {
+                decimal k, h;
+                lock (_balanceLock) { k = _kalshiBalanceUsd; h = _hardvenBalanceUsd; }
+                Console.WriteLine($"[BALANCE INIT] Dry-run: using REAL balances (Kalshi ${k:0.00}, " +
+                                  $"HardVen ${h:0.00}) — fire counts reflect what the bankroll can actually fund");
+            }
+            else
+            {
+                lock (_balanceLock) { _kalshiBalanceUsd = seed; _hardvenBalanceUsd = seed; }
+                Console.WriteLine($"[BALANCE INIT] Dry-run: simulation seeded at ${seed:0.00} on each platform " +
+                                  "— NOT your real bankroll, so fires are optimistic " +
+                                  "(HARDVEN_DRYRUN_BALANCE=real to mirror the live balances)");
+            }
             _ = Task.Run(RunEarlyExitMonitorAsync);
             AnnounceStartup();
             return;
