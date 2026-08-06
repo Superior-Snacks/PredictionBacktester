@@ -573,6 +573,10 @@ class PinnacleAdapter(BookAdapter):
                     self._on_browser_creds,
                     on_odds=self._on_browser_odds if self._window_ws_read else None,
                     on_idle_trim=self._trim_betslip)
+                # Report PAYLOAD-derived coverage on the [WS-READ] line. The topic scan there only sees
+                # subscription scopes, and the featured board's is sport-wide ('sp/33'), so it can never name
+                # the individual leagues on the main page — rec.league.id can, and that is what this counts.
+                self._browser.coverage_fn = self._ws_coverage_stats
                 if self._lifecycle_on:
                     # schedule-driven: the lifecycle task opens/closes the browser per the game windows (the
                     # window opens it the first time too — don't start it here). Stays dark until the first one.
@@ -1349,6 +1353,24 @@ class PinnacleAdapter(BookAdapter):
             elif age > max(ttl, 900):
                 del self._board_odds_lid_ts[lid]
         return out
+
+    def _ws_coverage_stats(self, ttl: float = 45.0) -> dict:
+        """Payload-derived WS coverage for the [WS-READ] diagnostic: how many REAL leagues pushed odds within
+        `ttl` (from rec.league.id), split into board-fed vs dedicated-tab-fed, plus the matchup count. This is
+        the honest answer to "what is the main tab covering" — the topic scan in pinnacle_session can only see
+        that ONE sport-wide board subscription ('sp/33'), never the leagues inside it."""
+        now = time.time()
+        leagues = {k.split(":")[0] for k, ts in list(self._browser_odds_mid_ts.items()) if now - ts < ttl}
+        board = {lid for lid, ts in list(self._board_odds_lid_ts.items()) if now - ts < ttl}
+        tabs = set()
+        if self._tab_manager is not None:
+            try:
+                tabs = {str(l) for l in self._tab_manager.covered_lids()}
+            except Exception:
+                tabs = set()
+        return {"leagues": len(leagues), "board": len(board & leagues),
+                "tabs": len(tabs & leagues), "matchups": len(leagues and
+                [k for k, ts in list(self._browser_odds_mid_ts.items()) if now - ts < ttl])}
 
     def reader_live_mids(self, ttl: float = 30.0) -> list:
         """Matchups ('lid:mid') the browser-WS READER has actually pushed odds for within `ttl` seconds — the

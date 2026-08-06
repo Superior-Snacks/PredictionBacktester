@@ -152,6 +152,11 @@ class PinnacleBrowserSession:
                  on_idle_trim: Optional[Callable] = None) -> None:
         self._on_creds = on_creds
         self._on_odds = on_odds                        # window-WS reader: called per odds PUBLISH (topic, payload)
+        # Optional () -> dict hook the adapter sets, reporting PAYLOAD-derived coverage (real league ids read
+        # from rec.league.id) for the [WS-READ] line. The topic scan below can only see SUBSCRIPTION scopes —
+        # the featured board's is sport-wide ('sp/33' = tennis), so topics alone can never name the individual
+        # leagues on the main page. The payload can, and does.
+        self.coverage_fn = None
         self._on_idle_trim = on_idle_trim              # async(page, source) -> tidy the board's side betslip while idle
         self._login_url = os.environ.get("PINNACLE_LOGIN_URL", "https://www.pinnacle.bet/en/")
         # ABSOLUTE, module-anchored profile dir so the SAME saved profile is reused no matter what CWD the
@@ -640,9 +645,14 @@ class PinnacleBrowserSession:
             self._probe_recv_publish += 1
             if len(self._probe_topics) < 40:
                 self._probe_topics.add(topic[:48])
-            m = re.search(r"/(?:sp|lg)/(\d+)", topic) or re.search(r"matchups/(\d+)", topic)
+            # SUBSCRIPTION SCOPE, not league: 'sp/33' is the sport-wide featured-board topic (33 = tennis),
+            # 'lg/221309' is one league page's topic. Tagged so the [WS-READ] line can't be misread as
+            # "only league 33 is covered" — the board streams many leagues under that one sport topic.
+            m = re.search(r"/(sp|lg)/(\d+)", topic)
             if m:
-                self._probe_leagues[m.group(1)] = time.time()
+                self._probe_leagues[f"{m.group(1)}/{m.group(2)}"] = time.time()
+            elif (m2 := re.search(r"matchups/(\d+)", topic)):
+                self._probe_leagues[f"mu/{m2.group(1)}"] = time.time()   # single-MATCHUP topic, not a league
             if not self._probe_odds_ok:                   # confirm ONCE that a PUBLISH payload is real odds JSON
                 try:
                     obj = json.loads(payload.decode("utf-8", "replace"))
@@ -674,9 +684,20 @@ class PinnacleBrowserSession:
                        else "AMBER — WS frames but no odds PUBLISH yet (open a sport with live odds?)" if n > 0
                        else "RED — NO received frames captured (odds WS likely worker-hidden → plan in-page shim)")
             tag = "WS-READ" if self._window_ws_read else "WS-READ-PROBE"
-            print(f"[{tag}] {el:.0f}s | recv={n} PUBLISH(odds)={pub} ACTIVE-leagues={len(active)} "
-                  f"odds_json={'yes' if self._probe_odds_ok else 'no'} | {verdict}"
-                  + (f" | active(<45s): {active[:12]}" if active else ""))
+            # Topic scopes tell us WHICH SUBSCRIPTIONS are streaming (sp/=board sport-wide, lg/=one league tab).
+            # Payload coverage (via coverage_fn) tells us WHICH REAL LEAGUES are actually pushing — the number
+            # that matters, and the one the board's single sport topic hides.
+            cov = ""
+            if callable(self.coverage_fn):
+                try:
+                    c = self.coverage_fn() or {}
+                    cov = (f" | leagues pushing={c.get('leagues', 0)} "
+                           f"(board={c.get('board', 0)}, tabs={c.get('tabs', 0)}) matchups={c.get('matchups', 0)}")
+                except Exception:
+                    cov = ""
+            print(f"[{tag}] {el:.0f}s | recv={n} PUBLISH(odds)={pub} topics={len(active)} "
+                  f"odds_json={'yes' if self._probe_odds_ok else 'no'} | {verdict}{cov}"
+                  + (f" | topics(<45s): {active[:12]}" if active else ""))
 
     def _on_cdp_ws_created(self, params: dict) -> None:
         url = params.get("url", "") or ""
