@@ -1009,12 +1009,39 @@ if (discord.Enabled)
         Environment.GetEnvironmentVariable("DISCORD_CHANNEL_ID"),
         reply:      msg => discord.AlertAsync(msg),
         onStatus:   BuildStatusAsync,
-        onShutdown: ShutdownHookAsync);
+        onShutdown: ShutdownHookAsync,
+        sidecarBaseUrl: HARDVEN_SIDECAR_URL);   // session/schedule verbs go to the sidecar's control plane
     if (cmdListener.Enabled)
     {
-        Console.WriteLine("[DISCORD CMD] remote commands enabled: status / close / end");
+        Console.WriteLine("[DISCORD CMD] remote commands enabled: status / help / pause / resume / force / " +
+                          "schedule / pin / unpin / toggle / close");
         _ = Task.Run(() => cmdListener.RunAsync(cts.Token));
     }
+
+    // BALANCE PUSH: the sidecar holds no Kalshi credentials, so the guard (which halts the schedule when
+    // EITHER leg runs dry) needs our Kalshi cash pushed to it. Best-effort; a failed push leaves the figure
+    // STALE on the sidecar, which is explicitly treated as "unknown" — never as zero — so a dead push path
+    // can't halt a healthy bot.
+    _ = Task.Run(async () =>
+    {
+        var http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+        int periodSec = int.TryParse(Environment.GetEnvironmentVariable("HARDVEN_BALANCE_PUSH_SEC"), out var ps)
+                        && ps > 0 ? ps : 300;
+        while (!cts.Token.IsCancellationRequested)
+        {
+            try
+            {
+                decimal bal = (await orderClient.GetBalanceCentsAsync()) / 100m;
+                if (!string.IsNullOrEmpty(HARDVEN_SIDECAR_URL))
+                    using (await http.PostAsync(
+                        $"{HARDVEN_SIDECAR_URL.TrimEnd('/')}/control/balance?kalshi_usd={bal.ToString(System.Globalization.CultureInfo.InvariantCulture)}",
+                        null)) { }
+            }
+            catch { /* best-effort: never disturb trading */ }
+            try { await Task.Delay(periodSec * 1000, cts.Token); }
+            catch (OperationCanceledException) { break; }
+        }
+    });
 
     // AUTO-STATUS after each session block (WEBHOOK-ONLY — no bot token needed). When a scheduled window closes
     // (ScheduledDark flips false→true) AND we actually collected during it, post the digest — a per-block summary

@@ -240,6 +240,102 @@ async def debug_visibility():
     return {"tabs": out, "visible_count": n_vis, "total": len(out)}
 
 
+# ── operator control plane (driven remotely from Discord via the C# listener) ─
+def _lifecycle():
+    lc = getattr(adapter, "_lifecycle", None)
+    if lc is None:
+        raise HTTPException(400, "lifecycle not running (PINNACLE_LIFECYCLE=1 required)")
+    return lc
+
+
+class ControlRequest(BaseModel):
+    """One shape for every control verb — the C# listener forwards Discord args verbatim."""
+    reason: str = "discord"
+    minutes: float = 60.0            # force_open duration
+    pins: str = ""                   # "09:00-12:00,20:00-23:00" (replaces the set; "" clears)
+    key: str = ""                    # toggle name
+    value: str = ""                  # toggle value
+    # schedule knobs — None = leave unchanged
+    lead_min: float | None = None
+    trail_min: float | None = None
+    min_gap_min: float | None = None
+    min_games: int | None = None
+    max_blocks: int | None = None
+    session_hours: float | None = None
+    jitter_min: float | None = None
+    horizon_hours: int | None = None
+    paired_only: str | None = None
+    today_only: str | None = None
+
+
+@app.get("/control/state")
+async def control_state():
+    """Everything an operator can change, plus what the bot is doing about it."""
+    lc = getattr(adapter, "_lifecycle", None)
+    ctl = getattr(adapter, "_control", None)
+    guard = getattr(adapter, "_balance_guard", None)
+    return {
+        "lifecycle": lc.status() if lc is not None else {"state": "not-running"},
+        "control": ctl.view() if ctl is not None else None,
+        "toggles": ctl.toggle_view() if ctl is not None else None,
+        "balance": guard.status() if guard is not None else None,
+        "book": adapter.name,
+    }
+
+
+@app.post("/control/pause")
+async def control_pause(req: ControlRequest):
+    return await _lifecycle().pause(req.reason)
+
+
+@app.post("/control/resume")
+async def control_resume(req: ControlRequest):
+    return await _lifecycle().resume()
+
+
+@app.post("/control/force_open")
+async def control_force_open(req: ControlRequest):
+    return await _lifecycle().force_open(req.minutes, req.reason)
+
+
+@app.post("/control/pins")
+async def control_pins(req: ControlRequest):
+    """Replace the pinned-hours set (empty string clears all pins) and replan immediately."""
+    return await _lifecycle().set_pins(req.pins)
+
+
+@app.post("/control/schedule")
+async def control_schedule(req: ControlRequest):
+    return await _lifecycle().apply_config(
+        lead_min=req.lead_min, trail_min=req.trail_min, min_gap_min=req.min_gap_min,
+        min_games=req.min_games, max_blocks=req.max_blocks, session_hours=req.session_hours,
+        jitter_min=req.jitter_min, horizon_hours=req.horizon_hours,
+        paired_only=req.paired_only, today_only=req.today_only)
+
+
+@app.post("/control/toggle")
+async def control_toggle(req: ControlRequest):
+    """Flip a runtime flag. Only flags the SIDECAR re-reads live can take effect immediately; flags the C#
+    bot reads once at startup are saved but reported as needing a restart (never silently ignored)."""
+    ctl = getattr(adapter, "_control", None)
+    if ctl is None:
+        raise HTTPException(400, "control state unavailable (PINNACLE_LIFECYCLE=1 required)")
+    if not req.key:
+        return ctl.toggle_view()
+    return ctl.set_toggle(req.key, req.value)
+
+
+@app.post("/control/balance")
+async def control_balance(kalshi_usd: float):
+    """The C# bot pushes its Kalshi cash here (the sidecar holds no Kalshi credentials). The guard judges
+    BOTH legs in one place and halts the schedule if either floor is breached."""
+    guard = getattr(adapter, "_balance_guard", None)
+    if guard is None:
+        raise HTTPException(400, "balance guard not running (PINNACLE_LIFECYCLE=1 required)")
+    guard.push_kalshi(kalshi_usd)
+    return await guard.check_now()
+
+
 @app.get("/debug/schedule")
 async def debug_schedule():
     """The lifecycle's work-window plan: every planned session (local + UTC, games, duration, past/NOW/

@@ -18,6 +18,7 @@ a login page and needs a manual re-login (fine while login is manual anyway; ful
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable
 
@@ -66,6 +67,12 @@ class PinnacleLifecycle:
         # slate entirely (a pin watches LINES of later games; pre-live arbs surface hours before start).
         self._pin_ranges = sched.parse_pin_hours(pin_hours)
         self._pinned_spans: list = []         # the pins' raw spans this plan, for labeling windows "pinned"
+        # OPERATOR OVERRIDE (Discord): beats the schedule entirely. Persisted in control.py so a pause/halt
+        # survives a restart — a remote "stop trading" that forgets itself is worse than none.
+        self._control = None                  # ControlState, injected by the adapter
+        self._override: str | None = None     # None | paused | halted | forced
+        self._override_until = None           # datetime (forced only)
+        self._override_reason = ""
         self._notify = Notifier()             # Discord (no-op unless DISCORD_WEBHOOK_URL is set)
         self.state = "init"
         self.next_change_secs = None
@@ -153,7 +160,17 @@ class PinnacleLifecycle:
         open. Returns seconds to the next change (for the sleep). Separated from run() so it's unit-testable."""
         now = now or sched._utcnow()
         cur = sched.active_window(self._windows, now)
-        inside = cur is not None
+        # A forced window expires on its own so a "force start" can never become a permanent 24/7 session.
+        if self._override == "forced" and self._override_until and now >= self._override_until:
+            print("[PINNACLE LIFECYCLE] forced window expired - back on schedule.")
+            self._set_override(None, "")
+        if self._override in ("paused", "halted"):
+            inside = False                       # operator pause / balance halt beats the schedule
+        elif self._override == "forced":
+            inside = True
+            cur = cur or (now, self._override_until or now, 0)
+        else:
+            inside = cur is not None
         if inside and not self._open:
             self._on_open()                      # adapter resets feed latches BEFORE the session comes up
             await self._browser.start()
@@ -166,10 +183,120 @@ class PinnacleLifecycle:
             self._on_close()                     # adapter stands the feed down (session_ready=False)
             print("[PINNACLE LIFECYCLE] window CLOSED → browser down (dark).")
             self._alert_close(now)
-        self.state = "open" if self._open else "dark"
-        _, secs = sched.status(self._windows, now)
+        self.state = ("paused" if self._override == "paused" else "halted" if self._override == "halted"
+                      else "forced" if self._override == "forced"
+                      else "open" if self._open else "dark")
+        if self._override in ("paused", "halted"):
+            secs = None                          # nothing will change until an operator resumes
+        elif self._override == "forced" and self._override_until:
+            secs = max(0.0, (self._override_until - now).total_seconds())
+        else:
+            _, secs = sched.status(self._windows, now)
         self.next_change_secs = secs
         return secs
+
+    # ── operator control (Discord) ────────────────────────────────────────────
+    def _set_override(self, mode: str | None, reason: str, until=None) -> None:
+        self._override, self._override_reason, self._override_until = mode, reason, until
+        if self._control is not None:
+            self._control.set_override(mode, reason, until.isoformat() + "Z" if until else None)
+
+    def restore_override(self, mode: str | None, reason: str, until_iso: str | None) -> None:
+        """Re-apply a persisted override at startup (no re-save — it came FROM the file)."""
+        until = None
+        if until_iso:
+            try:
+                until = datetime.fromisoformat(until_iso.replace("Z", "+00:00")).replace(tzinfo=None)
+            except ValueError:
+                until = None
+        if mode == "forced" and (until is None or until <= sched._utcnow()):
+            return                                # a stale forced window must not resurrect
+        self._override, self._override_reason, self._override_until = mode, reason, until
+
+    async def pause(self, reason: str = "operator") -> dict:
+        """Close the site and WAIT (process keeps running; feed stands down). Survives a restart."""
+        self._set_override("paused", reason)
+        await self.tick()
+        if self._notify.enabled:
+            self._notify.send_bg(f"⏸️ **PAUSED** ({reason}) — site closed, schedule suspended. `resume` to restart.")
+        return self.status()
+
+    async def resume(self) -> dict:
+        """Clear a pause OR a balance halt and hand control back to the schedule."""
+        prev = self._override
+        self._set_override(None, "")
+        await self.tick()
+        if self._notify.enabled:
+            self._notify.send_bg(f"▶️ **RESUMED** (was {prev or 'running'}) — back on schedule. {self._next_line()}")
+        return self.status()
+
+    async def force_open(self, minutes: float = 60.0, reason: str = "operator") -> dict:
+        """Open NOW, outside the schedule, for `minutes` — then revert to the schedule automatically."""
+        until = sched._utcnow() + timedelta(minutes=max(1.0, minutes))
+        self._set_override("forced", reason, until)
+        await self.tick()
+        if self._notify.enabled:
+            self._notify.send_bg(f"🔵 **FORCED OPEN** for {minutes:g}m (until "
+                                 f"{sched._local(until):%H:%M} local) — {reason}")
+        return self.status()
+
+    async def halt(self, reason: str) -> dict:
+        """BALANCE GUARD (or any hard stop): end the schedule and stay dark until an operator resumes.
+        Distinct from `paused` so the alert — and /debug/schedule — say WHY the bot stopped itself."""
+        if self._override == "halted":
+            return self.status()                  # already halted: don't re-alert every check
+        self._set_override("halted", reason)
+        await self.tick()
+        if self._notify.enabled:
+            self._notify.send_bg(f"🛑 **HALTED — {reason}**\nSchedule ended and the site is closed. "
+                                 "Top up and send `resume` to restart.")
+        print(f"[PINNACLE LIFECYCLE] HALTED: {reason}")
+        return self.status()
+
+    def _next_line(self) -> str:
+        up = [w for w in self._windows if w[0] > sched._utcnow()]
+        return (f"Next window {sched._local(up[0][0]):%a %H:%M} ({up[0][2]} game(s))." if up
+                else "No further windows planned yet.")
+
+    async def set_pins(self, spec: str) -> dict:
+        """Replace the pinned-hours spec and immediately replan."""
+        self._pin_ranges = sched.parse_pin_hours(spec)
+        if self._control is not None:
+            self._control.pins = [s.strip() for s in (spec or "").split(",") if s.strip()]
+            self._control.save()
+        self._win_ts = 0.0                        # force a replan on the next refresh
+        await self._refresh_windows()
+        await self.tick()
+        return self.status()
+
+    async def apply_config(self, **kw) -> dict:
+        """Change schedule knobs at runtime and replan. Unknown/blank keys are ignored."""
+        fields = {"lead_min": "_lead_min", "trail_min": "_trail_min", "min_gap_min": "_min_gap_min",
+                  "min_games": "_min_games", "max_blocks": "_max_blocks", "session_hours": "_session_hours",
+                  "jitter_min": "_jitter_min", "horizon_hours": "_horizon", "paired_only": "_paired_only",
+                  "today_only": "_today_only"}
+        applied = {}
+        for k, attr in fields.items():
+            if kw.get(k) is None:
+                continue
+            v = kw[k]
+            if k in ("paired_only", "today_only"):
+                v = str(v).strip().lower() in ("1", "true", "yes", "on")
+            elif k in ("max_blocks", "min_games", "horizon_hours"):
+                v = int(v) or None if k == "max_blocks" else int(v)
+            else:
+                v = float(v)
+            setattr(self, attr, v)
+            applied[k] = v
+        if applied and self._control is not None:
+            self._control.schedule.update({k: (v if not isinstance(v, float) else round(v, 3))
+                                           for k, v in applied.items()})
+            self._control.save()
+        if applied:
+            self._win_ts = 0.0
+            await self._refresh_windows()
+            await self.tick()
+        return {"applied": applied, **self.status()}
 
     async def run(self) -> None:
         await self._refresh_windows()
@@ -274,6 +401,9 @@ class PinnacleLifecycle:
         cur = sched.active_window(self._windows, now)
         return {
             "state": self.state, "open": self._open, "windows": len(self._windows),
+            "override": self._override, "override_reason": self._override_reason,
+            "override_until": (self._override_until.isoformat() + "Z") if self._override_until else None,
+            "pins": [f"{a:02d}:{b:02d}-{c:02d}:{d:02d}" for a, b, c, d in self._pin_ranges],
             "next_change_secs": round(self.next_change_secs) if self.next_change_secs is not None else None,
             "plan": self._last_plan,
             "planned_at": (sched._utcnow().fromtimestamp(self._win_ts).isoformat() + "Z") if self._win_ts else None,

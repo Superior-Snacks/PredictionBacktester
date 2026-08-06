@@ -530,6 +530,8 @@ class PinnacleAdapter(BookAdapter):
         self._lifecycle_pin_hours = os.environ.get("PINNACLE_PIN_HOURS", "").strip()
         self._lifecycle = None
         self._lifecycle_task = None
+        self._control = None          # ControlState (operator commands); only when the lifecycle runs
+        self._balance_guard = None    # BalanceGuard; only when the lifecycle runs
 
         # AUTO-PAIR: opt-in scheduled re-pairing (startup + daily at HARDVEN_PAIR_HOUR local). Account-free
         # (Kalshi public + Pinnacle guest + the sidecar /catalog); the C# bot hot-reloads the result.
@@ -610,7 +612,29 @@ class PinnacleAdapter(BookAdapter):
                                                         paired_only=self._lifecycle_paired_only,
                                                         jitter_min=self._lifecycle_jitter,
                                                         pin_hours=self._lifecycle_pin_hours)
+                    # Operator control: restore any persisted pins/override/toggles BEFORE the loop starts,
+                    # so a pause or balance-halt set before a restart is honoured on the very first tick.
+                    import schedule as _sched
+                    from control import ControlState
+                    self._control = ControlState()
+                    self._lifecycle._control = self._control
+                    if self._control.pins:
+                        self._lifecycle._pin_ranges = _sched.parse_pin_hours(",".join(self._control.pins))
+                    if self._control.schedule:
+                        for k, v in self._control.schedule.items():
+                            attr = {"lead_min": "_lead_min", "trail_min": "_trail_min",
+                                    "min_gap_min": "_min_gap_min", "min_games": "_min_games",
+                                    "max_blocks": "_max_blocks", "session_hours": "_session_hours",
+                                    "jitter_min": "_jitter_min", "horizon_hours": "_horizon",
+                                    "paired_only": "_paired_only", "today_only": "_today_only"}.get(k)
+                            if attr:
+                                setattr(self._lifecycle, attr, v)
+                    self._lifecycle.restore_override(self._control.override, self._control.reason,
+                                                     self._control.override_until)
                     self._lifecycle_task = asyncio.create_task(self._lifecycle.run())
+                    from balance_guard import BalanceGuard
+                    self._balance_guard = BalanceGuard(self, self._lifecycle, self._lifecycle._notify)
+                    self._balance_guard.start()
                     mode = (f"MANUAL PLAN {self._lifecycle_manual_plan}" if self._lifecycle_manual_plan
                             else f"{self._lifecycle_session_hours:g}h density-sessions" if self._lifecycle_session_hours > 0
                             else f"gap-merge, densest {self._lifecycle_max_blocks} blocks")

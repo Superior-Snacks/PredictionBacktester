@@ -1,5 +1,6 @@
 using System.Net.Http;
 using System.Net.Http.Headers;
+using System.Text;
 using System.Text.Json;
 
 namespace HardVenArb;
@@ -24,13 +25,16 @@ public sealed class DiscordCommandListener
     private readonly Func<Task<string>> _onStatus;    // build the 'status' text
     private readonly Func<Task> _onShutdown;          // graceful stop (write sentinel + cancel)
     private readonly int _pollSec;
+    private readonly string _sidecarBase;             // control plane lives in the sidecar (lifecycle owns it)
+    private readonly HttpClient _ctlHttp = new() { Timeout = TimeSpan.FromSeconds(30) };
     private string _lastId = "";
     private bool _warnedAuth;
 
     public bool Enabled => !string.IsNullOrWhiteSpace(_token) && !string.IsNullOrWhiteSpace(_channelId);
 
     public DiscordCommandListener(string? botToken, string? channelId, Func<string, Task> reply,
-                                  Func<Task<string>> onStatus, Func<Task> onShutdown, int pollSec = 10)
+                                  Func<Task<string>> onStatus, Func<Task> onShutdown, int pollSec = 10,
+                                  string sidecarBaseUrl = "")
     {
         _token     = string.IsNullOrWhiteSpace(botToken)  ? null : botToken.Trim();
         _channelId = string.IsNullOrWhiteSpace(channelId) ? null : channelId.Trim();
@@ -38,6 +42,7 @@ public sealed class DiscordCommandListener
         _onStatus  = onStatus;
         _onShutdown = onShutdown;
         _pollSec   = pollSec > 0 ? pollSec : 10;
+        _sidecarBase = (sidecarBaseUrl ?? "").TrimEnd('/');
         _http      = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
         if (_token != null)
             _http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bot", _token);
@@ -109,8 +114,13 @@ public sealed class DiscordCommandListener
         if (!string.IsNullOrEmpty(newest)) _lastId = newest;
     }
 
-    private async Task HandleAsync(string cmd)
+    private async Task HandleAsync(string raw)
     {
+        // "pause low funds" → verb "pause", args "low funds". Session/schedule verbs are FORWARDED to the
+        // sidecar, which owns the lifecycle (browser open/close, windows, pins) and persists operator state.
+        string[] parts = raw.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+        string cmd = parts.Length > 0 ? parts[0] : "";
+        string args = parts.Length > 1 ? parts[1].Trim() : "";
         switch (cmd)
         {
             case "status":
@@ -120,13 +130,178 @@ public sealed class DiscordCommandListener
                 break;
             case "close":
             case "end":
+            case "kill":
                 Console.WriteLine($"[DISCORD CMD] '{cmd}' — graceful shutdown requested");
                 await SafeReply("🛑 shutdown requested — stopping the bot gracefully (supervisor will NOT restart).");
                 try { await _onShutdown(); }
                 catch (Exception ex) { Console.WriteLine($"[DISCORD CMD] shutdown hook error: {ex.Message}"); }
                 break;
+
+            // ── session control (sidecar) ─────────────────────────────────────
+            case "pause":
+                await CtlAsync("/control/pause", new { reason = args.Length > 0 ? args : "discord" },
+                               "⏸️ pausing — closing the site");
+                break;
+            case "resume":
+            case "start":
+                await CtlAsync("/control/resume", new { reason = "discord" }, "▶️ resuming — back on schedule");
+                break;
+            case "force":
+            case "open":
+                await CtlAsync("/control/force_open",
+                               new { minutes = ParseNum(args, 60), reason = "discord force" },
+                               $"🔵 forcing open for {ParseNum(args, 60):0} min");
+                break;
+
+            // ── schedule + pins (sidecar) ─────────────────────────────────────
+            case "schedule":
+            case "sched":
+                await ScheduleAsync(args);
+                break;
+            case "pin":
+                await CtlAsync("/control/pins", new { pins = args }, $"📌 pins set to: {(args.Length > 0 ? args : "(none)")}");
+                break;
+            case "unpin":
+                await CtlAsync("/control/pins", new { pins = "" }, "📌 all pins cleared");
+                break;
+            case "toggle":
+            case "set":
+                await ToggleAsync(args);
+                break;
+            case "help":
+                await SafeReply(HelpText);
+                break;
         }
     }
+
+    private const string HelpText =
+        "**Commands**\n" +
+        "`status` — bot + session state · `help`\n" +
+        "`pause [reason]` — close the site, stay dark (survives restart) · `resume` — back on schedule\n" +
+        "`force [minutes]` — open NOW outside the schedule (default 60, auto-reverts)\n" +
+        "`schedule` — show the plan · `schedule <key>=<val> …` — e.g. `schedule lead_min=20 max_blocks=3`\n" +
+        "   keys: lead_min trail_min min_gap_min min_games max_blocks session_hours jitter_min horizon_hours paired_only today_only\n" +
+        "`pin 09:00-12:00[,20:00-23:00]` — always-on hours (local) · `unpin` — clear\n" +
+        "`toggle` — list flags · `toggle <FLAG> <0|1>` — e.g. `toggle HARDVEN_BET_ENABLE 0`\n" +
+        "`close`/`end` — stop the bot entirely (no restart)";
+
+    private static double ParseNum(string s, double dflt)
+        => double.TryParse(s.Split(' ')[0], System.Globalization.NumberStyles.Any,
+                           System.Globalization.CultureInfo.InvariantCulture, out var v) && v > 0 ? v : dflt;
+
+    /// <summary>POST a control verb to the sidecar and report the resulting state back to the channel.</summary>
+    private async Task CtlAsync(string path, object payload, string ack)
+    {
+        if (string.IsNullOrEmpty(_sidecarBase))
+        {
+            await SafeReply("⚠️ no sidecar URL configured — session control unavailable.");
+            return;
+        }
+        Console.WriteLine($"[DISCORD CMD] -> sidecar {path}");
+        try
+        {
+            using var body = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
+            using var resp = await _ctlHttp.PostAsync(_sidecarBase + path, body);
+            string txt = await resp.Content.ReadAsStringAsync();
+            if (!resp.IsSuccessStatusCode)
+            {
+                await SafeReply($"⚠️ {path} failed (HTTP {(int)resp.StatusCode}): {Trim(txt, 300)}");
+                return;
+            }
+            await SafeReply($"{ack}\n{Summarize(txt)}");
+        }
+        catch (Exception ex)
+        {
+            await SafeReply($"⚠️ {path} error: {ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    /// <summary>`schedule` with no args shows the plan; with `k=v` pairs it edits and replans.</summary>
+    private async Task ScheduleAsync(string args)
+    {
+        if (string.IsNullOrWhiteSpace(args))
+        {
+            if (string.IsNullOrEmpty(_sidecarBase)) { await SafeReply("⚠️ no sidecar URL configured."); return; }
+            try
+            {
+                using var resp = await _ctlHttp.GetAsync(_sidecarBase + "/debug/schedule");
+                await SafeReply(resp.IsSuccessStatusCode
+                    ? FormatSchedule(await resp.Content.ReadAsStringAsync())
+                    : $"⚠️ schedule unavailable (HTTP {(int)resp.StatusCode})");
+            }
+            catch (Exception ex) { await SafeReply($"⚠️ schedule error: {ex.Message}"); }
+            return;
+        }
+        var kv = new Dictionary<string, object>();
+        foreach (var tok in args.Split(new[] { ' ', ',' }, StringSplitOptions.RemoveEmptyEntries))
+        {
+            var p = tok.Split('=', 2);
+            if (p.Length == 2 && p[0].Length > 0) kv[p[0].Trim()] = p[1].Trim();
+        }
+        if (kv.Count == 0) { await SafeReply("nothing to change — try `schedule lead_min=20 max_blocks=3`"); return; }
+        await CtlAsync("/control/schedule", kv, $"🗓️ schedule updated: {string.Join(", ", kv.Select(x => $"{x.Key}={x.Value}"))}");
+    }
+
+    private async Task ToggleAsync(string args)
+    {
+        var p = args.Split(new[] { ' ', '=' }, 2, StringSplitOptions.RemoveEmptyEntries);
+        if (p.Length == 0) { await CtlAsync("/control/toggle", new { }, "🎛️ toggles"); return; }
+        string key = p[0].Trim().ToUpperInvariant();
+        string val = p.Length > 1 ? p[1].Trim() : "";
+        await CtlAsync("/control/toggle", new { key, value = val }, $"🎛️ {key} → {val}");
+    }
+
+    /// <summary>Pull the few fields worth echoing out of a control response (state, override, next change).</summary>
+    private static string Summarize(string json)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            var r = doc.RootElement;
+            if (r.ValueKind != JsonValueKind.Object) return "";
+            var bits = new List<string>();
+            if (r.TryGetProperty("state", out var st)) bits.Add($"state=**{st.GetString()}**");
+            if (r.TryGetProperty("override_reason", out var rs) && !string.IsNullOrEmpty(rs.GetString()))
+                bits.Add($"reason={rs.GetString()}");
+            if (r.TryGetProperty("windows", out var w)) bits.Add($"windows={w}");
+            if (r.TryGetProperty("next_change_secs", out var n) && n.ValueKind == JsonValueKind.Number)
+                bits.Add($"next change in {n.GetDouble() / 60:0}m");
+            if (r.TryGetProperty("applied", out var ap) && ap.ValueKind == JsonValueKind.Object)
+                bits.Add($"applied={ap}");
+            if (r.TryGetProperty("detail", out var d)) bits.Add(d.GetString() ?? "");
+            if (r.TryGetProperty("effect", out var ef)) bits.Add($"effect={ef.GetString()}");
+            return bits.Count > 0 ? string.Join(" · ", bits) : Trim(json, 400);
+        }
+        catch { return Trim(json, 400); }
+    }
+
+    private static string FormatSchedule(string json)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            var r = doc.RootElement;
+            var sb = new StringBuilder();
+            sb.Append($"🗓️ **state={r.GetProperty("state").GetString()}**");
+            if (r.TryGetProperty("override", out var ov) && ov.ValueKind == JsonValueKind.String)
+                sb.Append($" (override: {ov.GetString()})");
+            sb.Append('\n');
+            if (r.TryGetProperty("windows_detail", out var wd) && wd.ValueKind == JsonValueKind.Array)
+                foreach (var w in wd.EnumerateArray().Take(6))
+                {
+                    string pin = w.TryGetProperty("pinned", out var pn) && pn.ValueKind == JsonValueKind.True ? " 📌" : "";
+                    string mark = w.GetProperty("state").GetString() == "NOW" ? " ⬅ now" : "";
+                    sb.Append($"• {w.GetProperty("open_local").GetString()} → {w.GetProperty("close_local").GetString()} " +
+                              $"({w.GetProperty("games")} games){pin}{mark}\n");
+                }
+            if (r.TryGetProperty("left_behind", out var lb) && lb.ValueKind == JsonValueKind.Array && lb.GetArrayLength() > 0)
+                sb.Append($"• left behind: {lb.GetArrayLength()} game(s)\n");
+            return Trim(sb.ToString(), 1800);
+        }
+        catch { return Trim(json, 800); }
+    }
+
+    private static string Trim(string s, int n) => s.Length <= n ? s : s[..n] + "…";
 
     private async Task SafeReply(string msg) { try { await _reply(msg); } catch { } }
 
