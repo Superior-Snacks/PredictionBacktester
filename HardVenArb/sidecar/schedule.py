@@ -30,6 +30,7 @@ import sys
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import NamedTuple
 
 import httpx
 
@@ -50,9 +51,24 @@ DURATION = sports_cfg.duration_by_name()
 DEFAULT_DURATION = 180
 
 
+class Game(NamedTuple):
+    """One board game. A NamedTuple (not a dataclass) so it stays INDEXABLE — every window function reads
+    item[0]/item[1], and the older plain (start, sport) tuples still work unchanged."""
+    start: datetime
+    sport: str
+    mid: str = ""            # Pinnacle matchupId — the key the paired filter and cross_pairs.json share
+    label: str = ""          # "Player A vs Player B" for human-readable alerts
+    league: str = ""
+
+
 def _utcnow() -> datetime:
     """Naive UTC 'now' — matches _pin_dt's naive-UTC starts (mixing naive+aware datetimes would raise)."""
     return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _g(item, i: int, default=""):
+    """Field `i` of a start item, tolerating the legacy 2-tuple shape."""
+    return item[i] if len(item) > i else default
 
 
 # ── window math (PURE — unit-testable, no network) ───────────────────────────────────────────────────────
@@ -201,6 +217,38 @@ def _jitter(anchor: datetime, salt: str, spread_min: float) -> timedelta:
     return timedelta(minutes=(frac * 2.0 - 1.0) * spread_min)  # -spread .. +spread
 
 
+def assign_games(windows, starts):
+    """Attribute every game to the window that will cover it → (per_window, left_behind).
+
+    `per_window` is a list parallel to `windows` of the games inside each one; `left_behind` is every game
+    that falls in NO selected window (a block dropped by min_games/max_blocks, or a gap the bot sleeps
+    through). This is what turns "3 windows, 27 games" into "these are the matches we're up for, and these
+    are the ones we're skipping" — the answer an operator actually wants from an alert."""
+    per = [[] for _ in windows]
+    left: list = []
+    for it in starts:
+        s = it[0]
+        for i, (o, c, _g_) in enumerate(windows):
+            if o <= s <= c:
+                per[i].append(it)
+                break
+        else:
+            left.append(it)
+    return per, left
+
+
+def describe_games(games, limit: int = 6) -> str:
+    """Compact human list for an alert: 'Kym vs Houkes 14:30, Dodig vs Giustino 15:00 (+3 more)'."""
+    if not games:
+        return "none"
+    out = []
+    for it in sorted(games, key=lambda x: x[0])[:limit]:
+        lbl = _g(it, 3) or _g(it, 2) or _g(it, 1)
+        out.append(f"{lbl} {_local(it[0]):%H:%M}")
+    extra = len(games) - len(out)
+    return ", ".join(out) + (f" (+{extra} more)" if extra > 0 else "")
+
+
 def apply_jitter(windows, spread_min: float = 0.0):
     """Nudge each window's open/close by a stable pseudo-random amount so the session rhythm isn't
     machine-precise. Applied AFTER block selection (never changes WHICH blocks are chosen), keeps each
@@ -267,7 +315,11 @@ def fetch_starts(sports: list[int], horizon_hours: int = 36, back_hours: int = 4
                     continue   # skip "(Games)" derivative children + tournament specials
                 st = _pin_dt(m.get("startTime", ""))
                 if st and lo <= st <= hi:
-                    out.append((st, sport, str(m.get("id"))))
+                    parts = m.get("participants") or []
+                    home = next((p.get("name", "") for p in parts if p.get("alignment") == "home"), "")
+                    away = next((p.get("name", "") for p in parts if p.get("alignment") == "away"), "")
+                    label = f"{home} vs {away}" if (home and away) else (lg.get("name") or sport)
+                    out.append(Game(st, sport, str(m.get("id")), label, lg.get("name") or ""))
             time.sleep(0.15)
     client.close()
     return out

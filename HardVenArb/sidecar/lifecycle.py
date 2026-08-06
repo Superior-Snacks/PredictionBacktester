@@ -23,6 +23,7 @@ from typing import Callable
 
 import schedule as sched
 from env_util import atomic_write_json
+from notify import Notifier
 
 
 class PinnacleLifecycle:
@@ -57,6 +58,10 @@ class PinnacleLifecycle:
         self._win_ts = 0.0
         self._open = False
         self._last_plan: dict = {}            # provenance of the current plan (mode, counts) for status()/file
+        self._per_window: list = []           # games attributed to each window (parallel to _windows)
+        self._left_behind: list = []          # games in NO window — what this schedule is giving up
+        self._skipped: dict = {}              # why games never reached window selection (unpaired / other day)
+        self._notify = Notifier()             # Discord (no-op unless DISCORD_WEBHOOK_URL is set)
         self.state = "init"
         self.next_change_secs = None
 
@@ -83,12 +88,21 @@ class PinnacleLifecycle:
                   f"last {len(self._windows)} window(s)")
             return
         fetched = len(starts)
+        all_starts = list(starts)
         if self._today_only:                       # plan only TODAY (local) — tomorrow's slate is incomplete
             starts = sched.filter_to_local_day(starts)
         n_today = len(starts)
+        other_day = [g for g in all_starts if g not in starts]
         if self._paired_only:                      # only games with a Kalshi counterpart can produce an arb
+            before_pair = list(starts)
             starts = sched.filter_to_paired(starts)
+            unpaired = [g for g in before_pair if g not in starts]
+        else:
+            unpaired = []
         n_paired = len(starts)
+        # WHY a game never even reached window selection — the difference between "we're skipping this match"
+        # and "we couldn't have bet this match anyway".
+        self._skipped = {"unpaired": unpaired, "other_day": other_day}
         if self._session_hours > 0:                # discrete ~Nh sessions by game-START density (continuous sports)
             new = sched.compute_sessions(starts, self._session_hours, self._lead_min, self._trail_min,
                                          min_games=self._min_games, max_blocks=self._max_blocks or 4)
@@ -104,6 +118,8 @@ class PinnacleLifecycle:
             return
         self._windows = new
         self._win_ts = sched._utcnow().timestamp()
+        # Attribute games to windows AFTER jitter, so "what this window is for" reflects the real boundaries.
+        self._per_window, self._left_behind = sched.assign_games(self._windows, starts)
         games_kept = sum(w[2] for w in self._windows)
         scope = f"today-only {n_today}/{fetched} games" if self._today_only else f"{fetched} games"
         if self._paired_only:
@@ -120,17 +136,20 @@ class PinnacleLifecycle:
         """One decision step: open if `now` is inside a window and we're closed; close if outside and we're
         open. Returns seconds to the next change (for the sleep). Separated from run() so it's unit-testable."""
         now = now or sched._utcnow()
-        inside = sched.active_window(self._windows, now) is not None
+        cur = sched.active_window(self._windows, now)
+        inside = cur is not None
         if inside and not self._open:
             self._on_open()                      # adapter resets feed latches BEFORE the session comes up
             await self._browser.start()
             self._open = True
             print("[PINNACLE LIFECYCLE] window OPEN → browser up.")
+            self._alert_open(cur, now)
         elif not inside and self._open:
             await self._browser.stop()
             self._open = False
             self._on_close()                     # adapter stands the feed down (session_ready=False)
             print("[PINNACLE LIFECYCLE] window CLOSED → browser down (dark).")
+            self._alert_close(now)
         self.state = "open" if self._open else "dark"
         _, secs = sched.status(self._windows, now)
         self.next_change_secs = secs
@@ -151,6 +170,52 @@ class PinnacleLifecycle:
             except Exception as ex:
                 print(f"[PINNACLE LIFECYCLE] error: {type(ex).__name__}: {ex}")
                 await asyncio.sleep(60)
+
+    # ── Discord: why we're coming up, and what we're giving up ────────────────
+    def _games_for(self, window) -> list:
+        """The games attributed to `window` (empty if the plan was recomputed since attribution)."""
+        try:
+            return self._per_window[self._windows.index(window)]
+        except (ValueError, IndexError):
+            return []
+
+    def _alert_open(self, window, now) -> None:
+        if not self._notify.enabled:
+            return
+        o, c, n = window
+        games = self._games_for(window)
+        mins = max(0, round((c - now).total_seconds() / 60))
+        lines = [f"🟢 **LIVE** until {sched._local(c):%H:%M} local (~{mins}m) — {n} target game(s)",
+                 f"• Targets: {sched.describe_games(games, 8)}"]
+        # What we are NOT covering, and why. A skipped match the operator can see is a decision;
+        # an invisible one is a bug they'd never catch.
+        later = [g for g in self._left_behind if g[0] > c]
+        if later:
+            lines.append(f"• Left behind ({len(later)} later today): {sched.describe_games(later, 4)}")
+        unp = self._skipped.get("unpaired") or []
+        if unp:
+            lines.append(f"• Not bettable ({len(unp)} unpaired on the board): {sched.describe_games(unp, 3)}")
+        nxt = [w for w in self._windows if w[0] > c]
+        if nxt:
+            lines.append(f"• Next window: {sched._local(nxt[0][0]):%a %H:%M} ({nxt[0][2]} game(s))")
+        self._notify.send_bg("\n".join(lines))
+
+    def _alert_close(self, now) -> None:
+        if not self._notify.enabled:
+            return
+        upcoming = [w for w in self._windows if w[0] > now]
+        if upcoming:
+            o, c, n = upcoming[0]
+            mins = round((o - now).total_seconds() / 60)
+            nxt = (f"next open {sched._local(o):%a %H:%M} local (in {mins // 60}h{mins % 60:02d}m) "
+                   f"for {n} game(s): {sched.describe_games(self._games_for(upcoming[0]), 5)}")
+        else:
+            nxt = "no further windows planned (recomputes hourly)"
+        skipping = [g for g in self._left_behind if g[0] > now]
+        lines = [f"⚫ **DARK** — closed at {sched._local(now):%H:%M} local", f"• {nxt}"]
+        if skipping:
+            lines.append(f"• Sleeping through {len(skipping)} game(s): {sched.describe_games(skipping, 4)}")
+        self._notify.send_bg("\n".join(lines))
 
     def _write_windows_file(self) -> None:
         """Publish the CURRENT plan to work_windows.json on every recompute.
@@ -189,6 +254,18 @@ class PinnacleLifecycle:
                                 "open_local": sched._local(o).strftime("%a %d %b %H:%M"),
                                 "close_local": sched._local(c).strftime("%a %d %b %H:%M"),
                                 "duration_min": round((c - o).total_seconds() / 60),
-                                "state": ("NOW" if o <= now <= c else "past" if c < now else "upcoming")}
-                               for o, c, g in self._windows],
+                                "state": ("NOW" if o <= now <= c else "past" if c < now else "upcoming"),
+                                "targets": [{"start": g2[0].isoformat() + "Z", "label": sched._g(g2, 3),
+                                             "mid": sched._g(g2, 2), "league": sched._g(g2, 4)}
+                                            for g2 in sorted(self._per_window[i], key=lambda x: x[0])]
+                                           if i < len(self._per_window) else []}
+                               for i, (o, c, g) in enumerate(self._windows)],
+            # What the schedule gives up, and why — the counterpart to "targets".
+            "left_behind": [{"start": g[0].isoformat() + "Z", "label": sched._g(g, 3),
+                             "local": sched._local(g[0]).strftime("%a %H:%M")}
+                            for g in sorted(self._left_behind, key=lambda x: x[0])[:40]],
+            "skipped": {k: [{"start": g[0].isoformat() + "Z", "label": sched._g(g, 3)}
+                            for g in sorted(v, key=lambda x: x[0])[:20]]
+                        for k, v in (self._skipped or {}).items() if v},
+            "discord": self._notify.enabled,
         }
