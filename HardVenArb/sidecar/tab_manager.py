@@ -58,10 +58,16 @@ def _same_page(url: str | None) -> str:
 
 class LeagueTabManager:
     def __init__(self, session, live_mids_fn: Callable[[float], list], pairs_path: str,
-                 board_lids_fn: Optional[Callable[[], set]] = None) -> None:
+                 board_lids_fn: Optional[Callable[[], set]] = None,
+                 board_dom_fn: Optional[Callable] = None) -> None:
         self._session = session                  # PinnacleBrowserSession (open_tab / close_tab)
         self._live_mids = live_mids_fn           # callable(ttl) -> list['lid:mid'] the reader delivered
         self._board_lids = board_lids_fn         # callable() -> set(lid) the FEATURED BOARD streams (sp/ topics)
+        # async callable() -> set(lid) the board is RENDERING. The push-based signal above misses a league
+        # whose prices are simply stable (no pushes), which is why redundant tabs appeared for leagues clearly
+        # visible on the main page. Refreshed once per tick into _board_dom.
+        self._board_dom_fn = board_dom_fn
+        self._board_dom: set = set()
         self._pairs_path = pairs_path
         self._tabs: dict[str, object] = {}       # leagueId -> page (tabs THIS manager opened)
         self._max = int(os.environ.get("HARDVEN_TAB_MAX", "12"))
@@ -224,6 +230,7 @@ class LeagueTabManager:
         cov = {k.split(":")[0] for k in self._live_mids(self._cover_ttl)}
         if self._board_lids is not None:
             cov |= self._board_lids()
+        cov |= self._board_dom          # leagues the board is SHOWING (stable prices push nothing)
         return cov
 
     async def request_verify(self, lid: str) -> str:
@@ -339,7 +346,13 @@ class LeagueTabManager:
         if not paired:
             return
         now = time.time()
-        board = self._board_lids() if self._board_lids is not None else set()
+        # Refresh what the board is RENDERING before any open/close decision this tick.
+        if self._board_dom_fn is not None:
+            try:
+                self._board_dom = {str(x) for x in (await self._board_dom_fn() or set())}
+            except Exception:
+                pass
+        board = (self._board_lids() if self._board_lids is not None else set()) | self._board_dom
         # 1. prune dedicated tabs whose league is no longer paired (game settled / off today's slate)
         for lid in list(self._tabs):
             if lid not in paired:
@@ -517,6 +530,11 @@ class LeagueTabManager:
                        "reset_min": self._reset_sec / 60, "cover_ttl": self._cover_ttl},
             "tabs": tabs,
             "board_paired_lids": sorted(board & set(paired)),
+            # Split the two board signals so a redundant tab is diagnosable: 'pushing' = the league's odds
+            # moved recently; 'showing' = the board is rendering it (covers stable-price leagues that push
+            # nothing, which is what used to cause tabs for leagues clearly visible on the main page).
+            "board_pushing_lids": sorted(board - self._board_dom),
+            "board_showing_lids": sorted(self._board_dom),
             "hot_ranking": [{"lid": l, "hot_games": self._hot_games(l, now),
                              "covered_by": ("board" if l in board else "tab" if l in self._tabs
                                             else "rove" if l == self._rove_lid

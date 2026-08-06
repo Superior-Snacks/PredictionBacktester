@@ -46,6 +46,7 @@ import os
 import random
 import re
 import threading
+import unicodedata
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -668,7 +669,8 @@ class PinnacleAdapter(BookAdapter):
                         pairs_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                                                   "cross_pairs.json")
                         self._tab_manager = LeagueTabManager(self._browser, self.reader_live_mids, pairs_path,
-                                                             board_lids_fn=self.board_lids)
+                                                             board_lids_fn=self.board_lids,
+                                                             board_dom_fn=self.board_dom_lids)
                         print("[PINNACLE] tab manager ARMED under lifecycle — starts with each work window, "
                               "stops when the window closes (rove tab is what verify_now drives).")
                         # Per-tab human activity, same as the non-lifecycle path: N reader tabs that never
@@ -695,7 +697,8 @@ class PinnacleAdapter(BookAdapter):
                         pairs_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                                                   "cross_pairs.json")
                         self._tab_manager = LeagueTabManager(self._browser, self.reader_live_mids, pairs_path,
-                                                             board_lids_fn=self.board_lids)
+                                                             board_lids_fn=self.board_lids,
+                                                             board_dom_fn=self.board_dom_lids)
                         self._tab_manager.start()
                         # Light per-tab human activity across the reader tabs so the browser isn't 1 live tab +
                         # N dead ones. Off with HARDVEN_TAB_ORGANIC=0. Interlocked with bets via _pause_all_organic.
@@ -1471,6 +1474,78 @@ class PinnacleAdapter(BookAdapter):
         return {"leagues": len(leagues), "board": len(board & leagues),
                 "tabs": len(tabs & leagues), "matchups": len(leagues and
                 [k for k, ts in list(self._browser_odds_mid_ts.items()) if now - ts < ttl])}
+
+    @staticmethod
+    def _slug_txt(s: str) -> str:
+        """'ATP Montreal - R3 Odds' -> 'atp-montreal-r3-odds' (same shape pair_pinnacle._slugify produces)."""
+        s = unicodedata.normalize("NFKD", s or "").encode("ascii", "ignore").decode("ascii")
+        return re.sub(r"[^a-zA-Z0-9]+", "-", s).strip("-").lower()
+
+    async def board_dom_scan(self) -> dict:
+        """RAW view of what the board is showing and how it matched — the diagnostic behind board_dom_lids.
+        Served on /debug/board_dom so a 'why is this league still getting a tab' question is answerable with
+        data instead of guesses."""
+        page = self._primary_page()
+        if page is None:
+            return {"error": "no primary page (browser not open?)"}
+        try:
+            raw = await page.evaluate(
+                "() => ({url: location.href,"
+                " hrefs: Array.from(document.querySelectorAll('a[href]')).map(a=>a.getAttribute('href')||'')"
+                "        .filter(h=>/matchups/i.test(h)).slice(0,400),"
+                " texts: Array.from(document.querySelectorAll('a,h1,h2,h3,h4'))"
+                "        .map(e=>(e.textContent||'').trim()).filter(t=>t.length>3&&t.length<90).slice(0,400)})")
+        except Exception as ex:
+            return {"error": f"{type(ex).__name__}: {ex}"}
+        self._league_url_for("")                       # populate/refresh _lid_urls
+        lid_slug = {}
+        for lid, u in (getattr(self, "_lid_urls", None) or {}).items():
+            parts = [p for p in u.split("#")[0].split("?")[0].rstrip("/").split("/") if p]
+            if len(parts) >= 2:
+                lid_slug[lid] = parts[-2].lower()      # .../tennis/<league-slug>/matchups/
+        matched, how = set(), {}
+        for h in raw.get("hrefs") or []:
+            s = [p for p in h.split("#")[0].split("?")[0].rstrip("/").split("/") if p]
+            cand = s[-2].lower() if len(s) >= 2 else ""
+            for lid, slug in lid_slug.items():
+                if cand and (cand == slug or cand.startswith(slug)):
+                    matched.add(lid); how.setdefault(lid, f"href:{h[:60]}")
+        for t in raw.get("texts") or []:
+            ts = self._slug_txt(t)
+            for lid, slug in lid_slug.items():
+                # 'ATP Montreal - R3 Odds' -> 'atp-montreal-r3-odds' starts with the league slug
+                if ts and (ts == slug or ts.startswith(slug + "-") or ts.startswith(slug)):
+                    matched.add(lid); how.setdefault(lid, f"text:{t[:60]}")
+        return {"page_url": raw.get("url"), "n_hrefs": len(raw.get("hrefs") or []),
+                "n_texts": len(raw.get("texts") or []), "matched_lids": sorted(matched), "how": how,
+                "paired_slugs": lid_slug,
+                "sample_hrefs": (raw.get("hrefs") or [])[:12], "sample_texts": (raw.get("texts") or [])[:12]}
+
+    async def board_dom_lids(self, ttl: float = 20.0) -> set:
+        """Leagues the main board is actually SHOWING, read from its DOM.
+
+        `board_lids()` infers board coverage from WS PUSHES, which silently misses the common case: a league
+        sitting on the board with STABLE pre-match prices pushes nothing, so it reads as uncovered and gets a
+        redundant dedicated tab ("tabs that are clearly on the main page"). The board subscribes to what it
+        RENDERS, so the rendered league links are the direct answer. Cached briefly — this evaluates JS on the
+        primary page and the tab manager asks every tick."""
+        now = time.time()
+        if now - getattr(self, "_board_dom_ts", 0.0) < ttl:
+            return getattr(self, "_board_dom_lids", set())
+        self._board_dom_ts = now
+        try:
+            scan = await self.board_dom_scan()
+        except Exception:
+            return getattr(self, "_board_dom_lids", set())
+        if scan.get("error"):
+            return getattr(self, "_board_dom_lids", set())
+        out = set(scan.get("matched_lids") or [])
+        prev = getattr(self, "_board_dom_lids", set())
+        if out != prev:
+            print(f"[PINNACLE] board is SHOWING {len(out)} paired league(s): {sorted(out)} "
+                  "(these get no dedicated tab)")
+        self._board_dom_lids = out
+        return out
 
     def reader_live_mids(self, ttl: float = 30.0) -> list:
         """Matchups ('lid:mid') the browser-WS READER has actually pushed odds for within `ttl` seconds — the

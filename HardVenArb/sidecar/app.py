@@ -347,6 +347,17 @@ async def debug_schedule():
     return lc.status()
 
 
+@app.get("/debug/board_dom")
+async def debug_board_dom():
+    """What the MAIN BOARD is currently showing, and which paired leagues that matched (and how). Answers
+    'why does league X still get a dedicated tab when it's right there on the board' with evidence: the raw
+    hrefs/texts scanned, the paired league slugs, and the per-league match reason."""
+    fn = getattr(adapter, "board_dom_scan", None)
+    if not callable(fn):
+        raise HTTPException(400, "adapter has no board_dom_scan (Pinnacle adapter only)")
+    return await fn()
+
+
 @app.get("/debug/tabs")
 async def debug_tabs():
     """The tab manager's own account of every tab: what it's SHOWING vs what it SHOULD show (on_station),
