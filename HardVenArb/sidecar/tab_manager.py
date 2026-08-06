@@ -1,11 +1,13 @@
 """
 tab_manager.py — LEAGUE TAB MANAGER for the browser-WS reader.
 
-WHY: the browser's odds WS is subscription-follows-the-page. The main tennis board (topic sp/33) is
-BOARD-SCOPED (~25% of the slate — it only streams the matches the board renders). A LEAGUE page (topic
-lg/{lid}) streams that league's WHOLE slate, but subscriptions DON'T accumulate — navigating drops the old
-league, so one tab = one league. Full-slate coverage therefore = one open tab per paired league the main
-board isn't already feeding. (Background tabs stay alive — confirmed 2026-07-16 — so N tabs is viable.)
+WHY: the browser's odds WS is subscription-follows-the-page. The main board (topic sp/{sport}) carries the
+sport's TODAY slate — MEASURED 2026-08-06: 12 leagues streaming while only 2 were rendered, so the list's
+virtualisation limits RENDERING, not the subscription (an earlier "~25% board coverage" note was an artifact
+of measuring a CHANGES-ONLY feed over a short TTL). A LEAGUE page (topic lg/{lid}) streams that league's whole
+slate, but subscriptions DON'T accumulate — navigating drops the old league, so one tab = one league. Tabs are
+therefore needed for paired leagues the board does NOT carry: in practice the ones whose games are on a LATER
+day. (Background tabs stay alive — confirmed 2026-07-16 — so N tabs is viable.)
 
 WHAT: every tick, read the paired leagues (+ their URLs) from cross_pairs.json, ask the reader which leagues
 it's actually delivering (reader_live_mids), and open ONE tab per tick for a GAP league (paired but not being
@@ -69,7 +71,11 @@ class LeagueTabManager:
         # rendered; otherwise the uncovered ones need a tab. Refreshed once per tick into _board_mids.
         self._board_dom_fn = board_dom_fn
         self._board_mids: set = set()
-        self._board_dom: set = set()          # derived: leagues fully covered by the board right now
+        self._board_dom: set = set()          # leagues the board covers via TODAY-slate membership
+        # Treat "has a game today" as board coverage (the board IS the sport's Today list and its sport topic
+        # carries all of it). Only applied while the board is demonstrably streaming, so a dead board can
+        # never make everything look covered. HARDVEN_BOARD_COVERS_TODAY=0 reverts to push-only coverage.
+        self._board_covers_today = os.environ.get("HARDVEN_BOARD_COVERS_TODAY", "1") != "0"
         self._pairs_path = pairs_path
         self._tabs: dict[str, object] = {}       # leagueId -> page (tabs THIS manager opened)
         self._max = int(os.environ.get("HARDVEN_TAB_MAX", "12"))
@@ -337,6 +343,20 @@ class LeagueTabManager:
                 n += 1
         return n
 
+    def _has_game_today(self, lid: str, now: float) -> bool:
+        """Does this league have a paired game starting on TODAY's local date?
+
+        The board's date bar reads `Today (55)` and its sport topic carries that whole list — measured
+        2026-08-06: 12 leagues streaming while only 2 were rendered. So membership of today's slate IS board
+        coverage, and it is knowable IMMEDIATELY, unlike push-derived coverage which starts empty and only
+        fills as prices happen to move. That startup blind spot is what opened dedicated tabs for leagues
+        (9417, 237182) that were sitting on the board the whole time."""
+        today = datetime.fromtimestamp(now).date()
+        for ts, _precise in self._league_games.get(lid, {}).values():
+            if ts is not None and datetime.fromtimestamp(ts).date() == today:
+                return True
+        return False
+
     def _hot_mids(self, lid: str, now: float) -> set:
         """Matchup ids of this league's HOT games (pre-live within the hot window) — the set the board must
         be rendering in full before we can call the league board-covered."""
@@ -386,8 +406,12 @@ class LeagueTabManager:
                 self._board_mids = {str(x) for x in (await self._board_dom_fn() or set())}
             except Exception:
                 pass
-        self._board_dom = set()
-        board = (self._board_lids() if self._board_lids is not None else set()) | self._board_dom
+        # Board coverage = today's slate, but ONLY while the board proves it is streaming (some league is
+        # pushing on its sport topic). A silent board must never make every league look covered.
+        pushing = self._board_lids() if self._board_lids is not None else set()
+        self._board_dom = ({lid for lid in paired if self._has_game_today(lid, now)}
+                           if (self._board_covers_today and pushing) else set())
+        board = pushing | self._board_dom
         # 1. prune dedicated tabs whose league is no longer paired (game settled / off today's slate)
         for lid in list(self._tabs):
             if lid not in paired:
@@ -569,7 +593,7 @@ class LeagueTabManager:
             # moved recently; 'showing' = the board is rendering it (covers stable-price leagues that push
             # nothing, which is what used to cause tabs for leagues clearly visible on the main page).
             "board_pushing_lids": sorted(board - self._board_dom),
-            "board_fully_covered_lids": sorted(self._board_dom),   # every hot game of these is rendered
+            "board_today_covered_lids": sorted(self._board_dom),   # on the board's Today slate
             "board_rendered_mids": len(self._board_mids),
             "hot_ranking": [{"lid": l, "hot_games": self._hot_games(l, now),
                              "covered_by": ("board" if l in board else "tab" if l in self._tabs
