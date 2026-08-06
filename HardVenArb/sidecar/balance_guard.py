@@ -67,6 +67,14 @@ class BalanceGuard:
     def _kalshi_fresh(self) -> bool:
         return self._kalshi_bal is not None and (time.time() - self._kalshi_ts) < self._stale_sec
 
+    def _session_ready(self) -> bool:
+        """Is the book session actually LOGGED IN? Adapters without a session gate report ready."""
+        fn = getattr(self._adapter, "session_status", None)
+        try:
+            return bool(fn().get("ready", True)) if callable(fn) else True
+        except Exception:
+            return True
+
     def _breaches(self) -> list[str]:
         """Which floors are breached RIGHT NOW. Unknown/stale figures are never a breach."""
         out = []
@@ -77,11 +85,24 @@ class BalanceGuard:
         return out
 
     async def check_now(self) -> dict:
+        # A LOGGED-OUT session answers /balance with 0.00 — indistinguishable from a genuinely empty wallet by
+        # value alone. Treating that as a breach caused a DEADLOCK (2026-08-06): the operator logged out, the
+        # guard halted on "wallet 0.00", the halt kept the browser closed, and a closed browser can never log
+        # back in — so the bot could not recover on its own, and the halt survived restarts by design. The
+        # session gate is the disambiguator: no confirmed login ⇒ the balance is UNKNOWN, never zero. Same rule
+        # already applied to the pushed Kalshi figure.
+        if not self._session_ready():
+            if self._book_bal is not None:
+                print("[BALANCE] book session not logged in - treating the wallet as UNKNOWN (not 0) until it is.")
+            self._book_bal = None
+            self._book_ts = 0.0
+            return self.status()
         try:
             self._book_bal = float(await self._adapter.balance())
             self._book_ts = time.time()
         except Exception as ex:
             print(f"[BALANCE] book balance read failed: {type(ex).__name__}: {ex}")   # unknown ≠ zero
+            self._book_bal = None
         breaches = self._breaches()
         if breaches and self._enabled and self._lifecycle is not None:
             await self._lifecycle.halt("low balance: " + "; ".join(breaches))
