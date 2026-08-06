@@ -532,6 +532,10 @@ class PinnacleAdapter(BookAdapter):
         self._lifecycle_task = None
         self._control = None          # ControlState (operator commands); only when the lifecycle runs
         self._balance_guard = None    # BalanceGuard; only when the lifecycle runs
+        # LIVE FX (account currency → USD). The currency comes from the session status, so a USD account
+        # short-circuits to 1.0 instead of having a EUR rate applied to dollars.
+        from fx import FxProvider
+        self._fx = FxProvider(currency_fn=lambda: (self.session_status() or {}).get("currency", ""))
 
         # AUTO-PAIR: opt-in scheduled re-pairing (startup + daily at HARDVEN_PAIR_HOUR local). Account-free
         # (Kalshi public + Pinnacle guest + the sidecar /catalog); the C# bot hot-reloads the result.
@@ -569,7 +573,19 @@ class PinnacleAdapter(BookAdapter):
         self._survive_logged = False                      # one-time "SURVIVED" flag per session (unattended pass/fail)
 
     # ── lifecycle ──────────────────────────────────────────────────────────────
+    async def _start_fx(self) -> None:
+        """Fetch the rate once up front (so the very first bet is sized on a live number), then keep it fresh."""
+        try:
+            st = await self._fx.refresh()
+            print(f"[FX] {st['currency']}/USD = {st['rate']:.4f} ({st['source']}); "
+                  f"env HARDVEN_FX_TO_USD={st['env_rate']:.4f}"
+                  + (f" — drift {st['env_drift_pct']:+.2f}%" if st.get("env_drift_pct") is not None else ""))
+        except Exception as ex:
+            print(f"[FX] initial refresh failed ({type(ex).__name__}: {ex}) - using env rate {self._fx.rate}")
+        self._fx.start()
+
     async def startup(self) -> None:
+        await self._start_fx()          # size the very first bet on a LIVE rate, not a hand-set env var
         self._http = httpx.AsyncClient(
             headers={"accept": "application/json", "content-type": "application/json",
                      "origin": "https://www.pinnacle.bet", "referer": "https://www.pinnacle.bet/",

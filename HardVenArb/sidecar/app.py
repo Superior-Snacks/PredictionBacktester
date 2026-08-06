@@ -475,7 +475,22 @@ async def balance():
     s = _session_state()
     if s is not None and s.get("currency"):
         resp["currency"] = s.get("currency")   # account currency (e.g. EUR) — Kalshi is USD; FX-convert at M1
+    fx = getattr(adapter, "_fx", None)
+    if fx is not None:
+        resp["fx_to_usd"] = fx.rate            # rides along so a caller gets cash + rate in one read
+        resp["balance_usd"] = round(amt * fx.rate, 2)
     return resp
+
+
+@app.get("/fx")
+async def fx_rate(refresh: bool = False):
+    """LIVE account-currency→USD rate — the number that sizes the book leg. The C# bot polls this instead of
+    trusting a hand-set env var (which was found 6.9% stale on 2026-08-06, silently turning hedged arbs into
+    directional positions). Falls back to HARDVEN_FX_TO_USD; `stale` says whether the last fetch succeeded."""
+    fx = getattr(adapter, "_fx", None)
+    if fx is None:
+        raise HTTPException(400, "no FX provider on this adapter")
+    return await fx.refresh() if refresh else fx.status()
 
 
 @app.post("/bet")

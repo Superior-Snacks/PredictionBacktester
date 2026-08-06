@@ -36,7 +36,7 @@ public class HardVenWebsocketFeed
     // Min(KalshiDepth, HardVenDepth) and the Capital/Profit columns mix EUR-payout units with USD ones (off by
     // the FX rate on Pinnacle-binding windows). Multiply HardVen size by HARDVEN_FX_TO_USD (USD per book-unit;
     // default 1.0 = a USD book / no-op) so all downstream depth is USD-equivalent. ~1.08 for an EUR account.
-    private readonly decimal _fxToUsd;
+    private static decimal _fxToUsd => FxRate.Current;   // LIVE rate (see FxRate) — never a frozen copy
     private int _staleAccum;            // stale quotes seen during the in-progress poll
     private int _lastStaleCount = -1;   // last reported count, for transition logging
     /// <summary>Count of HardVen quotes whose sidecar timestamp is older than the freshness window (stale).</summary>
@@ -78,11 +78,9 @@ public class HardVenWebsocketFeed
             NumberStyles.Any, CultureInfo.InvariantCulture, out var m) && m > 0 ? m : 30_000;
         _quoteMaxAgeSec = maxAgeMs / 1000.0;
 
-        _fxToUsd = decimal.TryParse(Environment.GetEnvironmentVariable("HARDVEN_FX_TO_USD"),
-            NumberStyles.Any, CultureInfo.InvariantCulture, out var fx) && fx > 0m ? fx : 1.0m;
         if (_fxToUsd != 1.0m)
             Console.WriteLine($"[HARDVEN] FX: converting book size to USD-equivalent ×{_fxToUsd} " +
-                              "(price unitless, left as-is).");
+                              "(price unitless, left as-is). " + FxRate.Describe());
     }
 
     /// <summary>Adds selection ids to poll (hot-reload). Safe from any thread.</summary>

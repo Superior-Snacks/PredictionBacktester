@@ -17,6 +17,23 @@ public interface IHardVenOrderExecutor
         string tokenId, decimal price, decimal size, int side,
         bool negRisk = false, string tickSize = "0.01", int feeRateBps = 0);
 
+    /// <summary>Same as <see cref="SubmitOrderAsync"/>, but places an EXACT account-currency stake.
+    ///
+    /// <para><b>Why this exists.</b> StakeLadder deliberately snaps the book stake to a round rung (€5, €10,
+    /// €50) because a bettor staking €4.62 is a trivially detectable bot signature. But the executor works in
+    /// USD-payout contracts, so the rung was converted to contracts and the client then converted BACK — and
+    /// the two floorings destroyed the round number (a €5 rung reached the slip as €4.62). Passing the rung
+    /// through preserves it: the BOOK side is a human round number and the KALSHI side absorbs the remainder,
+    /// which is correct anyway — Kalshi is an API nobody eyeballs, and its integer contract count is where a
+    /// non-round quantity belongs.</para>
+    ///
+    /// <para>Default implementation ignores the stake and falls back, so simulated/legacy clients need no
+    /// change.</para></summary>
+    Task<string> SubmitOrderWithStakeAsync(
+        string tokenId, decimal price, decimal size, int side, decimal stakeAccount,
+        bool negRisk = false, string tickSize = "0.01", int feeRateBps = 0)
+        => SubmitOrderAsync(tokenId, price, size, side, negRisk, tickSize, feeRateBps);
+
     /// <summary>Fetches the current state of an order by its ID.</summary>
     Task<string> GetOrderAsync(string orderId);
 

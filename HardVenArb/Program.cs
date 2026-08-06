@@ -447,8 +447,49 @@ if (isLive || isDryRun)
     var hardvenConfig = HardVenApiConfig.FromEnvironment();
     // HardVen balance/bets route through the sidecar (it owns the Pinnacle session). FX: the account is EUR,
     // Kalshi USD — convert the wallet balance the same way the feed converts depth (HARDVEN_FX_TO_USD).
-    decimal hardvenFxToUsd = decimal.TryParse(Environment.GetEnvironmentVariable("HARDVEN_FX_TO_USD"),
-        NumberStyles.Any, CultureInfo.InvariantCulture, out var _hvfx) && _hvfx > 0m ? _hvfx : 1.0m;
+    // FX: seed from the env, then keep it LIVE from the sidecar's /fx. The env used to be the only source and
+    // drifted 6.9% unnoticed (1.08 vs a real 1.1542 on 2026-08-06), which over-stakes the book leg and turns
+    // a hedged arb into a directional position. FxRate rejects out-of-band updates, so a bad fetch is inert.
+    FxRate.SeedFromEnvironment();
+    decimal hardvenFxToUsd = FxRate.Current;
+    _ = Task.Run(async () =>
+    {
+        var fxHttp = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+        int fxSec = int.TryParse(Environment.GetEnvironmentVariable("HARDVEN_FX_POLL_SEC"), out var fp) && fp > 0
+                    ? fp : 900;
+        bool warned = false;
+        while (!cts.Token.IsCancellationRequested)
+        {
+            try
+            {
+                using var r = await fxHttp.GetAsync($"{HARDVEN_SIDECAR_URL.TrimEnd('/')}/fx", cts.Token);
+                if (r.IsSuccessStatusCode)
+                {
+                    using var doc = JsonDocument.Parse(await r.Content.ReadAsStringAsync(cts.Token));
+                    if (doc.RootElement.TryGetProperty("rate", out var rt) && rt.TryGetDecimal(out var live))
+                    {
+                        if (FxRate.TryUpdate(live, "sidecar", out string why))
+                        {
+                            if (!warned && Math.Abs(live - hardvenFxToUsd) / hardvenFxToUsd > 0.02m)
+                            {
+                                warned = true;
+                                Console.WriteLine($"[FX] live {live:0.0000} vs env {hardvenFxToUsd:0.0000} " +
+                                    $"({(live / hardvenFxToUsd - 1m):+0.0%;-0.0%}) — using LIVE. Update " +
+                                    "HARDVEN_FX_TO_USD so a sidecar outage falls back to something current.");
+                                _ = discord.AlertAsync($"💱 FX drift: env {hardvenFxToUsd:0.0000} → live " +
+                                    $"{live:0.0000} ({(live / hardvenFxToUsd - 1m):+0.0%;-0.0%}). Stakes now " +
+                                    "sized on the live rate.");
+                            }
+                        }
+                        else Console.WriteLine($"[FX] rejected sidecar rate: {why}");
+                    }
+                }
+            }
+            catch { /* best-effort: the seeded rate stands */ }
+            try { await Task.Delay(fxSec * 1000, cts.Token); }
+            catch (OperationCanceledException) { break; }
+        }
+    });
     // previewOnly on EVERY dry-run: the sidecar then refuses to place even when HARDVEN_BET_ENABLE=1 is armed
     // in the environment for live trading. Without this, --dry-run + HARDVEN_LIVE_BET_PATH=1 reached the real
     // placement path (observed 2026-08-04 — a real bet was attempted and only missed because the odds moved).

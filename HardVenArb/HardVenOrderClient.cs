@@ -28,7 +28,9 @@ public sealed class HardVenOrderClient : IHardVenOrderExecutor
 {
     private readonly HardVenApiConfig _config;
     private readonly string _sidecarBase;   // e.g. http://127.0.0.1:8787 — the odds/balance/bet sidecar
-    private readonly decimal _fxToUsd;      // USD per account-unit (EUR≈1.08); 1.0 = USD book / no-op
+    // USD per account-unit. Reads the LIVE rate (FxRate, refreshed from the sidecar) rather than a value
+    // frozen at construction — a stale rate mis-sizes the book stake and un-hedges the arb (see FxRate).
+    private static decimal _fxToUsd => FxRate.Current;
     private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(15) };      // fast read calls (balance, bets)
     // UI-drive calls (/bet, /bet/test) navigate + find + click + verify in the managed browser — that can run to
     // tens of seconds (board scroll-miss then rove-nav fallback), well past the 15s read timeout, which was
@@ -45,8 +47,8 @@ public sealed class HardVenOrderClient : IHardVenOrderExecutor
     {
         _config      = config;
         _sidecarBase = (sidecarBaseUrl ?? "").TrimEnd('/');
-        _fxToUsd     = fxToUsd > 0m ? fxToUsd : 1.0m;
         _previewOnly = previewOnly;
+        // fxToUsd is the env seed; FxRate holds it (and any live refresh) for every consumer.
     }
 
     // ── Read-only: live via the sidecar ────────────────────────────────────────
@@ -150,8 +152,14 @@ public sealed class HardVenOrderClient : IHardVenOrderExecutor
     /// <para><b>SELL throws by design.</b> A placed sportsbook bet is IRREVERSIBLE — there is no lay. The
     /// no-reverse recovery model should never route a sell here, so reaching this is a bug in the executor,
     /// and faking success would leave the bot believing it had flattened a position it still holds.</para></summary>
-    public async Task<string> SubmitOrderAsync(
+    public Task<string> SubmitOrderAsync(
         string tokenId, decimal price, decimal size, int side,
+        bool negRisk = false, string tickSize = "0.01", int feeRateBps = 0)
+        => SubmitOrderWithStakeAsync(tokenId, price, size, side, 0m, negRisk, tickSize, feeRateBps);
+
+    /// <inheritdoc/>
+    public async Task<string> SubmitOrderWithStakeAsync(
+        string tokenId, decimal price, decimal size, int side, decimal stakeAccount,
         bool negRisk = false, string tickSize = "0.01", int feeRateBps = 0)
     {
         if (side != 0)
@@ -169,7 +177,15 @@ public sealed class HardVenOrderClient : IHardVenOrderExecutor
         // IRREVERSIBLE leg (must be hedged on Kalshi or held to settlement). Rounding down leaves the excess
         // on Kalshi instead, which recovery can simply reverse. Costs <1% of a small stake; removes a
         // systematic bias toward the expensive side of the asymmetry.
-        decimal stakeAcct = Math.Floor(stakeUsd / _fxToUsd * 100m) / 100m;
+        //
+        // EXACT-STAKE PATH: when the caller passes the ladder's rung (stakeAccount > 0) it is used VERBATIM —
+        // the slip shows the round human figure the ladder chose (€5, €10, €50) instead of a re-derived €4.62.
+        // NOT clamped to the derived value: the derived figure is LOWER precisely because the contract count
+        // was floored, so clamping would round the stake straight back off its rung and defeat the point.
+        // The resulting sub-contract mismatch is bounded (<1 contract) and is what the executor's residual
+        // gate below and its Case-B recovery already exist to handle.
+        decimal derivedAcct = Math.Floor(stakeUsd / _fxToUsd * 100m) / 100m;
+        decimal stakeAcct   = stakeAccount > 0m ? stakeAccount : derivedAcct;
         decimal minOdds   = Math.Round(1m / price, 4);            // accept only at or above these odds
         if (stakeAcct <= 0m)
             throw new ArgumentOutOfRangeException(nameof(size),

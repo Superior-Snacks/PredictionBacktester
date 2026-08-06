@@ -168,7 +168,9 @@ public class CrossArbExecutor
     private readonly decimal _balanceBufferPct;    // fraction of maxBetUsd kept as per-platform reserve
     // FX + currency label for the HardVen leg. The stake ladder is denominated in the BOOK's account currency
     // (Pinnacle = EUR) because that is the number typed into the bet slip — see StakeLadder.
-    private readonly decimal _hardvenFxToUsd;
+    // LIVE account-currency→USD rate (FxRate, refreshed from the sidecar). Read per use, not frozen at
+    // construction: a stale rate over-stakes the book leg and turns a hedged arb into a directional bet.
+    private static decimal _hardvenFxToUsd => FxRate.Current;
     private readonly string  _hardvenCurrency;
     private readonly decimal _maxExposureUsd;
     private readonly bool    _minBuy;              // --min-buy: cap every arb to exactly 1 contract
@@ -399,7 +401,7 @@ public class CrossArbExecutor
         decimal hardvenFxToUsd      = 1.0m,
         string  hardvenCurrency     = "EUR")
     {
-        _hardvenFxToUsd      = hardvenFxToUsd > 0m ? hardvenFxToUsd : 1.0m;
+        // hardvenFxToUsd is the env SEED only; FxRate owns the live value for every consumer.
         _hardvenCurrency     = hardvenCurrency;
         _kalshi              = kalshi;
         _hardven                = hardven;
@@ -963,6 +965,7 @@ public class CrossArbExecutor
             return;
         }
         decimal hardvenShares    = contracts;
+        decimal ladderStakeAccount = 0m;   // exact rung for the slip; 0 = client derives it from shares×price
         decimal kalshiCost    = kLegAsk * contracts;
         decimal hardvenCost      = pLegAsk * contracts;
         decimal estimatedCost = kalshiCost + hardvenCost;
@@ -1030,6 +1033,8 @@ public class CrossArbExecutor
             decimal kDepthAtLimit = testMode ? 300m : kBook.GetAskVolumeAtOrBelow(kLimitDec);
             decimal pDepthAtLimit = testMode ? 300m : pBook.GetAskVolumeAtOrBelow(pLimitAsk);
 
+            // The exact rung typed into the slip (0 = let the client derive it). Set only when the ladder
+            // actually resizes, so a non-ladder path keeps the old derived-stake behaviour.
             var (ladderContracts, ladderStake) = StakeLadder.SizeBet(
                 hardvenPrice:    pLegAsk,
                 fxToUsd:         _hardvenFxToUsd,
@@ -1080,6 +1085,7 @@ public class CrossArbExecutor
                 Console.WriteLine(
                     $"[LADDER] {pair.Label} | {contracts} → {ladderContracts} contracts " +
                     $"(stake {ladderStake:0.00} {_hardvenCurrency}, ≤{StakeLadder.MaxDepthFraction:0.###} of book max)");
+                ladderStakeAccount = ladderStake;   // exact rung → the slip (keeps the book side round)
                 contracts     = ladderContracts;
                 hardvenShares = contracts;
                 kalshiCost    = newKalshiCost;
@@ -1192,7 +1198,8 @@ public class CrossArbExecutor
 
         // Fire both legs simultaneously
         var kalshiTask = PlaceKalshiLegAsync(pair.KalshiTicker, kalshiSide, kPriceCents, contracts, execId, execLog);
-        var hardvenTask   = PlaceHardVenLegAsync(hardvenToken, pLimitAsk, hardvenShares, pair.IsNegRisk, execLog);
+        var hardvenTask   = PlaceHardVenLegAsync(hardvenToken, pLimitAsk, hardvenShares, pair.IsNegRisk, execLog,
+                                                 stakeAccount: ladderStakeAccount);
 
         // Catch any unhandled leg exception so the OTHER leg's fill is still visible.
         // PlaceXxxLegAsync both have general catch blocks, but those blocks call
@@ -1697,8 +1704,13 @@ public class CrossArbExecutor
         return isSell ? (makingVal, takingVal) : (takingVal, makingVal);
     }
 
+    /// <param name="stakeAccount">EXACT account-currency stake to type into the slip (the StakeLadder rung),
+    /// or 0 to let the client derive it from shares×price. Passing it keeps the BOOK side a round human
+    /// number (€5/€10/€50) — a bettor staking €4.62 is a trivially detectable bot signature — and pushes the
+    /// non-round remainder onto Kalshi's integer contract count, which nobody eyeballs.</param>
     private async Task<(decimal FilledShares, decimal AvgPrice)> PlaceHardVenLegAsync(
-        string tokenId, decimal price, decimal shares, bool negRisk = false, List<string>? execLog = null)
+        string tokenId, decimal price, decimal shares, bool negRisk = false, List<string>? execLog = null,
+        decimal stakeAccount = 0m)
     {
         string tokenShort = tokenId[..Math.Min(12, tokenId.Length)];
         Emit(execLog, $"[ORDER P] BUY token={tokenShort}... price={price:0.0000} shares={shares}");
@@ -1720,8 +1732,8 @@ public class CrossArbExecutor
                 try
                 {
                     DebugLog.Trades($"PlaceHardVenLegAsync: attempt {attempt + 1} negRisk={negRisk} feeRateBps={feeRate} tickSize={tickSize}");
-                    result = await _hardven.SubmitOrderAsync(
-                        tokenId, limitPrice, shares, side: 0 /*BUY*/,
+                    result = await _hardven.SubmitOrderWithStakeAsync(
+                        tokenId, limitPrice, shares, side: 0 /*BUY*/, stakeAccount: stakeAccount,
                         negRisk: negRisk, tickSize: tickSize, feeRateBps: feeRate);
                     break;
                 }
