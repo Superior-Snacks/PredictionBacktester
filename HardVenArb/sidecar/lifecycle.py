@@ -18,6 +18,7 @@ a login page and needs a manual re-login (fine while login is manual anyway; ful
 from __future__ import annotations
 
 import asyncio
+import os
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable
@@ -66,6 +67,16 @@ class PinnacleLifecycle:
         # plan — merged after block selection so min_games/max_blocks can never drop them, and exempt from the
         # slate entirely (a pin watches LINES of later games; pre-live arbs surface hours before start).
         self._pin_ranges = sched.parse_pin_hours(pin_hours)
+        # FORCED REPLAN HOURS (local). The plan is built from whatever the slate holds at compute time, and
+        # a sportsbook's day fills in gradually — a plan made at 06:00 is built on a fraction of the games
+        # that will exist by 08:00. The hourly recompute eventually catches up, but this pins a deliberate
+        # full replan at named hours so the day's real shape is planned once the board is populated.
+        self._replan_hours = set()
+        for h in (os.environ.get("PINNACLE_REPLAN_HOURS", "") or "").split(","):
+            h = h.strip()
+            if h.isdigit() and 0 <= int(h) <= 23:
+                self._replan_hours.add(int(h))
+        self._replanned_at: set = set()      # (date, hour) already forced — never twice in the same hour
         self._pinned_spans: list = []         # the pins' raw spans this plan, for labeling windows "pinned"
         # OPERATOR OVERRIDE (Discord): beats the schedule entirely. Persisted in control.py so a pause/halt
         # survives a restart — a remote "stop trading" that forgets itself is worse than none.
@@ -302,7 +313,16 @@ class PinnacleLifecycle:
         await self._refresh_windows()
         while True:
             try:
-                if sched._utcnow().timestamp() - self._win_ts > self._recompute_sec:
+                # Forced morning (or any named-hour) replan, in addition to the periodic recompute.
+                loc = sched._local(sched._utcnow())
+                key = (loc.date().isoformat(), loc.hour)
+                if loc.hour in self._replan_hours and key not in self._replanned_at:
+                    self._replanned_at = {k for k in self._replanned_at if k[0] == key[0]} | {key}
+                    print(f"[PINNACLE LIFECYCLE] scheduled replan at {loc:%H:%M} local - rebuilding the day's "
+                          "windows now that the slate has filled in.")
+                    self._win_ts = 0.0
+                    await self._refresh_windows()
+                elif sched._utcnow().timestamp() - self._win_ts > self._recompute_sec:
                     await self._refresh_windows()
                 secs = await self.tick()
                 # wake at the next transition, but cap so we also re-poll/recompute periodically; floor avoids spin
