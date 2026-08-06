@@ -495,7 +495,11 @@ if (isLive || isDryRun)
     // placement path (observed 2026-08-04 — a real bet was attempted and only missed because the odds moved).
     var hardvenOrderClient = new HardVenOrderClient(hardvenConfig, HARDVEN_SIDECAR_URL, hardvenFxToUsd,
                                                     previewOnly: isDryRun);
-    const decimal MAX_BET_USD          = 30m;    // max combined dollar cost per arb entry
+    // Max combined dollar cost per arb entry. HARD CAP on position size, so it must be raised before the bot
+    // can take the €100+ bets the bankroll plan calls for — at $30 a €100 stake is simply unreachable and the
+    // ladder would silently size down to the smallest rung. Env-driven (was a recompile-only const).
+    decimal MAX_BET_USD = decimal.TryParse(Environment.GetEnvironmentVariable("HARDVEN_MAX_BET_USD"),
+        NumberStyles.Any, CultureInfo.InvariantCulture, out var _mbu) && _mbu > 0m ? _mbu : 30m;
     const decimal BALANCE_BUFFER_PCT   = 0.20m;  // per-platform reserve (fraction of maxBet)
     const decimal EXECUTION_THRESHOLD  = 0.995m; // net-cost ceiling for arb detection
     // Minimum net to attempt execution (the thin-margin slippage buffer). Default 0.985 = require ~1.5¢/set. On
