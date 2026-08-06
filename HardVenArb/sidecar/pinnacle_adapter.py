@@ -657,9 +657,35 @@ class PinnacleAdapter(BookAdapter):
                     print(f"[PINNACLE] session source = BROWSER + LIFECYCLE (sports={self._lifecycle_sports}, "
                           f"{mode}, lead {self._lifecycle_lead}m) — the browser opens/closes on the game "
                           "schedule; dark between sessions.")
-                    if self._tab_manager_on:
-                        print("[PINNACLE] HARDVEN_TAB_MANAGER=1 IGNORED under PINNACLE_LIFECYCLE (the browser cycles "
-                              "per block) — run the tab manager in the non-lifecycle window-reader mode.")
+                    # TAB MANAGER UNDER LIFECYCLE. This used to be refused ("the browser cycles per block"),
+                    # which quietly broke a combination that is now the DEFAULT: without a tab manager there is
+                    # no roving tab, so verify_now() answers "no tab manager (rove disabled)" and, with
+                    # HARDVEN_REQUIRE_WS_VERIFIED=1, every arb needing verification is SKIPPED — the bot looks
+                    # healthy and simply never fires. The manager already tolerates its tabs disappearing, so
+                    # it is created here and started/stopped alongside each scheduled session instead.
+                    if self._tab_manager_on and self._window_ws_read:
+                        from tab_manager import LeagueTabManager
+                        pairs_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                                  "cross_pairs.json")
+                        self._tab_manager = LeagueTabManager(self._browser, self.reader_live_mids, pairs_path,
+                                                             board_lids_fn=self.board_lids)
+                        print("[PINNACLE] tab manager ARMED under lifecycle — starts with each work window, "
+                              "stops when the window closes (rove tab is what verify_now drives).")
+                        # Per-tab human activity, same as the non-lifecycle path: N reader tabs that never
+                        # move is its own tell. Reads tabs live via reader_tabs, so it survives the manager
+                        # being stopped and restarted between windows.
+                        if os.environ.get("HARDVEN_TAB_ORGANIC", "1") != "0":
+                            from organic import TabOrganic
+                            try:
+                                pop_chance = float(os.environ.get("HARDVEN_TAB_POPOVER_CHANCE", "0.15"))
+                            except ValueError:
+                                pop_chance = 0.15
+                            self._tab_organic = TabOrganic(
+                                self._tab_manager.reader_tabs, _UI_CLOSE_JS, _UI_RANDOM_OPEN_JS,
+                                popover_chance=pop_chance, trim_fn=self._trim_betslip)
+                            self._tab_organic.start()
+                    elif self._tab_manager_on:
+                        print("[PINNACLE] HARDVEN_TAB_MANAGER=1 needs PINNACLE_WINDOW_WS_READ=1 — not started.")
                 else:
                     await self._browser.start()
                     print("[PINNACLE] session source = BROWSER — log in to the window; the feed waits for "
@@ -970,12 +996,26 @@ class PinnacleAdapter(BookAdapter):
         self._session_expired = False
         self._ws_auth_rejects = self._rest_auth_fails = 0
         self._seeded.clear()
+        # Bring the league tabs back up with the session. Its own start delay covers the browser launch that
+        # follows this hook, and a failed open_tab is handled per-tick, so starting early is safe.
+        if self._tab_manager is not None:
+            try:
+                self._tab_manager.start()
+            except Exception as ex:
+                print(f"[PINNACLE] tab manager start failed: {type(ex).__name__}: {ex}")
 
     def _on_session_closed(self) -> None:
         """A scheduled window closed the browser → stand the feed DOWN: gate odds (no creds now) and stop the
         WS/keepalive so we don't poke Pinnacle during the dark stretch. The C# freshness gate clears the books."""
         self._session_ready = False
         self._give_up_ws("scheduled dark window", clean=True)
+        # Stand the tab manager down too. The browser is already stopped by the time this hook runs, so its
+        # tabs are gone — stop() only needs to cancel the loop and forget them (it tolerates dead pages).
+        if self._tab_manager is not None:
+            try:
+                asyncio.create_task(self._tab_manager.stop())
+            except Exception as ex:
+                print(f"[PINNACLE] tab manager stop failed: {type(ex).__name__}: {ex}")
 
     # ── WS (MQTT) odds source ────────────────────────────────────────────────
     def _start_ws(self) -> None:

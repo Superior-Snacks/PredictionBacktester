@@ -105,16 +105,27 @@ class LeagueTabManager:
                   f"(tick {self._interval:g}s, cover-ttl {self._cover_ttl:g}s).")
 
     async def stop(self) -> None:
+        """Cancel the loop and drop every tab. Tab closing is best-effort: under the lifecycle this runs AFTER
+        the browser has already been stopped, so the pages are dead and closing them will throw — that must
+        not stop us clearing state, or the next window would inherit handles to a browser that no longer exists."""
         if self._task and not self._task.done():
             self._task.cancel()
         self._task = None
         for lid, pg in list(self._tabs.items()):
-            await self._session.close_tab(pg)
+            try:
+                await self._session.close_tab(pg)
+            except Exception:
+                pass
         self._tabs.clear()
+        self._tab_board_since.clear()
+        self._tab_alive.clear()
         if self._rove_page is not None:
-            await self._session.close_tab(self._rove_page)
-            self._rove_page = None
-            self._rove_lid = None
+            try:
+                await self._session.close_tab(self._rove_page)
+            except Exception:
+                pass
+        self._rove_page = None
+        self._rove_lid = None
 
     async def run(self) -> None:
         try:
