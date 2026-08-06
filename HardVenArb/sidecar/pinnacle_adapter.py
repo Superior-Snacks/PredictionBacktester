@@ -352,9 +352,13 @@ class PinnacleAdapter(BookAdapter):
                                                # /lg/{lid}/ topics, so this is board-only → the tab manager skips
                                                # opening a DEDICATED tab for a league the board already streams
         try:
-            self._board_lid_ttl = float(os.environ.get("PINNACLE_BOARD_LID_TTL") or 300.0)
+            # 30 min, not 5. The board's sport topic subscribes the WHOLE sport (measured 2026-08-06: 12
+            # leagues streaming while 2 were rendered), but it is CHANGES-ONLY — a league with stable
+            # pre-match prices simply goes quiet. A short TTL therefore reads "quiet" as "uncovered" and
+            # opens a redundant dedicated tab for a league the board is already carrying.
+            self._board_lid_ttl = float(os.environ.get("PINNACLE_BOARD_LID_TTL") or 1800.0)
         except ValueError:
-            self._board_lid_ttl = 300.0
+            self._board_lid_ttl = 1800.0
         try:
             self._browser_odds_ttl = float(os.environ.get("PINNACLE_WINDOW_WS_TTL") or 30.0)
         except ValueError:
@@ -670,7 +674,7 @@ class PinnacleAdapter(BookAdapter):
                                                   "cross_pairs.json")
                         self._tab_manager = LeagueTabManager(self._browser, self.reader_live_mids, pairs_path,
                                                              board_lids_fn=self.board_lids,
-                                                             board_dom_fn=self.board_dom_lids)
+                                                             board_dom_fn=self.board_dom_mids)
                         print("[PINNACLE] tab manager ARMED under lifecycle — starts with each work window, "
                               "stops when the window closes (rove tab is what verify_now drives).")
                         # Per-tab human activity, same as the non-lifecycle path: N reader tabs that never
@@ -698,7 +702,7 @@ class PinnacleAdapter(BookAdapter):
                                                   "cross_pairs.json")
                         self._tab_manager = LeagueTabManager(self._browser, self.reader_live_mids, pairs_path,
                                                              board_lids_fn=self.board_lids,
-                                                             board_dom_fn=self.board_dom_lids)
+                                                             board_dom_fn=self.board_dom_mids)
                         self._tab_manager.start()
                         # Light per-tab human activity across the reader tabs so the browser isn't 1 live tab +
                         # N dead ones. Off with HARDVEN_TAB_ORGANIC=0. Interlocked with bets via _pause_all_organic.
@@ -1489,12 +1493,20 @@ class PinnacleAdapter(BookAdapter):
         if page is None:
             return {"error": "no primary page (browser not open?)"}
         try:
+            # Real markup (captured 2026-08-06) drives this:
+            #   league header row : <a class="rowLink-…" href="/en/tennis/atp-montreal-r3/matchups/">
+            #   game row          : <a href="/en/tennis/atp-montreal-r3/norrie-vs-de-minaur/1633401615/">
+            # The list is VIRTUALISED (3272px of content in a 680px scroller; ~13 of 55 rows in the DOM), so
+            # only rendered rows exist — and per the 2026-07-16 coverage measurement, only rendered matchups
+            # actually stream. That makes the GAME rows the honest signal: collect their matchup ids and let
+            # the caller decide per league. A league header alone proves nothing about its games.
             raw = await page.evaluate(
-                "() => ({url: location.href,"
-                " hrefs: Array.from(document.querySelectorAll('a[href]')).map(a=>a.getAttribute('href')||'')"
-                "        .filter(h=>/matchups/i.test(h)).slice(0,400),"
-                " texts: Array.from(document.querySelectorAll('a,h1,h2,h3,h4'))"
-                "        .map(e=>(e.textContent||'').trim()).filter(t=>t.length>3&&t.length<90).slice(0,400)})")
+                "() => {const hs = Array.from(document.querySelectorAll('a[href]'))"
+                "         .map(a=>a.getAttribute('href')||'');"
+                " return {url: location.href,"
+                "  league_hrefs: hs.filter(h=>/\\/matchups\\/?$/.test(h)).slice(0,200),"
+                "  mids: hs.map(h=>(h.match(/\\/(\\d{6,})\\/?$/)||[])[1]).filter(Boolean).slice(0,400),"
+                "  rows: document.querySelectorAll('.scrollbar-item').length};}")
         except Exception as ex:
             return {"error": f"{type(ex).__name__}: {ex}"}
         self._league_url_for("")                       # populate/refresh _lid_urls
@@ -1503,23 +1515,38 @@ class PinnacleAdapter(BookAdapter):
             parts = [p for p in u.split("#")[0].split("?")[0].rstrip("/").split("/") if p]
             if len(parts) >= 2:
                 lid_slug[lid] = parts[-2].lower()      # .../tennis/<league-slug>/matchups/
-        matched, how = set(), {}
-        for h in raw.get("hrefs") or []:
+        # Leagues whose HEADER row is rendered (informational — not sufficient for coverage).
+        headers = set()
+        for h in raw.get("league_hrefs") or []:
             s = [p for p in h.split("#")[0].split("?")[0].rstrip("/").split("/") if p]
             cand = s[-2].lower() if len(s) >= 2 else ""
             for lid, slug in lid_slug.items():
-                if cand and (cand == slug or cand.startswith(slug)):
-                    matched.add(lid); how.setdefault(lid, f"href:{h[:60]}")
-        for t in raw.get("texts") or []:
-            ts = self._slug_txt(t)
-            for lid, slug in lid_slug.items():
-                # 'ATP Montreal - R3 Odds' -> 'atp-montreal-r3-odds' starts with the league slug
-                if ts and (ts == slug or ts.startswith(slug + "-") or ts.startswith(slug)):
-                    matched.add(lid); how.setdefault(lid, f"text:{t[:60]}")
-        return {"page_url": raw.get("url"), "n_hrefs": len(raw.get("hrefs") or []),
-                "n_texts": len(raw.get("texts") or []), "matched_lids": sorted(matched), "how": how,
-                "paired_slugs": lid_slug,
-                "sample_hrefs": (raw.get("hrefs") or [])[:12], "sample_texts": (raw.get("texts") or [])[:12]}
+                if cand and cand == slug:
+                    headers.add(lid)
+        return {"page_url": raw.get("url"), "rendered_rows": raw.get("rows"),
+                "rendered_mids": sorted(set(raw.get("mids") or [])),
+                "header_lids": sorted(headers), "paired_slugs": lid_slug,
+                "note": "list is virtualised - only rendered rows stream; coverage is judged per MATCHUP"}
+
+    async def board_dom_mids(self, ttl: float = 20.0) -> set:
+        """Matchup ids the board is RENDERING right now (and therefore streaming). Cached briefly."""
+        now = time.time()
+        if now - getattr(self, "_board_dom_ts", 0.0) < ttl:
+            return getattr(self, "_board_dom_mids_cache", set())
+        self._board_dom_ts = now
+        try:
+            scan = await self.board_dom_scan()
+        except Exception:
+            return getattr(self, "_board_dom_mids_cache", set())
+        if scan.get("error"):
+            return getattr(self, "_board_dom_mids_cache", set())
+        out = set(scan.get("rendered_mids") or [])
+        prev = getattr(self, "_board_dom_mids_cache", set())
+        if out != prev:
+            print(f"[PINNACLE] board is rendering {len(out)} matchup(s) "
+                  f"({scan.get('rendered_rows')} rows) - only these stream from the board")
+        self._board_dom_mids_cache = out
+        return out
 
     async def board_dom_lids(self, ttl: float = 20.0) -> set:
         """Leagues the main board is actually SHOWING, read from its DOM.

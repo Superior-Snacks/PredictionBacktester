@@ -63,11 +63,13 @@ class LeagueTabManager:
         self._session = session                  # PinnacleBrowserSession (open_tab / close_tab)
         self._live_mids = live_mids_fn           # callable(ttl) -> list['lid:mid'] the reader delivered
         self._board_lids = board_lids_fn         # callable() -> set(lid) the FEATURED BOARD streams (sp/ topics)
-        # async callable() -> set(lid) the board is RENDERING. The push-based signal above misses a league
-        # whose prices are simply stable (no pushes), which is why redundant tabs appeared for leagues clearly
-        # visible on the main page. Refreshed once per tick into _board_dom.
+        # async callable() -> set(matchup_id) the board is RENDERING. Pinnacle's board list is VIRTUALISED
+        # (~13 of 55 rows in the DOM), and only rendered rows stream — so board coverage is a per-MATCHUP
+        # fact, not per-league. A league counts as board-covered only when every one of its HOT games is
+        # rendered; otherwise the uncovered ones need a tab. Refreshed once per tick into _board_mids.
         self._board_dom_fn = board_dom_fn
-        self._board_dom: set = set()
+        self._board_mids: set = set()
+        self._board_dom: set = set()          # derived: leagues fully covered by the board right now
         self._pairs_path = pairs_path
         self._tabs: dict[str, object] = {}       # leagueId -> page (tabs THIS manager opened)
         self._max = int(os.environ.get("HARDVEN_TAB_MAX", "12"))
@@ -335,6 +337,35 @@ class LeagueTabManager:
                 n += 1
         return n
 
+    def _hot_mids(self, lid: str, now: float) -> set:
+        """Matchup ids of this league's HOT games (pre-live within the hot window) — the set the board must
+        be rendering in full before we can call the league board-covered."""
+        edge = now + self._hot_hours * 3600.0
+        out = set()
+        for mid, (ts, precise) in self._league_games.get(lid, {}).items():
+            if ts is None:
+                continue
+            if (now < ts <= edge) if precise else (ts <= edge and now < ts + 86400.0):
+                out.add(str(mid))
+        return out
+
+    def _pre_live_games(self, lid: str, now: float) -> int:
+        """Paired games in this league that have NOT started yet — at ANY horizon, not just the hot window.
+
+        The bot is pre-live only, so a league whose games have ALL started is worth nothing: not a dedicated
+        tab (hot=0 already excludes it) and not a rove sweep either. Without this the rove kept parking on
+        finished/in-play leagues (observed: ITF Men Fano - QF, whose single game had started 2.4h earlier)."""
+        n = 0
+        for ts, precise in self._league_games.get(lid, {}).values():
+            if ts is None:
+                n += 1                      # unknown start: keep it sweepable rather than silently dropping it
+            elif precise:
+                if ts > now:
+                    n += 1
+            elif ts + 86400.0 > now:        # day-granular: the day hasn't fully passed
+                n += 1
+        return n
+
     def _gap_key(self, now: float):
         """Dedicated-tab ranking: MOST hot games first, then soonest start."""
         return lambda lid: (-self._hot_games(lid, now), self._sort_key(lid))
@@ -346,12 +377,16 @@ class LeagueTabManager:
         if not paired:
             return
         now = time.time()
-        # Refresh what the board is RENDERING before any open/close decision this tick.
+        # The rendered-row set is kept for DIAGNOSTICS ONLY. It is NOT a coverage signal: measured
+        # 2026-08-06, the board's sport topic (sp/33) streamed 12 leagues while only 2 were rendered — the
+        # SPA virtualises RENDERING, not the subscription. Gating coverage on what's in the viewport would
+        # deny board credit to 10 covered leagues and open exactly the redundant tabs we're trying to avoid.
         if self._board_dom_fn is not None:
             try:
-                self._board_dom = {str(x) for x in (await self._board_dom_fn() or set())}
+                self._board_mids = {str(x) for x in (await self._board_dom_fn() or set())}
             except Exception:
                 pass
+        self._board_dom = set()
         board = (self._board_lids() if self._board_lids is not None else set()) | self._board_dom
         # 1. prune dedicated tabs whose league is no longer paired (game settled / off today's slate)
         for lid in list(self._tabs):
@@ -534,7 +569,8 @@ class LeagueTabManager:
             # moved recently; 'showing' = the board is rendering it (covers stable-price leagues that push
             # nothing, which is what used to cause tabs for leagues clearly visible on the main page).
             "board_pushing_lids": sorted(board - self._board_dom),
-            "board_showing_lids": sorted(self._board_dom),
+            "board_fully_covered_lids": sorted(self._board_dom),   # every hot game of these is rendered
+            "board_rendered_mids": len(self._board_mids),
             "hot_ranking": [{"lid": l, "hot_games": self._hot_games(l, now),
                              "covered_by": ("board" if l in board else "tab" if l in self._tabs
                                             else "rove" if l == self._rove_lid
@@ -552,8 +588,11 @@ class LeagueTabManager:
         if self._rove_page is not None and (now - self._last_rove) < self._rove_dwell:
             return                                            # still dwelling on the current league
         covered = self._covered_now()
+        # Sweep only leagues that still have an UNSTARTED game — a fully in-play/finished league can never
+        # produce a pre-live arb, so parking the rove there wastes the one roving slot (and looks odd).
         tail = sorted((lid for lid in paired
-                       if lid not in self._tabs and lid not in covered and lid != self._rove_lid),
+                       if lid not in self._tabs and lid not in covered and lid != self._rove_lid
+                       and self._pre_live_games(lid, now) > 0),
                       key=self._sort_key)                     # sweep soonest-start tail leagues first
         if not tail:
             return                                            # nothing to sweep (all paired leagues are covered)
