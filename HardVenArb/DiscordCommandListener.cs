@@ -29,6 +29,8 @@ public sealed class DiscordCommandListener
     private readonly HttpClient _ctlHttp = new() { Timeout = TimeSpan.FromSeconds(30) };
     private string _lastId = "";
     private bool _warnedAuth;
+    private int _emptyContent;        // consecutive human messages with unreadable text (missing intent)
+    private bool _warnedIntent;
 
     public bool Enabled => !string.IsNullOrWhiteSpace(_token) && !string.IsNullOrWhiteSpace(_channelId);
 
@@ -51,8 +53,12 @@ public sealed class DiscordCommandListener
     public async Task RunAsync(CancellationToken ct)
     {
         if (!Enabled) return;
-        Console.WriteLine("[DISCORD CMD] command listener ON — send 'status' or 'close'/'end' in the channel.");
+        Console.WriteLine("[DISCORD CMD] command listener ON — send 'commands' in the channel for the menu.");
         _lastId = await GetLatestIdAsync(ct);   // baseline: ignore history; only react to messages sent from now on
+        // Post the menu once on startup so the operator never has to remember a command to discover commands.
+        // DISCORD_POST_HELP_ON_START=0 to suppress (e.g. if the supervisor restarts often).
+        if (Environment.GetEnvironmentVariable("DISCORD_POST_HELP_ON_START") != "0")
+            await SafeReply(HelpText);
         while (!ct.IsCancellationRequested)
         {
             try { await PollAsync(ct); }
@@ -109,6 +115,23 @@ public sealed class DiscordCommandListener
                 continue;
             string content = (m.TryGetProperty("content", out var c) ? c.GetString() ?? "" : "")
                 .Trim().ToLowerInvariant();
+            // MESSAGE CONTENT INTENT check: without it Discord returns messages with EMPTY content, so the
+            // listener silently ignores every command and looks "connected but broken". Catch that once.
+            if (content.Length == 0)
+            {
+                if (++_emptyContent == 3 && !_warnedIntent)
+                {
+                    _warnedIntent = true;
+                    Console.WriteLine("[DISCORD CMD] read 3 human messages with EMPTY content — the bot almost " +
+                                      "certainly lacks the MESSAGE CONTENT INTENT (Discord Developer Portal → " +
+                                      "your app → Bot → Privileged Gateway Intents → Message Content Intent). " +
+                                      "Commands cannot work until that is enabled.");
+                    await SafeReply("⚠️ I can see messages but not their text — enable the **Message Content " +
+                                    "Intent** for this bot in the Discord Developer Portal, then restart me.");
+                }
+                continue;
+            }
+            _emptyContent = 0;
             await HandleAsync(content);
         }
         if (!string.IsNullOrEmpty(newest)) _lastId = newest;
@@ -168,22 +191,34 @@ public sealed class DiscordCommandListener
             case "set":
                 await ToggleAsync(args);
                 break;
+            case "commands":
+            case "cmds":
             case "help":
+            case "?":
                 await SafeReply(HelpText);
                 break;
         }
     }
 
-    private const string HelpText =
-        "**Commands**\n" +
-        "`status` — bot + session state · `help`\n" +
-        "`pause [reason]` — close the site, stay dark (survives restart) · `resume` — back on schedule\n" +
+    /// <summary>The operator's menu. Posted once at startup (so it's always in recent history) and on
+    /// `commands`/`help`. Kept under Discord's 2000-char cap.</summary>
+    public const string HelpText =
+        "**HardVen commands** — send any of these in this channel\n" +
+        "`commands` · `status` — bot + session state\n" +
+        "**Session**\n" +
+        "`pause [reason]` — close the site & stay dark *(survives a restart)*\n" +
+        "`resume` — back on schedule (also clears a low-balance halt)\n" +
         "`force [minutes]` — open NOW outside the schedule (default 60, auto-reverts)\n" +
-        "`schedule` — show the plan · `schedule <key>=<val> …` — e.g. `schedule lead_min=20 max_blocks=3`\n" +
-        "   keys: lead_min trail_min min_gap_min min_games max_blocks session_hours jitter_min horizon_hours paired_only today_only\n" +
-        "`pin 09:00-12:00[,20:00-23:00]` — always-on hours (local) · `unpin` — clear\n" +
+        "**Schedule**\n" +
+        "`schedule` — show the current plan\n" +
+        "`schedule <key>=<val> …` — e.g. `schedule lead_min=20 max_blocks=3`\n" +
+        "  · keys: `lead_min trail_min min_gap_min min_games max_blocks session_hours jitter_min horizon_hours paired_only today_only`\n" +
+        "`pin 09:00-12:00[,20:00-23:00]` — always-on hours (local) · `unpin` — clear them\n" +
+        "**Flags**\n" +
         "`toggle` — list flags · `toggle <FLAG> <0|1>` — e.g. `toggle HARDVEN_BET_ENABLE 0`\n" +
-        "`close`/`end` — stop the bot entirely (no restart)";
+        "  · ⚠️ flags the C# bot reads at startup reply `needs-restart` — they are saved, not live\n" +
+        "**Stop**\n" +
+        "`close` / `end` / `kill` — stop the bot entirely (supervisor will NOT restart it)";
 
     private static double ParseNum(string s, double dflt)
         => double.TryParse(s.Split(' ')[0], System.Globalization.NumberStyles.Any,
