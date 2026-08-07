@@ -1,180 +1,132 @@
 CrossArbBot
 APP
- — 4:21 PM
-[HardVenArb] 🟢 TELEMETRY started — 204 pair(s), sidecar http://127.0.0.1:8787/. Heartbeat every 30m.
+ — Yesterday at 8:48 PM
+[HardVen/sidecar] 🟢 LIVE until 23:38 local (~170m) — 20 target game(s)
+• Targets: Hanne Vandewinkel vs Madison Sieg 20:56, Ekaterina Ovcharenko vs Ekaterine Gorgodze 21:00, Yexin Ma vs Katrina Scott 21:00, Fiona Crawley vs Anastasia Zakharova 21:00, Yeon Woo Ku vs Mai Hontama 21:00, Nikola Bartunkova vs Amanda Anisimova 21:15, Kaylan Bigun vs Naoya Honda 21:30, Reese Brantmeier vs Elizabeth Mandlik 21:30 (+12 more)
+• Next window: Fri 06:05 (0 game(s))
+[HardVenArb] ✅ DRY-RUN started — startup complete (HardVen fees prefetched), monitoring 138 pair(s). Cash: Kalshi $1000.00 / HardVen $1000.00.
+[HardVenArb] 🔄 DRY RUN reloaded (daily recycle / restart) — 138 pair(s), run uptime unbroken.
+[HardVenArb] HardVen commands — send any of these in this channel
+commands · status — bot + session state
+Session
+pause [reason] — close the site & stay dark (survives a restart)
+resume — back on schedule (also clears a low-balance halt)
+force [minutes] — open NOW outside the schedule (default 60, auto-reverts)
+Schedule
+schedule — show the current plan
+schedule <key>=<val> … — e.g. schedule lead_min=20 max_blocks=3
+  · keys: lead_min trail_min min_gap_min min_games max_blocks session_hours jitter_min horizon_hours paired_only today_only
+pin 09:00-12:00[,20:00-23:00] — always-on hours (local) · unpin — clear them
+Flags
+toggle — list flags · toggle <FLAG> <0|1> — e.g. toggle HARDVEN_BET_ENABLE 0
+  · ⚠️ flags the C# bot reads at startup reply needs-restart — they are saved, not live
+Stop
+close / end / kill — stop the bot entirely (supervisor will NOT restart it)
 [HardVenArb] 🟢 HardVen session established — login captured.
 CrossArbBot
 APP
- — 4:51 PM
-[HardVenArb] 💓 up 0d0h30m │ session ready │ live books K=196/408 H=170/408 │ WS K=ok H=ok │ openArbs=1 arbsLogged=3
+ — Yesterday at 9:19 PM
+[HardVenArb] 💓 up 24d7h46m │ session ready │ live books K=232/276 H=152/164 (H in-play=6) │ WS K=ok H=ok │ openArbs=0 arbsLogged=75
 CrossArbBot
 APP
- — 5:21 PM
-[HardVenArb] 💓 up 0d1h0m │ session ready │ live books K=192/408 H=170/408 │ WS K=ok H=ok │ openArbs=2 arbsLogged=4
+ — Yesterday at 9:49 PM
+[HardVenArb] 💓 up 24d8h16m │ session ready │ live books K=208/276 H=148/164 (H in-play=2) │ WS K=ok H=ok │ openArbs=0 arbsLogged=178
 CrossArbBot
 APP
- — 5:51 PM
-[HardVenArb] 💓 up 0d1h30m │ session ready │ live books K=186/408 H=170/408 │ WS K=ok H=ok │ openArbs=2 arbsLogged=4
+ — Yesterday at 10:19 PM
+[HardVenArb] 💓 up 24d8h46m │ session ready │ live books K=196/276 H=144/164 (H in-play=0) │ WS K=ok H=ok │ openArbs=0 arbsLogged=231
 CrossArbBot
 APP
- — 6:21 PM
-[HardVenArb] 💓 up 0d2h0m │ session ready │ live books K=180/408 H=170/408 │ WS K=ok H=ok │ openArbs=3 arbsLogged=8
+ — Yesterday at 10:49 PM
+[HardVenArb] 💓 up 24d9h16m │ session ready │ live books K=212/302 H=162/190 (H in-play=0) │ WS K=ok H=ok │ openArbs=1 arbsLogged=254
 CrossArbBot
 APP
- — 6:51 PM
-[HardVenArb] 💓 up 0d2h30m │ session ready │ live books K=174/408 H=168/408 │ WS K=ok H=ok │ openArbs=2 arbsLogged=8
+ — Yesterday at 11:19 PM
+[HardVenArb] 💓 up 24d9h46m │ session ready │ live books K=210/302 H=150/190 (H in-play=0) │ WS K=ok H=ok │ openArbs=1 arbsLogged=262
 CrossArbBot
 APP
- — 7:21 PM
-[HardVenArb] 💓 up 0d3h0m │ session ready │ live books K=170/408 H=164/408 │ WS K=ok H=ok │ openArbs=2 arbsLogged=8
-CrossArbBot
-APP
- — 7:51 PM
-[HardVenArb] 💓 up 0d3h30m │ session ready │ live books K=170/408 H=164/408 │ WS K=ok H=ok │ openArbs=2 arbsLogged=8
-CrossArbBot
-APP
- — 8:21 PM
-[HardVenArb] 💓 up 0d4h0m │ session ready │ live books K=162/408 H=162/408 │ WS K=ok H=ok │ openArbs=1 arbsLogged=8
-CrossArbBot
-APP
- — 8:51 PM
-[HardVenArb] 💓 up 0d4h30m │ session ready │ live books K=46/408 H=44/408 │ WS K=ok H=ok │ openArbs=0 arbsLogged=8
-CrossArbBot
-APP
- — 9:21 PM
-[HardVenArb] 💓 up 0d5h0m │ session ready │ live books K=40/408 H=28/408 │ WS K=ok H=ok │ openArbs=0 arbsLogged=8
-CrossArbBot
-APP
- — 9:51 PM
-[HardVenArb] 💓 up 0d5h30m │ session ready │ live books K=28/408 H=28/408 │ WS K=ok H=ok │ openArbs=0 arbsLogged=8
-CrossArbBot
-APP
- — 10:21 PM
-[HardVenArb] 💓 up 0d6h0m │ session ready │ live books K=28/408 H=28/408 │ WS K=ok H=ok │ openArbs=0 arbsLogged=8
-CrossArbBot
-APP
- — 10:51 PM
-[HardVenArb] 💓 up 0d6h30m │ session ready │ live books K=0/408 H=28/408 │ WS K=ok H=ok │ openArbs=0 arbsLogged=8
-CrossArbBot
-APP
- — 11:21 PM
-[HardVenArb] 💓 up 0d7h0m │ session ready │ live books K=0/408 H=28/408 │ WS K=ok H=ok │ openArbs=0 arbsLogged=8
-CrossArbBot
-APP
- — 11:45 PM
+ — Yesterday at 11:48 PM
+[HardVen/sidecar] ⚫ DARK — closed at 23:48 local
+• next open Fri 06:05 local (in 6h17m) for 0 game(s): none
+• Sleeping through 1 game(s): Hanne Vandewinkel vs Madison Sieg 23:56
 [HardVenArb] 🗓️ session block ended —
-📊 status — session dark (scheduled) | live books K=0/408 H=28/408 | WS K=ok H=ok | openArbs=0 pairs=204 | up 0d7h24m
-HardVenArb status — CrossArbTelemetry_20260712.csv
-span 2026-07-12 07:06:24 → 18:14:11 | windows 25 (25 pre-live, 0 in-play) | capturable 21 (84%)
-PRE-LIVE: 21 cap | edge avg 1.07c max 1.56c | est profit $63.30
-in-play: 0 capturable
-[HardVenArb] 💓 up 0d7h30m │ session dark (scheduled) │ live books K=0/408 H=0/408 │ WS K=ok H=ok │ openArbs=0 arbsLogged=8
+📊 status — session dark (scheduled) | live books K=236/302 H=150/190 | WS K=ok H=ok | openArbs=1 pairs=151 | up 24d10h16m
+HardVenArb status — CrossArbTelemetry_20260806.csv
+span 2026-08-06 18:12:07 → 23:44:02 | windows 707 (387 pre-live, 320 in-play) | capturable 137 (19%)
+PRE-LIVE: 90 cap | edge avg 1.32c max 7.63c | est profit $184.87
+in-play: 47 cap | edge avg 1.50c max 11.86c | est profit $95.67
+[HardVenArb] 💓 up 24d10h16m │ session dark (scheduled) │ live books K=218/302 H=150/190 (H in-play=0) │ WS K=ok H=ok │ openArbs=1 arbsLogged=466
 CrossArbBot
 APP
- — 12:21 AM
-[HardVenArb] 💓 up 0d8h0m │ session ready │ live books K=0/408 H=28/408 │ WS K=ok H=ok │ openArbs=0 arbsLogged=8
+ — 12:19 AM
+[HardVenArb] 💓 up 24d10h46m │ session dark (scheduled) │ live books K=294/408 H=0/270 (H in-play=2) │ WS K=ok H=ok │ openArbs=0 arbsLogged=466
 CrossArbBot
 APP
- — 12:51 AM
-[HardVenArb] 💓 up 0d8h30m │ session ready │ live books K=0/408 H=28/408 │ WS K=ok H=ok │ openArbs=0 arbsLogged=8
+ — 12:49 AM
+[HardVen/sidecar] 🟢 LIVE until 03:40 local (~171m) — 10 target game(s)
+• Targets: Frances Tiafoe vs Arthur Rinderknech 01:00, Elina Svitolina vs Anastasia Potapova 01:45, Seon Yong Han vs Donghyun Hwang 02:00, Yuki Mochizuki vs Tsung Hao Huang 02:00, Chengyiyi Yuan vs Yu Jun Lin 02:00, Yuhan Wang vs Junhan Zhang 02:00, Matthew Dellavedova vs Suk Ann 03:00, Hanlei Lu vs Isaac Becroft 03:00 (+2 more)
+• Left behind (18 later today): Maria Florencia Urrutia vs Camila Rodero 14:00, Polina Iatcenko vs Caroline Dolehide 14:00, Ayana Akli vs Carolyn Ansari 14:00, Ekaterina Ovcharenko vs Ekaterine Gorgodze 14:00 (+14 more)
+• Not bettable (26 unpaired on the board): Rares Teodor Pieleanu vs Robert Guna 08:00, Vladyslav Orlov vs Wojciech Marek 09:00, Marcel Zielinski vs Michael Savano 10:00 (+23 more)
+• Next window: Fri 04:38 (62 game(s))
+[HardVenArb] 💓 up 24d11h16m │ session DOWN │ live books K=268/408 H=0/270 (H in-play=2) │ WS K=ok H=ok │ openArbs=0 arbsLogged=466
 CrossArbBot
 APP
- — 1:15 AM
+ — 1:19 AM
+[HardVenArb] 💓 up 24d11h46m │ session ready │ live books K=292/408 H=214/270 (H in-play=2) │ WS K=ok H=ok │ openArbs=0 arbsLogged=476
+CrossArbBot
+APP
+ — 1:49 AM
+[HardVen/sidecar] ⚫ DARK — closed at 01:49 local
+• next open Fri 04:38 local (in 2h50m) for 90 game(s): Arnav Vijay Paparkar vs Martin Borisiouk 05:00, Taiyo Yamanaka vs Shunsuke Mitsui 05:00, Anna Bazderova vs Edda Mamedova 05:00, Victoria Milovanova vs Nina Sozaonova 05:00, Asylzhan Arystanbekova vs Liel Marlies Rothensteiner 05:00 (+85 more)
+• Sleeping through 14 game(s): Chengyiyi Yuan vs Yu Jun Lin 02:00, Yuhan Wang vs Junhan Zhang 02:00, Yuki Mochizuki vs Tsung Hao Huang 02:00, Seon Yong Han vs Donghyun Hwang 02:00 (+10 more)
+[HardVenArb] 💓 up 24d12h16m │ session dark (scheduled) │ live books K=326/518 H=246/302 (H in-play=4) │ WS K=ok H=ok │ openArbs=0 arbsLogged=498
 [HardVenArb] 🗓️ session block ended —
-📊 status — session dark (scheduled) | live books K=0/408 H=28/408 | WS K=ok H=ok | openArbs=0 pairs=204 | up 0d8h54m
-HardVenArb status — CrossArbTelemetry_20260712.csv
-span 2026-07-12 07:06:24 → 18:14:11 | windows 25 (25 pre-live, 0 in-play) | capturable 21 (84%)
-PRE-LIVE: 21 cap | edge avg 1.07c max 1.56c | est profit $63.30
-in-play: 0 capturable
-[HardVenArb] 💓 up 0d9h0m │ session dark (scheduled) │ live books K=0/408 H=0/408 │ WS K=ok H=ok │ openArbs=0 arbsLogged=8
-CrossArbBot
-APP
- — 1:51 AM
-[HardVenArb] 💓 up 0d9h30m │ session dark (scheduled) │ live books K=0/408 H=0/408 │ WS K=ok H=ok │ openArbs=0 arbsLogged=8
-CrossArbBot
-APP
- — 2:21 AM
-[HardVenArb] 💓 up 0d10h0m │ session dark (scheduled) │ live books K=0/408 H=0/408 │ WS K=ok H=ok │ openArbs=0 arbsLogged=8
-CrossArbBot
-APP
- — 2:51 AM
-[HardVenArb] 💓 up 0d10h30m │ session dark (scheduled) │ live books K=0/408 H=0/408 │ WS K=ok H=ok │ openArbs=0 arbsLogged=8
-CrossArbBot
-APP
- — 3:21 AM
-[HardVenArb] 💓 up 0d11h0m │ session dark (scheduled) │ live books K=0/408 H=0/408 │ WS K=ok H=ok │ openArbs=0 arbsLogged=8
-CrossArbBot
-APP
- — 3:51 AM
-[HardVenArb] 💓 up 0d11h30m │ session dark (scheduled) │ live books K=0/408 H=0/408 │ WS K=ok H=ok │ openArbs=0 arbsLogged=8
-CrossArbBot
-APP
- — 4:21 AM
-[HardVenArb] 💓 up 0d12h0m │ session dark (scheduled) │ live books K=0/408 H=0/408 │ WS K=ok H=ok │ openArbs=0 arbsLogged=8
-CrossArbBot
-APP
- — 4:51 AM
-[HardVenArb] 💓 up 0d12h30m │ session dark (scheduled) │ live books K=0/408 H=0/408 │ WS K=ok H=ok │ openArbs=0 arbsLogged=8
-CrossArbBot
-APP
- — 5:21 AM
-[HardVenArb] 💓 up 0d13h0m │ session dark (scheduled) │ live books K=0/408 H=0/408 │ WS K=ok H=ok │ openArbs=0 arbsLogged=8
-CrossArbBot
-APP
- — 5:51 AM
-[HardVenArb] 💓 up 0d13h30m │ session dark (scheduled) │ live books K=0/408 H=0/408 │ WS K=ok H=ok │ openArbs=0 arbsLogged=8
-CrossArbBot
-APP
- — 6:00 AM
-[HardVenArb] 🔄 TELEMETRY reloaded (daily recycle / restart) — 69 pair(s), run uptime unbroken.
-[HardVenArb] 🟢 HardVen session established — login captured.
-CrossArbBot
-APP
- — 6:30 AM
-[HardVenArb] 💓 up 0d14h9m │ session dark (scheduled) │ live books K=104/138 H=0/138 │ WS K=ok H=ok │ openArbs=0 arbsLogged=0
-CrossArbBot
-APP
- — 7:00 AM
-[HardVenArb] 💓 up 0d14h39m │ session dark (scheduled) │ live books K=112/138 H=0/138 │ WS K=ok H=ok │ openArbs=0 arbsLogged=0
-CrossArbBot
-APP
- — 7:30 AM
-[HardVenArb] 💓 up 0d15h9m │ session dark (scheduled) │ live books K=118/138 H=0/138 │ WS K=ok H=ok │ openArbs=0 arbsLogged=0
-CrossArbBot
-APP
- — 8:00 AM
-[HardVenArb] 💓 up 0d15h39m │ session ready │ live books K=112/138 H=138/138 │ WS K=ok H=ok │ openArbs=0 arbsLogged=0
-CrossArbBot
-APP
- — 8:30 AM
-[HardVenArb] 💓 up 0d16h9m │ session ready │ live books K=138/138 H=138/138 │ WS K=ok H=ok │ openArbs=1 arbsLogged=3
-[HardVenArb] 🗓️ session block ended —
-📊 status — session dark (scheduled) | live books K=134/138 H=138/138 | WS K=ok H=ok | openArbs=1 pairs=69 | up 0d16h14m
-HardVenArb status — CrossArbTelemetry_20260713.csv
-span 2026-07-13 08:10:50 → 08:11:20 | windows 2 (2 pre-live, 0 in-play) | capturable 2 (100%)
-PRE-LIVE: 2 cap | edge avg 0.61c max 0.61c | est profit $5.60
+📊 status — session dark (scheduled) | live books K=336/518 H=246/302 | WS K=ok H=ok | openArbs=0 pairs=259 | up 24d12h16m
+HardVenArb status — CrossArbTelemetry_20260807.csv
+span 2026-08-07 00:49:41 → 01:48:54 | windows 31 (20 pre-live, 11 in-play) | capturable 1 (3%)
+PRE-LIVE: 1 cap | edge avg 1.18c max 1.18c | est profit $0.12
 in-play: 0 capturable
 CrossArbBot
 APP
- — 9:00 AM
-[HardVenArb] 💓 up 0d16h39m │ session ready │ live books K=116/138 H=138/138 │ WS K=ok H=ok │ openArbs=1 arbsLogged=15
+ — 2:14 AM
+[HardVenArb] ⚠️ CONNECTION HALT — venue disconnect detected by the watchdog; new trades paused until reconnect.
+[HardVenArb] 💓 up 24d12h46m │ session dark (scheduled) │ live books K=170/518 H=0/302 (H in-play=4) │ WS K=ok H=ok │ openArbs=0 arbsLogged=498
 CrossArbBot
 APP
- — 9:30 AM
-[HardVenArb] 💓 up 0d17h9m │ session ready │ live books K=122/138 H=132/138 │ WS K=ok H=ok │ openArbs=5 arbsLogged=43
+ — 2:49 AM
+[HardVenArb] 💓 up 24d13h16m │ session dark (scheduled) │ live books K=188/518 H=0/302 (H in-play=4) │ WS K=ok H=ok │ openArbs=0 arbsLogged=498
+[HardVenArb] ⚠️ CONNECTION HALT — venue disconnect detected by the watchdog; new trades paused until reconnect.
 CrossArbBot
 APP
- — 10:00 AM
-[HardVenArb] 💓 up 0d17h39m │ session ready │ live books K=114/138 H=130/138 │ WS K=ok H=ok │ openArbs=5 arbsLogged=43
+ — 3:19 AM
+[HardVenArb] 💓 up 24d13h46m │ session dark (scheduled) │ live books K=192/564 H=0/318 (H in-play=4) │ WS K=ok H=ok │ openArbs=0 arbsLogged=498
+[HardVenArb] ⚠️ CONNECTION HALT — venue disconnect detected by the watchdog; new trades paused until reconnect.
 CrossArbBot
 APP
- — 10:30 AM
-[HardVenArb] 💓 up 0d18h9m │ session ready │ live books K=114/138 H=118/138 │ WS K=ok H=ok │ openArbs=5 arbsLogged=49
+ — 3:49 AM
+[HardVenArb] 💓 up 24d14h16m │ session dark (scheduled) │ live books K=138/564 H=0/318 (H in-play=4) │ WS K=ok H=ok │ openArbs=0 arbsLogged=498
 CrossArbBot
 APP
- — 11:00 AM
-[HardVenArb] 💓 up 0d18h39m │ session ready │ live books K=100/138 H=104/138 │ WS K=ok H=ok │ openArbs=6 arbsLogged=56
+ — 4:19 AM
+[HardVenArb] 💓 up 24d14h46m │ session dark (scheduled) │ live books K=170/564 H=0/318 (H in-play=4) │ WS K=ok H=ok │ openArbs=0 arbsLogged=498
 CrossArbBot
 APP
- — 11:30 AM
-[HardVenArb] 💓 up 0d19h9m │ session ready │ live books K=96/138 H=98/138 │ WS K=ok H=ok │ openArbs=6 arbsLogged=57
+ — 4:38 AM
+[HardVen/sidecar] 🟢 LIVE (operator hours) until 14:50 local (~611m) — 90 target game(s)
+• Targets: Nikita Ianin vs Damir Zhalgasbay 05:00, Arnav Vijay Paparkar vs Martin Borisiouk 05:00, Taiyo Yamanaka vs Shunsuke Mitsui 05:00, Asylzhan Arystanbekova vs Liel Marlies Rothensteiner 05:00, Anna Bazderova vs Edda Mamedova 05:00, Victoria Milovanova vs Nina Sozaonova 05:00, Eva Korysheva vs Kisa Yoshioka 05:00, Egor Pleshivtsev vs Ryo Tabata 06:00 (+82 more)
+• Watching lines for 13 later game(s): Iva Jovic vs Alina Korneeva 15:05, Yeon Woo Ku vs Mai Hontama 16:00, Hanne Vandewinkel vs Madison Sieg 16:00, Reese Brantmeier vs Elizabeth Mandlik 16:00, Yexin Ma vs Katrina Scott 16:00 (+8 more)
+• Left behind (13 later today): Iva Jovic vs Alina Korneeva 15:05, Yeon Woo Ku vs Mai Hontama 16:00, Hanne Vandewinkel vs Madison Sieg 16:00, Reese Brantmeier vs Elizabeth Mandlik 16:00 (+9 more)
+• Not bettable (12 unpaired on the board): Giorgia Pedone vs Sofia Meabe 12:30, Tom Gentzsch vs Henri Squire 15:00, Aurora Zantedeschi vs Ida Wobker 15:00 (+9 more)
+• Next window: Sat 06:04 (0 game(s))
+CrossArbBot
+APP
+ — 4:49 AM
+[HardVenArb] 💓 up 24d15h16m │ session ready │ live books K=196/594 H=258/332 (H in-play=4) │ WS K=ok H=ok │ openArbs=0 arbsLogged=498
+CrossArbBot
+APP
+ — 5:19 AM
+[HardVenArb] 💓 up 24d15h46m │ session ready │ live books K=194/594 H=242/332 (H in-play=4) │ WS K=ok H=ok │ openArbs=0 arbsLogged=498
+CrossArbBot
+APP
+ — 5:49 AM
+[HardVenArb] 💓 up 24d16h16m │ session ready │ live books K=198/594 H=242/332 (H in-play=4) │ WS K=ok H=ok │ openArbs=0 arbsLogged=498
