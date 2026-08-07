@@ -540,6 +540,73 @@ if (isLive || isDryRun)
         }
     }
 
+    // ── BETTING-CONTRACT PREFLIGHT ────────────────────────────────────────────────────────────────────
+    // The sidecar keeps its OWN hard stake cap (HARDVEN_MAX_STAKE) in a separate process, deliberately not the
+    // same knob as the ladder's HARDVEN_STAKE_MAX: an independent ceiling is what catches a units/FX/depth bug
+    // in THIS process before it becomes a real bet. Defence in depth only works if the two agree, though —
+    // a sidecar cap BELOW the ladder's rung rejects the book leg AFTER the Kalshi leg has already filled, so
+    // every arb becomes a naked leg + recovery. That is silent today (a rejected bet looks like any other miss)
+    // and the two env names are one transposition apart, so verify it up front and refuse to arm on a mismatch.
+    // Read the dress-rehearsal flag directly: `liveBetPath` is declared below, and the preflight has to run
+    // before the execution clients are built.
+    if (!isDryRun || Environment.GetEnvironmentVariable("HARDVEN_LIVE_BET_PATH") == "1")
+    {
+        try
+        {
+            using var hc = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+            using var hr = await hc.GetAsync($"{HARDVEN_SIDECAR_URL.TrimEnd('/')}/health");
+            using var hd = JsonDocument.Parse(await hr.Content.ReadAsStringAsync());
+            if (hd.RootElement.TryGetProperty("betting", out var bet))
+            {
+                decimal ladderCap = StakeLadder.MaxStakeAccount;   // 0 = uncapped
+                bool betEnabled = bet.TryGetProperty("bet_enabled", out var be) && be.GetBoolean();
+                decimal? sidecarCap = bet.TryGetProperty("max_stake", out var ms)
+                                      && ms.ValueKind == JsonValueKind.Number ? ms.GetDecimal() : null;
+                // With HARDVEN_STAKE_MAX set, Snap() only ever reduces, so the rung is <= that cap and the
+                // comparison is exact. UNCAPPED, the stake is bounded only by depth and --max-bet, which we
+                // cannot pin down here — so warn that the sidecar becomes the real (and silent) binding limit
+                // rather than pretending MinRung is the worst case.
+                decimal willSend = ladderCap;      // 0 = unbounded → unverifiable
+                if (willSend > 0m && sidecarCap is decimal cap && cap < willSend)
+                {
+                    Console.ForegroundColor = ConsoleColor.Red;
+                    Console.WriteLine(
+                        $"[PREFLIGHT FAIL] Sidecar HARDVEN_MAX_STAKE={cap:0.00} is BELOW the stake this bot will " +
+                        $"send ({willSend:0.00}). Every book leg would be REJECTED at the slip — after the Kalshi " +
+                        $"leg has already filled — leaving a naked leg on every arb. Raise HARDVEN_MAX_STAKE to " +
+                        $"at least {willSend:0.00} (and restart the sidecar), or lower HARDVEN_STAKE_MAX.");
+                    Console.ResetColor();
+                    return;
+                }
+                if (!betEnabled)
+                    Console.WriteLine("[PREFLIGHT] NOTE: sidecar HARDVEN_BET_ENABLE=0 — the book leg will PREVIEW " +
+                                      "only (no real bet). Under --live the Kalshi leg is still REAL.");
+                if (willSend <= 0m)
+                    Console.WriteLine($"[PREFLIGHT WARN] HARDVEN_STAKE_MAX is unset, so the ladder is uncapped and " +
+                                      $"the sidecar's {sidecarCap?.ToString("0.00") ?? "?"} cap silently becomes the " +
+                                      $"binding limit — any larger rung is rejected AFTER the Kalshi leg fills. " +
+                                      $"Set HARDVEN_STAKE_MAX to make this checkable.");
+                else
+                    Console.WriteLine($"[PREFLIGHT OK] betting contract agrees — sidecar cap " +
+                                      $"{sidecarCap?.ToString("0.00") ?? "none"} ≥ stake sent {willSend:0.00}, " +
+                                      $"bet_enabled={betEnabled}.");
+            }
+            else
+            {
+                Console.WriteLine("[PREFLIGHT] sidecar /health has no `betting` block (older sidecar?) — " +
+                                  "cannot verify HARDVEN_MAX_STAKE ≥ HARDVEN_STAKE_MAX. Check it by hand.");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"[PREFLIGHT FAIL] could not reach the sidecar to verify the betting contract: {ex.Message}");
+            Console.WriteLine("[PREFLIGHT] refusing to arm — a live run needs the sidecar up anyway.");
+            Console.ResetColor();
+            return;
+        }
+    }
+
     // Order execution clients — simulated in dry-run, real in live.
     SimulatedFillProfile? fillProfile = null;
     if (isDryRun)

@@ -101,6 +101,16 @@ def _session_state() -> dict | None:
 @app.get("/health")
 async def health():
     h = {"ok": True, "book": adapter.name, "ts": time.time()}
+    # The venue-side BETTING CONTRACT, published so the bot can verify it agrees with its own sizing BEFORE it
+    # fires anything. These are the sidecar's own numbers, deliberately independent of the C# ladder: a hard cap
+    # in a separate process is what catches a units/FX/depth bug in the bot before it becomes a real bet. But a
+    # mismatch is only safe if it is LOUD — a sidecar cap below the ladder's rung rejects the book leg AFTER the
+    # Kalshi leg has filled, i.e. a naked leg on every single arb. See the C# preflight in Program.cs.
+    h["betting"] = {
+        "max_stake": getattr(adapter, "_max_stake", None),      # HARDVEN_MAX_STAKE (account currency)
+        "bet_enabled": bool(getattr(adapter, "_bet_enabled", False)),   # HARDVEN_BET_ENABLE
+        "currency": getattr(adapter, "_balance_currency", "") or None,
+    }
     s = _session_state()
     if s is not None:
         h["session_ready"] = bool(s.get("ready", True))

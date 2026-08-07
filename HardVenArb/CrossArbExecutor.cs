@@ -1145,6 +1145,12 @@ public class CrossArbExecutor
                 return;
             }
 
+            // The rung ALWAYS goes to the slip — not only when the ladder changed the count. This was inside
+            // the resize branch, so whenever the pre-ladder ceiling happened to equal what the rung buys
+            // (ladderContracts == contracts) the stake stayed 0 → the client re-DERIVED a non-round stake
+            // (the €4.62 signature the rung plumbing exists to prevent) AND the lock check below, gated on
+            // stake > 0, was silently skipped. Ladder success ⇒ we know the exact rung ⇒ send it.
+            ladderStakeAccount = ladderStake;
             if (ladderContracts != contracts)
             {
                 // Release the over-reservation made at the pre-ladder size, then re-reserve at the rung.
@@ -1158,7 +1164,6 @@ public class CrossArbExecutor
                 Console.WriteLine(
                     $"[LADDER] {pair.Label} | {contracts} → {ladderContracts} contracts " +
                     $"(stake {ladderStake:0.00} {_hardvenCurrency}, ≤{StakeLadder.MaxDepthFraction:0.###} of book max)");
-                ladderStakeAccount = ladderStake;   // exact rung → the slip (keeps the book side round)
                 contracts     = ladderContracts;
                 hardvenShares = contracts;
                 kalshiCost    = newKalshiCost;
