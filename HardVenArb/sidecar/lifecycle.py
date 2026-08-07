@@ -182,9 +182,17 @@ class PinnacleLifecycle:
         if post_bound != pre_bound:
             mode += " + bounded"
             verb = "trimmed" if post_bound < pre_bound else "grew"
+            # PER-DAY, because the cap is per-day. Printing the multi-day total against a per-day ceiling reads
+            # as a breach that isn't one (2026-08-07: "10.1h -> 18.7h ... daily cap 10h" was today 8.7h +
+            # tomorrow 10.0h, both legal).
+            per_day: dict = {}
+            for o, c, _g in new:
+                d = sched._local(o).date()
+                per_day[d] = per_day.get(d, timedelta()) + (c - o)
+            days = ", ".join(f"{d:%a %d}: {h.total_seconds() / 3600:.1f}h" for d, h in sorted(per_day.items()))
             print(f"[PINNACLE LIFECYCLE] hard bounds {verb} the plan "
-                  f"{pre_bound.total_seconds() / 3600:.1f}h -> {post_bound.total_seconds() / 3600:.1f}h "
-                  f"(min downtime {self._min_downtime_min:g}m, daily cap {self._max_daily_hours:g}h, "
+                  f"{pre_bound.total_seconds() / 3600:.1f}h -> {post_bound.total_seconds() / 3600:.1f}h total "
+                  f"[{days}] (min downtime {self._min_downtime_min:g}m, daily cap {self._max_daily_hours:g}h/day, "
                   f"fill={'on' if self._fill_to_cap else 'off'}, "
                   f"{burned:.1f}h already burned today).")
         if not new and self._windows:

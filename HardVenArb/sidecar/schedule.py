@@ -399,8 +399,16 @@ def fill_daily_hours(windows, max_hours: float, spent=None, now: datetime | None
     for w in windows:
         by_day.setdefault(_local(w[0]).date(), []).append(w)
     out = []
+    today = _local(now).date()
     for day, ws in by_day.items():
         ws = sorted(ws, key=lambda x: x[0])
+        # ONLY fill the current day. With `today_only` planning, a future day holds nothing but the operator's
+        # pins — its games have not been fetched yet — so filling it inflates a placeholder against a slate we
+        # cannot see. Observed 2026-08-07: tomorrow's 06:00-08:00 pin was stretched to a 10h block starting at
+        # MIDNIGHT. That day gets replanned (and filled) once its games exist.
+        if day != today:
+            out.extend(ws)
+            continue
         planned = sum(((c - max(o, now)) for o, c, _ in ws if c > max(o, now)), timedelta())
         leftover = timedelta(hours=max_hours) - spent.get(day, timedelta()) - planned
         if leftover <= timedelta():

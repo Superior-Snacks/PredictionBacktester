@@ -148,6 +148,14 @@ def main() -> int:
     out = sched.fill_daily_hours(thin, 8, spent=burned, now=T0)
     r.append(check("fill respects hours already burned", hours(out), 2.0))
 
+    # A FUTURE day holds only pins (its games aren't fetched under today_only) — inflating it against a slate
+    # we can't see turned tomorrow's 2h morning pin into a 10h midnight block on the live bot (2026-08-07).
+    tomorrow_pin = [w(6, 0, 8, 0, games=0, day=8)]
+    r.append(check("future day is NOT filled (games unknown yet)",
+                   sched.fill_daily_hours(tomorrow_pin, 10, now=T0), tomorrow_pin))
+    mixed = sched.fill_daily_hours(thin + tomorrow_pin, 8, now=T0)
+    r.append(check("  ...while today still fills", (hours([mixed[0]]), hours([mixed[1]])), (8.0, 2.0)))
+
     # ── banking window ────────────────────────────────────────────────────────
     lc2 = PinnacleLifecycle(FakeBrowser(), [33])
     asyncio.run(lc2.halt("low balance: pinnacle wallet 0.00 < floor 5"))
