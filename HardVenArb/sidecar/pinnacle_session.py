@@ -209,6 +209,7 @@ class PinnacleBrowserSession:
         self._pw = None
         self._ctx = None
         self._page = None
+        self._banking_hold = False        # operator banking window → suppress the session-refresh reload
         self._activity_task: Optional[asyncio.Task] = None
         # captured creds
         self._session = ""
@@ -828,6 +829,9 @@ class PinnacleBrowserSession:
                 break
             if self._page is None:
                 continue
+            if getattr(self, "_banking_hold", False):
+                print("[PINNACLE SESSION] session refresh SKIPPED - operator banking window is open.")
+                continue
             try:
                 self.pause_activity()
                 await self._page.reload(wait_until="domcontentloaded", timeout=45_000)
@@ -1100,6 +1104,25 @@ class PinnacleBrowserSession:
                 pass
 
     # ── execution interlock (delegates to the organic loop) ───────────────────────
+    def set_banking(self, on: bool) -> None:
+        """Operator banking window: suppress the periodic re-login RELOAD. `pause_activity` isn't enough — the
+        refresh loop pauses activity around itself and reloads anyway, which would wipe a part-filled deposit
+        form out from under the operator. Cleared when the window ends."""
+        self._banking_hold = bool(on)
+        print(f"[PINNACLE SESSION] banking hold {'ON - session-refresh reloads suppressed' if on else 'OFF'}.")
+
+    async def open_banking_tab(self, url: str):
+        """Open `url` in a NEW tab in the bot's own profile and put it in front — the operator deposits on the
+        exact account (and cookies) that place the bets. A separate tab, so nothing the operator does navigates
+        the page holding the WS/session."""
+        pg = await self.open_tab(url)
+        if pg is not None:
+            try:
+                await pg.bring_to_front()
+            except Exception:
+                pass
+        return pg
+
     def pause_activity(self) -> None:
         """Pause organic idle behaviour before placing a bet (so an in-flight scroll/move can't fight the bet
         click on the single page). Resume after. No-op until the organic loop is running."""

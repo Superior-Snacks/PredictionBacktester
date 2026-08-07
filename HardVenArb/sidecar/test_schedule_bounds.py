@@ -124,6 +124,54 @@ def main() -> int:
     r.append(check("  banked uptime is the real open->close span",
                    lc._spent_by_day[datetime(2026, 8, 7).date()], timedelta(hours=3, minutes=30)))
 
+    # ── fill_daily_hours: the cap as a TARGET, not just a ceiling ─────────────
+    thin = [w(12, 0, 14, 0, games=3)]                       # 2h planned, 8h budget
+    out = sched.fill_daily_hours(thin, 8, now=T0)
+    r.append(check("thin plan grows toward the cap", hours(out), 8.0))
+    r.append(check("  ...earlier open preferred (pre-live lead)", out[0][0] < thin[0][0], True))
+
+    r.append(check("already at the cap -> unchanged",
+                   sched.fill_daily_hours([w(6, 0, 14, 0, games=3)], 8, now=T0),
+                   [w(6, 0, 14, 0, games=3)]))
+    r.append(check("over the cap -> fill does nothing",
+                   sched.fill_daily_hours([w(6, 0, 20, 0, games=3)], 8, now=T0),
+                   [w(6, 0, 20, 0, games=3)]))
+
+    two = [w(8, 0, 10, 0, games=3), w(14, 0, 16, 0, games=3)]
+    out = sched.fill_daily_hours(two, 24, now=T0, min_downtime_min=60)
+    gap = (out[1][0] - out[0][1]).total_seconds() / 60
+    r.append(check("filling never eats the required downtime", gap >= 60, True))
+    r.append(check("  ...and stays inside the local day",
+                   out[0][0] >= datetime(2026, 8, 7) and out[-1][1] <= datetime(2026, 8, 8), True))
+
+    burned = {datetime(2026, 8, 7).date(): timedelta(hours=6)}
+    out = sched.fill_daily_hours(thin, 8, spent=burned, now=T0)
+    r.append(check("fill respects hours already burned", hours(out), 2.0))
+
+    # ── banking window ────────────────────────────────────────────────────────
+    lc2 = PinnacleLifecycle(FakeBrowser(), [33])
+    asyncio.run(lc2.halt("low balance: pinnacle wallet 0.00 < floor 5"))
+    r.append(check("halt closes the site", (lc2._override, lc2._open), ("halted", False)))
+    asyncio.run(lc2.banking(30))
+    r.append(check("banking OPENS the site through a halt", (lc2.state, lc2._open), ("banking", True)))
+
+    # the halt underneath must survive: banking is deliberately not persisted
+    class FakeControl:
+        def __init__(self): self.saved = []
+        def set_override(self, mode, reason, until): self.saved.append(mode)
+    lc3 = PinnacleLifecycle(FakeBrowser(), [33])
+    lc3._control = FakeControl()
+    asyncio.run(lc3.halt("empty"))
+    asyncio.run(lc3.banking(30))
+    r.append(check("banking is NOT persisted (halt survives a restart)", lc3._control.saved, ["halted"]))
+    r.append(check("  ...and a persisted banking can't be restored",
+                   (lc3.restore_override("banking", "x", None), lc3._override)[1], "banking"))
+
+    # expiry reverts to the halt, it does not clear it
+    lc3._override_until = datetime(2026, 8, 7, 0, 0)
+    asyncio.run(lc3.tick(now=datetime(2026, 8, 7, 1, 0)))
+    r.append(check("banking expires back INTO the halt", lc3._override, "halted"))
+
     n = sum(r)
     print(f"\n{n}/{len(r)} passed")
     return 0 if n == len(r) else 1

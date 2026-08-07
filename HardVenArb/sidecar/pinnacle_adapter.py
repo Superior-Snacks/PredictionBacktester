@@ -475,6 +475,8 @@ class PinnacleAdapter(BookAdapter):
         self._browser = None                                   # PinnacleBrowserSession when source == "browser"
         self._tab_manager = None                               # LeagueTabManager when HARDVEN_TAB_MANAGER=1 (reader)
         self._tab_organic = None                               # TabOrganic: light per-tab human activity
+        self._banking_mode = False                             # operator banking window: all automation frozen
+        self._banking_task: Optional[asyncio.Task] = None
         self._bet_page = None                                  # cold last-resort bet tab (see _select_bet_tab)
         self._bet_cursor = None                                # tracked mouse pos for human-like placement moves
         self._tab_manager_on = os.environ.get("HARDVEN_TAB_MANAGER") == "1"
@@ -523,6 +525,8 @@ class PinnacleAdapter(BookAdapter):
         # shaped around games, and merge_windows unions overlapping blocks/pins into ever-longer spans.
         self._lifecycle_min_downtime = float(os.environ.get("PINNACLE_MIN_DOWNTIME_MIN", "0") or 0)
         self._lifecycle_max_daily_hours = float(os.environ.get("PINNACLE_MAX_DAILY_HOURS", "0") or 0)
+        # Treat the daily cap as a TARGET: stretch windows into unused budget (more pre-live watching time).
+        self._lifecycle_fill_to_cap = os.environ.get("PINNACLE_FILL_TO_CAP", "1") != "0"
         self._lifecycle_today_only = os.environ.get("PINNACLE_SESSION_TODAY_ONLY", "1") != "0"  # plan only today's games (default ON)
         # These four were previously stuck at the constructor defaults with no way to tune them from the env.
         self._lifecycle_trail = _cfg_int("PINNACLE_TRAIL_MIN", 45)        # stay open this long past a block
@@ -642,7 +646,9 @@ class PinnacleAdapter(BookAdapter):
                                                         jitter_min=self._lifecycle_jitter,
                                                         pin_hours=self._lifecycle_pin_hours,
                                                         min_downtime_min=self._lifecycle_min_downtime,
-                                                        max_daily_hours=self._lifecycle_max_daily_hours)
+                                                        max_daily_hours=self._lifecycle_max_daily_hours,
+                                                        fill_to_cap=self._lifecycle_fill_to_cap,
+                                                        on_banking=self._on_banking)
                     # Operator control: restore any persisted pins/override/toggles BEFORE the loop starts,
                     # so a pause or balance-halt set before a restart is honoured on the very first tick.
                     import schedule as _sched
@@ -2933,6 +2939,44 @@ class PinnacleAdapter(BookAdapter):
             self._tab_organic.pause()
         if self._tab_manager is not None:
             self._tab_manager.hold(True)
+
+    def _on_banking(self, on: bool) -> None:
+        """Lifecycle hook for the operator's banking window: freeze every automation that touches the browser,
+        and put the site in front of them in the bot's OWN profile (same cookies/account that place the bets).
+        Deferred to a task because banking OPENS the browser on top of a halt — at call time it may not be up
+        yet — and re-applied there because the tab manager is recreated on session-open and would start unheld."""
+        self._banking_mode = bool(on)
+        if on:
+            self._pause_all_organic()
+            if self._banking_task is None or self._banking_task.done():
+                self._banking_task = asyncio.create_task(self._banking_window())
+        else:
+            try:
+                if self._browser is not None:
+                    self._browser.set_banking(False)
+            except Exception:
+                pass
+            self._resume_all_organic()
+
+    async def _banking_window(self) -> None:
+        for _ in range(120):                                  # up to ~60s for a cold browser start
+            if not self._banking_mode:
+                return
+            if self._browser is not None and getattr(self._browser, "_page", None) is not None:
+                break
+            await asyncio.sleep(0.5)
+        if not self._banking_mode or self._browser is None:
+            return
+        self._pause_all_organic()                             # AFTER session-open recreated the tab manager
+        try:
+            self._browser.set_banking(True)                   # no session-refresh reload over a deposit form
+            url = os.environ.get("PINNACLE_CASHIER_URL", "").strip() or self._browser._derive_home_url()
+            await self._browser.open_banking_tab(url)
+            print(f"[PINNACLE] banking window: opened {url} — automation frozen; the bot will not touch the "
+                  "browser until it expires.")
+        except Exception as ex:
+            print(f"[PINNACLE] banking window: could not open the site ({type(ex).__name__}: {ex}) — the "
+                  "browser IS up, navigate to the cashier manually.")
 
     def _resume_all_organic(self) -> None:
         try:

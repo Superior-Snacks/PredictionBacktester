@@ -36,7 +36,8 @@ class PinnacleLifecycle:
                  min_games: int = 1, max_blocks: int | None = 4, session_hours: float = 0.0,
                  manual_plan: str | None = None, today_only: bool = True,
                  paired_only: bool = True, jitter_min: float = 0.0, pin_hours: str = "",
-                 min_downtime_min: float = 0.0, max_daily_hours: float = 0.0):
+                 min_downtime_min: float = 0.0, max_daily_hours: float = 0.0,
+                 fill_to_cap: bool = False, on_banking: Callable[[bool], None] | None = None):
         self._browser = browser
         self._sports = sports
         self._on_open = on_open or (lambda: None)
@@ -62,6 +63,10 @@ class PinnacleLifecycle:
         # In-memory: a restart forgets the day's spend, which is the safe direction (never over-restricts).
         self._spent_by_day: dict = {}
         self._open_since = None
+        self._fill_to_cap = fill_to_cap             # treat the daily cap as a TARGET, not just a ceiling
+        # Freeze/unfreeze every automation that touches the browser, for the operator's banking window.
+        self._on_banking = on_banking or (lambda on: None)
+        self._pre_banking = (None, "")              # override to restore when the banking window expires
         self._manual_plan = manual_plan       # path to a hand-written test plan (overrides the slate) — for cycle testing
         self._today_only = today_only         # plan only the CURRENT local day's games (tomorrow's slate is incomplete)
         # Schedule around games we can actually BET (paired with a Kalshi market). Unpaired board games buy a
@@ -167,15 +172,20 @@ class PinnacleLifecycle:
             spent = self._spent_snapshot(now_utc)
             new = sched.cap_daily_hours(new, self._max_daily_hours, protected=self._pinned_spans,
                                         spent=spent, now=now_utc)
+            if self._fill_to_cap:      # spend the slack: unused budget is unused pre-live watching time
+                new = sched.fill_daily_hours(new, self._max_daily_hours, spent=spent, now=now_utc,
+                                             min_downtime_min=self._min_downtime_min)
             burned = spent.get(sched._local(now_utc).date(), timedelta()).total_seconds() / 3600
         else:
             burned = 0.0
         post_bound = sum((c - o for o, c, _ in new), timedelta())
-        if post_bound < pre_bound:
+        if post_bound != pre_bound:
             mode += " + bounded"
-            print(f"[PINNACLE LIFECYCLE] hard bounds trimmed the plan "
+            verb = "trimmed" if post_bound < pre_bound else "grew"
+            print(f"[PINNACLE LIFECYCLE] hard bounds {verb} the plan "
                   f"{pre_bound.total_seconds() / 3600:.1f}h -> {post_bound.total_seconds() / 3600:.1f}h "
                   f"(min downtime {self._min_downtime_min:g}m, daily cap {self._max_daily_hours:g}h, "
+                  f"fill={'on' if self._fill_to_cap else 'off'}, "
                   f"{burned:.1f}h already burned today).")
         if not new and self._windows:
             print("[PINNACLE LIFECYCLE] slate returned 0 usable windows; keeping last windows (transient?)")
@@ -229,7 +239,21 @@ class PinnacleLifecycle:
         if self._override == "forced" and self._override_until and now >= self._override_until:
             print("[PINNACLE LIFECYCLE] forced window expired - back on schedule.")
             self._set_override(None, "")
-        if self._override in ("paused", "halted"):
+        # A banking window expires back into whatever it interrupted — normally the halt that prompted it. It
+        # must NOT clear that halt: only the operator knows whether the money actually landed.
+        if self._override == "banking" and self._override_until and now >= self._override_until:
+            prev, prev_reason = getattr(self, "_pre_banking", (None, ""))
+            self._on_banking(False)              # automation back on before the state flips
+            self._set_override(prev, prev_reason)
+            self._pre_banking = (None, "")
+            print(f"[PINNACLE LIFECYCLE] banking window expired - back to {prev or 'schedule'}.")
+            if self._notify.enabled:
+                self._notify.send_bg(f"🏦 banking window closed — back to **{prev or 'schedule'}**."
+                                     + (" Send `resume` when the balance is topped up." if prev else ""))
+        if self._override == "banking":
+            inside = True                        # site must be UP; this is the one override that opens on a halt
+            cur = cur or (now, self._override_until or now, 0)
+        elif self._override in ("paused", "halted"):
             inside = False                       # operator pause / balance halt beats the schedule
         elif self._override == "forced":
             inside = True
@@ -250,12 +274,13 @@ class PinnacleLifecycle:
             self._on_close()                     # adapter stands the feed down (session_ready=False)
             print("[PINNACLE LIFECYCLE] window CLOSED → browser down (dark).")
             self._alert_close(now)
-        self.state = ("paused" if self._override == "paused" else "halted" if self._override == "halted"
+        self.state = ("banking" if self._override == "banking"
+                      else "paused" if self._override == "paused" else "halted" if self._override == "halted"
                       else "forced" if self._override == "forced"
                       else "open" if self._open else "dark")
         if self._override in ("paused", "halted"):
             secs = None                          # nothing will change until an operator resumes
-        elif self._override == "forced" and self._override_until:
+        elif self._override in ("forced", "banking") and self._override_until:
             secs = max(0.0, (self._override_until - now).total_seconds())
         else:
             _, secs = sched.status(self._windows, now)
@@ -263,9 +288,12 @@ class PinnacleLifecycle:
         return secs
 
     # ── operator control (Discord) ────────────────────────────────────────────
-    def _set_override(self, mode: str | None, reason: str, until=None) -> None:
+    def _set_override(self, mode: str | None, reason: str, until=None, persist: bool = True) -> None:
         self._override, self._override_reason, self._override_until = mode, reason, until
-        if self._control is not None:
+        # `persist=False` is for BANKING only. Persisting it would overwrite the halt underneath in
+        # control_state.json, so a sidecar restart mid-banking would come back with NO halt and start trading on
+        # the empty account we opened the window to refill. In-memory only ⇒ a restart lands back in the halt.
+        if persist and self._control is not None:
             self._control.set_override(mode, reason, until.isoformat() + "Z" if until else None)
 
     def restore_override(self, mode: str | None, reason: str, until_iso: str | None) -> None:
@@ -278,6 +306,8 @@ class PinnacleLifecycle:
                 until = None
         if mode == "forced" and (until is None or until <= sched._utcnow()):
             return                                # a stale forced window must not resurrect
+        if mode == "banking":
+            return                                # never persisted (see _set_override); can't be restored
         self._override, self._override_reason, self._override_until = mode, reason, until
 
     async def pause(self, reason: str = "operator") -> dict:
@@ -305,6 +335,34 @@ class PinnacleLifecycle:
         if self._notify.enabled:
             self._notify.send_bg(f"🔵 **FORCED OPEN** for {minutes:g}m (until "
                                  f"{sched._local(until):%H:%M} local) — {reason}")
+        return self.status()
+
+    async def banking(self, minutes: float = 30.0) -> dict:
+        """HANDS-OFF BANKING WINDOW: bring the site up in the bot's OWN Chrome profile and then stop touching it,
+        so the operator can deposit/withdraw on the very account that places the bets.
+
+        This exists because a balance halt is self-sealing: the halt closes the browser, and a closed browser is
+        exactly what you need open to top the account up. So `banking` deliberately OVERRIDES a halt to open the
+        site — while keeping trading off (nothing fires in this state) and freezing every automation that would
+        steal focus or navigate: tab churn/rove, organic mouse+keyboard activity, and the periodic re-login page
+        reload. It auto-reverts after `minutes` (like `forced`) so a forgotten banking window can't leave the bot
+        idle and un-keptalive forever, and reverting RESTORES the halt rather than clearing it — clearing is the
+        operator's call, via `resume`, once the money has actually landed.
+        """
+        self._pre_banking = (self._override, self._override_reason)     # usually ("halted", "low balance: …")
+        until = sched._utcnow() + timedelta(minutes=max(1.0, minutes))
+        self._set_override("banking", "operator banking window", until, persist=False)
+        self._on_banking(True)                    # freeze tabs/organic/reload BEFORE the site comes up
+        await self.tick()
+        if self._notify.enabled:
+            prev = self._pre_banking[0]
+            self._notify.send_bg(
+                f"🏦 **BANKING WINDOW** — site open in the bot's own profile for {minutes:g}m "
+                f"(until {sched._local(until):%H:%M} local). Automation is frozen: no tab switching, no "
+                f"organic activity, no page reloads, no trading. "
+                + (f"Reverts to **{prev}** when it expires — send `resume` once funds have landed."
+                   if prev else "Reverts to the schedule when it expires."))
+        print(f"[PINNACLE LIFECYCLE] BANKING WINDOW open for {minutes:g}m — automation frozen.")
         return self.status()
 
     async def halt(self, reason: str) -> dict:

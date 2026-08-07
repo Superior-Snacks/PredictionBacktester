@@ -298,6 +298,14 @@ async def control_force_open(req: ControlRequest):
     return await _lifecycle().force_open(req.minutes, req.reason)
 
 
+@app.post("/control/banking")
+async def control_banking(req: ControlRequest):
+    """Hands-off banking window: open the site in the bot's own Chrome profile and freeze all automation so the
+    operator can deposit/withdraw undisturbed. Deliberately opens THROUGH a balance halt — the halt closes the
+    browser, and a closed browser is exactly what you need open to refill the account. Auto-reverts to the halt."""
+    return await _lifecycle().banking(req.minutes or 30.0)
+
+
 @app.post("/control/pins")
 async def control_pins(req: ControlRequest):
     """Replace the pinned-hours set (empty string clears all pins) and replan immediately."""

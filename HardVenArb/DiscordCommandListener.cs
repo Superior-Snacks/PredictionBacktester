@@ -176,6 +176,19 @@ public sealed class DiscordCommandListener
                                $"🔵 forcing open for {ParseNum(args, 60):0} min");
                 break;
 
+            // Hands-off banking window. Opens the site in the bot's OWN Chrome profile (same account that
+            // places the bets) and freezes tab switching, organic activity and page reloads so a deposit isn't
+            // interrupted. Works THROUGH a balance halt on purpose: the halt closes the browser, and a closed
+            // browser is exactly what you need open to top up. Auto-reverts to the halt — `resume` clears it.
+            case "banking":
+            case "deposit":
+            case "bank":
+                await CtlAsync("/control/banking",
+                               new { minutes = ParseNum(args, 30), reason = "discord banking" },
+                               $"🏦 banking window for {ParseNum(args, 30):0} min — site opening, automation frozen. " +
+                               "Send `resume` when the funds have landed.");
+                break;
+
             // ── schedule + pins (sidecar) ─────────────────────────────────────
             case "schedule":
             case "sched":
@@ -209,6 +222,8 @@ public sealed class DiscordCommandListener
         "`pause [reason]` — close the site & stay dark *(survives a restart)*\n" +
         "`resume` — back on schedule (also clears a low-balance halt)\n" +
         "`force [minutes]` — open NOW outside the schedule (default 60, auto-reverts)\n" +
+        "`banking [minutes]` — open the site & FREEZE all automation so you can deposit/withdraw " +
+        "(default 30; works through a low-balance halt, then reverts to it — `resume` when funds land)\n" +
         "**Schedule**\n" +
         "`schedule` — show the current plan\n" +
         "`schedule <key>=<val> …` — e.g. `schedule lead_min=20 max_blocks=3`\n" +

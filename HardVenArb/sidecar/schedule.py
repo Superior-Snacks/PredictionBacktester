@@ -367,6 +367,77 @@ def cap_daily_hours(windows, max_hours: float, protected=None, min_window_min: f
     return sorted(out, key=lambda w: w[0])
 
 
+def _midnight_utc(day, plus_days: int = 0) -> datetime:
+    """Local midnight of `day` (+plus_days) as a UTC-naive datetime — the edge a window may not grow past, so
+    stretching today's plan can't quietly spend tomorrow's budget."""
+    tz = datetime.now(timezone.utc).astimezone().tzinfo
+    d = day + timedelta(days=plus_days)
+    return datetime(d.year, d.month, d.day, tzinfo=tz).astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def fill_daily_hours(windows, max_hours: float, spent=None, now: datetime | None = None,
+                     min_downtime_min: float = 0.0):
+    """Grow the plan TOWARD the daily ceiling — the cap as a TARGET, not just a limit.
+
+    `cap_daily_hours` only ever removes time, so on a thin slate the bot sits dark with budget unspent. Watching
+    is what finds pre-live edges (they surface hours before a start), so unused budget is unused opportunity.
+
+    Expansion is EARLIER-OPEN FIRST, then later-close: more lead time is worth more than more trail, for the
+    same reason `enforce_downtime` trims closes rather than delaying opens. Room is bounded by the neighbouring
+    window plus `min_downtime_min` (so filling can never eat the downtime the operator asked for), by `now` (no
+    growing into the past), and by local midnight (so today can't spend tomorrow's budget). When there isn't
+    enough budget for everyone, each window gets a share proportional to the room it has.
+
+    Run AFTER cap_daily_hours: cap enforces the ceiling, fill takes up the slack under it.
+    """
+    if max_hours <= 0 or not windows:
+        return list(windows)
+    now = now or _utcnow()
+    spent = spent or {}
+    gap = timedelta(minutes=min_downtime_min)
+    by_day: dict = {}
+    for w in windows:
+        by_day.setdefault(_local(w[0]).date(), []).append(w)
+    out = []
+    for day, ws in by_day.items():
+        ws = sorted(ws, key=lambda x: x[0])
+        planned = sum(((c - max(o, now)) for o, c, _ in ws if c > max(o, now)), timedelta())
+        leftover = timedelta(hours=max_hours) - spent.get(day, timedelta()) - planned
+        if leftover <= timedelta():
+            out.extend(ws)
+            continue
+        lo_edge, hi_edge = _midnight_utc(day), _midnight_utc(day, 1)
+        opens = [o for o, _, _ in ws]
+        closes = [c for _, c, _ in ws]
+        # TWO PHASES, because the space between two windows belongs to BOTH of them and can only be spent once.
+        # Sizing each window's room against its ORIGINAL neighbours double-counts that gap and lets the pair
+        # expand straight through the downtime (caught by test: a 4h gap handed 3h to each side).
+        # Phase 1 moves OPENS earlier (the preferred direction); phase 2 then moves CLOSES later against the
+        # opens as they now stand, so what phase 1 consumed is no longer on offer.
+        early = []
+        for i in range(len(ws)):
+            lower = max(closes[i - 1] + gap, now, lo_edge) if i else max(now, lo_edge)
+            early.append(max(timedelta(), opens[i] - lower))
+        tot_e = sum(early, timedelta())
+        if tot_e > timedelta():
+            scale = min(1.0, leftover / tot_e)
+            for i in range(len(ws)):
+                opens[i] -= early[i] * scale
+            leftover -= tot_e * scale
+        if leftover > timedelta():
+            late = []
+            for i in range(len(ws)):
+                upper = (opens[i + 1] - gap) if i + 1 < len(ws) else hi_edge
+                late.append(max(timedelta(), upper - closes[i]))
+            tot_l = sum(late, timedelta())
+            if tot_l > timedelta():
+                scale = min(1.0, leftover / tot_l)
+                for i in range(len(ws)):
+                    closes[i] += late[i] * scale
+        out.extend((opens[i], closes[i], ws[i][2]) for i in range(len(ws)))
+    return sorted(out, key=lambda w: w[0])
+
+
 def assign_games(windows, starts):
     """Attribute every game to the window that will cover it → (per_window, left_behind).
 
