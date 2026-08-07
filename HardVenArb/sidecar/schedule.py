@@ -276,6 +276,97 @@ def merge_windows(a: list, b: list) -> list:
     return [(o, c, g) for o, c, g in out]
 
 
+def enforce_downtime(windows, min_downtime_min: float, min_window_min: float = 20.0):
+    """Guarantee at least `min_downtime_min` of browser-DOWN time between consecutive windows.
+
+    Why this is needed: `merge_windows` unions on ANY overlap, so a chain of adjacent sessions plus an operator
+    pin collapses into one very long block — observed 2026-08-07 as a single 12:37->19:45 window (7h08m). No
+    other rule bounds a window's LENGTH, so without this the bot can legitimately plan itself an all-day session
+    and never stand the browser down.
+
+    Policy: pull the EARLIER window's close back; never delay the later window's open. Pre-live edges surface
+    hours before a start, so the later block's LEAD time is worth more than the earlier block's TRAIL (which
+    only buys settlement/void reads). A window trimmed below `min_window_min` isn't worth a login and is dropped.
+    Expects chronological, disjoint windows — i.e. run this AFTER merge_windows and AFTER apply_jitter, since
+    jitter can itself close a gap.
+    """
+    if min_downtime_min <= 0 or len(windows) < 2:
+        return list(windows)
+    gap = timedelta(minutes=min_downtime_min)
+    floor = timedelta(minutes=min_window_min)
+    ws = sorted(windows, key=lambda w: w[0])
+    out = []
+    for i, (o, c, g) in enumerate(ws):
+        if i + 1 < len(ws):
+            latest_close = ws[i + 1][0] - gap
+            if c > latest_close:
+                c = latest_close
+        if c - o >= floor:
+            out.append((o, c, g))
+    return out
+
+
+def cap_daily_hours(windows, max_hours: float, protected=None, min_window_min: float = 20.0,
+                    spent=None, now: datetime | None = None):
+    """Bound the TOTAL open time per LOCAL day — the ceiling that stops a dense slate from planning a 24/7
+    session.
+
+    THE BUDGET IS THE DAY'S, NOT THE PLAN'S. The hourly recompute rebuilds windows from scratch and
+    `fetch_starts(back_hours=4)` drops older blocks off the front, so a plan-local cap would hand out a fresh
+    full allowance every rebuild: 5h this morning + a noon rebuild = another 5h, against a "5h" cap. Two things
+    make it a real daily ceiling:
+      * `spent` = {local_date: timedelta} of uptime ALREADY BURNED today (the lifecycle measures actual
+        open->close time), subtracted from that day's budget;
+      * each window is charged only its REMAINING time (from `now`), so the in-progress window isn't
+        double-counted against the elapsed time that produced it.
+
+    Spends what's left in priority order: `protected` windows first, then most games, then earliest. The window
+    that only PARTIALLY fits is trimmed to the remainder (dropped if that is under `min_window_min`); the rest
+    are dropped. Fully-past windows are kept untouched and charged nothing — they are history, not plan.
+
+    Operator pins are `protected`: they still CONSUME budget (a cap pins can silently blow through is not a
+    cap) but are never trimmed or dropped — a pin is an explicit instruction, not a guess. If pins alone exceed
+    the budget they all survive and everything else sleeps.
+
+    A window is attributed to the local day it OPENS on and charged there: simpler and more predictable than
+    splitting an overnight block across two budgets.
+    """
+    if max_hours <= 0 or not windows:
+        return list(windows)
+    now = now or _utcnow()
+    spent = spent or {}
+    prot = {(w[0], w[1]) for w in (protected or [])}
+    floor = timedelta(minutes=min_window_min)
+    by_day: dict = {}
+    for w in windows:
+        by_day.setdefault(_local(w[0]).date(), []).append(w)
+    out = []
+    for day, ws in by_day.items():
+        budget = timedelta(hours=max_hours) - spent.get(day, timedelta())
+        order = sorted(ws, key=lambda w: (0 if (w[0], w[1]) in prot else 1, -w[2], w[0]))
+        used = timedelta()
+        for o, c, g in order:
+            anchor = max(o, now)                 # only the FUTURE part of a window costs budget
+            remaining = c - anchor
+            if remaining <= timedelta():
+                out.append((o, c, g))            # already over — history, charge nothing
+                continue
+            if (o, c) in prot:
+                out.append((o, c, g))
+                used += remaining
+                continue
+            left = budget - used
+            if left <= timedelta():
+                continue                         # budget gone — this block sleeps
+            if remaining <= left:
+                out.append((o, c, g))
+                used += remaining
+            elif left >= floor:
+                out.append((o, anchor + left, g))   # partial fit: take the front of what's left
+                used += left
+    return sorted(out, key=lambda w: w[0])
+
+
 def assign_games(windows, starts):
     """Attribute every game to the window that will cover it → (per_window, left_behind).
 

@@ -519,6 +519,10 @@ class PinnacleAdapter(BookAdapter):
         self._lifecycle_min_games = _cfg_int("PINNACLE_MIN_GAMES", 1)
         self._lifecycle_session_hours = float(os.environ.get("PINNACLE_SESSION_HOURS", "0"))  # >0 = discrete Nh density-sessions
         self._lifecycle_manual_plan = os.environ.get("PINNACLE_MANUAL_PLAN", "").strip() or None  # test override (short cycle)
+        # Hard bounds on total uptime (0 = off). Nothing else caps how long the bot can stay open: windows are
+        # shaped around games, and merge_windows unions overlapping blocks/pins into ever-longer spans.
+        self._lifecycle_min_downtime = float(os.environ.get("PINNACLE_MIN_DOWNTIME_MIN", "0") or 0)
+        self._lifecycle_max_daily_hours = float(os.environ.get("PINNACLE_MAX_DAILY_HOURS", "0") or 0)
         self._lifecycle_today_only = os.environ.get("PINNACLE_SESSION_TODAY_ONLY", "1") != "0"  # plan only today's games (default ON)
         # These four were previously stuck at the constructor defaults with no way to tune them from the env.
         self._lifecycle_trail = _cfg_int("PINNACLE_TRAIL_MIN", 45)        # stay open this long past a block
@@ -636,7 +640,9 @@ class PinnacleAdapter(BookAdapter):
                                                         today_only=self._lifecycle_today_only,
                                                         paired_only=self._lifecycle_paired_only,
                                                         jitter_min=self._lifecycle_jitter,
-                                                        pin_hours=self._lifecycle_pin_hours)
+                                                        pin_hours=self._lifecycle_pin_hours,
+                                                        min_downtime_min=self._lifecycle_min_downtime,
+                                                        max_daily_hours=self._lifecycle_max_daily_hours)
                     # Operator control: restore any persisted pins/override/toggles BEFORE the loop starts,
                     # so a pause or balance-halt set before a restart is honoured on the very first tick.
                     import schedule as _sched

@@ -35,7 +35,8 @@ class PinnacleLifecycle:
                  lead_min: int = 15, trail_min: int = 45, min_gap_min: int = 60,
                  min_games: int = 1, max_blocks: int | None = 4, session_hours: float = 0.0,
                  manual_plan: str | None = None, today_only: bool = True,
-                 paired_only: bool = True, jitter_min: float = 0.0, pin_hours: str = ""):
+                 paired_only: bool = True, jitter_min: float = 0.0, pin_hours: str = "",
+                 min_downtime_min: float = 0.0, max_daily_hours: float = 0.0):
         self._browser = browser
         self._sports = sports
         self._on_open = on_open or (lambda: None)
@@ -50,6 +51,17 @@ class PinnacleLifecycle:
         self._min_games = min_games
         self._max_blocks = max_blocks
         self._session_hours = session_hours   # >0 = discrete density-session mode (continuous sports); 0 = gap-merge windows
+        # HARD BOUNDS on the plan — the only rules that limit total uptime. Everything above shapes windows
+        # around games; nothing else stops a dense slate (or overlapping pins, which merge_windows unions) from
+        # producing one all-day block. 0 = disabled, which is the pre-2026-08-07 behaviour.
+        self._min_downtime_min = min_downtime_min   # guaranteed browser-DOWN gap between consecutive windows
+        self._max_daily_hours = max_daily_hours     # ceiling on total open time per LOCAL day
+        # ACTUAL uptime burned, per local day — what makes the cap a DAILY ceiling instead of a per-plan one.
+        # Without it every rebuild hands out a fresh full allowance (and old blocks fall off the front of the
+        # slate anyway via fetch_starts' back_hours), so "5h/day" would really mean "5h per recompute".
+        # In-memory: a restart forgets the day's spend, which is the safe direction (never over-restricts).
+        self._spent_by_day: dict = {}
+        self._open_since = None
         self._manual_plan = manual_plan       # path to a hand-written test plan (overrides the slate) — for cycle testing
         self._today_only = today_only         # plan only the CURRENT local day's games (tomorrow's slate is incomplete)
         # Schedule around games we can actually BET (paired with a Kalshi market). Unpaired board games buy a
@@ -145,6 +157,26 @@ class PinnacleLifecycle:
                 mode += f" + {len(pins)} pinned"
         if self._jitter_min > 0:                   # human wobble; applied AFTER selection so blocks don't change
             new = sched.apply_jitter(new, self._jitter_min)
+        # HARD BOUNDS, applied LAST — after merge + jitter, because both can close a gap or lengthen a block.
+        # Downtime first (it shortens windows, which can only help the budget), then the daily ceiling.
+        pre_bound = sum((c - o for o, c, _ in new), timedelta())
+        if self._min_downtime_min > 0:
+            new = sched.enforce_downtime(new, self._min_downtime_min)
+        if self._max_daily_hours > 0:
+            now_utc = sched._utcnow()
+            spent = self._spent_snapshot(now_utc)
+            new = sched.cap_daily_hours(new, self._max_daily_hours, protected=self._pinned_spans,
+                                        spent=spent, now=now_utc)
+            burned = spent.get(sched._local(now_utc).date(), timedelta()).total_seconds() / 3600
+        else:
+            burned = 0.0
+        post_bound = sum((c - o for o, c, _ in new), timedelta())
+        if post_bound < pre_bound:
+            mode += " + bounded"
+            print(f"[PINNACLE LIFECYCLE] hard bounds trimmed the plan "
+                  f"{pre_bound.total_seconds() / 3600:.1f}h -> {post_bound.total_seconds() / 3600:.1f}h "
+                  f"(min downtime {self._min_downtime_min:g}m, daily cap {self._max_daily_hours:g}h, "
+                  f"{burned:.1f}h already burned today).")
         if not new and self._windows:
             print("[PINNACLE LIFECYCLE] slate returned 0 usable windows; keeping last windows (transient?)")
             return
@@ -166,6 +198,28 @@ class PinnacleLifecycle:
               f"({mode}, lead {self._lead_min}m{jit}; {scope}; {games_kept} in-window).")
         self._write_windows_file()
 
+    def _burn_uptime(self, now) -> None:
+        """Bank the session that just ended against its local day's budget. Attributed to the day the session
+        OPENED on, matching cap_daily_hours' attribution (a window is charged to the day it opens)."""
+        if self._open_since is None:
+            return
+        day = sched._local(self._open_since).date()
+        self._spent_by_day[day] = self._spent_by_day.get(day, timedelta()) + (now - self._open_since)
+        self._open_since = None
+        # keep only the last few days so a long-lived process doesn't accumulate forever
+        for d in [d for d in self._spent_by_day if (sched._local(now).date() - d).days > 2]:
+            self._spent_by_day.pop(d, None)
+
+    def _spent_snapshot(self, now):
+        """Today's burned uptime INCLUDING the session currently in progress. The live session is counted here
+        rather than left to the window's own duration, because a rebuild mid-session must see the hours already
+        used — otherwise the cap resets every recompute, which is the bug this whole mechanism exists to stop."""
+        snap = dict(self._spent_by_day)
+        if self._open and self._open_since is not None:
+            day = sched._local(self._open_since).date()
+            snap[day] = snap.get(day, timedelta()) + (now - self._open_since)
+        return snap
+
     async def tick(self, now=None) -> float | None:
         """One decision step: open if `now` is inside a window and we're closed; close if outside and we're
         open. Returns seconds to the next change (for the sleep). Separated from run() so it's unit-testable."""
@@ -186,11 +240,13 @@ class PinnacleLifecycle:
             self._on_open()                      # adapter resets feed latches BEFORE the session comes up
             await self._browser.start()
             self._open = True
+            self._open_since = now               # start the daily-budget clock (see _burn_uptime)
             print("[PINNACLE LIFECYCLE] window OPEN → browser up.")
             self._alert_open(cur, now)
         elif not inside and self._open:
             await self._browser.stop()
             self._open = False
+            self._burn_uptime(now)               # bank this session against today's cap BEFORE the next replan
             self._on_close()                     # adapter stands the feed down (session_ready=False)
             print("[PINNACLE LIFECYCLE] window CLOSED → browser down (dark).")
             self._alert_close(now)
