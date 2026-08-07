@@ -622,17 +622,28 @@ class LeagueTabManager:
                        "reset_min": self._reset_sec / 60, "cover_ttl": self._cover_ttl},
             "tabs": tabs,
             "board_paired_lids": sorted(board & set(paired)),
-            # Split the two board signals so a redundant tab is diagnosable: 'pushing' = the league's odds
-            # moved recently; 'showing' = the board is rendering it (covers stable-price leagues that push
-            # nothing, which is what used to cause tabs for leagues clearly visible on the main page).
+            # Split the two board signals so a redundant tab is diagnosable. NB the key is PUSHING-BUT-NOT-
+            # RENDERED (`board - _board_dom`), not "pushing" — a league that is both pushing and on the board is
+            # deliberately excluded, so a rendered league reading False here means nothing. (Misread as a
+            # coverage hole on 2026-08-07.) 'board_covered_lids' = the board is rendering it, which covers
+            # stable-price leagues that push nothing — the case that used to spawn tabs for leagues plainly
+            # visible on the main page.
             "board_pushing_lids": sorted(board - self._board_dom),
             "board_covered_lids": sorted(self._board_dom),        # judged covered by the board this tick
             "board_scanned_lids": sorted(self._board_scanned),  # from the scroll scan (authoritative)
             "board_coverage_source": ("scroll-scan" if self._board_scanned else
                                       "today-slate" if self._board_dom else "push-only"),
             "board_rendered_mids": len(self._board_mids),
+            # `covered_by` MUST mirror _covered_now() — the set the gap logic actually consults — or the debug
+            # view accuses the manager of holes it doesn't have. It used to test only `board` (_board_lids, the
+            # WS-push view) and so reported NONE for leagues covered via _board_dom, i.e. leagues the scroll
+            # scan can SEE on the board. 2026-08-07: two hot leagues read covered_by=NONE while the manager was
+            # correctly declining to tab them, which looks exactly like a coverage bug. Split the board sources
+            # instead of merging them, so "why does this league have no tab" stays answerable at a glance.
             "hot_ranking": [{"lid": l, "hot_games": self._hot_games(l, now),
-                             "covered_by": ("board" if l in board else "tab" if l in self._tabs
+                             "covered_by": ("board-push" if l in board
+                                            else "board-dom" if l in self._board_dom
+                                            else "tab" if l in self._tabs
                                             else "rove" if l == self._rove_lid
                                             else "ws" if l in live else "NONE")}
                             for l in hot_rank[:20]],
