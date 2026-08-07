@@ -1138,14 +1138,19 @@ if (executor != null)
                 await Task.Delay(WATCHDOG_INTERVAL_MS, cts.Token).ContinueWith(_ => { });
                 if (cts.Token.IsCancellationRequested) break;
 
+                // A scheduled dark window CLOSES the browser, so the HardVen feed going quiet is the plan
+                // working, not a venue disconnect. Without this the watchdog cried CONNECTION HALT to Discord
+                // every dark stretch (3x on the 2026-08-06 soak), which would mask a real overnight outage.
+                // Kalshi is still expected up while dark, so it keeps its full watchdog.
+                bool darkNow = hardvenFeed.ScheduledDark;
                 bool kOk = kalshiFeed.IsConnected;
-                bool pOk = hardvenFeed.IsConnected;
+                bool pOk = hardvenFeed.IsConnected || darkNow;
 
                 // ── WS connect/disconnect transitions ──────────────────────────
                 if (!kOk && lastKOk) Console.WriteLine("[WATCHDOG] Kalshi disconnected — halting new trades");
                 if (!pOk && lastPOk) Console.WriteLine("[WATCHDOG] HardVen disconnected — halting new trades");
                 if ( kOk && !lastKOk) Console.WriteLine("[WATCHDOG] Kalshi reconnected — resuming trades");
-                if ( pOk && !lastPOk) Console.WriteLine("[WATCHDOG] HardVen reconnected — resuming trades");
+                if ( pOk && !lastPOk) Console.WriteLine($"[WATCHDOG] HardVen {(darkNow ? "dark (scheduled) — not a disconnect" : "reconnected — resuming trades")}");
                 lastKOk = kOk;
                 lastPOk = pOk;
                 if (!kOk || !pOk) executor.HaltForConnectionLoss();
@@ -1174,7 +1179,10 @@ if (executor != null)
                     }
                 }
 
-                if (pOk && pSilS >= WS_SILENCE_THRESHOLD_S
+                // `!darkNow` is load-bearing: pOk is forced true while dark (above), so without it this would
+                // REST-ping a deliberately-closed venue every 60s and halt on the failure — the same false
+                // alarm by another route.
+                if (pOk && !darkNow && pSilS >= WS_SILENCE_THRESHOLD_S
                         && (nowDt - lastPPingAt).TotalSeconds >= WS_SILENCE_THRESHOLD_S)
                 {
                     lastPPingAt = nowDt;

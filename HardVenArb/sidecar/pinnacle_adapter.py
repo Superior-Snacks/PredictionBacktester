@@ -1738,8 +1738,23 @@ class PinnacleAdapter(BookAdapter):
                     old = self._cache[k]
                     if old.status != "suspended":
                         suspended += 1
+                    # CARRY `live`/`cutoff` THROUGH THE SUSPENSION. In-play tennis suspends between points, so
+                    # a live token passes through here constantly; rebuilding it with the Selection defaults
+                    # silently reset live=False, and the next REST re-seed then read THAT as "was pre-match"
+                    # (_apply_straight_markets' guard consults this entry) and restored the token as pre-live.
                     self._cache[k] = Selection(old.selection_id, old.decimal_odds, old.max_stake,
-                                               status="suspended", ts=now)
+                                               status="suspended", ts=now, live=old.live, cutoff=old.cutoff)
+            # A `/pre`-topic push must NOT downgrade a token the `/live/*` topic already flagged in-play — the
+            # same rule _apply_straight_markets applies to REST snapshots, which this path was missing. Without
+            # it the window is logged as PRE-LIVE (HardVenInPlay=0), the favourable regime: ~1s placement in the
+            # analyzer and past the executor's pre-live-only gate. The matchup's `del` (above) is what clears
+            # the tag when the game actually ends. Audited 2026-08-07 vs Kalshi settlement times: this misfiled
+            # ~2.5% of windows, incl. one logged pre-live 6 min before its Kalshi market closed.
+            if not live:
+                for token, sel in updates.items():
+                    old = self._cache.get(token)
+                    if old is not None and old.live:
+                        sel.live = True
             self._cache.update(updates)
         if updates and self._debug_ws:
             legs = " ".join(f"{k.split(':', 2)[-1]}={v.decimal_odds:.3f}" for k, v in list(updates.items())[:6])
