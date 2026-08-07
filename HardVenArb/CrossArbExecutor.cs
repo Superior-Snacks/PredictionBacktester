@@ -1166,6 +1166,44 @@ public class CrossArbExecutor
                 estimatedCost = kalshiCost + hardvenCost;
             }
 
+            // ── LOCK CHECK: is this trade actually risk-free once the legs are ROUNDED? ──────────────────
+            // The net-floor gate above is per-CONTRACT and runs before sizing, so it cannot see the rounding
+            // residual. The HardVen stake is a round rung; the Kalshi count is FLOORED from it (StakeLadder),
+            // so the book leg pays `stake x odds` (fractional) while Kalshi pays a whole number. If the Kalshi
+            // side wins we collect the floor, not the fraction — a shortfall costing `short x (1 - kAsk)`. When
+            // the edge is thinner than that shortfall the "arb" LOSES on one branch, and nothing downstream
+            // would have caught it. Compute both branches exactly and refuse anything not positive on BOTH.
+            if (ladderStakeAccount > 0m && _hardvenFxToUsd > 0m && pLegAsk > 0m)
+            {
+                decimal stakeUsd  = ladderStakeAccount * _hardvenFxToUsd;
+                decimal idealCtr  = stakeUsd / pLegAsk;                  // what the book stake actually hedges
+                decimal kFee      = KalshiFee(kLegAsk) * contracts;                  // per-contract x count
+                decimal pFee      = HardVenFee(pLegAsk, hardvenToken) * idealCtr;    // ~0 on Pinnacle; kept honest
+                decimal totalCost = contracts * kLegAsk + kFee + stakeUsd + pFee;
+                decimal ifKalshi  = contracts - totalCost;               // Kalshi pays $1 x whole contracts
+                decimal ifHardVen = idealCtr - totalCost;                // book pays stake x odds
+                decimal worst     = Math.Min(ifKalshi, ifHardVen);
+                if (worst <= 0m)
+                {
+                    lock (_balanceLock) { _kalshiBalanceUsd += kalshiCost; _hardvenBalanceUsd += hardvenCost; }
+                    Console.WriteLine(
+                        $"[EXEC SKIP] {pair.Label} | NOT LOCKED after rounding: {contracts} contracts vs " +
+                        $"{idealCtr:0.00} hedged (short {idealCtr - contracts:0.00}) → " +
+                        $"K-wins ${ifKalshi:0.000} / P-wins ${ifHardVen:0.000}. Raise the stake or the net floor.");
+                    await JournalAsync(JsonSerializer.Serialize(new {
+                        t = DateTime.UtcNow, @event = "EXEC_SKIP", pairId, arbType,
+                        reason = "NOT_LOCKED_AFTER_ROUNDING", contracts,
+                        idealContracts = Math.Round(idealCtr, 3),
+                        shortContracts = Math.Round(idealCtr - contracts, 3),
+                        stakeAccount = ladderStakeAccount, kAsk = kLegAsk, pAsk = pLegAsk,
+                        ifKalshiWins = Math.Round(ifKalshi, 4), ifHardVenWins = Math.Round(ifHardVen, 4)
+                    }));
+                    return;
+                }
+                Console.WriteLine($"[LOCK] {pair.Label} | guaranteed both ways: K-wins ${ifKalshi:0.000} / " +
+                                  $"P-wins ${ifHardVen:0.000} (worst ${worst:0.000} on {contracts} contracts)");
+            }
+
             if (Math.Min(kDepthAtLimit, pDepthAtLimit) < contracts)
             {
                 lock (_balanceLock) { _kalshiBalanceUsd += kalshiCost; _hardvenBalanceUsd += hardvenCost; }

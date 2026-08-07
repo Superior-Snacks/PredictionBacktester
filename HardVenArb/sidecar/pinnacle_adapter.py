@@ -477,6 +477,7 @@ class PinnacleAdapter(BookAdapter):
         self._tab_organic = None                               # TabOrganic: light per-tab human activity
         self._banking_mode = False                             # operator banking window: all automation frozen
         self._banking_task: Optional[asyncio.Task] = None
+        self._validate_task: Optional[asyncio.Task] = None      # proves a fresh capture before advertising it
         self._bet_page = None                                  # cold last-resort bet tab (see _select_bet_tab)
         self._bet_cursor = None                                # tracked mouse pos for human-like placement moves
         self._tab_manager_on = os.environ.get("HARDVEN_TAB_MANAGER") == "1"
@@ -933,6 +934,32 @@ class PinnacleAdapter(BookAdapter):
                 out[sid] = Selection(s.selection_id, s.decimal_odds, s.max_stake, status, ts, s.live, s.cutoff)
         return out
 
+    async def _validate_capture(self) -> None:
+        """Prove a freshly-captured session is ALIVE before the bot is told the venue is up.
+
+        Probes the authed wallet endpoint (the page polls it constantly, so it is not an unusual call) after the
+        settle wait. `balance()` already answers None for 401 / guest-redirect / malformed, which is exactly the
+        "unreadable" signal we need — a real zero balance returns 0.0 and still proves the session works.
+
+        On failure we do NOT flip `_session_ready` false by hand: the browser owns that flag, and lying in the
+        other direction would fight the login watcher. Instead we mark the session expired, which is the same
+        state a guest-redirect burst produces — the existing recovery (reload + credential submit) then runs,
+        and the next capture re-validates. Net effect: the bot never advertises a session it hasn't used once.
+        """
+        try:
+            bal = await self.balance()
+        except Exception as ex:
+            print(f"[PINNACLE] session validation errored ({type(ex).__name__}: {ex}) — treating as UNPROVEN.")
+            bal = None
+        if bal is not None:
+            print(f"[PINNACLE] session VALIDATED — authed call succeeded (wallet {bal:.2f} "
+                  f"{self._balance_currency or ''}). The bot is GO.")
+            return
+        self._session_expired = True
+        print("[PINNACLE] *** CAPTURED SESSION FAILED VALIDATION *** — the authed probe did not come back. "
+              "This is the saved profile replaying a DEAD x-session, not a live login. NOT advertising the "
+              "venue as up; forcing the re-login path instead.")
+
     # ── browser session source: receive live creds + expose status ────────────────
     def _on_browser_creds(self, creds: dict) -> None:
         """Callback from PinnacleBrowserSession on every credential change. Pushes the freshest x-session /
@@ -978,6 +1005,14 @@ class PinnacleAdapter(BookAdapter):
             self._session_expired = False
             self._ws_auth_rejects = self._rest_auth_fails = 0   # fresh creds → clear the death streaks
             self._mark_session_started("browser login" if became_ready else "session rotated")  # (re)start age tracking
+            # VALIDATE, don't assume. A page restoring from the SAVED profile replays a STALE x-session before it
+            # re-authenticates, and capturing the first auth header we see declared "the bot is GO" on a session
+            # that was dead on arrival (2026-08-07: /wallet/balance 401 + ~20 guest-redirects + a WS give-up,
+            # recovered only via mass-logout detection). Under --live that false GO is worse than noise: the C#
+            # bot fires the REAL Kalshi leg believing the venue is up, HardVen refuses, and recovery has to unwind
+            # a naked leg. One cheap authed probe settles it.
+            if self._validate_task is None or self._validate_task.done():
+                self._validate_task = asyncio.create_task(self._validate_capture())
             if self._ws_gave_up:                          # recover from a terminal give-up so /odds restarts the feed
                 self._ws_gave_up = False
                 self._ws_started = False                  # next odds() relands _start_ws() with the new creds
