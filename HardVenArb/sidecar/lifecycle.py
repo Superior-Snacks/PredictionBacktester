@@ -173,8 +173,13 @@ class PinnacleLifecycle:
             new = sched.cap_daily_hours(new, self._max_daily_hours, protected=self._pinned_spans,
                                         spent=spent, now=now_utc)
             if self._fill_to_cap:      # spend the slack: unused budget is unused pre-live watching time
+                # In session mode the configured SHAPE is the ceiling on any one window — filling must not
+                # quietly repeal PINNACLE_SESSION_HOURS by stretching a 2h session into a 5h one.
+                max_win = (self._session_hours + (self._lead_min + self._trail_min) / 60.0
+                           if self._session_hours > 0 else 0.0)
                 new = sched.fill_daily_hours(new, self._max_daily_hours, spent=spent, now=now_utc,
-                                             min_downtime_min=self._min_downtime_min)
+                                             min_downtime_min=self._min_downtime_min,
+                                             max_window_hours=max_win, protected=self._pinned_spans)
             burned = spent.get(sched._local(now_utc).date(), timedelta()).total_seconds() / 3600
         else:
             burned = 0.0

@@ -156,6 +156,21 @@ def main() -> int:
     mixed = sched.fill_daily_hours(thin + tomorrow_pin, 8, now=T0)
     r.append(check("  ...while today still fills", (hours([mixed[0]]), hours([mixed[1]])), (8.0, 2.0)))
 
+    # PINNACLE_SESSION_HOURS=2 must survive filling — a 2h session is ~3h with lead+trail, never 5h+.
+    sess = [w(12, 0, 14, 0, games=8), w(18, 0, 20, 0, games=6)]
+    out = sched.fill_daily_hours(sess, 10, now=T0, min_downtime_min=45, max_window_hours=3.0)
+    r.append(check("fill respects the session shape", [round(hours([x]), 2) for x in out], [3.0, 3.0]))
+    r.append(check("  ...so a thin day lands UNDER the cap", hours(out) < 10.0, True))
+
+    # an operator PIN is a stated span, not a seed to grow from
+    pin2 = w(6, 0, 8, 0, games=0)
+    out = sched.fill_daily_hours([pin2], 10, now=T0, protected=[pin2])
+    r.append(check("fill never stretches a pin", out, [pin2]))
+    # ...and protection is by OVERLAP, since merge+jitter rewrite the tuples before the bounds run
+    jittered = (pin2[0] + timedelta(minutes=4), pin2[1] + timedelta(minutes=4), 0)
+    out = sched.fill_daily_hours([jittered], 10, now=T0, protected=[pin2])
+    r.append(check("  ...even after jitter moved it", out, [jittered]))
+
     # ── banking window ────────────────────────────────────────────────────────
     lc2 = PinnacleLifecycle(FakeBrowser(), [33])
     asyncio.run(lc2.halt("low balance: pinnacle wallet 0.00 < floor 5"))

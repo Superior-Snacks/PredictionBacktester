@@ -335,7 +335,6 @@ def cap_daily_hours(windows, max_hours: float, protected=None, min_window_min: f
         return list(windows)
     now = now or _utcnow()
     spent = spent or {}
-    prot = {(w[0], w[1]) for w in (protected or [])}
     floor = timedelta(minutes=min_window_min)
     by_day: dict = {}
     for w in windows:
@@ -343,7 +342,7 @@ def cap_daily_hours(windows, max_hours: float, protected=None, min_window_min: f
     out = []
     for day, ws in by_day.items():
         budget = timedelta(hours=max_hours) - spent.get(day, timedelta())
-        order = sorted(ws, key=lambda w: (0 if (w[0], w[1]) in prot else 1, -w[2], w[0]))
+        order = sorted(ws, key=lambda w: (0 if _is_protected(w[0], w[1], protected) else 1, -w[2], w[0]))
         used = timedelta()
         for o, c, g in order:
             anchor = max(o, now)                 # only the FUTURE part of a window costs budget
@@ -351,7 +350,7 @@ def cap_daily_hours(windows, max_hours: float, protected=None, min_window_min: f
             if remaining <= timedelta():
                 out.append((o, c, g))            # already over — history, charge nothing
                 continue
-            if (o, c) in prot:
+            if _is_protected(o, c, protected):
                 out.append((o, c, g))
                 used += remaining
                 continue
@@ -367,6 +366,13 @@ def cap_daily_hours(windows, max_hours: float, protected=None, min_window_min: f
     return sorted(out, key=lambda w: w[0])
 
 
+def _is_protected(o: datetime, c: datetime, spans) -> bool:
+    """Does this window OVERLAP an operator-pinned span? Overlap, not tuple equality: by the time the bounds run,
+    merge_windows and apply_jitter have both rewritten the tuples, so an exact-match test silently never fires
+    and pins lose their protection. Mirrors PinnacleLifecycle._is_pinned so both answer the same question."""
+    return any(po < c and o < pc for po, pc, *_ in (spans or []))
+
+
 def _midnight_utc(day, plus_days: int = 0) -> datetime:
     """Local midnight of `day` (+plus_days) as a UTC-naive datetime — the edge a window may not grow past, so
     stretching today's plan can't quietly spend tomorrow's budget."""
@@ -376,7 +382,7 @@ def _midnight_utc(day, plus_days: int = 0) -> datetime:
 
 
 def fill_daily_hours(windows, max_hours: float, spent=None, now: datetime | None = None,
-                     min_downtime_min: float = 0.0):
+                     min_downtime_min: float = 0.0, max_window_hours: float = 0.0, protected=None):
     """Grow the plan TOWARD the daily ceiling — the cap as a TARGET, not just a limit.
 
     `cap_daily_hours` only ever removes time, so on a thin slate the bot sits dark with budget unspent. Watching
@@ -387,6 +393,14 @@ def fill_daily_hours(windows, max_hours: float, spent=None, now: datetime | None
     window plus `min_downtime_min` (so filling can never eat the downtime the operator asked for), by `now` (no
     growing into the past), and by local midnight (so today can't spend tomorrow's budget). When there isn't
     enough budget for everyone, each window gets a share proportional to the room it has.
+
+    TWO THINGS FILL MUST NOT DO, both found on the live plan 2026-08-07:
+      * `max_window_hours` — never stretch a window past the SHAPE the operator configured. Under
+        `PINNACLE_SESSION_HOURS=2` a session is ~2h+lead+trail; filling had grown them to 5.2h and 3.5h, which
+        silently repeals the setting. On a thin slate the day now simply lands under the cap — the lever for
+        more hours is `max_blocks`/`min_games` (more sessions), not longer ones.
+      * `protected` — never stretch an operator PIN. A pin is a stated span ("06:00-08:00"), not a seed to grow
+        from; filling had turned a 2h morning pin into a 10h block opening at midnight.
 
     Run AFTER cap_daily_hours: cap enforces the ceiling, fill takes up the slack under it.
     """
@@ -422,21 +436,39 @@ def fill_daily_hours(windows, max_hours: float, spent=None, now: datetime | None
         # expand straight through the downtime (caught by test: a 4h gap handed 3h to each side).
         # Phase 1 moves OPENS earlier (the preferred direction); phase 2 then moves CLOSES later against the
         # opens as they now stand, so what phase 1 consumed is no longer on offer.
+        # How much each window is ALLOWED to grow in total, before we look at where there is room.
+        cap_w = timedelta(hours=max_window_hours) if max_window_hours > 0 else None
+        headroom = []
+        for o, c, _g in ws:
+            if _is_protected(o, c, protected):
+                headroom.append(timedelta())                       # a pin is a stated span, not a seed
+            elif cap_w is not None:
+                headroom.append(max(timedelta(), cap_w - (c - o)))  # never exceed the configured session shape
+            else:
+                headroom.append(None)                              # unbounded
         early = []
         for i in range(len(ws)):
             lower = max(closes[i - 1] + gap, now, lo_edge) if i else max(now, lo_edge)
-            early.append(max(timedelta(), opens[i] - lower))
+            room = max(timedelta(), opens[i] - lower)
+            if headroom[i] is not None:
+                room = min(room, headroom[i])
+            early.append(room)
         tot_e = sum(early, timedelta())
         if tot_e > timedelta():
             scale = min(1.0, leftover / tot_e)
             for i in range(len(ws)):
                 opens[i] -= early[i] * scale
+                if headroom[i] is not None:
+                    headroom[i] -= early[i] * scale      # phase 1 spends the window's own allowance
             leftover -= tot_e * scale
         if leftover > timedelta():
             late = []
             for i in range(len(ws)):
                 upper = (opens[i + 1] - gap) if i + 1 < len(ws) else hi_edge
-                late.append(max(timedelta(), upper - closes[i]))
+                room = max(timedelta(), upper - closes[i])
+                if headroom[i] is not None:
+                    room = min(room, headroom[i])
+                late.append(room)
             tot_l = sum(late, timedelta())
             if tot_l > timedelta():
                 scale = min(1.0, leftover / tot_l)
