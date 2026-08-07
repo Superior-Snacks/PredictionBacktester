@@ -204,6 +204,10 @@ public class CrossArbExecutor
     private          int     _tryLimit             = -1;  // original N, for display
     private          CancellationTokenSource? _outerCts;
     private readonly ConcurrentDictionary<string, byte>    _inFlight          = new();
+    // In-flight guard keyed on the PINNACLE MATCHUP ("lid:mid") rather than the pair. Kalshi lists each side of
+    // a match as its own ticker (…-BIG / …-HON), and both can pair to the same matchup, so one arb opens on two
+    // pairIds at once and the per-pair guard above lets both through. Value = the pairId holding it, for the log.
+    private readonly ConcurrentDictionary<string, string>  _inFlightMatchup   = new();
     private readonly ConcurrentDictionary<string, byte>    _earlyExitScheduled = new();
     private readonly ConcurrentDictionary<string, decimal> _perPairInvested        = new();
     private readonly ConcurrentDictionary<string, int>     _settlementAbsentTicks  = new();
@@ -680,8 +684,46 @@ public class CrossArbExecutor
             Console.WriteLine($"[EXEC SKIP] {pairId}: already in-flight (previous attempt still running)");
             return;
         }
+        // SIBLING-CONTENTION GUARD. Kalshi lists both sides of a match as separate tickers, and when both are
+        // paired they resolve to the SAME Pinnacle matchup — so one arb fires two executions at the same instant
+        // (observed 2026-08-06 23:30:00 and 23:42:38: identical pAsk, economically the identical position). They
+        // then send two orders into ONE Pinnacle line: the second takes a worse price or doesn't fill, leaving
+        // its Kalshi leg naked. Serialise on the shared resource — the matchup — not just the pairId.
+        string? legKey = HardVenLegKey(pairId, arbType);
+        if (legKey != null && !_inFlightMatchup.TryAdd(legKey, pairId))
+        {
+            _inFlight.TryRemove(pairId, out _);
+            _inFlightMatchup.TryGetValue(legKey, out string? holder);
+            Console.WriteLine($"[EXEC SKIP] {pairId}: HardVen leg {legKey} already in-flight " +
+                              $"via {holder} — sibling ticker on the same Pinnacle line");
+            await JournalAsync(JsonSerializer.Serialize(new {
+                t = DateTime.UtcNow, @event = "EXEC_SKIP", pairId, arbType,
+                reason = "LEG_IN_FLIGHT", legKey, heldBy = holder
+            }));
+            return;
+        }
         try   { await ExecuteLockedAsync(pairId, arbType, detectedKAsk, detectedPAsk, testMode); }
-        finally { _inFlight.TryRemove(pairId, out _); }
+        finally
+        {
+            _inFlight.TryRemove(pairId, out _);
+            if (legKey != null) _inFlightMatchup.TryRemove(legKey, out _);
+        }
+    }
+
+    /// <summary>
+    /// The exact Pinnacle SELECTION this arb will buy — the shared resource two sibling pairs contend for.
+    /// Mirrors the leg choice made at execution (K_YES_P_NO buys the NO token, K_NO_P_YES the YES token), so
+    /// the …-BIG and …-HON pairings of one match resolve to the SAME token and serialise, while a moneyline
+    /// and a spread on that same match resolve to DIFFERENT tokens and stay independent (they're different
+    /// lines with their own depth — blocking those would cost real opportunities).
+    /// Null when unresolvable (no pair / blank token) — caller then falls back to per-pair guarding only.
+    /// </summary>
+    private string? HardVenLegKey(string pairId, string arbType)
+    {
+        var p = _telemetry.GetPair(pairId);
+        if (p == null) return null;
+        string? tok = arbType == "K_YES_P_NO" ? p.HardVenNoTokenId : p.HardVenYesTokenId;
+        return string.IsNullOrWhiteSpace(tok) ? null : tok;
     }
 
     private async Task ExecuteLockedAsync(string pairId, string arbType, decimal kLegAsk, decimal pLegAsk, bool testMode = false)
@@ -692,6 +734,15 @@ public class CrossArbExecutor
         if (_cooldownUntil.TryGetValue(pairId, out long cd) && now < cd)
         {
             Console.WriteLine($"[EXEC SKIP] {pairId}: cooldown active for {cd - now}s more");
+            return;
+        }
+        // ...and on the HardVen LEG, so sibling tickers can't ping-pong through the per-pair cooldown. Observed
+        // 2026-08-06: HON 21:02:08 -> BIG 21:03:47 -> BIG 21:08:38 -> HON 21:10:13 — alternating siblings
+        // re-entered the same Pinnacle line inside the 120s window the per-pair cooldown was meant to enforce.
+        string? legKeyCd = HardVenLegKey(pairId, arbType);
+        if (legKeyCd != null && _cooldownUntil.TryGetValue($"L:{legKeyCd}", out long lcd) && now < lcd)
+        {
+            Console.WriteLine($"[EXEC SKIP] {pairId}: HardVen leg {legKeyCd} on cooldown for {lcd - now}s more (sibling just fired)");
             return;
         }
         if (_openPositions.TryGetValue(pairId, out var heldPos))
@@ -1181,8 +1232,10 @@ public class CrossArbExecutor
             return;
         }
 
-        // Set cooldown before firing to block concurrent execution on the same pair
+        // Set cooldown before firing to block concurrent execution on the same pair — and on the same Pinnacle
+        // matchup, so the sibling ticker is held off too (it trades the identical line).
         _cooldownUntil[pairId] = now + _pairCooldownSeconds;
+        if (legKeyCd != null) _cooldownUntil[$"L:{legKeyCd}"] = now + _pairCooldownSeconds;
 
         DateTime execStart = DateTime.UtcNow;
         var execLog = _logErrors ? new List<string>() : null;

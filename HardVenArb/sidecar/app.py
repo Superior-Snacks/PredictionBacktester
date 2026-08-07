@@ -494,14 +494,18 @@ async def bet_test(req: BetTestRequest):
 @app.get("/balance")
 async def balance():
     amt = await adapter.balance()
-    resp = {"balance": amt}
+    # None = the wallet could not be READ (pre-login / auth failure), which is NOT the same as 0.00. Serialised
+    # as null + readable:false so a caller can tell them apart; the C# client already maps a missing/non-numeric
+    # balance to 0 and low-cash-skips, so this stays backward-compatible.
+    resp = {"balance": amt, "readable": amt is not None}
     s = _session_state()
     if s is not None and s.get("currency"):
         resp["currency"] = s.get("currency")   # account currency (e.g. EUR) — Kalshi is USD; FX-convert at M1
     fx = getattr(adapter, "_fx", None)
     if fx is not None:
         resp["fx_to_usd"] = fx.rate            # rides along so a caller gets cash + rate in one read
-        resp["balance_usd"] = round(amt * fx.rate, 2)
+        if amt is not None:
+            resp["balance_usd"] = round(amt * fx.rate, 2)
     return resp
 
 

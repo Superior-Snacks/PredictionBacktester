@@ -42,6 +42,8 @@ class BalanceGuard:
         self._kalshi_ts = 0.0
         self._task: asyncio.Task | None = None
         self._low_warned = False
+        self._unreadable = 0            # consecutive logged-in-but-unreadable book reads
+        self._unreadable_warn_after = int(os.environ.get("HARDVEN_BALANCE_UNREADABLE_WARN", "3") or 3)
 
     def start(self) -> None:
         if self._task is None or self._task.done():
@@ -99,20 +101,49 @@ class BalanceGuard:
                 print("[BALANCE] book session not logged in - treating the wallet as UNKNOWN (not 0) until it is.")
             self._book_bal = None
             self._book_ts = 0.0
+            self._unreadable = 0        # dark / logged-out is EXPECTED unknown — not the anomalous kind
             return self.status()
         try:
-            self._book_bal = float(await self._adapter.balance())
-            self._book_ts = time.time()
+            bal = await self._adapter.balance()
         except Exception as ex:
             print(f"[BALANCE] book balance read failed: {type(ex).__name__}: {ex}")   # unknown ≠ zero
+            bal = None
+        # The same deadlock as the logged-out case, one layer down: an adapter that CANNOT read the wallet
+        # (401, 5xx, malformed reply) must report None, and None must stay unknown here. 2026-08-07: a 401 on
+        # /wallet/balance seconds after a clean login was collapsed to 0.0 by the adapter and halted a funded
+        # account — and the halt then kept the browser closed, so it could never re-auth its way out.
+        if bal is None:
+            if self._book_bal is not None:
+                print("[BALANCE] book wallet UNREADABLE - treating as UNKNOWN (not 0) until a read succeeds.")
             self._book_bal = None
+            self._book_ts = 0.0
+            # Not halting on unknown is right, but "unknown forever" means the book leg is effectively
+            # UNGUARDED — and silently so. Say it once, loudly, rather than let a wallet nobody can read pass
+            # for a healthy one. (Logged-out/dark is handled by the session gate above and never lands here.)
+            self._unreadable += 1
+            if self._unreadable == self._unreadable_warn_after:
+                msg = (f"⚠️ **{self._adapter.name} wallet unreadable** on {self._unreadable} consecutive checks "
+                       f"— the book-side balance floor is NOT being enforced (session looks logged in). "
+                       f"Not halting: unknown is not zero.")
+                # Console gets ASCII only: this box's stdout is cp1252 and an emoji/em-dash here raises
+                # UnicodeEncodeError *inside the guard*, which would take down the very check that is warning.
+                print(f"[BALANCE] {self._adapter.name} wallet UNREADABLE x{self._unreadable} - the book-side "
+                      "floor is NOT being enforced. Not halting (unknown != zero).")
+                if self._notify is not None and self._notify.enabled:
+                    self._notify.send_bg(msg)
+        else:
+            if self._unreadable >= self._unreadable_warn_after:
+                print(f"[BALANCE] book wallet readable again ({bal:.2f}) - floor enforcement restored.")
+            self._unreadable = 0
+            self._book_bal = float(bal)
+            self._book_ts = time.time()
         breaches = self._breaches()
         if breaches and self._enabled and self._lifecycle is not None:
             await self._lifecycle.halt("low balance: " + "; ".join(breaches))
         elif breaches and not self._low_warned:
             self._low_warned = True
             msg = "⚠️ **LOW BALANCE** (guard is report-only): " + "; ".join(breaches)
-            print(f"[BALANCE] {msg}")
+            print("[BALANCE] LOW BALANCE (guard is report-only): " + "; ".join(breaches))   # ASCII: cp1252 stdout
             if self._notify is not None and self._notify.enabled:
                 self._notify.send_bg(msg)
         elif not breaches:

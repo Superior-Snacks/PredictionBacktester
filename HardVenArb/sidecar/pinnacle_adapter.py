@@ -572,6 +572,10 @@ class PinnacleAdapter(BookAdapter):
         # PINNACLE_SESSION_AGE_LOG_SEC, default 300s = 5m). A periodic "session held Xm" heartbeat + a final
         # "held Xm before this stop" on give-up turn the 2h keepalive/idle test into a precise measurement.
         self._session_started_at = 0.0                    # unix time the CURRENT session became live (0 = none)
+        # POST-LOGIN SETTLE: capture fires the instant the credentials are visible on the wire, but the site is
+        # still finishing its load and the account context isn't live server-side yet. An authed call inside
+        # that gap answers 401 (2026-08-07: /wallet/balance 401'd seconds after a clean login). Wait it out.
+        self._session_settle_sec = float(os.environ.get("PINNACLE_SESSION_SETTLE_SEC", "5"))
         self._session_age_task: Optional[asyncio.Task] = None
         self._session_age_log_sec = float(os.environ.get("PINNACLE_SESSION_AGE_LOG_SEC", "300"))
         self._survive_min = float(os.environ.get("PINNACLE_SESSION_SURVIVE_MIN", "35"))  # milestone: past the ~30m danger zone
@@ -1210,6 +1214,20 @@ class PinnacleAdapter(BookAdapter):
             pending = [l for l in list(self._active_leagues.keys()) if l not in self._subscribed]
             if pending:
                 self._subscribe_league(pending[0])        # one per tick = staggered, organic-looking
+
+    async def _await_session_settle(self) -> None:
+        """Hold until the current session is at least `PINNACLE_SESSION_SETTLE_SEC` old. No-op once it is (so
+        this costs nothing on the steady-state poll) or when no session start is stamped. Cheap insurance: a
+        premature authed call doesn't just fail, it increments `_rest_auth_fails` toward `_rest_death_check`,
+        so sleeping through the gap protects the SESSION as well as the reading."""
+        if self._session_started_at <= 0 or self._session_settle_sec <= 0:
+            return
+        age = time.time() - self._session_started_at
+        remaining = self._session_settle_sec - age
+        if remaining > 0:
+            print(f"[PINNACLE] session only {age:.1f}s old - waiting {remaining:.1f}s for the site to settle "
+                  "before the authed call.")
+            await asyncio.sleep(min(remaining, self._session_settle_sec))
 
     def _mark_session_started(self, how: str) -> None:
         """Stamp the moment a session became live (env token at startup, or a fresh browser capture) so the age
@@ -2201,21 +2219,31 @@ class PinnacleAdapter(BookAdapter):
         return out
 
     # ── M1 (later): betting + wallet confirmation ──
-    async def balance(self) -> float:
+    async def balance(self) -> Optional[float]:
         """Account cash balance via the authed wallet endpoint — same X-Session/X-Device-UUID/X-API-Key headers
-        as the odds feed (the page polls this constantly, so it's a normal call). Returns the numeric amount
-        (0.0 if unavailable). The account currency (EUR here — NOT USD; Kalshi is USD) is stashed for /health +
-        the min-balance floor; cross-venue stake sizing must FX-convert at M1. Gated on a live session so it
-        can't hit the authed endpoint with a stale token pre-login (which would trip the give-up)."""
+        as the odds feed (the page polls this constantly, so it's a normal call). The account currency (EUR here
+        — NOT USD; Kalshi is USD) is stashed for /health + the min-balance floor; cross-venue stake sizing must
+        FX-convert at M1. Gated on a live session so it can't hit the authed endpoint with a stale token
+        pre-login (which would trip the give-up).
+
+        Returns **None when the balance cannot be READ** (pre-login, auth failure, malformed reply) — NOT 0.0.
+        That distinction is load-bearing: BalanceGuard halts the SCHEDULE below a floor, and the halt closes the
+        browser, which is the very thing that could re-authenticate. Returning 0.0 for "couldn't read" therefore
+        DEADLOCKS a healthy bot — observed 2026-08-07, when a 401 on /wallet/balance halted a funded account
+        seconds after a successful login. A genuine zero balance still returns 0.0."""
         if self._session_source == "browser" and not self._session_ready:
-            return 0.0
+            return None
+        await self._await_session_settle()      # don't poll the wallet while the site is still coming up
         data = await self._http_get("/wallet/balance")
         if not isinstance(data, dict):
-            return 0.0
+            return None                      # 401 / 5xx / non-JSON — unknown, not empty
+        amt = data.get("amount")
+        if amt is None:
+            return None                      # field absent => unreadable (a real zero arrives as 0, not None)
         try:
-            self._balance = float(data.get("amount") or 0.0)
+            self._balance = float(amt)
         except (TypeError, ValueError):
-            self._balance = 0.0
+            return None
         self._balance_currency = data.get("currency") or self._balance_currency
         return self._balance
 

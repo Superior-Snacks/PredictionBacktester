@@ -279,8 +279,8 @@ class AggregatorAdapter(BookAdapter):
     async def catalog(self) -> list[CatalogEntry]:
         return await self._inner.catalog()
 
-    async def balance(self) -> float:
-        return await self._inner.balance()
+    async def balance(self) -> Optional[float]:
+        return await self._inner.balance()      # None = unreadable, passed through (never collapsed to 0.0)
 
     async def place_bet(self, selection_id: str, stake: float, max_odds: float) -> BetResult:
         return await self._inner.place_bet(selection_id, stake, max_odds)

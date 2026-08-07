@@ -98,8 +98,11 @@ class BookAdapter(ABC):
 
     # ── M1: betting + wallet confirmation ──────────────────────────────────────
     @abstractmethod
-    async def balance(self) -> float:
-        """Account cash balance."""
+    async def balance(self) -> Optional[float]:
+        """Account cash balance, or **None when it cannot be READ** (not logged in, auth failure, bad reply).
+        Never collapse "unreadable" to 0.0: BalanceGuard halts the schedule below a floor and the halt closes
+        the browser, so a 0.0-on-error halts a funded account and then blocks the re-login that would clear it.
+        A genuinely empty wallet returns 0.0."""
         raise NotImplementedError
 
     @abstractmethod
