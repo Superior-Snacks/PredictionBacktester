@@ -54,8 +54,10 @@ record ActiveWindow(
     string   OpenedBy      = "",   // which side's price move CREATED the arb: KALSHI / HARDVEN / BOTH / INITIAL
     decimal  OpenKLeg      = -1m,  // the Kalshi leg price at open (for held/move comparison at close)
     decimal  OpenPLeg      = -1m,  // the HardVen leg price at open
-    bool     HardVenWsVerified = false  // HardVen leg was under LIVE WS coverage at some point in the window
-                                        // (not screening-only) → the arb is confirmed on real-time prices
+    bool     HardVenWsVerified = false,  // HardVen leg was under LIVE WS coverage at some point in the window
+                                         // (not screening-only) → the arb is confirmed on real-time prices
+    bool     OpenedInPlay  = false  // regime the window was OPENED in. A window must describe ONE regime: it is
+                                    // split at a kickoff (see WENT_LIVE) so this also holds at close.
 )
 {
     // First eval at which each leg's ask rose ABOVE its open price (moved against you → LEFT the "within the
@@ -622,7 +624,8 @@ public class CrossPlatformArbTelemetryStrategy
                         OpenedBy:          openedBy,
                         OpenKLeg:          kLegPrice,
                         OpenPLeg:          pLegPrice,
-                        HardVenWsVerified: hvVerified
+                        HardVenWsVerified: hvVerified,
+                        OpenedInPlay:      _books.TryGetValue($"H:{chosenHvToken}", out var openBook) && openBook.IsLive
                     );
                     _activeWindows[pair.PairId] = w;
                     DebugLog.Discovery($"EvaluatePair {pair.Label}: ARB OPEN {bestType} net={bestNet:0.0000} depth={bestDepth:0.0} kAge={kAge}ms pAge={pAge}ms");
@@ -631,6 +634,25 @@ public class CrossPlatformArbTelemetryStrategy
                 }
                 else
                 {
+                    // KICKOFF SPLIT. A window must describe ONE regime. The in-play tag used to be sampled once,
+                    // at close, and stamped over the whole window — so a window straddling kickoff was filed
+                    // entirely as whichever regime happened to be current when it ended (pre-live if the live
+                    // topic hadn't pushed yet, in-play if it had). Both are wrong, and they corrupt the analyzer,
+                    // which applies placement time PER ROW by this tag (~1s pre-live vs ~8s in-play) and reads
+                    // pre-live DURATION as the headline durability stat. So: close the window at the transition
+                    // and let the next eval reopen a fresh one, which is then honestly tagged in-play.
+                    // Telemetry-only — execution reads book.IsLive live, never this tag.
+                    string liveTok = existing.ArbType == "K_YES_P_NO" ? pair.HardVenNoTokenId : pair.HardVenYesTokenId;
+                    bool inPlayNow = _books.TryGetValue($"H:{liveTok}", out var liveBook) && liveBook.IsLive;
+                    if (inPlayNow != existing.OpenedInPlay)
+                    {
+                        DebugLog.Discovery($"EvaluatePair {pair.Label}: REGIME CHANGE " +
+                            $"{(existing.OpenedInPlay ? "in-play→pre" : "pre→in-play")} — splitting the window");
+                        CloseWindow(pair.PairId, existing, evalNow, "WENT_LIVE");
+                        _activeWindows[pair.PairId] = null;   // next eval reopens, tagged with the NEW regime
+                    }
+                    else
+                    {
                     bool betterCost  = bestNet   < existing.BestNetCost;
                     bool betterDepth = bestDepth > Math.Min(existing.KalshiDepth, existing.HardVenDepth);
                     // each leg of THIS window's fixed ArbType, at the current asks — to detect a move against you
@@ -657,6 +679,7 @@ public class CrossPlatformArbTelemetryStrategy
                     };
                     if (betterCost)
                         DebugLog.Discovery($"EvaluatePair {pair.Label}: ARB UPDATE better net={bestNet:0.0000} (was {existing.BestNetCost:0.0000})");
+                    }
                 }
             }
             else if (existing != null)
@@ -749,10 +772,12 @@ public class CrossPlatformArbTelemetryStrategy
         // the bookmaker selection_id this arb's book leg actually used — the exact join key for the audit
         // tape (verify_arbs.py): K_NO_P_YES backs HardVen YES, K_YES_P_NO backs HardVen NO.
         string hardvenLegId = w.ArbType == "K_YES_P_NO" ? pair.HardVenNoTokenId : pair.HardVenYesTokenId;
-        // IN-PLAY tag: was the HardVen game live (vs pre-match) when this window closed? Pre-match legs are stable
-        // (near-instant capture); live legs are volatile (the ~8s placement / auto-cancel model). Drives per-window
-        // timing in the analyzer so a stable pre-match hold isn't judged by the same clock as a live flicker.
-        bool hvInPlay = _books.TryGetValue($"H:{hardvenLegId}", out var hvBook) && hvBook.IsLive;
+        // IN-PLAY tag: the regime this window ACTUALLY LIVED IN. Taken from the window's own OpenedInPlay, not
+        // sampled here at close: a close-time sample describes one instant and was being stamped over a window
+        // that may have straddled kickoff. Windows are now SPLIT at the transition (closedBy=WENT_LIVE), so
+        // open-regime == close-regime and this is exact. Pre-match legs are stable (near-instant capture); live
+        // legs are volatile (~8s placement) — the analyzer picks its per-row timing model off this.
+        bool hvInPlay = w.OpenedInPlay;
 
         decimal fees     = w.KalshiFees + w.HardVenFees;
         decimal profit   = 1m - w.BestNetCost;
