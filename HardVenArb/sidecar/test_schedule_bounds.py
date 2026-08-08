@@ -195,6 +195,40 @@ def main() -> int:
     asyncio.run(lc3.tick(now=datetime(2026, 8, 7, 1, 0)))
     r.append(check("banking expires back INTO the halt", lc3._override, "halted"))
 
+    # ── carve_out_pins + cap_window_length: the 2026-08-08 "up far longer than the schedule" bug ──
+    # merge_windows glued a session onto an abutting pin: 18:21->02:58 (8h37m) under SESSION_HOURS=3.
+    sess = [(datetime(2026, 8, 7, 18, 21), datetime(2026, 8, 7, 23, 30), 13)]   # session running INTO the pin
+    pin_n = [(datetime(2026, 8, 7, 23, 0), datetime(2026, 8, 8, 3, 5), 0)]
+    glued = sched.merge_windows(sess, pin_n)
+    r.append(check("(repro) an OVERLAPPING session+pin merges into one long block",
+                   round((glued[0][1] - glued[0][0]).total_seconds() / 3600, 2), 8.73))
+    carved = sched.carve_out_pins(sess, pin_n)
+    r.append(check("carve keeps them separate", len(carved), 2))
+    # carve truncates the session at the pin's start (18:21->23:00 = 4.65h); cap_window_length then applies the
+    # session-shape ceiling. Two separate invariants, in that order — same as the lifecycle runs them.
+    r.append(check("  ...session truncated at the pin's start",
+                   round((carved[0][1] - carved[0][0]).total_seconds() / 3600, 2), 4.65))
+    r.append(check("  ...then the length cap brings it to the shape",
+                   round((sched.cap_window_length(carved, 4.0, protected=pin_n)[0][1]
+                          - carved[0][0]).total_seconds() / 3600, 2), 4.0))
+    r.append(check("  ...pin keeps its exact span", (carved[1][0], carved[1][1]), (pin_n[0][0], pin_n[0][1])))
+
+    # a pin landing MID-session splits it in two
+    mid = [(datetime(2026, 8, 7, 8, 0), datetime(2026, 8, 7, 16, 0), 9)]
+    pin_m = [(datetime(2026, 8, 7, 11, 0), datetime(2026, 8, 7, 12, 0), 0)]
+    out = sched.carve_out_pins(mid, pin_m)
+    r.append(check("pin mid-session splits it", [(o.hour, c.hour) for o, c, _ in out],
+                   [(8, 11), (11, 12), (12, 16)]))
+
+    # cap_window_length: the backstop nothing had
+    long_w = [(datetime(2026, 8, 8, 2, 39), datetime(2026, 8, 8, 14, 51), 48)]   # the real 12h12m window
+    capped = sched.cap_window_length(long_w, 4.0)
+    r.append(check("12h12m window capped to the session shape",
+                   round((capped[0][1] - capped[0][0]).total_seconds() / 3600, 2), 4.0))
+    r.append(check("  ...truncated from the CLOSE (lead preserved)", capped[0][0], long_w[0][0]))
+    r.append(check("a PIN is exempt from the cap",
+                   sched.cap_window_length(pin_n, 4.0, protected=pin_n), pin_n))
+
     n = sum(r)
     print(f"\n{n}/{len(r)} passed")
     return 0 if n == len(r) else 1

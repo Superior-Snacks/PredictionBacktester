@@ -157,7 +157,10 @@ class PinnacleLifecycle:
         if self._pin_ranges and starts:
             pins = sched.pinned_windows(self._pin_ranges)
             if pins:
-                new = sched.merge_windows(new, pins)
+                # CARVE, don't merge. merge_windows() glued a session onto an abutting pin and produced 8-13h
+                # blocks under a 3h session shape (2026-08-07/08). Carving keeps the pin's exact span AND the
+                # session's shape as separate windows; enforce_downtime below then puts a real gap between them.
+                new = sched.carve_out_pins(new, pins)
                 self._pinned_spans = pins
                 mode += f" + {len(pins)} pinned"
         if self._jitter_min > 0:                   # human wobble; applied AFTER selection so blocks don't change
@@ -165,6 +168,12 @@ class PinnacleLifecycle:
         # HARD BOUNDS, applied LAST — after merge + jitter, because both can close a gap or lengthen a block.
         # Downtime first (it shortens windows, which can only help the budget), then the daily ceiling.
         pre_bound = sum((c - o for o, c, _ in new), timedelta())
+        # Per-window ceiling FIRST: nothing else bounds a single window's LENGTH (downtime only spaces windows
+        # apart, the daily cap bounds the day's total). Pins are exempt — their span is the instruction.
+        max_win_cap = (self._session_hours + (self._lead_min + self._trail_min) / 60.0
+                       if self._session_hours > 0 else 0.0)
+        if max_win_cap > 0:
+            new = sched.cap_window_length(new, max_win_cap, protected=self._pinned_spans)
         if self._min_downtime_min > 0:
             new = sched.enforce_downtime(new, self._min_downtime_min)
         if self._max_daily_hours > 0:

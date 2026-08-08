@@ -155,7 +155,29 @@ public sealed class DiscordCommandListener
             case "end":
             case "kill":
                 Console.WriteLine($"[DISCORD CMD] '{cmd}' — graceful shutdown requested");
-                await SafeReply("🛑 shutdown requested — stopping the bot gracefully (supervisor will NOT restart).");
+                await SafeReply("🛑 shutdown requested — stopping the bot **and the sidecar** " +
+                                "(supervisor will NOT restart).");
+                // Tear the SIDECAR down too. This used to run only under the `--stop-sidecar` CLI flag, so a
+                // Discord `close` stopped the C# bot and left the sidecar running its own lifecycle — still
+                // opening/closing Pinnacle and holding a logged-in browser session. Observed 2026-08-08: the
+                // bot stopped at 08:32 and sidecar window alerts kept arriving until 15:17. "Stop the bot
+                // entirely" has to mean the venue session too; an unattended logged-in browser is the exact
+                // exposure the schedule exists to avoid. Sidecar first — it refuses while a bet is in flight.
+                try
+                {
+                    using var sc = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+                    using var sr = await sc.PostAsync($"{_sidecarBase.TrimEnd('/')}/shutdown", null);
+                    Console.WriteLine($"[DISCORD CMD] sidecar /shutdown → {(int)sr.StatusCode}");
+                    if (!sr.IsSuccessStatusCode)
+                        await SafeReply($"⚠️ sidecar shutdown returned HTTP {(int)sr.StatusCode} — " +
+                                        "it may still be running; check the browser is closed.");
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[DISCORD CMD] sidecar shutdown error: {ex.Message}");
+                    await SafeReply($"⚠️ could not reach the sidecar to stop it ({ex.GetType().Name}) — " +
+                                    "the bot is stopping, but CLOSE THE BROWSER MANUALLY.");
+                }
                 try { await _onShutdown(); }
                 catch (Exception ex) { Console.WriteLine($"[DISCORD CMD] shutdown hook error: {ex.Message}"); }
                 break;

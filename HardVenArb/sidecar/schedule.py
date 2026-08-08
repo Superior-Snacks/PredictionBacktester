@@ -276,6 +276,60 @@ def merge_windows(a: list, b: list) -> list:
     return [(o, c, g) for o, c, g in out]
 
 
+def carve_out_pins(computed, pins, min_window_min: float = 20.0):
+    """Keep operator PINS as their own windows instead of gluing them onto computed sessions.
+
+    `merge_windows` unions on ANY overlap, so a session that ran up to a pin's start became ONE block spanning
+    both — observed 2026-08-07/08 as 18:21->02:58 (8h37m), 02:39->14:51 (12h12m) and 05:45->18:48 (13h03m) with
+    `PINNACLE_SESSION_HOURS=3`. Nothing downstream caught it: enforce_downtime only spaces windows APART,
+    cap_daily_hours bounds the DAY, and max_window_hours is only consulted when FILLING. The session-shape
+    setting was therefore silently void whenever a pin happened to abut a session.
+
+    Both intents survive here: the pin keeps its exact stated span (operator instruction), the computed session
+    keeps its shape, and `enforce_downtime` then carves a real gap between them. A session overlapped in the
+    MIDDLE by a pin splits into two pieces; pieces below `min_window_min` are dropped as not worth a login.
+    """
+    spans = merge_windows(list(pins), [])          # normalise overlapping pins among themselves
+    out = []
+    for o, c, g in computed:
+        pieces = [(o, c)]
+        for po, pc, *_ in spans:
+            nxt = []
+            for a, b in pieces:
+                if pc <= a or po >= b:
+                    nxt.append((a, b))             # no overlap
+                    continue
+                if a < po:
+                    nxt.append((a, po))            # keep the head before the pin
+                if b > pc:
+                    nxt.append((pc, b))            # keep the tail after the pin
+            pieces = nxt
+        for a, b in pieces:
+            if (b - a) >= timedelta(minutes=min_window_min):
+                out.append((a, b, g))
+    return sorted(out + [tuple(s) for s in spans], key=lambda w: w[0])
+
+
+def cap_window_length(windows, max_hours: float, protected=None, min_window_min: float = 20.0):
+    """Hard ceiling on ANY SINGLE window — the backstop `max_window_hours` never was.
+
+    Truncates from the CLOSE (the open carries the lead time that finds pre-live edges). Operator pins are
+    exempt: a pinned span is an explicit instruction about which hours to be up, not a computed guess, so a 4h
+    pin stays 4h even under a 3h session shape.
+    """
+    if max_hours <= 0 or not windows:
+        return list(windows)
+    lim = timedelta(hours=max_hours)
+    floor = timedelta(minutes=min_window_min)
+    out = []
+    for o, c, g in windows:
+        if _is_protected(o, c, protected) or (c - o) <= lim:
+            out.append((o, c, g))
+        elif lim >= floor:
+            out.append((o, o + lim, g))
+    return out
+
+
 def enforce_downtime(windows, min_downtime_min: float, min_window_min: float = 20.0):
     """Guarantee at least `min_downtime_min` of browser-DOWN time between consecutive windows.
 
