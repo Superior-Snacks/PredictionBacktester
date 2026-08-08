@@ -146,6 +146,15 @@ int tryIdx = Array.IndexOf(args, "--try");
 if (tryIdx >= 0 && tryIdx + 1 < args.Length && int.TryParse(args[tryIdx + 1], out int parsedN) && parsedN > 0)
     tryN = parsedN;
 
+// --try-success (or HARDVEN_TRY_SUCCESS=1): spend the --try budget on POSITIONS OPENED rather than attempts.
+// By default any execution that reaches the firing stage counts — including a clean MISS (both legs 0) and a
+// fully-reversed Case A, which leave the bot holding nothing. At a real net floor most attempts end that way,
+// so `--try 1` would routinely stop the run before it ever got an arb on. With this, misses are free.
+bool trySuccessOnly = args.Contains("--try-success")
+                   || Environment.GetEnvironmentVariable("HARDVEN_TRY_SUCCESS") == "1";
+if (trySuccessOnly && tryN is null)
+    Console.WriteLine("[WARN] --try-success has no effect without --try N; ignoring.");
+
 // --stop-after <dur>: hard wall-clock cap on the run ("2h", "90m", "3600s", or a bare number = minutes).
 // For unattended waits on a thin slate: pair with `--try 1` so the bot ends either when an arb fires OR when
 // the clock runs out, whichever comes first.
@@ -699,6 +708,7 @@ if (isLive || isDryRun)
         allowReentry:        ALLOW_REENTRY,
         logErrors:           logErrors,
         tryN:                tryN,
+        trySuccessOnly:      trySuccessOnly,
         outerCts:            cts,
         hardvenTickSizes:       restVerifier.HardVenTickSizes,
         restVerifier:        restVerifier,
@@ -720,7 +730,11 @@ if (isLive || isDryRun)
         await executor.ReconcileOnStartupAsync(pairs);
     string execLabel  = isDryRun ? $"DRY RUN [{scenarioName}] — no real orders" : "LIVE";
     string minBuyTag  = minBuy ? "  MIN-BUY=1" : $"  maxBet=${MAX_BET_USD:0.00}";
-    Console.WriteLine($"[EXECUTOR] {execLabel} |{minBuyTag} buffer={BALANCE_BUFFER_PCT:P0} maxExposure=${maxExposureUsd:0.00} threshold={EXECUTION_THRESHOLD:0.000} cooldown=120s");
+    // The try budget is on this line because "why did the bot stop?" is the question it answers, and the
+    // attempts-vs-positions distinction decides whether a miss ends the run.
+    string tryTag = tryN is null ? "unlimited"
+                  : $"{tryN} {(trySuccessOnly ? "POSITION(S) — misses are free" : "attempt(s) — a miss counts")}";
+    Console.WriteLine($"[EXECUTOR] {execLabel} |{minBuyTag} buffer={BALANCE_BUFFER_PCT:P0} maxExposure=${maxExposureUsd:0.00} threshold={EXECUTION_THRESHOLD:0.000} cooldown={PAIR_COOLDOWN_SEC}s try={tryTag}");
     // Show the EXECUTION GATES explicitly — "why did/didn't it fire" is otherwise invisible until a skip line
     // appears, and the favourite gate's start state (env HARDVEN_FAVORITE_KALSHI_SPORTS, live-toggled by H) is
     // easy to misremember mid-session.
@@ -1012,6 +1026,9 @@ if (discord.Enabled)
         var everUp    = new Dictionary<string, bool>      { ["session"] = false, ["hardven"] = false, ["kalshi"] = false };
         var alerted   = new Dictionary<string, bool>      { ["session"] = false, ["hardven"] = false, ["kalshi"] = false };
         var lastHeartbeat = DateTime.UtcNow;
+        // Edge-detect the session coming up, to refresh balances immediately (see below). Seeded from the
+        // CURRENT state so a bot started while already logged in doesn't fire a redundant refresh.
+        bool sessionWasReady = hardvenFeed.SessionReady;
 
         void Track(string key, bool up, DateTime now, string downMsg, string upMsg, string? establishedMsg)
         {
@@ -1044,6 +1061,18 @@ if (discord.Enabled)
                 bool sessionOk = hardvenFeed.SessionReady || darkNow;   // treat a scheduled dark as "not a problem"
                 bool hvOk      = hardvenFeed.IsConnected;     // sidecar serving odds
                 bool kOk       = kalshiFeed.IsConnected;
+
+                // BALANCE ON SESSION-OPEN. While the browser is dark /balance answers null (unreadable, not
+                // zero) and the C# client maps that to $0 — so `pAffordable` is 0 and EVERY arb skips for
+                // insufficient funds. The periodic refresh is on a 5-MINUTE timer, so a window that opens at
+                // 05:00 could spend its first minutes unable to trade — and the Asian morning slate front-loads
+                // arbs at open. Refresh the moment the session actually comes up instead of waiting for the tick.
+                if (hardvenFeed.SessionReady && !sessionWasReady && executor != null)
+                {
+                    Console.WriteLine("[BALANCE] session came up — refreshing balances now (not waiting for the 5m tick)");
+                    _ = executor.RefreshBalancesNowAsync();
+                }
+                sessionWasReady = hardvenFeed.SessionReady;
 
                 // Alert only on a STUCK problem: startup warm-up + scheduled-reopen re-capture gaps are absorbed
                 // by everUp + the grace window, so an auto-login that recovers within grace stays silent.

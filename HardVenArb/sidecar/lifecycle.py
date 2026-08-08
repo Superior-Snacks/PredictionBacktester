@@ -119,7 +119,19 @@ class PinnacleLifecycle:
                     print(f"     open {sched._local(o):%H:%M:%S} → close {sched._local(c):%H:%M:%S}  "
                           f"({(c - o).total_seconds() / 60:.1f}m open)")
             except Exception as ex:
-                print(f"[PINNACLE LIFECYCLE] manual plan load FAILED ({type(ex).__name__}: {ex}) — check {self._manual_plan}")
+                # LOUD, because a failed manual plan leaves `_windows` EMPTY, and an empty plan is
+                # indistinguishable from "scheduled dark" in every downstream log line — the bot sits there
+                # looking healthy and never opens, for the whole run. (2026-08-08: a git-bash `/c/...` path on
+                # Windows Python produced exactly this, and it read as the bot correctly waiting.)
+                print(f"[PINNACLE LIFECYCLE] *** MANUAL PLAN FAILED TO LOAD *** "
+                      f"({type(ex).__name__}: {ex})\n"
+                      f"     path given: {self._manual_plan}\n"
+                      f"     >>> THERE ARE NO WINDOWS. THE BROWSER WILL NEVER OPEN AND NOTHING WILL TRADE. <<<\n"
+                      f"     Fix the path (Windows form, e.g. C:\\...\\l18_window.json) and restart, or unset "
+                      f"PINNACLE_MANUAL_PLAN to fall back to the real schedule.")
+                if self._notify.enabled:
+                    self._notify.send_bg("🚨 **MANUAL PLAN FAILED TO LOAD** — no windows exist, the bot will "
+                                         "never open. Fix `PINNACLE_MANUAL_PLAN` and restart.")
             return
         try:
             starts = await asyncio.to_thread(sched.fetch_starts, self._sports, self._horizon)

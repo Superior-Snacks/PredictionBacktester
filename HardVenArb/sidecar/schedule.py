@@ -26,6 +26,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import sys
 import time
 from datetime import datetime, timedelta, timezone
@@ -135,13 +136,33 @@ def compute_sessions(starts: list[tuple[datetime, str]], session_hours: float = 
     return sorted(sessions, key=lambda w: w[0])
 
 
+def _resolve_path(path: str) -> Path:
+    """Accept a GIT-BASH style POSIX path on Windows. The sidecar is launched from PowerShell but the operator
+    copies paths out of a bash shell, so `/c/Users/...` arrives and Windows Python reads it as `\\c\\Users\\...`
+    — file not found, and (before the louder error below) that read as "correctly dark" while actually meaning
+    the lifecycle could never open. Translate `/<drive>/rest` → `<DRIVE>:\\rest`; leave everything else alone.
+    Also resolves a relative path against this file's directory, not the CWD."""
+    p = Path(path)
+    if not p.exists():
+        m = re.match(r"^[/\\]([A-Za-z])[/\\](.*)$", str(path))
+        if m:
+            win = Path(f"{m.group(1).upper()}:\\{m.group(2).replace('/', chr(92))}")
+            if win.exists():
+                return win
+        if not p.is_absolute():
+            local = Path(__file__).resolve().parent / path
+            if local.exists():
+                return local
+    return p
+
+
 def load_manual_plan(path: str, base: datetime | None = None) -> list[tuple[datetime, datetime, int]]:
     """Load a MANUAL test plan that OVERRIDES the game slate — for quickly verifying the lifecycle's
     open→wait→close→wait→open cycle WITHOUT waiting for real games. Each entry is either RELATIVE (easy for
     testing): {"open_in": <min from base>, "close_in": <min from base>} — base defaults to now (plan-load time);
     or ABSOLUTE: {"open": <ISO-UTC>, "close": <ISO-UTC>}. Returns [(open_utc, close_utc, games), ...] sorted."""
     base = base or _utcnow()
-    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    data = json.loads(_resolve_path(path).read_text(encoding="utf-8"))
     out: list[tuple[datetime, datetime, int]] = []
     for e in data:
         if "open_in" in e or "close_in" in e:

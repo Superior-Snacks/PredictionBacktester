@@ -202,6 +202,9 @@ public class CrossArbExecutor
     private readonly bool    _earlyExitEnabled = Environment.GetEnvironmentVariable("HARDVEN_EARLY_EXIT") == "1";
     private          int     _triesRemaining       = -1;  // -1 = unlimited
     private          int     _tryLimit             = -1;  // original N, for display
+    // --try-success: spend the --try budget on POSITIONS OPENED, not attempts. Without it a clean miss (or a
+    // fully-reversed Case A) ends the run having held nothing — which at a real net floor is the common case.
+    private readonly bool    _trySuccessOnly;
     private          CancellationTokenSource? _outerCts;
     private readonly ConcurrentDictionary<string, byte>    _inFlight          = new();
     // In-flight guard keyed on the PINNACLE MATCHUP ("lid:mid") rather than the pair. Kalshi lists each side of
@@ -396,6 +399,7 @@ public class CrossArbExecutor
         bool    allowReentry             = false,   // dry-run only; Program.cs forces false under --live
         bool    logErrors                = false,
         int?    tryN                = null,
+        bool    trySuccessOnly      = false,   // --try-success: count positions opened, not attempts
         CancellationTokenSource? outerCts = null,
         ConcurrentDictionary<string, string>? hardvenTickSizes = null,
         CrossArbRestVerifier? restVerifier = null,
@@ -437,6 +441,7 @@ public class CrossArbExecutor
         _dryRun              = dryRun;
         _triesRemaining      = tryN ?? -1;
         _tryLimit            = tryN ?? -1;
+        _trySuccessOnly      = trySuccessOnly;
         _outerCts            = outerCts;
         _hedgeMaxNet         = hedgeMaxNet;
         _reverseFloorCents   = Math.Max(1, reverseFloorCents);
@@ -570,6 +575,11 @@ public class CrossArbExecutor
         _telemetry.HardVenFeeRates  = _hardvenFeeRates;
         _telemetry.HardVenFeeParams = _hardvenFeeParams;
     }
+
+    /// <summary>Force a balance refresh outside the 5-minute poll. Called when the book session comes UP: while
+    /// the browser is dark <c>/balance</c> is unreadable and the client reports $0, which makes every arb skip
+    /// on affordability. Waiting for the next tick can waste the first minutes of a window.</summary>
+    public Task RefreshBalancesNowAsync() => RefreshBalancesAsync();
 
     private async Task PeriodicBalanceRefreshLoop()
     {
@@ -1614,7 +1624,13 @@ public class CrossArbExecutor
                 _perPairInvested.AddOrUpdate(pairId, finalCost, (_, old) => old + finalCost);
             }
 
-            DecrementTryLimit();
+            // `--try N` counts ATTEMPTS by default: a clean MISS (both legs 0) or a fully-reversed Case A ends
+            // the run having opened nothing. With a meaningful net floor most attempts miss, so `--try 1` would
+            // routinely stop the bot before it ever held a position. `--try-success` counts POSITIONS instead:
+            // decrement only when one actually survived recovery (kHeld > 0, the same test the exposure block
+            // above uses). A miss then costs nothing and the bot keeps waiting for a real arb.
+            if (!_trySuccessOnly || kHeld > 0)
+                DecrementTryLimit(kHeld > 0 ? "position opened" : "attempt");
             await JournalAsync(JsonSerializer.Serialize(new {
                 t = DateTime.UtcNow, @event = "EXECUTION_COMPLETE",
                 execId, pairId, arbType, label = pair.Label, dryRun = _dryRun,
@@ -3200,14 +3216,18 @@ public class CrossArbExecutor
         catch { return false; }
     }
 
-    private void DecrementTryLimit()
+    private void DecrementTryLimit(string what = "attempt")
     {
         if (_triesRemaining < 0) return;
         int left = Interlocked.Decrement(ref _triesRemaining);
+        Console.WriteLine($"[TRY LIMIT] {what} counted — {left} of {_tryLimit} remaining"
+                        + (_trySuccessOnly ? " (counting POSITIONS: misses are free)" : " (counting ATTEMPTS)"));
         if (left == 0)
         {
             Console.ForegroundColor = ConsoleColor.Cyan;
-            Console.WriteLine($"[TRY LIMIT] All {_tryLimit} arb(s) completed — shutting down cleanly.");
+            Console.WriteLine($"[TRY LIMIT] All {_tryLimit} "
+                            + (_trySuccessOnly ? "position(s) opened" : "attempt(s) made")
+                            + " — shutting down cleanly.");
             Console.ResetColor();
             _outerCts?.Cancel();
         }
