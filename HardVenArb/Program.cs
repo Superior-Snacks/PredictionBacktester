@@ -532,8 +532,9 @@ if (isLive || isDryRun)
     else if (ALLOW_REENTRY)
     {
         Console.ForegroundColor = ConsoleColor.Yellow;
-        Console.WriteLine("[TEST MODE] HARDVEN_ALLOW_REENTRY=1 — multiple positions per pair allowed "
-                        + "(dry-run only). Real arbs can now re-enter a pair without waiting for it to close.");
+        Console.WriteLine("[TEST MODE] HARDVEN_ALLOW_REENTRY=1 (dry-run only) — pair cooldown, leg/sibling "
+                        + "cooldown AND the one-position-per-pair lock are all OFF. Real arbs re-enter "
+                        + "immediately. Simultaneous sibling fires are still blocked (in-flight lock).");
         Console.ResetColor();
     }
     const decimal LOW_BALANCE_ALERT_USD = 15m;   // Discord-alert when either venue's cash drops below this

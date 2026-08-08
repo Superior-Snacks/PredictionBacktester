@@ -1,0 +1,589 @@
+dotnet run --project HardVenArb -- --dry-run --scenario FlakyKalshi
+[INJECT] test arb MANUAL_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT__9280:163 K_YES_P_NO K=0.5500 P=0.4000 — bypassing pre-live / WS-verify / stale gates (synthetic price); favourite+ladder+recovery run as live
+[EXEC TEST] MANUAL_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT__9280:163: injected arb — re-entry guards (cooldown, open position) bypassed
+[TIME SKEW] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K last=18:55:03.655 P last=18:54:09.490 skew=54165ms — stale book may distort arb
+[LADDER] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | 210 → 28 contracts (stake 10.00 EUR, ≤0.333 of book max)
+[LOCK] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | guaranteed both ways: K-wins $0.580 / P-wins $1.417 (worst $0.580 on 28 contracts)
+[EXEC SCALE] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | 210→28 contracts (balance limited) K=$1000.00 P=$1000.00
+[DRY RUN EXEC] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K_YES_P_NO | K-yes=0.5500 P=0.4000 net=$0.9673 | 28 contracts est.$26.60
+[ORDER K] KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT YES 56¢ × 28  clientId=CAXARB_AX_20260808185507_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT
+[ORDER P] BUY token=9280:1633561... price=0.4038 shares=28
+[FILL K]  KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT placed orderId=SIM_CAXARB_AX_20260808185507_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT status=canceled fillImm=0
+[HARDVEN] HardVen quotes fresh again — all 78 polled books live.
+[DRYRUN UI] Pinnacle moneyline located + verified @ 2.070 — real UI drive OK, nothing placed; simulating fill
+[FILL P]  9280:1633561... placed orderID=SIM_H_1786215317688_9280:163 status=matched
+[FILL P]  9280:1633561... filled=28 avgPrice=0.4038
+[STALE PRICE] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | detectedNet=0.9673 kFilled=0 pFilled=28.00 — one leg missed limit, price may have moved
+[EXEC UNHEDGED] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | kFilled=0 pFilled=28.00 balanced=0 kExcess=0 pExcess=28.00 — starting recovery
+[RECOVER] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | pExcess=28.0000 hedgeQty=28 hedgeNet=0.9612 — hedging on Kalshi (Pinnacle held)
+[ORDER K] KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT YES 56¢ × 28  clientId=CAXARB_AX_20260808185507_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT_RH
+[FILL K]  KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT placed orderId=SIM_CAXARB_AX_20260808185507_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT_RH status=executed fillImm=28
+[RECOVER OK] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | hedged +28 on Kalshi (Pinnacle held)
+[KEYS] INJECT FAVOURITE-on-Kalshi test arb -> Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? (kAsk=0.55 pAsk=0.40) | K_YES_P_NO
+[INJECT] test arb MANUAL_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT__9280:163 K_YES_P_NO K=0.5500 P=0.4000 — bypassing pre-live / WS-verify / stale gates (synthetic price); favourite+ladder+recovery run as live
+[EXEC TEST] MANUAL_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT__9280:163: injected arb — re-entry guards (cooldown, open position) bypassed
+[TIME SKEW] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K last=18:55:16.453 P last=18:55:21.744 skew=5291ms — stale book may distort arb
+[LADDER] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | 210 → 28 contracts (stake 10.00 EUR, ≤0.333 of book max)
+[LOCK] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | guaranteed both ways: K-wins $0.580 / P-wins $1.417 (worst $0.580 on 28 contracts)
+[EXEC SCALE] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | 210→28 contracts (balance limited) K=$984.60 P=$988.80
+[DRY RUN EXEC] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K_YES_P_NO | K-yes=0.5500 P=0.4000 net=$0.9673 | 28 contracts est.$26.60
+[ORDER K] KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT YES 56¢ × 28  clientId=CAXARB_AX_20260808185523_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT
+[ORDER P] BUY token=9280:1633561... price=0.4038 shares=28
+[FILL K]  KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT placed orderId=SIM_CAXARB_AX_20260808185523_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT status=canceled fillImm=0
+[HARDVEN] WARNING: 4/78 HardVen quote(s) STALE (bookmaker session frozen / expired?) — those books cleared; no arb can fire on a stale quote. Refresh the bookmaker session.
+[DRYRUN UI] Pinnacle moneyline located + verified @ 2.070 — real UI drive OK, nothing placed; simulating fill
+[FILL P]  9280:1633561... placed orderID=SIM_H_1786215325930_9280:163 status=matched
+[FILL P]  9280:1633561... filled=28 avgPrice=0.4038
+[STALE PRICE] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | detectedNet=0.9673 kFilled=0 pFilled=28.00 — one leg missed limit, price may have moved
+[EXEC UNHEDGED] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | kFilled=0 pFilled=28.00 balanced=0 kExcess=0 pExcess=28.00 — starting recovery
+[RECOVER] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | pExcess=28.0000 hedgeQty=28 hedgeNet=0.9712 — hedging on Kalshi (Pinnacle held)
+[ORDER K] KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT YES 57¢ × 28  clientId=CAXARB_AX_20260808185523_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT_RH
+[FILL K]  KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT placed orderId=SIM_CAXARB_AX_20260808185523_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT_RH status=executed fillImm=28
+[RECOVER OK] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | hedged +28 on Kalshi (Pinnacle held)
+[KEYS] INJECT FAVOURITE-on-Kalshi test arb -> Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? (kAsk=0.55 pAsk=0.40) | K_YES_P_NO
+[INJECT] test arb MANUAL_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT__9280:163 K_YES_P_NO K=0.5500 P=0.4000 — bypassing pre-live / WS-verify / stale gates (synthetic price); favourite+ladder+recovery run as live
+[EXEC TEST] MANUAL_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT__9280:163: injected arb — re-entry guards (cooldown, open position) bypassed
+[TIME SKEW] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K last=18:55:26.392 P last=18:55:27.758 skew=1366ms — stale book may distort arb
+[LADDER] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | 210 → 28 contracts (stake 10.00 EUR, ≤0.333 of book max)
+[LOCK] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | guaranteed both ways: K-wins $0.580 / P-wins $1.417 (worst $0.580 on 28 contracts)
+[EXEC SCALE] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | 210→28 contracts (balance limited) K=$969.20 P=$977.60
+[DRY RUN EXEC] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K_YES_P_NO | K-yes=0.5500 P=0.4000 net=$0.9673 | 28 contracts est.$26.60
+[ORDER K] KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT YES 56¢ × 28  clientId=CAXARB_AX_20260808185528_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT
+[ORDER P] BUY token=9280:1633561... price=0.4038 shares=28
+[FILL K]  KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT placed orderId=SIM_CAXARB_AX_20260808185528_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT status=canceled fillImm=0
+
+[TELEMETRY] --- TOP 10 CLOSEST TO CROSS-PLATFORM ARB ---
+  Kalshi books: 82/102 | HardVen books: 70/78 | Pairs: 51 | Open arbs: 0
+[STATUS 18:55:30] K=$953.80  P=$966.40  │  invested=$79.56  proj=+$2.98  │  exposure=$110.32/$1000.00  │  open=1  filled=2  earlyExit=0  │  books K=82/102 P=70/78  WS K=True P=True  dayLoss=$0.00/$20.00  cleanup=$0.00
+  $1.0129 (+$0.0129 away) K_YES_P_NO | depth=5128.2 | Will Ekaterina Alexandrova win the Sabalenka vs Alexandrova: Round Of 16 match?
+  $1.0129 (+$0.0129 away) K_NO_P_YES | depth=5128.2 | Will Aryna Sabalenka win the Sabalenka vs Alexandrova: Round Of 16 match?
+  $1.0197 (+$0.0197 away) K_NO_P_YES | depth=10809.9 | Jiri Lehecka vs Rafael Jodar — Over 22.5
+  $1.0237 (+$0.0237 away) K_NO_P_YES | depth=9664.5 | Will Elina Svitolina win the Svitolina vs Anisimova: Round Of 16 match?
+  $1.0243 (+$0.0243 away) K_NO_P_YES | depth=25746.1 | Will Arthur Rinderknech win the Rinderknech vs Nakashima: Round Of 16 match?
+  $1.0247 (+$0.0247 away) K_YES_P_NO | depth=7405.5 | Will Belinda Bencic win the Eala vs Bencic: Round Of 16 match?
+  $1.0266 (+$0.0266 away) K_NO_P_YES | depth=7658.5 | Will Jessica Pegula win the Pegula vs Shnaider: Round Of 16 match?
+  $1.0266 (+$0.0266 away) K_YES_P_NO | depth=7658.5 | Will Diana Shnaider win the Pegula vs Shnaider: Round Of 16 match?
+  $1.0269 (+$0.0269 away) K_YES_P_NO | depth=10075.2 | Will Joao Fonseca win the Fonseca vs Shelton: Round Of 16 match?
+  $1.0273 (+$0.0273 away) K_YES_P_NO | depth=12949.0 | Will Cameron Norrie win the Fils vs Norrie: Round Of 16 match?
+  ├ Will Edas Butvilas win the Butvilas vs Lajovi │ K_YES_P_NO   │ K=56@0.545 P=56@0.404 │ bid 0.530+0.000 │ pnl +$0.00
+[DRYRUN UI] Pinnacle moneyline located + verified @ 2.070 — real UI drive OK, nothing placed; simulating fill
+[FILL P]  9280:1633561... placed orderID=SIM_H_1786215331076_9280:163 status=matched
+[FILL P]  9280:1633561... filled=28 avgPrice=0.4038
+[STALE PRICE] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | detectedNet=0.9673 kFilled=0 pFilled=28.00 — one leg missed limit, price may have moved
+[EXEC UNHEDGED] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | kFilled=0 pFilled=28.00 balanced=0 kExcess=0 pExcess=28.00 — starting recovery
+[RECOVER] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | pExcess=28.0000 hedgeQty=28 hedgeNet=0.9712 — hedging on Kalshi (Pinnacle held)
+[ORDER K] KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT YES 57¢ × 28  clientId=CAXARB_AX_20260808185528_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT_RH
+[FILL K]  KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT placed orderId=SIM_CAXARB_AX_20260808185528_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT_RH status=executed fillImm=28
+[RECOVER OK] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | hedged +28 on Kalshi (Pinnacle held)
+[KEYS] INJECT FAVOURITE-on-Kalshi test arb -> Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? (kAsk=0.55 pAsk=0.40) | K_YES_P_NO
+[INJECT] test arb MANUAL_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT__9280:163 K_YES_P_NO K=0.5500 P=0.4000 — bypassing pre-live / WS-verify / stale gates (synthetic price); favourite+ladder+recovery run as live
+[EXEC TEST] MANUAL_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT__9280:163: injected arb — re-entry guards (cooldown, open position) bypassed
+[TIME SKEW] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K last=18:55:33.177 P last=18:55:30.771 skew=2406ms — stale book may distort arb
+[LADDER] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | 210 → 28 contracts (stake 10.00 EUR, ≤0.333 of book max)
+[LOCK] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | guaranteed both ways: K-wins $0.580 / P-wins $1.417 (worst $0.580 on 28 contracts)
+[EXEC SCALE] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | 210→28 contracts (balance limited) K=$953.80 P=$966.40
+[DRY RUN EXEC] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K_YES_P_NO | K-yes=0.5500 P=0.4000 net=$0.9673 | 28 contracts est.$26.60
+[ORDER K] KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT YES 56¢ × 28  clientId=CAXARB_AX_20260808185533_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT
+[ORDER P] BUY token=9280:1633561... price=0.4038 shares=28
+[FILL K]  KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT placed orderId=SIM_CAXARB_AX_20260808185533_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT status=executed fillImm=28
+[DRYRUN UI] Pinnacle moneyline located + verified @ 2.070 — real UI drive OK, nothing placed; simulating fill
+[FILL P]  9280:1633561... placed orderID=SIM_H_1786215335737_9280:163 status=matched
+[FILL P]  9280:1633561... filled=28 avgPrice=0.4038
+[EXEC OK] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K=28@56¢ | P=28.00sh@$0.4038 | cost=$26.71 actualNet=0.9712 projProfit=$0.81
+[INJECT] test arb MANUAL_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT__9280:163 K_YES_P_NO K=0.5500 P=0.4000 — bypassing pre-live / WS-verify / stale gates (synthetic price); favourite+ladder+recovery run as live
+[EXEC TEST] MANUAL_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT__9280:163: injected arb — re-entry guards (cooldown, open position) bypassed
+[LADDER] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | 210 → 28 contracts (stake 10.00 EUR, ≤0.333 of book max)
+[LOCK] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | guaranteed both ways: K-wins $0.580 / P-wins $1.417 (worst $0.580 on 28 contracts)
+[EXEC SCALE] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | 210→28 contracts (balance limited) K=$1000.00 P=$1000.00
+[DRY RUN EXEC] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K_YES_P_NO | K-yes=0.5500 P=0.4000 net=$0.9673 | 28 contracts est.$26.60
+[ORDER K] KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT YES 56¢ × 28  clientId=CAXARB_AX_20260808185828_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT
+[ORDER P] BUY token=9280:1633561... price=0.4038 shares=28
+[FILL K]  KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT placed orderId=SIM_CAXARB_AX_20260808185828_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT status=executed fillImm=28
+[DRYRUN UI] Pinnacle moneyline located + verified @ 2.070 — real UI drive OK, nothing placed; simulating fill
+[FILL P]  9280:1633561... placed orderID=SIM_H_1786215515595_9280:163 status=matched
+[FILL P]  9280:1633561... filled=28 avgPrice=0.4038
+[EXEC OK] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K=28@56¢ | P=28.00sh@$0.4038 | cost=$26.71 actualNet=0.9712 projProfit=$0.81
+[KEYS] INJECT FAVOURITE-on-Kalshi test arb -> Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? (kAsk=0.55 pAsk=0.40) | K_YES_P_NO
+[INJECT] test arb MANUAL_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT__9280:163 K_YES_P_NO K=0.5500 P=0.4000 — bypassing pre-live / WS-verify / stale gates (synthetic price); favourite+ladder+recovery run as live
+[EXEC TEST] MANUAL_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT__9280:163: injected arb — re-entry guards (cooldown, open position) bypassed
+[TIME SKEW] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K last=18:58:28.917 P last=18:58:37.646 skew=8729ms — stale book may distort arb
+[LADDER] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | 210 → 28 contracts (stake 10.00 EUR, ≤0.333 of book max)
+[LOCK] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | guaranteed both ways: K-wins $0.580 / P-wins $1.417 (worst $0.580 on 28 contracts)
+[EXEC SCALE] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | 210→28 contracts (balance limited) K=$984.60 P=$988.80
+[DRY RUN EXEC] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K_YES_P_NO | K-yes=0.5500 P=0.4000 net=$0.9673 | 28 contracts est.$26.60
+[ORDER K] KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT YES 56¢ × 28  clientId=CAXARB_AX_20260808185839_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT
+[ORDER P] BUY token=9280:1633561... price=0.4038 shares=28
+[FILL K]  KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT placed orderId=SIM_CAXARB_AX_20260808185839_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT status=executed fillImm=28
+[DRYRUN UI] Pinnacle moneyline located + verified @ 2.070 — real UI drive OK, nothing placed; simulating fill
+[FILL P]  9280:1633561... placed orderID=SIM_H_1786215522070_9280:163 status=matched
+[FILL P]  9280:1633561... filled=28 avgPrice=0.4038
+[EXEC OK] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K=28@56¢ | P=28.00sh@$0.4038 | cost=$26.71 actualNet=0.9712 projProfit=$0.81
+[KEYS] INJECT FAVOURITE-on-Kalshi test arb -> Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? (kAsk=0.55 pAsk=0.40) | K_YES_P_NO
+[INJECT] test arb MANUAL_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT__9280:163 K_YES_P_NO K=0.5500 P=0.4000 — bypassing pre-live / WS-verify / stale gates (synthetic price); favourite+ladder+recovery run as live
+[EXEC TEST] MANUAL_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT__9280:163: injected arb — re-entry guards (cooldown, open position) bypassed
+[TIME SKEW] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K last=18:58:28.917 P last=18:58:43.671 skew=14754ms — stale book may distort arb
+[LADDER] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | 210 → 28 contracts (stake 10.00 EUR, ≤0.333 of book max)
+[LOCK] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | guaranteed both ways: K-wins $0.580 / P-wins $1.417 (worst $0.580 on 28 contracts)
+[EXEC SCALE] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | 210→28 contracts (balance limited) K=$969.20 P=$977.60
+[DRY RUN EXEC] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K_YES_P_NO | K-yes=0.5500 P=0.4000 net=$0.9673 | 28 contracts est.$26.60
+[ORDER K] KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT YES 56¢ × 28  clientId=CAXARB_AX_20260808185844_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT
+[ORDER P] BUY token=9280:1633561... price=0.4038 shares=28
+[FILL K]  KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT placed orderId=SIM_CAXARB_AX_20260808185844_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT status=executed fillImm=28
+[DRYRUN UI] Pinnacle moneyline located + verified @ 2.070 — real UI drive OK, nothing placed; simulating fill
+[FILL P]  9280:1633561... placed orderID=SIM_H_1786215527083_9280:163 status=matched
+[FILL P]  9280:1633561... filled=28 avgPrice=0.4038
+[EXEC OK] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K=28@56¢ | P=28.00sh@$0.4038 | cost=$26.71 actualNet=0.9712 projProfit=$0.81
+[KEYS] INJECT FAVOURITE-on-Kalshi test arb -> Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? (kAsk=0.55 pAsk=0.40) | K_YES_P_NO
+[INJECT] test arb MANUAL_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT__9280:163 K_YES_P_NO K=0.5500 P=0.4000 — bypassing pre-live / WS-verify / stale gates (synthetic price); favourite+ladder+recovery run as live
+[EXEC TEST] MANUAL_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT__9280:163: injected arb — re-entry guards (cooldown, open position) bypassed
+[TIME SKEW] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K last=18:58:28.917 P last=18:58:43.671 skew=14754ms — stale book may distort arb
+[LADDER] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | 210 → 28 contracts (stake 10.00 EUR, ≤0.333 of book max)
+[LOCK] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | guaranteed both ways: K-wins $0.580 / P-wins $1.417 (worst $0.580 on 28 contracts)
+[EXEC SCALE] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | 210→28 contracts (balance limited) K=$953.80 P=$966.40
+[DRY RUN EXEC] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K_YES_P_NO | K-yes=0.5500 P=0.4000 net=$0.9673 | 28 contracts est.$26.60
+[ORDER K] KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT YES 56¢ × 28  clientId=CAXARB_AX_20260808185848_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT
+[ORDER P] BUY token=9280:1633561... price=0.4038 shares=28
+[FILL K]  KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT placed orderId=SIM_CAXARB_AX_20260808185848_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT status=executed fillImm=28
+[DRYRUN UI] Pinnacle moneyline located + verified @ 2.070 — real UI drive OK, nothing placed; simulating fill
+[FILL P]  9280:1633561... placed orderID=SIM_H_1786215531197_9280:163 status=matched
+[FILL P]  9280:1633561... filled=28 avgPrice=0.4038
+[EXEC OK] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K=28@56¢ | P=28.00sh@$0.4038 | cost=$26.71 actualNet=0.9712 projProfit=$0.81
+[KEYS] INJECT FAVOURITE-on-Kalshi test arb -> Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? (kAsk=0.55 pAsk=0.40) | K_YES_P_NO
+[INJECT] test arb MANUAL_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT__9280:163 K_YES_P_NO K=0.5500 P=0.4000 — bypassing pre-live / WS-verify / stale gates (synthetic price); favourite+ladder+recovery run as live
+[EXEC TEST] MANUAL_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT__9280:163: injected arb — re-entry guards (cooldown, open position) bypassed
+[TIME SKEW] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K last=18:58:28.917 P last=18:58:43.671 skew=14754ms — stale book may distort arb
+[LADDER] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | 210 → 28 contracts (stake 10.00 EUR, ≤0.333 of book max)
+[LOCK] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | guaranteed both ways: K-wins $0.580 / P-wins $1.417 (worst $0.580 on 28 contracts)
+[EXEC SCALE] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | 210→28 contracts (balance limited) K=$938.40 P=$955.20
+[DRY RUN EXEC] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K_YES_P_NO | K-yes=0.5500 P=0.4000 net=$0.9673 | 28 contracts est.$26.60
+[ORDER K] KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT YES 56¢ × 28  clientId=CAXARB_AX_20260808185852_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT
+[ORDER P] BUY token=9280:1633561... price=0.4038 shares=28
+[FILL K]  KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT placed orderId=SIM_CAXARB_AX_20260808185852_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT status=canceled fillImm=0
+[DRYRUN UI] Pinnacle moneyline located + verified @ 2.070 — real UI drive OK, nothing placed; simulating fill
+[FILL P]  9280:1633561... placed orderID=SIM_H_1786215534791_9280:163 status=matched
+[FILL P]  9280:1633561... filled=28 avgPrice=0.4038
+[STALE PRICE] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | detectedNet=0.9673 kFilled=0 pFilled=28.00 — one leg missed limit, price may have moved
+[EXEC UNHEDGED] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | kFilled=0 pFilled=28.00 balanced=0 kExcess=0 pExcess=28.00 — starting recovery
+[RECOVER] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | pExcess=28.0000 hedgeQty=28 hedgeNet=0.9712 — hedging on Kalshi (Pinnacle held)
+[ORDER K] KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT YES 57¢ × 28  clientId=CAXARB_AX_20260808185852_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT_RH
+[FILL K]  KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT placed orderId=SIM_CAXARB_AX_20260808185852_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT_RH status=executed fillImm=28
+[RECOVER OK] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | hedged +28 on Kalshi (Pinnacle held)
+[STATUS 18:58:55] K=$923.00  P=$944.00  │  invested=$160.24  proj=+$4.84  │  exposure=$148.40/$1000.00  │  open=1  filled=5  earlyExit=0  │  books K=78/102 P=66/78  WS K=True P=True  dayLoss=$0.00/$20.00  cleanup=$0.00
+  ├ Will Edas Butvilas win the Butvilas vs Lajovi │ K_YES_P_NO   │ K=56@0.550 P=56@0.404 │ bid 0.530+0.000 │ pnl +$0.00
+[KEYS] INJECT FAVOURITE-on-Kalshi test arb -> Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? (kAsk=0.55 pAsk=0.40) | K_YES_P_NO
+[INJECT] test arb MANUAL_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT__9280:163 K_YES_P_NO K=0.5500 P=0.4000 — bypassing pre-live / WS-verify / stale gates (synthetic price); favourite+ladder+recovery run as live
+[EXEC TEST] MANUAL_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT__9280:163: injected arb — re-entry guards (cooldown, open position) bypassed
+[TIME SKEW] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K last=18:58:56.758 P last=18:58:43.671 skew=13087ms — stale book may distort arb
+[LADDER] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | 210 → 28 contracts (stake 10.00 EUR, ≤0.333 of book max)
+[LOCK] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | guaranteed both ways: K-wins $0.580 / P-wins $1.417 (worst $0.580 on 28 contracts)
+[EXEC SCALE] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | 210→28 contracts (balance limited) K=$923.00 P=$944.00
+[DRY RUN EXEC] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K_YES_P_NO | K-yes=0.5500 P=0.4000 net=$0.9673 | 28 contracts est.$26.60
+[ORDER K] KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT YES 56¢ × 28  clientId=CAXARB_AX_20260808185857_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT
+[ORDER P] BUY token=9280:1633561... price=0.4038 shares=28
+[FILL K]  KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT placed orderId=SIM_CAXARB_AX_20260808185857_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT status=canceled fillImm=0
+[DRYRUN UI] Pinnacle moneyline located + verified @ 2.070 — real UI drive OK, nothing placed; simulating fill
+[FILL P]  9280:1633561... placed orderID=SIM_H_1786215542603_9280:163 status=matched
+[FILL P]  9280:1633561... filled=28 avgPrice=0.4038
+[STALE PRICE] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | detectedNet=0.9673 kFilled=0 pFilled=28.00 — one leg missed limit, price may have moved
+[EXEC UNHEDGED] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | kFilled=0 pFilled=28.00 balanced=0 kExcess=0 pExcess=28.00 — starting recovery
+[RECOVER] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | pExcess=28.0000 hedgeQty=28 hedgeNet=0.9712 — hedging on Kalshi (Pinnacle held)
+[ORDER K] KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT YES 57¢ × 28  clientId=CAXARB_AX_20260808185857_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT_RH
+[FILL K]  KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT placed orderId=SIM_CAXARB_AX_20260808185857_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT_RH status=executed fillImm=28
+[RECOVER OK] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | hedged +28 on Kalshi (Pinnacle held)
+
+
+
+dotnet run --project HardVenArb -- --dry-run --scenario PartialFillSwamp
+[INJECT] test arb MANUAL_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT__9280:163 K_YES_P_NO K=0.5500 P=0.4000 — bypassing pre-live / WS-verify / stale gates (synthetic price); favourite+ladder+recovery run as live
+[EXEC TEST] MANUAL_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT__9280:163: injected arb — re-entry guards (cooldown, open position) bypassed
+[LADDER] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | 210 → 28 contracts (stake 10.00 EUR, ≤0.333 of book max)
+[LOCK] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | guaranteed both ways: K-wins $0.580 / P-wins $1.417 (worst $0.580 on 28 contracts)
+[EXEC SCALE] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | 210→28 contracts (balance limited) K=$1000.00 P=$1000.00
+[DRY RUN EXEC] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K_YES_P_NO | K-yes=0.5500 P=0.4000 net=$0.9673 | 28 contracts est.$26.60
+[ORDER K] KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT YES 56¢ × 28  clientId=CAXARB_AX_20260808190159_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT
+[ORDER P] BUY token=9280:1633561... price=0.4038 shares=28
+[FILL K]  KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT placed orderId=SIM_CAXARB_AX_20260808190159_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT status=executed fillImm=15
+[DRYRUN UI] Pinnacle moneyline located + verified @ 2.070 — real UI drive OK, nothing placed; simulating fill
+[FILL P]  9280:1633561... placed orderID=SIM_H_1786215727138_9280:163 status=matched
+[FILL P]  9280:1633561... filled=11.7021 avgPrice=0.4038
+[EXEC OK] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K=11@56¢ | P=11.00sh@$0.4038 | cost=$10.49 actualNet=0.9712 projProfit=$0.32
+[EXEC UNHEDGED] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | kFilled=15 pFilled=11.70 balanced=11 kExcess=4 pExcess=0.70 — starting recovery
+[CLEANUP DUST] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | Absorbing 0.70 HardVen sub-unit remainder ($0.28) — no halt
+[RECOVER REVERSED] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | swept 4 Kalshi yes (attempt 1), 0 left
+[KEYS] INJECT FAVOURITE-on-Kalshi test arb -> Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? (kAsk=0.55 pAsk=0.40) | K_YES_P_NO
+[INJECT] test arb MANUAL_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT__9280:163 K_YES_P_NO K=0.5500 P=0.4000 — bypassing pre-live / WS-verify / stale gates (synthetic price); favourite+ladder+recovery run as live
+[EXEC TEST] MANUAL_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT__9280:163: injected arb — re-entry guards (cooldown, open position) bypassed
+[LADDER] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | 210 → 28 contracts (stake 10.00 EUR, ≤0.333 of book max)
+[LOCK] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | guaranteed both ways: K-wins $0.580 / P-wins $1.417 (worst $0.580 on 28 contracts)
+[EXEC SCALE] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | 210→28 contracts (balance limited) K=$984.60 P=$988.80
+[DRY RUN EXEC] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K_YES_P_NO | K-yes=0.5500 P=0.4000 net=$0.9673 | 28 contracts est.$26.60
+[ORDER K] KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT YES 56¢ × 28  clientId=CAXARB_AX_20260808190216_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT
+[ORDER P] BUY token=9280:1633561... price=0.4038 shares=28
+[FILL K]  KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT placed orderId=SIM_CAXARB_AX_20260808190216_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT status=executed fillImm=28
+[DRYRUN UI] Pinnacle moneyline located + verified @ 2.070 — real UI drive OK, nothing placed; simulating fill
+[FILL P]  9280:1633561... placed orderID=SIM_H_1786215738945_9280:163 status=matched
+[FILL P]  9280:1633561... filled=28 avgPrice=0.4038
+[EXEC OK] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K=28@56¢ | P=28.00sh@$0.4038 | cost=$26.71 actualNet=0.9712 projProfit=$0.81
+[STATUS 19:02:23] K=$969.20  P=$977.60  │  invested=$37.20  proj=+$1.12  │  exposure=$53.20/$1000.00  │  open=1  filled=2  earlyExit=0  │  books K=66/102 P=16/78  WS K=True P=True  dayLoss=$0.00/$20.00  cleanup=$0.36
+  ├ Will Edas Butvilas win the Butvilas vs Lajovi │ K_YES_P_NO   │ K=28@0.550 P=28@0.404 │ bid 0.530+0.000 │ pnl +$0.00
+[KEYS] INJECT FAVOURITE-on-Kalshi test arb -> Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? (kAsk=0.55 pAsk=0.40) | K_YES_P_NO
+[INJECT] test arb MANUAL_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT__9280:163 K_YES_P_NO K=0.5500 P=0.4000 — bypassing pre-live / WS-verify / stale gates (synthetic price); favourite+ladder+recovery run as live
+[EXEC TEST] MANUAL_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT__9280:163: injected arb — re-entry guards (cooldown, open position) bypassed
+[LADDER] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | 210 → 28 contracts (stake 10.00 EUR, ≤0.333 of book max)
+[LOCK] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | guaranteed both ways: K-wins $0.580 / P-wins $1.417 (worst $0.580 on 28 contracts)
+[EXEC SCALE] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | 210→28 contracts (balance limited) K=$969.20 P=$977.60
+[DRY RUN EXEC] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K_YES_P_NO | K-yes=0.5500 P=0.4000 net=$0.9673 | 28 contracts est.$26.60
+[ORDER K] KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT YES 56¢ × 28  clientId=CAXARB_AX_20260808190228_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT
+[ORDER P] BUY token=9280:1633561... price=0.4038 shares=28
+[FILL K]  KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT placed orderId=SIM_CAXARB_AX_20260808190228_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT status=executed fillImm=28
+[DRYRUN UI] Pinnacle moneyline located + verified @ 2.070 — real UI drive OK, nothing placed; simulating fill
+[FILL P]  9280:1633561... placed orderID=SIM_H_1786215750833_9280:163 status=matched
+[FILL P]  9280:1633561... filled=28 avgPrice=0.4038
+[EXEC OK] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K=28@56¢ | P=28.00sh@$0.4038 | cost=$26.71 actualNet=0.9712 projProfit=$0.81
+[KEYS] INJECT FAVOURITE-on-Kalshi test arb -> Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? (kAsk=0.55 pAsk=0.40) | K_YES_P_NO
+[INJECT] test arb MANUAL_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT__9280:163 K_YES_P_NO K=0.5500 P=0.4000 — bypassing pre-live / WS-verify / stale gates (synthetic price); favourite+ladder+recovery run as live
+[EXEC TEST] MANUAL_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT__9280:163: injected arb — re-entry guards (cooldown, open position) bypassed
+[LADDER] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | 210 → 28 contracts (stake 10.00 EUR, ≤0.333 of book max)
+[LOCK] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | guaranteed both ways: K-wins $0.580 / P-wins $1.417 (worst $0.580 on 28 contracts)
+[EXEC SCALE] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | 210→28 contracts (balance limited) K=$953.80 P=$966.40
+[DRY RUN EXEC] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K_YES_P_NO | K-yes=0.5500 P=0.4000 net=$0.9673 | 28 contracts est.$26.60
+[ORDER K] KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT YES 56¢ × 28  clientId=CAXARB_AX_20260808190238_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT
+[ORDER P] BUY token=9280:1633561... price=0.4038 shares=28
+[FILL K]  KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT placed orderId=SIM_CAXARB_AX_20260808190238_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT status=executed fillImm=10
+[DRYRUN UI] Pinnacle moneyline located + verified @ 2.070 — real UI drive OK, nothing placed; simulating fill
+[FILL P]  9280:1633561... placed orderID=SIM_H_1786215760639_9280:163 status=matched
+[FILL P]  9280:1633561... filled=16.1226 avgPrice=0.4038
+[EXEC OK] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K=10@56¢ | P=10.00sh@$0.4038 | cost=$9.54 actualNet=0.9712 projProfit=$0.29
+[EXEC UNHEDGED] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | kFilled=10 pFilled=16.12 balanced=10 kExcess=0 pExcess=6.12 — starting recovery
+[RECOVER] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | pExcess=6.1226 hedgeQty=6 hedgeNet=0.9712 — hedging on Kalshi (Pinnacle held)
+[ORDER K] KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT YES 57¢ × 6  clientId=CAXARB_AX_20260808190238_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT_RH
+[FILL K]  KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT placed orderId=SIM_CAXARB_AX_20260808190238_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT_RH status=executed fillImm=1
+[RECOVER OK] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | hedged +1 on Kalshi (Pinnacle held)
+[RECOVER HOLD] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | holding 5.12 unhedged Pinnacle share(s) to settlement (PARTIAL_HEDGE_REMAINDER) — Pinnacle is never reversed
+[KEYS] INJECT FAVOURITE-on-Kalshi test arb -> Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? (kAsk=0.55 pAsk=0.40) | K_YES_P_NO
+[INJECT] test arb MANUAL_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT__9280:163 K_YES_P_NO K=0.5500 P=0.4000 — bypassing pre-live / WS-verify / stale gates (synthetic price); favourite+ladder+recovery run as live
+[EXEC TEST] MANUAL_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT__9280:163: injected arb — re-entry guards (cooldown, open position) bypassed
+[LADDER] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | 210 → 28 contracts (stake 10.00 EUR, ≤0.333 of book max)
+[LOCK] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | guaranteed both ways: K-wins $0.580 / P-wins $1.417 (worst $0.580 on 28 contracts)
+[EXEC SCALE] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | 210→28 contracts (balance limited) K=$938.40 P=$955.20
+[DRY RUN EXEC] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K_YES_P_NO | K-yes=0.5500 P=0.4000 net=$0.9673 | 28 contracts est.$26.60
+[ORDER K] KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT YES 56¢ × 28  clientId=CAXARB_AX_20260808190248_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT
+[ORDER P] BUY token=9280:1633561... price=0.4038 shares=28
+[FILL K]  KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT placed orderId=SIM_CAXARB_AX_20260808190248_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT status=executed fillImm=25
+[DRYRUN UI] Pinnacle moneyline located + verified @ 2.070 — real UI drive OK, nothing placed; simulating fill
+[FILL P]  9280:1633561... placed orderID=SIM_H_1786215770499_9280:163 status=matched
+[FILL P]  9280:1633561... filled=28 avgPrice=0.4038
+[EXEC OK] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K=25@56¢ | P=25.00sh@$0.4038 | cost=$23.85 actualNet=0.9712 projProfit=$0.72
+[EXEC UNHEDGED] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | kFilled=25 pFilled=28.00 balanced=25 kExcess=0 pExcess=3.00 — starting recovery
+[RECOVER] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | pExcess=3.0000 hedgeQty=3 hedgeNet=0.9712 — hedging on Kalshi (Pinnacle held)
+[ORDER K] KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT YES 57¢ × 3  clientId=CAXARB_AX_20260808190248_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT_RH
+[FILL K]  KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT placed orderId=SIM_CAXARB_AX_20260808190248_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT_RH status=executed fillImm=3
+[RECOVER OK] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | hedged +3 on Kalshi (Pinnacle held)
+
+
+dotnet run --project HardVenArb -- --dry-run --scenario DustUnhedged
+[INJECT] test arb MANUAL_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT__9280:163 K_YES_P_NO K=0.5500 P=0.4000 — bypassing pre-live / WS-verify / stale gates (synthetic price); favourite+ladder+recovery run as live
+[EXEC TEST] MANUAL_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT__9280:163: injected arb — re-entry guards (cooldown, open position) bypassed
+[LADDER] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | 210 → 28 contracts (stake 10.00 EUR, ≤0.333 of book max)
+[LOCK] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | guaranteed both ways: K-wins $0.580 / P-wins $1.417 (worst $0.580 on 28 contracts)
+[EXEC SCALE] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | 210→28 contracts (balance limited) K=$1000.00 P=$1000.00
+[DRY RUN EXEC] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K_YES_P_NO | K-yes=0.5500 P=0.4000 net=$0.9673 | 28 contracts est.$26.60
+[ORDER K] KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT YES 56¢ × 28  clientId=CAXARB_AX_20260808190546_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT
+[ORDER P] BUY token=9280:1633561... price=0.4038 shares=28
+[FILL K]  KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT placed orderId=SIM_CAXARB_AX_20260808190546_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT status=executed fillImm=28
+[STATUS 19:05:46] K=$984.60  P=$988.80  │  invested=$0.00  proj=+$0.00  │  exposure=$26.60/$1000.00  │  open=0  filled=0  earlyExit=0  │  books K=64/102 P=12/78  WS K=True P=True  dayLoss=$0.00/$20.00  cleanup=$0.00
+[DRYRUN UI] Pinnacle moneyline located + verified @ 2.070 — real UI drive OK, nothing placed; simulating fill
+[FILL P WARN] 9280:1633561... success=false — {"success":false,"orderID":"SIM_H_1786215951971_9280:163","status":"canceled","takingAmount":"0","makingAmount":"0.0000"}
+[STALE PRICE] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | detectedNet=0.9673 kFilled=28 pFilled=0.00 — one leg missed limit, price may have moved
+[EXEC UNHEDGED] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | kFilled=28 pFilled=0.00 balanced=0 kExcess=28 pExcess=0.00 — starting recovery
+[RECOVER REVERSED] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | swept 28 Kalshi yes (attempt 1), 0 left
+[KEYS] INJECT FAVOURITE-on-Kalshi test arb -> Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? (kAsk=0.55 pAsk=0.40) | K_YES_P_NO
+[INJECT] test arb MANUAL_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT__9280:163 K_YES_P_NO K=0.5500 P=0.4000 — bypassing pre-live / WS-verify / stale gates (synthetic price); favourite+ladder+recovery run as live
+[EXEC TEST] MANUAL_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT__9280:163: injected arb — re-entry guards (cooldown, open position) bypassed
+[TIME SKEW] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K last=19:06:03.096 P last=19:06:05.305 skew=2209ms — stale book may distort arb
+[LADDER] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | 210 → 28 contracts (stake 10.00 EUR, ≤0.333 of book max)
+[LOCK] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | guaranteed both ways: K-wins $0.580 / P-wins $1.417 (worst $0.580 on 28 contracts)
+[EXEC SCALE] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | 210→28 contracts (balance limited) K=$984.60 P=$988.80
+[DRY RUN EXEC] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K_YES_P_NO | K-yes=0.5500 P=0.4000 net=$0.9673 | 28 contracts est.$26.60
+[ORDER K] KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT YES 56¢ × 28  clientId=CAXARB_AX_20260808190607_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT
+[ORDER P] BUY token=9280:1633561... price=0.4038 shares=28
+[FILL K]  KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT placed orderId=SIM_CAXARB_AX_20260808190607_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT status=executed fillImm=28
+[DRYRUN UI] Pinnacle moneyline located + verified @ 2.070 — real UI drive OK, nothing placed; simulating fill
+[FILL P WARN] 9280:1633561... success=false — {"success":false,"orderID":"SIM_H_1786215969819_9280:163","status":"canceled","takingAmount":"0","makingAmount":"0.0000"}
+[STALE PRICE] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | detectedNet=0.9673 kFilled=28 pFilled=0.00 — one leg missed limit, price may have moved
+[EXEC UNHEDGED] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | kFilled=28 pFilled=0.00 balanced=0 kExcess=28 pExcess=0.00 — starting recovery
+[RECOVER REVERSED] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | swept 28 Kalshi yes (attempt 1), 0 left
+[KEYS] INJECT FAVOURITE-on-Kalshi test arb -> Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? (kAsk=0.55 pAsk=0.40) | K_YES_P_NO
+[INJECT] test arb MANUAL_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT__9280:163 K_YES_P_NO K=0.5500 P=0.4000 — bypassing pre-live / WS-verify / stale gates (synthetic price); favourite+ladder+recovery run as live
+[EXEC TEST] MANUAL_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT__9280:163: injected arb — re-entry guards (cooldown, open position) bypassed
+[TIME SKEW] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K last=19:06:03.096 P last=19:06:11.321 skew=8225ms — stale book may distort arb
+[LADDER] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | 210 → 28 contracts (stake 10.00 EUR, ≤0.333 of book max)
+[LOCK] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | guaranteed both ways: K-wins $0.580 / P-wins $1.417 (worst $0.580 on 28 contracts)
+[EXEC SCALE] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | 210→28 contracts (balance limited) K=$969.20 P=$977.60
+[DRY RUN EXEC] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K_YES_P_NO | K-yes=0.5500 P=0.4000 net=$0.9673 | 28 contracts est.$26.60
+[ORDER K] KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT YES 56¢ × 28  clientId=CAXARB_AX_20260808190612_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT
+[ORDER P] BUY token=9280:1633561... price=0.4038 shares=28
+[FILL K]  KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT placed orderId=SIM_CAXARB_AX_20260808190612_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT status=executed fillImm=28
+[DRYRUN UI] Pinnacle moneyline located + verified @ 2.070 — real UI drive OK, nothing placed; simulating fill
+[FILL P WARN] 9280:1633561... success=false — {"success":false,"orderID":"SIM_H_1786215974516_9280:163","status":"canceled","takingAmount":"0","makingAmount":"0.0000"}
+[STALE PRICE] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | detectedNet=0.9673 kFilled=28 pFilled=0.00 — one leg missed limit, price may have moved
+[EXEC UNHEDGED] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | kFilled=28 pFilled=0.00 balanced=0 kExcess=28 pExcess=0.00 — starting recovery
+[RECOVER REVERSED] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | swept 28 Kalshi yes (attempt 1), 0 left
+[KEYS] INJECT FAVOURITE-on-Kalshi test arb -> Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? (kAsk=0.55 pAsk=0.40) | K_YES_P_NO
+[INJECT] test arb MANUAL_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT__9280:163 K_YES_P_NO K=0.5500 P=0.4000 — bypassing pre-live / WS-verify / stale gates (synthetic price); favourite+ladder+recovery run as live
+[EXEC TEST] MANUAL_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT__9280:163: injected arb — re-entry guards (cooldown, open position) bypassed
+[TIME SKEW] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K last=19:06:03.096 P last=19:06:14.336 skew=11240ms — stale book may distort arb
+[LADDER] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | 210 → 28 contracts (stake 10.00 EUR, ≤0.333 of book max)
+[LOCK] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | guaranteed both ways: K-wins $0.580 / P-wins $1.417 (worst $0.580 on 28 contracts)
+[EXEC SCALE] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | 210→28 contracts (balance limited) K=$953.80 P=$966.40
+[DRY RUN EXEC] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K_YES_P_NO | K-yes=0.5500 P=0.4000 net=$0.9673 | 28 contracts est.$26.60
+[ORDER K] KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT YES 56¢ × 28  clientId=CAXARB_AX_20260808190615_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT
+[ORDER P] BUY token=9280:1633561... price=0.4038 shares=28
+[FILL K]  KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT placed orderId=SIM_CAXARB_AX_20260808190615_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT status=executed fillImm=28
+
+[TELEMETRY] --- TOP 10 CLOSEST TO CROSS-PLATFORM ARB ---
+  Kalshi books: 78/102 | HardVen books: 66/78 | Pairs: 51 | Open arbs: 0
+[STATUS 19:06:16] K=$938.40  P=$955.20  │  invested=$0.00  proj=+$0.00  │  exposure=$106.40/$1000.00  │  open=0  filled=0  earlyExit=0  │  books K=78/102 P=66/78  WS K=True P=True  dayLoss=$0.00/$20.00  cleanup=$1.68
+  $1.0129 (+$0.0129 away) K_YES_P_NO | depth=5128.2 | Will Ekaterina Alexandrova win the Sabalenka vs Alexandrova: Round Of 16 match?
+  $1.0129 (+$0.0129 away) K_NO_P_YES | depth=5128.2 | Will Aryna Sabalenka win the Sabalenka vs Alexandrova: Round Of 16 match?
+  $1.0162 (+$0.0162 away) K_NO_P_YES | depth=7658.5 | Will Jessica Pegula win the Pegula vs Shnaider: Round Of 16 match?
+  $1.0188 (+$0.0188 away) K_YES_P_NO | depth=13105.3 | Will Cameron Norrie win the Fils vs Norrie: Round Of 16 match?
+  $1.0188 (+$0.0188 away) K_NO_P_YES | depth=13105.3 | Will Arthur Fils win the Fils vs Norrie: Round Of 16 match?
+  $1.0213 (+$0.0213 away) K_NO_P_YES | depth=13865.2 | Will Brandon Nakashima win the Rinderknech vs Nakashima: Round Of 16 match?
+  $1.0221 (+$0.0221 away) K_NO_P_YES | depth=10760.2 | Jiri Lehecka vs Rafael Jodar — Over 22.5
+  $1.0237 (+$0.0237 away) K_YES_P_NO | depth=9664.5 | Will Amanda Anisimova win the Svitolina vs Anisimova: Round Of 16 match?
+  $1.0237 (+$0.0237 away) K_NO_P_YES | depth=9664.5 | Will Elina Svitolina win the Svitolina vs Anisimova: Round Of 16 match?
+  $1.0243 (+$0.0243 away) K_NO_P_YES | depth=24813.7 | Will Arthur Rinderknech win the Rinderknech vs Nakashima: Round Of 16 match?
+[DRYRUN UI] Pinnacle moneyline located + verified @ 2.070 — real UI drive OK, nothing placed; simulating fill
+[FILL P WARN] 9280:1633561... success=false — {"success":false,"orderID":"SIM_H_1786215977829_9280:163","status":"canceled","takingAmount":"0","makingAmount":"0.0000"}
+[STALE PRICE] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | detectedNet=0.9673 kFilled=28 pFilled=0.00 — one leg missed limit, price may have moved
+[EXEC UNHEDGED] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | kFilled=28 pFilled=0.00 balanced=0 kExcess=28 pExcess=0.00 — starting recovery
+[RECOVER REVERSED] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | swept 28 Kalshi yes (attempt 1), 0 left
+[KEYS] INJECT FAVOURITE-on-Kalshi test arb -> Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? (kAsk=0.55 pAsk=0.40) | K_YES_P_NO
+[INJECT] test arb MANUAL_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT__9280:163 K_YES_P_NO K=0.5500 P=0.4000 — bypassing pre-live / WS-verify / stale gates (synthetic price); favourite+ladder+recovery run as live
+[EXEC TEST] MANUAL_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT__9280:163: injected arb — re-entry guards (cooldown, open position) bypassed
+[TIME SKEW] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K last=19:06:03.096 P last=19:06:17.334 skew=14238ms — stale book may distort arb
+[LADDER] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | 210 → 28 contracts (stake 10.00 EUR, ≤0.333 of book max)
+[LOCK] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | guaranteed both ways: K-wins $0.580 / P-wins $1.417 (worst $0.580 on 28 contracts)
+[EXEC SCALE] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | 210→28 contracts (balance limited) K=$938.40 P=$955.20
+[DRY RUN EXEC] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K_YES_P_NO | K-yes=0.5500 P=0.4000 net=$0.9673 | 28 contracts est.$26.60
+[ORDER K] KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT YES 56¢ × 28  clientId=CAXARB_AX_20260808190619_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT
+[ORDER P] BUY token=9280:1633561... price=0.4038 shares=28
+[FILL K]  KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT placed orderId=SIM_CAXARB_AX_20260808190619_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT status=executed fillImm=28
+[DRYRUN UI] Pinnacle moneyline located + verified @ 2.070 — real UI drive OK, nothing placed; simulating fill
+[FILL P WARN] 9280:1633561... success=false — {"success":false,"orderID":"SIM_H_1786215981643_9280:163","status":"canceled","takingAmount":"0","makingAmount":"0.0000"}
+[STALE PRICE] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | detectedNet=0.9673 kFilled=28 pFilled=0.00 — one leg missed limit, price may have moved
+[EXEC UNHEDGED] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | kFilled=28 pFilled=0.00 balanced=0 kExcess=28 pExcess=0.00 — starting recovery
+[RECOVER REVERSED] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | swept 28 Kalshi yes (attempt 1), 0 left
+[KEYS] INJECT FAVOURITE-on-Kalshi test arb -> Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? (kAsk=0.55 pAsk=0.40) | K_YES_P_NO
+[INJECT] test arb MANUAL_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT__9280:163 K_YES_P_NO K=0.5500 P=0.4000 — bypassing pre-live / WS-verify / stale gates (synthetic price); favourite+ladder+recovery run as live
+[EXEC TEST] MANUAL_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT__9280:163: injected arb — re-entry guards (cooldown, open position) bypassed
+[TIME SKEW] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K last=19:06:03.096 P last=19:06:23.359 skew=20263ms — stale book may distort arb
+[LADDER] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | 210 → 28 contracts (stake 10.00 EUR, ≤0.333 of book max)
+[LOCK] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | guaranteed both ways: K-wins $0.580 / P-wins $1.417 (worst $0.580 on 28 contracts)
+[EXEC SCALE] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | 210→28 contracts (balance limited) K=$923.00 P=$944.00
+[DRY RUN EXEC] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K_YES_P_NO | K-yes=0.5500 P=0.4000 net=$0.9673 | 28 contracts est.$26.60
+[ORDER K] KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT YES 56¢ × 28  clientId=CAXARB_AX_20260808190623_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT
+[ORDER P] BUY token=9280:1633561... price=0.4038 shares=28
+[FILL K]  KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT placed orderId=SIM_CAXARB_AX_20260808190623_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT status=executed fillImm=28
+[DRYRUN UI] Pinnacle moneyline located + verified @ 2.070 — real UI drive OK, nothing placed; simulating fill
+[FILL P WARN] 9280:1633561... success=false — {"success":false,"orderID":"SIM_H_1786215985856_9280:163","status":"canceled","takingAmount":"0","makingAmount":"0.0000"}
+[STALE PRICE] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | detectedNet=0.9673 kFilled=28 pFilled=0.00 — one leg missed limit, price may have moved
+[EXEC UNHEDGED] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | kFilled=28 pFilled=0.00 balanced=0 kExcess=28 pExcess=0.00 — starting recovery
+[RECOVER REVERSED] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | swept 28 Kalshi yes (attempt 1), 0 left
+
+
+dotnet run --project HardVenArb -- --dry-run --scenario ChronicSlippage
+[INJECT] test arb MANUAL_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT__9280:163 K_YES_P_NO K=0.5500 P=0.4000 — bypassing pre-live / WS-verify / stale gates (synthetic price); favourite+ladder+recovery run as live
+[EXEC TEST] MANUAL_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT__9280:163: injected arb — re-entry guards (cooldown, open position) bypassed
+[LADDER] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | 210 → 28 contracts (stake 10.00 EUR, ≤0.333 of book max)
+[LOCK] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | guaranteed both ways: K-wins $0.580 / P-wins $1.417 (worst $0.580 on 28 contracts)
+[EXEC SCALE] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | 210→28 contracts (balance limited) K=$1000.00 P=$1000.00
+[DRY RUN EXEC] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K_YES_P_NO | K-yes=0.5500 P=0.4000 net=$0.9673 | 28 contracts est.$26.60
+[ORDER K] KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT YES 56¢ × 28  clientId=CAXARB_AX_20260808190851_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT
+[ORDER P] BUY token=9280:1633561... price=0.4038 shares=28
+[FILL K]  KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT placed orderId=SIM_CAXARB_AX_20260808190851_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT status=executed fillImm=28
+[DRYRUN UI] Pinnacle moneyline located + verified @ 2.080 — real UI drive OK, nothing placed; simulating fill
+[FILL P]  9280:1633561... placed orderID=SIM_H_1786216136390_9280:163 status=matched
+[FILL P]  9280:1633561... filled=28 avgPrice=0.4119
+[EXEC OK] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K=28@56¢ | P=28.00sh@$0.4119 | cost=$26.93 actualNet=0.9792 projProfit=$0.58
+[KEYS] INJECT FAVOURITE-on-Kalshi test arb -> Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? (kAsk=0.55 pAsk=0.40) | K_YES_P_NO
+[INJECT] test arb MANUAL_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT__9280:163 K_YES_P_NO K=0.5500 P=0.4000 — bypassing pre-live / WS-verify / stale gates (synthetic price); favourite+ladder+recovery run as live
+[EXEC TEST] MANUAL_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT__9280:163: injected arb — re-entry guards (cooldown, open position) bypassed
+[LADDER] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | 210 → 28 contracts (stake 10.00 EUR, ≤0.333 of book max)
+[LOCK] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | guaranteed both ways: K-wins $0.580 / P-wins $1.417 (worst $0.580 on 28 contracts)
+[EXEC SCALE] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | 210→28 contracts (balance limited) K=$984.60 P=$988.80
+[DRY RUN EXEC] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K_YES_P_NO | K-yes=0.5500 P=0.4000 net=$0.9673 | 28 contracts est.$26.60
+[ORDER K] KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT YES 56¢ × 28  clientId=CAXARB_AX_20260808190858_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT
+[ORDER P] BUY token=9280:1633561... price=0.4038 shares=28
+[FILL K]  KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT placed orderId=SIM_CAXARB_AX_20260808190858_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT status=executed fillImm=28
+[DRYRUN UI] Pinnacle moneyline located + verified @ 2.080 — real UI drive OK, nothing placed; simulating fill
+[FILL P]  9280:1633561... placed orderID=SIM_H_1786216140848_9280:163 status=matched
+[FILL P]  9280:1633561... filled=28 avgPrice=0.4119
+[EXEC OK] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K=28@56¢ | P=28.00sh@$0.4119 | cost=$26.93 actualNet=0.9792 projProfit=$0.58
+[HARDVEN] HardVen quotes fresh again — all 78 polled books live.
+[KEYS] INJECT FAVOURITE-on-Kalshi test arb -> Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? (kAsk=0.55 pAsk=0.40) | K_YES_P_NO
+[INJECT] test arb MANUAL_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT__9280:163 K_YES_P_NO K=0.5500 P=0.4000 — bypassing pre-live / WS-verify / stale gates (synthetic price); favourite+ladder+recovery run as live
+[EXEC TEST] MANUAL_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT__9280:163: injected arb — re-entry guards (cooldown, open position) bypassed
+[TIME SKEW] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K last=19:09:02.778 P last=19:09:04.046 skew=1268ms — stale book may distort arb
+[LADDER] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | 210 → 28 contracts (stake 10.00 EUR, ≤0.333 of book max)
+[LOCK] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | guaranteed both ways: K-wins $0.580 / P-wins $1.417 (worst $0.580 on 28 contracts)
+[EXEC SCALE] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | 210→28 contracts (balance limited) K=$969.20 P=$977.60
+[DRY RUN EXEC] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K_YES_P_NO | K-yes=0.5500 P=0.4000 net=$0.9673 | 28 contracts est.$26.60
+[ORDER K] KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT YES 56¢ × 28  clientId=CAXARB_AX_20260808190904_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT
+[ORDER P] BUY token=9280:1633561... price=0.4038 shares=28
+[FILL K]  KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT placed orderId=SIM_CAXARB_AX_20260808190904_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT status=executed fillImm=28
+[DRYRUN UI] Pinnacle moneyline located + verified @ 2.080 — real UI drive OK, nothing placed; simulating fill
+[FILL P]  9280:1633561... placed orderID=SIM_H_1786216146661_9280:163 status=matched
+[FILL P]  9280:1633561... filled=28 avgPrice=0.4119
+[EXEC OK] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K=28@56¢ | P=28.00sh@$0.4119 | cost=$26.93 actualNet=0.9792 projProfit=$0.58
+[KEYS] INJECT FAVOURITE-on-Kalshi test arb -> Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? (kAsk=0.55 pAsk=0.40) | K_YES_P_NO
+[INJECT] test arb MANUAL_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT__9280:163 K_YES_P_NO K=0.5500 P=0.4000 — bypassing pre-live / WS-verify / stale gates (synthetic price); favourite+ladder+recovery run as live
+[EXEC TEST] MANUAL_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT__9280:163: injected arb — re-entry guards (cooldown, open position) bypassed
+[TIME SKEW] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K last=19:09:02.778 P last=19:09:07.060 skew=4282ms — stale book may distort arb
+[LADDER] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | 210 → 28 contracts (stake 10.00 EUR, ≤0.333 of book max)
+[LOCK] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | guaranteed both ways: K-wins $0.580 / P-wins $1.417 (worst $0.580 on 28 contracts)
+[EXEC SCALE] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | 210→28 contracts (balance limited) K=$953.80 P=$966.40
+[DRY RUN EXEC] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K_YES_P_NO | K-yes=0.5500 P=0.4000 net=$0.9673 | 28 contracts est.$26.60
+[ORDER K] KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT YES 56¢ × 28  clientId=CAXARB_AX_20260808190908_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT
+[ORDER P] BUY token=9280:1633561... price=0.4038 shares=28
+[FILL K]  KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT placed orderId=SIM_CAXARB_AX_20260808190908_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT status=executed fillImm=28
+[DRYRUN UI] Pinnacle moneyline located + verified @ 2.080 — real UI drive OK, nothing placed; simulating fill
+[FILL P]  9280:1633561... placed orderID=SIM_H_1786216150673_9280:163 status=matched
+[FILL P]  9280:1633561... filled=28 avgPrice=0.4119
+[EXEC OK] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K=28@56¢ | P=28.00sh@$0.4119 | cost=$26.93 actualNet=0.9792 projProfit=$0.58
+[KEYS] INJECT FAVOURITE-on-Kalshi test arb -> Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? (kAsk=0.55 pAsk=0.40) | K_YES_P_NO
+[INJECT] test arb MANUAL_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT__9280:163 K_YES_P_NO K=0.5500 P=0.4000 — bypassing pre-live / WS-verify / stale gates (synthetic price); favourite+ladder+recovery run as live
+[EXEC TEST] MANUAL_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT__9280:163: injected arb — re-entry guards (cooldown, open position) bypassed
+[TIME SKEW] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K last=19:09:02.778 P last=19:09:10.063 skew=7286ms — stale book may distort arb
+[LADDER] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | 210 → 28 contracts (stake 10.00 EUR, ≤0.333 of book max)
+[LOCK] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | guaranteed both ways: K-wins $0.580 / P-wins $1.417 (worst $0.580 on 28 contracts)
+[EXEC SCALE] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | 210→28 contracts (balance limited) K=$938.40 P=$955.20
+[DRY RUN EXEC] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K_YES_P_NO | K-yes=0.5500 P=0.4000 net=$0.9673 | 28 contracts est.$26.60
+[ORDER K] KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT YES 56¢ × 28  clientId=CAXARB_AX_20260808190911_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT
+[ORDER P] BUY token=9280:1633561... price=0.4038 shares=28
+[FILL K]  KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT placed orderId=SIM_CAXARB_AX_20260808190911_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT status=executed fillImm=28
+[DRYRUN UI] Pinnacle moneyline located + verified @ 2.080 — real UI drive OK, nothing placed; simulating fill
+[FILL P]  9280:1633561... placed orderID=SIM_H_1786216153606_9280:163 status=matched
+[FILL P]  9280:1633561... filled=28 avgPrice=0.4119
+[EXEC OK] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K=28@56¢ | P=28.00sh@$0.4119 | cost=$26.93 actualNet=0.9792 projProfit=$0.58
+[KEYS] INJECT FAVOURITE-on-Kalshi test arb -> Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? (kAsk=0.55 pAsk=0.40) | K_YES_P_NO
+[INJECT] test arb MANUAL_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT__9280:163 K_YES_P_NO K=0.5500 P=0.4000 — bypassing pre-live / WS-verify / stale gates (synthetic price); favourite+ladder+recovery run as live
+[EXEC TEST] MANUAL_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT__9280:163: injected arb — re-entry guards (cooldown, open position) bypassed
+[TIME SKEW] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K last=19:09:02.778 P last=19:09:13.077 skew=10299ms — stale book may distort arb
+[LADDER] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | 210 → 28 contracts (stake 10.00 EUR, ≤0.333 of book max)
+[LOCK] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | guaranteed both ways: K-wins $0.580 / P-wins $1.417 (worst $0.580 on 28 contracts)
+[EXEC SCALE] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | 210→28 contracts (balance limited) K=$923.00 P=$944.00
+[DRY RUN EXEC] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K_YES_P_NO | K-yes=0.5500 P=0.4000 net=$0.9673 | 28 contracts est.$26.60
+[ORDER K] KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT YES 56¢ × 28  clientId=CAXARB_AX_20260808190913_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT
+[ORDER P] BUY token=9280:1633561... price=0.4038 shares=28
+[FILL K]  KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT placed orderId=SIM_CAXARB_AX_20260808190913_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT status=executed fillImm=28
+[DRYRUN UI] Pinnacle moneyline located + verified @ 2.080 — real UI drive OK, nothing placed; simulating fill
+[FILL P]  9280:1633561... placed orderID=SIM_H_1786216156619_9280:163 status=matched
+[FILL P]  9280:1633561... filled=28 avgPrice=0.4119
+[EXEC OK] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K=28@56¢ | P=28.00sh@$0.4119 | cost=$26.93 actualNet=0.9792 projProfit=$0.58
+[KEYS] INJECT FAVOURITE-on-Kalshi test arb -> Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? (kAsk=0.55 pAsk=0.40) | K_YES_P_NO
+[INJECT] test arb MANUAL_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT__9280:163 K_YES_P_NO K=0.5500 P=0.4000 — bypassing pre-live / WS-verify / stale gates (synthetic price); favourite+ladder+recovery run as live
+[EXEC TEST] MANUAL_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT__9280:163: injected arb — re-entry guards (cooldown, open position) bypassed
+[TIME SKEW] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K last=19:09:02.778 P last=19:09:16.090 skew=13312ms — stale book may distort arb
+[LADDER] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | 210 → 28 contracts (stake 10.00 EUR, ≤0.333 of book max)
+[LOCK] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | guaranteed both ways: K-wins $0.580 / P-wins $1.417 (worst $0.580 on 28 contracts)
+[EXEC SCALE] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | 210→28 contracts (balance limited) K=$907.60 P=$932.80
+[DRY RUN EXEC] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K_YES_P_NO | K-yes=0.5500 P=0.4000 net=$0.9673 | 28 contracts est.$26.60
+[ORDER K] KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT YES 56¢ × 28  clientId=CAXARB_AX_20260808190917_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT
+[ORDER P] BUY token=9280:1633561... price=0.4038 shares=28
+[FILL K]  KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT placed orderId=SIM_CAXARB_AX_20260808190917_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT status=executed fillImm=28
+[STATUS 19:09:18] K=$892.20  P=$921.60  │  invested=$161.60  proj=+$3.49  │  exposure=$186.20/$1000.00  │  open=1  filled=6  earlyExit=0  │  books K=50/102 P=66/78  WS K=True P=True  dayLoss=$0.00/$20.00  cleanup=$0.00
+  ├ Will Edas Butvilas win the Butvilas vs Lajovi │ K_YES_P_NO   │ K=28@0.550 P=28@0.412 │ bid 0.540+0.000 │ pnl +$0.00
+[DRYRUN UI] Pinnacle moneyline located + verified @ 2.080 — real UI drive OK, nothing placed; simulating fill
+[FILL P]  9280:1633561... placed orderID=SIM_H_1786216159465_9280:163 status=matched
+[FILL P]  9280:1633561... filled=28 avgPrice=0.4119
+[EXEC OK] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K=28@56¢ | P=28.00sh@$0.4119 | cost=$26.93 actualNet=0.9792 projProfit=$0.58
+
+
+dotnet run --project HardVenArb -- --dry-run --scenario CancelRace
+[INJECT] test arb MANUAL_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT__9280:163 K_YES_P_NO K=0.5500 P=0.4000 — bypassing pre-live / WS-verify / stale gates (synthetic price); favourite+ladder+recovery run as live
+[EXEC TEST] MANUAL_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT__9280:163: injected arb — re-entry guards (cooldown, open position) bypassed
+[LADDER] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | 210 → 28 contracts (stake 10.00 EUR, ≤0.333 of book max)
+[LOCK] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | guaranteed both ways: K-wins $0.580 / P-wins $1.417 (worst $0.580 on 28 contracts)
+[EXEC SCALE] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | 210→28 contracts (balance limited) K=$1000.00 P=$1000.00
+[DRY RUN EXEC] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K_YES_P_NO | K-yes=0.5500 P=0.4000 net=$0.9673 | 28 contracts est.$26.60
+[ORDER K] KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT YES 56¢ × 28  clientId=CAXARB_AX_20260808191148_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT
+[ORDER P] BUY token=9280:1633561... price=0.4038 shares=28
+[FILL K]  KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT placed orderId=SIM_CAXARB_AX_20260808191148_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT status=executed fillImm=28
+[DRYRUN UI] Pinnacle moneyline located + verified @ 2.080 — real UI drive OK, nothing placed; simulating fill
+[FILL P]  9280:1633561... placed orderID=SIM_H_1786216314326_9280:163 status=matched
+[FILL P]  9280:1633561... filled=28 avgPrice=0.4038
+[EXEC OK] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K=28@56¢ | P=28.00sh@$0.4038 | cost=$26.71 actualNet=0.9712 projProfit=$0.81
+[KEYS] INJECT FAVOURITE-on-Kalshi test arb -> Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? (kAsk=0.55 pAsk=0.40) | K_YES_P_NO
+[INJECT] test arb MANUAL_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT__9280:163 K_YES_P_NO K=0.5500 P=0.4000 — bypassing pre-live / WS-verify / stale gates (synthetic price); favourite+ladder+recovery run as live
+[EXEC TEST] MANUAL_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT__9280:163: injected arb — re-entry guards (cooldown, open position) bypassed
+[LADDER] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | 210 → 28 contracts (stake 10.00 EUR, ≤0.333 of book max)
+[LOCK] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | guaranteed both ways: K-wins $0.580 / P-wins $1.417 (worst $0.580 on 28 contracts)
+[EXEC SCALE] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | 210→28 contracts (balance limited) K=$984.60 P=$988.80
+[DRY RUN EXEC] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K_YES_P_NO | K-yes=0.5500 P=0.4000 net=$0.9673 | 28 contracts est.$26.60
+[ORDER K] KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT YES 56¢ × 28  clientId=CAXARB_AX_20260808191156_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT
+[ORDER P] BUY token=9280:1633561... price=0.4038 shares=28
+[FILL K]  KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT placed orderId=SIM_CAXARB_AX_20260808191156_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT status=executed fillImm=28
+[DRYRUN UI] Pinnacle moneyline located + verified @ 2.080 — real UI drive OK, nothing placed; simulating fill
+[FILL P]  9280:1633561... placed orderID=SIM_H_1786216318640_9280:163 status=matched
+[FILL P]  9280:1633561... filled=28 avgPrice=0.4038
+[EXEC OK] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K=28@56¢ | P=28.00sh@$0.4038 | cost=$26.71 actualNet=0.9712 projProfit=$0.81
+[KEYS] INJECT FAVOURITE-on-Kalshi test arb -> Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? (kAsk=0.55 pAsk=0.40) | K_YES_P_NO
+[INJECT] test arb MANUAL_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT__9280:163 K_YES_P_NO K=0.5500 P=0.4000 — bypassing pre-live / WS-verify / stale gates (synthetic price); favourite+ladder+recovery run as live
+[EXEC TEST] MANUAL_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT__9280:163: injected arb — re-entry guards (cooldown, open position) bypassed
+[LADDER] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | 210 → 28 contracts (stake 10.00 EUR, ≤0.333 of book max)
+[LOCK] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | guaranteed both ways: K-wins $0.580 / P-wins $1.417 (worst $0.580 on 28 contracts)
+[EXEC SCALE] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | 210→28 contracts (balance limited) K=$969.20 P=$977.60
+[DRY RUN EXEC] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K_YES_P_NO | K-yes=0.5500 P=0.4000 net=$0.9673 | 28 contracts est.$26.60
+[ORDER K] KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT YES 56¢ × 28  clientId=CAXARB_AX_20260808191159_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT
+[ORDER P] BUY token=9280:1633561... price=0.4038 shares=28
+[FILL K]  KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT placed orderId=SIM_CAXARB_AX_20260808191159_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT status=canceled fillImm=0
+[DRYRUN UI] Pinnacle moneyline located + verified @ 2.080 — real UI drive OK, nothing placed; simulating fill
+[FILL P]  9280:1633561... placed orderID=SIM_H_1786216322354_9280:163 status=matched
+[FILL P]  9280:1633561... filled=28 avgPrice=0.4038
+[STALE PRICE] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | detectedNet=0.9673 kFilled=0 pFilled=28.00 — one leg missed limit, price may have moved
+[EXEC UNHEDGED] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | kFilled=0 pFilled=28.00 balanced=0 kExcess=0 pExcess=28.00 — starting recovery
+[RECOVER] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | pExcess=28.0000 hedgeQty=28 hedgeNet=0.9712 — hedging on Kalshi (Pinnacle held)
+[ORDER K] KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT YES 57¢ × 28  clientId=CAXARB_AX_20260808191159_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT_RH
+[FILL K]  KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT placed orderId=SIM_CAXARB_AX_20260808191159_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT_RH status=executed fillImm=28
+[RECOVER OK] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | hedged +28 on Kalshi (Pinnacle held)
+[KEYS] INJECT FAVOURITE-on-Kalshi test arb -> Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? (kAsk=0.55 pAsk=0.40) | K_YES_P_NO
+[INJECT] test arb MANUAL_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT__9280:163 K_YES_P_NO K=0.5500 P=0.4000 — bypassing pre-live / WS-verify / stale gates (synthetic price); favourite+ladder+recovery run as live
+[EXEC TEST] MANUAL_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT__9280:163: injected arb — re-entry guards (cooldown, open position) bypassed
+[LADDER] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | 210 → 28 contracts (stake 10.00 EUR, ≤0.333 of book max)
+[LOCK] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | guaranteed both ways: K-wins $0.580 / P-wins $1.417 (worst $0.580 on 28 contracts)
+[EXEC SCALE] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | 210→28 contracts (balance limited) K=$953.80 P=$966.40
+[DRY RUN EXEC] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K_YES_P_NO | K-yes=0.5500 P=0.4000 net=$0.9673 | 28 contracts est.$26.60
+[ORDER K] KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT YES 56¢ × 28  clientId=CAXARB_AX_20260808191203_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT
+[ORDER P] BUY token=9280:1633561... price=0.4038 shares=28
+[FILL K]  KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT placed orderId=SIM_CAXARB_AX_20260808191203_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT status=executed fillImm=1
+[DRYRUN UI] Pinnacle moneyline located + verified @ 2.080 — real UI drive OK, nothing placed; simulating fill
+[FILL P]  9280:1633561... placed orderID=SIM_H_1786216325934_9280:163 status=matched
+[FILL P]  9280:1633561... filled=28 avgPrice=0.4038
+[EXEC OK] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K=1@56¢ | P=1.00sh@$0.4038 | cost=$0.95 actualNet=0.9712 projProfit=$0.03
+[EXEC UNHEDGED] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | kFilled=1 pFilled=28.00 balanced=1 kExcess=0 pExcess=27.00 — starting recovery
+[RECOVER] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | pExcess=27.0000 hedgeQty=27 hedgeNet=0.9712 — hedging on Kalshi (Pinnacle held)
+[ORDER K] KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT YES 57¢ × 27  clientId=CAXARB_AX_20260808191203_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT_RH
+[FILL K]  KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT placed orderId=SIM_CAXARB_AX_20260808191203_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT_RH status=executed fillImm=27
+[RECOVER OK] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | hedged +27 on Kalshi (Pinnacle held)
+[KEYS] INJECT FAVOURITE-on-Kalshi test arb -> Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? (kAsk=0.55 pAsk=0.40) | K_YES_P_NO
+[INJECT] test arb MANUAL_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT__9280:163 K_YES_P_NO K=0.5500 P=0.4000 — bypassing pre-live / WS-verify / stale gates (synthetic price); favourite+ladder+recovery run as live
+[EXEC TEST] MANUAL_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT__9280:163: injected arb — re-entry guards (cooldown, open position) bypassed
+[TIME SKEW] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K last=19:12:02.888 P last=19:12:07.295 skew=4406ms — stale book may distort arb
+[LADDER] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | 210 → 28 contracts (stake 10.00 EUR, ≤0.333 of book max)
+[LOCK] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | guaranteed both ways: K-wins $0.580 / P-wins $1.417 (worst $0.580 on 28 contracts)
+[EXEC SCALE] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | 210→28 contracts (balance limited) K=$938.40 P=$955.20
+[DRY RUN EXEC] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | K_YES_P_NO | K-yes=0.5500 P=0.4000 net=$0.9673 | 28 contracts est.$26.60
+[ORDER K] KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT YES 56¢ × 28  clientId=CAXARB_AX_20260808191207_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT
+[ORDER P] BUY token=9280:1633561... price=0.4038 shares=28
+[FILL K]  KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT placed orderId=SIM_CAXARB_AX_20260808191207_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT status=canceled fillImm=0
+[DRYRUN UI] Pinnacle moneyline located + verified @ 2.080 — real UI drive OK, nothing placed; simulating fill
+[FILL P]  9280:1633561... placed orderID=SIM_H_1786216329896_9280:163 status=matched
+[FILL P]  9280:1633561... filled=28 avgPrice=0.4038
+[STALE PRICE] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | detectedNet=0.9673 kFilled=0 pFilled=28.00 — one leg missed limit, price may have moved
+[EXEC UNHEDGED] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | kFilled=0 pFilled=28.00 balanced=0 kExcess=0 pExcess=28.00 — starting recovery
+[RECOVER] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | pExcess=28.0000 hedgeQty=28 hedgeNet=0.9712 — hedging on Kalshi (Pinnacle held)
+[ORDER K] KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT YES 57¢ × 28  clientId=CAXARB_AX_20260808191207_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT_RH
+[FILL K]  KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT placed orderId=SIM_CAXARB_AX_20260808191207_KXATPCHALLENGERMATCH-26AUG08BUTLAJ-BUT_RH status=executed fillImm=28
+[RECOVER OK] Will Edas Butvilas win the Butvilas vs Lajovic: Semifinal match? | hedged +28 on Kalshi (Pinnacle held)

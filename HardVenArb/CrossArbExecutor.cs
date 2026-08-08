@@ -256,10 +256,11 @@ public class CrossArbExecutor
     // the guard never consulted it (see ExecuteLockedAsync) — kept only so existing command lines don't break.
     // Re-entry is allowed once the position closes (early exit or settlement); applies to fresh AND restored.
     private readonly bool    _singleEntry;
-    // TEST-ONLY escape hatch (HARDVEN_ALLOW_REENTRY=1). Lets one dry-run process take many positions on the same
-    // pair so a scenario suite can be driven without restarting between every trade. Program.cs FORCES this
-    // false unless --dry-run, so it cannot be left in .env and silently stack real positions — the whole point
-    // of the knob is that it is impossible to hit by accident.
+    // TEST-ONLY escape hatch (HARDVEN_ALLOW_REENTRY=1). Removes EVERY pace limit on re-entering a pair: the open
+    // position guard, the per-pair cooldown and the per-leg (sibling) cooldown — so one dry-run process can be
+    // driven through a scenario suite back-to-back instead of restarting, or waiting out 120s, between trades.
+    // The `_inFlightMatchup` lock is NOT disabled, so simultaneous sibling fires stay blocked. Program.cs FORCES
+    // this false unless --dry-run, so it cannot be left in .env and silently stack real positions.
     private readonly bool    _allowReentry;
     private const    decimal MaxPerPairExposureUsd = 200m;
 
@@ -747,7 +748,7 @@ public class CrossArbExecutor
             Console.WriteLine($"[EXEC TEST] {pairId}: injected arb — re-entry guards (cooldown, open position) bypassed");
         }
         // Guard: cooldown or open position on this pair
-        if (!testMode && _cooldownUntil.TryGetValue(pairId, out long cd) && now < cd)
+        if (!testMode && !_allowReentry && _cooldownUntil.TryGetValue(pairId, out long cd) && now < cd)
         {
             Console.WriteLine($"[EXEC SKIP] {pairId}: cooldown active for {cd - now}s more");
             return;
@@ -755,8 +756,13 @@ public class CrossArbExecutor
         // ...and on the HardVen LEG, so sibling tickers can't ping-pong through the per-pair cooldown. Observed
         // 2026-08-06: HON 21:02:08 -> BIG 21:03:47 -> BIG 21:08:38 -> HON 21:10:13 — alternating siblings
         // re-entered the same Pinnacle line inside the 120s window the per-pair cooldown was meant to enforce.
+        // NB when _allowReentry unlocks this, the SIBLING guard loses only its SEQUENTIAL half — the
+        // `_inFlightMatchup` lock above still blocks two siblings firing at the same instant, which is the
+        // dangerous case (two orders into one Pinnacle line). Sequential sibling re-entry inside 120s becomes
+        // possible, which is exactly what a scenario run wants and is harmless with simulated fills.
         string? legKeyCd = HardVenLegKey(pairId, arbType);
-        if (!testMode && legKeyCd != null && _cooldownUntil.TryGetValue($"L:{legKeyCd}", out long lcd) && now < lcd)
+        if (!testMode && !_allowReentry && legKeyCd != null
+            && _cooldownUntil.TryGetValue($"L:{legKeyCd}", out long lcd) && now < lcd)
         {
             Console.WriteLine($"[EXEC SKIP] {pairId}: HardVen leg {legKeyCd} on cooldown for {lcd - now}s more (sibling just fired)");
             return;
