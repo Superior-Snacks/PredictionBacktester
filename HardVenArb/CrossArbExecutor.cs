@@ -1351,6 +1351,22 @@ public class CrossArbExecutor
             dryRun = _dryRun
         }));
 
+        // FIRING alert — real money only. Posted BEFORE the legs go out, so if anything hangs mid-placement the
+        // last thing you saw is "it tried", not silence. Dry runs stay quiet on purpose: the scenario suite can
+        // fire 35 times in an hour and would bury every real alert in the channel.
+        if (!_dryRun)
+        {
+            string lockLine = lockIfKalshi != 0m || lockIfHardVen != 0m
+                ? $"\nlock: K-wins **${lockIfKalshi:0.00}** / P-wins **${lockIfHardVen:0.00}**"
+                : "";
+            DiscordAlert(
+                $"🎯 **FIRING** — {pair.Label}\n"
+                + $"{arbType} · edge **{100m * (1m - netNow):0.00}¢** · {contracts} contracts"
+                + (ladderStakeAccount > 0m ? $" · stake {ladderStakeAccount:0.00} {_hardvenCurrency}" : "")
+                + $"\nK-{kalshiSide} {kLegAsk:0.0000} / P {pLegAsk:0.0000} · est ${estimatedCost:0.00}"
+                + lockLine);
+        }
+
         // Snapshot pre-trade HardVen balance concurrently with leg orders so reconcile can
         // compute a delta rather than comparing against total wallet balance. This prevents
         // spurious RECONCILE_MISMATCH halts when a pre-existing HardVen balance is present
@@ -1626,6 +1642,35 @@ public class CrossArbExecutor
                 Interlocked.Increment(ref _totalExecuted);
                 lock (_exposureLock) { _totalInvested += finalCost; _totalProjectedProfit += finalProfit; }
                 _perPairInvested.AddOrUpdate(pairId, finalCost, (_, old) => old + finalCost);
+            }
+
+            // OUTCOME alert — the other half of the FIRING alert above. Says what you actually ended up holding,
+            // because "it fired" and "it locked" are very different results and the difference is the whole
+            // point of the recovery machinery. Real money only, same reasoning as the FIRING alert.
+            if (!_dryRun)
+            {
+                string cleanup = recovery is { Outcome: not "NONE" } ? $" · recovery: {recovery.Outcome}" : "";
+                if (kHeld > 0)
+                {
+                    decimal projProfit = kHeld * (1.0m - finalNet);
+                    string icon = execOutcome == "FILLED" ? "✅" : "⚠️";
+                    string head = execOutcome == "FILLED" ? "ARB LOCKED" : "FILLED (with cleanup)";
+                    DiscordAlert(
+                        $"{icon} **{head}** — {pair.Label}\n"
+                        + $"holding K **{kHeld:0.##}** @ {finalPos!.KalshiEntryPrice:0.0000} / "
+                        + $"P **{pHeld:0.##}** @ {finalPos.HardVenEntryPrice:0.0000}\n"
+                        + $"net **{finalNet:0.0000}** · projected **+${projProfit:0.00}** to settlement{cleanup}");
+                }
+                else
+                {
+                    // Nothing held: either neither leg filled, or recovery unwound everything. Not a loss of
+                    // principal, but it IS the case where fees were paid for nothing — worth seeing.
+                    DiscordAlert(
+                        $"❌ **NO POSITION** — {pair.Label} ({execOutcome})\n"
+                        + $"kFilled {kFilled:0.##} / pFilled {pFilled:0.##} — nothing held{cleanup}"
+                        + (execOutcome == "MISS" ? "\nBoth legs missed their limit; no exposure taken."
+                                                 : "\nRecovery unwound the filled leg."));
+                }
             }
 
             // `--try N` counts ATTEMPTS by default: a clean MISS (both legs 0) or a fully-reversed Case A ends
