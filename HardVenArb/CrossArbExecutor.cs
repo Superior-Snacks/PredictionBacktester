@@ -1075,6 +1075,9 @@ public class CrossArbExecutor
         }
         decimal hardvenShares    = contracts;
         decimal ladderStakeAccount = 0m;   // exact rung for the slip; 0 = client derives it from shares×price
+        // Lock-check outcome, hoisted out of the ladder block so the alert below can quote it — "it fired" is
+        // only half the story; the worst-case branch is what says whether it was actually risk-free.
+        decimal lockIfKalshi = 0m, lockIfHardVen = 0m;
         decimal kalshiCost    = kLegAsk * contracts;
         decimal hardvenCost      = pLegAsk * contracts;
         decimal estimatedCost = kalshiCost + hardvenCost;
@@ -1241,6 +1244,7 @@ public class CrossArbExecutor
                     }));
                     return;
                 }
+                lockIfKalshi = ifKalshi; lockIfHardVen = ifHardVen;
                 Console.WriteLine($"[LOCK] {pair.Label} | guaranteed both ways: K-wins ${ifKalshi:0.000} / " +
                                   $"P-wins ${ifHardVen:0.000} (worst ${worst:0.000} on {contracts} contracts)");
             }
@@ -2853,6 +2857,16 @@ public class CrossArbExecutor
                 var root = doc.RootElement;
                 if (!root.TryGetProperty("event", out var evEl)) continue;
                 string ev = evEl.GetString() ?? "";
+
+                // SKIP SIMULATED TRADES. The journal is per-DAY, not per-mode, so a dry run and a live run on
+                // the same date write to the SAME file — and dry-run positions are simulated: they exist on no
+                // venue and never settle. Restoring them made a live start believe it held something, find
+                // Kalshi (correctly) empty, and HARD HALT "refusing to trade blind" (2026-08-08: an afternoon
+                // of scenario testing left a simulated 56-contract position open and blocked the live run).
+                // The worse variant is silent: had the venue returned anything, a phantom simulated position
+                // could have been carried into live trading. `dryRun` is already stamped on every record.
+                if (root.TryGetProperty("dryRun", out var drEl) &&
+                    drEl.ValueKind == JsonValueKind.True) continue;
 
                 if (ev == "EXECUTION_COMPLETE")
                 {
