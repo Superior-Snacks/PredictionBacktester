@@ -510,6 +510,32 @@ if (isLive || isDryRun)
     decimal EXEC_NET_FLOOR = decimal.TryParse(Environment.GetEnvironmentVariable("HARDVEN_EXEC_NET_FLOOR"),
         NumberStyles.Any, CultureInfo.InvariantCulture, out var _enf) && _enf > 0m ? _enf : 0.985m;
     const decimal MIN_PLAUSIBLE_NET    = 0.90m;  // reject arbs cheaper than this: a >10% "edge" signals a mispriced/mismatched pair (JOR), not a real arb
+    // Re-entry cooldown per pair AND per HardVen leg (the sibling guard shares it). Was hardcoded at 120 with no
+    // way to change it — which made the dry-run failure-scenario suite painful to drive, since each injected arb
+    // then sat out two minutes. Injected (testMode) arbs now bypass it entirely, so this is for tuning real
+    // re-entry pace: lower = re-enter a recurring edge sooner, higher = fewer bites at the same line.
+    int PAIR_COOLDOWN_SEC = int.TryParse(Environment.GetEnvironmentVariable("HARDVEN_PAIR_COOLDOWN_SEC"),
+        NumberStyles.Any, CultureInfo.InvariantCulture, out var _pcd) && _pcd >= 0 ? _pcd : 120;
+    // HARDVEN_ALLOW_REENTRY: take MULTIPLE positions on the same pair. Testing-only — it exists so one dry-run
+    // process can be driven through a whole scenario suite without a restart between trades. **Deliberately
+    // IGNORED under --live**, and loudly: the request is that leaving it in .env can never stack real positions
+    // by accident, so the safety is structural rather than a matter of remembering to unset it.
+    bool ALLOW_REENTRY_ENV = Environment.GetEnvironmentVariable("HARDVEN_ALLOW_REENTRY") == "1";
+    bool ALLOW_REENTRY = ALLOW_REENTRY_ENV && isDryRun;
+    if (ALLOW_REENTRY_ENV && !isDryRun)
+    {
+        Console.ForegroundColor = ConsoleColor.Yellow;
+        Console.WriteLine("[SAFETY] HARDVEN_ALLOW_REENTRY=1 IGNORED — it is a dry-run testing knob and this is a "
+                        + "LIVE run. One position per pair is enforced.");
+        Console.ResetColor();
+    }
+    else if (ALLOW_REENTRY)
+    {
+        Console.ForegroundColor = ConsoleColor.Yellow;
+        Console.WriteLine("[TEST MODE] HARDVEN_ALLOW_REENTRY=1 — multiple positions per pair allowed "
+                        + "(dry-run only). Real arbs can now re-enter a pair without waiting for it to close.");
+        Console.ResetColor();
+    }
     const decimal LOW_BALANCE_ALERT_USD = 15m;   // Discord-alert when either venue's cash drops below this
 
     // Recovery / halt policy. Ops rule: only halt on the daily-loss tripwire, a manual stop, or a network
@@ -663,12 +689,13 @@ if (isLive || isDryRun)
         maxExposureUsd:      maxExposureUsd,
         executionThreshold:  EXECUTION_THRESHOLD,
         execNetFloor:        EXEC_NET_FLOOR,
-        pairCooldownSeconds: 120,
+        pairCooldownSeconds: PAIR_COOLDOWN_SEC,
         fillTimeoutMs:       5000,
         maxDayLossUsd:       20m,
         dryRun:              isDryRun,
         minBuy:              minBuy,
         singleEntry:         singleEntry,
+        allowReentry:        ALLOW_REENTRY,
         logErrors:           logErrors,
         tryN:                tryN,
         outerCts:            cts,

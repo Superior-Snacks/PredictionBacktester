@@ -252,11 +252,15 @@ public class CrossArbExecutor
     private const  decimal  MaxHardVenLimitBufferPct      = 0.15m;
 
     // ── Position scaling ──────────────────────────────────────────────────────
-    // _singleEntry = true (--single-entry):  one open position per pair at a time.
-    //   Re-entry is allowed once the position closes (early exit or settlement).
-    //   Applies to both fresh and restored positions.
-    // _singleEntry = false (default): scale-in allowed up to MaxPerPairExposureUsd.
+    // ONE OPEN POSITION PER PAIR is the standing behaviour, always, in live. `--single-entry` is a DEAD flag —
+    // the guard never consulted it (see ExecuteLockedAsync) — kept only so existing command lines don't break.
+    // Re-entry is allowed once the position closes (early exit or settlement); applies to fresh AND restored.
     private readonly bool    _singleEntry;
+    // TEST-ONLY escape hatch (HARDVEN_ALLOW_REENTRY=1). Lets one dry-run process take many positions on the same
+    // pair so a scenario suite can be driven without restarting between every trade. Program.cs FORCES this
+    // false unless --dry-run, so it cannot be left in .env and silently stack real positions — the whole point
+    // of the knob is that it is impossible to hit by accident.
+    private readonly bool    _allowReentry;
     private const    decimal MaxPerPairExposureUsd = 200m;
 
     private          decimal  _dayLossUsd          = 0m;
@@ -388,6 +392,7 @@ public class CrossArbExecutor
         bool    dryRun                   = false,
         bool    minBuy                   = false,
         bool    singleEntry              = false,
+        bool    allowReentry             = false,   // dry-run only; Program.cs forces false under --live
         bool    logErrors                = false,
         int?    tryN                = null,
         CancellationTokenSource? outerCts = null,
@@ -417,6 +422,7 @@ public class CrossArbExecutor
         _maxExposureUsd      = maxExposureUsd;
         _minBuy              = minBuy;
         _singleEntry         = singleEntry;
+        _allowReentry        = allowReentry;
         _logErrors           = logErrors;
         _executionThreshold  = executionThreshold;
         _execNetFloor        = execNetFloor;
@@ -730,8 +736,18 @@ public class CrossArbExecutor
     {
         long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 
+        // INJECTED TEST ARBS bypass the re-entry guards. `testMode` already means "this price is fabricated, so
+        // the data-quality gates are meaningless" — the same applies to re-entry: the cooldown and the
+        // open-position lock exist to stop the bot re-trading a REAL opportunity it is already in, and neither
+        // is a property of the code under test. Without this, the I/O gate-testers fire once and are then dead
+        // for 120s (and permanently once a fill leaves a position open), which makes the failure-scenario suite
+        // impractical to run. Live detection is untouched — nothing sets testMode outside the dry-run keys.
+        if (testMode)
+        {
+            Console.WriteLine($"[EXEC TEST] {pairId}: injected arb — re-entry guards (cooldown, open position) bypassed");
+        }
         // Guard: cooldown or open position on this pair
-        if (_cooldownUntil.TryGetValue(pairId, out long cd) && now < cd)
+        if (!testMode && _cooldownUntil.TryGetValue(pairId, out long cd) && now < cd)
         {
             Console.WriteLine($"[EXEC SKIP] {pairId}: cooldown active for {cd - now}s more");
             return;
@@ -740,7 +756,7 @@ public class CrossArbExecutor
         // 2026-08-06: HON 21:02:08 -> BIG 21:03:47 -> BIG 21:08:38 -> HON 21:10:13 — alternating siblings
         // re-entered the same Pinnacle line inside the 120s window the per-pair cooldown was meant to enforce.
         string? legKeyCd = HardVenLegKey(pairId, arbType);
-        if (legKeyCd != null && _cooldownUntil.TryGetValue($"L:{legKeyCd}", out long lcd) && now < lcd)
+        if (!testMode && legKeyCd != null && _cooldownUntil.TryGetValue($"L:{legKeyCd}", out long lcd) && now < lcd)
         {
             Console.WriteLine($"[EXEC SKIP] {pairId}: HardVen leg {legKeyCd} on cooldown for {lcd - now}s more (sibling just fired)");
             return;
@@ -753,12 +769,16 @@ public class CrossArbExecutor
                 heldK = heldPos.KalshiContracts, heldP = heldPos.HardVenShares,
                 heldArbType = heldPos.ArbType,
                 detectedNet = Math.Round(kLegAsk + pLegAsk, 4),
-                willBlock = _singleEntry
+                willBlock = !testMode && !_allowReentry   // used to report `_singleEntry`, which the guard
+                                                          // never consulted — now it says what really happens
             }));
         }
-        if (_openPositions.ContainsKey(pairId))
+        // ONE POSITION PER PAIR. Not gated on `_singleEntry` (that flag was never consulted and is dead) —
+        // stacking positions on one pair is the riskier default, so it stays off unless explicitly unlocked
+        // for a dry run via HARDVEN_ALLOW_REENTRY, which Program.cs refuses to honour under --live.
+        if (!testMode && !_allowReentry && _openPositions.ContainsKey(pairId))
         {
-            Console.WriteLine($"[EXEC SKIP] {pairId}: position already open (single-entry enforced)");
+            Console.WriteLine($"[EXEC SKIP] {pairId}: position already open (one position per pair)");
             return;
         }
 
