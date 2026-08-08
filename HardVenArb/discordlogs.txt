@@ -1,17 +1,13 @@
-CrossArbBot
-APP
- — Yesterday at 8:48 PM
-[HardVen/sidecar] 🟢 LIVE until 23:38 local (~170m) — 20 target game(s)
-• Targets: Hanne Vandewinkel vs Madison Sieg 20:56, Ekaterina Ovcharenko vs Ekaterine Gorgodze 21:00, Yexin Ma vs Katrina Scott 21:00, Fiona Crawley vs Anastasia Zakharova 21:00, Yeon Woo Ku vs Mai Hontama 21:00, Nikola Bartunkova vs Amanda Anisimova 21:15, Kaylan Bigun vs Naoya Honda 21:30, Reese Brantmeier vs Elizabeth Mandlik 21:30 (+12 more)
-• Next window: Fri 06:05 (0 game(s))
-[HardVenArb] ✅ DRY-RUN started — startup complete (HardVen fees prefetched), monitoring 138 pair(s). Cash: Kalshi $1000.00 / HardVen $1000.00.
-[HardVenArb] 🔄 DRY RUN reloaded (daily recycle / restart) — 138 pair(s), run uptime unbroken.
+[HardVenArb] ⚠️ Low cash: HardVen $7.22 < $15.00 — top up to avoid balance-skipping arbs.
+[HardVenArb] ✅ DRY-RUN started — startup complete (HardVen fees prefetched), monitoring 103 pair(s). Cash: Kalshi $1000.00 / HardVen $1000.00.
+[HardVenArb] 🔄 DRY RUN reloaded (daily recycle / restart) — 103 pair(s), run uptime unbroken.
 [HardVenArb] HardVen commands — send any of these in this channel
 commands · status — bot + session state
 Session
 pause [reason] — close the site & stay dark (survives a restart)
 resume — back on schedule (also clears a low-balance halt)
 force [minutes] — open NOW outside the schedule (default 60, auto-reverts)
+banking [minutes] — open the site & FREEZE all automation so you can deposit/withdraw (default 30; works through a low-balance halt, then reverts to it — resume when funds land)
 Schedule
 schedule — show the current plan
 schedule <key>=<val> … — e.g. schedule lead_min=20 max_blocks=3
@@ -23,110 +19,278 @@ toggle — list flags · toggle <FLAG> <0|1> — e.g. toggle HARDVEN_BET_ENABLE 
 Stop
 close / end / kill — stop the bot entirely (supervisor will NOT restart it)
 [HardVenArb] 🟢 HardVen session established — login captured.
+Superior_Snacks — 6:22 PM
+schedule
 CrossArbBot
 APP
- — Yesterday at 9:19 PM
-[HardVenArb] 💓 up 24d7h46m │ session ready │ live books K=232/276 H=152/164 (H in-play=6) │ WS K=ok H=ok │ openArbs=0 arbsLogged=75
+ — 6:22 PM
+[HardVenArb] ⚠️ schedule unavailable (HTTP 400)
+[HardVenArb] ⚠️ CONNECTION HALT — venue disconnect detected by the watchdog; new trades paused until reconnect.
+[HardVen/sidecar] 🟢 LIVE (operator hours) until 02:58 local (~515m) — 13 target game(s)
+• Targets: Zizou Bergs vs Ben Shelton 18:30, Botic Van de Zandschulp vs Hubert Hurkacz 18:30, Spencer Johnson vs Andres Martin 19:00, Andre Ilagan vs Sebastian Gorzny 19:00, Maya Joint vs Liudmila Samsonova 19:00, Mirra Andreeva vs Leylah Fernandez 19:20, Aryan Shah vs Alejo Sanchez Quilez 20:00, Elise Mertens vs Naomi Osaka 21:00 (+5 more)
+• Next window: Sat 06:04 (0 game(s))
+Superior_Snacks — 6:23 PM
+schedule
 CrossArbBot
 APP
- — Yesterday at 9:49 PM
-[HardVenArb] 💓 up 24d8h16m │ session ready │ live books K=208/276 H=148/164 (H in-play=2) │ WS K=ok H=ok │ openArbs=0 arbsLogged=178
+ — 6:23 PM
+[HardVenArb] 🗓️ state=open
+• Fri 07 Aug 18:21 → Sat 08 Aug 02:58 (13 games) 📌 ⬅ now
+• Sat 08 Aug 06:04 → Sat 08 Aug 07:54 (0 games) 📌
+• Sat 08 Aug 23:00 → Sun 09 Aug 03:05 (0 games) 📌
 CrossArbBot
 APP
- — Yesterday at 10:19 PM
-[HardVenArb] 💓 up 24d8h46m │ session ready │ live books K=196/276 H=144/164 (H in-play=0) │ WS K=ok H=ok │ openArbs=0 arbsLogged=231
+ — 6:45 PM
+[HardVenArb] 💓 up 25d5h12m │ session ready │ live books K=198/236 H=102/142 (H in-play=6) │ WS K=ok H=ok │ openArbs=0 arbsLogged=37
 CrossArbBot
 APP
- — Yesterday at 10:49 PM
-[HardVenArb] 💓 up 24d9h16m │ session ready │ live books K=212/302 H=162/190 (H in-play=0) │ WS K=ok H=ok │ openArbs=1 arbsLogged=254
+ — 7:15 PM
+[HardVenArb] 💓 up 25d5h42m │ session ready │ live books K=180/236 H=86/142 (H in-play=6) │ WS K=ok H=ok │ openArbs=0 arbsLogged=59
 CrossArbBot
 APP
- — Yesterday at 11:19 PM
-[HardVenArb] 💓 up 24d9h46m │ session ready │ live books K=210/302 H=150/190 (H in-play=0) │ WS K=ok H=ok │ openArbs=1 arbsLogged=262
-CrossArbBot
-APP
- — Yesterday at 11:48 PM
-[HardVen/sidecar] ⚫ DARK — closed at 23:48 local
-• next open Fri 06:05 local (in 6h17m) for 0 game(s): none
-• Sleeping through 1 game(s): Hanne Vandewinkel vs Madison Sieg 23:56
+ — 7:23 PM
+[HardVen/sidecar] ⚫ DARK — closed at 19:23 local
+• next open Fri 19:47 local (in 0h24m) for 7 game(s): Aryan Shah vs Alejo Sanchez Quilez 20:00, Elise Mertens vs Naomi Osaka 21:00, Maximo Zeitune vs Felipe Meligeni Rodrigues Alves 21:00, Terence Atmane vs Jakub Mensik 22:00, Taylor Townsend vs Belinda Bencic 23:00 (+2 more)
 [HardVenArb] 🗓️ session block ended —
-📊 status — session dark (scheduled) | live books K=236/302 H=150/190 | WS K=ok H=ok | openArbs=1 pairs=151 | up 24d10h16m
-HardVenArb status — CrossArbTelemetry_20260806.csv
-span 2026-08-06 18:12:07 → 23:44:02 | windows 707 (387 pre-live, 320 in-play) | capturable 137 (19%)
-PRE-LIVE: 90 cap | edge avg 1.32c max 7.63c | est profit $184.87
-in-play: 47 cap | edge avg 1.50c max 11.86c | est profit $95.67
-[HardVenArb] 💓 up 24d10h16m │ session dark (scheduled) │ live books K=218/302 H=150/190 (H in-play=0) │ WS K=ok H=ok │ openArbs=1 arbsLogged=466
-CrossArbBot
-APP
- — 12:19 AM
-[HardVenArb] 💓 up 24d10h46m │ session dark (scheduled) │ live books K=294/408 H=0/270 (H in-play=2) │ WS K=ok H=ok │ openArbs=0 arbsLogged=466
-CrossArbBot
-APP
- — 12:49 AM
-[HardVen/sidecar] 🟢 LIVE until 03:40 local (~171m) — 10 target game(s)
-• Targets: Frances Tiafoe vs Arthur Rinderknech 01:00, Elina Svitolina vs Anastasia Potapova 01:45, Seon Yong Han vs Donghyun Hwang 02:00, Yuki Mochizuki vs Tsung Hao Huang 02:00, Chengyiyi Yuan vs Yu Jun Lin 02:00, Yuhan Wang vs Junhan Zhang 02:00, Matthew Dellavedova vs Suk Ann 03:00, Hanlei Lu vs Isaac Becroft 03:00 (+2 more)
-• Left behind (18 later today): Maria Florencia Urrutia vs Camila Rodero 14:00, Polina Iatcenko vs Caroline Dolehide 14:00, Ayana Akli vs Carolyn Ansari 14:00, Ekaterina Ovcharenko vs Ekaterine Gorgodze 14:00 (+14 more)
-• Not bettable (26 unpaired on the board): Rares Teodor Pieleanu vs Robert Guna 08:00, Vladyslav Orlov vs Wojciech Marek 09:00, Marcel Zielinski vs Michael Savano 10:00 (+23 more)
-• Next window: Fri 04:38 (62 game(s))
-[HardVenArb] 💓 up 24d11h16m │ session DOWN │ live books K=268/408 H=0/270 (H in-play=2) │ WS K=ok H=ok │ openArbs=0 arbsLogged=466
-CrossArbBot
-APP
- — 1:19 AM
-[HardVenArb] 💓 up 24d11h46m │ session ready │ live books K=292/408 H=214/270 (H in-play=2) │ WS K=ok H=ok │ openArbs=0 arbsLogged=476
-CrossArbBot
-APP
- — 1:49 AM
-[HardVen/sidecar] ⚫ DARK — closed at 01:49 local
-• next open Fri 04:38 local (in 2h50m) for 90 game(s): Arnav Vijay Paparkar vs Martin Borisiouk 05:00, Taiyo Yamanaka vs Shunsuke Mitsui 05:00, Anna Bazderova vs Edda Mamedova 05:00, Victoria Milovanova vs Nina Sozaonova 05:00, Asylzhan Arystanbekova vs Liel Marlies Rothensteiner 05:00 (+85 more)
-• Sleeping through 14 game(s): Chengyiyi Yuan vs Yu Jun Lin 02:00, Yuhan Wang vs Junhan Zhang 02:00, Yuki Mochizuki vs Tsung Hao Huang 02:00, Seon Yong Han vs Donghyun Hwang 02:00 (+10 more)
-[HardVenArb] 💓 up 24d12h16m │ session dark (scheduled) │ live books K=326/518 H=246/302 (H in-play=4) │ WS K=ok H=ok │ openArbs=0 arbsLogged=498
-[HardVenArb] 🗓️ session block ended —
-📊 status — session dark (scheduled) | live books K=336/518 H=246/302 | WS K=ok H=ok | openArbs=0 pairs=259 | up 24d12h16m
+📊 status — session dark (scheduled) | live books K=184/236 H=80/142 | WS K=ok H=ok | openArbs=2 pairs=118 | up 25d5h50m
 HardVenArb status — CrossArbTelemetry_20260807.csv
-span 2026-08-07 00:49:41 → 01:48:54 | windows 31 (20 pre-live, 11 in-play) | capturable 1 (3%)
-PRE-LIVE: 1 cap | edge avg 1.18c max 1.18c | est profit $0.12
-in-play: 0 capturable
+span 2026-08-07 00:49:41 → 19:13:37 | windows 157 (89 pre-live, 68 in-play) | capturable 57 (36%)
+PRE-LIVE: 45 cap | edge avg 1.24c max 3.78c | est profit $43.50
+in-play: 12 cap | edge avg 3.95c max 8.02c | est profit $49.97
 CrossArbBot
 APP
- — 2:14 AM
-[HardVenArb] ⚠️ CONNECTION HALT — venue disconnect detected by the watchdog; new trades paused until reconnect.
-[HardVenArb] 💓 up 24d12h46m │ session dark (scheduled) │ live books K=170/518 H=0/302 (H in-play=4) │ WS K=ok H=ok │ openArbs=0 arbsLogged=498
-CrossArbBot
-APP
- — 2:49 AM
-[HardVenArb] 💓 up 24d13h16m │ session dark (scheduled) │ live books K=188/518 H=0/302 (H in-play=4) │ WS K=ok H=ok │ openArbs=0 arbsLogged=498
-[HardVenArb] ⚠️ CONNECTION HALT — venue disconnect detected by the watchdog; new trades paused until reconnect.
-CrossArbBot
-APP
- — 3:19 AM
-[HardVenArb] 💓 up 24d13h46m │ session dark (scheduled) │ live books K=192/564 H=0/318 (H in-play=4) │ WS K=ok H=ok │ openArbs=0 arbsLogged=498
-[HardVenArb] ⚠️ CONNECTION HALT — venue disconnect detected by the watchdog; new trades paused until reconnect.
-CrossArbBot
-APP
- — 3:49 AM
-[HardVenArb] 💓 up 24d14h16m │ session dark (scheduled) │ live books K=138/564 H=0/318 (H in-play=4) │ WS K=ok H=ok │ openArbs=0 arbsLogged=498
-CrossArbBot
-APP
- — 4:19 AM
-[HardVenArb] 💓 up 24d14h46m │ session dark (scheduled) │ live books K=170/564 H=0/318 (H in-play=4) │ WS K=ok H=ok │ openArbs=0 arbsLogged=498
-CrossArbBot
-APP
- — 4:38 AM
-[HardVen/sidecar] 🟢 LIVE (operator hours) until 14:50 local (~611m) — 90 target game(s)
-• Targets: Nikita Ianin vs Damir Zhalgasbay 05:00, Arnav Vijay Paparkar vs Martin Borisiouk 05:00, Taiyo Yamanaka vs Shunsuke Mitsui 05:00, Asylzhan Arystanbekova vs Liel Marlies Rothensteiner 05:00, Anna Bazderova vs Edda Mamedova 05:00, Victoria Milovanova vs Nina Sozaonova 05:00, Eva Korysheva vs Kisa Yoshioka 05:00, Egor Pleshivtsev vs Ryo Tabata 06:00 (+82 more)
-• Watching lines for 13 later game(s): Iva Jovic vs Alina Korneeva 15:05, Yeon Woo Ku vs Mai Hontama 16:00, Hanne Vandewinkel vs Madison Sieg 16:00, Reese Brantmeier vs Elizabeth Mandlik 16:00, Yexin Ma vs Katrina Scott 16:00 (+8 more)
-• Left behind (13 later today): Iva Jovic vs Alina Korneeva 15:05, Yeon Woo Ku vs Mai Hontama 16:00, Hanne Vandewinkel vs Madison Sieg 16:00, Reese Brantmeier vs Elizabeth Mandlik 16:00 (+9 more)
-• Not bettable (12 unpaired on the board): Giorgia Pedone vs Sofia Meabe 12:30, Tom Gentzsch vs Henri Squire 15:00, Aurora Zantedeschi vs Ida Wobker 15:00 (+9 more)
+ — 7:45 PM
+[HardVenArb] 💓 up 25d6h12m │ session dark (scheduled) │ live books K=172/236 H=0/142 (H in-play=6) │ WS K=ok H=ok │ openArbs=0 arbsLogged=61
+[HardVen/sidecar] 🟢 LIVE (operator hours) until 03:01 local (~434m) — 7 target game(s)
+• Targets: Aryan Shah vs Alejo Sanchez Quilez 20:00, Elise Mertens vs Naomi Osaka 21:00, Maximo Zeitune vs Felipe Meligeni Rodrigues Alves 21:00, Terence Atmane vs Jakub Mensik 22:00, Taylor Townsend vs Belinda Bencic 23:00, Maria Sakkari vs Coco Gauff 23:00, Casper Ruud vs Joao Fonseca 23:00
 • Next window: Sat 06:04 (0 game(s))
 CrossArbBot
 APP
- — 4:49 AM
-[HardVenArb] 💓 up 24d15h16m │ session ready │ live books K=196/594 H=258/332 (H in-play=4) │ WS K=ok H=ok │ openArbs=0 arbsLogged=498
+ — 8:15 PM
+[HardVenArb] 💓 up 25d6h42m │ session ready │ live books K=166/250 H=92/154 (H in-play=8) │ WS K=ok H=ok │ openArbs=0 arbsLogged=65
 CrossArbBot
 APP
- — 5:19 AM
-[HardVenArb] 💓 up 24d15h46m │ session ready │ live books K=194/594 H=242/332 (H in-play=4) │ WS K=ok H=ok │ openArbs=0 arbsLogged=498
+ — 8:45 PM
+[HardVenArb] 💓 up 25d7h12m │ session ready │ live books K=180/250 H=92/154 (H in-play=8) │ WS K=ok H=ok │ openArbs=0 arbsLogged=67
 CrossArbBot
 APP
- — 5:49 AM
-[HardVenArb] 💓 up 24d16h16m │ session ready │ live books K=198/594 H=242/332 (H in-play=4) │ WS K=ok H=ok │ openArbs=0 arbsLogged=498
+ — 9:15 PM
+[HardVenArb] 💓 up 25d7h42m │ session ready │ live books K=166/250 H=92/154 (H in-play=8) │ WS K=ok H=ok │ openArbs=0 arbsLogged=70
+CrossArbBot
+APP
+ — 9:27 PM
+[HardVen/sidecar] ⚫ DARK — closed at 21:27 local
+• next open Fri 21:48 local (in 0h21m) for 5 game(s): Terence Atmane vs Jakub Mensik 22:00, Elise Mertens vs Naomi Osaka 22:10, Taylor Townsend vs Belinda Bencic 23:00, Maria Sakkari vs Coco Gauff 23:00, Casper Ruud vs Joao Fonseca 23:00
+[HardVenArb] 🗓️ session block ended —
+📊 status — session dark (scheduled) | live books K=170/250 H=88/154 | WS K=ok H=ok | openArbs=0 pairs=125 | up 25d7h55m
+HardVenArb status — CrossArbTelemetry_20260807.csv
+span 2026-08-07 00:49:41 → 21:08:50 | windows 168 (94 pre-live, 74 in-play) | capturable 61 (36%)
+PRE-LIVE: 48 cap | edge avg 1.25c max 3.78c | est profit $46.43
+in-play: 13 cap | edge avg 4.06c max 8.02c | est profit $55.55
+CrossArbBot
+APP
+ — 9:45 PM
+[HardVenArb] 💓 up 25d8h12m │ session dark (scheduled) │ live books K=204/276 H=0/170 (H in-play=8) │ WS K=ok H=ok │ openArbs=0 arbsLogged=70
+[HardVen/sidecar] 🟢 LIVE (operator hours) until 02:58 local (~310m) — 5 target game(s)
+• Targets: Terence Atmane vs Jakub Mensik 22:00, Elise Mertens vs Naomi Osaka 22:10, Taylor Townsend vs Belinda Bencic 23:00, Maria Sakkari vs Coco Gauff 23:00, Casper Ruud vs Joao Fonseca 23:00
+• Next window: Sat 06:04 (0 game(s))
+CrossArbBot
+APP
+ — 10:15 PM
+[HardVenArb] 💓 up 25d8h42m │ session ready │ live books K=174/276 H=100/170 (H in-play=8) │ WS K=ok H=ok │ openArbs=0 arbsLogged=70
+CrossArbBot
+APP
+ — 10:45 PM
+[HardVenArb] 💓 up 25d9h12m │ session ready │ live books K=178/276 H=92/170 (H in-play=8) │ WS K=ok H=ok │ openArbs=0 arbsLogged=70
+CrossArbBot
+APP
+ — 11:15 PM
+[HardVenArb] 💓 up 25d9h42m │ session ready │ live books K=180/314 H=106/192 (H in-play=8) │ WS K=ok H=ok │ openArbs=0 arbsLogged=70
+CrossArbBot
+APP
+ — 11:45 PM
+[HardVenArb] 💓 up 25d10h12m │ session ready │ live books K=198/314 H=106/192 (H in-play=8) │ WS K=ok H=ok │ openArbs=0 arbsLogged=70
+CrossArbBot
+APP
+ — 12:15 AM
+[HardVenArb] 💓 up 25d10h42m │ session ready │ live books K=178/314 H=104/192 (H in-play=8) │ WS K=ok H=ok │ openArbs=0 arbsLogged=71
+CrossArbBot
+APP
+ — 12:29 AM
+[HardVen/sidecar] ⚫ DARK — closed at 00:29 local
+• next open Sat 02:39 local (in 2h10m) for 44 game(s): Yuki Mochizuki vs Donghyun Hwang 03:00, Matthew Dellavedova vs Isaac Becroft 03:00, Gaeul Jang vs Chenting Zhu 03:00, Chengyiyi Yuan vs Junhan Zhang 03:00, Egor Pleshivtsev vs Arnav Vijay Paparkar 05:00 (+39 more)
+• Sleeping through 6 game(s): Caty Mcnally vs Alexandra Eala 00:30, Alexei Popyrin vs Thiago Agustin Tirante 00:45, Learner Tien vs Tommy Paul 01:00, Nuno Borges vs Luciano Darderi 16:30 (+2 more)
+[HardVenArb] 🗓️ session block ended —
+📊 status — session dark (scheduled) | live books K=194/314 H=104/192 | WS K=ok H=ok | openArbs=0 pairs=157 | up 25d10h56m
+HardVenArb status — CrossArbTelemetry_20260807.csv
+span 2026-08-07 00:49:41 → 23:50:03 | windows 169 (95 pre-live, 74 in-play) | capturable 62 (37%)
+PRE-LIVE: 49 cap | edge avg 1.25c max 3.78c | est profit $47.36
+in-play: 13 cap | edge avg 4.06c max 8.02c | est profit $55.55
+CrossArbBot
+APP
+ — 12:45 AM
+[HardVenArb] 💓 up 25d11h12m │ session dark (scheduled) │ live books K=218/356 H=0/212 (H in-play=8) │ WS K=ok H=ok │ openArbs=0 arbsLogged=71
+CrossArbBot
+APP
+ — 1:15 AM
+[HardVenArb] 💓 up 25d11h42m │ session dark (scheduled) │ live books K=212/356 H=0/212 (H in-play=8) │ WS K=ok H=ok │ openArbs=0 arbsLogged=71
+CrossArbBot
+APP
+ — 1:45 AM
+[HardVenArb] 💓 up 25d12h12m │ session dark (scheduled) │ live books K=162/356 H=0/212 (H in-play=8) │ WS K=ok H=ok │ openArbs=0 arbsLogged=71
+CrossArbBot
+APP
+ — 2:15 AM
+[HardVenArb] 💓 up 25d12h42m │ session dark (scheduled) │ live books K=196/386 H=0/222 (H in-play=8) │ WS K=ok H=ok │ openArbs=0 arbsLogged=71
+CrossArbBot
+APP
+ — 2:39 AM
+[HardVen/sidecar] 🟢 LIVE (operator hours) until 14:51 local (~732m) — 48 target game(s)
+• Targets: Yuki Mochizuki vs Donghyun Hwang 03:00, Matthew Dellavedova vs Isaac Becroft 03:00, Gaeul Jang vs Chenting Zhu 03:00, Chengyiyi Yuan vs Junhan Zhang 03:00, Egor Pleshivtsev vs Arnav Vijay Paparkar 05:00, Pawit Sornlaksup vs Mukund Sasikumar 05:00, Shintaro Imai vs Shunsuke Mitsui 05:00, Damir Zhalgasbay vs Maan Kesharwani 05:00 (+40 more)
+• Watching lines for 4 later game(s): Nuno Borges vs Luciano Darderi 16:30, Arthur Rinderknech vs Brandon Nakashima 18:00, Jiri Lehecka vs Rafael Jodar 22:00, Arthur Fils vs Cameron Norrie 23:30
+• Left behind (3 later today): Nuno Borges vs Luciano Darderi 16:30, Arthur Rinderknech vs Brandon Nakashima 18:00, Jiri Lehecka vs Rafael Jodar 22:00
+• Not bettable (9 unpaired on the board): Ana Sofia Sanchez vs Victoria Bosio 14:00, Giorgia Pedone vs Lucciana Perez Alarcon 14:00, Lucas Poullain vs Gijs Brouwer 14:00 (+6 more)
+• Next window: Sat 23:00 (1 game(s))
+[HardVenArb] 💓 up 25d13h12m │ session ready │ live books K=218/386 H=120/222 (H in-play=8) │ WS K=ok H=ok │ openArbs=0 arbsLogged=71
+CrossArbBot
+APP
+ — 3:15 AM
+[HardVenArb] 💓 up 25d13h42m │ session ready │ live books K=218/386 H=116/222 (H in-play=8) │ WS K=ok H=ok │ openArbs=2 arbsLogged=77
+CrossArbBot
+APP
+ — 3:29 AM
+[HardVen/sidecar] ⚫ DARK — closed at 03:29 local
+• next open Sat 04:41 local (in 1h12m) for 49 game(s): Damir Zhalgasbay vs Maan Kesharwani 05:00, Shintaro Imai vs Shunsuke Mitsui 05:00, Pawit Sornlaksup vs Mukund Sasikumar 05:00, Egor Pleshivtsev vs Arnav Vijay Paparkar 05:00, Victoria Milovanova vs Kisa Yoshioka 06:00 (+44 more)
+• Sleeping through 3 game(s): Annika Penickova vs Anne-Christine Lutkemeyer 15:15, Arthur Rinderknech vs Brandon Nakashima 18:00, Jiri Lehecka vs Rafael Jodar 22:00
+[HardVenArb] 🗓️ session block ended —
+📊 status — session dark (scheduled) | live books K=190/386 H=114/222 | WS K=ok H=ok | openArbs=2 pairs=193 | up 25d13h57m
+HardVenArb status — CrossArbTelemetry_20260808.csv
+span 2026-08-08 03:05:19 → 03:05:33 | windows 4 (4 pre-live, 0 in-play) | capturable 2 (50%)
+PRE-LIVE: 2 cap | edge avg 5.36c max 5.89c | est profit $6.95
+in-play: 0 capturable
+CrossArbBot
+APP
+ — 3:45 AM
+[HardVenArb] 💓 up 25d14h12m │ session dark (scheduled) │ live books K=214/408 H=0/236 (H in-play=8) │ WS K=ok H=ok │ openArbs=0 arbsLogged=77
+CrossArbBot
+APP
+ — 4:15 AM
+[HardVenArb] 💓 up 25d14h42m │ session dark (scheduled) │ live books K=234/408 H=0/236 (H in-play=8) │ WS K=ok H=ok │ openArbs=0 arbsLogged=77
+CrossArbBot
+APP
+ — 4:41 AM
+[HardVen/sidecar] 🟢 LIVE (operator hours) until 15:32 local (~651m) — 47 target game(s)
+• Targets: Damir Zhalgasbay vs Maan Kesharwani 05:00, Shintaro Imai vs Shunsuke Mitsui 05:00, Pawit Sornlaksup vs Mukund Sasikumar 05:00, Egor Pleshivtsev vs Arnav Vijay Paparkar 05:00, Arina Arifullina vs Su Jeong Jang 06:00, Victoria Milovanova vs Kisa Yoshioka 06:00, Edda Mamedova vs Irem Kurt 06:00, Asylzhan Arystanbekova vs Anna Pushkareva 06:00 (+39 more)
+• Watching lines for 7 later game(s): Marta Kostyuk vs Iga Swiatek 16:30, Nuno Borges vs Luciano Darderi 16:30, Jessica Pegula vs Diana Shnaider 18:00, Arthur Rinderknech vs Brandon Nakashima 18:00, Jiri Lehecka vs Rafael Jodar 22:00 (+2 more)
+• Left behind (5 later today): Marta Kostyuk vs Iga Swiatek 16:30, Nuno Borges vs Luciano Darderi 16:30, Jessica Pegula vs Diana Shnaider 18:00, Arthur Rinderknech vs Brandon Nakashima 18:00 (+1 more)
+• Not bettable (6 unpaired on the board): Daniel Salazar vs Alec Beckley 09:00, Carl Emil Overbeck vs Marcello Serafini 16:00, Petr Nesterov vs Radu Mihai Papoe 17:00 (+3 more)
+• Next window: Sat 23:00 (2 game(s))
+[HardVenArb] 💓 up 25d15h12m │ session ready │ live books K=238/408 H=126/236 (H in-play=8) │ WS K=ok H=ok │ openArbs=1 arbsLogged=186
+CrossArbBot
+APP
+ — 5:15 AM
+[HardVenArb] 💓 up 25d15h42m │ session ready │ live books K=252/426 H=122/240 (H in-play=8) │ WS K=ok H=ok │ openArbs=0 arbsLogged=263
+CrossArbBot
+APP
+ — 5:31 AM
+[HardVen/sidecar] ⚫ DARK — closed at 05:31 local
+• next open Sat 05:48 local (in 0h17m) for 49 game(s): Asylzhan Arystanbekova vs Anna Pushkareva 06:05, Edda Mamedova vs Irem Kurt 06:10, Arina Arifullina vs Su Jeong Jang 06:17, Victoria Milovanova vs Kisa Yoshioka 06:17, Maria Herazo vs Denislava Glushkova 07:30 (+44 more)
+• Sleeping through 1 game(s): Jiri Lehecka vs Rafael Jodar 22:00
+[HardVenArb] 🗓️ session block ended —
+📊 status — session dark (scheduled) | live books K=248/426 H=120/240 | WS K=ok H=ok | openArbs=0 pairs=213 | up 25d15h59m
+HardVenArb status — CrossArbTelemetry_20260808.csv
+span 2026-08-08 03:05:19 → 05:17:02 | windows 194 (194 pre-live, 0 in-play) | capturable 47 (24%)
+PRE-LIVE: 47 cap | edge avg 1.23c max 5.89c | est profit $54.46
+in-play: 0 capturable
+CrossArbBot
+APP
+ — 5:45 AM
+[HardVenArb] 💓 up 25d16h12m │ session dark (scheduled) │ live books K=254/426 H=0/240 (H in-play=8) │ WS K=ok H=ok │ openArbs=0 arbsLogged=269
+[HardVen/sidecar] 🟢 LIVE (operator hours) until 18:48 local (~779m) — 49 target game(s)
+• Targets: Asylzhan Arystanbekova vs Anna Pushkareva 06:05, Edda Mamedova vs Irem Kurt 06:10, Arina Arifullina vs Su Jeong Jang 06:17, Victoria Milovanova vs Kisa Yoshioka 06:17, Maria Herazo vs Denislava Glushkova 07:30, Felitsata Dorofeeva-Rybas vs Vittoria Paganetti 07:30, Amelie Justine Hejtmanek vs Victoria Pohle 08:00, Giannicola Misasi vs Gabriel Ghetu 08:00 (+41 more)
+• Watching lines for 3 later game(s): Jiri Lehecka vs Rafael Jodar 22:00, Aryna Sabalenka vs Ekaterina Alexandrova 23:05, Arthur Fils vs Cameron Norrie 23:30
+• Left behind (1 later today): Jiri Lehecka vs Rafael Jodar 22:00
+• Not bettable (4 unpaired on the board): Petr Nesterov vs Radu Mihai Papoe 17:00, Edas Butvilas vs Dusan Lajovic 19:00, Spencer Johnson vs Andre Ilagan 19:00 (+1 more)
+• Next window: Sat 23:00 (2 game(s))
+CrossArbBot
+APP
+ — 6:15 AM
+[HardVenArb] 💓 up 25d16h42m │ session ready │ live books K=254/426 H=120/240 (H in-play=8) │ WS K=ok H=ok │ openArbs=0 arbsLogged=269
+CrossArbBot
+APP
+ — 6:45 AM
+[HardVenArb] 💓 up 25d17h12m │ session ready │ live books K=250/434 H=122/244 (H in-play=8) │ WS K=ok H=ok │ openArbs=0 arbsLogged=269
+CrossArbBot
+APP
+ — 7:15 AM
+[HardVenArb] 💓 up 25d17h42m │ session ready │ live books K=254/434 H=120/244 (H in-play=8) │ WS K=ok H=ok │ openArbs=0 arbsLogged=278
+CrossArbBot
+APP
+ — 7:45 AM
+[HardVenArb] 💓 up 25d18h12m │ session ready │ live books K=254/434 H=114/244 (H in-play=8) │ WS K=ok H=ok │ openArbs=0 arbsLogged=283
+CrossArbBot
+APP
+ — 8:15 AM
+[HardVenArb] 💓 up 25d18h42m │ session ready │ live books K=248/446 H=122/252 (H in-play=8) │ WS K=ok H=ok │ openArbs=0 arbsLogged=283
+Superior_Snacks — 8:30 AM
+Schedule
+CrossArbBot
+APP
+ — 8:30 AM
+[HardVenArb] 🗓️ state=open
+• Sat 08 Aug 07:41 → Sat 08 Aug 14:50 (35 games) ⬅ now
+• Sat 08 Aug 21:47 → Sun 09 Aug 03:05 (3 games) 📌
+• Sun 09 Aug 06:02 → Sun 09 Aug 08:05 (0 games) 📌
+• Sun 09 Aug 23:00 → Mon 10 Aug 02:56 (0 games) 📌
+• left behind: 16 game(s)
+Superior_Snacks — 8:31 AM
+Commands
+CrossArbBot
+APP
+ — 8:31 AM
+[HardVenArb] HardVen commands — send any of these in this channel
+commands · status — bot + session state
+Session
+pause [reason] — close the site & stay dark (survives a restart)
+resume — back on schedule (also clears a low-balance halt)
+force [minutes] — open NOW outside the schedule (default 60, auto-reverts)
+banking [minutes] — open the site & FREEZE all automation so you can deposit/withdraw (default 30; works through a low-balance halt, then reverts to it — resume when funds land)
+Schedule
+schedule — show the current plan
+schedule <key>=<val> … — e.g. schedule lead_min=20 max_blocks=3
+  · keys: lead_min trail_min min_gap_min min_games max_blocks session_hours jitter_min horizon_hours paired_only today_only
+pin 09:00-12:00[,20:00-23:00] — always-on hours (local) · unpin — clear them
+Flags
+toggle — list flags · toggle <FLAG> <0|1> — e.g. toggle HARDVEN_BET_ENABLE 0
+  · ⚠️ flags the C# bot reads at startup reply needs-restart — they are saved, not live
+Stop
+close / end / kill — stop the bot entirely (supervisor will NOT restart it)
+Superior_Snacks — 8:32 AM
+Close
+CrossArbBot
+APP
+ — 8:32 AM
+[HardVenArb] 🛑 shutdown requested — stopping the bot gracefully (supervisor will NOT restart).
+CrossArbBot
+APP
+ — 1:09 PM
+[HardVen/sidecar] ⚫ DARK — closed at 13:09 local
+• next open Sat 13:16 local (in 0h07m) for 6 game(s): Caroline Dolehide vs Ekaterine Gorgodze 13:30, Ayana Akli vs Anastasia Zakharova 13:30, Tom Gentzsch vs Zsombor Piros 13:30, Giorgia Pedone vs Lucciana Perez Alarcon 14:00, Ana Sofia Sanchez vs Victoria Bosio 14:00 (+1 more)
+• Sleeping through 15 game(s): Gabriele Piraino vs Carlos Sanchez Jover 15:00, Felipe Meligeni Rodrigues Alves vs Paulo Andre Saraiva Dos Santos 15:00, Maximus Dussault vs Evan Zhu 15:00, Clement Chidekh vs Timo Legout 15:00 (+11 more)
+[HardVen/sidecar] 🟢 LIVE until 14:57 local (~101m) — 6 target game(s)
+• Targets: Caroline Dolehide vs Ekaterine Gorgodze 13:30, Ayana Akli vs Anastasia Zakharova 13:30, Tom Gentzsch vs Zsombor Piros 13:30, Giorgia Pedone vs Lucciana Perez Alarcon 14:00, Ana Sofia Sanchez vs Victoria Bosio 14:00, Lucas Poullain vs Gijs Brouwer 14:00
+• Left behind (15 later today): Gabriele Piraino vs Carlos Sanchez Jover 15:00, Felipe Meligeni Rodrigues Alves vs Paulo Andre Saraiva Dos Santos 15:00, Maximus Dussault vs Evan Zhu 15:00, Clement Chidekh vs Timo Legout 15:00 (+11 more)
+• Next window: Sat 21:47 (3 game(s))
+CrossArbBot
+APP
+ — 2:57 PM
+[HardVen/sidecar] ⚫ DARK — closed at 14:57 local
+• next open Sat 21:47 local (in 6h50m) for 3 game(s): Jiri Lehecka vs Rafael Jodar 22:00, Aryna Sabalenka vs Ekaterina Alexandrova 23:05, Arthur Fils vs Cameron Norrie 23:30
+• Sleeping through 15 game(s): Annika Penickova vs Anne-Christine Lutkemeyer 15:00, Eunhye Lee vs Dana Guzman 15:00, Gabriele Piraino vs Carlos Sanchez Jover 15:00, Felipe Meligeni Rodrigues Alves vs Paulo Andre Saraiva Dos Santos 15:00 (+11 more)
+CrossArbBot
+APP
+ — 3:17 PM
+[HardVen/sidecar] 🟢 LIVE until 16:30 local (~73m) — 8 target game(s)
+• Targets: Maximus Dussault vs Evan Zhu 15:11, Eunhye Lee vs Dana Guzman 15:13, Annika Penickova vs Anne-Christine Lutkemeyer 15:13, Gabriele Piraino vs Carlos Sanchez Jover 15:14, Clement Chidekh vs Timo Legout 15:17, Carl Emil Overbeck vs Marcello Serafini 16:00, Marta Kostyuk vs Iga Swiatek 16:30, Nuno Borges vs Luciano Darderi 16:30
+• Left behind (7 later today): Petr Nesterov vs Radu Mihai Papoe 17:00, Jessica Pegula vs Diana Shnaider 18:00, Arthur Rinderknech vs Brandon Nakashima 18:00, Spencer Johnson vs Andre Ilagan 19:00 (+3 more)
+• Next window: Sat 23:00 (2 game(s))
