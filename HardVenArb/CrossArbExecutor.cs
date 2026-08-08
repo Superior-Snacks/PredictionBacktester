@@ -1253,10 +1253,17 @@ public class CrossArbExecutor
 
         if (contracts < idealContracts)
         {
+            // Name the ACTUAL binding constraint. This line hardcoded "(balance limited)" and ran AFTER the
+            // ladder, so a ladder/depth reduction was reported as a capital shortage — e.g. "210→28 contracts
+            // (balance limited) K=$1000.00 P=$1000.00", which reads as "fund me" when $1000 was never the
+            // limit. Misleading in exactly the logs used to decide how much capital to add.
+            decimal needUsd = idealContracts * pricePerSet;
+            bool balanceBound = kBalSnap < needUsd || pBalSnap < needUsd;
+            string why = balanceBound ? "balance limited" : "ladder/depth limited";
             Console.WriteLine(
-                $"[EXEC SCALE] {pair.Label} | {idealContracts}→{contracts} contracts (balance limited) " +
-                $"K=${kBalSnap:0.00} P=${pBalSnap:0.00}");
-            DebugLog.Balance($"ExecuteAsync {pair.Label}: scaled {idealContracts}→{contracts} contracts");
+                $"[EXEC SCALE] {pair.Label} | {idealContracts}→{contracts} contracts ({why}) " +
+                $"K=${kBalSnap:0.00} P=${pBalSnap:0.00} need≈${needUsd:0.00}");
+            DebugLog.Balance($"ExecuteAsync {pair.Label}: scaled {idealContracts}→{contracts} contracts ({why})");
         }
 
         string execId = string.Empty;
