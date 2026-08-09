@@ -78,22 +78,47 @@ Envelope is a list of `[mtype, key, payload]`.
 
 ---
 
-## 3. Open unknowns — need a logged-in session to capture
+## 3. Open unknowns
 
-- [ ] **`max_stake` per selection — THE design risk.** `Selection.max_stake` feeds `max_contracts`, which drives
-      `StakeLadder.MaxDepthFraction` (never bet >1/3 of book max) and the executor's depth gate. The price
-      frames carry **no limit**. Find it: `customersettings` `"limit"` keys, `credit_limit`, per-price data on a
-      bet-slip call, or a separate quote endpoint. **If BetInAsia exposes no per-selection limit, decide the
-      fallback deliberately** (account-level cap? fixed notional?) — do not let it default to 0 or infinity.
-- [ ] Bet placement request/response (never captured — no bet was placed during recon).
-- [ ] Balance amount + endpoint (`customer_data` had no balance field in the top level).
+### Answered 2026-08-09 by re-mining the existing capture (no account needed)
+
+- [x] **Moneyline market key per sport.** Three spellings, all with `line = None`:
+      `tennis_match,all` (tennis, `p1`/`p2`) · `ml` (mma, boxing, basket, `a`/`h`) ·
+      `time_win,tp,all,ml` (baseball, af, ih, cricket, esports, rl, darts, snooker, volley, arf).
+      3-way is `wdw` / `time_win,tp,reg,wdw` → `three_way=True`, pair NO-only.
+      **`time_win,tp,reg,ml` is deliberately NOT a moneyline** — `reg` is regulation-only while `all` includes
+      overtime; Kalshi settles on the final result, so pairing them would be a silent mis-hedge.
+- [x] **In-play flag** — `event.ir_status`. Non-null ⇒ in-running, e.g.
+      `{"time": ["2h", 21], "score": [0, 4], "rc": [0, 0]}`. Absent/null ⇒ pre-match. Drives `Selection.live`.
+- [x] **`max_stake` per selection — CONFIRMED ABSENT.** Not in the price feed, and nothing account-level
+      substitutes: `credit_limit ["USD", 0.0]`, `max_stake_per_event null`,
+      `settings.max_order 999999999999999999` (sentinel), `max_betslips 8` (slip count).
+      **DECIDED:** `BIA_ASSUMED_MAX_STAKE`, default **100.0**, announced at startup and published in
+      `/health`. Rationale: letting the 1e18 sentinel through does not "disable a limit", it silently
+      DELETES the `MaxDepthFraction` sizing gate while everything still looks healthy — the same shape as
+      the `balance()→0.0` halt bug and the phantom-fee bug. Revisit the instant a real limit is captured.
+
+### Still need a logged-in session
+
+- [ ] Bet placement request/response (no bet was placed during recon).
+- [ ] Balance amount + endpoint. **Until then `balance()` returns `None` (unreadable), never 0.0** —
+      BalanceGuard keeps None as UNKNOWN and does not halt.
 - [ ] Open bets / bet-status endpoints.
-- [ ] Moneyline market key per sport (the recon sample is heavy on `ah`/`ahou`; confirm the 2-way match-winner key).
-- [ ] Does the feed distinguish pre-match vs **in-play**? (`Selection.live` drives the timing model.)
 - [ ] Session TTL / re-login cadence (Pinnacle's ~30min idle logout was a major time sink — check early).
+      `betinasia_ws` already re-validates and re-logs-in on socket failure, so this degrades rather than dies.
 
 **Next recon run:** log in, place one tiny real bet, let it settle. That single session captures placement,
-balance, open_bets, bet status, and limits in one pass.
+balance, open_bets, bet status, and limits in one pass. `MAX_FRAME_CHARS` has been raised 4000 → 60000
+(`BIA_RECON_MAX_FRAME_CHARS`) — the old value truncated 46% of frames into invalid JSON and the casualties
+were exactly the long `event` catalog frames.
+
+### Two feed behaviours the parser must handle (found by replaying the capture)
+
+- A market whose value is **`null` has been WITHDRAWN** — drop it, do not keep the last price. A stale price
+  on a dead market is the phantom-arb shape.
+- The feed publishes **`0.0` odds** on listed-but-unavailable markets (seen on `tennis_game_win`). 0.0 is not
+  a price. Rejected at INGEST, not at read time, so `catalog()` — which walks the same cache — can never
+  publish a leg that will never price.
 
 ---
 
@@ -103,19 +128,22 @@ balance, open_bets, bet status, and limits in one pass.
 - [ ] Re-run `betinasia_recon.py` logged in; place + settle one minimum bet.
 - [ ] Extract: placement contract, balance, open bets, limits, in-play flag.
 
-### Phase 1 — M0: odds + catalog (unlocks telemetry, zero money)
-- [ ] `sidecar/betinasia_ws.py` — asyncio WS client: connect, ping loop, `watch_hcaps` batching,
-      frame router, reconnect w/ resubscribe. (Model on `bookmaker_stomp.py`, not the paho code.)
-- [ ] `sidecar/betinasia_adapter.py` — `BookAdapter` subclass:
-      - `startup()` → login, open WS
-      - `odds()` → cache lookup, `ts` freshness, `status`, `cutoff`
-      - `catalog()` → from `event` frames and/or `/web/events/external/`
-      - `balance()` → `Optional[float]`, **None when unreadable** (the rule that bit us twice on Pinnacle)
-      - M1 methods raise/preview until Phase 3
-- [ ] **selection_id scheme** — must be stable, parseable, and mirror the pairing script.
-      Proposal: `{sport}:{event_key}:{market_key}:{selection}` (e.g. `tennis:2026-08-05,73551,87843:tennis_ah,all,set:p1`)
-- [ ] Register `betinasia` in `app.py :: load_adapter()`.
-- [ ] Run alongside Pinnacle telemetry-only and compare coverage.
+### Phase 1 — M0: odds + catalog (unlocks telemetry, zero money) — **BUILT 2026-08-09**
+- [x] `sidecar/betinasia_ws.py` — asyncio WS client (`websockets`): login, connect, ping loop, `watch_hcaps`
+      batching, frame router, reconnect w/ resubscribe + session re-validate/re-login on failure.
+      `handle_frame()` is deliberately pure + synchronous so tests drive it from recorded frames, no socket.
+- [x] `sidecar/betinasia_adapter.py` — `BookAdapter` subclass: `startup()`, `odds()` (auto-subscribes ids it
+      has not seen), `catalog()` (moneyline + 3-way only), `balance()` → `None`, M1 methods refuse loudly.
+- [x] **selection_id scheme** — `{sport}:{comp_id}:{event_key}:{market_key}:{selection}`
+      (e.g. `tennis:338:2026-08-05,73551,87843:tennis_match,all:p1`). Colon-safe: no field observed in the
+      capture contains a colon. **comp_id is carried inside the id on purpose** — `watch_hcaps` needs it, so
+      `odds()` is self-sufficient without a catalog round-trip (mirrors Pinnacle ids carrying the league id).
+- [x] Register `betinasia` in `app.py :: load_adapter()`.
+- [x] `sidecar/test_betinasia.py` — **54/54**, incl. replaying all 330 parseable recon frames: no crash,
+      moneylines recognised across 13 sports, every cached odd a plausible decimal, every real-data id
+      round-trips. The 0.0-odds bug above was found by this replay, not by reading the spec.
+- [ ] Run alongside Pinnacle telemetry-only and compare coverage. **Blocked on credentials** — the WS token
+      *is* the login session_id, so even the odds path needs `BIA_USERNAME`/`BIA_PASSWORD`.
 
 ### Phase 2 — pairing
 - [ ] `sidecar/pair_betinasia.py` — Kalshi ↔ BIA. Team names come as `{team_id, name}`, so a **team-id map is

@@ -40,7 +40,12 @@ sys.stdout.reconfigure(encoding="utf-8")
 from playwright.async_api import async_playwright
 
 PROFILE = Path(__file__).parent / ".betinasia_profile"
-MAX_FRAME_CHARS = 4000      # per recorded frame/body -- enough to see the schema, not the whole book
+# 4000 was "enough to see the schema" but it truncated 46% of the 2026-08-05 capture into invalid
+# JSON, and the casualties were exactly the long ones: the `event` catalog frames (teams arrays) came
+# through almost entirely unusable, so the replay corpus in test_betinasia.py can barely exercise
+# catalog(). 60k keeps whole frames while still bounding a runaway socket. Override if a capture gets
+# unwieldy -- but never below ~20k, or the catalog path goes untested again.
+MAX_FRAME_CHARS = int(os.environ.get("BIA_RECON_MAX_FRAME_CHARS", "60000"))
 MAX_FRAMES_PER_WS = 120     # cap for the BULK 'event' catalog frames (they repeat); non-event frames below
 MAX_INTERESTING_PER_WS = 400  # price/odds/other frames are the prize -- keep far more of them
 SKIP_URL = re.compile(r"\.(png|jpe?g|gif|svg|webp|woff2?|ttf|css|ico|mp4)(\?|$)|googletagmanager|"

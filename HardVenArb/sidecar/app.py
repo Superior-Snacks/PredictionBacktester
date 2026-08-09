@@ -50,6 +50,9 @@ def load_adapter() -> BookAdapter:
     if name == "pinnacle":
         from pinnacle_adapter import PinnacleAdapter      # clean httpx (no browser); replays x-session headers
         return PinnacleAdapter()
+    if name == "betinasia":
+        from betinasia_adapter import BetInAsiaAdapter    # httpx login + WS price feed; no browser at all
+        return BetInAsiaAdapter()
     if name == "aggregator":
         # COMPOSITE: prices from a read-only odds aggregator, bets/balance through a real book's adapter
         # (HARDVEN_AGG_PLACEMENT_BOOK, default pinnacle). Defaults to HARDVEN_AGG_MODE=shadow, which serves the
