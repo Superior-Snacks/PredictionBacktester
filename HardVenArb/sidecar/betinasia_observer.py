@@ -140,20 +140,32 @@ class BetInAsiaObserver:
 
     # ── reporting ─────────────────────────────────────────────────────────────
     def coverage(self, sport: Optional[str] = None) -> dict:
-        """What the page has given us: catalog (free) vs priced (only what it subscribed to)."""
+        """What the page has given us: catalog (free) vs priced (only what it subscribed to).
+
+        MATCHES ONLY. Outrights (`...,multirunner,...`) are excluded from both sides of the ratio:
+        they price through `watch_event`/`offers_event`, the sport page never subscribes them unless
+        you open the outrights tab, and `catalog()` skips them anyway. Counting them made a run that
+        had subscribed literally every match report 94% and look like it had a gap.
+        """
+        def is_match(k: str) -> bool:
+            return "multirunner" not in k
+
         events = self.feed.all_events()
-        cat = collections.Counter(s for (s, _k) in events)
+        cat = collections.Counter(s for (s, k) in events if is_match(k))
+        outr = collections.Counter(s for (s, k) in events if not is_match(k))
         priced = collections.Counter(
-            s for (s, k), b in self.feed._books.items() if (b or {}).get("markets"))
+            s for (s, k), b in self.feed._books.items() if is_match(k) and (b or {}).get("markets"))
         out = {"sockets": self._sockets, "frames": self._frames,
-               "catalog_total": len(events), "priced_total": sum(priced.values()),
-               "page_subscribed": len(self.feed._subs)}
+               "catalog_matches": sum(cat.values()), "catalog_outrights": sum(outr.values()),
+               "priced_total": sum(priced.values()), "page_subscribed": len(self.feed._subs)}
         if sport:
             out["sport"] = sport
             out["catalog"] = cat.get(sport, 0)
+            out["outrights"] = outr.get(sport, 0)
             out["priced"] = priced.get(sport, 0)
         else:
-            out["by_sport"] = {s: {"catalog": cat[s], "priced": priced.get(s, 0)}
+            out["by_sport"] = {s: {"matches": cat[s], "outrights": outr.get(s, 0),
+                                   "priced": priced.get(s, 0)}
                                for s, _ in cat.most_common(12)}
         return out
 
@@ -174,7 +186,7 @@ async def main() -> int:
         while time.time() < deadline:
             await asyncio.sleep(5)
             c = obs.coverage(args.sport)
-            print(f"\r[BIA-OBS] frames={c['frames']:6d}  catalog={c['catalog_total']:5d}  "
+            print(f"\r[BIA-OBS] frames={c['frames']:6d}  catalog={c['catalog_matches']:5d} matches  "
                   f"page-subscribed={c['page_subscribed']:4d}  "
                   f"{args.sport}: {c['priced']}/{c['catalog']} priced   ", end="", flush=True)
     except (KeyboardInterrupt, asyncio.CancelledError):
@@ -184,8 +196,14 @@ async def main() -> int:
     print(json.dumps(full, indent=2))
     c = obs.coverage(args.sport)
     if c["catalog"]:
-        print(f"\n{args.sport}: catalog {c['catalog']}, priced {c['priced']} "
-              f"({100*c['priced']//c['catalog']}%) - the gap is events the page never subscribed to.")
+        pct = 100 * c["priced"] // c["catalog"]
+        print(f"\n{args.sport}: {c['priced']}/{c['catalog']} MATCHES priced ({pct}%)"
+              f"  [+{c['outrights']} outrights, not subscribed by the sport page and not paired]")
+        if pct >= 100:
+            print("  => full coverage from one page load. Nothing was clicked; the page did this itself.")
+        else:
+            print("  => the gap is matches the page never subscribed to. Give it longer (the app "
+                  "subscribes over several seconds) before treating it as a real ceiling.")
     await obs.stop()
     return 0
 
