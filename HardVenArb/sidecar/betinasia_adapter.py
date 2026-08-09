@@ -62,6 +62,45 @@ ASSUMED_MAX_STAKE = float(os.environ.get("BIA_ASSUMED_MAX_STAKE", "100.0"))
 MONEYLINE_KEYS = {"tennis_match,all", "ml", "time_win,tp,all,ml"}
 THREE_WAY_KEYS = {"wdw", "time_win,tp,reg,wdw", "time_win,tp,all,wdw"}
 
+# ── Feed market_key -> order bet_type ─────────────────────────────────────────
+# The PRICE feed and the ORDER api speak different vocabularies, and the translation is a lookup
+# table, not a mechanical transform -- two of the four observed pairs would break any rule you could
+# write (`ml` and `time_win,tp,all,ml` pass their tail through, `tennis_match,all` and `wdw` do not):
+#
+#   sport     feed market_key        POST /v1/betslips/ bet_type       (observed 2026-08-09)
+#   tennis    tennis_match,all       for,tset,all,vwhatever,p2
+#   basket    ml                     for,ml,h
+#   baseball  time_win,tp,all,ml     for,tp,all,ml,a
+#   fb        wdw                    for,h                             (middle segment is EMPTY)
+#
+# Shape is  "for," + <infix> + "," + <selection>, with the selection token passed through unchanged
+# (p1/p2 for tennis, h/a elsewhere, presumably d for a soccer draw -- not yet observed).
+# `for` = back. The feed also supports `against` (lay) -- `against,tset,all,vset1,p1` was observed --
+# i.e. the same economic position from the other side. We only ever back, so `for` is hard-coded.
+#
+# CONFIRMATION OF AN EARLIER CALL: baseball's slip came back described as "Cleveland Guardians
+# Moneyline (Inc. Overtime)", so `tp,all,ml` really does include overtime. That is why
+# `time_win,tp,reg,ml` (regulation only) stays classified as a derivative -- Kalshi settles on the
+# final result, so pairing the `reg` variant would be a silent mis-hedge.
+BET_TYPE_INFIX = {
+    "tennis_match,all":   "tset,all,vwhatever",
+    "ml":                 "ml",
+    "time_win,tp,all,ml": "tp,all,ml",
+    "wdw":                "",              # soccer 1X2: no infix at all
+}
+
+
+def make_bet_type(market_key: str, selection: str) -> Optional[str]:
+    """Feed market_key + selection -> the `bet_type` string POST /v1/betslips/ expects.
+
+    None for any market we have not observed a slip for: sending a guessed bet_type would either be
+    rejected or -- worse -- accepted as a DIFFERENT market than the one we priced.
+    """
+    if market_key not in BET_TYPE_INFIX:
+        return None
+    infix = BET_TYPE_INFIX[market_key]
+    return f"for,{infix},{selection}" if infix else f"for,{selection}"
+
 # Selection tokens that mean "the home/first side" and "the away/second side" respectively.
 HOME_SELECTIONS = {"h", "p1"}
 AWAY_SELECTIONS = {"a", "p2"}
@@ -197,7 +236,30 @@ class BetInAsiaAdapter(BookAdapter):
         return None
 
     async def place_bet(self, selection_id: str, stake: float, max_odds: float) -> BetResult:
-        return BetResult(accepted=False, reason="betinasia placement not implemented (Phase 3)")
+        """NOT IMPLEMENTED, and deliberately not forced into this signature yet.
+
+        The BookAdapter contract says "IRREVERSIBLE once accepted", which is true of Pinnacle: you
+        click, and you are on. BetInAsia does not work that way -- the 2026-08-09 capture shows an
+        order RESTING:
+
+            POST /v1/orders/  {..., "duration": 259200}   -> status "open",
+                                                             bet_bar_values.unplaced ["USD", 5.0]
+            DELETE /v1/betslips/{id}/                     -> cancel while open
+
+        so a book leg may fill later, partially, or never, and can be pulled. That is closer to the
+        analyzer's `--hardven-first` model (an unfilled leg cancelled = a free miss) than to the
+        Kalshi-first hedge race, and it is strictly SAFER -- but it is an executor-level change, not
+        an adapter detail. Partial fills are real, not theoretical: the captured order asked for
+        USD 5.0 and got USD 4.994, a residual the integer Kalshi leg cannot match.
+
+        Implementing this signature as if it were immediate-and-irreversible would report a resting
+        order as a completed hedge. Refusing is the honest answer until the execution model is
+        settled.
+        """
+        return BetResult(accepted=False,
+                         reason="betinasia placement not implemented (Phase 3) - orders REST and "
+                                "partially fill, which the immediate/irreversible place_bet "
+                                "contract cannot express")
 
     async def open_bets(self) -> list[dict]:
         return []

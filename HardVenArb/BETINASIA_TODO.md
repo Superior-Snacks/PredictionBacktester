@@ -98,14 +98,77 @@ Envelope is a list of `[mtype, key, payload]`.
       DELETES the `MaxDepthFraction` sizing gate while everything still looks healthy — the same shape as
       the `balance()→0.0` halt bug and the phantom-fee bug. Revisit the instant a real limit is captured.
 
-### Still need a logged-in session
+### Answered 2026-08-09 by the logged-in recon (one real $5 bet + 3 slips opened/cancelled)
 
-- [ ] Bet placement request/response (no bet was placed during recon).
-- [ ] Balance amount + endpoint. **Until then `balance()` returns `None` (unreadable), never 0.0** —
-      BalanceGuard keeps None as UNKNOWN and does not halt.
-- [ ] Open bets / bet-status endpoints.
-- [ ] Session TTL / re-login cadence (Pinnacle's ~30min idle logout was a major time sink — check early).
-      `betinasia_ws` already re-validates and re-logs-in on socket failure, so this degrades rather than dies.
+**There is no DOM automation anywhere in this venue.** Betting is a clean JSON API, so the entire
+Pinnacle UI layer — Playwright, tab manager, rove-nav, slip clicking, organic activity,
+`HARDVEN_BETS_VIA_PAGE`, session keepalive — does not exist here. It also explains why the tab never
+logs out: there is no browser session to expire, just a `session_id` bearer token.
+
+```
+POST   /v1/betslips/       {sport, event_id, bet_type, betslip_type:"normal", equivalent_bets:true}
+                           -> {betslip_id, bet_type_description, expiry_ts, is_open,
+                               accounts:[{bookie, username, bet_type}], invalid_accounts:{...}}
+POST   /v1/orders/         {betslip_id, price, stake:["USD",5], duration:259200,
+                            keep_open_ir:false, adaptive_bookies:[...], accounts:[[bookie,user],…]}
+                           -> {order_id, status:"open", bet_bar_values:{unplaced:["USD",5.0]}, …}
+POST   /v1/betslips/{id}/refresh/   {betslipId}
+DELETE /v1/betslips/{id}/                          cancel
+GET    /v1/orders/                  open bets + settlement: bets[]{bookie, got_price, got_stake,
+                                    status}, closed, close_reason:"order_filled"
+GET    /v1/orders/position_by_event/               net position per event
+GET    /v1/customers/{u}/accounting_info/  -> current_balance, open_stakes, available_credit,
+                                              commission_rate (0% -> HardVenFee stays 0)
+GET    /v1/customers/{u}/can_place_bets/   -> {can_place_bets, reason, country, ip_address}
+```
+
+- [x] **Session TTL — a non-issue.** Token-based, no idle logout (user left a tab open for hours).
+
+### Feed `market_key` -> order `bet_type`: SOLVED, and it is a lookup table
+
+| sport | feed `market_key` | order `bet_type` |
+|---|---|---|
+| tennis | `tennis_match,all` | `for,tset,all,vwhatever,p2` |
+| basket | `ml` | `for,ml,h` |
+| baseball | `time_win,tp,all,ml` | `for,tp,all,ml,a` |
+| fb | `wdw` | `for,h` — infix is **empty** |
+
+Shape is `"for," + <infix> + "," + <selection>`. NOT a mechanical transform: `ml` and
+`time_win,tp,all,ml` pass their tail through, `tennis_match,all` and `wdw` do not. Implemented as
+`BET_TYPE_INFIX` + `make_bet_type()`, returning **None** for any unobserved market — a guessed
+bet_type is either rejected or, worse, silently accepted as a *different* market than the one priced.
+Covers all three moneyline spellings and the 3-way, so the moneyline set is complete.
+
+`for` = back; the API also supports `against` (lay) — `against,tset,all,vset1,p1` was observed, the
+same position from the other side. We only back, so `for` is hard-coded.
+
+**Confirms an earlier call:** the baseball slip came back described as *"Cleveland Guardians Moneyline
+(Inc. Overtime)"*, so `tp,all,ml` does include OT — which is exactly why `time_win,tp,reg,ml` stays a
+derivative rather than a moneyline.
+
+### 🚨 THE EXECUTION MODEL IS NOT PINNACLE'S — this is the real Phase 3 work
+
+- **Orders REST.** `duration: 259200` (3 days); the order returns `status:"open"` with
+  `bet_bar_values.unplaced ["USD", 5.0]`, cancellable via `DELETE /v1/betslips/{id}/`. A book leg may
+  fill later, partially, or never. This is the analyzer's **`--hardven-first`** model (unfilled leg
+  cancelled = a free miss) and is strictly SAFER than the Kalshi-first hedge race — but the executor
+  currently assumes the book leg is immediate and irreversible.
+- **Partial fills are real, not theoretical.** The placed order wanted `USD 5.0`, got `USD 4.994`.
+  Same class as the integer-rounding shortfall that blocked both arbs on 2026-08-09, except
+  unpredictable and on the book side. The lock guard must reckon with it.
+- `BookAdapter.place_bet()` therefore stays UNIMPLEMENTED on purpose: its contract says "IRREVERSIBLE
+  once accepted", and forcing a resting order into that signature would report an open order as a
+  completed hedge.
+- It is a broker over an exchange pool: `exchange_mode:"make_and_take"`, bookies `bdaq 3et bf mbook
+  pin88 sharp ipm vx betamapola sing2`. With `equivalent_bets:true` a moneyline can be filled via an
+  equivalent handicap on some books (bf offered `for,ah,h,-2` for an Arsenal moneyline).
+
+### Still open
+
+- [ ] **No per-selection stake limit still.** Closest is `bookie_accounts[].max_bet ["EUR", 2000.0]`,
+      per underlying bookie account. `BIA_ASSUMED_MAX_STAKE` stays the deliberate placeholder — the
+      resting-order model makes it less load-bearing than it was for Pinnacle.
+- [ ] Settled-bet shape — capture `GET /v1/orders/` once a placed bet resolves (VOID detection).
 
 **Next recon run:** log in, place one tiny real bet, let it settle. That single session captures placement,
 balance, open_bets, bet status, and limits in one pass. `MAX_FRAME_CHARS` has been raised 4000 → 60000

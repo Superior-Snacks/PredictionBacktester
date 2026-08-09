@@ -25,6 +25,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from betinasia_ws import BetInAsiaFeed, iter_messages
 from betinasia_adapter import (
     is_moneyline, is_three_way, make_selection_id, parse_selection_id,
+    make_bet_type, BET_TYPE_INFIX,
     _sides, _selection_name, _start_ts_epoch,
 )
 
@@ -148,6 +149,22 @@ check("malformed id rejected", parse_selection_id("nope") is None)
 check("selection name maps to team", _selection_name("p1", "Alice", "Bob") == "Alice")
 check("away token maps to away", _selection_name("a", "Home FC", "Away FC") == "Away FC")
 check("unknown token falls back to raw", _selection_name("over", "H", "A") == "over")
+
+# ── 5b. feed market_key -> order bet_type ─────────────────────────────────────
+# All four cases are VERBATIM from real POST /v1/betslips/ requests (2026-08-09 captures).
+print("\n[5b] bet_type mapping (observed slips)")
+check("tennis moneyline",
+      make_bet_type("tennis_match,all", "p2") == "for,tset,all,vwhatever,p2")
+check("basket moneyline", make_bet_type("ml", "h") == "for,ml,h")
+check("baseball moneyline", make_bet_type("time_win,tp,all,ml", "a") == "for,tp,all,ml,a")
+check("soccer 1X2 has NO infix", make_bet_type("wdw", "h") == "for,h")
+check("soccer draw follows the same shape", make_bet_type("wdw", "d") == "for,d")
+# Guessing a bet_type is worse than refusing: a wrong one is either rejected or silently accepted
+# as a DIFFERENT market than the one we priced.
+check("unobserved market yields None", make_bet_type("tennis_ah,all,game", "p1") is None)
+check("regulation-only variant yields None", make_bet_type("time_win,tp,reg,ml", "a") is None)
+check("every moneyline/3-way key is mappable",
+      all(k in BET_TYPE_INFIX for k in ("tennis_match,all", "ml", "time_win,tp,all,ml", "wdw")))
 
 # ── 6. replay the real recon capture ──────────────────────────────────────────
 print("\n[6] replay of real recon frames")
