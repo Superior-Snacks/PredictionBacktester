@@ -46,8 +46,13 @@ PROFILE = Path(__file__).parent / ".betinasia_profile"
 # catalog(). 60k keeps whole frames while still bounding a runaway socket. Override if a capture gets
 # unwieldy -- but never below ~20k, or the catalog path goes untested again.
 MAX_FRAME_CHARS = int(os.environ.get("BIA_RECON_MAX_FRAME_CHARS", "60000"))
-MAX_FRAMES_PER_WS = 120     # cap for the BULK 'event' catalog frames (they repeat); non-event frames below
-MAX_INTERESTING_PER_WS = 400  # price/odds/other frames are the prize -- keep far more of them
+MAX_FRAMES_PER_WS = int(os.environ.get("BIA_RECON_MAX_CATALOG", "400"))
+# The "interesting" bucket is shared by PRICE frames and, on a logged-in run, the BET frames. Prices
+# stream continuously, so a 400 cap is spent within minutes of browsing and everything after it --
+# including the bet placement we opened the session to capture -- is silently dropped. Raised, and
+# overridable: on a bet-capture run set BIA_RECON_MAX_INTERESTING high enough that the cap cannot be
+# reached before you place the bet.
+MAX_INTERESTING_PER_WS = int(os.environ.get("BIA_RECON_MAX_INTERESTING", "20000"))
 SKIP_URL = re.compile(r"\.(png|jpe?g|gif|svg|webp|woff2?|ttf|css|ico|mp4)(\?|$)|googletagmanager|"
                       r"google-analytics|hotjar|sentry|intercom|facebook|doubleclick", re.I)
 ODDSY = re.compile(r"odd|price|market|event|match|sport|line|bet|fixture|selection|tennis", re.I)
