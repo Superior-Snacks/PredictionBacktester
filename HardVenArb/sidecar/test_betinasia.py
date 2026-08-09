@@ -247,6 +247,21 @@ act._ws = _Spy()
 asyncio.run(act.watch([(338, "tennis", "k")]))
 check("non-passive feed DOES send (guard is opt-in, not global)", len(act._ws.sent) == 1)
 
+# ── 5e. liveness must not depend on the venue announcing kickoff ──────────────
+print("\n[5e] in-play detection (ir_status OR start passed)")
+import time as _t
+from betinasia_adapter import _is_live
+
+check("ir_status present => live", _is_live({"ir_status": {"time": ["2h", 1]}}, _t.time() + 9999))
+check("start in the future, no ir_status => pre-live", not _is_live({}, _t.time() + 3600))
+# THE ONE THAT MATTERS: the feed never announced a kickoff in 7.4 min of capture (0 pre->live
+# transitions, 13 live->pre). A started game with a stale flag must still read as live.
+check("start PASSED but feed never flipped the flag => still live",
+      _is_live({}, _t.time() - 60))
+check("start passed AND ir_status absent-but-null => live", _is_live({"ir_status": None}, _t.time() - 1))
+check("unknown start (0) and no flag => pre-live (cannot invent liveness)",
+      not _is_live({}, 0.0))
+
 # ── 6. replay the real recon capture ──────────────────────────────────────────
 print("\n[6] replay of real recon frames")
 files = sorted(glob.glob(os.path.join(os.path.dirname(os.path.abspath(__file__)),

@@ -214,14 +214,15 @@ class BetInAsiaAdapter(BookAdapter):
                 # decimal odds <= 1.0 pay nothing; treat as unpriced rather than emit a bogus price
                 continue
             ev = self.feed.get_event(sport, ekey) or {}
+            start = _start_ts_epoch(ev.get("start_ts"))
             out[sid] = Selection(
                 selection_id=sid,
                 decimal_odds=float(price),
                 max_stake=ASSUMED_MAX_STAKE,
                 status="open",
                 ts=ts,
-                live=bool(ev.get("ir_status")),      # ir_status present+non-null => in-running
-                cutoff=_start_ts_epoch(ev.get("start_ts")),
+                live=_is_live(ev, start),
+                cutoff=start,
             )
         return out
 
@@ -342,6 +343,26 @@ def _selection_name(sel: str, home: str, away: str) -> str:
     if sel in AWAY_SELECTIONS and away:
         return away
     return sel
+
+
+def _is_live(ev: dict, start_epoch: float) -> bool:
+    """IN-PLAY if the feed says so OR the scheduled start has passed. Either signal is enough.
+
+    Do NOT trust `ir_status` alone. Across a 7.4-minute capture the feed produced 13 in-play ->
+    pre-live transitions (matches ending) and ZERO pre-live -> in-play ones: we have no evidence it
+    announces a kickoff at all. Believing the flag on its own is the same failure that produced the
+    Pinnacle in-play tag bug -- a game goes live, nothing updates, and a PRELIVE_ONLY bot fires into a
+    live book with live latency and a moving price.
+
+    `start_ts` makes this deterministic instead of hopeful: the schedule is known in advance, so
+    liveness never depends on the venue volunteering anything. Wrong in the safe direction too --
+    tennis routinely starts late, so `now >= start_ts` can call a still-pre-match game live, and a
+    pre-live-only bot then declines an arb it could have taken. A skipped edge costs nothing; a naked
+    leg into a live book costs money.
+    """
+    if ev.get("ir_status"):
+        return True
+    return bool(start_epoch) and time.time() >= start_epoch
 
 
 def _start_ts_epoch(start_ts: Optional[str]) -> float:
