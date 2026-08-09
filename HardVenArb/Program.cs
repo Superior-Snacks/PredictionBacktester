@@ -1487,6 +1487,19 @@ _ = Task.Run(async () =>
             telemetry.AddPairs(validPairs);
             if (validKList.Count > 0) kalshiFeed.EnqueueSubscribe(validKList);
             if (validPList.Count > 0) hardvenFeed.EnqueueSubscribe(validPList);
+
+            // Newly paired tokens have no fee params / tick size yet. Without this they keep defaults for
+            // the rest of the session, so the executor prices them differently from the detector that
+            // found the arb. Fire-and-forget: it is rate-limited (~1.5s/token) and must not block reload.
+            if (executor != null && validPList.Count > 0)
+            {
+                var ex2 = executor;
+                _ = Task.Run(async () =>
+                {
+                    try { await ex2.PrefetchFeeRatesForNewPairsAsync(); }
+                    catch (Exception e) { Console.WriteLine($"[FEE PREFETCH] re-pair prefetch failed: {e.Message}"); }
+                });
+            }
         }
         catch (Exception ex)
         {

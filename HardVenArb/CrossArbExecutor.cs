@@ -296,7 +296,13 @@ public class CrossArbExecutor
     {
         if (_hardvenFeeParams.TryGetValue(tokenId, out var fp))
             return fp.R * (decimal)Math.Pow((double)(p * (1m - p)), fp.E);
-        return 0.03m * p * (1m - p); // fallback: Sports r=0.03, e=1
+        // No params for this token → charge NOTHING, mirroring the telemetry strategy. A back-only
+        // bookmaker bakes its vig into the odds (i.e. into the price we pay); a separate fee would
+        // double-count it. The old fallback here was 0.03*p*(1-p) — a Polymarket sports fee curve
+        // inherited from KalshiPolyCross — which invented ~0.7c of cost per share on any token the
+        // startup prefetch had not seen. Pairs added by the periodic re-pair are exactly that case,
+        // so real arbs the detector had REST-confirmed were rejected as NET_TOO_HIGH.
+        return 0m;
     }
 
     private static void Emit(List<string>? log, string msg)
@@ -544,11 +550,17 @@ public class CrossArbExecutor
         DiscordAlert($"✅ {mode} started — startup complete (HardVen fees prefetched), monitoring {pairCount} pair(s). Cash: Kalshi ${k:0.00} / HardVen ${p:0.00}.");
     }
 
+    /// <summary>Fetch fee params/tick size for any pair token we have not seen yet. Called at startup and
+    /// again after every hot-reload — pairs added by the periodic re-pair otherwise keep default fee math
+    /// and tick size for the rest of the session.</summary>
+    public Task PrefetchFeeRatesForNewPairsAsync() => PrefetchFeeRatesAsync();
+
     private async Task PrefetchFeeRatesAsync()
     {
         var tokens = _telemetry.GetAllPairs()
             .SelectMany(p => new[] { p.HardVenYesTokenId, p.HardVenNoTokenId })
             .Where(t => !string.IsNullOrEmpty(t))
+            .Where(t => !_hardvenFeeParams.ContainsKey(t))   // idempotent: only tokens we lack
             .Distinct()
             .ToList();
         if (tokens.Count == 0) return;
