@@ -212,6 +212,41 @@ check("unmapped sport is skipped, not guessed",
 check("every mapped sport's key is a known moneyline/3-way",
       all(is_moneyline(v) or is_three_way(v) for v in MONEYLINE_BY_SPORT.values()))
 
+# ── 5d. passive mode must be unable to emit ───────────────────────────────────
+print("\n[5d] passive guard (observe-only transport)")
+from betinasia_ws import BetInAsiaError
+
+pf = BetInAsiaFeed(username="x", password="y", on_log=lambda m: None, passive=True)
+try:
+    asyncio.run(pf.start())
+    check("passive start() refuses", False, "it opened a socket")
+except BetInAsiaError:
+    check("passive start() refuses", True)
+except Exception as e:
+    check("passive start() refuses", False, f"wrong error: {type(e).__name__}")
+
+
+class _Spy:
+    def __init__(self): self.sent = []
+    async def send(self, payload): self.sent.append(payload)
+
+
+spy = _Spy()
+pf._ws = spy
+asyncio.run(pf.watch([(338, "tennis", "2026-08-09,1,2")]))
+check("passive watch() sends NOTHING", spy.sent == [], str(spy.sent))
+check("passive watch() still records intent", ("tennis", "2026-08-09,1,2") in pf._subs)
+# parsing must still work -- passive is a transport switch, not a downgrade
+pf.handle_frame([["offers_hcap", [338, "tennis", "2026-08-09,1,2"],
+                  {"tennis_match,all": [None, [["p1", 1.8], ["p2", 2.1]]]}]])
+check("passive feed still parses pumped frames",
+      (pf.get_market("tennis", "2026-08-09,1,2", "tennis_match,all") or (None, {}, 0))[1].get("p1") == 1.8)
+
+act = BetInAsiaFeed(username="x", password="y", on_log=lambda m: None)
+act._ws = _Spy()
+asyncio.run(act.watch([(338, "tennis", "k")]))
+check("non-passive feed DOES send (guard is opt-in, not global)", len(act._ws.sent) == 1)
+
 # ── 6. replay the real recon capture ──────────────────────────────────────────
 print("\n[6] replay of real recon frames")
 files = sorted(glob.glob(os.path.join(os.path.dirname(os.path.abspath(__file__)),

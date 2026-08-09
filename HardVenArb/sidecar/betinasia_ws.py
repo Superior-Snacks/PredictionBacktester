@@ -53,9 +53,21 @@ BASE_URL = os.environ.get("BIA_BASE_URL", "https://black.betinasia.com")
 WS_URL   = os.environ.get("BIA_WS_URL",   "wss://black.betinasia.com/cpricefeed/")
 
 PING_SEC       = float(os.environ.get("BIA_PING_SEC", "3.0"))     # matches the real client's cadence
-SUB_BATCH      = int(os.environ.get("BIA_SUB_BATCH", "50"))       # events per watch_hcaps frame
 RECONNECT_SEC  = float(os.environ.get("BIA_RECONNECT_SEC", "5.0"))
 HTTP_TIMEOUT   = float(os.environ.get("BIA_HTTP_TIMEOUT", "15.0"))
+
+# ── Subscription shape: stay inside what a browsing human produces ────────────
+# Measured off three real sessions (betinasia_recon_20260809_*): 90/57/25 subscribe frames carrying
+# 638/334/172 events. Batch sizes ran min 1, MEDIAN 3, max 32 (one 113 outlier); the sustained rate
+# was ~2-3 events/sec. So the VOLUME is not what stands out -- a real session subscribes hundreds --
+# it is the SHAPE. One 250-wide watch_hcaps is a fingerprint no browser makes.
+#
+# The page-load burst is authentic and worth reproducing: at t~3s the browser fired 5+10+15+32 back to
+# back (~77 events instantly) before settling into a trickle. Reconnecting IS a page load, so
+# BURST_EVENTS goes out unpaced and everything after it is paced.
+SUB_BATCH      = int(os.environ.get("BIA_SUB_BATCH", "12"))        # events per watch_hcaps frame
+SUB_PACE_SEC   = float(os.environ.get("BIA_SUB_PACE_SEC", "0.4"))  # gap between paced batches
+SUB_BURST      = int(os.environ.get("BIA_SUB_BURST", "77"))        # unpaced allowance, page-load sized
 
 
 def iter_messages(frame: Any) -> list[list]:
@@ -80,7 +92,14 @@ class BetInAsiaFeed:
     """Login + WS odds cache. Owns no BookAdapter concepts — it speaks BetInAsia and nothing else."""
 
     def __init__(self, username: Optional[str] = None, password: Optional[str] = None,
-                 on_log: Optional[Callable[[str], None]] = None) -> None:
+                 on_log: Optional[Callable[[str], None]] = None, passive: bool = False) -> None:
+        # PASSIVE mode: this object becomes a pure PARSER. It will not open a socket, will not log in,
+        # and will not send a single frame -- `betinasia_observer` pumps it the frames a real browser
+        # received. Enforced here rather than by convention because the whole anti-detection position
+        # rests on the account never emitting traffic a user would not: a Python WS client carrying the
+        # session token is a different TLS fingerprint with no browser origin, which is exactly the
+        # kind of second client that stands out. A guard a caller cannot forget beats a rule it can.
+        self.passive = passive
         # Credentials come from the environment ONLY. Never a file, never a default: the 2026-08-05
         # recon captured a login POST with the password in cleartext, which is exactly the mistake
         # this rule exists to stop repeating.
@@ -188,12 +207,16 @@ class BetInAsiaFeed:
         return [d for d in (data or []) if isinstance(d, dict)]
 
     async def list_events(self, sport: str, ts_from: Optional[str] = None,
-                          limit: int = 500) -> list[dict]:
+                          limit: int = 25) -> list[dict]:
         """GAMES for a sport -> [{id, competition_id, sport, start_ts}, ...].
 
         `id` IS the WS event_key and `competition_id` IS the comp_id `watch_hcaps` needs, so this
         alone is enough to subscribe. It carries NO team names — those come from the WS `event`
         frames (see `all_events()`), which is why the adapter builds its catalog from those.
+
+        Default limit is 25 because that is exactly what the site's own page asks for. Raising it is
+        a request shape the real client never makes, so treat any larger value as a deliberate,
+        justified exception rather than a convenience.
         """
         if ts_from is None:
             ts_from = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(time.time() - 3600))
@@ -201,11 +224,29 @@ class BetInAsiaFeed:
                                {"sports": sport, "event_ts_from": ts_from, "limit": limit})
         return [d for d in (data or []) if isinstance(d, dict)]
 
-    async def watch_sport(self, sport: str, limit: int = 500) -> int:
-        """Subscribe every upcoming event in a sport. Returns how many were added."""
-        events = await self.list_events(sport, limit=limit)
-        entries = [(e.get("competition_id"), e.get("sport") or sport, e.get("id"))
-                   for e in events if e.get("id") and e.get("competition_id") is not None]
+    async def watch_sport(self, sport: str, limit: int = 0) -> int:
+        """Subscribe a sport's events, SOONEST FIRST. Returns how many were added.
+
+        Driven off the WS catalog rather than REST: the catalog was pushed to us unprompted, so using
+        it costs nothing and adds no request the real client would not make. REST is only a fallback
+        for the case where the push has not arrived yet.
+
+        Soonest-first matters for more than politeness -- a far-future game legitimately has no book,
+        so subscribing in catalog order buys a pile of silent events and makes "is it priced?"
+        unreadable. `limit=0` means no cap; the browser envelope is enforced downstream in
+        `_send_watch`, not here.
+        """
+        cat = [(k, v) for (s, k), v in self._events.items() if s == sport]
+        if cat:
+            ordered = sorted(cat, key=lambda kv: str((kv[1] or {}).get("start_ts") or "9999"))
+            entries = [((v or {}).get("competition_id"), sport, k) for k, v in ordered
+                       if (v or {}).get("competition_id") is not None]
+        else:
+            events = await self.list_events(sport)
+            entries = [(e.get("competition_id"), e.get("sport") or sport, e.get("id"))
+                       for e in events if e.get("id") and e.get("competition_id") is not None]
+        if limit > 0:
+            entries = entries[:limit]
         await self.watch(entries)
         return len(entries)
 
@@ -221,10 +262,21 @@ class BetInAsiaFeed:
                     continue
                 self._subs[k] = comp_id
                 new.append([comp_id, sport, ekey])
+        if self.passive:
+            # Record what was wanted (useful for reporting coverage gaps) but emit nothing.
+            if new:
+                self._log(f"passive: NOT subscribing {len(new)} event(s) - "
+                          f"prices come only from what the page itself watches")
+            return
         if new and self._ws is not None:
             await self._send_watch(new)
 
-    async def _send_watch(self, entries: list[list]) -> None:
+    async def _send_watch(self, entries: list[list], burst: int = 0) -> None:
+        """Emit watch_hcaps in browser-shaped batches. `burst` = how many events may go out unpaced
+        (a page load does ~77); everything beyond that is spaced by SUB_PACE_SEC. Pacing lives HERE,
+        at the transport, so no caller -- however eager -- can produce a subscription burst a browser
+        would never make."""
+        sent = 0
         for i in range(0, len(entries), SUB_BATCH):
             batch = entries[i:i + SUB_BATCH]
             try:
@@ -232,6 +284,9 @@ class BetInAsiaFeed:
             except Exception as e:
                 self._log(f"watch_hcaps send failed: {type(e).__name__}: {e}")
                 return
+            sent += len(batch)
+            if sent >= burst and i + SUB_BATCH < len(entries):
+                await asyncio.sleep(SUB_PACE_SEC)
 
     # ── reads ─────────────────────────────────────────────────────────────────
     def get_market(self, sport: str, event_key: str, market_key: str):
@@ -321,6 +376,10 @@ class BetInAsiaFeed:
 
     # ── connection lifecycle ──────────────────────────────────────────────────
     async def start(self) -> None:
+        if self.passive:
+            raise BetInAsiaError(
+                "passive feed: refusing to open a socket. Frames must be pumped in from the browser "
+                "via betinasia_observer -- see the note on __init__(passive=...)")
         if not self.session_id:
             await self.login()
         self._stop.clear()
@@ -358,7 +417,8 @@ class BetInAsiaFeed:
                     async with self._lock:
                         entries = [[cid, sp, ek] for (sp, ek), cid in self._subs.items()]
                     if entries:
-                        await self._send_watch(entries)
+                        # A reconnect IS a page load, so the page-load burst is the authentic shape here.
+                        await self._send_watch(entries, burst=SUB_BURST)
                         self._log(f"resubscribed {len(entries)} event(s)")
                     ping = asyncio.create_task(self._ping_loop(ws))
                     try:

@@ -12,15 +12,23 @@ Two questions this answers, neither of which the other tools can:
      That is a WS message, not a tab, so one connection is still enough in principle. Whether one
      connection will actually price N events is unproven: the `api/info` frame reports
      `registered_events` (which stayed 0 through 34 real browser subscribes, so it is NOT counting
-     this) and `max_queue_size: 50000` (a queue depth, not a subscription cap). So: subscribe for
-     real and count what comes back.
+     this) and `max_queue_size: 50000` (a queue depth, not a subscription cap).
 
-    python probe_betinasia_catalog.py --sport tennis
-    python probe_betinasia_catalog.py --sport fb --limit 250      # soccer; 0 = every event
-    python probe_betinasia_catalog.py --sport fb --limit 0 --price-wait 60
+DEFAULT IS OBSERVE-ONLY, and that is not a formality -- it is the whole point.
+
+Connecting and listening is EXACTLY what a browser does: the catalog push is unprompted, so phases 1
+and 2 add no behaviour to the account at all. Subscribing is different. Measured off three real
+sessions, the browser's envelope is: batch sizes min 1 / MEDIAN 3 / max 32, a ~77-event page-load
+burst, then ~2-3 events/sec. A real session does subscribe hundreds of events, so volume alone is not
+the tell -- SHAPE is. `--subscribe` therefore paces through BetInAsiaFeed._send_watch (which enforces
+the envelope at the transport, so nothing here can bypass it) and is capped at --max-subscribe.
+
+    python probe_betinasia_catalog.py --sport tennis              # observe only
+    python probe_betinasia_catalog.py --sport fb                  # observe only, soccer
+    python probe_betinasia_catalog.py --sport fb --subscribe 60   # opt in, browser-paced
 
 Needs BIA_USERNAME / BIA_PASSWORD in the environment (the WS token IS the login session_id).
-Read-only: it subscribes to prices and never opens a betslip or places anything.
+Never opens a betslip and never places anything, in any mode.
 """
 from __future__ import annotations
 
@@ -39,8 +47,12 @@ from betinasia_adapter import MONEYLINE_BY_SPORT, is_moneyline
 async def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--sport", default="tennis", help="tennis | fb (soccer) | baseball | basket ...")
-    ap.add_argument("--limit", type=int, default=250,
-                    help="max events to subscribe; 0 = every event in the catalog")
+    ap.add_argument("--subscribe", type=int, default=0,
+                    help="OPT-IN: subscribe this many events to measure pricing. 0 = observe only "
+                         "(the default). Paced to the browser envelope by the feed itself.")
+    ap.add_argument("--max-subscribe", type=int, default=120,
+                    help="hard ceiling on --subscribe; a browsing session reaches a few hundred over "
+                         "minutes, so keep single probes well under that")
     ap.add_argument("--settle", type=float, default=12.0,
                     help="seconds of catalog quiet before declaring the push complete")
     ap.add_argument("--price-wait", type=float, default=45.0,
@@ -87,7 +99,9 @@ async def main() -> int:
         return 1
 
     # ── phase 2: is the WS catalog a superset of what REST lists? ─────────────
-    rest = await feed.list_events(args.sport, limit=1000)
+    # limit=25 is what the site's own page requests; a bigger number is a shape the real client never
+    # produces, and the diff works fine on a sample.
+    rest = await feed.list_events(args.sport, limit=25)
     rest_ids = {e.get("id") for e in rest if e.get("id")}
     ws_ids = {k for (_s, k) in mine}
     missing = rest_ids - ws_ids
@@ -106,14 +120,28 @@ async def main() -> int:
     if starts:
         print(f"[PROBE] start times span {starts[0][:16]} -> {starts[-1][:16]}")
 
-    # ── phase 3: subscribe for real and count what actually prices ────────────
-    targets = [(v.get("competition_id"), s, k) for (s, k), v in mine.items()
-               if v.get("competition_id") is not None]
-    if args.limit > 0:
-        targets = targets[:args.limit]
+    # ── phase 3: OPT-IN only -- subscribe a browser-sized sample and count pricing ──
+    if args.subscribe <= 0:
+        print("\n[PROBE] observe-only (default). Everything above came from listening to a push the "
+              "site makes to any logged-in client -- no behaviour was added to the account.")
+        print("        To measure pricing, re-run with e.g. --subscribe 60 (browser-paced).")
+        await feed.stop()
+        return 0
+
+    n_sub = min(args.subscribe, args.max_subscribe)
+    if n_sub < args.subscribe:
+        print(f"\n[PROBE] capping --subscribe {args.subscribe} -> {n_sub} (--max-subscribe)")
+
+    # Prefer events that start SOON: a far-future game having no book is not a subscription ceiling,
+    # and mixing the two makes the result unreadable.
+    soon = sorted(((v.get("start_ts") or "9999", k, v) for (s, k), v in mine.items()
+                   if v.get("competition_id") is not None))
+    targets = [(v.get("competition_id"), args.sport, k) for _st, k, v in soon][:n_sub]
     ml_key = MONEYLINE_BY_SPORT.get(args.sport)
-    print(f"\n[PROBE] subscribing {len(targets)} {args.sport} event(s) on ONE socket "
-          f"(moneyline key: {ml_key})...")
+    print(f"\n[PROBE] subscribing {len(targets)} soonest {args.sport} event(s) on ONE socket "
+          f"(moneyline key: {ml_key})")
+    print(f"        paced by the feed: batches of {__import__('betinasia_ws').SUB_BATCH}, "
+          f"{__import__('betinasia_ws').SUB_PACE_SEC}s apart -- inside the measured browser envelope")
     t1 = time.time()
     await feed.watch(targets)
 
