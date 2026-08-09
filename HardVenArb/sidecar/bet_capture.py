@@ -171,14 +171,30 @@ _CAPTURE_JS = r"""
     }
     return false;
   };
-  new MutationObserver((recs) => {
+  // The observer must attach to a node that EXISTS. On the RE-INJECTION path (add_init_script, which
+  // runs on every navigation) this code executes before the document has a <body>, so the old
+  // `.observe(document.body, ...)` threw, the whole IIFE aborted, and `window.__hvCap` was never
+  // assigned. drain() then returned [] forever -- no error, no events -- so any capture that spanned a
+  // navigation was silently dead. Observed 2026-08-09: armed on a loading splash, the app navigated at
+  // 4s, and the real bet at 57s produced zero DOM records.
+  const mo = new MutationObserver((recs) => {
     if (Date.now() - lastInteraction > MUT_WINDOW_MS) return;
     for (const r of recs) {
       if (!interesting(r)) continue;
       const n = r.target && r.target.nodeType === 1 ? r.target : null;
       if (n) changed.add(n);
     }
-  }).observe(document.body, {childList: true, subtree: true, attributes: true, characterData: false});
+  });
+  const observeWhenReady = () => {
+    const target = document.body || document.documentElement;
+    if (!target) return false;
+    try {
+      mo.observe(target, {childList: true, subtree: true, attributes: true, characterData: false});
+      return true;
+    } catch (e) { return false; }
+  };
+  if (!observeWhenReady())
+    document.addEventListener("DOMContentLoaded", observeWhenReady, {once: true});
 
   // Snapshot the changed region on demand (Python calls this after letting the UI settle).
   window.__hvCap = {
@@ -204,7 +220,9 @@ _CAPTURE_JS = r"""
     // One-off structural outline of the whole page, for orientation.
     outline: () => {
       const budget = {n: 0};
-      return {kind: "outline", t: Date.now(), url: location.href, tree: describe(document.body, 0, budget)};
+      const root = document.body || document.documentElement;
+      return {kind: "outline", t: Date.now(), url: location.href,
+              tree: root ? describe(root, 0, budget) : null};
     },
   };
   return "installed";
@@ -339,9 +357,23 @@ class BetSlipRecorder:
         if not self._page:
             return False
         try:
-            events = await self._page.evaluate("() => window.__hvCap ? window.__hvCap.drain() : []")
+            # `null` (not []) when the in-page hook is missing, so a DEAD capture is distinguishable
+            # from "the user has not clicked yet". The old version returned [] for both, which is how a
+            # capture stayed silently dead across a whole session.
+            events = await self._page.evaluate(
+                "() => window.__hvCap ? window.__hvCap.drain() : null")
         except Exception as e:
             self._write({"kind": "error", "t": int(time.time() * 1000), "where": "drain", "error": str(e)})
+            return False
+        if events is None:
+            try:
+                res = await self._page.evaluate(_CAPTURE_JS)
+                self._write({"kind": "rearm", "t": int(time.time() * 1000),
+                             "url": self._page.url, "inject": res})
+                print(f"\n[BET-CAPTURE] hook was gone - RE-ARMED on {self._page.url[:70]}", flush=True)
+            except Exception as e:
+                self._write({"kind": "error", "t": int(time.time() * 1000),
+                             "where": "rearm", "error": str(e)})
             return False
         for e in events or []:
             self._write(e)
