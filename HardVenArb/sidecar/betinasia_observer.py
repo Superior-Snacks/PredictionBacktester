@@ -170,6 +170,54 @@ class BetInAsiaObserver:
         return out
 
 
+    def horizon_report(self, sport: str) -> str:
+        """Split priced-vs-not by how soon the match starts, and by league.
+
+        Diagnoses an incomplete sport page. Two very different causes look identical in a bare
+        percentage:
+          * DATE WINDOW  -- everything starting today is priced, later dates are not. The page shows
+                            today's card; the rest will price when their day comes round.
+          * COUNT CEILING -- today's games are themselves only partly priced. The page is
+                            virtualising a long list and subscribing what it renders, so coverage
+                            depends on scroll position rather than on the calendar.
+        """
+        import datetime as _dt
+        now = _dt.datetime.now(_dt.timezone.utc)
+        buckets = {"<24h": [0, 0], "24-72h": [0, 0], ">72h": [0, 0], "no start": [0, 0]}
+        leagues_missing: collections.Counter = collections.Counter()
+        for (s, k), ev in self.feed.all_events().items():
+            if s != sport or "multirunner" in k:
+                continue
+            priced = bool((self.feed._books.get((s, k)) or {}).get("markets"))
+            st = (ev or {}).get("start_ts")
+            key = "no start"
+            if st:
+                try:
+                    d = _dt.datetime.fromisoformat(str(st).replace("Z", "+00:00"))
+                    hrs = (d - now).total_seconds() / 3600.0
+                    key = "<24h" if hrs < 24 else ("24-72h" if hrs < 72 else ">72h")
+                except Exception:
+                    pass
+            buckets[key][0 if priced else 1] += 1
+            if not priced:
+                leagues_missing[(ev or {}).get("competition_name") or "?"] += 1
+
+        lines = ["  horizon      priced  unpriced"]
+        for k, (p, u) in buckets.items():
+            if p or u:
+                lines.append(f"  {k:<11}{p:>7}{u:>10}")
+        near = buckets["<24h"]
+        if near[0] and not near[1]:
+            lines.append("  => DATE WINDOW: everything starting inside 24h is priced. The page shows "
+                         "today's card; later dates price when their day arrives. Not a ceiling.")
+        elif near[1]:
+            lines.append("  => COUNT CEILING: even matches starting inside 24h are unpriced, so the "
+                         "page is subscribing what it RENDERS. Coverage depends on scroll position.")
+            lines.append("     Worst-affected leagues: "
+                         + ", ".join(f"{n}x {nm[:26]}" for nm, n in leagues_missing.most_common(4)))
+        return "\n".join(lines)
+
+
 async def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--url", default="https://black.betinasia.com")
@@ -202,8 +250,11 @@ async def main() -> int:
         if pct >= 100:
             print("  => full coverage from one page load. Nothing was clicked; the page did this itself.")
         else:
-            print("  => the gap is matches the page never subscribed to. Give it longer (the app "
-                  "subscribes over several seconds) before treating it as a real ceiling.")
+            # WHY the gap matters more than its size. A page showing 775 fixtures may subscribe only
+            # what it renders (a COUNT ceiling -> scrolling would fix it) or only today's card (a DATE
+            # window -> a later visit picks the rest up). Those need opposite responses, and the
+            # horizon split is what tells them apart.
+            print(obs.horizon_report(args.sport))
     await obs.stop()
     return 0
 
