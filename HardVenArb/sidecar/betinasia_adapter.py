@@ -59,6 +59,9 @@ default. Replace it the moment Phase 0 captures a real limit from a bet-slip/quo
 
 ASSUMED_MAX_STAKE = float(os.environ.get("BIA_ASSUMED_MAX_STAKE", "100.0"))
 
+# Sport page to deep-link on startup. NOT "/" -- that subscribes only the featured tournament.
+START_URL = os.environ.get("BIA_START_URL", "https://black.betinasia.com/sportsbook/tennis")
+
 MONEYLINE_KEYS = {"tennis_match,all", "ml", "time_win,tp,all,ml"}
 THREE_WAY_KEYS = {"wdw", "time_win,tp,reg,wdw", "time_win,tp,all,wdw"}
 
@@ -162,15 +165,34 @@ class BetInAsiaAdapter(BookAdapter):
     name = "betinasia"
 
     def __init__(self) -> None:
-        self.feed = BetInAsiaFeed()
+        # BROWSER is the default and should stay that way: the bot opens the real page on the real
+        # profile and only READS its socket. `direct` opens our own WS with the session token -- a
+        # second client with a different TLS fingerprint and no surrounding page traffic. It exists
+        # for offline/diagnostic use, not for anything the account does routinely.
+        self.transport = os.environ.get("BIA_TRANSPORT", "browser").lower()
+        self.observer = None
+        self.feed = BetInAsiaFeed(passive=(self.transport == "browser"))
         self._started = False
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
     async def startup(self) -> None:
         print(f"[BIA] assumed max_stake = {ASSUMED_MAX_STAKE:.2f} "
               f"(NO per-selection limit is published -- see MAX_STAKE_NOTE)", flush=True)
-        await self.feed.login()
-        await self.feed.start()
+        if self.transport == "browser":
+            from betinasia_observer import BetInAsiaObserver
+            # Deep-link the sport page. Landing on "/" subscribes only the FEATURED tournament (6 of
+            # 75 tennis matches); landing on /sportsbook/tennis subscribes all 75, with no clicking.
+            # Subscriptions then persist for the life of the socket, so this is one page load and
+            # then hours of pure observation.
+            self.observer = BetInAsiaObserver(url=START_URL)
+            await self.observer.start()
+            self.feed = self.observer.feed
+            print(f"[BIA] passive transport: watching the page at {START_URL}", flush=True)
+        else:
+            print("[BIA] WARNING transport=direct - opening our OWN websocket. This is a second "
+                  "client on the account; prefer BIA_TRANSPORT=browser.", flush=True)
+            await self.feed.login()
+            await self.feed.start()
         self._started = True
         if self.feed.currency != "USD":
             # Kalshi is USD. A USD BetInAsia account means the whole FX path collapses to identity;
@@ -179,7 +201,10 @@ class BetInAsiaAdapter(BookAdapter):
                   f"HARDVEN_FX_TO_USD must be set", flush=True)
 
     async def shutdown(self) -> None:
-        await self.feed.stop()
+        if self.observer is not None:
+            await self.observer.stop()
+        elif not self.feed.passive:
+            await self.feed.stop()
         self._started = False
 
     # ── M0: odds ──────────────────────────────────────────────────────────────

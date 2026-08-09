@@ -64,6 +64,10 @@ class BetInAsiaObserver:
         self._sockets = 0
         self._frames = 0
         self._started = 0.0
+        self._last_update: dict[tuple, float] = {}     # (sport, ekey) -> last offers_hcap time
+        self._sub_order: dict[tuple, int] = {}         # (sport, ekey) -> order the PAGE subscribed it
+        self._sub_time: dict[tuple, float] = {}
+        self._server_says: list[tuple] = []            # verbatim error/api frames (limit announcements)
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
     async def start(self) -> None:
@@ -120,6 +124,17 @@ class BetInAsiaObserver:
             return
         self._frames += 1
         self.feed.handle_frame(frame)
+        # Per-event last-update stamps + verbatim capture of anything the server says about limits.
+        # Needed to tell a DROPPED subscription from a merely QUIET one (see drop_report).
+        now = time.time()
+        for m in (frame if isinstance(frame, list) and frame
+                  and not isinstance(frame[0], str) else [frame]):
+            if not (isinstance(m, list) and m):
+                continue
+            if m[0] == "offers_hcap" and len(m) >= 3 and isinstance(m[1], list) and len(m[1]) >= 3:
+                self._last_update[(m[1][1], m[1][2])] = now
+            elif m[0] in ("error", "api"):
+                self._server_says.append((round(now - self._started, 1), json.dumps(m)[:400]))
 
     def _on_sent(self, payload) -> None:
         """Record what the PAGE subscribed to, so coverage can be reported honestly. We never send."""
@@ -136,7 +151,14 @@ class BetInAsiaObserver:
             ents = [ents]
         for e in ents:
             if isinstance(e, list) and len(e) >= 3:
-                self.feed._subs[(e[1], e[2])] = e[0]
+                k = (e[1], e[2])
+                self.feed._subs[k] = e[0]
+                if k not in self._sub_order:
+                    # ORDER matters: a server-side cap that evicts the oldest subscription shows up as
+                    # silence correlated with subscription order, which is the only way to tell a cap
+                    # from a market that simply is not ticking.
+                    self._sub_order[k] = len(self._sub_order)
+                    self._sub_time[k] = time.time()
 
     # ── reporting ─────────────────────────────────────────────────────────────
     def coverage(self, sport: Optional[str] = None) -> dict:
@@ -169,6 +191,66 @@ class BetInAsiaObserver:
                                for s, _ in cat.most_common(12)}
         return out
 
+
+    def drop_report(self, sport: Optional[str] = None, quiet_sec: float = 600.0) -> dict:
+        """Which subscriptions are still ALIVE, grouped by league — the league-drop test.
+
+        THE CONFOUND, stated up front: pre-live soccer barely ticks (4 of 90 events moved in a 7.4-min
+        capture), so "no recent update" does NOT mean "dropped". Silence is the normal state of a
+        pre-match book. Two signals separate a real eviction from ordinary quiet:
+
+          * ORDER CORRELATION. A server-side cap evicts the OLDEST subscriptions, so the dead ones
+            cluster at low `sub_order` while recently-added ones keep ticking. `alive_by_quartile`
+            below is that test: a clean gradient across quartiles is a cap, a flat profile is not.
+          * NEVER-vs-STOPPED. An event that priced once and went quiet is alive-but-still. One that
+            was subscribed and NEVER priced was probably never really registered.
+
+        And the third possibility the idle hour is for: if drops are TIME based, the dead set grows
+        with wall-clock while `sub_order` stays uncorrelated.
+        """
+        now = time.time()
+        rows = []
+        for k, order in self._sub_order.items():
+            sp, ekey = k
+            if sport and sp != sport:
+                continue
+            if "multirunner" in ekey:
+                continue
+            ev = self.feed.all_events().get(k) or {}
+            last = self._last_update.get(k)
+            rows.append({
+                "league": ev.get("competition_name") or "?",
+                "order": order,
+                "sub_age": round(now - self._sub_time.get(k, now), 1),
+                "ever_priced": last is not None,
+                "quiet_sec": round(now - last, 1) if last else None,
+                "alive": bool(last and (now - last) <= quiet_sec),
+            })
+        rows.sort(key=lambda r: r["order"])
+        by_league: dict[str, dict] = {}
+        for r in rows:
+            d = by_league.setdefault(r["league"], {"subscribed": 0, "ever_priced": 0, "alive": 0})
+            d["subscribed"] += 1
+            d["ever_priced"] += int(r["ever_priced"])
+            d["alive"] += int(r["alive"])
+        quart = []
+        if rows:
+            n = max(1, len(rows) // 4)
+            for i in range(0, len(rows), n):
+                chunk = rows[i:i + n]
+                quart.append({"orders": f"{chunk[0]['order']}-{chunk[-1]['order']}",
+                              "n": len(chunk),
+                              "alive": sum(r["alive"] for r in chunk),
+                              "ever_priced": sum(r["ever_priced"] for r in chunk)})
+        return {"t": round(now - self._started, 1), "sport": sport,
+                "subscribed": len(rows),
+                "ever_priced": sum(r["ever_priced"] for r in rows),
+                "alive": sum(r["alive"] for r in rows),
+                "quiet_threshold_sec": quiet_sec,
+                "alive_by_quartile": quart,
+                "by_league": dict(sorted(by_league.items(),
+                                         key=lambda kv: -kv[1]["subscribed"])),
+                "server_says": self._server_says[-8:]}
 
     def horizon_report(self, sport: str) -> str:
         """Split priced-vs-not by how soon the match starts, and by league.
@@ -223,22 +305,41 @@ async def main() -> int:
     ap.add_argument("--url", default="https://black.betinasia.com")
     ap.add_argument("--secs", type=float, default=120.0)
     ap.add_argument("--sport", default="tennis")
+    ap.add_argument("--log", default="",
+                    help="append periodic JSONL snapshots here. USE THIS for long runs -- otherwise "
+                         "an hour of measurement exists only in the terminal and dies with it.")
+    ap.add_argument("--snap-every", type=float, default=60.0, help="seconds between --log snapshots")
+    ap.add_argument("--quiet-sec", type=float, default=600.0,
+                    help="an event silent longer than this counts as not-alive in the drop report")
     args = ap.parse_args()
 
     obs = BetInAsiaObserver(url=args.url)
     await obs.start()
     print("[BIA-OBS] Leave it alone to measure PURE passive coverage, or browse normally to see what "
           "ordinary navigation adds. Ctrl+C to stop early.\n")
+    logfp = open(args.log, "a", encoding="utf-8") if args.log else None
+    if logfp:
+        print(f"[BIA-OBS] logging snapshots every {args.snap_every:.0f}s -> {args.log}")
     try:
         deadline = time.time() + args.secs
+        next_snap = time.time() + args.snap_every
         while time.time() < deadline:
             await asyncio.sleep(5)
             c = obs.coverage(args.sport)
-            print(f"\r[BIA-OBS] frames={c['frames']:6d}  catalog={c['catalog_matches']:5d} matches  "
-                  f"page-subscribed={c['page_subscribed']:4d}  "
+            d = obs.drop_report(args.sport, args.quiet_sec)
+            print(f"\r[BIA-OBS] frames={c['frames']:6d}  subscribed={d['subscribed']:4d}  "
+                  f"ever-priced={d['ever_priced']:4d}  alive={d['alive']:4d}  "
                   f"{args.sport}: {c['priced']}/{c['catalog']} priced   ", end="", flush=True)
+            if logfp and time.time() >= next_snap:
+                logfp.write(json.dumps(d) + "\n")
+                logfp.flush()
+                next_snap = time.time() + args.snap_every
     except (KeyboardInterrupt, asyncio.CancelledError):
         pass
+    finally:
+        if logfp:
+            logfp.write(json.dumps(obs.drop_report(args.sport, args.quiet_sec)) + "\n")
+            logfp.close()
     print("\n")
     full = obs.coverage()
     print(json.dumps(full, indent=2))
