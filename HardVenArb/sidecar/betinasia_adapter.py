@@ -105,6 +105,31 @@ def make_bet_type(market_key: str, selection: str) -> Optional[str]:
 HOME_SELECTIONS = {"h", "p1"}
 AWAY_SELECTIONS = {"a", "p2"}
 
+# Which moneyline spelling each sport uses. Inverted from MONEYLINE_KEYS + the observed per-sport
+# census, so catalog() can name a game's moneyline BEFORE any price has been seen. A sport missing
+# from this map is skipped rather than guessed -- an invented market key pairs a leg we cannot price.
+MONEYLINE_BY_SPORT = {
+    "tennis":   "tennis_match,all",
+    "basket":   "ml",
+    "mma":      "ml",
+    "boxing":   "ml",
+    "fb":       "wdw",                  # soccer is 3-way
+    "baseball": "time_win,tp,all,ml",
+    "af":       "time_win,tp,all,ml",
+    "ih":       "time_win,tp,all,ml",
+    "cricket":  "time_win,tp,all,ml",
+    "esports":  "time_win,tp,all,ml",
+    "rl":       "time_win,tp,all,ml",
+    "darts":    "time_win,tp,all,ml",
+    "snooker":  "time_win,tp,all,ml",
+    "volley":   "time_win,tp,all,ml",
+    "arf":      "time_win,tp,all,ml",
+}
+
+# Tennis names its sides p1/p2; every other sport observed uses h/a.
+TWO_WAY_SELECTIONS = {"tennis": ("p1", "p2")}
+THREE_WAY_SELECTIONS = ("h", "d", "a")   # soccer 1X2; `d` inferred, not yet observed on a slip
+
 
 def is_moneyline(market_key: str) -> bool:
     return market_key in MONEYLINE_KEYS
@@ -202,30 +227,51 @@ class BetInAsiaAdapter(BookAdapter):
 
     # ── Pairing: catalog ──────────────────────────────────────────────────────
     async def catalog(self) -> list[CatalogEntry]:
+        """Built from the WS `event` frames, NOT from observed prices.
+
+        The feed pushes its whole catalog unprompted on connect -- 87 tennis events with team names,
+        competition and start time, before a single `watch_hcaps` -- whereas prices only exist for
+        what we have already subscribed. Requiring a price here would be circular: the pairer needs
+        the game list in order to decide what is worth subscribing to.
+
+        The moneyline market key is therefore SYNTHESISED from the sport (see MONEYLINE_BY_SPORT)
+        rather than read off an observed book. That is safe because the key is a property of the
+        sport, not of the event -- all three spellings are pinned by tests.
+
+        `/v1/events/{user}/suggested/` is the REST equivalent, but it returns ids only with no team
+        names, so it is used to DRIVE subscriptions (`feed.watch_sport`) rather than to build this.
+        """
         entries: list[CatalogEntry] = []
         for (sport, ekey), ev in self.feed.all_events().items():
-            book = self.feed._books.get((sport, ekey)) or {}
-            comp_id = book.get("comp_id", 0)
-            league = ev.get("competition_name") or ""
-            start = ev.get("start_ts")
+            market_key = MONEYLINE_BY_SPORT.get(sport)
+            if not market_key:
+                continue          # sport whose moneyline spelling we have not pinned -- skip, never guess
+            if ev.get("event_type") == "multirunner":
+                continue          # outrights: not a 2-way market, priced via offers_event
             home, away = _sides(ev)
-            event_name = ev.get("event_name") or (f"{home} vs. {away}" if home and away else ekey)
-            for market_key, (_line, sels) in (book.get("markets") or {}).items():
-                three = is_three_way(market_key)
-                if not is_moneyline(market_key) and not three:
-                    continue        # derivatives are telemetry-only; the pairer does not need them
-                for sel in sels:
-                    entries.append(CatalogEntry(
-                        selection_id=make_selection_id(sport, comp_id, ekey, market_key, sel),
-                        sport=sport,
-                        league=league,
-                        event=event_name,
-                        market=market_key,
-                        selection_name=_selection_name(sel, home, away),
-                        start_time=start,
-                        three_way=three,
-                    ))
+            if not home or not away:
+                continue          # no teams -> nothing a pairer could match against Kalshi
+            comp_id = ev.get("competition_id")
+            if comp_id is None:
+                book = self.feed._books.get((sport, ekey)) or {}
+                comp_id = book.get("comp_id", 0)
+            three = is_three_way(market_key)
+            for sel in (THREE_WAY_SELECTIONS if three else TWO_WAY_SELECTIONS.get(sport, ("h", "a"))):
+                entries.append(CatalogEntry(
+                    selection_id=make_selection_id(sport, comp_id, ekey, market_key, sel),
+                    sport=sport,
+                    league=ev.get("competition_name") or "",
+                    event=ev.get("event_name") or f"{home} vs. {away}",
+                    market=market_key,
+                    selection_name=_selection_name(sel, home, away),
+                    start_time=ev.get("start_ts"),
+                    three_way=three,
+                ))
         return entries
+
+    async def watch_sport(self, sport: str, limit: int = 500) -> int:
+        """Subscribe a whole sport's upcoming events via the REST event list. Telemetry entry point."""
+        return await self.feed.watch_sport(sport, limit=limit)
 
     # ── M1: not built (Phase 3) ───────────────────────────────────────────────
     async def balance(self) -> Optional[float]:

@@ -166,6 +166,52 @@ check("regulation-only variant yields None", make_bet_type("time_win,tp,reg,ml",
 check("every moneyline/3-way key is mappable",
       all(k in BET_TYPE_INFIX for k in ("tennis_match,all", "ml", "time_win,tp,all,ml", "wdw")))
 
+# ── 5c. catalog is built from event frames, not from prices ───────────────────
+print("\n[5c] catalog from event frames (no prices needed)")
+import asyncio
+from betinasia_adapter import BetInAsiaAdapter, MONEYLINE_BY_SPORT
+
+ad = BetInAsiaAdapter()
+ad.feed = feed()
+# Exactly the shape the WS pushes on connect: catalog metadata, zero prices.
+ad.feed.handle_frame([["event", ["tennis", "2026-08-09,10047664,90384"], {
+    "event_type": "normal", "start_ts": "2026-08-09T14:30:00Z", "competition_id": 338,
+    "competition_name": "ATP Masters 1000 Toronto/Montreal", "home": "Learner Tien",
+    "away": "Thiago Agustin Tirante", "event_name": "Learner Tien vs. Thiago Agustin Tirante"}]])
+ad.feed.handle_frame([["event", ["fb", "2026-08-21,1,27"], {
+    "event_type": "normal", "start_ts": "2026-08-21T19:00:00Z", "competition_id": 1,
+    "competition_name": "England Premier League", "home": "Arsenal", "away": "Leeds"}]])
+ad.feed.handle_frame([["event", ["tennis", "2026-08-01,multirunner,100447481"], {
+    "event_type": "multirunner", "start_ts": "2026-08-01T00:00:00Z", "competition_id": 338,
+    "competition_name": "ATP Toronto", "teams": [{"team_id": 1, "name": "X"}]}]])
+
+cat = asyncio.run(ad.catalog())
+by_sport = {}
+for e in cat:
+    by_sport.setdefault(e.sport, []).append(e)
+check("catalog produced entries with NO prices seen", len(cat) > 0, str(len(cat)))
+check("tennis emits 2 legs", len(by_sport.get("tennis", [])) == 2, str(by_sport.get("tennis")))
+check("soccer emits 3 legs (1X2)", len(by_sport.get("fb", [])) == 3)
+check("outright/multirunner skipped",
+      not any("multirunner" in e.selection_id for e in cat))
+tn = sorted(by_sport.get("tennis", []), key=lambda e: e.selection_id)
+check("tennis uses p1/p2 + the right market key",
+      all("tennis_match,all" in e.selection_id for e in tn)
+      and {e.selection_id.rsplit(":", 1)[1] for e in tn} == {"p1", "p2"})
+check("tennis selection names resolve to players",
+      {e.selection_name for e in tn} == {"Learner Tien", "Thiago Agustin Tirante"})
+check("comp_id comes from the event payload",
+      all(":338:" in e.selection_id for e in tn), str([e.selection_id for e in tn]))
+check("soccer flagged three_way", all(e.three_way for e in by_sport.get("fb", [])))
+check("start_time carried through", tn[0].start_time == "2026-08-09T14:30:00Z")
+# An unmapped sport must be skipped, never guessed into a fake market key.
+ad.feed.handle_frame([["event", ["curling", "2026-08-09,5,6"],
+                       {"event_type": "normal", "home": "A", "away": "B", "competition_id": 9}]])
+check("unmapped sport is skipped, not guessed",
+      len(asyncio.run(ad.catalog())) == len(cat))
+check("every mapped sport's key is a known moneyline/3-way",
+      all(is_moneyline(v) or is_three_way(v) for v in MONEYLINE_BY_SPORT.values()))
+
 # ── 6. replay the real recon capture ──────────────────────────────────────────
 print("\n[6] replay of real recon frames")
 files = sorted(glob.glob(os.path.join(os.path.dirname(os.path.abspath(__file__)),

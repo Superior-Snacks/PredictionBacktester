@@ -92,6 +92,8 @@ class BetInAsiaFeed:
         self.customer_data: dict = {}
         self.can_place_bets: bool = False
         self.currency: str = "USD"
+        self.username: str = self._user
+        self._http: Optional[httpx.AsyncClient] = None
 
         # (sport, event_key) -> {"markets": {market_key: (line, {sel: odds})}, "ts": float, "comp_id": int}
         self._books: dict[tuple[str, str], dict] = {}
@@ -121,12 +123,16 @@ class BetInAsiaFeed:
         """POST /web/sessions/ -> session_id. Raises BetInAsiaError on any non-ok reply."""
         if not self._user or not self._pass:
             raise BetInAsiaError("BIA_USERNAME / BIA_PASSWORD are not set in the environment")
-        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
-            r = await c.post(f"{BASE_URL}/web/sessions/",
-                             json={"username": self._user, "password": self._pass})
-            if r.status_code != 200:
-                raise BetInAsiaError(f"login HTTP {r.status_code}")
-            body = r.json()
+        # ONE long-lived client, kept for the whole session. The /v1/* catalog endpoints are authed off
+        # whatever the login response sets (cookie), so a throwaway client per call would drop that and
+        # every catalog read would come back a guest redirect.
+        if self._http is None:
+            self._http = httpx.AsyncClient(timeout=HTTP_TIMEOUT)
+        r = await self._http.post(f"{BASE_URL}/web/sessions/",
+                                  json={"username": self._user, "password": self._pass})
+        if r.status_code != 200:
+            raise BetInAsiaError(f"login HTTP {r.status_code}")
+        body = r.json()
         if body.get("status") != "ok":
             raise BetInAsiaError(f"login rejected: status={body.get('status')!r}")
         data = body.get("data") or {}
@@ -137,20 +143,71 @@ class BetInAsiaFeed:
         self.customer_data  = data.get("customer_data") or {}
         self.can_place_bets = bool(data.get("can_place_bets"))
         self.currency       = (self.customer_data.get("ccy_code") or "USD").upper()
+        self.username       = self._user
         # Deliberately never log the session_id: it is a bearer token for the whole account.
         self._log(f"login OK - currency={self.currency} can_place_bets={self.can_place_bets}")
         return sid
 
     async def validate_session(self) -> bool:
         """GET /web/sessions/{id}/ — cheap liveness probe. False means the session is dead."""
-        if not self.session_id:
+        if not self.session_id or self._http is None:
             return False
         try:
-            async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
-                r = await c.get(f"{BASE_URL}/web/sessions/{self.session_id}/")
+            r = await self._http.get(f"{BASE_URL}/web/sessions/{self.session_id}/")
             return r.status_code == 200 and (r.json() or {}).get("status") == "ok"
         except Exception:
             return False
+
+    # ── REST catalog (the "what leagues / what games" calls) ──────────────────
+    async def _get(self, path: str, params: dict | None = None):
+        """Authed GET returning the `data` payload, or None when unreadable. Never raises: a catalog
+        read that fails must degrade to "we learned nothing", not take the feed down."""
+        if self._http is None:
+            return None
+        try:
+            r = await self._http.get(f"{BASE_URL}{path}", params=params or {})
+            if r.status_code != 200:
+                self._log(f"GET {path} -> HTTP {r.status_code}")
+                return None
+            body = r.json()
+        except Exception as e:
+            self._log(f"GET {path} failed: {type(e).__name__}: {e}")
+            return None
+        if not isinstance(body, dict) or body.get("status") != "ok":
+            return None
+        return body.get("data")
+
+    async def list_competitions(self, sport: str, limit: int = 200) -> list[dict]:
+        """LEAGUES for a sport -> [{id, name, sport, country, val}, ...].
+
+        `val` is this account's current exposure in that competition (it matched the open position
+        exactly in the capture), NOT a ranking — do not read it as importance.
+        """
+        data = await self._get(f"/v1/newcompetitions/{self.username}/suggested/",
+                               {"sports": sport, "sport_limit": limit})
+        return [d for d in (data or []) if isinstance(d, dict)]
+
+    async def list_events(self, sport: str, ts_from: Optional[str] = None,
+                          limit: int = 500) -> list[dict]:
+        """GAMES for a sport -> [{id, competition_id, sport, start_ts}, ...].
+
+        `id` IS the WS event_key and `competition_id` IS the comp_id `watch_hcaps` needs, so this
+        alone is enough to subscribe. It carries NO team names — those come from the WS `event`
+        frames (see `all_events()`), which is why the adapter builds its catalog from those.
+        """
+        if ts_from is None:
+            ts_from = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(time.time() - 3600))
+        data = await self._get(f"/v1/events/{self.username}/suggested/",
+                               {"sports": sport, "event_ts_from": ts_from, "limit": limit})
+        return [d for d in (data or []) if isinstance(d, dict)]
+
+    async def watch_sport(self, sport: str, limit: int = 500) -> int:
+        """Subscribe every upcoming event in a sport. Returns how many were added."""
+        events = await self.list_events(sport, limit=limit)
+        entries = [(e.get("competition_id"), e.get("sport") or sport, e.get("id"))
+                   for e in events if e.get("id") and e.get("competition_id") is not None]
+        await self.watch(entries)
+        return len(entries)
 
     # ── subscriptions ─────────────────────────────────────────────────────────
     async def watch(self, entries: Iterable[tuple[int, str, str]]) -> None:
@@ -281,6 +338,12 @@ class BetInAsiaFeed:
                 pass
         self._ws = None
         self._connected = False
+        if self._http is not None:
+            try:
+                await self._http.aclose()
+            except Exception:
+                pass
+            self._http = None
 
     async def _run(self) -> None:
         """Connect, resubscribe everything, pump frames; reconnect forever until stop()."""
