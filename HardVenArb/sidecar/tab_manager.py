@@ -82,6 +82,9 @@ class LeagueTabManager:
         # fact, not per-league. A league counts as board-covered only when every one of its HOT games is
         # rendered; otherwise the uncovered ones need a tab. Refreshed once per tick into _board_mids.
         self._board_dom_fn = board_dom_fn
+        # NOTE: never populated today — no per-matchup board-render feed exists yet, so this stays
+        # empty and contributes nothing to coverage. Kept because the docstring above describes the
+        # intended source; treat a non-empty value as an upgrade, not as something to rely on.
         self._board_mids: set = set()
         self._board_scanned: set = set()      # leagues enumerated by the periodic scroll scan
         self._board_dom: set = set()          # leagues judged board-covered this tick
@@ -248,10 +251,33 @@ class LeagueTabManager:
         """Leagues already fed → NOT gaps (so we never open a dedicated tab for them): the reader's recent pushes
         (board / dedicated tabs / rove) UNION the FEATURED-BOARD leagues (sport-level topics, generous TTL so a
         briefly-quiet featured league isn't redundantly re-tabbed)."""
-        cov = {k.split(":")[0] for k in self._live_mids(self._cover_ttl)}
+        now = time.time()
+        # Delivered set, PER MATCHUP. `_live_mids` yields 'lid:mid'; `_board_mids` is bare matchup ids.
+        live_keys = set(self._live_mids(self._cover_ttl))
+        delivered = {k.split(":", 1)[1] for k in live_keys if ":" in k} | set(self._board_mids)
+        push_lids = {k.split(":")[0] for k in live_keys}
         if self._board_lids is not None:
-            cov |= self._board_lids()
-        cov |= self._board_dom          # leagues the board is SHOWING (stable prices push nothing)
+            push_lids |= self._board_lids()
+
+        # A league is covered only when EVERY hot game in it is being delivered. Collapsing to
+        # league level (`{k.split(':')[0] for k in live_mids}`) meant ONE matchup pushing marked the
+        # whole league covered, so its other games never got a tab and silently never priced:
+        # measured 2026-08-10, league 293610 delivered JOHROT and SURKIM while RAIVAN — paired, in
+        # play, seeded — returned nothing from /odds all session. The docstring already stated the
+        # right rule ("covered only when every one of its HOT games is rendered"); only these two
+        # sources were still league-wide. The board is VIRTUALISED (~13 of 55 rows), so per-league
+        # coverage was never a safe inference from it.
+        candidates = set(self._league_games) | push_lids | self._board_dom
+        cov = set()
+        for lid in candidates:
+            hot = self._hot_mids(lid, now)
+            if not hot:
+                # Nothing near-term to cover. Keep the league out of the gap queue so a tab slot is
+                # not spent on a league whose games are all done or days away.
+                cov.add(lid)
+                continue
+            if all(m in delivered for m in hot):
+                cov.add(lid)
         return cov
 
     async def request_verify(self, lid: str) -> str:
@@ -452,12 +478,21 @@ class LeagueTabManager:
                 self._tab_board_since.pop(lid, None)
                 self._tab_alive.pop(lid, None)
                 print(f"[TAB-MGR] closed tab for de-paired league {lid} (tabs={len(self._tabs)})")
+        live_keys_now = set(self._live_mids(self._cover_ttl))
         # 1b. RECLAIM tabs the featured board has taken over: a league we opened a tab for (because it WASN'T on
         # the board) that later appears there and STAYS ≥ board_reclaim_sec is now redundant — close it so the
         # slot covers a still-uncovered league instead. Sustained (timer) so a transient board_lids blip from the
         # primary page glancing at another sport doesn't churn tabs. Its coverage continues via the board.
         for lid in list(self._tabs):
-            if lid in board:
+            # Board membership is NOT sufficient to reclaim. The board is virtualised, so a league can
+            # be listed on it while some of its matchups never render — and gap selection now judges
+            # coverage per matchup. Testing only `lid in board` made the two disagree and fight:
+            # observed 2026-08-10, league 293612 was reclaimed as "redundant" and re-opened as a gap
+            # ~15s later, in a loop, because the board carried the league but not all of its hot games.
+            # Keep the tab while ANY hot game is still dark; the slot is doing real work.
+            hot = self._hot_mids(lid, now)
+            dark = {m for m in hot if f"{lid}:{m}" not in live_keys_now}
+            if lid in board and not dark:
                 self._tab_board_since.setdefault(lid, now)
                 if now - self._tab_board_since[lid] >= self._board_reclaim_sec:
                     await self._session.close_tab(self._tabs.pop(lid))
