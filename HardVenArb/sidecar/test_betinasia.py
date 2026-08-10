@@ -136,10 +136,15 @@ check("time_win,tp,reg,ml excluded (regulation != final)", not is_moneyline("tim
 # ── 5. selection ids ──────────────────────────────────────────────────────────
 print("\n[5] selection id round-trip")
 sid = make_selection_id("tennis", 338, "2026-08-05,73551,87843", "tennis_match,all", "p1")
-check("id shape", sid == "tennis:338:2026-08-05,73551,87843:tennis_match,all:p1")
+# THE TRANSPORT CONSTRAINT: /odds is `?selections=a,b,c`, so an id containing a comma is split into
+# fragments before the adapter sees it and every lookup misses -- with a healthy feed and a full
+# catalog, which is why it read as "no prices" rather than as a bug.
+check("id carries NO comma (the /odds list separator)", "," not in sid, sid)
+check("id shape", sid == "tennis:338:2026-08-05~73551~87843:tennis_match~all:p1", sid)
 check("round-trips", parse_selection_id(sid) ==
       ("tennis", "338", "2026-08-05,73551,87843", "tennis_match,all", "p1"))
-check("commas in event+market keys survive", parse_selection_id(sid)[2].count(",") == 2)
+check("commas in event+market keys survive the round-trip",
+      parse_selection_id(sid)[2].count(",") == 2 and parse_selection_id(sid)[3] == "tennis_match,all")
 check("multirunner key round-trips",
       parse_selection_id(make_selection_id("fb", 209, "2026-01-28,multirunner,100340373", "ml", "h"))
       [2] == "2026-01-28,multirunner,100340373")
@@ -196,7 +201,7 @@ check("outright/multirunner skipped",
       not any("multirunner" in e.selection_id for e in cat))
 tn = sorted(by_sport.get("tennis", []), key=lambda e: e.selection_id)
 check("tennis uses p1/p2 + the right market key",
-      all("tennis_match,all" in e.selection_id for e in tn)
+      all("tennis_match" + "~" + "all" in e.selection_id for e in tn)
       and {e.selection_id.rsplit(":", 1)[1] for e in tn} == {"p1", "p2"})
 check("tennis selection names resolve to players",
       {e.selection_name for e in tn} == {"Learner Tien", "Thiago Agustin Tirante"})

@@ -39,7 +39,7 @@ sys.stdout.reconfigure(encoding="utf-8")
 
 from pair_auto import fetch_catalog, price_validate, fuzz
 from env_util import atomic_write_json
-from betinasia_adapter import MONEYLINE_BY_SPORT, is_three_way
+from betinasia_adapter import MONEYLINE_BY_SPORT, is_three_way, parse_selection_id
 
 CACHE_NAME = "bia_player_ids.json"
 
@@ -148,8 +148,10 @@ def _name_score(a: str, b: str) -> float:
 
 # ── selection ids ─────────────────────────────────────────────────────────────
 def _parse_sid(sid: str):
-    p = sid.split(":")
-    return tuple(p) if len(p) == 5 else None
+    """Delegate to the adapter's parser. It DECODES the comma-substitution, so the market key compared
+    below is the real `tennis_match,all` and not the wire form -- splitting here by hand silently
+    stopped matching the moment ids became comma-free."""
+    return parse_selection_id(sid)
 
 
 def _event_players(event_key: str) -> tuple[str, str]:

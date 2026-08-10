@@ -142,6 +142,14 @@ def is_three_way(market_key: str) -> bool:
     return market_key in THREE_WAY_KEYS
 
 
+# BetInAsia's own keys are comma-separated ("2026-08-09,10047664,90384", "tennis_match,all") and the
+# sidecar's /odds transport is `?selections=a,b,c` -- ALSO comma-separated. So a raw id is shredded
+# into five useless fragments before the adapter ever sees it, and every lookup misses: the feed is
+# healthy, the catalog is full, and odds() returns {} forever. Encode commas on the way out and decode
+# on the way in so the id is a single opaque token to everything in between.
+_COMMA_SUB = "~"          # not present in any sport, event key, market key or selection observed
+
+
 def make_selection_id(sport: str, comp_id: int | str, event_key: str,
                       market_key: str, selection: str) -> str:
     """`{sport}:{comp_id}:{event_key}:{market_key}:{selection}`
@@ -151,14 +159,19 @@ def make_selection_id(sport: str, comp_id: int | str, event_key: str,
     purpose -- watch_hcaps needs it to subscribe, so odds() stays self-sufficient without a catalog
     round-trip, mirroring how the Pinnacle ids carry their league id for rove-nav.
     """
-    return f"{sport}:{comp_id}:{event_key}:{market_key}:{selection}"
+    return (f"{sport}:{comp_id}:{event_key.replace(',', _COMMA_SUB)}"
+            f":{market_key.replace(',', _COMMA_SUB)}:{selection}")
 
 
 def parse_selection_id(sid: str) -> Optional[tuple[str, str, str, str, str]]:
+    """Inverse of make_selection_id: returns the REAL (comma-bearing) event and market keys."""
     parts = sid.split(":")
     if len(parts) != 5:
         return None
-    return parts[0], parts[1], parts[2], parts[3], parts[4]
+    return (parts[0], parts[1],
+            parts[2].replace(_COMMA_SUB, ","),
+            parts[3].replace(_COMMA_SUB, ","),
+            parts[4])
 
 
 class _IdentityFx:
@@ -429,6 +442,20 @@ class BetInAsiaAdapter(BookAdapter):
                 s["page_url"] = self.observer._page.url if self.observer._page else None
             except Exception:
                 s["page_url"] = None
+            # A SAMPLE of what is actually priced. `priced` alone cannot tell you that odds() is
+            # looking up a market_key the feed never sends -- which reads as "no prices" while the
+            # cache is full. Show sport/event/market so the two sides can be compared directly.
+            try:
+                sample = []
+                for (sp, ek), b in list(self.feed._books.items()):
+                    mk = list((b or {}).get("markets") or {})
+                    if mk:
+                        sample.append({"sport": sp, "event": ek, "markets": mk[:6]})
+                    if len(sample) >= 5:
+                        break
+                s["priced_sample"] = sample
+            except Exception:
+                pass
             if s.get("events") and not s.get("priced"):
                 s["WARNING"] = ("catalog present but ZERO prices - the page is not logged in or never "
                                 "subscribed; odds() will return {} for every selection")
