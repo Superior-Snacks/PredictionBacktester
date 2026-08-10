@@ -542,6 +542,11 @@ class PinnacleAdapter(BookAdapter):
         # Operator-pinned LOCAL hours always included in the plan (e.g. "09:00-12:00" or two ranges
         # comma-separated) — "I find more arbs in the morning". Immune to min_games/max_blocks.
         self._lifecycle_pin_hours = os.environ.get("PINNACLE_PIN_HOURS", "").strip()
+        # ALLOWED HOURS ("only run 05:00-08:00,10:00-12:00"). PINNACLE_ONLY_HOURS is the canonical name —
+        # bare ONLY_HOURS is accepted because the two bots SHARE one .env and it is the obvious thing to
+        # type, but the prefixed form should win where both exist.
+        self._lifecycle_only_hours = (os.environ.get("PINNACLE_ONLY_HOURS")
+                                      or os.environ.get("ONLY_HOURS") or "").strip()
         self._lifecycle = None
         self._lifecycle_task = None
         self._control = None          # ControlState (operator commands); only when the lifecycle runs
@@ -646,6 +651,7 @@ class PinnacleAdapter(BookAdapter):
                                                         paired_only=self._lifecycle_paired_only,
                                                         jitter_min=self._lifecycle_jitter,
                                                         pin_hours=self._lifecycle_pin_hours,
+                                                        only_hours=self._lifecycle_only_hours,
                                                         min_downtime_min=self._lifecycle_min_downtime,
                                                         max_daily_hours=self._lifecycle_max_daily_hours,
                                                         fill_to_cap=self._lifecycle_fill_to_cap,
@@ -679,6 +685,18 @@ class PinnacleAdapter(BookAdapter):
                     print(f"[PINNACLE] session source = BROWSER + LIFECYCLE (sports={self._lifecycle_sports}, "
                           f"{mode}, lead {self._lifecycle_lead}m) — the browser opens/closes on the game "
                           "schedule; dark between sessions.")
+                    # Say out loud whether the hours are RESTRICTED, and whether the value actually parsed.
+                    # A silently-dropped time spec is how PINNACLE_PIN_HOURS went unnoticed for three days.
+                    if self._lifecycle_only_hours:
+                        got = self._lifecycle._only_ranges
+                        if got:
+                            spec = ",".join(f"{h1:02d}:{m1:02d}-{h2:02d}:{m2:02d}" for h1, m1, h2, m2 in got)
+                            print(f"[PINNACLE] ONLY-HOURS ACTIVE [{spec}] local — the bot will NEVER be up "
+                                  f"outside these ranges. Applied after every other rule; pins are not exempt.")
+                        else:
+                            print(f"[PINNACLE] WARNING ONLY_HOURS={self._lifecycle_only_hours!r} parsed to "
+                                  f"NOTHING — the restriction is OFF and the bot will run its normal schedule. "
+                                  f"Want 'HH:MM-HH:MM[,HH:MM-HH:MM]' in LOCAL time.")
                     # TAB MANAGER UNDER LIFECYCLE. This used to be refused ("the browser cycles per block"),
                     # which quietly broke a combination that is now the DEFAULT: without a tab manager there is
                     # no roving tab, so verify_now() answers "no tab manager (rove disabled)" and, with

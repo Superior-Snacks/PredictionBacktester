@@ -331,6 +331,67 @@ def carve_out_pins(computed, pins, min_window_min: float = 20.0):
     return sorted(out + [tuple(s) for s in spans], key=lambda w: w[0])
 
 
+def allowed_intervals(ranges: list[tuple[int, int, int, int]], now: datetime | None = None,
+                      days: int = 3) -> list[tuple[datetime, datetime]]:
+    """Local HH:MM-HH:MM ranges materialised as UTC-naive intervals, from YESTERDAY through `days` ahead.
+
+    Starts a day EARLY on purpose: an overnight range ('22:00-02:00') that opened yesterday is still running
+    now, and generating only from today would clip the plan against an interval that had not started yet."""
+    now = now or _utcnow()
+    tz = datetime.now(timezone.utc).astimezone().tzinfo
+    today = _local(now).date()
+    out = []
+    for h1, m1, h2, m2 in ranges:
+        for d in range(-1, days):
+            day = today + timedelta(days=d)
+            o_loc = datetime(day.year, day.month, day.day, h1, m1, tzinfo=tz)
+            c_loc = datetime(day.year, day.month, day.day, h2, m2, tzinfo=tz)
+            if c_loc <= o_loc:
+                c_loc += timedelta(days=1)              # overnight range crosses midnight
+            out.append((o_loc.astimezone(timezone.utc).replace(tzinfo=None),
+                        c_loc.astimezone(timezone.utc).replace(tzinfo=None)))
+    return sorted(out)
+
+
+def clip_to_allowed(windows, ranges: list[tuple[int, int, int, int]], now: datetime | None = None,
+                    min_window_min: float = 20.0, days: int = 3):
+    """Restrict a plan to operator ALLOWED hours — the INVERSE of a pin, and the only rule here that can
+    say "never be up then".
+
+    Everything else in this module ADDS or CAPS: `pinned_windows` adds hours, `merge_windows` unions them,
+    `fill_daily_hours` spends slack, and the caps bound DURATION ("at most 10h/day", "3h per session") with
+    no opinion about WHICH hours. So "only run 05:00-08:00" was previously unexpressible, and reaching for
+    PINNACLE_PIN_HOURS did the opposite of what the name suggests to an operator.
+
+    Intersects each planned window with the allowed set; fragments shorter than `min_window_min` are dropped
+    (not worth a login), and adjacent fragments are re-merged so contiguous ranges like
+    '10:00-12:00,12:00-15:00' behave as one 10:00-15:00 block rather than two windows with a phantom gap.
+
+    PINS ARE NOT EXEMPT. Every other bound protects them because a pin is an explicit operator instruction —
+    but so is this, and it is the stricter one. "Only these hours" that a pin could escape would be a lie.
+
+    An EMPTY `ranges` disables the restriction entirely (returns the plan untouched), so an unset or
+    unparseable env can never silently ground the bot.
+    """
+    if not ranges or not windows:
+        return list(windows)
+    allowed = allowed_intervals(ranges, now=now, days=days)
+    floor = timedelta(minutes=min_window_min)
+    out = []
+    for o, c, g in windows:
+        first = True
+        for ao, ac in allowed:
+            s, e = max(o, ao), min(c, ac)
+            if e - s < floor:
+                continue
+            # Games ride the FIRST surviving fragment only. A split would otherwise report the window's whole
+            # game count on each piece; the lifecycle re-attributes afterwards, but inflating a count that
+            # feeds "is this window worth opening" is the wrong direction to be wrong in.
+            out.append((s, e, g if first else 0))
+            first = False
+    return merge_windows(out, [])
+
+
 def cap_window_length(windows, max_hours: float, protected=None, min_window_min: float = 20.0):
     """Hard ceiling on ANY SINGLE window — the backstop `max_window_hours` never was.
 

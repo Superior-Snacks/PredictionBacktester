@@ -229,6 +229,57 @@ def main() -> int:
     r.append(check("a PIN is exempt from the cap",
                    sched.cap_window_length(pin_n, 4.0, protected=pin_n), pin_n))
 
+    # ── clip_to_allowed (ONLY_HOURS) ──────────────────────────────────────────
+    # Every other rule here ADDS or CAPS DURATION; this is the only one that can say "never be up then".
+    # The bug it answers: an operator set PINNACLE_PIN_HOURS expecting a restriction and got the opposite —
+    # pins are additive, so the bot ran 20:14->00:00 anyway.
+    ONLY = sched.parse_pin_hours("05:00-08:00,10:00-12:00,14:00-17:00")
+    NOW = datetime(2026, 8, 7, 4, 0)
+    r.append(check("spec parses to 3 ranges", len(ONLY), 3))
+
+    # the real window off the Discord status line — entirely outside every allowed range
+    out = sched.clip_to_allowed([w(20, 14, 23, 59, games=8)], ONLY, now=NOW)
+    r.append(check("window fully outside -> dropped", out, []))
+
+    out = sched.clip_to_allowed([w(4, 0, 6, 0, games=3)], ONLY, now=NOW)
+    r.append(check("head outside is trimmed to the range open", out[0][0].strftime("%H:%M"), "05:00"))
+    r.append(check("  ...close untouched", out[0][1].strftime("%H:%M"), "06:00"))
+
+    out = sched.clip_to_allowed([w(6, 0, 16, 0, games=9)], ONLY, now=NOW)
+    r.append(check("a long window splits across the gaps", len(out), 3))
+    r.append(check("  ...pieces land inside the ranges",
+                   [(o.strftime("%H:%M"), c.strftime("%H:%M")) for o, c, _ in out],
+                   [("06:00", "08:00"), ("10:00", "12:00"), ("14:00", "16:00")]))
+    # A split must not report the parent's game count on every piece — that inflates "is this worth opening".
+    r.append(check("  ...games are not duplicated", sum(g for *_, g in out), 9))
+
+    # Contiguous ranges must behave as ONE block, not two windows with a phantom gap between them.
+    CONTIG = sched.parse_pin_hours("10:00-12:00,12:00-15:00")
+    out = sched.clip_to_allowed([w(9, 0, 16, 0, games=4)], CONTIG, now=NOW)
+    r.append(check("contiguous ranges re-merge", len(out), 1))
+    r.append(check("  ...spanning both", (out[0][0].strftime("%H:%M"), out[0][1].strftime("%H:%M")),
+                   ("10:00", "15:00")))
+
+    out = sched.clip_to_allowed([w(7, 50, 8, 5, games=1)], ONLY, now=NOW)
+    r.append(check("sliver below the 20m floor is dropped", out, []))
+
+    inside = [w(14, 30, 16, 0, games=4)]
+    r.append(check("window fully inside is untouched", sched.clip_to_allowed(inside, ONLY, now=NOW), inside))
+
+    # Fail-open: an unset or fully-invalid spec must never ground the bot.
+    outside = [w(20, 0, 23, 0, games=5)]
+    r.append(check("empty ranges = unrestricted", sched.clip_to_allowed(outside, [], now=NOW), outside))
+    r.append(check("garbage spec parses to nothing", sched.parse_pin_hours("schedule"), []))
+    r.append(check("  ...and therefore does not restrict",
+                   sched.clip_to_allowed(outside, sched.parse_pin_hours("schedule"), now=NOW), outside))
+
+    # Overnight range: must be generated from YESTERDAY too, or a currently-running span is clipped away.
+    NIGHT = sched.parse_pin_hours("22:00-02:00")
+    out = sched.clip_to_allowed([(datetime(2026, 8, 7, 0, 30), datetime(2026, 8, 7, 3, 0), 2)],
+                                NIGHT, now=datetime(2026, 8, 7, 1, 0))
+    r.append(check("overnight range from yesterday still applies", len(out), 1))
+    r.append(check("  ...clipped at its 02:00 close", out[0][1].strftime("%H:%M"), "02:00"))
+
     n = sum(r)
     print(f"\n{n}/{len(r)} passed")
     return 0 if n == len(r) else 1

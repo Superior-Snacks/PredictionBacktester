@@ -36,6 +36,7 @@ class PinnacleLifecycle:
                  min_games: int = 1, max_blocks: int | None = 4, session_hours: float = 0.0,
                  manual_plan: str | None = None, today_only: bool = True,
                  paired_only: bool = True, jitter_min: float = 0.0, pin_hours: str = "",
+                 only_hours: str = "",
                  min_downtime_min: float = 0.0, max_daily_hours: float = 0.0,
                  fill_to_cap: bool = False, on_banking: Callable[[bool], None] | None = None):
         self._browser = browser
@@ -84,6 +85,17 @@ class PinnacleLifecycle:
         # plan — merged after block selection so min_games/max_blocks can never drop them, and exempt from the
         # slate entirely (a pin watches LINES of later games; pre-live arbs surface hours before start).
         self._pin_ranges = sched.parse_pin_hours(pin_hours)
+        # OPERATOR ALLOWED HOURS — the inverse of a pin, and the only rule that can say "never be up then".
+        # Applied LAST, after every other bound, so nothing (pins, fill_to_cap, jitter) can escape it.
+        # Empty = unrestricted, so an unset or fully-invalid value can never silently ground the bot.
+        self._only_ranges = sched.parse_pin_hours(only_hours)
+        # Shortest window worth a login — a clipped fragment below this is dropped rather than opening the
+        # browser for a few minutes. Matches schedule.py's own default; env-tunable because a tight
+        # ONLY_HOURS set makes the fragment size matter.
+        try:
+            self._min_window_min = float(os.environ.get("PINNACLE_MIN_WINDOW_MIN", "20") or 20)
+        except ValueError:
+            self._min_window_min = 20.0
         # FORCED REPLAN HOURS (local). The plan is built from whatever the slate holds at compute time, and
         # a sportsbook's day fills in gradually — a plan made at 06:00 is built on a fraction of the games
         # that will exist by 08:00. The hourly recompute eventually catches up, but this pins a deliberate
@@ -221,9 +233,35 @@ class PinnacleLifecycle:
                   f"[{days}] (min downtime {self._min_downtime_min:g}m, daily cap {self._max_daily_hours:g}h/day, "
                   f"fill={'on' if self._fill_to_cap else 'off'}, "
                   f"{burned:.1f}h already burned today).")
-        if not new and self._windows:
+        # ── ALLOWED HOURS, applied dead last ──────────────────────────────────────────────────────────────
+        # After the caps AND after fill_to_cap, because filling ADDS time and would otherwise reintroduce
+        # hours the operator excluded. Clipping only shrinks or splits, so it cannot break the guarantees
+        # made above: downtime between windows can only grow, and the daily total can only fall.
+        clipped_away = False
+        if self._only_ranges:
+            before = new
+            new = sched.clip_to_allowed(new, self._only_ranges, now=sched._utcnow(),
+                                        min_window_min=self._min_window_min)
+            kept = sum((c - o for o, c, _ in new), timedelta())
+            had = sum((c - o for o, c, _ in before), timedelta())
+            clipped_away = bool(before) and not new
+            if kept != had:
+                mode += " + only-hours"
+                spec = ",".join(f"{h1:02d}:{m1:02d}-{h2:02d}:{m2:02d}"
+                                for h1, m1, h2, m2 in self._only_ranges)
+                print(f"[PINNACLE LIFECYCLE] ONLY-HOURS [{spec}] local trimmed the plan "
+                      f"{had.total_seconds() / 3600:.1f}h -> {kept.total_seconds() / 3600:.1f}h "
+                      f"({len(before)} window(s) -> {len(new)}). Pins are NOT exempt from this.")
+        # "0 usable windows" normally means a transient empty slate, so the last plan is kept rather than
+        # standing the browser down on a blip. An ONLY-HOURS clip is the opposite: a deliberate, stable
+        # "not now". Keeping the old windows there would leave the bot up through excluded hours — exactly
+        # what the setting exists to prevent — so that case falls through to an explicit empty plan.
+        if not new and self._windows and not clipped_away:
             print("[PINNACLE LIFECYCLE] slate returned 0 usable windows; keeping last windows (transient?)")
             return
+        if clipped_away:
+            print("[PINNACLE LIFECYCLE] ONLY-HOURS excludes every planned window — standing down until the "
+                  "next allowed range.")
         self._windows = new
         self._win_ts = sched._utcnow().timestamp()
         # Attribute games to windows AFTER merge+jitter, so "what this window is for" reflects the real
