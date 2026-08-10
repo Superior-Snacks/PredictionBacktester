@@ -305,6 +305,31 @@ public class CrossArbExecutor
         return 0m;
     }
 
+    // BetInAsia moneyline market keys, comma-encoded as `~` because the sidecar's /odds transport is a
+    // comma-separated list. Mirrors MONEYLINE_BY_SPORT in betinasia_adapter.py.
+    private static readonly HashSet<string> BiaMoneylineMarkets = new(StringComparer.Ordinal)
+    { "tennis_match~all", "ml", "time_win~tp~all~ml", "wdw" };
+
+    /// <summary>Can the book PLACE this selection as a straight moneyline?
+    ///
+    /// Venue-shaped, because the two books encode a selection completely differently:
+    ///   Pinnacle   leagueId:matchupId:side                     -> 3 segments; a derivative has 5
+    ///   BetInAsia  sport:compId:eventKey:marketKey:selection    -> ALWAYS 5, moneyline or not
+    /// The old test was `Split(':').Length != 3`, which is right for Pinnacle and rejects EVERY
+    /// BetInAsia selection including plain moneylines — so a second venue could detect arbs all day
+    /// and never fire one, with a log line confidently calling them derivatives.
+    ///
+    /// Unknown shapes fail CLOSED: the cost of wrongly allowing one is a Kalshi leg that fills and is
+    /// immediately reversed (~2x fees, burnt window), while wrongly blocking one only skips telemetry.
+    /// </summary>
+    internal static bool IsStraightMoneyline(string token)
+    {
+        string[] p = token.Split(':');
+        if (p.Length == 3) return true;                                   // Pinnacle moneyline
+        if (p.Length == 5) return BiaMoneylineMarkets.Contains(p[3]);     // BetInAsia: market segment decides
+        return false;
+    }
+
     private static void Emit(List<string>? log, string msg)
     {
         Console.WriteLine(msg);
@@ -884,7 +909,7 @@ public class CrossArbExecutor
         // fees and a burnt window, every time. Derivatives stay in TELEMETRY (the tape is still useful) — only
         // execution is gated. Set HARDVEN_MONEYLINE_ONLY=0 once the book can place derivatives (e.g. an API
         // adapter, where a spread is just another selection id).
-        if (_moneylineOnly && hardvenToken.Split(':').Length != 3)
+        if (_moneylineOnly && !IsStraightMoneyline(hardvenToken))
         {
             Console.WriteLine($"[EXEC SKIP] {pair.Label}: DERIVATIVE leg ({hardvenToken}) — the UI book places " +
                               "straight moneylines only (HARDVEN_MONEYLINE_ONLY=0 to allow)");
