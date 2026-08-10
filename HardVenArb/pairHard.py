@@ -150,11 +150,16 @@ def main() -> None:
     ap.add_argument("--classic", action="store_true",
                     help="use the broad built-in CLASSIC_SERIES allowlist (every sport) instead of the ACTIVE "
                          "sports from sports.py / HARDVEN_SPORTS")
+    ap.add_argument("--out", default="",
+                    help="pairs file to write (default cross_pairs.json). A SECOND venue must scaffold into "
+                         "its OWN file — token formats are venue-specific and one file is read by one book, "
+                         "so sharing would have each pairer destroy the other's work.")
     ap.add_argument("--fresh", action="store_true",
                     help="force a full rebuild with BLANK Pinnacle tokens (default: MERGE — carry over already-"
                          "filled hardven_*_token for tickers that are still open, so an intraday re-pair can't drop "
                          "a working pairing whose live moneyline is momentarily suspended at catalog time)")
     args = ap.parse_args()
+    out_path = Path(args.out) if args.out else OUT
 
     custom = [s.strip().upper() for s in args.series.split(",") if s.strip()]
     # default scope = the ACTIVE sports' moneyline series (unified config); --classic = the broad built-in set
@@ -210,9 +215,12 @@ def main() -> None:
     # momentarily suspended on Pinnacle's board at catalog time. --fresh forces the old blank rebuild. Only the
     # two hardven_* tokens + the three_way/fuzzy tags are carried; all Kalshi fields stay FRESH from this fetch.
     carried = 0
-    if not args.fresh and OUT.exists():
+    # MERGE MUST READ THE FILE IT IS ABOUT TO WRITE. Reading the hardcoded OUT while writing --out
+    # would carry the OTHER venue's tokens into this file — Pinnacle tennis ids landing in the
+    # BetInAsia soccer pairs, which every downstream consumer would then treat as valid.
+    if not args.fresh and out_path.exists():
         try:
-            prev = {e.get("kalshi_ticker"): e for e in json.loads(OUT.read_text(encoding="utf-8"))}
+            prev = {e.get("kalshi_ticker"): e for e in json.loads(out_path.read_text(encoding="utf-8"))}
         except (ValueError, OSError):
             prev = {}
         for e in entries:
@@ -227,12 +235,12 @@ def main() -> None:
 
     entries.sort(key=lambda e: (e["settlement_date"], e["kalshi_ticker"]))
 
-    if OUT.exists():
-        shutil.copy2(OUT, OUT.with_suffix(".json.bak"))   # COPY (not move) → OUT stays present during the backup
-    atomic_write_json(OUT, entries)                        # atomic overwrite → the C# hot-reload never reads a partial file
+    if out_path.exists():
+        shutil.copy2(out_path, out_path.with_suffix(".json.bak"))   # COPY (not move) → OUT stays present during the backup
+    atomic_write_json(out_path, entries)                        # atomic overwrite → the C# hot-reload never reads a partial file
 
     mode = "fresh rebuild" if args.fresh else f"merged ({carried} filled pair(s) carried over)"
-    print(f"[OK] wrote {len(entries)} classic sports-game markets to {OUT.name} — {mode} "
+    print(f"[OK] wrote {len(entries)} classic sports-game markets to {out_path.name} — {mode} "
           f"(Kalshi side filled; Pinnacle tokens filled by pair_pinnacle).")
     if kept_series:
         print("     kept series: " + ", ".join(f"{k}={v}" for k, v in sorted(kept_series.items(), key=lambda x: -x[1])))

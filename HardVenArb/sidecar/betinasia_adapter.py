@@ -60,7 +60,11 @@ default. Replace it the moment Phase 0 captures a real limit from a bet-slip/quo
 ASSUMED_MAX_STAKE = float(os.environ.get("BIA_ASSUMED_MAX_STAKE", "100.0"))
 
 # Sport page to deep-link on startup. NOT "/" -- that subscribes only the featured tournament.
-START_URL = os.environ.get("BIA_START_URL", "https://black.betinasia.com/sportsbook/tennis")
+# Default sport page. Football is the venue's biggest book by far (825 matches vs 75 tennis) and
+# Kalshi carries ~342 soccer ties across 18 series, so this is where the pair count comes from.
+# NOTE: one page load covers tennis completely (75/75) but only ~21% of football (161 of 754) --
+# soccer needs a pass through the league pages, and subscriptions accumulate permanently once made.
+START_URL = os.environ.get("BIA_START_URL", "https://black.betinasia.com/sportsbook/football")
 
 MONEYLINE_KEYS = {"tennis_match,all", "ml", "time_win,tp,all,ml"}
 THREE_WAY_KEYS = {"wdw", "time_win,tp,reg,wdw", "time_win,tp,all,wdw"}
@@ -285,17 +289,29 @@ class BetInAsiaAdapter(BookAdapter):
         from pairing_scheduler import PairingScheduler
 
         here = Path(__file__).resolve().parent
-        sport = os.environ.get("BIA_PAIR_SPORT", "tennis")
-        seeds = os.environ.get("BIA_SEED_FILE", str(here.parent / "cross_pairs.json"))
+        sport = os.environ.get("BIA_PAIR_SPORT", "fb")
         pairs = os.environ.get("BIA_PAIRS_FILE", str(here.parent / "cross_pairs_bia.json"))
         interval = int(os.environ.get("BIA_PAIR_INTERVAL_MIN", "90"))
-        steps = [("betinasia fill", ["pair_betinasia.py", "--sport", sport, "--pairs", pairs,
-                                     "--sync-seeds", seeds, "--write"], here)]
+        seeds = os.environ.get("BIA_SEED_FILE", "")
+
+        if seeds:
+            # Legacy path: borrow another venue's already-scaffolded Kalshi side. Only correct while both
+            # books cover the SAME sport.
+            steps = [("betinasia fill", ["pair_betinasia.py", "--sport", sport, "--pairs", pairs,
+                                         "--sync-seeds", seeds, "--write"], here)]
+        else:
+            # Scaffold our OWN Kalshi side. Pinnacle's cross_pairs.json is scoped by HARDVEN_SPORTS
+            # (tennis), so once the two books run different sports there is no soccer in it to sync from
+            # — this venue has to fetch its own. `--out` keeps it in a separate file: token formats are
+            # venue-specific and a pairs file is read by exactly one book.
+            steps = [("scaffold (Kalshi)", ["pairHard.py", "--out", pairs], here.parent),
+                     ("betinasia fill", ["pair_betinasia.py", "--sport", sport, "--pairs", pairs,
+                                         "--write"], here)]
         sched = PairingScheduler(initial_delay=float(os.environ.get("BIA_PAIR_STARTUP_DELAY", "30")),
                                  interval_min=interval, steps=steps)
         self._pairing_task = asyncio.create_task(sched.run())
-        print(f"[BIA] auto-pair ON: {sport} every {interval} min "
-              f"(seeds <- {Path(seeds).name}, writes {Path(pairs).name})", flush=True)
+        src = f"seeds <- {Path(seeds).name}" if seeds else "scaffolds its own Kalshi side"
+        print(f"[BIA] auto-pair ON: {sport} every {interval} min ({src}, writes {Path(pairs).name})", flush=True)
 
     # ── M0: odds ──────────────────────────────────────────────────────────────
     async def odds(self, selection_ids: list[str]) -> dict[str, Selection]:

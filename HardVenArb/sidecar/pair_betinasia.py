@@ -43,6 +43,22 @@ from betinasia_adapter import MONEYLINE_BY_SPORT, is_three_way, parse_selection_
 
 CACHE_NAME = "bia_player_ids.json"
 
+# 3-WAY MARKETS. Soccer's `wdw` carries THREE selections and the venue orders them h, d, a — so the
+# draw sits BETWEEN the two teams. Taking names[0]/names[1] therefore scored the away team against the
+# literal string 'd' and matched almost nothing (42 of 540 on the first soccer dry-run). Kalshi splits
+# the same event into three markets whose outcome is a team name or "Tie"/"Draw".
+DRAW_TOKENS = {"d", "draw", "x"}
+DRAW_WORDS = {"tie", "draw"}
+
+
+def _is_draw_outcome(name: str) -> bool:
+    return _norm(name) in DRAW_WORDS
+
+
+def _team_names(game: dict) -> list[str]:
+    """The two TEAM names of a game, draw excluded — what a head-to-head tie must be matched on."""
+    return [nm for tok, (nm, _s) in game["players"].items() if tok not in DRAW_TOKENS]
+
 
 # ── name handling ─────────────────────────────────────────────────────────────
 def _norm(s: str) -> str:
@@ -228,7 +244,7 @@ def _match_game(entry: dict, games: dict, cache: dict, threshold: float):
     # 2) names
     best = None
     for ekey, g in games.items():
-        names = [n for n, _sid in g["players"].values()]
+        names = _team_names(g)
         if len(names) < 2:
             continue
         if not _date_close(entry.get("settlement_date"), g["start"]):
@@ -345,8 +361,20 @@ def main() -> None:
 
         # Orient: which BIA selection is the Kalshi YES outcome?
         yes_name = e.get("kalshi_outcome") or ""
-        scored = sorted(((_name_score(yes_name, nm), tok, sid)
-                         for tok, (nm, sid) in g["players"].items()), reverse=True)
+        if _is_draw_outcome(yes_name):
+            # Kalshi's "Tie" market <-> the venue's draw selection. Scoring it by NAME would compare
+            # "Tie" against two team names and pick whichever fuzzed highest -- a wrong-side pair.
+            draw = [(tok, sid) for tok, (nm, sid) in g["players"].items() if tok in DRAW_TOKENS]
+            if not draw:
+                unmatched += 1
+                misses.append(f"{tk}  Kalshi TIE market but the venue has no draw selection")
+                continue
+            others = [(tok, sid) for tok, (nm, sid) in g["players"].items() if tok not in DRAW_TOKENS]
+            scored = [(100.0, draw[0][0], draw[0][1])] + [(0.0, t, s2) for t, s2 in others]
+        else:
+            scored = sorted(((_name_score(yes_name, nm), tok, sid)
+                             for tok, (nm, sid) in g["players"].items()
+                             if tok not in DRAW_TOKENS), reverse=True)
         if len(scored) < 2 or scored[0][0] < args.threshold:
             unmatched += 1
             misses.append(f"{tk}  matched game but no side scored >= {args.threshold} for "

@@ -51,8 +51,17 @@ CATALOG: dict[str, Sport] = {
         # In-season drivers: MLS, Liga MX, UCL qualifiers (July), World Cup (live now, "Regulation Time
         # Moneyline"). Plus USL/USL Cup + off-season club leagues (La Liga 2, Chile Primera, Bolivia Primera)
         # that fill when they run.
+        # Enumerated live off Kalshi 2026-08-10: 18 series carrying 684 open per-match markets (~342 ties),
+        # 5.6x the whole tennis book. The previous list held only the Americas + UCL and missed EVERY major
+        # European league — EPL, La Liga, Serie A, Ligue 1, Eredivisie, Bundesliga 2, EFL Championship,
+        # Brasileiro A/B/C, Turkish Super Lig, Danish Superliga, UAE — i.e. most of the market.
+        # Out-of-season entries are harmless (they simply return no games), so seasonal ones are kept.
         moneyline=("KXWCGAME", "KXMLSGAME", "KXLIGAMXGAME", "KXUCLGAME",
-                   "KXUSLGAME", "KXUSLCUPGAME", "KXLALIGA2GAME", "KXCHLLDPGAME", "KXBOLPDIVGAME"),
+                   "KXUSLGAME", "KXUSLCUPGAME", "KXLALIGA2GAME", "KXCHLLDPGAME", "KXBOLPDIVGAME",
+                   "KXEPLGAME", "KXLALIGAGAME", "KXSERIEAGAME", "KXLIGUE1GAME", "KXEREDIVISIEGAME",
+                   "KXBUNDESLIGA2GAME", "KXEFLCHAMPIONSHIPGAME", "KXBRASILEIROGAME",
+                   "KXBRASILEIROBGAME", "KXBRASILEIROCGAME", "KXSUPERLIGGAME",
+                   "KXDENSUPERLIGAGAME", "KXUAEPLGAME", "KXUEFASCGAME"),
         spread=(),   # soccer Asian-handicap / goal-totals derivatives = future work (3-way base needs its own pairing)
         total=(),
     ),
