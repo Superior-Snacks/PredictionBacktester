@@ -119,6 +119,7 @@ class BetInAsiaFeed:
         # (sport, event_key) -> event metadata payload (catalog source)
         self._events: dict[tuple[str, str], dict] = {}
         self._subs: dict[tuple[str, str], int] = {}      # (sport, event_key) -> comp_id
+        self._wanted: set = set()                        # passive: ids the BOT asked for
         self._lock = asyncio.Lock()
 
         self._ws: Optional[Any] = None
@@ -254,6 +255,13 @@ class BetInAsiaFeed:
     async def watch(self, entries: Iterable[tuple[int, str, str]]) -> None:
         """Subscribe (comp_id, sport, event_key) triples. Idempotent — already-watched keys are kept
         (the server answers a repeat with `error/event_already_subscribed`, which is harmless but noisy)."""
+        if self.passive:
+            # Emit nothing AND record nothing. Recording intent here was actively harmful: `_subs` is
+            # the record of what the PAGE subscribed, and polluting it with what the bot merely ASKED
+            # for made coverage reporting claim subscriptions that never happened -- so a sidecar
+            # serving zero prices still looked fully subscribed.
+            self._wanted.update((sport, ekey) for _c, sport, ekey in entries)
+            return
         new: list[list] = []
         async with self._lock:
             for comp_id, sport, ekey in entries:
@@ -262,12 +270,6 @@ class BetInAsiaFeed:
                     continue
                 self._subs[k] = comp_id
                 new.append([comp_id, sport, ekey])
-        if self.passive:
-            # Record what was wanted (useful for reporting coverage gaps) but emit nothing.
-            if new:
-                self._log(f"passive: NOT subscribing {len(new)} event(s) - "
-                          f"prices come only from what the page itself watches")
-            return
         if new and self._ws is not None:
             await self._send_watch(new)
 
@@ -306,8 +308,10 @@ class BetInAsiaFeed:
         return dict(self._events)
 
     def stats(self) -> dict:
+        priced = sum(1 for b in self._books.values() if (b or {}).get("markets"))
         return {"connected": self._connected, "subs": len(self._subs), "books": len(self._books),
-                "events": len(self._events), "frames": self._frames_seen,
+                "priced": priced, "events": len(self._events), "wanted": len(self._wanted),
+                "frames": self._frames_seen,
                 "last_frame_age": round(self.last_frame_age, 2) if self._last_frame_ts else None}
 
     # ── frame handling ────────────────────────────────────────────────────────

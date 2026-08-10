@@ -28,6 +28,8 @@ public sealed class DiscordCommandListener
     private readonly string _sidecarBase;             // control plane lives in the sidecar (lifecycle owns it)
     private readonly HttpClient _ctlHttp = new() { Timeout = TimeSpan.FromSeconds(30) };
     private string _lastId = "";
+    private readonly string _tag;      // "pin"/"bia"; "" = answer unaddressed commands (legacy)
+    private bool _warnedUnaddressed;
     private bool _warnedAuth;
     private int _emptyContent;        // consecutive human messages with unreadable text (missing intent)
     private bool _warnedIntent;
@@ -36,7 +38,7 @@ public sealed class DiscordCommandListener
 
     public DiscordCommandListener(string? botToken, string? channelId, Func<string, Task> reply,
                                   Func<Task<string>> onStatus, Func<Task> onShutdown, int pollSec = 10,
-                                  string sidecarBaseUrl = "")
+                                  string sidecarBaseUrl = "", string botTag = "")
     {
         _token     = string.IsNullOrWhiteSpace(botToken)  ? null : botToken.Trim();
         _channelId = string.IsNullOrWhiteSpace(channelId) ? null : channelId.Trim();
@@ -45,6 +47,7 @@ public sealed class DiscordCommandListener
         _onShutdown = onShutdown;
         _pollSec   = pollSec > 0 ? pollSec : 10;
         _sidecarBase = (sidecarBaseUrl ?? "").TrimEnd('/');
+        _tag       = (botTag ?? "").Trim().ToLowerInvariant();
         _http      = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
         if (_token != null)
             _http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bot", _token);
@@ -132,10 +135,40 @@ public sealed class DiscordCommandListener
                 continue;
             }
             _emptyContent = 0;
-            await HandleAsync(content);
+            string? cmd = AddressedTo(content);
+            if (cmd is null || cmd.Length == 0) continue;   // not for us / bare tag
+            await HandleAsync(cmd);
         }
         if (!string.IsNullOrEmpty(newest)) _lastId = newest;
     }
+
+    /// <summary>Is this message addressed to THIS bot? Returns the command with the tag stripped, or null.
+    ///
+    /// Two bots poll the same channel, so an unaddressed "pause" is executed by BOTH — one operator
+    /// keystroke pausing two venues, with two interleaved replies and no way to tell which said what.
+    /// With a tag set we answer only "<tag> cmd" (or "all cmd"); anything addressed to another bot is
+    /// ignored SILENTLY, because replying "not for me" from every bot is just the same noise again.
+    /// No tag = legacy single-bot behaviour, so an existing deployment is unchanged until it opts in.
+    /// </summary>
+    private string? AddressedTo(string raw)
+    {
+        if (_tag.Length == 0) return raw;                        // legacy: answer everything
+        string[] p = raw.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+        if (p.Length == 0) return null;
+        string head = p[0];
+        if (head == _tag || head == "all")
+            return p.Length > 1 ? p[1].Trim() : "";
+        // Bare command with a tag configured: tell the operator ONCE, then stay quiet. Executing it
+        // would be the ambiguity we are removing; silently dropping it forever looks like a dead bot.
+        if (!IsKnownTag(head) && !_warnedUnaddressed)
+        {
+            _warnedUnaddressed = true;
+            _ = SafeReply($"commands now need addressing — send `{_tag} {raw}` (or `all {raw}`).");
+        }
+        return null;
+    }
+
+    private static bool IsKnownTag(string s) => s is "pin" or "bia" or "all";
 
     private async Task HandleAsync(string raw)
     {

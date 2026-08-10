@@ -68,6 +68,8 @@ class BetInAsiaObserver:
         self._sub_order: dict[tuple, int] = {}         # (sport, ekey) -> order the PAGE subscribed it
         self._sub_time: dict[tuple, float] = {}
         self._server_says: list[tuple] = []            # verbatim error/api frames (limit announcements)
+        self._anon_socket = False                      # saw the logged-OUT demo feed
+        self._socket_urls: list[str] = []               # token-redacted, for diagnosis
         self._quiet_ref = float(os.environ.get("BIA_QUIET_SEC", "600"))
         self._resumed = 0                              # updates that arrived after > _quiet_ref silence
         self._resumed_keys: set = set()
@@ -94,6 +96,30 @@ class BetInAsiaObserver:
         except Exception as e:
             self._log(f"initial navigation: {type(e).__name__}: {e}")
         self._log("observing - the page drives, we only read")
+        asyncio.create_task(self._first_look())
+
+    async def _first_look(self, after: float = 60.0) -> None:
+        """One loud verdict once the page has had time to settle.
+
+        A logged-in tennis page reaches ~100% priced within a minute; a logged-out or
+        never-subscribed one sits at a full catalog and zero prices FOREVER while every other signal
+        (socket connected, frames arriving, catalog populated, /health ok) reads healthy. This is the
+        line that tells those two apart without anyone having to go looking."""
+        await asyncio.sleep(after)
+        st = self.feed.stats()
+        urls = ", ".join(self._socket_urls) or "(none)"
+        page_url = ""
+        try:
+            page_url = self._page.url if self._page else ""
+        except Exception:
+            pass
+        self._log(f"after {after:.0f}s: sockets={self._sockets} [{urls}] frames={self._frames} "
+                  f"catalog={st['events']} priced={st['priced']} page={page_url[:70]}")
+        if st["events"] and not st["priced"]:
+            self._log("*** NO PRICES. The catalog arrives on any connection, so this is NOT a "
+                      "connectivity problem. Either the page is not logged in, or it is not showing "
+                      "a sport list (prices only exist for what the page subscribes). odds() will "
+                      "return {} for every selection until this is fixed. ***")
 
     async def stop(self) -> None:
         for closer in (getattr(self._ctx, "close", None), getattr(self._pw, "stop", None)):
@@ -109,10 +135,27 @@ class BetInAsiaObserver:
         page.on("websocket", self._hook_ws)
 
     def _hook_ws(self, ws) -> None:
-        if PRICE_FEED_HINT not in (ws.url or ""):
+        url = ws.url or ""
+        if PRICE_FEED_HINT not in url:
             return                                   # analytics/chat sockets are not our protocol
         self._sockets += 1
-        self._log(f"price feed socket seen ({self._sockets})")
+        # WHICH socket matters. The site opens TWO that both match "cpricefeed":
+        #   /cpricefeed/?token=<session_id>    logged in  -> catalog AND prices
+        #   /folly/cpricefeed/?token=demo-...  anonymous  -> catalog ONLY
+        # On the demo socket everything looks healthy -- a full catalog arrives, `catalog()` returns
+        # hundreds of selections, /health says ok -- and `odds()` silently returns {} forever because
+        # nothing was ever subscribed. Name the socket so that state is visible at a glance.
+        demo = "/folly/" in url or "token=demo" in url
+        self._anon_socket = self._anon_socket or demo
+        kind = "ANONYMOUS/demo (catalog only, NO PRICES)" if demo else "authed"
+        # Keep the URL with the token REDACTED: the token is a bearer credential for the whole
+        # account, but the path and token PREFIX are what identify which feed this is.
+        import re as _re
+        self._socket_urls.append(_re.sub(r"token=([^&]{0,6})[^&]*", r"token=\1...", url))
+        self._log(f"price feed socket #{self._sockets}: {kind}")
+        if demo:
+            self._log("WARNING the page is NOT logged in. It will serve a full catalog and zero "
+                      "prices, which looks identical to a healthy idle bot. Log in in the window.")
         ws.on("framereceived", self._on_frame)
         # framesent is deliberately NOT hooked for parsing -- we never act on what the page asks for,
         # we only parse what the server answers. It is watched purely to report coverage below.

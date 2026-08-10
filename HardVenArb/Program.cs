@@ -274,10 +274,23 @@ string hardvenProxy = (Environment.GetEnvironmentVariable("HARDVEN_SOCKS_PROXY")
 // Same: read the sidecar URL after .env loads so a .env override is honoured on the server.
 string HARDVEN_SIDECAR_URL = (Environment.GetEnvironmentVariable("HARDVEN_SIDECAR_URL") ?? "http://127.0.0.1:8787").Trim();
 
+// BOT TAG — which venue this process is. Two bots share one Discord channel, so without it every
+// alert is anonymous and, worse, every COMMAND is obeyed by BOTH: one "pause" pauses Pinnacle and
+// BetInAsia together, and "status" returns two interleaved replies with no way to tell them apart.
+// Defaults to HARDVEN_OUTPUT_TAG so the value that already separates the journals also names the bot.
+// Empty = legacy single-bot behaviour (no prefix required on commands).
+string BOT_TAG = (Environment.GetEnvironmentVariable("HARDVEN_BOT_TAG")
+                  ?? Environment.GetEnvironmentVariable("HARDVEN_OUTPUT_TAG") ?? "").Trim().ToLowerInvariant();
+string BOT_NAME = BOT_TAG.Length > 0 ? BOT_TAG.ToUpperInvariant() : "HardVenArb";
+
 // Discord webhook alerter (halts, naked-position failures, low cash). .env is loaded above, so the
 // URL is in the process env now; an unset/empty URL leaves it a disabled no-op.
-var discord = new DiscordNotifier(Environment.GetEnvironmentVariable("DISCORD_WEBHOOK_URL"));
-if (discord.Enabled) Console.WriteLine("[DISCORD] webhook alerts enabled");
+var discord = new DiscordNotifier(Environment.GetEnvironmentVariable("DISCORD_WEBHOOK_URL"), BOT_NAME);
+if (discord.Enabled)
+    Console.WriteLine($"[DISCORD] webhook alerts enabled — posting as [{BOT_NAME}]"
+                      + (BOT_TAG.Length > 0 ? $"; commands must be addressed '{BOT_TAG} <cmd>'"
+                                            : " (no bot tag set — this bot answers UNADDRESSED commands, "
+                                              + "which is ambiguous if another bot shares this channel)"));
 if (string.IsNullOrEmpty(kalshiConfig.ApiKeyId) || string.IsNullOrEmpty(kalshiConfig.PrivateKeyPath))
 {
     Console.WriteLine("[ERROR] Set KALSHI_API_KEY_ID and KALSHI_PRIVATE_KEY_PATH environment variables.");
@@ -1185,7 +1198,8 @@ if (discord.Enabled)
         reply:      msg => discord.AlertAsync(msg),
         onStatus:   BuildStatusAsync,
         onShutdown: ShutdownHookAsync,
-        sidecarBaseUrl: HARDVEN_SIDECAR_URL);   // session/schedule verbs go to the sidecar's control plane
+        sidecarBaseUrl: HARDVEN_SIDECAR_URL,   // session/schedule verbs go to the sidecar's control plane
+        botTag: BOT_TAG);                      // only answer commands addressed to this venue
     if (cmdListener.Enabled)
     {
         Console.WriteLine("[DISCORD CMD] remote commands enabled: status / help / pause / resume / force / " +

@@ -161,6 +161,46 @@ def parse_selection_id(sid: str) -> Optional[tuple[str, str, str, str, str]]:
     return parts[0], parts[1], parts[2], parts[3], parts[4]
 
 
+class _IdentityFx:
+    """FX provider for a USD account: the rate is 1.0 and never changes.
+
+    NOT cosmetic. Without an `_fx` on the adapter `/fx` returns HTTP 400, the C# bot falls back to
+    HARDVEN_FX_TO_USD, and that env var holds the EUR rate for the PINNACLE account -- 1.1540. Applied
+    to a USD BetInAsia balance it inflates every book stake by 15.4%, so the two legs stop paying equal
+    amounts and the "hedge" quietly becomes directional. That is the exact failure the FX layer was
+    built for after the 6.9%-stale incident; here it would arrive through a 400 nobody reads.
+
+    If the account is ever NOT USD this refuses to serve identity, because a wrong 1.0 is the same
+    class of bug in the other direction.
+    """
+
+    def __init__(self, currency_fn):
+        self._currency_fn = currency_fn
+
+    def currency(self) -> str:
+        return (self._currency_fn() or "USD").upper()
+
+    @property
+    def rate(self) -> float:
+        return 1.0
+
+    def status(self) -> dict:
+        ccy = self.currency()
+        ok = ccy == "USD"
+        return {"currency": ccy, "rate": 1.0 if ok else 0.0, "source": "identity (USD account)",
+                "age_sec": 0, "stale": not ok, "env_rate": 1.0, "env_drift_pct": 0.0,
+                "last_error": None if ok else
+                              f"account currency is {ccy}, not USD - identity FX is WRONG here; "
+                              f"wire a real rate before sizing anything",
+                "max_deviation": 0.0}
+
+    async def refresh(self) -> dict:
+        return self.status()
+
+    def start(self) -> None:
+        return None
+
+
 class BetInAsiaAdapter(BookAdapter):
     name = "betinasia"
 
@@ -172,6 +212,9 @@ class BetInAsiaAdapter(BookAdapter):
         self.transport = os.environ.get("BIA_TRANSPORT", "browser").lower()
         self.observer = None
         self.feed = BetInAsiaFeed(passive=(self.transport == "browser"))
+        # `/fx` reads adapter._fx. Absent => HTTP 400 => the bot silently uses the PINNACLE
+        # EUR env rate on a USD account. See _IdentityFx.
+        self._fx = _IdentityFx(currency_fn=lambda: self.feed.currency)
         self._started = False
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
@@ -376,6 +419,19 @@ class BetInAsiaAdapter(BookAdapter):
     # ── diagnostics ───────────────────────────────────────────────────────────
     def health(self) -> dict:
         s = self.feed.stats()
+        # PRICED is the number that matters and the one the bot could not previously see: a catalog
+        # with zero prices is the logged-out/never-subscribed state, and it is indistinguishable from
+        # healthy unless this is published.
+        if self.observer is not None:
+            s["anonymous_socket"] = getattr(self.observer, "_anon_socket", False)
+            s["sockets"] = getattr(self.observer, "_socket_urls", [])
+            try:
+                s["page_url"] = self.observer._page.url if self.observer._page else None
+            except Exception:
+                s["page_url"] = None
+            if s.get("events") and not s.get("priced"):
+                s["WARNING"] = ("catalog present but ZERO prices - the page is not logged in or never "
+                                "subscribed; odds() will return {} for every selection")
         s.update({"book": self.name, "currency": self.feed.currency,
                   "assumed_max_stake": ASSUMED_MAX_STAKE,
                   "can_place_bets": self.feed.can_place_bets,

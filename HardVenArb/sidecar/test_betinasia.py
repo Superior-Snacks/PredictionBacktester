@@ -235,7 +235,12 @@ spy = _Spy()
 pf._ws = spy
 asyncio.run(pf.watch([(338, "tennis", "2026-08-09,1,2")]))
 check("passive watch() sends NOTHING", spy.sent == [], str(spy.sent))
-check("passive watch() still records intent", ("tennis", "2026-08-09,1,2") in pf._subs)
+# `_subs` is the record of what the PAGE subscribed. Recording the bot's REQUESTS there made a
+# sidecar serving zero prices report itself fully subscribed, which is how a logged-out observer
+# looked healthy for an entire run. Wants go in their own set.
+check("passive watch() does NOT pollute _subs", ("tennis", "2026-08-09,1,2") not in pf._subs)
+check("passive watch() records the want separately", ("tennis", "2026-08-09,1,2") in pf._wanted)
+check("stats expose priced + wanted", {"priced", "wanted"} <= set(pf.stats()))
 # parsing must still work -- passive is a transport switch, not a downgrade
 pf.handle_frame([["offers_hcap", [338, "tennis", "2026-08-09,1,2"],
                   {"tennis_match,all": [None, [["p1", 1.8], ["p2", 2.1]]]}]])
