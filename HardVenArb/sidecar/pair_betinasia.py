@@ -58,8 +58,51 @@ def _surname(name: str) -> str:
     return parts[-1] if parts else ""
 
 
+SAME_SURNAME_DIFFERENT_PERSON = 50.0   # deliberately below any sane --threshold
+
+
+def _given(name: str) -> list[str]:
+    """Given names = everything before the surname. 'Thiago Agustin Tirante' -> ['thiago','agustin']."""
+    return _norm(name).split()[:-1]
+
+
+def _tok_compatible(x: str, y: str) -> bool:
+    """Same name token, allowing an INITIAL to stand for the name it abbreviates."""
+    return x == y or (len(x) == 1 and y.startswith(x)) or (len(y) == 1 and x.startswith(y))
+
+
+def _given_compatible(ga: list[str], gb: list[str]) -> bool:
+    """Do two given-name lists describe the same person?
+
+    ORDER-INDEPENDENT on purpose. Comparing positionally looks right and is wrong, because Spanish and
+    Italian COMPOUND SURNAMES break the alignment: `_surname()` keeps only the final token, so Kalshi's
+    "Jorda Sanchis" becomes given=['jorda'] while the venue's "David Jorda Sanchis" becomes
+    given=['david','jorda']. Left-aligned that compares 'jorda' to 'david' and rejects a real player;
+    right-aligned it would instead break 'T. Tirante' vs 'Thiago Agustin Tirante'. Requiring every
+    token of the SHORTER list to find a partner anywhere in the longer one handles both, and still
+    rejects siblings -- 'alexander' simply has no partner in ['mischa'].
+
+    Found by the data: this rule change recovered Jorda Sanchis, Alcala Gurri and D'Agostino, which a
+    first cut at the sibling fix had wrongly thrown away.
+    """
+    if not ga or not gb:
+        return True                       # one side is surname-only: nothing to contradict
+    short, long = (ga, gb) if len(ga) <= len(gb) else (gb, ga)
+    return all(any(_tok_compatible(x, y) for y in long) for x in short)
+
+
 def _name_score(a: str, b: str) -> float:
-    """0-100. Exact normalised equality first, then surname equality, then fuzzy as a last resort."""
+    """0-100. Exact normalised equality, then surname equality GATED ON THE GIVEN NAME, then fuzzy.
+
+    The gate is the whole point. Surname equality alone scored 95 and cleared any sane threshold, so
+    'Alexander Zverev' matched 'Mischa Zverev' and 'Andy Murray' matched 'Jamie Murray' -- different
+    people, and tennis is full of them (siblings, and common surnames all over the Challenger tour).
+    A pair built that way is not a near miss: the two legs back opposite players, so the "hedge" is a
+    doubled directional bet that loses on both branches. It has to fail closed.
+
+    Initials still work, because that is the real-world variation we must survive: 'T. Tirante' vs
+    'Thiago Agustin Tirante' is the SAME player and still scores 95.
+    """
     na, nb = _norm(a), _norm(b)
     if not na or not nb:
         return 0.0
@@ -67,10 +110,15 @@ def _name_score(a: str, b: str) -> float:
         return 100.0
     sa, sb = _surname(a), _surname(b)
     if sa and sa == sb:
-        return 95.0
+        ga, gb = _given(a), _given(b)
+        if not _given_compatible(ga, gb):
+            return SAME_SURNAME_DIFFERENT_PERSON
+        return 95.0 if (ga and gb) else 90.0     # surname-only side is plausible but weaker
     if fuzz is None:
         return 0.0
-    return float(fuzz.token_sort_ratio(na, nb))
+    # Different surnames: never let fuzzy alone carry a pair to a passing score. Two unrelated players
+    # can share a first name and token_sort_ratio rewards that far too generously.
+    return min(float(fuzz.token_sort_ratio(na, nb)), 85.0)
 
 
 # ── selection ids ─────────────────────────────────────────────────────────────
