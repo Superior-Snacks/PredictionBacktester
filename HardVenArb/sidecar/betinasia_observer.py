@@ -68,6 +68,9 @@ class BetInAsiaObserver:
         self._sub_order: dict[tuple, int] = {}         # (sport, ekey) -> order the PAGE subscribed it
         self._sub_time: dict[tuple, float] = {}
         self._server_says: list[tuple] = []            # verbatim error/api frames (limit announcements)
+        self._quiet_ref = float(os.environ.get("BIA_QUIET_SEC", "600"))
+        self._resumed = 0                              # updates that arrived after > _quiet_ref silence
+        self._resumed_keys: set = set()
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
     async def start(self) -> None:
@@ -132,7 +135,17 @@ class BetInAsiaObserver:
             if not (isinstance(m, list) and m):
                 continue
             if m[0] == "offers_hcap" and len(m) >= 3 and isinstance(m[1], list) and len(m[1]) >= 3:
-                self._last_update[(m[1][1], m[1][2])] = now
+                k = (m[1][1], m[1][2])
+                prev = self._last_update.get(k)
+                # RESUMED-AFTER-QUIET is the real eviction test. A dropped subscription cannot start
+                # updating again without a resubscribe, so a single resume disproves eviction for
+                # that event. "alive" (updated recently) does NOT do this job: a pre-live soccer book
+                # barely ticks, so silence is its normal state and the alive count decays on quiet
+                # markets that were never dropped at all.
+                if prev is not None and (now - prev) > self._quiet_ref:
+                    self._resumed += 1
+                    self._resumed_keys.add(k)
+                self._last_update[k] = now
             elif m[0] in ("error", "api"):
                 self._server_says.append((round(now - self._started, 1), json.dumps(m)[:400]))
 
@@ -246,6 +259,11 @@ class BetInAsiaObserver:
                 "subscribed": len(rows),
                 "ever_priced": sum(r["ever_priced"] for r in rows),
                 "alive": sum(r["alive"] for r in rows),
+                # THE EVICTION TEST. Any nonzero value proves subscriptions are NOT being dropped:
+                # a quiet event that starts updating again was never evicted. Read this before
+                # `alive`, which on a pre-live book mostly measures how chatty the market is.
+                "resumed_after_quiet": self._resumed,
+                "events_that_resumed": len(self._resumed_keys),
                 "quiet_threshold_sec": quiet_sec,
                 "alive_by_quartile": quart,
                 "by_league": dict(sorted(by_league.items(),
@@ -289,9 +307,16 @@ class BetInAsiaObserver:
             if p or u:
                 lines.append(f"  {k:<11}{p:>7}{u:>10}")
         near = buckets["<24h"]
-        if near[0] and not near[1]:
-            lines.append("  => DATE WINDOW: everything starting inside 24h is priced. The page shows "
-                         "today's card; later dates price when their day arrives. Not a ceiling.")
+        near_total = near[0] + near[1]
+        # A handful of unpriced near games is noise, not a ceiling: a real virtualised-list ceiling
+        # leaves a LARGE fraction of today's card unsubscribed. The first cut fired on any nonzero and
+        # so called a 785/789 run a "COUNT CEILING" off 2 stragglers.
+        if near_total and near[1] / near_total <= 0.2:
+            lines.append(f"  => NO CEILING: {near[0]}/{near_total} of the next 24h is priced"
+                         + (f" ({near[1]} stragglers)." if near[1] else "."))
+            if buckets[">72h"][1]:
+                lines.append("     Unpriced far-future games are normal - they price when their day "
+                             "comes round.")
         elif near[1]:
             lines.append("  => COUNT CEILING: even matches starting inside 24h are unpriced, so the "
                          "page is subscribing what it RENDERS. Coverage depends on scroll position.")
