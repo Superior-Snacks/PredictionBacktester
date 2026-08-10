@@ -144,6 +144,37 @@ class LeagueTabManager:
             print(f"[TAB-MGR] league tab manager ON - {self._max} dedicated gap tabs{rove} "
                   f"(tick {self._interval:g}s, cover-ttl {self._cover_ttl:g}s).")
 
+    async def drop_all_tabs(self, why: str = "") -> int:
+        """Close every managed tab (dedicated + rove) but LEAVE THE LOOP RUNNING.
+
+        Called on a detected logout. The auto-login watcher only drives the MAIN page, so after a
+        session death the league tabs sit there showing a logged-out UI: they stream nothing, they
+        keep their slots, and they are extra windows an operator has to notice by eye. Closing them
+        lets the re-login happen cleanly on one page, and the next tick rebuilds whatever is still a
+        gap — the manager is already idempotent, so this is self-healing rather than destructive.
+
+        Deliberately NOT stop(): the loop must survive so the rebuild happens automatically.
+        """
+        n = len(self._tabs) + (1 if self._rove_page is not None else 0)
+        for lid, pg in list(self._tabs.items()):
+            try:
+                await self._session.close_tab(pg)
+            except Exception:
+                pass
+        self._tabs.clear()
+        self._tab_board_since.clear()
+        self._tab_alive.clear()
+        if self._rove_page is not None:
+            try:
+                await self._session.close_tab(self._rove_page)
+            except Exception:
+                pass
+        self._rove_page, self._rove_lid = None, None
+        if n:
+            print(f"[TAB-MGR] dropped {n} tab(s){(' - ' + why) if why else ''}; the main page re-authenticates "
+                  f"and the next tick reopens whatever is still a gap.")
+        return n
+
     async def stop(self) -> None:
         """Cancel the loop and drop every tab. Tab closing is best-effort: under the lifecycle this runs AFTER
         the browser has already been stopped, so the pages are dead and closing them will throw — that must

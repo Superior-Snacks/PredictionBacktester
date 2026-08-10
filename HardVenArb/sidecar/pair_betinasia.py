@@ -32,6 +32,7 @@ import os
 import re
 import sys
 import unicodedata
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -294,7 +295,12 @@ def _match_game(entry: dict, games: dict, cache: dict, threshold: float):
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--sidecar", default=os.environ.get("HARDVEN_SIDECAR_URL", "http://127.0.0.1:8787"))
+    # BIA_SIDECAR_URL, NOT HARDVEN_SIDECAR_URL. This script pairs BetInAsia, and HARDVEN_SIDECAR_URL is
+    # whatever the shell last pointed at -- in a two-venue setup that is usually the PINNACLE sidecar on
+    # 8787. Defaulting to it silently paired against the wrong venue's catalog (206 tennis selections,
+    # 0 football) and reported "nothing to pair" as if the feed were empty.
+    ap.add_argument("--sidecar",
+                    default=os.environ.get("BIA_SIDECAR_URL", "http://127.0.0.1:8788"))
     ap.add_argument("--pairs", default=str(Path(__file__).resolve().parent.parent / "cross_pairs_bia.json"))
     ap.add_argument("--sport", default="tennis")
     ap.add_argument("--write", action="store_true", help="write the file (default = dry-run preview)")
@@ -324,6 +330,20 @@ def main() -> None:
     if fuzz is None:
         print("[PAIR-BIA] WARNING: rapidfuzz missing - only exact/surname matches will work. "
               "pip install rapidfuzz")
+
+    # Refuse to pair against another book's catalog. Here it produced 0 matches and a confusing
+    # "nothing to pair", but a venue whose ids happened to half-match would write GARBAGE TOKENS into
+    # the pairs file, and nothing downstream could tell.
+    try:
+        with urllib.request.urlopen(f"{args.sidecar.rstrip('/')}/health", timeout=15) as r:
+            book = (json.loads(r.read().decode()) or {}).get("book")
+    except Exception as e:
+        print(f"[PAIR-BIA] cannot reach the sidecar at {args.sidecar} ({type(e).__name__}: {e})")
+        return
+    if book != "betinasia":
+        print(f"[PAIR-BIA] REFUSING: {args.sidecar} is serving book '{book}', not 'betinasia'. "
+              f"Point --sidecar (or BIA_SIDECAR_URL) at the BetInAsia sidecar.")
+        return
 
     cat = fetch_catalog(args.sidecar, args.catalog_timeout)
     games = index_catalog(cat, args.sport)

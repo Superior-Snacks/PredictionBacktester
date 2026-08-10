@@ -2115,6 +2115,17 @@ class PinnacleAdapter(BookAdapter):
         self._guest_redirect_ts.clear()
         print(f"[PINNACLE] *** LIKELY LOGOUT: {reason} - board odds still stream (public) but ALL authed REST is "
               "guest-redirecting. Forcing a real re-login (reload + submit). No bets can fund until it lands.")
+        # Close the league tabs FIRST. The auto-login watcher only drives the main page, so every other
+        # tab keeps showing a logged-out UI: it streams nothing while still holding its slot, and the
+        # operator sees several dead windows with no sign the bot is recovering. Dropping them means the
+        # re-login happens on one page and the tab manager rebuilds from a known-good session on its
+        # next tick (it reopens any league that is still a gap, so nothing is lost).
+        mgr = getattr(self, "_tab_manager", None)
+        if mgr is not None and hasattr(mgr, "drop_all_tabs"):
+            try:
+                asyncio.get_event_loop().create_task(mgr.drop_all_tabs("logged out"))
+            except Exception as ex:
+                print(f"[PINNACLE] could not drop league tabs on logout: {type(ex).__name__}: {ex}")
         if self._browser is not None:
             try:
                 asyncio.get_event_loop().create_task(self._browser.force_remint(force_login=True))
