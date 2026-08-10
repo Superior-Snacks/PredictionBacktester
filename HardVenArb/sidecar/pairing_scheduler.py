@@ -28,7 +28,12 @@ ROOT = SIDECAR.parent                     # HardVenArb/ (where pairHard.py + the
 
 
 class PairingScheduler:
-    def __init__(self, hour: int = 5, initial_delay: float = 8.0, interval_min: int = 0):
+    def __init__(self, hour: int = 5, initial_delay: float = 8.0, interval_min: int = 0,
+                 steps: "list[tuple[str, list[str], object]] | None" = None):
+        # `steps` = [(label, [script, *args], cwd)]. None keeps the historic Pinnacle chain, so nothing
+        # changes for the venue that already uses this. A second book supplies its own chain instead of
+        # getting a scheduler of its own -- the cadence logic is the part worth sharing.
+        self._steps = steps
         self._hour = hour % 24
         self._initial_delay = max(0.0, initial_delay)
         # >0 = re-pair every N minutes (subsumes the daily cadence). Intraday re-pairing is what actually gets
@@ -66,6 +71,11 @@ class PairingScheduler:
     async def _pair_once(self, reason: str) -> None:
         sports = os.environ.get("HARDVEN_SPORTS") or "<all enabled>"
         print(f"[PAIR SCHED] {reason} pairing run — sports={sports}")
+        if self._steps is not None:
+            for label, script_args, cwd in self._steps:
+                await self._run_step(label, script_args, cwd)
+            print(f"[PAIR SCHED] {reason} pairing run complete.")
+            return
         # moneyline: scaffold -> fill (the fill reads the scaffold, so skip it if the scaffold failed)
         if await self._run_step("scaffold (Kalshi)", ["pairHard.py"], ROOT):
             await self._run_step("moneyline fill (Pinnacle)", ["pair_pinnacle.py", "--write"], SIDECAR)

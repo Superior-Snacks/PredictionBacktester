@@ -255,6 +255,11 @@ def main() -> None:
                     default=float(os.environ.get("HARDVEN_CATALOG_TIMEOUT", "60")))
     ap.add_argument("--reseed-from", default="",
                     help="copy Kalshi fields from this pairs file, blanking hardven_* (bootstrap)")
+    ap.add_argument("--sync-seeds", default="",
+                    help="MERGE new Kalshi tickers from this file, keeping pairs already filled. This is "
+                         "the repeat-run form: --reseed-from blanks everything and re-matches from "
+                         "scratch, which drops a working pair whenever the venue catalog is momentarily "
+                         "missing that game.")
     args = ap.parse_args()
 
     if fuzz is None:
@@ -281,6 +286,33 @@ def main() -> None:
         print(f"[PAIR-BIA] reseeded {len(pairs)} Kalshi entries from {args.reseed_from}")
     elif pairs_path.exists():
         pairs = json.loads(pairs_path.read_text(encoding="utf-8"))
+        if args.sync_seeds:
+            # Kalshi lists tennis close to the event while BetInAsia lists a day ahead, so the pairable
+            # set is the moving INTERSECTION of the two. A one-shot pair catches only whatever overlaps
+            # at that instant (22 of 23 of BIA's same-day slate paired, but only 3 of 68 for tomorrow --
+            # Kalshi had not posted those yet). Merging new tickers each cycle is what turns that into
+            # full coverage over the day. Pinnacle's scheduler already keeps the scaffold fresh; we read
+            # it, never write it.
+            try:
+                src = json.loads(Path(args.sync_seeds).read_text(encoding="utf-8"))
+            except Exception as e:
+                print(f"[PAIR-BIA] --sync-seeds unreadable ({type(e).__name__}: {e}) - continuing with "
+                      f"the existing file")
+                src = []
+            have = {e.get("kalshi_ticker") for e in pairs}
+            added = 0
+            for e in src:
+                tk = e.get("kalshi_ticker")
+                if not tk or tk in have:
+                    continue
+                n = {k: v for k, v in e.items() if not k.startswith("hardven_")}
+                n.pop("three_way", None)
+                n.pop("fuzzy", None)
+                pairs.append(n)
+                have.add(tk)
+                added += 1
+            print(f"[PAIR-BIA] synced {added} new Kalshi ticker(s) from {Path(args.sync_seeds).name} "
+                  f"({len(pairs)} total, existing fills kept)")
     else:
         print(f"[PAIR-BIA] {pairs_path} does not exist. Seed it from the Kalshi side, or bootstrap "
               f"with --reseed-from cross_pairs.json")

@@ -188,6 +188,7 @@ class BetInAsiaAdapter(BookAdapter):
             await self.observer.start()
             self.feed = self.observer.feed
             print(f"[BIA] passive transport: watching the page at {START_URL}", flush=True)
+            self._start_pairing_scheduler()
         else:
             print("[BIA] WARNING transport=direct - opening our OWN websocket. This is a second "
                   "client on the account; prefer BIA_TRANSPORT=browser.", flush=True)
@@ -206,6 +207,39 @@ class BetInAsiaAdapter(BookAdapter):
         elif not self.feed.passive:
             await self.feed.stop()
         self._started = False
+
+    def _start_pairing_scheduler(self) -> None:
+        """Re-pair on a cadence, like Pinnacle does. Opt-in via BIA_AUTO_PAIR=1.
+
+        Not optional in spirit: Kalshi posts tennis close to the event while BetInAsia lists a day
+        ahead, so the pairable set is a MOVING INTERSECTION. Measured at 14:49 UTC, 22 of BIA's 23
+        same-day games were paired but only 3 of its 68 next-day games -- Kalshi simply had not posted
+        those markets yet. A one-shot pair therefore looks like poor coverage when it is really a
+        snapshot of a narrow window; re-pairing is what converts it into the day's full overlap.
+
+        We do NOT run pairHard.py here. Pinnacle's scheduler already keeps the Kalshi scaffold fresh in
+        cross_pairs.json, so this only READS it (--sync-seeds) and writes its own file. Two schedulers
+        scraping Kalshi in parallel would double the load for identical data, and only one of them can
+        own cross_pairs.json.
+        """
+        if os.environ.get("BIA_AUTO_PAIR") != "1":
+            return
+        import asyncio
+        from pathlib import Path
+        from pairing_scheduler import PairingScheduler
+
+        here = Path(__file__).resolve().parent
+        sport = os.environ.get("BIA_PAIR_SPORT", "tennis")
+        seeds = os.environ.get("BIA_SEED_FILE", str(here.parent / "cross_pairs.json"))
+        pairs = os.environ.get("BIA_PAIRS_FILE", str(here.parent / "cross_pairs_bia.json"))
+        interval = int(os.environ.get("BIA_PAIR_INTERVAL_MIN", "90"))
+        steps = [("betinasia fill", ["pair_betinasia.py", "--sport", sport, "--pairs", pairs,
+                                     "--sync-seeds", seeds, "--write"], here)]
+        sched = PairingScheduler(initial_delay=float(os.environ.get("BIA_PAIR_STARTUP_DELAY", "30")),
+                                 interval_min=interval, steps=steps)
+        self._pairing_task = asyncio.create_task(sched.run())
+        print(f"[BIA] auto-pair ON: {sport} every {interval} min "
+              f"(seeds <- {Path(seeds).name}, writes {Path(pairs).name})", flush=True)
 
     # ── M0: odds ──────────────────────────────────────────────────────────────
     async def odds(self, selection_ids: list[str]) -> dict[str, Selection]:
