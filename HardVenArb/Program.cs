@@ -242,19 +242,56 @@ var cts = new CancellationTokenSource();
 // ══════════════════════════════════════════════════════════════════════════════
 //  CONFIGURATION
 // ══════════════════════════════════════════════════════════════════════════════
-const decimal ARB_THRESHOLD         = 0.995m;
-const decimal DEPTH_FLOOR           = 1m;
-const decimal MIN_BOOK_PRICE        = 0.03m;
-const int     KALSHI_BATCH_SIZE     = 100;
-const int     HARDVEN_BATCH_SIZE       = 200;
+// ── env-driven limits ─────────────────────────────────────────────────────────────────────────────────
+// EVERY risk/size limit in this file reads an env var. They used to be `const` — recompile-only — which is
+// how a $40 reserve buffer ended up standing in front of a $12.88 account with no runtime way to change it:
+// the bot skipped every arb as "balance-limited to 0 contracts" and the run read as "the market offered
+// nothing". A limit you cannot change without a rebuild is a limit that will eventually be wrong silently.
+//
+// Convention: a value <= 0 in the environment is treated as UNSET and falls back, EXCEPT where zero is a
+// meaningful setting (a zero buffer, a zero cooldown) — those pass allowZero: true. That keeps a typo'd or
+// empty env var from silently disabling a safety limit, while still letting you deliberately set one to 0.
+static decimal EnvDec(string name, decimal fallback, bool allowZero = false)
+{
+    string? raw = Environment.GetEnvironmentVariable(name);
+    if (decimal.TryParse(raw, NumberStyles.Any, CultureInfo.InvariantCulture, out var v)
+        && (v > 0m || (allowZero && v == 0m)))
+        return v;
+    return fallback;
+}
+
+static int EnvInt(string name, int fallback, bool allowZero = false)
+{
+    string? raw = Environment.GetEnvironmentVariable(name);
+    if (int.TryParse(raw, NumberStyles.Any, CultureInfo.InvariantCulture, out var v)
+        && (v > 0 || (allowZero && v == 0)))
+        return v;
+    return fallback;
+}
+
+// Tri-state on purpose: unset keeps the built-in default, so a bool limit can be turned BOTH ways from the
+// environment. "!= null && == 1" would make it impossible to switch a default-on tripwire off.
+static bool EnvBool(string name, bool fallback)
+{
+    string? raw = (Environment.GetEnvironmentVariable(name) ?? "").Trim();
+    if (raw == "1" || raw.Equals("true", StringComparison.OrdinalIgnoreCase)) return true;
+    if (raw == "0" || raw.Equals("false", StringComparison.OrdinalIgnoreCase)) return false;
+    return fallback;
+}
+
+decimal ARB_THRESHOLD       = EnvDec("HARDVEN_ARB_THRESHOLD", 0.995m);
+decimal DEPTH_FLOOR         = EnvDec("HARDVEN_DEPTH_FLOOR", 1m, allowZero: true);
+decimal MIN_BOOK_PRICE      = EnvDec("HARDVEN_MIN_BOOK_PRICE", 0.03m, allowZero: true);
+int     KALSHI_BATCH_SIZE   = EnvInt("HARDVEN_KALSHI_BATCH_SIZE", 100);
+int     HARDVEN_BATCH_SIZE  = EnvInt("HARDVEN_BATCH_SIZE", 200);
 // /odds is now an instant cache read (the sidecar refreshes the book in the background), so the bot can
 // poll fast and cheaply. Default 3s; override with HARDVEN_POLL_MS. NOTE: actual quote freshness is set by
 // the sidecar's BOOKMAKER_REFRESH_SEC — this only controls how often the bot pulls the latest cached book.
 int           HARDVEN_PING_INTERVAL_MS =
     int.TryParse(Environment.GetEnvironmentVariable("HARDVEN_POLL_MS"), out var _hvPollMs) && _hvPollMs > 0
         ? _hvPollMs : 3_000;
-const int     NEAR_MISS_INTERVAL_MS  = 60_000;
-const int     STATUS_DASH_INTERVAL_MS = 30_000;
+int NEAR_MISS_INTERVAL_MS   = EnvInt("HARDVEN_NEAR_MISS_INTERVAL_MS", 60_000);
+int STATUS_DASH_INTERVAL_MS = EnvInt("HARDVEN_STATUS_INTERVAL_MS", 30_000);
 // HARDVEN_SIDECAR_URL is read after .env is loaded (see below, next to the proxy read) — reading it here
 // would predate LoadDotEnv() and silently ignore any value in .env.
 
@@ -526,24 +563,35 @@ if (isLive || isDryRun)
     // Max combined dollar cost per arb entry. HARD CAP on position size, so it must be raised before the bot
     // can take the €100+ bets the bankroll plan calls for — at $30 a €100 stake is simply unreachable and the
     // ladder would silently size down to the smallest rung. Env-driven (was a recompile-only const).
-    decimal MAX_BET_USD = decimal.TryParse(Environment.GetEnvironmentVariable("HARDVEN_MAX_BET_USD"),
-        NumberStyles.Any, CultureInfo.InvariantCulture, out var _mbu) && _mbu > 0m ? _mbu : 30m;
-    const decimal BALANCE_BUFFER_PCT   = 0.20m;  // per-platform reserve (fraction of maxBet)
-    const decimal EXECUTION_THRESHOLD  = 0.995m; // net-cost ceiling for arb detection
+    decimal MAX_BET_USD = EnvDec("HARDVEN_MAX_BET_USD", 30m);
+    // Per-platform cash reserve, held back from every sizing decision.
+    //   HARDVEN_BALANCE_BUFFER_USD  — absolute $, wins when set. Use this on a SMALL account: the pct form
+    //                                 is a fraction of maxBet and has no idea what your balance actually is,
+    //                                 so raising maxBet quietly raises the reserve too.
+    //   HARDVEN_BALANCE_BUFFER_PCT  — fraction of maxBet (the historic behaviour, default 0.20).
+    // Both accept 0 to disable the reserve entirely.
+    decimal BALANCE_BUFFER_PCT = EnvDec("HARDVEN_BALANCE_BUFFER_PCT", 0.20m, allowZero: true);
+    decimal BALANCE_BUFFER_USD = EnvDec("HARDVEN_BALANCE_BUFFER_USD", -1m, allowZero: true);
+    bool    bufferIsAbsolute   = BALANCE_BUFFER_USD >= 0m;
+    // The executor takes a PERCENTAGE and multiplies by maxBet, so an absolute buffer is expressed back as
+    // the equivalent fraction. Done here rather than by changing the executor's contract so there is exactly
+    // one definition of the reserve, and it stays visible on the startup banner.
+    if (bufferIsAbsolute)
+        BALANCE_BUFFER_PCT = MAX_BET_USD > 0m ? BALANCE_BUFFER_USD / MAX_BET_USD : 0m;
+    decimal EXECUTION_THRESHOLD = EnvDec("HARDVEN_EXEC_THRESHOLD", 0.995m);
     // Minimum net to attempt execution (the thin-margin slippage buffer). Default 0.985 = require ~1.5¢/set. On
     // stable PRE-LIVE lines that settle within ~2 days, at price-taker size (no market impact), you can run it
     // thin: HARDVEN_EXEC_NET_FLOOR closer to EXECUTION_THRESHOLD captures down to any positive edge after fees.
     // Set it >= EXECUTION_THRESHOLD to disable the extra floor entirely (execute any detected arb). Kept above
     // MIN_PLAUSIBLE_NET or the executable band [MIN_PLAUSIBLE_NET, floor] collapses and nothing fires.
-    decimal EXEC_NET_FLOOR = decimal.TryParse(Environment.GetEnvironmentVariable("HARDVEN_EXEC_NET_FLOOR"),
-        NumberStyles.Any, CultureInfo.InvariantCulture, out var _enf) && _enf > 0m ? _enf : 0.985m;
-    const decimal MIN_PLAUSIBLE_NET    = 0.90m;  // reject arbs cheaper than this: a >10% "edge" signals a mispriced/mismatched pair (JOR), not a real arb
+    decimal EXEC_NET_FLOOR  = EnvDec("HARDVEN_EXEC_NET_FLOOR", 0.985m);
+    // Reject arbs cheaper than this: a >10% "edge" signals a mispriced/mismatched pair (JOR), not a real arb.
+    decimal MIN_PLAUSIBLE_NET = EnvDec("HARDVEN_MIN_PLAUSIBLE_NET", 0.90m);
     // Re-entry cooldown per pair AND per HardVen leg (the sibling guard shares it). Was hardcoded at 120 with no
     // way to change it — which made the dry-run failure-scenario suite painful to drive, since each injected arb
     // then sat out two minutes. Injected (testMode) arbs now bypass it entirely, so this is for tuning real
     // re-entry pace: lower = re-enter a recurring edge sooner, higher = fewer bites at the same line.
-    int PAIR_COOLDOWN_SEC = int.TryParse(Environment.GetEnvironmentVariable("HARDVEN_PAIR_COOLDOWN_SEC"),
-        NumberStyles.Any, CultureInfo.InvariantCulture, out var _pcd) && _pcd >= 0 ? _pcd : 120;
+    int PAIR_COOLDOWN_SEC = EnvInt("HARDVEN_PAIR_COOLDOWN_SEC", 120, allowZero: true);
     // HARDVEN_ALLOW_REENTRY: take MULTIPLE positions on the same pair. Testing-only — it exists so one dry-run
     // process can be driven through a whole scenario suite without a restart between trades. **Deliberately
     // IGNORED under --live**, and loudly: the request is that leaving it in .env can never stack real positions
@@ -565,16 +613,16 @@ if (isLive || isDryRun)
                         + "immediately. Simultaneous sibling fires are still blocked (in-flight lock).");
         Console.ResetColor();
     }
-    const decimal LOW_BALANCE_ALERT_USD = 15m;   // Discord-alert when either venue's cash drops below this
+    decimal LOW_BALANCE_ALERT_USD = EnvDec("HARDVEN_LOW_BALANCE_ALERT_USD", 15m, allowZero: true);  // Discord-alert below this
 
     // Recovery / halt policy. Ops rule: only halt on the daily-loss tripwire, a manual stop, or a network
     // error — never on a naked leg. A naked/partial leg is hedged if still ≤ break-even, else swept out;
     // if it truly can't flatten (venue paused) the pair is orphaned and the bot keeps running.
-    const decimal HEDGE_MAX_NET        = 1.0m;   // complete a hedge only if net ≤ this (1.0 = break-even; raise to tolerate worse hedges when capital is ample)
-    const int     REVERSE_FLOOR_CENTS  = 1;      // relentless reverse sweeps the book down to this price to guarantee a fill
-    const int     REVERSE_MAX_ATTEMPTS = 4;      // sweep attempts before orphaning the remainder
-    const decimal TRADE_MAX_LOSS_MULT  = 3.0m;   // per-trade tripwire: halt if a single (hedged) fill lands >Nx worse than its edge
-    const bool    PER_TRADE_TRIPWIRE   = true;   // enable the per-trade tripwire above
+    decimal HEDGE_MAX_NET       = EnvDec("HARDVEN_HEDGE_MAX_NET", 1.0m);        // complete a hedge only if net ≤ this (1.0 = break-even)
+    int     REVERSE_FLOOR_CENTS = EnvInt("HARDVEN_REVERSE_FLOOR_CENTS", 1);     // reverse sweeps the book down to this price to guarantee a fill
+    int     REVERSE_MAX_ATTEMPTS= EnvInt("HARDVEN_REVERSE_MAX_ATTEMPTS", 4);    // sweep attempts before orphaning the remainder
+    decimal TRADE_MAX_LOSS_MULT = EnvDec("HARDVEN_TRADE_MAX_LOSS_MULT", 3.0m);  // halt if one (hedged) fill lands >Nx worse than its edge
+    bool    PER_TRADE_TRIPWIRE  = EnvBool("HARDVEN_PER_TRADE_TRIPWIRE", true);  // enable the per-trade tripwire above
 
     // In dry-run, probe real credentials before swapping in simulated clients.
     // This surfaces auth/connectivity issues without risking any orders.
@@ -705,9 +753,12 @@ if (isLive || isDryRun)
                           "(locate + click moneyline + verify), then the fill is simulated. Nothing is placed; needs the logged-in sidecar.");
         Console.ResetColor();
     }
-    // Total combined open-exposure cap. $1,000 = full deployment of the $500/platform capital;
+    // Total combined open-exposure cap. Default $1,000 = full deployment of the $500/platform capital;
     // the per-platform balance/buffer checks still gate each side so neither venue overdraws.
-    decimal       maxExposureUsd     = 1000m;
+    decimal maxExposureUsd = EnvDec("HARDVEN_MAX_EXPOSURE_USD", 1000m);
+    // Per-day cumulative-loss tripwire — a HARD halt requiring a manual reset, so it was the single most
+    // consequential number in this file to have had no env at all.
+    decimal maxDayLossUsd  = EnvDec("HARDVEN_MAX_DAY_LOSS_USD", 20m);
     executor = new CrossArbExecutor(
         kalshi:              kalshiExec,
         hardven:                hardvenExec,
@@ -719,8 +770,8 @@ if (isLive || isDryRun)
         executionThreshold:  EXECUTION_THRESHOLD,
         execNetFloor:        EXEC_NET_FLOOR,
         pairCooldownSeconds: PAIR_COOLDOWN_SEC,
-        fillTimeoutMs:       5000,
-        maxDayLossUsd:       20m,
+        fillTimeoutMs:       EnvInt("HARDVEN_FILL_TIMEOUT_MS", 5000),
+        maxDayLossUsd:       maxDayLossUsd,
         dryRun:              isDryRun,
         minBuy:              minBuy,
         singleEntry:         singleEntry,
@@ -753,7 +804,36 @@ if (isLive || isDryRun)
     // attempts-vs-positions distinction decides whether a miss ends the run.
     string tryTag = tryN is null ? "unlimited"
                   : $"{tryN} {(trySuccessOnly ? "POSITION(S) — misses are free" : "attempt(s) — a miss counts")}";
-    Console.WriteLine($"[EXECUTOR] {execLabel} |{minBuyTag} buffer={BALANCE_BUFFER_PCT:P0} maxExposure=${maxExposureUsd:0.00} threshold={EXECUTION_THRESHOLD:0.000} cooldown={PAIR_COOLDOWN_SEC}s try={tryTag}");
+    // Show the reserve in DOLLARS, not just as a percentage. The percentage is a fraction of maxBet, so
+    // "buffer=20%" tells you nothing about whether it fits inside your balance — which is the only thing
+    // that decides if a bet is possible.
+    decimal effectiveBufferUsd = MAX_BET_USD * BALANCE_BUFFER_PCT;
+    string  bufferTag = bufferIsAbsolute
+        ? $"buffer=${effectiveBufferUsd:0.00} (absolute)"
+        : $"buffer={BALANCE_BUFFER_PCT:P0} of maxBet = ${effectiveBufferUsd:0.00}";
+    Console.WriteLine($"[EXECUTOR] {execLabel} |{minBuyTag} {bufferTag} maxExposure=${maxExposureUsd:0.00} threshold={EXECUTION_THRESHOLD:0.000} cooldown={PAIR_COOLDOWN_SEC}s dayLoss=${maxDayLossUsd:0.00} try={tryTag}");
+
+    // ── the reserve-vs-balance check ──────────────────────────────────────────────────────────────────
+    // Sizing is floor((balance - buffer) / price) per platform, so a reserve at or above the balance makes
+    // EVERY arb size to zero contracts and skip. Nothing else in the log says so: the bot connects, prices
+    // flow, near-misses print, and the day reads as "no arbs were available". Observed live 2026-08-10 with
+    // a $40 reserve (20% of a $200 maxBet) in front of a $12.88 account.
+    foreach (var (venue, bal) in new[] { ("Kalshi", executor.KalshiBalanceUsd),
+                                         ("HardVen", executor.HardVenBalanceUsd) })
+    {
+        if (effectiveBufferUsd < bal) continue;
+        Console.ForegroundColor = ConsoleColor.Red;
+        Console.WriteLine(
+            $"[LIMITS] *** {venue} CANNOT TRADE: reserve buffer ${effectiveBufferUsd:0.00} >= balance ${bal:0.00}. " +
+            $"Every arb will size to 0 contracts and skip as 'balance-limited'. ***");
+        Console.WriteLine(
+            $"[LIMITS]     Fix by funding {venue}, or lower the reserve: HARDVEN_BALANCE_BUFFER_USD=<abs $> " +
+            $"(0 disables it) or HARDVEN_BALANCE_BUFFER_PCT=<fraction of maxBet>, or lower " +
+            $"HARDVEN_MAX_BET_USD (currently ${MAX_BET_USD:0.00}).");
+        Console.ResetColor();
+        await discord.AlertAsync($"⚠️ **{BOT_NAME}** cannot trade on {venue}: reserve buffer " +
+                                 $"${effectiveBufferUsd:0.00} ≥ balance ${bal:0.00}. Every arb sizes to 0 contracts.");
+    }
     // Show the EXECUTION GATES explicitly — "why did/didn't it fire" is otherwise invisible until a skip line
     // appears, and the favourite gate's start state (env HARDVEN_FAVORITE_KALSHI_SPORTS, live-toggled by H) is
     // easy to misremember mid-session.
