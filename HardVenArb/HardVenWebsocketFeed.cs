@@ -38,6 +38,7 @@ public class HardVenWebsocketFeed
     // default 1.0 = a USD book / no-op) so all downstream depth is USD-equivalent. ~1.08 for an EUR account.
     private static decimal _fxToUsd => FxRate.Current;   // LIVE rate (see FxRate) — never a frozen copy
     private int _staleAccum;            // stale quotes seen during the in-progress poll
+    private bool _warnedFeedDown;      // one-shot: venue feed reported down under the feed-age policy
     private int _lastStaleCount = -1;   // last reported count, for transition logging
     /// <summary>Count of HardVen quotes whose sidecar timestamp is older than the freshness window (stale).</summary>
     public volatile int StaleQuoteCount;
@@ -189,6 +190,31 @@ public class HardVenWebsocketFeed
 
         double nowUnix = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 1000.0;
 
+        // FEED-LEVEL freshness. Some venues push only — no REST prices endpoint exists to re-seed
+        // timestamps with (BetInAsia has exactly one price-bearing HTTP response, the betslip), so a
+        // quiet pre-match market legitimately carries a quote many minutes old while the socket is
+        // perfectly healthy. Per-QUOTE age then throws away every pre-live price: measured, the median
+        // pre-live quote was 834s old against a 30s gate, and 221 of 221 windows were in-play.
+        // When the sidecar declares `quote_age_policy: "feed"`, trust a quote for as long as the FEED
+        // is alive and clear everything the moment it is not. Venues that serve a frozen last-known
+        // price on fetch failure (Pinnacle) send no policy and keep the per-quote gate, because there
+        // a stale ts really can mean "our session died".
+        bool feedPolicy = false, feedAlive = true;
+        if (doc.RootElement.TryGetProperty("feed", out var fe) && fe.ValueKind == JsonValueKind.Object)
+        {
+            feedPolicy = fe.TryGetProperty("quote_age_policy", out var qp)
+                         && string.Equals(qp.GetString(), "feed", StringComparison.OrdinalIgnoreCase);
+            feedAlive  = !fe.TryGetProperty("alive", out var al) || al.ValueKind != JsonValueKind.False;
+            if (feedPolicy && !feedAlive && !_warnedFeedDown)
+            {
+                _warnedFeedDown = true;
+                Console.WriteLine("[HARDVEN] venue FEED reports DOWN — clearing all book quotes. This is the " +
+                                  "signal that replaces per-quote age on a push-only venue; a quiet market is " +
+                                  "fine, a silent socket is not.");
+            }
+            if (feedPolicy && feedAlive) _warnedFeedDown = false;
+        }
+
         foreach (var prop in sels.EnumerateObject())
         {
             string bookKey = $"H:{prop.Name}";
@@ -209,7 +235,8 @@ public class HardVenWebsocketFeed
             // quote ONLY while its ts is recent; else clear the book AND don't advance its staleness clock.
             double ts     = s.TryGetProperty("ts", out var tsEl) && tsEl.TryGetDouble(out var tv) ? tv : 0;
             double ageSec = ts > 0 ? nowUnix - ts : double.MaxValue;
-            bool   fresh  = ageSec <= _quoteMaxAgeSec;
+            // feed policy: the socket's health is the freshness signal, not this one quote's age.
+            bool   fresh  = feedPolicy ? (feedAlive && ts > 0) : (ageSec <= _quoteMaxAgeSec);
             if (!fresh) _staleAccum++;
 
             // A fresh, live, valid price → one ask level. Anything else (stale/suspended/missing/garbage) →

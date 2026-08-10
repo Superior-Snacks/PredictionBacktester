@@ -1616,13 +1616,31 @@ class PinnacleAdapter(BookAdapter):
             });
             return seen.size;
           };
-          // Find the scroller: the nearest ancestor of a row that actually overflows. Class names are
-          // build-hashed (list-mCW1NFV2s6), so never select on them.
-          let el = document.querySelector('.scrollbar-item');
-          while (el && !(el.scrollHeight > el.clientHeight + 40)) el = el.parentElement;
+          // Find the scroller by walking UP FROM THE CONTENT, never from a class name. The previous
+          // version anchored on `.scrollbar-item`; when that stopped matching, `el` was null on the
+          // first line and the scan silently degraded to "read whatever is rendered, report TRUNCATED
+          // forever" -- which is what starved the tab manager (7 paired games instead of 42, tabs=0/12
+          // with 12 slots free). The rows themselves are the one thing we can always locate, because
+          // finding them is the entire point of the scan.
           grab();
-          if (!el) return {leagues: [...seen], scrolled: false, height: 0, steps: 0,
-                           reached_bottom: false, settled: true};
+          const anchor = document.querySelector('a[href$="/matchups/"]')
+                      || document.querySelector('a[href*="/matchups"]')
+                      || document.querySelector('.scrollbar-item');   // legacy, last resort
+          let el = anchor;
+          while (el && !(el.scrollHeight > el.clientHeight + 40)) el = el.parentElement;
+          // Nothing overflowed on the way up: the page itself may be the scroller (layout change).
+          if (!el) {
+            const doc = document.scrollingElement || document.documentElement;
+            if (doc && doc.scrollHeight > doc.clientHeight + 40) el = doc;
+          }
+          if (!el) {
+            // Two very different situations, and conflating them is what hid this for a whole session:
+            //   anchor found    -> the list FITS without scrolling, so this read is COMPLETE
+            //   no anchor       -> the board did not render; report it as an error, not as truncation
+            const fits = !!anchor;
+            return {leagues: [...seen], scrolled: false, height: 0, steps: 0,
+                    reached_bottom: fits, settled: fits, no_scroller: true, no_rows: !anchor};
+          }
           const start = el.scrollTop, step = Math.max(200, el.clientHeight - 80);
           let steps = 0, y = 0, reached = false, settled = false;
           // Scroll to the bottom, THEN keep re-reading until a pass adds nothing new. A fixed step count
@@ -1663,6 +1681,7 @@ class PinnacleAdapter(BookAdapter):
                     if s == slug:
                         matched.add(lid)
         return {"scrolled": raw.get("scrolled"), "list_height_px": raw.get("height"),
+                "no_scroller": bool(raw.get("no_scroller")), "no_rows": bool(raw.get("no_rows")),
                 "scroll_steps": raw.get("steps"),
                 # complete = we hit the bottom AND a further read added no new leagues
                 "reached_bottom": raw.get("reached_bottom"), "settled": raw.get("settled"),
@@ -1689,9 +1708,18 @@ class PinnacleAdapter(BookAdapter):
             print(f"[PINNACLE] board scroll-scan: {scan['error']}")
             return getattr(self, "_board_scan_lids", set())
         out = set(scan.get("matched_lids") or [])
-        state = "complete" if scan.get("complete") else (
-            "TRUNCATED (never reached the bottom)" if not scan.get("reached_bottom")
-            else "TRUNCATED (list still growing when we stopped)")
+        if scan.get("no_rows"):
+            # No league rows at all: the board did not render (wrong page, still loading, markup change).
+            # This is an ERROR, not a truncated scan -- saying "truncated" sent us hunting a scroll bug
+            # for a whole session when the real answer was "the selector matched nothing".
+            print("[PINNACLE] board scroll-scan: NO LEAGUE ROWS on the page — the board did not render "
+                  "(is the primary tab on a sport board?). Keeping the previous league set.")
+            self._board_scan_ts = now - max(0.0, ttl - 120.0)
+            return getattr(self, "_board_scan_lids", set())
+        state = ("complete (list fits, no scrolling needed)" if scan.get("no_scroller") and scan.get("complete")
+                 else "complete" if scan.get("complete") else (
+                 "TRUNCATED (never reached the bottom)" if not scan.get("reached_bottom")
+                 else "TRUNCATED (list still growing when we stopped)"))
         print(f"[PINNACLE] board scroll-scan {state}: {len(scan.get('leagues_on_board') or [])} league(s) "
               f"listed [{scan.get('date_bar')}] ({scan.get('scroll_steps')} steps, "
               f"{scan.get('list_height_px')}px) - {len(out)} of ours are ON the board: {sorted(out)}")

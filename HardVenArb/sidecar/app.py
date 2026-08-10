@@ -168,6 +168,19 @@ async def odds(selections: str = Query(..., description="comma-separated selecti
             d["wv"] = bool(wv[sid])
         sels[sid] = d
     resp = {"selections": sels, "ts": time.time()}
+    # FEED HEALTH rides along with every poll. The C# freshness gate was per-QUOTE age, which is right
+    # for a book whose sidecar serves a frozen last-known price when its fetch fails (a stale ts really
+    # can mean "our session died"). On a push-only venue the same signal means the opposite: the ts is
+    # stamped only when the venue actually sends that event, so an old ts is a QUIET MARKET, not a dead
+    # one — and discarding it threw away every pre-live price. Adapters that can tell the difference
+    # publish it here; the bot then trusts a quiet quote while the FEED is alive, and clears everything
+    # when it is not.
+    fh = getattr(adapter, "feed_health", None)
+    if callable(fh):
+        try:
+            resp["feed"] = fh()
+        except Exception:
+            pass
     s = _session_state()
     if s is not None:
         resp["session_ready"] = bool(s.get("ready", True))   # rides along so the C# /odds poll sees readiness

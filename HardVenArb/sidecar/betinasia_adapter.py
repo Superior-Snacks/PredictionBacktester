@@ -429,6 +429,30 @@ class BetInAsiaAdapter(BookAdapter):
     async def bet(self, bet_id: str) -> Optional[dict]:
         return None
 
+    def feed_health(self) -> dict:
+        """Is the SOCKET alive, independent of any one market's age?
+
+        This is the signal a push-only venue needs. BetInAsia has no REST prices endpoint at all (the
+        whole recon contains exactly one price-bearing HTTP response, and it is the betslip), so there
+        is no Pinnacle-style 90s re-seed to keep per-quote timestamps moving. A pre-match market simply
+        does not tick: measured over 120s, 2 of 20 pre-live selections got a fresher timestamp versus 8
+        of 12 in-play, and the median pre-live quote was 834s old against a 30s freshness gate. Every
+        pre-live price was therefore being discarded, which is why 221 of 221 windows were in-play.
+
+        `stale` here means THE FEED stopped, not "this market is quiet" — frames arrive constantly
+        across the whole book, so silence on the socket is unambiguous.
+        """
+        st = self.feed.stats()
+        age = st.get("last_frame_age")
+        limit = float(os.environ.get("BIA_FEED_STALE_SEC", "120"))
+        alive = bool(st.get("connected") or (age is not None and age <= limit))
+        return {"book": self.name, "alive": alive,
+                "last_frame_age": age, "stale_after_sec": limit,
+                "priced": st.get("priced", 0), "frames": st.get("frames", 0),
+                # Tell the bot the per-quote age gate does not apply here, so it does not have to know
+                # anything venue-specific itself.
+                "quote_age_policy": "feed"}
+
     # ── diagnostics ───────────────────────────────────────────────────────────
     def health(self) -> dict:
         s = self.feed.stats()
