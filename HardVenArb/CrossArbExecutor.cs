@@ -322,7 +322,18 @@ public class CrossArbExecutor
     }
 
     // ── Trade journal ─────────────────────────────────────────────────────────
-    private readonly string        _journalPath = $"CrossArbJournal_{DateTime.UtcNow:yyyyMMdd}.jsonl";
+    // HARDVEN_OUTPUT_TAG separates two venues' output files. It matters more than it looks: the
+    // journal is what RestorePositionsFromVenuesAsync reads at startup, so a shared file means one
+    // venue's open positions are restored as the other's — the same contamination that let 35
+    // dry-run records convince a live start it held a position and hard-halted it. Unset = the
+    // historic names, so the Pinnacle bot's existing files and restore are untouched.
+    private static string Tagged(string baseName, string ext)
+    {
+        string tag = (Environment.GetEnvironmentVariable("HARDVEN_OUTPUT_TAG") ?? "").Trim();
+        string suffix = tag.Length > 0 ? "_" + tag : "";
+        return $"{baseName}{suffix}_{DateTime.UtcNow:yyyyMMdd}{ext}";
+    }
+    private readonly string        _journalPath = Tagged("CrossArbJournal", ".jsonl");
     private readonly SemaphoreSlim _journalLock = new(1, 1);
 
     // ── CSV ───────────────────────────────────────────────────────────────────

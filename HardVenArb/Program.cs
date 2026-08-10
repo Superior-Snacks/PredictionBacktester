@@ -312,15 +312,21 @@ var manualPairs = new List<CrossPair>();
 // In dev builds AppContext.BaseDirectory = bin/Debug/net10.0/ — the output copy of
 // cross_pairs.json is stale; pair_markets.py writes to the project source dir 3 levels up.
 // Detect dev by looking for a .csproj file there; production published builds have none.
-string outputDirFile = Path.Combine(AppContext.BaseDirectory, "cross_pairs.json");
+// HARDVEN_PAIRS_FILE selects the pairs file, so a second venue can run beside Pinnacle without
+// touching its pairing. Token formats are venue-specific ("221310:1633549397:home" on Pinnacle vs
+// "tennis:338:2026-08-09,...:tennis_match,all:p1" on BetInAsia) and a pairs file is read by exactly
+// one book, so sharing one file would mean each pairer silently destroying the other's work.
+// Filename only — the dev/published directory resolution below still applies.
+string pairsFileName = (Environment.GetEnvironmentVariable("HARDVEN_PAIRS_FILE") ?? "cross_pairs.json").Trim();
+string outputDirFile = Path.Combine(AppContext.BaseDirectory, pairsFileName);
 string sourceDir     = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../.."));
-string sourceDirFile = Path.Combine(sourceDir, "cross_pairs.json");
+string sourceDirFile = Path.Combine(sourceDir, pairsFileName);
 bool   isDevBuild    = Directory.GetFiles(sourceDir, "*.csproj").Length > 0;
 // Dev build → the auto-pairer writes cross_pairs.json to the SOURCE dir (HardVenArb/). Point the reload path
 // there even when the file doesn't exist YET (the first auto-pair run creates it), so the hot-reload actually
 // finds it — otherwise a fresh setup with HARDVEN_AUTO_PAIR would freeze onto a CWD path and never load pairs.
 string manualPath = isDevBuild ? sourceDirFile
-                               : (File.Exists(outputDirFile) ? outputDirFile : "cross_pairs.json");
+                               : (File.Exists(outputDirFile) ? outputDirFile : pairsFileName);
 if (File.Exists(manualPath))
 {
     try
@@ -347,12 +353,12 @@ if (File.Exists(manualPath))
                 manualPairs.Add(new CrossPair(pairId, label, kTicker, yesToken, noToken, eventId, settlementDate, isNegRisk, hardvenMinSize, threeWay));
             }
         }
-        Console.WriteLine($"[CONFIG] {manualPairs.Count} manual pair(s) loaded from cross_pairs.json"
+        Console.WriteLine($"[CONFIG] {manualPairs.Count} manual pair(s) loaded from {pairsFileName}"
                           + (excludedCount > 0 ? $" ({excludedCount} skipped by --exclude)" : ""));
     }
     catch (Exception ex)
     {
-        Console.WriteLine($"[CONFIG WARN] Could not parse cross_pairs.json: {ex.Message}");
+        Console.WriteLine($"[CONFIG WARN] Could not parse {pairsFileName}: {ex.Message}");
     }
 }
 

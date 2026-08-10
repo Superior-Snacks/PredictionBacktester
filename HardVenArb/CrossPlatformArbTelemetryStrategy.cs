@@ -246,8 +246,13 @@ public class CrossPlatformArbTelemetryStrategy
         _arbThreshold = arbThreshold;
         _depthFloor   = depthFloor;
         _requestHardVenVerify = requestHardVenVerify;
-        _csvBaseName      = "CrossArbTelemetry";
-        _hedgeCsvBaseName = "CrossArbHedgeMonitor";
+        // Same HARDVEN_OUTPUT_TAG as the journal: two venues running side by side must not interleave
+        // their telemetry, or every downstream analysis silently mixes two books' arb windows into one
+        // tape. Unset = the historic names, so existing files and the analyzer keep working unchanged.
+        string outTag = (Environment.GetEnvironmentVariable("HARDVEN_OUTPUT_TAG") ?? "").Trim();
+        string tagSfx = outTag.Length > 0 ? "_" + outTag : "";
+        _csvBaseName      = "CrossArbTelemetry" + tagSfx;
+        _hedgeCsvBaseName = "CrossArbHedgeMonitor" + tagSfx;
 
         _bookKeyToPairs = new Dictionary<string, List<int>>(StringComparer.Ordinal);
         _activeWindows  = new Dictionary<string, ActiveWindow?>(StringComparer.Ordinal);
