@@ -56,6 +56,39 @@ for a, b in [("T. Tirante", "Thiago Agustin Tirante"),
     s = P._name_score(a, b)
     check(f"{a} == {b}  (score {s:.0f})", s >= THRESHOLD, f"scored {s} < {THRESHOLD}")
 
+print("\n[2b] annotated names — both venues decorate them, both broke matching")
+# Kalshi disambiguates duplicates; BetInAsia adds a status marker. The square-bracket case is worse:
+# 'f' lands as the LAST token so _surname() returned "f" and compared the wrong thing entirely.
+for a, b in [("Cezar Cretu (b. 2001)", "Cezar Cretu"),
+             ("Ekaterina Alexandrova [f]", "Ekaterina Alexandrova"),
+             ("Alexandrova", "Ekaterina Alexandrova [f]"),
+             ("Elina Svitolina", "Svitolina")]:
+    s = P._name_score(a, b)
+    check(f"{a} == {b}  (score {s:.0f})", s >= THRESHOLD, f"scored {s} < {THRESHOLD}")
+check("bracket marker no longer hijacks the surname",
+      P._surname("Ekaterina Alexandrova [f]") == "alexandrova",
+      P._surname("Ekaterina Alexandrova [f]"))
+# ...and stripping annotations must not resurrect the sibling hole
+check("annotated sibling still rejected",
+      P._name_score("Alexander Zverev [f]", "Mischa Zverev") < THRESHOLD)
+
+print("\n[2c] compound surnames — only ONE venue spells the second surname")
+# Real ties lost to this, found by reading the unpaired lists by hand. `_surname()` takes the LAST
+# token, so a Spanish double surname makes the two venues disagree on the surname entirely.
+for a, b in [("Murkel Dellien", "Murkel Alejandro Dellien Velasco"),
+             ("Daniel Elahi Galan", "Daniel Elahi Galan Riveros"),
+             ("Daniel Merida", "Daniel Merida Aguilar"),
+             ("Learner Tien", "Learner Tien"),
+             ("Juan Martin", "Juan Martin Del Potro")]:
+    s = P._name_score(a, b)
+    check(f"{a} == {b}  (score {s:.0f})", s >= THRESHOLD, f"scored {s} < {THRESHOLD}")
+# ...and the loosening must not start matching merely-similar surnames
+for a, b in [("Juan Martin", "Juan Martinez"),
+             ("Li Na", "Li Wang"),
+             ("Andres Martin", "Andres Molteni")]:
+    s = P._name_score(a, b)
+    check(f"{a} != {b}  (score {s:.0f})", s < THRESHOLD, f"scored {s} >= {THRESHOLD}")
+
 print("\n[3] unrelated players")
 for a, b in [("Learner Tien", "Thiago Agustin Tirante"),
              ("Andre Ilagan", "Andres Martin"),

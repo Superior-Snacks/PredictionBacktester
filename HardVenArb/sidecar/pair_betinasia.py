@@ -46,7 +46,15 @@ CACHE_NAME = "bia_player_ids.json"
 
 # ── name handling ─────────────────────────────────────────────────────────────
 def _norm(s: str) -> str:
-    s = unicodedata.normalize("NFKD", s or "").encode("ascii", "ignore").decode()
+    # BOTH VENUES ANNOTATE NAMES, and both annotations break matching in different ways:
+    #   Kalshi     "Cezar Cretu (b. 2001)"      disambiguates same-named players
+    #   BetInAsia  "Ekaterina Alexandrova [f]"  status/seeding marker
+    # Left in, the tokens ('b','2001','f') are name tokens the other side never has. The square-bracket
+    # case is the nastier one: 'f' becomes the LAST token, so `_surname()` returns "f" and the whole
+    # surname gate compares the wrong thing -- Alexandrova vs Svitolina was a real pair lost this way,
+    # and it is the only Pinnacle-paired tie that BIA missed for a fixable reason.
+    s = re.sub(r"[\(\[][^)\]]*[\)\]]", " ", s or "")
+    s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode()
     s = re.sub(r"[^a-z0-9 ]", " ", s.lower())
     return " ".join(s.split())
 
@@ -108,12 +116,29 @@ def _name_score(a: str, b: str) -> float:
         return 0.0
     if na == nb:
         return 100.0
-    sa, sb = _surname(a), _surname(b)
-    if sa and sa == sb:
-        ga, gb = _given(a), _given(b)
-        if not _given_compatible(ga, gb):
-            return SAME_SURNAME_DIFFERENT_PERSON
-        return 95.0 if (ga and gb) else 90.0     # surname-only side is plausible but weaker
+
+    # TOKEN SUBSET is the primary test, not surname equality. Surnames are the wrong anchor because
+    # `_surname()` takes the LAST token, and Spanish/Latin American players carry a double surname that
+    # only one venue spells out:
+    #     Kalshi "Murkel Dellien"          -> surname 'dellien'
+    #     BetInAsia "Murkel Alejandro Dellien Velasco" -> surname 'velasco'
+    # Same player, "different" surnames, rejected. Found by reading the unpaired lists by hand rather
+    # than trusting the score — it cost the real Dellien/Galan and Merida/Tien ties.
+    #
+    # Subset handles that, and every case the surname rule handled, in one idea: every token of the
+    # SHORTER name must appear in the longer one (initials count). Middle names, dropped second
+    # surnames and abbreviations are all just "the longer name has extra tokens".
+    # Siblings still fail, which is the property that must not regress: {alexander, zverev} is not a
+    # subset of {mischa, zverev} because 'alexander' has no partner.
+    ta, tb = na.split(), nb.split()
+    short, long = (ta, tb) if len(ta) <= len(tb) else (tb, ta)
+    if all(any(_tok_compatible(x, y) for y in long) for x in short):
+        # A single shared token is much weaker evidence than two, so score it at the threshold rather
+        # than above it: "Griekspoor" vs "Tallon Griekspoor" is fine, but one common token should not
+        # outvote a conflicting given name elsewhere.
+        return 95.0 if len(short) >= 2 else 90.0
+    if _surname(a) and _surname(a) == _surname(b):
+        return SAME_SURNAME_DIFFERENT_PERSON     # same surname, conflicting given name = not this person
     if fuzz is None:
         return 0.0
     # Different surnames: never let fuzzy alone carry a pair to a passing score. Two unrelated players
@@ -327,6 +352,16 @@ def main() -> None:
         if any(gate):
             print(f"[PAIR-BIA] price-gate (tol={args.price_tol}): {gate[0]} consistent | "
                   f"{gate[1]} inverted-fixed | {gate[2]} wrong-game rejected | {gate[3]} unvalidated")
+        # A gate that validates NOTHING is not a gate. price_validate needs `kalshi_yes_price` on each
+        # entry (written by the Kalshi-side scaffolder); when it is null the pair is counted
+        # "unvalidated" and passes through unchecked. Say so out loud rather than let a comforting
+        # line of output imply the inversion/wrong-game checks ran.
+        if gate[3] and not (gate[0] or gate[1] or gate[2]):
+            missing = sum(1 for e in pairs
+                          if e.get("hardven_yes_token") and e.get("kalshi_yes_price") is None)
+            print(f"[PAIR-BIA] WARNING price-gate DID NOT RUN: all {gate[3]} filled pair(s) are "
+                  f"unvalidated ({missing} have kalshi_yes_price=null). Inverted sides and wrong-game "
+                  f"pairs are NOT being caught. Re-scaffold the Kalshi side so the field is populated.")
 
     valid = sum(1 for e in pairs if e.get("hardven_yes_token") and e.get("hardven_no_token"))
     if args.write and (filled or gate[1] or gate[2]):
