@@ -89,6 +89,32 @@ for a, b in [("Juan Martin", "Juan Martinez"),
     s = P._name_score(a, b)
     check(f"{a} != {b}  (score {s:.0f})", s < THRESHOLD, f"scored {s} >= {THRESHOLD}")
 
+print("\n[2d] letters NFKD does not decompose (they were being DELETED, not folded)")
+for a, b in [("Kasimpasa", "Kasımpaşa"), ("Nordsjaelland", "Nordsjælland"),
+             ("Bodo", "Bodø"), ("Malmo", "Malmö")]:
+    s_ = P._name_score(a, b)
+    check(f"{a} == {b}  (score {s_:.0f})", s_ >= THRESHOLD, f"scored {s_}")
+
+print("\n[2e] stem matching is TEAM-SPORT ONLY")
+P.STEM_MATCHING = True
+for a, b in [("Karlsruhe", "Karlsruher SC"), ("Corum", "Corumspor"),
+             ("Kocaeli", "Kocaelispor"), ("Braunschweig", "Braunschweiger TSV")]:
+    s_ = P._name_score(a, b)
+    check(f"club stem: {a} == {b}  ({s_:.0f})", s_ >= THRESHOLD, f"scored {s_}")
+s_ = P._name_score("Alexander Zverev", "Mischa Zverev")
+check(f"siblings still rejected with stem ON ({s_:.0f})", s_ < THRESHOLD)
+P.STEM_MATCHING = False
+# Why it is scoped: a blanket prefix rule scored "Juan Martin" == "Juan Martinez" at 95 -- different
+# players, a wrong-side pair. Surnames do not inflect; club names do.
+s_ = P._name_score("Juan Martin", "Juan Martinez")
+check(f"player stem NOT applied: Juan Martin != Juan Martinez ({s_:.0f})", s_ < THRESHOLD)
+
+print("\n[2f] 3-way (soccer) helpers")
+g3 = {"players": {"h": ("Arsenal", "sH"), "d": ("d", "sD"), "a": ("Leeds", "sA")}}
+check("draw excluded from the head-to-head", P._team_names(g3) == ["Arsenal", "Leeds"])
+check("Kalshi 'Tie' recognised", P._is_draw_outcome("Tie") and P._is_draw_outcome("Draw"))
+check("a team name is not a draw", not P._is_draw_outcome("Arsenal"))
+
 print("\n[3] unrelated players")
 for a, b in [("Learner Tien", "Thiago Agustin Tirante"),
              ("Andre Ilagan", "Andres Martin"),

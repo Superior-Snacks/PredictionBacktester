@@ -61,6 +61,17 @@ def _team_names(game: dict) -> list[str]:
 
 
 # ── name handling ─────────────────────────────────────────────────────────────
+# Letters that NFKD does NOT decompose. `ö` -> o+diaeresis folds fine, but these are DISTINCT letters
+# with no ASCII base, so `.encode("ascii","ignore")` DELETES them: "Kasımpaşa" -> "kasmpasa" (vs Kalshi's
+# "kasimpasa"), "Nordsjælland" -> "nordsjlland", "Bodø" -> "bod". Every one is a real European club and
+# every one scored 85 — just under the threshold. Transliterate before folding.
+_TRANSLIT = str.maketrans({
+    "ı": "i", "İ": "i", "ø": "o", "Ø": "o", "æ": "ae", "Æ": "ae", "œ": "oe", "Œ": "oe",
+    "ß": "ss", "đ": "d", "Đ": "d", "ð": "d", "Ð": "d", "ł": "l", "Ł": "l",
+    "þ": "th", "Þ": "th", "ħ": "h", "ŋ": "n", "ʼ": "'", "’": "'",
+})
+
+
 def _norm(s: str) -> str:
     # BOTH VENUES ANNOTATE NAMES, and both annotations break matching in different ways:
     #   Kalshi     "Cezar Cretu (b. 2001)"      disambiguates same-named players
@@ -70,6 +81,7 @@ def _norm(s: str) -> str:
     # surname gate compares the wrong thing -- Alexandrova vs Svitolina was a real pair lost this way,
     # and it is the only Pinnacle-paired tie that BIA missed for a fixable reason.
     s = re.sub(r"[\(\[][^)\]]*[\)\]]", " ", s or "")
+    s = s.translate(_TRANSLIT)
     s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode()
     s = re.sub(r"[^a-z0-9 ]", " ", s.lower())
     return " ".join(s.split())
@@ -90,9 +102,31 @@ def _given(name: str) -> list[str]:
     return _norm(name).split()[:-1]
 
 
+# A shorter token is accepted as a PREFIX of a longer one only from this length. Club names vary by
+# stem and suffix across sources -- "Karlsruhe"/"Karlsruher SC" (German adjectival), "Corum"/"Corumspor"
+# (Turkish -spor) -- and both scored just under the bar. 5 is deliberately conservative: it excludes the
+# short generic words that would over-match ("real", "inter", "sport" as a bare word, "san", "new"), and
+# a loose token still cannot pair a tie on its own because BOTH sides must clear the threshold.
+_PREFIX_MIN = 5
+
+# ...and ONLY for team sports. The rule is safe for clubs and dangerous for people: "Juan Martin" vs
+# "Juan Martinez" scored 95 under a blanket prefix rule -- different players, a wrong-side pair, exactly
+# the failure the sibling gate exists to stop. Club names inflect ("Karlsruher"), surnames do not.
+# Enabled per run from --sport; tennis keeps exact-surname matching and is unchanged.
+STEM_MATCHING = False
+
+
 def _tok_compatible(x: str, y: str) -> bool:
-    """Same name token, allowing an INITIAL to stand for the name it abbreviates."""
-    return x == y or (len(x) == 1 and y.startswith(x)) or (len(y) == 1 and x.startswith(y))
+    """Same name token, allowing an INITIAL to stand for the name it abbreviates, and a long-enough
+    stem to stand for its inflected/suffixed form."""
+    if x == y:
+        return True
+    if (len(x) == 1 and y.startswith(x)) or (len(y) == 1 and x.startswith(y)):
+        return True
+    if not STEM_MATCHING:
+        return False
+    short, long = (x, y) if len(x) <= len(y) else (y, x)
+    return len(short) >= _PREFIX_MIN and long.startswith(short)
 
 
 def _given_compatible(ga: list[str], gb: list[str]) -> bool:
@@ -279,6 +313,13 @@ def main() -> None:
                          "scratch, which drops a working pair whenever the venue catalog is momentarily "
                          "missing that game.")
     args = ap.parse_args()
+
+    # Team sports get stem matching; player sports do not (see STEM_MATCHING).
+    global STEM_MATCHING
+    STEM_MATCHING = args.sport not in ("tennis", "boxing", "mma", "darts", "snooker")
+    if STEM_MATCHING:
+        print(f"[PAIR-BIA] stem matching ON for '{args.sport}' (club names inflect: "
+              f"Karlsruhe/Karlsruher, Corum/Corumspor)")
 
     if fuzz is None:
         print("[PAIR-BIA] WARNING: rapidfuzz missing - only exact/surname matches will work. "

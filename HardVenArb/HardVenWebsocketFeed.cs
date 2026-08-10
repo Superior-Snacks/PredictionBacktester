@@ -125,7 +125,7 @@ public class HardVenWebsocketFeed
                         string q  = Uri.EscapeDataString(string.Join(",", chunk));
                         using var resp = await _http.GetAsync($"{_sidecarBase}/odds?selections={q}", ct);
                         if (!resp.IsSuccessStatusCode) continue;
-                        ApplyOdds(await resp.Content.ReadAsStringAsync(ct));
+                        ApplyOdds(await resp.Content.ReadAsStringAsync(ct), chunk);
                         anyOk = true;
                     }
                     IsConnected = anyOk;
@@ -157,7 +157,7 @@ public class HardVenWebsocketFeed
         IsConnected = false;
     }
 
-    private void ApplyOdds(string json)
+    private void ApplyOdds(string json, IEnumerable<string>? requested = null)
     {
         using var doc = JsonDocument.Parse(json);
 
@@ -256,7 +256,37 @@ public class HardVenWebsocketFeed
             if (fresh) book.MarkDeltaReceived();   // only advance the staleness clock on a genuinely recent quote
             _telemetry.OnBookUpdate(bookKey);
         }
+
+        // SELECTIONS THE VENUE NO LONGER QUOTES. A finished match leaves the book entirely, so the
+        // sidecar simply omits it — and the loop above only touches what came BACK, leaving the last
+        // ask in place forever. Observed 2026-08-10: a Challenger match settled at 17:53 (Kalshi
+        // `status=finalized`) and its window stayed "open" for 37 minutes on a dead price, closing
+        // only at SHUTDOWN. Kalshi's residual NO at 5c against the venue's final 0.9363 reads as a
+        // permanent 1.4c arb that no re-read can disprove, because neither side is live.
+        // Cleared after a short grace so one partial/slow response cannot flap good books.
+        if (requested is null) return;
+        foreach (string sid in requested)
+        {
+            if (sels.TryGetProperty(sid, out _)) { _missCount.Remove(sid); continue; }
+            _missCount.TryGetValue(sid, out int n);
+            n++;
+            _missCount[sid] = n;
+            if (n < MissesBeforeClear) continue;
+            if (!_state.Books.TryGetValue($"H:{sid}", out var gone)) continue;
+            using var empty = JsonDocument.Parse("{\"bids\":[],\"asks\":[]}");
+            gone.ProcessBookUpdate(empty.RootElement.GetProperty("bids"),
+                                   empty.RootElement.GetProperty("asks"));
+            _telemetry.OnBookUpdate($"H:{sid}");
+            if (_missCount[sid] == MissesBeforeClear)
+                Console.WriteLine($"[HARDVEN] selection no longer quoted — book cleared ({sid[..Math.Min(46, sid.Length)]}). "
+                                  + "Usually the event finished and left the venue's book.");
+        }
     }
+
+    // Consecutive polls a selection may be absent before its book is emptied. >1 so a single partial
+    // response cannot churn live books; at a 3s poll this clears within ~6s.
+    private const int MissesBeforeClear = 2;
+    private readonly Dictionary<string, int> _missCount = new(StringComparer.Ordinal);
 
     /// <summary>One-line console note when HardVen quotes flip stale↔fresh (session frozen / recovered).</summary>
     private void ReportStaleness(int polled)
