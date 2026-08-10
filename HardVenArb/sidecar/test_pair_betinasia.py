@@ -183,5 +183,78 @@ check("player ids parsed", P._event_players("2026-08-09,10047664,90384") == ("10
 check("outright yields no players", P._event_players("2026-08-01,multirunner,100447481") == ("", ""))
 check("date parsed", P._event_date("2026-08-09,1,2") == "2026-08-09")
 
+print("\n[8] multi-sport pass — sport scoping")
+# THE RISK a multi-sport run introduces: one pairs file now holds tennis AND football AND baseball
+# entries, and each sport's pass walks the WHOLE list. Without scoping, a club name can fuzz against a
+# player name and fill a Kalshi tennis ticker with a football token -- a wrong-SPORT pair that no
+# downstream check looks for (the price gate compares prices, not sports).
+smap = P._series_to_bia_sport()
+check("series parsed off a market ticker",
+      P._series_of("KXEPLGAME-26AUG24FULCFC-FUL") == "KXEPLGAME")
+check("ticker with no dash survives", P._series_of("KXEPLGAME") == "KXEPLGAME")
+check("empty ticker does not crash", P._series_of("") == "")
+check("soccer series -> fb", smap.get("KXEPLGAME") == "fb")
+check("tennis series -> tennis", smap.get("KXATPMATCH") == "tennis")
+check("baseball series -> baseball", smap.get("KXMLBGAME") == "baseball")
+check("UFC -> mma", smap.get("KXUFCFIGHT") == "mma")
+check("exact-score market is NOT a tennis moneyline series",
+      "KXATPEXACTMATCH" not in smap, "KXATPEXACTMATCH leaked into the moneyline map")
+
+# A football entry offered to the TENNIS pass must be skipped, even when the venue game would score 100.
+fb_entry = {"kalshi_ticker": "KXEPLGAME-26AUG24FULCFC-FUL", "event_title": "Fulham vs Chelsea",
+            "kalshi_outcome": "Fulham", "settlement_date": "2026-08-24"}
+tennis_games = {
+    "2026-08-24,1,2": {"sport": "tennis", "league": "ATP", "start": "2026-08-24T12:00:00Z",
+                       "three_way": False,
+                       "players": {"p1": ("Fulham", "tennis:1:2026-08-24,1,2:tennis_match,all:p1"),
+                                   "p2": ("Chelsea", "tennis:1:2026-08-24,1,2:tennis_match,all:p2")}},
+}
+pairs = [dict(fb_entry)]
+f, _vc, um, _ms = P._fill_pass(pairs, tennis_games, {}, THRESHOLD, "tennis", smap)
+check("football entry skipped by the tennis pass", f == 0 and um == 0,
+      f"filled={f} unmatched={um}")
+check("...and no token was written", "hardven_yes_token" not in pairs[0])
+# ...and the SAME entry must fill on its own sport's pass.
+fb_games = {
+    "2026-08-24,10,20": {"sport": "fb", "league": "EPL", "start": "2026-08-24T12:00:00Z",
+                         "three_way": True,
+                         "players": {"h": ("Fulham", "fb:1:2026-08-24~10~20:wdw:h"),
+                                     "d": ("d", "fb:1:2026-08-24~10~20:wdw:d"),
+                                     "a": ("Chelsea", "fb:1:2026-08-24~10~20:wdw:a")}},
+}
+pairs = [dict(fb_entry)]
+f, _vc, um, _ms = P._fill_pass(pairs, fb_games, {}, THRESHOLD, "fb", smap)
+check("same entry fills on the fb pass", f == 1, f"filled={f} unmatched={um}")
+check("YES side oriented to home", pairs[0].get("hardven_yes_token", "").endswith(":h"))
+check("pass records which sport filled it", pairs[0].get("hardven_sport") == "fb")
+check("three_way tagged", pairs[0].get("three_way") is True)
+
+# An UNKNOWN series must degrade to the old behaviour (offered to every pass), not silently vanish.
+unk = [{"kalshi_ticker": "KXBRANDNEWSERIES-26AUG24AB-A", "event_title": "Fulham vs Chelsea",
+        "kalshi_outcome": "Fulham", "settlement_date": "2026-08-24"}]
+f, _vc, _um, _ms = P._fill_pass(unk, fb_games, {}, THRESHOLD, "fb", smap)
+check("unknown series still offered to the pass", f == 1, f"filled={f}")
+
+# Already-filled entries are never re-matched (the repeat-run / --sync-seeds path).
+done = [{"kalshi_ticker": "KXEPLGAME-26AUG24FULCFC-FUL", "event_title": "Fulham vs Chelsea",
+         "kalshi_outcome": "Fulham", "settlement_date": "2026-08-24",
+         "hardven_yes_token": "KEEP", "hardven_no_token": "KEEPNO"}]
+f, _vc, um, _ms = P._fill_pass(done, fb_games, {}, THRESHOLD, "fb", smap)
+check("filled entry left alone", f == 0 and um == 0 and done[0]["hardven_yes_token"] == "KEEP")
+
+print("\n[9] sports.py catalog contract")
+import sports as S
+check("default set unchanged (live Pinnacle bot)",
+      [s.key for s in S.CATALOG.values() if s.enabled] == ["baseball", "tennis", "soccer"],
+      str([s.key for s in S.CATALOG.values() if s.enabled]))
+check("pinnacle_ids skips unset ids", 0 not in S.pinnacle_ids())
+check("name_by_id has no 0 collision", 0 not in S.name_by_id())
+_paths = dict(S.bia_paths())
+check("every advertised BIA path is absolute",
+      all(u.startswith("https://") for u in _paths.values()))
+check("unverified slug is not advertised",
+      all(u.rstrip("/") != "https://black.betinasia.com" for u in _paths.values()))
+check("darts has no path (slug never observed)", S.CATALOG["darts"].bia_path == "")
+
 print(f"\n{'='*58}\n  {PASS} passed, {FAIL} failed\n{'='*58}")
 sys.exit(1 if FAIL else 0)

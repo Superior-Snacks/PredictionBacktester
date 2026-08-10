@@ -64,7 +64,8 @@ ASSUMED_MAX_STAKE = float(os.environ.get("BIA_ASSUMED_MAX_STAKE", "100.0"))
 # Kalshi carries ~342 soccer ties across 18 series, so this is where the pair count comes from.
 # NOTE: one page load covers tennis completely (75/75) but only ~21% of football (161 of 754) --
 # soccer needs a pass through the league pages, and subscriptions accumulate permanently once made.
-START_URL = os.environ.get("BIA_START_URL", "https://black.betinasia.com/sportsbook/football")
+BASE_URL = os.environ.get("BIA_BASE_URL", "https://black.betinasia.com")
+START_URL = os.environ.get("BIA_START_URL", BASE_URL + "/sportsbook/football")
 
 MONEYLINE_KEYS = {"tennis_match,all", "ml", "time_win,tp,all,ml"}
 THREE_WAY_KEYS = {"wdw", "time_win,tp,reg,wdw", "time_win,tp,all,wdw"}
@@ -248,6 +249,7 @@ class BetInAsiaAdapter(BookAdapter):
             await self.observer.start()
             self.feed = self.observer.feed
             print(f"[BIA] passive transport: watching the page at {START_URL}", flush=True)
+            self._start_sport_walker()
             self._start_pairing_scheduler()
         else:
             print("[BIA] WARNING transport=direct - opening our OWN websocket. This is a second "
@@ -262,11 +264,76 @@ class BetInAsiaAdapter(BookAdapter):
                   f"HARDVEN_FX_TO_USD must be set", flush=True)
 
     async def shutdown(self) -> None:
+        # Cancel our background loops BEFORE the browser goes away, so a walk in flight cannot raise
+        # against a closed page and bury the real shutdown path in a traceback.
+        import asyncio
+        for attr in ("_sport_walk_task", "_pairing_task"):
+            task = getattr(self, attr, None)
+            if task is not None and not task.done():
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):
+                    pass
+            setattr(self, attr, None)
         if self.observer is not None:
             await self.observer.stop()
         elif not self.feed.passive:
             await self.feed.stop()
         self._started = False
+
+    def _start_sport_walker(self) -> None:
+        """Visit every active sport's board once at startup, then re-visit on a slow cadence.
+
+        WHY IT EXISTS. The page only subscribes what it RENDERED when you visited, and coverage decays
+        silently as new fixtures are listed: a 90-min run held its 791 subscriptions perfectly while the
+        catalog grew 789 -> 825, so coverage fell 99% -> 95% purely from the denominator. Nothing drops;
+        the book simply grows past what we asked for. A periodic re-visit is therefore PURELY ADDITIVE --
+        it picks up what is new and can never cost us a subscription we already hold.
+
+        WHY ONE TAB. Subscriptions accumulate on the socket across navigation (tennis stayed at 83 after
+        navigating to football), so one tab that walks the sports ends up holding all of them. See
+        BetInAsiaObserver.visit_sports.
+
+        Off by default (BIA_SPORT_WALK=1): the single-sport bot does not need it, and navigating a live
+        bot's page is not something to start doing implicitly."""
+        if os.environ.get("BIA_SPORT_WALK") != "1":
+            return
+        import asyncio
+        import sports as _sports
+
+        targets = _sports.bia_paths(BASE_URL)
+        if not targets:
+            print("[BIA] sport walk requested but no sport has a verified BIA path "
+                  "(set HARDVEN_SPORTS, e.g. 'all')", flush=True)
+            return
+        dwell = float(os.environ.get("BIA_SPORT_DWELL_SEC", "25"))
+        every_min = float(os.environ.get("BIA_SPORT_WALK_MIN", "180"))
+        skipped = [s.key for s in _sports.bia_sports() if not s.bia_path]
+
+        async def _walk() -> None:
+            # Let the initial page settle first so the startup verdict is not measured mid-navigation.
+            await asyncio.sleep(float(os.environ.get("BIA_SPORT_WALK_DELAY", "70")))
+            while True:
+                try:
+                    if self.observer is not None:
+                        await self.observer.visit_sports(targets, dwell=dwell)
+                        print("[BIA] venue coverage by sport:\n"
+                              + self.observer.coverage_table(), flush=True)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    print(f"[BIA] sport walk failed ({type(e).__name__}: {e}) - retrying next cycle",
+                          flush=True)
+                await asyncio.sleep(every_min * 60.0)
+
+        self._sport_walk_task = asyncio.create_task(_walk())
+        names = ", ".join(c for c, _ in targets)
+        print(f"[BIA] sport walk ON: {names} (dwell {dwell:.0f}s, re-visit every {every_min:.0f} min)",
+              flush=True)
+        if skipped:
+            print(f"[BIA] sport walk SKIPS {skipped} - no sportsbook slug observed in any capture, "
+                  f"so the URL would be a guess", flush=True)
 
     def _start_pairing_scheduler(self) -> None:
         """Re-pair on a cadence, like Pinnacle does. Opt-in via BIA_AUTO_PAIR=1.
@@ -288,8 +355,16 @@ class BetInAsiaAdapter(BookAdapter):
         from pathlib import Path
         from pairing_scheduler import PairingScheduler
 
+        import sports as _sports
+
         here = Path(__file__).resolve().parent
-        sport = os.environ.get("BIA_PAIR_SPORT", "fb")
+        # DERIVE the pairing scope from the active sport set rather than defaulting to one sport.
+        # A hardcoded "fb" default meant HARDVEN_SPORTS=all walked ten sport pages, subscribed all of
+        # them, scaffolded 99 Kalshi series -- and then paired ONLY football, so nine sports' worth of
+        # prices sat in the feed unpaired and the run would have read as "those sports have no arbs".
+        _codes = _sports.bia_sport_codes()
+        _default = "all" if len(_codes) > 1 else (_codes[0] if _codes else "fb")
+        sport = os.environ.get("BIA_PAIR_SPORT", _default)
         pairs = os.environ.get("BIA_PAIRS_FILE", str(here.parent / "cross_pairs_bia.json"))
         interval = int(os.environ.get("BIA_PAIR_INTERVAL_MIN", "90"))
         seeds = os.environ.get("BIA_SEED_FILE", "")
@@ -307,11 +382,22 @@ class BetInAsiaAdapter(BookAdapter):
             steps = [("scaffold (Kalshi)", ["pairHard.py", "--out", pairs], here.parent),
                      ("betinasia fill", ["pair_betinasia.py", "--sport", sport, "--pairs", pairs,
                                          "--write"], here)]
-        sched = PairingScheduler(initial_delay=float(os.environ.get("BIA_PAIR_STARTUP_DELAY", "30")),
-                                 interval_min=interval, steps=steps)
+        # ORDERING: pairing can only fill what the feed has PRICED, and prices only exist for sports the
+        # walk has visited. The old 30s default fired while the walk was still on its first page, so the
+        # first cycle of a ten-sport run would pair football and nothing else -- and the other nine would
+        # read as "no games" for a full interval (90 min). Wait out the walk when one is scheduled.
+        default_delay = 30.0
+        if os.environ.get("BIA_SPORT_WALK") == "1":
+            n = len(_sports.bia_paths(BASE_URL))
+            walk_secs = (float(os.environ.get("BIA_SPORT_WALK_DELAY", "70"))
+                         + n * (float(os.environ.get("BIA_SPORT_DWELL_SEC", "25")) + 5.0))
+            default_delay = walk_secs + 30.0
+        delay = float(os.environ.get("BIA_PAIR_STARTUP_DELAY", str(default_delay)))
+        sched = PairingScheduler(initial_delay=delay, interval_min=interval, steps=steps)
         self._pairing_task = asyncio.create_task(sched.run())
         src = f"seeds <- {Path(seeds).name}" if seeds else "scaffolds its own Kalshi side"
-        print(f"[BIA] auto-pair ON: {sport} every {interval} min ({src}, writes {Path(pairs).name})", flush=True)
+        print(f"[BIA] auto-pair ON: {sport} every {interval} min ({src}, writes {Path(pairs).name}); "
+              f"first run in {delay:.0f}s", flush=True)
 
     # ── M0: odds ──────────────────────────────────────────────────────────────
     async def odds(self, selection_ids: list[str]) -> dict[str, Selection]:

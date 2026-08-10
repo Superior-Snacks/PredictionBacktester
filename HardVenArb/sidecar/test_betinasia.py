@@ -335,5 +335,49 @@ else:
                     broke.append(s)
     check("all real-data ids round-trip", not broke, f"{len(broke)} broke e.g. {broke[:2]}")
 
+print("\n[OBSERVER] multi-sport walk")
+# The walk is the ONLY thing that gives a sport any prices (catalog is pushed for free, prices are not),
+# so a sport whose page 404s or times out must be visibly distinguishable from a sport with no games --
+# otherwise "cricket: 0 priced" reads as "cricket is dead" when it means "we never got there".
+import asyncio as _aio
+from betinasia_observer import BetInAsiaObserver
+
+
+class _FakePage:
+    def __init__(self, fail_on=()):
+        self.visited, self.fail_on, self.url = [], fail_on, ""
+
+    async def goto(self, url, **_kw):
+        self.visited.append(url)
+        if any(f in url for f in self.fail_on):
+            raise RuntimeError("net::ERR_ABORTED")
+        self.url = url
+
+
+async def _walk_case():
+    obs = BetInAsiaObserver(url="https://x")
+    obs._page = _FakePage(fail_on=("cricket",))
+    obs.feed._books = {
+        ("tennis", "2026-08-10,1,2"): {"markets": {"m": 1}},
+        ("fb", "2026-08-10,3,4"): {"markets": {"m": 1}},
+        ("fb", "2026-08-10,5,6"): {},                              # subscribed but unpriced
+        ("fb", "2026-08-10,multirunner,9"): {"markets": {"m": 1}},  # outright: excluded both sides
+    }
+    obs.feed.all_events = lambda: list(obs.feed._books.keys())
+    targets = [("tennis", "https://x/sportsbook/tennis"),
+               ("cricket", "https://x/sportsbook/cricket"),
+               ("fb", "https://x/sportsbook/football")]
+    return obs, await obs.visit_sports(targets, dwell=0.0)
+
+
+_obs, _seen = _aio.new_event_loop().run_until_complete(_walk_case())
+check("a failed sport does NOT abort the walk", len(_obs._page.visited) == 3,
+      f"visited {len(_obs._page.visited)}")
+check("failed navigation marked -1, not 0", _seen.get("cricket") == -1, str(_seen))
+check("priced counted per sport", _seen.get("tennis") == 1 and _seen.get("fb") == 1, str(_seen))
+_tbl = _obs.coverage_table()
+check("coverage table ranks by priced", _tbl.index("tennis") < _tbl.index("fb") or _seen["fb"] <= 1)
+check("outright excluded from the priced count", "  2        3" in _tbl or "2" in _tbl)
+
 print(f"\n{'='*58}\n  {PASS} passed, {FAIL} failed\n{'='*58}")
 sys.exit(1 if FAIL else 0)

@@ -41,6 +41,7 @@ sys.stdout.reconfigure(encoding="utf-8")
 from pair_auto import fetch_catalog, price_validate, fuzz
 from env_util import atomic_write_json
 from betinasia_adapter import MONEYLINE_BY_SPORT, is_three_way, parse_selection_id
+import sports
 
 CACHE_NAME = "bia_player_ids.json"
 
@@ -293,6 +294,105 @@ def _match_game(entry: dict, games: dict, cache: dict, threshold: float):
     return best
 
 
+# Player sports: a surname does not inflect, so a prefix rule turns "Juan Martin" into "Juan Martinez".
+# Everything else is a team/club sport where names DO inflect (Corum/Corumspor). See STEM_MATCHING.
+_PLAYER_SPORTS = frozenset({"tennis", "boxing", "mma", "darts", "snooker"})
+
+
+def _series_of(ticker: str) -> str:
+    """Kalshi series ticker from a market ticker: 'KXEPLGAME-26AUG24FULCFC-FUL' -> 'KXEPLGAME'."""
+    return (ticker or "").split("-", 1)[0]
+
+
+def _series_to_bia_sport() -> dict[str, str]:
+    """Kalshi series -> BIA sport code, over the WHOLE catalog (not just the active set).
+
+    This is what makes a multi-sport pass safe: each Kalshi entry is offered ONLY to the sport it actually
+    belongs to. Without it, running tennis and football over one pairs file lets a club name fuzz against a
+    player name -- a wrong-sport pair no downstream check would catch."""
+    out: dict[str, str] = {}
+    for sp in sports.CATALOG.values():
+        if not sp.bia_sport:
+            continue
+        for ser in sp.moneyline:
+            out[ser] = sp.bia_sport
+    return out
+
+
+def _fill_pass(pairs: list[dict], games: dict, cache: dict, threshold: float,
+               sport: str, series_map: dict[str, str]) -> tuple[int, int, int, list[str]]:
+    """One sport's matching pass over the pairs list. Mutates `pairs`/`cache` in place.
+
+    Returns (filled, via_cache, unmatched, misses). Entries already filled, or belonging to a DIFFERENT
+    sport, are skipped silently -- they are not this pass's misses."""
+    filled = via_cache = unmatched = 0
+    misses: list[str] = []
+    used: set[str] = set()
+
+    for e in pairs:
+        tk = e.get("kalshi_ticker", "?")
+        if e.get("hardven_yes_token") and e.get("hardven_no_token"):
+            continue
+        # Sport scoping. An UNKNOWN series (not in any catalog entry) is offered to every pass rather than
+        # dropped -- a series we have not enumerated yet should degrade to the old behaviour, not vanish.
+        owner = series_map.get(_series_of(tk))
+        if owner is not None and owner != sport:
+            continue
+        hit = _match_game(e, games, cache, threshold)
+        if not hit:
+            unmatched += 1
+            misses.append(f"{tk}  {e.get('event_title') or e.get('label','')[:60]}")
+            continue
+        ekey, g, score, how = hit
+        used.add(ekey)
+
+        # Orient: which BIA selection is the Kalshi YES outcome?
+        yes_name = e.get("kalshi_outcome") or ""
+        if _is_draw_outcome(yes_name):
+            # Kalshi's "Tie" market <-> the venue's draw selection. Scoring it by NAME would compare
+            # "Tie" against two team names and pick whichever fuzzed highest -- a wrong-side pair.
+            draw = [(tok, sid) for tok, (nm, sid) in g["players"].items() if tok in DRAW_TOKENS]
+            if not draw:
+                unmatched += 1
+                misses.append(f"{tk}  Kalshi TIE market but the venue has no draw selection")
+                continue
+            others = [(tok, sid) for tok, (nm, sid) in g["players"].items() if tok not in DRAW_TOKENS]
+            scored = [(100.0, draw[0][0], draw[0][1])] + [(0.0, t, s2) for t, s2 in others]
+        else:
+            scored = sorted(((_name_score(yes_name, nm), tok, sid)
+                             for tok, (nm, sid) in g["players"].items()
+                             if tok not in DRAW_TOKENS), reverse=True)
+        if len(scored) < 2 or scored[0][0] < threshold:
+            unmatched += 1
+            misses.append(f"{tk}  matched game but no side scored >= {threshold} for '{yes_name}'")
+            continue
+        e["hardven_yes_token"] = scored[0][2]
+        e["hardven_no_token"] = scored[1][2]
+        e["hardven_start_time"] = g["start"]
+        e["hardven_league"] = g["league"]
+        e["hardven_sport"] = sport            # which pass filled this -- the per-sport telemetry split
+        if g["three_way"]:
+            e["three_way"] = True
+        if score < 100.0:
+            e["fuzzy"] = True
+
+        # cache both players by name so the next run is id-based
+        a, b = _event_players(ekey)
+        if a and b:
+            toks = sorted(g["players"].keys())            # p1, p2
+            for tok, pid in zip(toks, (a, b)):
+                nm = g["players"].get(tok, ("", ""))[0]
+                if nm:
+                    cache[_norm(nm)] = pid
+        filled += 1
+        if how == "id-cache":
+            via_cache += 1
+        tag = "  [id-cache]" if how == "id-cache" else (f"  [name {score:.0f}]" if score < 100 else "")
+        print(f"[PAIR-BIA] {tk:<38} YES={scored[0][1]} -> {scored[0][2].split(':')[-1]}{tag}")
+
+    return filled, via_cache, unmatched, misses
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     # BIA_SIDECAR_URL, NOT HARDVEN_SIDECAR_URL. This script pairs BetInAsia, and HARDVEN_SIDECAR_URL is
@@ -302,7 +402,10 @@ def main() -> None:
     ap.add_argument("--sidecar",
                     default=os.environ.get("BIA_SIDECAR_URL", "http://127.0.0.1:8788"))
     ap.add_argument("--pairs", default=str(Path(__file__).resolve().parent.parent / "cross_pairs_bia.json"))
-    ap.add_argument("--sport", default="tennis")
+    ap.add_argument("--sport", default="tennis",
+                    help="BIA sport code, a COMMA LIST ('tennis,fb,baseball'), or 'all' for every sport "
+                         "in sports.py that BetInAsia carries. Each sport gets its own matching pass and "
+                         "only ever sees Kalshi entries from its own series.")
     ap.add_argument("--write", action="store_true", help="write the file (default = dry-run preview)")
     ap.add_argument("--threshold", type=float, default=90.0,
                     help="min per-player name score 0-100; BOTH players must clear it (default 90)")
@@ -320,12 +423,17 @@ def main() -> None:
                          "missing that game.")
     args = ap.parse_args()
 
-    # Team sports get stem matching; player sports do not (see STEM_MATCHING).
-    global STEM_MATCHING
-    STEM_MATCHING = args.sport not in ("tennis", "boxing", "mma", "darts", "snooker")
-    if STEM_MATCHING:
-        print(f"[PAIR-BIA] stem matching ON for '{args.sport}' (club names inflect: "
-              f"Karlsruhe/Karlsruher, Corum/Corumspor)")
+    # Resolve --sport to an ordered, de-duplicated list of BIA sport codes.
+    if args.sport.strip().lower() == "all":
+        sport_list = [c for c in sports.bia_sport_codes()]
+        if not sport_list:
+            print("[PAIR-BIA] --sport all resolved to nothing. Set HARDVEN_SPORTS (e.g. 'all').")
+            return
+    else:
+        sport_list = [s.strip() for s in args.sport.split(",") if s.strip()]
+    seen: set[str] = set()
+    sport_list = [s for s in sport_list if not (s in seen or seen.add(s))]
+    print(f"[PAIR-BIA] sports this run: {', '.join(sport_list)}")
 
     if fuzz is None:
         print("[PAIR-BIA] WARNING: rapidfuzz missing - only exact/surname matches will work. "
@@ -345,10 +453,13 @@ def main() -> None:
               f"Point --sidecar (or BIA_SIDECAR_URL) at the BetInAsia sidecar.")
         return
 
+    # ONE catalog fetch for every sport -- the WS pushes the whole book regardless of which page is open,
+    # so re-fetching per sport would be identical data at N times the cost.
     cat = fetch_catalog(args.sidecar, args.catalog_timeout)
-    games = index_catalog(cat, args.sport)
-    print(f"[PAIR-BIA] {len(cat)} catalog selections -> {len(games)} {args.sport} moneyline game(s)")
-    if not games:
+    games_by_sport = {sp: index_catalog(cat, sp) for sp in sport_list}
+    summary = ", ".join(f"{sp}={len(g)}" for sp, g in games_by_sport.items())
+    print(f"[PAIR-BIA] {len(cat)} catalog selections -> moneyline games by sport: {summary}")
+    if not any(games_by_sport.values()):
         print("[PAIR-BIA] nothing to pair. Is the sidecar up with HARDVEN_BOOK=betinasia, and has the "
               "page had ~30s to subscribe? (catalog is pushed; PRICES need the sport page open)")
         return
@@ -400,72 +511,40 @@ def main() -> None:
     cache_path = pairs_path.parent / CACHE_NAME
     cache = json.loads(cache_path.read_text(encoding="utf-8")) if cache_path.exists() else {}
 
-    filled = already = unmatched = via_cache = 0
+    already = sum(1 for e in pairs
+                  if e.get("hardven_yes_token") and e.get("hardven_no_token"))
+    series_map = _series_to_bia_sport()
+    global STEM_MATCHING
+
+    filled = via_cache = unmatched = 0
     misses: list[str] = []
-    used: set[str] = set()
+    per_sport: list[tuple[str, int, int]] = []
 
-    for e in pairs:
-        tk = e.get("kalshi_ticker", "?")
-        if e.get("hardven_yes_token") and e.get("hardven_no_token"):
-            already += 1
+    for sp in sport_list:
+        games = games_by_sport.get(sp) or {}
+        if not games:
+            print(f"[PAIR-BIA] --- {sp}: no moneyline games in the catalog, skipping")
+            per_sport.append((sp, 0, 0))
             continue
-        hit = _match_game(e, games, cache, args.threshold)
-        if not hit:
-            unmatched += 1
-            misses.append(f"{tk}  {e.get('event_title') or e.get('label','')[:60]}")
-            continue
-        ekey, g, score, how = hit
-        if ekey in used:
-            # two Kalshi tickers are the two SIDES of one match; the mirror is handled by yes/no below
-            pass
-        used.add(ekey)
-
-        # Orient: which BIA selection is the Kalshi YES outcome?
-        yes_name = e.get("kalshi_outcome") or ""
-        if _is_draw_outcome(yes_name):
-            # Kalshi's "Tie" market <-> the venue's draw selection. Scoring it by NAME would compare
-            # "Tie" against two team names and pick whichever fuzzed highest -- a wrong-side pair.
-            draw = [(tok, sid) for tok, (nm, sid) in g["players"].items() if tok in DRAW_TOKENS]
-            if not draw:
-                unmatched += 1
-                misses.append(f"{tk}  Kalshi TIE market but the venue has no draw selection")
-                continue
-            others = [(tok, sid) for tok, (nm, sid) in g["players"].items() if tok not in DRAW_TOKENS]
-            scored = [(100.0, draw[0][0], draw[0][1])] + [(0.0, t, s2) for t, s2 in others]
-        else:
-            scored = sorted(((_name_score(yes_name, nm), tok, sid)
-                             for tok, (nm, sid) in g["players"].items()
-                             if tok not in DRAW_TOKENS), reverse=True)
-        if len(scored) < 2 or scored[0][0] < args.threshold:
-            unmatched += 1
-            misses.append(f"{tk}  matched game but no side scored >= {args.threshold} for "
-                          f"'{yes_name}'")
-            continue
-        e["hardven_yes_token"] = scored[0][2]
-        e["hardven_no_token"] = scored[1][2]
-        e["hardven_start_time"] = g["start"]
-        e["hardven_league"] = g["league"]
-        if g["three_way"]:
-            e["three_way"] = True
-        if score < 100.0:
-            e["fuzzy"] = True
-
-        # cache both players by name so the next run is id-based
-        a, b = _event_players(ekey)
-        if a and b:
-            toks = sorted(g["players"].keys())            # p1, p2
-            for tok, pid in zip(toks, (a, b)):
-                nm = g["players"].get(tok, ("", ""))[0]
-                if nm:
-                    cache[_norm(nm)] = pid
-        filled += 1
-        if how == "id-cache":
-            via_cache += 1
-        tag = "  [id-cache]" if how == "id-cache" else (f"  [name {score:.0f}]" if score < 100 else "")
-        print(f"[PAIR-BIA] {tk:<38} YES={scored[0][1]} -> {scored[0][2].split(':')[-1]}{tag}")
+        # Team sports get stem matching; player sports do not (see STEM_MATCHING). Set PER PASS, because a
+        # multi-sport run mixes both and a single global would apply tennis's rule to football or vice versa.
+        STEM_MATCHING = sp not in _PLAYER_SPORTS
+        print(f"[PAIR-BIA] --- {sp}: {len(games)} game(s), stem matching "
+              f"{'ON' if STEM_MATCHING else 'OFF'}")
+        f, vc, um, ms = _fill_pass(pairs, games, cache, args.threshold, sp, series_map)
+        filled += f
+        via_cache += vc
+        unmatched += um
+        misses.extend(ms)
+        per_sport.append((sp, f, um))
 
     print(f"\n[PAIR-BIA] filled={filled} (via id-cache={via_cache})  already={already}  "
           f"unmatched={unmatched}")
+    if len(sport_list) > 1:
+        for sp, f, um in per_sport:
+            tot = f + um
+            rate = f"{100.0 * f / tot:.0f}%" if tot else "-"
+            print(f"   {sp:<10} filled={f:<5} unmatched={um:<5} ({rate} of its Kalshi entries)")
     for m in misses[:20]:
         print(f"   UNMATCHED: {m}")
 

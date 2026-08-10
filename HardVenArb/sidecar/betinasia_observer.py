@@ -98,6 +98,42 @@ class BetInAsiaObserver:
         self._log("observing - the page drives, we only read")
         asyncio.create_task(self._first_look())
 
+    # ── multi-sport coverage ──────────────────────────────────────────────────
+    async def visit_sports(self, targets: list, dwell: float = 25.0) -> dict:
+        """Walk a list of (sport_code, url) sportsbook pages ONCE, letting each one subscribe its board.
+
+        WHY ONE TAB AND NOT ONE TAB PER SPORT. Measured 2026-08-09/10: subscriptions ACCUMULATE on the
+        socket and are never dropped -- tennis went 6 -> 83 on opening the tennis page and was STILL 83
+        after navigating away to football, and a 90-min run showed 426 distinct events go quiet >10 min
+        then resume (a dropped subscription cannot resume). So a single tab that visits each sport in turn
+        ends up holding every sport's book simultaneously, and N pinned tabs would buy nothing.
+        It is also the safer shape: a real user browses sports one after another in one tab. Nine tabs
+        parked on nine sportsbook sections is not a thing a person does, and anti-detection is a hard
+        constraint here.
+
+        Navigation only -- no clicking, no scrolling, no `watch_hcaps` from our side. The page decides
+        what to subscribe; we just give it the chance to."""
+        seen: dict[str, int] = {}
+        for code, url in targets:
+            if self._page is None:
+                break
+            try:
+                await self._page.goto(url, wait_until="domcontentloaded", timeout=60_000)
+            except Exception as e:
+                self._log(f"visit {code}: navigation failed ({type(e).__name__}: {e}) - skipping")
+                seen[code] = -1
+                continue
+            # Dwell so the board renders and its subscribe batches go out. The transport paces them.
+            await asyncio.sleep(max(dwell, 1.0))
+            cov = self.coverage(code)
+            priced, cat = int(cov.get("priced") or 0), int(cov.get("catalog") or 0)
+            seen[code] = priced
+            pct = f"{100.0 * priced / cat:.0f}%" if cat else "n/a"
+            self._log(f"visit {code}: {priced} priced / {cat} catalog matches ({pct})")
+        self._log(f"sport walk done: {', '.join(f'{k}={v}' for k, v in seen.items())} "
+                  f"| priced across all sports={self.coverage().get('priced_total')}")
+        return seen
+
     async def _first_look(self, after: float = 60.0) -> None:
         """One loud verdict once the page has had time to settle.
 
@@ -247,6 +283,29 @@ class BetInAsiaObserver:
                                for s, _ in cat.most_common(12)}
         return out
 
+
+    def coverage_table(self) -> str:
+        """Per-sport venue coverage, ranked — the BOOK half of "which sport is most prone to arbs".
+
+        The Kalshi half (how many contests it lists, and how much they trade) is measured separately; an
+        arb needs BOTH sides, so a sport is only a candidate where these two overlap. Reported as a table
+        rather than a dict because its whole job is to be read by a human deciding where to point the bot.
+
+        `priced` is the number that matters: catalog is pushed for free on any connection, so a sport can
+        show hundreds of catalog events and still be worth nothing until the page has subscribed them."""
+        cov = self.coverage()
+        rows = []
+        for sport, d in (cov.get("by_sport") or {}).items():
+            m, p = d["matches"], d["priced"]
+            rows.append((p, sport, m, d["outrights"], (100.0 * p / m) if m else 0.0))
+        rows.sort(reverse=True)
+        out = [f"{'SPORT':<12}{'priced':>8}{'catalog':>9}{'cover':>8}{'outrights':>11}",
+               "-" * 48]
+        for p, sport, m, o, pct in rows:
+            out.append(f"{sport:<12}{p:>8}{m:>9}{pct:>7.0f}%{o:>11}")
+        out.append("-" * 48)
+        out.append(f"{'TOTAL':<12}{cov.get('priced_total', 0):>8}{cov.get('catalog_matches', 0):>9}")
+        return "\n".join(out)
 
     def drop_report(self, sport: Optional[str] = None, quiet_sec: float = 600.0) -> dict:
         """Which subscriptions are still ALIVE, grouped by league — the league-drop test.
