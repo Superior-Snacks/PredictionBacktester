@@ -558,8 +558,15 @@ class BetInAsiaAdapter(BookAdapter):
     # Captured column order, kept ONLY as a cross-check on the price match below. A hardcoded map is the
     # weaker instrument: it has to be captured per sport, and it silently becomes wrong the day the site
     # reorders a layout. Where both are available they must AGREE.
+    # Captured by clicking each column and reading the row's <a href> + the event's home/away:
+    #   tennis   2026-08-11 (3 competitions)  col2 = p1 (first-named), col3 = p2
+    #   baseball 2026-08-11,52826,10048573    col2 = 1.795 = Detroit  = HOME
+    #                                         col3 = 2.210 = Cleveland = AWAY
+    # The board lists HOME FIRST, so the layout is [label, home, away] in both sports. Note that is NOT
+    # the MLB "away @ home" convention — which is precisely why this is captured rather than assumed.
     SLIP_COLUMN = {
-        "tennis": {"p1": 2, "p2": 3},
+        "tennis":   {"p1": 2, "p2": 3},
+        "baseball": {"h": 2, "a": 3},
     }
 
     # Widest relative gap between the feed's board price and the price rendered in the row that we will
@@ -602,7 +609,34 @@ class BetInAsiaAdapter(BookAdapter):
             except Exception:
                 continue
         if not seen:
-            return None, "no price columns found in the row"
+            # We matched an <a> and its href checked out, yet it renders no price cells. Almost certainly a
+            # DIFFERENT link carrying the same event key (breadcrumb, event-detail link, in-play widget) --
+            # `.first` takes DOM order, not "the board row". Report what we actually grabbed.
+            try:
+                txt = " ".join(((await row.inner_text()) or "").split())[:200]
+            except Exception:
+                txt = "<unreadable>"
+            try:
+                kids = await row.locator("> *").count()
+            except Exception:
+                kids = -1
+            return None, (f"matched an <a> with {kids} child element(s) and no price columns -- "
+                          f"probably not the board row. Its text: {txt!r}")
+
+        # CAPTURED POSITION IS AUTHORITATIVE where we have one. Operator's call, and the right one: a
+        # position observed by clicking is a fact, whereas the price match is an inference that refuses on
+        # symmetric markets and on any stale-price disagreement. So the map decides, and the price becomes
+        # a free CROSS-CHECK on it -- which is the stronger arrangement anyway, since the two instruments
+        # fail in unrelated ways and both must agree before a real bet is placed.
+        captured = self.SLIP_COLUMN.get(sport, {}).get(sel)
+        if captured is not None:
+            shown = seen.get(captured)
+            if shown is None:
+                return None, f"captured column {captured} for {sport}/{sel} is not present in the row"
+            if abs(shown - want) > want * self.COLUMN_MATCH_TOL:
+                return None, (f"captured column {captured} shows {shown} but the board says {want} for "
+                              f"'{sel}' — layout may have changed; refusing until re-captured")
+            return captured, ""
 
         ranked = sorted(seen.items(), key=lambda kv: abs(kv[1] - want))
         best_col, best_val = ranked[0]
@@ -618,10 +652,6 @@ class BetInAsiaAdapter(BookAdapter):
             if second <= max(best * self.COLUMN_MATCH_MARGIN, best + want * 0.005):
                 return None, (f"columns {seen} are too close to tell apart for '{sel}' at {want} — "
                               f"refusing (a symmetric market cannot be identified by price)")
-        captured = self.SLIP_COLUMN.get(sport, {}).get(sel)
-        if captured is not None and captured != best_col:
-            return None, (f"price match says column {best_col} but the captured layout says {captured} "
-                          f"for {sport}/{sel} — refusing on disagreement")
         return best_col, ""
 
     async def slip_quote(self, selection_id: str) -> dict:
@@ -703,6 +733,9 @@ class BetInAsiaAdapter(BookAdapter):
 
             # CROSS-CHECK the href before clicking. The event key alone already identifies the match; sport
             # and comp_id are two more independent confirmations that cost nothing.
+            n_rows = await page.locator(f'a[href*="{ekey}"]').count()
+            if n_rows > 1:
+                print(f"[BIA SLIP] {ekey}: {n_rows} links match this event key -- using DOM-first", flush=True)
             href = await row.get_attribute("href") or ""
             if f"/{sport}/" not in href or f"/{comp_id}/" not in href:
                 return {"ok": False, "error": f"row href {href!r} disagrees with token "
