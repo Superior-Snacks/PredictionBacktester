@@ -2411,6 +2411,62 @@ class PinnacleAdapter(BookAdapter):
             print(f"[PINNACLE BET] LIVE - placing {stake:.2f} on {selection_id} @ max_odds>={max_odds:.4f}")
             return await self._place_via_ui(selection_id, stake, max_odds)
 
+    async def slip_quote(self, selection_id: str) -> dict:
+        """Open the Quick Bet popover for a selection, read the TRUE offered odds, close it. Places nothing.
+
+        This is the only independent confirmation of a Pinnacle price that exists. `/odds` answers from the
+        sidecar cache, and re-reading a cache proves nothing; even the authed re-seed is a different read of
+        the same feed. The popover is what the venue will actually honour — and it is where the price the bot
+        screened on and the price it can get diverge (observed: screened 1.5102, popover 1.5100).
+
+        Safe by construction: clicking an odds button PLACES NOTHING, it only opens the popover, and
+        `_select_bet_tab` already probes and verifies the matchup/side/price BEFORE anything else happens
+        (a positional miss opens the wrong popover, it cannot place the wrong bet). This is the same probe
+        `_place_via_ui` performs; it simply stops before stake entry.
+
+        Returns {ok, decimal_odds, implied_price, tab, error}. Organic activity is frozen for the duration
+        and resumed in the finally, exactly as the bet path does, so nothing re-points the tab mid-read.
+        """
+        parts = selection_id.split(":")
+        if len(parts) != 3 or parts[2] not in ("home", "away"):
+            return {"ok": False, "error": f"slip quotes handle straight moneyline tokens only, got '{selection_id}'"}
+        lid, _mid, _desig = parts
+        exp = await self._expected_selection(selection_id)
+        if not exp:
+            return {"ok": False, "error": f"no catalog entry for {selection_id} -- cannot verify the market"}
+        url = self._league_url_for(lid)
+        if not url:
+            return {"ok": False, "error": f"no league URL known for lid {lid}"}
+
+        self._pause_all_organic()
+        page = None
+        try:
+            page, tab_kind, sel_ok = await self._select_bet_tab(lid, url, exp)
+            if page is None or not sel_ok or not sel_ok.get("ok"):
+                return {"ok": False, "error": f"could not select the intended market: {sel_ok and sel_ok.get('error')}"}
+            shown = float(sel_ok.get("price") or 0)
+            if sel_ok.get("american") or shown <= 1.0 or shown > 1000:
+                return {"ok": False, "error": "the site is not on Decimal Odds"
+                                              if sel_ok.get("american") else
+                                              f"popover price {shown} is not decimal odds"}
+            return {"ok": True, "decimal_odds": shown, "implied_price": round(1.0 / shown, 6),
+                    "tab": tab_kind, "selection_id": selection_id}
+        except Exception as e:
+            return {"ok": False, "error": f"slip quote error: {type(e).__name__}: {e}"}
+        finally:
+            # Always close the popover and clear any stray side-betslip selection the probe left behind —
+            # an open slip is both a detection tell and something the next bet would trip over.
+            if page is not None:
+                try:
+                    await page.evaluate(_UI_CLOSE_JS)
+                except Exception:
+                    pass
+                try:
+                    await self._trim_betslip(page, source="post-quote")
+                except Exception:
+                    pass
+            self._resume_all_organic()
+
     async def _place_via_ui(self, selection_id: str, stake: float, max_odds: float,
                             submit: bool = True) -> BetResult:
         """Place the bet by driving the real UI: open the league page, click the selection's Money Line button,

@@ -103,6 +103,43 @@ public class CrossArbRestVerifier
     }
 
     /// <summary>
+    /// Opens the venue's BETSLIP for this selection and returns the true offered price (implied, 0-1), or
+    /// -1 if it could not be quoted. Places nothing.
+    ///
+    /// This is the only independent confirmation of a HardVen price that exists: `/odds` answers from the
+    /// sidecar cache, so verifying against it is a cache agreeing with itself. The slip is what the venue
+    /// will actually honour — and it is exactly where the two diverge (observed 2026-08-11: screened 1.5102,
+    /// slip 1.5100, leg rejected).
+    ///
+    /// Costs seconds, so it belongs on the execution path only. Returns -1 for a book that cannot quote
+    /// (404) so the caller can fall back rather than refuse a venue that structurally has no slip read.
+    /// </summary>
+    public async Task<(decimal Price, string Error)> SlipQuoteAsync(string hardvenToken, double timeoutSec = 20.0)
+    {
+        try
+        {
+            string url = $"{_sidecarBase}/slip_quote?selection_id={Uri.EscapeDataString(hardvenToken)}";
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSec));
+            using var resp = await _http.PostAsync(url, null, cts.Token);
+            if (resp.StatusCode == System.Net.HttpStatusCode.NotFound)
+                return (-1m, "unsupported");            // book has no betslip read — caller decides
+            string body = await resp.Content.ReadAsStringAsync(cts.Token);
+            using var doc = JsonDocument.Parse(body);
+            var root = doc.RootElement;
+            if (!(root.TryGetProperty("ok", out var ok) && ok.ValueKind == JsonValueKind.True))
+                return (-1m, root.TryGetProperty("error", out var e) ? (e.GetString() ?? "?") : "not ok");
+            decimal price = root.TryGetProperty("implied_price", out var ip) && ip.TryGetDecimal(out var p)
+                ? p : -1m;
+            return price > 0m ? (price, "") : (-1m, "no implied_price in the quote");
+        }
+        catch (Exception ex)
+        {
+            DebugLog.Trades($"SlipQuoteAsync {hardvenToken}: {ex.GetType().Name}: {ex.Message}");
+            return (-1m, $"{ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    /// <summary>
     /// Fetches live bid prices for both held legs. Used by early-exit monitoring when
     /// WS books are stale. Returns (-1,-1) if either fetch fails.
     /// K_YES_P_NO: we hold K YES + P NO → fetch yes_bid on Kalshi, bids on HardVen NO token.

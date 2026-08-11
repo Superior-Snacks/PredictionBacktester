@@ -241,6 +241,19 @@ async def verify_now(selection_id: str, timeout: float = 10.0):
     return await fn(selection_id, timeout)
 
 
+@app.post("/slip_quote")
+async def slip_quote(selection_id: str):
+    """Open the betslip popover for one selection and return the TRUE offered odds. Places nothing.
+
+    The executor calls this after detecting an arb and before firing: it is the only price Pinnacle will
+    actually honour, and it is where the screened price and the obtainable price diverge. Costs a few
+    seconds, so it belongs on the execution path only — never on the poll loop."""
+    fn = getattr(adapter, "slip_quote", None)
+    if not callable(fn):
+        raise HTTPException(404, f"book '{adapter.name}' cannot quote from a betslip")
+    return await fn(selection_id)
+
+
 @app.get("/debug/feed")
 async def debug_feed():
     """Price-socket + coverage diagnostics. Answers "is the WS up, and is anything dropped?".

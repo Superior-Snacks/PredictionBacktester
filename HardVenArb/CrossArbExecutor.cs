@@ -254,6 +254,25 @@ public class CrossArbExecutor
     // halfAllow buffer doubles the dollar budget on cheap legs (ask=0.05 → limit=0.10+).
     private const  decimal  MaxHardVenLimitBufferPct      = 0.15m;
 
+    // SLIP QUOTE: confirm the HardVen price at the venue betslip before firing. ON by default — the
+    // alternative is firing on a cache already shown to disagree with the slip. Costs a few seconds per
+    // attempt, so HARDVEN_SLIP_QUOTE=0 disables it for latency-sensitive experiments.
+    private readonly bool   _slipQuoteEnabled    = Environment.GetEnvironmentVariable("HARDVEN_SLIP_QUOTE") != "0";
+    private readonly double _slipQuoteTimeoutSec =
+        double.TryParse(Environment.GetEnvironmentVariable("HARDVEN_SLIP_QUOTE_TIMEOUT_SEC"),
+                        System.Globalization.NumberStyles.Any,
+                        System.Globalization.CultureInfo.InvariantCulture, out var _sqt) && _sqt > 0 ? _sqt : 20.0;
+
+    /// <summary>Env-read for a decimal knob; &lt;=0 or unparseable falls back, so a typo cannot silently
+    /// disable a limit. Mirrors Program.cs's EnvDec, which is not visible from this class.</summary>
+    private static decimal EnvDecStatic(string name, decimal fallback)
+    {
+        string? raw = Environment.GetEnvironmentVariable(name);
+        return decimal.TryParse(raw, System.Globalization.NumberStyles.Any,
+                                System.Globalization.CultureInfo.InvariantCulture, out var v) && v > 0m
+            ? v : fallback;
+    }
+
     // ── Position scaling ──────────────────────────────────────────────────────
     // ONE OPEN POSITION PER PAIR is the standing behaviour, always, in live. `--single-entry` is a DEAD flag —
     // the guard never consulted it (see ExecuteLockedAsync) — kept only so existing command lines don't break.
@@ -1117,13 +1136,87 @@ public class CrossArbExecutor
             }));
             return;
         }
+        // ── SLIP QUOTE: confirm the HardVen price at the venue, then re-check BOTH legs ──────────────────
+        // The screened price comes from the sidecar cache; the betslip is the only thing the venue will
+        // actually honour, and it is where the two diverge. Doing this BEFORE sizing means the true price
+        // drives contracts, the ladder, the depth gate and the limit — not just a pass/fail at the end.
+        // It costs seconds, so Kalshi is re-read from its live book afterwards and the whole arb re-tested:
+        // a slip that takes 3s is 3s in which Kalshi can move away, and firing on a stale Kalshi would just
+        // relocate the problem to the other leg.
+        if (_restVerifier != null && !testMode && !_dryRun && _slipQuoteEnabled)
+        {
+            var (slipPrice, slipErr) = await _restVerifier.SlipQuoteAsync(hardvenToken, _slipQuoteTimeoutSec);
+            if (slipErr == "unsupported")
+            {
+                DebugLog.Trades($"ExecuteAsync {pair.Label}: book cannot slip-quote — proceeding on the feed price");
+            }
+            else if (slipPrice <= 0m)
+            {
+                Console.WriteLine($"[SLIP QUOTE] {pair.Label}: could not read the betslip ({slipErr}) — skipping");
+                await JournalAsync(JsonSerializer.Serialize(new {
+                    t = DateTime.UtcNow, @event = "EXEC_SKIP", pairId, arbType,
+                    reason = "SLIP_QUOTE_FAILED", detail = slipErr
+                }));
+                return;
+            }
+            else
+            {
+                decimal drift = slipPrice - pLegAsk;
+                if (Math.Abs(drift) > 0.00005m)
+                    Console.WriteLine($"[SLIP QUOTE] {pair.Label}: feed {pLegAsk:0.0000} → slip {slipPrice:0.0000} " +
+                                      $"({drift:+0.0000;-0.0000}) — repricing on the slip");
+                pLegAsk = slipPrice;                       // the true price drives everything below
+
+                // Kalshi may have moved while the slip opened. Re-read its LIVE book and re-test the arb.
+                var kSideBook = arbType == "K_YES_P_NO" ? kYes : kNo;
+                decimal kNow = kSideBook.GetBestAsk();
+                if (kNow > 0m) kLegAsk = kNow;
+                decimal netSlip = kLegAsk + pLegAsk + KalshiFee(kLegAsk) + HardVenFee(pLegAsk, hardvenToken);
+                if (netSlip >= _executionThreshold || netSlip > _execNetFloor)
+                {
+                    Console.WriteLine($"[SLIP QUOTE] {pair.Label}: arb GONE on the true prices " +
+                                      $"(K={kLegAsk:0.0000} P={pLegAsk:0.0000} net=${netSlip:0.0000} " +
+                                      $"floor {_execNetFloor:0.000}) — skipping");
+                    await JournalAsync(JsonSerializer.Serialize(new {
+                        t = DateTime.UtcNow, @event = "EXEC_SKIP", pairId, arbType,
+                        reason = "ARB_GONE_AT_SLIP", netSlip, kAsk = kLegAsk, pAsk = pLegAsk,
+                        floor = _execNetFloor
+                    }));
+                    return;
+                }
+                netNow = netSlip;
+            }
+        }
+
         // Kalshi always gets ask+1¢ (one full tick of IOC buffer, regardless of margin).
-        // HardVen gets the remaining margin as buffer; floor at exact ask if margin is thin.
-        decimal halfAllow   = (_executionThreshold - netNow) / 2m;
         int     kPriceCents = (int)Math.Floor((kLegAsk + 0.01m) * 100m);
-        decimal pBufferCap  = pLegAsk * MaxHardVenLimitBufferPct;
-        decimal pLimitAsk   = Math.Min(0.99m, pLegAsk + Math.Min(Math.Max(0m, halfAllow - 0.01m), pBufferCap));
-        DebugLog.Trades($"ExecuteAsync {pair.Label}: halfAllow={halfAllow:0.00000} kLimit={kPriceCents}¢ pLimit={pLimitAsk:0.0000}");
+
+        // ── HardVen limit: accept ANY price that still breaks even ───────────────────────────────────────
+        // WAS `pLegAsk + max(0, (threshold - net)/2 - 0.01)`, which subtracted a flat 1c BEFORE halving, so
+        // every arb thinner than ~2c of edge got a limit at EXACTLY the screened price — zero tolerance.
+        // Observed live 2026-08-11: Pinnacle offered 1.5100 against a required 1.5102 and rejected the leg
+        // over a 0.013% move. The edge could have absorbed 263x that; the miss instead cost $2.10 to reverse
+        // the Kalshi leg. A limit is a CEILING, not the price paid — we still fill at the best available — so
+        // refusing headroom buys nothing and forfeits the trade.
+        //
+        // The economic bound is break-even: the highest HardVen price at which the pair still does not lose.
+        // Priced off the Kalshi LIMIT (kPriceCents), not its ask, because that is the worst we can actually
+        // pay on that leg. HardVenFee is charged at the limit price for the same reason.
+        decimal kWorst    = kPriceCents / 100m;
+        decimal breakEven = 1m - kWorst - KalshiFee(kWorst);
+        // Solve once more with the fee evaluated at the candidate price (Pinnacle's fee is 0, so this is a
+        // no-op there, but it keeps the bound honest for a book that does charge one).
+        breakEven = 1m - kWorst - KalshiFee(kWorst) - HardVenFee(breakEven, hardvenToken);
+        // Never tighten below the screened ask, and never exceed the venue's 0.99 ceiling.
+        decimal pLimitAsk = Math.Min(0.99m, Math.Max(pLegAsk, breakEven));
+        // Optional sanity rail: a limit far above the screened price only binds if the book is much worse
+        // than we read it, which is a pairing/staleness smell rather than a normal fill. Off by default now
+        // that break-even is the intended bound — HARDVEN_LIMIT_BUFFER_PCT=0.15 restores the old cap.
+        decimal bufferPct = EnvDecStatic("HARDVEN_LIMIT_BUFFER_PCT", 0m);
+        if (bufferPct > 0m)
+            pLimitAsk = Math.Min(pLimitAsk, pLegAsk * (1m + bufferPct));
+        DebugLog.Trades($"ExecuteAsync {pair.Label}: breakEven={breakEven:0.0000} pLimit={pLimitAsk:0.0000} " +
+                        $"(screened {pLegAsk:0.0000}, headroom {(pLimitAsk - pLegAsk):0.0000})");
         decimal pricePerSet = kLegAsk + pLegAsk;
 
         // HardVen minimum: per-market orderMinSize and the CLOB's hard $1 dollar floor.
