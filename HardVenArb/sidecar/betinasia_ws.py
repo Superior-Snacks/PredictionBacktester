@@ -133,6 +133,7 @@ class BetInAsiaFeed:
         self._connected = False
         self._last_frame_ts: float = 0.0
         self._frames_seen = 0
+        self._already_subscribed_seen = 0
 
     # ── properties ────────────────────────────────────────────────────────────
     @property
@@ -346,8 +347,19 @@ class BetInAsiaFeed:
             # "ok" / "pong" / "api" / "error" carry no prices; error is logged for subscribe debugging
             elif mtype == "error":
                 detail = msg[1] if len(msg) > 1 else ""
+                # `event_already_subscribed` is normally harmless noise from re-subscribing a board event,
+                # so it was filtered out. But it is ALSO the exact reply a re-opened BETSLIP would get, and
+                # the venue answers it INSTEAD of pushing prices -- so hiding it turned "you already have
+                # this" into an unexplained silent timeout. Surface it, rate-limited so a chatty board
+                # cannot flood the log.
                 if detail != "event_already_subscribed":
                     self._log(f"WS error frame: {detail}")
+                else:
+                    self._already_subscribed_seen += 1
+                    if self._already_subscribed_seen <= 5 or self._already_subscribed_seen % 50 == 0:
+                        self._log(f"WS error: event_already_subscribed (#{self._already_subscribed_seen}) "
+                                  f"— if a slip quote just timed out, THIS is why: the venue answers this "
+                                  f"instead of pushing prices for an event still subscribed from last time")
 
     def _on_event(self, key: Any, payload: Any) -> None:
         # event key is [sport, event_key]; offers keys are [comp_id, sport, event_key]
