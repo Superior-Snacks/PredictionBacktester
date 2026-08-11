@@ -125,6 +125,7 @@ class BetInAsiaObserver:
                 continue
             # Dwell so the board renders and its subscribe batches go out. The transport paces them.
             await asyncio.sleep(max(dwell, 1.0))
+            await self.expand_all(code)
             cov = self.coverage(code)
             priced, cat = int(cov.get("priced") or 0), int(cov.get("catalog") or 0)
             seen[code] = priced
@@ -133,6 +134,43 @@ class BetInAsiaObserver:
         self._log(f"sport walk done: {', '.join(f'{k}={v}' for k, v in seen.items())} "
                   f"| priced across all sports={self.coverage().get('priced_total')}")
         return seen
+
+    async def expand_all(self, label: str = "") -> int:
+        """Click every "Show more" on the current board until none remain. Returns clicks made.
+
+        TWO REASONS, and the second is the bigger one:
+        1. A collapsed competition's rows do not EXIST in the DOM, so `slip_quote` has to expand before it
+           can find its row — paying that cost on the execution path, when the arb is already ticking.
+           Doing it up front makes a quote a pure find-and-click.
+        2. The page only subscribes what it RENDERED. Collapsed rows are never subscribed, which is why
+           football sat at 148 priced against a 930-event catalog. Expanding is therefore the cheapest
+           coverage fix available — it is the same action that makes quotes fast.
+
+        Clicking "Show more" is ordinary browsing, not automation-only behaviour, and it is paced. Bounded
+        by BIA_EXPAND_MAX so a board that regenerates the control cannot spin forever.
+        """
+        page = self._page
+        if page is None:
+            return 0
+        limit = int(os.environ.get("BIA_EXPAND_MAX", "40"))
+        pace = float(os.environ.get("BIA_EXPAND_PACE_SEC", "0.35"))
+        clicks = 0
+        for _ in range(limit):
+            try:
+                more = page.get_by_text("Show more", exact=True)
+                n = await more.count()
+                if n == 0:
+                    break
+                # Always take the FIRST: expanding removes that control, so the next iteration naturally
+                # advances to the next competition. Indexing into a shifting list would skip entries.
+                await more.first.click(timeout=5_000)
+                clicks += 1
+                await asyncio.sleep(pace)
+            except Exception:
+                break     # control vanished mid-click, or the board re-rendered — not worth retrying
+        if clicks:
+            self._log(f"expanded {clicks} 'Show more' section(s){' on ' + label if label else ''}")
+        return clicks
 
     async def _first_look(self, after: float = 60.0) -> None:
         """One loud verdict once the page has had time to settle.

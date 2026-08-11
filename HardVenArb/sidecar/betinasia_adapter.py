@@ -747,6 +747,27 @@ class BetInAsiaAdapter(BookAdapter):
             "events_known": st.get("events", 0),
             "priced": st.get("priced", 0),
         }
+        # SLIP-CHANNEL AUDIT. `slip_quote` decides "already subscribed, read the cache" purely from a
+        # timestamp, and there is no other way to see what the acca channel holds: `watch_acca_hcaps` is
+        # logged but never recorded into `_subs`, so the subscribed SET is invisible. Without this the
+        # cache decision is an inference; with it, it is inspectable.
+        # NOTE subscriptions are PER-SOCKET — a page close/reconnect resets them, so this list is scoped
+        # to the current socket, not the session.
+        now = time.time()
+        slip = []
+        for (sp, ek), bk in (self.feed._slip_books or {}).items():
+            slip.append({"sport": sp, "event": ek,
+                         "age_sec": round(now - (bk.get("ts") or 0), 1),
+                         "markets": len(bk.get("markets") or {})})
+        slip.sort(key=lambda r: r["age_sec"])
+        out["slip"] = {"events": len(slip),
+                       "max_age_sec": float(os.environ.get("BIA_SLIP_MAX_AGE_SEC", "10")),
+                       # fresh = a re-quote would be served from the feed with NO click
+                       "fresh": sum(1 for r in slip
+                                    if r["age_sec"] <= float(os.environ.get("BIA_SLIP_MAX_AGE_SEC", "10"))),
+                       "already_subscribed_errors": getattr(self.feed, "_already_subscribed_seen", 0),
+                       "recent": slip[:20]}
+
         obs = self.observer
         if obs is None:
             out["note"] = "no observer (direct transport) — per-sport coverage unavailable"
