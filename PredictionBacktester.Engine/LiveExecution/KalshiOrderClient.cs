@@ -326,17 +326,41 @@ public class KalshiOrderClient : IKalshiOrderExecutor, IDisposable
         return (orderId, status, fill);
     }
 
-    /// <summary>Polls GET /portfolio/orders/{orderId} once and returns (status, fill_count_fp).</summary>
+    /// <summary>
+    /// Polls GET /portfolio/orders/{orderId} once and returns (status, fill_count_fp).
+    ///
+    /// A 404 here means "not visible YET", not "does not exist": order creation and order lookup are
+    /// eventually consistent. Observed live 2026-08-11 — a sell placed at 13:01:39.526 answered 404 to a
+    /// poll ~112ms later, yet had `status=executed, fill=5.00` moments afterwards and the position was
+    /// genuinely flat. Returning "pending" lets the caller's poll loop keep trying until its fill timeout.
+    ///
+    /// This is deliberately NOT allowed to throw. The caller wraps its whole placement in
+    /// `catch (HttpRequestException) when (StatusCode == NotFound)`, whose handler reads a 404 as "market
+    /// delisted" and PERMANENTLY BLOCKLISTS the ticker — so a transient lookup race would have blocklisted a
+    /// live market AND reported a filled order as a failed leg, sending the executor into recovery against
+    /// a hedge it already had.
+    /// </summary>
     public async Task<(string Status, decimal FillCount)> PollOrderAsync(string orderId)
     {
-        using var doc = await GetAsync($"/portfolio/orders/{orderId}");
-        var order = doc.RootElement.TryGetProperty("order", out var o) ? o : doc.RootElement;
+        JsonDocument doc;
+        try
+        {
+            doc = await GetAsync($"/portfolio/orders/{orderId}");
+        }
+        catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            return ("pending", 0m);
+        }
+        using (doc)
+        {
+            var order = doc.RootElement.TryGetProperty("order", out var o) ? o : doc.RootElement;
 
-        string  status = order.TryGetProperty("status",        out var st) ? (st.GetString() ?? "") : "";
-        decimal fill   = order.TryGetProperty("fill_count_fp", out var fc)
-            ? decimal.Parse(fc.GetString() ?? "0", CultureInfo.InvariantCulture) : 0m;
+            string  status = order.TryGetProperty("status",        out var st) ? (st.GetString() ?? "") : "";
+            decimal fill   = order.TryGetProperty("fill_count_fp", out var fc)
+                ? decimal.Parse(fc.GetString() ?? "0", CultureInfo.InvariantCulture) : 0m;
 
-        return (status, fill);
+            return (status, fill);
+        }
     }
 
     /// <summary>

@@ -237,7 +237,21 @@ def _poll_fill(session, private_key, api_key_id, order_id,
                      polls=polls, fill_count=fill_count, elapsed_ms=round(elapsed_ms, 1))
             break
 
-        data, _ = _get(session, private_key, api_key_id, f"/portfolio/orders/{order_id}")
+        # A 404 means the order is not VISIBLE yet, not that it does not exist -- creation and lookup are
+        # eventually consistent. Seen live 2026-08-11: a sell polled ~112ms after placement 404'd, then
+        # showed status=executed fill=5.00 moments later (and the position really was flat). Crashing here
+        # aborted the script mid-round-trip and looked exactly like a failed sell holding an open position.
+        # Duck-typed on purpose: `requests` is imported lazily in main(), so naming requests.HTTPError here
+        # would NameError. Any exception carrying a 404 response is treated as "not visible yet".
+        try:
+            data, _ = _get(session, private_key, api_key_id, f"/portfolio/orders/{order_id}")
+        except Exception as e:
+            resp = getattr(e, "response", None)
+            if resp is not None and getattr(resp, "status_code", None) == 404:
+                polls += 1
+                time.sleep(poll_ms / 1000)
+                continue
+            raise
         order   = data.get("order", data)
         polls  += 1
 
