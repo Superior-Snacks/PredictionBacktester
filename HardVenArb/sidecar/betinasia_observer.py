@@ -225,6 +225,11 @@ class BetInAsiaObserver:
                     self._resumed += 1
                     self._resumed_keys.add(k)
                 self._last_update[k] = now
+            # SLIP CHANNEL TRACE. The betslip price only exists because the PAGE subscribes it, so when a
+            # quote times out we must be able to tell "we never asked" from "we asked and got nothing".
+            # Logged in both directions rather than counted, because this fires only while a slip is open.
+            elif m[0] == "offers_acca_hcap" and len(m) >= 2:
+                print(f"[BIA-OBS] <- offers_acca_hcap {m[1]}", flush=True)
             elif m[0] in ("error", "api"):
                 self._server_says.append((round(now - self._started, 1), json.dumps(m)[:400]))
 
@@ -235,6 +240,13 @@ class BetInAsiaObserver:
         try:
             msg = json.loads(payload)
         except (json.JSONDecodeError, TypeError):
+            return
+        # SLIP SUBSCRIBE TRACE. `watch_acca_hcaps` is what makes the venue push betslip prices, and it is
+        # sent by the PAGE when a slip opens. Without this line an outbound subscribe is invisible here,
+        # so a failed slip quote cannot be told apart: "the click never opened a slip" (nothing sent) vs
+        # "the venue ignored us" (sent, no reply). Log only -- we still never send.
+        if isinstance(msg, list) and msg and msg[0] in ("watch_acca_hcaps", "unwatch_acca_hcaps"):
+            print(f"[BIA-OBS] -> {msg[0]} {json.dumps(msg[1])[:160]}", flush=True)
             return
         if not (isinstance(msg, list) and msg and msg[0] in ("watch_hcaps", "watch_event")):
             return
