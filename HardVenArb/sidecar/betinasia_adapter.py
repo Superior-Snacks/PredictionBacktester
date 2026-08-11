@@ -555,6 +555,145 @@ class BetInAsiaAdapter(BookAdapter):
                 # anything venue-specific itself.
                 "quote_age_policy": "feed"}
 
+    # Which board COLUMN a selection token occupies inside the row <a>. Captured 2026-08-11: the row has
+    # exactly three children [label, col1, col2], p1 clicked at div:nth-child(2) three times across three
+    # competitions and p2 at div:nth-child(3).
+    # ONLY TENNIS IS OBSERVED. Every other shape (h/a two-way, h/d/a three-way) is DELIBERATELY absent:
+    # clicking the wrong column places a real bet on the wrong side of a market, and the column order for
+    # those layouts has never been captured. Same rule as MONEYLINE_BY_SPORT -- skip, never guess.
+    SLIP_COLUMN = {
+        "tennis": {"p1": 2, "p2": 3},
+    }
+
+    async def slip_quote(self, selection_id: str) -> dict:
+        """Open the betslip for one selection and return the TRUE offered odds. Places nothing.
+
+        WHY THIS IS NEEDED even though the board WS looks right: measured 2026-08-11 on a fast in-play
+        match, board and slip agreed EXACTLY on 84% of selections sampled <=2s apart -- but the other 16%
+        were worse at the slip (median 1.69%, max 6.52%) and NEVER better. One-directional, so a board
+        price can only ever OVERSTATE an arb. On a 1-2c edge that is decisive.
+
+        HOW THE ROW IS FOUND -- and why this is safer than the Pinnacle equivalent. The row is an <a> whose
+        href is `/sportsbook/{sport}/{country}/{comp_id}/{event_key}`, and that event_key is byte-identical
+        to the one inside our selection_id. So the market is addressable by EXACT ID, and sport + comp_id
+        cross-check against the same href before anything is clicked. Pinnacle's odds button carries no
+        matchup id at all, which is why its bet path has to probe positionally and read the popover back to
+        discover what it actually selected; here a wrong row is detectable BEFORE the click.
+
+        The price itself never arrives over HTTP -- all 15 captured /v1/betslips/ responses are price-free.
+        Clicking makes the page send `watch_acca_hcaps`, and the venue answers `offers_acca_hcap`, which
+        the feed parses into `_slip_books`. So this waits on the socket, not on a response body.
+        """
+        import asyncio as _aio
+
+        parsed = parse_selection_id(selection_id)
+        if not parsed:
+            return {"ok": False, "error": f"unparseable selection_id '{selection_id}'"}
+        sport, comp_id, ekey, market_key, sel = parsed
+        if market_key != MONEYLINE_BY_SPORT.get(sport):
+            return {"ok": False, "error": f"slip quotes are moneyline-only; '{market_key}' is a derivative"}
+        col = self.SLIP_COLUMN.get(sport, {}).get(sel)
+        if col is None:
+            return {"ok": False, "error": f"board column for {sport}/{sel} has never been captured -- "
+                                          f"refusing to guess which side a click would take"}
+        obs = self.observer
+        page = getattr(obs, "_page", None) if obs else None
+        if page is None:
+            return {"ok": False, "error": "no browser page (direct transport cannot open a betslip)"}
+
+        t0 = time.time()
+        key = (sport, ekey)
+        before_ts = (self.feed._slip_books.get(key) or {}).get("ts", 0.0)
+        try:
+            row = page.locator(f'a[href*="{ekey}"]').first
+            # The competition may still be collapsed -- its rows do not exist in the DOM until "Show more"
+            # is expanded, so this is a PRECONDITION of finding the row, not a fallback.
+            if await row.count() == 0:
+                for _ in range(int(os.environ.get("BIA_SHOW_MORE_CLICKS", "6"))):
+                    more = page.get_by_text("Show more", exact=True)
+                    if await more.count() == 0:
+                        break
+                    await more.first.click(timeout=5_000)
+                    await _aio.sleep(0.4)
+                    if await page.locator(f'a[href*="{ekey}"]').count():
+                        break
+                row = page.locator(f'a[href*="{ekey}"]').first
+            if await row.count() == 0:
+                return {"ok": False, "error": f"event {ekey} is not on this board (wrong sport page?)"}
+
+            # CROSS-CHECK the href before clicking. The event key alone already identifies the match; sport
+            # and comp_id are two more independent confirmations that cost nothing.
+            href = await row.get_attribute("href") or ""
+            if f"/{sport}/" not in href or f"/{comp_id}/" not in href:
+                return {"ok": False, "error": f"row href {href!r} disagrees with token "
+                                              f"(sport={sport} comp={comp_id}) -- refusing to click"}
+
+            url_before = page.url
+            slips_before = len(self.feed._slip_books)
+            await row.locator(f"div:nth-child({col}) > span").first.click(timeout=5_000)
+            await _aio.sleep(0.5)
+            url_after = page.url
+            # THE ROW IS AN <a href>. A real user's click is swallowed by the app (it opens the Quick Bet
+            # panel); if the default link action fires instead, the SPA navigates to the event page, the
+            # slip never opens and no watch_acca_hcaps is ever sent. That failure looks identical to "the
+            # venue did not price it", so distinguish them explicitly rather than reporting the same
+            # timeout for both.
+            if url_after != url_before:
+                print(f"[BIA SLIP] click NAVIGATED: {url_before} -> {url_after} (returning)", flush=True)
+                try:
+                    await page.go_back(wait_until="domcontentloaded", timeout=15_000)
+                except Exception:
+                    pass
+                return {"ok": False, "navigated": True, "url_after": url_after,
+                        "error": "the click followed the row link instead of opening the betslip -- "
+                                 "the app's handler did not intercept it"}
+
+            # Wait for the venue to push THIS event's slip prices. A changed ts (or a first appearance)
+            # is the signal; a stale cached book must never be read as a fresh quote.
+            deadline = time.time() + float(os.environ.get("BIA_SLIP_WAIT_SEC", "8"))
+            while time.time() < deadline:
+                bk = self.feed._slip_books.get(key)
+                if bk and bk.get("ts", 0.0) > before_ts:
+                    entry = (bk.get("markets") or {}).get(market_key)
+                    if entry:
+                        _line, sels = entry
+                        odds = sels.get(sel)
+                        if odds and odds > 1.0:
+                            ms = round((time.time() - t0) * 1000, 1)
+                            print(f"[BIA SLIP] {selection_id} -> {odds} in {ms:.0f}ms", flush=True)
+                            return {"ok": True, "decimal_odds": odds,
+                                    "implied_price": round(1.0 / odds, 6),
+                                    "elapsed_ms": ms, "selection_id": selection_id}
+                await _aio.sleep(0.1)
+            # Timed out. Report WHAT WE OBSERVED so the next attempt does not need another guess:
+            #   slip_books_grew   -> the venue IS pushing slip prices, just not for this event/market
+            #   book_present      -> we have a book for the event but the moneyline key is absent from it
+            #   slip_panel_seen   -> the panel really did open, so the click path is right
+            bk = self.feed._slip_books.get(key) or {}
+            panel = 0
+            try:
+                panel = await page.get_by_text("start acca", exact=False).count()
+            except Exception:
+                pass
+            return {"ok": False,
+                    "error": f"no offers_acca_hcap for {ekey}/{market_key}/{sel} within the wait window",
+                    "diag": {"slip_books_before": slips_before,
+                             "slip_books_now": len(self.feed._slip_books),
+                             "book_present": bool(bk),
+                             "markets_in_book": sorted((bk.get("markets") or {}).keys())[:12],
+                             "slip_panel_seen": panel,
+                             "url": page.url}}
+        except Exception as e:
+            return {"ok": False, "error": f"slip quote error: {type(e).__name__}: {e}"}
+        finally:
+            # ALWAYS close. An open slip is a detection tell, and it is what the next quote would collide
+            # with. Escape first (no selector to rot); the close control is a build-hashed svg behind a
+            # long nth-child path, so it is only a fallback.
+            try:
+                await page.keyboard.press("Escape")
+            except Exception:
+                pass
+
     def feed_diagnostics(self) -> dict:
         """Everything we know about the price socket and what it is covering, as JSON.
 
