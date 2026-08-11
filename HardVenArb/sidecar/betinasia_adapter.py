@@ -603,7 +603,32 @@ class BetInAsiaAdapter(BookAdapter):
 
         t0 = time.time()
         key = (sport, ekey)
-        before_ts = (self.feed._slip_books.get(key) or {}).get("ts", 0.0)
+
+        # ── ALREADY SUBSCRIBED? Then do not click at all. ────────────────────────────────────────────
+        # Proved 2026-08-11: the acca subscription behaves like the board one — once an event is
+        # subscribed the venue KEEPS PUSHING updates (two further offers_acca_hcap arrived after a quote
+        # returned), and a REPEAT watch_acca_hcaps is answered with `event_already_subscribed` INSTEAD of
+        # a price. That is why every re-quote of the same event timed out while a fresh event worked
+        # first time in 686ms. So a second click is not just wasteful, it is actively self-defeating.
+        # Reading the live cache instead is faster AND removes a UI action, which is the direction the
+        # anti-detection constraint pushes anyway.
+        max_age = float(os.environ.get("BIA_SLIP_MAX_AGE_SEC", "10"))
+        cached = self.feed._slip_books.get(key)
+        if cached and (time.time() - cached.get("ts", 0.0)) <= max_age:
+            entry = (cached.get("markets") or {}).get(market_key)
+            if entry:
+                _line, sels = entry
+                odds = sels.get(sel)
+                if odds and odds > 1.0:
+                    age = round(time.time() - cached.get("ts", 0.0), 2)
+                    print(f"[BIA SLIP] {selection_id} -> {odds} from the live slip feed "
+                          f"(age {age}s, no click)", flush=True)
+                    return {"ok": True, "decimal_odds": odds,
+                            "implied_price": round(1.0 / odds, 6),
+                            "elapsed_ms": round((time.time() - t0) * 1000, 1),
+                            "from_cache": True, "age_sec": age, "selection_id": selection_id}
+
+        before_ts = (cached or {}).get("ts", 0.0)
         try:
             row = page.locator(f'a[href*="{ekey}"]').first
             # The competition may still be collapsed -- its rows do not exist in the DOM until "Show more"
