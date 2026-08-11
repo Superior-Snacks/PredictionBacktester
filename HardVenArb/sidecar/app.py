@@ -241,6 +241,21 @@ async def verify_now(selection_id: str, timeout: float = 10.0):
     return await fn(selection_id, timeout)
 
 
+@app.get("/debug/feed")
+async def debug_feed():
+    """Price-socket + coverage diagnostics. Answers "is the WS up, and is anything dropped?".
+
+    Read `drops.resumed_after_quiet` first: a dropped subscription cannot resume, so any nonzero value
+    proves nothing was evicted. `sockets` > 1 means the connection came back at some point — and
+    subscriptions do NOT survive a reconnect, so that is when a re-walk is needed. A falling
+    priced/catalog ratio with zero drops is the silent-decay case: new fixtures were listed and never
+    subscribed, which another sport walk fixes."""
+    fn = getattr(adapter, "feed_diagnostics", None)
+    if not callable(fn):
+        raise HTTPException(404, f"book '{adapter.name}' publishes no feed diagnostics")
+    return fn()
+
+
 @app.get("/catalog")
 async def catalog():
     return {"selections": [c.to_api() for c in await adapter.catalog()]}

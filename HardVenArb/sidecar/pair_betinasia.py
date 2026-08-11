@@ -460,8 +460,18 @@ def main() -> None:
     summary = ", ".join(f"{sp}={len(g)}" for sp, g in games_by_sport.items())
     print(f"[PAIR-BIA] {len(cat)} catalog selections -> moneyline games by sport: {summary}")
     if not any(games_by_sport.values()):
-        print("[PAIR-BIA] nothing to pair. Is the sidecar up with HARDVEN_BOOK=betinasia, and has the "
-              "page had ~30s to subscribe? (catalog is pushed; PRICES need the sport page open)")
+        # NOTE: pairing needs the CATALOG, not prices. The WS pushes its entire catalog unprompted on
+        # connect (every sport, before a single watch_hcaps), and `catalog()` is built from those event
+        # frames precisely so the pairer can decide what is worth subscribing to — requiring a price here
+        # would be circular. So an empty result is a CATALOG problem, not a subscription one. The old
+        # wording ("PRICES need the sport page open") sent a real debugging session down the wrong path.
+        print("[PAIR-BIA] nothing to pair for these sports. The catalog arrives free on connect, so this "
+              "is NOT about page subscriptions:")
+        print("   - is the sidecar up with HARDVEN_BOOK=betinasia, and LOGGED IN? (a logged-out socket "
+              "gets the demo feed and no real catalog)")
+        print("   - give the socket ~30s after startup for the catalog push to land")
+        print("   - are these sports actually carried? check /catalog and MONEYLINE_BY_SPORT")
+        print("   (prices are a separate matter — they need the sport page open, but only for TRADING)")
         return
 
     pairs_path = Path(args.pairs)

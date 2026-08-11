@@ -555,6 +555,59 @@ class BetInAsiaAdapter(BookAdapter):
                 # anything venue-specific itself.
                 "quote_age_policy": "feed"}
 
+    def feed_diagnostics(self) -> dict:
+        """Everything we know about the price socket and what it is covering, as JSON.
+
+        WHY: the observer already tracks sockets, per-sport coverage and the eviction test, but all of it
+        went to the CONSOLE only — so "is any sport's subscription dropped?" was unanswerable without
+        reading scrollback. That is a fair question the moment one tab is holding ten sports at once.
+
+        `resumed_after_quiet` is the number to read first. A dropped subscription cannot start updating
+        again, so any nonzero value PROVES nothing was evicted. Read it before `alive`, which on a
+        pre-live book mostly measures how chatty the markets are — it decays on healthy quiet markets and
+        has caused a false "we're losing subscriptions" verdict before.
+
+        Coverage decays SILENTLY even with zero drops: the page subscribes what it rendered when visited,
+        so newly-listed fixtures are never auto-subscribed (measured: catalog grew 789 -> 825 in 90 min
+        while subscriptions held at 791). `catalog_matches` vs `priced_total` is where that shows up, and
+        the fix is another sport walk, not a reconnect.
+        """
+        st = self.feed.stats()
+        out: dict = {
+            "book": self.name,
+            "transport": self.transport,
+            "connected": bool(st.get("connected")),
+            "frames": st.get("frames", 0),
+            "last_frame_age": st.get("last_frame_age"),
+            "subscribed": st.get("subs", 0),
+            "events_known": st.get("events", 0),
+            "priced": st.get("priced", 0),
+        }
+        obs = self.observer
+        if obs is None:
+            out["note"] = "no observer (direct transport) — per-sport coverage unavailable"
+            return out
+        # socket COUNT is the reconnect signal: this venue holds one socket for hours, so >1 means the
+        # page reloaded or the connection dropped and came back (subscriptions do NOT survive that).
+        out["sockets"] = getattr(obs, "_sockets", None)
+        out["socket_urls"] = list(getattr(obs, "_socket_urls", []) or [])   # already token-redacted
+        try:
+            cov = obs.coverage()
+            out["catalog_matches"] = cov.get("catalog_matches")
+            out["priced_total"] = cov.get("priced_total")
+            out["page_subscribed"] = cov.get("page_subscribed")
+            out["by_sport"] = cov.get("by_sport")
+        except Exception as ex:
+            out["coverage_error"] = f"{type(ex).__name__}: {ex}"
+        try:
+            dr = obs.drop_report()
+            out["drops"] = {k: dr.get(k) for k in
+                            ("subscribed", "ever_priced", "alive",
+                             "resumed_after_quiet", "events_that_resumed")}
+        except Exception as ex:
+            out["drop_error"] = f"{type(ex).__name__}: {ex}"
+        return out
+
     # ── diagnostics ───────────────────────────────────────────────────────────
     def health(self) -> dict:
         s = self.feed.stats()
