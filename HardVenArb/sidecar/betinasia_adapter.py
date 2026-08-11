@@ -555,15 +555,74 @@ class BetInAsiaAdapter(BookAdapter):
                 # anything venue-specific itself.
                 "quote_age_policy": "feed"}
 
-    # Which board COLUMN a selection token occupies inside the row <a>. Captured 2026-08-11: the row has
-    # exactly three children [label, col1, col2], p1 clicked at div:nth-child(2) three times across three
-    # competitions and p2 at div:nth-child(3).
-    # ONLY TENNIS IS OBSERVED. Every other shape (h/a two-way, h/d/a three-way) is DELIBERATELY absent:
-    # clicking the wrong column places a real bet on the wrong side of a market, and the column order for
-    # those layouts has never been captured. Same rule as MONEYLINE_BY_SPORT -- skip, never guess.
+    # Captured column order, kept ONLY as a cross-check on the price match below. A hardcoded map is the
+    # weaker instrument: it has to be captured per sport, and it silently becomes wrong the day the site
+    # reorders a layout. Where both are available they must AGREE.
     SLIP_COLUMN = {
         "tennis": {"p1": 2, "p2": 3},
     }
+
+    # Widest relative gap between the feed's board price and the price rendered in the row that we will
+    # still call a match. They are the same number in principle, but the row can be a tick behind.
+    COLUMN_MATCH_TOL = 0.05      # 5%
+    COLUMN_MATCH_MARGIN = 3.0    # best candidate must be >=3x closer than the runner-up
+
+    async def _identify_column(self, row, sport: str, ekey: str, market_key: str, sel: str):
+        """Find which board column belongs to `sel` by MATCHING ITS PRICE, not by a captured position.
+
+        The row renders both (or all three) prices as text, and the feed already knows the board price for
+        each selection. So the column is identifiable from data we independently hold: whichever column
+        shows this selection's price IS this selection. That beats a captured `nth-child` map on both
+        counts -- it needs no per-sport capture, and it cannot silently point at the wrong side if the site
+        reorders a layout, because the price would stop matching.
+
+        Fails CLOSED. Returns (None, reason) when no column matches, when two columns are too close to
+        separate (a market priced 1.925/1.925 genuinely cannot be told apart this way), or when the answer
+        contradicts the captured map. Clicking the wrong column places a real bet on the wrong side.
+        """
+        book = self.feed._books.get((sport, ekey)) or {}
+        entry = (book.get("markets") or {}).get(market_key)
+        if not entry:
+            return None, f"no board price cached for {market_key} — cannot identify the column"
+        _line, sels = entry
+        want = sels.get(sel)
+        if not want or want <= 1.0:
+            return None, f"no board price for selection '{sel}' — cannot identify the column"
+
+        seen: dict[int, float] = {}
+        for col in (2, 3, 4):                      # 2-way uses 2..3, 3-way (wdw) adds 4
+            try:
+                loc = row.locator(f"div:nth-child({col}) > span").first
+                if await loc.count() == 0:
+                    continue
+                txt = ((await loc.inner_text()) or "").strip().replace(",", "")
+                seen[col] = float(txt)
+            except (ValueError, TypeError):
+                continue
+            except Exception:
+                continue
+        if not seen:
+            return None, "no price columns found in the row"
+
+        ranked = sorted(seen.items(), key=lambda kv: abs(kv[1] - want))
+        best_col, best_val = ranked[0]
+        if abs(best_val - want) > want * self.COLUMN_MATCH_TOL:
+            return None, (f"no column matches the board price {want} for '{sel}' (row shows {seen}) — "
+                          f"refusing rather than guessing a side")
+        if len(ranked) > 1:
+            second = abs(ranked[1][1] - want)
+            best = abs(best_val - want)
+            # A pure RATIO test cannot separate a symmetric market: two columns both showing exactly the
+            # wanted price give best == second == 0, and 0 < 0*margin is false, so it would wave through
+            # a coin-flip on which side gets bet. Require an ABSOLUTE gap as well.
+            if second <= max(best * self.COLUMN_MATCH_MARGIN, best + want * 0.005):
+                return None, (f"columns {seen} are too close to tell apart for '{sel}' at {want} — "
+                              f"refusing (a symmetric market cannot be identified by price)")
+        captured = self.SLIP_COLUMN.get(sport, {}).get(sel)
+        if captured is not None and captured != best_col:
+            return None, (f"price match says column {best_col} but the captured layout says {captured} "
+                          f"for {sport}/{sel} — refusing on disagreement")
+        return best_col, ""
 
     async def slip_quote(self, selection_id: str) -> dict:
         """Open the betslip for one selection and return the TRUE offered odds. Places nothing.
@@ -592,10 +651,6 @@ class BetInAsiaAdapter(BookAdapter):
         sport, comp_id, ekey, market_key, sel = parsed
         if market_key != MONEYLINE_BY_SPORT.get(sport):
             return {"ok": False, "error": f"slip quotes are moneyline-only; '{market_key}' is a derivative"}
-        col = self.SLIP_COLUMN.get(sport, {}).get(sel)
-        if col is None:
-            return {"ok": False, "error": f"board column for {sport}/{sel} has never been captured -- "
-                                          f"refusing to guess which side a click would take"}
         obs = self.observer
         page = getattr(obs, "_page", None) if obs else None
         if page is None:
@@ -652,6 +707,11 @@ class BetInAsiaAdapter(BookAdapter):
             if f"/{sport}/" not in href or f"/{comp_id}/" not in href:
                 return {"ok": False, "error": f"row href {href!r} disagrees with token "
                                               f"(sport={sport} comp={comp_id}) -- refusing to click"}
+
+            # Identify the column from the PRICE now that we have the row element.
+            col, why = await self._identify_column(row, sport, ekey, market_key, sel)
+            if col is None:
+                return {"ok": False, "error": why}
 
             url_before = page.url
             slips_before = len(self.feed._slip_books)
