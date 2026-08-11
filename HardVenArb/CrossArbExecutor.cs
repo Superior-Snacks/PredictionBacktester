@@ -1169,7 +1169,7 @@ public class CrossArbExecutor
 
                 // Kalshi may have moved while the slip opened. Re-read its LIVE book and re-test the arb.
                 var kSideBook = arbType == "K_YES_P_NO" ? kYes : kNo;
-                decimal kNow = kSideBook.GetBestAsk();
+                decimal kNow = kSideBook.GetBestAskPrice();
                 if (kNow > 0m) kLegAsk = kNow;
                 decimal netSlip = kLegAsk + pLegAsk + KalshiFee(kLegAsk) + HardVenFee(pLegAsk, hardvenToken);
                 if (netSlip >= _executionThreshold || netSlip > _execNetFloor)
