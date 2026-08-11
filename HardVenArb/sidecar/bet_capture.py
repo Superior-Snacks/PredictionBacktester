@@ -128,6 +128,31 @@ _CAPTURE_JS = r"""
 
   const push = (o) => { o.t = Date.now(); q.push(o); if (q.length > 900) q.shift(); };
 
+  // ANCESTOR CHAIN. The clicked element alone is not enough to locate a market later: an odds button on
+  // this board carries no matchup id and no data attributes, so the only durable way to find it is
+  // "the row containing these team names, then the price cell within it". That means we need the
+  // CONTAINER, not just the button. Walk up a bounded number of levels recording each ancestor's tag,
+  // stable attrs, child count and a text snippet -- the snippet is what reveals which level first
+  // contains both team names, i.e. the row.
+  const ANCESTOR_LEVELS = 8;
+  const ancestry = (el) => {
+    const out = [];
+    let n = el.parentElement, depth = 0;
+    while (n && depth < ANCESTOR_LEVELS && n.tagName !== "BODY") {
+      out.push({
+        depth: depth,
+        tag: n.tagName.toLowerCase(),
+        attrs: attrs(n),
+        children: n.children ? n.children.length : 0,
+        // Longer than MAX_TEXT on purpose: a row's text is what identifies the match.
+        text: (n.textContent || "").replace(/\s+/g, " ").trim().slice(0, 400),
+        sel: selectors(n),
+      });
+      n = n.parentElement; depth++;
+    }
+    return out;
+  };
+
   const onInteract = (ev) => {
     const el = ev.target;
     if (!el || el.nodeType !== 1) return;
@@ -143,6 +168,7 @@ _CAPTURE_JS = r"""
         rect: vis(el),
         sel: selectors(el),
       },
+      ancestors: ancestry(el),
       url: location.href,
     });
   };
