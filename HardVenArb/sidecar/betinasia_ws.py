@@ -116,6 +116,11 @@ class BetInAsiaFeed:
 
         # (sport, event_key) -> {"markets": {market_key: (line, {sel: odds})}, "ts": float, "comp_id": int}
         self._books: dict[tuple[str, str], dict] = {}
+        # BETSLIP prices, kept SEPARATE from the board book above. Same shape, different numbers: the
+        # board is the consolidated pool across every book in the pool, the slip is what THIS account can
+        # actually take once excluded/locked books are removed. Conflating them would silently turn an
+        # unobtainable screening price into a "verified" one.
+        self._slip_books: dict[tuple[str, str], dict] = {}
         # (sport, event_key) -> event metadata payload (catalog source)
         self._events: dict[tuple[str, str], dict] = {}
         self._subs: dict[tuple[str, str], int] = {}      # (sport, event_key) -> comp_id
@@ -328,6 +333,16 @@ class BetInAsiaFeed:
                 self._on_event(msg[1], msg[2])
             elif mtype == "offers_event" and len(msg) >= 3:
                 self._on_offers(msg[1], msg[2])
+            # BETSLIP PRICES. Opening a slip makes the page send `watch_acca_hcaps [[comp_id, sport, ekey]]`
+            # and the venue answers `offers_acca_hcap` with the SAME payload shape as the board channel --
+            # but DIFFERENT NUMBERS. That is the whole point: the board price is the consolidated pool
+            # including books this account cannot use, while the slip price is what is actually takeable.
+            # Kept in its own cache so the two can never be confused; the board cache stays the screening
+            # price and this becomes the verification price.
+            # (Corrects an earlier note: NO betslip HTTP response carries a price -- all 15 captured
+            # /v1/betslips/ responses are price-free. The price only ever arrives here, over the socket.)
+            elif mtype == "offers_acca_hcap" and len(msg) >= 3:
+                self._on_offers(msg[1], msg[2], slip=True)
             # "ok" / "pong" / "api" / "error" carry no prices; error is logged for subscribe debugging
             elif mtype == "error":
                 detail = msg[1] if len(msg) > 1 else ""
@@ -341,11 +356,17 @@ class BetInAsiaFeed:
         sport, ekey = (key[0], key[1]) if len(key) == 2 else (key[1], key[2])
         self._events[(sport, ekey)] = payload
 
-    def _on_offers(self, key: Any, payload: Any) -> None:
+    def _on_offers(self, key: Any, payload: Any, slip: bool = False) -> None:
+        """Ingest a price payload. `slip=True` routes it to the BETSLIP cache instead of the board cache.
+
+        Both channels share this parser because the envelope is byte-identical -- only the numbers differ,
+        and that difference is the point: the board is the consolidated pool (including books this account
+        cannot use), the slip is what is actually obtainable."""
         if not (isinstance(key, list) and len(key) >= 3) or not isinstance(payload, dict):
             return
         comp_id, sport, ekey = key[0], key[1], key[2]
-        book = self._books.setdefault((sport, ekey), {"markets": {}, "ts": 0.0, "comp_id": comp_id})
+        target = self._slip_books if slip else self._books
+        book = target.setdefault((sport, ekey), {"markets": {}, "ts": 0.0, "comp_id": comp_id})
         book["comp_id"] = comp_id
         book["ts"] = time.time()
         for market_key, val in payload.items():
