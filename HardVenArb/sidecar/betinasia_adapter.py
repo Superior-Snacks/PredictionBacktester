@@ -597,17 +597,22 @@ class BetInAsiaAdapter(BookAdapter):
             return None, f"no board price for selection '{sel}' — cannot identify the column"
 
         seen: dict[int, float] = {}
-        for col in (2, 3, 4):                      # 2-way uses 2..3, 3-way (wdw) adds 4
+        raw: dict[int, str] = {}               # every column's TEXT, parseable or not
+        for col in (2, 3, 4):                  # 2-way uses 2..3, 3-way (wdw) adds 4
             try:
                 loc = row.locator(f"div:nth-child({col}) > span").first
                 if await loc.count() == 0:
                     continue
-                txt = ((await loc.inner_text()) or "").strip().replace(",", "")
-                seen[col] = float(txt)
+                txt = " ".join(((await loc.inner_text()) or "").split())
+                raw[col] = txt
+                seen[col] = float(txt.replace(",", ""))
             except (ValueError, TypeError):
-                continue
+                continue                       # present but not a number -- kept in `raw` for the error
             except Exception:
                 continue
+        if not seen and raw:
+            return None, (f"columns are present but none parse as a price: {raw} — "
+                          f"the row is probably rendering scores/status, not odds")
         if not seen:
             # We matched an <a> and its href checked out, yet it renders no price cells. Almost certainly a
             # DIFFERENT link carrying the same event key (breadcrumb, event-detail link, in-play widget) --
@@ -632,7 +637,9 @@ class BetInAsiaAdapter(BookAdapter):
         if captured is not None:
             shown = seen.get(captured)
             if shown is None:
-                return None, f"captured column {captured} for {sport}/{sel} is not present in the row"
+                return None, (f"captured column {captured} for {sport}/{sel} holds no PRICE. "
+                              f"Column texts: {raw or '<none>'} — the row layout is not what was captured "
+                              f"(in-play rows can carry an extra cell)")
             if abs(shown - want) > want * self.COLUMN_MATCH_TOL:
                 return None, (f"captured column {captured} shows {shown} but the board says {want} for "
                               f"'{sel}' — layout may have changed; refusing until re-captured")
@@ -653,6 +660,59 @@ class BetInAsiaAdapter(BookAdapter):
                 return None, (f"columns {seen} are too close to tell apart for '{sel}' at {want} — "
                               f"refusing (a symmetric market cannot be identified by price)")
         return best_col, ""
+
+    async def _find_price_cell(self, page, ekey: str, want: float):
+        """Locator for the clickable cell showing `want` for this event, found BY PRICE across every link.
+
+        WHY NOT A COLUMN MAP. The board's layout depends on MATCH STATE, not just sport. Captured pre-game,
+        a baseball match is ONE link holding both prices ([label, home, away]). Once in-play the same match
+        renders as TWO links, one per side, each `[team name, price]` — so "column 2" is a price before the
+        game starts and a team name after it. A captured position cannot express that, and following it
+        would click a team name or, worse, the wrong side.
+
+        The price is the one thing that identifies a cell in every layout: we already hold the board odds
+        for this exact selection, so whichever cell shows that number IS that selection. Self-verifying,
+        layout-independent, and it fails closed — if no cell matches, or two match equally well, nothing is
+        clicked.
+        """
+        links = page.locator(f'a[href*="{ekey}"]')
+        try:
+            n = await links.count()
+        except Exception:
+            return None, 0, "could not query the board"
+        cands = []                       # (abs error, locator, text, link index)
+        for i in range(min(n, 12)):
+            link = links.nth(i)
+            try:
+                spans = link.locator("div > span")
+                m = await spans.count()
+            except Exception:
+                continue
+            for j in range(min(m, 8)):
+                cell = spans.nth(j)
+                try:
+                    txt = " ".join(((await cell.inner_text()) or "").split())
+                    val = float(txt.replace(",", ""))
+                except (ValueError, TypeError):
+                    continue
+                except Exception:
+                    continue
+                if val <= 1.0:
+                    continue             # not decimal odds
+                cands.append((abs(val - want), cell, txt, i))
+        if not cands:
+            return None, n, f"no cell on any of {n} link(s) renders decimal odds"
+        cands.sort(key=lambda c: c[0])
+        best = cands[0]
+        if best[0] > want * self.COLUMN_MATCH_TOL:
+            return None, n, (f"no cell matches the board price {want} "
+                             f"(closest {best[2]} on link {best[3]}) — refusing rather than guessing")
+        if len(cands) > 1:
+            second = cands[1][0]
+            if second <= max(best[0] * self.COLUMN_MATCH_MARGIN, best[0] + want * 0.005):
+                return None, n, (f"two cells are equally close to {want} ({best[2]}, {cands[1][2]}) — "
+                                 f"cannot tell the sides apart, refusing")
+        return best[1], n, ""
 
     async def _find_board_row(self, page, ekey: str):
         """The board row for `ekey`, chosen by CONTENT rather than DOM order.
@@ -766,14 +826,25 @@ class BetInAsiaAdapter(BookAdapter):
                 return {"ok": False, "error": f"row href {href!r} disagrees with token "
                                               f"(sport={sport} comp={comp_id}) -- refusing to click"}
 
-            # Identify the column from the PRICE now that we have the row element.
-            col, why = await self._identify_column(row, sport, ekey, market_key, sel)
-            if col is None:
+            # Locate the exact clickable cell BY PRICE — layout-independent (see _find_price_cell).
+            book = self.feed._books.get((sport, ekey)) or {}
+            mk_entry = (book.get("markets") or {}).get(market_key)
+            if not mk_entry:
+                return {"ok": False, "error": f"no board price cached for {market_key} — "
+                                              f"cannot identify which cell is '{sel}'"}
+            want = (mk_entry[1] or {}).get(sel)
+            if not want or want <= 1.0:
+                return {"ok": False, "error": f"no board price for selection '{sel}'"}
+            cell, n_links, why = await self._find_price_cell(page, ekey, want)
+            if cell is None:
                 return {"ok": False, "error": why}
+            if n_links > 1:
+                print(f"[BIA SLIP] {ekey}: {n_links} links carry this key; matched the cell showing {want}",
+                      flush=True)
 
             url_before = page.url
             slips_before = len(self.feed._slip_books)
-            await row.locator(f"div:nth-child({col}) > span").first.click(timeout=5_000)
+            await cell.click(timeout=5_000)
             await _aio.sleep(0.5)
             url_after = page.url
             # THE ROW IS AN <a href>. A real user's click is swallowed by the app (it opens the Quick Bet
