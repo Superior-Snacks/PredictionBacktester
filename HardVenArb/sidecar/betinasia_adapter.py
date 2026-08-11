@@ -34,6 +34,7 @@ import os
 import time
 from typing import Optional
 
+import sports as sports_cfg
 from book_adapter import BetResult, BookAdapter, CatalogEntry, Selection
 from betinasia_ws import BetInAsiaFeed
 
@@ -737,6 +738,24 @@ class BetInAsiaAdapter(BookAdapter):
                 continue
         return None, n
 
+    def _league_url(self, sport: str, ekey: str, comp_id) -> str:
+        """The league page holding this game: `{base}{sport_slug}/{country}/{comp_id}`, or "" if any part
+        is unknown.
+
+        Observed verbatim in the captures (`/sportsbook/football/AR/24805`), and every part is data we
+        already hold: the WS `event` frame carries `country` and `competition_id` on 100% of 5,849 events
+        captured, and `comp_id` rides inside the selection_id. So the rover addresses the league directly
+        rather than loading the sport board and expanding it.
+
+        The LEAGUE page, not the event page: it renders the same board rows `_find_price_cell` is already
+        proven against, whereas the event page's layout is unverified — slip_quote currently treats
+        landing on it as a failure."""
+        country = (self.feed.get_event(sport, ekey) or {}).get("country") or ""
+        path = sports_cfg.bia_path_by_code().get(sport, "")
+        if not (country and path and comp_id):
+            return ""
+        return f"{BASE_URL.rstrip('/')}{path}/{country}/{comp_id}"
+
     async def slip_quote(self, selection_id: str) -> dict:
         """Open the betslip for one selection and return the TRUE offered odds. Places nothing.
 
@@ -765,12 +784,18 @@ class BetInAsiaAdapter(BookAdapter):
         if market_key != MONEYLINE_BY_SPORT.get(sport):
             return {"ok": False, "error": f"slip quotes are moneyline-only; '{market_key}' is a derivative"}
         obs = self.observer
-        page = getattr(obs, "_page", None) if obs else None
-        if page is None:
+        if obs is None:
             return {"ok": False, "error": "no browser page (direct transport cannot open a betslip)"}
 
         t0 = time.time()
         key = (sport, ekey)
+
+        # The venue itself says whether this event can go on a betslip at all. Refusing here costs one
+        # dict lookup; discovering it by navigating and clicking costs a page load and a timeout.
+        ev_meta = self.feed.get_event(sport, ekey) or {}
+        if ev_meta.get("available_for_accas") is False:
+            return {"ok": False, "error": f"{ekey} is not available_for_accas — the venue will not put "
+                                          f"it on a betslip, so there is no slip price to read"}
 
         # ── ALREADY SUBSCRIBED? Then do not click at all. ────────────────────────────────────────────
         # Proved 2026-08-11: the acca subscription behaves like the board one — once an event is
@@ -821,7 +846,25 @@ class BetInAsiaAdapter(BookAdapter):
 
         before_ts = (cached or {}).get("ts", 0.0)
         try:
+            # THE ROVING TAB does every click, so the observing tab is never dragged off its board (its
+            # accumulated subscriptions are the whole feed). Acquire it before anything else.
+            page = await obs.rover()
+            if page is None:
+                return {"ok": False, "error": "could not open the roving tab"}
+
             row, n_links = await self._find_board_row(page, ekey)
+            # NAVIGATE TO THE LEAGUE. The rover starts blank and generally is not showing this game, so
+            # "row missing" is the normal first state, not an error. The event frames carry `country` and
+            # `competition_id` on 100% of events, which is exactly the league page's address — so the
+            # rover goes straight there instead of loading the whole sport board and expanding it.
+            if row is None:
+                url = self._league_url(sport, ekey, comp_id)
+                if url and page.url.rstrip("/") != url.rstrip("/"):
+                    print(f"[BIA SLIP] rover -> {url}", flush=True)
+                    if await obs.rover(url) is None:
+                        return {"ok": False, "error": f"rover could not reach {url}"}
+                    await _aio.sleep(float(os.environ.get("BIA_ROVER_SETTLE_SEC", "1.0")))
+                    row, n_links = await self._find_board_row(page, ekey)
             # The competition may still be collapsed -- its rows do not exist in the DOM until "Show more"
             # is expanded, so this is a PRECONDITION of finding the row, not a fallback.
             if row is None:
@@ -837,7 +880,8 @@ class BetInAsiaAdapter(BookAdapter):
             if row is None:
                 return {"ok": False,
                         "error": (f"no board ROW for {ekey} — {n_links} link(s) carry this event key but "
-                                  f"none render price cells (wrong sport page, or the row is not expanded)")}
+                                  f"none render price cells (rover is on {page.url!r}; the league page may "
+                                  f"not list this game, or the row is not expanded)")}
 
             # CROSS-CHECK the href before clicking. The event key alone already identifies the match; sport
             # and comp_id are two more independent confirmations that cost nothing.
@@ -984,10 +1028,27 @@ class BetInAsiaAdapter(BookAdapter):
         if obs is None:
             out["note"] = "no observer (direct transport) — per-sport coverage unavailable"
             return out
-        # socket COUNT is the reconnect signal: this venue holds one socket for hours, so >1 means the
-        # page reloaded or the connection dropped and came back (subscriptions do NOT survive that).
+        # socket COUNT is the reconnect signal: the OBSERVING tab holds one socket for hours, so a rising
+        # count means it reloaded or dropped and came back (board subscriptions do NOT survive that).
+        # Since the rover was added this is no longer a clean alarm — every rover navigation is a new
+        # socket by design. Read it against `tabs.rover` below rather than on its own.
         out["sockets"] = getattr(obs, "_sockets", None)
         out["socket_urls"] = list(getattr(obs, "_socket_urls", []) or [])   # already token-redacted
+        # THE TWO TABS, side by side. The observing tab should sit still (its accumulated subscriptions
+        # are the feed); the rover is the only one that moves. If `observing` starts tracking `rover`,
+        # something is navigating the wrong tab and the board will go with it.
+        rv = getattr(obs, "_rover", None)
+        out["tabs"] = {
+            "observing": (getattr(obs, "_page", None).url
+                          if getattr(obs, "_page", None) is not None else None),
+            "rover": (rv.url if rv is not None and not rv.is_closed() else None),
+            "rover_open": rv is not None and not rv.is_closed(),
+        }
+        # Betslip subscriptions, per socket. A quote REFUSES to click an already-subscribed event, so a
+        # count that only ever grows (especially across reconnects) is the shape of the old global-set bug.
+        out["acca_subs"] = {"total": len(getattr(obs, "_acca_subs", ()) or ()),
+                            "by_socket": [len(v) for v in
+                                          (getattr(obs, "_acca_by_ws", {}) or {}).values()]}
         try:
             cov = obs.coverage()
             out["catalog_matches"] = cov.get("catalog_matches")

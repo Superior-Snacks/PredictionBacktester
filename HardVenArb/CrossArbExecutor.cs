@@ -262,6 +262,15 @@ public class CrossArbExecutor
         double.TryParse(Environment.GetEnvironmentVariable("HARDVEN_SLIP_QUOTE_TIMEOUT_SEC"),
                         System.Globalization.NumberStyles.Any,
                         System.Globalization.CultureInfo.InvariantCulture, out var _sqt) && _sqt > 0 ? _sqt : 20.0;
+    // SLIP-VERIFIED DRY RUN. Normally dry-run skips the betslip and books the FEED price, which is exactly
+    // the number measurement says to distrust: board and slip agreed on 84% of samples but the rest were
+    // WORSE at the slip and never better, so a dry run's edge is systematically overstated and its "arb
+    // survived" rate is unmeasured. Turning this on makes a soak collect prices the venue would actually
+    // honour (and ARB_GONE_AT_SLIP counts) while still placing nothing.
+    // Off by default because it is not free: every attempt becomes a real navigation + click at the venue,
+    // and dry-run fires far more often than live (seeded balance, re-entry allowed). Anti-detection is a
+    // hard constraint, so opt in deliberately and keep an eye on the click rate.
+    private readonly bool   _slipQuoteInDryRun   = Environment.GetEnvironmentVariable("HARDVEN_SLIP_QUOTE_DRYRUN") == "1";
 
     /// <summary>Env-read for a decimal knob; &lt;=0 or unparseable falls back, so a typo cannot silently
     /// disable a limit. Mirrors Program.cs's EnvDec, which is not visible from this class.</summary>
@@ -602,7 +611,13 @@ public class CrossArbExecutor
         lock (_balanceLock) { k = _kalshiBalanceUsd; p = _hardvenBalanceUsd; }
         int pairCount = _telemetry.GetAllPairs().Count();
         string mode = _dryRun ? "DRY-RUN" : "LIVE";
-        DiscordAlert($"✅ {mode} started — startup complete (HardVen fees prefetched), monitoring {pairCount} pair(s). Cash: Kalshi ${k:0.00} / HardVen ${p:0.00}.");
+        // Say whether the run's prices are slip-VERIFIED or feed-only. A dry run that books feed prices
+        // overstates its edge systematically, so this must not be something you have to infer from env.
+        bool slipOn = _restVerifier != null && _slipQuoteEnabled && (!_dryRun || _slipQuoteInDryRun);
+        string verify = slipOn ? "slip-verified"
+                               : (_dryRun ? "FEED PRICES ONLY (not slip-verified — set HARDVEN_SLIP_QUOTE_DRYRUN=1)"
+                                          : "feed prices only (HARDVEN_SLIP_QUOTE=0)");
+        DiscordAlert($"✅ {mode} started — startup complete (HardVen fees prefetched), monitoring {pairCount} pair(s). Cash: Kalshi ${k:0.00} / HardVen ${p:0.00}. Prices: {verify}.");
     }
 
     /// <summary>Fetch fee params/tick size for any pair token we have not seen yet. Called at startup and
@@ -1143,7 +1158,7 @@ public class CrossArbExecutor
         // It costs seconds, so Kalshi is re-read from its live book afterwards and the whole arb re-tested:
         // a slip that takes 3s is 3s in which Kalshi can move away, and firing on a stale Kalshi would just
         // relocate the problem to the other leg.
-        if (_restVerifier != null && !testMode && !_dryRun && _slipQuoteEnabled)
+        if (_restVerifier != null && !testMode && (!_dryRun || _slipQuoteInDryRun) && _slipQuoteEnabled)
         {
             var (slipPrice, slipErr) = await _restVerifier.SlipQuoteAsync(hardvenToken, _slipQuoteTimeoutSec);
             if (slipErr == "unsupported")

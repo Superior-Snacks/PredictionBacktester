@@ -73,11 +73,26 @@ class BetInAsiaObserver:
         self._quiet_ref = float(os.environ.get("BIA_QUIET_SEC", "600"))
         self._resumed = 0                              # updates that arrived after > _quiet_ref silence
         self._resumed_keys: set = set()
-        # Events the PAGE has subscribed on the BETSLIP (acca) channel. Once subscribed the venue keeps
-        # pushing that event's slip prices, and a REPEAT watch_acca_hcaps is answered `event_already_
-        # subscribed` with NO price — so knowing this set is what stops us clicking a second time and
-        # then waiting for a push that will never come.
-        self._acca_subs: set = set()
+        # Events the PAGE has subscribed on the BETSLIP (acca) channel, KEYED BY SOCKET. Once subscribed
+        # the venue keeps pushing that event's slip prices, and a REPEAT watch_acca_hcaps is answered
+        # `event_already_subscribed` with NO price — so knowing this set is what stops us clicking a
+        # second time and then waiting for a push that will never come.
+        self._acca_by_ws: dict[int, set] = {}
+        self._rover = None                             # the one tab allowed to click (see rover())
+
+    @property
+    def _acca_subs(self) -> set:
+        """Every LIVE socket's betslip subscriptions, unioned.
+
+        PER SOCKET, not global. A subscription belongs to the socket that sent it: close the tab — or
+        navigate it, which drops the old socket — and the venue forgets it. A single global set would go
+        on claiming the event was subscribed, and slip_quote REFUSES TO CLICK when it believes that, so
+        every later quote for that event fails against a socket that never subscribed anything. That is a
+        permanent self-inflicted blind spot, and a roving tab would mint one on every navigation."""
+        out: set = set()
+        for s in self._acca_by_ws.values():
+            out |= s
+        return out
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
     async def start(self) -> None:
@@ -102,6 +117,35 @@ class BetInAsiaObserver:
             self._log(f"initial navigation: {type(e).__name__}: {e}")
         self._log("observing - the page drives, we only read")
         asyncio.create_task(self._first_look())
+
+    # ── the roving tab ────────────────────────────────────────────────────────
+    async def rover(self, url: str = ""):
+        """The SECOND tab — the only one allowed to click. Returns the page, creating it on first use.
+
+        WHY IT MUST NOT BE THE OBSERVING TAB. Board subscriptions accumulate on a socket and are never
+        dropped (measured: tennis 6 -> 83, still 83 after navigating away to football), so the observing
+        tab holds EVERY sport's book at once no matter what it is displaying — as long as it is left
+        alone. Verifying a price is the opposite kind of act: navigate to that game's league page, click
+        its moneyline, read the slip push. Doing that on the observing tab would drag the whole feed
+        around for one quote. Splitting them lets the feed sit still while the rover moves, and two tabs
+        is an unremarkable thing for a person to have open (nine parked ones are not).
+
+        The rover is hooked by `_ctx.on("page")` like any other tab, so its own socket feeds the SAME
+        caches — its slip pushes land in `_slip_books` exactly as the observer's board pushes do."""
+        if self._ctx is None:
+            return None
+        pg = self._rover
+        if pg is None or pg.is_closed():
+            pg = await self._ctx.new_page()          # _ctx.on("page") hooks its sockets for us
+            self._rover = pg
+            self._log("opened the roving tab (slip verification only)")
+        if url:
+            try:
+                await pg.goto(url, wait_until="domcontentloaded", timeout=60_000)
+            except Exception as e:
+                self._log(f"rover navigation to {url} failed ({type(e).__name__}: {e})")
+                return None
+        return pg
 
     # ── multi-sport coverage ──────────────────────────────────────────────────
     async def visit_sports(self, targets: list, dwell: float = 25.0) -> dict:
@@ -238,7 +282,16 @@ class BetInAsiaObserver:
         ws.on("framereceived", self._on_frame)
         # framesent is deliberately NOT hooked for parsing -- we never act on what the page asks for,
         # we only parse what the server answers. It is watched purely to report coverage below.
-        ws.on("framesent", self._on_sent)
+        # The socket is bound in so its betslip subscriptions can die WITH it (see _acca_subs).
+        ws.on("framesent", lambda p, _w=ws: self._on_sent(p, _w))
+        ws.on("close", lambda *_a, _w=ws: self._on_ws_close(_w))
+
+    def _on_ws_close(self, ws) -> None:
+        """Forget this socket's betslip subscriptions. The venue drops them when the socket goes, so
+        keeping them would make slip_quote refuse to click an event nothing is subscribed to."""
+        gone = self._acca_by_ws.pop(id(ws), None)
+        if gone:
+            self._log(f"socket closed - releasing {len(gone)} betslip subscription(s)")
 
     def _on_frame(self, payload) -> None:
         if not isinstance(payload, str):
@@ -276,10 +329,11 @@ class BetInAsiaObserver:
             elif m[0] in ("error", "api"):
                 self._server_says.append((round(now - self._started, 1), json.dumps(m)[:400]))
 
-    def _on_sent(self, payload) -> None:
+    def _on_sent(self, payload, ws=None) -> None:
         """Record what the PAGE subscribed to, so coverage can be reported honestly. We never send."""
         if not isinstance(payload, str):
             return
+        bucket = self._acca_by_ws.setdefault(id(ws), set())
         try:
             msg = json.loads(payload)
         except (json.JSONDecodeError, TypeError):
@@ -296,9 +350,9 @@ class BetInAsiaObserver:
                 if isinstance(e, list) and len(e) >= 3:
                     k = (e[1], e[2])
                     if msg[0] == "watch_acca_hcaps":
-                        self._acca_subs.add(k)
+                        bucket.add(k)
                     else:
-                        self._acca_subs.discard(k)
+                        bucket.discard(k)
             print(f"[BIA-OBS] -> {msg[0]} {json.dumps(msg[1])[:160]}", flush=True)
             return
         if not (isinstance(msg, list) and msg and msg[0] in ("watch_hcaps", "watch_event")):

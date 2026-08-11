@@ -208,6 +208,15 @@ def bia_sport_codes() -> list[str]:
     return [s.bia_sport for s in bia_sports()]
 
 
+def bia_path_by_code() -> dict[str, str]:
+    """{bia_sport_code: sportsbook slug} for the active sports carrying a VERIFIED slug.
+
+    The rover builds league URLs (`{slug}/{country}/{comp_id}`) from this. Sports with an empty
+    `bia_path` are omitted rather than guessed: an unverified slug is a 404, and navigating the rover
+    into a 404 looks exactly like "this game has no betslip"."""
+    return {s.bia_sport: s.bia_path for s in bia_sports() if s.bia_path}
+
+
 def bia_paths(base: str = "https://black.betinasia.com") -> list[tuple[str, str]]:
     """[(bia_sport_code, absolute sportsbook URL)] for the active sports — the observer's visit list.
 
