@@ -152,10 +152,27 @@ async def shutdown_sidecar():
 
 # ── M0: odds (the only endpoint telemetry needs) ──────────────────────────────
 @app.get("/odds")
-async def odds(selections: str = Query(..., description="comma-separated selection ids")):
+async def odds(selections: str = Query(..., description="comma-separated selection ids"),
+               fresh: int = Query(0, description="1 = re-read these selections FROM THE VENUE first "
+                                                 "(execution-path verify only, never the poll loop)")):
     ids = [s for s in (x.strip() for x in selections.split(",")) if s]
     if not ids:
         raise HTTPException(400, "no selections")
+    # INDEPENDENT VERIFY. Without this, /odds answers from the same cache the caller screened on, so a
+    # "verification" is a cache agreeing with itself -- it agreed 110/110 times while the independently
+    # checked Kalshi leg disagreed 76% of the time. `fresh=1` forces a live venue read first, and the
+    # `venue_fresh` flag below tells the caller whether that actually happened, so a failed refetch can
+    # never masquerade as a confirmed price.
+    venue_fresh = None
+    if fresh:
+        rf = getattr(adapter, "refetch_from_venue", None)
+        if callable(rf):
+            try:
+                venue_fresh = bool((await rf(ids)).get("ok"))
+            except Exception:
+                venue_fresh = False
+        else:
+            venue_fresh = False      # this book cannot re-read on demand; say so rather than imply it did
     result = await adapter.odds(ids)
     # wv = per-selection "WS-verified" (live WS coverage) vs screening-only (httpx re-seed of an untabbed tail
     # league). The C# bot fires /verify on an arb whose leg is wv=false, then trusts it only once WS-confirmed.
@@ -168,6 +185,8 @@ async def odds(selections: str = Query(..., description="comma-separated selecti
             d["wv"] = bool(wv[sid])
         sels[sid] = d
     resp = {"selections": sels, "ts": time.time()}
+    if venue_fresh is not None:
+        resp["venue_fresh"] = venue_fresh
     # FEED HEALTH rides along with every poll. The C# freshness gate was per-QUOTE age, which is right
     # for a book whose sidecar serves a frozen last-known price when its fetch fails (a stale ts really
     # can mean "our session died"). On a push-only venue the same signal means the opposite: the ts is

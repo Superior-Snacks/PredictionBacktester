@@ -2024,6 +2024,37 @@ class PinnacleAdapter(BookAdapter):
             markets = await self._http_get(f"/leagues/{lid}/markets/straight", count_429=True)
         return self._apply_straight_markets(lid, markets, time.time()) if markets else 0
 
+    async def refetch_from_venue(self, selection_ids: list[str]) -> dict:
+        """Force a LIVE re-read from Pinnacle for the leagues behind `selection_ids`, then report which
+        leagues actually refreshed. Returns {"leagues": {lid: applied_token_count|-1}, "ok": bool}.
+
+        WHY THIS EXISTS. `CrossArbRestVerifier` was verifying the HardVen leg with `GET /odds` -- the very
+        cache the screening price came from. Re-reading a cache 119ms after writing it cannot disagree with
+        itself, so the "verification" agreed 110/110 times and looked like a perfect venue. The Kalshi leg,
+        which IS independently checked (a real call to Kalshi), disagreed 76% of the time. That gap was
+        instrumentation, not venue quality: we had no independent read of a Pinnacle price at all.
+
+        `_reseed_league` is the honest primitive -- it is an authed REST call to Pinnacle, the same one the
+        90s backstop already makes, so it adds no new request shape or fingerprint. Only the execution path
+        calls this (a couple of hundred times a day at most), not the 3s poll loop.
+
+        A league that fails to refetch is reported as -1 rather than silently falling through to the cached
+        price: the caller must be able to tell "the venue confirmed this" from "we asked and got nothing".
+        """
+        lids: list[str] = []
+        for sid in selection_ids:
+            p = self._parse_sid(sid)
+            if p and p[1] not in lids:
+                lids.append(p[1])
+        out: dict[str, int] = {}
+        for lid in lids:
+            try:
+                out[lid] = await self._reseed_league(lid)
+            except Exception as ex:
+                print(f"[PINNACLE] refetch_from_venue {lid}: {type(ex).__name__}: {ex}")
+                out[lid] = -1
+        return {"leagues": out, "ok": bool(lids) and all(v >= 0 for v in out.values())}
+
     def _straight_prices(self, lid: str, markets: list) -> dict:
         """{token: decimal_odds} for a /markets/straight payload — same `_market_tokens` keying as the cache, so
         two sources (authed vs guest) are directly comparable per token. Used by the debug snapshot below."""

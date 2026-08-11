@@ -956,10 +956,21 @@ public class CrossArbExecutor
                 return;
             }
             // Live now — re-read BOTH legs and re-check, because seconds passed while the tab navigated.
-            var (vK, vP) = await _restVerifier.GetCurrentAsksAsync(pair, arbType);
+            var (vK, vP, vFresh) = await _restVerifier.GetCurrentAsksAsync(pair, arbType);
             if (vK <= 0m || vP <= 0m)
             {
                 Console.WriteLine($"[EXEC SKIP] {pair.Label}: WS-verified but the re-read failed — skipping");
+                return;
+            }
+            if (!vFresh)
+            {
+                // The sidecar could not re-read this selection FROM THE VENUE, so `vP` is the same cached
+                // number we screened on. Confirming a price against its own cache is not confirmation.
+                Console.WriteLine($"[EXEC SKIP] {pair.Label}: HardVen price NOT confirmed at the venue " +
+                                  $"(sidecar refetch failed) — refusing to treat the cached price as verified");
+                await JournalAsync(JsonSerializer.Serialize(new {
+                    t = DateTime.UtcNow, @event = "EXEC_SKIP", pairId, arbType, reason = "HARDVEN_NOT_VENUE_FRESH"
+                }));
                 return;
             }
             decimal vNet = vK + vP + KalshiFee(vK) + HardVenFee(vP, hardvenToken);
@@ -1025,10 +1036,22 @@ public class CrossArbExecutor
                 string reason = staleByAge && venueSkewMs < StaleGateMs
                     ? $"age={maxAgeMs:0}ms" : $"skew={venueSkewMs:0}ms";
                 Console.WriteLine($"[STALE GATE] {pair.Label} | {reason} — REST-verifying before firing");
-                var (freshK, freshP) = await _restVerifier.GetCurrentAsksAsync(pair, arbType);
+                var (freshK, freshP, pVenueFresh) = await _restVerifier.GetCurrentAsksAsync(pair, arbType);
                 if (freshK <= 0m || freshP <= 0m)
                 {
                     Console.WriteLine($"[STALE GATE] {pair.Label} | REST fetch failed — skipping");
+                    return;
+                }
+                if (!pVenueFresh)
+                {
+                    // This gate fired BECAUSE the book is suspect. Falling back to the cached HardVen price
+                    // here would answer "is this price stale?" with the stale price itself.
+                    Console.WriteLine($"[STALE GATE] {pair.Label} | HardVen refetch from the venue FAILED — " +
+                                      $"cannot confirm a suspect price against its own cache, skipping");
+                    await JournalAsync(JsonSerializer.Serialize(new {
+                        t = DateTime.UtcNow, @event = "EXEC_SKIP", pairId, arbType,
+                        reason = "HARDVEN_NOT_VENUE_FRESH", venueSkewMs
+                    }));
                     return;
                 }
                 decimal freshNet = freshK + freshP + KalshiFee(freshK) + HardVenFee(freshP, hardvenToken);

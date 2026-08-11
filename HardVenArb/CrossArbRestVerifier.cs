@@ -65,12 +65,13 @@ public class CrossArbRestVerifier
     /// stale-book gate before firing orders when venue time-skew is large.
     /// Returns (-1,-1) if either fetch fails.
     /// </summary>
-    public async Task<(decimal KAsk, decimal PAsk)> GetCurrentAsksAsync(CrossPair pair, string arbType)
+    public async Task<(decimal KAsk, decimal PAsk, bool PVenueFresh)> GetCurrentAsksAsync(
+        CrossPair pair, string arbType)
     {
         string hardvenToken = arbType == "K_YES_P_NO" ? pair.HardVenNoTokenId : pair.HardVenYesTokenId;
         decimal kAsk = await GetKalshiAskAsync(pair.KalshiTicker, arbType);
-        decimal pAsk = await GetHardVenAskAsync(hardvenToken);
-        return (kAsk, pAsk);
+        var (pAsk, pVenueFresh) = await GetHardVenAskAsync(hardvenToken);
+        return (kAsk, pAsk, pVenueFresh);
     }
 
     /// <summary>SYNCHRONOUS WS-verify: ask the sidecar to point its ROVING tab at this selection's league and
@@ -135,8 +136,8 @@ public class CrossArbRestVerifier
 
             string hardvenToken = arbType == "K_YES_P_NO" ? pair.HardVenNoTokenId : pair.HardVenYesTokenId;
             DebugLog.Trades($"VerifyAsync {pair.Label}: fetching HardVen ask for token {hardvenToken[..Math.Min(8, hardvenToken.Length)]}...");
-            decimal pAsk = await GetHardVenAskAsync(hardvenToken);
-            DebugLog.Trades($"VerifyAsync {pair.Label}: HardVen ask={pAsk:0.0000}");
+            var (pAsk, pVenueFresh) = await GetHardVenAskAsync(hardvenToken);
+            DebugLog.Trades($"VerifyAsync {pair.Label}: HardVen ask={pAsk:0.0000} venueFresh={pVenueFresh}");
 
             sw.Stop();
             bool confirmed = kAsk > 0m && pAsk > 0m && (kAsk + pAsk) < 1.00m;
@@ -211,17 +212,35 @@ public class CrossArbRestVerifier
     /// implied_price is the per-contract cost (= 1/decimal_odds = the "ask"); status is "open"/"suspended".
     /// (-1, "") on any error or missing selection.
     /// </summary>
-    private async Task<(decimal price, string status)> GetHardVenSelectionAsync(string tokenId)
+    /// <summary>
+    /// Reads a HardVen selection from the sidecar. <paramref name="fromVenue"/> asks the sidecar to
+    /// re-read it FROM THE VENUE first (`?fresh=1`) and reports, via <c>VenueFresh</c>, whether that
+    /// actually happened.
+    ///
+    /// WHY THE FLAG MATTERS. `/odds` normally answers from the same cache the screening price came from,
+    /// so verifying against it is a cache agreeing with itself: measured 2026-08-11, the HardVen leg
+    /// "confirmed" 110/110 windows while the independently-checked Kalshi leg disagreed with its screening
+    /// price 76% of the time. That was not a better venue, it was a mirror. With `fresh=1` the sidecar
+    /// re-seeds the league from Pinnacle before answering — and when it cannot, `venue_fresh` comes back
+    /// false so the caller can refuse rather than silently accept the cached number as confirmation.
+    /// </summary>
+    private async Task<(decimal price, string status, bool venueFresh)> GetHardVenSelectionAsync(
+        string tokenId, bool fromVenue = false)
     {
-        string url = $"{_sidecarBase}/odds?selections={Uri.EscapeDataString(tokenId)}";
+        string url = $"{_sidecarBase}/odds?selections={Uri.EscapeDataString(tokenId)}"
+                   + (fromVenue ? "&fresh=1" : "");
         string json = await _http.GetStringAsync(url);
         using var doc = JsonDocument.Parse(json);
+        // Absent when we did not ask for a venue re-read; false when we asked and it failed. Only an
+        // explicit true means the price below was confirmed against Pinnacle rather than against ourselves.
+        bool venueFresh = doc.RootElement.TryGetProperty("venue_fresh", out var vf)
+                          && vf.ValueKind == JsonValueKind.True;
         if (!doc.RootElement.TryGetProperty("selections", out var sels) ||
             !sels.TryGetProperty(tokenId, out var sel))
-            return (-1m, "");
+            return (-1m, "", venueFresh);
         string status = sel.TryGetProperty("status", out var st) ? (st.GetString() ?? "") : "";
         decimal price = sel.TryGetProperty("implied_price", out var ip) && ip.TryGetDecimal(out var p) ? p : -1m;
-        return (price, status);
+        return (price, status, venueFresh);
     }
 
     /// <summary>
@@ -277,15 +296,20 @@ public class CrossArbRestVerifier
     private Task<decimal> GetHardVenBidAsync(string tokenId) => Task.FromResult(-1m);
 
     // HardVen "ask" = the sidecar's per-contract implied price (1/decimal_odds) when the market is open.
-    private async Task<decimal> GetHardVenAskAsync(string tokenId)
+    // ALWAYS asks the sidecar to re-read from the venue: every caller of this is a VERIFY path (arb-open
+    // telemetry check, or the executor's pre-fire re-check), never the 3s poll loop, so the extra authed
+    // league fetch is marginal against the 90s backstop that already re-seeds every active league.
+    // Returns venueFresh=false when the venue read did not happen, so a cached echo is never mistaken for
+    // confirmation.
+    private async Task<(decimal Ask, bool VenueFresh)> GetHardVenAskAsync(string tokenId)
     {
-        var (price, status) = await GetHardVenSelectionAsync(tokenId);
+        var (price, status, venueFresh) = await GetHardVenSelectionAsync(tokenId, fromVenue: true);
         if (status == "open" && price > 0m)
         {
-            DebugLog.Trades($"GetHardVenAskAsync {tokenId}: ask={price:0.0000} (sidecar)");
-            return price;
+            DebugLog.Trades($"GetHardVenAskAsync {tokenId}: ask={price:0.0000} venueFresh={venueFresh}");
+            return (price, venueFresh);
         }
         DebugLog.Trades($"GetHardVenAskAsync {tokenId}: not open / no price (status={status})");
-        return -1m;
+        return (-1m, venueFresh);
     }
 }
