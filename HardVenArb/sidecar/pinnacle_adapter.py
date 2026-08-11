@@ -2440,17 +2440,30 @@ class PinnacleAdapter(BookAdapter):
 
         self._pause_all_organic()
         page = None
+        t0 = time.perf_counter()
         try:
             page, tab_kind, sel_ok = await self._select_bet_tab(lid, url, exp)
+            ms = round((time.perf_counter() - t0) * 1000, 1)
+            # WHICH TIER WE LANDED ON IS THE WHOLE COST STORY, so report it rather than just the total:
+            #   dedicated / rove  -> the league was ALREADY open: a click, no navigation (fast path)
+            #   rove-nav          -> we had to navigate the roving tab to the league (seconds)
+            #   board             -> blind scroll on the big combined list (slow, often misses)
+            #   cold              -> a fresh tab, full page load (slowest)
+            # If the slow tiers dominate, the fix is tab COVERAGE (park a tab on the league before the arb
+            # matters), not a faster click — the click is already the cheap part.
+            print(f"[SLIP QUOTE] {selection_id} via {tab_kind} in {ms:.0f}ms"
+                  f"{'' if (sel_ok and sel_ok.get('ok')) else ' (FAILED)'}")
             if page is None or not sel_ok or not sel_ok.get("ok"):
-                return {"ok": False, "error": f"could not select the intended market: {sel_ok and sel_ok.get('error')}"}
+                return {"ok": False, "tab": tab_kind, "elapsed_ms": ms,
+                        "error": f"could not select the intended market: {sel_ok and sel_ok.get('error')}"}
             shown = float(sel_ok.get("price") or 0)
             if sel_ok.get("american") or shown <= 1.0 or shown > 1000:
-                return {"ok": False, "error": "the site is not on Decimal Odds"
-                                              if sel_ok.get("american") else
-                                              f"popover price {shown} is not decimal odds"}
+                return {"ok": False, "tab": tab_kind, "elapsed_ms": ms,
+                        "error": "the site is not on Decimal Odds"
+                                 if sel_ok.get("american") else
+                                 f"popover price {shown} is not decimal odds"}
             return {"ok": True, "decimal_odds": shown, "implied_price": round(1.0 / shown, 6),
-                    "tab": tab_kind, "selection_id": selection_id}
+                    "tab": tab_kind, "elapsed_ms": ms, "selection_id": selection_id}
         except Exception as e:
             return {"ok": False, "error": f"slip quote error: {type(e).__name__}: {e}"}
         finally:
