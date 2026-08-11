@@ -63,6 +63,40 @@ _load_dotenv(str(_HERE), str(_ROOT), str(_ROOT.parent), os.path.expanduser("~"),
 # ─── CONFIG ───────────────────────────────────────────────────────────────────
 
 KALSHI_BASE = "https://api.elections.kalshi.com/trade-api/v2"
+
+# Kalshi retired POST /portfolio/orders — it now answers HTTP 410 `deprecated_v1_order_endpoint`.
+# Observed live 2026-08-11: every order failed, and because the book leg had already filled, each one
+# left a NAKED directional position. GET /portfolio/orders/{id} is unaffected and still returns the
+# authoritative `status` / `fill_count_fp`, so only order CREATION moved.
+V2_ORDERS_PATH = "/portfolio/events/orders"
+
+
+def v2_order_body(ticker: str, side: str, price_cents: int, count, action: str = "buy",
+                  client_order_id: str | None = None) -> dict:
+    """Build a V2 create-order body from our (side, action, price-in-cents) contract.
+
+    V2 quotes ONLY the YES leg: `bid` = buy YES, `ask` = sell YES. A NO order is therefore the OPPOSITE
+    action on YES at the COMPLEMENT price -- buy NO @p == sell YES @(1-p). Getting this backwards places a
+    real order on the WRONG SIDE at a plausible price, which nothing downstream would catch.
+    Count and price are fixed-point STRINGS, and price is in DOLLARS (V1 used integer cents).
+    """
+    is_yes = side.lower() == "yes"
+    is_buy = action.lower() == "buy"
+    book_side = "bid" if is_buy == is_yes else "ask"
+    yes_cents = price_cents if is_yes else 100 - price_cents
+    body = {
+        "ticker": ticker,
+        "side": book_side,
+        "count": str(count),
+        "price": f"{yes_cents / 100:.6f}".rstrip("0").rstrip("."),
+        "time_in_force": "immediate_or_cancel",   # cannot be combined with expiration_time
+        "self_trade_prevention_type": "taker_at_cross",   # required by V2
+    }
+    if client_order_id:
+        body["client_order_id"] = client_order_id
+    return body
+
+
 LOG_PATH    = _ROOT / "kalshi_trade_test.log"
 
 # ─── TRACE LOGGER ─────────────────────────────────────────────────────────────
@@ -431,31 +465,23 @@ def main():
     print("  ── BUY")
     _sep("─")
 
-    price_field = "yes_price" if args.side == "yes" else "no_price"
-    buy_body = {
-        "ticker":        args.ticker,
-        "side":          args.side,
-        "action":        "buy",
-        "count":         args.contracts,
-        price_field:     ask_cents,
-        "time_in_force": "immediate_or_cancel",
-    }
+    buy_body = v2_order_body(args.ticker, args.side, ask_cents, args.contracts, action="buy")
 
     _log(trace_id, "ORDER_SUBMIT", leg="buy",
          ticker=args.ticker, side=args.side,
          price_cents=ask_cents, count=args.contracts)
     print(f"  [T3] Submitting buy @ {ask_cents}¢ ...", end="", flush=True)
     try:
-        buy_resp, t3_ms = _post(session, private_key, api_key_id, "/portfolio/orders", buy_body)
+        buy_resp, t3_ms = _post(session, private_key, api_key_id, V2_ORDERS_PATH, buy_body)
     except Exception as e:
         _log(trace_id, "ORDER_ERROR", leg="buy", error=str(e))
         sys.exit(f"\n  ERROR placing buy: {e}")
 
-    buy_order    = buy_resp.get("order", buy_resp)
+    buy_order    = buy_resp.get("order", buy_resp)   # V2 is flat; .get keeps V1 shape working
     buy_order_id = buy_order.get("order_id", "")
     _log(trace_id, "ORDER_RESP", leg="buy",
          order_id=buy_order_id, elapsed_ms=round(t3_ms, 1),
-         status=buy_order.get("status", ""), fill_count=float(buy_order.get("fill_count_fp", 0) or 0))
+         status=buy_order.get("status", ""), fill_count=float(buy_order.get("fill_count", buy_order.get("fill_count_fp", 0)) or 0))
     print(f"  {t3_ms:.1f}ms")
     _row("Order ID",        buy_order_id)
     _row("Submit→resp",     _ms(t3_ms))
@@ -504,21 +530,14 @@ def main():
         print(f"  WARNING: No {args.side.upper()} bids visible — using fallback {sell_bid}¢")
     _row("Sell price", f"${sell_bid / 100:.2f}  ({sell_bid}¢)")
 
-    sell_body = {
-        "ticker":        args.ticker,
-        "side":          args.side,
-        "action":        "sell",
-        "count":         filled_count,
-        price_field:     sell_bid,
-        "time_in_force": "immediate_or_cancel",
-    }
+    sell_body = v2_order_body(args.ticker, args.side, sell_bid, filled_count, action="sell")
 
     _log(trace_id, "ORDER_SUBMIT", leg="sell",
          ticker=args.ticker, side=args.side,
          price_cents=sell_bid, count=filled_count)
     print(f"  [T4] Submitting sell @ {sell_bid}¢ ...", end="", flush=True)
     try:
-        sell_resp, t4_ms = _post(session, private_key, api_key_id, "/portfolio/orders", sell_body)
+        sell_resp, t4_ms = _post(session, private_key, api_key_id, V2_ORDERS_PATH, sell_body)
     except Exception as e:
         _log(trace_id, "SELL_FAILED", error=str(e),
              open_contracts=filled_count, ticker=args.ticker, side=args.side)
@@ -530,7 +549,7 @@ def main():
     sell_order_id = sell_order.get("order_id", "")
     _log(trace_id, "ORDER_RESP", leg="sell",
          order_id=sell_order_id, elapsed_ms=round(t4_ms, 1),
-         status=sell_order.get("status", ""), fill_count=float(sell_order.get("fill_count_fp", 0) or 0))
+         status=sell_order.get("status", ""), fill_count=float(sell_order.get("fill_count", sell_order.get("fill_count_fp", 0)) or 0))
     print(f"  {t4_ms:.1f}ms")
     _row("Order ID",       sell_order_id)
     _row("Submit→resp",    _ms(t4_ms))

@@ -245,36 +245,83 @@ public class KalshiOrderClient : IKalshiOrderExecutor, IDisposable
         };
     }
 
+    private static decimal ReadDecimalFlexible(JsonElement el, string prop)
+    {
+        if (!el.TryGetProperty(prop, out var v)) return 0m;
+        return v.ValueKind switch
+        {
+            JsonValueKind.Number => v.TryGetDecimal(out var d) ? d : (decimal)v.GetDouble(),
+            JsonValueKind.String => decimal.TryParse(v.GetString(), NumberStyles.Any,
+                                                     CultureInfo.InvariantCulture, out var s) ? s : 0m,
+            _ => 0m
+        };
+    }
+
+    /// <summary>V2 create-order path. The legacy POST /portfolio/orders now returns HTTP 410
+    /// (<c>deprecated_v1_order_endpoint</c>) — observed live 2026-08-11, when EVERY Kalshi leg failed and
+    /// left the already-filled book leg naked. GET /portfolio/orders/{id} is NOT deprecated and still
+    /// carries the authoritative status, so only order CREATION moved.</summary>
+    private const string V2OrdersPath = "/portfolio/events/orders";
+
     /// <summary>
-    /// Places an IOC order on Kalshi. Returns (orderId, status, fill_count_fp).
-    /// side = "yes" | "no", action = "buy" | "sell".
-    /// priceCents = price in cents (e.g. 65 for $0.65).
+    /// Maps our (side, action) pair onto Kalshi V2's single YES-quoted book.
+    /// V2 dropped the yes/no + buy/sell model: it exposes only <c>bid</c> (buy YES) and <c>ask</c> (sell
+    /// YES), so a NO order is the OPPOSITE action on YES at the COMPLEMENT price —
+    /// buy NO @ p  ==  sell YES @ (1 − p),  sell NO @ p  ==  buy YES @ (1 − p).
+    ///
+    /// This is a pure function purely so it can be unit-tested: inverting it would place a real order on
+    /// the WRONG SIDE of the market at a plausible-looking price, which no downstream check would catch —
+    /// the fill would simply come back as a directional bet against the position we meant to hold.
+    ///
+    /// Limit direction survives the transform: a bid fills at or below its price and an ask at or above,
+    /// so "pay ≤ 41¢ for NO" becomes "receive ≥ 59¢ for YES", the same constraint.
+    /// </summary>
+    internal static (string BookSide, decimal YesPrice) MapToV2Book(string side, int priceCents, string action)
+    {
+        bool isYes = string.Equals(side, "yes", StringComparison.OrdinalIgnoreCase);
+        bool isBuy = string.Equals(action, "buy", StringComparison.OrdinalIgnoreCase);
+        // buy YES and sell NO both LIFT the yes book (bid); sell YES and buy NO both HIT it (ask).
+        string bookSide = isBuy == isYes ? "bid" : "ask";
+        int    yesCents = isYes ? priceCents : 100 - priceCents;
+        return (bookSide, yesCents / 100m);
+    }
+
+    /// <summary>
+    /// Places an IOC order on Kalshi via the V2 endpoint. Returns (orderId, status, fillCount).
+    /// side = "yes" | "no", action = "buy" | "sell", priceCents = price of THAT side in cents
+    /// (e.g. 65 for $0.65) — the caller-facing contract is unchanged; the V2 translation is internal.
     /// clientOrderId tags the order for idempotency / self-trade prevention.
     /// </summary>
     public async Task<(string OrderId, string Status, decimal FillCount)> PlaceOrderAsync(
         string ticker, string side, int priceCents, int count,
         string action = "buy", string? clientOrderId = null)
     {
-        string priceField = side == "yes" ? "yes_price" : "no_price";
+        var (bookSide, yesPrice) = MapToV2Book(side, priceCents, action);
         var body = new Dictionary<string, object>
         {
             ["ticker"]        = ticker,
-            ["side"]          = side,
-            ["action"]        = action,
-            ["count"]         = count,
-            [priceField]      = priceCents,
+            ["side"]          = bookSide,
+            // V2 takes count and price as fixed-point STRINGS, not numbers. Prices are DOLLARS (V1 was cents).
+            ["count"]         = count.ToString(CultureInfo.InvariantCulture),
+            ["price"]         = yesPrice.ToString("0.######", CultureInfo.InvariantCulture),
             ["time_in_force"] = "immediate_or_cancel",
+            // Required by V2. taker_at_cross cancels OUR taker order if it would cross our own resting
+            // order — the right choice for an IOC taker: never trade with ourselves, never rest.
+            ["self_trade_prevention_type"] = "taker_at_cross",
         };
         if (!string.IsNullOrEmpty(clientOrderId))
             body["client_order_id"] = clientOrderId;
 
-        using var doc = await PostAsync("/portfolio/orders", body);
-        var order = doc.RootElement.TryGetProperty("order", out var o) ? o : doc.RootElement;
+        using var doc = await PostAsync(V2OrdersPath, body);
+        var root = doc.RootElement;
 
-        string  orderId = order.TryGetProperty("order_id",      out var id) ? (id.GetString() ?? "") : "";
-        string  status  = order.TryGetProperty("status",        out var st) ? (st.GetString() ?? "") : "";
-        decimal fill    = order.TryGetProperty("fill_count_fp", out var fc)
-            ? decimal.Parse(fc.GetString() ?? "0", CultureInfo.InvariantCulture) : 0m;
+        string  orderId = root.TryGetProperty("order_id", out var id) ? (id.GetString() ?? "") : "";
+        decimal fill    = ReadDecimalFlexible(root, "fill_count");
+        // V2 returns NO status field (only fill_count / remaining_count). Claim "executed" only on a full
+        // immediate fill; anything else reports "resting" so the caller falls through to its GET poll,
+        // which is still the authoritative source. Costs one poll on a partial/no fill, and guessing
+        // "canceled" here would report a fill count we never confirmed.
+        string status = fill >= count ? "executed" : "resting";
 
         return (orderId, status, fill);
     }
