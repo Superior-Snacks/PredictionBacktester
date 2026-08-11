@@ -962,7 +962,9 @@ public class CrossArbExecutor
                 Console.WriteLine($"[EXEC SKIP] {pair.Label}: WS-verified but the re-read failed — skipping");
                 return;
             }
-            if (!vFresh)
+            // null = this book has no independent price read (BetInAsia is push-only); only an explicit
+            // false means we asked the venue and it did not answer.
+            if (vFresh == false)
             {
                 // The sidecar could not re-read this selection FROM THE VENUE, so `vP` is the same cached
                 // number we screened on. Confirming a price against its own cache is not confirmation.
@@ -1042,7 +1044,7 @@ public class CrossArbExecutor
                     Console.WriteLine($"[STALE GATE] {pair.Label} | REST fetch failed — skipping");
                     return;
                 }
-                if (!pVenueFresh)
+                if (pVenueFresh == false)
                 {
                     // This gate fired BECAUSE the book is suspect. Falling back to the cached HardVen price
                     // here would answer "is this price stale?" with the stale price itself.

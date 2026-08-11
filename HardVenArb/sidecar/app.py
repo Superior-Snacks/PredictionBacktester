@@ -163,16 +163,25 @@ async def odds(selections: str = Query(..., description="comma-separated selecti
     # checked Kalshi leg disagreed 76% of the time. `fresh=1` forces a live venue read first, and the
     # `venue_fresh` flag below tells the caller whether that actually happened, so a failed refetch can
     # never masquerade as a confirmed price.
-    venue_fresh = None
+    # TRI-STATE, not a boolean. "cannot" and "tried and failed" must not collapse into one value:
+    #   ok          - the venue was re-read; the price below is confirmed
+    #   failed      - we asked the venue and it did not answer  -> the caller should REFUSE
+    #   unsupported - this book has no independent price read AT ALL
+    # BetInAsia is push-only with no REST price endpoint (the entire recon contains exactly one
+    # price-bearing HTTP response, and it is /v1/betslips/), so "unsupported" is permanent and structural
+    # there, not a failure. Reporting it as `failed` would have made the C# side refuse every BIA arb the
+    # moment a quiet pre-live quote aged past the stale gate -- i.e. exactly the windows that venue exists
+    # to trade, killed by a gate meant for a different book's failure mode.
+    venue_refetch = None
     if fresh:
         rf = getattr(adapter, "refetch_from_venue", None)
-        if callable(rf):
-            try:
-                venue_fresh = bool((await rf(ids)).get("ok"))
-            except Exception:
-                venue_fresh = False
+        if not callable(rf):
+            venue_refetch = "unsupported"
         else:
-            venue_fresh = False      # this book cannot re-read on demand; say so rather than imply it did
+            try:
+                venue_refetch = "ok" if (await rf(ids)).get("ok") else "failed"
+            except Exception:
+                venue_refetch = "failed"
     result = await adapter.odds(ids)
     # wv = per-selection "WS-verified" (live WS coverage) vs screening-only (httpx re-seed of an untabbed tail
     # league). The C# bot fires /verify on an arb whose leg is wv=false, then trusts it only once WS-confirmed.
@@ -185,8 +194,9 @@ async def odds(selections: str = Query(..., description="comma-separated selecti
             d["wv"] = bool(wv[sid])
         sels[sid] = d
     resp = {"selections": sels, "ts": time.time()}
-    if venue_fresh is not None:
-        resp["venue_fresh"] = venue_fresh
+    if venue_refetch is not None:
+        resp["venue_refetch"] = venue_refetch
+        resp["venue_fresh"] = (venue_refetch == "ok")   # kept for readability in logs/diagnostics
     # FEED HEALTH rides along with every poll. The C# freshness gate was per-QUOTE age, which is right
     # for a book whose sidecar serves a frozen last-known price when its fetch fails (a stale ts really
     # can mean "our session died"). On a push-only venue the same signal means the opposite: the ts is

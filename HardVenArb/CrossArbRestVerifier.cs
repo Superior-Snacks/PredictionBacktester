@@ -65,7 +65,7 @@ public class CrossArbRestVerifier
     /// stale-book gate before firing orders when venue time-skew is large.
     /// Returns (-1,-1) if either fetch fails.
     /// </summary>
-    public async Task<(decimal KAsk, decimal PAsk, bool PVenueFresh)> GetCurrentAsksAsync(
+    public async Task<(decimal KAsk, decimal PAsk, bool? PVenueFresh)> GetCurrentAsksAsync(
         CrossPair pair, string arbType)
     {
         string hardvenToken = arbType == "K_YES_P_NO" ? pair.HardVenNoTokenId : pair.HardVenYesTokenId;
@@ -224,17 +224,27 @@ public class CrossArbRestVerifier
     /// re-seeds the league from Pinnacle before answering — and when it cannot, `venue_fresh` comes back
     /// false so the caller can refuse rather than silently accept the cached number as confirmation.
     /// </summary>
-    private async Task<(decimal price, string status, bool venueFresh)> GetHardVenSelectionAsync(
+    private async Task<(decimal price, string status, bool? venueFresh)> GetHardVenSelectionAsync(
         string tokenId, bool fromVenue = false)
     {
         string url = $"{_sidecarBase}/odds?selections={Uri.EscapeDataString(tokenId)}"
                    + (fromVenue ? "&fresh=1" : "");
         string json = await _http.GetStringAsync(url);
         using var doc = JsonDocument.Parse(json);
-        // Absent when we did not ask for a venue re-read; false when we asked and it failed. Only an
-        // explicit true means the price below was confirmed against Pinnacle rather than against ourselves.
-        bool venueFresh = doc.RootElement.TryGetProperty("venue_fresh", out var vf)
-                          && vf.ValueKind == JsonValueKind.True;
+        // TRI-STATE (see the sidecar's /odds):
+        //   true  = "ok"          the venue confirmed this price
+        //   false = "failed"      we asked the venue and got nothing -> caller must REFUSE
+        //   null  = "unsupported" this book has no independent price read at all, or we did not ask.
+        // null must NOT block. BetInAsia is push-only with no REST price endpoint, so demanding an
+        // independent re-read there would refuse every arb forever; its correctness gate is the betslip.
+        bool? venueFresh = null;
+        if (doc.RootElement.TryGetProperty("venue_refetch", out var vr) && vr.ValueKind == JsonValueKind.String)
+        {
+            string s = vr.GetString() ?? "";
+            if (s == "ok") venueFresh = true;
+            else if (s == "failed") venueFresh = false;
+            // "unsupported" deliberately leaves it null
+        }
         if (!doc.RootElement.TryGetProperty("selections", out var sels) ||
             !sels.TryGetProperty(tokenId, out var sel))
             return (-1m, "", venueFresh);
@@ -301,7 +311,7 @@ public class CrossArbRestVerifier
     // league fetch is marginal against the 90s backstop that already re-seeds every active league.
     // Returns venueFresh=false when the venue read did not happen, so a cached echo is never mistaken for
     // confirmation.
-    private async Task<(decimal Ask, bool VenueFresh)> GetHardVenAskAsync(string tokenId)
+    private async Task<(decimal Ask, bool? VenueFresh)> GetHardVenAskAsync(string tokenId)
     {
         var (price, status, venueFresh) = await GetHardVenSelectionAsync(tokenId, fromVenue: true);
         if (status == "open" && price > 0m)
