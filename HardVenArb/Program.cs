@@ -85,6 +85,62 @@ using PredictionBacktester.Engine.LiveExecution;
 // ══════════════════════════════════════════════════════════════════════════════
 //  MODE SELECTION
 // ══════════════════════════════════════════════════════════════════════════════
+// ── Self-check: the sampled slip verifier's GATE (pre-live only, rate-limited, one at a time) ─────────
+// This gate decides how often the bot navigates and clicks at the venue, so a bug here is an
+// anti-detection problem, not a wrong number in a file. Exercised directly rather than inferred from a run.
+if (args.Contains("--slip-verify-check"))
+{
+    // Set BEFORE the type is first touched: the interval/enabled flags are static readonly from env.
+    Environment.SetEnvironmentVariable("HARDVEN_SLIP_VERIFY", "1");
+    Environment.SetEnvironmentVariable("HARDVEN_SLIP_VERIFY_INTERVAL_SEC", "2");   // keep the check quick
+    int failures = 0;
+    void Check(string label, bool ok)
+    {
+        Console.WriteLine($"  {(ok ? "PASS" : "FAIL")}  {label}");
+        if (!ok) failures++;
+    }
+
+    var probePairs = new List<CrossPair> { new("P1", "A vs B", "KX-T", "hvYes", "hvNo") };
+    var probe = new CrossPlatformArbTelemetryStrategy(
+        probePairs, new System.Collections.Concurrent.ConcurrentDictionary<string, LocalOrderBook>());
+
+    Console.WriteLine("\n[1] disabled until a quoter is wired");
+    Check("no verifier -> no sampling", !probe.TrySlipVerifySlot(openedInPlay: false));
+
+    probe.SetSlipVerifier((_, _) => Task.FromResult((0.5m, "")));
+
+    Console.WriteLine("\n[2] pre-live only");
+    Check("in-play arb is never sampled", !probe.TrySlipVerifySlot(openedInPlay: true));
+    Check("pre-live arb takes the first slot", probe.TrySlipVerifySlot(openedInPlay: false));
+
+    Console.WriteLine("\n[3] one at a time (the rover is a single tab)");
+    Check("second arb is refused while one is in flight", !probe.TrySlipVerifySlot(openedInPlay: false));
+    probe.ReleaseSlipVerifySlot();
+
+    Console.WriteLine("\n[4] rate limit holds after the slot is released");
+    Check("still refused inside the interval", !probe.TrySlipVerifySlot(openedInPlay: false));
+    int waitMs = CrossPlatformArbTelemetryStrategy.SlipVerifyIntervalMsForTest;
+    Console.WriteLine($"      waiting {waitMs}ms for the interval to elapse...");
+    await Task.Delay(waitMs + 250);
+    Check("allowed once the interval has passed", probe.TrySlipVerifySlot(openedInPlay: false));
+    probe.ReleaseSlipVerifySlot();
+
+    Console.WriteLine("\n[5] concurrent opens cannot both click");
+    await Task.Delay(waitMs + 250);
+    int granted = 0;
+    await Task.WhenAll(Enumerable.Range(0, 32).Select(_ => Task.Run(() =>
+    {
+        if (probe.TrySlipVerifySlot(openedInPlay: false)) Interlocked.Increment(ref granted);
+    })));
+    Check($"exactly one of 32 simultaneous arbs was sampled (got {granted})", granted == 1);
+
+    Console.WriteLine(failures == 0 ? "\nALL PASS" : $"\nFAILURES: {failures}");
+    // Exit code via ExitCode, not `return n`: a returned value would make this file's entry point
+    // int-returning and every other bare `return;` in it a compile error.
+    Environment.ExitCode = failures == 0 ? 0 : 1;
+    return;
+}
+
 // ── Quick diagnostic: fetch + print raw positions response then exit ──────────
 if (args.Contains("--positions-check"))
 {
@@ -498,6 +554,10 @@ var telemetry = new CrossPlatformArbTelemetryStrategy(pairs, state.Books, ARB_TH
 // ── REST verifier — confirms arb windows via independent REST calls ───────────
 var restVerifier = new CrossArbRestVerifier(orderClient, telemetry, hardvenProxy, HARDVEN_SIDECAR_URL);
 telemetry.OnArbOpened += restVerifier.OnArbOpened;
+// Sampled betslip measurement (HARDVEN_SLIP_VERIFY=1). Independent of the executor: it runs in ANY mode,
+// including telemetry-only, because its whole point is measuring what the board price is worth before
+// trusting it with money. Wired here because the verifier needs the strategy to exist first.
+telemetry.SetSlipVerifier(restVerifier.SlipQuoteAsync);
 
 // ── Executor — live order placement on WS-detected arb windows ────────────────
 CrossArbExecutor?            executor    = null;

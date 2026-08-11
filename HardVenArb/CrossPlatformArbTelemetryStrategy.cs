@@ -202,6 +202,10 @@ public class CrossPlatformArbTelemetryStrategy
         Channel.CreateUnbounded<string>(new UnboundedChannelOptions { SingleReader = true });
     private readonly string _hedgeCsvBaseName;
 
+    private readonly Channel<string> _slipCsvChannel =
+        Channel.CreateUnbounded<string>(new UnboundedChannelOptions { SingleReader = true });
+    private readonly string _slipCsvBaseName;
+
     // Column headers — written by the writer task each time it opens a NEW/empty dated file (kept here so
     // rotation re-emits them). Must stay in lockstep with the row builders below.
     private const string CsvHeader =
@@ -221,6 +225,42 @@ public class CrossPlatformArbTelemetryStrategy
         "OpenTime,PairId,Label,ArbType,OffsetMs," +
         "EntryKalshiAsk,KalshiUnwindBid,KalshiOppositeAsk,KalshiEntryAskNow," +
         "EntryHardVenAsk,HardVenLegNow,KalshiUnwindDepth,EntryNetCost";
+    // SLIP VERIFY. Separate file from the telemetry on purpose: this is a SAMPLE (one arb every few
+    // minutes), not the tape. Mixing a sparse sample into the window log would let any per-row average
+    // silently mean "of the few we happened to click".
+    // ArbSurvived answers the actual question — was it still an arb once the venue quoted its real price.
+    private const string SlipCsvHeader =
+        "Time,PairId,Label,ArbType,Regime," +
+        "BoardHardVenAsk,SlipHardVenAsk,SlippageAbs,SlippagePct," +
+        "KalshiAskAtOpen,KalshiAskNow,NetAtBoard,NetAtSlip,ArbSurvived,MarginVsThreshold," +
+        "KalshiBestDepth,HardVenBestDepth,KalshiTop3Depth,HardVenTop3Depth," +
+        "QuoteMs,HardVenLegId,Error";
+
+    // ── Sampled slip verifier ─────────────────────────────────────────────────
+    // Measures what the BOARD price is actually worth: the board is a cache the venue does not commit to,
+    // the betslip is. Deliberately a SAMPLE, not a check on every arb — each quote is a real navigation
+    // and click at the venue, and anti-detection is a hard constraint, so it is rate-limited globally
+    // (not per pair: the venue sees one bot, not N pairs).
+    // PRE-LIVE ONLY. In-play prices move on their own during the seconds a quote takes, so an in-play
+    // sample cannot separate "the board lied" from "the game moved" — the one thing this exists to measure.
+    private Func<string, double, Task<(decimal Price, string Error)>>? _slipQuote;
+    private static readonly bool SlipVerifyEnabled =
+        Environment.GetEnvironmentVariable("HARDVEN_SLIP_VERIFY") == "1";
+    private static readonly int SlipVerifyIntervalMs =
+        Math.Max(1, int.TryParse(Environment.GetEnvironmentVariable("HARDVEN_SLIP_VERIFY_INTERVAL_SEC"),
+                                 out var _svi) && _svi > 0 ? _svi : 300) * 1000;
+    private static readonly double SlipVerifyTimeoutSec =
+        double.TryParse(Environment.GetEnvironmentVariable("HARDVEN_SLIP_VERIFY_TIMEOUT_SEC"),
+                        System.Globalization.NumberStyles.Any,
+                        System.Globalization.CultureInfo.InvariantCulture, out var _svt) && _svt > 0 ? _svt : 25.0;
+    private long _lastSlipVerifyTicks;
+    private int  _slipVerifyInFlight;      // one at a time: the rover is a single tab
+    public int   SlipVerifyCount;          // surfaced in status output
+
+    /// <summary>Wire the betslip reader (the sidecar's /slip_quote). Set after construction because the
+    /// verifier that owns it needs this strategy first. Null = sampling disabled.</summary>
+    public void SetSlipVerifier(Func<string, double, Task<(decimal Price, string Error)>>? slipQuote)
+        => _slipQuote = slipQuote;
 
     // ── Public stats ──────────────────────────────────────────────────────────
     public int OpenArbs   => _activeWindows.Values.Count(w => w != null);
@@ -253,6 +293,10 @@ public class CrossPlatformArbTelemetryStrategy
         string tagSfx = outTag.Length > 0 ? "_" + outTag : "";
         _csvBaseName      = "CrossArbTelemetry" + tagSfx;
         _hedgeCsvBaseName = "CrossArbHedgeMonitor" + tagSfx;
+        _slipCsvBaseName  = "CrossArbSlipVerify" + tagSfx;
+        // Let the FIRST pre-live arb be sampled immediately rather than waiting out one interval — a short
+        // session would otherwise collect nothing at all.
+        _lastSlipVerifyTicks = Environment.TickCount64 - SlipVerifyIntervalMs;
 
         _bookKeyToPairs = new Dictionary<string, List<int>>(StringComparer.Ordinal);
         _activeWindows  = new Dictionary<string, ActiveWindow?>(StringComparer.Ordinal);
@@ -273,6 +317,10 @@ public class CrossPlatformArbTelemetryStrategy
         _csvWriterTask      = Task.Run(RunCsvWriterAsync);
         // skip the hedge CSV entirely when disabled (HARDVEN_HEDGE_MONITOR_SECS=0) so no empty file is written
         _hedgeCsvWriterTask = HedgeMonitorEnabled ? Task.Run(RunHedgeCsvWriterAsync) : Task.CompletedTask;
+        _slipCsvWriterTask  = SlipVerifyEnabled  ? Task.Run(RunSlipCsvWriterAsync)  : Task.CompletedTask;
+        if (SlipVerifyEnabled)
+            Console.WriteLine($"[SLIP VERIFY] sampling pre-live arbs at most every {SlipVerifyIntervalMs / 1000}s " +
+                              $"-> {_slipCsvBaseName}_{CsvDate()}.csv");
         DebugLog.Discovery($"CrossPlatformArbTelemetryStrategy: initialized with {pairs.Count} pairs, threshold={arbThreshold}");
         if (_debugPrices)
             Console.WriteLine("[CROSS] HARDVEN_DEBUG_PRICES=1 — dumping the full 4-leg price breakdown on each arb open.");
@@ -636,6 +684,8 @@ public class CrossPlatformArbTelemetryStrategy
                     DebugLog.Discovery($"EvaluatePair {pair.Label}: ARB OPEN {bestType} net={bestNet:0.0000} depth={bestDepth:0.0} kAge={kAge}ms pAge={pAge}ms");
                     invokeOnArbOpened = true;
                     windowJustOpened   = openTime;
+                    // Sampled betslip check (pre-live only, rate-limited). Returns instantly; the quote runs off-thread.
+                    MaybeSlipVerify(pair, w, chosenHvToken, kLegPrice, pLegPrice);
                 }
                 else
                 {
@@ -910,6 +960,107 @@ public class CrossPlatformArbTelemetryStrategy
         _csvChannel.Writer.TryWrite(row);
     }
 
+    // ── Sampled slip verify ───────────────────────────────────────────────────
+    /// <summary>Gate one arb open into a betslip sample: pre-live, rate-limited, one at a time. Returns
+    /// immediately — the quote itself takes seconds and must never sit on the book-update path.</summary>
+    private void MaybeSlipVerify(CrossPair pair, ActiveWindow w, string hvToken,
+                                 decimal kLegAtOpen, decimal pLegAtOpen)
+    {
+        if (!TrySlipVerifySlot(w.OpenedInPlay)) return;
+        _ = Task.Run(() => RunSlipVerifyAsync(pair, w, hvToken, kLegAtOpen, pLegAtOpen));
+    }
+
+    /// <summary>The gate itself, separated so it can be exercised directly (`--slip-verify-check`): this
+    /// decides how often the bot touches the venue, and getting it wrong is an anti-detection problem
+    /// rather than a wrong number in a file. True = caller owns the slot and MUST release it.</summary>
+    internal bool TrySlipVerifySlot(bool openedInPlay)
+    {
+        if (!SlipVerifyEnabled || _slipQuote is null) return false;
+        if (openedInPlay) return false;                    // pre-live only — see the field comment
+        // CLAIM THE SLOT BEFORE CHECKING THE INTERVAL. Two pairs can open an arb in the same millisecond
+        // on different threads; checking the clock first would let both pass it and both click.
+        if (Interlocked.CompareExchange(ref _slipVerifyInFlight, 1, 0) != 0) return false;
+        long now = Environment.TickCount64;
+        if (now - Interlocked.Read(ref _lastSlipVerifyTicks) < SlipVerifyIntervalMs)
+        {
+            Volatile.Write(ref _slipVerifyInFlight, 0);
+            return false;
+        }
+        // Stamped at START, not completion: "at most every N" is measured between attempts, so a slow
+        // quote does not push the next one further out.
+        Interlocked.Exchange(ref _lastSlipVerifyTicks, now);
+        return true;
+    }
+
+    internal void ReleaseSlipVerifySlot() => Volatile.Write(ref _slipVerifyInFlight, 0);
+    internal static int SlipVerifyIntervalMsForTest => SlipVerifyIntervalMs;
+
+    /// <summary>Quote the betslip, then re-test the arb on the prices the venue would actually honour.
+    ///
+    /// The Kalshi leg is RE-READ after the quote returns, not reused from open: the slip takes seconds and
+    /// Kalshi moves in them, so pairing a fresh HardVen price with a stale Kalshi one would report an arb
+    /// that no longer exists on either side. NetAtSlip is therefore "both legs, as of now".</summary>
+    private async Task RunSlipVerifyAsync(CrossPair pair, ActiveWindow w, string hvToken,
+                                          decimal kLegAtOpen, decimal pLegAtOpen)
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        decimal slip = -1m; string err = "";
+        try
+        {
+            (slip, err) = await _slipQuote!(hvToken, SlipVerifyTimeoutSec);
+        }
+        catch (Exception ex) { err = $"{ex.GetType().Name}: {ex.Message}"; }
+        finally { ReleaseSlipVerifySlot(); }
+        sw.Stop();
+
+        // Live re-read of BOTH legs' books for the depth columns and the honest re-test.
+        string kKey = w.ArbType == "K_YES_P_NO" ? $"K:{pair.KalshiTicker}" : $"K:{pair.KalshiTicker}_NO";
+        _books.TryGetValue(kKey, out var kBook);
+        _books.TryGetValue($"H:{hvToken}", out var pBook);
+        decimal kNow      = kBook?.GetBestAskPrice() ?? -1m;
+        decimal kBestSize = kBook?.GetBestAskSize()  ?? 0m;
+        decimal pBestSize = pBook?.GetBestAskSize()  ?? 0m;
+        decimal kTop3     = kBook?.GetTopAskVolume(3) ?? 0m;
+        decimal pTop3     = pBook?.GetTopAskVolume(3) ?? 0m;
+
+        decimal netBoard = kLegAtOpen + pLegAtOpen + KalshiFee(kLegAtOpen) + HardVenFee(pLegAtOpen, hvToken);
+        decimal slipPct  = pLegAtOpen > 0m && slip > 0m ? (slip - pLegAtOpen) / pLegAtOpen * 100m : 0m;
+        decimal kUse     = kNow > 0m ? kNow : kLegAtOpen;
+        decimal netSlip  = slip > 0m ? kUse + slip + KalshiFee(kUse) + HardVenFee(slip, hvToken) : -1m;
+        bool    survived = slip > 0m && netSlip < _arbThreshold;
+
+        if (slip > 0m)
+        {
+            Interlocked.Increment(ref SlipVerifyCount);
+            Console.WriteLine($"[SLIP VERIFY] {pair.Label}: board {pLegAtOpen:0.0000} -> slip {slip:0.0000} " +
+                              $"({slipPct:+0.00;-0.00}%)  net ${netBoard:0.0000} -> ${netSlip:0.0000}  " +
+                              $"{(survived ? "STILL AN ARB" : "GONE")}  depth K={kBestSize:0.#}/P={pBestSize:0.#}  " +
+                              $"{sw.ElapsedMilliseconds}ms");
+        }
+        else
+        {
+            Console.WriteLine($"[SLIP VERIFY] {pair.Label}: no quote ({err}) after {sw.ElapsedMilliseconds}ms");
+        }
+
+        _slipCsvChannel.Writer.TryWrite(string.Join(",",
+            DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss.fff"),
+            Quote(pair.PairId), Quote(pair.Label), w.ArbType, "pre-live",
+            pLegAtOpen.ToString("0.0000"),
+            slip > 0m ? slip.ToString("0.0000") : "",
+            slip > 0m ? (slip - pLegAtOpen).ToString("0.0000") : "",
+            slip > 0m ? slipPct.ToString("0.0000") : "",
+            kLegAtOpen.ToString("0.0000"),
+            kNow > 0m ? kNow.ToString("0.0000") : "",
+            netBoard.ToString("0.0000"),
+            netSlip > 0m ? netSlip.ToString("0.0000") : "",
+            slip > 0m ? (survived ? "1" : "0") : "",
+            netSlip > 0m ? (_arbThreshold - netSlip).ToString("0.0000") : "",
+            kBestSize.ToString("0.##"), pBestSize.ToString("0.##"),
+            kTop3.ToString("0.##"),     pTop3.ToString("0.##"),
+            sw.ElapsedMilliseconds.ToString(),
+            Quote(hvToken), Quote(err)));
+    }
+
     // One post-open sample of the Kalshi unwind trajectory. Columns the analyzer joins on (PairId, OpenTime)
     // and reads at OffsetMs ≈ --hedge-secs to price the worst-case hedge of a failed HardVen leg.
     //   KalshiUnwindBid   = bid of the held Kalshi leg now → sell-back price (flatten); per-share unwind P/L
@@ -957,12 +1108,14 @@ public class CrossPlatformArbTelemetryStrategy
         // Hedge samples are streamed live (no per-position summary to flush), so just close the channels.
         _csvChannel.Writer.TryComplete();
         _hedgeCsvChannel.Writer.TryComplete();
-        try { await Task.WhenAll(_csvWriterTask, _hedgeCsvWriterTask); }
+        _slipCsvChannel.Writer.TryComplete();
+        try { await Task.WhenAll(_csvWriterTask, _hedgeCsvWriterTask, _slipCsvWriterTask); }
         catch (Exception ex) { DebugLog.Discovery($"ShutdownAsync: CSV writer task threw — {ex.Message}"); }
     }
 
     private readonly Task _csvWriterTask;
     private readonly Task _hedgeCsvWriterTask;
+    private readonly Task _slipCsvWriterTask;
 
     // File boundary = LOCAL calendar day (matches how the operator reads "per day" and the day-bounded schedule).
     private static string CsvDate() => DateTime.Now.ToString("yyyyMMdd");
@@ -1027,6 +1180,19 @@ public class CrossPlatformArbTelemetryStrategy
         {
             Console.WriteLine($"[HEDGE CSV ERROR] {ex.Message}");
             DebugLog.Discovery($"RunHedgeCsvWriterAsync exception: {ex}");
+        }
+    }
+
+    private async Task RunSlipCsvWriterAsync()
+    {
+        try
+        {
+            await DrainWithDailyRotationAsync(_slipCsvChannel.Reader, _slipCsvBaseName, SlipCsvHeader, "SLIP CSV");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[SLIP CSV ERROR] {ex.Message}");
+            DebugLog.Discovery($"RunSlipCsvWriterAsync exception: {ex}");
         }
     }
 }

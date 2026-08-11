@@ -777,6 +777,20 @@ class BetInAsiaAdapter(BookAdapter):
         """
         import asyncio as _aio
 
+        # ONE ROVER, ONE QUOTE AT A TIME. Two callers now reach this: the executor verifying a trade it is
+        # about to place, and the sampled verifier measuring board-vs-slip drift. They share a single tab,
+        # so overlapping calls would have one navigating while the other is mid-click — and the price that
+        # came back would belong to whichever game won the race. Serialise here rather than in each caller:
+        # the constraint is the tab's, so the tab's owner should enforce it.
+        lock = getattr(self, "_slip_lock", None)
+        if lock is None:
+            lock = self._slip_lock = _aio.Lock()
+        async with lock:
+            return await self._slip_quote_locked(selection_id)
+
+    async def _slip_quote_locked(self, selection_id: str) -> dict:
+        import asyncio as _aio
+
         parsed = parse_selection_id(selection_id)
         if not parsed:
             return {"ok": False, "error": f"unparseable selection_id '{selection_id}'"}
