@@ -48,6 +48,7 @@ the opposite side. The bot backs whichever side makes the cross-venue net < $1.
 import argparse
 import datetime as dt
 import json
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -66,6 +67,14 @@ KALSHI_BASE = "https://api.elections.kalshi.com/trade-api/v2"
 HERE = Path(__file__).parent
 OUT = HERE / "cross_pairs.json"
 DEFAULT_MAX_DAYS_OUT = 10
+
+# Widest yes_bid/yes_ask whose MIDPOINT is still worth believing (probability, not cents). Kalshi sports
+# books are bimodal: the median is ~8c wide, but the tail is ~87c — a quote-less market, where the mid is
+# an artefact of two unrelated resting orders. Such a mid does not merely fail to validate: it can land
+# nearer (1 - book) than book and make the gate SWAP a correct pair, manufacturing exactly the inverted
+# pairing it exists to catch. Measured on 602 live active sports markets, 0.15 keeps ~72% of two-sided
+# books and cuts in the gap before the garbage cluster (0.20 buys only ~1pp more).
+MAX_TRUSTED_SPREAD = float(os.environ.get("HARDVEN_PAIR_MAX_SPREAD", "0.15"))
 
 # Match-WINNER (moneyline) series only — the "…GAME"/"…MATCH"/"…FIGHT" tickers, NOT the sub-markets
 # (…SPREAD/…TOTAL/…RFI/…F5/…SETWINNER/…1H/…2H/…BTTS/…EXACTMATCH = totals/spreads/props, future work).
@@ -126,16 +135,40 @@ def _close_date(market: dict):
     return None
 
 
+def _price_field(m: dict, dollars: str, cents: str):
+    """One Kalshi price as a 0-1 probability, from EITHER payload shape.
+
+    /events?with_nested_markets now reports DOLLAR STRINGS ('0.8400') under *_dollars; the integer-cents
+    fields this used to read (yes_bid/yes_ask/last_price) are simply absent, so every lookup returned None
+    and the price gate silently validated nothing. Read dollars first, keep cents as the fallback so an
+    older/other endpoint still parses. 0 means "no bid/ask", i.e. unpriced -> None."""
+    v = m.get(dollars)
+    if isinstance(v, str) and v.strip():
+        try:
+            v = float(v)
+        except ValueError:
+            v = None
+    if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0:
+        return float(v)
+    c = m.get(cents)
+    if isinstance(c, (int, float)) and not isinstance(c, bool) and c > 0:
+        return c / 100.0
+    return None
+
+
 def _yes_price(m: dict):
-    """Kalshi YES probability (0-1) for the price-consistency gate: mid of yes_bid/yes_ask (cents) if both
-    present, else last_price; None if the market has no price yet. Lets pair_auto verify each pair's two
-    sides AGREE on the favorite (catches inverted sides + wrong-game mispairs)."""
-    yb, ya = m.get("yes_bid"), m.get("yes_ask")
-    if isinstance(yb, (int, float)) and isinstance(ya, (int, float)) and yb > 0 and ya > 0:
-        return round((yb + ya) / 200.0, 4)
-    lp = m.get("last_price")
-    if isinstance(lp, (int, float)) and lp > 0:
-        return round(lp / 100.0, 4)
+    """Kalshi YES probability (0-1) for the price-consistency gate: mid of yes_bid/yes_ask when the book is
+    tight enough to believe, else the last trade, but only where the CURRENT book still brackets it (a print
+    outside the live book is stale and says nothing about who is favoured now). None when nothing is usable —
+    pair_auto then counts the pair 'unvalidated' and leaves it alone, which is the safe outcome. Lets
+    pair_auto verify each pair's two sides AGREE on the favorite (catches inverted sides + wrong-game)."""
+    yb = _price_field(m, "yes_bid_dollars", "yes_bid")
+    ya = _price_field(m, "yes_ask_dollars", "yes_ask")
+    lp = _price_field(m, "last_price_dollars", "last_price")
+    if yb is not None and ya is not None and yb <= ya <= yb + MAX_TRUSTED_SPREAD:
+        return round((yb + ya) / 2.0, 4)
+    if lp is not None and (yb is None or lp >= yb) and (ya is None or lp <= ya):
+        return round(lp, 4)
     return None
 
 
