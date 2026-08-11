@@ -780,7 +780,21 @@ class BetInAsiaAdapter(BookAdapter):
         # first time in 686ms. So a second click is not just wasteful, it is actively self-defeating.
         # Reading the live cache instead is faster AND removes a UI action, which is the direction the
         # anti-detection constraint pushes anyway.
+        # ALREADY SUBSCRIBED means the price is LIVE, however old the last push is. Same reasoning the
+        # board feed already uses: on a push-only venue the venue stamps a timestamp only when it actually
+        # sends, so an old ts means A QUIET MARKET, not a stale price — the venue would have pushed if
+        # anything changed. Requiring a recent push here was an outright BUG: a quiet subscribed market
+        # aged past the limit, we clicked again, got `event_already_subscribed` (no price), and the quote
+        # timed out on a price that was live the whole time. That is what produced the accumulating errors.
+        subs = getattr(self.observer, "_acca_subs", None)
+        subscribed = bool(subs is not None and key in subs)
         max_age = float(os.environ.get("BIA_SLIP_MAX_AGE_SEC", "10"))
+        if subscribed:
+            # Bounded only by the FEED being alive; a dead socket loses the subscription anyway.
+            try:
+                max_age = float((self.feed_health() or {}).get("stale_after_sec") or max_age)
+            except Exception:
+                pass
         cached = self.feed._slip_books.get(key)
         if cached and (time.time() - cached.get("ts", 0.0)) <= max_age:
             entry = (cached.get("markets") or {}).get(market_key)
@@ -790,11 +804,20 @@ class BetInAsiaAdapter(BookAdapter):
                 if odds and odds > 1.0:
                     age = round(time.time() - cached.get("ts", 0.0), 2)
                     print(f"[BIA SLIP] {selection_id} -> {odds} from the live slip feed "
-                          f"(age {age}s, no click)", flush=True)
+                          f"(age {age}s, {'subscribed' if subscribed else 'recent'}, no click)", flush=True)
                     return {"ok": True, "decimal_odds": odds,
                             "implied_price": round(1.0 / odds, 6),
                             "elapsed_ms": round((time.time() - t0) * 1000, 1),
                             "from_cache": True, "age_sec": age, "selection_id": selection_id}
+
+        if subscribed:
+            # Subscribed but no usable cached price. Clicking again CANNOT help: the venue answers
+            # `event_already_subscribed` and pushes nothing, so the quote would open a slip and then time
+            # out. Refuse before touching the DOM — no click, no UI action, no wasted window.
+            return {"ok": False,
+                    "error": (f"{ekey} is already subscribed on the betslip channel but no price for "
+                              f"{market_key}/{sel} is cached — re-clicking cannot help (the venue replies "
+                              f"event_already_subscribed). The feed may be stale.")}
 
         before_ts = (cached or {}).get("ts", 0.0)
         try:

@@ -73,6 +73,11 @@ class BetInAsiaObserver:
         self._quiet_ref = float(os.environ.get("BIA_QUIET_SEC", "600"))
         self._resumed = 0                              # updates that arrived after > _quiet_ref silence
         self._resumed_keys: set = set()
+        # Events the PAGE has subscribed on the BETSLIP (acca) channel. Once subscribed the venue keeps
+        # pushing that event's slip prices, and a REPEAT watch_acca_hcaps is answered `event_already_
+        # subscribed` with NO price — so knowing this set is what stops us clicking a second time and
+        # then waiting for a push that will never come.
+        self._acca_subs: set = set()
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
     async def start(self) -> None:
@@ -284,6 +289,16 @@ class BetInAsiaObserver:
         # so a failed slip quote cannot be told apart: "the click never opened a slip" (nothing sent) vs
         # "the venue ignored us" (sent, no reply). Log only -- we still never send.
         if isinstance(msg, list) and msg and msg[0] in ("watch_acca_hcaps", "unwatch_acca_hcaps"):
+            ents = msg[1] if isinstance(msg[1], list) else []
+            if ents and not isinstance(ents[0], list):
+                ents = [ents]
+            for e in ents:
+                if isinstance(e, list) and len(e) >= 3:
+                    k = (e[1], e[2])
+                    if msg[0] == "watch_acca_hcaps":
+                        self._acca_subs.add(k)
+                    else:
+                        self._acca_subs.discard(k)
             print(f"[BIA-OBS] -> {msg[0]} {json.dumps(msg[1])[:160]}", flush=True)
             return
         if not (isinstance(msg, list) and msg and msg[0] in ("watch_hcaps", "watch_event")):
