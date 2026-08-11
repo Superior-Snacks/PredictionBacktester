@@ -654,6 +654,29 @@ class BetInAsiaAdapter(BookAdapter):
                               f"refusing (a symmetric market cannot be identified by price)")
         return best_col, ""
 
+    async def _find_board_row(self, page, ekey: str):
+        """The board row for `ekey`, chosen by CONTENT rather than DOM order.
+
+        Several links can carry the same event key -- the board row, a breadcrumb, an event-detail link,
+        an in-play widget. `.first` takes whichever appears first in the document, which happened to be the
+        board row on tennis and was NOT on baseball (the quote failed with "no price columns" before it
+        ever clicked). So pick the link that actually HAS price cells: a breadcrumb cannot satisfy that,
+        which makes the choice self-verifying rather than positional.
+        """
+        links = page.locator(f'a[href*="{ekey}"]')
+        try:
+            n = await links.count()
+        except Exception:
+            return None, 0
+        for i in range(min(n, 12)):
+            cand = links.nth(i)
+            try:
+                if await cand.locator("div:nth-child(2) > span").count() > 0:
+                    return cand, n
+            except Exception:
+                continue
+        return None, n
+
     async def slip_quote(self, selection_id: str) -> dict:
         """Open the betslip for one selection and return the TRUE offered odds. Places nothing.
 
@@ -715,10 +738,10 @@ class BetInAsiaAdapter(BookAdapter):
 
         before_ts = (cached or {}).get("ts", 0.0)
         try:
-            row = page.locator(f'a[href*="{ekey}"]').first
+            row, n_links = await self._find_board_row(page, ekey)
             # The competition may still be collapsed -- its rows do not exist in the DOM until "Show more"
             # is expanded, so this is a PRECONDITION of finding the row, not a fallback.
-            if await row.count() == 0:
+            if row is None:
                 for _ in range(int(os.environ.get("BIA_SHOW_MORE_CLICKS", "6"))):
                     more = page.get_by_text("Show more", exact=True)
                     if await more.count() == 0:
@@ -727,15 +750,17 @@ class BetInAsiaAdapter(BookAdapter):
                     await _aio.sleep(0.4)
                     if await page.locator(f'a[href*="{ekey}"]').count():
                         break
-                row = page.locator(f'a[href*="{ekey}"]').first
-            if await row.count() == 0:
-                return {"ok": False, "error": f"event {ekey} is not on this board (wrong sport page?)"}
+                row, n_links = await self._find_board_row(page, ekey)
+            if row is None:
+                return {"ok": False,
+                        "error": (f"no board ROW for {ekey} — {n_links} link(s) carry this event key but "
+                                  f"none render price cells (wrong sport page, or the row is not expanded)")}
 
             # CROSS-CHECK the href before clicking. The event key alone already identifies the match; sport
             # and comp_id are two more independent confirmations that cost nothing.
-            n_rows = await page.locator(f'a[href*="{ekey}"]').count()
-            if n_rows > 1:
-                print(f"[BIA SLIP] {ekey}: {n_rows} links match this event key -- using DOM-first", flush=True)
+            if n_links > 1:
+                print(f"[BIA SLIP] {ekey}: {n_links} links carry this key; using the one with price cells",
+                      flush=True)
             href = await row.get_attribute("href") or ""
             if f"/{sport}/" not in href or f"/{comp_id}/" not in href:
                 return {"ok": False, "error": f"row href {href!r} disagrees with token "
