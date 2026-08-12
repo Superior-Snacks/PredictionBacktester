@@ -666,25 +666,23 @@ if (isLive || isDryRun)
     // then sat out two minutes. Injected (testMode) arbs now bypass it entirely, so this is for tuning real
     // re-entry pace: lower = re-enter a recurring edge sooner, higher = fewer bites at the same line.
     int PAIR_COOLDOWN_SEC = EnvInt("HARDVEN_PAIR_COOLDOWN_SEC", 120, allowZero: true);
-    // HARDVEN_ALLOW_REENTRY: take MULTIPLE positions on the same pair. Testing-only — it exists so one dry-run
-    // process can be driven through a whole scenario suite without a restart between trades. **Deliberately
-    // IGNORED under --live**, and loudly: the request is that leaving it in .env can never stack real positions
-    // by accident, so the safety is structural rather than a matter of remembering to unset it.
-    bool ALLOW_REENTRY_ENV = Environment.GetEnvironmentVariable("HARDVEN_ALLOW_REENTRY") == "1";
-    bool ALLOW_REENTRY = ALLOW_REENTRY_ENV && isDryRun;
-    if (ALLOW_REENTRY_ENV && !isDryRun)
+    // HARDVEN_ALLOW_REENTRY: take MULTIPLE positions on the same pair. WAS forced off under --live so a
+    // stale .env could never stack real positions by accident; now it follows the env in EVERY mode by
+    // explicit request, because one-position-per-pair caps how many fires a verification night can produce
+    // and proving the execution path needs fires.
+    // Know what it switches off: the pair cooldown, the leg/sibling cooldown AND the one-position-per-pair
+    // lock — so HARDVEN_PAIR_COOLDOWN_SEC becomes inert and a recurring edge can be re-taken immediately.
+    // Simultaneous sibling fires are still blocked by the in-flight lock, and MAX_EXPOSURE_USD /
+    // MAX_DAY_LOSS_USD / the per-trade tripwire still bound the total damage.
+    bool ALLOW_REENTRY = Environment.GetEnvironmentVariable("HARDVEN_ALLOW_REENTRY") == "1";
+    if (ALLOW_REENTRY)
     {
         Console.ForegroundColor = ConsoleColor.Yellow;
-        Console.WriteLine("[SAFETY] HARDVEN_ALLOW_REENTRY=1 IGNORED — it is a dry-run testing knob and this is a "
-                        + "LIVE run. One position per pair is enforced.");
-        Console.ResetColor();
-    }
-    else if (ALLOW_REENTRY)
-    {
-        Console.ForegroundColor = ConsoleColor.Yellow;
-        Console.WriteLine("[TEST MODE] HARDVEN_ALLOW_REENTRY=1 (dry-run only) — pair cooldown, leg/sibling "
-                        + "cooldown AND the one-position-per-pair lock are all OFF. Real arbs re-enter "
-                        + "immediately. Simultaneous sibling fires are still blocked (in-flight lock).");
+        Console.WriteLine((isDryRun ? "[TEST MODE]" : "[LIVE — REAL MONEY]")
+                        + " HARDVEN_ALLOW_REENTRY=1 — pair cooldown, leg/sibling cooldown AND the "
+                        + "one-position-per-pair lock are all OFF. A recurring edge re-enters immediately"
+                        + (isDryRun ? "." : ", so ONE mispaired market can be hit repeatedly. Exposure is "
+                                            + "bounded only by MAX_EXPOSURE_USD / MAX_DAY_LOSS_USD."));
         Console.ResetColor();
     }
     decimal LOW_BALANCE_ALERT_USD = EnvDec("HARDVEN_LOW_BALANCE_ALERT_USD", 15m, allowZero: true);  // Discord-alert below this

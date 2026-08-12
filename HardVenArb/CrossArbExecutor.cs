@@ -291,18 +291,52 @@ public class CrossArbExecutor
             ? v : fallback;
     }
 
+    /// <summary>Env-read for a boolean SAFETY guard. Only the explicit disable spellings turn one off
+    /// ("0"/"false"/"off", case-insensitive); anything else — unset, blank, or a typo — keeps the guard at
+    /// its default. A misspelt value must never be the thing that silently unlocks a live pacing limit.</summary>
+    private static bool EnvBoolStatic(string name, bool fallback)
+    {
+        string raw = (Environment.GetEnvironmentVariable(name) ?? "").Trim();
+        if (raw.Length == 0) return fallback;
+        if (raw is "0" || raw.Equals("false", StringComparison.OrdinalIgnoreCase)
+                       || raw.Equals("off",   StringComparison.OrdinalIgnoreCase)) return false;
+        if (raw is "1" || raw.Equals("true",  StringComparison.OrdinalIgnoreCase)
+                       || raw.Equals("on",    StringComparison.OrdinalIgnoreCase)) return true;
+        Console.WriteLine($"[CONFIG WARN] {name}='{raw}' not understood — keeping the default ({fallback}).");
+        return fallback;
+    }
+
     // ── Position scaling ──────────────────────────────────────────────────────
-    // ONE OPEN POSITION PER PAIR is the standing behaviour, always, in live. `--single-entry` is a DEAD flag —
+    // ONE OPEN POSITION PER PAIR is the DEFAULT behaviour in live, but no longer unconditional — see
+    // HARDVEN_ALLOW_REENTRY below, which now applies in live too. `--single-entry` is a DEAD flag —
     // the guard never consulted it (see ExecuteLockedAsync) — kept only so existing command lines don't break.
     // Re-entry is allowed once the position closes (early exit or settlement); applies to fresh AND restored.
     private readonly bool    _singleEntry;
-    // TEST-ONLY escape hatch (HARDVEN_ALLOW_REENTRY=1). Removes EVERY pace limit on re-entering a pair: the open
-    // position guard, the per-pair cooldown and the per-leg (sibling) cooldown — so one dry-run process can be
-    // driven through a scenario suite back-to-back instead of restarting, or waiting out 120s, between trades.
-    // The `_inFlightMatchup` lock is NOT disabled, so simultaneous sibling fires stay blocked. Program.cs FORCES
-    // this false unless --dry-run, so it cannot be left in .env and silently stack real positions.
+    // HARDVEN_ALLOW_REENTRY=1. Removes EVERY pace limit on re-entering a pair: the open position guard, the
+    // per-pair cooldown and the per-leg (sibling) cooldown — originally so one dry-run process could be driven
+    // through a scenario suite back-to-back instead of waiting out 120s between trades.
+    // It APPLIES IN LIVE as of 2026-08-12 (it used to be forced false there). Program.cs prints a red-flag
+    // banner when it is on under --live, because the same edge can then be re-taken with no pacing at all —
+    // if a pair is mispaired, nothing stops it being hit again and again. What still holds: the
+    // `_inFlightMatchup` lock (no simultaneous sibling fires), MaxPerPairExposureUsd, HARDVEN_MAX_EXPOSURE_USD,
+    // HARDVEN_MAX_DAY_LOSS_USD and the per-trade tripwire.
     private readonly bool    _allowReentry;
-    private const    decimal MaxPerPairExposureUsd = 200m;
+    // The THREE pacing guards, now independently switchable. They answer different questions and there are
+    // real reasons to want one without the others — e.g. keep the open-position lock (never stack on one
+    // market) while dropping the cooldowns (re-take an edge the moment a position closes).
+    //   HARDVEN_ONE_POSITION_PER_PAIR  never hold two positions on the same pair            (default ON)
+    //   HARDVEN_PAIR_COOLDOWN          honour HARDVEN_PAIR_COOLDOWN_SEC after a fire        (default ON)
+    //   HARDVEN_LEG_COOLDOWN           same, keyed on the HardVen LEG so sibling tickers
+    //                                  cannot ping-pong through the per-pair cooldown       (default ON)
+    // HARDVEN_ALLOW_REENTRY=1 stays as the master switch that clears all three at once, so existing
+    // scenario runs and .env files keep working unchanged.
+    private readonly bool    _onePositionPerPair;
+    private readonly bool    _pairCooldownOn;
+    private readonly bool    _legCooldownOn;
+    // Cumulative $ allowed on ONE pair. Was a hardcoded 200 — harmless while live enforced one position per
+    // pair, but with HARDVEN_ALLOW_REENTRY now live-capable this is what actually bounds stacking on a single
+    // (possibly mispaired) market, so it has to be tunable.
+    private static readonly decimal MaxPerPairExposureUsd = EnvDecStatic("HARDVEN_MAX_PAIR_EXPOSURE_USD", 200m);
 
     private          decimal  _dayLossUsd          = 0m;
     private          DateOnly _dayStart            = DateOnly.FromDateTime(DateTime.UtcNow);
@@ -507,6 +541,23 @@ public class CrossArbExecutor
         _minBuy              = minBuy;
         _singleEntry         = singleEntry;
         _allowReentry        = allowReentry;
+        // Each guard is ON unless its own env says otherwise, or the master re-entry switch clears it.
+        _onePositionPerPair  = !allowReentry && EnvBoolStatic("HARDVEN_ONE_POSITION_PER_PAIR", true);
+        _pairCooldownOn      = !allowReentry && EnvBoolStatic("HARDVEN_PAIR_COOLDOWN",         true);
+        _legCooldownOn       = !allowReentry && EnvBoolStatic("HARDVEN_LEG_COOLDOWN",          true);
+        // Say which pacing guards are actually live. Three independent switches plus a master override is
+        // exactly the shape that gets misread from a .env, and the failure is silent in the safe-looking
+        // direction: you believe a guard is on, it is off, and you only find out from the fill log.
+        if (!_onePositionPerPair || !_pairCooldownOn || !_legCooldownOn)
+        {
+            string Off(bool on) => on ? "on" : "OFF";
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.WriteLine($"[PACING] one-position-per-pair {Off(_onePositionPerPair)} | "
+                            + $"pair-cooldown {Off(_pairCooldownOn)} ({pairCooldownSeconds}s) | "
+                            + $"leg-cooldown {Off(_legCooldownOn)}"
+                            + (allowReentry ? "   <- all cleared by HARDVEN_ALLOW_REENTRY=1" : ""));
+            Console.ResetColor();
+        }
         _logErrors           = logErrors;
         _executionThreshold  = executionThreshold;
         _execNetFloor        = execNetFloor;
@@ -849,7 +900,7 @@ public class CrossArbExecutor
             Console.WriteLine($"[EXEC TEST] {pairId}: injected arb — re-entry guards (cooldown, open position) bypassed");
         }
         // Guard: cooldown or open position on this pair
-        if (!testMode && !_allowReentry && _cooldownUntil.TryGetValue(pairId, out long cd) && now < cd)
+        if (!testMode && _pairCooldownOn && _cooldownUntil.TryGetValue(pairId, out long cd) && now < cd)
         {
             Console.WriteLine($"[EXEC SKIP] {pairId}: cooldown active for {cd - now}s more");
             return;
@@ -862,7 +913,7 @@ public class CrossArbExecutor
         // dangerous case (two orders into one Pinnacle line). Sequential sibling re-entry inside 120s becomes
         // possible, which is exactly what a scenario run wants and is harmless with simulated fills.
         string? legKeyCd = HardVenLegKey(pairId, arbType);
-        if (!testMode && !_allowReentry && legKeyCd != null
+        if (!testMode && _legCooldownOn && legKeyCd != null
             && _cooldownUntil.TryGetValue($"L:{legKeyCd}", out long lcd) && now < lcd)
         {
             Console.WriteLine($"[EXEC SKIP] {pairId}: HardVen leg {legKeyCd} on cooldown for {lcd - now}s more (sibling just fired)");
@@ -876,14 +927,14 @@ public class CrossArbExecutor
                 heldK = heldPos.KalshiContracts, heldP = heldPos.HardVenShares,
                 heldArbType = heldPos.ArbType,
                 detectedNet = Math.Round(kLegAsk + pLegAsk, 4),
-                willBlock = !testMode && !_allowReentry   // used to report `_singleEntry`, which the guard
-                                                          // never consulted — now it says what really happens
+                willBlock = !testMode && _onePositionPerPair   // used to report `_singleEntry`, which the guard
+                                                              // never consulted — now it says what really happens
             }));
         }
-        // ONE POSITION PER PAIR. Not gated on `_singleEntry` (that flag was never consulted and is dead) —
-        // stacking positions on one pair is the riskier default, so it stays off unless explicitly unlocked
-        // for a dry run via HARDVEN_ALLOW_REENTRY, which Program.cs refuses to honour under --live.
-        if (!testMode && !_allowReentry && _openPositions.ContainsKey(pairId))
+        // ONE POSITION PER PAIR. Not gated on `_singleEntry` (that flag was never consulted and is dead).
+        // Stacking positions on one pair is the riskier default, so it stays ON unless explicitly unlocked
+        // via HARDVEN_ONE_POSITION_PER_PAIR=0 (or the HARDVEN_ALLOW_REENTRY master switch).
+        if (!testMode && _onePositionPerPair && _openPositions.ContainsKey(pairId))
         {
             Console.WriteLine($"[EXEC SKIP] {pairId}: position already open (one position per pair)");
             return;
