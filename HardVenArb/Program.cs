@@ -472,10 +472,24 @@ if (File.Exists(manualPath))
 // separate file so the moneyline pairs stay clean. Merged into manualPairs here so the run prices the lines
 // too (the sidecar resolves the {lid}:{mid}:{type}:{points}:{side} tokens). Hot-reloaded alongside
 // cross_pairs.json (below), so a daily auto-pair refreshes the derivative lines live too.
-string derivSrc  = Path.Combine(sourceDir, "derivative_pairs.json");
-string derivOut  = Path.Combine(AppContext.BaseDirectory, "derivative_pairs.json");
+// A SECOND VENUE MUST NOT INHERIT THIS FILE. Tokens are venue-specific, so when HARDVEN_PAIRS_FILE points
+// somewhere other than the default, the matching derivative file is this venue's too — loading Pinnacle's
+// would feed `{lid}:{mid}:{type}:{points}:{side}` tokens to a book that cannot resolve them. Observed
+// 2026-08-11: the BetInAsia run loaded 31 Pinnacle tennis lines and logged "selection no longer quoted"
+// for every one, forever. Default it to the sibling of whatever pairs file is in use, and let
+// HARDVEN_DERIV_PAIRS_FILE override; "" (or a missing file) simply loads no derivatives.
+string derivFileName = (Environment.GetEnvironmentVariable("HARDVEN_DERIV_PAIRS_FILE") ?? "").Trim();
+if (derivFileName.Length == 0)
+    derivFileName = pairsFileName.Equals("cross_pairs.json", StringComparison.OrdinalIgnoreCase)
+        ? "derivative_pairs.json"
+        // cross_pairs_bia.json -> derivative_pairs_bia.json
+        : pairsFileName.Replace("cross_pairs", "derivative_pairs", StringComparison.OrdinalIgnoreCase);
+string derivSrc  = Path.Combine(sourceDir, derivFileName);
+string derivOut  = Path.Combine(AppContext.BaseDirectory, derivFileName);
 string derivPath = isDevBuild ? derivSrc
-                              : (File.Exists(derivOut) ? derivOut : "derivative_pairs.json");
+                              : (File.Exists(derivOut) ? derivOut : derivFileName);
+if (!File.Exists(derivPath))
+    Console.WriteLine($"[CONFIG] no derivative pairs ({derivFileName} not found) — moneyline only.");
 if (File.Exists(derivPath))
 {
     try
@@ -502,12 +516,12 @@ if (File.Exists(derivPath))
                 manualPairs.Add(new CrossPair(pairId, label, kTicker, yesToken, noToken, eventId, settlementDate, isNegRisk, hardvenMinSize, false));
             }
         }
-        Console.WriteLine($"[CONFIG] {manualPairs.Count - before} derivative pair(s) loaded from derivative_pairs.json"
+        Console.WriteLine($"[CONFIG] {manualPairs.Count - before} derivative pair(s) loaded from {derivFileName}"
                           + (derivExcluded > 0 ? $" ({derivExcluded} skipped by --exclude)" : ""));
     }
     catch (Exception ex)
     {
-        Console.WriteLine($"[CONFIG WARN] Could not parse derivative_pairs.json: {ex.Message}");
+        Console.WriteLine($"[CONFIG WARN] Could not parse {derivFileName}: {ex.Message}");
     }
 }
 
