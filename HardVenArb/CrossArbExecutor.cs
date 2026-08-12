@@ -271,6 +271,15 @@ public class CrossArbExecutor
     // and dry-run fires far more often than live (seeded balance, re-entry allowed). Anti-detection is a
     // hard constraint, so opt in deliberately and keep an eye on the click rate.
     private readonly bool   _slipQuoteInDryRun   = Environment.GetEnvironmentVariable("HARDVEN_SLIP_QUOTE_DRYRUN") == "1";
+    // Net cost the SLIP-VERIFIED pair must still beat to be taken. 1.00 = pure break-even: accept any
+    // amount of book slippage so long as the pair does not lose. Separate from the entry floor on purpose
+    // (see the ARB_GONE_AT_SLIP gate). Caveat worth knowing: the Kalshi leg is limited at ask+1c of IOC
+    // buffer, so a pair accepted at exactly 1.00 could in principle fill 1c worse if that book moves in the
+    // same instant — IOC normally fills at the ask, but set this to 0.99 to exclude the case entirely.
+    private readonly decimal _slipAcceptNet =
+        decimal.TryParse(Environment.GetEnvironmentVariable("HARDVEN_SLIP_ACCEPT_NET"),
+                         System.Globalization.NumberStyles.Any,
+                         System.Globalization.CultureInfo.InvariantCulture, out var _san) && _san > 0m ? _san : 1.00m;
 
     /// <summary>Env-read for a decimal knob; &lt;=0 or unparseable falls back, so a typo cannot silently
     /// disable a limit. Mirrors Program.cs's EnvDec, which is not visible from this class.</summary>
@@ -1187,15 +1196,21 @@ public class CrossArbExecutor
                 decimal kNow = kSideBook.GetBestAskPrice();
                 if (kNow > 0m) kLegAsk = kNow;
                 decimal netSlip = kLegAsk + pLegAsk + KalshiFee(kLegAsk) + HardVenFee(pLegAsk, hardvenToken);
-                if (netSlip >= _executionThreshold || netSlip > _execNetFloor)
+                // ACCEPT ANYTHING THAT STILL BREAKS EVEN — a different question from the entry floor.
+                // The floor decides whether an arb is worth ATTEMPTING; by this point the venue has quoted
+                // the price it will actually honour (Pinnacle accepts at quote or cancels, it never
+                // re-prices), so the only question left is whether taking it still makes money. Re-using the
+                // entry floor here threw away trades that were merely thinner than hoped but still free
+                // money, and forfeiting a live arb costs the same as never finding it.
+                if (netSlip >= _slipAcceptNet)
                 {
                     Console.WriteLine($"[SLIP QUOTE] {pair.Label}: arb GONE on the true prices " +
                                       $"(K={kLegAsk:0.0000} P={pLegAsk:0.0000} net=${netSlip:0.0000} " +
-                                      $"floor {_execNetFloor:0.000}) — skipping");
+                                      $"accept<{_slipAcceptNet:0.000}) — skipping");
                     await JournalAsync(JsonSerializer.Serialize(new {
                         t = DateTime.UtcNow, @event = "EXEC_SKIP", pairId, arbType,
                         reason = "ARB_GONE_AT_SLIP", netSlip, kAsk = kLegAsk, pAsk = pLegAsk,
-                        floor = _execNetFloor
+                        acceptBelow = _slipAcceptNet, floor = _execNetFloor
                     }));
                     return;
                 }
