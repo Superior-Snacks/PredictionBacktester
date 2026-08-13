@@ -37,11 +37,11 @@ public class CrossArbRestVerifier
                 Proxy    = new System.Net.WebProxy(socksProxy),
                 UseProxy = true
             };
-            _http = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(5) };
+            _http = new HttpClient(handler) { Timeout = HttpCeiling };
         }
         else
         {
-            _http = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+            _http = new HttpClient { Timeout = HttpCeiling };
         }
     }
 
@@ -83,6 +83,16 @@ public class CrossArbRestVerifier
     ///
     /// <para>Returns false on any failure (timeout, no rove tab, bet in flight) — the caller then skips, exactly
     /// as before. Never throws.</para></summary>
+    /// <summary>Client-wide ceiling ONLY — every call sets its own deadline via a CancellationTokenSource.
+    /// This was 5s, which silently overrode them all: HttpClient.Timeout fires first, so a slip quote asking
+    /// for 20s got a TaskCanceledException at 5s and HARDVEN_SLIP_QUOTE_TIMEOUT_SEC did nothing. Observed
+    /// 2026-08-12 killing the best arb of the session (net 0.9373, 4.5c/share) three times in a row while a
+    /// successful quote elsewhere took 1046ms. Keep this ABOVE every per-call timeout.</summary>
+    private static readonly TimeSpan HttpCeiling = TimeSpan.FromSeconds(
+        double.TryParse(Environment.GetEnvironmentVariable("HARDVEN_SIDECAR_HTTP_CEILING_SEC"),
+                        System.Globalization.NumberStyles.Any,
+                        CultureInfo.InvariantCulture, out var _hc) && _hc > 0 ? _hc : 60.0);
+
     public async Task<bool> VerifyNowAsync(string hardvenToken, double timeoutSec = 10.0)
     {
         if (string.IsNullOrWhiteSpace(hardvenToken)) return false;
@@ -90,7 +100,10 @@ public class CrossArbRestVerifier
         {
             string url = $"{_sidecarBase}/verify_now?selection_id={Uri.EscapeDataString(hardvenToken)}"
                        + $"&timeout={timeoutSec.ToString(CultureInfo.InvariantCulture)}";
-            using var resp = await _http.PostAsync(url, null);
+            // Own deadline: the client-wide ceiling is now generous, so each call states its own. The
+            // sidecar is asked to wait `timeoutSec` for a WS push, so allow a little over that.
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSec + 5));
+            using var resp = await _http.PostAsync(url, null, cts.Token);
             if (!resp.IsSuccessStatusCode) return false;
             using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
             return doc.RootElement.TryGetProperty("verified", out var v) && v.ValueKind == JsonValueKind.True;
@@ -266,7 +279,9 @@ public class CrossArbRestVerifier
     {
         string url = $"{_sidecarBase}/odds?selections={Uri.EscapeDataString(tokenId)}"
                    + (fromVenue ? "&fresh=1" : "");
-        string json = await _http.GetStringAsync(url);
+        // Own deadline (see HttpCeiling): a price read must stay snappy — this sits on the execution path.
+        using var oddsCts = new CancellationTokenSource(TimeSpan.FromSeconds(fromVenue ? 15 : 5));
+        string json = await _http.GetStringAsync(url, oddsCts.Token);
         using var doc = JsonDocument.Parse(json);
         // TRI-STATE (see the sidecar's /odds):
         //   true  = "ok"          the venue confirmed this price
