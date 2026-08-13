@@ -38,7 +38,7 @@ from pathlib import Path
 
 sys.stdout.reconfigure(encoding="utf-8")
 
-from pair_auto import fetch_catalog, price_validate, sibling_validate, fuzz
+from pair_auto import fetch_catalog, price_validate, sibling_validate, duplicate_token_validate, fuzz
 from env_util import atomic_write_json
 from betinasia_adapter import MONEYLINE_BY_SPORT, is_three_way, parse_selection_id
 import sports
@@ -604,6 +604,9 @@ def main() -> None:
         # and they end up IDENTICAL, which is the exact corruption the sibling gate exists to remove.
         # Observed 2026-08-13: 4 INVERTED-FIXED swaps left 3 broken sibling pairs in the written file.
         # Re-checking here is cheap and makes the written file's invariant unconditional.
+        dup_c, dup_b = duplicate_token_validate(pairs)
+        if dup_b:
+            print(f'[PAIR] duplicate-token gate: {dup_b} entry(s) blanked across {dup_c} book fixture(s) claimed by more than one Kalshi event')
         post_c, post_b = sibling_validate(pairs)
         if post_b:
             print(f"[PAIR] post-price sibling re-check: {post_b} pair(s) blanked — an inverted-fixed swap "

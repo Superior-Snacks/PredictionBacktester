@@ -401,6 +401,72 @@ def sibling_validate(pairs: list[dict]) -> tuple:
     return checked, blanked
 
 
+def duplicate_token_validate(pairs: list[dict]) -> tuple:
+    """ONE BOOK FIXTURE CANNOT BE TWO KALSHI EVENTS. Blanks the entries that lost the tie.
+
+    Teams play SERIES — the same two sides on consecutive days — and a matcher working from names alone
+    happily pairs Friday's Kalshi game to Thursday's book fixture. Both entries then look perfect
+    individually and even mirror correctly, because the collision is ACROSS events, not inside one; the
+    sibling gate cannot see it. What it produces is a phantom arb priced off two different games, and
+    those are not small: 2026-08-13 shipped Kiwoom/KT Wiz at net 0.83 and Hanshin/Hiroshima at 0.9296 —
+    the second one clears MIN_PLAUSIBLE_NET and the dry run executed it.
+
+    RESOLVED BY DATE, not blanked wholesale, because the book's own event key carries one
+    (`sport:comp:YYYY-MM-DD~id~id:market:sel`). The entry whose Kalshi settlement_date is nearest that
+    date keeps the token; the rest are cleared for re-match. A tie, or an unparseable date, blanks all
+    claimants — guessing is what created the problem.
+
+    Returns (tokens_examined, entries_blanked)."""
+    from datetime import date as _date
+
+    def book_date(tok: str):
+        m = re.search(r"(\d{4})-(\d{2})-(\d{2})", tok or "")
+        try:
+            return _date(int(m.group(1)), int(m.group(2)), int(m.group(3))) if m else None
+        except ValueError:
+            return None
+
+    def kalshi_date(e: dict):
+        try:
+            y, mth, d = (e.get("settlement_date") or "").split("-")
+            return _date(int(y), int(mth), int(d))
+        except (ValueError, AttributeError):
+            return None
+
+    by_token: dict[str, list[dict]] = {}
+    for e in pairs:
+        t = e.get("hardven_yes_token")
+        if t and e.get("hardven_no_token"):
+            by_token.setdefault(t, []).append(e)
+
+    examined = blanked = 0
+    for tok, rows in by_token.items():
+        events = {r.get("event_id") for r in rows}
+        if len(events) < 2:
+            continue                       # the two SIBLINGS of one event share tokens by design
+        examined += 1
+        bd = book_date(tok)
+        scored = []
+        for r in rows:
+            kd = kalshi_date(r)
+            scored.append((abs((kd - bd).days) if (bd and kd) else None, r))
+        gaps = [g for g, _ in scored if g is not None]
+        winner = None
+        if bd is not None and gaps and gaps.count(min(gaps)) == 1:
+            winner = min(scored, key=lambda x: (x[0] is None, x[0]))[1]
+        for gap, r in scored:
+            if r is winner:
+                continue
+            print(f"[PAIR] DUPLICATE-TOKEN {r.get('kalshi_ticker','?')}: book fixture {tok[-34:]} is already "
+                  f"claimed by {sorted(events - {r.get('event_id')})} "
+                  f"({'date gap ' + str(gap) + 'd' if gap is not None else 'no usable date'}) — blanking")
+            r["hardven_yes_token"] = r["hardven_no_token"] = ""
+            r.pop("fuzzy", None)
+            r["duplicate_token_rejected"] = True
+            blanked += 1
+    return examined, blanked
+
+
 def price_validate(pairs: list[dict], sidecar: str, tol: float) -> tuple:
     """PRICE-CONSISTENCY GATE. For each filled pair, the Kalshi-YES probability (kalshi_yes_price, from
     pairHard) and the bookmaker yes-token's implied prob must AGREE on the favorite — both are P(the same
@@ -580,6 +646,9 @@ def main() -> None:
         # and they end up IDENTICAL, which is the exact corruption the sibling gate exists to remove.
         # Observed 2026-08-13: 4 INVERTED-FIXED swaps left 3 broken sibling pairs in the written file.
         # Re-checking here is cheap and makes the written file's invariant unconditional.
+        dup_c, dup_b = duplicate_token_validate(pairs)
+        if dup_b:
+            print(f'[PAIR] duplicate-token gate: {dup_b} entry(s) blanked across {dup_c} book fixture(s) claimed by more than one Kalshi event')
         post_c, post_b = sibling_validate(pairs)
         if post_b:
             print(f"[PAIR] post-price sibling re-check: {post_b} pair(s) blanked — an inverted-fixed swap "
