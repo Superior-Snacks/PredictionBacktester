@@ -30,6 +30,7 @@ would be a silent mis-hedge. It is classified as a derivative, not a moneyline.
 """
 from __future__ import annotations
 
+import json
 import os
 import time
 from typing import Optional
@@ -560,11 +561,65 @@ class BetInAsiaAdapter(BookAdapter):
 
     # ── M1: not built (Phase 3) ───────────────────────────────────────────────
     async def balance(self) -> Optional[float]:
-        """None = UNREADABLE, which is the correct answer today: the balance endpoint has not been
-        captured yet (the recon never logged a funded session's wallet call). Returning 0.0 here
-        would trip BalanceGuard into halting a funded account -- the exact bug that bit Pinnacle
-        twice. BalanceGuard keeps None as UNKNOWN and does not halt."""
-        return None
+        """Account cash, read from the venue THROUGH THE PAGE. None = unreadable.
+
+        FETCHED FROM PAGE CONTEXT, not from Python. `GET /v1/customers/{user}/accounting_info/` is an
+        ordinary authed call the site makes itself, but issuing it from httpx would be a SECOND CLIENT on
+        the account -- different TLS fingerprint, no browser origin, no surrounding page traffic -- which
+        is the one thing the passive transport exists to avoid. Running it inside the tab reuses the
+        session the operator logged in with, so on the wire it is indistinguishable from the site's own
+        request. This is also the pattern placement will need, so it is worth proving here first, where
+        the worst case is a number we already treat as optional.
+
+        NEEDS BIA_USERNAME for the path only -- authentication rides on the page's cookies, so no password
+        is involved and nothing secret is added to the environment.
+
+        None IS A REAL ANSWER, not a failure: BalanceGuard treats it as UNKNOWN and does not halt, whereas
+        returning 0.0 would halt a funded account -- the exact bug that bit Pinnacle twice. So every
+        failure path here returns None rather than a number it is not sure of.
+        """
+        user = (os.environ.get("BIA_USERNAME") or getattr(self.feed, "username", "") or "").strip()
+        obs = self.observer
+        page = getattr(obs, "_page", None) if obs else None
+        if not user or page is None:
+            if not getattr(self, "_bal_warned", False):
+                self._bal_warned = True
+                why = "BIA_USERNAME is unset" if not user else "no browser page"
+                print(f"[BIA] balance unreadable ({why}) — reporting UNKNOWN, which does not halt the "
+                      f"balance guard. Set BIA_USERNAME to enable it (path only; the page's own session "
+                      f"provides auth).", flush=True)
+            return None
+        try:
+            res = await page.evaluate(
+                """async (u) => {
+                    const r = await fetch(`/v1/customers/${u}/accounting_info/`,
+                                          {credentials: 'include'});
+                    if (!r.ok) return {err: 'HTTP ' + r.status};
+                    return await r.json();
+                }""", user)
+        except Exception as e:
+            print(f"[BIA] balance fetch failed: {type(e).__name__}: {e}", flush=True)
+            return None
+        if not isinstance(res, dict) or res.get("err"):
+            print(f"[BIA] balance fetch: {res.get('err') if isinstance(res, dict) else res}", flush=True)
+            return None
+        # Shape per the 2026-08-09 recon: {current_balance, open_stakes, available_credit, commission_rate}.
+        # It may be nested under `data` like the session calls, so accept either.
+        d = res.get("data") if isinstance(res.get("data"), dict) else res
+        raw = d.get("current_balance")
+        # Money here is often ["USD", 123.45] as elsewhere in this API; accept a bare number too.
+        if isinstance(raw, (list, tuple)) and len(raw) >= 2:
+            raw = raw[1]
+        try:
+            bal = float(raw)
+        except (TypeError, ValueError):
+            print(f"[BIA] balance: could not read current_balance from {json.dumps(d)[:160]}", flush=True)
+            return None
+        if not getattr(self, "_bal_seen", False):
+            self._bal_seen = True
+            print(f"[BIA] balance reads OK via the page: {bal:.2f} "
+                  f"(open_stakes={d.get('open_stakes')}, commission={d.get('commission_rate')})", flush=True)
+        return bal
 
     async def place_bet(self, selection_id: str, stake: float, max_odds: float) -> BetResult:
         """NOT IMPLEMENTED, and deliberately not forced into this signature yet.
