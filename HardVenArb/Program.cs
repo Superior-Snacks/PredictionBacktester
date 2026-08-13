@@ -85,6 +85,47 @@ using PredictionBacktester.Engine.LiveExecution;
 // ══════════════════════════════════════════════════════════════════════════════
 //  MODE SELECTION
 // ══════════════════════════════════════════════════════════════════════════════
+// ── Self-check: the SAME-SIDE guard (name-based hedge verification) ───────────────────────────────────
+// Numbers cannot tell a hedge from a doubled bet at a coin flip; names can. This is the check that would
+// have stopped 2026-08-12's Dias trade, so it gets a test rather than a hope.
+if (args.Contains("--side-check"))
+{
+    int bad = 0;
+    void C(string label, bool ok) { Console.WriteLine($"  {(ok ? "PASS" : "FAIL")}  {label}"); if (!ok) bad++; }
+
+    // THE REAL FAILURE: Kalshi YES = Sabrina Dias, book leg also Sabrina Dias.
+    C("blocks the real Dias same-side bet",
+      !CrossArbExecutor.SideNamesOppose("Sabrina Dias (Sets)", "Sabrina Dias", "K_YES_P_NO", out var w1));
+    Console.WriteLine($"        reason: {w1}");
+
+    // The CORRECT version of that same trade must still go through.
+    C("allows the correct opposite leg",
+      CrossArbExecutor.SideNamesOppose("Gabriela Kawano Cho (Sets)", "Sabrina Dias", "K_YES_P_NO", out _));
+
+    // K_NO_P_YES is the mirror: holding Kalshi NO, the book leg SHOULD be the Kalshi outcome.
+    C("K_NO_P_YES allows the matching leg",
+      CrossArbExecutor.SideNamesOppose("Sabrina Dias (Sets)", "Sabrina Dias", "K_NO_P_YES", out _));
+    C("K_NO_P_YES blocks the opposite leg",
+      !CrossArbExecutor.SideNamesOppose("Gabriela Kawano Cho", "Sabrina Dias", "K_NO_P_YES", out _));
+
+    // NEAR-EVEN GAMES MUST STILL TRADE — the whole point of doing this by name, not by price.
+    C("even-money game still allowed (surname-only label)",
+      CrossArbExecutor.SideNamesOppose("Kobori (Sets)", "Lola Giza", "K_YES_P_NO", out _));
+    C("even-money game blocked when it IS the same player",
+      !CrossArbExecutor.SideNamesOppose("Giza (Sets)", "Lola Giza", "K_YES_P_NO", out _));
+
+    // Missing label = books with no slip name must not be bricked, unless asked to fail closed.
+    C("missing label passes by default", CrossArbExecutor.SideNamesOppose("", "Sabrina Dias", "K_YES_P_NO", out _));
+    Environment.SetEnvironmentVariable("HARDVEN_REQUIRE_SIDE_NAME", "1");
+    C("missing label fails closed with HARDVEN_REQUIRE_SIDE_NAME=1",
+      !CrossArbExecutor.SideNamesOppose("", "Sabrina Dias", "K_YES_P_NO", out _));
+    Environment.SetEnvironmentVariable("HARDVEN_REQUIRE_SIDE_NAME", null);
+
+    Console.WriteLine(bad == 0 ? "ALL PASS" : $"FAILURES: {bad}");
+    Environment.ExitCode = bad == 0 ? 0 : 1;
+    return;
+}
+
 // ── Self-check: the sampled slip verifier's GATE (pre-live only, rate-limited, one at a time) ─────────
 // This gate decides how often the bot navigates and clicks at the venue, so a bug here is an
 // anti-detection problem, not a wrong number in a file. Exercised directly rather than inferred from a run.
@@ -456,7 +497,9 @@ if (File.Exists(manualPath))
             if (!string.IsNullOrEmpty(kTicker) && !string.IsNullOrEmpty(yesToken) && !string.IsNullOrEmpty(noToken))
             {
                 string pairId = $"MANUAL_{kTicker}__{yesToken[..Math.Min(8, yesToken.Length)]}";
-                manualPairs.Add(new CrossPair(pairId, label, kTicker, yesToken, noToken, eventId, settlementDate, isNegRisk, hardvenMinSize, threeWay));
+                // The Kalshi YES side's NAME — the executor cross-checks the book leg against it.
+                string kOutcome = el.TryGetProperty("kalshi_outcome", out var kOut) ? (kOut.GetString() ?? "") : "";
+                manualPairs.Add(new CrossPair(pairId, label, kTicker, yesToken, noToken, eventId, settlementDate, isNegRisk, hardvenMinSize, threeWay, kOutcome));
             }
         }
         Console.WriteLine($"[CONFIG] {manualPairs.Count} manual pair(s) loaded from {pairsFileName}"
@@ -513,7 +556,8 @@ if (File.Exists(derivPath))
             {
                 // pairId includes the YES token prefix → unique per line (many lines share one kTicker prefix).
                 string pairId = $"MANUAL_{kTicker}__{yesToken[..Math.Min(8, yesToken.Length)]}";
-                manualPairs.Add(new CrossPair(pairId, label, kTicker, yesToken, noToken, eventId, settlementDate, isNegRisk, hardvenMinSize, false));
+                string kOutcomeD = el.TryGetProperty("kalshi_outcome", out var kOutD) ? (kOutD.GetString() ?? "") : "";
+                manualPairs.Add(new CrossPair(pairId, label, kTicker, yesToken, noToken, eventId, settlementDate, isNegRisk, hardvenMinSize, false, kOutcomeD));
             }
         }
         Console.WriteLine($"[CONFIG] {manualPairs.Count - before} derivative pair(s) loaded from {derivFileName}"

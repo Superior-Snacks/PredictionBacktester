@@ -2463,7 +2463,12 @@ class PinnacleAdapter(BookAdapter):
                                  if sel_ok.get("american") else
                                  f"popover price {shown} is not decimal odds"}
             return {"ok": True, "decimal_odds": shown, "implied_price": round(1.0 / shown, 6),
-                    "tab": tab_kind, "elapsed_ms": ms, "selection_id": selection_id}
+                    "tab": tab_kind, "elapsed_ms": ms, "selection_id": selection_id,
+                    # The venue's own name for what this quote is on, e.g. "Sabrina Dias (Sets)".
+                    # The caller compares it to the Kalshi outcome to prove the two legs are OPPOSITE
+                    # sides — the only check an inverted pairing cannot slip past.
+                    "selection_label": sel_ok.get("label") or "",
+                    "matchup": sel_ok.get("matchup") or ""}
         except Exception as e:
             return {"ok": False, "error": f"slip quote error: {type(e).__name__}: {e}"}
         finally:
@@ -2836,7 +2841,12 @@ class PinnacleAdapter(BookAdapter):
         ok = matchup_ok and side_ok and market_ok and not derivative and not rejected
         why = (f"matchup={matchup_ok} side={side_ok} market={market_ok} deriv={derivative} "
                f"rejected={rejected} label='{pop.get('label')}'")
-        return {"ok": ok, "price": price, "why": why}
+        # Carry the VENUE'S OWN WORDS for who this bet is on. Everything above proves we clicked the
+        # Pinnacle selection we meant to; none of it knows which side KALSHI is on, so an inverted pairing
+        # passes every check here and still buys the same outcome twice. Handing the label upward is what
+        # lets the caller cross-check it against kalshi_outcome — the one test a bad pairing cannot survive.
+        return {"ok": ok, "price": price, "why": why,
+                "label": pop.get("label") or "", "matchup": pop.get("matchup") or ""}
 
     async def _try_select_on(self, page, exp: dict):
         """Bring `page` to front, find the intended moneyline's odds button, and click it with a REAL human mouse

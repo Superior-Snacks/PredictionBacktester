@@ -357,6 +357,50 @@ def _fetch_implied(sidecar: str, tokens: set) -> dict:
     return out
 
 
+def sibling_validate(pairs: list[dict]) -> tuple:
+    """STRUCTURAL GATE — the two Kalshi markets of one event must MIRROR each other's book tokens.
+
+    A 2-way event has two complementary Kalshi markets ("will A win" / "will B win"). Their book tokens are
+    therefore necessarily crossed: A's yes-token IS B's no-token. If both rows carry the SAME pair of tokens,
+    at least one of them maps Kalshi-YES onto the wrong side — and there is no price on earth that makes that
+    consistent, so this needs no /odds call and works where the price gate cannot.
+
+    WHY IT MATTERS (2026-08-12, real money): Dias vs Kawano Cho shipped with both siblings holding
+    yes=away / no=home. The bot fired K_YES_P_NO on the Dias market, bought its `no` token — and that token
+    WAS Dias. Two bets on the same player, i.e. a DOUBLED directional bet dressed as a hedge. It won, which
+    is the only reason it did not cost $22. The price gate could not have saved it: at 0.465 vs 0.50 the
+    agree- and invert-distances are equal to two decimal places, so "near a coin-flip the error is benign"
+    is simply false — at a coin flip is exactly where an inverted pair is most likely AND most expensive.
+
+    Blanks BOTH siblings rather than guessing which one is wrong: one of them is fine, but nothing here can
+    tell which, and shipping a coin-flip guess is what caused this. Returns (checked_events, blanked_pairs).
+    """
+    by_event: dict[str, list[dict]] = {}
+    for e in pairs:
+        if e.get("hardven_yes_token") and e.get("hardven_no_token") and e.get("event_id"):
+            by_event.setdefault(e["event_id"], []).append(e)
+
+    checked = blanked = 0
+    for ev, rows in by_event.items():
+        if len(rows) != 2:
+            continue                      # 1 side paired = nothing to cross-check; >2 = not a 2-way event
+        checked += 1
+        a, b = rows
+        mirrored = (a["hardven_yes_token"] == b["hardven_no_token"]
+                    and a["hardven_no_token"] == b["hardven_yes_token"])
+        if mirrored:
+            continue
+        print(f"[PAIR] SIBLING-REJECT {ev}: {a.get('kalshi_ticker','?')} and {b.get('kalshi_ticker','?')} "
+              f"do not mirror (yes={a['hardven_yes_token']} / yes={b['hardven_yes_token']}) — one of them "
+              f"maps Kalshi-YES to the wrong side; blanking BOTH")
+        for r in (a, b):
+            r["hardven_yes_token"] = r["hardven_no_token"] = ""
+            r.pop("fuzzy", None)
+            r["sibling_rejected"] = True
+            blanked += 1
+    return checked, blanked
+
+
 def price_validate(pairs: list[dict], sidecar: str, tol: float) -> tuple:
     """PRICE-CONSISTENCY GATE. For each filled pair, the Kalshi-YES probability (kalshi_yes_price, from
     pairHard) and the bookmaker yes-token's implied prob must AGREE on the favorite — both are P(the same
@@ -365,7 +409,14 @@ def price_validate(pairs: list[dict], sidecar: str, tol: float) -> tuple:
     blank the pair. This catches the mispairs team-matching can't: inverted sides + wrong-game. (Near a
     coin-flip the agree/invert distinction is ambiguous but the error is benign; the gate bites on lopsided
     games, which is where inversions create the fat phantom 'arbs'.) Returns (consistent, inverted, rejected,
-    unvalidated)."""
+    unvalidated).
+
+    BLIND AT A COIN FLIP, and that is NOT harmless. When kalshi≈0.5 the agree- and invert-distances are
+    equal, so this gate picks essentially at random — and picking wrong pairs Kalshi-YES with the book's
+    SAME side, which the executor then buys twice instead of hedging. That is a doubled directional bet, not
+    a wash: it loses the whole stake on both venues rather than netting out (real case 2026-08-12, Dias vs
+    Kawano Cho at 0.465/0.50). `sibling_validate` above is the check that actually covers this, because it
+    is structural rather than numeric. Run it FIRST."""
     tokens = {e[k] for e in pairs for k in ("hardven_yes_token", "hardven_no_token") if e.get(k)}
     implied = _fetch_implied(sidecar, tokens)
     consistent = inverted = rejected = unvalidated = 0
@@ -512,6 +563,14 @@ def main() -> None:
     # ── price-consistency gate: reject wrong-game pairs + fix inverted sides by live prices ──
     gate = (0, 0, 0, 0)
     if not args.no_price_gate:
+        # STRUCTURAL FIRST: mirroring needs no prices, so it still bites when the book is unreachable or
+        # the market sits at a coin flip — precisely where price_validate is blind.
+        sib_checked, sib_blanked = sibling_validate(pairs)
+        if sib_blanked:
+            print(f"[PAIR] sibling gate: {sib_blanked} pair(s) blanked across {sib_checked} 2-way event(s) "
+                  f"— tokens did not mirror, so one side mapped Kalshi-YES backwards")
+        elif sib_checked:
+            print(f"[PAIR] sibling gate: {sib_checked} 2-way event(s) all mirror correctly")
         gate = price_validate(pairs, args.sidecar, args.price_tol)
         if any(gate):
             print(f"[PAIR] price-gate (tol={args.price_tol}): {gate[0]} consistent | {gate[1]} inverted-fixed | "

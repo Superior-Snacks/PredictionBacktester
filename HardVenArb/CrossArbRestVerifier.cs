@@ -127,6 +127,11 @@ public class CrossArbRestVerifier
     /// Costs seconds, so it belongs on the execution path only. Returns -1 for a book that cannot quote
     /// (404) so the caller can fall back rather than refuse a venue that structurally has no slip read.
     /// </summary>
+    /// <summary>Name the venue showed for the most recent slip quote, e.g. "Sabrina Dias (Sets)".
+    /// Set by SlipQuoteAsync; read immediately after, on the same call path (slip quotes are serialised
+    /// by the sidecar's rover lock, and the executor quotes one leg at a time).</summary>
+    public string LastSlipLabel { get; private set; } = "";
+
     public async Task<(decimal Price, string Error)> SlipQuoteAsync(string hardvenToken, double timeoutSec = 20.0)
     {
         try
@@ -143,6 +148,9 @@ public class CrossArbRestVerifier
                 return (-1m, root.TryGetProperty("error", out var e) ? (e.GetString() ?? "?") : "not ok");
             decimal price = root.TryGetProperty("implied_price", out var ip) && ip.TryGetDecimal(out var p)
                 ? p : -1m;
+            // The venue's own name for this selection ("Sabrina Dias (Sets)"). Returned as the Error slot's
+            // sibling via LastSlipLabel rather than widening the tuple for every existing caller.
+            LastSlipLabel = root.TryGetProperty("selection_label", out var sl) ? (sl.GetString() ?? "") : "";
             return price > 0m ? (price, "") : (-1m, "no implied_price in the quote");
         }
         catch (Exception ex)

@@ -560,6 +560,14 @@ def main() -> None:
 
     gate = (0, 0, 0, 0)
     if not args.no_price_gate:
+        # STRUCTURAL FIRST: mirroring needs no prices, so it still bites when the book is unreachable or
+        # the market sits at a coin flip — precisely where price_validate is blind.
+        sib_checked, sib_blanked = sibling_validate(pairs)
+        if sib_blanked:
+            print(f"[PAIR] sibling gate: {sib_blanked} pair(s) blanked across {sib_checked} 2-way event(s) "
+                  f"— tokens did not mirror, so one side mapped Kalshi-YES backwards")
+        elif sib_checked:
+            print(f"[PAIR] sibling gate: {sib_checked} 2-way event(s) all mirror correctly")
         gate = price_validate(pairs, args.sidecar, args.price_tol)
         if any(gate):
             print(f"[PAIR-BIA] price-gate (tol={args.price_tol}): {gate[0]} consistent | "

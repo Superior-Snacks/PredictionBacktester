@@ -1234,6 +1234,26 @@ public class CrossArbExecutor
                 }));
                 return;
             }
+            else if (!SideNamesOppose(_restVerifier.LastSlipLabel, pair.KalshiOutcome, arbType, out string sideWhy))
+            {
+                // SAME-SIDE GUARD — the only check an inverted pairing cannot survive.
+                // Everything upstream is numeric, and numbers cannot tell a hedge from a doubled bet when the
+                // market is near even: two legs on the SAME outcome price at ~P each, summing under 1.00
+                // whenever P < 0.5, which reads as a perfectly good arb. That is exactly what happened on
+                // 2026-08-12 (Dias vs Kawano Cho, 0.47 + 0.50 = 0.97): both bets on Dias, no hedge at all,
+                // saved only by her winning. Here we compare the VENUE'S OWN LABEL for the leg we are about
+                // to buy against the Kalshi outcome's name — a test that works at 50/50 precisely because it
+                // never looks at a price.
+                Console.ForegroundColor = ConsoleColor.Red;
+                Console.WriteLine($"[SAME-SIDE BLOCK] {pair.Label}: {sideWhy} — this is NOT a hedge, skipping");
+                Console.ResetColor();
+                await JournalAsync(JsonSerializer.Serialize(new {
+                    t = DateTime.UtcNow, @event = "EXEC_SKIP", pairId, arbType,
+                    reason = "SAME_SIDE_NOT_HEDGE", detail = sideWhy,
+                    slipLabel = _restVerifier.LastSlipLabel, kalshiOutcome = pair.KalshiOutcome
+                }));
+                return;
+            }
             else
             {
                 decimal drift = slipPrice - pLegAsk;
@@ -2058,6 +2078,47 @@ public class CrossArbExecutor
 
         if (_logErrors && hadError && execLog?.Count > 0)
             await FlushErrorLogAsync(execLog, pairId, arbType, execStart);
+    }
+
+    /// <summary>Do the two legs back OPPOSITE outcomes? Compares the venue's own label for the book leg
+    /// against the Kalshi YES outcome's name.
+    ///
+    /// <para>K_YES_P_NO holds Kalshi YES, so the book leg must be the OTHER participant. K_NO_P_YES holds
+    /// Kalshi NO, so the book leg must BE the Kalshi outcome. Either way the label decides it, and unlike
+    /// every price-based test this still works when the market is a coin flip.</para>
+    ///
+    /// <para>UNKNOWN IS NOT A PASS on the name, but a MISSING label is: books that publish no slip label
+    /// would otherwise never trade. Set HARDVEN_REQUIRE_SIDE_NAME=1 to make a missing label fail closed.</para>
+    /// </summary>
+    internal static bool SideNamesOppose(string slipLabel, string kalshiOutcome, string arbType, out string why)
+    {
+        string lab = Norm(slipLabel), outc = Norm(kalshiOutcome);
+        if (lab.Length == 0 || outc.Length == 0)
+        {
+            bool strict = Environment.GetEnvironmentVariable("HARDVEN_REQUIRE_SIDE_NAME") == "1";
+            why = $"no name to compare (slip='{slipLabel}' kalshi='{kalshiOutcome}')"
+                + (strict ? " and HARDVEN_REQUIRE_SIDE_NAME=1" : "");
+            return !strict;
+        }
+        // Surname-level containment either way: the venue writes "Sabrina Dias (Sets)" where Kalshi writes
+        // "Sabrina Dias", and one side often carries only the surname.
+        bool sameSide = lab.Contains(outc) || outc.Contains(lab)
+                     || LastWord(outc).Length >= 4 && lab.Contains(LastWord(outc));
+        bool wantSame = arbType == "K_NO_P_YES";      // holding Kalshi NO ⇒ book leg IS the Kalshi outcome
+        if (sameSide == wantSame) { why = ""; return true; }
+        why = wantSame
+            ? $"book leg '{slipLabel}' is NOT the Kalshi outcome '{kalshiOutcome}' but {arbType} requires it"
+            : $"book leg '{slipLabel}' IS the Kalshi outcome '{kalshiOutcome}' — both legs back the same side";
+        return false;
+    }
+
+    private static string Norm(string s) => new string((s ?? "").ToLowerInvariant()
+        .Where(c => char.IsLetterOrDigit(c) || c == ' ').ToArray()).Trim();
+
+    private static string LastWord(string s)
+    {
+        int i = s.LastIndexOf(' ');
+        return i < 0 ? s : s[(i + 1)..];
     }
 
     // ── Kalshi IOC leg ────────────────────────────────────────────────────────

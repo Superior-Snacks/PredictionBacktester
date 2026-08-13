@@ -20,7 +20,11 @@ public record CrossPair(
     // 3-way market (e.g. soccer 1X2): ONLY the Kalshi-NO direction (K_NO_P_YES) is a complete hedge —
     // Kalshi NO(A) + book back-A covers A / Draw / B. The K_YES_P_NO direction (Kalshi YES + book back-B)
     // would miss the draw, so it's disabled for these pairs. Both tokens are still the two team moneylines.
-    bool ThreeWay = false
+    bool ThreeWay = false,
+    // The Kalshi YES side's NAME ("Sabrina Dias"). Carried so the executor can prove the book leg is the
+    // OPPOSITE participant before firing: an inverted pairing produces two bets on the SAME outcome, which
+    // no price test can catch at a coin flip (2026-08-12, Dias vs Kawano Cho).
+    string KalshiOutcome = ""
 );
 
 record ActiveWindow(
