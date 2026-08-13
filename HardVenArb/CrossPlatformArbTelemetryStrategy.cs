@@ -652,7 +652,19 @@ public class CrossPlatformArbTelemetryStrategy
                     // to a tab so this arb gets confirmed on real-time prices, and flag the window accordingly.
                     string chosenHvToken = bestType == "K_NO_P_YES" ? pair.HardVenYesTokenId : pair.HardVenNoTokenId;
                     bool hvVerified = IsHardVenVerified(chosenHvToken);
-                    if (!hvVerified) RequestVerify(chosenHvToken);
+                    // ASK FOR A TAB ON EVERY ARB OPEN, not only unverified ones.
+                    // Coverage for PRICES is not coverage for BETTING. A league fed by the board push needs no
+                    // tab to quote prices, and the tab manager therefore never opens one ("leagues already fed
+                    // → NOT gaps"). But a slip quote needs a PAGE showing that league, so the first thing that
+                    // ever navigates there is the quote itself — from cold, on the execution path, with the
+                    // clock running. Measured 2026-08-13: Vandecasteele/Shelbayh (net 0.9853, depth 2838,
+                    // pre-live, board-fed and therefore "verified") timed out after 20s in SLIP_QUOTE_FAILED
+                    // and took its sibling down with it via LEG_IN_FLIGHT — while a tabbed league quoted in
+                    // 562-1046ms. Perversely, a WORSE-covered league traded faster, because being unverified
+                    // is what used to trigger this call.
+                    // Cheap and self-limiting: request_verify returns 'already-open' when tabbed and 'at-cap'
+                    // when the pool is full, so this can neither thrash nor exceed HARDVEN_TAB_MAX.
+                    RequestVerify(chosenHvToken);
 
                     DateTime openTime = DateTime.UtcNow;
                     var w = new ActiveWindow(
