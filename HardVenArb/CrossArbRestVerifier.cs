@@ -132,6 +132,10 @@ public class CrossArbRestVerifier
     /// by the sidecar's rover lock, and the executor quotes one leg at a time).</summary>
     public string LastSlipLabel { get; private set; } = "";
 
+    /// <summary>Tier that served the last slip quote ("cache" / "sport-tab" / "rover"). The
+    /// sampler throttles harder after a rover quote, since that one navigated the browser.</summary>
+    public string LastSlipVia { get; private set; } = "";
+
     public async Task<(decimal Price, string Error)> SlipQuoteAsync(string hardvenToken, double timeoutSec = 20.0)
     {
         try
@@ -151,6 +155,8 @@ public class CrossArbRestVerifier
             // The venue's own name for this selection ("Sabrina Dias (Sets)"). Returned as the Error slot's
             // sibling via LastSlipLabel rather than widening the tuple for every existing caller.
             LastSlipLabel = root.TryGetProperty("selection_label", out var sl) ? (sl.GetString() ?? "") : "";
+            // Which tier served it: "cache" / "sport-tab" (cheap) vs "rover" (navigated).
+            LastSlipVia   = root.TryGetProperty("via", out var vv) ? (vv.GetString() ?? "") : "";
             return price > 0m ? (price, "") : (-1m, "no implied_price in the quote");
         }
         catch (Exception ex)

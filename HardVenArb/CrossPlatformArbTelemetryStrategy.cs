@@ -250,21 +250,38 @@ public class CrossPlatformArbTelemetryStrategy
     private Func<string, double, Task<(decimal Price, string Error)>>? _slipQuote;
     private static readonly bool SlipVerifyEnabled =
         Environment.GetEnvironmentVariable("HARDVEN_SLIP_VERIFY") == "1";
-    private static readonly int SlipVerifyIntervalMs =
-        Math.Max(1, int.TryParse(Environment.GetEnvironmentVariable("HARDVEN_SLIP_VERIFY_INTERVAL_SEC"),
-                                 out var _svi) && _svi > 0 ? _svi : 300) * 1000;
+    // THREE INDEPENDENT BUDGETS, not one. What a sample COSTS and what it is WORTH both vary:
+    //   pre-live   the only regime we trade, and a parked board serves it in ~0.5s  -> sample often
+    //   in-play    telemetry only under PRELIVE_ONLY, still worth measuring          -> slower
+    //   rover      had to navigate to the league: seconds, and a real UI action      -> slowest
+    // Separate budgets rather than one shared clock means an in-play sample can never consume the slot a
+    // pre-live arb would have used — which is what "pre-live has priority" has to mean when you cannot
+    // know what is coming next. The rover gate is checked ON TOP of whichever regime gate applies, so a
+    // run that keeps falling back to navigation throttles itself without also throttling board quotes.
+    private static int EnvSec(string name, int fallback) =>
+        Math.Max(1, int.TryParse(Environment.GetEnvironmentVariable(name), out var v) && v > 0 ? v : fallback) * 1000;
+    private static readonly int SlipVerifyPreLiveMs = EnvSec("HARDVEN_SLIP_VERIFY_PRELIVE_SEC", 60);
+    private static readonly int SlipVerifyInPlayMs  = EnvSec("HARDVEN_SLIP_VERIFY_INPLAY_SEC", 180);
+    private static readonly int SlipVerifyRoverMs   = EnvSec("HARDVEN_SLIP_VERIFY_ROVER_SEC", 300);
+    private long _lastRoverTicks;
     private static readonly double SlipVerifyTimeoutSec =
         double.TryParse(Environment.GetEnvironmentVariable("HARDVEN_SLIP_VERIFY_TIMEOUT_SEC"),
                         System.Globalization.NumberStyles.Any,
                         System.Globalization.CultureInfo.InvariantCulture, out var _svt) && _svt > 0 ? _svt : 25.0;
-    private long _lastSlipVerifyTicks;
+    private long _lastSlipVerifyTicks;      // pre-live budget
+    private long _lastInPlayVerifyTicks;    // in-play budget (independent of the above)
     private int  _slipVerifyInFlight;      // one at a time: the rover is a single tab
     public int   SlipVerifyCount;          // surfaced in status output
 
     /// <summary>Wire the betslip reader (the sidecar's /slip_quote). Set after construction because the
     /// verifier that owns it needs this strategy first. Null = sampling disabled.</summary>
-    public void SetSlipVerifier(Func<string, double, Task<(decimal Price, string Error)>>? slipQuote)
-        => _slipQuote = slipQuote;
+    public void SetSlipVerifier(Func<string, double, Task<(decimal Price, string Error)>>? slipQuote,
+                                Func<string>? slipVia = null)
+    {
+        _slipQuote = slipQuote;
+        _slipVia   = slipVia;      // reads back which tier served the last quote (see the rover cooldown)
+    }
+    private Func<string>? _slipVia;
 
     // ── Public stats ──────────────────────────────────────────────────────────
     public int OpenArbs   => _activeWindows.Values.Count(w => w != null);
@@ -300,7 +317,10 @@ public class CrossPlatformArbTelemetryStrategy
         _slipCsvBaseName  = "CrossArbSlipVerify" + tagSfx;
         // Let the FIRST pre-live arb be sampled immediately rather than waiting out one interval — a short
         // session would otherwise collect nothing at all.
-        _lastSlipVerifyTicks = Environment.TickCount64 - SlipVerifyIntervalMs;
+        // Both budgets start already elapsed so the FIRST arb of a session is sampled at once,
+        // rather than a short run collecting nothing while it waits out an interval.
+        _lastSlipVerifyTicks     = Environment.TickCount64 - SlipVerifyPreLiveMs;
+        _lastInPlayVerifyTicks   = Environment.TickCount64 - SlipVerifyInPlayMs;
 
         _bookKeyToPairs = new Dictionary<string, List<int>>(StringComparer.Ordinal);
         _activeWindows  = new Dictionary<string, ActiveWindow?>(StringComparer.Ordinal);
@@ -323,8 +343,10 @@ public class CrossPlatformArbTelemetryStrategy
         _hedgeCsvWriterTask = HedgeMonitorEnabled ? Task.Run(RunHedgeCsvWriterAsync) : Task.CompletedTask;
         _slipCsvWriterTask  = SlipVerifyEnabled  ? Task.Run(RunSlipCsvWriterAsync)  : Task.CompletedTask;
         if (SlipVerifyEnabled)
-            Console.WriteLine($"[SLIP VERIFY] sampling pre-live arbs at most every {SlipVerifyIntervalMs / 1000}s " +
-                              $"-> {_slipCsvBaseName}_{CsvDate()}.csv");
+            Console.WriteLine($"[SLIP VERIFY] sampling pre-live every {SlipVerifyPreLiveMs / 1000}s, "
+                            + $"in-play every {SlipVerifyInPlayMs / 1000}s, "
+                            + $"+{SlipVerifyRoverMs / 1000}s cooldown after any rover quote "
+                            + $"-> {_slipCsvBaseName}_{CsvDate()}.csv");
         DebugLog.Discovery($"CrossPlatformArbTelemetryStrategy: initialized with {pairs.Count} pairs, threshold={arbThreshold}");
         if (_debugPrices)
             Console.WriteLine("[CROSS] HARDVEN_DEBUG_PRICES=1 — dumping the full 4-leg price breakdown on each arb open.");
@@ -992,24 +1014,30 @@ public class CrossPlatformArbTelemetryStrategy
     internal bool TrySlipVerifySlot(bool openedInPlay)
     {
         if (!SlipVerifyEnabled || _slipQuote is null) return false;
-        if (openedInPlay) return false;                    // pre-live only — see the field comment
         // CLAIM THE SLOT BEFORE CHECKING THE INTERVAL. Two pairs can open an arb in the same millisecond
         // on different threads; checking the clock first would let both pass it and both click.
         if (Interlocked.CompareExchange(ref _slipVerifyInFlight, 1, 0) != 0) return false;
-        long now = Environment.TickCount64;
-        if (now - Interlocked.Read(ref _lastSlipVerifyTicks) < SlipVerifyIntervalMs)
+        long now     = Environment.TickCount64;
+        long budget  = openedInPlay ? SlipVerifyInPlayMs : SlipVerifyPreLiveMs;
+        ref long last = ref (openedInPlay ? ref _lastInPlayVerifyTicks : ref _lastSlipVerifyTicks);
+        bool ok = now - Interlocked.Read(ref last) >= budget
+               // ROVER COOLDOWN, on top. We cannot know in advance whether this quote will need the
+               // roving tab — but we know whether the LAST one did, and a run that keeps falling back to
+               // navigation should slow down as a whole rather than keep paying seconds per sample.
+               && now - Interlocked.Read(ref _lastRoverTicks) >= 0;
+        if (!ok)
         {
             Volatile.Write(ref _slipVerifyInFlight, 0);
             return false;
         }
         // Stamped at START, not completion: "at most every N" is measured between attempts, so a slow
         // quote does not push the next one further out.
-        Interlocked.Exchange(ref _lastSlipVerifyTicks, now);
+        Interlocked.Exchange(ref last, now);
         return true;
     }
 
     internal void ReleaseSlipVerifySlot() => Volatile.Write(ref _slipVerifyInFlight, 0);
-    internal static int SlipVerifyIntervalMsForTest => SlipVerifyIntervalMs;
+    internal static int SlipVerifyIntervalMsForTest => SlipVerifyPreLiveMs;
 
     /// <summary>Quote the betslip, then re-test the arb on the prices the venue would actually honour.
     ///
@@ -1026,7 +1054,20 @@ public class CrossPlatformArbTelemetryStrategy
             (slip, err) = await _slipQuote!(hvToken, SlipVerifyTimeoutSec);
         }
         catch (Exception ex) { err = $"{ex.GetType().Name}: {ex.Message}"; }
-        finally { ReleaseSlipVerifySlot(); }
+        finally
+        {
+            // If that quote had to NAVIGATE, start the rover cooldown now. Stamped on completion (not on
+            // start like the regime budgets) because the cost being throttled is the navigation itself,
+            // and we only learn it happened once the answer comes back.
+            string via = _slipVia?.Invoke() ?? "";
+            if (via == "rover")
+            {
+                Interlocked.Exchange(ref _lastRoverTicks, Environment.TickCount64 + SlipVerifyRoverMs);
+                Console.WriteLine($"[SLIP VERIFY] that quote used the roving tab — pausing sampling for "
+                                + $"{SlipVerifyRoverMs / 1000}s");
+            }
+            ReleaseSlipVerifySlot();
+        }
         sw.Stop();
 
         // Live re-read of BOTH legs' books for the depth columns and the honest re-test.

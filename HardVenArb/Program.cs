@@ -150,9 +150,18 @@ if (args.Contains("--slip-verify-check"))
 
     probe.SetSlipVerifier((_, _) => Task.FromResult((0.5m, "")));
 
-    Console.WriteLine("\n[2] pre-live only");
-    Check("in-play arb is never sampled", !probe.TrySlipVerifySlot(openedInPlay: true));
-    Check("pre-live arb takes the first slot", probe.TrySlipVerifySlot(openedInPlay: false));
+    Console.WriteLine("\n[2] pre-live and in-play hold SEPARATE budgets");
+    Check("pre-live arb takes its own slot", probe.TrySlipVerifySlot(openedInPlay: false));
+    probe.ReleaseSlipVerifySlot();
+    // The point of separate budgets: an in-play sample can never consume the slot a pre-live arb would
+    // have used — which is what "pre-live has priority" has to mean when you cannot see what is coming.
+    Check("in-play has its own, untouched by the above", probe.TrySlipVerifySlot(openedInPlay: true));
+    probe.ReleaseSlipVerifySlot();
+    Check("pre-live now throttled, its budget is spent", !probe.TrySlipVerifySlot(openedInPlay: false));
+    Check("in-play also throttled (its longer budget)", !probe.TrySlipVerifySlot(openedInPlay: true));
+    // Re-claim so [3] exercises the in-flight lock from a held state, as it did before.
+    System.Threading.Thread.Sleep(CrossPlatformArbTelemetryStrategy.SlipVerifyIntervalMsForTest + 250);
+    Check("pre-live recovers once its interval elapses", probe.TrySlipVerifySlot(openedInPlay: false));
 
     Console.WriteLine("\n[3] one at a time (the rover is a single tab)");
     Check("second arb is refused while one is in flight", !probe.TrySlipVerifySlot(openedInPlay: false));
@@ -615,7 +624,7 @@ telemetry.OnArbOpened += restVerifier.OnArbOpened;
 // Sampled betslip measurement (HARDVEN_SLIP_VERIFY=1). Independent of the executor: it runs in ANY mode,
 // including telemetry-only, because its whole point is measuring what the board price is worth before
 // trusting it with money. Wired here because the verifier needs the strategy to exist first.
-telemetry.SetSlipVerifier(restVerifier.SlipQuoteAsync);
+telemetry.SetSlipVerifier(restVerifier.SlipQuoteAsync, () => restVerifier.LastSlipVia);
 
 // ── Executor — live order placement on WS-detected arb windows ────────────────
 CrossArbExecutor?            executor    = null;
