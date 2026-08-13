@@ -38,7 +38,7 @@ from pathlib import Path
 
 sys.stdout.reconfigure(encoding="utf-8")
 
-from pair_auto import fetch_catalog, price_validate, fuzz
+from pair_auto import fetch_catalog, price_validate, sibling_validate, fuzz
 from env_util import atomic_write_json
 from betinasia_adapter import MONEYLINE_BY_SPORT, is_three_way, parse_selection_id
 import sports
@@ -267,6 +267,14 @@ def _match_game(entry: dict, games: dict, cache: dict, threshold: float):
     sides = [s.strip() for s in re.split(r"\bvs\.?\b", title, flags=re.I) if s.strip()]
     if len(sides) != 2:
         sides = [yes_name, ""]
+    # DROP A CARD-NAME PREFIX. Combat sports title the EVENT, not just the bout: "330: Barboza vs
+    # Ribovics", "Fight Night: Kape vs Horiguchi". Left in, "330" parses as a GIVEN NAME, so
+    # _given_compatible finds no partner for it in "Edson" and _name_score collapses to
+    # SAME_SURNAME_DIFFERENT_PERSON (50) — the sibling guard firing on a card number. That scored every
+    # UFC bout 50 against a threshold of 90 and left all 24 unmatched while BOTH venues carried them.
+    # pair_auto already strips this; _match_game splits the title itself and did not.
+    if sides and ":" in sides[0]:
+        sides[0] = sides[0].rsplit(":", 1)[-1].strip() or sides[0]
 
     # 1) cached player ids
     ids = {cache.get(_norm(s)) for s in sides if _norm(s) in cache}
@@ -591,6 +599,15 @@ def main() -> None:
             print(f"[PAIR-BIA] WARNING price-gate DID NOT RUN: all {gate[3]} filled pair(s) are "
                   f"unvalidated ({missing} have kalshi_yes_price=null). Inverted sides and wrong-game "
                   f"pairs are NOT being caught. Re-scaffold the Kalshi side so the field is populated.")
+        # FINAL INTEGRITY CHECK — the price gate can UNDO the sibling gate. An INVERTED-FIXED swaps the
+        # tokens on ONE entry, but a 2-way event's two entries are mirrors: invert one and not the other
+        # and they end up IDENTICAL, which is the exact corruption the sibling gate exists to remove.
+        # Observed 2026-08-13: 4 INVERTED-FIXED swaps left 3 broken sibling pairs in the written file.
+        # Re-checking here is cheap and makes the written file's invariant unconditional.
+        post_c, post_b = sibling_validate(pairs)
+        if post_b:
+            print(f"[PAIR] post-price sibling re-check: {post_b} pair(s) blanked — an inverted-fixed swap "
+                  f"had broken their mirror")
 
     valid = sum(1 for e in pairs if e.get("hardven_yes_token") and e.get("hardven_no_token"))
     if args.write and (filled or gate[1] or gate[2]):

@@ -575,6 +575,15 @@ def main() -> None:
         if any(gate):
             print(f"[PAIR] price-gate (tol={args.price_tol}): {gate[0]} consistent | {gate[1]} inverted-fixed | "
                   f"{gate[2]} wrong-game rejected | {gate[3]} unvalidated (no price)")
+        # FINAL INTEGRITY CHECK — the price gate can UNDO the sibling gate. An INVERTED-FIXED swaps the
+        # tokens on ONE entry, but a 2-way event's two entries are mirrors: invert one and not the other
+        # and they end up IDENTICAL, which is the exact corruption the sibling gate exists to remove.
+        # Observed 2026-08-13: 4 INVERTED-FIXED swaps left 3 broken sibling pairs in the written file.
+        # Re-checking here is cheap and makes the written file's invariant unconditional.
+        post_c, post_b = sibling_validate(pairs)
+        if post_b:
+            print(f"[PAIR] post-price sibling re-check: {post_b} pair(s) blanked — an inverted-fixed swap "
+                  f"had broken their mirror")
 
     valid = sum(1 for e in pairs if e.get("hardven_yes_token") and e.get("hardven_no_token"))
     if args.write and (filled or gate[1] or gate[2]):

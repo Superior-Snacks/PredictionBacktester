@@ -139,9 +139,23 @@ class BetInAsiaObserver:
             return None
         pg = self._sport_tabs.get(sport)
         if pg is not None and not pg.is_closed():
-            return pg
-        pg = await self._ctx.new_page()          # _ctx.on("page") hooks its sockets for us
-        self._sport_tabs[sport] = pg
+            # STILL ON ITS BOARD? A Page handle survives anything the OPERATOR does — focus, tab order,
+            # scrolling — but not navigation: click into a match on this tab and the handle stays perfectly
+            # valid while the page now shows something else entirely. The bot would then hunt for a tennis
+            # row on a football page, find nothing, and silently fall through to the rover for every quote.
+            # The URL is the cheap, honest check; if it has wandered, put it back.
+            try:
+                here = (pg.url or "").split("?")[0]
+            except Exception:
+                here = ""
+            if url and here and not here.rstrip("/").endswith(url.rstrip("/").rsplit("/", 1)[-1]):
+                self._log(f"sport tab {sport}: was navigated to {here[:70]} — restoring its board")
+            else:
+                return pg
+            # fall through: re-navigate and re-expand this same tab
+        if pg is None or pg.is_closed():
+            pg = await self._ctx.new_page()      # _ctx.on("page") hooks its sockets for us
+            self._sport_tabs[sport] = pg
         if url:
             try:
                 await pg.goto(url, wait_until="domcontentloaded", timeout=60_000)
@@ -152,7 +166,7 @@ class BetInAsiaObserver:
             if expand:
                 # Pay the expansion cost ONCE, here, instead of on every quote's critical path.
                 try:
-                    n = await self.expand_all(label=sport)
+                    n = await self.expand_all(label=sport, page=pg)
                     self._log(f"sport tab {sport}: parked and expanded ({n} 'Show more' click(s))")
                 except Exception as e:
                     self._log(f"sport tab {sport}: expand failed ({type(e).__name__}: {e})")
@@ -234,7 +248,7 @@ class BetInAsiaObserver:
                   f"| priced across all sports={self.coverage().get('priced_total')}")
         return seen
 
-    async def expand_all(self, label: str = "") -> int:
+    async def expand_all(self, label: str = "", page=None) -> int:
         """Click every "Show more" on the current board until none remain. Returns clicks made.
 
         TWO REASONS, and the second is the bigger one:
@@ -248,18 +262,35 @@ class BetInAsiaObserver:
         Clicking "Show more" is ordinary browsing, not automation-only behaviour, and it is paced. Bounded
         by BIA_EXPAND_MAX so a board that regenerates the control cannot spin forever.
         """
-        page = self._page
+        # WHICH PAGE. This used to hardcode self._page, so every per-sport call expanded the ORIGINAL tab
+        # instead of the one asked about: parking 5 board tabs reported "tennis: 7 clicks" (that was
+        # football, the main tab) and then 0 for the next four (football was already expanded). The sport
+        # tabs themselves were never expanded at all. Take the page as an argument.
+        page = page or self._page
         if page is None:
             return 0
         limit = int(os.environ.get("BIA_EXPAND_MAX", "40"))
         pace = float(os.environ.get("BIA_EXPAND_PACE_SEC", "0.35"))
+        # SCROLL, DON'T JUST QUERY. The board renders lazily: sections below the fold are not in the DOM,
+        # so get_by_text finds no "Show more" for them and — the bigger cost — THE PAGE NEVER SUBSCRIBES
+        # THEM EITHER, because it only subscribes what it has rendered. Walking down the page is what turns
+        # a partial board into a whole one, for prices as much as for clicking.
+        scroll_rounds = int(os.environ.get("BIA_EXPAND_SCROLLS", "12"))
         clicks = 0
+        stagnant = 0
         for _ in range(limit):
             try:
                 more = page.get_by_text("Show more", exact=True)
                 n = await more.count()
                 if n == 0:
-                    break
+                    # Nothing visible — reveal more board and look again, rather than declaring it done.
+                    if stagnant >= scroll_rounds:
+                        break
+                    stagnant += 1
+                    await page.mouse.wheel(0, 1400)
+                    await asyncio.sleep(pace)
+                    continue
+                stagnant = 0
                 # Always take the FIRST: expanding removes that control, so the next iteration naturally
                 # advances to the next competition. Indexing into a shifting list would skip entries.
                 await more.first.click(timeout=5_000)
@@ -267,8 +298,14 @@ class BetInAsiaObserver:
                 await asyncio.sleep(pace)
             except Exception:
                 break     # control vanished mid-click, or the board re-rendered — not worth retrying
-        if clicks:
-            self._log(f"expanded {clicks} 'Show more' section(s){' on ' + label if label else ''}")
+        # Back to the top: a tab parked half-way down a board is both an odd thing to leave lying around
+        # and a worse starting point for the next find-and-click.
+        try:
+            await page.keyboard.press("Home")
+        except Exception:
+            pass
+        self._log(f"expanded {clicks} 'Show more' section(s){' on ' + label if label else ''} "
+                  f"({stagnant} scroll(s) with nothing to expand)")
         return clicks
 
     async def _first_look(self, after: float = 60.0) -> None:
@@ -449,7 +486,12 @@ class BetInAsiaObserver:
         else:
             out["by_sport"] = {s: {"matches": cat[s], "outrights": outr.get(s, 0),
                                    "priced": priced.get(s, 0)}
-                               for s, _ in cat.most_common(12)}
+                               # EVERY sport, not the top 12. BIA carries ~33 and football alone
+                               # takes five slots (fb, fb_ht, fb_htft, fb_corn, fb_corn_ht) with 3.5k
+                               # selections, so a low-volume sport fell off the end and READ AS ABSENT.
+                               # That cost real debugging time: baseball and mma looked unsubscribed
+                               # while /catalog had 46 and 44 selections for them all along.
+                               for s, _ in cat.most_common()}
         return out
 
 

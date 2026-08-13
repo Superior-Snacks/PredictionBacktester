@@ -66,7 +66,15 @@ ASSUMED_MAX_STAKE = float(os.environ.get("BIA_ASSUMED_MAX_STAKE", "100.0"))
 # NOTE: one page load covers tennis completely (75/75) but only ~21% of football (161 of 754) --
 # soccer needs a pass through the league pages, and subscriptions accumulate permanently once made.
 BASE_URL = os.environ.get("BIA_BASE_URL", "https://black.betinasia.com")
-START_URL = os.environ.get("BIA_START_URL", BASE_URL + "/sportsbook/football")
+# TENNIS, not football. The landing page is the one tab we do NOT trade from — every sport we do trade
+# gets its own parked board tab — so its only lasting effect is what it drags into the feed. Football is
+# the venue's biggest book by an order of magnitude (3,495 catalog selections across fb/fb_ht/fb_htft/
+# fb_corn/fb_corn_ht vs 150 tennis), none of which is paired while soccer is out of HARDVEN_SPORTS. That
+# bulk is not free: it crowds every per-sport report (it is what pushed baseball and mma off the end of a
+# top-12 coverage table and made them read as ABSENT for an afternoon) and it is subscription traffic for
+# markets we cannot trade. Tennis is the smallest useful board and is paired, so the landing page earns
+# its keep instead of just adding noise. BIA_START_URL still overrides.
+START_URL = os.environ.get("BIA_START_URL", BASE_URL + "/sportsbook/tennis")
 
 MONEYLINE_KEYS = {"tennis_match,all", "ml", "time_win,tp,all,ml"}
 THREE_WAY_KEYS = {"wdw", "time_win,tp,reg,wdw", "time_win,tp,all,wdw"}
