@@ -182,6 +182,42 @@ class BetInAsiaObserver:
         self._log(f"parked {sum(1 for v in out.values() if v)}/{len(targets)} sport board tab(s)")
         return out
 
+    async def reset_sport_tabs(self, targets: list, expand: bool = True) -> dict:
+        """Close every board tab (and the rover) and park the whole sequence again.
+
+        WHY A PERIODIC RESET AT ALL. A parked tab can only be clicked for what its DOM holds, and that DOM
+        is a snapshot of park time: fixtures the venue lists later never appear in it, so a slip quote for
+        a game added an hour ago falls through to the rover and pays a navigation. Subscriptions have the
+        same shape — the page subscribes what it RENDERED, so a board that has grown since is only
+        partially covered. Reloading is the one action that refreshes both.
+
+        WHAT IT COSTS. Closing a socket drops the subscriptions it was holding, so there is a real gap
+        between close and re-park; that is the price of the refresh and the reason this belongs on a slow
+        cadence rather than a fast one. Nothing is lost permanently — the re-park re-subscribes whatever
+        the board now shows, which is a superset of what it showed before.
+
+        The caller holds the slip lock across this, so a quote can never find its tab closed underneath
+        it, and a reset never starts while a click is in flight."""
+        old = list(self._sport_tabs.items())
+        closed = 0
+        for _sport, pg in old:
+            try:
+                if pg is not None and not pg.is_closed():
+                    await pg.close()
+                    closed += 1
+            except Exception:
+                pass
+        self._sport_tabs.clear()
+        rv, self._rover = self._rover, None
+        try:
+            if rv is not None and not rv.is_closed():
+                await rv.close()
+                closed += 1
+        except Exception:
+            pass
+        self._log(f"board reset: closed {closed} tab(s), re-parking {len(targets)} sport(s)")
+        return await self.open_sport_tabs(targets, expand=expand)
+
     # ── the roving tab ────────────────────────────────────────────────────────
     async def rover(self, url: str = ""):
         """The SECOND tab — the only one allowed to click. Returns the page, creating it on first use.

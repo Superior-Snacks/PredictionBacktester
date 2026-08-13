@@ -313,6 +313,11 @@ class BetInAsiaAdapter(BookAdapter):
             print("[BIA] board tabs: no sport has a verified BIA path (check HARDVEN_SPORTS)", flush=True)
             return
 
+        # PERIODIC RESET. A parked tab's DOM is a snapshot of park time, so fixtures the venue lists later
+        # are unclickable (the quote falls through to the rover) and unsubscribed (the page only subscribes
+        # what it rendered). Reloading the whole sequence is the one action that refreshes both. 0 = never.
+        reset_min = float(os.environ.get("BIA_BOARD_RESET_MIN", "60"))
+
         async def _park():
             await asyncio.sleep(float(os.environ.get("BIA_BOARD_TABS_DELAY_SEC", "20")))
             print(f"[BIA] parking {len(targets)} board tab(s): "
@@ -321,6 +326,26 @@ class BetInAsiaAdapter(BookAdapter):
                 await self.observer.open_sport_tabs(targets)
             except Exception as e:
                 print(f"[BIA] board tabs failed: {type(e).__name__}: {e}", flush=True)
+            if reset_min <= 0:
+                return
+            print(f"[BIA] board reset every {reset_min:g} min", flush=True)
+            while True:
+                await asyncio.sleep(reset_min * 60.0)
+                try:
+                    # HOLD THE SLIP LOCK for the whole reset: it is the same lock a quote takes, so a
+                    # click can never find its tab closed underneath it, and a reset waits for a quote
+                    # already in flight instead of racing it.
+                    lock = getattr(self, "_slip_lock", None)
+                    if lock is None:
+                        lock = self._slip_lock = asyncio.Lock()
+                    async with lock:
+                        await self.observer.reset_sport_tabs(targets)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    # A failed reset must not kill the loop — the tabs that survive keep working and the
+                    # next cycle tries again.
+                    print(f"[BIA] board reset failed: {type(e).__name__}: {e}", flush=True)
 
         self._board_tabs_task = asyncio.create_task(_park())
 

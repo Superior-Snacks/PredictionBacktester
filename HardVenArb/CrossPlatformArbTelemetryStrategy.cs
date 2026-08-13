@@ -238,7 +238,11 @@ public class CrossPlatformArbTelemetryStrategy
         "BoardHardVenAsk,SlipHardVenAsk,SlippageAbs,SlippagePct," +
         "KalshiAskAtOpen,KalshiAskNow,NetAtBoard,NetAtSlip,ArbSurvived,MarginVsThreshold," +
         "KalshiBestDepth,HardVenBestDepth,KalshiTop3Depth,HardVenTop3Depth," +
-        "QuoteMs,HardVenLegId,Error";
+        "QuoteMs,HardVenLegId,Error," +
+        // HOLD PHASE — how long the arb survived on prices the venue would actually honour. The window
+        // durations in the main telemetry are measured on BOARD prices, which overstate an arb; this is
+        // the capturable life of the same window, re-read from the live slip feed until it dies.
+        "HeldMs,HoldSamples,BestNetHeld,DiedBy";
 
     // ── Sampled slip verifier ─────────────────────────────────────────────────
     // Measures what the BOARD price is actually worth: the board is a cache the venue does not commit to,
@@ -263,6 +267,19 @@ public class CrossPlatformArbTelemetryStrategy
     private static readonly int SlipVerifyPreLiveMs = EnvSec("HARDVEN_SLIP_VERIFY_PRELIVE_SEC", 60);
     private static readonly int SlipVerifyInPlayMs  = EnvSec("HARDVEN_SLIP_VERIFY_INPLAY_SEC", 180);
     private static readonly int SlipVerifyRoverMs   = EnvSec("HARDVEN_SLIP_VERIFY_ROVER_SEC", 300);
+    // HOLD THE SLIP after a successful quote and watch the arb until it stops breaking even. Costs no UI
+    // action at all: the event is already subscribed on the acca channel, so the venue keeps pushing and a
+    // re-quote is served from cache. 0 disables the hold and restores the single-shot sample.
+    private static readonly int SlipHoldMs     = EnvSec("HARDVEN_SLIP_HOLD_SEC", 120);
+    private static readonly int SlipHoldPollMs = EnvSec("HARDVEN_SLIP_HOLD_POLL_SEC", 2);
+    // The net at which the held arb is declared dead. BREAK-EVEN by default, matching what the executor
+    // would actually accept — the question this measures is "how long could I still have taken it", not
+    // "how long did it stay as good as it first looked".
+    private static readonly decimal _slipAcceptNetForHold =
+        decimal.TryParse(Environment.GetEnvironmentVariable("HARDVEN_SLIP_ACCEPT_NET"),
+                         System.Globalization.NumberStyles.Any,
+                         System.Globalization.CultureInfo.InvariantCulture, out var _sah) && _sah > 0m
+            ? _sah : 1.00m;
     private long _lastRoverTicks;
     private static readonly double SlipVerifyTimeoutSec =
         double.TryParse(Environment.GetEnvironmentVariable("HARDVEN_SLIP_VERIFY_TIMEOUT_SEC"),
@@ -1099,6 +1116,41 @@ public class CrossPlatformArbTelemetryStrategy
             Console.WriteLine($"[SLIP VERIFY] {pair.Label}: no quote ({err}) after {sw.ElapsedMilliseconds}ms");
         }
 
+        // ── HOLD: watch the arb on SLIP prices until it stops breaking even ──────────────────────────
+        // The window durations in the main telemetry are measured on BOARD prices, which we know overstate
+        // an arb (84% agree, the rest worse at the slip, never better). This measures the same window's
+        // CAPTURABLE life instead. It needs no further UI action — the event is subscribed on the acca
+        // channel, so the venue keeps pushing and each re-quote is served from the sidecar's cache.
+        long heldMs = 0; int holdSamples = 0; decimal bestNetHeld = netSlip; string diedBy = "";
+        if (slip > 0m && survived && SlipHoldMs > 0)
+        {
+            var hold = System.Diagnostics.Stopwatch.StartNew();
+            while (hold.ElapsedMilliseconds < SlipHoldMs)
+            {
+                await Task.Delay(SlipHoldPollMs);
+                decimal p2; string e2;
+                try { (p2, e2) = await _slipQuote!(hvToken, SlipVerifyTimeoutSec); }
+                catch (Exception ex) { p2 = -1m; e2 = ex.GetType().Name; }
+                if (p2 <= 0m) { diedBy = $"QUOTE_LOST({e2})"; break; }
+                holdSamples++;
+                // Re-read Kalshi too: either leg moving can end the arb, and attributing it matters.
+                decimal kLive = kBook?.GetBestAskPrice() ?? kUse;
+                if (kLive <= 0m) kLive = kUse;
+                decimal net2 = kLive + p2 + KalshiFee(kLive) + HardVenFee(p2, hvToken);
+                if (net2 < bestNetHeld) bestNetHeld = net2;
+                if (net2 >= _slipAcceptNetForHold)
+                {
+                    diedBy = Math.Abs(p2 - slip) > Math.Abs(kLive - kUse) ? "HARDVEN" : "KALSHI";
+                    break;
+                }
+            }
+            hold.Stop();
+            heldMs = hold.ElapsedMilliseconds;
+            if (diedBy.Length == 0) diedBy = "STILL_ALIVE_AT_LIMIT";
+            Console.WriteLine($"[SLIP HOLD] {pair.Label}: stayed break-even for {heldMs / 1000.0:0.0}s "
+                            + $"over {holdSamples} slip sample(s), best net ${bestNetHeld:0.0000}, ended by {diedBy}");
+        }
+
         _slipCsvChannel.Writer.TryWrite(string.Join(",",
             DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss.fff"),
             Quote(pair.PairId), Quote(pair.Label), w.ArbType, "pre-live",
@@ -1115,7 +1167,10 @@ public class CrossPlatformArbTelemetryStrategy
             kBestSize.ToString("0.##"), pBestSize.ToString("0.##"),
             kTop3.ToString("0.##"),     pTop3.ToString("0.##"),
             sw.ElapsedMilliseconds.ToString(),
-            Quote(hvToken), Quote(err)));
+            Quote(hvToken), Quote(err),
+            heldMs.ToString(), holdSamples.ToString(),
+            bestNetHeld > 0m ? bestNetHeld.ToString("0.0000") : "",
+            Quote(diedBy)));
     }
 
     // One post-open sample of the Kalshi unwind trajectory. Columns the analyzer joins on (PairId, OpenTime)
