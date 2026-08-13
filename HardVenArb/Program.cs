@@ -1571,7 +1571,7 @@ if (executor != null)
                 string tryTag  = executor.TriesRemaining >= 0 ? $"  triesLeft={executor.TriesRemaining}" : "";
                 Console.WriteLine(
                     $"[STATUS {DateTime.UtcNow:HH:mm:ss}] " +
-                    $"K=${executor.KalshiBalanceUsd:0.00}  P=${executor.HardVenBalanceUsd:0.00}  │  " +
+                    $"K=${executor.KalshiBalanceUsd:0.00}  P={CrossArbExecutor.BalStr(executor.HardVenBalanceUsd)}  │  " +
                     $"invested=${executor.TotalInvested:0.00}  proj={projStr}  │  " +
                     $"exposure=${executor.TotalExposure:0.00}/${executor.MaxExposureUsd:0.00}  │  " +
                     $"open={executor.OpenPositionCount}  filled={executor.TotalExecuted}  earlyExit={executor.EarlyExitsCompleted}  │  " +

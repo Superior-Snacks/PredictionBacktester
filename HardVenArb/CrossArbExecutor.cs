@@ -171,6 +171,25 @@ public class CrossArbExecutor
     // LIVE account-currency→USD rate (FxRate, refreshed from the sidecar). Read per use, not frozen at
     // construction: a stale rate over-stakes the book leg and turns a hedged arb into a directional bet.
     private static decimal _hardvenFxToUsd => FxRate.Current;
+
+    /// <summary>Format a HardVen USD amount showing the ACCOUNT's own currency first.
+    ///
+    /// <para>The executor holds every balance in USD because Kalshi is USD and the sizing, caps and lock
+    /// arithmetic all have to be comparable. But the operator funds and reads the book account in EUR, so a
+    /// bare "P=$80.05" cannot be checked against the venue screen without doing FX in your head — and a REAL
+    /// discrepancy would hide underneath the conversion, since any gap just looks like the rate. Printing
+    /// "€69.34 ($80.05 @1.1545)" makes the venue-matching number the one you read first and the conversion
+    /// explicit. Falls back to plain USD when the account already is USD (or the rate is unusable).</para>
+    /// </summary>
+    internal static string BalStr(decimal usd)
+    {
+        decimal fx = _hardvenFxToUsd;
+        string ccy = (_hardvenCurrencyStatic ?? "EUR").ToUpperInvariant();
+        if (fx <= 0m || ccy == "USD") return $"${usd:0.00}";
+        string sym = ccy switch { "EUR" => "€", "GBP" => "£", _ => ccy + " " };
+        return $"{sym}{usd / fx:0.00} (${usd:0.00} @{fx:0.0000})";
+    }
+    private static string _hardvenCurrencyStatic = "EUR";
     private readonly string  _hardvenCurrency;
     private readonly decimal _maxExposureUsd;
     private readonly bool    _minBuy;              // --min-buy: cap every arb to exactly 1 contract
@@ -530,6 +549,7 @@ public class CrossArbExecutor
     {
         // hardvenFxToUsd is the env SEED only; FxRate owns the live value for every consumer.
         _hardvenCurrency     = hardvenCurrency;
+        _hardvenCurrencyStatic = hardvenCurrency;   // BalStr is static (used from status/Discord)
         _kalshi              = kalshi;
         _hardven                = hardven;
         _telemetry           = telemetry;
@@ -677,7 +697,7 @@ public class CrossArbExecutor
         string verify = slipOn ? "slip-verified"
                                : (_dryRun ? "FEED PRICES ONLY (not slip-verified — set HARDVEN_SLIP_QUOTE_DRYRUN=1)"
                                           : "feed prices only (HARDVEN_SLIP_QUOTE=0)");
-        DiscordAlert($"✅ {mode} started — startup complete (HardVen fees prefetched), monitoring {pairCount} pair(s). Cash: Kalshi ${k:0.00} / HardVen ${p:0.00}. Prices: {verify}.");
+        DiscordAlert($"✅ {mode} started — startup complete (HardVen fees prefetched), monitoring {pairCount} pair(s). Cash: Kalshi ${k:0.00} / HardVen {BalStr(p)}. Prices: {verify}.");
     }
 
     /// <summary>Fetch fee params/tick size for any pair token we have not seen yet. Called at startup and
@@ -763,7 +783,7 @@ public class CrossArbExecutor
                 else _hardvenLowAlerted = false;
             }
             string tag = initial ? "[BALANCE INIT]" : "[BALANCE]";
-            Console.WriteLine($"{tag} Kalshi=${newKalshi:0.00} HardVen=${newHardVen:0.00}");
+            Console.WriteLine($"{tag} Kalshi=${newKalshi:0.00} HardVen={BalStr(newHardVen)}");
             DebugLog.Balance($"RefreshBalancesAsync: K=${newKalshi:0.00} P=${newHardVen:0.00} initial={initial}");
             await JournalAsync(JsonSerializer.Serialize(new {
                 t = DateTime.UtcNow, @event = "BALANCE",
@@ -1390,7 +1410,7 @@ public class CrossArbExecutor
             }
             Console.WriteLine(
                 $"[EXEC SKIP] {pair.Label} | balance-limited to {contracts} contract(s), need ≥ {hardvenMinContracts} " +
-                $"(K=${kBalSnap:0.00} P=${pBalSnap:0.00} need K≈${kLegAsk * hardvenMinContracts:0.00} P≈${pLegAsk * hardvenMinContracts:0.00})");
+                $"(K=${kBalSnap:0.00} P={BalStr(pBalSnap)} need K≈${kLegAsk * hardvenMinContracts:0.00} P≈${pLegAsk * hardvenMinContracts:0.00})");
             DebugLog.Trades($"ExecuteAsync {pair.Label}: skipped — {contracts} contracts < hardvenMin {hardvenMinContracts} (balance-limited)");
             return;
         }
@@ -1543,7 +1563,7 @@ public class CrossArbExecutor
             string why = balanceBound ? "balance limited" : "ladder/depth limited";
             Console.WriteLine(
                 $"[EXEC SCALE] {pair.Label} | {idealContracts}→{contracts} contracts ({why}) " +
-                $"K=${kBalSnap:0.00} P=${pBalSnap:0.00} need≈${needUsd:0.00}");
+                $"K=${kBalSnap:0.00} P={BalStr(pBalSnap)} need≈${needUsd:0.00}");
             DebugLog.Balance($"ExecuteAsync {pair.Label}: scaled {idealContracts}→{contracts} contracts ({why})");
         }
 
