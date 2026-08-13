@@ -251,6 +251,7 @@ class BetInAsiaAdapter(BookAdapter):
             self.feed = self.observer.feed
             print(f"[BIA] passive transport: watching the page at {START_URL}", flush=True)
             self._start_sport_walker()
+            self._start_board_tabs()
             self._start_pairing_scheduler()
         else:
             print("[BIA] WARNING transport=direct - opening our OWN websocket. This is a second "
@@ -268,7 +269,7 @@ class BetInAsiaAdapter(BookAdapter):
         # Cancel our background loops BEFORE the browser goes away, so a walk in flight cannot raise
         # against a closed page and bury the real shutdown path in a traceback.
         import asyncio
-        for attr in ("_sport_walk_task", "_pairing_task"):
+        for attr in ("_sport_walk_task", "_board_tabs_task", "_pairing_task"):
             task = getattr(self, attr, None)
             if task is not None and not task.done():
                 task.cancel()
@@ -282,6 +283,38 @@ class BetInAsiaAdapter(BookAdapter):
         elif not self.feed.passive:
             await self.feed.stop()
         self._started = False
+
+    def _start_board_tabs(self) -> None:
+        """Park one fully-expanded board tab per active sport, so a slip quote never has to navigate.
+
+        Lazy creation (on the first quote for a sport) works, but it pays the load-and-expand cost on the
+        execution path with the arb already ticking — which is the exact cost that lost the Vandecasteele
+        arb on the Pinnacle side. Doing it at startup means the row is on screen before it is ever needed.
+
+        BIA_BOARD_TABS=0 disables it and falls back to lazy creation. The delay lets the initial page and
+        the sport walk settle first, so the tabs are opened into a quiet browser rather than competing with
+        startup navigation."""
+        if os.environ.get("BIA_BOARD_TABS") == "0":
+            print("[BIA] board tabs OFF (BIA_BOARD_TABS=0) — slip quotes will open tabs on demand", flush=True)
+            return
+        import asyncio
+        import sports as _sports
+
+        targets = _sports.bia_paths(BASE_URL)
+        if not targets:
+            print("[BIA] board tabs: no sport has a verified BIA path (check HARDVEN_SPORTS)", flush=True)
+            return
+
+        async def _park():
+            await asyncio.sleep(float(os.environ.get("BIA_BOARD_TABS_DELAY_SEC", "20")))
+            print(f"[BIA] parking {len(targets)} board tab(s): "
+                  f"{', '.join(c for c, _ in targets)}", flush=True)
+            try:
+                await self.observer.open_sport_tabs(targets)
+            except Exception as e:
+                print(f"[BIA] board tabs failed: {type(e).__name__}: {e}", flush=True)
+
+        self._board_tabs_task = asyncio.create_task(_park())
 
     def _start_sport_walker(self) -> None:
         """Visit every active sport's board once at startup, then re-visit on a slow cadence.
