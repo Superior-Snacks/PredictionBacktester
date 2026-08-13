@@ -887,6 +887,7 @@ class BetInAsiaAdapter(BookAdapter):
                           f"(age {age}s, {'subscribed' if subscribed else 'recent'}, no click)", flush=True)
                     return {"ok": True, "decimal_odds": odds,
                             "implied_price": round(1.0 / odds, 6),
+                            "via": "cache",          # no click at all — see the subscribed fast path
                             "elapsed_ms": round((time.time() - t0) * 1000, 1),
                             "from_cache": True, "age_sec": age, "selection_id": selection_id}
 
@@ -1009,6 +1010,11 @@ class BetInAsiaAdapter(BookAdapter):
                             print(f"[BIA SLIP] {selection_id} -> {odds} via {via} in {ms:.0f}ms", flush=True)
                             return {"ok": True, "decimal_odds": odds,
                                     "implied_price": round(1.0 / odds, 6),
+                                    # WHICH TIER SERVED THIS. The caller paces itself by this: a
+                                    # sport-tab quote is a find-and-click on a parked board (~0.5s) and
+                                    # can be sampled often; a rover quote navigates to the league and is
+                                    # both slow and a real UI action, so it earns a much longer cooldown.
+                                    "via": via,
                                     "elapsed_ms": ms, "selection_id": selection_id}
                 await _aio.sleep(0.1)
             # Timed out. Report WHAT WE OBSERVED so the next attempt does not need another guess:
