@@ -78,7 +78,8 @@ class BetInAsiaObserver:
         # `event_already_subscribed` with NO price — so knowing this set is what stops us clicking a
         # second time and then waiting for a push that will never come.
         self._acca_by_ws: dict[int, set] = {}
-        self._rover = None                             # the one tab allowed to click (see rover())
+        self._rover = None                             # fallback click tab (see rover())
+        self._sport_tabs: dict = {}                    # sport code -> parked board tab (see sport_tab())
 
     @property
     def _acca_subs(self) -> set:
@@ -117,6 +118,55 @@ class BetInAsiaObserver:
             self._log(f"initial navigation: {type(e).__name__}: {e}")
         self._log("observing - the page drives, we only read")
         asyncio.create_task(self._first_look())
+
+    # ── parked per-sport board tabs ───────────────────────────────────────────
+    async def sport_tab(self, sport: str, url: str = "", expand: bool = True):
+        """The PARKED board tab for one sport. Returns its page, creating it on first use.
+
+        WHY ONE PER SPORT, when a single tab already accumulates every sport's subscriptions. Prices are
+        not the point here — the DOM is. A slip quote has to CLICK a row, and a row only exists on the page
+        currently rendering that sport. With one tab the rover had to navigate to the league for every
+        quote, and on a cold league that cost >20s and lost the arb (2026-08-13, Vandecasteele/Shelbayh).
+
+        For the LOW-VOLUME sports this bot now covers, a sport's whole slate fits on its board page, so a
+        parked, fully-expanded tab per sport means the row is already on screen when the arb fires and the
+        quote is a pure find-and-click. The rover stays as the fallback for anything the board does not
+        carry — which is what it was always for.
+
+        Parked means PARKED: created once, expanded once, never navigated again. Its socket keeps the
+        subscriptions it accumulated, and re-navigating would drop them."""
+        if self._ctx is None:
+            return None
+        pg = self._sport_tabs.get(sport)
+        if pg is not None and not pg.is_closed():
+            return pg
+        pg = await self._ctx.new_page()          # _ctx.on("page") hooks its sockets for us
+        self._sport_tabs[sport] = pg
+        if url:
+            try:
+                await pg.goto(url, wait_until="domcontentloaded", timeout=60_000)
+            except Exception as e:
+                self._log(f"sport tab {sport}: navigation failed ({type(e).__name__}: {e})")
+                return pg
+            await asyncio.sleep(float(os.environ.get("BIA_SPORT_TAB_SETTLE_SEC", "3")))
+            if expand:
+                # Pay the expansion cost ONCE, here, instead of on every quote's critical path.
+                try:
+                    n = await self.expand_all(label=sport)
+                    self._log(f"sport tab {sport}: parked and expanded ({n} 'Show more' click(s))")
+                except Exception as e:
+                    self._log(f"sport tab {sport}: expand failed ({type(e).__name__}: {e})")
+        return pg
+
+    async def open_sport_tabs(self, targets: list, expand: bool = True) -> dict:
+        """Park one board tab per (sport_code, url), expanded. Returns {sport: ok}."""
+        out: dict[str, bool] = {}
+        for code, url in targets:
+            pg = await self.sport_tab(code, url, expand=expand)
+            out[code] = pg is not None and not pg.is_closed()
+            await asyncio.sleep(float(os.environ.get("BIA_SPORT_TAB_GAP_SEC", "2")))
+        self._log(f"parked {sum(1 for v in out.values() if v)}/{len(targets)} sport board tab(s)")
+        return out
 
     # ── the roving tab ────────────────────────────────────────────────────────
     async def rover(self, url: str = ""):

@@ -860,13 +860,23 @@ class BetInAsiaAdapter(BookAdapter):
 
         before_ts = (cached or {}).get("ts", 0.0)
         try:
-            # THE ROVING TAB does every click, so the observing tab is never dragged off its board (its
-            # accumulated subscriptions are the whole feed). Acquire it before anything else.
-            page = await obs.rover()
-            if page is None:
-                return {"ok": False, "error": "could not open the roving tab"}
-
-            row, n_links = await self._find_board_row(page, ekey)
+            # BOARD TAB FIRST, ROVER AS FALLBACK.
+            # The parked per-sport tab is already rendering this sport's whole slate, fully expanded, so
+            # for the low-volume sports this bot covers the row is usually ALREADY ON SCREEN — making the
+            # quote a pure find-and-click with no navigation at all. Only when the board does not carry the
+            # game do we pay for the rover to go and find its league, which is the cost that lost the
+            # Vandecasteele arb (>20s, cold league) on 2026-08-13.
+            via = "sport-tab"
+            slug = sports_cfg.bia_path_by_code().get(sport, "")
+            board_url = BASE_URL.rstrip("/") + slug if slug else ""
+            page = await obs.sport_tab(sport, board_url)
+            row, n_links = (None, 0) if page is None else await self._find_board_row(page, ekey)
+            if row is None:
+                via = "rover"
+                page = await obs.rover()
+                if page is None:
+                    return {"ok": False, "error": "could not open the roving tab"}
+                row, n_links = await self._find_board_row(page, ekey)
             # NAVIGATE TO THE LEAGUE. The rover starts blank and generally is not showing this game, so
             # "row missing" is the normal first state, not an error. The event frames carry `country` and
             # `competition_id` on 100% of events, which is exactly the league page's address — so the
@@ -955,7 +965,7 @@ class BetInAsiaAdapter(BookAdapter):
                         odds = sels.get(sel)
                         if odds and odds > 1.0:
                             ms = round((time.time() - t0) * 1000, 1)
-                            print(f"[BIA SLIP] {selection_id} -> {odds} in {ms:.0f}ms", flush=True)
+                            print(f"[BIA SLIP] {selection_id} -> {odds} via {via} in {ms:.0f}ms", flush=True)
                             return {"ok": True, "decimal_odds": odds,
                                     "implied_price": round(1.0 / odds, 6),
                                     "elapsed_ms": ms, "selection_id": selection_id}
