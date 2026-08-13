@@ -486,6 +486,15 @@ def main() -> None:
         print(f"[PAIR-BIA] reseeded {len(pairs)} Kalshi entries from {args.reseed_from}")
     elif pairs_path.exists():
         pairs = json.loads(pairs_path.read_text(encoding="utf-8"))
+        # SELF-HEAL BEFORE FILLING. A filled entry is never re-examined (_fill_pass skips anything that
+        # already has tokens) and pairHard's merge carries filled tokens forward, so ONE bad pair is sticky
+        # for good: 7 events were still holding the same token on BOTH siblings days later. Blanking here —
+        # before the fill rather than after it — puts them back in the queue, so the very next pass re-matches
+        # them BY NAME instead of leaving a hole until someone runs the pairer a second time.
+        heal_checked, heal_blanked = sibling_validate(pairs)
+        if heal_blanked:
+            print(f"[PAIR-BIA] self-heal: cleared {heal_blanked} stuck pair(s) across {heal_checked} 2-way "
+                  f"event(s) whose siblings shared a token — they will be re-matched by name below")
         if args.sync_seeds:
             # Kalshi lists tennis close to the event while BetInAsia lists a day ahead, so the pairable
             # set is the moving INTERSECTION of the two. A one-shot pair catches only whatever overlaps
