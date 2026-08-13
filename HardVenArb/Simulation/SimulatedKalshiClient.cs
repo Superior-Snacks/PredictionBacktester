@@ -36,7 +36,7 @@ public class SimulatedKalshiClient : IKalshiOrderExecutor
         Console.ResetColor();
     }
 
-    public async Task<(string OrderId, string Status, decimal FillCount)> PlaceOrderAsync(
+    public async Task<(string OrderId, string Status, decimal FillCount, decimal AvgFillPrice)> PlaceOrderAsync(
         string ticker, string side, int priceCents, int count,
         string action = "buy", string? clientOrderId = null)
     {
@@ -70,7 +70,9 @@ public class SimulatedKalshiClient : IKalshiOrderExecutor
             : $"SIM_K_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}_{ticker}";
 
         _completedOrders[orderId] = (status, filled);
-        return (orderId, status, filled);
+        // Simulated fills happen AT the limit, which is the pessimistic assumption and the one
+        // worth testing against: a real IOC may do better, never worse.
+        return (orderId, status, filled, priceCents / 100m);
     }
 
     public Task<(string Status, decimal FillCount)> PollOrderAsync(string orderId)

@@ -10,7 +10,7 @@ public interface IKalshiOrderExecutor
     /// Places an IOC order. Returns (orderId, status, fillCount).
     /// Returns ("", "error", 0) on transient failure.
     /// </summary>
-    Task<(string OrderId, string Status, decimal FillCount)> PlaceOrderAsync(
+    Task<(string OrderId, string Status, decimal FillCount, decimal AvgFillPrice)> PlaceOrderAsync(
         string ticker, string side, int priceCents, int count,
         string action = "buy", string? clientOrderId = null);
 

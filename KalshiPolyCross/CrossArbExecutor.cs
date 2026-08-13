@@ -944,8 +944,8 @@ public class CrossArbExecutor
         try { await Task.WhenAll(kalshiTask, polyTask); }
         catch (Exception ex) { legException = ex; }
 
-        var (kOrderId, kStatus, kFilled) = kalshiTask.IsCompletedSuccessfully
-            ? kalshiTask.Result : ("", "error", 0m);
+        var (kOrderId, kStatus, kFilled, kAvgFill) = kalshiTask.IsCompletedSuccessfully
+            ? kalshiTask.Result : ("", "error", 0m, 0m);
         var (pFilled, pActualPrice) = polyTask.IsCompletedSuccessfully
             ? polyTask.Result : (0m, 0m);
 
@@ -1320,7 +1320,7 @@ public class CrossArbExecutor
 
     // ── Kalshi IOC leg ────────────────────────────────────────────────────────
 
-    private async Task<(string OrderId, string Status, decimal FillCount)> PlaceKalshiLegAsync(
+    private async Task<(string OrderId, string Status, decimal FillCount, decimal AvgFillPrice)> PlaceKalshiLegAsync(
         string ticker, string side, int priceCents, int count, string execId = "", List<string>? execLog = null)
     {
         string clientId = string.IsNullOrEmpty(execId)
@@ -1330,7 +1330,7 @@ public class CrossArbExecutor
         DebugLog.Trades($"PlaceKalshiLegAsync: {ticker} {side} {priceCents}¢ × {count} clientId={clientId}");
         try
         {
-            var (orderId, status, fillImm) = await _kalshi.PlaceOrderAsync(
+            var (orderId, status, fillImm, avgFill) = await _kalshi.PlaceOrderAsync(
                 ticker, side, priceCents, count, clientOrderId: clientId);
             Interlocked.Exchange(ref _kalshiConsecErrors, 0);
             Console.ForegroundColor = ConsoleColor.Green;
@@ -1339,13 +1339,13 @@ public class CrossArbExecutor
             DebugLog.Trades($"PlaceKalshiLegAsync: placed orderId={orderId} status={status} fillImm={fillImm}");
 
             if (status == "executed" || fillImm >= count)
-                return (orderId, status, fillImm);
+                return (orderId, status, fillImm, avgFill);
 
             if (string.IsNullOrEmpty(orderId))
             {
                 Emit(execLog, $"[FILL K WARN] {ticker} empty orderId with status={status} — not polling");
                 DebugLog.Trades($"PlaceKalshiLegAsync: empty orderId with status={status} — not polling");
-                return ("", status, 0m);
+                return ("", status, 0m, 0m);
             }
 
             // Poll until resolved or fill timeout
@@ -1358,7 +1358,7 @@ public class CrossArbExecutor
                 polls++;
                 DebugLog.Trades($"PlaceKalshiLegAsync: poll #{polls} orderId={orderId} status={pollStatus} fill={pollFill}");
                 if (pollStatus == "executed" || pollStatus == "canceled")
-                    return (orderId, pollStatus, pollFill);
+                    return (orderId, pollStatus, pollFill, avgFill);
             }
 
             // Settle window: the IOC may have gained partial fills between our last poll and the
@@ -1370,7 +1370,7 @@ public class CrossArbExecutor
             Console.ResetColor();
             DebugLog.Trades($"PlaceKalshiLegAsync: settle-poll after {polls} polls — status={settleStatus} fill={settleFill}");
             return (orderId, settleStatus is "executed" or "canceled" ? settleStatus : "timeout",
-                    Math.Max(settleFill, fillImm));
+                    Math.Max(settleFill, fillImm), avgFill);
         }
         catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
         {
@@ -1380,21 +1380,21 @@ public class CrossArbExecutor
             try
             {
                 string retryId = $"CAXARB_{ticker}_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}R";
-                var (oid2, st2, fi2) = await _kalshi.PlaceOrderAsync(
+                var (oid2, st2, fi2, avg2) = await _kalshi.PlaceOrderAsync(
                     ticker, side, priceCents, count, clientOrderId: retryId);
                 Interlocked.Exchange(ref _kalshiConsecErrors, 0);
                 Console.ForegroundColor = ConsoleColor.Green;
                 Emit(execLog, $"[FILL K]  {ticker} 429-retry placed oid={oid2} status={st2} fill={fi2}");
                 Console.ResetColor();
                 DebugLog.Trades($"PlaceKalshiLegAsync: 429-retry placed oid={oid2} status={st2} fill={fi2}");
-                return (oid2, st2, fi2);
+                return (oid2, st2, fi2, avg2);
             }
             catch (Exception retryEx)
             {
                 Emit(execLog, $"[KALSHI LEG ERROR] {ticker} (after 429): {ApiErrorHelper.ClassifyKalshi(retryEx)}");
                 DebugLog.Trades($"PlaceKalshiLegAsync: 429 retry failed for {ticker}: {retryEx.Message}");
                 await CheckMaintenanceThresholdAsync("kalshi", Interlocked.Increment(ref _kalshiConsecErrors));
-                return ("", "error", 0m);
+                return ("", "error", 0m, 0m);
             }
         }
         catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
@@ -1403,14 +1403,14 @@ public class CrossArbExecutor
             Emit(execLog, $"[KALSHI LEG ERROR] {ticker}: 404 — market not found, blocklisting");
             DebugLog.Trades($"PlaceKalshiLegAsync: 404 on {ticker}");
             BlocklistKalshiTicker(ticker);
-            return ("", "error", 0m);
+            return ("", "error", 0m, 0m);
         }
         catch (Exception ex)
         {
             Emit(execLog, $"[KALSHI LEG ERROR] {ticker}: {ApiErrorHelper.ClassifyKalshi(ex)}");
             DebugLog.Trades($"PlaceKalshiLegAsync exception for {ticker}: {ex}");
             await CheckMaintenanceThresholdAsync("kalshi", Interlocked.Increment(ref _kalshiConsecErrors));
-            return ("", "error", 0m);
+            return ("", "error", 0m, 0m);
         }
     }
 
@@ -1743,7 +1743,7 @@ public class CrossArbExecutor
             decimal fill;
             try
             {
-                var (_, _, f) = await _kalshi.PlaceOrderAsync(
+                var (_, _, f, _) = await _kalshi.PlaceOrderAsync(
                     pair.KalshiTicker, kalshiSide, _reverseFloorCents, remaining, action: "sell");
                 fill = f;
             }
@@ -2119,7 +2119,7 @@ public class CrossArbExecutor
                     Emit(execLog, $"[RECOVER] {pair.Label} | pExcess={pUnhedged:0.0000} hedgeQty={hedgeQty} hedgeNet={hedgeNet:0.0000} — completing hedge on Kalshi");
                     Console.ResetColor();
 
-                    var (_, _, kFill2) = await PlaceKalshiLegAsync(
+                    var (_, _, kFill2, _) = await PlaceKalshiLegAsync(
                         pair.KalshiTicker, kalshiSide, currentKCents, hedgeQty, execId + "_RH", execLog);
                     if (kFill2 > 0)
                     {
@@ -3244,13 +3244,13 @@ public class CrossArbExecutor
                 {
                     Console.WriteLine($"[EARLY EXIT ERROR] {pair.Label} Kalshi sell: {ApiErrorHelper.ClassifyKalshi(ex)}");
                     DebugLog.Trades($"CheckEarlyExitAsync {pairId} Kalshi sell ex: {ex}");
-                    return ("", "error", 0m);
+                    return ("", "error", 0m, 0m);
                 }
             });
             var pSellTask = PlacePolySellAsync(polyToken, currentPos.PolyShares, pair.IsNegRisk);
             await Task.WhenAll(kSellTask, pSellTask);
 
-            var (_, kStatus, kSold) = kSellTask.Result;
+            var (_, kStatus, kSold, _) = kSellTask.Result;
             var (pSold, pAvgPrice)  = pSellTask.Result;
 
             bool kOk = kSold >= currentPos.KalshiContracts - 0.5m;
@@ -3267,7 +3267,7 @@ public class CrossArbExecutor
                     Console.WriteLine($"[EARLY EXIT RETRY] {pair.Label} | K partial {kSold}/{currentPos.KalshiContracts} — sweeping {kRemaining:0} contracts @{kRetryPrice}¢ (pass {sweep}/3)");
                     try
                     {
-                        var (_, _, kFilled2) = await _kalshi.PlaceOrderAsync(
+                        var (_, _, kFilled2, _) = await _kalshi.PlaceOrderAsync(
                             pair.KalshiTicker, kalshiSide, kRetryPrice, (int)Math.Ceiling(kRemaining), action: "sell");
                         kSold += kFilled2;
                         kRemaining = currentPos.KalshiContracts - kSold;

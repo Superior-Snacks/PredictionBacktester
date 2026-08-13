@@ -56,7 +56,7 @@ public class SimulatedVenuePositionClient : IKalshiOrderExecutor
         return result;
     }
 
-    public Task<(string OrderId, string Status, decimal FillCount)> PlaceOrderAsync(
+    public Task<(string OrderId, string Status, decimal FillCount, decimal AvgFillPrice)> PlaceOrderAsync(
         string ticker, string side, int priceCents, int count,
         string action = "buy", string? clientOrderId = null)
         => _inner.PlaceOrderAsync(ticker, side, priceCents, count, action, clientOrderId);

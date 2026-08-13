@@ -292,7 +292,7 @@ public class KalshiOrderClient : IKalshiOrderExecutor, IDisposable
     /// (e.g. 65 for $0.65) — the caller-facing contract is unchanged; the V2 translation is internal.
     /// clientOrderId tags the order for idempotency / self-trade prevention.
     /// </summary>
-    public async Task<(string OrderId, string Status, decimal FillCount)> PlaceOrderAsync(
+    public async Task<(string OrderId, string Status, decimal FillCount, decimal AvgFillPrice)> PlaceOrderAsync(
         string ticker, string side, int priceCents, int count,
         string action = "buy", string? clientOrderId = null)
     {
@@ -317,13 +317,20 @@ public class KalshiOrderClient : IKalshiOrderExecutor, IDisposable
 
         string  orderId = root.TryGetProperty("order_id", out var id) ? (id.GetString() ?? "") : "";
         decimal fill    = ReadDecimalFlexible(root, "fill_count");
+        // WHAT WE ACTUALLY PAID. An IOC limit fills at the best available price up to the limit, so the
+        // limit is an upper bound, NOT the price. Without reading this back the caller can only assume it
+        // got the ask it screened — and if the book moved and it filled a cent worse, the reported P&L is
+        // silently too good by that cent (on a 1-2c arb, most of the edge). V2 reports DOLLARS as a string,
+        // which ReadDecimalFlexible already handles. 0 = absent (no fill, or an older payload) — the caller
+        // must then fall back rather than treat it as a free trade.
+        decimal avgFill = ReadDecimalFlexible(root, "average_fill_price");
         // V2 returns NO status field (only fill_count / remaining_count). Claim "executed" only on a full
         // immediate fill; anything else reports "resting" so the caller falls through to its GET poll,
         // which is still the authoritative source. Costs one poll on a partial/no fill, and guessing
         // "canceled" here would report a fill count we never confirmed.
         string status = fill >= count ? "executed" : "resting";
 
-        return (orderId, status, fill);
+        return (orderId, status, fill, avgFill);
     }
 
     /// <summary>
