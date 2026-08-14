@@ -982,9 +982,13 @@ class BetInAsiaAdapter(BookAdapter):
             # a "no". Only a real click earns the full cooldown. Safe to keep on the instance: this lock
             # serialises every caller, so there is only ever one quote in flight to attribute it to.
             self._slip_clicked = False
+            self._slip_acca_flagged = False
             res = await self._slip_quote_locked(selection_id)
             if isinstance(res, dict):
                 res.setdefault("clicked", bool(getattr(self, "_slip_clicked", False)))
+                # False = the venue said this event cannot go on an accumulator. Reported on SUCCESS too:
+                # a success here is the whole point — it proves the flag does not block a betslip read.
+                res.setdefault("acca", not bool(getattr(self, "_slip_acca_flagged", False)))
             return res
 
     async def _slip_quote_locked(self, selection_id: str) -> dict:
@@ -1003,12 +1007,27 @@ class BetInAsiaAdapter(BookAdapter):
         t0 = time.time()
         key = (sport, ekey)
 
-        # The venue itself says whether this event can go on a betslip at all. Refusing here costs one
-        # dict lookup; discovering it by navigating and clicking costs a page load and a timeout.
+        # ── available_for_accas: A FLAG WE NEVER TESTED ──────────────────────────────────────────────
+        # This used to REFUSE outright, on the reasoning that "refusing costs one dict lookup, clicking
+        # costs a page load and a timeout". That reasoning was never checked against the venue: not once
+        # has this code clicked a non-acca event to find out what actually happens. Meanwhile the flag is
+        # a property of the sport/competition (cricket 6/49, esports 46/157, boxing 6/44 vs tennis 155/171),
+        # so a cricket-heavy session was refusing nearly every sample on an untested assumption — 22 of 24
+        # on 2026-08-14, and the roving tab never opened once all day because the gate fires before it.
+        #
+        # `available_for_accas` governs ACCUMULATORS. It is a real signal about the price CHANNEL we read
+        # (the click sends watch_acca_hcaps), but a single bet is a different product, and the operator has
+        # confirmed these markets are bettable by hand. So: try it, say so, and let the result decide.
+        # BIA_SLIP_REFUSE_NON_ACCA=1 restores the refusal once there is evidence for it either way.
         ev_meta = self.feed.get_event(sport, ekey) or {}
-        if ev_meta.get("available_for_accas") is False:
-            return {"ok": False, "error": f"{ekey} is not available_for_accas — the venue will not put "
-                                          f"it on a betslip, so there is no slip price to read"}
+        acca_flagged = ev_meta.get("available_for_accas") is False
+        if acca_flagged and os.environ.get("BIA_SLIP_REFUSE_NON_ACCA") == "1":
+            return {"ok": False, "acca": False,
+                    "error": f"{ekey} is not available_for_accas and BIA_SLIP_REFUSE_NON_ACCA=1"}
+        self._slip_acca_flagged = acca_flagged   # reported back so the outcome can be attributed
+        if acca_flagged:
+            print(f"[BIA SLIP] {ekey} is flagged NOT available_for_accas — quoting anyway to find out "
+                  f"whether that actually blocks a betslip read", flush=True)
 
         # ── ALREADY SUBSCRIBED? Then do not click at all. ────────────────────────────────────────────
         # Proved 2026-08-11: the acca subscription behaves like the board one — once an event is

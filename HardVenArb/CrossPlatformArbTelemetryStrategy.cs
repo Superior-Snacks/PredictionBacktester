@@ -192,6 +192,9 @@ public class CrossPlatformArbTelemetryStrategy
     /// <summary>Feed hook: record whether the venue will slip-quote this token, from /odds 'acca'.</summary>
     public void SetHardVenAccaOk(string token, bool ok) => _hardvenAccaOk[token] = ok;
 
+    private static readonly bool SkipNonAccaSamples =
+        Environment.GetEnvironmentVariable("HARDVEN_SLIP_SKIP_NON_ACCA") == "1";
+
     /// <summary>Unknown token → true. A book that never publishes the flag must behave exactly as before,
     /// and a token we simply have not polled yet must not be silently excluded from sampling.</summary>
     public bool IsHardVenAccaOk(string token) =>
@@ -308,14 +311,17 @@ public class CrossPlatformArbTelemetryStrategy
     /// verifier that owns it needs this strategy first. Null = sampling disabled.</summary>
     public void SetSlipVerifier(Func<string, double, Task<(decimal Price, string Error)>>? slipQuote,
                                 Func<string>? slipVia = null,
-                                Func<bool>? slipClicked = null)
+                                Func<bool>? slipClicked = null,
+                                Func<bool>? slipAccaFlagged = null)
     {
         _slipQuote   = slipQuote;
         _slipVia     = slipVia;      // reads back which tier served the last quote (see the rover cooldown)
         _slipClicked = slipClicked;  // ...and whether it cost a click at all (see RefundSlipVerifyBudget)
+        _slipAccaFlagged = slipAccaFlagged;
     }
     private Func<string>? _slipVia;
     private Func<bool>?   _slipClicked;
+    private Func<bool>?   _slipAccaFlagged;
 
     // ── Public stats ──────────────────────────────────────────────────────────
     public int OpenArbs   => _activeWindows.Values.Count(w => w != null);
@@ -1038,11 +1044,13 @@ public class CrossPlatformArbTelemetryStrategy
     private void MaybeSlipVerify(CrossPair pair, ActiveWindow w, string hvToken,
                                  decimal kLegAtOpen, decimal pLegAtOpen)
     {
-        // DON'T SPEND A SLOT ON SOMETHING THE VENUE WILL NEVER QUOTE. The sidecar knows, from the event
-        // frame, whether this event can go on a betslip at all — and if it cannot, the quote is refused in
-        // single-digit milliseconds without touching the page. Checked BEFORE claiming the slot so the
-        // sample goes to the next arb that can actually be measured, rather than being consumed and refunded.
-        if (!IsHardVenAccaOk(hvToken))
+        // OFF BY DEFAULT, and deliberately so. Skipping here assumes `available_for_accas: false` really
+        // does make a betslip unreadable — and that has never been measured, only asserted. Acting on it
+        // would silently exclude cricket, esports and boxing (154 of 301 pairs) from every check the bot
+        // makes, and would do it invisibly, which is exactly how an untested assumption becomes permanent.
+        // The sidecar now quotes those events anyway and reports the flag alongside the result; turn this
+        // on once that data shows the flag is worth obeying.
+        if (SkipNonAccaSamples && !IsHardVenAccaOk(hvToken))
         {
             Interlocked.Increment(ref SlipVerifySkippedNotQuotable);
             return;
@@ -1155,17 +1163,20 @@ public class CrossPlatformArbTelemetryStrategy
         decimal netSlip  = slip > 0m ? kUse + slip + KalshiFee(kUse) + HardVenFee(slip, hvToken) : -1m;
         bool    survived = slip > 0m && netSlip < _arbThreshold;
 
+        // Mark quotes on events the venue flagged as non-accumulator. A SUCCESS on one of these is the
+        // finding: it means the flag never justified refusing, and 154 of 301 pairs go back on the menu.
+        string accaNote = (_slipAccaFlagged?.Invoke() ?? false) ? "  [NON-ACCA EVENT]" : "";
         if (slip > 0m)
         {
             Interlocked.Increment(ref SlipVerifyCount);
             Console.WriteLine($"[SLIP VERIFY] {pair.Label}: board {pLegAtOpen:0.0000} -> slip {slip:0.0000} " +
                               $"({slipPct:+0.00;-0.00}%)  net ${netBoard:0.0000} -> ${netSlip:0.0000}  " +
                               $"{(survived ? "STILL AN ARB" : "GONE")}  depth K={kBestSize:0.#}/P={pBestSize:0.#}  " +
-                              $"{sw.ElapsedMilliseconds}ms");
+                              $"{sw.ElapsedMilliseconds}ms{accaNote}");
         }
         else
         {
-            Console.WriteLine($"[SLIP VERIFY] {pair.Label}: no quote ({err}) after {sw.ElapsedMilliseconds}ms");
+            Console.WriteLine($"[SLIP VERIFY] {pair.Label}: no quote ({err}) after {sw.ElapsedMilliseconds}ms{accaNote}");
         }
 
         // ── HOLD: watch the arb on SLIP prices until it stops breaking even ──────────────────────────

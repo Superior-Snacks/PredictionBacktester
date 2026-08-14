@@ -654,7 +654,8 @@ telemetry.OnArbOpened += restVerifier.OnArbOpened;
 // trusting it with money. Wired here because the verifier needs the strategy to exist first.
 telemetry.SetSlipVerifier(restVerifier.SlipQuoteAsync,
                           () => restVerifier.LastSlipVia,
-                          () => restVerifier.LastSlipClicked);
+                          () => restVerifier.LastSlipClicked,
+                          () => restVerifier.LastSlipAccaFlagged);
 
 // ── Executor — live order placement on WS-detected arb windows ────────────────
 CrossArbExecutor?            executor    = null;

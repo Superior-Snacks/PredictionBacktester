@@ -144,6 +144,11 @@ public class CrossArbRestVerifier
     /// reading, since the penalty for being wrong is slowing down rather than hammering the venue.</summary>
     public bool LastSlipClicked { get; private set; } = true;
 
+    /// <summary>True when the venue flagged the last quote's event as NOT available for accumulators.
+    /// Surfaced so a SUCCESSFUL quote on a flagged event is visible — that single line is what proves
+    /// the flag does not block a betslip read, and it is why the gate was opened rather than obeyed.</summary>
+    public bool LastSlipAccaFlagged { get; private set; }
+
     public async Task<(decimal Price, string Error)> SlipQuoteAsync(string hardvenToken, double timeoutSec = 20.0)
     {
         LastSlipClicked = true;   // pessimistic until the sidecar says otherwise (see the property)
@@ -160,6 +165,7 @@ public class CrossArbRestVerifier
             if (root.TryGetProperty("clicked", out var ck) &&
                 (ck.ValueKind == JsonValueKind.True || ck.ValueKind == JsonValueKind.False))
                 LastSlipClicked = ck.ValueKind == JsonValueKind.True;
+            LastSlipAccaFlagged = root.TryGetProperty("acca", out var ac) && ac.ValueKind == JsonValueKind.False;
             if (!(root.TryGetProperty("ok", out var ok) && ok.ValueKind == JsonValueKind.True))
                 return (-1m, root.TryGetProperty("error", out var e) ? (e.GetString() ?? "?") : "not ok");
             decimal price = root.TryGetProperty("implied_price", out var ip) && ip.TryGetDecimal(out var p)
