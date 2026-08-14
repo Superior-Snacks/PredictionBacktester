@@ -1149,6 +1149,38 @@ class BetInAsiaAdapter(BookAdapter):
                 res.setdefault("acca", not bool(getattr(self, "_slip_acca_flagged", False)))
             return res
 
+    async def await_fill(self, order_id: int, timeout: float = 45.0) -> dict:
+        """Block until the venue says this order is finished, then report what ACTUALLY filled.
+
+        Rides the pushed `api` frames the page already receives — no polling, no request, and the whole
+        lifecycle arrives here (order open -> bet placing -> bet done -> order done). Measured once at
+        13.6s end to end, which is why the default timeout is generous: it is the BROKER routing to an
+        underlying book and waiting for that book's acknowledgement, not a network round trip.
+
+        Returns whatever is known when the timeout expires rather than raising. A timeout is NOT a
+        failure to place — the order is live either way, and reporting it as unplaced would be the
+        dangerous direction: the caller would size a hedge against nothing while real money is on.
+        """
+        import asyncio as _aio
+        deadline = time.time() + timeout
+        last = None
+        while time.time() < deadline:
+            f = self.feed.order_fill(order_id)
+            if f.get("done"):
+                f["timed_out"] = False
+                return f
+            last = f
+            await _aio.sleep(0.15)
+        (last or {}).update({"timed_out": True})
+        print(f"[BIA] order {order_id} not finished after {timeout:.0f}s — reporting partial state. "
+              f"The order is LIVE; do not treat this as unplaced.", flush=True)
+        return last or {"known": False, "done": False, "timed_out": True,
+                        "filled_stake": 0.0, "avg_price": None, "bookies": []}
+
+    def order_state(self, order_id: int) -> dict:
+        """Non-blocking read of the same thing — for status lines and diagnostics."""
+        return self.feed.order_fill(order_id)
+
     async def slip_close(self) -> dict:
         """Close the betslip this bot opened. Escape, after a human pause.
 

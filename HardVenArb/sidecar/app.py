@@ -261,6 +261,20 @@ async def slip_quote(selection_id: str):
     return await fn(selection_id)
 
 
+@app.get("/order/{order_id}")
+async def order_state(order_id: int, wait: float = 0.0):
+    """What actually filled: {done, filled_stake, avg_price, bookies, close_reason}.
+
+    `wait > 0` blocks until the venue reports the order finished, up to that many seconds. Fed by the
+    venue's own pushed frames, so this costs no request and no poll — and it carries the two numbers the
+    placement request does not: the price actually routed and the stake actually routed. The Kalshi leg
+    must be sized against those, never against what was asked for."""
+    fn = getattr(adapter, "await_fill" if wait > 0 else "order_state", None)
+    if not callable(fn):
+        raise HTTPException(404, f"book '{adapter.name}' does not observe order fills")
+    return await fn(order_id, wait) if wait > 0 else fn(order_id)
+
+
 @app.post("/slip_close")
 async def slip_close():
     """Close the betslip this bot opened, if any. Idempotent — safe to call unconditionally.

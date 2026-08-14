@@ -124,6 +124,10 @@ class BetInAsiaFeed:
         # (sport, event_key) -> event metadata payload (catalog source)
         self._events: dict[tuple[str, str], dict] = {}
         self._subs: dict[tuple[str, str], int] = {}      # (sport, event_key) -> comp_id
+        # order_id -> latest {status, closed, close_reason, want_price, price, want_stake, stake,
+        #                     bets:{bet_id: {...}}, first_seen, last_seen}
+        # Fed by the pushed `api` frames (see _on_api). This is the fill observer: no polling, no request.
+        self._orders: dict[int, dict] = {}
         self._wanted: set = set()                        # passive: ids the BOT asked for
         self._lock = asyncio.Lock()
 
@@ -321,6 +325,102 @@ class BetInAsiaFeed:
                 "last_frame_age": round(self.last_frame_age, 2) if self._last_frame_ts else None}
 
     # ── frame handling ────────────────────────────────────────────────────────
+    @staticmethod
+    def _money(v: Any) -> Optional[float]:
+        """`["USD", 3.9917]` -> 3.9917. None for null — which is what an UNFILLED order reports, and is
+        a different thing from zero: code doing `stake[1]` throws on it, and code treating it as 0.0
+        would report a resting order as a zero fill."""
+        if isinstance(v, (list, tuple)) and len(v) >= 2:
+            try:
+                return float(v[1])
+            except (TypeError, ValueError):
+                return None
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            return float(v)
+        return None
+
+    def _on_api(self, payload: Any) -> None:
+        """Fold one pushed `api` frame's order/bet records into `_orders`.
+
+        Shape (verbatim, 2026-08-14): {"ts":…, "data":[["order",{…}], ["bet",{…}], ["betslip",{…}], …]}
+        `bet` records carry the BOOKIE and the routed price/stake; `order` carries the aggregate. Merged
+        rather than replaced: the venue sends partial records, and an update that omits a field must not
+        erase what an earlier one established.
+        """
+        if not isinstance(payload, dict):
+            return
+        for entry in (payload.get("data") or []):
+            if not (isinstance(entry, list) and len(entry) == 2):
+                continue
+            kind, o = entry
+            if kind not in ("order", "bet") or not isinstance(o, dict):
+                continue
+            oid = o.get("order_id")
+            if oid is None:
+                continue
+            rec = self._orders.setdefault(int(oid), {"bets": {}, "first_seen": time.time()})
+            rec["last_seen"] = time.time()
+            status = o.get("status")
+            status = status.get("code") if isinstance(status, dict) else status
+            if kind == "order":
+                for k in ("closed", "close_reason", "want_price", "price"):
+                    if k in o:
+                        rec[k] = o[k]
+                for k in ("want_stake", "stake"):
+                    if k in o:
+                        rec[k] = self._money(o[k])
+                if status is not None:
+                    rec["status"] = status
+            else:
+                bid = o.get("bet_id")
+                if bid is None:
+                    continue
+                b = rec["bets"].setdefault(bid, {})
+                b["bookie"] = o.get("bookie", b.get("bookie"))
+                if status is not None:
+                    b["status"] = status
+                # A bet's `want_*` IS the routed value — the venue has already applied its haircut by
+                # the time it says `placing` (4.00 asked -> 3.9917 routed), so this is the real number.
+                for src, dst in (("want_price", "price"), ("price", "price")):
+                    if o.get(src) is not None:
+                        b[dst] = o[src]
+                for src in ("want_stake", "stake"):
+                    m = self._money(o.get(src))
+                    if m is not None:
+                        b["stake"] = m
+
+    def order(self, order_id: int) -> Optional[dict]:
+        """Latest known state of one order, or None if the socket has said nothing about it."""
+        return self._orders.get(int(order_id))
+
+    def order_fill(self, order_id: int) -> dict:
+        """What actually filled: {done, filled_stake, avg_price, bookies, status, close_reason}.
+
+        `done` is the only field the executor should branch on — an order is finished when the venue says
+        `closed`, not when a stake appears, because an order can carry a stake while still open (that is
+        what a partial looks like)."""
+        rec = self._orders.get(int(order_id))
+        if not rec:
+            return {"known": False, "done": False, "filled_stake": 0.0, "avg_price": None,
+                    "bookies": [], "status": None, "close_reason": None}
+        bets = [b for b in rec["bets"].values() if b.get("stake")]
+        filled = sum(b["stake"] for b in bets)
+        # Stake-weighted: two bookies can fill the same order at different prices.
+        avg = (sum(b["stake"] * b["price"] for b in bets if b.get("price")) / filled) if filled else None
+        if avg is None and rec.get("price"):
+            avg = rec["price"]
+        if not filled and rec.get("stake"):
+            filled = rec["stake"]
+        return {"known": True,
+                "done": bool(rec.get("closed")),
+                "filled_stake": round(filled, 6),
+                "avg_price": avg,
+                "bookies": sorted({b["bookie"] for b in bets if b.get("bookie")}),
+                "status": rec.get("status"),
+                "close_reason": rec.get("close_reason"),
+                "want_stake": rec.get("want_stake"),
+                "want_price": rec.get("want_price")}
+
     def handle_frame(self, frame: Any) -> None:
         """Route one decoded frame into the caches. Pure and synchronous so the tests can drive it
         straight from recorded recon frames with no socket involved."""
@@ -344,6 +444,15 @@ class BetInAsiaFeed:
             # /v1/betslips/ responses are price-free. The price only ever arrives here, over the socket.)
             elif mtype == "offers_acca_hcap" and len(msg) >= 3:
                 self._on_offers(msg[1], msg[2], slip=True)
+            # ORDER + BET LIFECYCLE. Captured 2026-08-14: the venue PUSHES these, so a fill is observable
+            # with no polling and no request at all — the page already receives them and we are already
+            # reading its socket. The whole lifecycle arrived here:
+            #   order open (price/stake null) → bet placing → bet done → order done/order_filled
+            # in 13.6s, with the REAL routed price (1.88 asked → 1.90 filled) and the REAL stake
+            # (4.00 asked → 3.9917 routed). Those two numbers are what the Kalshi leg must be sized
+            # against; the request values would leave a residual naked every time.
+            elif mtype == "api" and len(msg) >= 2:
+                self._on_api(msg[1])
             # "ok" / "pong" / "api" / "error" carry no prices; error is logged for subscribe debugging
             elif mtype == "error":
                 detail = msg[1] if len(msg) > 1 else ""
