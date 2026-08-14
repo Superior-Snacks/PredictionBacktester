@@ -186,6 +186,25 @@ class BetInAsiaObserver:
         subscriptions it accumulated, and re-navigating would drop them."""
         if self._ctx is None:
             return None
+        # THE LANDING PAGE COUNTS AS A BOARD TAB. It is opened on BIA_START_URL, which is a sport board
+        # like any other — so opening a second tab on the same sport gives two tabs rendering the same
+        # slate, on two sockets, each subscribing the same events. The venue answers the loser
+        # `event_already_subscribed`: 31 of those in one short run, all self-inflicted. It also doubles
+        # the tab count the venue sees (`context.tabId`), which matters most in the single-sport case
+        # where the whole footprint should be ONE tab.
+        obs_pg = self._page
+        if obs_pg is not None and not obs_pg.is_closed() and url:
+            try:
+                here = (obs_pg.url or "").split("?")[0].rstrip("/")
+            except Exception:
+                here = ""
+            if here and here.endswith(url.rstrip("/").rsplit("/", 1)[-1]):
+                if sport not in self._sport_tabs:
+                    self._sport_tabs[sport] = obs_pg
+                    self._log(f"sport tab {sport}: reusing the observing page (already on its board) "
+                              f"— no second tab, no duplicate subscriptions")
+                return obs_pg
+
         pg = self._sport_tabs.get(sport)
         if pg is not None and not pg.is_closed():
             # STILL ON ITS BOARD? A Page handle survives anything the OPERATOR does — focus, tab order,
@@ -253,9 +272,19 @@ class BetInAsiaObserver:
         closed = 0
         for _sport, pg in old:
             try:
-                if pg is not None and not pg.is_closed():
-                    await pg.close()
-                    closed += 1
+                if pg is None or pg.is_closed():
+                    continue
+                # NEVER CLOSE THE OBSERVING PAGE. Since a landing page on a sport board is reused as that
+                # sport's tab (see sport_tab), it can appear in this dict — and closing it would take the
+                # primary feed socket with it and leave `self._page` pointing at a dead handle. Reload
+                # instead: that refreshes the DOM snapshot, which is the entire point of the reset, while
+                # the page object and its hooks survive.
+                if pg is self._page:
+                    await pg.reload(wait_until="domcontentloaded", timeout=60_000)
+                    self._log("board reset: reloaded the observing page in place (never closed)")
+                    continue
+                await pg.close()
+                closed += 1
             except Exception:
                 pass
         self._sport_tabs.clear()

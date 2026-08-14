@@ -1,0 +1,1060 @@
+PS C:\Users\jonin\Dev\Projects\PredictionBacktester\HardVenArb\sidecar> uvicorn app:app --port 8788
+[SIDECAR] loaded env from C:\Users\jonin\dev\projects\PredictionBacktester\.env
+INFO:     Started server process [14468]
+INFO:     Waiting for application startup.
+[BIA] assumed max_stake = 100.00 (NO per-selection limit is published -- see MAX_STAKE_NOTE)
+[BIA-OBS] RECON ON -> betinasia_recon_20260814_160511.jsonl (gitignored; contains session data)
+[BIA-OBS] detection canary armed (BIA_CANARY=0 to disable)
+[BIA-OBS] observing - the page drives, we only read
+[BIA] passive transport: watching the page at https://black.betinasia.com/sportsbook/tennis
+[BIA] auto-pair ON: tennis every 90 min (scaffolds its own Kalshi side, writes cross_pairs_bia_tennis.json); first run in 900s
+[SIDECAR] HardVen book adapter 'betinasia' ready.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8788 (Press CTRL+C to quit)
+[BIA-OBS] price feed socket #1: authed
+[WS OPEN] wss://black.betinasia.com/cpricefeed/?token=b4647acf9ba5e61799fdbbc33bf5213b&lang=en
+[BIA-OBS] WS error: event_already_subscribed (#1) — if a slip quote just timed out, THIS is why: the venue answers this instead of pushing prices for an event still subscribed from last time
+[BIA-OBS] WS error: event_already_subscribed (#2) — if a slip quote just timed out, THIS is why: the venue answers this instead of pushing prices for an event still subscribed from last time
+[BIA-OBS] WS error: event_already_subscribed (#3) — if a slip quote just timed out, THIS is why: the venue answers this instead of pushing prices for an event still subscribed from last time
+[BIA-OBS] WS error: event_already_subscribed (#4) — if a slip quote just timed out, THIS is why: the venue answers this instead of pushing prices for an event still subscribed from last time
+[BIA-OBS] WS error: event_already_subscribed (#5) — if a slip quote just timed out, THIS is why: the venue answers this instead of pushing prices for an event still subscribed from last time
+[BIA] parking 1 board tab(s): tennis
+[BIA-OBS] sport tab tennis: reusing the observing page (already on its board) — no second tab, no duplicate subscriptions
+[BIA-OBS] parked 1/1 sport board tab(s)
+[BIA] board reset every ~60 min (+/-25% jitter)
+[BIA-OBS] after 60s: sockets=1 [wss://black.betinasia.com/cpricefeed/?token=b4647a...&lang=en] frames=923 catalog=5983 priced=81 page=https://black.betinasia.com/sportsbook/tennis
+INFO:     127.0.0.1:57269 - "GET /fx HTTP/1.1" 200 OK
+[BIA] balance unreadable (BIA_USERNAME is unset) — reporting UNKNOWN, which does not halt the balance guard. Set BIA_USERNAME to enable it (path only; the page's own session provides auth).
+INFO:     127.0.0.1:57271 - "GET /balance HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58435 - "POST /control/balance?kalshi_usd=577.76 HTTP/1.1" 400 Bad Request
+INFO:     127.0.0.1:58437 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+[BIA-OBS] -> watch_acca_hcaps [[339, "tennis", "2026-08-14,99796,10023661"]]
+[BIA-OBS] -> watch_acca_hcaps [[339, "tennis", "2026-08-14,99796,10023661"]]
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,99796,10023661']
+[BIA SLIP] tennis:339:2026-08-14~99796~10023661:tennis_match~all:p2 -> 1.06 via sport-tab in 2180ms
+[BIA SLIP] betslip says: 'Adolfo Daniel Vallejo', $4,992 at 1.06
+INFO:     127.0.0.1:58438 - "POST /slip_quote?selection_id=tennis%3A339%3A2026-08-14~99796~10023661%3Atennis_match~all%3Ap2 HTTP/1.1" 200 OK
+[BIA SLIP] closed ('tennis', '2026-08-14,99796,10023661') with Escape
+INFO:     127.0.0.1:58438 - "POST /slip_close HTTP/1.1" 200 OK
+[BIA] using REAL betslip depth for sizing (first: tennis:339:2026-08-14~99796~10023661:tennis_match~all:p2 -> 4,992.00); assumed 100.00 still applies to selections never quoted, and after 300s
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,99796,10023661']
+[BIA-OBS] WS error frame: event_not_subscribed
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,99796,10023661']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,99796,10023661']
+INFO:     127.0.0.1:54074 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,99796,10023661']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,99796,10023661']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,99796,10023661']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,99796,10023661']
+[BIA-OBS] -> watch_acca_hcaps [[339, "tennis", "2026-08-14,69380,52983"]]
+[BIA-OBS] -> watch_acca_hcaps [[339, "tennis", "2026-08-14,69380,52983"]]
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA SLIP] tennis:339:2026-08-14~69380~52983:tennis_match~all:p1 -> 4.08 via sport-tab in 1926ms
+[BIA SLIP] betslip says: 'Vit Kopriva'
+INFO:     127.0.0.1:55613 - "POST /slip_quote?selection_id=tennis%3A339%3A2026-08-14~69380~52983%3Atennis_match~all%3Ap1 HTTP/1.1" 200 OK
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA SLIP] tennis:339:2026-08-14~69380~52983:tennis_match~all:p1 -> 3.23 from the live slip feed (age 1.23s, subscribed, no click)
+INFO:     127.0.0.1:55613 - "POST /slip_quote?selection_id=tennis%3A339%3A2026-08-14~69380~52983%3Atennis_match~all%3Ap1 HTTP/1.1" 200 OK
+[BIA SLIP] closed ('tennis', '2026-08-14,69380,52983') with Escape
+INFO:     127.0.0.1:55613 - "POST /slip_close HTTP/1.1" 200 OK
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,99796,10023661']
+INFO:     127.0.0.1:55616 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,99796,10023661']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,99796,10023661']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,99796,10023661']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,99796,10023661']
+INFO:     127.0.0.1:62624 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+INFO:     127.0.0.1:62628 - "POST /control/balance?kalshi_usd=577.76 HTTP/1.1" 400 Bad Request
+INFO:     127.0.0.1:50837 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,99796,10023661']
+[BIA SLIP] tennis:339:2026-08-14~99796~10023661:tennis_match~all:p2 -> 1.075 from the live slip feed (age 19.77s, subscribed, no click)
+INFO:     127.0.0.1:55003 - "POST /slip_quote?selection_id=tennis%3A339%3A2026-08-14~99796~10023661%3Atennis_match~all%3Ap2 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55003 - "POST /slip_close HTTP/1.1" 200 OK
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,99796,10023661']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,99796,10023661']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,99796,10023661']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,99796,10023661']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,99796,10023661']
+INFO:     127.0.0.1:52488 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,99796,10023661']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,99796,10023661']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,99796,10023661']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,99796,10023661']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,99796,10023661']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,99796,10023661']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,99796,10023661']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+INFO:     127.0.0.1:52498 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,99796,10023661']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,99796,10023661']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,99796,10023661']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+INFO:     127.0.0.1:65444 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,99796,10023661']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,99796,10023661']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,99796,10023661']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,99796,10023661']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+INFO:     127.0.0.1:65448 - "POST /control/balance?kalshi_usd=577.76 HTTP/1.1" 400 Bad Request
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[PAIR SCHED] startup pairing run — sports=tennis
+INFO:     127.0.0.1:58359 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+[BIA-OBS] -> watch_acca_hcaps [[1134, "tennis", "2026-08-14,10027310,92380"]]
+[BIA-OBS] -> watch_acca_hcaps [[1134, "tennis", "2026-08-14,10027310,92380"]]
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA SLIP] tennis:1134:2026-08-14~10027310~92380:tennis_match~all:p1 -> 3.26 via sport-tab in 1933ms
+[BIA SLIP] betslip says: 'Nikola Bartunkova'
+INFO:     127.0.0.1:58360 - "POST /slip_quote?selection_id=tennis%3A1134%3A2026-08-14~10027310~92380%3Atennis_match~all%3Ap1 HTTP/1.1" 200 OK
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA SLIP] closed ('tennis', '2026-08-14,10027310,92380') with Escape
+INFO:     127.0.0.1:58360 - "POST /slip_close HTTP/1.1" 200 OK
+[PAIR SCHED]   scaffold (Kalshi): OK —      kept series: KXWTAMATCH=64, KXATPMATCH=64, KXITFMATCH=22, KXATPCHALLENGERMATCH=12, KXITFWMATCH=10
+INFO:     127.0.0.1:58391 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58392 - "GET /catalog HTTP/1.1" 200 OK
+[PAIR SCHED]   betinasia fill: OK — [PAIR-BIA] cross_pairs_bia_tennis.json does not exist. Seed it from the Kalshi side, or bootstrap with --reseed-from cross_pairs.json
+[PAIR SCHED] startup pairing run complete.
+[PAIR SCHED] next re-pair in 90 min (intraday cadence).
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,99796,10023661']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+INFO:     127.0.0.1:65073 - "GET /fx HTTP/1.1" 200 OK
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+INFO:     127.0.0.1:65074 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,99796,10023661']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,99796,10023661']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,99796,10023661']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,99796,10023661']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,99796,10023661']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,99796,10023661']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,99796,10023661']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+INFO:     127.0.0.1:63806 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+[BIA SLIP] tennis:1134:2026-08-14~10027310~92380:tennis_match~all:p2 -> 1.432 from the live slip feed (age 25.14s, subscribed, no click)
+INFO:     127.0.0.1:63807 - "POST /slip_quote?selection_id=tennis%3A1134%3A2026-08-14~10027310~92380%3Atennis_match~all%3Ap2 HTTP/1.1" 200 OK
+[BIA SLIP] tennis:1134:2026-08-14~10027310~92380:tennis_match~all:p2 -> 1.432 from the live slip feed (age 27.16s, subscribed, no click)
+INFO:     127.0.0.1:63807 - "POST /slip_quote?selection_id=tennis%3A1134%3A2026-08-14~10027310~92380%3Atennis_match~all%3Ap2 HTTP/1.1" 200 OK
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA SLIP] tennis:1134:2026-08-14~10027310~92380:tennis_match~all:p2 -> 1.335 from the live slip feed (age 0.93s, subscribed, no click)
+INFO:     127.0.0.1:63807 - "POST /slip_quote?selection_id=tennis%3A1134%3A2026-08-14~10027310~92380%3Atennis_match~all%3Ap2 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63807 - "POST /slip_close HTTP/1.1" 200 OK
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+INFO:     127.0.0.1:64827 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+INFO:     127.0.0.1:64836 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+INFO:     127.0.0.1:64839 - "POST /control/balance?kalshi_usd=577.76 HTTP/1.1" 400 Bad Request
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+INFO:     127.0.0.1:52674 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+[BIA SLIP] tennis:1134:2026-08-14~10027310~92380:tennis_match~all:p1 -> 5.36 from the live slip feed (age 38.52s, subscribed, no click)
+INFO:     127.0.0.1:52675 - "POST /slip_quote?selection_id=tennis%3A1134%3A2026-08-14~10027310~92380%3Atennis_match~all%3Ap1 HTTP/1.1" 200 OK
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA SLIP] tennis:1134:2026-08-14~10027310~92380:tennis_match~all:p1 -> 4.58 from the live slip feed (age 1.58s, subscribed, no click)
+INFO:     127.0.0.1:52675 - "POST /slip_quote?selection_id=tennis%3A1134%3A2026-08-14~10027310~92380%3Atennis_match~all%3Ap1 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52675 - "POST /slip_close HTTP/1.1" 200 OK
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+INFO:     127.0.0.1:52677 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+INFO:     127.0.0.1:52680 - "POST /control/balance?kalshi_usd=577.76 HTTP/1.1" 400 Bad Request
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+INFO:     127.0.0.1:59227 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+INFO:     127.0.0.1:59230 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+[BIA-OBS] -> watch_acca_hcaps [[339, "tennis", "2026-08-14,10052228,59700"]]
+[BIA-OBS] -> watch_acca_hcaps [[339, "tennis", "2026-08-14,10052228,59700"]]
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA SLIP] tennis:339:2026-08-14~10052228~59700:tennis_match~all:p2 -> 2.26 via sport-tab in 1767ms
+[BIA SLIP] betslip says: 'Daniel Altmaier'
+INFO:     127.0.0.1:59231 - "POST /slip_quote?selection_id=tennis%3A339%3A2026-08-14~10052228~59700%3Atennis_match~all%3Ap2 HTTP/1.1" 200 OK
+[BIA SLIP] closed ('tennis', '2026-08-14,10052228,59700') with Escape
+INFO:     127.0.0.1:59231 - "POST /slip_close HTTP/1.1" 200 OK
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+INFO:     127.0.0.1:59899 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA SLIP] tennis:1134:2026-08-14~10027310~92380:tennis_match~all:p1 -> 3.46 from the live slip feed (age 21.87s, subscribed, no click)
+INFO:     127.0.0.1:59904 - "POST /slip_quote?selection_id=tennis%3A1134%3A2026-08-14~10027310~92380%3Atennis_match~all%3Ap1 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59904 - "POST /slip_close HTTP/1.1" 200 OK
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+INFO:     127.0.0.1:59905 - "POST /control/balance?kalshi_usd=577.76 HTTP/1.1" 400 Bad Request
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+INFO:     127.0.0.1:52715 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+INFO:     127.0.0.1:61045 - "GET /fx HTTP/1.1" 200 OK
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+INFO:     127.0.0.1:61046 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+INFO:     127.0.0.1:61053 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+[BIA SLIP] 2026-08-14,65917,72328 is flagged NOT available_for_accas — quoting anyway to find out whether that actually blocks a betslip read
+[BIA-OBS] -> watch_acca_hcaps [[10004084, "tennis", "2026-08-14,65917,72328"]]
+[BIA-OBS] -> watch_acca_hcaps [[10004084, "tennis", "2026-08-14,65917,72328"]]
+INFO:     127.0.0.1:61054 - "POST /slip_quote?selection_id=tennis%3A10004084%3A2026-08-14~65917~72328%3Atennis_match~all%3Ap1 HTTP/1.1" 200 OK
+[BIA SLIP] closed ('tennis', '2026-08-14,65917,72328') with Escape
+INFO:     127.0.0.1:61054 - "POST /slip_close HTTP/1.1" 200 OK
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+INFO:     127.0.0.1:50062 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+INFO:     127.0.0.1:60144 - "POST /control/balance?kalshi_usd=577.76 HTTP/1.1" 400 Bad Request
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+INFO:     127.0.0.1:61707 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] -> watch_acca_hcaps [[1534, "tennis", "2026-08-14,45149,10023046"]]
+[BIA-OBS] -> watch_acca_hcaps [[1534, "tennis", "2026-08-14,45149,10023046"]]
+[BIA-OBS] <- offers_acca_hcap [1534, 'tennis', '2026-08-14,45149,10023046']
+[BIA SLIP] tennis:1534:2026-08-14~45149~10023046:tennis_match~all:p2 -> 7.01 via sport-tab in 1827ms
+[BIA SLIP] betslip says: 'Juan Bautista Torres'
+INFO:     127.0.0.1:52359 - "POST /slip_quote?selection_id=tennis%3A1534%3A2026-08-14~45149~10023046%3Atennis_match~all%3Ap2 HTTP/1.1" 200 OK
+[BIA-OBS] <- offers_acca_hcap [1534, 'tennis', '2026-08-14,45149,10023046']
+[BIA SLIP] tennis:1534:2026-08-14~45149~10023046:tennis_match~all:p2 -> 5.92 from the live slip feed (age 1.03s, subscribed, no click)
+INFO:     127.0.0.1:52359 - "POST /slip_quote?selection_id=tennis%3A1534%3A2026-08-14~45149~10023046%3Atennis_match~all%3Ap2 HTTP/1.1" 200 OK
+[BIA-OBS] <- offers_acca_hcap [1534, 'tennis', '2026-08-14,45149,10023046']
+[BIA SLIP] closed ('tennis', '2026-08-14,45149,10023046') with Escape
+INFO:     127.0.0.1:52359 - "POST /slip_close HTTP/1.1" 200 OK
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [1534, 'tennis', '2026-08-14,45149,10023046']
+INFO:     127.0.0.1:52835 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+[BIA-OBS] <- offers_acca_hcap [1534, 'tennis', '2026-08-14,45149,10023046']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [1534, 'tennis', '2026-08-14,45149,10023046']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+INFO:     127.0.0.1:61807 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [1534, 'tennis', '2026-08-14,45149,10023046']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [1534, 'tennis', '2026-08-14,45149,10023046']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [1534, 'tennis', '2026-08-14,45149,10023046']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+INFO:     127.0.0.1:61811 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1534, 'tennis', '2026-08-14,45149,10023046']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [1534, 'tennis', '2026-08-14,45149,10023046']
+[BIA-OBS] <- offers_acca_hcap [1534, 'tennis', '2026-08-14,45149,10023046']
+[BIA-OBS] <- offers_acca_hcap [1534, 'tennis', '2026-08-14,45149,10023046']
+[BIA-OBS] <- offers_acca_hcap [1534, 'tennis', '2026-08-14,45149,10023046']
+[BIA-OBS] <- offers_acca_hcap [1534, 'tennis', '2026-08-14,45149,10023046']
+INFO:     127.0.0.1:64832 - "POST /control/balance?kalshi_usd=577.76 HTTP/1.1" 400 Bad Request
+INFO:     127.0.0.1:64833 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+[BIA SLIP] tennis:339:2026-08-14~10052228~59700:tennis_match~all:p1 -> 1.628 from the live slip feed (age 24.41s, subscribed, no click)
+INFO:     127.0.0.1:64834 - "POST /slip_quote?selection_id=tennis%3A339%3A2026-08-14~10052228~59700%3Atennis_match~all%3Ap1 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64834 - "POST /slip_close HTTP/1.1" 200 OK
+[BIA-OBS] <- offers_acca_hcap [1534, 'tennis', '2026-08-14,45149,10023046']
+[BIA-OBS] <- offers_acca_hcap [1534, 'tennis', '2026-08-14,45149,10023046']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1534, 'tennis', '2026-08-14,45149,10023046']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1534, 'tennis', '2026-08-14,45149,10023046']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [1534, 'tennis', '2026-08-14,45149,10023046']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [1534, 'tennis', '2026-08-14,45149,10023046']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+INFO:     127.0.0.1:59259 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [1534, 'tennis', '2026-08-14,45149,10023046']
+[BIA-OBS] <- offers_acca_hcap [1534, 'tennis', '2026-08-14,45149,10023046']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [1534, 'tennis', '2026-08-14,45149,10023046']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1534, 'tennis', '2026-08-14,45149,10023046']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1534, 'tennis', '2026-08-14,45149,10023046']
+INFO:     127.0.0.1:59264 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+[BIA SLIP] tennis:1134:2026-08-14~10027310~92380:tennis_match~all:p1 -> 1.568 from the live slip feed (age 9.32s, subscribed, no click)
+INFO:     127.0.0.1:59265 - "POST /slip_quote?selection_id=tennis%3A1134%3A2026-08-14~10027310~92380%3Atennis_match~all%3Ap1 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59265 - "POST /slip_close HTTP/1.1" 200 OK
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1534, 'tennis', '2026-08-14,45149,10023046']
+[BIA-OBS] <- offers_acca_hcap [1534, 'tennis', '2026-08-14,45149,10023046']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [1534, 'tennis', '2026-08-14,45149,10023046']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [1534, 'tennis', '2026-08-14,45149,10023046']
+INFO:     127.0.0.1:59269 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [1534, 'tennis', '2026-08-14,45149,10023046']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+INFO:     127.0.0.1:60637 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+INFO:     127.0.0.1:60640 - "POST /control/balance?kalshi_usd=577.76 HTTP/1.1" 400 Bad Request
+[BIA-OBS] <- offers_acca_hcap [1534, 'tennis', '2026-08-14,45149,10023046']
+[BIA-OBS] <- offers_acca_hcap [1534, 'tennis', '2026-08-14,45149,10023046']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA SLIP] tennis:339:2026-08-14~10052228~59700:tennis_match~all:p2 -> 1.628 from the live slip feed (age 20.21s, subscribed, no click)
+INFO:     127.0.0.1:59103 - "POST /slip_quote?selection_id=tennis%3A339%3A2026-08-14~10052228~59700%3Atennis_match~all%3Ap2 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59104 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+INFO:     127.0.0.1:59103 - "POST /slip_close HTTP/1.1" 200 OK
+[BIA-OBS] <- offers_acca_hcap [1534, 'tennis', '2026-08-14,45149,10023046']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+INFO:     127.0.0.1:50711 - "GET /fx HTTP/1.1" 200 OK
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1534, 'tennis', '2026-08-14,45149,10023046']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1534, 'tennis', '2026-08-14,45149,10023046']
+INFO:     127.0.0.1:51958 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [1534, 'tennis', '2026-08-14,45149,10023046']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [1534, 'tennis', '2026-08-14,45149,10023046']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+INFO:     127.0.0.1:58321 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+[BIA SLIP] tennis:1534:2026-08-14~45149~10023046:tennis_match~all:p1 -> 1.285 from the live slip feed (age 34.93s, subscribed, no click)
+INFO:     127.0.0.1:58322 - "POST /slip_quote?selection_id=tennis%3A1534%3A2026-08-14~45149~10023046%3Atennis_match~all%3Ap1 HTTP/1.1" 200 OK
+[BIA SLIP] tennis:1534:2026-08-14~45149~10023046:tennis_match~all:p1 -> 1.285 from the live slip feed (age 36.95s, subscribed, no click)
+INFO:     127.0.0.1:58322 - "POST /slip_quote?selection_id=tennis%3A1534%3A2026-08-14~45149~10023046%3Atennis_match~all%3Ap1 HTTP/1.1" 200 OK
+[BIA-OBS] <- offers_acca_hcap [1534, 'tennis', '2026-08-14,45149,10023046']
+[BIA SLIP] tennis:1534:2026-08-14~45149~10023046:tennis_match~all:p1 -> 1.187 from the live slip feed (age 1.89s, subscribed, no click)
+INFO:     127.0.0.1:58322 - "POST /slip_quote?selection_id=tennis%3A1534%3A2026-08-14~45149~10023046%3Atennis_match~all%3Ap1 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58322 - "POST /slip_close HTTP/1.1" 200 OK
+[BIA-OBS] <- offers_acca_hcap [1534, 'tennis', '2026-08-14,45149,10023046']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1534, 'tennis', '2026-08-14,45149,10023046']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+INFO:     127.0.0.1:57371 - "POST /control/balance?kalshi_usd=577.76 HTTP/1.1" 400 Bad Request
+[BIA-OBS] <- offers_acca_hcap [1534, 'tennis', '2026-08-14,45149,10023046']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+INFO:     127.0.0.1:50909 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1534, 'tennis', '2026-08-14,45149,10023046']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1534, 'tennis', '2026-08-14,45149,10023046']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [1534, 'tennis', '2026-08-14,45149,10023046']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+INFO:     127.0.0.1:63451 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA SLIP] 2026-08-14,65917,72328 is flagged NOT available_for_accas — quoting anyway to find out whether that actually blocks a betslip read
+INFO:     127.0.0.1:63454 - "POST /slip_quote?selection_id=tennis%3A10004084%3A2026-08-14~65917~72328%3Atennis_match~all%3Ap1 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63454 - "POST /slip_close HTTP/1.1" 200 OK
+[BIA SLIP] 2026-08-14,65917,72328 is flagged NOT available_for_accas — quoting anyway to find out whether that actually blocks a betslip read
+INFO:     127.0.0.1:63454 - "POST /slip_quote?selection_id=tennis%3A10004084%3A2026-08-14~65917~72328%3Atennis_match~all%3Ap1 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63454 - "POST /slip_close HTTP/1.1" 200 OK
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [1534, 'tennis', '2026-08-14,45149,10023046']
+[BIA-OBS] <- offers_acca_hcap [1534, 'tennis', '2026-08-14,45149,10023046']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA SLIP] 2026-08-14,65917,72328 is flagged NOT available_for_accas — quoting anyway to find out whether that actually blocks a betslip read
+INFO:     127.0.0.1:63455 - "POST /slip_quote?selection_id=tennis%3A10004084%3A2026-08-14~65917~72328%3Atennis_match~all%3Ap1 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63456 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+INFO:     127.0.0.1:63455 - "POST /slip_close HTTP/1.1" 200 OK
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [1534, 'tennis', '2026-08-14,45149,10023046']
+[BIA SLIP] tennis:1134:2026-08-14~10027310~92380:tennis_match~all:p1 -> 2.41 from the live slip feed (age 37.39s, subscribed, no click)
+INFO:     127.0.0.1:51863 - "POST /slip_quote?selection_id=tennis%3A1134%3A2026-08-14~10027310~92380%3Atennis_match~all%3Ap1 HTTP/1.1" 200 OK
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA SLIP] tennis:1134:2026-08-14~10027310~92380:tennis_match~all:p1 -> 2.16 from the live slip feed (age 0.93s, subscribed, no click)
+INFO:     127.0.0.1:51863 - "POST /slip_quote?selection_id=tennis%3A1134%3A2026-08-14~10027310~92380%3Atennis_match~all%3Ap1 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51863 - "POST /slip_close HTTP/1.1" 200 OK
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [1534, 'tennis', '2026-08-14,45149,10023046']
+INFO:     127.0.0.1:53168 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1534, 'tennis', '2026-08-14,45149,10023046']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+INFO:     127.0.0.1:53173 - "POST /control/balance?kalshi_usd=577.76 HTTP/1.1" 400 Bad Request
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+INFO:     127.0.0.1:63985 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+[BIA-OBS] <- offers_acca_hcap [1534, 'tennis', '2026-08-14,45149,10023046']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [1534, 'tennis', '2026-08-14,45149,10023046']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,69380,52983']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1534, 'tennis', '2026-08-14,45149,10023046']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+INFO:     127.0.0.1:54053 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+INFO:     127.0.0.1:64365 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+[BIA-OBS] WS error: event_already_subscribed (#50) — if a slip quote just timed out, THIS is why: the venue answers this instead of pushing prices for an event still subscribed from last time
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA SLIP] tennis:339:2026-08-14~10052228~59700:tennis_match~all:p2 -> 3.4 from the live slip feed (age 4.3s, subscribed, no click)
+INFO:     127.0.0.1:52122 - "POST /slip_quote?selection_id=tennis%3A339%3A2026-08-14~10052228~59700%3Atennis_match~all%3Ap2 HTTP/1.1" 200 OK
+[BIA SLIP] tennis:339:2026-08-14~10052228~59700:tennis_match~all:p2 -> 3.4 from the live slip feed (age 6.37s, subscribed, no click)
+INFO:     127.0.0.1:52123 - "POST /slip_quote?selection_id=tennis%3A339%3A2026-08-14~10052228~59700%3Atennis_match~all%3Ap2 HTTP/1.1" 200 OK
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA SLIP] tennis:339:2026-08-14~10052228~59700:tennis_match~all:p2 -> 2.61 from the live slip feed (age 1.48s, subscribed, no click)
+INFO:     127.0.0.1:52123 - "POST /slip_quote?selection_id=tennis%3A339%3A2026-08-14~10052228~59700%3Atennis_match~all%3Ap2 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52123 - "POST /slip_close HTTP/1.1" 200 OK
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+INFO:     127.0.0.1:62783 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+INFO:     127.0.0.1:62789 - "POST /control/balance?kalshi_usd=577.76 HTTP/1.1" 400 Bad Request
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+INFO:     127.0.0.1:54225 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] -> watch_acca_hcaps [[63009, "tennis", "2026-08-14,10067089,10065774"]]
+[BIA-OBS] -> watch_acca_hcaps [[63009, "tennis", "2026-08-14,10067089,10065774"]]
+[BIA-OBS] <- offers_acca_hcap [63009, 'tennis', '2026-08-14,10067089,10065774']
+[BIA SLIP] tennis:63009:2026-08-14~10067089~10065774:tennis_match~all:p1 -> 4.1 via sport-tab in 3027ms
+[BIA SLIP] betslip says: 'Marjorie Souza'
+INFO:     127.0.0.1:58471 - "POST /slip_quote?selection_id=tennis%3A63009%3A2026-08-14~10067089~10065774%3Atennis_match~all%3Ap1 HTTP/1.1" 200 OK
+[BIA SLIP] tennis:63009:2026-08-14~10067089~10065774:tennis_match~all:p1 -> 4.1 from the live slip feed (age 0.49s, subscribed, no click)
+INFO:     127.0.0.1:58472 - "POST /slip_quote?selection_id=tennis%3A63009%3A2026-08-14~10067089~10065774%3Atennis_match~all%3Ap1 HTTP/1.1" 200 OK
+[BIA SLIP] closed ('tennis', '2026-08-14,10067089,10065774') with Escape
+INFO:     127.0.0.1:58472 - "POST /slip_close HTTP/1.1" 200 OK
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+INFO:     127.0.0.1:56122 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+INFO:     127.0.0.1:56126 - "GET /fx HTTP/1.1" 200 OK
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [63009, 'tennis', '2026-08-14,10067089,10065774']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+INFO:     127.0.0.1:56130 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+[BIA SLIP] tennis:339:2026-08-14~10052228~59700:tennis_match~all:p2 -> 1.9 from the live slip feed (age 20.97s, subscribed, no click)
+INFO:     127.0.0.1:56131 - "POST /slip_quote?selection_id=tennis%3A339%3A2026-08-14~10052228~59700%3Atennis_match~all%3Ap2 HTTP/1.1" 200 OK
+[BIA SLIP] tennis:339:2026-08-14~10052228~59700:tennis_match~all:p2 -> 1.9 from the live slip feed (age 22.98s, subscribed, no click)
+INFO:     127.0.0.1:56132 - "POST /slip_quote?selection_id=tennis%3A339%3A2026-08-14~10052228~59700%3Atennis_match~all%3Ap2 HTTP/1.1" 200 OK
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA SLIP] tennis:339:2026-08-14~10052228~59700:tennis_match~all:p2 -> 1.9 from the live slip feed (age 0.11s, subscribed, no click)
+INFO:     127.0.0.1:56132 - "POST /slip_quote?selection_id=tennis%3A339%3A2026-08-14~10052228~59700%3Atennis_match~all%3Ap2 HTTP/1.1" 200 OK
+[BIA SLIP] tennis:339:2026-08-14~10052228~59700:tennis_match~all:p2 -> 1.9 from the live slip feed (age 2.12s, subscribed, no click)
+INFO:     127.0.0.1:56132 - "POST /slip_quote?selection_id=tennis%3A339%3A2026-08-14~10052228~59700%3Atennis_match~all%3Ap2 HTTP/1.1" 200 OK
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA SLIP] tennis:339:2026-08-14~10052228~59700:tennis_match~all:p2 -> 1.9 from the live slip feed (age 0.75s, subscribed, no click)
+INFO:     127.0.0.1:56132 - "POST /slip_quote?selection_id=tennis%3A339%3A2026-08-14~10052228~59700%3Atennis_match~all%3Ap2 HTTP/1.1" 200 OK
+[BIA SLIP] tennis:339:2026-08-14~10052228~59700:tennis_match~all:p2 -> 1.9 from the live slip feed (age 2.77s, subscribed, no click)
+INFO:     127.0.0.1:56132 - "POST /slip_quote?selection_id=tennis%3A339%3A2026-08-14~10052228~59700%3Atennis_match~all%3Ap2 HTTP/1.1" 200 OK
+[BIA SLIP] tennis:339:2026-08-14~10052228~59700:tennis_match~all:p2 -> 1.9 from the live slip feed (age 4.78s, subscribed, no click)
+INFO:     127.0.0.1:56132 - "POST /slip_quote?selection_id=tennis%3A339%3A2026-08-14~10052228~59700%3Atennis_match~all%3Ap2 HTTP/1.1" 200 OK
+[BIA SLIP] tennis:339:2026-08-14~10052228~59700:tennis_match~all:p2 -> 1.9 from the live slip feed (age 6.78s, subscribed, no click)
+INFO:     127.0.0.1:56132 - "POST /slip_quote?selection_id=tennis%3A339%3A2026-08-14~10052228~59700%3Atennis_match~all%3Ap2 HTTP/1.1" 200 OK
+[BIA SLIP] tennis:339:2026-08-14~10052228~59700:tennis_match~all:p2 -> 1.9 from the live slip feed (age 8.79s, subscribed, no click)
+INFO:     127.0.0.1:56132 - "POST /slip_quote?selection_id=tennis%3A339%3A2026-08-14~10052228~59700%3Atennis_match~all%3Ap2 HTTP/1.1" 200 OK
+[BIA SLIP] tennis:339:2026-08-14~10052228~59700:tennis_match~all:p2 -> 1.9 from the live slip feed (age 10.8s, subscribed, no click)
+INFO:     127.0.0.1:56132 - "POST /slip_quote?selection_id=tennis%3A339%3A2026-08-14~10052228~59700%3Atennis_match~all%3Ap2 HTTP/1.1" 200 OK
+[BIA SLIP] tennis:339:2026-08-14~10052228~59700:tennis_match~all:p2 -> 1.9 from the live slip feed (age 12.82s, subscribed, no click)
+INFO:     127.0.0.1:56132 - "POST /slip_quote?selection_id=tennis%3A339%3A2026-08-14~10052228~59700%3Atennis_match~all%3Ap2 HTTP/1.1" 200 OK
+[BIA SLIP] tennis:339:2026-08-14~10052228~59700:tennis_match~all:p2 -> 1.9 from the live slip feed (age 14.82s, subscribed, no click)
+INFO:     127.0.0.1:56132 - "POST /slip_quote?selection_id=tennis%3A339%3A2026-08-14~10052228~59700%3Atennis_match~all%3Ap2 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56132 - "POST /slip_close HTTP/1.1" 200 OK
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+INFO:     127.0.0.1:56141 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+INFO:     127.0.0.1:56146 - "POST /control/balance?kalshi_usd=577.76 HTTP/1.1" 400 Bad Request
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+INFO:     127.0.0.1:51300 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+INFO:     127.0.0.1:59936 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA SLIP] 2026-08-14,87656,70292: 2 links carry this key; using the one with price cells
+[BIA SLIP] 2026-08-14,87656,70292: 2 links carry this key; matched the cell showing 4.21
+[BIA-OBS] -> watch_acca_hcaps [[1134, "tennis", "2026-08-14,87656,70292"]]
+[BIA-OBS] -> watch_acca_hcaps [[1134, "tennis", "2026-08-14,87656,70292"]]
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,87656,70292']
+[BIA SLIP] tennis:1134:2026-08-14~87656~70292:tennis_match~all:p2 -> 3.65 via sport-tab in 4110ms
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA SLIP] betslip says: 'Anna Blinkova', $1,349 at 3.65
+INFO:     127.0.0.1:59940 - "POST /slip_quote?selection_id=tennis%3A1134%3A2026-08-14~87656~70292%3Atennis_match~all%3Ap2 HTTP/1.1" 200 OK
+[BIA SLIP] closed ('tennis', '2026-08-14,87656,70292') with Escape
+INFO:     127.0.0.1:59940 - "POST /slip_close HTTP/1.1" 200 OK
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,87656,70292']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,87656,70292']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,87656,70292']
+INFO:     127.0.0.1:55356 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,87656,70292']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,87656,70292']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,87656,70292']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,87656,70292']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,87656,70292']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+INFO:     127.0.0.1:55361 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,87656,70292']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,87656,70292']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,87656,70292']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+INFO:     127.0.0.1:55367 - "POST /control/balance?kalshi_usd=577.76 HTTP/1.1" 400 Bad Request
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+INFO:     127.0.0.1:55368 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,87656,70292']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,87656,70292']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,87656,70292']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,87656,70292']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,87656,70292']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA SLIP] tennis:1134:2026-08-14~10027310~92380:tennis_match~all:p1 -> 1.19 from the live slip feed (age 0.43s, subscribed, no click)
+INFO:     127.0.0.1:53547 - "POST /slip_quote?selection_id=tennis%3A1134%3A2026-08-14~10027310~92380%3Atennis_match~all%3Ap1 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53547 - "POST /slip_close HTTP/1.1" 200 OK
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,87656,70292']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+INFO:     127.0.0.1:51099 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+INFO:     127.0.0.1:51104 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,87656,70292']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,87656,70292']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10052228,59700']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,87656,70292']
+[BIA-OBS] socket closed - releasing 8 betslip subscription(s)
+[BIA-OBS] board reset: reloaded the observing page in place (never closed)
+[BIA-OBS] board reset: closed 0 tab(s), re-parking 1 sport(s)
+[BIA-OBS] sport tab tennis: reusing the observing page (already on its board) — no second tab, no duplicate subscriptions
+[BIA-OBS] price feed socket #2: authed
+[WS OPEN] wss://black.betinasia.com/cpricefeed/?token=b4647acf9ba5e61799fdbbc33bf5213b&lang=en
+[BIA-OBS] parked 1/1 sport board tab(s)
+INFO:     127.0.0.1:62028 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+[BIA-OBS] -> watch_acca_hcaps [[1134, "tennis", "2026-08-14,10027310,92380"]]
+[BIA-OBS] -> watch_acca_hcaps [[1134, "tennis", "2026-08-14,10027310,92380"]]
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA SLIP] tennis:1134:2026-08-14~10027310~92380:tennis_match~all:p1 -> 1.209 via sport-tab in 3037ms
+[BIA SLIP] betslip says: 'Nikola Bartunkova', $5,719 at 1.209
+INFO:     127.0.0.1:62031 - "POST /slip_quote?selection_id=tennis%3A1134%3A2026-08-14~10027310~92380%3Atennis_match~all%3Ap1 HTTP/1.1" 200 OK
+[BIA SLIP] closed ('tennis', '2026-08-14,10027310,92380') with Escape
+INFO:     127.0.0.1:62031 - "POST /slip_close HTTP/1.1" 200 OK
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+INFO:     127.0.0.1:62034 - "POST /control/balance?kalshi_usd=577.76 HTTP/1.1" 400 Bad Request
+INFO:     127.0.0.1:62036 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+INFO:     127.0.0.1:60012 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+INFO:     127.0.0.1:51623 - "GET /fx HTTP/1.1" 200 OK
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+INFO:     127.0.0.1:51635 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] -> watch_acca_hcaps [[10008934, "tennis", "2026-08-14,10036165,10051074"]]
+[BIA-OBS] -> watch_acca_hcaps [[10008934, "tennis", "2026-08-14,10036165,10051074"]]
+[BIA-OBS] <- offers_acca_hcap [10008934, 'tennis', '2026-08-14,10036165,10051074']
+[BIA SLIP] tennis:10008934:2026-08-14~10036165~10051074:tennis_match~all:p1 -> 1.925 via sport-tab in 3023ms
+[BIA SLIP] betslip says: 'Daniel Milavsky', $1,079 at 1.925
+INFO:     127.0.0.1:51636 - "POST /slip_quote?selection_id=tennis%3A10008934%3A2026-08-14~10036165~10051074%3Atennis_match~all%3Ap1 HTTP/1.1" 200 OK
+[BIA SLIP] closed ('tennis', '2026-08-14,10036165,10051074') with Escape
+INFO:     127.0.0.1:51636 - "POST /slip_close HTTP/1.1" 200 OK
+[BIA-OBS] <- offers_acca_hcap [10008934, 'tennis', '2026-08-14,10036165,10051074']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [10008934, 'tennis', '2026-08-14,10036165,10051074']
+[BIA-OBS] <- offers_acca_hcap [10008934, 'tennis', '2026-08-14,10036165,10051074']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [10008934, 'tennis', '2026-08-14,10036165,10051074']
+INFO:     127.0.0.1:51644 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+INFO:     127.0.0.1:51915 - "POST /control/balance?kalshi_usd=577.76 HTTP/1.1" 400 Bad Request
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [10008934, 'tennis', '2026-08-14,10036165,10051074']
+[BIA-OBS] <- offers_acca_hcap [10008934, 'tennis', '2026-08-14,10036165,10051074']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [10008934, 'tennis', '2026-08-14,10036165,10051074']
+INFO:     127.0.0.1:57478 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+[BIA-OBS] <- offers_acca_hcap [10008934, 'tennis', '2026-08-14,10036165,10051074']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] -> watch_acca_hcaps [[339, "tennis", "2026-08-14,10003905,63834"]]
+[BIA-OBS] -> watch_acca_hcaps [[339, "tennis", "2026-08-14,10003905,63834"]]
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10003905,63834']
+[BIA SLIP] tennis:339:2026-08-14~10003905~63834:tennis_match~all:p2 -> 3.47 via sport-tab in 2531ms
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10003905,63834']
+[BIA SLIP] betslip says: 'Matteo Berrettini'
+INFO:     127.0.0.1:57479 - "POST /slip_quote?selection_id=tennis%3A339%3A2026-08-14~10003905~63834%3Atennis_match~all%3Ap2 HTTP/1.1" 200 OK
+[BIA SLIP] tennis:339:2026-08-14~10003905~63834:tennis_match~all:p2 -> 3.02 from the live slip feed (age 2.55s, subscribed, no click)
+INFO:     127.0.0.1:57479 - "POST /slip_quote?selection_id=tennis%3A339%3A2026-08-14~10003905~63834%3Atennis_match~all%3Ap2 HTTP/1.1" 200 OK
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10003905,63834']
+[BIA SLIP] closed ('tennis', '2026-08-14,10003905,63834') with Escape
+INFO:     127.0.0.1:57479 - "POST /slip_close HTTP/1.1" 200 OK
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [10008934, 'tennis', '2026-08-14,10036165,10051074']
+[BIA-OBS] <- offers_acca_hcap [10008934, 'tennis', '2026-08-14,10036165,10051074']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10003905,63834']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [10008934, 'tennis', '2026-08-14,10036165,10051074']
+INFO:     127.0.0.1:62646 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+[BIA-OBS] <- offers_acca_hcap [10008934, 'tennis', '2026-08-14,10036165,10051074']
+[BIA-OBS] <- offers_acca_hcap [10008934, 'tennis', '2026-08-14,10036165,10051074']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10003905,63834']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10003905,63834']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10003905,63834']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [10008934, 'tennis', '2026-08-14,10036165,10051074']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+INFO:     127.0.0.1:62652 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+[BIA-OBS] <- offers_acca_hcap [10008934, 'tennis', '2026-08-14,10036165,10051074']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10003905,63834']
+[BIA-OBS] <- offers_acca_hcap [10008934, 'tennis', '2026-08-14,10036165,10051074']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA SLIP] tennis:1134:2026-08-14~10027310~92380:tennis_match~all:p2 -> 4.66 from the live slip feed (age 18.89s, subscribed, no click)
+INFO:     127.0.0.1:62654 - "POST /slip_quote?selection_id=tennis%3A1134%3A2026-08-14~10027310~92380%3Atennis_match~all%3Ap2 HTTP/1.1" 200 OK
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA SLIP] tennis:1134:2026-08-14~10027310~92380:tennis_match~all:p2 -> 3.74 from the live slip feed (age 0.72s, subscribed, no click)
+INFO:     127.0.0.1:62654 - "POST /slip_quote?selection_id=tennis%3A1134%3A2026-08-14~10027310~92380%3Atennis_match~all%3Ap2 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62654 - "POST /slip_close HTTP/1.1" 200 OK
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10003905,63834']
+[BIA-OBS] <- offers_acca_hcap [10008934, 'tennis', '2026-08-14,10036165,10051074']
+INFO:     127.0.0.1:64125 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10003905,63834']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10003905,63834']
+[BIA-OBS] <- offers_acca_hcap [10008934, 'tennis', '2026-08-14,10036165,10051074']
+[BIA-OBS] <- offers_acca_hcap [10008934, 'tennis', '2026-08-14,10036165,10051074']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10003905,63834']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10003905,63834']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+INFO:     127.0.0.1:64132 - "POST /control/balance?kalshi_usd=577.76 HTTP/1.1" 400 Bad Request
+INFO:     127.0.0.1:54977 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10003905,63834']
+[BIA-OBS] <- offers_acca_hcap [10008934, 'tennis', '2026-08-14,10036165,10051074']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [10008934, 'tennis', '2026-08-14,10036165,10051074']
+[BIA-OBS] <- offers_acca_hcap [10008934, 'tennis', '2026-08-14,10036165,10051074']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [10008934, 'tennis', '2026-08-14,10036165,10051074']
+[BIA-OBS] <- offers_acca_hcap [10008934, 'tennis', '2026-08-14,10036165,10051074']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+INFO:     127.0.0.1:49704 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+[BIA-OBS] <- offers_acca_hcap [10008934, 'tennis', '2026-08-14,10036165,10051074']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [10008934, 'tennis', '2026-08-14,10036165,10051074']
+[BIA SLIP] 2026-08-14,102235,89141 is flagged NOT available_for_accas — quoting anyway to find out whether that actually blocks a betslip read
+[BIA-OBS] -> watch_acca_hcaps [[10001370, "tennis", "2026-08-14,102235,89141"]]
+[BIA-OBS] -> watch_acca_hcaps [[10001370, "tennis", "2026-08-14,102235,89141"]]
+INFO:     127.0.0.1:49710 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+[BIA-OBS] <- offers_acca_hcap [10008934, 'tennis', '2026-08-14,10036165,10051074']
+INFO:     127.0.0.1:49707 - "POST /slip_quote?selection_id=tennis%3A10001370%3A2026-08-14~102235~89141%3Atennis_match~all%3Ap1 HTTP/1.1" 200 OK
+[BIA-OBS] <- offers_acca_hcap [10008934, 'tennis', '2026-08-14,10036165,10051074']
+[BIA SLIP] closed ('tennis', '2026-08-14,102235,89141') with Escape
+INFO:     127.0.0.1:49707 - "POST /slip_close HTTP/1.1" 200 OK
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10003905,63834']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10003905,63834']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10003905,63834']
+[BIA-OBS] <- offers_acca_hcap [10008934, 'tennis', '2026-08-14,10036165,10051074']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [10008934, 'tennis', '2026-08-14,10036165,10051074']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10003905,63834']
+INFO:     127.0.0.1:49715 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [10008934, 'tennis', '2026-08-14,10036165,10051074']
+[BIA-OBS] <- offers_acca_hcap [10008934, 'tennis', '2026-08-14,10036165,10051074']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10003905,63834']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10003905,63834']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10003905,63834']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10003905,63834']
+[BIA-OBS] <- offers_acca_hcap [10008934, 'tennis', '2026-08-14,10036165,10051074']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10003905,63834']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10003905,63834']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10003905,63834']
+[BIA-OBS] <- offers_acca_hcap [10008934, 'tennis', '2026-08-14,10036165,10051074']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10003905,63834']
+[BIA-OBS] <- offers_acca_hcap [10008934, 'tennis', '2026-08-14,10036165,10051074']
+[BIA-OBS] <- offers_acca_hcap [10008934, 'tennis', '2026-08-14,10036165,10051074']
+INFO:     127.0.0.1:49723 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+[BIA SLIP] tennis:339:2026-08-14~10003905~63834:tennis_match~all:p2 -> 2.4 from the live slip feed (age 10.24s, subscribed, no click)
+INFO:     127.0.0.1:49724 - "POST /slip_quote?selection_id=tennis%3A339%3A2026-08-14~10003905~63834%3Atennis_match~all%3Ap2 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49725 - "POST /control/balance?kalshi_usd=577.76 HTTP/1.1" 400 Bad Request
+[BIA SLIP] tennis:339:2026-08-14~10003905~63834:tennis_match~all:p2 -> 2.4 from the live slip feed (age 12.25s, subscribed, no click)
+INFO:     127.0.0.1:49724 - "POST /slip_quote?selection_id=tennis%3A339%3A2026-08-14~10003905~63834%3Atennis_match~all%3Ap2 HTTP/1.1" 200 OK
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10003905,63834']
+[BIA SLIP] tennis:339:2026-08-14~10003905~63834:tennis_match~all:p2 -> 2.08 from the live slip feed (age 1.96s, subscribed, no click)
+INFO:     127.0.0.1:49724 - "POST /slip_quote?selection_id=tennis%3A339%3A2026-08-14~10003905~63834%3Atennis_match~all%3Ap2 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49724 - "POST /slip_close HTTP/1.1" 200 OK
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10003905,63834']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10003905,63834']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10003905,63834']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [10008934, 'tennis', '2026-08-14,10036165,10051074']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [10008934, 'tennis', '2026-08-14,10036165,10051074']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10003905,63834']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10003905,63834']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10003905,63834']
+[BIA-OBS] <- offers_acca_hcap [10008934, 'tennis', '2026-08-14,10036165,10051074']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10003905,63834']
+INFO:     127.0.0.1:54519 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+INFO:     127.0.0.1:54522 - "GET /fx HTTP/1.1" 200 OK
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10003905,63834']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10003905,63834']
+INFO:     127.0.0.1:54528 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA SLIP] 2026-08-14,10036165,10051074 is flagged NOT available_for_accas — quoting anyway to find out whether that actually blocks a betslip read
+INFO:     127.0.0.1:54530 - "POST /slip_quote?selection_id=tennis%3A10008934%3A2026-08-14~10036165~10051074%3Atennis_match~all%3Ap2 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54530 - "POST /slip_close HTTP/1.1" 200 OK
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10003905,63834']
+[BIA SLIP] 2026-08-14,102235,89141 is flagged NOT available_for_accas — quoting anyway to find out whether that actually blocks a betslip read
+INFO:     127.0.0.1:54539 - "POST /slip_quote?selection_id=tennis%3A10001370%3A2026-08-14~102235~89141%3Atennis_match~all%3Ap2 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54538 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+INFO:     127.0.0.1:54539 - "POST /slip_close HTTP/1.1" 200 OK
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10003905,63834']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10003905,63834']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10003905,63834']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10003905,63834']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10003905,63834']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+INFO:     127.0.0.1:54544 - "POST /control/balance?kalshi_usd=577.76 HTTP/1.1" 400 Bad Request
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10003905,63834']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10003905,63834']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10003905,63834']
+[BIA SLIP] 2026-08-14,10036165,10051074 is flagged NOT available_for_accas — quoting anyway to find out whether that actually blocks a betslip read
+INFO:     127.0.0.1:55462 - "POST /slip_quote?selection_id=tennis%3A10008934%3A2026-08-14~10036165~10051074%3Atennis_match~all%3Ap2 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55461 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+INFO:     127.0.0.1:55462 - "POST /slip_close HTTP/1.1" 200 OK
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10003905,63834']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10003905,63834']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10003905,63834']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10003905,63834']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10003905,63834']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10003905,63834']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10003905,63834']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+INFO:     127.0.0.1:50763 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+[BIA SLIP] 2026-08-14,10036165,10051074 is flagged NOT available_for_accas — quoting anyway to find out whether that actually blocks a betslip read
+INFO:     127.0.0.1:50764 - "POST /slip_quote?selection_id=tennis%3A10008934%3A2026-08-14~10036165~10051074%3Atennis_match~all%3Ap2 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50764 - "POST /slip_close HTTP/1.1" 200 OK
+[BIA-OBS] -> watch_acca_hcaps [[1134, "tennis", "2026-08-14,101774,60391"]]
+[BIA-OBS] -> watch_acca_hcaps [[1134, "tennis", "2026-08-14,101774,60391"]]
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,101774,60391']
+[BIA SLIP] tennis:1134:2026-08-14~101774~60391:tennis_match~all:p2 -> 7.1 via sport-tab in 2453ms
+[BIA SLIP] betslip says: 'Harriet Dart', $899 at 7.1
+INFO:     127.0.0.1:50765 - "POST /slip_quote?selection_id=tennis%3A1134%3A2026-08-14~101774~60391%3Atennis_match~all%3Ap2 HTTP/1.1" 200 OK
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10003905,63834']
+[BIA SLIP] closed ('tennis', '2026-08-14,101774,60391') with Escape
+INFO:     127.0.0.1:50765 - "POST /slip_close HTTP/1.1" 200 OK
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,101774,60391']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10003905,63834']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10003905,63834']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,101774,60391']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10003905,63834']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,101774,60391']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,101774,60391']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10003905,63834']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10003905,63834']
+INFO:     127.0.0.1:49673 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10003905,63834']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10003905,63834']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,101774,60391']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10003905,63834']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,101774,60391']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,101774,60391']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10003905,63834']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10003905,63834']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10003905,63834']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,101774,60391']
+INFO:     127.0.0.1:49679 - "POST /verify?lid=tennis HTTP/1.1" 400 Bad Request
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10003905,63834']
+[BIA-OBS] <- offers_acca_hcap [1134, 'tennis', '2026-08-14,10027310,92380']
+[BIA-OBS] <- offers_acca_hcap [339, 'tennis', '2026-08-14,10003905,63834']
