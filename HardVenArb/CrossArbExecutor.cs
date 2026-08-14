@@ -64,10 +64,13 @@ public class CrossArbExecutor
     private readonly ConcurrentDictionary<string, LocalOrderBook> _books;
     private readonly CrossArbRestVerifier? _restVerifier;
 
-    // PRE-LIVE-ONLY execution gate (pre-live-first phase). Pre-live lines are stable, so both legs are filled
-    // SIMULTANEOUSLY (the current parallel model). In-play lines move fast and need the Pinnacle-FIRST sequential
-    // model, which isn't built yet — so skip in-play arbs for now. HARDVEN_PRELIVE_ONLY=0 re-enables in-play
-    // (only once the in-play execution model exists). Telemetry-only mode never reaches here.
+    // PRE-LIVE-ONLY execution gate. Pre-live lines are stable, so both legs can be filled SIMULTANEOUSLY;
+    // in-play lines move fast and need the sequential book-first model.
+    // THAT MODEL NOW EXISTS (HARDVEN_BOOK_FIRST=1, see _bookFirst) — so this gate is no longer blocked on
+    // missing machinery, it is a RISK CHOICE. Relaxing it is still not automatic: 738 of 745 windows on
+    // 2026-08-14 were in-play, so turning it off multiplies the trade count against a model whose naked-leg
+    // case has never been exercised with real money. HARDVEN_PRELIVE_ONLY=0 opens it.
+    // Telemetry-only mode never reaches here.
     private readonly bool _preLiveOnly = Environment.GetEnvironmentVariable("HARDVEN_PRELIVE_ONLY") != "0";
 
     // WS-VERIFY gate: never place a real bet on a HardVen leg whose price is SCREENING-ONLY (an httpx re-seed of
@@ -212,6 +215,22 @@ public class CrossArbExecutor
     private          decimal _totalInvested        = 0m;
     private          decimal _totalProjectedProfit = 0m;
     private readonly object  _exposureLock         = new();
+
+    // ── BOOK-FIRST EXECUTION ──────────────────────────────────────────────────────────────────────────
+    // Place the BOOK leg alone, wait for the venue to say what it actually got, then size the Kalshi leg
+    // to that. OFF by default: Pinnacle's click IS a fill, so there is nothing to wait for and the
+    // simultaneous model is correct there — this must not change the live-money bot by being added.
+    //
+    // ON for BetInAsia, where an order is routed to an underlying book and confirmed seconds later. The
+    // asymmetry is the point: if the book leg misses, no Kalshi order is ever sent, so a miss costs
+    // nothing. Scored on the 509-window tape: +$47 book-first against -$914 Kalshi-first, ~$960 of EV
+    // from leg ORDER alone.
+    //
+    // THE RISK IT ACCEPTS, stated plainly: the book leg can fill and the Kalshi hedge then miss, leaving
+    // a naked book leg. With no retry and no cancel that exposure is real, and it is bounded only by
+    // stake size — which is why the ladder cap matters more under this model than under the other one.
+    private readonly bool _bookFirst =
+        Environment.GetEnvironmentVariable("HARDVEN_BOOK_FIRST") == "1";
     private readonly CancellationTokenSource _cts  = new();
     private          int     _totalExecuted        = 0;
     private          int     _earlyExitsCompleted  = 0;
@@ -578,6 +597,15 @@ public class CrossArbExecutor
                             + (allowReentry ? "   <- all cleared by HARDVEN_ALLOW_REENTRY=1" : ""));
             Console.ResetColor();
         }
+        // WHICH LEG GOES FIRST changes what a miss costs, so it must never be a silent setting.
+        Console.ForegroundColor = _bookFirst ? ConsoleColor.Cyan : ConsoleColor.DarkGray;
+        Console.WriteLine(_bookFirst
+            ? "[EXEC MODE] BOOK-FIRST — the book leg is placed alone, then Kalshi is sized to what it "
+              + "ACTUALLY filled. A book miss sends no Kalshi order at all (zero exposure); a book fill "
+              + "whose hedge then misses leaves a NAKED book leg, and there is no retry or cancel."
+            : "[EXEC MODE] SIMULTANEOUS — both legs fire together (correct for a venue where a click is a "
+              + "fill). Set HARDVEN_BOOK_FIRST=1 for a broker whose orders are routed and confirmed later.");
+        Console.ResetColor();
         _logErrors           = logErrors;
         _executionThreshold  = executionThreshold;
         _execNetFloor        = execNetFloor;
@@ -1664,23 +1692,102 @@ public class CrossArbExecutor
             ? Task.FromResult<decimal?>(0m)
             : SnapshotHardVenBalanceAsync(hardvenToken);
 
-        // Fire both legs simultaneously
-        var kalshiTask = PlaceKalshiLegAsync(pair.KalshiTicker, kalshiSide, kPriceCents, contracts, execId, execLog);
-        var hardvenTask   = PlaceHardVenLegAsync(hardvenToken, pLimitAsk, hardvenShares, pair.IsNegRisk, execLog,
-                                                 stakeAccount: ladderStakeAccount);
-
-        // Catch any unhandled leg exception so the OTHER leg's fill is still visible.
-        // PlaceXxxLegAsync both have general catch blocks, but those blocks call
-        // CheckMaintenanceThresholdAsync which can itself throw, propagating out.
-        // If Task.WhenAll throws here we must still reach the recovery section below.
         Exception? legException = null;
-        try { await Task.WhenAll(kalshiTask, hardvenTask); }
-        catch (Exception ex) { legException = ex; }
+        string kOrderId = ""; string kStatus = "error";
+        decimal kFilled = 0m, kAvgFill = 0m, pFilled = 0m, pActualPrice = 0m;
 
-        var (kOrderId, kStatus, kFilled, kAvgFill) = kalshiTask.IsCompletedSuccessfully
-            ? kalshiTask.Result : ("", "error", 0m, 0m);
-        var (pFilled, pActualPrice) = hardvenTask.IsCompletedSuccessfully
-            ? hardvenTask.Result : (0m, 0m);
+        if (_bookFirst)
+        {
+            // ── BOOK-FIRST: place the BOOK leg alone, learn what it actually got, then size Kalshi to it ──
+            // Simultaneous firing is right for Pinnacle, where a click IS a fill. BetInAsia is a broker over
+            // an exchange pool: the order is routed to an underlying book and confirmed seconds later, and
+            // what comes back differs from what was asked for in BOTH directions — a stake haircut applied
+            // at routing (4.00 -> 3.9917 measured) and a price that can improve (1.88 -> 1.90).
+            //
+            // The payoff is asymmetric and large. If the book leg does not fill, NO Kalshi order is ever
+            // sent, so a miss costs nothing — that is the whole +$47 vs -$914 gap on the 509-window tape.
+            // Firing both at once turns the same miss into a naked Kalshi leg and an unwind at -0.0399/share
+            // against a -0.0113 break-even floor.
+            try
+            {
+                (pFilled, pActualPrice) = await PlaceHardVenLegAsync(
+                    hardvenToken, pLimitAsk, hardvenShares, pair.IsNegRisk, execLog,
+                    stakeAccount: ladderStakeAccount);
+            }
+            catch (Exception ex) { legException = ex; }
+
+            if (pFilled <= 0m)
+            {
+                // FREE MISS. Nothing was placed on Kalshi, so there is nothing to unwind and no exposure.
+                Emit(execLog, $"[BOOK MISS] {pair.Label} | book leg did not fill — no Kalshi order sent, "
+                            + $"zero exposure" + (legException != null ? $" ({legException.Message})" : ""));
+                await JournalAsync(JsonSerializer.Serialize(new {
+                    t = DateTime.UtcNow, @event = "BOOK_FIRST_MISS", execId, pairId, arbType,
+                    pAskAtFire = pLegAsk, wanted = (double)hardvenShares,
+                    error = legException?.Message, dryRun = _dryRun
+                }));
+                lock (_balanceLock) { _kalshiBalanceUsd += kalshiCost; _hardvenBalanceUsd += hardvenCost; }
+                lock (_exposureLock) { _totalExposure -= estimatedCost; }
+                return;
+            }
+
+            // SIZE KALSHI TO THE REAL FILL, floored: Kalshi trades whole contracts, so the fractional
+            // residual the book leaves (3.9917 of 4) is unhedgeable by construction and rides as excess.
+            int kContracts = (int)Math.Floor(pFilled);
+            if (kContracts <= 0)
+            {
+                Emit(execLog, $"[BOOK PARTIAL] {pair.Label} | book filled {pFilled:0.####} — under one whole "
+                            + $"contract, so no Kalshi hedge is possible. Leg rides NAKED.");
+                await JournalAsync(JsonSerializer.Serialize(new {
+                    t = DateTime.UtcNow, @event = "BOOK_FIRST_SUBCONTRACT", execId, pairId, arbType,
+                    pFilled = (double)pFilled, pPrice = (double)pActualPrice, dryRun = _dryRun
+                }));
+            }
+            else
+            {
+                // RE-READ THE KALSHI ASK. The book leg took seconds to confirm (13.6s measured), and a limit
+                // computed before it would simply miss if Kalshi moved — leaving the book leg naked for the
+                // sake of a stale number. Hedging at a worse price beats not hedging: the alternative to a
+                // thin hedge is an open directional position, not a better one.
+                decimal kNow = kLegAsk;
+                string kBookKeyNow = arbType == "K_YES_P_NO"
+                    ? $"K:{pair.KalshiTicker}" : $"K:{pair.KalshiTicker}_NO";
+                if (_books.TryGetValue(kBookKeyNow, out var kLiveBook))
+                {
+                    decimal live = kLiveBook.GetBestAskPrice();
+                    if (live > 0m) kNow = live;
+                }
+                int kCentsNow = (int)Math.Floor((kNow + 0.01m) * 100m);   // same ask+1c tick as above
+                if (kCentsNow != kPriceCents)
+                    Emit(execLog, $"[HEDGE REPRICE] {pair.Label} | Kalshi ask {kLegAsk:0.0000} -> {kNow:0.0000} "
+                               + $"while the book leg filled; limit {kPriceCents}c -> {kCentsNow}c");
+                try
+                {
+                    (kOrderId, kStatus, kFilled, kAvgFill) = await PlaceKalshiLegAsync(
+                        pair.KalshiTicker, kalshiSide, kCentsNow, kContracts, execId, execLog);
+                }
+                catch (Exception ex) { legException = ex; }
+            }
+        }
+        else
+        {
+            // Fire both legs simultaneously (Pinnacle: a click is a fill, so there is nothing to wait for)
+            var kalshiTask = PlaceKalshiLegAsync(pair.KalshiTicker, kalshiSide, kPriceCents, contracts, execId, execLog);
+            var hardvenTask   = PlaceHardVenLegAsync(hardvenToken, pLimitAsk, hardvenShares, pair.IsNegRisk, execLog,
+                                                     stakeAccount: ladderStakeAccount);
+
+            // Catch any unhandled leg exception so the OTHER leg's fill is still visible.
+            // PlaceXxxLegAsync both have general catch blocks, but those blocks call
+            // CheckMaintenanceThresholdAsync which can itself throw, propagating out.
+            // If Task.WhenAll throws here we must still reach the recovery section below.
+            try { await Task.WhenAll(kalshiTask, hardvenTask); }
+            catch (Exception ex) { legException = ex; }
+
+            (kOrderId, kStatus, kFilled, kAvgFill) = kalshiTask.IsCompletedSuccessfully
+                ? kalshiTask.Result : ("", "error", 0m, 0m);
+            (pFilled, pActualPrice) = hardvenTask.IsCompletedSuccessfully
+                ? hardvenTask.Result : (0m, 0m);
+        }
 
         if (legException != null)
         {

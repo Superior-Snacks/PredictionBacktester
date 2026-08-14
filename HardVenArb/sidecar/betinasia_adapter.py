@@ -860,6 +860,15 @@ class BetInAsiaAdapter(BookAdapter):
     async def _place_via_ui(self, selection_id: str, stake: float, max_odds: float) -> BetResult:
         import asyncio as _aio
 
+        # ── TOTAL TIME BUDGET, and why it is not a detail ────────────────────────────────────────────
+        # The C# client posts /bet on a 90s HttpClient. If this call outruns that, the CLIENT aborts —
+        # while the bet may already be placed. That is the exact shape of the 5s-timeout bug that killed
+        # the best arb of 2026-08-12: an outer deadline silently overriding an inner one, with the loss
+        # landing on the side that had already committed.
+        # So the sidecar bounds ITSELF, well under the client, and spends what is left rather than
+        # stacking independent per-step timeouts that can sum past it.
+        t_budget = time.time() + float(os.environ.get("BIA_PLACE_TOTAL_BUDGET_SEC", "70"))
+
         # 1. Open the slip on this selection. Reuses the quote path wholesale: it finds the row by event
         #    key, cross-checks sport, clicks the cell whose PRICE matches, and refuses on ambiguity.
         q = await self._slip_quote_outer(selection_id)
@@ -904,10 +913,12 @@ class BetInAsiaAdapter(BookAdapter):
         #    the response rather than scraping the DOM: the id is the join key for everything after this,
         #    and the page never renders it.
         order_id = None
+        resp_budget = max(5.0, min(float(os.environ.get("BIA_PLACE_RESP_TIMEOUT", "20")),
+                                   t_budget - time.time() - 10.0))   # leave 10s for the fill wait
         try:
             async with page.expect_response(
                     lambda r: "/v1/orders" in r.url and r.request.method == "POST",
-                    timeout=float(os.environ.get("BIA_PLACE_RESP_TIMEOUT", "20")) * 1000) as got:
+                    timeout=resp_budget * 1000) as got:
                 await CURSOR.click(page, place, timeout=8_000)
             resp = await got.value
             body = await resp.json()
@@ -924,8 +935,12 @@ class BetInAsiaAdapter(BookAdapter):
                              reason="order response carried no order_id — the order MAY BE LIVE")
 
         # 4. Wait for the venue to say what actually filled. Pushed over the socket; no polling.
-        fill = await self.await_fill(int(order_id),
-                                     timeout=float(os.environ.get("BIA_FILL_TIMEOUT", "45")))
+        #    Spends WHATEVER IS LEFT of the total budget rather than its own independent timeout — the
+        #    order is already live at this point, so overrunning the client's 90s here is the worst
+        #    possible moment to do it.
+        fill_budget = max(3.0, min(float(os.environ.get("BIA_FILL_TIMEOUT", "45")),
+                                   t_budget - time.time()))
+        fill = await self.await_fill(int(order_id), timeout=fill_budget)
         filled = float(fill.get("filled_stake") or 0.0)
         price = fill.get("avg_price")
         if fill.get("timed_out") and filled <= 0:
