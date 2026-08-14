@@ -253,6 +253,16 @@ foreach ($sel in $targets) {
                 Write-Host "      The venue can read this with one line of JS. Set BIA_SLIP_FOCUS_TAB=1." -ForegroundColor Red
             }
         }
+        if ($res.dom_odds) {
+            if ([math]::Abs([double]$res.dom_odds - [double]$res.decimal_odds) -le 0.001) {
+                Write-Host "  CROSSCHK socket $($res.decimal_odds) == open betslip $($res.dom_odds)  AGREE" -ForegroundColor Green
+            } else {
+                Write-Host "  CROSSCHK socket $($res.decimal_odds) != open betslip $($res.dom_odds)  *** CACHE DIVERGED ***" -ForegroundColor Red
+            }
+        }
+        if ($res.from_dom) {
+            Write-Host "  SOURCE  read off the OPEN BETSLIP - the socket had nothing cached for this event" -ForegroundColor Magenta
+        }
         if ($res.max_stake) {
             Write-Host ("  DEPTH   `$$([math]::Round($res.max_stake,2)) available AT {0} (real, off the slip ladder - not the assumed `$100)" -f $res.decimal_odds) -ForegroundColor Green
             if ($res.ladder) {

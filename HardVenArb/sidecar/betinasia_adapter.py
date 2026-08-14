@@ -1277,6 +1277,38 @@ class BetInAsiaAdapter(BookAdapter):
         rows.sort(key=lambda r: r[0])          # document order = descending price
         return [{"book": b, "odds": o, "stake": s} for _pos, b, o, s in rows]
 
+    async def _slip_price_from_dom(self, page) -> Optional[float]:
+        """Decimal odds the OPEN betslip is currently showing, read off the page. None if not readable.
+
+        AN INDEPENDENT SECOND OPINION ON THE SOCKET. `_slip_books` is a cache fed by `offers_acca_hcap`,
+        and when the venue stops pushing there is no way to tell a QUIET market from a DEAD cache — which
+        is the whole difficulty behind "already subscribed but no price is cached". The panel is rendered
+        from whatever the venue last told the page, so it answers the question the cache cannot: is there
+        actually a price on screen right now, and does it match what we remember?
+
+        `.price-input` is the right field rather than the ladder's BEST PRICE row. The ladder is the raw
+        pool including books this account cannot use — measured 2026-08-14, its best was 1.776 (4casters,
+        an excluded crypto book) while the venue quoted 1.769. The input holds what would actually be
+        placed. It is also one of the few HAND-WRITTEN class names on the site (`.price-input`,
+        `.stake-input`), so unlike the hashed CSS-module classes it survives a deploy.
+
+        Locator reads only — invisible to page script, and no request.
+        """
+        if page is None:
+            return None
+        try:
+            inp = page.locator(".price-input")
+            if await inp.count():
+                raw = (await inp.first.input_value()) or ""
+                txt = re.sub(r"[^\d.]", "", raw)
+                if txt:
+                    odds = float(txt)
+                    if 1.0 < odds < 1000.0:
+                        return odds
+        except Exception:
+            pass
+        return None
+
     @staticmethod
     def _stake_at_price(ladder: list[dict], odds: float) -> Optional[float]:
         """Cash available AT the quoted price. None when the ladder cannot answer.
@@ -1372,13 +1404,51 @@ class BetInAsiaAdapter(BookAdapter):
                             "from_cache": True, "age_sec": age, "selection_id": selection_id}
 
         if subscribed:
-            # Subscribed but no usable cached price. Clicking again CANNOT help: the venue answers
-            # `event_already_subscribed` and pushes nothing, so the quote would open a slip and then time
-            # out. Refuse before touching the DOM — no click, no UI action, no wasted window.
+            # ── SUBSCRIBED, NOTHING CACHED: ASK THE PAGE BEFORE GIVING UP ────────────────────────────
+            # Clicking again genuinely cannot help — the venue answers `event_already_subscribed` and
+            # pushes no price. But that only rules out the SOCKET. If a slip is open on screen it was
+            # rendered from a price the venue did send, and the DOM still holds it. The cache being empty
+            # and the venue having nothing to offer are different states, and this used to report both as
+            # the same refusal ("the feed may be stale") without ever checking which.
+            slip_pg = getattr(self, "_slip_page", None)
+            if slip_pg is None or slip_pg.is_closed():
+                slug = sports_cfg.bia_path_by_code().get(sport, "")
+                slip_pg = await obs.sport_tab(sport, BASE_URL.rstrip("/") + slug if slug else "")
+            dom_odds = await self._slip_price_from_dom(slip_pg)
+            if dom_odds:
+                panel_text = await self._read_slip_panel(slip_pg)
+                ladder = self._parse_slip_ladder(panel_text)
+                real_stake = self._stake_at_price(ladder, dom_odds)
+                if real_stake is not None:
+                    self._slip_depth[selection_id] = (real_stake, time.time())
+                print(f"[BIA SLIP] {ekey}: socket had nothing cached, but the OPEN BETSLIP reads "
+                      f"{dom_odds} — using the page", flush=True)
+                return {"ok": True, "decimal_odds": dom_odds,
+                        "implied_price": round(1.0 / dom_odds, 6),
+                        "via": "dom", "from_dom": True,
+                        "selection_label": self._parse_slip_label(panel_text),
+                        "slip_panel_text": panel_text,
+                        "max_stake": real_stake, "ladder": ladder[:24],
+                        "elapsed_ms": round((time.time() - t0) * 1000, 1),
+                        "selection_id": selection_id}
+            # Nothing on screen either. If a slip IS open it is the thing holding the subscription, so
+            # closing it sends `unwatch_acca_hcaps` and frees the event for a real re-click NEXT time —
+            # turning a permanent dead end into a one-cycle delay. Costs a keypress.
+            freed = False
+            if slip_pg is not None and not slip_pg.is_closed():
+                try:
+                    if await slip_pg.get_by_text("start acca", exact=False).count():
+                        await slip_pg.keyboard.press("Escape")
+                        freed = True
+                except Exception:
+                    pass
             return {"ok": False,
-                    "error": (f"{ekey} is already subscribed on the betslip channel but no price for "
-                              f"{market_key}/{sel} is cached — re-clicking cannot help (the venue replies "
-                              f"event_already_subscribed). The feed may be stale.")}
+                    "error": (f"{ekey} is already subscribed on the betslip channel, nothing is cached, "
+                              f"and the page shows no price for {market_key}/{sel} either. "
+                              + ("Closed the open slip to release the subscription — the next quote can "
+                                 "re-click." if freed else
+                                 "No slip is open to close, so the subscription cannot be released until "
+                                 "this socket cycles."))}
 
         before_ts = (cached or {}).get("ts", 0.0)
         try:
@@ -1547,6 +1617,16 @@ class BetInAsiaAdapter(BookAdapter):
                             slip_label = self._parse_slip_label(panel_text)
                             ladder     = self._parse_slip_ladder(panel_text)
                             real_stake = self._stake_at_price(ladder, odds)
+                            # CROSS-CHECK THE SOCKET AGAINST THE SCREEN. The slip is open right now, so
+                            # both numbers exist at the same instant — the one moment they can be compared
+                            # without the timestamp-alignment problem that made the 2026-08-11 board-vs-slip
+                            # reading wrong. A disagreement means the cache is not what the venue is
+                            # showing, which is the failure mode `_slip_books` cannot self-report.
+                            dom_odds = await self._slip_price_from_dom(page)
+                            if dom_odds and abs(dom_odds - odds) > 0.001:
+                                print(f"[BIA SLIP] PRICE DISAGREEMENT {ekey}: socket says {odds}, the "
+                                      f"open betslip shows {dom_odds} — trusting the socket, but the "
+                                      f"cache is not what the venue is displaying", flush=True)
                             if real_stake is not None:
                                 # REAL DEPTH, replacing BIA_ASSUMED_MAX_STAKE for this selection.
                                 self._slip_depth[selection_id] = (real_stake, time.time())
@@ -1560,6 +1640,10 @@ class BetInAsiaAdapter(BookAdapter):
                                     # None => nothing parsed => callers keep the assumed constant.
                                     "max_stake": real_stake,
                                     "ladder": ladder[:24],
+                                    # The same price as the OPEN slip renders it. Equal to decimal_odds
+                                    # means the socket cache and the screen agree; a difference is the
+                                    # cache diverging from what the venue is actually showing.
+                                    "dom_odds": dom_odds,
                                     # What the DOCUMENT reported at click time. "hidden" here means the
                                     # venue saw a click no human could have made.
                                     "visibility": vis,
