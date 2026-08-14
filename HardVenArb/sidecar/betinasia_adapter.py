@@ -991,6 +991,30 @@ class BetInAsiaAdapter(BookAdapter):
                 res.setdefault("acca", not bool(getattr(self, "_slip_acca_flagged", False)))
             return res
 
+    async def _read_slip_panel(self, page) -> str:
+        """The betslip panel's visible text, flattened. "" if it cannot be read.
+
+        WHY THIS EXISTS. `selection_label` -- the venue's OWN name for what the betslip contains -- is the
+        input to the executor's same-side guard (SideNamesOppose), the check added after two legs were
+        bought on Sabrina Dias. Only the Pinnacle adapter ever returned it, so on BetInAsia that guard has
+        been receiving "" and waving every trade through: side identification here rests entirely on
+        matching the board PRICE, which is the very thing that cannot separate a near-even market.
+
+        Reading the panel is the only independent answer. Deliberately raw text rather than a parsed name:
+        the panel's structure has never been captured, and echoing back the catalog name we already asked
+        for would be a cache agreeing with itself -- it would populate the field, satisfy the guard, and
+        prove nothing. Look at the text first, parse it second."""
+        try:
+            loc = page.get_by_text("start acca", exact=False)
+            if not await loc.count():
+                return ""
+            return await loc.first.evaluate(
+                """el => { let n = el;
+                           for (let i = 0; i < 6 && n.parentElement; i++) n = n.parentElement;
+                           return (n.innerText || '').replace(/\\s+/g, ' ').slice(0, 1200); }""")
+        except Exception as e:
+            return f"<unreadable: {type(e).__name__}>"
+
     async def _slip_quote_locked(self, selection_id: str) -> dict:
         import asyncio as _aio
 
@@ -1186,8 +1210,12 @@ class BetInAsiaAdapter(BookAdapter):
                         if odds and odds > 1.0:
                             ms = round((time.time() - t0) * 1000, 1)
                             print(f"[BIA SLIP] {selection_id} -> {odds} via {via} in {ms:.0f}ms", flush=True)
+                            panel_text = await self._read_slip_panel(page)
                             return {"ok": True, "decimal_odds": odds,
                                     "implied_price": round(1.0 / odds, 6),
+                                    # RAW, unparsed: see _read_slip_panel. The same-side guard stays
+                                    # unfed until we have seen what the venue actually renders here.
+                                    "slip_panel_text": panel_text,
                                     # WHICH TIER SERVED THIS. The caller paces itself by this: a
                                     # sport-tab quote is a find-and-click on a parked board (~0.5s) and
                                     # can be sampled often; a rover quote navigates to the league and is

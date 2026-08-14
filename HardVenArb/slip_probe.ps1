@@ -218,7 +218,14 @@ foreach ($sel in $targets) {
                 Write-Host "  VENUE   '$($res.selection_label)'  (nothing to compare against)" -ForegroundColor Yellow
             }
         } else {
-            Write-Host "  VENUE   <the betslip returned no selection_label - the click cannot be verified by name>" -ForegroundColor Yellow
+            Write-Host "  VENUE   <no selection_label - BetInAsia has never returned one, so the executor's" -ForegroundColor Yellow
+            Write-Host "           same-side name guard is INERT on this venue. Side identification here" -ForegroundColor Yellow
+            Write-Host "           rests on matching the board price instead.>" -ForegroundColor Yellow
+        }
+        if ($res.slip_panel_text) {
+            Write-Host "  PANEL   $($res.slip_panel_text)" -ForegroundColor Cyan
+            Write-Host "          ^ what the betslip itself renders. If the backed player's name is in there," -ForegroundColor DarkGray
+            Write-Host "            the click is verifiable by name and the guard can be wired to it." -ForegroundColor DarkGray
         }
 
         if ($res.from_cache) { Write-Host "  SERVED FROM CACHE (age $($res.age_sec)s) - no click, so this is NOT a path timing" -ForegroundColor Yellow }
