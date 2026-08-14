@@ -253,6 +253,10 @@ public class HardVenWebsocketFeed
             // tail league). Absent (paho/REST mode, other adapters) → true. Drives verify-on-detection.
             bool wv = !s.TryGetProperty("wv", out var wvEl) || wvEl.ValueKind == JsonValueKind.True;
             _telemetry.SetHardVenVerified(prop.Name, wv);
+            // acca = the venue will put this event on a betslip. Absent (Pinnacle, mock, REST mode) → true,
+            // so nothing changes for books that don't publish it.
+            bool acca = !s.TryGetProperty("acca", out var acEl) || acEl.ValueKind != JsonValueKind.False;
+            _telemetry.SetHardVenAccaOk(prop.Name, acca);
             if (fresh) book.MarkDeltaReceived();   // only advance the staleness clock on a genuinely recent quote
             _telemetry.OnBookUpdate(bookKey);
         }

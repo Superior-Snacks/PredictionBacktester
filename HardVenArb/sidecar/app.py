@@ -187,11 +187,18 @@ async def odds(selections: str = Query(..., description="comma-separated selecti
     # league). The C# bot fires /verify on an arb whose leg is wv=false, then trusts it only once WS-confirmed.
     wv_fn = getattr(adapter, "ws_verified_map", None)
     wv = wv_fn(list(result.keys())) if wv_fn else {}
+    # acca = can this event go on a BETSLIP at all? Only published by books that know (BetInAsia reads it
+    # off the event frame). The bot uses it to skip slip-verify samples that would be refused instantly —
+    # see BetInAsiaAdapter.acca_ok_map. Absent => the bot assumes True and behaves exactly as before.
+    acca_fn = getattr(adapter, "acca_ok_map", None)
+    acca = acca_fn(list(result.keys())) if acca_fn else {}
     sels = {}
     for sid, sel in result.items():
         d = sel.to_api()
         if sid in wv:
             d["wv"] = bool(wv[sid])
+        if sid in acca:
+            d["acca"] = bool(acca[sid])
         sels[sid] = d
     resp = {"selections": sels, "ts": time.time()}
     if venue_refetch is not None:

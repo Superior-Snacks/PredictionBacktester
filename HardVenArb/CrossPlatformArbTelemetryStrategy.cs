@@ -185,6 +185,18 @@ public class CrossPlatformArbTelemetryStrategy
     public bool IsHardVenVerified(string token) =>
         !_hardvenVerified.TryGetValue(token, out var v) || v;
 
+    // Can the venue put this token's event on a BETSLIP? Only meaningful for books that publish it.
+    private readonly ConcurrentDictionary<string, bool> _hardvenAccaOk = new(StringComparer.Ordinal);
+    public int SlipVerifySkippedNotQuotable;   // surfaced in status output
+
+    /// <summary>Feed hook: record whether the venue will slip-quote this token, from /odds 'acca'.</summary>
+    public void SetHardVenAccaOk(string token, bool ok) => _hardvenAccaOk[token] = ok;
+
+    /// <summary>Unknown token → true. A book that never publishes the flag must behave exactly as before,
+    /// and a token we simply have not polled yet must not be silently excluded from sampling.</summary>
+    public bool IsHardVenAccaOk(string token) =>
+        !_hardvenAccaOk.TryGetValue(token, out var v) || v;
+
     /// <summary>Ask the sidecar to promote a league to a live WS tab (verify-on-detection), deduped per league.</summary>
     private void RequestVerify(string hardvenToken)
     {
@@ -1026,6 +1038,15 @@ public class CrossPlatformArbTelemetryStrategy
     private void MaybeSlipVerify(CrossPair pair, ActiveWindow w, string hvToken,
                                  decimal kLegAtOpen, decimal pLegAtOpen)
     {
+        // DON'T SPEND A SLOT ON SOMETHING THE VENUE WILL NEVER QUOTE. The sidecar knows, from the event
+        // frame, whether this event can go on a betslip at all — and if it cannot, the quote is refused in
+        // single-digit milliseconds without touching the page. Checked BEFORE claiming the slot so the
+        // sample goes to the next arb that can actually be measured, rather than being consumed and refunded.
+        if (!IsHardVenAccaOk(hvToken))
+        {
+            Interlocked.Increment(ref SlipVerifySkippedNotQuotable);
+            return;
+        }
         if (!TrySlipVerifySlot(w.OpenedInPlay)) return;
         _ = Task.Run(() => RunSlipVerifyAsync(pair, w, hvToken, kLegAtOpen, pLegAtOpen));
     }
@@ -1184,7 +1205,12 @@ public class CrossPlatformArbTelemetryStrategy
 
         _slipCsvChannel.Writer.TryWrite(string.Join(",",
             DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss.fff"),
-            Quote(pair.PairId), Quote(pair.Label), w.ArbType, "pre-live",
+            // REGIME, not a constant. This column was the literal "pre-live" — a leftover from when the
+            // sampler only ever fired pre-match. Once in-play sampling was added it became an outright lie:
+            // on 2026-08-14 all 24 samples were filed pre-live while the main telemetry, reading the same
+            // w.OpenedInPlay, had 62 of 67 windows in-play. Anything reading this file would have concluded
+            // the board is honest pre-match on evidence that was almost entirely in-play.
+            Quote(pair.PairId), Quote(pair.Label), w.ArbType, w.OpenedInPlay ? "in-play" : "pre-live",
             pLegAtOpen.ToString("0.0000"),
             slip > 0m ? slip.ToString("0.0000") : "",
             slip > 0m ? (slip - pLegAtOpen).ToString("0.0000") : "",

@@ -512,6 +512,38 @@ class BetInAsiaAdapter(BookAdapter):
             )
         return out
 
+    def acca_ok_map(self, selection_ids: list[str]) -> dict[str, bool]:
+        """Per selection: will the venue put this event on a BETSLIP at all?
+
+        Published so the bot can stop spending slip-verify samples on events that can never be quoted.
+        Measured 2026-08-14: 22 of 24 samples were refused in single-digit milliseconds because the
+        event was not `available_for_accas` — the sampler was rationing a scarce, rate-limited resource
+        and then handing almost all of it to events it had no way to read.
+
+        This is a PROPERTY OF THE EVENT, not of the regime: across 3,809 captured events acca
+        availability was 53.6% pre-match and 54.1% in-play. It tracks the sport and competition instead
+        — cricket 6/49, esports 46/157, boxing 6/44, against tennis 155/171 and football 810/981. So a
+        cricket-heavy session simply cannot be slip-verified, and that is worth knowing up front rather
+        than discovering one refused sample at a time.
+
+        Absent/unknown -> True, matching `ws_verified_map`: never let a missing flag silence a check.
+        """
+        out: dict[str, bool] = {}
+        for sid in selection_ids:
+            # NEVER let this raise: it runs inside /odds, which the bot polls every 3s for every book.
+            # A throw here would take the whole price feed down to save a few sampling slots.
+            try:
+                parsed = parse_selection_id(sid)
+                if not parsed:
+                    continue
+                sport, _comp, ekey, _mk, _sel = parsed
+                ev = self.feed.get_event(sport, ekey) or {}
+                if ev.get("available_for_accas") is False:
+                    out[sid] = False
+            except Exception:
+                continue          # unknown => omitted => the bot's default (True) applies
+        return out
+
     # ── Pairing: catalog ──────────────────────────────────────────────────────
     async def catalog(self) -> list[CatalogEntry]:
         """Built from the WS `event` frames, NOT from observed prices.
