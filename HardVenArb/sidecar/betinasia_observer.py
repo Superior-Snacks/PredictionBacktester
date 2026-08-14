@@ -82,6 +82,12 @@ class BetInAsiaObserver:
         self._acca_by_ws: dict[int, set] = {}
         self._rover = None                             # fallback click tab (see rover())
         self._sport_tabs: dict = {}                    # sport code -> parked board tab (see sport_tab())
+        # Idle activity per board tab. SCROLL AND CURSOR ONLY — constructed with no browse_urls and no
+        # trim_fn, which leaves TabOrganic's click and navigation branches unreachable (they fall through
+        # to a mouse move). A board tab must never be navigated: it would drop the subscriptions the whole
+        # parked-tab design exists to accumulate.
+        self._organic: dict = {}
+        self._organic_tasks: dict = {}
 
     @property
     def _acca_subs(self) -> set:
@@ -255,13 +261,81 @@ class BetInAsiaObserver:
                     self._log(f"sport tab {sport}: expand failed ({type(e).__name__}: {e})")
         return pg
 
+    def _start_organic(self, sport: str, page) -> None:
+        """Give a parked board tab some idle life: scroll, cursor, pauses. No clicks, no navigation.
+
+        WHY. Between quotes these tabs sit perfectly still for minutes, then produce one precisely-formed
+        click. The measured evidence says nobody is watching input on this venue (mousemove listeners are
+        React/Zendesk only, and no telemetry field carries mouse or scroll data), so this is insurance
+        rather than a fix — which is why it is scroll-and-cursor only. Random betslips were considered and
+        rejected: opening one SUBSCRIBES that event on the acca channel, which is the exact mechanism that
+        makes an event unquotable, so it would trade a speculative benefit for a measured cost.
+
+        NOT ALGORITHMIC. TabOrganic rolls a weighted action each tick (idle / mouse / scroll / keyscroll)
+        and draws an irregular gap with an occasional long "stepped away" one, so there is no fixed cadence
+        and no repeating sequence.
+
+        NEVER STUCK AT THE BOTTOM. Both scroll actions are up-biased by construction: the wheel burst
+        returns up at least as far as it went down, and the keyboard scroll either presses Home (40%) or
+        scrolls up MORE than it scrolled down. Net drift is toward the top, where the rows are.
+        """
+        if os.environ.get("BIA_ORGANIC", "1") == "0" or sport in self._organic:
+            return
+        try:
+            from organic import TabOrganic
+        except Exception as e:
+            self._log(f"organic unavailable: {type(e).__name__}: {e}")
+            return
+        org = TabOrganic(page,
+                         browse_urls=None,      # no nav targets => the click/navigate branch is unreachable
+                         trim_fn=None,          # no betslip tidying: this tab must not touch bet controls
+                         min_gap=float(os.environ.get("BIA_ORGANIC_MIN_GAP", "25")),
+                         max_gap=float(os.environ.get("BIA_ORGANIC_MAX_GAP", "150")))
+        self._organic[sport] = org
+        self._organic_tasks[sport] = asyncio.create_task(self._run_organic(sport, org))
+        self._log(f"organic idle activity on the {sport} board (scroll + cursor only, no clicks)")
+
+    async def _run_organic(self, sport: str, org) -> None:
+        while True:
+            try:
+                await asyncio.sleep(org._next_gap())
+                await org._gate.wait()          # paused while a slip quote is in flight
+                pg = self._sport_tabs.get(sport)
+                if pg is None or pg.is_closed():
+                    return
+                await org.tick()
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                self._log(f"organic {sport}: {type(e).__name__}: {e}")
+                await asyncio.sleep(30)
+
+    def pause_organic(self) -> None:
+        """Freeze idle activity. A slip quote finds a row by price and clicks it, so a scroll landing
+        mid-click would move the board underneath it — the same hazard Pinnacle pauses organic for."""
+        for org in self._organic.values():
+            try:
+                org.pause()
+            except Exception:
+                pass
+
+    def resume_organic(self) -> None:
+        for org in self._organic.values():
+            try:
+                org.resume()
+            except Exception:
+                pass
+
     async def open_sport_tabs(self, targets: list, expand: bool = True) -> dict:
         """Park one board tab per (sport_code, url), expanded. Returns {sport: ok}."""
         out: dict[str, bool] = {}
         for code, url in targets:
             pg = await self.sport_tab(code, url, expand=expand)
             out[code] = pg is not None and not pg.is_closed()
-            await asyncio.sleep(float(os.environ.get("BIA_SPORT_TAB_GAP_SEC", "2")))
+            if out[code]:
+                self._start_organic(code, pg)
+            await asyncio.sleep(float(os.environ.get("BIA_SPORT_TAB_GAP_SEC", "2"))
+                                * random.uniform(0.7, 1.5))
         self._log(f"parked {sum(1 for v in out.values() if v)}/{len(targets)} sport board tab(s)")
         return out
 
@@ -281,6 +355,11 @@ class BetInAsiaObserver:
 
         The caller holds the slip lock across this, so a quote can never find its tab closed underneath
         it, and a reset never starts while a click is in flight."""
+        # Stop idle activity first: its task holds a page handle we are about to close or reload.
+        for _s, t in list(self._organic_tasks.items()):
+            t.cancel()
+        self._organic_tasks.clear()
+        self._organic.clear()
         old = list(self._sport_tabs.items())
         closed = 0
         for _sport, pg in old:

@@ -39,7 +39,7 @@ from typing import Optional
 import sports as sports_cfg
 from book_adapter import BetResult, BookAdapter, CatalogEntry, Selection
 from betinasia_ws import BetInAsiaFeed
-from human_mouse import CURSOR
+from human_mouse import CURSOR, VIEW_BOTTOM, VIEW_REST, VIEW_TOP
 
 # ── The max_stake problem ─────────────────────────────────────────────────────
 MAX_STAKE_NOTE = """
@@ -1116,6 +1116,24 @@ class BetInAsiaAdapter(BookAdapter):
         if lock is None:
             lock = self._slip_lock = _aio.Lock()
         async with lock:
+            # FREEZE IDLE ACTIVITY FOR THE WHOLE QUOTE. A quote finds its row by price and then clicks it;
+            # an organic scroll landing between those two steps moves the board underneath the click. Held
+            # across the entire lock, not just the click, because the row is located first.
+            try:
+                self.observer.pause_organic()
+            except Exception:
+                pass
+            try:
+                return await self._slip_quote_outer(selection_id)
+            finally:
+                try:
+                    self.observer.resume_organic()
+                except Exception:
+                    pass
+
+    async def _slip_quote_outer(self, selection_id: str) -> dict:
+        import asyncio as _aio
+        if True:
             # DID THIS QUOTE COST THE VENUE ANYTHING? Most refusals are decided from data we already hold
             # (not available_for_accas, already subscribed, no odds on the row) and never touch the page,
             # so the caller can retry almost immediately instead of spending a whole sampling interval on
@@ -1584,6 +1602,17 @@ class BetInAsiaAdapter(BookAdapter):
             # between a bot session and a hand-driven one.
             self._slip_page, self._slip_open_key = page, key
             await _aio.sleep(0.5)
+            # BRING THE SLIP INTO VIEW. Reading it does not require this — inner_text and input_value work
+            # on an off-screen node — but a person cannot open a betslip and then not look at it, and the
+            # placement path will need the Place button genuinely clickable. Wheeled, not jumped.
+            try:
+                pnl = page.get_by_text("start acca", exact=False)
+                if await pnl.count():
+                    pbox = await pnl.first.bounding_box()
+                    if pbox and not (VIEW_TOP <= pbox["y"] <= VIEW_BOTTOM):
+                        await CURSOR.scroll(page, pbox["y"] - VIEW_REST)
+            except Exception:
+                pass
             url_after = page.url
             # THE ROW IS AN <a href>. A real user's click is swallowed by the app (it opens the Quick Bet
             # panel); if the default link action fires instead, the SPA navigates to the event page, the
