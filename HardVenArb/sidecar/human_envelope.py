@@ -53,13 +53,20 @@ def pct(xs: list[float], p: float) -> float:
 
 
 def _traffic(path: str) -> tuple[set, dict, list]:
-    """(endpoints, metrics fields -> values, raw metrics payloads) for one capture."""
+    """(endpoints, metrics fields -> values, raw metrics payloads) for one capture.
+
+    RAISES on a missing or empty file rather than returning empties. A typo'd filename used to read as a
+    capture in which the venue saw nothing at all — "A only:" against every single endpoint — which is a
+    perfectly plausible-looking result and completely wrong. Same failure family as balance() returning
+    0.0 for an unreadable wallet: broken and 'nothing happened' must not share a value.
+    """
     endpoints, fields, payloads = set(), {}, []
-    try:
-        f = open(path, "r", encoding="utf-8", errors="replace")
-    except OSError:
-        return endpoints, fields, payloads
-    with f:
+    if not os.path.exists(path):
+        raise SystemExit(f"ERROR: no such capture file: {path}\n"
+                         f"       (check the extension — the recon writes ONE '.jsonl')")
+    if os.path.getsize(path) == 0:
+        raise SystemExit(f"ERROR: {path} is 0 bytes — that run recorded nothing. Re-run the capture.")
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
         for line in f:
             try:
                 rec = json.loads(line)

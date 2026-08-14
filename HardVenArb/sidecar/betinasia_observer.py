@@ -108,6 +108,23 @@ class BetInAsiaObserver:
         self._pw = await async_playwright().start()
         self._ctx = await self._pw.chromium.launch_persistent_context(
             str(PROFILE), headless=headless, args=args, viewport=None)
+        # BIA_RECON=1: record this browser's traffic in the SAME format betinasia_recon.py writes, so the
+        # bot's session can be diffed against a hand-driven one (`human_envelope.py --compare`).
+        # Needed because the two cannot be captured the same way: betinasia_recon.py owns its own browser
+        # and profile, while a bot leg has to run inside the sidecar's — and both want .betinasia_profile,
+        # so they can never be up at once. Arming the recorder HERE is the only way to record what the bot
+        # actually sends. Off by default: the dump is large and contains session data.
+        self._recon = None
+        if os.environ.get("BIA_RECON") == "1":
+            try:
+                from datetime import datetime as _dt
+                from betinasia_recon import Recon
+                out = Path(__file__).parent / f"betinasia_recon_{_dt.now():%Y%m%d_%H%M%S}.jsonl"
+                self._recon = Recon(out)
+                self._log(f"RECON ON -> {out.name} (gitignored; contains session data)")
+            except Exception as e:
+                self._log(f"RECON requested but could not start: {type(e).__name__}: {e}")
+
         self._ctx.on("page", self._hook_page)
         for pg in self._ctx.pages:
             self._hook_page(pg)
@@ -382,6 +399,13 @@ class BetInAsiaObserver:
     # ── frame plumbing ────────────────────────────────────────────────────────
     def _hook_page(self, page) -> None:
         page.on("websocket", self._hook_ws)
+        # Every tab, including sport tabs and the rover — a slip quote happens on one of those, so
+        # hooking only the first page would record everything EXCEPT the thing being measured.
+        if getattr(self, "_recon", None) is not None:
+            try:
+                self._recon.hook_page(page)
+            except Exception as e:
+                self._log(f"recon could not hook a tab: {type(e).__name__}: {e}")
 
     def _hook_ws(self, ws) -> None:
         url = ws.url or ""
