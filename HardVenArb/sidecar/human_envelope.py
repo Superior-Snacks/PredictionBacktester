@@ -134,7 +134,73 @@ def compare(a_path: str, b_path: str) -> int:
     return 0
 
 
+def timeline(path: str) -> int:
+    """Every betslip event in time order, so a close METHOD can be matched to what the venue recorded.
+
+    The question this answers: does `context.action = betslip.close` fire on every close, or only on some?
+    If a slip closed with Esc (or by re-clicking the odds) reports nothing, then the bot's missing
+    betslip.duration is ordinary rather than a signature — and that changes what is worth fixing.
+    """
+    if not os.path.exists(path):
+        raise SystemExit(f"ERROR: no such capture file: {path}")
+    rows = []
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            try:
+                rec = json.loads(line)
+            except Exception:
+                continue
+            url, t = rec.get("url") or "", rec.get("t")
+            if not url or t is None:
+                continue
+            if "/web/metrics" in url:
+                try:
+                    d = json.loads(rec.get("post") or "")
+                except Exception:
+                    continue
+                rows.append((t, "METRIC", d.get("context.action", "?"),
+                             d.get("betslip.duration"), d.get("betslip.closeTime"),
+                             d.get("betslip.source"), d.get("context.path", "")))
+            elif "/v1/betslips/" in url:
+                m = rec.get("method", "?")
+                kind = "SLIP OPEN" if m == "POST" and url.rstrip("/").endswith("betslips") else \
+                       "SLIP CANCEL" if m == "DELETE" else f"SLIP {m}"
+                rows.append((t, kind, "", None, None, None, ""))
+    rows.sort(key=lambda r: r[0])
+
+    opens = sum(1 for r in rows if r[1] == "SLIP OPEN")
+    cancels = sum(1 for r in rows if r[1] == "SLIP CANCEL")
+    closes = sum(1 for r in rows if r[1] == "METRIC" and r[2] == "betslip.close")
+    print(f"{path}\n  slips opened: {opens}   cancelled: {cancels}   "
+          f"betslip.close metrics: {closes}\n")
+    print(f"  {'t(s)':>8}  {'event':12}  detail")
+    print("  " + "-" * 88)
+    for t, kind, action, dur, close_ms, src, p in rows:
+        if kind == "METRIC":
+            if dur is not None:
+                detail = f"action={action}  duration={dur/1000:.1f}s  closeTime={close_ms}ms  source={src}"
+            else:
+                detail = f"action={action}  {p}"
+        else:
+            detail = ""
+        print(f"  {t:8.1f}  {kind:12}  {detail}")
+
+    print("\n  READ IT LIKE THIS: an open with no matching betslip.close metric = a close the venue did "
+          "NOT record a duration for.")
+    if opens and closes < opens:
+        print(f"  -> {opens - closes} of {opens} closes reported NOTHING. The metric is not emitted for "
+              f"every close, so the bot emitting none is less anomalous than it first looked.")
+    elif opens and closes == opens:
+        print("  -> EVERY close reported a duration. The bot emitting none IS a distinguishing absence.")
+    return 0
+
+
 def main(argv: list[str]) -> int:
+    if argv and argv[0] == "--timeline":
+        if len(argv) != 2:
+            print("usage: python human_envelope.py --timeline <recon.jsonl>")
+            return 2
+        return timeline(argv[1])
     if argv and argv[0] == "--compare":
         if len(argv) != 3:
             print("usage: python human_envelope.py --compare <human.jsonl> <bot.jsonl>")
