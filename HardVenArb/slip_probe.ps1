@@ -241,7 +241,10 @@ foreach ($sel in $targets) {
             Write-Host "           same-side name guard is INERT on this venue. Side identification here" -ForegroundColor Yellow
             Write-Host "           rests on matching the board price instead.>" -ForegroundColor Yellow
         }
-        if ($res.visibility) {
+        # Only reported when BIA_SLIP_CHECK_VISIBILITY=1 — the read itself runs in the page's main world,
+        # so it is off by default and bring_to_front() is trusted instead. Guard on `.state`, not on the
+        # object: an empty {} deserialises to a truthy PSCustomObject and would print the HIDDEN branch.
+        if ($res.visibility -and $res.visibility.state) {
             $vs = $res.visibility.state
             if ($vs -eq 'visible') {
                 Write-Host "  VISIBLE document.visibilityState=$vs focused=$($res.visibility.focused) - a human could have made this click" -ForegroundColor Green

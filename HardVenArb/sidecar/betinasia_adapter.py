@@ -1094,15 +1094,30 @@ class BetInAsiaAdapter(BookAdapter):
         Reading the panel is the only independent answer. Deliberately raw text rather than a parsed name:
         the panel's structure has never been captured, and echoing back the catalog name we already asked
         for would be a cache agreeing with itself -- it would populate the field, satisfy the guard, and
-        prove nothing. Look at the text first, parse it second."""
+        prove nothing. Look at the text first, parse it second.
+
+        READ VIA LOCATORS, NOT evaluate(). Measured with `test_dom_isolation.py`: a page that patches the
+        `innerText` getter sees **1** read from `locator.evaluate(el => el.innerText)` and **0** from
+        `locator.inner_text()` — Playwright runs its own operations in an isolated world that page script
+        cannot reach or patch, while our JS runs in the main world alongside theirs. The venue does not
+        instrument DOM properties today, but our own canary shows how little that would cost them, so the
+        ancestor walk is expressed as an XPath locator instead of a loop in their context.
+        """
         try:
             loc = page.get_by_text("start acca", exact=False)
             if not await loc.count():
                 return ""
-            return await loc.first.evaluate(
-                """el => { let n = el;
-                           for (let i = 0; i < 6 && n.parentElement; i++) n = n.parentElement;
-                           return (n.innerText || '').replace(/\\s+/g, ' ').slice(0, 4000); }""")
+            anchor = loc.first
+            # `ancestor::*[n]` counts outward from the element (XPath reverse axis), so this is the same
+            # walk the old loop did — deepest first, falling back when the tree is shallower.
+            for depth in range(6, 0, -1):
+                anc = anchor.locator(f"xpath=ancestor::*[{depth}]")
+                if await anc.count() == 0:
+                    continue
+                txt = " ".join(((await anc.first.inner_text()) or "").split())
+                if txt:
+                    return txt[:4000]
+            return " ".join(((await anchor.inner_text()) or "").split())[:4000]
         except Exception as e:
             return f"<unreadable: {type(e).__name__}>"
 
@@ -1364,14 +1379,22 @@ class BetInAsiaAdapter(BookAdapter):
                 except Exception as fe:
                     print(f"[BIA SLIP] could not focus the tab before clicking "
                           f"({type(fe).__name__}) — clicking into a possibly hidden tab", flush=True)
-            try:
-                vis = await page.evaluate(
-                    "() => ({state: document.visibilityState, focused: document.hasFocus()})")
-            except Exception:
-                vis = {}
-            if vis.get("state") == "hidden":
-                print(f"[BIA SLIP] WARNING clicking while document.visibilityState=hidden — "
-                      f"a human cannot do this; the venue can see it", flush=True)
+            # READING visibilityState IS ITSELF A MAIN-WORLD ACT, so it is DIAGNOSTIC-ONLY and off by
+            # default. bring_to_front() is what makes the click legitimate; this only confirmed it — and
+            # confirming it put a `document.visibilityState` read in the page's own context immediately
+            # before every click, creating a read-then-click correlation that would not otherwise exist.
+            # The venue polls that property 1.1x/s of its own accord, so one more read hides in the noise,
+            # but the TIMING does not. Set BIA_SLIP_CHECK_VISIBILITY=1 when verifying by hand.
+            vis = {}
+            if os.environ.get("BIA_SLIP_CHECK_VISIBILITY") == "1":
+                try:
+                    vis = await page.evaluate(
+                        "() => ({state: document.visibilityState, focused: document.hasFocus()})")
+                except Exception:
+                    vis = {}
+                if vis.get("state") == "hidden":
+                    print(f"[BIA SLIP] WARNING clicking while document.visibilityState=hidden — "
+                          f"a human cannot do this; the venue can see it", flush=True)
 
             url_before = page.url
             slips_before = len(self.feed._slip_books)
@@ -1457,18 +1480,16 @@ class BetInAsiaAdapter(BookAdapter):
             panel = 0
             panel_text = ""
             try:
-                loc = page.get_by_text("start acca", exact=False)
-                panel = await loc.count()
+                panel = await page.get_by_text("start acca", exact=False).count()
                 # WHAT IS ACTUALLY IN THE PANEL. Measured 2026-08-14 on a non-acca cricket match: the click
                 # landed, `slip_panel_seen` was 1 — the panel really did open — and yet no offers_acca_hcap
                 # ever arrived. So the acca CHANNEL is a dead end for these events, but the panel itself is
                 # on screen, and if it renders a price then a DOM read gets what the socket will not.
-                # That question is worth one string rather than another round of theorising.
+                # Shares _read_slip_panel rather than repeating the walk: that one is locator-based and so
+                # invisible to a page that instruments innerText, and a second copy would have kept the
+                # main-world read alive on exactly the diagnostic path used when something is already wrong.
                 if panel:
-                    panel_text = await loc.first.evaluate(
-                        """el => { let n = el;
-                                   for (let i = 0; i < 6 && n.parentElement; i++) n = n.parentElement;
-                                   return (n.innerText || '').replace(/\\s+/g, ' ').slice(0, 4000); }""")
+                    panel_text = await self._read_slip_panel(page)
             except Exception as pe:
                 panel_text = f"<unreadable: {type(pe).__name__}>"
             return {"ok": False,
