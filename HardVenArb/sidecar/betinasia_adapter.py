@@ -39,6 +39,7 @@ from typing import Optional
 import sports as sports_cfg
 from book_adapter import BetResult, BookAdapter, CatalogEntry, Selection
 from betinasia_ws import BetInAsiaFeed
+from human_mouse import CURSOR
 
 # ── The max_stake problem ─────────────────────────────────────────────────────
 MAX_STAKE_NOTE = """
@@ -910,8 +911,19 @@ class BetInAsiaAdapter(BookAdapter):
         # settle whether those were scores, seeds, or genuinely-integer odds.
         shown = ", ".join(repr(s) for s in seen[:16]) or "<no text in any cell>"
         if not cands:
+            # WHERE ARE THE NUMBERS? `div > span` inside the <a> is where every working sport keeps its
+            # price, but a row that renders team names and '-/-' score placeholders and nothing else
+            # leaves two very different possibilities: the venue posts no odds for this fixture yet, or it
+            # posts them somewhere this selector cannot see. Those need opposite fixes, and the cell texts
+            # alone cannot separate them — so dump the row VERBATIM and let one probe decide.
+            row_text = ""
+            try:
+                if n:
+                    row_text = " ".join(((await links.first.inner_text()) or "").split())[:400]
+            except Exception:
+                pass
             return None, n, (f"no cell on any of {n} link(s) renders decimal odds "
-                             f"(cells seen: {shown})")
+                             f"(cells seen: {shown}) | whole row reads: {row_text!r}")
         cands.sort(key=lambda c: c[0])
         best = cands[0]
         if best[0] > want * self.COLUMN_MATCH_TOL:
@@ -1228,7 +1240,7 @@ class BetInAsiaAdapter(BookAdapter):
                     more = page.get_by_text("Show more", exact=True)
                     if await more.count() == 0:
                         break
-                    await more.first.click(timeout=5_000)
+                    await CURSOR.click(page, more.first, timeout=5_000)
                     await _aio.sleep(0.4)
                     if await page.locator(f'a[href*="{ekey}"]').count():
                         break
@@ -1274,9 +1286,42 @@ class BetInAsiaAdapter(BookAdapter):
                 print(f"[BIA SLIP] {ekey}: {n_links} links carry this key; matched the cell showing {want}",
                       flush=True)
 
+            # ── ANTI-DETECTION: NEVER CLICK INTO A HIDDEN TAB ────────────────────────────────────────
+            # Playwright dispatches through CDP, so the event carries isTrusted:true and looks real. What
+            # does NOT look real is WHEN it arrives. A background tab reports
+            # `document.visibilityState === "hidden"`, and a human cannot click a tab they are not looking
+            # at — so a trusted click landing in a hidden document is a signature no genuine user can
+            # produce, readable by ordinary page JS with no fingerprinting required. Parked per-sport tabs
+            # made every quote today exactly that: five boards open, at most one visible.
+            # bring_to_front() costs ~0.3s and makes the action physically possible. The sampler is
+            # rate-limited to roughly one quote a minute, so the resulting tab switching is well inside
+            # what a person watching several boards does anyway.
+            # BIA_SLIP_FOCUS_TAB=0 restores the old behaviour; the visibility state is reported either way
+            # so the choice is never silent.
+            if os.environ.get("BIA_SLIP_FOCUS_TAB", "1") == "1":
+                try:
+                    await page.bring_to_front()
+                    await _aio.sleep(float(os.environ.get("BIA_SLIP_FOCUS_SETTLE_SEC", "0.35")))
+                except Exception as fe:
+                    print(f"[BIA SLIP] could not focus the tab before clicking "
+                          f"({type(fe).__name__}) — clicking into a possibly hidden tab", flush=True)
+            try:
+                vis = await page.evaluate(
+                    "() => ({state: document.visibilityState, focused: document.hasFocus()})")
+            except Exception:
+                vis = {}
+            if vis.get("state") == "hidden":
+                print(f"[BIA SLIP] WARNING clicking while document.visibilityState=hidden — "
+                      f"a human cannot do this; the venue can see it", flush=True)
+
             url_before = page.url
             slips_before = len(self.feed._slip_books)
-            await cell.click(timeout=5_000)
+            # HUMAN APPROACH, then a real click. `locator.click()` still does the clicking — it re-resolves
+            # the element's live position, which matters on a board that reorders as odds tick — but the
+            # cursor now travels there along a curved, decelerating path instead of appearing on the cell.
+            # A page that records mousemove sees a reach, not a teleport. See human_mouse.py.
+            if not await CURSOR.click(page, cell, timeout=5_000):
+                return {"ok": False, "error": "the price cell could not be clicked"}
             self._slip_clicked = True      # past this point the venue has seen a UI action
             await _aio.sleep(0.5)
             url_after = page.url
@@ -1325,6 +1370,9 @@ class BetInAsiaAdapter(BookAdapter):
                                     # None => nothing parsed => callers keep the assumed constant.
                                     "max_stake": real_stake,
                                     "ladder": ladder[:24],
+                                    # What the DOCUMENT reported at click time. "hidden" here means the
+                                    # venue saw a click no human could have made.
+                                    "visibility": vis,
                                     # The venue's own name for what it put on the slip -> feeds the
                                     # executor's same-side guard, which has been inert here until now.
                                     "selection_label": slip_label,

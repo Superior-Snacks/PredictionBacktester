@@ -43,6 +43,7 @@ from typing import Callable, Optional
 sys.stdout.reconfigure(encoding="utf-8")
 
 from betinasia_ws import BetInAsiaFeed
+from human_mouse import CURSOR
 
 PROFILE = Path(__file__).parent / ".betinasia_profile"
 PRICE_FEED_HINT = "cpricefeed"          # both /cpricefeed/ and /folly/cpricefeed/ carry the protocol
@@ -329,7 +330,9 @@ class BetInAsiaObserver:
                 stagnant = 0
                 # Always take the FIRST: expanding removes that control, so the next iteration naturally
                 # advances to the next competition. Indexing into a shifting list would skip entries.
-                await more.first.click(timeout=5_000)
+                # Human approach on the way in — a board reset fires ~11 of these an hour, and a burst of
+                # teleporting clicks is exactly the shape a click-stream check looks for.
+                await CURSOR.click(page, more.first, timeout=5_000)
                 clicks += 1
                 await asyncio.sleep(pace)
             except Exception:

@@ -53,7 +53,13 @@ param(
     # invoked with -File, which silently pointed this at C:\cross_pairs_bia.json.
     [string] $PairsFile,
     # Include in-play games too (default is pre-live only, which is what the bot trades).
-    [switch] $IncludeInPlay
+    [switch] $IncludeInPlay,
+    # Only consider games starting at least this many hours out. The point is the HORIZON question: a
+    # far-future board row was seen rendering '-/-' score placeholders and no odds, while same-day and
+    # next-day rows quote fine. Set -MinHoursOut 72 to aim straight at that, in any sport.
+    [double] $MinHoursOut = 0,
+    # ...and at most this many. -MaxHoursOut 36 gives the near-term control group.
+    [double] $MaxHoursOut = 0
 )
 
 $ErrorActionPreference = "Stop"
@@ -122,6 +128,7 @@ function Test-LabelMatch([string]$venueLabel, [string]$catalogName) {
 
 function Get-Candidates {
     Load-Pairs
+    if ($MinHoursOut -gt 0 -or $MaxHoursOut -gt 0) { Load-Catalog }   # start_time lives in the catalog
     $toks = @()
     foreach ($t in $script:Pair.Keys) { $toks += $t }
     $toks = $toks | Select-Object -Unique
@@ -136,6 +143,13 @@ function Get-Candidates {
             if ($s.status -ne 'open') { continue }
             if ((-not $IncludeInPlay) -and $s.live) { continue }
             if ($Sport -and (($s.selection_id -split ':')[0] -ne $Sport)) { continue }
+            if ($MinHoursOut -gt 0 -or $MaxHoursOut -gt 0) {
+                $e = $script:Cat[$s.selection_id]
+                if (-not $e -or -not $e.start_time) { continue }
+                $hrs = ([datetime]$e.start_time).ToUniversalTime().Subtract([datetime]::UtcNow).TotalHours
+                if ($MinHoursOut -gt 0 -and $hrs -lt $MinHoursOut) { continue }
+                if ($MaxHoursOut -gt 0 -and $hrs -gt $MaxHoursOut) { continue }
+            }
             $out += $s
         }
     }
@@ -148,14 +162,19 @@ if ($List) {
     Write-Host "$($c.Count) quotable candidate(s)$(if ($Sport) { " in $Sport" })" -ForegroundColor Cyan
     $c | ForEach-Object {
         $e = $script:Cat[$_.selection_id]
+        $hrs = $null
+        if ($e -and $e.start_time) {
+            $hrs = [math]::Round(([datetime]$e.start_time).ToUniversalTime().Subtract([datetime]::UtcNow).TotalHours, 1)
+        }
         [pscustomobject]@{
             sport   = ($_.selection_id -split ':')[0]
+            hrsOut  = $hrs
             odds    = $_.decimal_odds
             event   = if ($e) { $e.event } else { '?' }
             backing = if ($e) { $e.selection_name } else { '?' }
             id      = $_.selection_id
         }
-    } | Sort-Object sport, event | Format-Table -AutoSize -Wrap
+    } | Sort-Object sport, hrsOut | Format-Table -AutoSize -Wrap
     return
 }
 
@@ -221,6 +240,15 @@ foreach ($sel in $targets) {
             Write-Host "  VENUE   <no selection_label - BetInAsia has never returned one, so the executor's" -ForegroundColor Yellow
             Write-Host "           same-side name guard is INERT on this venue. Side identification here" -ForegroundColor Yellow
             Write-Host "           rests on matching the board price instead.>" -ForegroundColor Yellow
+        }
+        if ($res.visibility) {
+            $vs = $res.visibility.state
+            if ($vs -eq 'visible') {
+                Write-Host "  VISIBLE document.visibilityState=$vs focused=$($res.visibility.focused) - a human could have made this click" -ForegroundColor Green
+            } else {
+                Write-Host "  *** HIDDEN TAB *** document.visibilityState=$vs - no human can click a tab they cannot see." -ForegroundColor Red
+                Write-Host "      The venue can read this with one line of JS. Set BIA_SLIP_FOCUS_TAB=1." -ForegroundColor Red
+            }
         }
         if ($res.max_stake) {
             Write-Host ("  DEPTH   `$$([math]::Round($res.max_stake,2)) available AT {0} (real, off the slip ladder - not the assumed `$100)" -f $res.decimal_odds) -ForegroundColor Green
