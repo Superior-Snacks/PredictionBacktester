@@ -243,7 +243,11 @@ async def main() -> int:
     posts: list[tuple[str, str, str]] = []
     hosts: dict[str, int] = {}
 
-    print(f"[RECON] observe-only: {a.url} for {a.secs:.0f}s. Nothing will be clicked.")
+    print(f"[RECON] observe-only: {a.url} for {a.secs:.0f}s. THE BOT will not click anything.")
+    print("[RECON] DRIVE IT YOURSELF while this runs. The betting flow cannot be reached by URL — it is a")
+    print("        state you click into — so open a betslip, set a stake, and go as far as you are willing")
+    print("        (stopping short of Place is fine; the checks that matter load with the panel). Every")
+    print("        tab is instrumented, so whatever the flow touches is recorded.")
     async with async_playwright() as pw:
         ctx = await pw.chromium.launch_persistent_context(str(profile), headless=False)
         await ctx.add_init_script(PROBE_JS)
@@ -262,15 +266,27 @@ async def main() -> int:
         page = ctx.pages[0] if ctx.pages else await ctx.new_page()
         await page.goto(a.url, wait_until="domcontentloaded")
         await asyncio.sleep(a.secs)
-        try:
-            log = await page.evaluate("() => window.__hvDetect || {}")
-        except Exception as e:
-            print(f"[RECON] could not read the probe back: {e}")
-            log = {}
+        # READ BACK FROM EVERY TAB, merged. Driving the betting flow by hand can open a new tab, and
+        # reading only the first page would report "they check nothing" about a tab nobody looked at.
+        log = await read_probe(ctx)
         await ctx.close()
     if tmp:
         shutil.rmtree(tmp, ignore_errors=True)
 
+    report(log, a.secs, posts if a.net else None)
+
+    if a.json:
+        Path(a.json).write_text(json.dumps(
+            {"log": log, "posts": posts, "hosts": hosts, "secs": a.secs, "url": a.url},
+            indent=2), encoding="utf-8")
+        print(f"\n[RECON] raw report -> {a.json}")
+    return 0
+
+
+def report(log: dict, secs: float, posts: "list | None" = None) -> None:
+    """Print the whole read-out. Shared so betinasia_recon.py can arm the same probe during a
+    network capture and produce one combined session instead of two that cannot run at once —
+    both own a browser on .betinasia_profile, so they were mutually exclusive."""
     if not log:
         print("[RECON] EMPTY REPORT — the probe never armed, or the page replaced the document after "
               "init. Nothing below can be trusted as 'they do not check this'.")
@@ -284,13 +300,13 @@ async def main() -> int:
             continue
         for k, v in sorted(hits.items(), key=lambda kv: -kv[1]["count"]):
             shown.add(k)
-            print_entry(k, v, a.secs)
+            print_entry(k, v, secs)
 
     rest = {k: v for k, v in log.items() if k not in shown}
     if rest:
         print(f"\n{'=' * 78}\n### EVERYTHING ELSE (stacks included — do not eyeball counts)")
         for k, v in sorted(rest.items(), key=lambda kv: -kv[1]["count"]):
-            print_entry(k, v, a.secs)
+            print_entry(k, v, secs)
 
     # ── who is doing the looking ──────────────────────────────────────────────
     agg: dict[str, float] = {}
@@ -302,7 +318,7 @@ async def main() -> int:
     for o, c in sorted(agg.items(), key=lambda kv: -kv[1]):
         print(f"  {c:9.0f}  {o}")
 
-    if a.net:
+    if posts is not None:
         print(f"\n{'=' * 78}\n### WHAT LEFT THE BROWSER (non-asset POSTs)")
         seen = set()
         for h, p, body in posts:
@@ -346,12 +362,29 @@ async def main() -> int:
           "betslip.duration, betslip.source and context.tabId, so slip-hold time and tab count are "
           "recorded regardless of what this run found.")
 
-    if a.json:
-        Path(a.json).write_text(json.dumps(
-            {"log": log, "posts": posts, "hosts": hosts, "secs": a.secs, "url": a.url},
-            indent=2), encoding="utf-8")
-        print(f"\n[RECON] raw report -> {a.json}")
-    return 0
+
+async def read_probe(ctx) -> dict:
+    """Merge `window.__hvDetect` from every tab in a context. Shared with betinasia_recon.py."""
+    log: dict = {}
+    for pg in list(ctx.pages):
+        try:
+            if pg.is_closed():
+                continue
+            got = await pg.evaluate("() => window.__hvDetect || {}")
+        except Exception:
+            continue
+        for k, v in (got or {}).items():
+            cur = log.get(k)
+            if cur is None:
+                log[k] = v
+                continue
+            cur["count"] = cur.get("count", 0) + v.get("count", 0)
+            for f, pick in (("first", min), ("last", max)):
+                vals = [x for x in (cur.get(f), v.get(f)) if x is not None]
+                if vals:
+                    cur[f] = pick(vals)
+            cur.setdefault("stacks", {}).update(v.get("stacks") or {})
+    return log
 
 
 if __name__ == "__main__":

@@ -195,7 +195,77 @@ def timeline(path: str) -> int:
     return 0
 
 
+def orders(path: str) -> int:
+    """Every state an order passed through, in order — the fill experiment's readout.
+
+    Answers the questions the executor is blocked on: does a resting order report `closed:false` with a
+    stake below want_stake while it waits; does `bets[]` grow one bookie at a time; what does a cancel
+    look like against a fill. Requires the capture to have kept every /v1/orders/ body — see
+    ALWAYS_BODY in betinasia_recon.py, without which only the first five responses exist.
+    """
+    if not os.path.exists(path):
+        raise SystemExit(f"ERROR: no such capture file: {path}")
+    states: dict = {}
+    placements: list = []
+    order = []
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            try:
+                rec = json.loads(line)
+            except Exception:
+                continue
+            url, t = rec.get("url") or "", rec.get("t")
+            if rec.get("kind") != "http" or "/v1/orders" not in url:
+                continue
+            if rec.get("method") == "POST" and rec.get("post"):
+                placements.append((t, rec["post"]))
+            try:
+                d = json.loads(rec.get("body") or "")
+            except Exception:
+                continue
+            rows = d.get("data")
+            rows = rows if isinstance(rows, list) else [rows] if isinstance(rows, dict) else []
+            for o in rows:
+                if not isinstance(o, dict) or "order_id" not in o:
+                    continue
+                oid = o["order_id"]
+                bets = o.get("bets") or []
+                filled = sum((b.get("stake") or [0, 0])[1] for b in bets
+                             if isinstance(b.get("stake"), list) and len(b["stake"]) > 1)
+                snap = (o.get("closed"), o.get("close_reason"), o.get("status"),
+                        json.dumps(o.get("want_stake")), json.dumps(o.get("stake")),
+                        o.get("want_price"), o.get("price"), len(bets), round(filled, 4))
+                if states.get(oid) != snap:                # only print CHANGES
+                    states[oid] = snap
+                    order.append((t, oid, snap, bets))
+
+    print(f"{path}\n  placements captured: {len(placements)}   order state changes: {len(order)}\n")
+    for t, post in placements:
+        print(f"  t={t:7.1f}  PLACED  {post[:400]}")
+        if "request_" in post:
+            i = post.index("request_")
+            print(f"            ^ request field present: {post[i:i+120]}")
+    print()
+    for t, oid, s, bets in order:
+        closed, reason, status, want_stake, stake, want_price, price, nbets, filled = s
+        print(f"  t={t:7.1f}  order {oid}  closed={closed} reason={reason} status={status}")
+        print(f"            want {want_stake} @ {want_price}   got {stake} @ {price}   "
+              f"bets={nbets} filled={filled}")
+        for b in bets[:6]:
+            st = (b.get("status") or {}).get("code") if isinstance(b.get("status"), dict) else b.get("status")
+            print(f"              {b.get('bookie'):>12}  {json.dumps(b.get('stake'))} @ {b.get('price')}  {st}")
+    if not order:
+        print("  NO order bodies in this capture. Either nothing was placed, or the capture predates the\n"
+              "  ALWAYS_BODY fix and threw away every response after the fifth.")
+    return 0
+
+
 def main(argv: list[str]) -> int:
+    if argv and argv[0] == "--orders":
+        if len(argv) != 2:
+            print("usage: python human_envelope.py --orders <recon.jsonl>")
+            return 2
+        return orders(argv[1])
     if argv and argv[0] == "--timeline":
         if len(argv) != 2:
             print("usage: python human_envelope.py --timeline <recon.jsonl>")

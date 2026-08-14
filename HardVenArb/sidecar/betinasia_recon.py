@@ -55,6 +55,13 @@ MAX_FRAMES_PER_WS = int(os.environ.get("BIA_RECON_MAX_CATALOG", "400"))
 MAX_INTERESTING_PER_WS = int(os.environ.get("BIA_RECON_MAX_INTERESTING", "20000"))
 SKIP_URL = re.compile(r"\.(png|jpe?g|gif|svg|webp|woff2?|ttf|css|ico|mp4)(\?|$)|googletagmanager|"
                       r"google-analytics|hotjar|sentry|intercom|facebook|doubleclick", re.I)
+# ALWAYS store the body for these, however many times they are hit. The generic rule keeps only the first
+# five bodies per endpoint and counts the rest — which is right for catalog chatter and exactly wrong for
+# the order lifecycle: `/v1/orders/` is POLLED, so a resting order's progression from open to partially
+# filled to done lives entirely in the SIXTH response onward. Capturing a fill and keeping only the state
+# before it happened is the failure this avoids.
+ALWAYS_BODY = re.compile(os.environ.get(
+    "BIA_RECON_ALWAYS_BODY", r"/v1/(orders|betslips)|accounting_info|can_place_bets"), re.I)
 ODDSY = re.compile(r"odd|price|market|event|match|sport|line|bet|fixture|selection|tennis", re.I)
 
 
@@ -121,17 +128,21 @@ class Recon:
             return
         key = url.split("?")[0]
         self.endpoints[key] += 1
+        keep_all = bool(ALWAYS_BODY.search(url))         # order/betslip lifecycle — see ALWAYS_BODY
         body = ""
-        if self.endpoints[key] <= 5:                     # store the first few bodies per endpoint, then count
+        if keep_all or self.endpoints[key] <= 5:         # else: first few bodies per endpoint, then count
             try:
                 body = (await resp.text())[:MAX_FRAME_CHARS]
             except Exception:
                 body = "<unreadable>"
         req = resp.request
         post = ""
-        if req.method == "POST" and self.endpoints[key] <= 5:
+        if req.method == "POST" and (keep_all or self.endpoints[key] <= 5):
+            # 800 chars truncated the ORDER body mid-field at `"request_…` — possibly the idempotency key,
+            # and unrecoverable from any capture so far. Bodies on these endpoints are small; keep them whole.
+            post = ""
             try:
-                post = (req.post_data or "")[:800]
+                post = (req.post_data or "")[:8000 if keep_all else 800]
             except Exception:
                 post = ""
         self.rec("http", method=req.method, status=resp.status, url=url[:400], post=post, body=body)
@@ -170,6 +181,7 @@ async def main() -> int:
     ap.add_argument("--url", default="https://www.betinasia.com")
     args = ap.parse_args()
 
+    t_start = time.time()
     out = Path(__file__).parent / f"betinasia_recon_{datetime.now():%Y%m%d_%H%M%S}.jsonl"
     rec = Recon(out)
     print(f"[RECON] dump -> {out.name}  (gitignored; contains session data once logged in)")
@@ -187,6 +199,21 @@ async def main() -> int:
             str(PROFILE), headless=False, args=args_list,
             viewport=None,                              # let the window size rule (no fixed viewport tell)
         )
+        # ARM THE DETECTOR PROBE TOO. This file captures the NETWORK; detect_recon.py instruments the
+        # browser APIs — and they could never run together, because both open a browser on
+        # .betinasia_profile. For the bet-path question ("what does the venue check when I place?") the
+        # two halves have to come from the SAME session, so the probe is armed here and reported at the
+        # end. BIA_RECON_DETECT=0 skips it (see detect_recon for the toString tamper trade-off).
+        probe_on = os.environ.get("BIA_RECON_DETECT", "1") != "0"
+        if probe_on:
+            try:
+                from detect_recon import PROBE_JS
+                await ctx.add_init_script(PROBE_JS)
+                print("[RECON] detector probe armed — API reads will be reported at the end")
+            except Exception as e:
+                probe_on = False
+                print(f"[RECON] detector probe unavailable: {type(e).__name__}: {e}")
+
         ctx.on("page", rec.hook_page)
         for pg in ctx.pages:
             rec.hook_page(pg)
@@ -203,6 +230,15 @@ async def main() -> int:
         except (KeyboardInterrupt, asyncio.CancelledError):
             pass
         finally:
+            # Read the probe BEFORE closing the context — the pages are gone afterwards.
+            if probe_on:
+                try:
+                    from detect_recon import read_probe, report
+                    log = await read_probe(ctx)
+                    print(f"\n{'=' * 78}\n### DETECTOR PROBE — what the venue READ during this session")
+                    report(log, max(1.0, time.time() - t_start))
+                except Exception as e:
+                    print(f"[RECON] probe read-back failed: {type(e).__name__}: {e}")
             rec.summary(final=True)
             rec.out.flush()
             rec.out.close()
