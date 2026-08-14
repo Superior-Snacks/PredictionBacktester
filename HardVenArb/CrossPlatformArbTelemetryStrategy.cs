@@ -267,6 +267,8 @@ public class CrossPlatformArbTelemetryStrategy
     private static readonly int SlipVerifyPreLiveMs = EnvSec("HARDVEN_SLIP_VERIFY_PRELIVE_SEC", 60);
     private static readonly int SlipVerifyInPlayMs  = EnvSec("HARDVEN_SLIP_VERIFY_INPLAY_SEC", 180);
     private static readonly int SlipVerifyRoverMs   = EnvSec("HARDVEN_SLIP_VERIFY_ROVER_SEC", 300);
+    // How soon a refused-without-clicking sample may be retried (see RefundSlipVerifyBudget).
+    private static readonly int SlipVerifyRefundFloorMs = EnvSec("HARDVEN_SLIP_VERIFY_REFUND_FLOOR_SEC", 5);
     // HOLD THE SLIP after a successful quote and watch the arb until it stops breaking even. Costs no UI
     // action at all: the event is already subscribed on the acca channel, so the venue keeps pushing and a
     // re-quote is served from cache. 0 disables the hold and restores the single-shot sample.
@@ -293,12 +295,15 @@ public class CrossPlatformArbTelemetryStrategy
     /// <summary>Wire the betslip reader (the sidecar's /slip_quote). Set after construction because the
     /// verifier that owns it needs this strategy first. Null = sampling disabled.</summary>
     public void SetSlipVerifier(Func<string, double, Task<(decimal Price, string Error)>>? slipQuote,
-                                Func<string>? slipVia = null)
+                                Func<string>? slipVia = null,
+                                Func<bool>? slipClicked = null)
     {
-        _slipQuote = slipQuote;
-        _slipVia   = slipVia;      // reads back which tier served the last quote (see the rover cooldown)
+        _slipQuote   = slipQuote;
+        _slipVia     = slipVia;      // reads back which tier served the last quote (see the rover cooldown)
+        _slipClicked = slipClicked;  // ...and whether it cost a click at all (see RefundSlipVerifyBudget)
     }
     private Func<string>? _slipVia;
+    private Func<bool>?   _slipClicked;
 
     // ── Public stats ──────────────────────────────────────────────────────────
     public int OpenArbs   => _activeWindows.Values.Count(w => w != null);
@@ -1056,6 +1061,29 @@ public class CrossPlatformArbTelemetryStrategy
     internal void ReleaseSlipVerifySlot() => Volatile.Write(ref _slipVerifyInFlight, 0);
     internal static int SlipVerifyIntervalMsForTest => SlipVerifyPreLiveMs;
 
+    /// <summary>Hand the regime's budget back after a refusal that COST THE VENUE NOTHING, leaving only a
+    /// short floor before the next attempt.
+    ///
+    /// The budgets exist to ration UI ACTIONS, and most refusals are not one: the sidecar decides "the
+    /// venue will not put this event on a betslip", "this event is already subscribed" and "the row
+    /// renders no odds" from data it already holds, without touching the page. Charging those a full
+    /// interval means a burst of unquotable arbs blinds the sampler for minutes — 2 of 12 samples on
+    /// 2026-08-13 were spent on `available_for_accas: false` events, each answered in under 10ms and each
+    /// costing a whole minute of pre-live coverage.
+    ///
+    /// The floor is what stops this becoming a retry loop: a structurally unquotable pair re-refuses in
+    /// milliseconds, so without it the next arb open would always find the slot free.</summary>
+    internal void RefundSlipVerifyBudget(bool openedInPlay)
+    {
+        long budget = openedInPlay ? SlipVerifyInPlayMs : SlipVerifyPreLiveMs;
+        long target = Environment.TickCount64 - Math.Max(0, budget - SlipVerifyRefundFloorMs);
+        ref long last = ref (openedInPlay ? ref _lastInPlayVerifyTicks : ref _lastSlipVerifyTicks);
+        // Only ever move the clock EARLIER. A concurrent real attempt may have stamped it since, and
+        // pushing that forward would hand out a second slot on top of the one it already owns.
+        long cur = Interlocked.Read(ref last);
+        if (target < cur) Interlocked.Exchange(ref last, target);
+    }
+
     /// <summary>Quote the betslip, then re-test the arb on the prices the venue would actually honour.
     ///
     /// The Kalshi leg is RE-READ after the quote returns, not reused from open: the slip takes seconds and
@@ -1083,6 +1111,9 @@ public class CrossPlatformArbTelemetryStrategy
                 Console.WriteLine($"[SLIP VERIFY] that quote used the roving tab — pausing sampling for "
                                 + $"{SlipVerifyRoverMs / 1000}s");
             }
+            // A refusal the venue never saw does not spend the interval — give it back (minus a floor).
+            else if (slip <= 0m && !(_slipClicked?.Invoke() ?? true))
+                RefundSlipVerifyBudget(w.OpenedInPlay);
             ReleaseSlipVerifySlot();
         }
         sw.Stop();

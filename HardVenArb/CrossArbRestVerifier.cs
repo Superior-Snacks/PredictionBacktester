@@ -136,8 +136,17 @@ public class CrossArbRestVerifier
     /// sampler throttles harder after a rover quote, since that one navigated the browser.</summary>
     public string LastSlipVia { get; private set; } = "";
 
+    /// <summary>Whether the last slip quote actually CLICKED at the venue. False for the refusals decided
+    /// from data the sidecar already holds — an event the venue will not put on a betslip, an event already
+    /// subscribed, a row rendering no odds. Those cost nothing and should not spend a sampling interval,
+    /// which is the difference between 12 samples in an evening and one per arb worth checking.
+    /// Defaults to TRUE on a parse failure or an exception: assuming a click happened is the cautious
+    /// reading, since the penalty for being wrong is slowing down rather than hammering the venue.</summary>
+    public bool LastSlipClicked { get; private set; } = true;
+
     public async Task<(decimal Price, string Error)> SlipQuoteAsync(string hardvenToken, double timeoutSec = 20.0)
     {
+        LastSlipClicked = true;   // pessimistic until the sidecar says otherwise (see the property)
         try
         {
             string url = $"{_sidecarBase}/slip_quote?selection_id={Uri.EscapeDataString(hardvenToken)}";
@@ -148,6 +157,9 @@ public class CrossArbRestVerifier
             string body = await resp.Content.ReadAsStringAsync(cts.Token);
             using var doc = JsonDocument.Parse(body);
             var root = doc.RootElement;
+            if (root.TryGetProperty("clicked", out var ck) &&
+                (ck.ValueKind == JsonValueKind.True || ck.ValueKind == JsonValueKind.False))
+                LastSlipClicked = ck.ValueKind == JsonValueKind.True;
             if (!(root.TryGetProperty("ok", out var ok) && ok.ValueKind == JsonValueKind.True))
                 return (-1m, root.TryGetProperty("error", out var e) ? (e.GetString() ?? "?") : "not ok");
             decimal price = root.TryGetProperty("implied_price", out var ip) && ip.TryGetDecimal(out var p)

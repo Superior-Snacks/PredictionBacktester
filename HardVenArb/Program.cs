@@ -132,8 +132,14 @@ if (args.Contains("--side-check"))
 if (args.Contains("--slip-verify-check"))
 {
     // Set BEFORE the type is first touched: the interval/enabled flags are static readonly from env.
+    // NAME THESE EXACTLY. When the single interval was split into per-regime budgets, this kept setting
+    // the old HARDVEN_SLIP_VERIFY_INTERVAL_SEC — a variable nothing reads any more — so the check silently
+    // fell back to the 60s production budget and took three minutes of real sleeping instead of six
+    // seconds. It still passed, which is why it went unnoticed.
     Environment.SetEnvironmentVariable("HARDVEN_SLIP_VERIFY", "1");
-    Environment.SetEnvironmentVariable("HARDVEN_SLIP_VERIFY_INTERVAL_SEC", "2");   // keep the check quick
+    Environment.SetEnvironmentVariable("HARDVEN_SLIP_VERIFY_PRELIVE_SEC", "2");    // keep the check quick
+    Environment.SetEnvironmentVariable("HARDVEN_SLIP_VERIFY_INPLAY_SEC", "3");     // still distinct
+    Environment.SetEnvironmentVariable("HARDVEN_SLIP_VERIFY_REFUND_FLOOR_SEC", "1");
     int failures = 0;
     void Check(string label, bool ok)
     {
@@ -183,6 +189,28 @@ if (args.Contains("--slip-verify-check"))
         if (probe.TrySlipVerifySlot(openedInPlay: false)) Interlocked.Increment(ref granted);
     })));
     Check($"exactly one of 32 simultaneous arbs was sampled (got {granted})", granted == 1);
+    probe.ReleaseSlipVerifySlot();
+
+    // A refusal the venue never saw (not available_for_accas, already subscribed, no odds on the row)
+    // must not cost a whole interval — 2 of 12 samples on 2026-08-13 were spent on events the sidecar
+    // declined in under 10ms. The floor is what keeps this from becoming a retry loop.
+    Console.WriteLine("\n[6] a quote that never clicked hands its budget back");
+    await Task.Delay(waitMs + 250);
+    Check("claims a slot", probe.TrySlipVerifySlot(openedInPlay: false));
+    probe.ReleaseSlipVerifySlot();
+    Check("throttled again immediately", !probe.TrySlipVerifySlot(openedInPlay: false));
+    probe.RefundSlipVerifyBudget(openedInPlay: false);
+    Check("still throttled for the floor right after the refund", !probe.TrySlipVerifySlot(openedInPlay: false));
+    await Task.Delay(1250);            // the 1s floor set above
+    Check("allowed again after the floor, not the full interval",
+          probe.TrySlipVerifySlot(openedInPlay: false));
+    probe.ReleaseSlipVerifySlot();
+    // The refund must never hand out a slot someone else already holds.
+    Check("refund cannot un-throttle a fresh claim",
+          probe.TrySlipVerifySlot(openedInPlay: true) is var claimed && claimed);
+    probe.ReleaseSlipVerifySlot();
+    probe.RefundSlipVerifyBudget(openedInPlay: false);   // wrong regime — must not touch in-play
+    Check("refunding pre-live leaves the in-play budget alone", !probe.TrySlipVerifySlot(openedInPlay: true));
 
     Console.WriteLine(failures == 0 ? "\nALL PASS" : $"\nFAILURES: {failures}");
     // Exit code via ExitCode, not `return n`: a returned value would make this file's entry point
@@ -624,7 +652,9 @@ telemetry.OnArbOpened += restVerifier.OnArbOpened;
 // Sampled betslip measurement (HARDVEN_SLIP_VERIFY=1). Independent of the executor: it runs in ANY mode,
 // including telemetry-only, because its whole point is measuring what the board price is worth before
 // trusting it with money. Wired here because the verifier needs the strategy to exist first.
-telemetry.SetSlipVerifier(restVerifier.SlipQuoteAsync, () => restVerifier.LastSlipVia);
+telemetry.SetSlipVerifier(restVerifier.SlipQuoteAsync,
+                          () => restVerifier.LastSlipVia,
+                          () => restVerifier.LastSlipClicked);
 
 // ── Executor — live order placement on WS-detected arb windows ────────────────
 CrossArbExecutor?            executor    = null;

@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from typing import Optional
 
@@ -696,6 +697,24 @@ class BetInAsiaAdapter(BookAdapter):
     COLUMN_MATCH_TOL = 0.05      # 5%
     COLUMN_MATCH_MARGIN = 3.0    # best candidate must be >=3x closer than the runner-up
 
+    # WHAT A PRICE CELL LOOKS LIKE. Decimal odds always carry a decimal point on this venue ("1.062",
+    # "3.79"); a BARE INTEGER in a board row is a score, a seed or a market count, never a price.
+    #
+    # This is a safety rule, not a tidiness one. `_find_price_cell` clicks whichever cell is closest to
+    # the wanted price, and a tennis row in play renders game scores in the same spans -- so a score of
+    # "4" sat 5.5% from a wanted 3.793 on 2026-08-13 and missed the 5% tolerance by a hair. At odds of
+    # 3.90 the same cell would have PASSED, and the bot would have clicked a scoreboard, opened the slip
+    # for whatever that cell belongs to, and reported the resulting price as verification. That is the
+    # same class of error as the same-side fill: a plausible number from the wrong element.
+    #
+    # Fails closed in the harmless direction. If the venue ever does render 4.00 as "4" we decline a
+    # quote we could have taken -- which costs nothing, and the refusal now prints the cell texts it saw,
+    # so it shows up as data rather than as a silent miss.
+    # Shape only — the value test (`> 1.0`) stays where it was, so "0.5" is rejected for being unpayable
+    # rather than for being the wrong shape. Four decimals allowed: the feed quotes 3, but a rendered
+    # price is the venue's business and refusing an extra digit would be an own goal.
+    ODDS_TEXT = re.compile(r"^\d{1,3}\.\d{1,4}$")
+
     async def _identify_column(self, row, sport: str, ekey: str, market_key: str, sel: str):
         """Find which board column belongs to `sel` by MATCHING ITS PRICE, not by a captured position.
 
@@ -802,33 +821,51 @@ class BetInAsiaAdapter(BookAdapter):
             n = await links.count()
         except Exception:
             return None, 0, "could not query the board"
+        max_links = int(os.environ.get("BIA_SLIP_MAX_LINKS", "12"))
+        max_spans = int(os.environ.get("BIA_SLIP_MAX_SPANS", "24"))
         cands = []                       # (abs error, locator, text, link index)
-        for i in range(min(n, 12)):
+        seen: list[str] = []             # EVERY non-empty cell text, odds or not -- see below
+        for i in range(min(n, max_links)):
             link = links.nth(i)
             try:
                 spans = link.locator("div > span")
                 m = await spans.count()
             except Exception:
                 continue
-            for j in range(min(m, 8)):
+            for j in range(min(m, max_spans)):
                 cell = spans.nth(j)
                 try:
                     txt = " ".join(((await cell.inner_text()) or "").split())
+                except Exception:
+                    continue
+                if not txt:
+                    continue
+                if len(seen) < 24:
+                    seen.append(txt)
+                if not self.ODDS_TEXT.match(txt):
+                    continue
+                try:
                     val = float(txt.replace(",", ""))
                 except (ValueError, TypeError):
                     continue
-                except Exception:
-                    continue
                 if val <= 1.0:
-                    continue             # not decimal odds
+                    continue             # decimal odds <= 1.0 pay nothing
                 cands.append((abs(val - want), cell, txt, i))
+        # Report WHAT THE ROW ACTUALLY SHOWS on every refusal. The old message named only the single
+        # closest cell, which was not enough to tell "the venue suspended this price" from "we are
+        # scanning the wrong elements" -- and those need opposite fixes. Measured 2026-08-13: 7 of 12
+        # samples died here on tennis with closest cells reading 2/3/4/5, and the text alone could not
+        # settle whether those were scores, seeds, or genuinely-integer odds.
+        shown = ", ".join(repr(s) for s in seen[:16]) or "<no text in any cell>"
         if not cands:
-            return None, n, f"no cell on any of {n} link(s) renders decimal odds"
+            return None, n, (f"no cell on any of {n} link(s) renders decimal odds "
+                             f"(cells seen: {shown})")
         cands.sort(key=lambda c: c[0])
         best = cands[0]
         if best[0] > want * self.COLUMN_MATCH_TOL:
             return None, n, (f"no cell matches the board price {want} "
-                             f"(closest {best[2]} on link {best[3]}) — refusing rather than guessing")
+                             f"(closest {best[2]} on link {best[3]}; cells seen: {shown}) — "
+                             f"refusing rather than guessing")
         if len(cands) > 1:
             second = cands[1][0]
             if second <= max(best[0] * self.COLUMN_MATCH_MARGIN, best[0] + want * 0.005):
@@ -907,7 +944,16 @@ class BetInAsiaAdapter(BookAdapter):
         if lock is None:
             lock = self._slip_lock = _aio.Lock()
         async with lock:
-            return await self._slip_quote_locked(selection_id)
+            # DID THIS QUOTE COST THE VENUE ANYTHING? Most refusals are decided from data we already hold
+            # (not available_for_accas, already subscribed, no odds on the row) and never touch the page,
+            # so the caller can retry almost immediately instead of spending a whole sampling interval on
+            # a "no". Only a real click earns the full cooldown. Safe to keep on the instance: this lock
+            # serialises every caller, so there is only ever one quote in flight to attribute it to.
+            self._slip_clicked = False
+            res = await self._slip_quote_locked(selection_id)
+            if isinstance(res, dict):
+                res.setdefault("clicked", bool(getattr(self, "_slip_clicked", False)))
+            return res
 
     async def _slip_quote_locked(self, selection_id: str) -> dict:
         import asyncio as _aio
@@ -1058,6 +1104,7 @@ class BetInAsiaAdapter(BookAdapter):
             url_before = page.url
             slips_before = len(self.feed._slip_books)
             await cell.click(timeout=5_000)
+            self._slip_clicked = True      # past this point the venue has seen a UI action
             await _aio.sleep(0.5)
             url_after = page.url
             # THE ROW IS AN <a href>. A real user's click is swallowed by the app (it opens the Quick Bet
