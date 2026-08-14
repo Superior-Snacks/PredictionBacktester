@@ -71,6 +71,29 @@ record ActiveWindow(
     // `with`-copies carry it forward.
     public DateTime KLeftWithinAt { get; set; } = DateTime.MaxValue;
     public DateTime PLeftWithinAt { get; set; } = DateTime.MaxValue;
+
+    // ── THE HEDGE WINDOW: how long the SECOND leg stays takeable after the first is gone ──────────────
+    // This is the number the execution model actually runs on. The bot places on HardVen first, at the
+    // minimum, sees what it got, then hedges on Kalshi — so what matters is not "how long was there an
+    // arb" but "having filled one leg, how long could I still complete the other AT BREAK-EVEN".
+    //
+    // Measured per leg by holding the OTHER leg at its entry price and re-testing the pair on every eval:
+    //   KLeftBreakevenAt  first time  OpenPLeg + fee + kNow + fee  >= accept   (Kalshi hedge closed)
+    //   PLeftBreakevenAt  first time  OpenKLeg + fee + pNow + fee  >= accept   (HardVen hedge closed)
+    // so each is "if I had filled the other side at open, when did this side stop being hedgeable".
+    //
+    // BREAK-EVEN, NOT THE ENTRY THRESHOLD. A window CLOSES at _arbThreshold (0.995) but a pair is still
+    // worth completing anywhere under 1.00, so these keep running past the close — which is the whole
+    // point, since the window closes at the instant the interesting measurement begins.
+    public DateTime KLeftBreakevenAt { get; set; } = DateTime.MaxValue;
+    public DateTime PLeftBreakevenAt { get; set; } = DateTime.MaxValue;
+    // Set when the window closed but at least one leg was still hedgeable, so the watch continues.
+    public DateTime ClosedAt { get; set; } = DateTime.MaxValue;
+    public string   ClosedBy { get; set; } = "";
+    public string   ClosedSide { get; set; } = "";
+    public long     CloseKLegAgeMs { get; set; } = -1;
+    public long     ClosePLegAgeMs { get; set; } = -1;
+    public bool     ClosePHeld { get; set; }
 }
 
 // ── Strategy ──────────────────────────────────────────────────────────────────
@@ -239,7 +262,12 @@ public class CrossPlatformArbTelemetryStrategy
         "RestChecked,RestConfirmed,RestKalshiAsk,RestHardVenAsk,RestDelayMs," +
         "OpenedBy,ClosedBySide,KalshiLegAgeMsAtClose,HardVenLegAgeMsAtClose,HardVenLegHeld,HardVenLegId," +
         "KalshiLegWithinMs,HardVenLegWithinMs," +
-        "HardVenInPlay,HardVenWsVerified";
+        "HardVenInPlay,HardVenWsVerified," +
+        // Hedge windows: per leg, ms from open until it stopped being completable at break-even against
+        // the other leg's ENTRY price. HedgeGapMs = how long the survivor outlived the first to go —
+        // i.e. how long you have to hedge after one side fills. HedgeCensored names any leg still
+        // hedgeable when the watch ended, whose figure is therefore a floor, not a measurement.
+        "KalshiHedgeMs,HardVenHedgeMs,HedgeFirstOut,HedgeGapMs,HedgeCensored";
     private const string HedgeCsvHeader =
         "OpenTime,PairId,Label,ArbType,OffsetMs," +
         "EntryKalshiAsk,KalshiUnwindBid,KalshiOppositeAsk,KalshiEntryAskNow," +
@@ -257,7 +285,12 @@ public class CrossPlatformArbTelemetryStrategy
         // HOLD PHASE — how long the arb survived on prices the venue would actually honour. The window
         // durations in the main telemetry are measured on BOARD prices, which overstate an arb; this is
         // the capturable life of the same window, re-read from the live slip feed until it dies.
-        "HeldMs,HoldSamples,BestNetHeld,DiedBy";
+        "HeldMs,HoldSamples,BestNetHeld,DiedBy," +
+        // HEDGE WINDOW, on SLIP prices — the same measurement as the main telemetry but taken on the
+        // numbers the venue will actually honour. Per leg: ms from the quote until that side stopped
+        // being completable at break-even against the OTHER side's entry price. HedgeGapMs is the time
+        // you would have had to hedge after the first leg filled.
+        "SlipKHedgeMs,SlipPHedgeMs,SlipHedgeFirstOut,SlipHedgeGapMs";
 
     // ── Sampled slip verifier ─────────────────────────────────────────────────
     // Measures what the BOARD price is actually worth: the board is a cache the venue does not commit to,
@@ -628,6 +661,18 @@ public class CrossPlatformArbTelemetryStrategy
         decimal pYesAsk = pYes.GetBestAskPrice();
         decimal pNoAsk  = pNo.GetBestAskPrice();
 
+        // Keep any CLOSED window's hedge measurement running. Placed HERE, above the price-floor and
+        // arb-logic guards, because the measurement continues past the window it belongs to and must not
+        // stall on an eval that returns early for reasons about the CURRENT arb.
+        if (!_hedgeWatch.IsEmpty)
+        {
+            var hw = _hedgeWatch.TryGetValue(pair.PairId, out var pend) ? pend : null;
+            if (hw != null)
+                UpdateHedgeWatch(pair, DateTime.UtcNow,
+                                 hw.ArbType == "K_YES_P_NO" ? kYesAsk : kNoAsk,
+                                 hw.ArbType == "K_YES_P_NO" ? pNoAsk  : pYesAsk);
+        }
+
         if (kYesAsk < 0.05m || kNoAsk < 0.05m || pYesAsk < 0.05m || pNoAsk < 0.05m)
         {
             DebugLog.Discovery($"EvaluatePair {pair.Label}: price below min — kYes={kYesAsk:0.0000} kNo={kNoAsk:0.0000} pYes={pYesAsk:0.0000} pNo={pNoAsk:0.0000}");
@@ -864,7 +909,12 @@ public class CrossPlatformArbTelemetryStrategy
                             IsHardVenVerified(existing.ArbType == "K_NO_P_YES" ? pair.HardVenYesTokenId : pair.HardVenNoTokenId),
                         // FIRST eval each leg moves above its open price = when it left "within the arb" (latch once)
                         KLeftWithinAt = (existing.KLeftWithinAt == DateTime.MaxValue && existing.OpenKLeg >= 0m && kLegNow > existing.OpenKLeg) ? evalNow : existing.KLeftWithinAt,
-                        PLeftWithinAt = (existing.PLeftWithinAt == DateTime.MaxValue && existing.OpenPLeg >= 0m && pLegNow > existing.OpenPLeg) ? evalNow : existing.PLeftWithinAt
+                        PLeftWithinAt = (existing.PLeftWithinAt == DateTime.MaxValue && existing.OpenPLeg >= 0m && pLegNow > existing.OpenPLeg) ? evalNow : existing.PLeftWithinAt,
+                        // ...and the hedge window: each leg re-tested against the OTHER's entry price.
+                        KLeftBreakevenAt = HedgeLatch(existing.KLeftBreakevenAt, evalNow,
+                            existing.OpenPLeg, pair, existing.ArbType, kLegNow, kalshiSide: true),
+                        PLeftBreakevenAt = HedgeLatch(existing.PLeftBreakevenAt, evalNow,
+                            existing.OpenKLeg, pair, existing.ArbType, pLegNow, kalshiSide: false)
                     };
                     if (betterCost)
                         DebugLog.Discovery($"EvaluatePair {pair.Label}: ARB UPDATE better net={bestNet:0.0000} (was {existing.BestNetCost:0.0000})");
@@ -937,12 +987,90 @@ public class CrossPlatformArbTelemetryStrategy
         }
     }
 
+    /// <summary>Latch the moment a leg stops being hedgeable, holding the OTHER leg at its entry price.
+    ///
+    /// `held` is the other side's price when the arb opened — the price we would have filled at. `now` is
+    /// this side's current ask. The pair is still worth completing while the two together stay under
+    /// SlipAcceptNet (break-even, 1.00 by default), which is a LOOSER bar than the entry threshold that
+    /// opened the window: an arb that is no longer worth entering may still be worth finishing.
+    ///
+    /// Latches once and never unlatches. A leg that recovers after going through break-even is not the
+    /// same opportunity — the bot would already have missed it, and counting the recovery would report a
+    /// hedge window that no execution could have used.</summary>
+    private DateTime HedgeLatch(DateTime already, DateTime evalNow, decimal held,
+                                CrossPair pair, string arbType, decimal now, bool kalshiSide)
+    {
+        if (already != DateTime.MaxValue) return already;      // latched
+        if (held < 0m || now <= 0m) return already;            // unknown price — cannot judge
+        string hvToken = arbType == "K_YES_P_NO" ? pair.HardVenNoTokenId : pair.HardVenYesTokenId;
+        decimal net = kalshiSide
+            ? held + HardVenFee(held, hvToken) + now + KalshiFee(now)     // Kalshi is the side still to fill
+            : held + KalshiFee(held)           + now + HardVenFee(now, hvToken);
+        return net >= _slipAcceptNetForHold ? evalNow : already;
+    }
+
+    // Windows that CLOSED while at least one leg was still hedgeable. The CSV row is deliberately held
+    // back until the hedge window is measured or times out — a row written at close would carry the one
+    // number this exists to capture as "unknown" every single time.
+    private readonly ConcurrentDictionary<string, ActiveWindow> _hedgeWatch = new();
+    private static readonly int HedgeWatchMaxMs = EnvSec("HARDVEN_HEDGE_WATCH_MAX_SEC", 120);
+
+    /// <summary>Keep measuring the hedge window on a CLOSED window. Called every eval, before the arb
+    /// logic, so it keeps running on the paths that return early (stale book, price floor).</summary>
+    private void UpdateHedgeWatch(CrossPair pair, DateTime evalNow, decimal kLegNow, decimal pLegNow)
+    {
+        if (!_hedgeWatch.TryGetValue(pair.PairId, out var w) || w == null) return;
+        var upd = w;
+        upd.KLeftBreakevenAt = HedgeLatch(w.KLeftBreakevenAt, evalNow, w.OpenPLeg, pair, w.ArbType,
+                                          kLegNow, kalshiSide: true);
+        upd.PLeftBreakevenAt = HedgeLatch(w.PLeftBreakevenAt, evalNow, w.OpenKLeg, pair, w.ArbType,
+                                          pLegNow, kalshiSide: false);
+        bool bothGone = upd.KLeftBreakevenAt != DateTime.MaxValue && upd.PLeftBreakevenAt != DateTime.MaxValue;
+        bool expired  = (evalNow - upd.ClosedAt).TotalMilliseconds >= HedgeWatchMaxMs;
+        if (bothGone || expired)
+        {
+            _hedgeWatch.TryRemove(pair.PairId, out _);
+            WriteWindowRow(pair, upd, upd.ClosedAt, upd.ClosedBy, upd.ClosedSide,
+                           upd.CloseKLegAgeMs, upd.ClosePLegAgeMs, upd.ClosePHeld, evalNow);
+        }
+    }
+
     // NOTE: must be called while holding _windowLock
     private void CloseWindow(string pairId, ActiveWindow w, DateTime endTime, string closedBy,
         string closedSide = "", long kLegAgeMs = -1, long pLegAgeMs = -1, bool pHeld = false)
     {
         long durationMs = (long)(endTime - w.StartTime).TotalMilliseconds;
         if (durationMs < 5) return;
+
+        var pr = _pairs.FirstOrDefault(p => p.PairId == pairId);
+        if (pr == null)
+        {
+            DebugLog.Discovery($"CloseWindow: pair not found for pairId={pairId}, skipping CSV row");
+            return;
+        }
+
+        // HOLD THE ROW BACK while either leg is still hedgeable. The window closed because the PAIR fell
+        // below the entry threshold, which says nothing about whether the surviving leg is still takeable
+        // — and that survivor is the number the execution model needs. Writing now would stamp it
+        // "unknown" on every row, so the row waits for UpdateHedgeWatch to finish or time out.
+        if (w.KLeftBreakevenAt == DateTime.MaxValue || w.PLeftBreakevenAt == DateTime.MaxValue)
+        {
+            w.ClosedAt = endTime; w.ClosedBy = closedBy; w.ClosedSide = closedSide;
+            w.CloseKLegAgeMs = kLegAgeMs; w.ClosePLegAgeMs = pLegAgeMs; w.ClosePHeld = pHeld;
+            _hedgeWatch[pairId] = w;
+            return;
+        }
+        WriteWindowRow(pr, w, endTime, closedBy, closedSide, kLegAgeMs, pLegAgeMs, pHeld, endTime);
+    }
+
+    /// <summary>Emit the telemetry row. Split out of CloseWindow so the hedge watch can call it later,
+    /// once the surviving leg has actually stopped being hedgeable. `watchEnd` is when measurement
+    /// finished — equal to `endTime` when nothing needed watching.</summary>
+    private void WriteWindowRow(CrossPair pair, ActiveWindow w, DateTime endTime, string closedBy,
+        string closedSide, long kLegAgeMs, long pLegAgeMs, bool pHeld, DateTime watchEnd)
+    {
+        string pairId = w.PairId;
+        long durationMs = (long)(endTime - w.StartTime).TotalMilliseconds;
 
         // per-leg "time HELD WITHIN the arb" = how long after open each side stayed at-or-better than its open
         // price before first moving against you (MaxValue latch = never left → whole window). The OPTIMISTIC
@@ -951,12 +1079,21 @@ public class CrossPlatformArbTelemetryStrategy
         long kWithinMs = (long)(((w.KLeftWithinAt == DateTime.MaxValue ? endTime : w.KLeftWithinAt) - w.StartTime).TotalMilliseconds);
         long pWithinMs = (long)(((w.PLeftWithinAt == DateTime.MaxValue ? endTime : w.PLeftWithinAt) - w.StartTime).TotalMilliseconds);
 
-        var pair = _pairs.FirstOrDefault(p => p.PairId == pairId);
-        if (pair == null)
-        {
-            DebugLog.Discovery($"CloseWindow: pair not found for pairId={pairId}, skipping CSV row");
-            return;
-        }
+        // ── HEDGE WINDOWS ────────────────────────────────────────────────────────────────────────────
+        // Per leg: from arb open, how long that side stayed completable at break-even against the OTHER
+        // side's entry price. MaxValue = still hedgeable when the watch ended, so the value is a FLOOR —
+        // flagged by the `+` in HedgeCensored rather than silently reported as if it were the true life.
+        bool kCensored = w.KLeftBreakevenAt == DateTime.MaxValue;
+        bool pCensored = w.PLeftBreakevenAt == DateTime.MaxValue;
+        long kHedgeMs = (long)(((kCensored ? watchEnd : w.KLeftBreakevenAt) - w.StartTime).TotalMilliseconds);
+        long pHedgeMs = (long)(((pCensored ? watchEnd : w.PLeftBreakevenAt) - w.StartTime).TotalMilliseconds);
+        // THE ANSWER TO "if BIA closes after 3s, how long does Kalshi stay open": the gap between them.
+        // Signed by which side went first, so the sign says which leg to place FIRST — the survivor is
+        // the one you have time to come back to.
+        string firstOut = kHedgeMs == pHedgeMs ? "SAME" : (kHedgeMs < pHedgeMs ? "KALSHI" : "HARDVEN");
+        long hedgeGapMs = Math.Abs(kHedgeMs - pHedgeMs);
+        string hedgeCensored = kCensored && pCensored ? "BOTH" : kCensored ? "KALSHI"
+                             : pCensored ? "HARDVEN" : "";
 
         // the bookmaker selection_id this arb's book leg actually used — the exact join key for the audit
         // tape (verify_arbs.py): K_NO_P_YES backs HardVen YES, K_YES_P_NO backs HardVen NO.
@@ -1037,7 +1174,12 @@ public class CrossPlatformArbTelemetryStrategy
             kWithinMs,
             pWithinMs,
             hvInPlay ? "1" : "0",
-            w.HardVenWsVerified ? "1" : "0"
+            w.HardVenWsVerified ? "1" : "0",
+            kHedgeMs,
+            pHedgeMs,
+            firstOut,
+            hedgeGapMs,
+            hedgeCensored
         );
 
         EnqueueCsvRow(row);
@@ -1250,34 +1392,56 @@ public class CrossPlatformArbTelemetryStrategy
         long heldMs = 0; int holdSamples = 0; decimal bestNetHeld = netSlip; string diedBy = "";
         int holdBudgetMs = NextSlipHoldMs();      // drawn per sample — see SlipHoldMinMs/MaxMs
         var dwell = System.Diagnostics.Stopwatch.StartNew();   // how long the SLIP stays open, see below
-        if (slip > 0m && survived && holdBudgetMs > 0)
+        // Hedge windows on SLIP prices, latched during the same loop. 0 = never left break-even before
+        // the window ended, so the value is censored — reported as the full window with a "+" flag.
+        long kHedgeAt = 0, pHedgeAt = 0;
+        if (slip > 0m && holdBudgetMs > 0)
         {
+            // RUNS EVEN WHEN THE ARB DID NOT SURVIVE THE SLIP. It used to require `survived`, which threw
+            // away exactly the interesting half: a pair that is no longer worth ENTERING can still have a
+            // long, perfectly usable hedge window on the leg that has not moved — and that survivor is
+            // what the HardVen-first model comes back to fill. Skipping those measured only the easy cases.
             var hold = System.Diagnostics.Stopwatch.StartNew();
+            bool died = !survived;                       // already dead at the quote → time it from 0
+            if (died) { heldMs = 0; diedBy = "DEAD_AT_SLIP"; }
             while (hold.ElapsedMilliseconds < holdBudgetMs)
             {
                 await Task.Delay(SlipHoldPollMs);
                 decimal p2; string e2;
                 try { (p2, e2) = await _slipQuote!(hvToken, SlipVerifyTimeoutSec); }
                 catch (Exception ex) { p2 = -1m; e2 = ex.GetType().Name; }
-                if (p2 <= 0m) { diedBy = $"QUOTE_LOST({e2})"; break; }
+                if (p2 <= 0m) { if (!died) { died = true; heldMs = hold.ElapsedMilliseconds; diedBy = $"QUOTE_LOST({e2})"; } break; }
                 holdSamples++;
                 // Re-read Kalshi too: either leg moving can end the arb, and attributing it matters.
                 decimal kLive = kBook?.GetBestAskPrice() ?? kUse;
                 if (kLive <= 0m) kLive = kUse;
                 decimal net2 = kLive + p2 + KalshiFee(kLive) + HardVenFee(p2, hvToken);
                 if (net2 < bestNetHeld) bestNetHeld = net2;
-                if (net2 >= _slipAcceptNetForHold)
+                if (!died && net2 >= _slipAcceptNetForHold)
                 {
+                    died = true;
+                    heldMs = hold.ElapsedMilliseconds;
                     diedBy = Math.Abs(p2 - slip) > Math.Abs(kLive - kUse) ? "HARDVEN" : "KALSHI";
-                    break;
+                    // NO break: the pair is dead but each LEG may still be hedgeable, which is the number
+                    // the execution model needs. Keep sampling to the end of the drawn window.
                 }
+                // Each leg against the OTHER's entry price — "having filled that side, can I still finish?"
+                if (kHedgeAt == 0 && slip + HardVenFee(slip, hvToken) + kLive + KalshiFee(kLive) >= _slipAcceptNetForHold)
+                    kHedgeAt = hold.ElapsedMilliseconds;
+                if (pHedgeAt == 0 && kUse + KalshiFee(kUse) + p2 + HardVenFee(p2, hvToken) >= _slipAcceptNetForHold)
+                    pHedgeAt = hold.ElapsedMilliseconds;
             }
             hold.Stop();
-            heldMs = hold.ElapsedMilliseconds;
-            if (diedBy.Length == 0) diedBy = "STILL_ALIVE_AT_LIMIT";
-            Console.WriteLine($"[SLIP HOLD] {pair.Label}: stayed break-even for {heldMs / 1000.0:0.0}s "
-                            + $"over {holdSamples} slip sample(s), best net ${bestNetHeld:0.0000}, ended by {diedBy}");
+            if (!died) { heldMs = hold.ElapsedMilliseconds; diedBy = "STILL_ALIVE_AT_LIMIT"; }
+            Console.WriteLine($"[SLIP HOLD] {pair.Label}: break-even for {heldMs / 1000.0:0.0}s over "
+                            + $"{holdSamples} slip sample(s), best net ${bestNetHeld:0.0000}, ended by {diedBy}"
+                            + $" | hedge K={(kHedgeAt > 0 ? $"{kHedgeAt}ms" : "still open")} "
+                            + $"P={(pHedgeAt > 0 ? $"{pHedgeAt}ms" : "still open")}");
         }
+        long kHedgeMsSlip = kHedgeAt > 0 ? kHedgeAt : (long)dwell.ElapsedMilliseconds;
+        long pHedgeMsSlip = pHedgeAt > 0 ? pHedgeAt : (long)dwell.ElapsedMilliseconds;
+        string slipFirstOut = kHedgeMsSlip == pHedgeMsSlip ? "SAME"
+                            : kHedgeMsSlip < pHedgeMsSlip ? "KALSHI" : "HARDVEN";
 
         // ── DWELL: keep the slip open for the drawn budget even once the arb is dead ─────────────────
         // MEASUREMENT AND APPEARANCE ARE DIFFERENT CLOCKS, and conflating them produced a bot that looked
@@ -1327,7 +1491,13 @@ public class CrossPlatformArbTelemetryStrategy
             Quote(hvToken), Quote(err),
             heldMs.ToString(), holdSamples.ToString(),
             bestNetHeld > 0m ? bestNetHeld.ToString("0.0000") : "",
-            Quote(diedBy)));
+            Quote(diedBy),
+            // "+" marks a censored figure: that leg was STILL hedgeable when the window ended, so the
+            // number is a floor. Reporting it bare would understate every long hedge window.
+            kHedgeAt > 0 ? kHedgeMsSlip.ToString() : kHedgeMsSlip + "+",
+            pHedgeAt > 0 ? pHedgeMsSlip.ToString() : pHedgeMsSlip + "+",
+            slipFirstOut,
+            Math.Abs(kHedgeMsSlip - pHedgeMsSlip).ToString()));
     }
 
     // One post-open sample of the Kalshi unwind trajectory. Columns the analyzer joins on (PairId, OpenTime)
