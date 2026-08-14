@@ -260,7 +260,90 @@ def orders(path: str) -> int:
     return 0
 
 
+def fills(path: str) -> int:
+    """Order + bet lifecycle as the WEBSOCKET reported it, with fill latency per bookie.
+
+    The venue pushes `api` frames carrying `order` and `bet` records, so a fill is observable live with no
+    polling and no request — the observer already receives these. This reads them back out of a capture.
+
+    THE NUMBER THIS EXISTS FOR is placement -> bet done. Measured once (2026-08-14) at 13.6s on a
+    marketable order that routed to `overtime`, a crypto book with a known artificial delay. Kalshi hedge
+    windows on the same tape ran a median of ~4s. If that latency is typical rather than book-specific,
+    HardVen-first cannot work; if a non-crypto book is fast, it can. One number, and it decides the model.
+    """
+    if not os.path.exists(path):
+        raise SystemExit(f"ERROR: no such capture file: {path}")
+    rows, placed = [], {}
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            if '"api"' not in line:
+                continue
+            try:
+                rec = json.loads(line)
+            except Exception:
+                continue
+            if rec.get("kind") != "ws_frame":
+                continue
+            t = rec.get("t") or 0.0
+            try:
+                frames = json.loads(rec.get("body") or "[]")
+            except Exception:
+                continue
+            for fr in frames:
+                if not (isinstance(fr, list) and fr and fr[0] == "api"):
+                    continue
+                for entry in (fr[1].get("data") or []):
+                    if not (isinstance(entry, list) and len(entry) == 2):
+                        continue
+                    kind, o = entry
+                    if kind not in ("order", "bet") or not isinstance(o, dict):
+                        continue
+                    oid = o.get("order_id")
+                    if oid is None:
+                        continue
+                    st = o.get("status")
+                    st = st.get("code") if isinstance(st, dict) else st
+                    rows.append((t, kind, oid, st, o.get("bookie"),
+                                 o.get("want_price"), o.get("price"),
+                                 o.get("want_stake"), o.get("stake"),
+                                 o.get("closed"), o.get("close_reason")))
+                    if kind == "order" and oid not in placed:
+                        placed[oid] = t
+
+    seen = set()
+    print(f"{path}\n")
+    for r in rows:
+        t, kind, oid, st, bookie, wp, pr, ws, s, closed, reason = r
+        key = (kind, oid, st, str(pr), str(s), closed)
+        if key in seen:
+            continue                       # the venue repeats a state; show transitions only
+        seen.add(key)
+        lat = f"+{t - placed[oid]:5.1f}s" if oid in placed else "      "
+        who = f" via {bookie}" if bookie else ""
+        got = f"{pr} / {json.dumps(s)}" if pr is not None else "— / —"
+        print(f"  t={t:7.1f} {lat}  {kind:5} {oid}  {str(st):8}{who}")
+        print(f"                    want {wp} / {json.dumps(ws)}   got {got}"
+              + (f"   CLOSED {reason}" if closed else ""))
+
+    print()
+    for oid, t0 in placed.items():
+        done = [r[0] for r in rows if r[2] == oid and r[1] == "bet" and r[3] == "done"]
+        if done:
+            print(f"  order {oid}: placement -> bet done in {min(done) - t0:.1f}s")
+        else:
+            print(f"  order {oid}: no 'bet done' in this capture (still open, or the run ended too soon)")
+    if not rows:
+        print("  No order/bet frames. Either nothing was placed, or the capture ended before the venue\n"
+              "  pushed them — the lifecycle arrives over the WS, so the run must outlast the fill.")
+    return 0
+
+
 def main(argv: list[str]) -> int:
+    if argv and argv[0] == "--fills":
+        if len(argv) != 2:
+            print("usage: python human_envelope.py --fills <recon.jsonl>")
+            return 2
+        return fills(argv[1])
     if argv and argv[0] == "--orders":
         if len(argv) != 2:
             print("usage: python human_envelope.py --orders <recon.jsonl>")
