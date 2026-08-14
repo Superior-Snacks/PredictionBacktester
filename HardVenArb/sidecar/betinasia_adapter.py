@@ -1617,6 +1617,14 @@ class BetInAsiaAdapter(BookAdapter):
         now = time.time()
         live_depth = {k: v for k, v in self._slip_depth.items()
                       if (now - v[1]) <= self._slip_depth_ttl}
+        # DETECTION CANARY. `tripped` non-empty means the venue read an API it read ZERO times in the
+        # baseline — i.e. its behaviour changed and the current anti-detection posture is out of date.
+        try:
+            can = getattr(self.observer, "_canary", None)
+            if can is not None:
+                s["canary"] = can.report()
+        except Exception:
+            pass
         s.update({"book": self.name, "currency": self.feed.currency,
                   "assumed_max_stake": ASSUMED_MAX_STAKE,
                   "real_depth": {"selections": len(live_depth),

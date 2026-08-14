@@ -125,6 +125,20 @@ class BetInAsiaObserver:
             except Exception as e:
                 self._log(f"RECON requested but could not start: {type(e).__name__}: {e}")
 
+        # STANDING DETECTION CANARY. Injected before any page script runs, on every tab. Watches only
+        # APIs measured at zero reads, so a single hit means the venue's behaviour changed — see canary.py
+        # for the tamper trade-off this accepts.
+        self._canary = None
+        try:
+            from canary import CANARY_JS, Canary
+            c = Canary(log=self._log)
+            if c.enabled:
+                await self._ctx.add_init_script(CANARY_JS)
+                self._canary = c
+                self._log("detection canary armed (BIA_CANARY=0 to disable)")
+        except Exception as e:
+            self._log(f"canary could not be armed: {type(e).__name__}: {e}")
+
         self._ctx.on("page", self._hook_page)
         for pg in self._ctx.pages:
             self._hook_page(pg)
@@ -136,6 +150,22 @@ class BetInAsiaObserver:
             self._log(f"initial navigation: {type(e).__name__}: {e}")
         self._log("observing - the page drives, we only read")
         asyncio.create_task(self._first_look())
+        if self._canary is not None:
+            self._canary_task = asyncio.create_task(self._watch_canary())
+
+    async def _watch_canary(self) -> None:
+        """Poll every tab's canary. Polling, not a Playwright binding: `expose_binding` installs a
+        visibly non-native function on the page, which is a louder artifact than a hidden property."""
+        every = float(os.environ.get("BIA_CANARY_POLL_SEC", "30"))
+        while True:
+            await asyncio.sleep(every)
+            try:
+                pages = list(self._ctx.pages) if self._ctx else []
+                await self._canary.poll(pages)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                self._log(f"canary poll failed ({type(e).__name__}: {e})")
 
     # ── parked per-sport board tabs ───────────────────────────────────────────
     async def sport_tab(self, sport: str, url: str = "", expand: bool = True):
@@ -388,6 +418,11 @@ class BetInAsiaObserver:
                       "return {} for every selection until this is fixed. ***")
 
     async def stop(self) -> None:
+        # Cancel the canary poll BEFORE the browser goes, so it cannot raise against a closed context.
+        t = getattr(self, "_canary_task", None)
+        if t is not None:
+            t.cancel()
+            self._canary_task = None
         for closer in (getattr(self._ctx, "close", None), getattr(self._pw, "stop", None)):
             if closer:
                 try:
