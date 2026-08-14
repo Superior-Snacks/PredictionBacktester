@@ -34,6 +34,12 @@ from typing import Callable, Iterable, Optional
 # with tremor; this stands in for it and keeps two moves along the same route from being byte-identical.
 JITTER_PX = 1.0
 
+# Viewport band treated as "on screen" when deciding whether to wheel toward a target, and where to bring
+# it to rest. Absolute pixels rather than a fraction of the window: the browser is launched with
+# `viewport=None` so `page.viewport_size` is None, and reading `window.innerHeight` would mean running
+# javascript in the page's MAIN world — the exact thing the locator-only reads exist to avoid.
+VIEW_TOP, VIEW_BOTTOM, VIEW_REST = 80.0, 700.0, 320.0
+
 
 def bezier_path(x0: float, y0: float, tx: float, ty: float,
                 rng: Optional[random.Random] = None) -> list[tuple[float, float]]:
@@ -128,7 +134,7 @@ class HumanCursor:
         self._set(page, tx, ty)
 
     async def scroll(self, page, total_px: float, sink: Optional[Callable] = None) -> float:
-        """Wheel down about `total_px`, in human-shaped notches. Returns how far it actually went.
+        """Wheel about `total_px` in human-shaped notches — NEGATIVE scrolls up. Returns distance moved.
 
         `page.mouse.wheel(0, 1400)` emits ONE event with a 1400px delta, and the board-expansion loop
         emitted an identical one at identical spacing a dozen times per sport. The events are genuine;
@@ -139,28 +145,30 @@ class HumanCursor:
         briefly. Cheap: the whole thing still lands in well under a second per 1400px.
         """
         emit = sink or page.mouse.wheel
+        sign = 1.0 if total_px >= 0 else -1.0
+        target = abs(total_px)
         done = 0.0
         guard = 0
-        while done < total_px and guard < 200:
+        while done < target and guard < 200:
             guard += 1
             # Overshoot-and-correct, but only once we are far enough in for it to make sense.
             if done > 200 and random.random() < 0.08:
                 back = random.uniform(40, 110)
                 try:
-                    await emit(0, -back)
+                    await emit(0, -back * sign)
                 except Exception:
                     break
                 done -= back
                 await asyncio.sleep(random.uniform(0.05, 0.20))
                 continue
-            step = min(random.uniform(90, 240), total_px - done)
+            step = min(random.uniform(90, 240), target - done)
             try:
-                await emit(0, step)
+                await emit(0, step * sign)
             except Exception:
                 break                                  # page closed mid-scroll
             done += step
             await asyncio.sleep(random.uniform(0.04, 0.22))
-        return done
+        return done * sign
 
     async def click(self, page, loc, timeout: int = 5000) -> bool:
         """Approach the element, then click it for real. False if the click failed.
@@ -169,6 +177,22 @@ class HumanCursor:
         then a brief pause -- people do not click the instant they arrive -- then the real click with a
         randomised press duration.
         """
+        # WHEEL TOWARD IT BEFORE FALLING BACK TO A JUMP. `scroll_into_view_if_needed` teleports the scroll
+        # position in one step, and BetInAsia's own bundle registers a scroll listener (measured), so a
+        # board expansion that clicks a dozen "Show more" controls would emit a dozen instant jumps where
+        # a person emits wheel motion. Try to bring it into view by wheeling first; keep the jump as the
+        # fallback for anything that does not respond to it (virtualised lists, elements in a scroll pane).
+        box = None
+        try:
+            for _ in range(6):
+                box = await loc.bounding_box()
+                if box is None:
+                    break
+                if VIEW_TOP <= box["y"] <= VIEW_BOTTOM:
+                    break                                    # comfortably on screen already
+                await self.scroll(page, box["y"] - VIEW_REST)   # signed: negative scrolls up
+        except Exception:
+            box = None
         try:
             await loc.scroll_into_view_if_needed(timeout=4000)
         except Exception:

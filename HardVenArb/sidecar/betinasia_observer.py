@@ -199,10 +199,23 @@ class BetInAsiaObserver:
             except Exception:
                 here = ""
             if here and here.endswith(url.rstrip("/").rsplit("/", 1)[-1]):
-                if sport not in self._sport_tabs:
+                first_time = sport not in self._sport_tabs
+                if first_time:
                     self._sport_tabs[sport] = obs_pg
                     self._log(f"sport tab {sport}: reusing the observing page (already on its board) "
                               f"— no second tab, no duplicate subscriptions")
+                # STILL EXPAND IT. The first version of this returned here immediately and skipped the
+                # expansion entirely, so the single-sport run never clicked a single "Show more" and the
+                # board stayed collapsed — the operator had to do it by hand. Reuse changes WHICH page is
+                # the board tab; it does not change what a board tab needs doing to it.
+                # Only on first registration (and after a reset clears the dict), not on every quote.
+                if expand and first_time:
+                    try:
+                        n = await self.expand_all(label=sport, page=obs_pg)
+                        self._log(f"sport tab {sport}: expanded the observing page "
+                                  f"({n} 'Show more' click(s))")
+                    except Exception as e:
+                        self._log(f"sport tab {sport}: expand failed ({type(e).__name__}: {e})")
                 return obs_pg
 
         pg = self._sport_tabs.get(sport)

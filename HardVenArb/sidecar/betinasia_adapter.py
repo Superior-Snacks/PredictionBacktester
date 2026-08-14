@@ -639,6 +639,33 @@ class BetInAsiaAdapter(BookAdapter):
         if page is None:
             return None
         try:
+            # ── HEADER FIRST. The balance sits in the top-right corner of EVERY page (operator, confirmed
+            # 2026-08-14), rendered as a bare amount with no label — so the label anchors below only work
+            # on the account screen, which the bot never visits. Identify it by SHAPE and POSITION:
+            # money is `1,234.56` (exactly two decimals), whereas board odds are `1.769` (three) and
+            # scores are bare integers, so the format alone excludes almost everything on a board page.
+            # Everything here is a locator operation, so none of it is visible to page script.
+            money = re.compile(r"^[$€£]?\s?\d[\d,]*\.\d{2}$")
+            cand = page.get_by_text(money)
+            top_px = float(os.environ.get("BIA_BALANCE_HEADER_PX", "160"))
+            best_x, best_val = -1.0, None
+            for i in range(min(await cand.count(), 25)):
+                try:
+                    el = cand.nth(i)
+                    box = await el.bounding_box()
+                    if not box or box["y"] > top_px:
+                        continue                       # below the header band — a board cell, not the balance
+                    txt = (await el.inner_text()) or ""
+                    val = float(re.sub(r"[^\d.]", "", txt) or "nan")
+                except Exception:
+                    continue
+                # RIGHTMOST wins: the header carries other numbers (open stakes, a bet counter) and the
+                # balance is the one in the corner.
+                if val == val and 0 <= val < 10_000_000 and box["x"] > best_x:
+                    best_x, best_val = box["x"], val
+            if best_val is not None:
+                return best_val
+
             for label in self._BAL_LABELS:
                 loc = page.get_by_text(label, exact=False)
                 if not await loc.count():

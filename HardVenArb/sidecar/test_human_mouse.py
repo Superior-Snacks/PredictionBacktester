@@ -132,7 +132,23 @@ for _ in range(40):
         backs += 1
 check(f"sometimes flicks back, sometimes not ({backs}/40 runs)", 0 < backs < 40)
 
-print("\n[9] a dead page cannot break a move")
+print("\n[9] scrolling UP is supported (needed to wheel toward an element above the fold)")
+
+
+async def scrolled_up():
+    c = HumanCursor()
+    w = FakeWheel()
+    got = await c.scroll(FakePage("board"), -600, sink=w.wheel)
+    return got, w.deltas
+
+
+got_up, deltas_up = asyncio.run(scrolled_up())
+check(f"returns a negative distance (got {got_up:.0f})", -610 <= got_up <= -590)
+check("the net motion is upward", sum(deltas_up) < 0)
+check("still notched", len(deltas_up) >= 3)
+check("no single delta exceeds a notch", all(abs(d) <= 260 for d in deltas_up))
+
+print("\n[10] a dead page cannot break a move")
 
 
 async def dead_page():

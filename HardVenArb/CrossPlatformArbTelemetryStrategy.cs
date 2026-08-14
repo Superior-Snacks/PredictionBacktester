@@ -295,8 +295,8 @@ public class CrossPlatformArbTelemetryStrategy
     // whether or not anything client-side is checked.
     // A CONSTANT is the giveaway rather than the value: human lifetimes are scattered, so slips that all
     // last exactly the same time separate out at any setting. Hence a range, sampled each time.
-    private static readonly int SlipHoldMinMs = EnvSec("HARDVEN_SLIP_HOLD_MIN_SEC", 5);
-    private static readonly int SlipHoldMaxMs = EnvSec("HARDVEN_SLIP_HOLD_MAX_SEC", 75);
+    private static readonly int SlipHoldMinMs = EnvSec("HARDVEN_SLIP_HOLD_MIN_SEC", 3);
+    private static readonly int SlipHoldMaxMs = EnvSec("HARDVEN_SLIP_HOLD_MAX_SEC", 12);
     // 0 disables the hold. Read DIRECTLY, not through EnvSec: that helper clamps to >= 1s and falls back
     // to its default when the value is 0, so the documented `HARDVEN_SLIP_HOLD_SEC=0` off switch silently
     // did nothing and held for the default 120s instead.
@@ -440,8 +440,8 @@ public class CrossPlatformArbTelemetryStrategy
         if (SlipVerifyEnabled)
             Console.WriteLine(SlipHoldEnabled
                 ? $"[SLIP VERIFY] holding each slip a RANDOM {SlipHoldMinMs / 1000}-{SlipHoldMaxMs / 1000}s "
-                + $"(measured human range on this account: 5-92s, median 14s) — the venue reports "
-                + $"betslip.duration server-side, and a constant is what separates out"
+                + $"(kept open for the whole window even after the arb dies — the venue reports "
+                + $"betslip.duration, and closing the instant an arb dies is its own signature)"
                 : "[SLIP VERIFY] hold DISABLED — single-shot quotes only");
         DebugLog.Discovery($"CrossPlatformArbTelemetryStrategy: initialized with {pairs.Count} pairs, threshold={arbThreshold}");
         if (_debugPrices)
@@ -1249,6 +1249,7 @@ public class CrossPlatformArbTelemetryStrategy
         // channel, so the venue keeps pushing and each re-quote is served from the sidecar's cache.
         long heldMs = 0; int holdSamples = 0; decimal bestNetHeld = netSlip; string diedBy = "";
         int holdBudgetMs = NextSlipHoldMs();      // drawn per sample — see SlipHoldMinMs/MaxMs
+        var dwell = System.Diagnostics.Stopwatch.StartNew();   // how long the SLIP stays open, see below
         if (slip > 0m && survived && holdBudgetMs > 0)
         {
             var hold = System.Diagnostics.Stopwatch.StartNew();
@@ -1276,6 +1277,21 @@ public class CrossPlatformArbTelemetryStrategy
             if (diedBy.Length == 0) diedBy = "STILL_ALIVE_AT_LIMIT";
             Console.WriteLine($"[SLIP HOLD] {pair.Label}: stayed break-even for {heldMs / 1000.0:0.0}s "
                             + $"over {holdSamples} slip sample(s), best net ${bestNetHeld:0.0000}, ended by {diedBy}");
+        }
+
+        // ── DWELL: keep the slip open for the drawn budget even once the arb is dead ─────────────────
+        // MEASUREMENT AND APPEARANCE ARE DIFFERENT CLOCKS, and conflating them produced a bot that looked
+        // nothing like a person. The measurement loop above stops the moment the arb stops breaking even
+        // — correctly, since HeldMs answers "how long could I have taken it", and on 2026-08-14 that was a
+        // median of 4.0s with 10 of 11 killed by the HardVen leg. But the VENUE sees the slip's lifetime,
+        // and it reports it: betslip.duration came out at a median of 0.7s against a human median of
+        // 11.8s. Closing the instant an arb dies is its own signature.
+        // So: measure honestly, then sit on the slip for the rest of the drawn window. Costs nothing —
+        // the event is already subscribed, no further UI action is involved, and HeldMs is untouched.
+        if (slip > 0m && holdBudgetMs > 0)
+        {
+            long remaining = holdBudgetMs - dwell.ElapsedMilliseconds;
+            if (remaining > 0) await Task.Delay((int)remaining);
         }
 
         // CLOSE THE SLIP. Unconditional and last: the quote may have opened one before failing, and an
