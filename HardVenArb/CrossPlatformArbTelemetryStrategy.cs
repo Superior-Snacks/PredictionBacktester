@@ -287,7 +287,28 @@ public class CrossPlatformArbTelemetryStrategy
     // HOLD THE SLIP after a successful quote and watch the arb until it stops breaking even. Costs no UI
     // action at all: the event is already subscribed on the acca channel, so the venue keeps pushing and a
     // re-quote is served from cache. 0 disables the hold and restores the single-shot sample.
-    private static readonly int SlipHoldMs     = EnvSec("HARDVEN_SLIP_HOLD_SEC", 120);
+    // HOLD LENGTH IS DRAWN PER SAMPLE, not fixed. Measured 2026-08-14 off this account's OWN
+    // /web/metrics/ telemetry (`human_envelope.py`), a human betslip lives:
+    //     min 5.0s · p25 11.4s · median 14.0s · p75 43.3s · p90 76.5s · max 92.4s
+    // The old fixed 120s put EVERY bot slip beyond the longest human slip ever recorded here — and the
+    // venue reports `betslip.duration` to its own servers on every close, so this is a number they have
+    // whether or not anything client-side is checked.
+    // A CONSTANT is the giveaway rather than the value: human lifetimes are scattered, so slips that all
+    // last exactly the same time separate out at any setting. Hence a range, sampled each time.
+    private static readonly int SlipHoldMinMs = EnvSec("HARDVEN_SLIP_HOLD_MIN_SEC", 5);
+    private static readonly int SlipHoldMaxMs = EnvSec("HARDVEN_SLIP_HOLD_MAX_SEC", 75);
+    // 0 disables the hold. Read DIRECTLY, not through EnvSec: that helper clamps to >= 1s and falls back
+    // to its default when the value is 0, so the documented `HARDVEN_SLIP_HOLD_SEC=0` off switch silently
+    // did nothing and held for the default 120s instead.
+    private static readonly bool SlipHoldEnabled =
+        !(int.TryParse(Environment.GetEnvironmentVariable("HARDVEN_SLIP_HOLD_SEC"), out var _sh0) && _sh0 == 0);
+    /// <summary>A fresh hold budget for one sample, drawn from the measured human range.</summary>
+    private static int NextSlipHoldMs()
+    {
+        if (!SlipHoldEnabled) return 0;
+        int lo = Math.Min(SlipHoldMinMs, SlipHoldMaxMs), hi = Math.Max(SlipHoldMinMs, SlipHoldMaxMs);
+        return Random.Shared.Next(lo, hi + 1);
+    }
     private static readonly int SlipHoldPollMs = EnvSec("HARDVEN_SLIP_HOLD_POLL_SEC", 2);
     // The net at which the held arb is declared dead. BREAK-EVEN by default, matching what the executor
     // would actually accept — the question this measures is "how long could I still have taken it", not
@@ -387,6 +408,12 @@ public class CrossPlatformArbTelemetryStrategy
                             + $"in-play every {SlipVerifyInPlayMs / 1000}s, "
                             + $"+{SlipVerifyRoverMs / 1000}s cooldown after any rover quote "
                             + $"-> {_slipCsvBaseName}_{CsvDate()}.csv");
+        if (SlipVerifyEnabled)
+            Console.WriteLine(SlipHoldEnabled
+                ? $"[SLIP VERIFY] holding each slip a RANDOM {SlipHoldMinMs / 1000}-{SlipHoldMaxMs / 1000}s "
+                + $"(measured human range on this account: 5-92s, median 14s) — the venue reports "
+                + $"betslip.duration server-side, and a constant is what separates out"
+                : "[SLIP VERIFY] hold DISABLED — single-shot quotes only");
         DebugLog.Discovery($"CrossPlatformArbTelemetryStrategy: initialized with {pairs.Count} pairs, threshold={arbThreshold}");
         if (_debugPrices)
             Console.WriteLine("[CROSS] HARDVEN_DEBUG_PRICES=1 — dumping the full 4-leg price breakdown on each arb open.");
@@ -1185,10 +1212,11 @@ public class CrossPlatformArbTelemetryStrategy
         // CAPTURABLE life instead. It needs no further UI action — the event is subscribed on the acca
         // channel, so the venue keeps pushing and each re-quote is served from the sidecar's cache.
         long heldMs = 0; int holdSamples = 0; decimal bestNetHeld = netSlip; string diedBy = "";
-        if (slip > 0m && survived && SlipHoldMs > 0)
+        int holdBudgetMs = NextSlipHoldMs();      // drawn per sample — see SlipHoldMinMs/MaxMs
+        if (slip > 0m && survived && holdBudgetMs > 0)
         {
             var hold = System.Diagnostics.Stopwatch.StartNew();
-            while (hold.ElapsedMilliseconds < SlipHoldMs)
+            while (hold.ElapsedMilliseconds < holdBudgetMs)
             {
                 await Task.Delay(SlipHoldPollMs);
                 decimal p2; string e2;
