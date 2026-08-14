@@ -35,6 +35,7 @@ import asyncio
 import collections
 import json
 import os
+import random
 import sys
 import time
 from pathlib import Path
@@ -210,7 +211,9 @@ class BetInAsiaObserver:
             except Exception as e:
                 self._log(f"sport tab {sport}: navigation failed ({type(e).__name__}: {e})")
                 return pg
-            await asyncio.sleep(float(os.environ.get("BIA_SPORT_TAB_SETTLE_SEC", "3")))
+            # Jittered: five tabs each settling for exactly 3.000s is a metronome in the access log.
+            await asyncio.sleep(float(os.environ.get("BIA_SPORT_TAB_SETTLE_SEC", "3"))
+                                * random.uniform(0.7, 1.5))
             if expand:
                 # Pay the expansion cost ONCE, here, instead of on every quote's critical path.
                 try:
@@ -371,8 +374,8 @@ class BetInAsiaObserver:
                     if stagnant >= scroll_rounds:
                         break
                     stagnant += 1
-                    await page.mouse.wheel(0, 1400)
-                    await asyncio.sleep(pace)
+                    await CURSOR.scroll(page, 1400)     # notched + jittered, not one 1400px event
+                    await asyncio.sleep(pace * random.uniform(0.6, 1.6))
                     continue
                 stagnant = 0
                 # Always take the FIRST: expanding removes that control, so the next iteration naturally
@@ -381,7 +384,7 @@ class BetInAsiaObserver:
                 # teleporting clicks is exactly the shape a click-stream check looks for.
                 await CURSOR.click(page, more.first, timeout=5_000)
                 clicks += 1
-                await asyncio.sleep(pace)
+                await asyncio.sleep(pace * random.uniform(0.6, 1.6))
             except Exception:
                 break     # control vanished mid-click, or the board re-rendered — not worth retrying
         # Back to the top: a tab parked half-way down a board is both an odd thing to leave lying around

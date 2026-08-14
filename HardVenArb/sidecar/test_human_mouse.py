@@ -101,7 +101,38 @@ check("each page emits its own full path", len(m1pts) >= 10 and len(m2pts) >= 10
 check("the second tab does not start from the first tab's cursor",
       m2pts[0] != m1pts[-1])
 
-print("\n[8] a dead page cannot break a move")
+print("\n[8] scrolling is notched and uneven, not one giant delta")
+
+
+class FakeWheel:
+    def __init__(self):
+        self.deltas = []
+
+    async def wheel(self, dx, dy):
+        self.deltas.append(dy)
+
+
+async def scrolled():
+    c = HumanCursor()
+    w = FakeWheel()
+    got = await c.scroll(FakePage("board"), 1400, sink=w.wheel)
+    return got, w.deltas
+
+
+got, deltas = asyncio.run(scrolled())
+check(f"reaches roughly the target (got {got:.0f} of 1400)", 1390 <= got <= 1410)
+check(f"in many notches, not one event (got {len(deltas)})", len(deltas) >= 6)
+check("no single delta is a 1400px jump", all(abs(d) <= 260 for d in deltas))
+check("deltas are all different sizes", len(set(round(abs(d), 3) for d in deltas)) > 3)
+# Over many runs some should include a backward correction — people overshoot.
+backs = 0
+for _ in range(40):
+    _g, ds = asyncio.run(scrolled())
+    if any(d < 0 for d in ds):
+        backs += 1
+check(f"sometimes flicks back, sometimes not ({backs}/40 runs)", 0 < backs < 40)
+
+print("\n[9] a dead page cannot break a move")
 
 
 async def dead_page():

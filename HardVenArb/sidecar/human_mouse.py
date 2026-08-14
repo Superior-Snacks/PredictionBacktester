@@ -127,6 +127,41 @@ class HumanCursor:
             await asyncio.sleep(max(0.004, total / len(pts) * random.uniform(0.6, 1.4)))
         self._set(page, tx, ty)
 
+    async def scroll(self, page, total_px: float, sink: Optional[Callable] = None) -> float:
+        """Wheel down about `total_px`, in human-shaped notches. Returns how far it actually went.
+
+        `page.mouse.wheel(0, 1400)` emits ONE event with a 1400px delta, and the board-expansion loop
+        emitted an identical one at identical spacing a dozen times per sport. The events are genuine;
+        the pattern is not. A real wheel fires in notches (~100-120px each), a trackpad in many smaller
+        ones, both at uneven intervals — and people overshoot and flick back.
+
+        Deltas are drawn per notch, pauses are jittered, and roughly one scroll in twelve reverses
+        briefly. Cheap: the whole thing still lands in well under a second per 1400px.
+        """
+        emit = sink or page.mouse.wheel
+        done = 0.0
+        guard = 0
+        while done < total_px and guard < 200:
+            guard += 1
+            # Overshoot-and-correct, but only once we are far enough in for it to make sense.
+            if done > 200 and random.random() < 0.08:
+                back = random.uniform(40, 110)
+                try:
+                    await emit(0, -back)
+                except Exception:
+                    break
+                done -= back
+                await asyncio.sleep(random.uniform(0.05, 0.20))
+                continue
+            step = min(random.uniform(90, 240), total_px - done)
+            try:
+                await emit(0, step)
+            except Exception:
+                break                                  # page closed mid-scroll
+            done += step
+            await asyncio.sleep(random.uniform(0.04, 0.22))
+        return done
+
     async def click(self, page, loc, timeout: int = 5000) -> bool:
         """Approach the element, then click it for real. False if the click failed.
 
