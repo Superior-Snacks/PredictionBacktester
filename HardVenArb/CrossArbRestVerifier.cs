@@ -149,6 +149,29 @@ public class CrossArbRestVerifier
     /// the flag does not block a betslip read, and it is why the gate was opened rather than obeyed.</summary>
     public bool LastSlipAccaFlagged { get; private set; }
 
+    /// <summary>Close the betslip the sidecar opened. Idempotent and best-effort — never throws.
+    ///
+    /// Worth calling even when the quote failed: the click may have opened a slip before whatever went
+    /// wrong afterwards. Leaving it open keeps the event subscribed, and a subscribed event whose cached
+    /// price ages out can never be quoted again ("re-clicking cannot help"), so an un-closed slip
+    /// permanently burns that market for the life of the socket.</summary>
+    public async Task<bool> SlipCloseAsync(double timeoutSec = 20.0)
+    {
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSec));
+            using var resp = await _http.PostAsync($"{_sidecarBase}/slip_close", null, cts.Token);
+            if (!resp.IsSuccessStatusCode) return false;
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(cts.Token));
+            return doc.RootElement.TryGetProperty("closed", out var c) && c.ValueKind == JsonValueKind.True;
+        }
+        catch (Exception ex)
+        {
+            DebugLog.Trades($"SlipCloseAsync: {ex.GetType().Name}: {ex.Message}");
+            return false;
+        }
+    }
+
     public async Task<(decimal Price, string Error)> SlipQuoteAsync(string hardvenToken, double timeoutSec = 20.0)
     {
         LastSlipClicked = true;   // pessimistic until the sidecar says otherwise (see the property)

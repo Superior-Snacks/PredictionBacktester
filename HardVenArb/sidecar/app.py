@@ -261,6 +261,20 @@ async def slip_quote(selection_id: str):
     return await fn(selection_id)
 
 
+@app.post("/slip_close")
+async def slip_close():
+    """Close the betslip this bot opened, if any. Idempotent — safe to call unconditionally.
+
+    Not merely tidiness: closing sends `unwatch_acca_hcaps`, which frees the subscription. Without it a
+    quoted event stays subscribed for the life of the socket and becomes permanently unquotable once its
+    cached price ages out, so every event is one-shot. It also makes the venue's own betslip.close metric
+    fire, which a hand-driven session emits on every close and the bot emitted on none."""
+    fn = getattr(adapter, "slip_close", None)
+    if not callable(fn):
+        raise HTTPException(404, f"book '{adapter.name}' has no betslip to close")
+    return await fn()
+
+
 @app.get("/debug/feed")
 async def debug_feed():
     """Price-socket + coverage diagnostics. Answers "is the WS up, and is anything dropped?".

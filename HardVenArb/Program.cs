@@ -165,8 +165,9 @@ if (args.Contains("--slip-verify-check"))
     probe.ReleaseSlipVerifySlot();
     Check("pre-live now throttled, its budget is spent", !probe.TrySlipVerifySlot(openedInPlay: false));
     Check("in-play also throttled (its longer budget)", !probe.TrySlipVerifySlot(openedInPlay: true));
-    // Re-claim so [3] exercises the in-flight lock from a held state, as it did before.
-    System.Threading.Thread.Sleep(CrossPlatformArbTelemetryStrategy.SlipVerifyIntervalMsForTest + 250);
+    // Wait out the WORST CASE, not the nominal interval. The budget is jittered per interval, so it can
+    // legitimately run up to CadenceJitter longer — sleeping the base value made this flap.
+    System.Threading.Thread.Sleep(CrossPlatformArbTelemetryStrategy.SlipVerifyMaxIntervalMsForTest + 250);
     Check("pre-live recovers once its interval elapses", probe.TrySlipVerifySlot(openedInPlay: false));
 
     Console.WriteLine("\n[3] one at a time (the rover is a single tab)");
@@ -175,7 +176,7 @@ if (args.Contains("--slip-verify-check"))
 
     Console.WriteLine("\n[4] rate limit holds after the slot is released");
     Check("still refused inside the interval", !probe.TrySlipVerifySlot(openedInPlay: false));
-    int waitMs = CrossPlatformArbTelemetryStrategy.SlipVerifyIntervalMsForTest;
+    int waitMs = CrossPlatformArbTelemetryStrategy.SlipVerifyMaxIntervalMsForTest;
     Console.WriteLine($"      waiting {waitMs}ms for the interval to elapse...");
     await Task.Delay(waitMs + 250);
     Check("allowed once the interval has passed", probe.TrySlipVerifySlot(openedInPlay: false));
@@ -211,6 +212,21 @@ if (args.Contains("--slip-verify-check"))
     probe.ReleaseSlipVerifySlot();
     probe.RefundSlipVerifyBudget(openedInPlay: false);   // wrong regime — must not touch in-play
     Check("refunding pre-live leaves the in-play budget alone", !probe.TrySlipVerifySlot(openedInPlay: true));
+
+    // The cadence must not be metronomic — request timestamps make a fixed interval obvious server-side.
+    Console.WriteLine("\n[7] the sampling interval is jittered, once per interval");
+    double j = CrossPlatformArbTelemetryStrategy.CadenceJitterForTest;
+    Check($"jitter is configured (±{j * 100:0}%)", j > 0);
+    const long Base = 60_000;
+    var draws = Enumerable.Range(0, 400)
+                          .Select(_ => CrossPlatformArbTelemetryStrategy.Jittered(Base)).ToList();
+    Check($"values vary (got {draws.Distinct().Count()} distinct of 400)", draws.Distinct().Count() > 300);
+    Check($"all inside ±{j * 100:0}% of base ({draws.Min()}..{draws.Max()} vs {Base})",
+          draws.All(d => d >= (long)(Base * (1 - j)) - 1 && d <= (long)(Base * (1 + j)) + 1));
+    // Unbiased: jitter must not quietly speed the bot up. ±2% of base over 400 draws.
+    double mean = draws.Average();
+    Check($"mean stays at the configured rate (mean {mean:0} vs {Base})",
+          Math.Abs(mean - Base) < Base * 0.02);
 
     Console.WriteLine(failures == 0 ? "\nALL PASS" : $"\nFAILURES: {failures}");
     // Exit code via ExitCode, not `return n`: a returned value would make this file's entry point
@@ -655,7 +671,8 @@ telemetry.OnArbOpened += restVerifier.OnArbOpened;
 telemetry.SetSlipVerifier(restVerifier.SlipQuoteAsync,
                           () => restVerifier.LastSlipVia,
                           () => restVerifier.LastSlipClicked,
-                          () => restVerifier.LastSlipAccaFlagged);
+                          () => restVerifier.LastSlipAccaFlagged,
+                          () => restVerifier.SlipCloseAsync());
 
 // ── Executor — live order placement on WS-detected arb windows ────────────────
 CrossArbExecutor?            executor    = null;

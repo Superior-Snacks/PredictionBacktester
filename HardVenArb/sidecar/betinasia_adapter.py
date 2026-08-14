@@ -338,9 +338,13 @@ class BetInAsiaAdapter(BookAdapter):
                 print(f"[BIA] board tabs failed: {type(e).__name__}: {e}", flush=True)
             if reset_min <= 0:
                 return
-            print(f"[BIA] board reset every {reset_min:g} min", flush=True)
+            # JITTERED. A reload of every board at exactly 60.0-minute spacing is a machine signature
+            # visible in request timestamps alone, and it costs nothing to scatter.
+            import random as _rnd
+            jit = float(os.environ.get("BIA_BOARD_RESET_JITTER_PCT", "25")) / 100.0
+            print(f"[BIA] board reset every ~{reset_min:g} min (+/-{jit*100:.0f}% jitter)", flush=True)
             while True:
-                await asyncio.sleep(reset_min * 60.0)
+                await asyncio.sleep(reset_min * 60.0 * (1.0 + _rnd.uniform(-jit, jit)))
                 try:
                     # HOLD THE SLIP LOCK for the whole reset: it is the same lock a quote takes, so a
                     # click can never find its tab closed underneath it, and a reset waits for a quote
@@ -1023,6 +1027,61 @@ class BetInAsiaAdapter(BookAdapter):
                 res.setdefault("acca", not bool(getattr(self, "_slip_acca_flagged", False)))
             return res
 
+    async def slip_close(self) -> dict:
+        """Close the betslip this bot opened. Escape, after a human pause.
+
+        THREE THINGS COME OUT OF ONE KEYPRESS, and the third is a bug fix rather than cosmetics:
+
+        1. `unwatch_acca_hcaps` is sent, which RELEASES the subscription. Until now a quoted event stayed
+           subscribed for the life of the socket, so once its cached slip price aged out the event became
+           permanently unquotable — "already subscribed but no price cached, re-clicking cannot help".
+           Every event was effectively one-shot. Closing makes it quotable again.
+        2. The venue's own `/web/metrics/` emits `betslip.close` with a duration. Measured 2026-08-14
+           across five hand-driven closes (X button, Esc, re-clicking the odds, normal, held-then-closed):
+           ALL FIVE reported one. A bot that opens slips and reports none is a distinguishing absence.
+        3. It stops slips piling up open in a tab.
+
+        ESCAPE rather than the X: it was the cheapest close tested (a keypress, no cursor travel, no
+        element to locate) and produced a metric identical in shape to the button.
+
+        Idempotent — with no slip open this is a no-op, so the caller can fire it unconditionally.
+        """
+        import asyncio as _aio
+        import random as _rnd
+
+        page = getattr(self, "_slip_page", None)
+        if page is None:
+            return {"ok": True, "closed": False, "reason": "no slip open"}
+        lock = getattr(self, "_slip_lock", None)
+        if lock is None:
+            lock = self._slip_lock = _aio.Lock()
+        async with lock:                      # never close underneath a quote that is mid-click
+            page = getattr(self, "_slip_page", None)
+            if page is None:
+                return {"ok": True, "closed": False, "reason": "no slip open"}
+            self._slip_page = None
+            key = getattr(self, "_slip_open_key", None)
+            self._slip_open_key = None
+            try:
+                if page.is_closed():
+                    return {"ok": True, "closed": False, "reason": "the tab holding it is gone"}
+                # A person does not hit Escape the instant they finish reading. Jittered, and generous:
+                # the whole point is that nothing about this is metronomic.
+                lo = float(os.environ.get("BIA_SLIP_CLOSE_DELAY_MIN_MS", "180"))
+                hi = float(os.environ.get("BIA_SLIP_CLOSE_DELAY_MAX_MS", "1400"))
+                await _aio.sleep(_rnd.uniform(min(lo, hi), max(lo, hi)) / 1000.0)
+                # Focus first: Escape goes to the focused document, and the slip may be on a parked tab.
+                if os.environ.get("BIA_SLIP_FOCUS_TAB", "1") == "1":
+                    try:
+                        await page.bring_to_front()
+                    except Exception:
+                        pass
+                await page.keyboard.press("Escape")
+                print(f"[BIA SLIP] closed {key} with Escape", flush=True)
+                return {"ok": True, "closed": True, "event": list(key) if key else None}
+            except Exception as e:
+                return {"ok": False, "closed": False, "error": f"{type(e).__name__}: {e}"}
+
     async def _read_slip_panel(self, page) -> str:
         """The betslip panel's visible text, flattened. "" if it cannot be read.
 
@@ -1323,6 +1382,10 @@ class BetInAsiaAdapter(BookAdapter):
             if not await CURSOR.click(page, cell, timeout=5_000):
                 return {"ok": False, "error": "the price cell could not be clicked"}
             self._slip_clicked = True      # past this point the venue has seen a UI action
+            # Remember WHERE the slip is so it can be closed later (see slip_close). Without this the
+            # bot opens betslips and never closes one — measured 2026-08-14 as the clearest difference
+            # between a bot session and a hand-driven one.
+            self._slip_page, self._slip_open_key = page, key
             await _aio.sleep(0.5)
             url_after = page.url
             # THE ROW IS AN <a href>. A real user's click is swallowed by the app (it opens the Quick Bet

@@ -327,22 +327,50 @@ public class CrossPlatformArbTelemetryStrategy
     private long _lastInPlayVerifyTicks;    // in-play budget (independent of the above)
     private int  _slipVerifyInFlight;      // one at a time: the rover is a single tab
     public int   SlipVerifyCount;          // surfaced in status output
+    public int   SlipCloseCount;           // slips actually closed (see the /slip_close call)
+
+    // ── CADENCE JITTER ────────────────────────────────────────────────────────────────────────────────
+    // A sample "every 60s" means every 60.000s, and request timestamps make that obvious from the server
+    // side without any analysis at all — nothing human produces an interval that regular. The venue is a
+    // sharp book that does not mind the arb itself, so this is not about hiding the strategy; it is about
+    // not being trivially machine-shaped while testing.
+    //
+    // DRAWN ONCE PER INTERVAL, not per check. The gate is evaluated on every arb open — potentially many
+    // times a second — so re-rolling inside the comparison would let the smallest draw win and pull the
+    // effective interval toward the bottom of the range. Each granted sample fixes the NEXT one's budget.
+    private static readonly double CadenceJitter =
+        Math.Clamp(double.TryParse(Environment.GetEnvironmentVariable("HARDVEN_CADENCE_JITTER_PCT"),
+                                   System.Globalization.NumberStyles.Any,
+                                   System.Globalization.CultureInfo.InvariantCulture, out var _cj) && _cj >= 0
+                   ? _cj / 100.0 : 0.35, 0.0, 0.9);
+    private long _nextPreLiveBudgetMs;
+    private long _nextInPlayBudgetMs;
+
+    internal static long Jittered(long baseMs) =>
+        (long)(baseMs * (1.0 + (Random.Shared.NextDouble() * 2.0 - 1.0) * CadenceJitter));
+
+    internal static double CadenceJitterForTest => CadenceJitter;
+    /// <summary>Longest a jittered pre-live interval can be — what a test must wait out.</summary>
+    internal static int SlipVerifyMaxIntervalMsForTest => (int)(SlipVerifyPreLiveMs * (1.0 + CadenceJitter)) + 1;
 
     /// <summary>Wire the betslip reader (the sidecar's /slip_quote). Set after construction because the
     /// verifier that owns it needs this strategy first. Null = sampling disabled.</summary>
     public void SetSlipVerifier(Func<string, double, Task<(decimal Price, string Error)>>? slipQuote,
                                 Func<string>? slipVia = null,
                                 Func<bool>? slipClicked = null,
-                                Func<bool>? slipAccaFlagged = null)
+                                Func<bool>? slipAccaFlagged = null,
+                                Func<Task<bool>>? slipClose = null)
     {
         _slipQuote   = slipQuote;
         _slipVia     = slipVia;      // reads back which tier served the last quote (see the rover cooldown)
         _slipClicked = slipClicked;  // ...and whether it cost a click at all (see RefundSlipVerifyBudget)
         _slipAccaFlagged = slipAccaFlagged;
+        _slipClose   = slipClose;    // releases the subscription — without it every event is one-shot
     }
     private Func<string>? _slipVia;
     private Func<bool>?   _slipClicked;
     private Func<bool>?   _slipAccaFlagged;
+    private Func<Task<bool>>? _slipClose;
 
     // ── Public stats ──────────────────────────────────────────────────────────
     public int OpenArbs   => _activeWindows.Values.Count(w => w != null);
@@ -404,8 +432,9 @@ public class CrossPlatformArbTelemetryStrategy
         _hedgeCsvWriterTask = HedgeMonitorEnabled ? Task.Run(RunHedgeCsvWriterAsync) : Task.CompletedTask;
         _slipCsvWriterTask  = SlipVerifyEnabled  ? Task.Run(RunSlipCsvWriterAsync)  : Task.CompletedTask;
         if (SlipVerifyEnabled)
-            Console.WriteLine($"[SLIP VERIFY] sampling pre-live every {SlipVerifyPreLiveMs / 1000}s, "
-                            + $"in-play every {SlipVerifyInPlayMs / 1000}s, "
+            Console.WriteLine($"[SLIP VERIFY] sampling pre-live every ~{SlipVerifyPreLiveMs / 1000}s, "
+                            + $"in-play every ~{SlipVerifyInPlayMs / 1000}s "
+                            + $"(+/-{CadenceJitter * 100:0}% jitter, drawn per interval), "
                             + $"+{SlipVerifyRoverMs / 1000}s cooldown after any rover quote "
                             + $"-> {_slipCsvBaseName}_{CsvDate()}.csv");
         if (SlipVerifyEnabled)
@@ -1096,7 +1125,11 @@ public class CrossPlatformArbTelemetryStrategy
         // on different threads; checking the clock first would let both pass it and both click.
         if (Interlocked.CompareExchange(ref _slipVerifyInFlight, 1, 0) != 0) return false;
         long now     = Environment.TickCount64;
-        long budget  = openedInPlay ? SlipVerifyInPlayMs : SlipVerifyPreLiveMs;
+        // The budget for THIS interval was drawn when the previous sample was granted (see Jittered).
+        // Zero means "not drawn yet", i.e. the first sample of the session — let it through.
+        ref long pending = ref (openedInPlay ? ref _nextInPlayBudgetMs : ref _nextPreLiveBudgetMs);
+        long budget  = Interlocked.Read(ref pending);
+        if (budget <= 0) budget = openedInPlay ? SlipVerifyInPlayMs : SlipVerifyPreLiveMs;
         ref long last = ref (openedInPlay ? ref _lastInPlayVerifyTicks : ref _lastSlipVerifyTicks);
         bool ok = now - Interlocked.Read(ref last) >= budget
                // ROVER COOLDOWN, on top. We cannot know in advance whether this quote will need the
@@ -1111,6 +1144,9 @@ public class CrossPlatformArbTelemetryStrategy
         // Stamped at START, not completion: "at most every N" is measured between attempts, so a slow
         // quote does not push the next one further out.
         Interlocked.Exchange(ref last, now);
+        // Draw the NEXT interval now, while we hold the slot — one roll per interval (see CadenceJitter).
+        Interlocked.Exchange(ref pending,
+            Jittered(openedInPlay ? SlipVerifyInPlayMs : SlipVerifyPreLiveMs));
         return true;
     }
 
@@ -1240,6 +1276,15 @@ public class CrossPlatformArbTelemetryStrategy
             if (diedBy.Length == 0) diedBy = "STILL_ALIVE_AT_LIMIT";
             Console.WriteLine($"[SLIP HOLD] {pair.Label}: stayed break-even for {heldMs / 1000.0:0.0}s "
                             + $"over {holdSamples} slip sample(s), best net ${bestNetHeld:0.0000}, ended by {diedBy}");
+        }
+
+        // CLOSE THE SLIP. Unconditional and last: the quote may have opened one before failing, and an
+        // un-closed slip keeps the event subscribed — after which its cached price ages out and the event
+        // can never be quoted again for the life of the socket. This is the fix for that, not decoration.
+        if (_slipClose != null)
+        {
+            try { if (await _slipClose()) Interlocked.Increment(ref SlipCloseCount); }
+            catch (Exception ex) { DebugLog.Trades($"slip close: {ex.GetType().Name}: {ex.Message}"); }
         }
 
         _slipCsvChannel.Writer.TryWrite(string.Join(",",
