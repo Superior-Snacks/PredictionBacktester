@@ -618,24 +618,85 @@ class BetInAsiaAdapter(BookAdapter):
         return await self.feed.watch_sport(sport, limit=limit)
 
     # ── M1: not built (Phase 3) ───────────────────────────────────────────────
+    # The venue's own labels, from /accounting_info/. Anchoring the DOM read on THEIR wording rather than
+    # on a CSS class: the classes are hashed CSS-module names (`_265f6344`) that change on every deploy,
+    # while these strings are user-facing copy and are what the page actually renders.
+    _BAL_LABELS = ("Current balance", "Available credit", "Balance")
+
+    async def _balance_from_dom(self) -> Optional[float]:
+        """Read the balance off the rendered page. No request at all, and invisible to page script.
+
+        THE QUIETEST OPTION AVAILABLE. The fetch below is indistinguishable from the site's own request on
+        the wire, but it is still a REQUEST — it appears in their access log at a cadence the UI would not
+        produce. A locator read produces no traffic whatsoever, and Playwright runs it in an isolated
+        world the page cannot instrument (measured: `test_dom_isolation.py`).
+
+        Returns None when the balance is not on screen — it may sit behind an account menu, and opening
+        one would be a UI action, which is the thing this exists to avoid. None is a real answer here.
+        """
+        obs = self.observer
+        page = getattr(obs, "_page", None) if obs else None
+        if page is None:
+            return None
+        try:
+            for label in self._BAL_LABELS:
+                loc = page.get_by_text(label, exact=False)
+                if not await loc.count():
+                    continue
+                # Small ancestors only: the label and its value sit together, and a large container
+                # would sweep in "Open stakes" and "Yesterday P/L" alongside.
+                for depth in range(1, 5):
+                    anc = loc.first.locator(f"xpath=ancestor::*[{depth}]")
+                    if await anc.count() == 0:
+                        continue
+                    txt = " ".join(((await anc.first.inner_text()) or "").split())
+                    # The number must follow the LABEL, not merely appear nearby.
+                    m = re.search(rf"{re.escape(label)}\D{{0,14}}(-?[\d,]+(?:\.\d+)?)", txt, re.I)
+                    if not m:
+                        continue
+                    try:
+                        val = float(m.group(1).replace(",", ""))
+                    except ValueError:
+                        continue
+                    if 0 <= val < 10_000_000:
+                        return val
+        except Exception as e:
+            print(f"[BIA] balance DOM read failed: {type(e).__name__}: {e}", flush=True)
+        return None
+
     async def balance(self) -> Optional[float]:
-        """Account cash, read from the venue THROUGH THE PAGE. None = unreadable.
+        """Account cash. None = unreadable.
 
-        FETCHED FROM PAGE CONTEXT, not from Python. `GET /v1/customers/{user}/accounting_info/` is an
-        ordinary authed call the site makes itself, but issuing it from httpx would be a SECOND CLIENT on
-        the account -- different TLS fingerprint, no browser origin, no surrounding page traffic -- which
-        is the one thing the passive transport exists to avoid. Running it inside the tab reuses the
-        session the operator logged in with, so on the wire it is indistinguishable from the site's own
-        request. This is also the pattern placement will need, so it is worth proving here first, where
-        the worst case is a number we already treat as optional.
+        TRIES THE PAGE FIRST, then an authed fetch. `BIA_BALANCE_SOURCE` = `dom` (never issue a request),
+        `fetch` (skip the DOM), or `auto` (default: DOM, falling back).
 
-        NEEDS BIA_USERNAME for the path only -- authentication rides on the page's cookies, so no password
-        is involved and nothing secret is added to the environment.
+        WHY THE FETCH IS SECOND, NOT FIRST. `GET /v1/customers/{user}/accounting_info/` from page context
+        is indistinguishable from the site's own call on the wire — same session, same TLS, same origin —
+        so it was already the safe way to ASK. But it is still a request in their access log, on our
+        schedule rather than the UI's, and a read off the rendered page costs nothing at all.
+
+        NEEDS BIA_USERNAME for the fetch path only (the URL contains it); auth rides on the page's
+        cookies, so no password is involved. The DOM path needs nothing.
 
         None IS A REAL ANSWER, not a failure: BalanceGuard treats it as UNKNOWN and does not halt, whereas
         returning 0.0 would halt a funded account -- the exact bug that bit Pinnacle twice. So every
         failure path here returns None rather than a number it is not sure of.
         """
+        source = (os.environ.get("BIA_BALANCE_SOURCE") or "auto").lower()
+        if source in ("auto", "dom"):
+            v = await self._balance_from_dom()
+            if v is not None:
+                if not getattr(self, "_bal_src_logged", False):
+                    self._bal_src_logged = True
+                    print(f"[BIA] balance read FROM THE PAGE ({v:.2f}) — no request made", flush=True)
+                return v
+            if source == "dom":
+                if not getattr(self, "_bal_warned", False):
+                    self._bal_warned = True
+                    print("[BIA] balance not on screen and BIA_BALANCE_SOURCE=dom — reporting UNKNOWN "
+                          "(does not halt the guard). It may sit behind an account menu.", flush=True)
+                return None
+
         user = (os.environ.get("BIA_USERNAME") or getattr(self.feed, "username", "") or "").strip()
         obs = self.observer
         page = getattr(obs, "_page", None) if obs else None
@@ -661,22 +722,38 @@ class BetInAsiaAdapter(BookAdapter):
         if not isinstance(res, dict) or res.get("err"):
             print(f"[BIA] balance fetch: {res.get('err') if isinstance(res, dict) else res}", flush=True)
             return None
-        # Shape per the 2026-08-09 recon: {current_balance, open_stakes, available_credit, commission_rate}.
-        # It may be nested under `data` like the session calls, so accept either.
-        d = res.get("data") if isinstance(res.get("data"), dict) else res
-        raw = d.get("current_balance")
-        # Money here is often ["USD", 123.45] as elsewhere in this API; accept a bare number too.
+        # THE REAL SHAPE, read off a live response 2026-08-14 — `data` is a LIST OF RECORDS, not a dict:
+        #   {"data":[{"key":"current_balance","label":"Current balance","unit":"USD","value":47.4675},
+        #            {"key":"open_stakes",...},{"key":"available_credit",...}], "status":"ok"}
+        # The previous code expected `data` to be a dict keyed by `current_balance`, so it fell through to
+        # `res.get("current_balance")` -> None -> float(None) -> None. This path had therefore NEVER
+        # returned a number, and the failure was invisible because None is also the legitimate "unknown".
+        # Same lesson as balance()->0.0: a bug that returns the healthy idle value hides indefinitely.
+        fields: dict[str, float] = {}
+        data = res.get("data")
+        if isinstance(data, list):
+            for row in data:
+                if isinstance(row, dict) and "key" in row:
+                    fields[str(row["key"])] = row.get("value")
+        elif isinstance(data, dict):
+            fields = data
+        else:
+            fields = res
+        raw = fields.get("current_balance")
+        # Money is sometimes ["USD", 123.45] elsewhere in this API; accept a bare number too.
         if isinstance(raw, (list, tuple)) and len(raw) >= 2:
             raw = raw[1]
         try:
             bal = float(raw)
         except (TypeError, ValueError):
-            print(f"[BIA] balance: could not read current_balance from {json.dumps(d)[:160]}", flush=True)
+            print(f"[BIA] balance: no current_balance in {json.dumps(res)[:220]}", flush=True)
             return None
         if not getattr(self, "_bal_seen", False):
             self._bal_seen = True
-            print(f"[BIA] balance reads OK via the page: {bal:.2f} "
-                  f"(open_stakes={d.get('open_stakes')}, commission={d.get('commission_rate')})", flush=True)
+            print(f"[BIA] balance read via an authed page fetch: {bal:.2f} "
+                  f"(open_stakes={fields.get('open_stakes')}, "
+                  f"commission={fields.get('commission_rate')}). Set BIA_BALANCE_SOURCE=dom to stop "
+                  f"issuing this request once the on-page read is confirmed working.", flush=True)
         return bal
 
     async def place_bet(self, selection_id: str, stake: float, max_odds: float) -> BetResult:
