@@ -222,10 +222,17 @@ foreach ($sel in $targets) {
             Write-Host "           same-side name guard is INERT on this venue. Side identification here" -ForegroundColor Yellow
             Write-Host "           rests on matching the board price instead.>" -ForegroundColor Yellow
         }
-        if ($res.slip_panel_text) {
-            Write-Host "  PANEL   $($res.slip_panel_text)" -ForegroundColor Cyan
-            Write-Host "          ^ what the betslip itself renders. If the backed player's name is in there," -ForegroundColor DarkGray
-            Write-Host "            the click is verifiable by name and the guard can be wired to it." -ForegroundColor DarkGray
+        if ($res.max_stake) {
+            Write-Host ("  DEPTH   `$$([math]::Round($res.max_stake,2)) available AT {0} (real, off the slip ladder - not the assumed `$100)" -f $res.decimal_odds) -ForegroundColor Green
+            if ($res.ladder) {
+                $top = $res.ladder | Select-Object -First 6 | ForEach-Object { "{0} {1} `${2:N0}" -f $_.book, $_.odds, $_.stake }
+                Write-Host "          ladder: $($top -join '  |  ')" -ForegroundColor DarkGray
+            }
+        } elseif ($res.ok) {
+            Write-Host "  DEPTH   <no ladder parsed - sizing falls back to the assumed max stake>" -ForegroundColor Yellow
+        }
+        if ($res.slip_panel_text -and $VerbosePreference -ne 'SilentlyContinue') {
+            Write-Host "  PANEL   $($res.slip_panel_text)" -ForegroundColor DarkGray
         }
 
         if ($res.from_cache) { Write-Host "  SERVED FROM CACHE (age $($res.age_sec)s) - no click, so this is NOT a path timing" -ForegroundColor Yellow }

@@ -238,6 +238,13 @@ class BetInAsiaAdapter(BookAdapter):
         # profile and only READS its socket. `direct` opens our own WS with the session token -- a
         # second client with a different TLS fingerprint and no surrounding page traffic. It exists
         # for offline/diagnostic use, not for anything the account does routinely.
+        # selection_id -> (stake_at_quoted_price, observed_at). Filled by slip_quote from the betslip
+        # ladder; read by odds() in place of BIA_ASSUMED_MAX_STAKE. TTL'd because depth is a live number
+        # and a remembered one silently becomes fiction — expiring back to the announced assumption is
+        # honest, holding a ten-minute-old figure as current is not.
+        self._slip_depth: dict[str, tuple[float, float]] = {}
+        self._slip_depth_ttl = float(os.environ.get("BIA_SLIP_DEPTH_TTL_SEC", "300"))
+        self._depth_announced = False
         self.transport = os.environ.get("BIA_TRANSPORT", "browser").lower()
         self.observer = None
         self.feed = BetInAsiaFeed(passive=(self.transport == "browser"))
@@ -501,10 +508,23 @@ class BetInAsiaAdapter(BookAdapter):
                 continue
             ev = self.feed.get_event(sport, ekey) or {}
             start = _start_ts_epoch(ev.get("start_ts"))
+            # REAL DEPTH WHERE WE HAVE IT. ASSUMED_MAX_STAKE is a placeholder that feeds
+            # Selection.max_contracts -> StakeLadder.MaxDepthFraction -> the executor's depth gate, i.e.
+            # sizing. The betslip's ladder is the venue's own answer, so prefer it while it is fresh and
+            # fall back to the announced assumption once it ages out.
+            stake = ASSUMED_MAX_STAKE
+            hit = self._slip_depth.get(sid)
+            if hit and (time.time() - hit[1]) <= self._slip_depth_ttl:
+                stake = hit[0]
+                if not self._depth_announced:
+                    self._depth_announced = True
+                    print(f"[BIA] using REAL betslip depth for sizing (first: {sid} -> "
+                          f"{stake:,.2f}); assumed {ASSUMED_MAX_STAKE:.2f} still applies to "
+                          f"selections never quoted, and after {self._slip_depth_ttl:.0f}s", flush=True)
             out[sid] = Selection(
                 selection_id=sid,
                 decimal_odds=float(price),
-                max_stake=ASSUMED_MAX_STAKE,
+                max_stake=stake,
                 status="open",
                 ts=ts,
                 live=_is_live(ev, start),
@@ -1011,9 +1031,78 @@ class BetInAsiaAdapter(BookAdapter):
             return await loc.first.evaluate(
                 """el => { let n = el;
                            for (let i = 0; i < 6 && n.parentElement; i++) n = n.parentElement;
-                           return (n.innerText || '').replace(/\\s+/g, ' ').slice(0, 1200); }""")
+                           return (n.innerText || '').replace(/\\s+/g, ' ').slice(0, 4000); }""")
         except Exception as e:
             return f"<unreadable: {type(e).__name__}>"
+
+    # The betslip renders "{Sport} Start Acca {SELECTION} Stake $ Price Place ...". Observed verbatim
+    # 2026-08-14 across three sports:
+    #     "Baseball Start Acca Cleveland Guardians Moneyline (Inc. Overtime) Stake $ Price Place ..."
+    #     "Tennis Start Acca Rei Sakamoto Stake $ Price Place ..."
+    #     "MMA Start Acca Gillian Robertson, Moneyline Stake $ Price Place ..."
+    _SLIP_LABEL_RE = re.compile(r"Start Acca\s+(.+?)\s+Stake\b")
+
+    @staticmethod
+    def _parse_slip_label(panel_text: str) -> str:
+        """The competitor the betslip says it holds, or "" when it cannot be read.
+
+        This is the venue's OWN answer to "what did I just click", and it is what feeds the executor's
+        same-side guard. Returns "" rather than a guess on any doubt: an empty label leaves the guard in
+        the state it has always been in on this venue, whereas a wrong one would actively approve a bet.
+        """
+        if not panel_text:
+            return ""
+        m = BetInAsiaAdapter._SLIP_LABEL_RE.search(panel_text)
+        if not m:
+            return ""
+        label = m.group(1).strip()
+        # Strip the market descriptor the venue appends, so what remains is the COMPETITOR. Left in, the
+        # trailing words become the "last word" the surname test keys on -- "Cleveland Guardians Moneyline
+        # (Inc. Overtime)" would be compared on "overtime".
+        label = label.split(",")[0]
+        label = re.split(r"\bMoneyline\b", label)[0]
+        return " ".join(label.split()).strip()
+
+    # The ladder under the slip: one row per book per price level. First row is "BEST PRICE", the rest
+    # carry a running "TOTAL". Observed verbatim 2026-08-14:
+    #   "4casters BEST PRICE 1.776 $9,852 bf TOTAL $9,881 1.769 $29 sxbet TOTAL $10,388 1.769 $507 ..."
+    # (9,852 + 29 = 9,881 and + 507 = 10,388, so TOTAL is cumulative INCLUDING that row.)
+    _LADDER_BEST = re.compile(r"([A-Za-z0-9_]+)\s+BEST PRICE\s+([\d.]+)\s+\$([\d,]+(?:\.\d+)?)")
+    _LADDER_ROW = re.compile(
+        r"([A-Za-z0-9_]+)\s+TOTAL\s+\$[\d,]+(?:\.\d+)?\s+([\d.]+)\s+\$([\d,]+(?:\.\d+)?)")
+
+    @staticmethod
+    def _parse_slip_ladder(panel_text: str) -> list[dict]:
+        """[{book, odds, stake}] in the order the panel lists them (best price first). [] if unreadable."""
+        if not panel_text:
+            return []
+        rows: list[tuple[int, str, float, float]] = []
+        for rx in (BetInAsiaAdapter._LADDER_BEST, BetInAsiaAdapter._LADDER_ROW):
+            for m in rx.finditer(panel_text):
+                try:
+                    rows.append((m.start(), m.group(1), float(m.group(2)),
+                                 float(m.group(3).replace(",", ""))))
+                except ValueError:
+                    continue
+        rows.sort(key=lambda r: r[0])          # document order = descending price
+        return [{"book": b, "odds": o, "stake": s} for _pos, b, o, s in rows]
+
+    @staticmethod
+    def _stake_at_price(ladder: list[dict], odds: float) -> Optional[float]:
+        """Cash available AT the quoted price. None when the ladder cannot answer.
+
+        DELIBERATELY NOT THE CUMULATIVE TOTAL, though that is what a taker would sweep. The rows above our
+        price include books this account cannot use -- on 2026-08-14 the baseball BEST PRICE was 4casters
+        at 1.776 for $9,852 while the venue actually quoted 1.769, and 4casters is one of the crypto books
+        excluded for their artificial pre-live delay. Counting that $9,852 as reachable liquidity would
+        inflate depth by 3x on that selection alone.
+        Summing only the rows AT the quoted price is provably available at the price we are taking, and it
+        errs small: over-stating depth costs real money, under-stating it costs a slightly smaller bet.
+        """
+        if not ladder or odds <= 0:
+            return None
+        total = sum(r["stake"] for r in ladder if abs(r["odds"] - odds) < 1e-9)
+        return total if total > 0 else None
 
     async def _slip_quote_locked(self, selection_id: str) -> dict:
         import asyncio as _aio
@@ -1156,9 +1245,18 @@ class BetInAsiaAdapter(BookAdapter):
                 print(f"[BIA SLIP] {ekey}: {n_links} links carry this key; using the one with price cells",
                       flush=True)
             href = await row.get_attribute("href") or ""
-            if f"/{sport}/" not in href or f"/{comp_id}/" not in href:
-                return {"ok": False, "error": f"row href {href!r} disagrees with token "
-                                              f"(sport={sport} comp={comp_id}) -- refusing to click"}
+            if f"/{sport}/" not in href:
+                return {"ok": False, "error": f"row href {href!r} is not sport {sport} -- refusing to click"}
+            # COMP_ID IS A WARNING, NOT A VETO. The competition id is baked into the selection_id at pairing
+            # time and the venue re-numbers competitions: measured 2026-08-14, a CPL fixture whose event key
+            # matched EXACTLY was refused because the token said comp 60642 while the live href said 62718.
+            # The event key is the identity here -- a date plus both team ids, and it is what the <a> was
+            # selected by -- so a stale comp id cannot make this the wrong game, only the wrong league URL.
+            # Refusing on it threw away correctly-identified cricket fixtures to protect against nothing.
+            if f"/{comp_id}/" not in href:
+                print(f"[BIA SLIP] {ekey}: token says comp {comp_id} but the row says {href!r} — "
+                      f"stale competition id in the pair file; event key matches, so clicking anyway",
+                      flush=True)
 
             # Locate the exact clickable cell BY PRICE — layout-independent (see _find_price_cell).
             book = self.feed._books.get((sport, ekey)) or {}
@@ -1211,10 +1309,27 @@ class BetInAsiaAdapter(BookAdapter):
                             ms = round((time.time() - t0) * 1000, 1)
                             print(f"[BIA SLIP] {selection_id} -> {odds} via {via} in {ms:.0f}ms", flush=True)
                             panel_text = await self._read_slip_panel(page)
+                            slip_label = self._parse_slip_label(panel_text)
+                            ladder     = self._parse_slip_ladder(panel_text)
+                            real_stake = self._stake_at_price(ladder, odds)
+                            if real_stake is not None:
+                                # REAL DEPTH, replacing BIA_ASSUMED_MAX_STAKE for this selection.
+                                self._slip_depth[selection_id] = (real_stake, time.time())
+                            if slip_label:
+                                print(f"[BIA SLIP] betslip says: {slip_label!r}"
+                                      + (f", ${real_stake:,.0f} at {odds}" if real_stake else ""),
+                                      flush=True)
                             return {"ok": True, "decimal_odds": odds,
                                     "implied_price": round(1.0 / odds, 6),
-                                    # RAW, unparsed: see _read_slip_panel. The same-side guard stays
-                                    # unfed until we have seen what the venue actually renders here.
+                                    # Cash available AT the quoted price, read off the slip's own ladder.
+                                    # None => nothing parsed => callers keep the assumed constant.
+                                    "max_stake": real_stake,
+                                    "ladder": ladder[:24],
+                                    # The venue's own name for what it put on the slip -> feeds the
+                                    # executor's same-side guard, which has been inert here until now.
+                                    "selection_label": slip_label,
+                                    # Raw text kept alongside it: the parse is a regex over a layout that
+                                    # can change, and an operator needs to be able to see what it read.
                                     "slip_panel_text": panel_text,
                                     # WHICH TIER SERVED THIS. The caller paces itself by this: a
                                     # sport-tab quote is a find-and-click on a parked board (~0.5s) and
@@ -1242,7 +1357,7 @@ class BetInAsiaAdapter(BookAdapter):
                     panel_text = await loc.first.evaluate(
                         """el => { let n = el;
                                    for (let i = 0; i < 6 && n.parentElement; i++) n = n.parentElement;
-                                   return (n.innerText || '').replace(/\\s+/g, ' ').slice(0, 1200); }""")
+                                   return (n.innerText || '').replace(/\\s+/g, ' ').slice(0, 4000); }""")
             except Exception as pe:
                 panel_text = f"<unreadable: {type(pe).__name__}>"
             return {"ok": False,
@@ -1386,8 +1501,19 @@ class BetInAsiaAdapter(BookAdapter):
             if s.get("events") and not s.get("priced"):
                 s["WARNING"] = ("catalog present but ZERO prices - the page is not logged in or never "
                                 "subscribed; odds() will return {} for every selection")
+        # How many selections are sized on a MEASURED depth vs the announced guess. A guessed number that
+        # looks like a measured one is the failure mode this whole field exists to prevent, so say which.
+        now = time.time()
+        live_depth = {k: v for k, v in self._slip_depth.items()
+                      if (now - v[1]) <= self._slip_depth_ttl}
         s.update({"book": self.name, "currency": self.feed.currency,
                   "assumed_max_stake": ASSUMED_MAX_STAKE,
+                  "real_depth": {"selections": len(live_depth),
+                                 "ttl_sec": self._slip_depth_ttl,
+                                 "median": round(sorted(v[0] for v in live_depth.values())
+                                                 [len(live_depth) // 2], 2) if live_depth else None,
+                                 "note": "read off the betslip ladder at the quoted price; everything "
+                                         "else falls back to assumed_max_stake"},
                   "can_place_bets": self.feed.can_place_bets,
                   "betting_implemented": False})
         return s
