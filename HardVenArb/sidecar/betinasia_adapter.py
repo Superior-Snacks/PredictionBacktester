@@ -1201,10 +1201,22 @@ class BetInAsiaAdapter(BookAdapter):
             #   slip_panel_seen   -> the panel really did open, so the click path is right
             bk = self.feed._slip_books.get(key) or {}
             panel = 0
+            panel_text = ""
             try:
-                panel = await page.get_by_text("start acca", exact=False).count()
-            except Exception:
-                pass
+                loc = page.get_by_text("start acca", exact=False)
+                panel = await loc.count()
+                # WHAT IS ACTUALLY IN THE PANEL. Measured 2026-08-14 on a non-acca cricket match: the click
+                # landed, `slip_panel_seen` was 1 — the panel really did open — and yet no offers_acca_hcap
+                # ever arrived. So the acca CHANNEL is a dead end for these events, but the panel itself is
+                # on screen, and if it renders a price then a DOM read gets what the socket will not.
+                # That question is worth one string rather than another round of theorising.
+                if panel:
+                    panel_text = await loc.first.evaluate(
+                        """el => { let n = el;
+                                   for (let i = 0; i < 6 && n.parentElement; i++) n = n.parentElement;
+                                   return (n.innerText || '').replace(/\\s+/g, ' ').slice(0, 1200); }""")
+            except Exception as pe:
+                panel_text = f"<unreadable: {type(pe).__name__}>"
             return {"ok": False,
                     "error": f"no offers_acca_hcap for {ekey}/{market_key}/{sel} within the wait window",
                     "diag": {"slip_books_before": slips_before,
@@ -1212,6 +1224,7 @@ class BetInAsiaAdapter(BookAdapter):
                              "book_present": bool(bk),
                              "markets_in_book": sorted((bk.get("markets") or {}).keys())[:12],
                              "slip_panel_seen": panel,
+                             "panel_text": panel_text,
                              "url": page.url}}
         except Exception as e:
             return {"ok": False, "error": f"slip quote error: {type(e).__name__}: {e}"}

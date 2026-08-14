@@ -270,7 +270,7 @@ public class CrossPlatformArbTelemetryStrategy
     private static readonly bool SlipVerifyEnabled =
         Environment.GetEnvironmentVariable("HARDVEN_SLIP_VERIFY") == "1";
     // THREE INDEPENDENT BUDGETS, not one. What a sample COSTS and what it is WORTH both vary:
-    //   pre-live   the only regime we trade, and a parked board serves it in ~0.5s  -> sample often
+    //   pre-live   the only regime we trade, and a parked board serves it in ~2.2s  -> sample often
     //   in-play    telemetry only under PRELIVE_ONLY, still worth measuring          -> slower
     //   rover      had to navigate to the league: seconds, and a real UI action      -> slowest
     // Separate budgets rather than one shared clock means an in-play sample can never consume the slot a
