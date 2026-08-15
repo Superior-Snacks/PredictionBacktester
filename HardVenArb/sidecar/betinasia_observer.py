@@ -146,6 +146,18 @@ class BetInAsiaObserver:
         except Exception as e:
             self._log(f"canary could not be armed: {type(e).__name__}: {e}")
 
+        # EVENT CAPTURE, armed at CONTEXT level so it covers tabs that do not exist yet. The bot often
+        # clicks on a rover tab it opened seconds earlier, so a listener installed per-call on existing
+        # pages captured nothing from exactly the click under investigation. Opt-in and main-world, so
+        # it is a deliberate experiment rather than something left running: BIA_EVENT_CAPTURE=1.
+        if os.environ.get("BIA_EVENT_CAPTURE") == "1":
+            try:
+                from betinasia_adapter import BetInAsiaAdapter as _BA
+                await self._ctx.add_init_script(f"try {{ {_BA._EVENT_CAPTURE_JS} }} catch (e) {{}}")
+                self._log("event capture armed on ALL tabs (BIA_EVENT_CAPTURE=1) — experiment only")
+            except Exception as e:
+                self._log(f"event capture could not be armed: {type(e).__name__}: {e}")
+
         self._ctx.on("page", self._hook_page)
         for pg in self._ctx.pages:
             self._hook_page(pg)

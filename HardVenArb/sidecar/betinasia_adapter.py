@@ -1089,25 +1089,34 @@ class BetInAsiaAdapter(BookAdapter):
         Moves are excluded from the readout by default: a pointermove stream drowns the four events that
         matter. `moves=True` includes them when the question is about movement rather than the press.
         """
-        page = getattr(self, "_slip_page", None)
-        if page is None or page.is_closed():
-            ctx = getattr(self.observer, "_ctx", None)
-            pages = [p for p in (list(ctx.pages) if ctx else []) if not p.is_closed()]
-            page = pages[0] if pages else None
-        if page is None:
-            return {"ok": False, "error": "no page"}
-        try:
-            if reset:
-                await page.evaluate("() => { if (window.__evcap) window.__evcap.rows.length = 0; }")
-                return {"ok": True, "reset": True}
-            state = await page.evaluate(self._EVENT_CAPTURE_JS)
-            rows = await page.evaluate("() => (window.__evcap ? window.__evcap.rows : [])")
-            if not moves:
-                rows = [r for r in rows if r.get("type") not in ("pointermove", "mousemove")]
-            return {"ok": True, "url": page.url, "installed": state.get("installed", False),
-                    "count": len(rows), "events": rows[-40:]}
-        except Exception as e:
-            return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+        # EVERY TAB, not just one. The bot frequently clicks on a ROVER tab it navigated to seconds
+        # earlier (a league page), while the operator clicks on the long-lived board tab — so a capture
+        # installed on one page returned zero events for the bot and looked like a broken instrument.
+        # That asymmetry is also a candidate explanation in its own right: different page, different app
+        # state, different age of the React tree.
+        ctx = getattr(self.observer, "_ctx", None)
+        pages = [p for p in (list(ctx.pages) if ctx else []) if not p.is_closed()]
+        if not pages:
+            return {"ok": False, "error": "no pages"}
+        out, total = [], 0
+        for i, page in enumerate(pages):
+            try:
+                if reset:
+                    await page.evaluate("() => { if (window.__evcap) window.__evcap.rows.length = 0; }")
+                    continue
+                await page.evaluate(self._EVENT_CAPTURE_JS)
+                rows = await page.evaluate("() => (window.__evcap ? window.__evcap.rows : [])")
+                if not moves:
+                    rows = [r for r in rows if r.get("type") not in ("pointermove", "mousemove")]
+                total += len(rows)
+                if rows:
+                    out.append({"tab": i, "url": (page.url or "")[:90],
+                                "count": len(rows), "events": rows[-24:]})
+            except Exception as e:
+                out.append({"tab": i, "error": f"{type(e).__name__}: {e}"})
+        if reset:
+            return {"ok": True, "reset": True, "tabs": len(pages)}
+        return {"ok": True, "tabs": len(pages), "count": total, "captures": out}
 
     async def _active_element(self, page) -> str:
         """What has keyboard focus right now, read from an ISOLATED world so the page cannot see the read.
