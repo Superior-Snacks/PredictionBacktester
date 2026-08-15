@@ -101,9 +101,34 @@ def _session_state() -> dict | None:
         return None
 
 
+# ── WHICH CODE IS ACTUALLY RUNNING ───────────────────────────────────────────
+# Hashed AT IMPORT, so it describes what this process LOADED — not what is on disk now. Python does not
+# hot-reload, so an edited file is inert until a restart, and on 2026-08-15 that cost hours: three separate
+# diagnoses were made against a sidecar running pre-fix code, each one "confirming" a bug that had already
+# been fixed on disk. A client can compare this against the current file and refuse to draw conclusions.
+def _code_fingerprint() -> dict:
+    import hashlib
+    out = {}
+    here = os.path.dirname(os.path.abspath(__file__))
+    for f in ("betinasia_adapter.py", "pinnacle_adapter.py", "betinasia_observer.py", "app.py"):
+        try:
+            with open(os.path.join(here, f), "rb") as fh:
+                out[f] = hashlib.sha256(fh.read()).hexdigest()[:10]
+        except Exception:
+            pass
+    return out
+
+
+_CODE_FP = _code_fingerprint()
+_STARTED_AT = time.time()
+
+
 @app.get("/health")
 async def health():
     h = {"ok": True, "book": adapter.name, "ts": time.time()}
+    h["code"] = _CODE_FP                     # source hashes as loaded; compare against disk
+    h["started_at"] = _STARTED_AT
+    h["uptime_sec"] = round(time.time() - _STARTED_AT, 1)
     # The venue-side BETTING CONTRACT, published so the bot can verify it agrees with its own sizing BEFORE it
     # fires anything. These are the sidecar's own numbers, deliberately independent of the C# ladder: a hard cap
     # in a separate process is what catches a units/FX/depth bug in the bot before it becomes a real bet. But a

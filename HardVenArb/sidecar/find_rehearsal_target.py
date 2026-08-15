@@ -72,6 +72,15 @@ def main() -> int:
     except Exception as e:
         print(f"SIDECAR NOT REACHABLE on {a.port}: {type(e).__name__}. Start it first.")
         return 2
+    # Refuse to produce a result that describes code nobody is running. This check exists because the
+    # opposite happened repeatedly on 2026-08-15 and every conclusion drawn was wrong.
+    try:
+        from staleness import check as _stale_check
+        if not _stale_check(a.port, quiet=True) and a.run:
+            print("\nNot running the rehearsal against a stale sidecar. Restart it, then re-run.")
+            return 3
+    except ImportError:
+        pass
 
     cat = get(f"{base}/catalog")["selections"]
     now = dt.datetime.now(dt.timezone.utc)

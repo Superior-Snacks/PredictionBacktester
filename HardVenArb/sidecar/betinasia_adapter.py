@@ -923,14 +923,35 @@ class BetInAsiaAdapter(BookAdapter):
                 if pg.is_closed():
                     continue
                 entry = {"index": i, "url": (pg.url or "")[:120], "inputs": await self._dump_slip_inputs(pg)}
-                # Candidate Place controls, so the `get_by_text("place").last` guess can be checked
-                # against what the page actually renders rather than assumed.
+                # The SUBSTRING match is kept purely as a diagnostic — it is what the placement path used
+                # to use, and seeing the 14 UNPLACED rows it drags in is the clearest way to show why an
+                # exact match is required. `_place_via_ui` itself matches "Place" exactly.
                 try:
                     pl = pg.get_by_text("place", exact=False)
-                    n = min(await pl.count(), 6)
-                    entry["place_candidates"] = [
-                        f"[{j}] {((await pl.nth(j).inner_text()) or '')[:50]!r} "
-                        f"visible={await pl.nth(j).is_visible()}" for j in range(n)]
+                    total = await pl.count()
+                    # SHOW THE TAIL, NOT THE HEAD: the real button sorts last among these, so a dump that
+                    # truncates the front hides the only element that matters. Capped at 20 from the END.
+                    lo = max(0, total - 20)
+                    rows = []
+                    for j in range(lo, total):
+                        txt = ((await pl.nth(j).inner_text()) or "").replace("\n", " ")[:50]
+                        mark = "  <== get_by_text('place').last CLICKS THIS" if j == total - 1 else ""
+                        rows.append(f"[{j}/{total - 1}] {txt!r} visible={await pl.nth(j).is_visible()}{mark}")
+                    entry["place_candidates"] = rows
+                    # An EXACT match cannot hit "UNPLACED", which is what poisons the substring search:
+                    # every book row on the slip carries an unplaced amount and each one matches "place".
+                    ex = pg.get_by_text("Place", exact=True)
+                    n_ex = await ex.count()
+                    entry["place_exact"] = [
+                        f"[{j}] {((await ex.nth(j).inner_text()) or '')[:40]!r} "
+                        f"visible={await ex.nth(j).is_visible()}" for j in range(min(n_ex, 8))] or \
+                        ["(no element whose text is exactly 'Place')"]
+                    entry["buttons"] = []
+                    btn = pg.locator("button")
+                    for j in range(min(await btn.count(), 14)):
+                        t = ((await btn.nth(j).inner_text()) or "").replace("\n", " ").strip()[:34]
+                        if t:
+                            entry["buttons"].append(f"[{j}] {t!r} visible={await btn.nth(j).is_visible()}")
                 except Exception as e:
                     entry["place_candidates"] = [f"(failed: {type(e).__name__}: {e})"]
                 try:
@@ -1026,6 +1047,20 @@ class BetInAsiaAdapter(BookAdapter):
                 await _aio.sleep(pace)
                 paused += pace
 
+        # RELEASE THE SLIP ON EVERY NON-PLACING EXIT. Observed 2026-08-15: a form-fill failure returned
+        # without closing, and the event became PERMANENTLY unquotable —
+        #   "already subscribed on the betslip channel, nothing is cached, and the page shows no price
+        #    ... the subscription cannot be released until this socket cycles"
+        # because `unwatch_acca_hcaps` only goes out on close (see slip_close). So each failed attempt
+        # burned one event for the life of the socket. Defined up here so every exit below can reach it;
+        # the success path deliberately does NOT call it — after a real order the slip is the venue's
+        # business, not ours.
+        async def _release() -> None:
+            try:
+                await self.slip_close()
+            except Exception:
+                pass
+
         # 1. Open the slip on this selection. Reuses the quote path wholesale: it finds the row by event
         #    key, cross-checks sport, clicks the cell whose PRICE matches, and refuses on ambiguity.
         await step(f"opening the betslip on {selection_id}  (asking {stake:.2f} @ {max_odds})")
@@ -1057,18 +1092,28 @@ class BetInAsiaAdapter(BookAdapter):
         if page is None or page.is_closed():
             return BetResult(accepted=False, stake=stake, reason="the betslip's tab disappeared")
 
-        # RELEASE THE SLIP ON EVERY NON-PLACING EXIT FROM HERE ON. Observed 2026-08-15: a form-fill
-        # failure returned without closing, and the event became PERMANENTLY unquotable —
-        #   "already subscribed on the betslip channel, nothing is cached, and the page shows no price
-        #    ... the subscription cannot be released until this socket cycles"
-        # because `unwatch_acca_hcaps` only goes out on close (see slip_close). So each failed attempt
-        # burned one event for the life of the socket. The success path leaves it alone: after a real
-        # order the slip is the venue's business, not ours.
-        async def _release() -> None:
-            try:
-                await self.slip_close()
-            except Exception:
-                pass
+        # ── IS THERE ACTUALLY A BETSLIP ON SCREEN? ───────────────────────────────────────────────────
+        # A quote can come back from CACHE without clicking anything (`clicked: false` — the whole point
+        # of that path is to answer cheaply without spending a click on the venue). A price then exists
+        # while NO SLIP DOES, and the form fields are rendered by the slip: measured 2026-08-15, they are
+        # absent from the DOM entirely until it opens, and appear as `_7132a240 price-input undefined`
+        # only once it is up. Every failure so far was this — the code took a cached price as proof of an
+        # open slip, then waited 30s for a field on a page that had no betslip on it.
+        # Check the FIELD, not the `clicked` flag: the field is the thing being typed into, so its
+        # presence is the property that actually matters, and it stays correct if the quote path changes.
+        try:
+            await page.locator(self._PRICE_INPUT).first.wait_for(
+                state="visible", timeout=max(1.0, min(6.0, t_budget - time.time())) * 1000)
+        except Exception:
+            await _release()
+            cached = "" if q.get("clicked") else " The quote came from cache without clicking, so no " \
+                                                 "slip was ever opened."
+            if verbose:
+                print(f"[{tag}] STOPPED — quoted {offered} but there is no betslip on screen to type "
+                      f"into.{cached}", flush=True)
+            return BetResult(accepted=False, stake=stake, actual_odds=offered,
+                             reason=f"quoted {offered} but no betslip is open — the price form does not "
+                                    f"exist to fill.{cached}")
 
         # 2. Fill the form. Price first: changing it re-prices the slip, so a stake typed before would be
         #    re-validated against a different number.
@@ -1100,11 +1145,17 @@ class BetInAsiaAdapter(BookAdapter):
                                     f"nothing was submitted")
 
         await step("locating the Place control")
-        place = page.get_by_text("place", exact=False).last
+        # EXACT MATCH. The old `get_by_text("place", exact=False).last` worked only by accident of DOM
+        # order: every book row on the slip carries an UNPLACED amount, "unplaced" contains "place", and
+        # measured 2026-08-15 that substring matched 15 elements — 14 book rows plus the real button,
+        # which happened to sort last. One more row appended after it and the bot clicks a book row while
+        # believing it placed a bet. Exact cannot match "UNPLACED" at all; `.last` then only picks the
+        # innermost of any wrapper/leaf pair that both read "Place".
+        place = page.get_by_text("Place", exact=True).last
         if not await place.count():
             if verbose:
-                print(f"[{tag}] STOPPED — no Place control matched. The selector is "
-                      f"get_by_text('place').last; check what the slip actually renders.", flush=True)
+                print(f"[{tag}] STOPPED — nothing on the slip reads exactly 'Place'. Run "
+                      f"`python slip_dom.py` with a slip open and check place_exact/buttons.", flush=True)
             await _release()
             return BetResult(accepted=False, stake=stake, reason="no Place control on the slip")
         if verbose:

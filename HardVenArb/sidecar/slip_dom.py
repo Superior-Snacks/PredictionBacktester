@@ -46,9 +46,20 @@ def main() -> int:
         print("  INPUTS:")
         print(inputs)
         pc = p.get("place_candidates") or []
-        print(f"  PLACE CANDIDATES ({len(pc)}) — what get_by_text('place').last would pick is the LAST:")
+        print(f"  PLACE CANDIDATES ({len(pc)}) — substring 'place', which also matches 'UNPLACED':")
         for line in pc:
             print(f"      {line}")
+        # What the bot ACTUALLY uses. Exact match cannot hit the book rows' UNPLACED labels, so this is
+        # the list that has to contain the real button -- the substring list above is only diagnostic.
+        px = p.get("place_exact") or []
+        print(f"  PLACE EXACT ('Place') — THIS is what _place_via_ui clicks (.last of these):")
+        for line in px:
+            print(f"      {line}")
+        bl = p.get("buttons") or []
+        if bl:
+            print(f"  BUTTONS:")
+            for line in bl:
+                print(f"      {line}")
         if not a.inputs_only and p.get("panel_text"):
             print(f"  PANEL TEXT: {p['panel_text'][:300]!r}")
         print()
