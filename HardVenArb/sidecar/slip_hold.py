@@ -71,6 +71,11 @@ def main() -> int:
     ap.add_argument("--port", type=int, default=8788)
     ap.add_argument("--sport", default="tennis")
     ap.add_argument("--selection-id", default=None)
+    ap.add_argument("--nth", type=int, default=0,
+                    help="pick the Nth candidate instead of the soonest. A slip that dies on its own "
+                         "leaves its acca subscription held (slip_close only unwatches when a slip is "
+                         "actually open), so the event it burned is unquotable until the socket cycles — "
+                         "use this to step past it rather than restarting.")
     ap.add_argument("--seconds", type=float, default=120.0)
     ap.add_argument("--delay", type=float, default=3.0,
                     help="seconds to wait before touching anything, so you can click into the browser "
@@ -105,7 +110,7 @@ def main() -> int:
         import datetime as dt
         cat = _get(f"{base}/catalog")["selections"]
         now = dt.datetime.now(dt.timezone.utc)
-        best = None
+        cands = []
         for e in cat:
             if e.get("three_way") or (a.sport and e.get("sport") != a.sport):
                 continue
@@ -117,13 +122,17 @@ def main() -> int:
             except Exception:
                 continue
             mins = (t - now).total_seconds() / 60
-            if 40 < mins < 480 and (best is None or mins < best[0]):
-                best = (mins, e)
-        if not best:
+            if 40 < mins < 480:
+                cands.append((mins, e["event"], e["selection_name"], e["selection_id"]))
+        cands.sort(key=lambda r: (r[0], r[3]))
+        if not cands:
             print(f"no pre-live {a.sport} candidate found")
             return 1
-        sid = best[1]["selection_id"]
-        print(f"target: {best[1]['event']} -- {best[1]['selection_name']} (starts in {best[0]:.0f}m)")
+        if a.nth >= len(cands):
+            print(f"--nth {a.nth} but only {len(cands)} candidates")
+            return 1
+        mins, ev, seln, sid = cands[a.nth]
+        print(f"target[{a.nth}/{len(cands) - 1}]: {ev} -- {seln} (starts in {mins:.0f}m)")
     print(f"        {sid}\n")
 
     # HANDS OFF BEFORE THE BOT MOVES. With BIA_CLICK_MODE=os_hybrid the bot drives the PHYSICAL cursor,
