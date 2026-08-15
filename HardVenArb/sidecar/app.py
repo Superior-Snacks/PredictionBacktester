@@ -351,6 +351,19 @@ async def debug_feed():
     return fn()
 
 
+@app.post("/debug/fill_open_slip")
+async def debug_fill_open_slip(price: float, stake: float):
+    """Type into an ALREADY-OPEN betslip via CDP. Opens nothing, submits nothing.
+
+    Pair with `real_click.py`: open the slip with a real OS click, then call this. If the slip survives
+    CDP typing, only the OPENING click needs hardware input and the rest of the placement path can stay
+    as it is."""
+    fn = getattr(adapter, "fill_open_slip", None)
+    if not callable(fn):
+        raise HTTPException(404, f"book '{adapter.name}' cannot fill an open slip")
+    return await fn(price, stake)
+
+
 @app.get("/debug/input_probe")
 async def debug_input_probe(reset: bool = False):
     """Which MouseEvent properties does the SITE read? Answers whether a CDP click can ever pass.

@@ -230,6 +230,47 @@ class HumanCursor:
         self._set(page, x, y)
         return True
 
+    async def os_hybrid_click(self, page, loc, timeout: int = 5000) -> bool:
+        """CDP finds and scrolls to the element; the REAL Windows mouse performs the click.
+
+        The operator's design, and the right one: neither layer can do this alone. Coordinate-clicking
+        from remembered positions is unsafe on a board that reorders as odds tick — that is how you bet
+        the wrong side — so the element must be resolved live, which only CDP can do. And a CDP click
+        produces a betslip the venue discards, so the press must be real.
+
+        Falls back to the ordinary CDP click on non-Windows or if the coordinate translation fails: a
+        degraded click beats no click, and the caller is told which happened by the return of
+        `os_mouse.available()` rather than by silence.
+        """
+        try:
+            import os_mouse
+        except Exception:
+            return await self.click(page, loc, timeout=timeout)
+        if not os_mouse.available():
+            return await self.click(page, loc, timeout=timeout)
+        try:
+            cdp = self._cdp.get(page)
+        except TypeError:
+            cdp = None
+        if cdp is None:
+            try:
+                cdp = await page.context.new_cdp_session(page)
+                self._cdp[page] = cdp
+            except Exception:
+                return await self.click(page, loc, timeout=timeout)
+        try:
+            if await os_mouse.click_element(cdp, page, loc, timeout=timeout):
+                try:
+                    box = await loc.bounding_box()
+                    if box:
+                        self._set(page, box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+                except Exception:
+                    pass
+                return True
+        except Exception:
+            pass
+        return await self.click(page, loc, timeout=timeout)
+
     async def click(self, page, loc, timeout: int = 5000) -> bool:
         """Approach the element, then click it for real. False if the click failed.
 

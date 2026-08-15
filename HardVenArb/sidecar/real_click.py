@@ -104,6 +104,11 @@ def main() -> int:
     ap.add_argument("--port", type=int, default=8788)
     ap.add_argument("--countdown", type=float, default=8.0)
     ap.add_argument("--watch", type=float, default=45.0)
+    ap.add_argument("--then-fill", action="store_true",
+                    help="after the real click opens the slip, have the BOT type price+stake into it "
+                         "via CDP. Answers whether only the OPENING click needs hardware input.")
+    ap.add_argument("--fill-price", type=float, default=1.5)
+    ap.add_argument("--fill-stake", type=float, default=4.0)
     a = ap.parse_args()
     base = f"http://127.0.0.1:{a.port}"
 
@@ -149,7 +154,23 @@ def main() -> int:
         print("No betslip appeared. The pointer probably was not over a price cell -- the click landed")
         print("somewhere harmless. Re-run and aim at the odds number itself.")
         return 1
-    print(f"betslip OPEN {time.time() - t0:.1f}s after the click. Watching (do not touch the mouse)...\n")
+    print(f"betslip OPEN {time.time() - t0:.1f}s after the click.")
+
+    if a.then_fill:
+        print(f"\nnow having the BOT type {a.fill_price} / {a.fill_stake:.2f} into it via CDP...")
+        try:
+            r = _post(f"{base}/debug/fill_open_slip?price={a.fill_price}&stake={a.fill_stake}")
+            print(f"  {json.dumps(r)}")
+            if r.get("slip_still_open"):
+                print("  => the slip SURVIVED bot typing. Only the OPENING click needs hardware input;")
+                print("     the rest of the placement path can stay on CDP.")
+            else:
+                print("  => the slip died during bot typing too. Hardware input is needed throughout the")
+                print("     interaction, not just to open it.")
+        except Exception as e:
+            print(f"  fill failed: {type(e).__name__}: {e}")
+
+    print("Watching (do not touch the mouse)...\n")
 
     died = None
     deadline = time.time() + a.watch

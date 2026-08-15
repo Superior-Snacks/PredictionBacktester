@@ -1044,6 +1044,47 @@ class BetInAsiaAdapter(BookAdapter):
         except Exception as e:
             return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
+    async def fill_open_slip(self, price: float, stake: float) -> dict:
+        """Type into a betslip that is ALREADY open. Opens nothing, clicks no Place, places no bet.
+
+        THE QUESTION: how much of the interaction actually has to be real input? A CDP-opened slip is
+        dismissed in ~1-3s, but a SendInput-opened one survives, and CDP clicks work fine everywhere else
+        on the site (the 'Show more' expansions are CDP and they stick). So the guard may apply only to
+        the OPENING click. If a hand-opened slip tolerates CDP typing, the OS-mouse surface is one click
+        rather than the whole interaction layer -- which is the difference between a shim and a redesign.
+
+        Run it against a slip opened by `real_click.py` and watch whether the slip survives the typing.
+        """
+        ctx = getattr(self.observer, "_ctx", None)
+        page = getattr(self, "_slip_page", None)
+        if page is None or page.is_closed():
+            pages = [p for p in (list(ctx.pages) if ctx else []) if not p.is_closed()]
+            page = pages[0] if pages else None
+        if page is None:
+            return {"ok": False, "error": "no page"}
+        try:
+            if not await page.locator(self._PRICE_INPUT).first.count():
+                return {"ok": False, "error": "no betslip is open — open one first (real_click.py)"}
+        except Exception as e:
+            return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+        out: dict = {"ok": True}
+        try:
+            await CURSOR.click(page, page.locator(self._PRICE_INPUT).first, timeout=5_000)
+            await page.locator(self._PRICE_INPUT).first.fill(str(price), timeout=5_000)
+            await CURSOR.click(page, page.locator(self._STAKE_INPUT).first, timeout=5_000)
+            await page.locator(self._STAKE_INPUT).first.fill(f"{stake:.2f}", timeout=5_000)
+        except Exception as e:
+            out.update({"ok": False, "error": f"{type(e).__name__}: {e}"})
+        # Read both back: a fill that is silently rejected leaves the field unchanged, and that is a
+        # different failure from the slip being dismissed.
+        for name, sel in (("price", self._PRICE_INPUT), ("stake", self._STAKE_INPUT)):
+            try:
+                out[f"{name}_readback"] = await page.locator(sel).first.input_value()
+            except Exception:
+                out[f"{name}_readback"] = None
+        out["slip_still_open"] = bool(out.get("price_readback") is not None)
+        return out
+
     async def slip_dom(self) -> dict:
         """Dump the form controls on every open tab. For a HAND-DRIVEN recon of the betslip.
 
@@ -2336,7 +2377,8 @@ class BetInAsiaAdapter(BookAdapter):
             # expose, and is the cheap candidate fix for the venue dismissing bot-clicked slips (see
             # human_mouse.raw_cdp_click). A/B them with slip_hold.py before changing the default.
             mode = os.environ.get("BIA_CLICK_MODE", "playwright").strip().lower()
-            clicker = CURSOR.raw_cdp_click if mode == "cdp_raw" else CURSOR.click
+            clicker = {"cdp_raw": CURSOR.raw_cdp_click,
+                       "os_hybrid": CURSOR.os_hybrid_click}.get(mode, CURSOR.click)
             if not await clicker(page, cell, timeout=5_000):
                 return {"ok": False, "error": f"the price cell could not be clicked (mode={mode})"}
             if mode != "playwright":
