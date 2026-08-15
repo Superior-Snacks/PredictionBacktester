@@ -281,16 +281,23 @@ class BetInAsiaObserver:
         """
         if os.environ.get("BIA_ORGANIC", "1") == "0" or sport in self._organic:
             return
+        # `OrganicActivity`, NOT `TabOrganic`. organic.py defines both: OrganicActivity drives ONE page,
+        # TabOrganic drives Pinnacle's tab POOL and takes (tabs_fn, close_js, open_probe_js). Wiring the
+        # wrong one raised TypeError on every construction — so idle activity never ran at all, and worse,
+        # the exception escaped this call and aborted the re-park loop after each hourly board reset.
+        # Constructed here inside the try for that reason: a failure to add idle motion must never take
+        # the board tabs down with it.
         try:
-            from organic import TabOrganic
+            from organic import OrganicActivity
+            org = OrganicActivity(
+                page,
+                browse_urls=None,   # no nav targets => the click/navigate branch is unreachable
+                trim_fn=None,       # no betslip tidying: this tab must not touch bet controls
+                min_gap=float(os.environ.get("BIA_ORGANIC_MIN_GAP", "25")),
+                max_gap=float(os.environ.get("BIA_ORGANIC_MAX_GAP", "150")))
         except Exception as e:
-            self._log(f"organic unavailable: {type(e).__name__}: {e}")
+            self._log(f"organic unavailable ({type(e).__name__}: {e}) — board tabs continue without it")
             return
-        org = TabOrganic(page,
-                         browse_urls=None,      # no nav targets => the click/navigate branch is unreachable
-                         trim_fn=None,          # no betslip tidying: this tab must not touch bet controls
-                         min_gap=float(os.environ.get("BIA_ORGANIC_MIN_GAP", "25")),
-                         max_gap=float(os.environ.get("BIA_ORGANIC_MAX_GAP", "150")))
         self._organic[sport] = org
         self._organic_tasks[sport] = asyncio.create_task(self._run_organic(sport, org))
         self._log(f"organic idle activity on the {sport} board (scroll + cursor only, no clicks)")
