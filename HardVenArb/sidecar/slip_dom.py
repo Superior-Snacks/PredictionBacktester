@@ -43,6 +43,9 @@ def main() -> int:
         if "no input elements" in inputs and not p.get("place_candidates"):
             continue
         print(f"--- tab {p['index']}  {p.get('url', '')}")
+        # Read this FIRST on a freshly-opened slip: a hand-opened slip focuses the stake field, and
+        # whether a bot-opened one does is the open question about why bot slips are dismissed.
+        print(f"  ACTIVE ELEMENT: {p.get('active_element')}")
         print("  INPUTS:")
         print(inputs)
         pc = p.get("place_candidates") or []

@@ -1193,6 +1193,11 @@ class BetInAsiaAdapter(BookAdapter):
                 if pg.is_closed():
                     continue
                 entry = {"index": i, "url": (pg.url or "")[:120], "inputs": await self._dump_slip_inputs(pg)}
+                # WHAT HOLDS KEYBOARD FOCUS. The operator reports the stake field is auto-focused when a
+                # slip opens by hand; if it is NOT after a bot click, that is the difference we have been
+                # hunting -- a slip that closes when nothing in it holds focus fits every observation
+                # left standing after the input probe and --park-mouse both came back negative.
+                entry["active_element"] = await self._active_element(pg)
                 # The SUBSTRING match is kept purely as a diagnostic — it is what the placement path used
                 # to use, and seeing the 14 UNPLACED rows it drags in is the clearest way to show why an
                 # exact match is required. `_place_via_ui` itself matches "Place" exactly.
@@ -1210,12 +1215,16 @@ class BetInAsiaAdapter(BookAdapter):
                     entry["place_candidates"] = rows
                     # An EXACT match cannot hit "UNPLACED", which is what poisons the substring search:
                     # every book row on the slip carries an unplaced amount and each one matches "place".
-                    ex = pg.get_by_text("Place", exact=True)
+                    # What `_place_via_ui` ACTUALLY uses: a button whose whole text is "Place". Reported
+                    # so the selector in use can be checked against the page rather than assumed — the
+                    # text-based `get_by_text("Place", exact=True)` was found to match nothing here even
+                    # with such a button present, which is exactly the kind of thing only a dump reveals.
+                    ex = pg.locator("button").filter(has_text=re.compile(r"^\s*Place\s*$"))
                     n_ex = await ex.count()
                     entry["place_exact"] = [
                         f"[{j}] {((await ex.nth(j).inner_text()) or '')[:40]!r} "
                         f"visible={await ex.nth(j).is_visible()}" for j in range(min(n_ex, 8))] or \
-                        ["(no element whose text is exactly 'Place')"]
+                        ["(no BUTTON whose text is exactly 'Place')"]
                     entry["buttons"] = []
                     btn = pg.locator("button")
                     for j in range(min(await btn.count(), 14)):
@@ -1443,13 +1452,30 @@ class BetInAsiaAdapter(BookAdapter):
                                     f"nothing was submitted")
 
         await step("locating the Place control")
-        # EXACT MATCH. The old `get_by_text("place", exact=False).last` worked only by accident of DOM
-        # order: every book row on the slip carries an UNPLACED amount, "unplaced" contains "place", and
-        # measured 2026-08-15 that substring matched 15 elements — 14 book rows plus the real button,
-        # which happened to sort last. One more row appended after it and the bot clicks a book row while
-        # believing it placed a bet. Exact cannot match "UNPLACED" at all; `.last` then only picks the
-        # innermost of any wrapper/leaf pair that both read "Place".
-        place = page.get_by_text("Place", exact=True).last
+        # FIND IT AS A BUTTON, not as text.
+        #
+        # `get_by_text("place", exact=False).last` — the original — worked only by accident of DOM order:
+        # every book row carries an UNPLACED amount, "unplaced" contains "place", and that substring
+        # matched 16 elements of which the real button merely happened to sort last. One more row after
+        # it and the bot clicks a book row believing it placed a bet.
+        #
+        # `get_by_text("Place", exact=True)` was the obvious repair and is WRONG: measured 2026-08-15 it
+        # matches ZERO elements on this slip even though a <button> whose inner_text is exactly "Place"
+        # is present (slip_dom's BUTTONS list, index 10). Playwright's text engine and inner_text do not
+        # agree here, so the repair would have made every placement fail on "no Place control".
+        #
+        # The button role is the thing that is actually stable, and the fallbacks descend in specificity
+        # rather than repeating one guess.
+        place = page.locator("button").filter(has_text=re.compile(r"^\s*Place\s*$"))
+        if not await place.count():
+            place = page.get_by_role("button", name="Place", exact=True)
+        if not await place.count():
+            # Last resort: the original substring match. Verified to land on the real button, but only
+            # because it sorts last among the UNPLACED rows -- hence last, and hence noisy about it.
+            _trace(f"[{tag}] WARNING falling back to the substring 'place' match — it lands on the right "
+                   f"button only by DOM order. Re-check with slip_dom.py.")
+            place = page.get_by_text("place", exact=False)
+        place = place.last
         if not await place.count():
             if verbose:
                 _trace(f"[{tag}] STOPPED — nothing on the slip reads exactly 'Place'. Run "
