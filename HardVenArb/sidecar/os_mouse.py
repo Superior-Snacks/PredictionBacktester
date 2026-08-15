@@ -170,12 +170,21 @@ async def viewport_origin(cdp, page) -> Optional[tuple[float, float, float]]:
     return ((m["sx"] + border) * dpr, (m["sy"] + chrome_h) * dpr, dpr)
 
 
-async def calibrate(cdp, page) -> Optional[tuple[float, float, float]]:
-    """Verify the arithmetic by moving there and reading back where the page says the pointer landed.
+async def calibrate(cdp, page) -> Optional[tuple[float, float, float, float]]:
+    """Solve `screen = origin + client * scale` per axis, by MEASURING two points.
 
-    The formula above is right in principle and wrong in practice often enough to matter — fractional DPI
-    scales round, and some window states change the chrome height. One probe move costs nothing and turns
-    a guess into a measurement; the residual is folded into the origin.
+    Returns (origin_x, origin_y, scale_x, scale_y) in physical pixels per CSS pixel.
+
+    WHY TWO. The first version measured ONE point and folded the residual into the origin, which corrects
+    an offset and cannot correct a SCALE error — and a wrong scale produces an error that GROWS with
+    distance from the probe. Observed 2026-08-15: the cursor stopped "way before the moneylines", i.e.
+    short, and increasingly so further down the page. That is the signature of a scale error, and it came
+    from trusting `devicePixelRatio` and the outerHeight/innerHeight chrome arithmetic to be exact.
+
+    Two probes make the mapping empirical: command two screen positions, read back where the page says
+    the pointer actually landed, and solve. No DPI assumption survives, no chrome-geometry assumption
+    survives, and a maximised-vs-restored window makes no difference. The geometric estimate is still
+    computed, but only to aim the probes somewhere inside the viewport.
     """
     base = await viewport_origin(cdp, page)
     if base is None:
@@ -183,23 +192,48 @@ async def calibrate(cdp, page) -> Optional[tuple[float, float, float]]:
     ox, oy, dpr = base
     sig = (round(ox), round(oy), round(dpr, 3))
     cached = _CALIB.get(id(page))
-    if cached and cached[3] == sig:
-        return cached[:3]
+    if cached and cached[-1] == sig:
+        return cached[:4]
 
     # Listen from the isolated world: the page's own scripts cannot enumerate our listener.
     await _isolated_eval(cdp, page,
                          "(() => { window.__hvp = null; document.addEventListener('mousemove',"
                          " e => { window.__hvp = [e.clientX, e.clientY]; }, true); return 1; })()")
-    target_client = (120.0, 220.0)                      # safely inside any viewport
-    await human_move_to(ox + target_client[0] * dpr, oy + target_client[1] * dpr, steps=8)
-    await asyncio.sleep(0.12)
-    got = await _isolated_eval(cdp, page, "window.__hvp")
-    if isinstance(got, list) and len(got) == 2:
-        # Residual in CLIENT px -> correct the origin in PHYSICAL px.
-        ox += (target_client[0] - float(got[0])) * dpr
-        oy += (target_client[1] - float(got[1])) * dpr
-    _CALIB[id(page)] = (ox, oy, dpr, sig)
-    return ox, oy, dpr
+
+    async def probe(cx: float, cy: float):
+        """Aim at a client point using the ESTIMATE, then report (commanded_screen, observed_client)."""
+        sx, sy = ox + cx * dpr, oy + cy * dpr
+        await _isolated_eval(cdp, page, "window.__hvp = null")
+        if not await human_move_to(sx, sy, steps=8):
+            return None
+        await asyncio.sleep(0.12)
+        got = await _isolated_eval(cdp, page, "window.__hvp")
+        if not (isinstance(got, list) and len(got) == 2):
+            return None
+        return sx, sy, float(got[0]), float(got[1])
+
+    # Far apart, so the solved scale is not dominated by rounding, but both well inside any viewport.
+    p1 = await probe(140.0, 200.0)
+    p2 = await probe(620.0, 560.0)
+    if not p1 or not p2:
+        print("[os_mouse] calibration FAILED — no mousemove observed. The pointer may be landing outside "
+              "the window entirely; check the browser is on screen and not minimised.", flush=True)
+        return None
+    d_client_x, d_client_y = p2[2] - p1[2], p2[3] - p1[3]
+    if abs(d_client_x) < 5 or abs(d_client_y) < 5:
+        print(f"[os_mouse] calibration FAILED — the two probes landed on the same spot "
+              f"(dx={d_client_x:.0f} dy={d_client_y:.0f}). Cannot solve a scale.", flush=True)
+        return None
+    kx = (p2[0] - p1[0]) / d_client_x
+    ky = (p2[1] - p1[1]) / d_client_y
+    ox2 = p1[0] - p1[2] * kx
+    oy2 = p1[1] - p1[3] * ky
+    if abs(kx - dpr) > 0.02 or abs(ky - dpr) > 0.02:
+        print(f"[os_mouse] calibrated scale {kx:.3f}x{ky:.3f} differs from devicePixelRatio {dpr:.3f} — "
+              f"using the MEASURED value (this is why one-point calibration was aiming short).",
+              flush=True)
+    _CALIB[id(page)] = (ox2, oy2, kx, ky, sig)
+    return ox2, oy2, kx, ky
 
 
 async def click_element(cdp, page, loc, timeout: int = 5000) -> bool:
@@ -223,7 +257,7 @@ async def click_element(cdp, page, loc, timeout: int = 5000) -> bool:
     cal = await calibrate(cdp, page)
     if cal is None:
         return False
-    ox, oy, dpr = cal
+    ox, oy, kx, ky = cal
     for attempt in (1, 2):
         try:
             await loc.scroll_into_view_if_needed(timeout=timeout)
@@ -234,7 +268,7 @@ async def click_element(cdp, page, loc, timeout: int = 5000) -> bool:
             return False
         cx = box["x"] + box["width"] * random.uniform(0.35, 0.65)
         cy = box["y"] + box["height"] * random.uniform(0.35, 0.65)
-        if not await human_move_to(ox + cx * dpr, oy + cy * dpr):
+        if not await human_move_to(ox + cx * kx, oy + cy * ky):
             return False
         await asyncio.sleep(random.uniform(0.05, 0.14))  # people do not click the instant they arrive
         try:

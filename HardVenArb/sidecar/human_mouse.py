@@ -30,6 +30,15 @@ import random
 import weakref
 from typing import Callable, Iterable, Optional
 
+# Imported EAGERLY, though it is only used by os_hybrid_click. The freshness check in app.py hashes
+# whatever is in sys.modules at import time, so a lazily-imported module is invisible to it — and on
+# 2026-08-15 an edited os_mouse.py sat unloaded while a test "confirmed" behaviour it had already fixed.
+# A module that can change behaviour must be visible to the check that says whether behaviour changed.
+try:
+    import os_mouse                                    # noqa: F401  (registered, used lazily)
+except Exception:                                      # pragma: no cover - non-Windows / import failure
+    os_mouse = None                                    # type: ignore[assignment]
+
 # Sub-pixel wobble applied to every sampled point. Real input is quantised to integer pixels but arrives
 # with tremor; this stands in for it and keeps two moves along the same route from being byte-identical.
 JITTER_PX = 1.0
@@ -242,11 +251,7 @@ class HumanCursor:
         degraded click beats no click, and the caller is told which happened by the return of
         `os_mouse.available()` rather than by silence.
         """
-        try:
-            import os_mouse
-        except Exception:
-            return await self.click(page, loc, timeout=timeout)
-        if not os_mouse.available():
+        if os_mouse is None or not os_mouse.available():
             return await self.click(page, loc, timeout=timeout)
         try:
             cdp = self._cdp.get(page)

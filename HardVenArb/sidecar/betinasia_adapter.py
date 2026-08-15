@@ -1127,13 +1127,14 @@ class BetInAsiaAdapter(BookAdapter):
             cal = await os_mouse.calibrate(cdp, page)
             if cal is None:
                 return {"ok": False, "error": "could not translate client -> screen coordinates"}
-            ox, oy, dpr = cal
+            ox, oy, kx, ky = cal
             cx = box["x"] + box["width"] / 2.0
             cy = box["y"] + box["height"] / 2.0
-            moved = await os_mouse.human_move_to(ox + cx * dpr, oy + cy * dpr)
+            moved = await os_mouse.human_move_to(ox + cx * kx, oy + cy * ky)
             return {"ok": bool(moved), "client": [round(cx), round(cy)],
-                    "screen": [round(ox + cx * dpr), round(oy + cy * dpr)],
-                    "cursor_now": list(os_mouse.cursor_pos()), "dpr": dpr}
+                    "screen": [round(ox + cx * kx), round(oy + cy * ky)],
+                    "cursor_now": list(os_mouse.cursor_pos()),
+                    "scale": [round(kx, 4), round(ky, 4)]}
         except Exception as e:
             return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
