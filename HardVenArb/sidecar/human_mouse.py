@@ -39,6 +39,38 @@ try:
 except Exception:                                      # pragma: no cover - non-Windows / import failure
     os_mouse = None                                    # type: ignore[assignment]
 
+
+_DWELL_LOGGED = False
+
+
+async def dwell() -> float:
+    """Seconds to rest on an element before pressing. ONE definition, used by EVERY click path.
+
+    It exists because of the 2026-08-15 result set: every betslip that survived had SECONDS of hover
+    before the button went down (a human hovering, or a human pressing after the bot had aimed), and
+    every one that died was pressed ~100ms after arrival. The press mechanism appears on both sides, so
+    it is not the variable; the dwell is.
+
+    Defined here rather than at each call site because it was already missed once — `raw_cdp_click` kept
+    its own 40-120ms sleep after the other two paths were updated, and the resulting run read as "the
+    dwell did not help" when no dwell had happened. A behaviour used by three code paths needs one home.
+
+    Logs the first value it produces: a change nobody can see in the output is a change nobody can
+    verify was applied, which is exactly how the previous cycle was wasted.
+    """
+    global _DWELL_LOGGED
+    import os as _os
+    try:
+        centre = float(_os.environ.get("BIA_CLICK_DWELL_MS", "1500")) / 1000.0
+    except ValueError:
+        centre = 1.5
+    d = max(0.0, centre * random.uniform(0.7, 1.35))
+    if not _DWELL_LOGGED:
+        _DWELL_LOGGED = True
+        print(f"[click] dwelling ~{centre:.2f}s on the element before pressing "
+              f"(BIA_CLICK_DWELL_MS={int(centre * 1000)}); this first one is {d:.2f}s", flush=True)
+    return d
+
 # Sub-pixel wobble applied to every sampled point. Real input is quantised to integer pixels but arrives
 # with tremor; this stands in for it and keeps two moves along the same route from being byte-identical.
 JITTER_PX = 1.0
@@ -226,7 +258,10 @@ class HumanCursor:
             # A move first: a press with no preceding motion at that point is its own tell.
             await cdp.send("Input.dispatchMouseEvent",
                            {"type": "mouseMoved", "button": "none", "buttons": 0, **common})
-            await asyncio.sleep(random.uniform(0.04, 0.12))
+            # THE SAME DWELL AS THE OTHER TWO CLICK PATHS. This one was missed when the dwell was added
+            # and the omission cost a whole test cycle: the run looked like "the dwell did not help" when
+            # no dwell had occurred. Every click path must take it from the same place.
+            await asyncio.sleep(await dwell())
             await cdp.send("Input.dispatchMouseEvent",
                            {"type": "mousePressed", "button": "left", "buttons": 1,
                             "clickCount": 1, **common})
@@ -318,17 +353,7 @@ class HumanCursor:
             tx = box["x"] + box["width"] * random.uniform(0.35, 0.65)
             ty = box["y"] + box["height"] * random.uniform(0.35, 0.65)
             await self.move(page, tx, ty)
-            # SAME DWELL AS THE OS PATH (see os_mouse._dwell_sec). 40-120ms was "people do not click the
-            # instant they arrive", which is true but far too short: every betslip that survived on
-            # 2026-08-15 had SECONDS of hover before the press, and every one that died had ~100ms. If
-            # the venue's popover needs its hover state settled, this is the whole difference — and
-            # leaving the CDP path fast while slowing the OS path would confound every comparison
-            # between them.
-            try:
-                import os_mouse as _osm
-                await asyncio.sleep(_osm._dwell_sec())
-            except Exception:
-                await asyncio.sleep(random.uniform(1.0, 2.0))
+            await asyncio.sleep(await dwell())      # see dwell(): one definition, every click path
         try:
             await loc.click(timeout=timeout, delay=random.randint(30, 90))
         except Exception:

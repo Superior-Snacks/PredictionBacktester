@@ -121,18 +121,14 @@ async def human_move_to(sx: float, sy: float, steps: int = 0) -> bool:
     return True
 
 
-def _dwell_sec() -> float:
-    """How long to rest on the element before pressing. Jittered, and generous by default.
+async def _dwell_sec() -> float:
+    """Delegates to human_mouse.dwell so there is exactly ONE definition across all three click paths.
 
-    BIA_CLICK_DWELL_MS sets the centre (default 1500). Costs ~1.5s per click, which the placement path
-    can afford: the slip is only fragile AFTER it opens, and this happens before.
+    Imported lazily: human_mouse imports this module at load time, so a top-level import back would be
+    circular.
     """
-    import os as _os
-    try:
-        centre = float(_os.environ.get("BIA_CLICK_DWELL_MS", "1500")) / 1000.0
-    except ValueError:
-        centre = 1.5
-    return max(0.0, centre * random.uniform(0.7, 1.35))
+    from human_mouse import dwell
+    return await dwell()
 
 
 def click_here(press_ms: Optional[int] = None) -> bool:
@@ -323,7 +319,7 @@ async def click_element(cdp, page, loc, timeout: int = 5000) -> bool:
         # that lived had seconds on the element first. A hover-driven popover that needs its hover state
         # settled before a click counts as intentional behaves exactly like this — and leaves 'Show more'
         # unaffected, which is what we observe.
-        await asyncio.sleep(_dwell_sec())
+        await asyncio.sleep(await _dwell_sec())
         try:
             now = await loc.bounding_box()
         except Exception:
