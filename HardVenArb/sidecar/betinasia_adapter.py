@@ -1026,7 +1026,22 @@ class BetInAsiaAdapter(BookAdapter):
             # what makes "nothing was submitted" true going forward and not just at this instant.
             drive = time.time() - t_start
             net = drive - paused          # what a LIVE, unpaced run would have taken
-            await step("STOPPING HERE — clearing the stake so nothing is left armed")
+            # MEASURE THE PREFILL DRIFT HERE, where it is free. The live path REFUSES on a drifted limit
+            # (see the readback before the Place click); this is the only place to find out how often that
+            # would fire without risking money — and the rehearsal is MORE exposed than live, because the
+            # pacing widens the same gap. A rehearsal that always holds means the live guard is cheap
+            # insurance; one that regularly drifts means the type-then-click sequence needs rethinking.
+            held = await self._slip_price_from_dom(page)
+            if held is None:
+                drift = ("price field UNREADABLE at the Place control — the typed limit did not take; "
+                         "live would refuse here")
+            elif abs(held - max_odds) <= 1e-6:
+                drift = f"price field HELD at {max_odds} across the whole drive (live gate would pass)"
+            else:
+                drift = (f"price field READS {held}, not the {max_odds} typed "
+                         f"({'DOWN — live would refuse' if held < max_odds else 'up'}); "
+                         f"check whether the account's best-price prefill is still on")
+            await step(f"STOPPING HERE — {drift}; clearing the stake so nothing is left armed")
             cleared = True
             try:
                 await page.locator(self._STAKE_INPUT).first.fill("")
@@ -1042,7 +1057,8 @@ class BetInAsiaAdapter(BookAdapter):
             print(f"[BIA REHEARSAL] DONE. Would have asked {stake:.2f} @ {max_odds} on "
                   f"{label or selection_id} (slip offered {offered}). Nothing placed.\n"
                   f"[BIA REHEARSAL]   drive time {net:.1f}s  <-- the number the model turns on "
-                  f"(wall {drive:.1f}s, {paused:.1f}s of it deliberate pacing)", flush=True)
+                  f"(wall {drive:.1f}s, {paused:.1f}s of it deliberate pacing)\n"
+                  f"[BIA REHEARSAL]   {drift}", flush=True)
             return BetResult(accepted=False, stake=stake, actual_odds=offered,
                              reason=f"REHEARSAL OK — drove the real UI to the Place control and stopped. "
                                     f"Drive time {net:.1f}s net of {paused:.1f}s pacing (wall "
@@ -1057,6 +1073,39 @@ class BetInAsiaAdapter(BookAdapter):
         order_id = None
         resp_budget = max(5.0, min(float(os.environ.get("BIA_PLACE_RESP_TIMEOUT", "20")),
                                    t_budget - time.time() - 10.0))   # leave 10s for the fill wait
+        # ── READ THE LIMIT BACK BEFORE COMMITTING ────────────────────────────────────────────────────
+        # PRIMARILY: DID OUR OWN TYPING LAND? `fill()` on a React-controlled input can be silently
+        # rejected by the component, leaving the field holding something else entirely — and this is the
+        # last moment the difference is free. That risk is independent of any venue behaviour, so this
+        # gate stays worthwhile even with the venue's prefill disabled.
+        # SECONDARILY: DID THE VENUE MOVE IT? With the default account setting `.price-input` is
+        # pre-filled with the best price and tracks it LIVE, and seconds pass here — the stake is typed,
+        # the Place control is located, a paced rehearsal waits. Turning that prefill off in the account
+        # settings removes this second failure at the source, which is the better fix; the gate then
+        # simply never fires on it.
+        # The asymmetry is why this refuses rather than logs. max_odds is the price we ASK, and the venue
+        # improves from there (1.496 asked -> 1.526 filled). A limit sitting HIGHER than intended only
+        # costs a fill. A limit sitting LOWER accepts worse odds than the arb was sized on — a real loss,
+        # and on a 1-2c edge it is the entire edge.
+        back = await self._slip_price_from_dom(page)
+        if back is None:
+            # Empty is normal on an OPEN slip when the prefill is off — but not here. We wrote to this
+            # field moments ago, so nothing readable means the write did not take.
+            return BetResult(accepted=False, stake=stake,
+                             reason=f"the price field is unreadable after {max_odds} was typed into it "
+                                    f"— the write did not take. Refusing rather than committing to an "
+                                    f"unverified limit.")
+        if abs(back - max_odds) > 1e-6:
+            way = "DOWN (would accept worse odds than the arb needs)" if back < max_odds else \
+                  "UP (would just miss the fill)"
+            print(f"[{tag}] ABORT — the price field reads {back}, not the {max_odds} we typed; drifted "
+                  f"{way}. Either the write was rejected or the venue's best-price prefill is still on "
+                  f"and moved it. Nothing placed.", flush=True)
+            return BetResult(accepted=False, stake=stake, actual_odds=offered,
+                             reason=f"price field reads {back} after {max_odds} was entered — the write "
+                                    f"was rejected, or the account's best-price prefill is on and "
+                                    f"re-filled it. Not placing.")
+
         await step(f"CLICKING PLACE — committing {stake:.2f} @ {max_odds}. Everything after this line "
                    f"is real exposure.", wait=False)
         t_click = time.time()
@@ -1652,19 +1701,34 @@ class BetInAsiaAdapter(BookAdapter):
         return [{"book": b, "odds": o, "stake": s} for _pos, b, o, s in rows]
 
     async def _slip_price_from_dom(self, page) -> Optional[float]:
-        """Decimal odds the OPEN betslip is currently showing, read off the page. None if not readable.
+        """Whatever `.price-input` currently holds on the open betslip. None if not readable.
 
-        AN INDEPENDENT SECOND OPINION ON THE SOCKET. `_slip_books` is a cache fed by `offers_acca_hcap`,
-        and when the venue stops pushing there is no way to tell a QUIET market from a DEAD cache — which
-        is the whole difficulty behind "already subscribed but no price is cached". The panel is rendered
-        from whatever the venue last told the page, so it answers the question the cache cannot: is there
-        actually a price on screen right now, and does it match what we remember?
+        ⚠ ITS CONTENT DEPENDS ON AN ACCOUNT SETTING. By default the venue PRE-FILLS it with the ladder's
+        best price and TRACKS IT LIVE (operator, 2026-08-15, watching the field move) — so by default it
+        is neither the takeable quote nor a fixed ask, but the top of the raw pool, including books this
+        account cannot use, and it keeps moving. That prefill CAN BE TURNED OFF in the account settings,
+        after which the field holds only what is typed into it.
 
-        `.price-input` is the right field rather than the ladder's BEST PRICE row. The ladder is the raw
-        pool including books this account cannot use — measured 2026-08-14, its best was 1.776 (4casters,
-        an excluded crypto book) while the venue quoted 1.769. The input holds what would actually be
-        placed. It is also one of the few HAND-WRITTEN class names on the site (`.price-input`,
-        `.stake-input`), so unlike the hashed CSS-module classes it survives a deploy.
+        Read nothing into which mode is active: a null or a mismatch here is not evidence about the slip,
+        because both are normal with the prefill disabled. The only safe reading is AFTER writing to it.
+
+        That kills its original purpose. It was introduced as "an independent second opinion on the
+        socket", on the reasoning that the ladder shows the unusable pool while the input holds what would
+        actually be placed. The second half is simply false — the input shows the SAME best-of-pool the
+        ladder's top row does. Observed 2026-08-15: input 1.606 against a socket quote of 1.564 whose
+        price WAS present in the rendered ladder for $3,097. The screen and the cache agreed; only this
+        field differed, because it was quoting a book we cannot trade.
+
+        TWO CONSEQUENCES, and the second is a money gate:
+        1. It cannot contradict the socket. The genuine screen-vs-cache check is whether the rendered
+           ladder contains the quoted price (`_stake_at_price`) — the venue's own rendering of its own
+           offer.
+        2. Because it tracks live, it can CHANGE AFTER `_place_via_ui` types max_odds into it. That path
+           therefore reads it back immediately before clicking Place and refuses on any difference.
+
+        Still worth reading: `.price-input`/`.stake-input` are among the few HAND-WRITTEN class names on
+        the site, so unlike the hashed CSS-module classes they survive a deploy — a null here is evidence
+        the slip did not render, which is exactly what the placement path needs to know before it types.
 
         Locator reads only — invisible to page script, and no request.
         """
@@ -2008,10 +2072,31 @@ class BetInAsiaAdapter(BookAdapter):
                             # reading wrong. A disagreement means the cache is not what the venue is
                             # showing, which is the failure mode `_slip_books` cannot self-report.
                             dom_odds = await self._slip_price_from_dom(page)
+                            # THE LADDER IS THE CROSS-CHECK, NOT `.price-input`. This used to compare the
+                            # socket against the input field and shout "PRICE DISAGREEMENT" on any
+                            # difference. 2026-08-15, Navarro: socket 1.564, input 1.606, and the ladder
+                            # carried a row at 1.564 for $3,097 — the screen AGREED with the cache, and the
+                            # warning fired anyway because the input is not the venue's offer.
+                            # `_stake_at_price` already answers the real question: does the rendered ladder
+                            # contain the price the socket claims? A miss there means the cache and the
+                            # screen genuinely diverge, which is the failure `_slip_books` cannot self-report.
+                            if real_stake is None and ladder:
+                                best = ladder[0]
+                                print(f"[BIA SLIP] PRICE DISAGREEMENT {ekey}: socket says {odds} but the "
+                                      f"open betslip's ladder has NO row at that price (best on screen "
+                                      f"{best['odds']} for ${best['stake']:,.0f}) — trusting the socket, "
+                                      f"but the cache is not what the venue is displaying", flush=True)
+                            # `.price-input` LOGGED, NOT JUDGED. What it means is genuinely unsettled: on
+                            # 2026-08-14 it equalled the quote (1.769 while the ladder's best was an
+                            # excluded book at 1.776), and on 2026-08-15 it sat 2.7% ABOVE the quote. Either
+                            # the earlier match was coincidence or the field changed. It is also the field
+                            # `_place_via_ui` OVERWRITES with max_odds, so its prefill never reaches an
+                            # order. Record it so the question gets settled by data instead of guessed at.
                             if dom_odds and abs(dom_odds - odds) > 0.001:
-                                print(f"[BIA SLIP] PRICE DISAGREEMENT {ekey}: socket says {odds}, the "
-                                      f"open betslip shows {dom_odds} — trusting the socket, but the "
-                                      f"cache is not what the venue is displaying", flush=True)
+                                print(f"[BIA SLIP] note {ekey}: price-input prefill {dom_odds} vs quote "
+                                      f"{odds} ({(dom_odds / odds - 1) * 100:+.2f}%) — prefill is "
+                                      f"overwritten at placement; not treated as a disagreement",
+                                      flush=True)
                             if real_stake is not None:
                                 # REAL DEPTH, replacing BIA_ASSUMED_MAX_STAKE for this selection.
                                 self._slip_depth[selection_id] = (real_stake, time.time())
@@ -2028,6 +2113,9 @@ class BetInAsiaAdapter(BookAdapter):
                                     # The same price as the OPEN slip renders it. Equal to decimal_odds
                                     # means the socket cache and the screen agree; a difference is the
                                     # cache diverging from what the venue is actually showing.
+                                    # The `.price-input` PREFILL, not a second quote — see
+                                    # _slip_price_from_dom. A difference from decimal_odds is not evidence
+                                    # of a stale cache; `max_stake` being null is.
                                     "dom_odds": dom_odds,
                                     # What the DOCUMENT reported at click time. "hidden" here means the
                                     # venue saw a click no human could have made.
