@@ -19,10 +19,11 @@ import urllib.request
 sys.stdout.reconfigure(encoding="utf-8")
 
 
-def disk_hashes() -> dict:
+def disk_hashes(names) -> dict:
+    """Hash the files the SERVER says it imported — its list, not ours, so the two can never drift."""
     here = os.path.dirname(os.path.abspath(__file__))
     out = {}
-    for f in ("betinasia_adapter.py", "pinnacle_adapter.py", "betinasia_observer.py", "app.py"):
+    for f in names:
         p = os.path.join(here, f)
         if os.path.exists(p):
             with open(p, "rb") as fh:
@@ -42,7 +43,7 @@ def check(port: int = 8788, quiet: bool = False) -> bool:
         print("[STALE?] this sidecar predates the /health code fingerprint — it is running OLD code.\n"
               "         RESTART IT before trusting anything below.")
         return False
-    disk = disk_hashes()
+    disk = disk_hashes(running.keys())
     drift = [f for f, v in disk.items() if f in running and running[f] != v]
     if drift:
         print("=" * 78)

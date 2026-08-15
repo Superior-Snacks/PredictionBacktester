@@ -984,6 +984,66 @@ class BetInAsiaAdapter(BookAdapter):
             return f"      (could not enumerate inputs: {type(e).__name__}: {e})"
         return "\n".join(out) or "      (no input elements found on the page at all)"
 
+    _INPUT_PROBE_JS = r"""
+    () => {
+      // Which MouseEvent properties does this site actually READ? isTrusted is true for CDP clicks, so
+      // if the venue distinguishes them it must be reading something else -- pressure, movement, or the
+      // screen-vs-client offset. Wrapping the getters is the only way to know WHICH, and that decides
+      // whether a raw CDP dispatch can ever pass (it can set force/pointerType; it cannot set screenX/Y).
+      if (window.__inputProbe) return {already: true, reads: window.__inputProbe.reads};
+      const reads = {};
+      const probe = {reads};
+      window.__inputProbe = probe;
+      const names = ['pressure','screenX','screenY','movementX','movementY','isTrusted',
+                     'pointerType','buttons','sourceCapabilities','which','detail'];
+      for (const proto of [MouseEvent.prototype, PointerEvent.prototype, UIEvent.prototype, Event.prototype]) {
+        for (const n of names) {
+          const d = Object.getOwnPropertyDescriptor(proto, n);
+          if (!d || !d.get || d.__probed) continue;
+          const orig = d.get;
+          const wrapped = function () {
+            const stack = (new Error().stack || '').split('\n').slice(2, 4).join(' <- ');
+            const key = n + ' @ ' + stack.replace(/https?:\/\/[^ )]*\//g, '').slice(0, 120);
+            reads[key] = (reads[key] || 0) + 1;
+            return orig.call(this);
+          };
+          wrapped.__probed = true;
+          try { Object.defineProperty(proto, n, {...d, get: wrapped}); } catch (e) {}
+        }
+      }
+      return {installed: true, reads: {}};
+    }
+    """
+
+    async def input_probe(self, reset: bool = False) -> dict:
+        """Instrument MouseEvent getters and report which ones the SITE reads.
+
+        DELIBERATELY MAIN-WORLD, and therefore opt-in. Everything else in this adapter reads through
+        locators precisely to stay out of the page's context; this cannot be, because the point is to
+        replace the page's own property getters. Run it to answer one question, then restart.
+
+        The question: a CDP click and a hardware click differ in `pressure` (0 vs ~0.5), `movementX/Y`
+        (0 vs real) and `screenX/Y` (equal to clientX/Y vs offset by the window's desktop position). CDP
+        can set the first two via a raw dispatch and can NEVER set the third. So if the reads show
+        screenX/screenY, `BIA_CLICK_MODE=cdp_raw` is hopeless and the OS mouse is the only route; if they
+        show pressure only, the cheap fix is enough.
+        """
+        page = getattr(self, "_slip_page", None)
+        if page is None or page.is_closed():
+            ctx = getattr(self.observer, "_ctx", None)
+            pages = [p for p in (list(ctx.pages) if ctx else []) if not p.is_closed()]
+            page = pages[0] if pages else None
+        if page is None:
+            return {"ok": False, "error": "no page to instrument"}
+        try:
+            if reset:
+                await page.evaluate("() => { if (window.__inputProbe) window.__inputProbe.reads = {}; }")
+                return {"ok": True, "reset": True}
+            res = await page.evaluate(self._INPUT_PROBE_JS)
+            return {"ok": True, "url": page.url, **res}
+        except Exception as e:
+            return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
     async def slip_dom(self) -> dict:
         """Dump the form controls on every open tab. For a HAND-DRIVEN recon of the betslip.
 

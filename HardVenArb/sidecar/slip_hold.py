@@ -85,6 +85,14 @@ def main() -> int:
         check(a.port)
     except ImportError:
         pass
+    # State the click mode up front. A cdp_raw A/B against a sidecar that never received the env var is
+    # indistinguishable from cdp_raw failing, and that mistake has already cost one round trip.
+    try:
+        sw = (_get(f"{base}/health", timeout=5) or {}).get("switches") or {}
+        print(f"[cfg] click_mode={sw.get('click_mode')}  organic={sw.get('organic')}  "
+              f"sport_walk_delay={sw.get('sport_walk_delay')}")
+    except Exception:
+        pass
 
     sid = a.selection_id
     if not sid:

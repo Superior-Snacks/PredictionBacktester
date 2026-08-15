@@ -107,15 +107,28 @@ def _session_state() -> dict | None:
 # diagnoses were made against a sidecar running pre-fix code, each one "confirming" a bug that had already
 # been fixed on disk. A client can compare this against the current file and refuse to draw conclusions.
 def _code_fingerprint() -> dict:
+    """Hash every module in THIS directory that the server actually imported.
+
+    Derived from `sys.modules` rather than a hand-written list, because the hand-written list was wrong
+    within a day: it omitted `human_mouse.py`, so a click-strategy change could ship without the freshness
+    check noticing — and that check exists precisely to stop tests being run against code nobody loaded.
+    Anything imported is behaviour; anything not imported cannot affect the run.
+    """
     import hashlib
+    import sys as _sys
     out = {}
     here = os.path.dirname(os.path.abspath(__file__))
-    for f in ("betinasia_adapter.py", "pinnacle_adapter.py", "betinasia_observer.py", "app.py"):
+    for mod in list(_sys.modules.values()):
+        f = getattr(mod, "__file__", None) or ""
+        if not f.endswith(".py"):
+            continue
         try:
-            with open(os.path.join(here, f), "rb") as fh:
-                out[f] = hashlib.sha256(fh.read()).hexdigest()[:10]
+            if os.path.dirname(os.path.abspath(f)) != here:
+                continue
+            with open(f, "rb") as fh:
+                out[os.path.basename(f)] = hashlib.sha256(fh.read()).hexdigest()[:10]
         except Exception:
-            pass
+            continue
     return out
 
 
@@ -129,6 +142,15 @@ async def health():
     h["code"] = _CODE_FP                     # source hashes as loaded; compare against disk
     h["started_at"] = _STARTED_AT
     h["uptime_sec"] = round(time.time() - _STARTED_AT, 1)
+    # Behaviour switches that change what an experiment MEASURES. Published so a result can be attributed
+    # without reading the console: a cdp_raw A/B run against a sidecar that never saw the env var looks
+    # exactly like a cdp_raw failure.
+    h["switches"] = {
+        "click_mode": os.environ.get("BIA_CLICK_MODE", "playwright"),
+        "organic": os.environ.get("BIA_ORGANIC", "1"),
+        "place_pause_sec": os.environ.get("BIA_PLACE_STEP_PAUSE_SEC", "(default: 1.0 rehearsal / 0 live)"),
+        "sport_walk_delay": os.environ.get("BIA_SPORT_WALK_DELAY", "70"),
+    }
     # The venue-side BETTING CONTRACT, published so the bot can verify it agrees with its own sizing BEFORE it
     # fires anything. These are the sidecar's own numbers, deliberately independent of the C# ladder: a hard cap
     # in a separate process is what catches a units/FX/depth bug in the bot before it becomes a real bet. But a
@@ -327,6 +349,19 @@ async def debug_feed():
     if not callable(fn):
         raise HTTPException(404, f"book '{adapter.name}' publishes no feed diagnostics")
     return fn()
+
+
+@app.get("/debug/input_probe")
+async def debug_input_probe(reset: bool = False):
+    """Which MouseEvent properties does the SITE read? Answers whether a CDP click can ever pass.
+
+    Call once to install, then click a moneyline (any way), then call again to see the reads. MAIN-WORLD
+    by necessity — it replaces the page's own getters — so treat it as a one-off experiment and restart
+    the sidecar afterwards rather than leaving it in place."""
+    fn = getattr(adapter, "input_probe", None)
+    if not callable(fn):
+        raise HTTPException(404, f"book '{adapter.name}' has no input probe")
+    return await fn(reset=reset)
 
 
 @app.get("/debug/slip_dom")
