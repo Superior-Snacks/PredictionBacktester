@@ -317,6 +317,56 @@ public class CrossPlatformArbTelemetryStrategy
     private static readonly int SlipVerifyRoverMs   = EnvSec("HARDVEN_SLIP_VERIFY_ROVER_SEC", 300);
     // How soon a refused-without-clicking sample may be retried (see RefundSlipVerifyBudget).
     private static readonly int SlipVerifyRefundFloorMs = EnvSec("HARDVEN_SLIP_VERIFY_REFUND_FLOOR_SEC", 5);
+
+    // ── VERIFY WINDOWS ────────────────────────────────────────────────────────────────────────────────
+    // LOCAL-time windows in which the sampler may click, e.g. "05:00-09:00,17:00-24:00". Empty = always.
+    //
+    // Gates ONLY the clicking. The feed, the telemetry CSV, the arb windows and the hourly board refresh
+    // all keep running outside these hours — what stops is the one thing that touches the venue. An
+    // overnight run should still produce a full tape; it just should not be clicking betslips at 03:00,
+    // when a human plainly is not.
+    private static readonly (TimeSpan Start, TimeSpan End)[] SlipVerifyWindows =
+        ParseWindows(Environment.GetEnvironmentVariable("HARDVEN_SLIP_VERIFY_HOURS"));
+    private static int _verifyWindowState = -1;   // -1 unknown, 0 closed, 1 open — for one-shot logging
+
+    /// <summary>Parse "05:00-09:00,17:00-24:00" into local-time ranges. Bad entries are skipped loudly
+    /// rather than silently narrowing the schedule.</summary>
+    internal static (TimeSpan Start, TimeSpan End)[] ParseWindows(string? spec)
+    {
+        var outp = new List<(TimeSpan, TimeSpan)>();
+        foreach (var part in (spec ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var bits = part.Trim().Split('-');
+            if (bits.Length != 2) { Console.WriteLine($"[SLIP VERIFY] ignoring window '{part}'"); continue; }
+            if (!TryHm(bits[0], out var s) || !TryHm(bits[1], out var e))
+            { Console.WriteLine($"[SLIP VERIFY] ignoring window '{part}'"); continue; }
+            outp.Add((s, e));
+        }
+        return outp.ToArray();
+
+        static bool TryHm(string t, out TimeSpan v)
+        {
+            v = default;
+            var p = t.Trim().Split(':');
+            if (p.Length != 2 || !int.TryParse(p[0], out int h) || !int.TryParse(p[1], out int m)) return false;
+            if (h < 0 || h > 24 || m < 0 || m > 59) return false;
+            v = new TimeSpan(h, m, 0);       // 24:00 is a legal END, meaning midnight
+            return true;
+        }
+    }
+
+    /// <summary>Is `now` inside any window? Windows that wrap past midnight ("22:00-02:00") are honoured.</summary>
+    internal static bool InVerifyWindow((TimeSpan Start, TimeSpan End)[] windows, DateTime now)
+    {
+        if (windows.Length == 0) return true;                    // unset = always on
+        var t = now.TimeOfDay;
+        foreach (var (s, e) in windows)
+        {
+            if (s <= e) { if (t >= s && t < e) return true; }     // normal
+            else if (t >= s || t < e) return true;                // wraps midnight
+        }
+        return false;
+    }
     // HOLD THE SLIP after a successful quote and watch the arb until it stops breaking even. Costs no UI
     // action at all: the event is already subscribed on the acca channel, so the venue keeps pushing and a
     // re-quote is served from cache. 0 disables the hold and restores the single-shot sample.
@@ -470,6 +520,12 @@ public class CrossPlatformArbTelemetryStrategy
                             + $"(+/-{CadenceJitter * 100:0}% jitter, drawn per interval), "
                             + $"+{SlipVerifyRoverMs / 1000}s cooldown after any rover quote "
                             + $"-> {_slipCsvBaseName}_{CsvDate()}.csv");
+        if (SlipVerifyEnabled && SlipVerifyWindows.Length > 0)
+            Console.WriteLine("[SLIP VERIFY] windows (local): "
+                + string.Join(", ", SlipVerifyWindows.Select(w => $"{w.Start:hh\\:mm}-{w.End:hh\\:mm}"))
+                + $" — currently {(InVerifyWindow(SlipVerifyWindows, DateTime.Now) ? "OPEN" : "CLOSED")}. "
+                + "Outside them the bot keeps recording telemetry and refreshing the board; only the "
+                + "betslip clicking stops.");
         if (SlipVerifyEnabled)
             Console.WriteLine(SlipHoldEnabled
                 ? $"[SLIP VERIFY] holding each slip a RANDOM {SlipHoldMinMs / 1000}-{SlipHoldMaxMs / 1000}s "
@@ -1263,6 +1319,17 @@ public class CrossPlatformArbTelemetryStrategy
     internal bool TrySlipVerifySlot(bool openedInPlay)
     {
         if (!SlipVerifyEnabled || _slipQuote is null) return false;
+        // OUTSIDE THE VERIFY WINDOW? Refuse before claiming the slot, so nothing is consumed or refunded.
+        // Logged once per transition — a schedule that silently stops looks identical to a broken sampler,
+        // and that ambiguity has already cost a debugging session on this project.
+        bool open = InVerifyWindow(SlipVerifyWindows, DateTime.Now);
+        int was = Interlocked.Exchange(ref _verifyWindowState, open ? 1 : 0);
+        if (was != (open ? 1 : 0))
+            Console.WriteLine(open
+                ? $"[SLIP VERIFY] window OPEN ({DateTime.Now:HH:mm}) — sampling resumes"
+                : $"[SLIP VERIFY] window CLOSED ({DateTime.Now:HH:mm}) — no more betslip clicks until the "
+                  + $"next window. Telemetry, the feed and the hourly board refresh all keep running.");
+        if (!open) return false;
         // CLAIM THE SLOT BEFORE CHECKING THE INTERVAL. Two pairs can open an arb in the same millisecond
         // on different threads; checking the clock first would let both pass it and both click.
         if (Interlocked.CompareExchange(ref _slipVerifyInFlight, 1, 0) != 0) return false;

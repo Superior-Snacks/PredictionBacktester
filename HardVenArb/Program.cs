@@ -214,13 +214,41 @@ if (args.Contains("--slip-verify-check"))
     Check("refunding pre-live leaves the in-play budget alone", !probe.TrySlipVerifySlot(openedInPlay: true));
 
     // The cadence must not be metronomic — request timestamps make a fixed interval obvious server-side.
-    Console.WriteLine("\n[7] the sampling interval is jittered, once per interval");
+    Console.WriteLine("\n[7] verify WINDOWS gate the clicking, not the bot");
+    var W = CrossPlatformArbTelemetryStrategy.ParseWindows("05:00-09:00,17:00-24:00");
+    Check($"parsed 2 windows (got {W.Length})", W.Length == 2);
+    var day = new DateTime(2026, 8, 15);
+    Check("03:00 closed", !CrossPlatformArbTelemetryStrategy.InVerifyWindow(W, day.AddHours(3)));
+    Check("06:30 open",    CrossPlatformArbTelemetryStrategy.InVerifyWindow(W, day.AddHours(6.5)));
+    Check("09:00 closed (end is exclusive)",
+          !CrossPlatformArbTelemetryStrategy.InVerifyWindow(W, day.AddHours(9)));
+    Check("12:00 closed", !CrossPlatformArbTelemetryStrategy.InVerifyWindow(W, day.AddHours(12)));
+    Check("18:00 open",    CrossPlatformArbTelemetryStrategy.InVerifyWindow(W, day.AddHours(18)));
+    Check("23:59 open (24:00 means midnight)",
+          CrossPlatformArbTelemetryStrategy.InVerifyWindow(W, day.AddHours(23).AddMinutes(59)));
+    Check("00:00 closed — the run stops verifying at midnight",
+          !CrossPlatformArbTelemetryStrategy.InVerifyWindow(W, day));
+    var wrap = CrossPlatformArbTelemetryStrategy.ParseWindows("22:00-02:00");
+    Check("a window across midnight stays open at 23:30",
+          CrossPlatformArbTelemetryStrategy.InVerifyWindow(wrap, day.AddHours(23.5)));
+    Check("...and at 01:00", CrossPlatformArbTelemetryStrategy.InVerifyWindow(wrap, day.AddHours(1)));
+    Check("...but not at 03:00", !CrossPlatformArbTelemetryStrategy.InVerifyWindow(wrap, day.AddHours(3)));
+    Check("unset = always on",
+          CrossPlatformArbTelemetryStrategy.InVerifyWindow(
+              CrossPlatformArbTelemetryStrategy.ParseWindows(""), day.AddHours(3)));
+    Check("garbage is skipped, not treated as a window",
+          CrossPlatformArbTelemetryStrategy.ParseWindows("notatime,05:00-09:00").Length == 1);
+
+    Console.WriteLine("\n[8] the sampling interval is jittered, once per interval");
     double j = CrossPlatformArbTelemetryStrategy.CadenceJitterForTest;
     Check($"jitter is configured (±{j * 100:0}%)", j > 0);
     const long Base = 60_000;
-    var draws = Enumerable.Range(0, 400)
+    // 2000 draws, not 400: at ±35% the standard error of the mean over 400 is ~600ms, so a 2% tolerance
+    // was barely 2 sigma and failed roughly one run in twenty. Raising n rather than loosening the bound
+    // keeps the check meaningful — the property being tested is that jitter does not bias the RATE.
+    var draws = Enumerable.Range(0, 2000)
                           .Select(_ => CrossPlatformArbTelemetryStrategy.Jittered(Base)).ToList();
-    Check($"values vary (got {draws.Distinct().Count()} distinct of 400)", draws.Distinct().Count() > 300);
+    Check($"values vary (got {draws.Distinct().Count()} distinct of 2000)", draws.Distinct().Count() > 1500);
     Check($"all inside ±{j * 100:0}% of base ({draws.Min()}..{draws.Max()} vs {Base})",
           draws.All(d => d >= (long)(Base * (1 - j)) - 1 && d <= (long)(Base * (1 + j)) + 1));
     // Unbiased: jitter must not quietly speed the bot up. ±2% of base over 400 draws.
