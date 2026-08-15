@@ -872,8 +872,53 @@ class BetInAsiaAdapter(BookAdapter):
                 except Exception:
                     pass
 
-    async def _place_via_ui(self, selection_id: str, stake: float, max_odds: float) -> BetResult:
+    async def verify_bet_ui(self, selection_id: str, stake: float, max_odds: float,
+                            submit: bool = False) -> BetResult:
+        """Dress rehearsal for the UI path: drives every real step EXCEPT the Place click.
+
+        WHY THIS EXISTS. `--dry-run` + HARDVEN_LIVE_BET_PATH=1 does NOT exercise any of this — `/bet`
+        checks `preview` BEFORE reaching the adapter, so the rehearsal returns without a browser ever
+        being touched. It proves the C# chain and nothing about these selectors. Until this method
+        existed there was no way to test BIA placement short of a real bet, because `/bet/test` requires
+        `verify_bet_ui` and only the Pinnacle adapter had one.
+
+        `submit=False` is deliberately NOT gated on HARDVEN_BET_ENABLE: it places nothing, and requiring
+        the live arm to rehearse would mean only ever practising with the safety off.
+        """
         import asyncio as _aio
+
+        if submit:
+            return await self.place_bet(selection_id, stake, max_odds)
+
+        lock = getattr(self, "_slip_lock", None)
+        if lock is None:
+            lock = self._slip_lock = _aio.Lock()
+        async with lock:
+            try:
+                self.observer.pause_organic()
+            except Exception:
+                pass
+            try:
+                return await self._place_via_ui(selection_id, stake, max_odds, submit=False)
+            except Exception as e:
+                print(f"[BIA REHEARSAL] {type(e).__name__}: {e}", flush=True)
+                return BetResult(accepted=False, stake=stake,
+                                 reason=f"rehearsal failed before the Place click "
+                                        f"({type(e).__name__}: {e}) — nothing was submitted")
+            finally:
+                try:
+                    self.observer.resume_organic()
+                except Exception:
+                    pass
+
+    async def _place_via_ui(self, selection_id: str, stake: float, max_odds: float,
+                            submit: bool = True) -> BetResult:
+        import asyncio as _aio
+
+        # Wall clock to the Place click is the number the execution model turns on: POST->fill is 0.4s on
+        # pin88 (measured 2026-08-15), so the arb-vanishes-while-clicking risk now dominates the naked-leg
+        # risk. Anything before the click is a free miss; anything after is exposure.
+        t_start = time.time()
 
         # ── TOTAL TIME BUDGET, and why it is not a detail ────────────────────────────────────────────
         # The C# client posts /bet on a 90s HttpClient. If this call outruns that, the CLIENT aborts —
@@ -884,10 +929,40 @@ class BetInAsiaAdapter(BookAdapter):
         # stacking independent per-step timeouts that can sum past it.
         t_budget = time.time() + float(os.environ.get("BIA_PLACE_TOTAL_BUDGET_SEC", "70"))
 
+        # ── WATCHABLE PACING ─────────────────────────────────────────────────────────────────────────
+        # A rehearsal you cannot see is a rehearsal you cannot check: the point is watching the cursor
+        # land on the right cell, the right field, the right button, in that order. So the rehearsal
+        # narrates each step and waits ~1s between them.
+        # LIVE DOES NOT PACE, and that asymmetry is the whole design. A second per click is ~5s of extra
+        # drive time, and drive time is precisely what decides whether book-first pays — pacing the real
+        # path would slow the bot in the one dimension that costs arbs. Narration is free, so it stays on
+        # for both; the first supervised live bets should be readable too.
+        pace = float(os.environ.get("BIA_PLACE_STEP_PAUSE_SEC", "1.0" if not submit else "0"))
+        verbose = os.environ.get("BIA_PLACE_VERBOSE", "1") == "1"
+        tag = "BIA REHEARSAL" if not submit else "BIA BET"
+        step_n, paused = 0, 0.0
+
+        async def step(msg: str, wait: bool = True) -> None:
+            """Announce what is ABOUT to happen, then pause so it can be watched happening."""
+            nonlocal step_n, paused
+            step_n += 1
+            if verbose:
+                print(f"[{tag}] {step_n}. t+{time.time() - t_start:4.1f}s  {msg}", flush=True)
+            # Deliberate pauses are accumulated so the reported drive time can be stated NET of them.
+            # A paced rehearsal that reported its wall clock as the drive time would inflate the number
+            # the execution model is chosen on — the measurement would be corrupted by the act of
+            # watching it. Pacing still spends the total budget, so it stays bounded either way.
+            if wait and pace > 0:
+                await _aio.sleep(pace)
+                paused += pace
+
         # 1. Open the slip on this selection. Reuses the quote path wholesale: it finds the row by event
         #    key, cross-checks sport, clicks the cell whose PRICE matches, and refuses on ambiguity.
+        await step(f"opening the betslip on {selection_id}  (asking {stake:.2f} @ {max_odds})")
         q = await self._slip_quote_outer(selection_id)
         if not q.get("ok"):
+            if verbose:
+                print(f"[{tag}] STOPPED — the betslip would not open: {q.get('error')}", flush=True)
             return BetResult(accepted=False, stake=stake,
                              reason=f"could not open the betslip: {q.get('error')}")
         # PRICE GATES FIRST — pure data, no page needed, and they give the most specific reason. Checking
@@ -895,10 +970,16 @@ class BetInAsiaAdapter(BookAdapter):
         # which is both wrong and the sort of message that sends a debugging session the wrong way.
         offered = float(q.get("decimal_odds") or 0.0)
         label = q.get("selection_label") or ""
+        await step(f"slip is open on '{label or selection_id}' quoting {offered}", wait=False)
         if offered <= 1.0:
+            if verbose:
+                print(f"[{tag}] STOPPED — the slip quoted no usable price", flush=True)
             return BetResult(accepted=False, stake=stake, reason="the slip quoted no usable price")
         # max_odds is the caller's FLOOR: below it the arb is gone.
         if offered < max_odds - 1e-9:
+            if verbose:
+                print(f"[{tag}] STOPPED — slip offers {offered}, floor is {max_odds}. The arb is gone.",
+                      flush=True)
             return BetResult(accepted=False, stake=stake, actual_odds=offered,
                              reason=f"slip offers {offered} but {max_odds} is required — not placing")
 
@@ -909,20 +990,66 @@ class BetInAsiaAdapter(BookAdapter):
         # 2. Fill the form. Price first: changing it re-prices the slip, so a stake typed before would be
         #    re-validated against a different number.
         try:
+            await step(f"clicking the price field and typing {max_odds}")
             await CURSOR.click(page, page.locator(self._PRICE_INPUT).first, timeout=5_000)
             await page.locator(self._PRICE_INPUT).first.fill(str(max_odds))
             await _aio.sleep(random.uniform(0.15, 0.45))
+            await step(f"clicking the stake field and typing {stake:.2f}")
             await CURSOR.click(page, page.locator(self._STAKE_INPUT).first, timeout=5_000)
             await page.locator(self._STAKE_INPUT).first.fill(f"{stake:.2f}")
             await _aio.sleep(random.uniform(0.25, 0.8))
         except Exception as e:
+            if verbose:
+                print(f"[{tag}] STOPPED — could not fill the form: {type(e).__name__}: {e}", flush=True)
             return BetResult(accepted=False, stake=stake,
                              reason=f"could not fill the slip form ({type(e).__name__}: {e}) — "
                                     f"nothing was submitted")
 
+        await step("locating the Place control")
         place = page.get_by_text("place", exact=False).last
         if not await place.count():
+            if verbose:
+                print(f"[{tag}] STOPPED — no Place control matched. The selector is "
+                      f"get_by_text('place').last; check what the slip actually renders.", flush=True)
             return BetResult(accepted=False, stake=stake, reason="no Place control on the slip")
+        if verbose:
+            try:
+                print(f"[{tag}]    Place control reads: {(await place.inner_text())[:60]!r}", flush=True)
+            except Exception:
+                pass
+
+        if not submit:
+            # REHEARSAL STOPS HERE — one statement before the only irreversible line in the file.
+            # CLEAR THE STAKE FIRST. A rehearsal that returns leaving a filled slip has built a loaded
+            # gun: the stake sits in the form, and any later click on Place — organic activity, a stray
+            # roving-tab interaction, a human glancing at the window — places it. Blanking the field is
+            # what makes "nothing was submitted" true going forward and not just at this instant.
+            drive = time.time() - t_start
+            net = drive - paused          # what a LIVE, unpaced run would have taken
+            await step("STOPPING HERE — clearing the stake so nothing is left armed")
+            cleared = True
+            try:
+                await page.locator(self._STAKE_INPUT).first.fill("")
+            except Exception as e:
+                cleared = False
+                print(f"[BIA REHEARSAL] COULD NOT CLEAR THE STAKE ({type(e).__name__}) — the slip may "
+                      f"still hold {stake:.2f}. Close it by hand before anything else touches the page.",
+                      flush=True)
+            try:
+                await self.slip_close()
+            except Exception:
+                pass
+            print(f"[BIA REHEARSAL] DONE. Would have asked {stake:.2f} @ {max_odds} on "
+                  f"{label or selection_id} (slip offered {offered}). Nothing placed.\n"
+                  f"[BIA REHEARSAL]   drive time {net:.1f}s  <-- the number the model turns on "
+                  f"(wall {drive:.1f}s, {paused:.1f}s of it deliberate pacing)", flush=True)
+            return BetResult(accepted=False, stake=stake, actual_odds=offered,
+                             reason=f"REHEARSAL OK — drove the real UI to the Place control and stopped. "
+                                    f"Drive time {net:.1f}s net of {paused:.1f}s pacing (wall "
+                                    f"{drive:.1f}s). Slip quoted {offered}, would have asked "
+                                    f"{stake:.2f} @ {max_odds}."
+                                    + ("" if cleared else " WARNING: the stake field could not be "
+                                                          "cleared — check the slip by hand."))
 
         # 3. Click Place and capture the order_id from the venue's own response to that click. Waiting on
         #    the response rather than scraping the DOM: the id is the join key for everything after this,
@@ -930,6 +1057,9 @@ class BetInAsiaAdapter(BookAdapter):
         order_id = None
         resp_budget = max(5.0, min(float(os.environ.get("BIA_PLACE_RESP_TIMEOUT", "20")),
                                    t_budget - time.time() - 10.0))   # leave 10s for the fill wait
+        await step(f"CLICKING PLACE — committing {stake:.2f} @ {max_odds}. Everything after this line "
+                   f"is real exposure.", wait=False)
+        t_click = time.time()
         try:
             async with page.expect_response(
                     lambda r: "/v1/orders" in r.url and r.request.method == "POST",
@@ -938,8 +1068,11 @@ class BetInAsiaAdapter(BookAdapter):
             resp = await got.value
             body = await resp.json()
             order_id = ((body or {}).get("data") or {}).get("order_id")
+            # Drive time is reported on the LIVE path too, and it is the honest one — no pacing, real
+            # page, real contention with whatever else the browser was doing.
             print(f"[BIA BET] placed order {order_id}: asked {stake:.2f} @ {max_odds} "
-                  f"on {label or selection_id}", flush=True)
+                  f"on {label or selection_id}  (drive {t_click - t_start:.1f}s, "
+                  f"ack {time.time() - t_click:.1f}s)", flush=True)
         except Exception as e:
             # THE CLICK MAY HAVE LANDED. Never report this as a clean rejection.
             return BetResult(accepted=False, stake=stake,

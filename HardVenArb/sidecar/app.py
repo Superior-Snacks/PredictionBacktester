@@ -599,7 +599,7 @@ async def bet_test(req: BetTestRequest):
     pre-match layouts) BEFORE they cause a wrong bet."""
     fn = getattr(adapter, "verify_bet_ui", None)
     if not callable(fn):
-        raise HTTPException(400, "adapter has no verify_bet_ui (Pinnacle adapter only)")
+        raise HTTPException(400, "adapter has no verify_bet_ui (Pinnacle and BetInAsia only)")
     page = _managed_page()
     recording = False
     if req.record and page is not None and not _recorder.status()["active"]:

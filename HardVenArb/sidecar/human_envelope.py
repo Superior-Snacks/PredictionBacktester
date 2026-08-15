@@ -43,6 +43,8 @@ import os
 import statistics
 import sys
 
+sys.stdout.reconfigure(encoding="utf-8")   # some readouts below print em-dashes; cp1252 would raise
+
 
 def pct(xs: list[float], p: float) -> float:
     if not xs:
@@ -273,15 +275,35 @@ def fills(path: str) -> int:
     """
     if not os.path.exists(path):
         raise SystemExit(f"ERROR: no such capture file: {path}")
-    rows, placed = [], {}
+    rows, placed, post_t = [], {}, {}
     with open(path, "r", encoding="utf-8", errors="replace") as f:
         for line in f:
-            if '"api"' not in line:
+            if '"api"' not in line and "/v1/orders" not in line:
                 continue
             try:
                 rec = json.loads(line)
             except Exception:
                 continue
+
+            # t0 IS THE POST, not the venue's first mention of the order: an order the venue has already
+            # acknowledged has already been exposed for some unmeasured time, so anchoring on the first WS
+            # frame reads short. Its response carries the order_id, which is what joins click to lifecycle.
+            # CAVEAT: the recon hooks RESPONSES, so this is the POST's *reply*, not its send. Measured
+            # 2026-08-14 the WS push actually beat the reply by 0.1s -- both anchors land within noise of
+            # each other, and the true send is earlier than both. Treat every number here as a FLOOR.
+            if (rec.get("kind") == "http" and rec.get("method") == "POST"
+                    and "/v1/orders" in (rec.get("url") or "")):
+                try:
+                    d = json.loads(rec.get("body") or "")
+                except Exception:
+                    continue
+                got = d.get("data") if isinstance(d, dict) else None
+                got = got if isinstance(got, list) else [got] if isinstance(got, dict) else []
+                for o in got:
+                    if isinstance(o, dict) and o.get("order_id") is not None:
+                        post_t.setdefault(int(o["order_id"]), rec.get("t") or 0.0)
+                continue
+
             if rec.get("kind") != "ws_frame":
                 continue
             t = rec.get("t") or 0.0
@@ -310,6 +332,10 @@ def fills(path: str) -> int:
                     if kind == "order" and oid not in placed:
                         placed[oid] = t
 
+    def t0_of(oid):
+        """Commit time for one order: the POST if the capture kept it, else the venue's first mention."""
+        return post_t.get(oid, placed.get(oid))
+
     seen = set()
     print(f"{path}\n")
     for r in rows:
@@ -318,7 +344,7 @@ def fills(path: str) -> int:
         if key in seen:
             continue                       # the venue repeats a state; show transitions only
         seen.add(key)
-        lat = f"+{t - placed[oid]:5.1f}s" if oid in placed else "      "
+        lat = f"+{t - t0_of(oid):5.1f}s" if t0_of(oid) is not None else "      "
         who = f" via {bookie}" if bookie else ""
         got = f"{pr} / {json.dumps(s)}" if pr is not None else "— / —"
         print(f"  t={t:7.1f} {lat}  {kind:5} {oid}  {str(st):8}{who}")
@@ -326,12 +352,25 @@ def fills(path: str) -> int:
               + (f"   CLOSED {reason}" if closed else ""))
 
     print()
-    for oid, t0 in placed.items():
-        done = [r[0] for r in rows if r[2] == oid and r[1] == "bet" and r[3] == "done"]
-        if done:
-            print(f"  order {oid}: placement -> bet done in {min(done) - t0:.1f}s")
-        else:
+    for oid in sorted(set(placed) | set(post_t)):
+        t0 = t0_of(oid)
+        src = "POST" if oid in post_t else "first WS frame (POST not captured; READS SHORT)"
+        done = sorted(r[0] for r in rows if r[2] == oid and r[1] == "bet" and r[3] == "done")
+        shut = sorted(r[0] for r in rows if r[2] == oid and r[9])
+        books = sorted({r[4] for r in rows if r[2] == oid and r[1] == "bet" and r[4]})
+        if not done and not shut:
             print(f"  order {oid}: no 'bet done' in this capture (still open, or the run ended too soon)")
+            continue
+        print(f"  order {oid}  t0={src}   books: {', '.join(books) or '?'}")
+        if done:
+            # LAST, not first. A multi-book fill is not finished when one leg reports done -- the total
+            # stake is still moving, so the Kalshi leg cannot be sized yet. The naked window is the whole
+            # span, and quoting the first leg would understate it by however long the slowest book took.
+            print(f"      first leg done   {done[0] - t0:6.1f}s")
+            if len(done) > 1:
+                print(f"      LAST leg done    {done[-1] - t0:6.1f}s   <-- sizeable here, {len(done)} legs")
+        if shut:
+            print(f"      order closed     {shut[0] - t0:6.1f}s   <-- naked window ends here")
     if not rows:
         print("  No order/bet frames. Either nothing was placed, or the capture ended before the venue\n"
               "  pushed them — the lifecycle arrives over the WS, so the run must outlast the fill.")
