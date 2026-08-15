@@ -1064,6 +1064,23 @@ class BetInAsiaAdapter(BookAdapter):
         except Exception as e:
             return f"(unreadable: {type(e).__name__})"
 
+    def _clicker(self):
+        """(mode, click function) for EVERY click in the placement path — opening and Place alike.
+
+        ONE MODE FOR THE WHOLE INTERACTION, deliberately. A session where the slip is opened with a real
+        OS click and then the Place button is pressed with a CDP one is the worst of both: it carries
+        whatever made the CDP click unacceptable, at the single moment that commits money, and it makes
+        the event stream two populations instead of one. Whatever the venue's betslip actually reacts to,
+        a mixed session is harder to explain than either consistent one.
+
+        `os_hybrid` is the operator's design: CDP resolves the element's LIVE position (essential on a
+        board that reorders as odds tick — coordinate-clicking stale positions is how you bet the wrong
+        side) and Windows SendInput performs the press.
+        """
+        mode = os.environ.get("BIA_CLICK_MODE", "playwright").strip().lower()
+        return mode, {"cdp_raw": CURSOR.raw_cdp_click,
+                      "os_hybrid": CURSOR.os_hybrid_click}.get(mode, CURSOR.click)
+
     async def park_mouse_on_slip(self) -> dict:
         """Move the PHYSICAL cursor onto the open betslip. Moves only — presses nothing.
 
@@ -1429,13 +1446,16 @@ class BetInAsiaAdapter(BookAdapter):
         def _left(floor: float = 2.0, cap: float = 15.0) -> float:
             return max(floor, min(cap, t_budget - time.time()))
 
+        # SAME CLICK MODE THROUGHOUT. See _clicker: mixing a real opening click with synthetic ones
+        # afterwards keeps whatever made the synthetic click unacceptable, at the moment that commits.
+        click_mode, click = self._clicker()
         try:
-            await step(f"clicking the price field and typing {max_odds}")
-            await CURSOR.click(page, page.locator(self._PRICE_INPUT).first, timeout=_left() * 1000)
+            await step(f"clicking the price field and typing {max_odds}  (clicks: {click_mode})")
+            await click(page, page.locator(self._PRICE_INPUT).first, timeout=_left() * 1000)
             await page.locator(self._PRICE_INPUT).first.fill(str(max_odds), timeout=_left() * 1000)
             await _aio.sleep(random.uniform(0.15, 0.45))
             await step(f"clicking the stake field and typing {stake:.2f}")
-            await CURSOR.click(page, page.locator(self._STAKE_INPUT).first, timeout=_left() * 1000)
+            await click(page, page.locator(self._STAKE_INPUT).first, timeout=_left() * 1000)
             await page.locator(self._STAKE_INPUT).first.fill(f"{stake:.2f}", timeout=_left() * 1000)
             # Form is filled: the slip is now being interacted with and stops being fragile. Pacing may
             # resume, and the remaining steps are the ones worth watching anyway.
@@ -1584,7 +1604,8 @@ class BetInAsiaAdapter(BookAdapter):
             async with page.expect_response(
                     lambda r: "/v1/orders" in r.url and r.request.method == "POST",
                     timeout=resp_budget * 1000) as got:
-                await CURSOR.click(page, place, timeout=8_000)
+                # THE CLICK THAT COMMITS MONEY, through the same mode as every other click above.
+                await click(page, place, timeout=8_000)
             resp = await got.value
             body = await resp.json()
             order_id = ((body or {}).get("data") or {}).get("order_id")
@@ -2489,9 +2510,7 @@ class BetInAsiaAdapter(BookAdapter):
             # run; `cdp_raw` fills in force/pointerType/buttons, which Playwright's mouse API does not
             # expose, and is the cheap candidate fix for the venue dismissing bot-clicked slips (see
             # human_mouse.raw_cdp_click). A/B them with slip_hold.py before changing the default.
-            mode = os.environ.get("BIA_CLICK_MODE", "playwright").strip().lower()
-            clicker = {"cdp_raw": CURSOR.raw_cdp_click,
-                       "os_hybrid": CURSOR.os_hybrid_click}.get(mode, CURSOR.click)
+            mode, clicker = self._clicker()
             if not await clicker(page, cell, timeout=5_000):
                 return {"ok": False, "error": f"the price cell could not be clicked (mode={mode})"}
             if mode != "playwright":
