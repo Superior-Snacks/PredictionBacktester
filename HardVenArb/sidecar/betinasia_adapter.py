@@ -176,7 +176,10 @@ _COMMA_SUB = "~"          # not present in any sport, event key, market key or s
 _TRACE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bia_place_trace.log")
 
 
-def _trace(line: str) -> None:
+def _trace(line: str, **_ignored) -> None:
+    """`**_ignored` absorbs a stray `flush=` left over from a print() this replaced. Not laziness: on
+    2026-08-15 exactly that TypeError aborted a rehearsal from inside the logging call. Had it fired one
+    step later — after the Place click — the bot would have reported a failure on a live order."""
     print(line, flush=True)
     try:
         with open(_TRACE_PATH, "a", encoding="utf-8") as fh:
@@ -919,6 +922,38 @@ class BetInAsiaAdapter(BookAdapter):
                 except Exception:
                     pass
 
+    async def _settle_cursor_on_slip(self, page) -> bool:
+        """Move the pointer onto the freshly-opened slip, the way a hand follows the panel it just opened.
+
+        WHAT THE CLICK LEAVES BEHIND, and why it is wrong. `CURSOR.click` wheels the row into view, walks
+        a Bezier path to an off-centre point in the odds cell, pauses, and clicks — all genuine CDP input,
+        so `isTrusted` holds. But then it STOPS. The pointer stays parked on a board row while a panel
+        opens somewhere else and is never approached. No person does that: opening a betslip and then not
+        moving toward it is the one part of this sequence a human never performs.
+
+        And it may not be merely cosmetic. Measured 2026-08-15 (`slip_hold.py --quiet-secs 20`) an
+        untouched slip is dismissed within ~1-3s, while one a human is working in survives indefinitely —
+        so "is anything happening on this panel" is plausibly what the venue keys on. Moving onto it is
+        the cheapest thing that is both more human AND a candidate fix, which is why it is worth doing
+        before anything more invasive.
+
+        Best-effort: never raises, and a failure to find the panel is not a failure to quote.
+        """
+        try:
+            box = await page.locator(self._PRICE_INPUT).first.bounding_box()
+        except Exception:
+            return False
+        if not box:
+            return False
+        try:
+            # Toward the field, not exactly onto it — a hand arrives near the control it is heading for.
+            await CURSOR.move(page,
+                              box["x"] + box["width"] * random.uniform(0.3, 0.7),
+                              box["y"] + box["height"] * random.uniform(0.3, 0.7))
+            return True
+        except Exception:
+            return False
+
     async def _dump_slip_inputs(self, page) -> str:  # noqa: D401  (see _trace above for why)
         """Every input on the page, with the attributes that identify it. For diagnosing a fill failure.
 
@@ -1101,7 +1136,7 @@ class BetInAsiaAdapter(BookAdapter):
             if hot:
                 wait = False
             if verbose:
-                _trace(f"[{tag}] {step_n}. t+{time.time() - t_start:4.1f}s  {msg}", flush=True)
+                _trace(f"[{tag}] {step_n}. t+{time.time() - t_start:4.1f}s  {msg}")
             # Deliberate pauses are accumulated so the reported drive time can be stated NET of them.
             # A paced rehearsal that reported its wall clock as the drive time would inflate the number
             # the execution model is chosen on — the measurement would be corrupted by the act of
@@ -1130,7 +1165,7 @@ class BetInAsiaAdapter(BookAdapter):
         q = await self._slip_quote_outer(selection_id)
         if not q.get("ok"):
             if verbose:
-                _trace(f"[{tag}] STOPPED — the betslip would not open: {q.get('error')}", flush=True)
+                _trace(f"[{tag}] STOPPED — the betslip would not open: {q.get('error')}")
             return BetResult(accepted=False, stake=stake,
                              reason=f"could not open the betslip: {q.get('error')}")
         # PRICE GATES FIRST — pure data, no page needed, and they give the most specific reason. Checking
@@ -1145,13 +1180,12 @@ class BetInAsiaAdapter(BookAdapter):
                    f"— HOT ZONE, no pacing until the form is filled", wait=False)
         if offered <= 1.0:
             if verbose:
-                _trace(f"[{tag}] STOPPED — the slip quoted no usable price", flush=True)
+                _trace(f"[{tag}] STOPPED — the slip quoted no usable price")
             return BetResult(accepted=False, stake=stake, reason="the slip quoted no usable price")
         # max_odds is the caller's FLOOR: below it the arb is gone.
         if offered < max_odds - 1e-9:
             if verbose:
-                _trace(f"[{tag}] STOPPED — slip offers {offered}, floor is {max_odds}. The arb is gone.",
-                      flush=True)
+                _trace(f"[{tag}] STOPPED — slip offers {offered}, floor is {max_odds}. The arb is gone.",)
             return BetResult(accepted=False, stake=stake, actual_odds=offered,
                              reason=f"slip offers {offered} but {max_odds} is required — not placing")
 
@@ -1183,7 +1217,7 @@ class BetInAsiaAdapter(BookAdapter):
                                                  "slip was ever opened."
             if verbose:
                 _trace(f"[{tag}] STOPPED — quoted {offered} but there is no betslip on screen to type "
-                      f"into.{cached}", flush=True)
+                      f"into.{cached}")
             return BetResult(accepted=False, stake=stake, actual_odds=offered,
                              reason=f"quoted {offered} but no betslip is open — the price form does not "
                                     f"exist to fill.{cached}")
@@ -1214,7 +1248,7 @@ class BetInAsiaAdapter(BookAdapter):
             if verbose:
                 _trace(f"[{tag}] STOPPED — could not fill the form: {type(e).__name__}: {e}\n"
                       f"[{tag}] the slip IS open; here is every input on the page:\n"
-                      + await self._dump_slip_inputs(page), flush=True)
+                      + await self._dump_slip_inputs(page))
             await _release()
             return BetResult(accepted=False, stake=stake,
                              reason=f"could not fill the slip form ({type(e).__name__}: {e}) — "
@@ -1231,12 +1265,12 @@ class BetInAsiaAdapter(BookAdapter):
         if not await place.count():
             if verbose:
                 _trace(f"[{tag}] STOPPED — nothing on the slip reads exactly 'Place'. Run "
-                      f"`python slip_dom.py` with a slip open and check place_exact/buttons.", flush=True)
+                      f"`python slip_dom.py` with a slip open and check place_exact/buttons.")
             await _release()
             return BetResult(accepted=False, stake=stake, reason="no Place control on the slip")
         if verbose:
             try:
-                _trace(f"[{tag}]    Place control reads: {(await place.inner_text())[:60]!r}", flush=True)
+                _trace(f"[{tag}]    Place control reads: {(await place.inner_text())[:60]!r}")
             except Exception:
                 pass
 
@@ -1270,8 +1304,7 @@ class BetInAsiaAdapter(BookAdapter):
             except Exception as e:
                 cleared = False
                 _trace(f"[BIA REHEARSAL] COULD NOT CLEAR THE STAKE ({type(e).__name__}) — the slip may "
-                      f"still hold {stake:.2f}. Close it by hand before anything else touches the page.",
-                      flush=True)
+                      f"still hold {stake:.2f}. Close it by hand before anything else touches the page.",)
             try:
                 await self.slip_close()
             except Exception:
@@ -1280,7 +1313,7 @@ class BetInAsiaAdapter(BookAdapter):
                   f"{label or selection_id} (slip offered {offered}). Nothing placed.\n"
                   f"[BIA REHEARSAL]   drive time {net:.1f}s  <-- the number the model turns on "
                   f"(wall {drive:.1f}s, {paused:.1f}s of it deliberate pacing)\n"
-                  f"[BIA REHEARSAL]   {drift}", flush=True)
+                  f"[BIA REHEARSAL]   {drift}")
             return BetResult(accepted=False, stake=stake, actual_odds=offered,
                              reason=f"REHEARSAL OK — drove the real UI to the Place control and stopped. "
                                     f"Drive time {net:.1f}s net of {paused:.1f}s pacing (wall "
@@ -1323,7 +1356,7 @@ class BetInAsiaAdapter(BookAdapter):
                   "UP (would just miss the fill)"
             _trace(f"[{tag}] ABORT — the price field reads {back}, not the {max_odds} we typed; drifted "
                   f"{way}. Either the write was rejected or the venue's best-price prefill is still on "
-                  f"and moved it. Nothing placed.", flush=True)
+                  f"and moved it. Nothing placed.")
             await _release()
             return BetResult(accepted=False, stake=stake, actual_odds=offered,
                              reason=f"price field reads {back} after {max_odds} was entered — the write "
@@ -1345,7 +1378,7 @@ class BetInAsiaAdapter(BookAdapter):
             # page, real contention with whatever else the browser was doing.
             _trace(f"[BIA BET] placed order {order_id}: asked {stake:.2f} @ {max_odds} "
                   f"on {label or selection_id}  (drive {t_click - t_start:.1f}s, "
-                  f"ack {time.time() - t_click:.1f}s)", flush=True)
+                  f"ack {time.time() - t_click:.1f}s)")
         except Exception as e:
             # THE CLICK MAY HAVE LANDED. Never report this as a clean rejection.
             return BetResult(accepted=False, stake=stake,
@@ -1374,8 +1407,8 @@ class BetInAsiaAdapter(BookAdapter):
                                     f"({fill.get('close_reason')})")
         _trace(f"[BIA BET] order {order_id} FILLED {filled:.4f} @ {price} "
               f"via {','.join(fill.get('bookies') or []) or '?'}"
-              + (f"  (asked {stake:.2f} @ {max_odds})" if filled != stake or price != max_odds else ""),
-              flush=True)
+              + (f"  (asked {stake:.2f} @ {max_odds})"
+                 if filled != stake or price != max_odds else ""))
         return BetResult(accepted=True, bet_id=str(order_id),
                          actual_odds=price, stake=filled,
                          reason=None if fill.get("done") else "partial fill — order still open")
@@ -2257,6 +2290,10 @@ class BetInAsiaAdapter(BookAdapter):
                         await CURSOR.scroll(page, pbox["y"] - VIEW_REST)
             except Exception:
                 pass
+            # ...AND FOLLOW IT WITH THE POINTER. Scrolling the panel into view without moving toward it
+            # is still not what a hand does, and an untouched slip is dismissed in ~1-3s (measured). See
+            # _settle_cursor_on_slip. Cheap, best-effort, and it costs nothing if the panel is not found.
+            await self._settle_cursor_on_slip(page)
             url_after = page.url
             # THE ROW IS AN <a href>. A real user's click is swallowed by the app (it opens the Quick Bet
             # panel); if the default link action fires instead, the SPA navigates to the event page, the
