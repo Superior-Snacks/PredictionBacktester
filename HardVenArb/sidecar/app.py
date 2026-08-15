@@ -351,6 +351,18 @@ async def debug_feed():
     return fn()
 
 
+@app.post("/debug/aim")
+async def debug_aim(selection_id: str):
+    """Move the PHYSICAL cursor onto this selection's price cell and stop. Presses nothing.
+
+    The bot does the finding, scrolling and pointer travel; you press the button. If the slip then
+    survives, the PRESS is the difference and nothing else is."""
+    fn = getattr(adapter, "aim_at_selection", None)
+    if not callable(fn):
+        raise HTTPException(404, f"book '{adapter.name}' cannot aim")
+    return await fn(selection_id)
+
+
 @app.post("/debug/park_mouse")
 async def debug_park_mouse():
     """Move the PHYSICAL cursor onto the open betslip. Moves only — clicks nothing.

@@ -236,6 +236,36 @@ async def calibrate(cdp, page) -> Optional[tuple[float, float, float, float]]:
     return ox2, oy2, kx, ky
 
 
+async def aim_element(cdp, page, loc, timeout: int = 5000) -> Optional[dict]:
+    """Put the PHYSICAL cursor on the element and stop. Presses nothing.
+
+    Exists for one experiment: have the bot do the finding, the scrolling and the pointer travel, then
+    let a HUMAN press the physical button. Everything about the interaction is then identical to a bot
+    click except the press itself — which is the last untested difference after input forensics, focus,
+    hover position and pointer travel were each eliminated.
+    """
+    if not _WIN:
+        return None
+    cal = await calibrate(cdp, page)
+    if cal is None:
+        return None
+    ox, oy, kx, ky = cal
+    try:
+        await loc.scroll_into_view_if_needed(timeout=timeout)
+        box = await loc.bounding_box()
+    except Exception:
+        return None
+    if not box:
+        return None
+    cx = box["x"] + box["width"] / 2.0
+    cy = box["y"] + box["height"] / 2.0
+    sx, sy = ox + cx * kx, oy + cy * ky
+    if not await human_move_to(sx, sy):
+        return None
+    return {"client": [round(cx), round(cy)], "screen": [round(sx), round(sy)],
+            "cursor_now": list(cursor_pos()), "scale": [round(kx, 4), round(ky, 4)]}
+
+
 async def click_element(cdp, page, loc, timeout: int = 5000) -> bool:
     """Scroll the element into view with CDP, then click it with the REAL mouse.
 

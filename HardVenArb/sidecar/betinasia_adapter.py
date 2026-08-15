@@ -1064,6 +1064,19 @@ class BetInAsiaAdapter(BookAdapter):
         except Exception as e:
             return f"(unreadable: {type(e).__name__})"
 
+    async def aim_at_selection(self, selection_id: str) -> dict:
+        """Move the PHYSICAL cursor onto this selection's price cell and stop. Clicks nothing.
+
+        Reuses the whole quote path — row lookup by event key, sport cross-check, the cell whose price
+        matches — and returns just before the click. So the ONLY thing left for a human to contribute is
+        the button press, which is the last untested difference between a bot click and a hand click.
+        """
+        self._aim_only = True
+        try:
+            return await self.slip_quote(selection_id)
+        finally:
+            self._aim_only = False
+
     def _clicker(self):
         """(mode, click function) for EVERY click in the placement path — opening and Place alike.
 
@@ -2512,6 +2525,26 @@ class BetInAsiaAdapter(BookAdapter):
             # expose, and is the cheap candidate fix for the venue dismissing bot-clicked slips (see
             # human_mouse.raw_cdp_click). A/B them with slip_hold.py before changing the default.
             mode, clicker = self._clicker()
+
+            # AIM-ONLY: park the physical cursor on the cell and STOP, so a human can press the button.
+            # Set by /debug/aim. The bot does the finding, scrolling and travel; only the press differs.
+            if getattr(self, "_aim_only", False):
+                try:
+                    import os_mouse as _osm
+                    cdp = CURSOR._cdp.get(page)
+                    if cdp is None:
+                        cdp = await page.context.new_cdp_session(page)
+                        CURSOR._cdp[page] = cdp
+                    aim = await _osm.aim_element(cdp, page, cell, timeout=5_000)
+                except Exception as e:
+                    return {"ok": False, "error": f"aim failed: {type(e).__name__}: {e}"}
+                if not aim:
+                    return {"ok": False, "error": "could not aim at the price cell"}
+                print(f"[BIA SLIP] AIMED at the price cell — press the physical button yourself. "
+                      f"{aim}", flush=True)
+                return {"ok": False, "aimed": True, **aim,
+                        "error": "AIM ONLY — cursor parked on the cell, nothing clicked"}
+
             if not await clicker(page, cell, timeout=5_000):
                 return {"ok": False, "error": f"the price cell could not be clicked (mode={mode})"}
             if mode != "playwright":
@@ -2533,10 +2566,14 @@ class BetInAsiaAdapter(BookAdapter):
                         await CURSOR.scroll(page, pbox["y"] - VIEW_REST)
             except Exception:
                 pass
-            # ...AND FOLLOW IT WITH THE POINTER. Scrolling the panel into view without moving toward it
-            # is still not what a hand does, and an untouched slip is dismissed in ~1-3s (measured). See
-            # _settle_cursor_on_slip. Cheap, best-effort, and it costs nothing if the panel is not found.
-            await self._settle_cursor_on_slip(page)
+            # OFF BY DEFAULT (BIA_SETTLE_CURSOR=1 to enable). Added on the theory that a slip nobody
+            # moves toward gets dismissed; that theory is dead — --park-mouse with a correct calibration
+            # did not save the slip either. What it DOES do is drag the CDP cursor across the board
+            # during the exact 1-3s window the slip is fragile in, passing over other rows on the way.
+            # Unexplained movement inside the window under investigation is worth removing until there
+            # is a reason for it.
+            if os.environ.get("BIA_SETTLE_CURSOR") == "1":
+                await self._settle_cursor_on_slip(page)
             url_after = page.url
             # THE ROW IS AN <a href>. A real user's click is swallowed by the app (it opens the Quick Bet
             # panel); if the default link action fires instead, the SPA navigates to the event page, the
