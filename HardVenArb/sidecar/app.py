@@ -389,6 +389,16 @@ async def debug_fill_open_slip(price: float, stake: float, method: str = "click"
     return await fn(price, stake, method=method)
 
 
+@app.get("/debug/event_capture")
+async def debug_event_capture(reset: bool = False, moves: bool = False):
+    """Every field of every mouse/pointer event the page received — for diffing a bot click against a
+    hand click. Install, click one way, read, reset, click the other way, read, compare."""
+    fn = getattr(adapter, "event_capture", None)
+    if not callable(fn):
+        raise HTTPException(404, f"book '{adapter.name}' has no event capture")
+    return await fn(reset=reset, moves=moves)
+
+
 @app.get("/debug/input_probe")
 async def debug_input_probe(reset: bool = False):
     """Which MouseEvent properties does the SITE read? Answers whether a CDP click can ever pass.

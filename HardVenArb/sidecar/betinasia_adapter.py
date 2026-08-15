@@ -1044,6 +1044,71 @@ class BetInAsiaAdapter(BookAdapter):
         except Exception as e:
             return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
+    _EVENT_CAPTURE_JS = r"""
+    (() => {
+      // Record EVERY field of every pointer/mouse event, so a bot click and a hand click can be diffed
+      // field by field instead of theorised about. Capture phase, passive, and it never calls
+      // preventDefault -- the page's own handlers see exactly what they would have seen.
+      if (window.__evcap) return {already: true, n: window.__evcap.rows.length};
+      const rows = [];
+      window.__evcap = {rows};
+      const F = ['type','isTrusted','screenX','screenY','clientX','clientY','pageX','pageY',
+                 'movementX','movementY','pressure','tangentialPressure','tiltX','tiltY','twist',
+                 'pointerType','pointerId','isPrimary','width','height',
+                 'button','buttons','detail','which','altKey','ctrlKey','shiftKey','metaKey'];
+      const rec = (e) => {
+        if (rows.length > 400) return;
+        const o = {};
+        for (const f of F) { try { const v = e[f]; if (v !== undefined) o[f] = v; } catch (_) {} }
+        try { o.ts = Math.round(e.timeStamp); } catch (_) {}
+        try { o.coalesced = e.getCoalescedEvents ? e.getCoalescedEvents().length : null; } catch (_) {}
+        try { o.predicted = e.getPredictedEvents ? e.getPredictedEvents().length : null; } catch (_) {}
+        try {
+          const t = e.target;
+          o.target = t ? (t.tagName + '.' + String(t.className || '').slice(0, 30)) : null;
+        } catch (_) {}
+        rows.push(o);
+      };
+      for (const t of ['pointerdown','mousedown','pointerup','mouseup','click','pointermove','mousemove'])
+        document.addEventListener(t, rec, {capture: true, passive: true});
+      return {installed: true, n: 0};
+    })()
+    """
+
+    async def event_capture(self, reset: bool = False, moves: bool = False) -> dict:
+        """Every field of every mouse/pointer event the page received. For diffing bot vs hand clicks.
+
+        BUILT BECAUSE THE THEORIES RAN OUT. By this point polling, navigation, our own close, the sport
+        walk, organic, focus, native-property reads, pointer position, aim accuracy and dwell had each
+        been eliminated, and the surviving results contradicted every remaining mechanism: a SendInput
+        press worked once, a hand press worked once, both together failed, and a FAST hand click works
+        while a slow bot click does not. At the DOM level a SendInput click and a physical click are
+        built from the same Windows message, so nothing should differ — this establishes whether that is
+        actually true rather than assuming it.
+
+        Moves are excluded from the readout by default: a pointermove stream drowns the four events that
+        matter. `moves=True` includes them when the question is about movement rather than the press.
+        """
+        page = getattr(self, "_slip_page", None)
+        if page is None or page.is_closed():
+            ctx = getattr(self.observer, "_ctx", None)
+            pages = [p for p in (list(ctx.pages) if ctx else []) if not p.is_closed()]
+            page = pages[0] if pages else None
+        if page is None:
+            return {"ok": False, "error": "no page"}
+        try:
+            if reset:
+                await page.evaluate("() => { if (window.__evcap) window.__evcap.rows.length = 0; }")
+                return {"ok": True, "reset": True}
+            state = await page.evaluate(self._EVENT_CAPTURE_JS)
+            rows = await page.evaluate("() => (window.__evcap ? window.__evcap.rows : [])")
+            if not moves:
+                rows = [r for r in rows if r.get("type") not in ("pointermove", "mousemove")]
+            return {"ok": True, "url": page.url, "installed": state.get("installed", False),
+                    "count": len(rows), "events": rows[-40:]}
+        except Exception as e:
+            return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
     async def _active_element(self, page) -> str:
         """What has keyboard focus right now, read from an ISOLATED world so the page cannot see the read.
 
