@@ -872,6 +872,76 @@ class BetInAsiaAdapter(BookAdapter):
                 except Exception:
                     pass
 
+    async def _dump_slip_inputs(self, page) -> str:
+        """Every input on the page, with the attributes that identify it. For diagnosing a fill failure.
+
+        LOCATORS, NOT evaluate(): `test_dom_isolation.py` showed locator reads run in an isolated world
+        the page cannot observe, while evaluate() is main-world and visible to the app. A diagnostic is
+        not worth a detection footprint.
+        """
+        out = []
+        try:
+            inputs = page.locator("input, textarea, [contenteditable='true']")
+            n = min(await inputs.count(), 12)
+            for i in range(n):
+                el = inputs.nth(i)
+                try:
+                    cls = (await el.get_attribute("class")) or ""
+                    ph = (await el.get_attribute("placeholder")) or ""
+                    ty = (await el.get_attribute("type")) or ""
+                    vis = await el.is_visible()
+                    try:
+                        val = await el.input_value()
+                    except Exception:
+                        val = "?"
+                    out.append(f"      [{i}] class={cls[:44]!r} type={ty!r} placeholder={ph[:24]!r} "
+                               f"visible={vis} value={str(val)[:16]!r}")
+                except Exception:
+                    continue
+        except Exception as e:
+            return f"      (could not enumerate inputs: {type(e).__name__}: {e})"
+        return "\n".join(out) or "      (no input elements found on the page at all)"
+
+    async def slip_dom(self) -> dict:
+        """Dump the form controls on every open tab. For a HAND-DRIVEN recon of the betslip.
+
+        Built 2026-08-15 because `.price-input` stopped resolving and the automated path could not say
+        what replaced it. The alternative — a second Playwright profile — cannot work: the sidecar holds
+        `.betinasia_profile` and they cannot share it, so a recon script means taking the bot down. This
+        reads the browser that is ALREADY logged in, while a human drives it, which is also the only way
+        to see fields that render solely in response to real interaction.
+
+        Read-only and locator-based (isolated world), so it neither clicks anything nor is observable to
+        the page. Safe to call repeatedly at each stage of a manual bet.
+        """
+        ctx = getattr(self.observer, "_ctx", None)
+        if ctx is None:
+            return {"ok": False, "error": "no browser context — the observer has not started"}
+        out = []
+        for i, pg in enumerate(list(ctx.pages)):
+            try:
+                if pg.is_closed():
+                    continue
+                entry = {"index": i, "url": (pg.url or "")[:120], "inputs": await self._dump_slip_inputs(pg)}
+                # Candidate Place controls, so the `get_by_text("place").last` guess can be checked
+                # against what the page actually renders rather than assumed.
+                try:
+                    pl = pg.get_by_text("place", exact=False)
+                    n = min(await pl.count(), 6)
+                    entry["place_candidates"] = [
+                        f"[{j}] {((await pl.nth(j).inner_text()) or '')[:50]!r} "
+                        f"visible={await pl.nth(j).is_visible()}" for j in range(n)]
+                except Exception as e:
+                    entry["place_candidates"] = [f"(failed: {type(e).__name__}: {e})"]
+                try:
+                    entry["panel_text"] = (await self._read_slip_panel(pg))[:600]
+                except Exception:
+                    entry["panel_text"] = ""
+                out.append(entry)
+            except Exception as e:
+                out.append({"index": i, "error": f"{type(e).__name__}: {e}"})
+        return {"ok": True, "pages": out}
+
     async def verify_bet_ui(self, selection_id: str, stake: float, max_odds: float,
                             submit: bool = False) -> BetResult:
         """Dress rehearsal for the UI path: drives every real step EXCEPT the Place click.
@@ -987,20 +1057,44 @@ class BetInAsiaAdapter(BookAdapter):
         if page is None or page.is_closed():
             return BetResult(accepted=False, stake=stake, reason="the betslip's tab disappeared")
 
+        # RELEASE THE SLIP ON EVERY NON-PLACING EXIT FROM HERE ON. Observed 2026-08-15: a form-fill
+        # failure returned without closing, and the event became PERMANENTLY unquotable —
+        #   "already subscribed on the betslip channel, nothing is cached, and the page shows no price
+        #    ... the subscription cannot be released until this socket cycles"
+        # because `unwatch_acca_hcaps` only goes out on close (see slip_close). So each failed attempt
+        # burned one event for the life of the socket. The success path leaves it alone: after a real
+        # order the slip is the venue's business, not ours.
+        async def _release() -> None:
+            try:
+                await self.slip_close()
+            except Exception:
+                pass
+
         # 2. Fill the form. Price first: changing it re-prices the slip, so a stake typed before would be
         #    re-validated against a different number.
+        #    TIMEOUTS COME OFF THE TOTAL BUDGET. `fill()` defaults to Playwright's 30s, which is not a
+        #    detail: measured 2026-08-15 a missing `.price-input` took the whole call to 101s — past the
+        #    70s self-imposed budget AND past the C# client's 90s HttpClient. That is the same shape as
+        #    the 5s-timeout bug of 08-12, where an outer deadline fires while the inner call is still
+        #    working. Bound every step by what is actually left.
+        def _left(floor: float = 2.0, cap: float = 15.0) -> float:
+            return max(floor, min(cap, t_budget - time.time()))
+
         try:
             await step(f"clicking the price field and typing {max_odds}")
-            await CURSOR.click(page, page.locator(self._PRICE_INPUT).first, timeout=5_000)
-            await page.locator(self._PRICE_INPUT).first.fill(str(max_odds))
+            await CURSOR.click(page, page.locator(self._PRICE_INPUT).first, timeout=_left() * 1000)
+            await page.locator(self._PRICE_INPUT).first.fill(str(max_odds), timeout=_left() * 1000)
             await _aio.sleep(random.uniform(0.15, 0.45))
             await step(f"clicking the stake field and typing {stake:.2f}")
-            await CURSOR.click(page, page.locator(self._STAKE_INPUT).first, timeout=5_000)
-            await page.locator(self._STAKE_INPUT).first.fill(f"{stake:.2f}")
+            await CURSOR.click(page, page.locator(self._STAKE_INPUT).first, timeout=_left() * 1000)
+            await page.locator(self._STAKE_INPUT).first.fill(f"{stake:.2f}", timeout=_left() * 1000)
             await _aio.sleep(random.uniform(0.25, 0.8))
         except Exception as e:
             if verbose:
-                print(f"[{tag}] STOPPED — could not fill the form: {type(e).__name__}: {e}", flush=True)
+                print(f"[{tag}] STOPPED — could not fill the form: {type(e).__name__}: {e}\n"
+                      f"[{tag}] the slip IS open; here is every input on the page:\n"
+                      + await self._dump_slip_inputs(page), flush=True)
+            await _release()
             return BetResult(accepted=False, stake=stake,
                              reason=f"could not fill the slip form ({type(e).__name__}: {e}) — "
                                     f"nothing was submitted")
@@ -1011,6 +1105,7 @@ class BetInAsiaAdapter(BookAdapter):
             if verbose:
                 print(f"[{tag}] STOPPED — no Place control matched. The selector is "
                       f"get_by_text('place').last; check what the slip actually renders.", flush=True)
+            await _release()
             return BetResult(accepted=False, stake=stake, reason="no Place control on the slip")
         if verbose:
             try:
@@ -1091,6 +1186,7 @@ class BetInAsiaAdapter(BookAdapter):
         if back is None:
             # Empty is normal on an OPEN slip when the prefill is off — but not here. We wrote to this
             # field moments ago, so nothing readable means the write did not take.
+            await _release()
             return BetResult(accepted=False, stake=stake,
                              reason=f"the price field is unreadable after {max_odds} was typed into it "
                                     f"— the write did not take. Refusing rather than committing to an "
@@ -1101,6 +1197,7 @@ class BetInAsiaAdapter(BookAdapter):
             print(f"[{tag}] ABORT — the price field reads {back}, not the {max_odds} we typed; drifted "
                   f"{way}. Either the write was rejected or the venue's best-price prefill is still on "
                   f"and moved it. Nothing placed.", flush=True)
+            await _release()
             return BetResult(accepted=False, stake=stake, actual_odds=offered,
                              reason=f"price field reads {back} after {max_odds} was entered — the write "
                                     f"was rejected, or the account's best-price prefill is on and "

@@ -304,6 +304,20 @@ async def debug_feed():
     return fn()
 
 
+@app.get("/debug/slip_dom")
+async def debug_slip_dom():
+    """Form controls on every open tab — for a HAND-DRIVEN betslip recon.
+
+    Open a betslip yourself in the sidecar's own browser window, type a price and stake, and call this at
+    each stage. It reports the inputs (class/type/placeholder/visibility/value), the Place-control
+    candidates and the panel text, so the selectors can be written from what the page renders instead of
+    from a guess. Reads only — nothing is clicked, and the reads run in Playwright's isolated world."""
+    fn = getattr(adapter, "slip_dom", None)
+    if not callable(fn):
+        raise HTTPException(404, f"book '{adapter.name}' cannot dump a betslip DOM")
+    return await fn()
+
+
 @app.get("/catalog")
 async def catalog():
     return {"selections": [c.to_api() for c in await adapter.catalog()]}

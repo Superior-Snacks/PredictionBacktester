@@ -59,6 +59,11 @@ def main() -> int:
     ap.add_argument("--stake", type=float, default=4.0)
     ap.add_argument("--probe", type=int, default=60, help="how many candidates to price-check")
     ap.add_argument("--json", action="store_true", help="print a /bet/test body for the top pick")
+    ap.add_argument("--run", action="store_true",
+                    help="POST the rehearsal itself and print the result (no shell quoting involved)")
+    ap.add_argument("--submit", action="store_true",
+                    help="with --run: PLACE THE BET FOR REAL. Requires --yes-real-money.")
+    ap.add_argument("--yes-real-money", action="store_true", help="second gate for --submit")
     a = ap.parse_args()
 
     base = f"http://127.0.0.1:{a.port}"
@@ -119,21 +124,66 @@ def main() -> int:
     # Prefer a pick whose stake clears the venue minimum, so the same target also works for submit=true.
     good = [r for r in rows if a.stake * r[3] >= MIN_RETURN] or rows
     mins, e, s, odds = good[0]
-    # Ask BELOW the board: max_odds is both the floor and the price typed into the slip, and the venue
-    # improves you to what is actually available (1.496 asked -> 1.526 filled, 2026-08-15). Asking under
-    # guarantees the order is marketable, so a slow fill means a slow BOOK and not a resting order.
-    ask = round(odds * 0.97, 3)
+    # HOW FAR UNDER THE BOARD TO ASK, and why it differs by mode.
+    # max_odds is both the FLOOR (below it _place_via_ui refuses) and the price typed into the slip. The
+    # venue improves you to what is actually available (1.496 asked -> 1.526 filled, 2026-08-15), so
+    # asking under costs nothing on the fill -- but the floor is checked against the SLIP price, and the
+    # slip runs materially below the board: 2026-08-15 tennis, board 2.669 vs slip 2.52, a 5.6% gap,
+    # because the board is the consolidated pool including books this account cannot use.
+    # A rehearsal exists to exercise the FORM, so its floor must clear that gap or it stops at step 2 and
+    # tests nothing. A real bet is the opposite: the floor is the only thing standing between a moved
+    # line and a bad fill, so it stays tight and a refusal is the correct outcome.
+    ask = round(odds * (0.97 if a.submit else 0.88), 3)
     body = {"selection_id": e["selection_id"], "stake": round(a.stake, 2),
             "max_odds": ask, "submit": False}
     print(f"\nPICK: {e['event']} -- {e['selection_name']}  (starts in {mins:.0f}m, board {odds})")
     print(f"      asking {ask} = 3% under the board, so the slip is marketable and the floor passes")
+
     if a.json:
         print(json.dumps(body))
-    else:
-        print("\nRehearse it (drives the real UI, stops before Place, places nothing):\n")
-        print(f"  Invoke-RestMethod -Method Post -Uri {base}/bet/test `\n"
-              f"    -ContentType application/json `\n"
-              f"    -Body '{json.dumps(body)}'")
+        return 0
+
+    if not a.run:
+        # ONE LINE, NO BACKTICKS. A backtick continuation with trailing whitespace after it is not a
+        # continuation -- PowerShell then waits at `>>` for input that never comes, so the request is
+        # never sent and the sidecar shows nothing at all. That failure is indistinguishable from a hang.
+        print("\nRehearse it (drives the real UI, stops before Place, places nothing).")
+        print("Paste as ONE line -- a backtick with a trailing space silently swallows the command:\n")
+        print(f"  Invoke-RestMethod -Method Post -Uri {base}/bet/test -ContentType application/json "
+              f"-Body '{json.dumps(body)}'")
+        print("\n  ...or skip the shell entirely:  python find_rehearsal_target.py "
+              f"{'--sport ' + a.sport + ' ' if a.sport else ''}--run")
+        return 0
+
+    if a.submit:
+        if not a.yes_real_money:
+            print("\n--submit needs --yes-real-money as well. This PLACES A BET; there is no preview\n"
+                  "lock on this path and the sidecar reports bet_enabled=true.")
+            return 2
+        body["submit"] = True
+        print(f"\n*** PLACING FOR REAL: {body['stake']} @ {body['max_odds']} ***")
+
+    print(f"\nPOSTing /bet/test ... (the UI drive takes tens of seconds; the sidecar console narrates it)")
+    req = urllib.request.Request(f"{base}/bet/test",
+                                 data=json.dumps(body).encode(),
+                                 headers={"Content-Type": "application/json"})
+    import time as _t
+    t0 = _t.time()
+    try:
+        # Longer than the sidecar's own 70s budget so the SIDECAR's deadline is the one that fires --
+        # a client timeout here would leave us not knowing whether a bet went on.
+        res = json.load(urllib.request.urlopen(req, timeout=150))
+    except Exception as ex:
+        print(f"\nrequest failed after {_t.time() - t0:.1f}s: {type(ex).__name__}: {ex}")
+        detail = getattr(ex, "read", None)
+        if detail:
+            try:
+                print(detail().decode()[:600])
+            except Exception:
+                pass
+        return 1
+    print(f"\nreturned in {_t.time() - t0:.1f}s")
+    print(json.dumps(res, indent=2))
     return 0
 
 
