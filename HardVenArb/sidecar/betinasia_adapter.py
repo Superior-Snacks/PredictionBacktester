@@ -658,9 +658,16 @@ class BetInAsiaAdapter(BookAdapter):
             # money is `1,234.56` (exactly two decimals), whereas board odds are `1.769` (three) and
             # scores are bare integers, so the format alone excludes almost everything on a board page.
             # Everything here is a locator operation, so none of it is visible to page script.
+            # The text node is the bare number — the currency symbol lives in a sibling — so the symbol is
+            # optional here. Confirmed against the live markup 2026-08-15:
+            #   <span class="_9fe45e">45.71</span>  at x=1184 y=13, inside a header of hashed classes.
             money = re.compile(r"^[$€£]?\s?\d[\d,]*\.\d{2}$")
             cand = page.get_by_text(money)
-            top_px = float(os.environ.get("BIA_BALANCE_HEADER_PX", "160"))
+            # 90px, not 160. Measured: the balance sits at y=13, while a second row of money-shaped values
+            # (open stakes / P&L, "1.75" and "0.00") sits at y=148 — inside the old band. The rightmost
+            # rule happened to exclude them, but relying on horizontal order to reject a value the band
+            # should never have admitted is one layout change away from reading the wrong number as cash.
+            top_px = float(os.environ.get("BIA_BALANCE_HEADER_PX", "90"))
             best_x, best_val = -1.0, None
             for i in range(min(await cand.count(), 25)):
                 try:
@@ -677,6 +684,14 @@ class BetInAsiaAdapter(BookAdapter):
                 if val == val and 0 <= val < 10_000_000 and box["x"] > best_x:
                     best_x, best_val = box["x"], val
             if best_val is not None:
+                # Say WHICH number was picked and from where, once. A balance guard reading a silently
+                # wrong figure — an open-stakes total, a P&L — would halt or over-size on it, and the
+                # value alone gives an operator no way to tell it came from the right element.
+                if not getattr(self, "_bal_dom_logged", False):
+                    self._bal_dom_logged = True
+                    print(f"[BIA] balance read from the header: {best_val:.2f} (x={best_x:.0f}, "
+                          f"top {top_px:.0f}px band, rightmost). Cross-check it against the account "
+                          f"page once — nothing else validates this number.", flush=True)
                 return best_val
 
             for label in self._BAL_LABELS:
