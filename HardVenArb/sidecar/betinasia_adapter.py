@@ -2271,8 +2271,16 @@ class BetInAsiaAdapter(BookAdapter):
             # the element's live position, which matters on a board that reorders as odds tick — but the
             # cursor now travels there along a curved, decelerating path instead of appearing on the cell.
             # A page that records mousemove sees a reach, not a teleport. See human_mouse.py.
-            if not await CURSOR.click(page, cell, timeout=5_000):
-                return {"ok": False, "error": "the price cell could not be clicked"}
+            # CLICK MODE — the slip's survival depends on it. `playwright` (default) is what has always
+            # run; `cdp_raw` fills in force/pointerType/buttons, which Playwright's mouse API does not
+            # expose, and is the cheap candidate fix for the venue dismissing bot-clicked slips (see
+            # human_mouse.raw_cdp_click). A/B them with slip_hold.py before changing the default.
+            mode = os.environ.get("BIA_CLICK_MODE", "playwright").strip().lower()
+            clicker = CURSOR.raw_cdp_click if mode == "cdp_raw" else CURSOR.click
+            if not await clicker(page, cell, timeout=5_000):
+                return {"ok": False, "error": f"the price cell could not be clicked (mode={mode})"}
+            if mode != "playwright":
+                print(f"[BIA SLIP] clicked via {mode}", flush=True)
             self._slip_clicked = True      # past this point the venue has seen a UI action
             # Remember WHERE the slip is so it can be closed later (see slip_close). Without this the
             # bot opens betslips and never closes one — measured 2026-08-14 as the clearest difference

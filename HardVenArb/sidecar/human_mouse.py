@@ -85,8 +85,11 @@ class HumanCursor:
         # Weak keys: parked sport tabs and the rover come and go, and a closed page must not be pinned.
         try:
             self._pos: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
+            # CDP sessions are expensive to open and are per-page; same weak-key discipline.
+            self._cdp: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
         except TypeError:                                  # pragma: no cover - defensive
             self._pos = {}                                 # type: ignore[assignment]
+            self._cdp = {}                                 # type: ignore[assignment]
 
     def _get(self, page, tx: float, ty: float) -> tuple[float, float]:
         """Last known position for this page, or a plausible starting point near the target.
@@ -169,6 +172,63 @@ class HumanCursor:
             done += step
             await asyncio.sleep(random.uniform(0.04, 0.22))
         return done * sign
+
+    async def raw_cdp_click(self, page, loc, timeout: int = 5000) -> bool:
+        """Click via a RAW CDP dispatch that fills in the fields Playwright leaves at their defaults.
+
+        WHY THIS EXISTS. Proved on BetInAsia 2026-08-15: a betslip opened by `locator.click()` is
+        dismissed by the venue within ~1-3s, while one opened by a Windows `SendInput` click survives
+        indefinitely. Focus, navigation, our own polling, organic and the sport walk were each eliminated
+        first, so the difference is the click's ORIGIN.
+
+        Both routes are `isTrusted`. What differs is the detail CDP leaves blank, because Playwright's
+        `mouse` API exposes none of it:
+          - `force`       real mousedown carries pressure ~0.5; CDP defaults to 0
+          - `pointerType` should be "mouse"
+          - `buttons`     the button BITMASK during the press (1 = left), distinct from `button`
+        Chrome derives screenX/screenY itself, so this cannot fix those — which is exactly why this is a
+        TEST rather than a solution. If it works, the OS-mouse route and everything it costs (foreground
+        window, fixed coordinates, a machine that can do nothing else) is unnecessary.
+
+        Coordinates are resolved from the element immediately before dispatch, so this keeps the property
+        that matters on a reordering board: never click stale coordinates.
+        """
+        try:
+            await loc.scroll_into_view_if_needed(timeout=timeout)
+            box = await loc.bounding_box()
+        except Exception:
+            return False
+        if not box:
+            return False
+        x = box["x"] + box["width"] * random.uniform(0.35, 0.65)
+        y = box["y"] + box["height"] * random.uniform(0.35, 0.65)
+        try:
+            cdp = self._cdp.get(page)
+        except TypeError:
+            cdp = None
+        if cdp is None:
+            try:
+                cdp = await page.context.new_cdp_session(page)
+                self._cdp[page] = cdp
+            except Exception:
+                return False
+        common = {"x": x, "y": y, "pointerType": "mouse", "force": 0.5}
+        try:
+            # A move first: a press with no preceding motion at that point is its own tell.
+            await cdp.send("Input.dispatchMouseEvent",
+                           {"type": "mouseMoved", "button": "none", "buttons": 0, **common})
+            await asyncio.sleep(random.uniform(0.04, 0.12))
+            await cdp.send("Input.dispatchMouseEvent",
+                           {"type": "mousePressed", "button": "left", "buttons": 1,
+                            "clickCount": 1, **common})
+            await asyncio.sleep(random.uniform(0.03, 0.09))
+            await cdp.send("Input.dispatchMouseEvent",
+                           {"type": "mouseReleased", "button": "left", "buttons": 0,
+                            "clickCount": 1, **common})
+        except Exception:
+            return False
+        self._set(page, x, y)
+        return True
 
     async def click(self, page, loc, timeout: int = 5000) -> bool:
         """Approach the element, then click it for real. False if the click failed.
