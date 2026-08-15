@@ -109,6 +109,9 @@ def main() -> int:
                          "via CDP. Answers whether only the OPENING click needs hardware input.")
     ap.add_argument("--fill-price", type=float, default=1.5)
     ap.add_argument("--fill-stake", type=float, default=4.0)
+    ap.add_argument("--fill-method", choices=("keyboard", "click"), default="keyboard",
+                    help="keyboard = type into the already-focused stake field, no clicks at all "
+                         "(different CDP domain from the mouse). click = the current placement path.")
     a = ap.parse_args()
     base = f"http://127.0.0.1:{a.port}"
 
@@ -157,10 +160,14 @@ def main() -> int:
     print(f"betslip OPEN {time.time() - t0:.1f}s after the click.")
 
     if a.then_fill:
-        print(f"\nnow having the BOT type {a.fill_price} / {a.fill_stake:.2f} into it via CDP...")
+        print(f"\nnow having the BOT enter {a.fill_stake:.2f} via {a.fill_method} (no Enter pressed)...")
         try:
-            r = _post(f"{base}/debug/fill_open_slip?price={a.fill_price}&stake={a.fill_stake}")
-            print(f"  {json.dumps(r)}")
+            r = _post(f"{base}/debug/fill_open_slip?price={a.fill_price}"
+                      f"&stake={a.fill_stake}&method={a.fill_method}")
+            print(f"  focus before : {r.get('focus_before')}")
+            print(f"  focus after  : {r.get('focus_after')}")
+            print(f"  price readback: {r.get('price_readback')!r}   "
+                  f"stake readback: {r.get('stake_readback')!r}")
             if r.get("slip_still_open"):
                 print("  => the slip SURVIVED bot typing. Only the OPENING click needs hardware input;")
                 print("     the rest of the placement path can stay on CDP.")

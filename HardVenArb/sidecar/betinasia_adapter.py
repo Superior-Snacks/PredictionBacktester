@@ -1044,7 +1044,27 @@ class BetInAsiaAdapter(BookAdapter):
         except Exception as e:
             return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
-    async def fill_open_slip(self, price: float, stake: float) -> dict:
+    async def _active_element(self, page) -> str:
+        """What has keyboard focus right now, read from an ISOLATED world so the page cannot see the read.
+
+        Matters because the operator observed the stake field is auto-focused when a slip opens. If true,
+        the form needs no clicks at all: type the digits and they land. That would reduce the hardware-
+        input surface to the single click that OPENS the slip.
+        """
+        try:
+            import os_mouse
+            cdp = CURSOR._cdp.get(page)
+            if cdp is None:
+                cdp = await page.context.new_cdp_session(page)
+                CURSOR._cdp[page] = cdp
+            return await os_mouse._isolated_eval(
+                cdp, page,
+                "(() => { const a = document.activeElement; return a ? "
+                "(a.tagName + ' class=' + (a.className||'') + ' value=' + (a.value||'')) : 'none'; })()")
+        except Exception as e:
+            return f"(unreadable: {type(e).__name__})"
+
+    async def fill_open_slip(self, price: float, stake: float, method: str = "click") -> dict:
         """Type into a betslip that is ALREADY open. Opens nothing, clicks no Place, places no bet.
 
         THE QUESTION: how much of the interaction actually has to be real input? A CDP-opened slip is
@@ -1067,14 +1087,25 @@ class BetInAsiaAdapter(BookAdapter):
                 return {"ok": False, "error": "no betslip is open — open one first (real_click.py)"}
         except Exception as e:
             return {"ok": False, "error": f"{type(e).__name__}: {e}"}
-        out: dict = {"ok": True}
+        out: dict = {"ok": True, "method": method}
+        out["focus_before"] = await self._active_element(page)
         try:
-            await CURSOR.click(page, page.locator(self._PRICE_INPUT).first, timeout=5_000)
-            await page.locator(self._PRICE_INPUT).first.fill(str(price), timeout=5_000)
-            await CURSOR.click(page, page.locator(self._STAKE_INPUT).first, timeout=5_000)
-            await page.locator(self._STAKE_INPUT).first.fill(f"{stake:.2f}", timeout=5_000)
+            if method == "keyboard":
+                # NO CLICKS AT ALL. The operator observed the stake field is already focused when the
+                # slip opens, so typing is the whole interaction — and keyboard events go through a
+                # different CDP domain (Input.dispatchKeyEvent) than the mouse events the venue reacts
+                # to. `type()` emits real per-character keydown/keypress/input/keyup with delays, not a
+                # value assignment, so the app's own handlers run exactly as they would for a person.
+                # Deliberately NO Enter: that would submit.
+                await page.keyboard.type(f"{stake:.2f}", delay=random.uniform(55, 130))
+            else:
+                await CURSOR.click(page, page.locator(self._PRICE_INPUT).first, timeout=5_000)
+                await page.locator(self._PRICE_INPUT).first.fill(str(price), timeout=5_000)
+                await CURSOR.click(page, page.locator(self._STAKE_INPUT).first, timeout=5_000)
+                await page.locator(self._STAKE_INPUT).first.fill(f"{stake:.2f}", timeout=5_000)
         except Exception as e:
             out.update({"ok": False, "error": f"{type(e).__name__}: {e}"})
+        out["focus_after"] = await self._active_element(page)
         # Read both back: a fill that is silently rejected leaves the field unchanged, and that is a
         # different failure from the slip being dismissed.
         for name, sel in (("price", self._PRICE_INPUT), ("stake", self._STAKE_INPUT)):

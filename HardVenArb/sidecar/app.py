@@ -352,7 +352,7 @@ async def debug_feed():
 
 
 @app.post("/debug/fill_open_slip")
-async def debug_fill_open_slip(price: float, stake: float):
+async def debug_fill_open_slip(price: float, stake: float, method: str = "click"):
     """Type into an ALREADY-OPEN betslip via CDP. Opens nothing, submits nothing.
 
     Pair with `real_click.py`: open the slip with a real OS click, then call this. If the slip survives
@@ -361,7 +361,7 @@ async def debug_fill_open_slip(price: float, stake: float):
     fn = getattr(adapter, "fill_open_slip", None)
     if not callable(fn):
         raise HTTPException(404, f"book '{adapter.name}' cannot fill an open slip")
-    return await fn(price, stake)
+    return await fn(price, stake, method=method)
 
 
 @app.get("/debug/input_probe")
