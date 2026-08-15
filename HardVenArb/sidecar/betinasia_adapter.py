@@ -1064,6 +1064,62 @@ class BetInAsiaAdapter(BookAdapter):
         except Exception as e:
             return f"(unreadable: {type(e).__name__})"
 
+    async def park_mouse_on_slip(self) -> dict:
+        """Move the PHYSICAL cursor onto the open betslip. Moves only — presses nothing.
+
+        THE HYPOTHESIS THIS TESTS. The input probe proved BetInAsia inspects nothing about a click:
+        every property read came from React's SyntheticEvent constructor (uniform counts across a fixed
+        interface list) plus two reads by Google Analytics. So the slip is not dying because the click
+        looked synthetic.
+
+        What differs between the one test that WORKED and every test that failed is not the click's
+        origin but where the REAL pointer ended up. `real_click.py` never scrolls -- it clicks whatever
+        the operator is already hovering, so the physical cursor stays on the element. `CURSOR.click`
+        calls scroll_into_view_if_needed first, which slides the row out from under the physical pointer.
+        And CSS `:hover` tracks the physical cursor with no JavaScript and no events at all, which is why
+        a motionless mouse still kept the slip alive.
+
+        If parking the real cursor on the panel keeps a CDP-clicked slip open, the fix is an OS mouse
+        MOVE -- no synthetic-input problem, no OS clicking, and the whole os_hybrid apparatus becomes
+        unnecessary.
+        """
+        try:
+            import os_mouse
+        except Exception as e:
+            return {"ok": False, "error": f"os_mouse unavailable: {type(e).__name__}: {e}"}
+        if not os_mouse.available():
+            return {"ok": False, "error": "SendInput is Windows-only"}
+        page = getattr(self, "_slip_page", None)
+        if page is None or page.is_closed():
+            ctx = getattr(self.observer, "_ctx", None)
+            pages = [p for p in (list(ctx.pages) if ctx else []) if not p.is_closed()]
+            page = pages[0] if pages else None
+        if page is None:
+            return {"ok": False, "error": "no page"}
+        try:
+            box = await page.locator(self._PRICE_INPUT).first.bounding_box()
+        except Exception as e:
+            return {"ok": False, "error": f"no betslip on screen: {type(e).__name__}"}
+        if not box:
+            return {"ok": False, "error": "no betslip on screen to park on"}
+        try:
+            cdp = CURSOR._cdp.get(page)
+            if cdp is None:
+                cdp = await page.context.new_cdp_session(page)
+                CURSOR._cdp[page] = cdp
+            cal = await os_mouse.calibrate(cdp, page)
+            if cal is None:
+                return {"ok": False, "error": "could not translate client -> screen coordinates"}
+            ox, oy, dpr = cal
+            cx = box["x"] + box["width"] / 2.0
+            cy = box["y"] + box["height"] / 2.0
+            moved = await os_mouse.human_move_to(ox + cx * dpr, oy + cy * dpr)
+            return {"ok": bool(moved), "client": [round(cx), round(cy)],
+                    "screen": [round(ox + cx * dpr), round(oy + cy * dpr)],
+                    "cursor_now": list(os_mouse.cursor_pos()), "dpr": dpr}
+        except Exception as e:
+            return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
     async def fill_open_slip(self, price: float, stake: float, method: str = "click") -> dict:
         """Type into a betslip that is ALREADY open. Opens nothing, clicks no Place, places no bet.
 

@@ -351,6 +351,19 @@ async def debug_feed():
     return fn()
 
 
+@app.post("/debug/park_mouse")
+async def debug_park_mouse():
+    """Move the PHYSICAL cursor onto the open betslip. Moves only — clicks nothing.
+
+    Tests whether the slip's survival depends on where the real pointer sits (CSS `:hover` follows it
+    with no JS and no events) rather than on how the click was generated. If it does, the fix is an OS
+    mouse MOVE and the whole synthetic-click question is moot."""
+    fn = getattr(adapter, "park_mouse_on_slip", None)
+    if not callable(fn):
+        raise HTTPException(404, f"book '{adapter.name}' cannot park the mouse")
+    return await fn()
+
+
 @app.post("/debug/fill_open_slip")
 async def debug_fill_open_slip(price: float, stake: float, method: str = "click"):
     """Type into an ALREADY-OPEN betslip via CDP. Opens nothing, submits nothing.

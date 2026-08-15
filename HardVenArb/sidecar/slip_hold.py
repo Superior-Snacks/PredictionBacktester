@@ -72,6 +72,9 @@ def main() -> int:
     ap.add_argument("--sport", default="tennis")
     ap.add_argument("--selection-id", default=None)
     ap.add_argument("--seconds", type=float, default=120.0)
+    ap.add_argument("--park-mouse", action="store_true",
+                    help="after the CDP click, move the PHYSICAL cursor onto the slip (a move, not a "
+                         "click). Tests whether CSS :hover on the real pointer is what keeps it alive.")
     ap.add_argument("--quiet-secs", type=float, default=0.0,
                     help="LOOK AT NOTHING for this long after the quote, then check once. Distinguishes "
                          "'the venue closed it' from 'our own polling closed it' — /debug/slip_dom does "
@@ -131,7 +134,18 @@ def main() -> int:
         print(f"slip_quote refused: {q.get('error')}")
         return 1
     print(f"quoted {q.get('decimal_odds')} in {time.time() - t0:.1f}s "
-          f"(clicked={q.get('clicked')})\n")
+          f"(clicked={q.get('clicked')})")
+
+    if a.park_mouse:
+        # Move the REAL cursor onto the panel. CSS :hover follows the physical pointer with no events
+        # at all, which is the leading explanation left after the input probe cleared the venue of
+        # inspecting clicks.
+        try:
+            r = _post(f"{base}/debug/park_mouse", timeout=30)
+            print(f"parked physical cursor: {json.dumps(r)}")
+        except Exception as e:
+            print(f"park failed: {type(e).__name__}: {e}")
+    print()
 
     if a.quiet_secs > 0:
         print(f"NOT LOOKING for {a.quiet_secs:.0f}s (no slip_dom calls at all)...")
