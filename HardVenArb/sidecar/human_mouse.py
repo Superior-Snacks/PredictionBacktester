@@ -318,7 +318,17 @@ class HumanCursor:
             tx = box["x"] + box["width"] * random.uniform(0.35, 0.65)
             ty = box["y"] + box["height"] * random.uniform(0.35, 0.65)
             await self.move(page, tx, ty)
-            await asyncio.sleep(random.uniform(0.04, 0.12))
+            # SAME DWELL AS THE OS PATH (see os_mouse._dwell_sec). 40-120ms was "people do not click the
+            # instant they arrive", which is true but far too short: every betslip that survived on
+            # 2026-08-15 had SECONDS of hover before the press, and every one that died had ~100ms. If
+            # the venue's popover needs its hover state settled, this is the whole difference — and
+            # leaving the CDP path fast while slowing the OS path would confound every comparison
+            # between them.
+            try:
+                import os_mouse as _osm
+                await asyncio.sleep(_osm._dwell_sec())
+            except Exception:
+                await asyncio.sleep(random.uniform(1.0, 2.0))
         try:
             await loc.click(timeout=timeout, delay=random.randint(30, 90))
         except Exception:

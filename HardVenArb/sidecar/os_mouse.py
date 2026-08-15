@@ -121,6 +121,20 @@ async def human_move_to(sx: float, sy: float, steps: int = 0) -> bool:
     return True
 
 
+def _dwell_sec() -> float:
+    """How long to rest on the element before pressing. Jittered, and generous by default.
+
+    BIA_CLICK_DWELL_MS sets the centre (default 1500). Costs ~1.5s per click, which the placement path
+    can afford: the slip is only fragile AFTER it opens, and this happens before.
+    """
+    import os as _os
+    try:
+        centre = float(_os.environ.get("BIA_CLICK_DWELL_MS", "1500")) / 1000.0
+    except ValueError:
+        centre = 1.5
+    return max(0.0, centre * random.uniform(0.7, 1.35))
+
+
 def click_here(press_ms: Optional[int] = None) -> bool:
     """Press and release at the current position."""
     if not _send(MOUSEEVENTF_LEFTDOWN):
@@ -300,7 +314,16 @@ async def click_element(cdp, page, loc, timeout: int = 5000) -> bool:
         cy = box["y"] + box["height"] * random.uniform(0.35, 0.65)
         if not await human_move_to(ox + cx * kx, oy + cy * ky):
             return False
-        await asyncio.sleep(random.uniform(0.05, 0.14))  # people do not click the instant they arrive
+        # DWELL BEFORE PRESSING — and this is not politeness, it is the leading explanation for why
+        # bot-opened betslips die. Three results, 2026-08-15:
+        #   you hovered (seconds) + SendInput press   -> slip LIVED
+        #   bot travel + SendInput press after ~100ms -> slip DIED
+        #   bot travel + your finger (seconds later)  -> slip LIVED
+        # The press method appears on both sides, so it is not the variable. The dwell is: every case
+        # that lived had seconds on the element first. A hover-driven popover that needs its hover state
+        # settled before a click counts as intentional behaves exactly like this — and leaves 'Show more'
+        # unaffected, which is what we observe.
+        await asyncio.sleep(_dwell_sec())
         try:
             now = await loc.bounding_box()
         except Exception:
