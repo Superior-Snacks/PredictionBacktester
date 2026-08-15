@@ -72,6 +72,9 @@ def main() -> int:
     ap.add_argument("--sport", default="tennis")
     ap.add_argument("--selection-id", default=None)
     ap.add_argument("--seconds", type=float, default=120.0)
+    ap.add_argument("--delay", type=float, default=3.0,
+                    help="seconds to wait before touching anything, so you can click into the browser "
+                         "window and take your hand off the mouse. Set 0 to start immediately.")
     ap.add_argument("--park-mouse", action="store_true",
                     help="after the CDP click, move the PHYSICAL cursor onto the slip (a move, not a "
                          "click). Tests whether CSS :hover on the real pointer is what keeps it alive.")
@@ -122,6 +125,17 @@ def main() -> int:
         sid = best[1]["selection_id"]
         print(f"target: {best[1]['event']} -- {best[1]['selection_name']} (starts in {best[0]:.0f}m)")
     print(f"        {sid}\n")
+
+    # HANDS OFF BEFORE THE BOT MOVES. With BIA_CLICK_MODE=os_hybrid the bot drives the PHYSICAL cursor,
+    # so anything you do with the mouse in that window fights it — and the browser wants foreground focus
+    # for the click to land on the element rather than merely activating the window.
+    if a.delay > 0:
+        print(f"\nClick into the BROWSER window now, then let go of the mouse. Starting in "
+              f"{a.delay:.0f}s...")
+        for r in range(int(a.delay), 0, -1):
+            print(f"  {r}...   ", end="\r", flush=True)
+            time.sleep(1)
+        print("  go.      ")
 
     print("opening the betslip (one click, then nothing)...")
     t0 = time.time()

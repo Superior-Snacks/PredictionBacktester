@@ -205,25 +205,47 @@ async def calibrate(cdp, page) -> Optional[tuple[float, float, float]]:
 async def click_element(cdp, page, loc, timeout: int = 5000) -> bool:
     """Scroll the element into view with CDP, then click it with the REAL mouse.
 
-    The box is read AFTER the scroll and immediately before the move, so the coordinates are as live as
-    a CDP click's would be.
+    ⚠ COORDINATE CLICKING GIVES UP THE ONE GUARANTEE `locator.click()` PROVIDES: it re-resolves the
+    element at click time, so it cannot land on whatever slid into a remembered position. This board
+    reorders as odds tick, and on 2026-08-15 the first version of this function clicked a DIFFERENT MATCH
+    ENTIRELY — asked for 2026-08-16,101774,99176 and navigated to 2026-08-15,58962,80512 — because
+    `calibrate()` ran BETWEEN reading the box and moving to it, spending ~200ms during which the row moved.
+    On a live account that is a bet on the wrong market.
+
+    So the order is now: calibrate FIRST (it moves the cursor and takes time), then read the box, then
+    move, then RE-READ the box and confirm the aim point is still inside the element before pressing. The
+    re-read is what restores the guarantee — if the row shifted under us, nothing is clicked.
     """
     if not _WIN:
         return False
-    try:
-        await loc.scroll_into_view_if_needed(timeout=timeout)
-        box = await loc.bounding_box()
-    except Exception:
-        return False
-    if not box:
-        return False
+    # FIRST, because it moves the physical cursor and costs time. Cached per window position, so this is
+    # free on every click after the first.
     cal = await calibrate(cdp, page)
     if cal is None:
         return False
     ox, oy, dpr = cal
-    cx = box["x"] + box["width"] * random.uniform(0.35, 0.65)
-    cy = box["y"] + box["height"] * random.uniform(0.35, 0.65)
-    if not await human_move_to(ox + cx * dpr, oy + cy * dpr):
-        return False
-    await asyncio.sleep(random.uniform(0.05, 0.14))     # people do not click the instant they arrive
-    return click_here()
+    for attempt in (1, 2):
+        try:
+            await loc.scroll_into_view_if_needed(timeout=timeout)
+            box = await loc.bounding_box()
+        except Exception:
+            return False
+        if not box:
+            return False
+        cx = box["x"] + box["width"] * random.uniform(0.35, 0.65)
+        cy = box["y"] + box["height"] * random.uniform(0.35, 0.65)
+        if not await human_move_to(ox + cx * dpr, oy + cy * dpr):
+            return False
+        await asyncio.sleep(random.uniform(0.05, 0.14))  # people do not click the instant they arrive
+        try:
+            now = await loc.bounding_box()
+        except Exception:
+            now = None
+        if now and (now["x"] <= cx <= now["x"] + now["width"]
+                    and now["y"] <= cy <= now["y"] + now["height"]):
+            return click_here()
+        # The element moved while the cursor travelled. Re-aim once; if it moves again, refuse — a board
+        # reordering that fast is not one to fire a coordinate click into.
+        print(f"[os_mouse] target moved under the cursor (attempt {attempt}) — re-aiming rather than "
+              f"clicking whatever is there now", flush=True)
+    return False

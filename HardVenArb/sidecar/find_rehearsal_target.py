@@ -64,6 +64,9 @@ def main() -> int:
     ap.add_argument("--submit", action="store_true",
                     help="with --run: PLACE THE BET FOR REAL. Requires --yes-real-money.")
     ap.add_argument("--yes-real-money", action="store_true", help="second gate for --submit")
+    ap.add_argument("--delay", type=float, default=3.0,
+                    help="seconds before the run starts, so you can focus the browser window and let go "
+                         "of the mouse (BIA_CLICK_MODE=os_hybrid drives the PHYSICAL cursor). 0 to skip.")
     a = ap.parse_args()
 
     base = f"http://127.0.0.1:{a.port}"
@@ -172,11 +175,19 @@ def main() -> int:
         body["submit"] = True
         print(f"\n*** PLACING FOR REAL: {body['stake']} @ {body['max_odds']} ***")
 
+    import time as _t
+    if a.delay > 0:
+        print(f"\nClick into the BROWSER window now, then let go of the mouse. Starting in "
+              f"{a.delay:.0f}s...")
+        for r in range(int(a.delay), 0, -1):
+            print(f"  {r}...   ", end="\r", flush=True)
+            _t.sleep(1)
+        print("  go.      ")
+
     print(f"\nPOSTing /bet/test ... (the UI drive takes tens of seconds; the sidecar console narrates it)")
     req = urllib.request.Request(f"{base}/bet/test",
                                  data=json.dumps(body).encode(),
                                  headers={"Content-Type": "application/json"})
-    import time as _t
     t0 = _t.time()
     try:
         # Longer than the sidecar's own 70s budget so the SIDECAR's deadline is the one that fires --

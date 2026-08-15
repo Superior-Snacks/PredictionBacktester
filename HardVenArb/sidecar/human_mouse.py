@@ -267,8 +267,14 @@ class HumanCursor:
                 except Exception:
                     pass
                 return True
-        except Exception:
-            pass
+            # REFUSED, not failed: click_element declines when the target moved under the cursor. Falling
+            # back to a CDP click here would quietly undo the reason os_hybrid was selected, so say so.
+            print("[os_mouse] hardware click DECLINED — falling back to a CDP click, which is the mode "
+                  "os_hybrid exists to avoid. If this repeats, the board is reordering faster than the "
+                  "cursor can travel.", flush=True)
+        except Exception as e:
+            print(f"[os_mouse] hardware click FAILED ({type(e).__name__}: {e}) — falling back to CDP",
+                  flush=True)
         return await self.click(page, loc, timeout=timeout)
 
     async def click(self, page, loc, timeout: int = 5000) -> bool:
