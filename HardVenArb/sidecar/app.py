@@ -385,6 +385,15 @@ async def debug_visibility():
                 pages.append((f"reader:{lid}", pg))
         except Exception:
             pass
+    # BetInAsia has neither `_browser` nor `_tab_manager` — its pages live on the observer's context, so
+    # this endpoint reported an empty list for the whole BIA build. That silence was not harmless: focus
+    # is a leading candidate for why a bot-clicked betslip dies while a hand-clicked one lives, and the
+    # one instrument that could answer it was returning nothing.
+    if not pages:
+        ctx = getattr(getattr(adapter, "observer", None), "_ctx", None)
+        if ctx is not None:
+            for i, pg in enumerate(list(ctx.pages)):
+                pages.append((f"tab{i}", pg))
     for name, pg in pages:
         try:
             if pg.is_closed():
