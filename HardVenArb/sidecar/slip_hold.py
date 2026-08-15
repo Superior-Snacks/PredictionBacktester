@@ -71,6 +71,12 @@ def main() -> int:
     ap.add_argument("--port", type=int, default=8788)
     ap.add_argument("--sport", default="tennis")
     ap.add_argument("--selection-id", default=None)
+    ap.add_argument("--watch-only", action="store_true",
+                    help="THE MISSING CONTROL: the bot clicks nothing. YOU click a moneyline by hand and "
+                         "then touch nothing; this times how long it lives. Never run — every 'a hand "
+                         "click survives' data point so far involved either SendInput or you typing in "
+                         "the slip afterwards. If an untouched hand-clicked slip also dies in ~1-3s, "
+                         "there is no bot/human difference and there never was.")
     ap.add_argument("--nth", type=int, default=0,
                     help="pick the Nth candidate instead of the soonest. A slip that dies on its own "
                          "leaves its acca subscription held (slip_close only unwatches when a slip is "
@@ -104,6 +110,49 @@ def main() -> int:
               f"sport_walk_delay={sw.get('sport_walk_delay')}")
     except Exception:
         pass
+
+    if a.watch_only:
+        # No catalog lookup, no click, no aim — the bot's only job is to hold a stopwatch.
+        if slip_alive_now := slip_present(base)[0]:
+            print("A betslip is already open — close it first so the timing starts from your click.")
+            return 1
+        print("=" * 74)
+        print("CLICK A MONEYLINE BY HAND now, then TAKE YOUR HAND OFF THE MOUSE and touch nothing.")
+        print("The bot will click nothing. It only watches.")
+        print("=" * 74)
+        t_wait = time.time()
+        while time.time() - t_wait < 120:
+            if slip_present(base)[0]:
+                break
+            time.sleep(0.4)
+        else:
+            print("no betslip appeared in 120s")
+            return 1
+        t_open = time.time()
+        print(f"\nslip detected. watching, hands off...\n")
+        died = None
+        while time.time() - t_open < a.seconds:
+            if not slip_present(base)[0]:
+                died = time.time() - t_open
+                break
+            print(".", end="", flush=True)
+            time.sleep(1.0)
+        print("\n")
+        if died is None:
+            print(f"HAND-CLICKED SLIP SURVIVED {a.seconds:.0f}s UNTOUCHED.")
+            print("=> There IS a real difference between a hand click and every bot click, and it")
+            print("   survives all the eliminations. Worth chasing further.")
+        else:
+            print(f"HAND-CLICKED SLIP DIED at t+{died:.1f}s — untouched, clicked by you.")
+            print("=> THERE IS NO BOT/HUMAN DIFFERENCE. The slip is simply short-lived for everyone,")
+            print("   and both 'it survived' results (real_click.py, hand_click.py — each n=1) were")
+            print("   noise. Nothing needs explaining; the placement path just has to interact with")
+            print("   the slip immediately rather than admire it.")
+        try:
+            _post(f"{base}/slip_close", timeout=20)
+        except Exception:
+            pass
+        return 0
 
     sid = a.selection_id
     if not sid:
