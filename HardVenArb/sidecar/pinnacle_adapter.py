@@ -2904,6 +2904,65 @@ class PinnacleAdapter(BookAdapter):
             self._tab_manager.hold(False)
         return {"ok": True, "running": False}
 
+    async def camp_inspect(self) -> dict:
+        """Dump the ARMED Quick Bet exactly as it stands. Reads only; presses nothing.
+
+        camp_fire has to press a popover that has been sitting for minutes, and `_place_via_ui` has only
+        ever pressed one it typed into a second earlier. Four things about the idle state decide how fire
+        must be written, and none of them are guessable:
+          * is the Place control still ENABLED, or does an idle slip need re-confirming?
+          * did the stake survive?
+          * WHERE is the live price in this panel — fire must re-read it immediately before committing,
+            and `_try_select_on` only ever read it at selection time.
+          * what does the panel do when the price moves under an armed slip — re-price silently, disable
+            Place, or show a changed-odds state?
+        Run it right after arming and again a few minutes later; the diff answers all four.
+        """
+        page = self._primary_page()
+        if page is None or page.is_closed():
+            return {"ok": False, "error": "no primary page"}
+        out: dict = {"ok": True, "camping": bool(getattr(self, "_camping", False)),
+                     "url": (page.url or "")[:100]}
+        try:
+            portal = page.locator("#quick-bet-portal")
+            if not await portal.count():
+                return {**out, "ok": False, "error": "no Quick Bet on the page"}
+            try:
+                out["text"] = (await portal.first.inner_text()).replace("\n", " | ")[:600]
+            except Exception:
+                out["text"] = ""
+            inputs = []
+            il = portal.locator("input, textarea")
+            for i in range(min(await il.count(), 10)):
+                el = il.nth(i)
+                try:
+                    inputs.append({
+                        "class": (await el.get_attribute("class") or "")[:44],
+                        "name": await el.get_attribute("name"),
+                        "type": await el.get_attribute("type"),
+                        "value": await el.input_value(),
+                        "disabled": await el.is_disabled(),
+                        "visible": await el.is_visible()})
+                except Exception:
+                    continue
+            out["inputs"] = inputs
+            buttons = []
+            bl = portal.locator("button")
+            for i in range(min(await bl.count(), 12)):
+                el = bl.nth(i)
+                try:
+                    buttons.append({
+                        "text": ((await el.inner_text()) or "").replace("\n", " ")[:44],
+                        "disabled": await el.is_disabled(),
+                        "visible": await el.is_visible(),
+                        "class": (await el.get_attribute("class") or "")[:36]})
+                except Exception:
+                    continue
+            out["buttons"] = buttons
+        except Exception as e:
+            out.update({"ok": False, "error": f"{type(e).__name__}: {e}"})
+        return out
+
     # ── IN-PLAY CAMPING ───────────────────────────────────────────────────────
     async def camp_start(self, selection_id: str, stake: float) -> dict:
         """Park on a live game with the Quick Bet OPEN and the stake entered, then hold.

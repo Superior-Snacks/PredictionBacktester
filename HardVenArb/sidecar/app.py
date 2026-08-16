@@ -427,6 +427,19 @@ async def camp_start(req: CampRequest):
     return await fn(req.selection_id, req.stake)
 
 
+@app.get("/camp/inspect")
+async def camp_inspect():
+    """Dump the armed Quick Bet — inputs, buttons, enabled states, panel text. Reads only.
+
+    Run right after arming and again a few minutes later: the diff says whether an idle slip stays
+    pressable, whether the stake survives, where the live price sits, and what happens when the price
+    moves. camp_fire cannot be written safely without those answers."""
+    fn = getattr(adapter, "camp_inspect", None)
+    if not callable(fn):
+        raise HTTPException(404, f"book '{adapter.name}' cannot inspect a camp")
+    return await fn()
+
+
 @app.get("/camp/status")
 async def camp_status():
     fn = getattr(adapter, "camp_status", None)
