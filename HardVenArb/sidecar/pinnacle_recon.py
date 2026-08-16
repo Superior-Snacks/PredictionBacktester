@@ -69,6 +69,17 @@ TELEMETRY = re.compile(
 
 ODDS_HINT = re.compile(r'"(price|odds|handicap|moneyline|matchup|market|line|status)"', re.I)
 
+# BET LIFECYCLE. Today a fill is detected by holding `page.expect_response` around the Place click and
+# reading `betId` out of POST /bets/straight — a 15s timeout leaves the state UNKNOWN. That is workable
+# for one bet at a time and poor for a CAMPER, which fires repeatedly and would serialise on it.
+# BetInAsia turned out to PUSH its entire order lifecycle over the socket (order open -> bet placing ->
+# bet done, with the routed price and stake), which needs no request and cannot be missed by a timeout.
+# Whether Pinnacle does the same is unknown, and this run is the chance to find out.
+BET_HINT = re.compile(r'"(betId|betid|wagerId|ticketId|wagerNumber|acceptedPrice|placedAt|'
+                      r'betStatus|wagerStatus|stake|risk|win|toWin)"', re.I)
+# Never truncate or drop these — the placement bodies are the artifact the whole question turns on.
+BET_URL = re.compile(r"/bets(/|\?|$)|/bets/straight|/wagers|/tickets|/betslip|/wallet/balance", re.I)
+
 # Wraps the APIs a bot-detector would read. Counts only — no values are altered, so the page behaves
 # normally and only the ACCESS is recorded.
 PROBE_JS = r"""
@@ -125,6 +136,8 @@ class Recon:
         self.http_times = defaultdict(list)
         self.http_bodies = defaultdict(int)
         self.navs = []
+        self.bet_http = []          # (t, method, url, status, post, body) for anything bet-shaped
+        self.bet_ws = []            # (t, url, dir, payload) for WS frames naming a bet
 
     def w(self, kind: str, **kw) -> None:
         try:
@@ -147,6 +160,9 @@ class Recon:
             s = payload if isinstance(payload, str) else "[binary]"
             if ODDS_HINT.search(s or ""):
                 self.ws_odds[key] += 1
+            # A bet named on the socket is the answer to "can a fill be listened for instead of awaited".
+            if BET_HINT.search(s or ""):
+                self.bet_ws.append((round(time.time() - self.t0, 1), key, direction, (s or "")[:900]))
             if len(self.ws_samples[key]) < 6 and direction == "in":
                 self.ws_samples[key].append((s or "")[:400])
             self.w("ws_frame", url=key, dir=direction, body=(s or "")[:MAX_FRAME_CHARS])
@@ -165,15 +181,22 @@ class Recon:
         self.http_times[key].append(time.time() - self.t0)
         req = resp.request
         body = None
-        # Bodies are what identify a POLLING price endpoint from a static asset. Cheap cap per endpoint.
-        if self.http_bodies[key] < 5:
+        is_bet = bool(BET_URL.search(url))
+        # Bodies are what identify a POLLING price endpoint from a static asset. Cheap cap per endpoint —
+        # EXCEPT for bet endpoints, which are kept in full and forever. The BIA capture learned this the
+        # hard way: a five-body cap threw away everything after the fifth response, and the order
+        # lifecycle lives entirely in the ones after that.
+        if is_bet or self.http_bodies[key] < 5:
             try:
                 ct = (resp.headers or {}).get("content-type", "")
                 if "json" in ct or "text" in ct:
-                    body = (await resp.text())[:4000]
+                    body = (await resp.text())[:20000 if is_bet else 4000]
                     self.http_bodies[key] += 1
             except Exception:
                 pass
+        if is_bet:
+            self.bet_http.append((round(time.time() - self.t0, 1), req.method, url, resp.status,
+                                  (req.post_data or "")[:1200], (body or "")[:1200]))
         self.w("http", url=url, method=req.method, status=resp.status,
                telemetry=bool(TELEMETRY.search(url)),
                post=(req.post_data or "")[:2000] if req.method != "GET" else None,
@@ -244,6 +267,29 @@ class Recon:
             print(f"  {n:7}x  {k}")
 
         print("\n" + "=" * 78)
+        print("BET LIFECYCLE  — can a fill be LISTENED for, or only awaited?")
+        print("=" * 78)
+        if not self.bet_http and not self.bet_ws:
+            print("  nothing bet-shaped seen. Place one small real bet during a recon run — this section")
+            print("  is empty by construction until you do.")
+        for t, url, direction, s in self.bet_ws[:14]:
+            print(f"  t+{t:7.1f}s  WS {direction:3}  {url[:60]}")
+            print(f"                {s[:200]}")
+        if self.bet_ws:
+            print("\n  ^^ A bet named on the SOCKET means the fill can be observed with no request and no")
+            print("     15s expect_response window — which is what the camper needs to fire repeatedly.")
+        for t, m, url, st, post, body in self.bet_http[:16]:
+            print(f"  t+{t:7.1f}s  {m:5} {st}  {url[:78]}")
+            if post:
+                print(f"                POST {post[:170]}")
+            if body:
+                print(f"                <-   {body[:200]}")
+        if self.bet_http and not self.bet_ws:
+            print("\n  ^^ HTTP only, no socket frames. Then the current design (expect_response on")
+            print("     POST /bets/straight) is already the best available, and the camper must keep")
+            print("     firing serialised — worth knowing before building it the other way.")
+
+        print("\n" + "=" * 78)
         print("NAVIGATION  — the URLs you visited (the camper needs the live-tennis one)")
         print("=" * 78)
         for t, u in self.navs[-25:]:
@@ -291,7 +337,12 @@ async def main() -> int:
         print("  1. find the LIVE tennis list (the URL is captured for the camper)")
         print("  2. open a Quick Bet on a live game, enter a stake, and LEAVE IT for a minute —")
         print("     watch whether the price moves, and whether the slip survives")
-        print("  3. let it sit idle a while, so any heartbeat/telemetry cadence shows up")
+        print("  3. PLACE ONE SMALL REAL BET. Today a fill is detected by holding expect_response")
+        print("     around the Place click; if the socket announces the bet instead, the camper can")
+        print("     LISTEN rather than wait, and cannot miss a fill to a timeout. The BET LIFECYCLE")
+        print("     section is empty unless a bet actually goes on.")
+        print("  4. then open My Bets — that page fires the site's own listing call, worth capturing")
+        print("  5. let it sit idle a while, so any heartbeat/telemetry cadence shows up")
         print(f"\nRecording for {a.seconds:.0f}s — Ctrl+C to stop early and print the report.\n")
 
         probe = {}
