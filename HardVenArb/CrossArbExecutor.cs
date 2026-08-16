@@ -3703,6 +3703,30 @@ public class CrossArbExecutor
 
     // Watchdog calls this every loop while disconnected — guard on the flag so the alert fires once per
     // disconnect episode (and de-dupes against the VENUE_MAINTENANCE path, which shares the flag).
+    /// <summary>HARD HALT after a book bet whose acceptance could never be established (the camper pressed
+    /// Place and no confirmation came back). Manual reset required.
+    ///
+    /// <para>This exists because the alternative is worse than it looks. An unconfirmed press returns "not
+    /// placed", which the book-first path correctly reads as a free miss and sends no Kalshi hedge — but
+    /// "free miss" also means "zero exposure", and that is exactly the claim nobody can make here. If the bet
+    /// IS live, the account holds an unhedged directional position; carrying on and camping the same match
+    /// would then stack a second one on top of a position the bot does not know it has. So: stop, keep the
+    /// process up so the browser and status are still there to look at, and let a human read My Bets.</para></summary>
+    public void HaltForUnconfirmedBet(string why)
+    {
+        if (_halted) return;
+        _halted = true;
+        Console.ForegroundColor = ConsoleColor.Red;
+        Console.WriteLine($"[HALT] unconfirmed book bet — {why}. No further executions until the bot is " +
+                          "restarted. Reconcile against My Bets before resuming.");
+        Console.ResetColor();
+        DiscordAlert($"🚨 **HARD HALT** — a book bet was pressed and never confirmed ({why}). " +
+                     "Trading is stopped. **Check My Bets and reconcile before restarting.**");
+        _ = JournalAsync(JsonSerializer.Serialize(new {
+            t = DateTime.UtcNow, @event = "HALT_UNCONFIRMED_BET", why, halted = true
+        }));
+    }
+
     public void HaltForConnectionLoss()
     {
         if (_connectionHalted) return;

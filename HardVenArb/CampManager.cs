@@ -65,6 +65,11 @@ public sealed class CampManager
     private readonly bool _previewOnly;      // dry-run: arm and relocate for real, never press Place
     private readonly decimal _arbThreshold;  // net cost a window opens under — the baseline edge is measured from
 
+    /// <summary>Called when a press could not be confirmed either way. Wired to the executor's hard halt: a
+    /// bet that MAY be live and is definitely unhedged must stop the bot, not be absorbed as a free miss.</summary>
+    private Action<string>? _onUnconfirmed;
+    public void SetUnconfirmedHandler(Action<string>? h) => _onUnconfirmed = h;
+
     // Arming drives the UI (find the row, click, type) and can run for tens of seconds on a scroll-miss, so it
     // gets its own long-timeout client. Status/stop are instant reads and must not be stuck behind an arm.
     private readonly HttpClient _uiHttp   = new() { Timeout = TimeSpan.FromSeconds(90) };
@@ -360,6 +365,7 @@ public sealed class CampManager
                 Console.ResetColor();
                 _ = _discord.AlertAsync($"⚠️ **CAMP FIRE UNCONFIRMED** — {label}\nPressed Place, no confirmation " +
                                         $"({reason}). No hedge sent. **Check My Bets manually.**");
+                _onUnconfirmed?.Invoke($"{label}: {reason}");
                 return new CampFireResult(false, odds, stake, betId, true, $"unconfirmed: {reason}");
             }
 
@@ -380,6 +386,7 @@ public sealed class CampManager
             Console.ResetColor();
             _ = _discord.AlertAsync($"⚠️ **CAMP FIRE UNKNOWN** — {label}\n{ex.GetType().Name}: {ex.Message}. " +
                                     "No hedge sent. **Check My Bets manually.**");
+            _onUnconfirmed?.Invoke($"{label}: {ex.GetType().Name} mid-press");
             return new CampFireResult(false, 0m, 0m, "", true, $"sidecar error mid-press: {ex.Message}");
         }
     }

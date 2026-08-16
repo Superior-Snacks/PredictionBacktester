@@ -1120,6 +1120,10 @@ if (isLive || isDryRun)
         //   the EXECUTOR's pre-live-only gate lets the camped selection through, and only that one.
         hardvenOrderClient.SetCampManager(campManager);
         executor.SetCampManager(campManager);
+        // A press that could not be confirmed is the one camp outcome the book-first path cannot reason about:
+        // it looks like a free miss and may be an unhedged live bet. Stop trading and leave the process up so
+        // the browser is still there to check My Bets with.
+        campManager.SetUnconfirmedHandler(executor.HaltForUnconfirmedBet);
         if (!await campManager.StartAsync(cts.Token))
             campManager = null;                       // in-play mode refused — fall back to pre-live behaviour
     }
