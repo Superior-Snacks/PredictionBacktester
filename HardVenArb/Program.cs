@@ -294,20 +294,26 @@ if (args.Contains("--camp-check"))
         if (!ok) failed++;
     }
 
+    // REAL TOKEN SHAPES. Pinnacle moneylines are `lid:mid:home|away` and derivatives carry the extra
+    // type/points segments — and the camper now gates on exactly that difference, so placeholder ids like
+    // "aYes" would make every check pass or fail for the wrong reason.
     var campPairs = new List<CrossPair>
     {
-        new("A", "Alpha vs Beta",   "KX-A", "aYes", "aNo"),
-        new("B", "Gamma vs Delta",  "KX-B", "bYes", "bNo"),
-        new("C", "Settled Match",   "KX-C", "cYes", "cNo"),
+        new("A", "Alpha vs Beta",  "KX-A", "3357:100:home", "3357:100:away"),
+        new("B", "Gamma vs Delta", "KX-B", "3357:200:home", "3357:200:away"),
+        new("C", "Settled Match",  "KX-C", "3357:300:home", "3357:300:away"),
+        new("D", "Spread Match — Over 18.5", "KX-D",
+                 "3357:400:total:18.5:over", "3357:400:total:18.5:under"),
     };
     var campBooks = new System.Collections.Concurrent.ConcurrentDictionary<string, LocalOrderBook>();
-    foreach (var tok in new[] { "aYes", "aNo", "bYes", "bNo", "cYes", "cNo" })
-        campBooks[$"H:{tok}"] = new LocalOrderBook(tok) { IsLive = true };
+    foreach (var p in campPairs)
+        foreach (var tok in new[] { p.HardVenYesTokenId, p.HardVenNoTokenId })
+            campBooks[$"H:{tok}"] = new LocalOrderBook(tok) { IsLive = true };
     var campTel = new CrossPlatformArbTelemetryStrategy(campPairs, campBooks);
     var camp = new CampManager("http://127.0.0.1:1", campTel, campBooks,
                                new DiscordNotifier(null), 0.995m, previewOnly: true);
     // Camped (not Roving) so the open handler only RECORDS — Roving would try to arm against a dead sidecar.
-    camp.SetPhaseForTest(CampManager.CampPhase.Camped, "A", "aNo", "Alpha vs Beta");
+    camp.SetPhaseForTest(CampManager.CampPhase.Camped, "A", "3357:100:away", "Alpha vs Beta");
 
     void Window(string pairId, string arbType, decimal net, decimal depth, long holdMs)
     {
@@ -332,7 +338,7 @@ if (args.Contains("--camp-check"))
     Ck("B is the leader", camp.BestTargetForTest().PairId == "B");
     Ck("camp moves off A to B", camp.TryPickRelocation("A", out var mv) && mv.PairId == "B");
     Ck("...and arms the side B's windows keep taking (K_NO_P_YES buys the YES leg)",
-       camp.TryPickRelocation("A", out var mv2) && mv2.Token == "bYes");
+       camp.TryPickRelocation("A", out var mv2) && mv2.Token == "3357:200:home");
     Ck("the leader does not relocate to itself", !camp.TryPickRelocation("B", out _));
     // Pull A up to just under the 2x margin: still behind, must NOT trigger a swap.
     while (camp.ScoreForTest("B") > camp.ScoreForTest("A") * 2.0)
@@ -343,10 +349,19 @@ if (args.Contains("--camp-check"))
     Console.WriteLine("\n[4] a finished match stops being a target");
     Window("C", "K_NO_P_YES", 0.60m, 40m, holdMs: 8000);     // by far the best score...
     Ck("C leads while live", camp.BestTargetForTest().PairId == "C");
-    campBooks["H:cYes"].IsLive = false;                       // ...then the game ends
-    campBooks["H:cNo"].IsLive  = false;
+    campBooks["H:3357:300:home"].IsLive = false;               // ...then the game ends
+    campBooks["H:3357:300:away"].IsLive = false;
     Ck("a score earned on a match that is no longer live is not a camp target",
        camp.BestTargetForTest().PairId != "C");
+
+    // 2026-08-16's whole in-play tape was spread/total lines on one match: 14 windows, every one of them
+    // held long enough to press and NOT ONE was placeable. A camper that scored them would have parked on
+    // that match all evening and never been able to fire.
+    Console.WriteLine("\n[4b] derivatives are not camp targets — the book cannot place them");
+    for (int i = 0; i < 5; i++) Window("D", "K_NO_P_YES", 0.85m, 60m, holdMs: 6000);
+    Ck("a spread/total line scores nothing", camp.ScoreForTest("D") == 0d);
+    Ck("...and never leads, however fat its windows were", camp.BestTargetForTest().PairId != "D");
+    Ck("...and the camp is never relocated onto one", !camp.TryPickRelocation("A", out var mvD) || mvD.PairId != "D");
 
     Console.WriteLine("\n[5] the score decays, so an hour-old flurry cannot pin the camp");
     double before = camp.ScoreForTest("B");
