@@ -3467,14 +3467,25 @@ class PinnacleAdapter(BookAdapter):
                   "browser IS up, navigate to the cashier manually.")
 
     def _resume_all_organic(self) -> None:
+        """Undo _pause_all_organic — EXCEPT where in-play mode owns the pause.
+
+        ⚠ TWO OWNERS, DIFFERENT LIFETIMES. The placement path pauses and resumes for the duration of ONE
+        bet. In-play mode pauses for the lifetime of the MODE. Because placement's `finally` ran last, the
+        first camp_start un-paused exactly what start_inplay had just silenced — and the session organic
+        woke up and nav-clicked the board to /tennis/matchups/ moments after arming. Observed 2026-08-16.
+        The armed slip survived only because Pinnacle is an SPA and the Quick Bet portal is mounted at the
+        app root, so a soft navigation does not unmount it — luck, not design.
+        So: the short-lived owner may not release the long-lived owner's hold.
+        """
+        inplay = self.mode == "inplay"
         try:
-            if self._browser is not None:
+            if self._browser is not None and not inplay:
                 self._browser.resume_activity()
         except Exception:
             pass
         if self._tab_organic is not None:
             self._tab_organic.resume()
-        if self._tab_manager is not None:
+        if self._tab_manager is not None and not inplay:
             self._tab_manager.hold(False)
         ip = getattr(self, "_inplay", None)
         if ip is not None:
