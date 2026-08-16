@@ -1,0 +1,330 @@
+"""pinnacle_recon.py -- instrumented browser for Pinnacle recon, in-play edition.
+
+Same playbook that produced the BetInAsia adapter, pointed at the questions the in-play CAMPER needs
+answered before it is built on assumptions:
+
+  1. IS THE RE-PRICE A WEBSOCKET FEED? The camper parks with a Quick Bet open for tens of seconds and
+     relies on it re-pricing. If that is a socket push, an armed slip stays live for free. If it is
+     polling, the interval IS the staleness, and the camper must re-read before every press.
+  2. WHERE IS THE LIVE TAB? Every navigation is recorded, so browsing to in-play tennis by hand yields
+     the exact URL the camper should park on — the same way the league-page URL was derived for BIA.
+  3. WHAT IS PINNACLE WATCHING? BetInAsia's `/web/metrics/` turned out to carry `betslip.duration` and
+     `betslip.source`, which changed how the bot behaves. Pinnacle's equivalent is unknown, and a bot
+     that camps for minutes with a slip open is exactly the shape such telemetry would notice.
+
+Usage — the sidecar must be STOPPED (they cannot share .pinnacle_profile):
+
+    python pinnacle_recon.py                       # opens the live tennis page
+    python pinnacle_recon.py --url https://www.pinnacle.com/en/tennis/matchups/live/
+    python pinnacle_recon.py --seconds 600         # run longer
+    PINNACLE_WINDOW_POS=2000,60 python pinnacle_recon.py
+
+You browse; it records. Writes pinnacle_recon_YYYYmmdd_HHMMSS.jsonl (GITIGNORED — it WILL contain
+session data once logged in) and prints a report on Ctrl+C:
+
+  * every WS endpoint, frame counts, direction, and whether odds numbers appear in the frames
+  * every JSON/XHR endpoint ranked by hits, with the POLLING INTERVAL where one is detectable
+  * a TELEMETRY section: analytics/monitoring/error-reporting beacons, separated from product APIs
+  * a FINGERPRINTING section: which detection-adjacent browser APIs the site actually touched
+
+The fingerprint probe is an init script that wraps the APIs and counts reads. That is main-world and
+therefore observable in principle — acceptable for a deliberate recon run, not something to leave on.
+"""
+from __future__ import annotations
+
+import argparse
+import asyncio
+import json
+import os
+import re
+import sys
+import time
+from collections import Counter, defaultdict
+from datetime import datetime
+from pathlib import Path
+
+sys.stdout.reconfigure(encoding="utf-8")
+
+from playwright.async_api import async_playwright
+
+PROFILE = Path(os.environ.get("PINNACLE_USER_DATA_DIR")
+               or (Path(__file__).resolve().parent / ".pinnacle_profile")).expanduser().resolve()
+
+DEFAULT_URL = os.environ.get("PINNACLE_RECON_URL", "https://www.pinnacle.com/en/tennis/matchups/live/")
+
+MAX_FRAME_CHARS = int(os.environ.get("PIN_RECON_MAX_FRAME_CHARS", "60000"))
+MAX_FRAMES_PER_WS = int(os.environ.get("PIN_RECON_MAX_FRAMES", "4000"))
+
+SKIP_URL = re.compile(r"\.(png|jpe?g|gif|svg|webp|woff2?|ttf|css|ico|mp4|m4s)(\?|$)", re.I)
+
+# Anything matching these is MONITORING rather than product API. Kept and reported separately instead of
+# skipped: for BetInAsia the telemetry endpoint was the single most behaviour-relevant thing found, and a
+# recon that filters analytics out by default would have missed it entirely.
+TELEMETRY = re.compile(
+    r"googletagmanager|google-analytics|/gtag/|/collect|doubleclick|facebook|"
+    r"sentry|bugsnag|rollbar|datadog|newrelic|nr-data|dynatrace|appdynamics|"
+    r"hotjar|fullstory|logrocket|mouseflow|clarity\.ms|segment|amplitude|mixpanel|"
+    r"perimeterx|px-cloud|datadome|akamai|imperva|distil|shieldsquare|castle|sift|"
+    r"/metrics|/telemetry|/beacon|/track|/rum|/insight", re.I)
+
+ODDS_HINT = re.compile(r'"(price|odds|handicap|moneyline|matchup|market|line|status)"', re.I)
+
+# Wraps the APIs a bot-detector would read. Counts only — no values are altered, so the page behaves
+# normally and only the ACCESS is recorded.
+PROBE_JS = r"""
+(() => {
+  if (window.__pinprobe) return;
+  const hits = {};
+  window.__pinprobe = hits;
+  const bump = (k) => { hits[k] = (hits[k] || 0) + 1; };
+  const wrapGet = (obj, name, key) => {
+    try {
+      const d = Object.getOwnPropertyDescriptor(obj, name);
+      if (!d || !d.get) return;
+      Object.defineProperty(obj, name, Object.assign({}, d, {
+        get: function () { bump(key); return d.get.call(this); }}));
+    } catch (e) {}
+  };
+  const wrapFn = (obj, name, key) => {
+    try {
+      const f = obj[name];
+      if (typeof f !== 'function') return;
+      obj[name] = function () { bump(key); return f.apply(this, arguments); };
+    } catch (e) {}
+  };
+  for (const p of ['webdriver','plugins','languages','platform','hardwareConcurrency','deviceMemory',
+                   'userAgent','vendor','maxTouchPoints','connection','permissions'])
+    wrapGet(Navigator.prototype, p, 'navigator.' + p);
+  wrapFn(HTMLCanvasElement.prototype, 'toDataURL', 'canvas.toDataURL');
+  wrapFn(HTMLCanvasElement.prototype, 'getContext', 'canvas.getContext');
+  wrapFn(WebGLRenderingContext.prototype, 'getParameter', 'webgl.getParameter');
+  try { wrapFn(WebGL2RenderingContext.prototype, 'getParameter', 'webgl2.getParameter'); } catch (e) {}
+  wrapFn(window, 'requestIdleCallback', 'requestIdleCallback');
+  wrapFn(Element.prototype, 'getBoundingClientRect', 'getBoundingClientRect');
+  try { wrapFn(window.PerformanceObserver && window.PerformanceObserver.prototype, 'observe',
+               'PerformanceObserver.observe'); } catch (e) {}
+  try { wrapFn(window.Notification, 'requestPermission', 'Notification.requestPermission'); } catch (e) {}
+  try { wrapFn(AudioContext.prototype, 'createOscillator', 'audio.createOscillator'); } catch (e) {}
+  for (const t of ['mousemove','mousedown','keydown','touchstart','devicemotion','visibilitychange'])
+    ((tt) => { const a = document.addEventListener;
+      document.addEventListener = function (n) { if (n === tt) bump('listener:' + tt);
+                                                 return a.apply(this, arguments); }; })(t);
+  return 1;
+})()
+"""
+
+
+class Recon:
+    def __init__(self, path: Path):
+        self.f = open(path, "a", encoding="utf-8")
+        self.t0 = time.time()
+        self.ws_frames = Counter()
+        self.ws_odds = Counter()
+        self.ws_samples = defaultdict(list)
+        self.http_hits = Counter()
+        self.http_times = defaultdict(list)
+        self.http_bodies = defaultdict(int)
+        self.navs = []
+
+    def w(self, kind: str, **kw) -> None:
+        try:
+            self.f.write(json.dumps({"t": round(time.time() - self.t0, 3), "kind": kind, **kw}) + "\n")
+        except Exception:
+            pass
+
+    # ── websocket ────────────────────────────────────────────────────────────
+    def on_ws(self, ws) -> None:
+        url = ws.url
+        self.w("ws_open", url=url)
+        print(f"[WS OPEN] {url[:110]}")
+
+        def frame(payload, direction):
+            key = url.split("?")[0]
+            self.ws_frames[(key, direction)] += 1
+            n = self.ws_frames[(key, direction)]
+            if n > MAX_FRAMES_PER_WS:
+                return
+            s = payload if isinstance(payload, str) else "[binary]"
+            if ODDS_HINT.search(s or ""):
+                self.ws_odds[key] += 1
+            if len(self.ws_samples[key]) < 6 and direction == "in":
+                self.ws_samples[key].append((s or "")[:400])
+            self.w("ws_frame", url=key, dir=direction, body=(s or "")[:MAX_FRAME_CHARS])
+
+        ws.on("framereceived", lambda p: frame(p, "in"))
+        ws.on("framesent", lambda p: frame(p, "out"))
+        ws.on("close", lambda _=None: self.w("ws_close", url=url))
+
+    # ── http ─────────────────────────────────────────────────────────────────
+    async def on_response(self, resp) -> None:
+        url = resp.url
+        if SKIP_URL.search(url):
+            return
+        key = url.split("?")[0]
+        self.http_hits[key] += 1
+        self.http_times[key].append(time.time() - self.t0)
+        req = resp.request
+        body = None
+        # Bodies are what identify a POLLING price endpoint from a static asset. Cheap cap per endpoint.
+        if self.http_bodies[key] < 5:
+            try:
+                ct = (resp.headers or {}).get("content-type", "")
+                if "json" in ct or "text" in ct:
+                    body = (await resp.text())[:4000]
+                    self.http_bodies[key] += 1
+            except Exception:
+                pass
+        self.w("http", url=url, method=req.method, status=resp.status,
+               telemetry=bool(TELEMETRY.search(url)),
+               post=(req.post_data or "")[:2000] if req.method != "GET" else None,
+               body=body)
+
+    def on_nav(self, frame) -> None:
+        try:
+            if frame.parent_frame is not None:
+                return
+            self.navs.append((round(time.time() - self.t0, 1), frame.url))
+            self.w("nav", url=frame.url)
+            print(f"[NAV] {frame.url[:110]}")
+        except Exception:
+            pass
+
+    # ── report ───────────────────────────────────────────────────────────────
+    def report(self, probe: dict) -> None:
+        print("\n" + "=" * 78)
+        print("WEBSOCKETS  — is the re-price pushed?")
+        print("=" * 78)
+        if not self.ws_frames:
+            print("  NO WebSocket frames at all. If prices still moved on screen, the re-price is POLLED")
+            print("  and the HTTP section below will show the interval — the camper must then re-read")
+            print("  the popover immediately before every press rather than trusting what it shows.")
+        else:
+            for (url, direction), n in self.ws_frames.most_common():
+                mark = f"   <-- {self.ws_odds[url]} frames carry price/odds fields" if direction == "in" \
+                       and self.ws_odds.get(url) else ""
+                print(f"  {direction:3}  {n:6}  {url[:88]}{mark}")
+            for url, s in self.ws_samples.items():
+                if s:
+                    print(f"\n  sample inbound frames on {url[:70]}:")
+                    for x in s[:3]:
+                        print(f"    {x[:220]}")
+
+        print("\n" + "=" * 78)
+        print("HTTP  — product endpoints, with polling interval where detectable")
+        print("=" * 78)
+        for url, n in self.http_hits.most_common(24):
+            if TELEMETRY.search(url):
+                continue
+            ts = sorted(self.http_times[url])
+            gap = ""
+            if len(ts) >= 3:
+                gaps = [round(b - a, 1) for a, b in zip(ts, ts[1:])]
+                gaps.sort()
+                med = gaps[len(gaps) // 2]
+                if med > 0:
+                    gap = f"   every ~{med:.1f}s  <-- POLLED" if med < 120 else ""
+            print(f"  {n:5}  {url[:92]}{gap}")
+
+        print("\n" + "=" * 78)
+        print("TELEMETRY / MONITORING  — what Pinnacle reports about this session")
+        print("=" * 78)
+        tel = [(u, n) for u, n in self.http_hits.most_common() if TELEMETRY.search(u)]
+        if not tel:
+            print("  none seen. (BetInAsia's /web/metrics/ carried betslip.duration and betslip.source,")
+            print("  which changed how the bot behaves — absence here is a real and useful result.)")
+        for u, n in tel:
+            print(f"  {n:5}  {u[:92]}")
+
+        print("\n" + "=" * 78)
+        print("FINGERPRINT-ADJACENT APIs the page actually touched")
+        print("=" * 78)
+        if not probe:
+            print("  probe recorded nothing (page may have reloaded after install)")
+        for k, n in sorted(probe.items(), key=lambda kv: -kv[1])[:30]:
+            print(f"  {n:7}x  {k}")
+
+        print("\n" + "=" * 78)
+        print("NAVIGATION  — the URLs you visited (the camper needs the live-tennis one)")
+        print("=" * 78)
+        for t, u in self.navs[-25:]:
+            print(f"  t+{t:7.1f}s  {u[:100]}")
+
+
+async def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--url", default=DEFAULT_URL)
+    ap.add_argument("--seconds", type=float, default=420.0)
+    ap.add_argument("--no-probe", action="store_true", help="skip the fingerprint probe (main-world)")
+    a = ap.parse_args()
+
+    out = Path(__file__).parent / f"pinnacle_recon_{datetime.now():%Y%m%d_%H%M%S}.jsonl"
+    rec = Recon(out)
+    print(f"[REC] {out.name}  (gitignored — contains session data once logged in)")
+    print(f"[REC] profile {PROFILE}")
+    print("[REC] the SIDECAR MUST BE STOPPED — they cannot share this profile.\n")
+
+    async with async_playwright() as pw:
+        launch = dict(user_data_dir=str(PROFILE), headless=False, viewport=None,
+                      args=["--start-maximized"])
+        pos = os.environ.get("PINNACLE_WINDOW_POS")
+        if pos:
+            launch["args"] = launch["args"] + [f"--window-position={pos}"]
+        try:
+            ctx = await pw.chromium.launch_persistent_context(channel="chrome", **launch)
+        except Exception:
+            ctx = await pw.chromium.launch_persistent_context(**launch)
+        if not a.no_probe:
+            await ctx.add_init_script(PROBE_JS)
+
+        def hook(pg):
+            pg.on("websocket", rec.on_ws)
+            pg.on("response", lambda r: asyncio.create_task(rec.on_response(r)))
+            pg.on("framenavigated", rec.on_nav)
+
+        ctx.on("page", hook)
+        for pg in ctx.pages:
+            hook(pg)
+        page = ctx.pages[0] if ctx.pages else await ctx.new_page()
+        await page.goto(a.url, wait_until="domcontentloaded")
+
+        print("BROWSE NOW. Things worth doing while it records:")
+        print("  1. find the LIVE tennis list (the URL is captured for the camper)")
+        print("  2. open a Quick Bet on a live game, enter a stake, and LEAVE IT for a minute —")
+        print("     watch whether the price moves, and whether the slip survives")
+        print("  3. let it sit idle a while, so any heartbeat/telemetry cadence shows up")
+        print(f"\nRecording for {a.seconds:.0f}s — Ctrl+C to stop early and print the report.\n")
+
+        probe = {}
+        try:
+            end = time.time() + a.seconds
+            while time.time() < end:
+                await asyncio.sleep(15)
+                try:
+                    probe = await page.evaluate("() => window.__pinprobe || {}")
+                except Exception:
+                    pass
+                ws_in = sum(n for (u, d), n in rec.ws_frames.items() if d == "in")
+                print(f"  t+{time.time() - rec.t0:5.0f}s  ws_in={ws_in}  http={sum(rec.http_hits.values())}"
+                      f"  endpoints={len(rec.http_hits)}")
+        except (KeyboardInterrupt, asyncio.CancelledError):
+            pass
+        finally:
+            try:
+                probe = await page.evaluate("() => window.__pinprobe || {}") or probe
+            except Exception:
+                pass
+            rec.report(probe)
+            rec.f.close()
+            print(f"\n[REC] written to {out.name}")
+            try:
+                await ctx.close()
+            except Exception:
+                pass
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(asyncio.run(main()))
+    except KeyboardInterrupt:
+        pass

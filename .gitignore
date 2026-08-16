@@ -408,6 +408,11 @@ control_state.json
 betinasia_recon_*.jsonl
 .betinasia_profile/
 
+# Pinnacle recon dumps — same hazard, and worse: this profile is the LIVE-MONEY session, so the capture
+# contains its cookies and authed API bodies. NEVER commit.
+pinnacle_recon_*.jsonl
+bia_place_trace.log
+
 # huge gz files
 *.gz
 *.json
