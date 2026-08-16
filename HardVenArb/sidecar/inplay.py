@@ -91,8 +91,48 @@ class InPlayActivity:
         self._camping = on
 
     # ── behaviours ───────────────────────────────────────────────────────────
+    async def _keyboard_scroll(self) -> None:
+        """Scroll with the KEYBOARD, not the wheel — this is the part that keeps the session alive.
+
+        Pinnacle's ~30-minute idle logout is UI-based, and it was established during the keepalive work
+        that mouse movement, wheel scrolling and authed API calls do NOT reset it; keyboard input and
+        navigation clicks do. In-play mode pauses the session's own organic (it was dragging the page
+        off the live list), so this loop has to carry the keepalive itself or the camp gets logged out
+        mid-session — which would look like the venue killing a long-lived slip.
+        """
+        keys = ["PageDown"] * random.randint(1, 3) + ["PageUp"] * random.randint(1, 4)
+        if random.random() < 0.4:
+            keys.append("Home")                      # back to the top, where the live games are
+        for k in keys:
+            if not self._gate.is_set():
+                return
+            try:
+                await self._page.keyboard.press(k)
+            except Exception:
+                return
+            await asyncio.sleep(random.uniform(0.25, 1.1))
+
+    async def _pin_url(self) -> None:
+        """Return to the live list if anything navigated away.
+
+        Belt and braces: the session organic is paused while in-play runs, but a click can still follow
+        a link, and a camp that has quietly drifted onto the pre-match page produces no arbs and no error.
+        """
+        try:
+            cur = (self._page.url or "")
+            if LIVE_URL.split("?")[0] not in cur:
+                self._log(f"page drifted to {cur[:70]} — returning to the live list")
+                await self._page.goto(LIVE_URL, wait_until="domcontentloaded")
+        except Exception:
+            pass
+
     async def _scroll_cycle(self) -> None:
         """Down a bit, then up more. Net drift is upward, so the list never comes to rest at its end."""
+        # Roughly a third of the time, use the keyboard instead — see _keyboard_scroll: it is the only
+        # form of scrolling that resets the idle logout.
+        if random.random() < 0.35:
+            await self._keyboard_scroll()
+            return
         down = random.uniform(160, 620)
         up = down + random.uniform(40, 320)          # ALWAYS returns further than it went
         for total, sign in ((down, 1), (up, -1)):
@@ -176,9 +216,13 @@ class InPlayActivity:
                     return
                 if self._camping:
                     # No scrolling and no peeking while armed: a scroll moves the board under the slip
-                    # and a peek would open a DIFFERENT market's slip over the one being held.
+                    # and a peek would open a DIFFERENT market's slip over the one being held. No URL
+                    # pin either — a goto would destroy the armed popover, which is the thing being
+                    # protected. If the page drifts while camped, that is the camp lost; camp_stop and
+                    # the next cycle recover it.
                     await self._hover_drift()
                     continue
+                await self._pin_url()
                 await self._scroll_cycle()
                 if random.random() < self._peek_chance:
                     await self._peek_slip()

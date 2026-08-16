@@ -2492,7 +2492,7 @@ class PinnacleAdapter(BookAdapter):
             self._resume_all_organic()
 
     async def _place_via_ui(self, selection_id: str, stake: float, max_odds: float,
-                            submit: bool = True) -> BetResult:
+                            submit: bool = True, keep_open: bool = False) -> BetResult:
         """Place the bet by driving the real UI: open the league page, click the selection's Money Line button,
         VERIFY the Quick Bet popover really is the intended market, enter the stake, submit.
 
@@ -2579,9 +2579,15 @@ class PinnacleAdapter(BookAdapter):
             # VERIFY-ONLY: everything above is the whole risk surface (navigation, finding the row, confirming
             # the popover really is the intended market, stake entry). Stopping here exercises it for free.
             if not submit:
-                await page.evaluate(_UI_CLOSE_JS)
+                # ...AND NORMALLY CLOSES, because a rehearsal must leave nothing behind. CAMPING is the
+                # one caller that wants the opposite: the armed popover IS the product, and closing it
+                # here is what made the camp look like the slip was being rejected. Two callers, opposite
+                # requirements, one flag — the default stays "clean up".
+                if not keep_open:
+                    await page.evaluate(_UI_CLOSE_JS)
                 print(f"[PINNACLE BET] VERIFY-ONLY OK {selection_id} @ {shown} stake {stake:.2f} "
-                      f"(max bet {max_bet}) - popover matched, NOTHING placed")
+                      f"(max bet {max_bet}) - popover matched, NOTHING placed"
+                      + (" — LEFT OPEN for camping" if keep_open else ""))
                 return BetResult(accepted=False, stake=stake, actual_odds=shown,
                                  reason=f"verify-only: would place {stake:.2f} @ {shown} on "
                                         f"'{sel_ok.get('label')}' ({sel_ok.get('matchup')}); max bet {max_bet}")
@@ -2706,9 +2712,25 @@ class PinnacleAdapter(BookAdapter):
                 await page.goto(LIVE_URL, wait_until="domcontentloaded")
         except Exception as e:
             return {"ok": False, "error": f"could not open {LIVE_URL}: {type(e).__name__}: {e}"}
+        # SILENCE EVERYTHING THAT MOVES THE PAGE OR OPENS TABS. Two separate offenders, both correct
+        # pre-live and both wrong here:
+        #   * the SESSION's organic navigates the primary page around PINNACLE_BROWSE_URLS, which
+        #     includes /tennis/matchups/ — so it kept dragging the camp off the live list.
+        #   * the TAB MANAGER's sweep opens and re-points rove tabs on its own cadence. Skipping tab
+        #     candidates in _select_bet_tab stops PLACEMENT borrowing one; it does not stop the sweep
+        #     creating them.
+        try:
+            if self._browser is not None:
+                self._browser.pause_activity()
+        except Exception:
+            pass
+        if self._tab_manager is not None:
+            self._tab_manager.hold(True)
         self._inplay = InPlayActivity(page, self._human_click_loc,
                                       lambda m: print(f"[PINNACLE INPLAY] {m}", flush=True))
         self._inplay.start()
+        print("[PINNACLE INPLAY] session organic PAUSED and tab manager HELD — this one tab is the "
+              "whole session now. Idle activity comes from the in-play loop instead.", flush=True)
         return {"ok": True, **self._inplay.status()}
 
     async def stop_inplay(self) -> dict:
@@ -2717,6 +2739,14 @@ class PinnacleAdapter(BookAdapter):
             return {"ok": True, "running": False}
         await ip.stop()
         self._inplay = None
+        # Hand the browser back: session organic drives the primary page again, tab manager resumes.
+        try:
+            if self._browser is not None:
+                self._browser.resume_activity()
+        except Exception:
+            pass
+        if self._tab_manager is not None:
+            self._tab_manager.hold(False)
         return {"ok": True, "running": False}
 
     # ── IN-PLAY CAMPING ───────────────────────────────────────────────────────
@@ -2750,7 +2780,9 @@ class PinnacleAdapter(BookAdapter):
         self._camp = {"selection_id": selection_id, "stake": stake, "since": time.time(),
                       "fires": 0, "armed": False}
         try:
-            res = await self._place_via_ui(selection_id, stake, 1.01, submit=False)
+            # keep_open: the verify-only path closes the popover on the way out (a rehearsal must leave
+            # nothing behind). The camper needs precisely the opposite — the armed popover is the point.
+            res = await self._place_via_ui(selection_id, stake, 1.01, submit=False, keep_open=True)
         except Exception as e:
             self._camping = False
             return {"ok": False, "error": f"{type(e).__name__}: {e}"}
