@@ -125,6 +125,31 @@ PROBE_JS = r"""
 """
 
 
+def post_text(req) -> str:
+    """Request body as text, or a marker — NEVER raising.
+
+    `request.post_data` base64-decodes and then `.decode()`s as UTF-8, which throws on a binary body.
+    Pinnacle posts gzipped payloads (0x1f 0x8b), so this raised on a large share of requests — and
+    because it raised INSIDE the response handler, those responses were dropped from the capture
+    entirely rather than merely logged noisily. A recon that silently discards the requests it cannot
+    decode is worse than one that records them as opaque.
+    """
+    try:
+        return req.post_data or ""
+    except Exception:
+        pass
+    try:
+        buf = req.post_data_buffer
+        if buf:
+            head = bytes(buf[:2])
+            if head == b"\x1f\x8b":
+                return f"[gzip {len(buf)}B]"
+            return buf.decode("utf-8", errors="replace")
+    except Exception:
+        pass
+    return "[unreadable body]"
+
+
 class Recon:
     def __init__(self, path: Path):
         self.f = open(path, "a", encoding="utf-8")
@@ -173,6 +198,15 @@ class Recon:
 
     # ── http ─────────────────────────────────────────────────────────────────
     async def on_response(self, resp) -> None:
+        """Never let a single bad response kill the handler. A raise here escapes into pyee's callback,
+        prints a full traceback per request, and — the part that actually matters — abandons that
+        response instead of recording it. Losing captures to a decode error is the opposite of recon."""
+        try:
+            await self._on_response(resp)
+        except Exception as e:
+            self.w("http_error", err=f"{type(e).__name__}: {e}")
+
+    async def _on_response(self, resp) -> None:
         url = resp.url
         if SKIP_URL.search(url):
             return
@@ -196,10 +230,10 @@ class Recon:
                 pass
         if is_bet:
             self.bet_http.append((round(time.time() - self.t0, 1), req.method, url, resp.status,
-                                  (req.post_data or "")[:1200], (body or "")[:1200]))
+                                  post_text(req)[:1200], (body or "")[:1200]))
         self.w("http", url=url, method=req.method, status=resp.status,
                telemetry=bool(TELEMETRY.search(url)),
-               post=(req.post_data or "")[:2000] if req.method != "GET" else None,
+               post=post_text(req)[:2000] if req.method != "GET" else None,
                body=body)
 
     def on_nav(self, frame) -> None:
