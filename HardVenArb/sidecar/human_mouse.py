@@ -42,6 +42,91 @@ except Exception:                                      # pragma: no cover - non-
 
 _DWELL_LOGGED = False
 
+# ── RECORDED TRAJECTORY REPLAY ───────────────────────────────────────────────
+# A Bezier is a smooth curve; a human reach is not. Real pointing throws ballistically, UNDERSHOOTS,
+# corrects once or twice, and settles — with the fastest moment early (~30% in) rather than at the
+# midpoint, and with genuine near-stationary samples the easing never produces. Those are exactly the
+# statistics a page recording mousemove can compute, and Pinnacle runs Microsoft Clarity, which does.
+#
+# So: replay real gestures captured by mouse_record.py (OS-level, nothing injected into any page),
+# warped onto whatever start/end this call needs. Shape and timing come from the recording; only
+# position and scale are transformed, so reversals and the velocity profile survive intact.
+#
+# Falls back to the Bezier when no corpus exists, so nothing depends on having recorded yet.
+_CORPUS: Optional[list] = None
+_CORPUS_TRIED = False
+
+
+def _corpus() -> list:
+    global _CORPUS, _CORPUS_TRIED
+    if _CORPUS_TRIED:
+        return _CORPUS or []
+    _CORPUS_TRIED = True
+    import json
+    import os as _os
+    name = _os.environ.get("HARDVEN_MOUSE_CORPUS", "mouse_corpus.json")
+    try:
+        import pathlib
+        p = pathlib.Path(__file__).parent / name
+        gestures = json.loads(p.read_text(encoding="utf-8")).get("gestures") or []
+        # Only gestures with real structure are useful; a 12-point flick warped across 800px is worse
+        # than the Bezier it replaces.
+        _CORPUS = [g for g in gestures if len(g.get("points") or []) >= 20]
+        if _CORPUS:
+            print(f"[cursor] replaying {len(_CORPUS)} recorded gestures from {name} "
+                  f"(set HARDVEN_MOUSE_CORPUS to change, delete the file to fall back to synthetic)",
+                  flush=True)
+    except Exception:
+        _CORPUS = []
+    return _CORPUS or []
+
+
+def replay_path(x0: float, y0: float, tx: float, ty: float) -> Optional[list]:
+    """A recorded gesture warped onto (x0,y0)->(tx,ty). None if no corpus.
+
+    Similarity transform — rotate and scale the recording's own start->end vector onto the required one,
+    then translate. That preserves the gesture's shape relative to its direction of travel, which is
+    where the overshoot and correction live; an axis-independent stretch would flatten exactly those.
+    """
+    corpus = _corpus()
+    if not corpus:
+        return None
+    need = math.hypot(tx - x0, ty - y0)
+    if need < 4:
+        return None
+    # Prefer a gesture of similar length: warping a 40px nudge across 900px invents detail that was
+    # never recorded, and squeezing a long reach into a short hop erases it.
+    def span(g):
+        p = g["points"]
+        return math.hypot(p[-1][1] - p[0][1], p[-1][2] - p[0][2]) or 1.0
+    ranked = sorted(corpus, key=lambda g: abs(math.log((span(g) + 1) / (need + 1))))
+    g = random.choice(ranked[:max(3, len(ranked) // 5)])
+    p = g["points"]
+    sx, sy = p[0][1], p[0][2]
+    gx, gy = p[-1][1] - sx, p[-1][2] - sy
+    glen = math.hypot(gx, gy) or 1.0
+    # Rotation+scale taking (gx,gy) onto (tx-x0, ty-y0).
+    ux, uy = gx / glen, gy / glen
+    dx, dy = tx - x0, ty - y0
+    k = math.hypot(dx, dy) / glen
+    cos_t = (ux * dx + uy * dy) / (math.hypot(dx, dy) or 1.0)
+    sin_t = (ux * dy - uy * dx) / (math.hypot(dx, dy) or 1.0)
+    mirror = -1.0 if random.random() < 0.5 else 1.0        # so a gesture never replays identically
+    warp = random.uniform(0.85, 1.2)                        # time scaling
+    out = []
+    prev_t = 0.0
+    for t, px, py in p:
+        rx, ry = (px - sx), (py - sy) * mirror
+        wx = (rx * cos_t - ry * sin_t) * k
+        wy = (rx * sin_t + ry * cos_t) * k
+        out.append((x0 + wx + random.uniform(-0.6, 0.6),
+                    y0 + wy + random.uniform(-0.6, 0.6),
+                    max(0.0, (t - prev_t) * warp)))
+        prev_t = t
+    if out:
+        out[-1] = (tx, ty, out[-1][2])                      # land exactly on target
+    return out
+
 
 async def dwell() -> float:
     """Seconds to rest on an element before pressing. ONE definition, used by EVERY click path.
@@ -163,12 +248,29 @@ class HumanCursor:
                    sink: Optional[Callable] = None) -> None:
         """Travel to (tx,ty). `sink` overrides where points go (tests); default is page.mouse.move."""
         x0, y0 = self._get(page, tx, ty)
+        emit = sink or page.mouse.move
+
+        # RECORDED FIRST. The replay carries its own per-step timing, because the timing IS the signal —
+        # peak velocity early, hesitations, the pause before the final correction. Re-timing it evenly
+        # would keep the shape and throw away the half that is hardest to fake.
+        rec = replay_path(x0, y0, tx, ty)
+        if rec:
+            for (bx, by, dt) in rec:
+                try:
+                    await emit(bx, by)
+                except Exception:
+                    break
+                if dt > 0:
+                    await asyncio.sleep(min(dt, 0.25))     # cap: a recorded pause of seconds is a person
+                                                           # being distracted, not part of the reach
+            self._set(page, tx, ty)
+            return
+
         pts = bezier_path(x0, y0, tx, ty)
         if len(pts) == 1:
             self._set(page, tx, ty)
             return
         total = path_duration(math.hypot(tx - x0, ty - y0))
-        emit = sink or page.mouse.move
         for (bx, by) in pts:
             try:
                 await emit(bx, by)

@@ -56,6 +56,12 @@ import httpx
 
 from book_adapter import BookAdapter, BetResult, CatalogEntry, Selection
 import sports as sports_cfg   # unified sport catalog (active sport ids default the lifecycle set)
+# Shared cursor: notched wheel scrolling, the measured dwell, and recorded-trajectory replay. This
+# adapter kept its own `_human_move_page`/`_human_click_loc` (the originals these were ported FROM) and
+# so has been missing every improvement since — wheel-instead-of-teleport, off-centre targeting, and the
+# corpus replay. Imported at module level on purpose: a lazy import inside a try/except would turn a
+# missing name into a silently skipped scroll.
+from human_mouse import CURSOR
 
 REST_BASE = os.environ.get("PINNACLE_API_BASE", "https://api.arcadia.pinnacle.com/0.1")
 # GUEST API: same board structure (sports/leagues/matchups/markets, incl. price `designation`) served with ONLY
@@ -2893,19 +2899,39 @@ class PinnacleAdapter(BookAdapter):
         can't make us land on the button that slid into stale coordinates (a handicap next to the moneyline) —
         and it fires the full pointer-event sequence, so the Quick Bet opens correctly (unlike a synthetic JS
         `.click()` with no pointer events). Works on both an ElementHandle and a Locator."""
+        # WHEEL TOWARD IT FIRST. `scroll_into_view_if_needed` teleports the scroll position in one step;
+        # this site runs Microsoft Clarity, which records scroll. Wheeling in notches costs nothing and
+        # is what the BIA cursor already does — the jump was the last instant-teleport in either path.
         try:
-            await loc.scroll_into_view_if_needed(timeout=4000)
+            box = await loc.bounding_box()
+            if box and not (80 <= box["y"] <= 700):
+                await CURSOR.scroll(page, box["y"] - 320)
+        except Exception:
+            pass
+        try:
+            await loc.scroll_into_view_if_needed(timeout=4000)   # fallback for virtualised panes
         except Exception:
             pass
         try:
             box = await loc.bounding_box()
         except Exception:
             box = None
-        if box:                                            # curved human approach toward the button (visual only)
-            await self._human_move_page(page, box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
-            await asyncio.sleep(random.uniform(0.04, 0.12))
+        if box:
+            # OFF-CENTRE. This aimed at the exact geometric centre on every click; people do not, and
+            # "always dead centre" is a signature that survives however good the approach path is.
+            await self._human_move_page(page,
+                                        box["x"] + box["width"] * random.uniform(0.35, 0.65),
+                                        box["y"] + box["height"] * random.uniform(0.35, 0.65))
+            # Dwell measured against 37 recorded gestures (mouse_record.py): a reach ends in a settle,
+            # not an immediate press. Shared with the BIA path so both stay in step.
+            try:
+                from human_mouse import dwell as _dwell
+                await asyncio.sleep(await _dwell())
+            except Exception:
+                await asyncio.sleep(random.uniform(0.15, 0.45))
         try:
-            await loc.click(timeout=5000, delay=random.randint(30, 90))
+            # 42-92ms measured across the same 37 gestures; the old floor of 30 was below anything real.
+            await loc.click(timeout=5000, delay=random.randint(42, 92))
         except Exception:
             return False
         return True
