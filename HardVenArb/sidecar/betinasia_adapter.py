@@ -1055,7 +1055,8 @@ class BetInAsiaAdapter(BookAdapter):
       const F = ['type','isTrusted','screenX','screenY','clientX','clientY','pageX','pageY',
                  'movementX','movementY','pressure','tangentialPressure','tiltX','tiltY','twist',
                  'pointerType','pointerId','isPrimary','width','height',
-                 'button','buttons','detail','which','altKey','ctrlKey','shiftKey','metaKey'];
+                 'button','buttons','detail','which','altKey','ctrlKey','shiftKey','metaKey',
+                 'deltaX','deltaY','deltaMode'];
       const rec = (e) => {
         if (rows.length > 400) return;
         const o = {};
@@ -1069,7 +1070,12 @@ class BetInAsiaAdapter(BookAdapter):
         } catch (_) {}
         rows.push(o);
       };
-      for (const t of ['pointerdown','mousedown','pointerup','mouseup','click','pointermove','mousemove'])
+      // WHEEL AND SCROLL TOO. The quote path scrolls the panel into view right after opening the slip,
+      // and an absolutely-positioned popover often dismisses on scroll — but the operator can scroll a
+      // hand-opened slip without losing it, so the theory needs evidence rather than plausibility.
+      // Recording wheel/scroll shows whether one actually lands between the click and the death.
+      for (const t of ['pointerdown','mousedown','pointerup','mouseup','click','pointermove','mousemove',
+                       'wheel','scroll'])
         document.addEventListener(t, rec, {capture: true, passive: true});
       return {installed: true, n: 0};
     })()
