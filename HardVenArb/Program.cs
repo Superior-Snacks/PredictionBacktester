@@ -73,6 +73,21 @@ using PredictionBacktester.Engine.LiveExecution;
 //    HARDVEN_HEDGE_MONITOR_SECS    seconds to sample the post-open Kalshi unwind price for the hedge tape (default 30; 0 = off)
 //    HARDVEN_KEEP_AWAKE            1 = suppress system sleep while running (default 1, Windows-only); 0 to disable
 //
+//  IN-PLAY CAMPER (see CampManager.cs). Off by default. It REPLACES pre-live coverage — the sidecar's tab
+//  pool is held while it runs — so it is a mode, not an extra. `--camp-check` tests the target ranking offline.
+//    HARDVEN_INPLAY_CAMP           1 = in-play mode: park an armed betslip on the best live game (default 0)
+//    HARDVEN_CAMP_ARM_STAKE        account-currency stake typed at arm time (default = HARDVEN_STAKE_MIN_RUNG).
+//                                  Not the bet size: the executor sizes each fire and the slip is re-typed.
+//    HARDVEN_CAMP_MIN_HOLD_MS      a window shorter than this was never pressable, so it does not score (1500)
+//    HARDVEN_CAMP_SCORE_HALFLIFE_SEC  half-life of the catchable-money score (600)
+//    HARDVEN_CAMP_DEPTH_CAP        contracts one window may contribute, so a single deep book can't dominate (50)
+//    HARDVEN_CAMP_SWITCH_MARGIN    a challenger must beat the incumbent by this multiple to take the camp (2.0)
+//    HARDVEN_CAMP_MIN_TENURE_SEC   minimum time on a target before it can be relocated away from (120)
+//    HARDVEN_CAMP_IDLE_SEC         release after this long with no window on the camped game, ±20% (600)
+//    HARDVEN_CAMP_MAX_SEC          hard ceiling on one camp regardless of activity (3600)
+//    HARDVEN_CAMP_REARM_SEC        pause after a fire before re-arming (20)
+//    HARDVEN_CAMP_HEALTH_SEC       how often to DOM-verify the armed slip still exists (30)
+//
 //  cross_pairs.json: verified Kalshi↔HardVen market pairs; auto-populated on scan,
 //                    must be non-empty for arb detection to fire.
 //                    (Sidecar-side pairing + the unattended feed supervisor / keep-awake are documented in STARTUP.md.)
@@ -260,6 +275,92 @@ if (args.Contains("--slip-verify-check"))
     // Exit code via ExitCode, not `return n`: a returned value would make this file's entry point
     // int-returning and every other bare `return;` in it a compile error.
     Environment.ExitCode = failures == 0 ? 0 : 1;
+    return;
+}
+
+// ── Self-check: the IN-PLAY CAMPER's target selection ─────────────────────────────────────────────────
+// Where the camp parks decides which in-play arbs are reachable at all, and the inputs (window holds, edge,
+// depth, decay) only exist at runtime — so this exercises the decision directly rather than waiting for a
+// live session to be wrong in a way nobody notices. No sidecar and no browser: only the pure ranking.
+if (args.Contains("--camp-check"))
+{
+    Environment.SetEnvironmentVariable("HARDVEN_CAMP_SCORE_HALFLIFE_SEC", "2");   // keep the decay test quick
+    Environment.SetEnvironmentVariable("HARDVEN_CAMP_MIN_HOLD_MS", "1500");
+    Environment.SetEnvironmentVariable("HARDVEN_CAMP_SWITCH_MARGIN", "2");
+    int failed = 0;
+    void Ck(string label, bool ok)
+    {
+        Console.WriteLine($"  {(ok ? "PASS" : "FAIL")}  {label}");
+        if (!ok) failed++;
+    }
+
+    var campPairs = new List<CrossPair>
+    {
+        new("A", "Alpha vs Beta",   "KX-A", "aYes", "aNo"),
+        new("B", "Gamma vs Delta",  "KX-B", "bYes", "bNo"),
+        new("C", "Settled Match",   "KX-C", "cYes", "cNo"),
+    };
+    var campBooks = new System.Collections.Concurrent.ConcurrentDictionary<string, LocalOrderBook>();
+    foreach (var tok in new[] { "aYes", "aNo", "bYes", "bNo", "cYes", "cNo" })
+        campBooks[$"H:{tok}"] = new LocalOrderBook(tok) { IsLive = true };
+    var campTel = new CrossPlatformArbTelemetryStrategy(campPairs, campBooks);
+    var camp = new CampManager("http://127.0.0.1:1", campTel, campBooks,
+                               new DiscordNotifier(null), 0.995m, previewOnly: true);
+    // Camped (not Roving) so the open handler only RECORDS — Roving would try to arm against a dead sidecar.
+    camp.SetPhaseForTest(CampManager.CampPhase.Camped, "A", "aNo", "Alpha vs Beta");
+
+    void Window(string pairId, string arbType, decimal net, decimal depth, long holdMs)
+    {
+        camp.OnArbOpened(pairId, net, arbType, depth, 0.5m, 0.4m);
+        camp.OnArbClosed(pairId, arbType, holdMs, inPlay: true);
+    }
+
+    Console.WriteLine("\n[1] a window only scores if it held long enough to be pressed");
+    Window("A", "K_YES_P_NO", 0.95m, 10m, holdMs: 40);      // a 40ms flicker was never catchable
+    Ck("40ms window scores nothing", camp.ScoreForTest("A") == 0d);
+    Window("A", "K_YES_P_NO", 0.95m, 10m, holdMs: 5000);
+    Ck("5s window scores", camp.ScoreForTest("A") > 0d);
+
+    Console.WriteLine("\n[2] score is catchable MONEY: edge x depth, not window count");
+    // B gets ONE window with 4x the edge and 2x the depth of A's; A gets three thin ones.
+    Window("B", "K_NO_P_YES", 0.795m, 20m, holdMs: 4000);
+    for (int i = 0; i < 3; i++) Window("A", "K_YES_P_NO", 0.985m, 5m, holdMs: 4000);
+    Ck($"one fat window outranks three thin ones (B={camp.ScoreForTest("B"):0.00} A={camp.ScoreForTest("A"):0.00})",
+       camp.ScoreForTest("B") > camp.ScoreForTest("A"));
+
+    Console.WriteLine("\n[3] relocation needs a MARGIN, not a nose ahead");
+    Ck("B is the leader", camp.BestTargetForTest().PairId == "B");
+    Ck("camp moves off A to B", camp.TryPickRelocation("A", out var mv) && mv.PairId == "B");
+    Ck("...and arms the side B's windows keep taking (K_NO_P_YES buys the YES leg)",
+       camp.TryPickRelocation("A", out var mv2) && mv2.Token == "bYes");
+    Ck("the leader does not relocate to itself", !camp.TryPickRelocation("B", out _));
+    // Pull A up to just under the 2x margin: still behind, must NOT trigger a swap.
+    while (camp.ScoreForTest("B") > camp.ScoreForTest("A") * 2.0)
+        Window("A", "K_YES_P_NO", 0.985m, 5m, holdMs: 4000);
+    Ck($"a lead inside the margin holds the camp still (B={camp.ScoreForTest("B"):0.00} " +
+       $"A={camp.ScoreForTest("A"):0.00})", !camp.TryPickRelocation("A", out _));
+
+    Console.WriteLine("\n[4] a finished match stops being a target");
+    Window("C", "K_NO_P_YES", 0.60m, 40m, holdMs: 8000);     // by far the best score...
+    Ck("C leads while live", camp.BestTargetForTest().PairId == "C");
+    campBooks["H:cYes"].IsLive = false;                       // ...then the game ends
+    campBooks["H:cNo"].IsLive  = false;
+    Ck("a score earned on a match that is no longer live is not a camp target",
+       camp.BestTargetForTest().PairId != "C");
+
+    Console.WriteLine("\n[5] the score decays, so an hour-old flurry cannot pin the camp");
+    double before = camp.ScoreForTest("B");
+    await Task.Delay(2200);                                   // one 2s half-life (set above)
+    double after = camp.ScoreForTest("B");
+    Ck($"halved over one half-life ({before:0.00} -> {after:0.00})",
+       after < before * 0.6 && after > before * 0.4);
+
+    Console.WriteLine("\n[6] the armed side follows the tally, not the last window");
+    Ck("A's windows are mostly K_YES_P_NO -> arm the NO leg",
+       camp.DominantArbTypeForTest("A") == "K_YES_P_NO");
+
+    Console.WriteLine(failed == 0 ? "\nALL PASS" : $"\nFAILURES: {failed}");
+    Environment.ExitCode = failed == 0 ? 0 : 1;
     return;
 }
 
@@ -704,6 +805,9 @@ telemetry.SetSlipVerifier(restVerifier.SlipQuoteAsync,
 
 // ── Executor — live order placement on WS-detected arb windows ────────────────
 CrossArbExecutor?            executor    = null;
+// In-play camper (HARDVEN_INPLAY_CAMP=1). Outside the block so the status line and the shutdown path can
+// reach it — a camp left armed at exit is a stake sitting on a live game with nothing watching it.
+CampManager?                 campManager = null;
 // Concrete dry-run refs kept outside the if-block so key handlers (M/C/E/X) can reach them.
 SimulatedKalshiClient?       simKalshi   = null;
 SimulatedVenuePositionClient? venueClient = null;
@@ -996,6 +1100,30 @@ if (isLive || isDryRun)
         hardvenCurrency:      Environment.GetEnvironmentVariable("HARDVEN_CURRENCY") ?? "EUR");
     telemetry.OnArbOpened  += executor.OnArbOpened;
     telemetry.BookUpdated  += executor.OnBookUpdate;  // event-driven early exit checks
+
+    // ── IN-PLAY CAMPER (HARDVEN_INPLAY_CAMP=1) ────────────────────────────────────────────────────────
+    // Switches the sidecar to in-play mode (one live tab, tab manager held) and parks an armed betslip on
+    // whichever live game is currently worth camping on, so an in-play arb costs ONE PRESS instead of the
+    // navigate-find-click-type drive that makes in-play unreachable. Off by default: it REPLACES pre-live
+    // coverage rather than adding to it — the tab pool is held while it runs — so it is a mode, not an extra.
+    if (EnvBool("HARDVEN_INPLAY_CAMP", false))
+    {
+        campManager = new CampManager(HARDVEN_SIDECAR_URL, telemetry, state.Books, discord,
+                                      ARB_THRESHOLD, previewOnly: isDryRun);
+        // The camper needs BOTH ends of a window: the open says where to camp, the close says how long it held
+        // (and therefore whether it was ever catchable — see OnArbClosed).
+        telemetry.OnArbOpened += campManager.OnArbOpened;
+        telemetry.OnArbClosed += campManager.OnArbClosed;
+        // Two seams into execution, both required rather than optional:
+        //   the ORDER CLIENT presses the armed slip instead of driving the UI (and refuses to drive at all
+        //     while a camp is armed, because a drive navigates the one tab the slip lives on);
+        //   the EXECUTOR's pre-live-only gate lets the camped selection through, and only that one.
+        hardvenOrderClient.SetCampManager(campManager);
+        executor.SetCampManager(campManager);
+        if (!await campManager.StartAsync(cts.Token))
+            campManager = null;                       // in-play mode refused — fall back to pre-live behaviour
+    }
+
     await executor.InitializeBalancesAsync();
     if (isLive && pairs.Count > 0)
         await executor.ReconcileOnStartupAsync(pairs);
@@ -1457,6 +1585,16 @@ if (discord.Enabled)
         string live = $"📊 **status** — session {sess} | live books K={kLive}/{kTotal} H={pLive}/{pTotal} | " +
                       $"WS K={(kalshiFeed.IsConnected ? "ok" : "down")} H={(hardvenFeed.IsConnected ? "ok" : "down")} | " +
                       $"openArbs={telemetry.OpenArbs} pairs={telemetry.TotalPairs} | up {up.Days}d{up.Hours}h{up.Minutes}m";
+        if (campManager != null)
+        {
+            live += "\n⛺ " + campManager.StatusLine();
+            // The shortlist is the relocation decision's actual input, so showing it turns "why is it parked
+            // there?" from a guess into a read.
+            var top = campManager.TopTargets(3).ToList();
+            if (top.Count > 0)
+                live += "\n" + string.Join("\n", top.Select(t =>
+                    $"   ${t.Score:0.00} · {t.Label} ({t.Takeable}/{t.Opens} takeable)"));
+        }
         string analysis = await RunAnalyzerSummaryAsync();
         string combined = string.IsNullOrWhiteSpace(analysis)
             ? live + "\n(no telemetry logged yet)"
@@ -1848,6 +1986,15 @@ await Task.WhenAll(kalshiWsTask, hardvenWsTask);
 try { await keepAwakeTask; } catch { /* releases sleep-suppression in its own finally */ }
 
 DebugLog.Write("WS feeds stopped — beginning shutdown sequence");
+// FIRST: release the armed betslip and hand the browser back to pre-live mode. Done before the telemetry and
+// executor flushes because it touches the venue — leaving a Quick Bet armed on a live game after the bot has
+// stopped means a loaded slip nothing is watching, and leaving the sidecar in in-play mode means the next run
+// starts with its tab pool held.
+if (campManager != null)
+{
+    try { await campManager.StopAsync(); }
+    catch (Exception ex) { Console.WriteLine($"[SHUTDOWN ERROR] camp release failed: {ex.Message}"); }
+}
 try { await telemetry.ShutdownAsync(); }
 catch (Exception ex)
 {

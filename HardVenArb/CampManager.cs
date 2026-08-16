@@ -1,0 +1,793 @@
+using System.Collections.Concurrent;
+using System.Globalization;
+using System.Net.Http;
+using System.Text;
+using System.Text.Json;
+using PredictionBacktester.Engine;
+
+namespace HardVenArb;
+
+/// <summary>Outcome of pressing an armed camp. Distinguishes the three states the sidecar reports, because
+/// they demand three different responses and collapsing them is how a naked leg gets created.</summary>
+public sealed record CampFireResult(
+    bool    Placed,          // confirmed on the account — safe to hedge against
+    decimal Odds,            // the decimal odds the bet was ACCEPTED at (not the armed price)
+    decimal StakeAccount,    // account-currency stake actually staked
+    string  BetId,
+    bool    Ambiguous,       // pressed, but acceptance never confirmed — state UNKNOWN, must NOT be hedged
+    string  Reason);
+
+/// <summary>
+/// The in-play camp brain: decides WHERE to park the one live Pinnacle tab's armed betslip, when to move it,
+/// and when to give up and go back to browsing. The sidecar owns the mechanics (<c>/camp/start</c>,
+/// <c>/camp/fire</c>, <c>/camp/status</c>, <c>/camp/stop</c>); this owns the policy.
+///
+/// <para><b>Why camping at all.</b> Measured over 206 in-play windows on 2026-08-16: they came from just 13
+/// pairs, NOT ONE produced a single isolated arb, 94% of windows were a repeat on a pair already seen, and the
+/// median gap to the next window on the same pair was 41s. So in-play opportunity is concentrated and
+/// recurring — which means the expensive part of execution (navigate → find the row → click → type → confirm,
+/// seconds long while an in-play line moves under it) can be paid ONCE, up front, instead of inside every
+/// window. Pre-arming turns the in-play book leg into a single press. That is the only reason in-play is
+/// reachable at all.</para>
+///
+/// <para><b>The lifecycle</b>, which is deliberately simple:</para>
+/// <code>
+///   ROVING   browse the live list calmly, camp nothing. The startup state.
+///     │  first in-play arb window opens          → arm on THAT moneyline
+///   CAMPED   armed slip held; the next window on it costs one press
+///     │  a window opens on the armed selection   → the executor presses (see FireAsync)
+///     │  another game scores clearly better      → relocate (needs a MARGIN, see below)
+///     │  nothing happens for ~10 min             → release, back to ROVING
+///     │  the popover died under us               → back to ROVING
+/// </code>
+///
+/// <para><b>Scoring, and what "a game with especially good arb holds" means.</b> A window is only worth
+/// camping for if it could actually have been TAKEN, so score is built from closes, not opens: when a window
+/// closes, if it lived at least <c>HARDVEN_CAMP_MIN_HOLD_MS</c> (a press is ~1s of UI, so anything shorter was
+/// never catchable however fast the camp was), it contributes <c>edge × depth</c> — the dollars that were
+/// genuinely on the table — decayed with a half-life. The result is a per-pair estimate of recent catchable
+/// money per unit time, which is exactly the quantity a camp should be maximising. Frequency, edge size, depth
+/// and hold length all move it in the right direction without needing four separate weights.</para>
+///
+/// <para><b>Relocation needs a margin, not just a lead.</b> Switching costs a navigation, a re-arm, and a gap
+/// in coverage on a pair that has been producing. So a challenger must beat the incumbent by
+/// <c>HARDVEN_CAMP_SWITCH_MARGIN</c>× (default 2×) and the incumbent must have had a minimum tenure. Without
+/// both, two comparable games trade the camp back and forth and neither is ever actually armed when a window
+/// opens.</para>
+/// </summary>
+public sealed class CampManager
+{
+    // ── collaborators ─────────────────────────────────────────────────────────
+    private readonly string _sidecar;
+    private readonly CrossPlatformArbTelemetryStrategy _telemetry;
+    private readonly ConcurrentDictionary<string, LocalOrderBook> _books;
+    private readonly DiscordNotifier _discord;
+    private readonly bool _previewOnly;      // dry-run: arm and relocate for real, never press Place
+    private readonly decimal _arbThreshold;  // net cost a window opens under — the baseline edge is measured from
+
+    // Arming drives the UI (find the row, click, type) and can run for tens of seconds on a scroll-miss, so it
+    // gets its own long-timeout client. Status/stop are instant reads and must not be stuck behind an arm.
+    private readonly HttpClient _uiHttp   = new() { Timeout = TimeSpan.FromSeconds(90) };
+    private readonly HttpClient _fastHttp = new() { Timeout = TimeSpan.FromSeconds(15) };
+    // Firing has its own client: camp_fire waits up to 15s for /bets/straight and then polls the account's bet
+    // list to establish acceptance (the POST answers PENDING_ACCEPTANCE with no bet id). Timing out the HTTP
+    // call underneath that would leave a placed bet with no record on this side — the exact failure that cost
+    // a leg on 2026-08-12.
+    private readonly HttpClient _fireHttp = new() { Timeout = TimeSpan.FromSeconds(120) };
+
+    // ── tunables ──────────────────────────────────────────────────────────────
+    private readonly decimal _armStake;       // account-currency stake typed at arm time (fire re-types if sized differently)
+    private readonly double  _halfLifeSec;
+    private readonly long    _minHoldMs;
+    private readonly double  _switchMargin;
+    private readonly int     _minTenureSec;
+    private readonly int     _idleSec;
+    private readonly int     _maxSec;
+    private readonly int     _rearmSec;
+    private readonly int     _healthSec;
+    private readonly double  _depthCapContracts;
+
+    // ── state (all under _lock) ───────────────────────────────────────────────
+    private readonly object _lock = new();
+    private CampPhase _phase = CampPhase.Off;
+    private string    _campPairId = "";
+    private string    _campToken  = "";      // the Pinnacle selection_id actually armed
+    private string    _campLabel  = "";
+    private string    _campArbType = "";
+    private DateTime  _armedAt;
+    private DateTime  _lastActionAt;         // arm, fire attempt, or a window opening on the camped selection
+    private DateTime  _lastHealthAt;
+    private int       _idleBudgetSec;        // _idleSec ± jitter, re-rolled per camp
+    private DateTime  _rearmAfter = DateTime.MaxValue;
+    private string    _rearmPairId = "";
+
+    private int _armCount, _relocCount, _releaseCount, _lostCount, _fireCount, _placedCount, _ambiguousCount;
+
+    // pairId → decayed catchable-money score
+    private readonly ConcurrentDictionary<string, PairScore> _scores = new(StringComparer.Ordinal);
+    // Windows still open, keyed pairId|arbType, so the close can be priced against what it opened at.
+    private readonly ConcurrentDictionary<string, PendingWindow> _pending = new(StringComparer.Ordinal);
+
+    // Only one sidecar camp operation at a time. Arm/relocate/release all drive the same single tab, and two
+    // of them interleaved produce a camp whose recorded state and actual state disagree.
+    private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly Random _rng = new();
+    private CancellationTokenSource? _cts;
+    private Task? _supervisor;
+
+    public enum CampPhase { Off, Roving, Arming, Camped, Firing }
+
+    private sealed class PairScore
+    {
+        public string   Label = "";
+        public double   Value;               // decayed $ of catchable edge
+        public DateTime ValueAt = DateTime.UtcNow;
+        public int      Opens, Takeable;
+        public DateTime LastOpen = DateTime.MinValue;
+        // Which HardVen leg the arbs on this pair keep buying. Repeats DO switch sides (only 1 of 13 pairs
+        // stayed on one), but a dominant side runs 70-88% — so a re-arm follows the tally rather than the
+        // most recent window, and the minority case stays cheap: parked on the game, the other cell is a
+        // click away rather than a navigation.
+        public int      YesSideOpens, NoSideOpens;
+    }
+
+    private readonly record struct PendingWindow(string PairId, string ArbType, double Edge, double Depth, DateTime OpenedAt);
+
+    public CampManager(
+        string sidecarBaseUrl,
+        CrossPlatformArbTelemetryStrategy telemetry,
+        ConcurrentDictionary<string, LocalOrderBook> books,
+        DiscordNotifier discord,
+        decimal arbThreshold,
+        bool previewOnly)
+    {
+        _sidecar      = (sidecarBaseUrl ?? "").TrimEnd('/');
+        _telemetry    = telemetry;
+        _books        = books;
+        _discord      = discord;
+        _arbThreshold = arbThreshold;
+        _previewOnly  = previewOnly;
+
+        _armStake    = EnvDec("HARDVEN_CAMP_ARM_STAKE", StakeLadder.MinRung);
+        _halfLifeSec = (double)EnvDec("HARDVEN_CAMP_SCORE_HALFLIFE_SEC", 600m);
+        _minHoldMs   = EnvInt("HARDVEN_CAMP_MIN_HOLD_MS", 1500);
+        _switchMargin = (double)EnvDec("HARDVEN_CAMP_SWITCH_MARGIN", 2.0m);
+        _minTenureSec = EnvInt("HARDVEN_CAMP_MIN_TENURE_SEC", 120);
+        _idleSec      = EnvInt("HARDVEN_CAMP_IDLE_SEC", 600);
+        _maxSec       = EnvInt("HARDVEN_CAMP_MAX_SEC", 3600);
+        _rearmSec     = EnvInt("HARDVEN_CAMP_REARM_SEC", 20);
+        _healthSec    = EnvInt("HARDVEN_CAMP_HEALTH_SEC", 30);
+        _depthCapContracts = (double)EnvDec("HARDVEN_CAMP_DEPTH_CAP", 50m);
+    }
+
+    // ── public surface ────────────────────────────────────────────────────────
+
+    /// <summary>The Pinnacle selection currently armed, or "" when nothing is. Read by the order client to
+    /// decide press-vs-drive, so it must reflect the sidecar's real state and never a stale intention.</summary>
+    public string ArmedToken { get { lock (_lock) return _phase == CampPhase.Camped || _phase == CampPhase.Firing ? _campToken : ""; } }
+
+    public bool IsArmedOn(string token) =>
+        !string.IsNullOrEmpty(token) && string.Equals(ArmedToken, token, StringComparison.Ordinal);
+
+    /// <summary>True while a camp exists at all — used to refuse UI-driving bets that would navigate the one
+    /// live tab and take the armed slip with it.</summary>
+    public bool AnyCampArmed => ArmedToken.Length > 0;
+
+    public CampPhase Phase { get { lock (_lock) return _phase; } }
+
+    /// <summary>Put the sidecar into in-play mode (one live tab, tab manager held, camp-aware idle) and start
+    /// the supervisor. ROVING from here: nothing is camped until the first in-play window opens.</summary>
+    public async Task<bool> StartAsync(CancellationToken ct)
+    {
+        var (ok, body) = await PostAsync(_fastHttp, "/inplay/start", null, ct);
+        if (!ok)
+        {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"[CAMP] could not enter in-play mode — {body}. Camping is OFF; the bot will run " +
+                              "pre-live as usual.");
+            Console.ResetColor();
+            return false;
+        }
+        lock (_lock) { _phase = CampPhase.Roving; }
+        _cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        _supervisor = Task.Run(() => SupervisorLoopAsync(_cts.Token));
+        Console.ForegroundColor = ConsoleColor.Cyan;
+        Console.WriteLine($"[CAMP] IN-PLAY mode: roving. Will arm on the first in-play arb, then hold it. " +
+                          $"arm stake={_armStake:0.##} · idle release ~{_idleSec}s · relocate at {_switchMargin:0.#}x " +
+                          $"after {_minTenureSec}s · hard cap {_maxSec}s");
+        Console.ResetColor();
+        return true;
+    }
+
+    public async Task StopAsync()
+    {
+        try { _cts?.Cancel(); } catch { }
+        if (_supervisor != null) { try { await _supervisor; } catch { } }
+        // Release the slip before handing the browser back: leaving an armed Quick Bet behind after shutdown
+        // means a stake sitting on a live game with nothing watching it.
+        if (AnyCampArmed) { try { await ReleaseAsync("shutdown", CancellationToken.None, force: true); } catch { } }
+        try { await PostAsync(_fastHttp, "/inplay/stop", null, CancellationToken.None); } catch { }
+        lock (_lock) { _phase = CampPhase.Off; }
+    }
+
+    // ── telemetry hooks ───────────────────────────────────────────────────────
+
+    /// <summary>Wire to <c>telemetry.OnArbOpened</c>. Runs on the feed thread — records state and hands any
+    /// sidecar work to a background task, never blocks the book update.</summary>
+    public void OnArbOpened(string pairId, decimal netCost, string arbType, decimal depth,
+                            decimal kLegAsk, decimal pLegAsk)
+    {
+        if (Phase == CampPhase.Off) return;
+        var pair = _telemetry.GetPair(pairId);
+        if (pair == null) return;
+        string token = TokenFor(pair, arbType);
+        if (token.Length == 0) return;
+        // IN-PLAY ONLY. A camp is a live-tab construct; a pre-match window is executed the normal way.
+        if (!(_books.TryGetValue($"H:{token}", out var book) && book.IsLive)) return;
+
+        double edge = Math.Max(0d, (double)(_arbThreshold - netCost));
+        _pending[$"{pairId}|{arbType}"] = new PendingWindow(pairId, arbType, edge, (double)depth, DateTime.UtcNow);
+
+        var sc = _scores.GetOrAdd(pairId, _ => new PairScore { Label = pair.Label });
+        lock (sc)
+        {
+            sc.Label = pair.Label;
+            sc.Opens++;
+            sc.LastOpen = DateTime.UtcNow;
+            if (arbType == "K_YES_P_NO") sc.NoSideOpens++; else sc.YesSideOpens++;
+        }
+
+        bool armNow = false;
+        lock (_lock)
+        {
+            if (_phase == CampPhase.Roving)
+            {
+                armNow = true;
+                _phase = CampPhase.Arming;      // claim it here so two simultaneous opens can't both arm
+            }
+            else if (_phase == CampPhase.Camped && pairId == _campPairId)
+            {
+                // The camp is doing its job even if the executor's gates end up refusing this particular
+                // window — the game is producing. That is "action" for the idle clock.
+                _lastActionAt = DateTime.UtcNow;
+            }
+        }
+        if (armNow)
+            _ = Task.Run(() => ArmAsync(pairId, token, pair.Label, arbType, "first in-play arb",
+                                        _cts?.Token ?? CancellationToken.None));
+    }
+
+    /// <summary>Wire to <c>telemetry.OnArbClosed</c>. The close is where a window's HOLD becomes known, and the
+    /// hold is what decides whether it was ever catchable — so this, not the open, is what feeds the score.</summary>
+    public void OnArbClosed(string pairId, string arbType, long durationMs, bool inPlay)
+    {
+        if (Phase == CampPhase.Off) return;
+        if (!_pending.TryRemove($"{pairId}|{arbType}", out var w)) return;
+        if (!inPlay) return;
+        var sc = _scores.GetOrAdd(pairId, _ => new PairScore());
+        // A window shorter than one press was never takeable, however well-placed the camp was. Counting it
+        // would rank a game that flickers 40 unreachable windows above one that holds three real ones.
+        if (durationMs < _minHoldMs) return;
+        double catchable = w.Edge * Math.Min(w.Depth, _depthCapContracts);
+        if (catchable <= 0d) return;
+        lock (sc)
+        {
+            sc.Value = Decayed(sc.Value, sc.ValueAt) + catchable;
+            sc.ValueAt = DateTime.UtcNow;
+            sc.Takeable++;
+        }
+    }
+
+    // ── the money press ───────────────────────────────────────────────────────
+
+    /// <summary>Press PLACE BET on the armed slip. Called by <see cref="HardVenOrderClient"/> in place of the
+    /// UI drive when the leg being bought is the one already armed.
+    ///
+    /// <para><paramref name="minOdds"/> is a FLOOR, not a target. The panel re-quotes continuously and Place
+    /// stays enabled through the change, so a press accepts whatever is current — higher decimal odds favour a
+    /// backer, so anything at or above the price the arb was sized on is fine, and below it the edge the trade
+    /// was justified by no longer exists. The sidecar applies the same floor again to the odds-changed
+    /// re-prompt, so a move against us between press and submit is declined rather than accepted.</para></summary>
+    public async Task<CampFireResult> FireAsync(string token, decimal minOdds, decimal stakeAccount,
+                                                CancellationToken ct = default)
+    {
+        if (!IsArmedOn(token))
+            return new CampFireResult(false, 0m, 0m, "", false, "no camp armed on this selection");
+        if (_previewOnly)
+            return new CampFireResult(false, 0m, 0m, "", false,
+                "dry run — the camp is armed and would have been pressed, but preview mode places nothing");
+
+        lock (_lock)
+        {
+            if (_phase != CampPhase.Camped)
+                return new CampFireResult(false, 0m, 0m, "", false, $"camp is {_phase}, not pressable");
+            _phase = CampPhase.Firing;
+            _lastActionAt = DateTime.UtcNow;
+            _fireCount++;
+        }
+
+        string payload = JsonSerializer.Serialize(new
+        {
+            min_odds = Math.Round(minOdds, 4),
+            stake    = stakeAccount > 0m ? (decimal?)Math.Round(stakeAccount, 2) : null,
+            confirm  = "yes",
+        });
+
+        string pairId, label;
+        lock (_lock) { pairId = _campPairId; label = _campLabel; }
+
+        try
+        {
+            var (ok, body) = await PostAsync(_fireHttp, "/camp/fire", payload, ct);
+            // camp_fire ALWAYS releases the camp in its finally — the slip is consumed by a placement, and a
+            // failed press leaves a panel we no longer know the state of. So the camp is gone either way.
+            ClearCampAfterFire(pairId);
+
+            if (!ok)
+                return new CampFireResult(false, 0m, 0m, "", false, $"/camp/fire failed: {Truncate(body)}");
+
+            using var doc = JsonDocument.Parse(body);
+            var root = doc.RootElement;
+            bool okFlag    = Flag(root, "ok");
+            bool fired     = Flag(root, "fired");
+            bool confirmed = Flag(root, "confirmed");
+            bool accepted  = Flag(root, "accepted");
+            string reason  = Str(root, "error");
+            decimal odds   = Dec(root, "odds");
+            decimal stake  = Dec(root, "stake");
+            string betId   = Str(root, "bet_id");
+
+            if (okFlag && accepted)
+            {
+                Interlocked.Increment(ref _placedCount);
+                Console.ForegroundColor = ConsoleColor.Green;
+                Console.WriteLine($"[CAMP FIRE] {label} · {stake:0.##} @ {odds:0.000} · bet {betId}");
+                Console.ResetColor();
+                return new CampFireResult(true, odds, stake, betId, false, "accepted");
+            }
+
+            // PRESSED BUT UNCONFIRMED. The sidecar's own instruction is do NOT hedge against this, and it is
+            // right: a hedge placed against a bet that does not exist is a naked directional position, which is
+            // strictly worse than an unhedged book leg we know about. So this returns "not placed" — no Kalshi
+            // order is sent — and shouts, because it is the one outcome that needs a human to reconcile.
+            if (fired && !confirmed)
+            {
+                Interlocked.Increment(ref _ambiguousCount);
+                Console.ForegroundColor = ConsoleColor.Red;
+                Console.WriteLine($"[CAMP FIRE ⚠] {label}: PLACE BET was pressed and acceptance was never " +
+                                  $"confirmed — {reason}. NO Kalshi hedge was sent. Reconcile this against " +
+                                  $"My Bets by hand before the game settles.");
+                Console.ResetColor();
+                _ = _discord.AlertAsync($"⚠️ **CAMP FIRE UNCONFIRMED** — {label}\nPressed Place, no confirmation " +
+                                        $"({reason}). No hedge sent. **Check My Bets manually.**");
+                return new CampFireResult(false, odds, stake, betId, true, $"unconfirmed: {reason}");
+            }
+
+            // Clean refusal — declined on a moved price, Place disabled below the venue minimum, slip gone.
+            // Nothing was placed, so this is a free miss and the executor's book-first path sends no Kalshi leg.
+            Console.WriteLine($"[CAMP FIRE] {label}: no bet — {reason}");
+            return new CampFireResult(false, odds, stake, betId, false, reason.Length > 0 ? reason : "not fired");
+        }
+        catch (Exception ex)
+        {
+            // A timeout here is NOT proof nothing was placed: camp_fire may still be waiting on the account's
+            // bet list. Treat it as ambiguous for exactly the same reason as above.
+            ClearCampAfterFire(pairId);
+            Interlocked.Increment(ref _ambiguousCount);
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"[CAMP FIRE ⚠] {label}: {ex.GetType().Name} talking to the sidecar mid-press " +
+                              $"({ex.Message}) — the bet MAY be live. No hedge sent.");
+            Console.ResetColor();
+            _ = _discord.AlertAsync($"⚠️ **CAMP FIRE UNKNOWN** — {label}\n{ex.GetType().Name}: {ex.Message}. " +
+                                    "No hedge sent. **Check My Bets manually.**");
+            return new CampFireResult(false, 0m, 0m, "", true, $"sidecar error mid-press: {ex.Message}");
+        }
+    }
+
+    private void ClearCampAfterFire(string pairId)
+    {
+        lock (_lock)
+        {
+            _phase       = CampPhase.Roving;
+            _campToken   = ""; _campPairId = ""; _campLabel = ""; _campArbType = "";
+            // The tape says repeats keep coming (median gap 41s), so the pair that just produced is usually
+            // still the best target. Re-arm shortly rather than waiting for the next window to be detected —
+            // otherwise the very next repeat pays the full navigate-find-click cost the camp exists to avoid.
+            _rearmAfter  = DateTime.UtcNow.AddSeconds(_rearmSec);
+            _rearmPairId = pairId;
+        }
+    }
+
+    // ── supervisor ────────────────────────────────────────────────────────────
+
+    private async Task SupervisorLoopAsync(CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                await Task.Delay(5_000, ct);
+                await TickAsync(ct);
+            }
+            catch (OperationCanceledException) { return; }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[CAMP] supervisor: {ex.GetType().Name}: {ex.Message}");
+                try { await Task.Delay(15_000, ct); } catch { return; }
+            }
+        }
+    }
+
+    private async Task TickAsync(CancellationToken ct)
+    {
+        CampPhase phase; string pairId, label; DateTime armedAt, lastAction, lastHealth; int idleBudget;
+        DateTime rearmAfter; string rearmPair;
+        lock (_lock)
+        {
+            phase = _phase; pairId = _campPairId; label = _campLabel;
+            armedAt = _armedAt; lastAction = _lastActionAt; lastHealth = _lastHealthAt;
+            idleBudget = _idleBudgetSec; rearmAfter = _rearmAfter; rearmPair = _rearmPairId;
+        }
+        var now = DateTime.UtcNow;
+
+        if (phase == CampPhase.Roving)
+        {
+            // The only thing ROVING does on a timer is honour a pending re-arm after a fire. Otherwise it waits
+            // for a window to open, which is what the user asked for: browse calmly, camp on the next arb.
+            if (now >= rearmAfter && rearmPair.Length > 0)
+            {
+                lock (_lock) { _rearmAfter = DateTime.MaxValue; _rearmPairId = ""; }
+                var best = BestTarget();
+                string target = best.PairId.Length > 0 ? best.PairId : rearmPair;
+                var pair = _telemetry.GetPair(target);
+                if (pair != null)
+                {
+                    string arbType = DominantArbType(target);
+                    string tok = TokenFor(pair, arbType);
+                    if (tok.Length > 0 && IsTokenLive(tok))
+                    {
+                        bool claimed = false;
+                        lock (_lock) { if (_phase == CampPhase.Roving) { _phase = CampPhase.Arming; claimed = true; } }
+                        if (claimed)
+                            await ArmAsync(target, tok, pair.Label, arbType,
+                                           target == rearmPair ? "re-arm after fire" : "re-arm on the best target", ct);
+                    }
+                }
+            }
+            return;
+        }
+        if (phase != CampPhase.Camped) return;   // Arming / Firing own themselves
+
+        // ── health: is the popover actually still there? ──────────────────────
+        // camp_status READS the DOM rather than echoing the flag written at arm time — that distinction is the
+        // whole value of the check. An earlier version reported armed:true for 13 minutes on a camp the page
+        // had already navigated away from, which on a money path means pressing Place on whatever is there.
+        if ((now - lastHealth).TotalSeconds >= _healthSec)
+        {
+            lock (_lock) { _lastHealthAt = now; }
+            var (ok, body) = await GetAsync(_fastHttp, "/camp/status", ct);
+            bool alive = false, camping = false; string lost = "";
+            if (ok)
+            {
+                try
+                {
+                    using var doc = JsonDocument.Parse(body);
+                    camping = Flag(doc.RootElement, "camping");
+                    alive   = camping && Flag(doc.RootElement, "armed");
+                    lost    = Str(doc.RootElement, "lost");
+                }
+                catch { }
+            }
+            if (ok && !alive)
+            {
+                bool took = false;
+                lock (_lock)
+                {
+                    // A press that started since the snapshot owns the slip; leave it alone.
+                    if (_phase == CampPhase.Camped)
+                    {
+                        _phase = CampPhase.Roving;
+                        _campToken = ""; _campPairId = ""; _campLabel = ""; _campArbType = "";
+                        took = true;
+                    }
+                }
+                if (!took) return;
+                Interlocked.Increment(ref _lostCount);
+                Console.ForegroundColor = ConsoleColor.Yellow;
+                Console.WriteLine($"[CAMP] LOST on {label} after {(now - armedAt).TotalMinutes:0.0}m — " +
+                                  $"{(lost.Length > 0 ? lost : camping ? "the Quick Bet is gone" : "the sidecar is no longer camping")}. " +
+                                  "Back to roving; the next in-play arb re-arms.");
+                Console.ResetColor();
+                // The sidecar may still hold _camping with a dead popover (its own idle watcher clears it, but
+                // this can get here first). Stop explicitly so betslip trimming resumes.
+                if (camping) await ReleaseAsync("lost", ct);
+                return;
+            }
+        }
+
+        // ── hard ceiling ──────────────────────────────────────────────────────
+        // A pair that keeps producing windows the gates refuse would otherwise hold the camp forever, because
+        // an open counts as action. This is the backstop that guarantees the tab eventually moves on.
+        if ((now - armedAt).TotalSeconds >= _maxSec)
+        {
+            await ReleaseAsync($"held {(now - armedAt).TotalMinutes:0}m (hard cap)", ct);
+            return;
+        }
+
+        // ── idle release ──────────────────────────────────────────────────────
+        if ((now - lastAction).TotalSeconds >= idleBudget)
+        {
+            await ReleaseAsync($"nothing for {(now - lastAction).TotalMinutes:0.0}m", ct);
+            return;
+        }
+
+        // ── relocation ────────────────────────────────────────────────────────
+        if ((now - armedAt).TotalSeconds < _minTenureSec) return;
+        if (!TryPickRelocation(pairId, out var move)) return;
+
+        Interlocked.Increment(ref _relocCount);
+        Console.ForegroundColor = ConsoleColor.Cyan;
+        Console.WriteLine($"[CAMP] RELOCATE {label} (${move.FromScore:0.00}) → {move.Label} (${move.ToScore:0.00}) — " +
+                          $"{move.ToScore / Math.Max(move.FromScore, 1e-9):0.#}x better over the last " +
+                          $"{_halfLifeSec / 60:0}m half-life");
+        Console.ResetColor();
+        await ReleaseAsync("relocating", ct, quiet: true);
+        bool got = false;
+        lock (_lock) { if (_phase == CampPhase.Roving) { _phase = CampPhase.Arming; got = true; } }
+        if (got) await ArmAsync(move.PairId, move.Token, move.Label, move.ArbType, "better target", ct);
+    }
+
+    internal readonly record struct Relocation(
+        string PairId, string Token, string Label, string ArbType, double FromScore, double ToScore);
+
+    /// <summary>Should the camp move, and to what? Pure decision, no I/O — the tenure check is the caller's,
+    /// everything else is here so it can be exercised without a browser.
+    ///
+    /// <para>The MARGIN is what makes this stable. A bare "is anyone ahead?" test hands the camp to whichever
+    /// game happened to close a window most recently, and two comparable matches then swap it back and forth,
+    /// paying a navigation each time and never actually being armed when a window opens. Requiring a clear
+    /// multiple means the camp only moves when the tape says the other game is a different class of target,
+    /// not merely a nose ahead.</para></summary>
+    internal bool TryPickRelocation(string incumbentPairId, out Relocation move)
+    {
+        move = default;
+        var lead = BestTarget();
+        if (lead.PairId.Length == 0 || lead.PairId == incumbentPairId) return false;
+        double incumbent = ScoreOf(incumbentPairId);
+        if (lead.Score < Math.Max(incumbent, 1e-9) * _switchMargin) return false;
+        var lp = _telemetry.GetPair(lead.PairId);
+        if (lp == null) return false;
+        string lArb = DominantArbType(lead.PairId);
+        string lTok = TokenFor(lp, lArb);
+        if (lTok.Length == 0 || !IsTokenLive(lTok)) return false;
+        move = new Relocation(lead.PairId, lTok, lp.Label, lArb, incumbent, lead.Score);
+        return true;
+    }
+
+    // ── test surface (same assembly only) ─────────────────────────────────────
+    internal double ScoreForTest(string pairId) => ScoreOf(pairId);
+    internal string DominantArbTypeForTest(string pairId) => DominantArbType(pairId);
+    internal (string PairId, double Score) BestTargetForTest() => BestTarget();
+    /// <summary>Force the phase, so the open/close handlers can be exercised without a sidecar.</summary>
+    internal void SetPhaseForTest(CampPhase p, string pairId = "", string token = "", string label = "")
+    {
+        lock (_lock)
+        {
+            _phase = p; _campPairId = pairId; _campToken = token; _campLabel = label;
+            _armedAt = _lastActionAt = _lastHealthAt = DateTime.UtcNow;
+            _idleBudgetSec = _idleSec;
+        }
+    }
+
+    // ── sidecar operations ────────────────────────────────────────────────────
+
+    private async Task ArmAsync(string pairId, string token, string label, string arbType, string why,
+                                CancellationToken ct)
+    {
+        await _gate.WaitAsync(ct);
+        try
+        {
+            string payload = JsonSerializer.Serialize(new { selection_id = token, stake = (double)_armStake });
+            Console.WriteLine($"[CAMP] arming on {label} ({why}) — {token} @ stake {_armStake:0.##}…");
+            var (ok, body) = await PostAsync(_uiHttp, "/camp/start", payload, ct);
+            bool armed = false; string err = Truncate(body); decimal odds = 0m;
+            if (ok)
+            {
+                try
+                {
+                    using var doc = JsonDocument.Parse(body);
+                    armed = Flag(doc.RootElement, "ok") && Flag(doc.RootElement, "armed");
+                    err   = Str(doc.RootElement, "error");
+                    odds  = Dec(doc.RootElement, "odds");
+                }
+                catch { }
+            }
+            if (!armed)
+            {
+                lock (_lock) { if (_phase == CampPhase.Arming) _phase = CampPhase.Roving; }
+                Console.ForegroundColor = ConsoleColor.Yellow;
+                Console.WriteLine($"[CAMP] could not arm {label}: {err}. Staying on rove — the next in-play arb tries again.");
+                Console.ResetColor();
+                return;
+            }
+            var now = DateTime.UtcNow;
+            lock (_lock)
+            {
+                _phase = CampPhase.Camped;
+                _campPairId = pairId; _campToken = token; _campLabel = label; _campArbType = arbType;
+                _armedAt = now; _lastActionAt = now; _lastHealthAt = now;
+                // Jitter the release so it is not metronomic. A camp that is abandoned at exactly 600.0s every
+                // time is a schedule, and a schedule is a signature.
+                _idleBudgetSec = (int)(_idleSec * (0.8 + _rng.NextDouble() * 0.4));
+                _armCount++;
+            }
+            Console.ForegroundColor = ConsoleColor.Cyan;
+            Console.WriteLine($"[CAMP] ARMED on {label} @ {odds:0.000} ({SideName(arbType)}) — the next window here " +
+                              $"is one press. Releasing in ~{_idleBudgetSec / 60.0:0.0}m if nothing happens.");
+            Console.ResetColor();
+            _ = _discord.AlertAsync($"⛺ camped on **{label}** ({SideName(arbType)} @ {odds:0.000}) — {why}");
+        }
+        finally { _gate.Release(); }
+    }
+
+    /// <summary>Drop the camp and go back to browsing. Refuses while a press is in flight unless
+    /// <paramref name="force"/> — the supervisor decides to release from a snapshot taken seconds earlier, and
+    /// a fire that started in between must not have the slip pulled out from under it.</summary>
+    private async Task ReleaseAsync(string why, CancellationToken ct, bool quiet = false, bool force = false)
+    {
+        string label;
+        lock (_lock)
+        {
+            if (!force && _phase != CampPhase.Camped) return;
+            label = _campLabel;
+            _phase = CampPhase.Roving;
+            _campToken = ""; _campPairId = ""; _campLabel = ""; _campArbType = "";
+            _releaseCount++;
+        }
+        await _gate.WaitAsync(ct);
+        try { await PostAsync(_fastHttp, "/camp/stop", null, ct); }
+        catch { }
+        finally { _gate.Release(); }
+        if (!quiet)
+            Console.WriteLine($"[CAMP] released {label} — {why}. Roving; will camp on the next in-play arb.");
+    }
+
+    // ── scoring helpers ───────────────────────────────────────────────────────
+
+    private double Decayed(double value, DateTime at)
+    {
+        if (value <= 0d) return 0d;
+        double elapsed = (DateTime.UtcNow - at).TotalSeconds;
+        if (elapsed <= 0d) return value;
+        return value * Math.Pow(0.5, elapsed / Math.Max(1d, _halfLifeSec));
+    }
+
+    private double ScoreOf(string pairId) =>
+        _scores.TryGetValue(pairId, out var s) ? DecayedLocked(s) : 0d;
+
+    private double DecayedLocked(PairScore s) { lock (s) return Decayed(s.Value, s.ValueAt); }
+
+    /// <summary>Highest-scoring pair that is currently live and paired. Restricted to live books because a
+    /// score earned an hour ago on a match that has since finished is not a camp target.</summary>
+    private (string PairId, double Score) BestTarget()
+    {
+        string best = ""; double bestVal = 0d;
+        foreach (var kv in _scores)
+        {
+            double v = DecayedLocked(kv.Value);
+            if (v <= bestVal) continue;
+            var p = _telemetry.GetPair(kv.Key);
+            if (p == null) continue;
+            if (!IsTokenLive(TokenFor(p, DominantArbType(kv.Key)))) continue;
+            best = kv.Key; bestVal = v;
+        }
+        return (best, bestVal);
+    }
+
+    /// <summary>The arb direction this pair's windows keep taking, which decides WHICH cell to arm. Ties go to
+    /// the Kalshi-NO side (it backs the HardVen YES leg) purely for determinism.</summary>
+    private string DominantArbType(string pairId)
+    {
+        if (!_scores.TryGetValue(pairId, out var s)) return "K_NO_P_YES";
+        lock (s) return s.NoSideOpens > s.YesSideOpens ? "K_YES_P_NO" : "K_NO_P_YES";
+    }
+
+    private static string TokenFor(CrossPair p, string arbType) =>
+        arbType == "K_YES_P_NO" ? (p.HardVenNoTokenId ?? "") : (p.HardVenYesTokenId ?? "");
+
+    private static string SideName(string arbType) =>
+        arbType == "K_YES_P_NO" ? "backing the NO side" : "backing the YES side";
+
+    private bool IsTokenLive(string token) =>
+        token.Length > 0 && _books.TryGetValue($"H:{token}", out var b) && b.IsLive && !b.IsDead;
+
+    // ── status ────────────────────────────────────────────────────────────────
+
+    public string StatusLine()
+    {
+        CampPhase phase; string label, side; DateTime armedAt, lastAction; int budget;
+        lock (_lock)
+        {
+            phase = _phase; label = _campLabel; side = _campArbType;
+            armedAt = _armedAt; lastAction = _lastActionAt; budget = _idleBudgetSec;
+        }
+        if (phase == CampPhase.Off) return "camp: off";
+        string head = phase switch
+        {
+            CampPhase.Roving => "roving (nothing armed)",
+            CampPhase.Arming => "arming…",
+            CampPhase.Firing => $"FIRING on {label}",
+            _                => $"camped on {label} ({SideName(side)}) for {(DateTime.UtcNow - armedAt).TotalMinutes:0.0}m, " +
+                                $"idle {(DateTime.UtcNow - lastAction).TotalMinutes:0.0}/{budget / 60.0:0.0}m",
+        };
+        return $"camp: {head} | arms={_armCount} relocs={_relocCount} released={_releaseCount} lost={_lostCount} " +
+               $"fires={_fireCount} placed={_placedCount}" + (_ambiguousCount > 0 ? $" ⚠unconfirmed={_ambiguousCount}" : "");
+    }
+
+    /// <summary>The current camp shortlist, best first — what the relocation decision is actually looking at.</summary>
+    public IEnumerable<(string Label, double Score, int Opens, int Takeable, DateTime LastOpen)> TopTargets(int n)
+        => _scores.Select(kv =>
+           {
+               lock (kv.Value)
+                   return (kv.Value.Label, Decayed(kv.Value.Value, kv.Value.ValueAt),
+                           kv.Value.Opens, kv.Value.Takeable, kv.Value.LastOpen);
+           })
+           .Where(t => t.Item2 > 0d)
+           .OrderByDescending(t => t.Item2)
+           .Take(n);
+
+    // ── plumbing ──────────────────────────────────────────────────────────────
+
+    private async Task<(bool Ok, string Body)> PostAsync(HttpClient http, string path, string? json, CancellationToken ct)
+    {
+        try
+        {
+            using HttpContent? body = json is null ? null : new StringContent(json, Encoding.UTF8, "application/json");
+            using var resp = await http.PostAsync(_sidecar + path, body, ct);
+            string text = await resp.Content.ReadAsStringAsync(ct);
+            return (resp.IsSuccessStatusCode, text);
+        }
+        catch (Exception ex) { return (false, $"{ex.GetType().Name}: {ex.Message}"); }
+    }
+
+    private async Task<(bool Ok, string Body)> GetAsync(HttpClient http, string path, CancellationToken ct)
+    {
+        try
+        {
+            using var resp = await http.GetAsync(_sidecar + path, ct);
+            string text = await resp.Content.ReadAsStringAsync(ct);
+            return (resp.IsSuccessStatusCode, text);
+        }
+        catch (Exception ex) { return (false, $"{ex.GetType().Name}: {ex.Message}"); }
+    }
+
+    private static bool Flag(JsonElement el, string name) =>
+        el.ValueKind == JsonValueKind.Object && el.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.True;
+
+    private static string Str(JsonElement el, string name) =>
+        el.ValueKind == JsonValueKind.Object && el.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String
+            ? v.GetString() ?? "" : "";
+
+    private static decimal Dec(JsonElement el, string name)
+    {
+        if (el.ValueKind != JsonValueKind.Object || !el.TryGetProperty(name, out var v)) return 0m;
+        if (v.ValueKind == JsonValueKind.Number && v.TryGetDecimal(out var n)) return n;
+        if (v.ValueKind == JsonValueKind.String &&
+            decimal.TryParse(v.GetString(), NumberStyles.Any, CultureInfo.InvariantCulture, out var s)) return s;
+        return 0m;
+    }
+
+    private static string Truncate(string s) => s.Length <= 200 ? s : s[..200];
+
+    private static decimal EnvDec(string name, decimal fallback)
+    {
+        string? raw = Environment.GetEnvironmentVariable(name);
+        return decimal.TryParse(raw, NumberStyles.Any, CultureInfo.InvariantCulture, out var v) && v > 0m ? v : fallback;
+    }
+
+    private static int EnvInt(string name, int fallback)
+    {
+        string? raw = Environment.GetEnvironmentVariable(name);
+        return int.TryParse(raw, NumberStyles.Any, CultureInfo.InvariantCulture, out var v) && v > 0 ? v : fallback;
+    }
+}

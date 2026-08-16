@@ -42,6 +42,12 @@ public sealed class HardVenOrderClient : IHardVenOrderExecutor
     /// bet just because the env happens to be armed for live trading.</summary>
     private readonly bool _previewOnly;
 
+    /// <summary>The in-play camper, when running. Null in pre-live mode. Set after construction because the
+    /// camp manager needs the telemetry strategy, which is built later.</summary>
+    private CampManager? _camp;
+
+    public void SetCampManager(CampManager? camp) => _camp = camp;
+
     public HardVenOrderClient(HardVenApiConfig config, string sidecarBaseUrl, decimal fxToUsd,
                               bool previewOnly = false)
     {
@@ -191,6 +197,50 @@ public sealed class HardVenOrderClient : IHardVenOrderExecutor
             throw new ArgumentOutOfRangeException(nameof(size),
                 $"HardVen stake rounds to 0 at the book's 2-dp granularity (size={size} price={price} fx={_fxToUsd})");
 
+        // ── IN-PLAY: PRESS THE CAMP, DON'T DRIVE THE UI ──────────────────────────────────────────────────
+        // This is the whole point of camping. `/bet` navigates, finds the row, clicks, types and confirms —
+        // seconds, during which an in-play line moves and the arb is gone. An armed slip is one press.
+        //
+        // It is also a HARD REQUIREMENT, not an optimisation: in-play mode runs ONE tab, so a `/bet` drive
+        // would navigate the very page the armed Quick Bet lives on and destroy the camp on its way past. So
+        // while any camp is armed, this method either presses that camp or refuses — it never drives.
+        var camp = _camp;
+        if (camp is not null && camp.AnyCampArmed)
+        {
+            if (!camp.IsArmedOn(tokenId))
+                return JsonSerializer.Serialize(new
+                {
+                    success = false,
+                    orderID = "",
+                    status  = "rejected",
+                    reason  = "a camp is armed on a different selection — driving the UI for this one would " +
+                              "navigate the single live tab and destroy the armed slip. Skipped.",
+                });
+
+            var fire = await camp.FireAsync(tokenId, minOdds, stakeAcct);
+            if (!fire.Placed)
+                return JsonSerializer.Serialize(new
+                {
+                    success = false,
+                    orderID = fire.BetId,
+                    status  = fire.Ambiguous ? "unknown" : "rejected",
+                    // The distinction matters upstream: "rejected" is a free miss with zero exposure, whereas
+                    // "unknown" means a bet may exist that nothing is hedging. FireAsync has already alerted.
+                    reason  = fire.Reason,
+                });
+
+            decimal firedUsd    = fire.StakeAccount * _fxToUsd;
+            decimal firedShares = firedUsd * fire.Odds;
+            return JsonSerializer.Serialize(new
+            {
+                success      = true,
+                orderID      = fire.BetId,
+                status       = "matched",
+                takingAmount = Math.Round(firedShares, 4).ToString(CultureInfo.InvariantCulture),
+                makingAmount = Math.Round(firedUsd, 4).ToString(CultureInfo.InvariantCulture),
+            });
+        }
+
         var payload = JsonSerializer.Serialize(new
         {
             selection_id = tokenId,
@@ -252,6 +302,11 @@ public sealed class HardVenOrderClient : IHardVenOrderExecutor
         {
             if (string.IsNullOrWhiteSpace(_sidecarBase) || string.IsNullOrWhiteSpace(tokenId) || price <= 0m || size <= 0m)
                 return new HardVenVerifyResult(false, 0m, "verify skipped (no sidecar / bad args)");
+            // A verify drive navigates and clicks exactly like a real placement, so under the in-play camper it
+            // would destroy the armed slip to rehearse something the camper does not do that way anyway.
+            if (_camp is not null && _camp.AnyCampArmed)
+                return new HardVenVerifyResult(false, 0m,
+                    "verify skipped — a camp is armed and a UI drive would navigate the tab holding it");
 
             decimal stakeUsd  = size * price;
             decimal stakeAcct = Math.Floor(stakeUsd / _fxToUsd * 100m) / 100m;

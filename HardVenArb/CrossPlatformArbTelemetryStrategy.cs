@@ -461,6 +461,15 @@ public class CrossPlatformArbTelemetryStrategy
 
     public event Action<string, decimal, string, decimal, decimal, decimal>? OnArbOpened;
 
+    /// <summary>Fires the instant a window CLOSES: (pairId, arbType, durationMs, openedInPlay).
+    ///
+    /// <para>Duration is the only capturability signal that exists at runtime — a window that lived 40ms was
+    /// never takeable however well-positioned the bot was, and one that held 5s was. The CSV row carries it too,
+    /// but the row can be held back for the hedge watch (up to HedgeHorizonMs), so anything that needs to
+    /// REACT to a hold — the in-play camper's target ranking — has to be told here instead. Raised from
+    /// CloseWindow rather than WriteWindowRow for exactly that reason.</para></summary>
+    public event Action<string, string, long, bool>? OnArbClosed;
+
     /// <summary>Fires after every book update — subscribers (e.g. executor) use this for event-driven exit checks.</summary>
     public event Action<string>? BookUpdated;
 
@@ -1097,6 +1106,12 @@ public class CrossPlatformArbTelemetryStrategy
     {
         long durationMs = (long)(endTime - w.StartTime).TotalMilliseconds;
         if (durationMs < 5) return;
+
+        // Announce the close BEFORE the hedge-watch hold below can defer the row by minutes. Subscribers that
+        // need to act on how long a window held (the in-play camper ranks its targets on exactly that) would
+        // otherwise learn about a 5s window long after the game had moved on.
+        try { OnArbClosed?.Invoke(pairId, w.ArbType, durationMs, w.OpenedInPlay); }
+        catch (Exception ex) { DebugLog.Discovery($"OnArbClosed handler threw: {ex.Message}"); }
 
         var pr = _pairs.FirstOrDefault(p => p.PairId == pairId);
         if (pr == null)

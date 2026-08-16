@@ -73,6 +73,13 @@ public class CrossArbExecutor
     // Telemetry-only mode never reaches here.
     private readonly bool _preLiveOnly = Environment.GetEnvironmentVariable("HARDVEN_PRELIVE_ONLY") != "0";
 
+    /// <summary>The in-play camper, when running. An ARMED camp is the one in-play leg the gate above lets
+    /// through, because it is the only one that can be taken at press speed rather than UI-drive speed —
+    /// everything else in-play still costs the navigate-find-click-type drive the gate exists to keep off
+    /// moving lines. Null in pre-live mode, so the gate behaves exactly as before.</summary>
+    private CampManager? _camp;
+    public void SetCampManager(CampManager? camp) => _camp = camp;
+
     // WS-VERIFY gate: never place a real bet on a HardVen leg whose price is SCREENING-ONLY (an httpx re-seed of
     // an untabbed tail league, possibly stale/delayed) — only on a leg confirmed on the live browser WS
     // (sidecar tag wv=true). The telemetry fires /verify on the same window open to promote that league to a live
@@ -1066,11 +1073,19 @@ public class CrossArbExecutor
         // stable pre-live lines; in-play needs the Pinnacle-first model, not built yet). Both HardVen legs share
         // the match state, so checking the chosen one is enough.
         var chosenHardVenBook = arbType == "K_YES_P_NO" ? pNo : pYes;
-        if (_preLiveOnly && !testMode && chosenHardVenBook.IsLive)
+        bool campArmedHere = _camp is not null && _camp.IsArmedOn(hardvenToken);
+        if (_preLiveOnly && !testMode && chosenHardVenBook.IsLive && !campArmedHere)
         {
-            Console.WriteLine($"[EXEC SKIP] {pair.Label}: IN-PLAY — pre-live-only gate is ON (HARDVEN_PRELIVE_ONLY=0 to allow in-play)");
+            string why = _camp is null
+                ? "HARDVEN_PRELIVE_ONLY=0 to allow in-play"
+                : $"not the camped selection (camp is {(_camp.AnyCampArmed ? "on another game" : "roving")}) — " +
+                  "in-play is only taken at press speed";
+            Console.WriteLine($"[EXEC SKIP] {pair.Label}: IN-PLAY — pre-live-only gate is ON ({why})");
             return;
         }
+        if (campArmedHere)
+            Console.WriteLine($"[EXEC] {pair.Label}: IN-PLAY on the ARMED CAMP — the book leg is one press, " +
+                              "not a UI drive");
 
         // WS-VERIFY gate: the chosen HardVen leg's price must be confirmed on the live browser WS, not a
         // screening-only httpx re-seed of an untabbed tail league. If unverified, skip — the telemetry has

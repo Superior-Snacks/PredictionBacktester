@@ -1482,6 +1482,13 @@ class PinnacleAdapter(BookAdapter):
             return {"ok": True, "verified": True, "waited_ms": 0, "how": "already-live"}
         if self._bet_lock.locked():
             return {"ok": False, "verified": False, "error": "bet in flight - not borrowing the rove tab"}
+        # Nothing opens or re-points a tab while a slip is armed. In-play mode exists to keep ONE tab still,
+        # and the camped selection is on the live list this tab is showing — so it takes the already-live
+        # short-circuit above and never reaches here. Anything that DOES reach here is a different league,
+        # i.e. exactly the case that is not worth a navigation mid-camp.
+        if getattr(self, "_camping", False):
+            return {"ok": False, "verified": False,
+                    "error": "camping - not navigating a tab while a slip is armed"}
         tm = self._tab_manager
         if tm is None:
             return {"ok": False, "verified": False, "error": "no tab manager (rove disabled)"}
@@ -2433,6 +2440,14 @@ class PinnacleAdapter(BookAdapter):
         Returns {ok, decimal_odds, implied_price, tab, error}. Organic activity is frozen for the duration
         and resumed in the finally, exactly as the bet path does, so nothing re-points the tab mid-read.
         """
+        # ⚠ A QUOTE IS A BETSLIP, AND IN-PLAY HAS ONE TAB. `_select_bet_tab` falls through to the primary page
+        # in in-play mode (by design — borrowing another tab mid-camp loses the window), so quoting here would
+        # open a DIFFERENT market's Quick Bet on top of the armed one and then close it on the way out. The
+        # camp would die silently and the C# side would keep believing it was armed. Refuse instead: the
+        # caller treats an error as "not sampled" and refunds its budget, which costs a measurement, not a camp.
+        if getattr(self, "_camping", False):
+            return {"ok": False, "error": "camping — a slip quote would open a second Quick Bet over the "
+                                          "armed one on the single live tab"}
         parts = selection_id.split(":")
         if len(parts) != 3 or parts[2] not in ("home", "away"):
             return {"ok": False, "error": f"slip quotes handle straight moneyline tokens only, got '{selection_id}'"}
@@ -3139,10 +3154,14 @@ class PinnacleAdapter(BookAdapter):
         except Exception as e:
             return {"ok": False, "error": f"could not set the stake: {type(e).__name__}: {e}"}
 
-        place = portal.locator('button[class*="placeBet-"]').first
+        # TEXT FIRST, class second. Captured 2026-08-16: in the odds-changed prompt the button's class
+        # changes from `placeBet-…` to `button-…`, and DECLINE carries the IDENTICAL class — so a
+        # class-based selector both misses the accept state and cannot tell accept from decline in it.
+        # The text is the only thing stable across both renderings.
+        place = portal.get_by_text("PLACE BET", exact=False).last
         try:
             if not await place.count():
-                place = portal.get_by_text("PLACE BET", exact=False).first
+                place = portal.locator('button[class*="placeBet-"]').first
             if await place.is_disabled():
                 return {"ok": False, "fired": False, "live_odds": live, "max_bet": max_bet,
                         "error": f"PLACE BET is disabled at stake {want_stake:g} @ {live} — almost "
@@ -3172,7 +3191,17 @@ class PinnacleAdapter(BookAdapter):
         try:
             if not await self._human_click_loc(page, place, fast=True):
                 return {"ok": False, "fired": False, "error": "could not click PLACE BET"}
+            # ── THE ODDS-CHANGED RE-PROMPT ───────────────────────────────────────────────────────────
+            # When the price moves against you between press and submit, Pinnacle does NOT place — it
+            # re-renders the panel with DECLINE alongside PLACE BET and waits. No dialog, no new element
+            # to find: it happens inside the same portal (verified — `dialogs` came back empty).
+            # Left unhandled the press simply never becomes a bet, and the old code sat out its 15s and
+            # reported "the bet MAY be live" for something that definitively was not.
+            # THE DECISION IS THE SAME ONE AS BEFORE PRESSING: the prompt shows the NEW price in the same
+            # position, so re-read it and apply the same floor. At or above it the arb still stands and
+            # this accepts; below it the edge is gone and DECLINE is the correct answer, not a retry.
             body: dict = {}
+            prompt_done = False
             for _ in range(60):
                 await asyncio.sleep(0.25)
                 if "_resp" in placed:
@@ -3181,6 +3210,40 @@ class PinnacleAdapter(BookAdapter):
                     except Exception:
                         body = {}
                     break
+                if prompt_done:
+                    continue
+                try:
+                    dec = portal.get_by_text("DECLINE", exact=False)
+                    if not await dec.count():
+                        continue
+                except Exception:
+                    continue
+                t2 = ""
+                try:
+                    t2 = (await portal.first.inner_text()).replace("\n", " | ")
+                except Exception:
+                    pass
+                m2 = self._CAMP_PRICE_RX.search(t2)
+                newp = float(m2.group(1)) if m2 else None
+                if newp is None:
+                    await self._human_click_loc(page, dec.first, fast=True)
+                    return {"ok": False, "fired": False, "declined": True,
+                            "error": "odds-changed prompt appeared and its price was unreadable — "
+                                     "DECLINED rather than accept an unknown price"}
+                if newp < min_odds - 1e-9:
+                    await self._human_click_loc(page, dec.first, fast=True)
+                    print(f"[PINNACLE CAMP] odds moved {live} -> {newp}, below the {min_odds} floor — "
+                          f"DECLINED, no bet placed", flush=True)
+                    return {"ok": False, "fired": False, "declined": True,
+                            "live_odds": newp, "min_odds": min_odds,
+                            "error": f"odds changed to {newp}, below the {min_odds} the arb needs — "
+                                     f"declined, nothing placed"}
+                print(f"[PINNACLE CAMP] odds moved {live} -> {newp}, still clears {min_odds} — "
+                      f"accepting", flush=True)
+                live = newp
+                prompt_done = True
+                await self._human_click_loc(page, portal.get_by_text("PLACE BET", exact=False).last,
+                                            fast=True)
             if "_resp" not in placed:
                 return {"ok": False, "fired": True, "confirmed": False,
                         "error": "PLACE BET clicked but no /bets/straight response in 15s — the bet MAY "
