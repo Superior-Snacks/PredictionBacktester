@@ -428,7 +428,7 @@ async def camp_start(req: CampRequest):
 
 
 @app.get("/camp/inspect")
-async def camp_inspect():
+async def camp_inspect(wide: bool = False):
     """Dump the armed Quick Bet — inputs, buttons, enabled states, panel text. Reads only.
 
     Run right after arming and again a few minutes later: the diff says whether an idle slip stays
@@ -437,7 +437,7 @@ async def camp_inspect():
     fn = getattr(adapter, "camp_inspect", None)
     if not callable(fn):
         raise HTTPException(404, f"book '{adapter.name}' cannot inspect a camp")
-    return await fn()
+    return await fn(wide=wide)
 
 
 @app.get("/camp/status")

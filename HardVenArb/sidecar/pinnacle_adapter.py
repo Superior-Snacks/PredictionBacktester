@@ -2904,7 +2904,7 @@ class PinnacleAdapter(BookAdapter):
             self._tab_manager.hold(False)
         return {"ok": True, "running": False}
 
-    async def camp_inspect(self) -> dict:
+    async def camp_inspect(self, wide: bool = False) -> dict:
         """Dump the ARMED Quick Bet exactly as it stands. Reads only; presses nothing.
 
         camp_fire has to press a popover that has been sitting for minutes, and `_place_via_ui` has only
@@ -2961,6 +2961,45 @@ class PinnacleAdapter(BookAdapter):
             out["buttons"] = buttons
         except Exception as e:
             out.update({"ok": False, "error": f"{type(e).__name__}: {e}"})
+
+        # WIDE: the odds-changed re-prompt. Pinnacle asks for re-confirmation when the price moves
+        # against you between pressing and submitting, and that dialog may render OUTSIDE
+        # #quick-bet-portal — a portal-scoped dump would miss it entirely and report a healthy slip.
+        # Everything visible at document level, so the markup can be identified rather than guessed:
+        # _place_via_ui already refuses this prompt precisely because its markup was never captured.
+        if wide:
+            try:
+                dlg = []
+                dl = page.locator('[role="dialog"], [aria-modal="true"], [class*="modal"], '
+                                  '[class*="Modal"], [class*="dialog"], [class*="confirm"]')
+                for i in range(min(await dl.count(), 6)):
+                    el = dl.nth(i)
+                    try:
+                        if not await el.is_visible():
+                            continue
+                        dlg.append({"class": (await el.get_attribute("class") or "")[:60],
+                                    "role": await el.get_attribute("role"),
+                                    "text": ((await el.inner_text()) or "").replace("\n", " | ")[:400]})
+                    except Exception:
+                        continue
+                out["dialogs"] = dlg
+                pb = []
+                bl2 = page.locator("button")
+                for i in range(min(await bl2.count(), 40)):
+                    el = bl2.nth(i)
+                    try:
+                        if not await el.is_visible():
+                            continue
+                        t = ((await el.inner_text()) or "").replace("\n", " ").strip()
+                        if not t:
+                            continue
+                        pb.append({"text": t[:40], "disabled": await el.is_disabled(),
+                                   "class": (await el.get_attribute("class") or "")[:44]})
+                    except Exception:
+                        continue
+                out["page_buttons"] = pb
+            except Exception as e:
+                out["wide_error"] = f"{type(e).__name__}: {e}"
         return out
 
     # ── IN-PLAY CAMPING ───────────────────────────────────────────────────────
