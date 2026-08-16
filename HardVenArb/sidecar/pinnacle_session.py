@@ -220,6 +220,11 @@ class PinnacleBrowserSession:
         self._have_ws = False
         self._last_capture = 0.0
         self._last_main_refresh = 0.0     # last time the MAIN board page was (re)loaded — its keepalive clock
+        # Camping postpones the session refresh (reload() destroys an armed betslip), bounded so the
+        # x-session still gets re-minted. See set_camp_hold.
+        self._camp_hold = False
+        self._camp_skips = 0
+        self._camp_max_skips = int(os.environ.get("PINNACLE_CAMP_MAX_SKIPS", "2"))
         self._ready_announced = False
         # diagnostics: surface WHERE capture is stuck (x-session vs the MQTT-CONNECT WS login)
         self._status_task: Optional[asyncio.Task] = None
@@ -832,6 +837,20 @@ class PinnacleBrowserSession:
             if getattr(self, "_banking_hold", False):
                 print("[PINNACLE SESSION] session refresh SKIPPED - operator banking window is open.")
                 continue
+            # A CAMP IS AN ARMED BETSLIP, AND reload() DESTROYS IT. Soft SPA navigation leaves the Quick
+            # Bet portal mounted; a hard reload does not — measured 2026-08-16, a camp died at ~5.4min
+            # against a 7min refresh cadence. BOUNDED, because this reload is what re-mints the
+            # x-session the odds WS authenticates with: a camp may postpone it, never cancel it.
+            if getattr(self, "_camp_hold", False):
+                self._camp_skips = getattr(self, "_camp_skips", 0) + 1
+                if self._camp_skips <= self._camp_max_skips:
+                    print(f"[PINNACLE SESSION] session refresh DEFERRED — a betslip is armed "
+                          f"({self._camp_skips}/{self._camp_max_skips} allowed). The x-session is not "
+                          f"re-minted while deferred.")
+                    continue
+                print(f"[PINNACLE SESSION] session refresh FORCED after {self._camp_skips} deferrals — "
+                      f"the armed betslip will be destroyed, but the x-session must be re-minted.")
+            self._camp_skips = 0
             try:
                 self.pause_activity()
                 await self._page.reload(wait_until="domcontentloaded", timeout=45_000)
@@ -983,6 +1002,19 @@ class PinnacleBrowserSession:
                 return
             except Exception:
                 continue
+
+    def set_camp_hold(self, on: bool) -> None:
+        """Ask the session-refresh loop to postpone its reload while a betslip is armed.
+
+        A REQUEST, NOT A VETO. The reload re-mints the x-session that the odds WebSocket authenticates
+        with, so a camp that could suppress it indefinitely would trade a betslip for the price feed.
+        PINNACLE_CAMP_MAX_SKIPS (default 2) bounds it: at ~7 minutes a cycle that is ~14 minutes of
+        postponement, comfortably past the 41s median gap between repeat arbs on the same match, and the
+        forced refresh announces itself so a destroyed camp is never a mystery.
+        """
+        self._camp_hold = bool(on)
+        if not on:
+            self._camp_skips = 0
 
     def set_home_url(self, url: str | None) -> str:
         """Re-point the board-drift watchdog. Returns the URL now being enforced.

@@ -2542,12 +2542,22 @@ class PinnacleAdapter(BookAdapter):
         placed: dict = {}
         page = None
 
+        # `bets_seen` collects the app's OWN `GET /0.1/bets` responses. Pinnacle polls that endpoint every
+        # ~0.2s while a bet is in flight (measured in the 2026-08-16 recon) precisely because the
+        # placement POST does NOT confirm anything — it answers {"requestId": ..., "status":
+        # "PENDING_ACCEPTANCE"} with no bet id and no accepted price. Reading the site's own poll costs no
+        # extra request, cannot be rate-limited, and is exactly how the page itself learns the outcome.
+        bets_seen: list = []
+
         def _on_resp(resp):
             try:
                 if "/bets/straight" in resp.url and resp.url.rstrip("/").endswith("straight") \
                         and resp.request.method == "POST":
                     placed["status"] = resp.status
                     placed["_resp"] = resp
+                elif "/0.1/bets" in resp.url and resp.request.method == "GET":
+                    bets_seen.append(resp)
+                    del bets_seen[:-12]        # only the recent ones matter
             except Exception:
                 pass
 
@@ -2655,10 +2665,51 @@ class PinnacleAdapter(BookAdapter):
                 return BetResult(accepted=False, stake=stake,
                                  reason=f"bet rejected by Pinnacle (HTTP {placed.get('status')})")
 
+            # ── HTTP 200 IS NOT AN ACCEPTED BET ──────────────────────────────────────────────────────
+            # The response is {"requestId": "...", "status": "PENDING_ACCEPTANCE"} — captured verbatim
+            # 2026-08-16. It carries NO betId and NO accepted price. This block used to read `betId`
+            # (absent -> None), fall back to the SCRAPED price, and return accepted=True. So a bet
+            # Pinnacle had merely RECEIVED was booked as filled, with nothing to reconcile it by. If it
+            # was then rejected, the executor had already hedged Kalshi and was carrying a naked leg
+            # while reporting a completed arb. Pre-live acceptance is near-certain so it survived; in-play
+            # is exactly where rejections happen, which is why this had to be fixed before camp_fire.
+            req_id = str(body.get("requestId") or body.get("requestID") or "") or None
+            status = str(body.get("status") or "").upper()
             bet_id = str(body.get("betId") or body.get("id") or "") or None
             got = body.get("price") or shown
-            print(f"[PINNACLE BET] PLACED {stake:.2f} on {selection_id} @ {got} (bet {bet_id})")
-            return BetResult(accepted=True, bet_id=bet_id, actual_odds=float(got), stake=stake)
+
+            if bet_id and status not in ("PENDING_ACCEPTANCE", "PENDING"):
+                # Some responses may carry the id directly; trust that when it happens.
+                print(f"[PINNACLE BET] PLACED {stake:.2f} on {selection_id} @ {got} (bet {bet_id})")
+                return BetResult(accepted=True, bet_id=bet_id, actual_odds=float(got), stake=stake)
+
+            if not req_id:
+                print(f"[PINNACLE BET] response carried neither a betId nor a requestId "
+                      f"(status={status or 'none'}) — cannot confirm. Body: {str(body)[:200]}")
+                return BetResult(accepted=False, stake=stake,
+                                 reason="placement response had no betId and no requestId — state "
+                                        "UNKNOWN, reconcile against My Bets before retrying")
+
+            conf = await self._confirm_bet(req_id, bets_seen)
+            if conf.get("accepted"):
+                print(f"[PINNACLE BET] PLACED {stake:.2f} on {selection_id} @ {conf.get('price') or got} "
+                      f"(bet {conf.get('bet_id')}, confirmed in {conf.get('waited_s', 0):.1f}s)")
+                return BetResult(accepted=True, bet_id=conf.get("bet_id"),
+                                 actual_odds=float(conf.get("price") or got), stake=stake)
+            if conf.get("rejected"):
+                print(f"[PINNACLE BET] REJECTED by Pinnacle ({conf.get('status')}) — nothing is on. "
+                      f"request {req_id}")
+                return BetResult(accepted=False, stake=stake,
+                                 reason=f"Pinnacle rejected the bet ({conf.get('status')}) — no position "
+                                        f"was opened; do NOT hedge against this result")
+            # Neither confirmed nor rejected inside the window. NOT an acceptance: saying "accepted"
+            # here is what the old code did, and it is the direction that costs money.
+            print(f"[PINNACLE BET] UNCONFIRMED after {conf.get('waited_s', 0):.1f}s — request {req_id} "
+                  f"never appeared in the account's bet list. The bet MAY be live.")
+            return BetResult(accepted=False, stake=stake,
+                             reason=f"placement accepted by the API but not confirmed in the bet list "
+                                    f"within {conf.get('waited_s', 0):.0f}s (requestId {req_id}) — state "
+                                    f"UNKNOWN, reconcile against My Bets; do not retry blindly")
         except Exception as e:
             return BetResult(accepted=False, stake=stake, reason=f"UI placement error: {e}")
         finally:
@@ -2699,6 +2750,62 @@ class PinnacleAdapter(BookAdapter):
             mode = "LIVE SUBMIT" if submit else "VERIFY-ONLY"
             print(f"[PINNACLE BET] TEST ({mode}) {selection_id} stake={stake:.2f} max_odds>={max_odds:.4f}")
             return await self._place_via_ui(selection_id, stake, max_odds, submit=submit)
+
+    # ── PLACEMENT CONFIRMATION ────────────────────────────────────────────────
+    # Terminal states. Anything else is still in flight and must not be treated as either outcome.
+    _BET_OK = {"ACCEPTED", "PLACED", "CONFIRMED", "WON", "LOST", "SETTLED", "OPEN", "RUNNING", "PENDING_SETTLEMENT"}
+    _BET_BAD = {"REJECTED", "CANCELLED", "CANCELED", "DECLINED", "FAILED", "VOID", "EXPIRED"}
+
+    async def _confirm_bet(self, req_id: str, bets_seen: list, timeout: float = None) -> dict:
+        """Did `req_id` actually become a bet? Returns {accepted|rejected, bet_id, price, status, waited_s}.
+
+        WHY THIS IS NEEDED AT ALL: `POST /0.1/bets/straight` answers `PENDING_ACCEPTANCE` — the request
+        was received, nothing more. Pinnacle's own page discovers the outcome by polling `GET /0.1/bets`
+        at ~0.2s, which is why this reads THAT rather than issuing anything: the responses are already
+        arriving, so confirmation costs no request and cannot be throttled.
+
+        THREE OUTCOMES, and the third is the one that matters. Confirmed and rejected are both actionable.
+        Neither-within-the-window is NOT an acceptance — it is "unknown", and the caller must refuse to
+        hedge against it. Reporting unknown as accepted is precisely the bug this replaces.
+        """
+        import json as _json
+        deadline = time.time() + (timeout if timeout is not None
+                                  else float(os.environ.get("PINNACLE_BET_CONFIRM_SEC", "12")))
+        t0 = time.time()
+        seen_ids = set()
+        while time.time() < deadline:
+            # Walk newest first; the poll that carries our bet is usually the most recent one.
+            for resp in list(reversed(bets_seen)):
+                if id(resp) in seen_ids:
+                    continue
+                seen_ids.add(id(resp))
+                try:
+                    data = await resp.json()
+                except Exception:
+                    continue
+                rows = data if isinstance(data, list) else (data.get("bets") or data.get("data") or [])
+                if isinstance(rows, dict):
+                    rows = [rows]
+                for b in rows or []:
+                    if not isinstance(b, dict):
+                        continue
+                    rid = str(b.get("requestId") or b.get("requestID") or "")
+                    if rid != req_id:
+                        continue
+                    st = str(b.get("status") or b.get("betStatus") or "").upper()
+                    price = (b.get("price") or b.get("acceptedPrice")
+                             or (b.get("selections") or [{}])[0].get("price"))
+                    bid = str(b.get("betId") or b.get("id") or "") or None
+                    if st in self._BET_BAD:
+                        return {"rejected": True, "status": st, "bet_id": bid,
+                                "waited_s": time.time() - t0}
+                    # An id with a non-terminal-bad status means Pinnacle owns the bet.
+                    if bid or st in self._BET_OK:
+                        return {"accepted": True, "bet_id": bid, "price": price, "status": st,
+                                "waited_s": time.time() - t0}
+            await asyncio.sleep(0.25)
+        return {"accepted": False, "rejected": False, "status": "UNCONFIRMED",
+                "waited_s": time.time() - t0}
 
     # ── MODE ──────────────────────────────────────────────────────────────────
     @property
@@ -2847,6 +2954,13 @@ class PinnacleAdapter(BookAdapter):
         # getattr, not self._inplay: the attribute only exists once in-play mode has started, and a bare
         # access inside a swallowing try/except would turn "idle never switched to hover" into silence —
         # the camper would keep browsing and scrolling the board out from under its own armed slip.
+        # Ask the session to postpone its re-mint reload: a hard reload unmounts the Quick Bet portal and
+        # takes the armed slip with it (a soft SPA nav does not). Bounded inside the session.
+        try:
+            if self._browser is not None:
+                self._browser.set_camp_hold(True)
+        except Exception:
+            pass
         ip = getattr(self, "_inplay", None)
         if ip is not None:
             ip.set_camping(True)
@@ -2896,6 +3010,11 @@ class PinnacleAdapter(BookAdapter):
         if not getattr(self, "_camping", False):
             return {"ok": True, "camping": False}
         self._camping = False                      # release FIRST so the trim below is allowed to run
+        try:
+            if self._browser is not None:
+                self._browser.set_camp_hold(False)      # the session may re-mint again
+        except Exception:
+            pass
         ip = getattr(self, "_inplay", None)
         if ip is not None:
             ip.set_camping(False)
