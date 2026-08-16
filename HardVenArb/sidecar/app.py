@@ -448,6 +448,27 @@ async def camp_status():
     return await fn()
 
 
+class CampFireRequest(BaseModel):
+    min_odds: float            # the price the arb was sized on; below it, refuse
+    stake: float | None = None
+    confirm: str = ""          # must be "yes" — this places a REAL bet
+
+
+@app.post("/camp/fire")
+async def camp_fire(req: CampFireRequest):
+    """Press PLACE BET on the armed slip. THIS PLACES A REAL BET.
+
+    `min_odds` is a floor, not a target: the slip re-quotes continuously and Place stays enabled through
+    the change, so firing accepts whatever is current. Anything at or above the floor is fine (higher
+    decimal odds favour a backer); below it the edge is gone and it refuses."""
+    if (req.confirm or "").lower() != "yes":
+        raise HTTPException(400, "camp/fire places a REAL bet — pass confirm=\"yes\"")
+    fn = getattr(adapter, "camp_fire", None)
+    if not callable(fn):
+        raise HTTPException(404, f"book '{adapter.name}' cannot fire a camp")
+    return await fn(req.min_odds, req.stake)
+
+
 @app.post("/camp/stop")
 async def camp_stop():
     """Release the camp and clear the armed selection — nothing is left loaded."""

@@ -3032,6 +3032,153 @@ class PinnacleAdapter(BookAdapter):
         return {"ok": True, "armed": True, "selection_id": selection_id,
                 "stake": stake, "odds": res.actual_odds}
 
+    # The panel renders "... | {selection} | {price} | Max Bet: {limit} | Win | ...", and when the stake
+    # is below the minimum the limit is blank ("Max Bet: | Win"). The price is the last decimal BEFORE
+    # "Max Bet", which holds in both renderings — anchoring on the selection name would not, because the
+    # name also appears in the matchup line above it.
+    _CAMP_PRICE_RX = re.compile(r"(\d+\.\d+)\s*\|\s*Max Bet", re.I)
+    _CAMP_MAXBET_RX = re.compile(r"Max Bet:\s*(?:EUR|€|\$|£)?\s*([\d,]+\.?\d*)", re.I)
+
+    async def camp_fire(self, min_odds: float, stake: float = None) -> dict:
+        """Press PLACE BET on the armed slip. THE ONLY FUNCTION HERE THAT COMMITS MONEY.
+
+        The camp exists so this is one press instead of navigate-find-click-type-confirm. What it must
+        still do, because an armed slip is a live thing:
+
+        RE-READ THE PRICE. Measured 2026-08-16: the panel re-quotes continuously and shows
+        "Odds changed: | old | new" while Place STAYS ENABLED — so pressing accepts whatever is current,
+        not what was armed. `odds_at_arm` is worthless by then (1.155 at arm, 1.335 twenty minutes on).
+        `min_odds` is the caller's FLOOR: the price the arb was sized against. Below it, refuse.
+
+        CHECK THE BUTTON. Below Pinnacle's per-price minimum the panel blanks "Max Bet" and DISABLES
+        Place — that is what a €5 stake at 1.19 looks like. Clicking a disabled button silently does
+        nothing, so this reports the reason instead of returning a false success.
+
+        CONFIRM. The POST answers PENDING_ACCEPTANCE with no bet id; acceptance is established against
+        the account's own bet list. See _confirm_bet.
+        """
+        if not getattr(self, "_camping", False):
+            return {"ok": False, "error": "not camping"}
+        if not self._bet_enabled:
+            return {"ok": False, "error": "HARDVEN_BET_ENABLE is not set — refusing to place"}
+        page = self._primary_page()
+        if page is None or page.is_closed():
+            return {"ok": False, "error": "no page"}
+        portal = page.locator("#quick-bet-portal")
+        try:
+            if not await portal.count():
+                await self.camp_stop()
+                return {"ok": False, "error": "the armed slip is gone — nothing to fire"}
+            text = (await portal.first.inner_text()).replace("\n", " | ")
+        except Exception as e:
+            return {"ok": False, "error": f"could not read the slip: {type(e).__name__}: {e}"}
+
+        m = self._CAMP_PRICE_RX.search(text)
+        if not m:
+            return {"ok": False, "error": "could not read the live price off the slip",
+                    "text": text[:240]}
+        live = float(m.group(1))
+        mb = self._CAMP_MAXBET_RX.search(text)
+        max_bet = float(mb.group(1).replace(",", "")) if mb else None
+
+        # THE FLOOR. Higher decimal odds are better for a backer, so anything at or above the price the
+        # arb was sized on is fine; below it the edge the trade was justified by no longer exists.
+        if live < min_odds - 1e-9:
+            return {"ok": False, "fired": False, "live_odds": live, "min_odds": min_odds,
+                    "error": f"slip now shows {live}, below the {min_odds} the arb needs — not firing"}
+
+        c = getattr(self, "_camp", {}) or {}
+        want_stake = float(stake if stake is not None else c.get("stake") or 0)
+        try:
+            inp = portal.locator("input[type=text]").first
+            cur = (await inp.input_value() or "").strip()
+            if want_stake and abs(float(cur or 0) - want_stake) > 1e-6:
+                await self._human_click_loc(page, inp, fast=True)
+                await inp.fill(f"{want_stake:g}")
+                await asyncio.sleep(0.35)          # the panel re-computes Max Bet / enables Place
+                text = (await portal.first.inner_text()).replace("\n", " | ")
+        except Exception as e:
+            return {"ok": False, "error": f"could not set the stake: {type(e).__name__}: {e}"}
+
+        place = portal.locator('button[class*="placeBet-"]').first
+        try:
+            if not await place.count():
+                place = portal.get_by_text("PLACE BET", exact=False).first
+            if await place.is_disabled():
+                return {"ok": False, "fired": False, "live_odds": live, "max_bet": max_bet,
+                        "error": f"PLACE BET is disabled at stake {want_stake:g} @ {live} — almost "
+                                 f"certainly below Pinnacle's minimum for this price (the panel blanks "
+                                 f"'Max Bet' when that happens). Raise the stake or skip this window."}
+        except Exception as e:
+            return {"ok": False, "error": f"could not evaluate PLACE BET: {type(e).__name__}: {e}"}
+
+        # ── COMMITTING ───────────────────────────────────────────────────────────────────────────────
+        placed: dict = {}
+        bets_seen: list = []
+
+        def _on_resp(resp):
+            try:
+                if "/bets/straight" in resp.url and resp.url.rstrip("/").endswith("straight") \
+                        and resp.request.method == "POST":
+                    placed["status"] = resp.status
+                    placed["_resp"] = resp
+                elif "/0.1/bets" in resp.url and resp.request.method == "GET":
+                    bets_seen.append(resp)
+                    del bets_seen[:-12]
+            except Exception:
+                pass
+
+        page.on("response", _on_resp)
+        t0 = time.time()
+        try:
+            if not await self._human_click_loc(page, place, fast=True):
+                return {"ok": False, "fired": False, "error": "could not click PLACE BET"}
+            body: dict = {}
+            for _ in range(60):
+                await asyncio.sleep(0.25)
+                if "_resp" in placed:
+                    try:
+                        body = await placed["_resp"].json()
+                    except Exception:
+                        body = {}
+                    break
+            if "_resp" not in placed:
+                return {"ok": False, "fired": True, "confirmed": False,
+                        "error": "PLACE BET clicked but no /bets/straight response in 15s — the bet MAY "
+                                 "be live. Reconcile against My Bets; do NOT hedge against this."}
+            if placed.get("status") != 200:
+                return {"ok": False, "fired": True, "confirmed": False,
+                        "error": f"Pinnacle refused the placement (HTTP {placed.get('status')})"}
+
+            req_id = str(body.get("requestId") or body.get("requestID") or "") or None
+            bid = str(body.get("betId") or body.get("id") or "") or None
+            if not bid and req_id:
+                conf = await self._confirm_bet(req_id, bets_seen)
+                if conf.get("rejected"):
+                    return {"ok": False, "fired": True, "confirmed": True, "accepted": False,
+                            "error": f"Pinnacle REJECTED the bet ({conf.get('status')}) — nothing is on"}
+                if not conf.get("accepted"):
+                    return {"ok": False, "fired": True, "confirmed": False,
+                            "error": f"unconfirmed after {conf.get('waited_s', 0):.0f}s (requestId "
+                                     f"{req_id}) — state UNKNOWN, do not hedge against this"}
+                bid, live = conf.get("bet_id") or bid, float(conf.get("price") or live)
+            c["fires"] = c.get("fires", 0) + 1
+            print(f"[PINNACLE CAMP] FIRED {want_stake:g} @ {live} on {c.get('selection_id')} "
+                  f"(bet {bid}) in {time.time() - t0:.1f}s", flush=True)
+            return {"ok": True, "fired": True, "confirmed": True, "accepted": True,
+                    "bet_id": bid, "odds": live, "stake": want_stake,
+                    "elapsed_s": round(time.time() - t0, 2)}
+        finally:
+            try:
+                page.remove_listener("response", _on_resp)
+            except Exception:
+                pass
+            # The slip is consumed by a placement. Release so nothing stale is fired again.
+            try:
+                await self.camp_stop()
+            except Exception:
+                pass
+
     async def camp_status(self) -> dict:
         """State of the camp, VERIFIED against the page — not the flag written when it was armed.
 
