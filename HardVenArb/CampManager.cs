@@ -92,6 +92,14 @@ public sealed class CampManager
     private readonly int     _healthSec;
     private readonly double  _depthCapContracts;
 
+    /// <summary>Mirrors the executor's HARDVEN_MONEYLINE_ONLY gate, because a camp on a leg the executor will
+    /// never place is worse than no camp at all: the slip holds, the game produces windows, every one of them
+    /// is skipped as a derivative, and the idle clock keeps resetting on that activity — so the camp sits there
+    /// looking busy and productive while being structurally incapable of a single bet. Derivative pairs are
+    /// loaded into the SAME pair list as moneylines (derivative_pairs.json is merged in), so this is not a
+    /// theoretical case; on a tennis slate the spread/total lines outnumber the moneylines.</summary>
+    private readonly bool _moneylineOnly = Environment.GetEnvironmentVariable("HARDVEN_MONEYLINE_ONLY") != "0";
+
     // ── state (all under _lock) ───────────────────────────────────────────────
     private readonly object _lock = new();
     private CampPhase _phase = CampPhase.Off;
@@ -227,8 +235,10 @@ public sealed class CampManager
         if (pair == null) return;
         string token = TokenFor(pair, arbType);
         if (token.Length == 0) return;
-        // IN-PLAY ONLY. A camp is a live-tab construct; a pre-match window is executed the normal way.
-        if (!(_books.TryGetValue($"H:{token}", out var book) && book.IsLive)) return;
+        // IN-PLAY ONLY (a camp is a live-tab construct; a pre-match window is executed the normal way), and
+        // PLACEABLE ONLY — a derivative window is real money that was on the table and completely unreachable,
+        // so scoring it would rank a spread-heavy match above one the bot can actually trade.
+        if (!IsCampable(token)) return;
 
         double edge = Math.Max(0d, (double)(_arbThreshold - netCost));
         _pending[$"{pairId}|{arbType}"] = new PendingWindow(pairId, arbType, edge, (double)depth, DateTime.UtcNow);
@@ -451,7 +461,7 @@ public sealed class CampManager
                 {
                     string arbType = DominantArbType(target);
                     string tok = TokenFor(pair, arbType);
-                    if (tok.Length > 0 && IsTokenLive(tok))
+                    if (tok.Length > 0 && IsCampable(tok))
                     {
                         bool claimed = false;
                         lock (_lock) { if (_phase == CampPhase.Roving) { _phase = CampPhase.Arming; claimed = true; } }
@@ -566,7 +576,7 @@ public sealed class CampManager
         if (lp == null) return false;
         string lArb = DominantArbType(lead.PairId);
         string lTok = TokenFor(lp, lArb);
-        if (lTok.Length == 0 || !IsTokenLive(lTok)) return false;
+        if (lTok.Length == 0 || !IsCampable(lTok)) return false;
         move = new Relocation(lead.PairId, lTok, lp.Label, lArb, incumbent, lead.Score);
         return true;
     }
@@ -685,7 +695,7 @@ public sealed class CampManager
             if (v <= bestVal) continue;
             var p = _telemetry.GetPair(kv.Key);
             if (p == null) continue;
-            if (!IsTokenLive(TokenFor(p, DominantArbType(kv.Key)))) continue;
+            if (!IsCampable(TokenFor(p, DominantArbType(kv.Key)))) continue;
             best = kv.Key; bestVal = v;
         }
         return (best, bestVal);
@@ -707,6 +717,10 @@ public sealed class CampManager
 
     private bool IsTokenLive(string token) =>
         token.Length > 0 && _books.TryGetValue($"H:{token}", out var b) && b.IsLive && !b.IsDead;
+
+    /// <summary>Can this selection be camped at all? Live, and placeable by the book — see _moneylineOnly.</summary>
+    private bool IsCampable(string token) =>
+        IsTokenLive(token) && (!_moneylineOnly || CrossArbExecutor.IsStraightMoneyline(token));
 
     // ── status ────────────────────────────────────────────────────────────────
 

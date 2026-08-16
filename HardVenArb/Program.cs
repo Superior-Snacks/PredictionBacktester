@@ -725,18 +725,34 @@ if (File.Exists(manualPath))
 // would feed `{lid}:{mid}:{type}:{points}:{side}` tokens to a book that cannot resolve them. Observed
 // 2026-08-11: the BetInAsia run loaded 31 Pinnacle tennis lines and logged "selection no longer quoted"
 // for every one, forever. Default it to the sibling of whatever pairs file is in use, and let
-// HARDVEN_DERIV_PAIRS_FILE override; "" (or a missing file) simply loads no derivatives.
+// HARDVEN_DERIV_PAIRS_FILE override.
+//
+// TO LOAD NO DERIVATIVES AT ALL, set it to `none` (or `off`). Setting it to the EMPTY string does not work
+// and never did — an empty env var is indistinguishable from an unset one on Windows, so it falls straight
+// back to the default filename. The old comment here claimed otherwise, which is the kind of documentation
+// that is worse than none: you set it, the log says nothing, and 200 spread/total lines keep being priced.
 string derivFileName = (Environment.GetEnvironmentVariable("HARDVEN_DERIV_PAIRS_FILE") ?? "").Trim();
-if (derivFileName.Length == 0)
+bool derivDisabled = derivFileName.Equals("none", StringComparison.OrdinalIgnoreCase)
+                  || derivFileName.Equals("off",  StringComparison.OrdinalIgnoreCase);
+if (derivDisabled)
+{
+    Console.WriteLine($"[CONFIG] derivative pairs DISABLED (HARDVEN_DERIV_PAIRS_FILE={derivFileName}) — " +
+                      "moneyline pairs only, so spread/total lines are neither priced nor logged.");
+    derivFileName = "";
+}
+else if (derivFileName.Length == 0)
     derivFileName = pairsFileName.Equals("cross_pairs.json", StringComparison.OrdinalIgnoreCase)
         ? "derivative_pairs.json"
         // cross_pairs_bia.json -> derivative_pairs_bia.json
         : pairsFileName.Replace("cross_pairs", "derivative_pairs", StringComparison.OrdinalIgnoreCase);
-string derivSrc  = Path.Combine(sourceDir, derivFileName);
-string derivOut  = Path.Combine(AppContext.BaseDirectory, derivFileName);
-string derivPath = isDevBuild ? derivSrc
-                              : (File.Exists(derivOut) ? derivOut : derivFileName);
-if (!File.Exists(derivPath))
+// "" only reaches here when derivatives are disabled, and Path.Combine would then resolve to the DIRECTORY —
+// which File.Exists rejects, so the load is skipped as intended. Kept explicit so it reads as a decision.
+string derivSrc  = derivDisabled ? "" : Path.Combine(sourceDir, derivFileName);
+string derivOut  = derivDisabled ? "" : Path.Combine(AppContext.BaseDirectory, derivFileName);
+string derivPath = derivDisabled ? ""
+                 : isDevBuild    ? derivSrc
+                                 : (File.Exists(derivOut) ? derivOut : derivFileName);
+if (!derivDisabled && !File.Exists(derivPath))
     Console.WriteLine($"[CONFIG] no derivative pairs ({derivFileName} not found) — moneyline only.");
 if (File.Exists(derivPath))
 {

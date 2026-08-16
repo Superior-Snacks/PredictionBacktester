@@ -119,12 +119,30 @@ class InPlayActivity:
 
         Belt and braces: the session organic is paused while in-play runs, but a click can still follow
         a link, and a camp that has quietly drifted onto the pre-match page produces no arbs and no error.
+
+        GIVES UP IF THE URL ITSELF IS WRONG. If PINNACLE_INPLAY_URL redirects — a stale path, a locale the
+        account does not have, a sport with no live list right now — then goto lands somewhere else, the next
+        tick sees the drift again, and this navigates on a loop every few seconds forever. That reads exactly
+        like "the page keeps going back to the matchup page" while actually being this function fighting a
+        redirect. A URL that does not hold after a real navigation is a CONFIGURATION error, so say so once
+        and stop, rather than hammering the site to no effect.
         """
+        if getattr(self, "_pin_broken", False):
+            return
         try:
             cur = (self._page.url or "")
-            if LIVE_URL.split("?")[0] not in cur:
-                self._log(f"page drifted to {cur[:70]} — returning to the live list")
-                await self._page.goto(LIVE_URL, wait_until="domcontentloaded")
+            if LIVE_URL.split("?")[0] in cur:
+                return
+            self._log(f"page drifted to {cur[:70]} — returning to the live list")
+            await self._page.goto(LIVE_URL, wait_until="domcontentloaded")
+            await asyncio.sleep(1.5)                      # let a redirect settle before judging
+            landed = (self._page.url or "")
+            if LIVE_URL.split("?")[0] not in landed:
+                self._pin_broken = True
+                self._log(f"PINNACLE_INPLAY_URL does not hold: navigating to {LIVE_URL} landed on "
+                          f"{landed[:90]}. That is a redirect, not drift — so pinning is DISABLED for this "
+                          f"session rather than looping on it. Open the live list by hand, copy the real URL, "
+                          f"and set PINNACLE_INPLAY_URL to it.")
         except Exception:
             pass
 

@@ -2130,6 +2130,19 @@ class PinnacleAdapter(BookAdapter):
                 await asyncio.sleep(self._reader_reseed_sec)
             except asyncio.CancelledError:
                 break
+            # IN-PLAY MODE DOES NOT NEED THIS, AND IT IS THE LOUDEST THING THE SIDECAR DOES.
+            #
+            # The backstop exists for STABLE PRE-MATCH and TAIL leagues: lines that barely move, on leagues with
+            # no tab, where the WS may push nothing for minutes and a book would otherwise age out. In-play is
+            # the exact opposite regime — one tab parked on the live list, whose WS pushes in-play deltas
+            # continuously for precisely the markets being traded. So every re-seed here re-fetches a price the
+            # WS already delivered.
+            #
+            # And the cost is not zero. It is an authed REST call per active league on a fixed cadence, from an
+            # account that is otherwise sitting on one page: a machine-regular polling signature with no human
+            # analogue, attached to the session that places the bets. Free to drop, so drop it.
+            if self.mode == "inplay":
+                continue
             # authed re-seed needs a live session; guest is public → runs regardless
             if self._reseed_source != "guest" and self._session_source == "browser" and not self._session_ready:
                 continue
@@ -2859,7 +2872,26 @@ class PinnacleAdapter(BookAdapter):
             from inplay import InPlayActivity, LIVE_URL
         except Exception as e:
             return {"ok": False, "error": f"inplay unavailable: {type(e).__name__}: {e}"}
+        # ARRIVE THE WAY A PERSON DOES: sport board first, pause, then the Live tab on it. A session that
+        # deep-links to /tennis/matchups/live/ as its first navigation after login has an entry pattern no
+        # hand produces — nobody types that URL, they click Tennis and then Live. The intermediate hop costs
+        # one page load at startup and happens exactly once per session, so there is no reason not to pay it.
+        # Best-effort throughout: if any step fails the direct goto below still gets us there, because being
+        # on the live list matters more than how we arrived.
         try:
+            if LIVE_URL.split("?")[0] not in (page.url or ""):
+                board = LIVE_URL.split("/matchups/")[0] + "/matchups/"      # …/en/tennis/matchups/
+                try:
+                    await page.goto(board, wait_until="domcontentloaded")
+                    await asyncio.sleep(random.uniform(1.8, 4.2))           # a beat to look at the board
+                    # The Live control is a link on the board. Click it if it is there; fall back to the URL.
+                    live_link = page.get_by_role("link", name=re.compile(r"^\s*live\s*$", re.I))
+                    if await live_link.count():
+                        await self._human_click_loc(page, live_link.first)
+                        await page.wait_for_load_state("domcontentloaded")
+                except Exception as e:
+                    print(f"[PINNACLE INPLAY] board->live nav did not take ({type(e).__name__}: {e}) — "
+                          f"going straight to the live list", flush=True)
             if LIVE_URL.split("?")[0] not in (page.url or ""):
                 await page.goto(LIVE_URL, wait_until="domcontentloaded")
         except Exception as e:
@@ -3660,8 +3692,23 @@ class PinnacleAdapter(BookAdapter):
         # another tab mid-camp loses the window it is camped for. Fall through to the primary page, which
         # IS the live list. The tab manager object is left intact so stopping in-play restores normal
         # behaviour without rebuilding it.
+        # THE PRIMARY PAGE IS THE ONLY CANDIDATE, and it must be the LAST word too. Nulling `tm` skipped
+        # candidates 1-2, but 3 was gated on `_on_board(lid)` — which is fed by the FEATURED BOARD's sport
+        # topic and is routinely False on the live list — so the miss fell straight through to candidate 4,
+        # `_bet_tab()`. That opens (or re-points) a separate tab at the league's /matchups/ URL and calls
+        # bring_to_front(), which is exactly the "the page keeps going back to the matchup page" symptom:
+        # the visible window switches to a matchups tab, and any slip armed there is invisible to
+        # camp_status / the in-play watcher, which both read the PRIMARY page.
+        #
+        # Failing here is the CORRECT outcome, not a limitation: a market that cannot be found on the live
+        # list is not in-play, so there is nothing to camp on and navigating to find it would be answering
+        # the wrong question at the cost of the camp.
         if self.mode == "inplay":
-            tm = None
+            primary = self._primary_page()
+            if primary is not None:
+                r = await self._try_select_on(primary, exp)
+                return primary, ("live" if (r and r.get("ok")) else "live-miss"), r
+            return None, "live-nopage", {"ok": False, "error": "in-play mode has no primary page"}
 
         # 1. a reader tab already on the league (gap leagues: dedicated tab / rove parked here) — focused, no nav
         if tm is not None:
