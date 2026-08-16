@@ -389,6 +389,18 @@ async def debug_fill_open_slip(price: float, stake: float, method: str = "click"
     return await fn(price, stake, method=method)
 
 
+@app.get("/debug/slip_watch")
+async def debug_slip_watch(reset: bool = False):
+    """Stack trace of whatever removes the betslip from the DOM. Install, click, read.
+
+    The click events of a bot click and a hand click were measured identical, so the cause is not the
+    click. This records the destroyer directly instead of inferring it."""
+    fn = getattr(adapter, "slip_watch", None)
+    if not callable(fn):
+        raise HTTPException(404, f"book '{adapter.name}' has no slip watch")
+    return await fn(reset=reset)
+
+
 @app.get("/debug/event_capture")
 async def debug_event_capture(reset: bool = False, moves: bool = False):
     """Every field of every mouse/pointer event the page received — for diffing a bot click against a

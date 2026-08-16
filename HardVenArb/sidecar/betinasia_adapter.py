@@ -1081,6 +1081,74 @@ class BetInAsiaAdapter(BookAdapter):
     })()
     """
 
+    _SLIP_WATCH_JS = r"""
+    (() => {
+      // CATCH WHATEVER DESTROYS THE BETSLIP, with a stack trace. Seven hypotheses about WHY the slip
+      // closes were each falsified by measurement; this stops asking why and records WHO. Any node
+      // removal that takes `.price-input` out of the document is logged with the JS stack of the caller,
+      // so the closing code names itself instead of being inferred.
+      if (window.__slipwatch) return {already: true, kills: window.__slipwatch.kills};
+      const kills = [];
+      window.__slipwatch = {kills};
+      const holds = (n) => {
+        try {
+          if (!n || n.nodeType !== 1) return false;
+          return !!(n.querySelector && (n.querySelector('.price-input') || n.querySelector('.stake-input')))
+                 || (n.classList && (n.classList.contains('price-input') || n.classList.contains('stake-input')));
+        } catch (e) { return false; }
+      };
+      const note = (how, n) => {
+        if (kills.length > 30) return;
+        kills.push({how: how, t: Math.round(performance.now()),
+                    stack: (new Error().stack || '').split('\n').slice(2, 8).join(' | ')});
+      };
+      const rc = Node.prototype.removeChild;
+      Node.prototype.removeChild = function (n) { if (holds(n)) note('removeChild', n); return rc.apply(this, arguments); };
+      const rm = Element.prototype.remove;
+      Element.prototype.remove = function () { if (holds(this)) note('remove', this); return rm.apply(this, arguments); };
+      const rp = Node.prototype.replaceChild;
+      Node.prototype.replaceChild = function (nw, od) { if (holds(od)) note('replaceChild', od); return rp.apply(this, arguments); };
+      // Also catch a wholesale innerHTML wipe of a container that held the slip.
+      const d = Object.getOwnPropertyDescriptor(Element.prototype, 'innerHTML');
+      if (d && d.set) {
+        Object.defineProperty(Element.prototype, 'innerHTML', Object.assign({}, d, {
+          set: function (v) { if (holds(this)) note('innerHTML=', this); return d.set.call(this, v); }}));
+      }
+      return {installed: true, kills: []};
+    })()
+    """
+
+    async def slip_watch(self, reset: bool = False) -> dict:
+        """Record a STACK TRACE every time the betslip node is removed from the DOM.
+
+        Built after seven falsified hypotheses (scroll, organic, focus, dwell, pointer position, input
+        forensics, double-subscribe). The DOM events of a bot click and a hand click were measured to be
+        identical field for field, and the WS subscribe frames identical too — yet the outcome differs
+        reproducibly. That means the cause is in code we have not instrumented, so the honest move is to
+        instrument the destruction itself rather than keep guessing at causes.
+
+        Main-world by necessity (it patches removeChild/remove/replaceChild/innerHTML). Experiment only.
+        """
+        ctx = getattr(self.observer, "_ctx", None)
+        pages = [p for p in (list(ctx.pages) if ctx else []) if not p.is_closed()]
+        if not pages:
+            return {"ok": False, "error": "no pages"}
+        out = []
+        for i, page in enumerate(pages):
+            try:
+                if reset:
+                    await page.evaluate("() => { if (window.__slipwatch) window.__slipwatch.kills.length = 0; }")
+                    continue
+                await page.evaluate(self._SLIP_WATCH_JS)
+                kills = await page.evaluate("() => (window.__slipwatch ? window.__slipwatch.kills : [])")
+                if kills:
+                    out.append({"tab": i, "url": (page.url or "")[:80], "kills": kills})
+            except Exception as e:
+                out.append({"tab": i, "error": f"{type(e).__name__}: {e}"})
+        if reset:
+            return {"ok": True, "reset": True}
+        return {"ok": True, "tabs": len(pages), "kills": out}
+
     async def event_capture(self, reset: bool = False, moves: bool = False) -> dict:
         """Every field of every mouse/pointer event the page received. For diffing bot vs hand clicks.
 
