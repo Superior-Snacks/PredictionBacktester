@@ -156,6 +156,8 @@ class Recon:
         self.t0 = time.time()
         self.ws_frames = Counter()
         self.ws_odds = Counter()
+        self.ws_binary = Counter()
+        self.ws_pkt = Counter()          # (url, mqtt packet type) -> count
         self.ws_samples = defaultdict(list)
         self.http_hits = Counter()
         self.http_times = defaultdict(list)
@@ -182,7 +184,20 @@ class Recon:
             n = self.ws_frames[(key, direction)]
             if n > MAX_FRAMES_PER_WS:
                 return
-            s = payload if isinstance(payload, str) else "[binary]"
+            # BINARY FRAMES ARE THE WHOLE POINT HERE. Pinnacle's Arcadia socket is MQTT-over-WebSocket,
+            # so every frame arrives as bytes and logging "[binary]" discards exactly the evidence the
+            # question needs — whether the re-price is pushed, and what it contains. Keep the bytes:
+            # hex for the header (MQTT's first byte encodes the packet type) and a lossy text rendering,
+            # because MQTT PUBLISH payloads on this API are JSON often enough to be readable.
+            if isinstance(payload, str):
+                s = payload
+            else:
+                b = bytes(payload or b"")
+                self.ws_binary[key] += 1
+                if b:
+                    self.ws_pkt[(key, b[0] >> 4)] += 1      # MQTT packet type = high nibble of byte 0
+                s = (f"[binary {len(b)}B hex={b[:16].hex()} "
+                     f"text={b.decode('utf-8', errors='replace')[:MAX_FRAME_CHARS]}]")
             if ODDS_HINT.search(s or ""):
                 self.ws_odds[key] += 1
             # A bet named on the socket is the answer to "can a fill be listened for instead of awaited".
@@ -260,11 +275,26 @@ class Recon:
                 mark = f"   <-- {self.ws_odds[url]} frames carry price/odds fields" if direction == "in" \
                        and self.ws_odds.get(url) else ""
                 print(f"  {direction:3}  {n:6}  {url[:88]}{mark}")
+            if self.ws_pkt:
+                # MQTT control packet types, high nibble of the first byte. PUBLISH (3) inbound IS the
+                # price push; if the socket is nothing but PINGREQ/PINGRESP (12/13) it is only a
+                # keepalive and the prices really are coming from the ~6s HTTP poll.
+                names = {1: "CONNECT", 2: "CONNACK", 3: "PUBLISH", 4: "PUBACK", 8: "SUBSCRIBE",
+                         9: "SUBACK", 10: "UNSUBSCRIBE", 12: "PINGREQ", 13: "PINGRESP", 14: "DISCONNECT"}
+                print("\n  MQTT packet types seen (high nibble of byte 0):")
+                for (url, t), n in self.ws_pkt.most_common(12):
+                    print(f"    {n:6}  type {t:2} {names.get(t, '?'):12} on {url[-40:]}")
+                pub = sum(n for (_u, t), n in self.ws_pkt.items() if t == 3)
+                if pub:
+                    print(f"\n  {pub} PUBLISH frames — the socket carries DATA, not just keepalive.")
+                else:
+                    print("\n  NO PUBLISH frames — this socket may be keepalive only, in which case the")
+                    print("  ~6s HTTP poll below is the real price source and IS the staleness bound.")
             for url, s in self.ws_samples.items():
                 if s:
                     print(f"\n  sample inbound frames on {url[:70]}:")
                     for x in s[:3]:
-                        print(f"    {x[:220]}")
+                        print(f"    {x[:400]}")
 
         print("\n" + "=" * 78)
         print("HTTP  — product endpoints, with polling interval where detectable")
@@ -334,7 +364,13 @@ async def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--url", default=DEFAULT_URL)
     ap.add_argument("--seconds", type=float, default=420.0)
-    ap.add_argument("--no-probe", action="store_true", help="skip the fingerprint probe (main-world)")
+    # OFF BY DEFAULT, and it must stay that way. The probe patches navigator getters, canvas, WebGL and
+    # getBoundingClientRect — i.e. it makes the browser look exactly like the thing detectors hunt for,
+    # on the LIVE-MONEY profile. Enabling it on 2026-08-16 produced the account's first-ever captcha.
+    # Only use it on a THROWAWAY profile (PINNACLE_USER_DATA_DIR=/some/copy).
+    ap.add_argument("--probe", action="store_true",
+                    help="wrap fingerprint APIs to count reads. PATCHES NATIVES — never on the real "
+                         "profile; point PINNACLE_USER_DATA_DIR at a copy first.")
     a = ap.parse_args()
 
     out = Path(__file__).parent / f"pinnacle_recon_{datetime.now():%Y%m%d_%H%M%S}.jsonl"
@@ -344,16 +380,34 @@ async def main() -> int:
     print("[REC] the SIDECAR MUST BE STOPPED — they cannot share this profile.\n")
 
     async with async_playwright() as pw:
-        launch = dict(user_data_dir=str(PROFILE), headless=False, viewport=None,
-                      args=["--start-maximized"])
-        pos = os.environ.get("PINNACLE_WINDOW_POS")
-        if pos:
-            launch["args"] = launch["args"] + [f"--window-position={pos}"]
+        # ⚠ MIRROR pinnacle_session.py EXACTLY. This opens the LIVE-MONEY profile, so any difference in
+        # launch configuration presents the account's own browser with a changed fingerprint. The first
+        # version of this script omitted all of it — no `ignore_default_args`, so Chrome ran WITH
+        # `--enable-automation` and `navigator.webdriver` read TRUE — and produced the account's first
+        # captcha in its history. Keep these in step with pinnacle_session.py if that ever changes.
+        win_args = []
+        for env, flag in (("PINNACLE_WINDOW_POS", "--window-position"),
+                          ("PINNACLE_WINDOW_SIZE", "--window-size")):
+            v = (os.environ.get(env) or "").strip()
+            if v:
+                win_args.append(f"{flag}={v}")
+        launch = dict(user_data_dir=str(PROFILE), headless=False,
+                      viewport={"width": 1400, "height": 900},
+                      args=[*win_args,
+                            "--disable-blink-features=AutomationControlled",
+                            "--disable-background-timer-throttling",
+                            "--disable-backgrounding-occluded-windows",
+                            "--disable-renderer-backgrounding"],
+                      ignore_default_args=["--enable-automation"])
         try:
             ctx = await pw.chromium.launch_persistent_context(channel="chrome", **launch)
         except Exception:
             ctx = await pw.chromium.launch_persistent_context(**launch)
-        if not a.no_probe:
+        await ctx.add_init_script(
+            "Object.defineProperty(navigator,'webdriver',{get:()=>undefined});")
+        if a.probe:
+            print("[REC] ⚠ FINGERPRINT PROBE ON — it patches natives. Only acceptable on a COPY of the "
+                  "profile; on the real one this is what triggered a captcha.")
             await ctx.add_init_script(PROBE_JS)
 
         def hook(pg):

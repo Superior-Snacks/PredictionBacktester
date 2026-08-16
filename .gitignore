@@ -13,6 +13,9 @@
 .pinnacle_profile/
 # any browser profile dir the sidecar creates (Chrome profile holds cookies/session — never commit)
 *_profile/
+# ...INCLUDING SUFFIXED COPIES. `*_profile/` misses `.pinnacle_profile_recon/`, and a copied Chrome
+# profile is ~1000 files that flood the IDE's source-control view while carrying live session cookies.
+*_profile_*/
 
 # SQLite Database Files
 *.db
