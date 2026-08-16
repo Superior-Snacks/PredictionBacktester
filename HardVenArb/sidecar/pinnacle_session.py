@@ -984,6 +984,27 @@ class PinnacleBrowserSession:
             except Exception:
                 continue
 
+    def set_home_url(self, url: str | None) -> str:
+        """Re-point the board-drift watchdog. Returns the URL now being enforced.
+
+        `_home_url` is where the watchdog drags the primary page back to whenever it has been elsewhere
+        for `_board_drift_sec`. That is exactly right pre-live — a stray click must not leave the board
+        parked on some event page — and it is what pulled IN-PLAY mode off the live list on a timer,
+        because the live list is not the trading-sport board.
+
+        Re-pointing rather than disabling: the watchdog is the thing that recovers from a stray
+        navigation, and in-play needs that recovery MORE than pre-live does (it has one tab and no rove
+        to fall back on). Pass None to restore the derived default.
+        """
+        if url:
+            self._home_url = url
+        else:
+            self._home_url = (os.environ.get("PINNACLE_HOME_URL") or "").strip() or self._derive_home_url()
+        self._went_home = False        # let the one-shot re-run against the new target
+        self._off_home_since = 0.0     # and do not count drift measured against the OLD home
+        print(f"[PINNACLE SESSION] board home is now {self._home_url}", flush=True)
+        return self._home_url
+
     def _derive_home_url(self) -> str:
         """First browsed sport's matchups page, else the active sport from the shared catalog, else the site
         root. Keeps 'which sport do we trade' in ONE place (HARDVEN_SPORTS) rather than a second env var."""

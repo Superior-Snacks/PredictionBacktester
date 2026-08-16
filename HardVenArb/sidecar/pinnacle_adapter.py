@@ -2741,11 +2741,18 @@ class PinnacleAdapter(BookAdapter):
         #   * the TAB MANAGER's sweep opens and re-points rove tabs on its own cadence. Skipping tab
         #     candidates in _select_bet_tab stops PLACEMENT borrowing one; it does not stop the sweep
         #     creating them.
+        #   * the BOARD-DRIFT WATCHDOG drags the primary page back to `_home_url` after board_drift_sec
+        #     — a timer that pulled the camp onto /matchups/ no matter what else was silenced. RE-POINTED
+        #     at the live list rather than disabled: with one tab and no rove, in-play needs that
+        #     recovery more than pre-live does.
+        self._inplay_prev_home = None
         try:
             if self._browser is not None:
                 self._browser.pause_activity()
-        except Exception:
-            pass
+                self._inplay_prev_home = self._browser.set_home_url(LIVE_URL)
+        except Exception as e:
+            print(f"[PINNACLE INPLAY] could not re-point the board watchdog ({type(e).__name__}: {e}) — "
+                  f"it will keep pulling the page back to the pre-match board", flush=True)
         if self._tab_manager is not None:
             self._tab_manager.hold(True)
         # on_lost releases the camp the moment the popover dies, so trimming resumes, the idle goes back
@@ -2768,12 +2775,16 @@ class PinnacleAdapter(BookAdapter):
             return {"ok": True, "running": False}
         await ip.stop()
         self._inplay = None
-        # Hand the browser back: session organic drives the primary page again, tab manager resumes.
+        # Hand the browser back: session organic drives the primary page again, the board watchdog goes
+        # back to enforcing the trading sport, tab manager resumes. Passing None restores the derived
+        # default rather than the value we happened to capture, so a changed PINNACLE_HOME_URL wins.
         try:
             if self._browser is not None:
+                self._browser.set_home_url(None)
                 self._browser.resume_activity()
         except Exception:
             pass
+        self._inplay_prev_home = None
         if self._tab_manager is not None:
             self._tab_manager.hold(False)
         return {"ok": True, "running": False}
