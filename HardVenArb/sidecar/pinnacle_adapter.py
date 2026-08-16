@@ -3118,6 +3118,15 @@ class PinnacleAdapter(BookAdapter):
         last = (None, None, None)
         tm = self._tab_manager
 
+        # IN-PLAY MODE STAYS ON ITS ONE TAB. Candidates 1 and 2 borrow or NAVIGATE a reader/rove tab,
+        # which is right pre-live (a focused league page finds the row fast) and wrong here: the camper's
+        # whole premise is that it is already parked on the live list with a slip armed, and flipping to
+        # another tab mid-camp loses the window it is camped for. Fall through to the primary page, which
+        # IS the live list. The tab manager object is left intact so stopping in-play restores normal
+        # behaviour without rebuilding it.
+        if getattr(self, "_inplay", None) is not None:
+            tm = None
+
         # 1. a reader tab already on the league (gap leagues: dedicated tab / rove parked here) — focused, no nav
         if tm is not None:
             page, kind = tm.page_for_lid(lid)
@@ -3302,6 +3311,13 @@ class PinnacleAdapter(BookAdapter):
             self._tab_organic.pause()
         if self._tab_manager is not None:
             self._tab_manager.hold(True)
+        # IN-PLAY IDLE TOO. It was added after this function and would otherwise keep scrolling and
+        # opening random slips DURING an arm or a placement — moving the board under the click, or
+        # opening a competing Quick Bet over the one being armed. Every loop that touches the browser
+        # has to be listed here; that is the whole contract of this function.
+        ip = getattr(self, "_inplay", None)
+        if ip is not None:
+            ip.pause()
 
     def _on_banking(self, on: bool) -> None:
         """Lifecycle hook for the operator's banking window: freeze every automation that touches the browser,
@@ -3351,6 +3367,9 @@ class PinnacleAdapter(BookAdapter):
             self._tab_organic.resume()
         if self._tab_manager is not None:
             self._tab_manager.hold(False)
+        ip = getattr(self, "_inplay", None)
+        if ip is not None:
+            ip.resume()
 
     async def probe_bet_endpoints(self) -> dict:
         """DISCOVERY (read-only): find the authed endpoint that LISTS bets, so `open_bets()` can be a clean REST
