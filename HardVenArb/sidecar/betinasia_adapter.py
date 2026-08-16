@@ -1107,7 +1107,13 @@ class BetInAsiaAdapter(BookAdapter):
         const grab = (ev) => {
           try {
             const d = typeof ev.data === 'string' ? ev.data : '[binary]';
-            ws.push({t: Math.round(performance.now()), d: d.slice(0, 220)});
+            // Board price ticks are the overwhelming majority and say nothing; keeping them at full
+            // length pushed the interesting frames out of the buffer AND truncated the one that
+            // mattered. `api` frames carry the betslip lifecycle (pmm records reference our own
+            // betslip_id moments before the unmount) so they are kept whole.
+            const isApi = d.indexOf('"api"') !== -1;
+            if (!isApi && d.indexOf('offers_') !== -1 && ws.length > 8) return;
+            ws.push({t: Math.round(performance.now()), d: d.slice(0, isApi ? 1400 : 200)});
             if (ws.length > 60) ws.shift();
           } catch (e) {}
         };
@@ -1170,8 +1176,16 @@ class BetInAsiaAdapter(BookAdapter):
                     continue
                 await page.evaluate(self._SLIP_WATCH_JS)
                 kills = await page.evaluate("() => (window.__slipwatch ? window.__slipwatch.kills : [])")
-                if kills:
-                    out.append({"tab": i, "url": (page.url or "")[:80], "kills": kills})
+                # The tail is returned even with NO kills, so a SURVIVING slip can be compared against a
+                # dying one. Without it the only frames ever seen are the ones preceding a death, which
+                # makes every recurring message look guilty — `event_already_subscribed` has now been
+                # blamed twice on exactly that basis.
+                tail = await page.evaluate(
+                    "() => (window.__slipwatch && window.__slipwatch.ws"
+                    " ? window.__slipwatch.ws.slice(-8) : [])")
+                if kills or tail:
+                    out.append({"tab": i, "url": (page.url or "")[:80],
+                                "kills": kills, "ws_tail": tail})
             except Exception as e:
                 out.append({"tab": i, "error": f"{type(e).__name__}: {e}"})
         if reset:

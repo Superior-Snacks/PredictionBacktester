@@ -508,6 +508,17 @@ class BetInAsiaObserver:
         page = page or self._page
         if page is None:
             return 0
+        # BIA_EXPAND_BOARD=0 skips expansion entirely — for TESTING ONLY. It costs a chunk of startup
+        # (the scroll-and-click loop plus the settle after each click), which is pure overhead when the
+        # run is a single scripted quote against a known selection.
+        # NOT for production: collapsed competitions are not in the DOM at all, so `slip_quote` has to
+        # expand on the execution path with the arb already ticking, AND the page only subscribes what it
+        # rendered — football sat at 148 priced against a 930-event catalog until this ran.
+        if os.environ.get("BIA_EXPAND_BOARD") == "0":
+            if label:
+                self._log(f"expand SKIPPED for {label} (BIA_EXPAND_BOARD=0) — testing only; coverage and "
+                          f"quote speed both suffer while this is off")
+            return 0
         limit = int(os.environ.get("BIA_EXPAND_MAX", "40"))
         pace = float(os.environ.get("BIA_EXPAND_PACE_SEC", "0.35"))
         # SCROLL, DON'T JUST QUERY. The board renders lazily: sections below the fold are not in the DOM,
