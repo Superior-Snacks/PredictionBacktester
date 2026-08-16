@@ -283,11 +283,45 @@ class BetInAsiaFeed:
         if new and self._ws is not None:
             await self._send_watch(new)
 
+    def hold_subs(self, on: bool) -> None:
+        """Stop/resume emitting `watch_hcaps` while a betslip is open.
+
+        ⚠ THIS IS WHY BOT-OPENED BETSLIPS DIED. Captured 2026-08-16 with `slip_watch`: two
+        `["error","event_already_subscribed"]` frames arrive, and 300ms later React unmounts the slip.
+        The venue answers a re-subscribe with an error instead of prices, the app concludes it cannot
+        price the open slip, and throws it away.
+
+        The re-subscribes are OURS. A human's browser has no bot walking events underneath it, which is
+        exactly why hand-clicked slips survive and every bot-clicked one died — regardless of click mode,
+        pointer position, dwell or focus. Ten mechanisms were eliminated before this one was even
+        suspected, because the search was aimed at the venue rather than at our own socket traffic.
+
+        Deferred rather than dropped: the entries stay in `_pending` and go out when the slip closes, so
+        coverage is delayed by the life of a betslip and never lost.
+        """
+        self._sub_hold = bool(on)
+
+    async def flush_pending_subs(self) -> int:
+        """Send whatever was deferred while a slip was open. Returns how many events went out."""
+        pending, self._pending_subs = getattr(self, "_pending_subs", []), []
+        if pending and self._ws is not None:
+            await self._send_watch(pending)
+        return len(pending)
+
     async def _send_watch(self, entries: list[list], burst: int = 0) -> None:
         """Emit watch_hcaps in browser-shaped batches. `burst` = how many events may go out unpaced
         (a page load does ~77); everything beyond that is spaced by SUB_PACE_SEC. Pacing lives HERE,
         at the transport, so no caller -- however eager -- can produce a subscription burst a browser
         would never make."""
+        # HELD WHILE A BETSLIP IS OPEN — see hold_subs. A watch_hcaps landing now draws
+        # `event_already_subscribed`, which makes the app discard the slip 300ms later.
+        if getattr(self, "_sub_hold", False):
+            if not hasattr(self, "_pending_subs"):
+                self._pending_subs = []
+            self._pending_subs.extend(entries)
+            self._log(f"holding {len(entries)} subscription(s) — a betslip is open "
+                      f"({len(self._pending_subs)} queued)")
+            return
         sent = 0
         for i in range(0, len(entries), SUB_BATCH):
             batch = entries[i:i + SUB_BATCH]

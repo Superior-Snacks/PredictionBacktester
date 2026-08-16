@@ -1097,10 +1097,39 @@ class BetInAsiaAdapter(BookAdapter):
                  || (n.classList && (n.classList.contains('price-input') || n.classList.contains('stake-input')));
         } catch (e) { return false; }
       };
+      // RING BUFFER OF INBOUND WS MESSAGES. React unmounted the slip, so app STATE changed — and the
+      // only external thing that changes this app's state is the price socket. Snapshotting the last
+      // few frames at the moment of the kill answers, without further theorising, whether the venue
+      // TOLD the page to close the slip or whether the page decided by itself.
+      const ws = [];
+      try {
+        const origAdd = WebSocket.prototype.addEventListener;
+        const grab = (ev) => {
+          try {
+            const d = typeof ev.data === 'string' ? ev.data : '[binary]';
+            ws.push({t: Math.round(performance.now()), d: d.slice(0, 220)});
+            if (ws.length > 60) ws.shift();
+          } catch (e) {}
+        };
+        WebSocket.prototype.addEventListener = function (t, f, o) {
+          if (t === 'message') { try { origAdd.call(this, 'message', grab); } catch (e) {} }
+          return origAdd.apply(this, arguments);
+        };
+        const d0 = Object.getOwnPropertyDescriptor(WebSocket.prototype, 'onmessage');
+        if (d0 && d0.set) {
+          Object.defineProperty(WebSocket.prototype, 'onmessage', Object.assign({}, d0, {
+            set: function (f) { try { origAdd.call(this, 'message', grab); } catch (e) {} return d0.set.call(this, f); }}));
+        }
+      } catch (e) {}
+      window.__slipwatch.ws = ws;
+
       const note = (how, n) => {
         if (kills.length > 30) return;
-        kills.push({how: how, t: Math.round(performance.now()),
-                    stack: (new Error().stack || '').split('\n').slice(2, 8).join(' | ')});
+        const now = Math.round(performance.now());
+        kills.push({how: how, t: now,
+                    stack: (new Error().stack || '').split('\n').slice(2, 8).join(' | '),
+                    // Frames from the 4s before the unmount, newest last.
+                    ws_before: ws.filter(m => now - m.t < 4000).slice(-6)});
       };
       const rc = Node.prototype.removeChild;
       Node.prototype.removeChild = function (n) { if (holds(n)) note('removeChild', n); return rc.apply(this, arguments); };
@@ -2259,6 +2288,15 @@ class BetInAsiaAdapter(BookAdapter):
                         pass
                 await page.keyboard.press("Escape")
                 print(f"[BIA SLIP] closed {key} with Escape", flush=True)
+                # The slip is gone, so our own watch_hcaps can no longer collide with its acca
+                # subscription. Release the hold and send whatever queued up meanwhile.
+                try:
+                    self.feed.hold_subs(False)
+                    n = await self.feed.flush_pending_subs()
+                    if n:
+                        print(f"[BIA SLIP] released {n} deferred subscription(s)", flush=True)
+                except Exception:
+                    pass
                 return {"ok": True, "closed": True, "event": list(key) if key else None}
             except Exception as e:
                 return {"ok": False, "closed": False, "error": f"{type(e).__name__}: {e}"}
@@ -2702,6 +2740,13 @@ class BetInAsiaAdapter(BookAdapter):
             # bot opens betslips and never closes one — measured 2026-08-14 as the clearest difference
             # between a bot session and a hand-driven one.
             self._slip_page, self._slip_open_key = page, key
+            # FREEZE OUR OWN SUBSCRIPTION TRAFFIC FOR THE LIFE OF THE SLIP. A watch_hcaps sent now draws
+            # `event_already_subscribed`, and the app unmounts the open betslip ~300ms after seeing it
+            # (measured 2026-08-16, slip_watch). Released in slip_close.
+            try:
+                self.feed.hold_subs(True)
+            except Exception:
+                pass
             await _aio.sleep(0.5)
             # ⚠ SCROLLING HERE CLOSES THE BETSLIP. Off by default; BIA_SLIP_SCROLL=1 restores it.
             #

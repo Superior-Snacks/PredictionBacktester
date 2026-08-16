@@ -158,6 +158,18 @@ class BetInAsiaObserver:
             except Exception as e:
                 self._log(f"event capture could not be armed: {type(e).__name__}: {e}")
 
+        # SLIP WATCH must arm HERE, not on demand: it wraps WebSocket.prototype to keep a ring buffer of
+        # inbound frames, and a patch applied after the page has already opened its socket sees nothing.
+        # The DOM-removal hooks would work either way; the WS half is why this needs an init script.
+        if os.environ.get("BIA_SLIP_WATCH") == "1":
+            try:
+                from betinasia_adapter import BetInAsiaAdapter as _BA
+                await self._ctx.add_init_script(f"try {{ {_BA._SLIP_WATCH_JS} }} catch (e) {{}}")
+                self._log("slip watch armed on ALL tabs (BIA_SLIP_WATCH=1) — records what unmounts the "
+                          "betslip, with the WS frames that preceded it")
+            except Exception as e:
+                self._log(f"slip watch could not be armed: {type(e).__name__}: {e}")
+
         self._ctx.on("page", self._hook_page)
         for pg in self._ctx.pages:
             self._hook_page(pg)
