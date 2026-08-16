@@ -2606,7 +2606,9 @@ class PinnacleAdapter(BookAdapter):
                 pass
             page.on("response", _on_resp)
             await asyncio.sleep(random.uniform(0.3, 0.8))    # a person reads the slip before committing
-            if not await self._human_click_loc(page, place):
+            # ALWAYS FAST. This is the committing press, and it is the one click in the system where a
+            # second of added realism is a second of price movement against a bet already decided on.
+            if not await self._human_click_loc(page, place, fast=True):
                 await page.evaluate(_UI_CLOSE_JS)
                 return BetResult(accepted=False, stake=stake, reason="submit failed: could not click Place Bet")
 
@@ -2690,6 +2692,26 @@ class PinnacleAdapter(BookAdapter):
             print(f"[PINNACLE BET] TEST ({mode}) {selection_id} stake={stake:.2f} max_odds>={max_odds:.4f}")
             return await self._place_via_ui(selection_id, stake, max_odds, submit=submit)
 
+    # ── MODE ──────────────────────────────────────────────────────────────────
+    @property
+    def mode(self) -> str:
+        """'prelive' (default) or 'inplay'. ONE place that answers which personality is running.
+
+        The two are genuinely different bots sharing an adapter, and the differences are not cosmetic:
+
+                            PRE-LIVE                        IN-PLAY
+          tabs              tab manager + rove + board      ONE live tab, tab manager HELD
+          page navigation   session organic browses         pinned to the live list
+          idle activity     per-tab organic                 scroll + random slip peeks, hover when camped
+          betslip           trimmed on sight                armed slip PRESERVED while camping
+          bet tab choice    reader -> rove -> board         primary page only
+          click realism     fast (arb is ticking)           full (nothing is racing)
+
+        Derived from whether in-play is running rather than stored separately, so the two can never
+        disagree — a mode flag that drifts out of step with the thing it describes is worse than none.
+        """
+        return "inplay" if getattr(self, "_inplay", None) is not None else "prelive"
+
     # ── IN-PLAY MODE ──────────────────────────────────────────────────────────
     async def start_inplay(self) -> dict:
         """One live tab, no tab manager, camp-aware idle. PINNACLE_INPLAY=1.
@@ -2726,8 +2748,15 @@ class PinnacleAdapter(BookAdapter):
             pass
         if self._tab_manager is not None:
             self._tab_manager.hold(True)
+        # on_lost releases the camp the moment the popover dies, so trimming resumes, the idle goes back
+        # to browsing, and no stale "armed" state survives to be fired against.
+        async def _lost():
+            if getattr(self, "_camping", False):
+                await self.camp_stop()
+
         self._inplay = InPlayActivity(page, self._human_click_loc,
-                                      lambda m: print(f"[PINNACLE INPLAY] {m}", flush=True))
+                                      lambda m: print(f"[PINNACLE INPLAY] {m}", flush=True),
+                                      on_lost=_lost)
         self._inplay.start()
         print("[PINNACLE INPLAY] session organic PAUSED and tab manager HELD — this one tab is the "
               "whole session now. Idle activity comes from the in-play loop instead.", flush=True)
@@ -2812,10 +2841,36 @@ class PinnacleAdapter(BookAdapter):
                 "stake": stake, "odds": res.actual_odds}
 
     async def camp_status(self) -> dict:
+        """State of the camp, VERIFIED against the page — not the flag written when it was armed.
+
+        The first version returned the dict stored by camp_start, so `armed: True` meant "we armed it N
+        seconds ago" and nothing more. Observed 2026-08-16: the page navigated to /matchups/, which
+        destroys the Quick Bet, and the status kept reporting armed for as long as it was asked. That is
+        the worst possible failure on a money path — camp_fire would press Place on a page with no slip,
+        and the operator would have been told the camp was healthy the whole time.
+
+        So this READS the popover. If it is gone the camp is over, and saying so is the point.
+        """
         c = getattr(self, "_camp", None)
         if not c or not getattr(self, "_camping", False):
             return {"camping": False}
-        return {"camping": True, **c, "held_sec": round(time.time() - c["since"], 1)}
+        out = {"camping": True, **c, "held_sec": round(time.time() - c["since"], 1)}
+        page = self._primary_page()
+        live = False
+        url = ""
+        try:
+            if page is not None and not page.is_closed():
+                url = page.url or ""
+                live = bool(await page.locator("#quick-bet-portal").count())
+        except Exception as e:
+            out["check_error"] = f"{type(e).__name__}: {e}"
+        out["armed"] = live                      # OVERWRITES the remembered value on purpose
+        out["url"] = url[:90]
+        if not live:
+            out["lost"] = ("the Quick Bet is no longer on the page — "
+                           + ("the tab navigated away" if "/live/" not in url
+                              else "it was closed or expired in place"))
+        return out
 
     async def camp_stop(self) -> dict:
         """Release the camp and clear the armed selection, so nothing is left loaded."""
@@ -2925,7 +2980,7 @@ class PinnacleAdapter(BookAdapter):
             await asyncio.sleep(max(0.004, total / steps * random.uniform(0.6, 1.4)))
         self._bet_cursor = (tx, ty)
 
-    async def _human_click_loc(self, page, loc) -> bool:
+    async def _human_click_loc(self, page, loc, fast: bool = False) -> bool:
         """Curved human approach toward the element, then a RELIABLE real click. `loc.click()` re-resolves the
         element's LIVE position at click time — so the constantly-reordering board (odds ticking, rows inserted)
         can't make us land on the button that slid into stale coordinates (a handicap next to the moneyline) —
@@ -2958,7 +3013,7 @@ class PinnacleAdapter(BookAdapter):
             # not an immediate press. Shared with the BIA path so both stay in step.
             try:
                 from human_mouse import dwell as _dwell
-                await asyncio.sleep(await _dwell())
+                await asyncio.sleep(await _dwell(fast=fast))
             except Exception:
                 await asyncio.sleep(random.uniform(0.15, 0.45))
         try:
@@ -3097,7 +3152,10 @@ class PinnacleAdapter(BookAdapter):
         result = {"ok": False, "error": "no candidate matched"}
         try:
             for h in cands[:20]:
-                if not await self._human_click_loc(page, h):  # REAL mouse click on the actual element
+                # MODE-DEPENDENT. Pre-live reaches this while an arb is ticking, so it takes the fast
+                # lane. In-play reaches it while ARMING a camp — nothing is racing, the fire comes
+                # later, and the full human settle costs nothing there.
+                if not await self._human_click_loc(page, h, fast=(self.mode == "prelive")):
                     tried.append("no box")
                     continue
                 pop = None
@@ -3156,7 +3214,7 @@ class PinnacleAdapter(BookAdapter):
         # another tab mid-camp loses the window it is camped for. Fall through to the primary page, which
         # IS the live list. The tab manager object is left intact so stopping in-play restores normal
         # behaviour without rebuilding it.
-        if getattr(self, "_inplay", None) is not None:
+        if self.mode == "inplay":
             tm = None
 
         # 1. a reader tab already on the league (gap leagues: dedicated tab / rove parked here) — focused, no nav

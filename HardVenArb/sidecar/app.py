@@ -146,6 +146,9 @@ async def health():
     # without reading the console: a cdp_raw A/B run against a sidecar that never saw the env var looks
     # exactly like a cdp_raw failure.
     h["switches"] = {
+        # prelive vs inplay — two different personalities sharing one adapter, and nearly every
+        # behaviour below branches on it. Published so a run can be attributed without reading logs.
+        "mode": getattr(adapter, "mode", "n/a"),
         "click_mode": os.environ.get("BIA_CLICK_MODE", "playwright"),
         "organic": os.environ.get("BIA_ORGANIC", "1"),
         "place_pause_sec": os.environ.get("BIA_PLACE_STEP_PAUSE_SEC", "(default: 1.0 rehearsal / 0 live)"),

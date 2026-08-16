@@ -128,7 +128,7 @@ def replay_path(x0: float, y0: float, tx: float, ty: float) -> Optional[list]:
     return out
 
 
-async def dwell() -> float:
+async def dwell(fast: bool = False) -> float:
     """Seconds to rest on an element before pressing. ONE definition, used by EVERY click path.
 
     It exists because of the 2026-08-15 result set: every betslip that survived had SECONDS of hover
@@ -145,10 +145,17 @@ async def dwell() -> float:
     """
     global _DWELL_LOGGED
     import os as _os
+    # FAST = the EXECUTION path. An arb window is measured in seconds and a missed one is a certain
+    # loss, whereas the dwell is insurance against a hypothesis that was FALSIFIED on BetInAsia (the
+    # slip died there for an unrelated reason). Paying 1.5s per click while the price ticks is the wrong
+    # trade — so idle/organic clicks get the full human settle, and placement gets the short one.
+    if fast:
+        return random.uniform(0.10, 0.28)
     try:
-        centre = float(_os.environ.get("BIA_CLICK_DWELL_MS", "1500")) / 1000.0
+        centre = float(_os.environ.get("HARDVEN_CLICK_DWELL_MS",
+                                       _os.environ.get("BIA_CLICK_DWELL_MS", "600"))) / 1000.0
     except ValueError:
-        centre = 1.5
+        centre = 0.6
     d = max(0.0, centre * random.uniform(0.7, 1.35))
     if not _DWELL_LOGGED:
         _DWELL_LOGGED = True

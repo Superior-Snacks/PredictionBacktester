@@ -48,10 +48,12 @@ class InPlayActivity:
     """
 
     def __init__(self, page, click_fn: Callable, log: Callable[[str], None],
-                 gate: Optional[asyncio.Event] = None):
+                 gate: Optional[asyncio.Event] = None,
+                 on_lost: Optional[Callable] = None):
         self._page = page
         self._click = click_fn
         self._log = log
+        self._on_lost = on_lost          # async callback: the armed popover vanished
         self._gate = gate or asyncio.Event()
         self._gate.set()
         self._camping = False
@@ -182,6 +184,13 @@ class InPlayActivity:
         except Exception:
             pass
 
+    async def _popover_alive(self) -> bool:
+        """Is the Quick Bet still on the page? Locator count only — no JS, nothing the page can see."""
+        try:
+            return bool(await self._page.locator(PORTAL).count())
+        except Exception:
+            return False
+
     async def _hover_drift(self) -> None:
         """Small drift over the armed slip — a held mouse, not a parked coordinate.
 
@@ -218,8 +227,20 @@ class InPlayActivity:
                     # No scrolling and no peeking while armed: a scroll moves the board under the slip
                     # and a peek would open a DIFFERENT market's slip over the one being held. No URL
                     # pin either — a goto would destroy the armed popover, which is the thing being
-                    # protected. If the page drifts while camped, that is the camp lost; camp_stop and
-                    # the next cycle recover it.
+                    # protected.
+                    #
+                    # But DO notice when it is already gone. A camp whose popover has died is not a camp,
+                    # and leaving the flag set means the next fire presses Place on whatever is there.
+                    # Reported the moment it happens rather than whenever someone next asks.
+                    if not await self._popover_alive():
+                        self._log("ARMED SLIP IS GONE — the camp is dead. Not hovering a popover that "
+                                  "no longer exists; call /camp/stop and re-arm.")
+                        if self._on_lost is not None:
+                            try:
+                                await self._on_lost()
+                            except Exception:
+                                pass
+                        continue
                     await self._hover_drift()
                     continue
                 await self._pin_url()
