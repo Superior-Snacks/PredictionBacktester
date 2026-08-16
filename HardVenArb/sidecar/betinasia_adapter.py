@@ -2629,17 +2629,32 @@ class BetInAsiaAdapter(BookAdapter):
             # between a bot session and a hand-driven one.
             self._slip_page, self._slip_open_key = page, key
             await _aio.sleep(0.5)
-            # BRING THE SLIP INTO VIEW. Reading it does not require this — inner_text and input_value work
-            # on an off-screen node — but a person cannot open a betslip and then not look at it, and the
-            # placement path will need the Place button genuinely clickable. Wheeled, not jumped.
-            try:
-                pnl = page.get_by_text("start acca", exact=False)
-                if await pnl.count():
-                    pbox = await pnl.first.bounding_box()
-                    if pbox and not (VIEW_TOP <= pbox["y"] <= VIEW_BOTTOM):
-                        await CURSOR.scroll(page, pbox["y"] - VIEW_REST)
-            except Exception:
-                pass
+            # ⚠ SCROLLING HERE CLOSES THE BETSLIP. Off by default; BIA_SLIP_SCROLL=1 restores it.
+            #
+            # This was added so the slip would be on screen ("a person cannot open a betslip and then not
+            # look at it") and it is the reason bot-opened slips died within 1-3s for an entire session.
+            # An absolutely-positioned popover dismisses on scroll rather than drifting with the page —
+            # ordinary behaviour, nothing to do with detection.
+            #
+            # It fits every result. The only two runs whose slips survived — real_click.py and
+            # hand_click.py — both bypass this function: one clicks and polls, the other returns BEFORE
+            # the click for a human to press. Every run that went through here died, regardless of click
+            # mode, which is exactly why CDP, cdp_raw and os_hybrid behaved identically and why ten
+            # mechanisms were eliminated without finding it. The venue was never doing anything.
+            #
+            # Reading does not need it: inner_text and input_value both work on an off-screen node. The
+            # placement path needs the Place button CLICKABLE, which scroll_into_view_if_needed handles
+            # at click time on the element itself — after the form is filled and the slip is no longer
+            # fragile.
+            if os.environ.get("BIA_SLIP_SCROLL") == "1":
+                try:
+                    pnl = page.get_by_text("start acca", exact=False)
+                    if await pnl.count():
+                        pbox = await pnl.first.bounding_box()
+                        if pbox and not (VIEW_TOP <= pbox["y"] <= VIEW_BOTTOM):
+                            await CURSOR.scroll(page, pbox["y"] - VIEW_REST)
+                except Exception:
+                    pass
             # OFF BY DEFAULT (BIA_SETTLE_CURSOR=1 to enable). Added on the theory that a slip nobody
             # moves toward gets dismissed; that theory is dead — --park-mouse with a correct calibration
             # did not save the slip either. What it DOES do is drag the CDP cursor across the board
