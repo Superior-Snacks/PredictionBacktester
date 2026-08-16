@@ -389,6 +389,40 @@ async def debug_fill_open_slip(price: float, stake: float, method: str = "click"
     return await fn(price, stake, method=method)
 
 
+class CampRequest(BaseModel):
+    selection_id: str
+    stake: float
+
+
+@app.post("/camp/start")
+async def camp_start(req: CampRequest):
+    """Park on a live game with the Quick Bet armed, so the next arb on it costs one press.
+
+    Justified by the tape: 206 in-play windows came from 13 pairs, none produced a single isolated arb,
+    94% were repeats, median gap 41s. See PinnacleAdapter.camp_start."""
+    fn = getattr(adapter, "camp_start", None)
+    if not callable(fn):
+        raise HTTPException(404, f"book '{adapter.name}' cannot camp")
+    return await fn(req.selection_id, req.stake)
+
+
+@app.get("/camp/status")
+async def camp_status():
+    fn = getattr(adapter, "camp_status", None)
+    if not callable(fn):
+        return {"camping": False, "supported": False}
+    return await fn()
+
+
+@app.post("/camp/stop")
+async def camp_stop():
+    """Release the camp and clear the armed selection — nothing is left loaded."""
+    fn = getattr(adapter, "camp_stop", None)
+    if not callable(fn):
+        return {"ok": True, "camping": False, "supported": False}
+    return await fn()
+
+
 @app.get("/debug/slip_watch")
 async def debug_slip_watch(reset: bool = False):
     """Stack trace of whatever removes the betslip from the DOM. Install, click, read.

@@ -2678,6 +2678,77 @@ class PinnacleAdapter(BookAdapter):
             print(f"[PINNACLE BET] TEST ({mode}) {selection_id} stake={stake:.2f} max_odds>={max_odds:.4f}")
             return await self._place_via_ui(selection_id, stake, max_odds, submit=submit)
 
+    # ── IN-PLAY CAMPING ───────────────────────────────────────────────────────
+    async def camp_start(self, selection_id: str, stake: float) -> dict:
+        """Park on a live game with the Quick Bet OPEN and the stake entered, then hold.
+
+        WHY CAMP RATHER THAN SNIPE. Measured over 206 in-play windows on 2026-08-16: they came from just
+        13 pairs, NOT ONE of which produced a single isolated arb, 94% of windows were a repeat on a pair
+        already seen, and the median gap to the next window on the same pair was 41s (p25 10s, p90 185s).
+        Camping 300s catches 96% of a pair's repeats. So the opportunity is concentrated and recurring,
+        and the expensive part of execution — navigate, find the row, click, type, confirm — can be paid
+        ONCE up front instead of inside every window.
+
+        That is what made in-play unreachable before: the parallel model fires both legs at detection, and
+        the Pinnacle leg's UI drive is seconds long while an in-play line moves under it. Pre-arming turns
+        the in-play leg into a single press.
+
+        Arms the DOMINANT side. Repeats on a pair switch sides (only 1 of 13 pairs stayed on one), but a
+        dominant side runs 70-88%, and the minority case is cheap anyway: parked on the match page, the
+        other cell is right there — a click, not a navigation.
+
+        Nothing is placed. The slip sits armed until camp_fire, camp_stop, or the venue clears it.
+        """
+        if self._session_source == "browser" and not self._session_ready:
+            return {"ok": False, "error": "no live Pinnacle session"}
+        if self._bet_lock.locked():
+            return {"ok": False, "error": "a bet is in flight"}
+        # Set BEFORE driving the UI: _place_via_ui's own post-quote trim would otherwise clear the very
+        # selection this is placing, and the guard lives in _trim_betslip.
+        self._camping = True
+        self._camp = {"selection_id": selection_id, "stake": stake, "since": time.time(),
+                      "fires": 0, "armed": False}
+        try:
+            res = await self._place_via_ui(selection_id, stake, 1.01, submit=False)
+        except Exception as e:
+            self._camping = False
+            return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+        # `verify-only` returns accepted=False by construction (it places nothing); what matters is
+        # whether it got far enough to have entered a stake.
+        armed = bool(res.actual_odds and res.actual_odds > 1.0)
+        self._camp["armed"] = armed
+        self._camp["odds_at_arm"] = res.actual_odds
+        if not armed:
+            self._camping = False
+            return {"ok": False, "error": f"could not arm: {res.reason}"}
+        print(f"[PINNACLE CAMP] armed on {selection_id} stake={stake:.2f} @ {res.actual_odds} — "
+              f"betslip trimming suspended until camp_stop", flush=True)
+        return {"ok": True, "armed": True, "selection_id": selection_id,
+                "stake": stake, "odds": res.actual_odds}
+
+    async def camp_status(self) -> dict:
+        c = getattr(self, "_camp", None)
+        if not c or not getattr(self, "_camping", False):
+            return {"camping": False}
+        return {"camping": True, **c, "held_sec": round(time.time() - c["since"], 1)}
+
+    async def camp_stop(self) -> dict:
+        """Release the camp and clear the armed selection, so nothing is left loaded."""
+        if not getattr(self, "_camping", False):
+            return {"ok": True, "camping": False}
+        self._camping = False                      # release FIRST so the trim below is allowed to run
+        page = self._primary_page()
+        try:
+            if page is not None:
+                await self._trim_betslip(page, source="camp-stop")
+        except Exception:
+            pass
+        c = getattr(self, "_camp", {}) or {}
+        print(f"[PINNACLE CAMP] stopped after {time.time() - c.get('since', time.time()):.0f}s, "
+              f"{c.get('fires', 0)} fire(s)", flush=True)
+        self._camp = None
+        return {"ok": True, "camping": False}
+
     # ── UI placement helpers ──────────────────────────────────────────────────
     async def _expected_selection(self, selection_id: str) -> Optional[dict]:
         """What the popover MUST show for this token, from the Pinnacle catalog (authoritative Pinnacle naming,
@@ -3034,6 +3105,13 @@ class PinnacleAdapter(BookAdapter):
         while True:
             try:
                 await asyncio.sleep(self._betslip_sweep_sec)
+                # ⚠ AN ARMED SLIP IS INDISTINGUISHABLE FROM A STRAY ONE. The in-play camper deliberately
+                # leaves a Quick Bet open with a stake entered, so that the next arb on the game it is
+                # parked on costs one press instead of navigate-find-click-type. This loop would clear it
+                # within 25s and the camper would look like it simply never worked — a silent conflict
+                # between two correct behaviours. `_camping` is held for the life of a camp.
+                if getattr(self, "_camping", False):
+                    continue
                 if not self._betslip_trim or self._bet_lock.locked():
                     continue
                 pages = []
@@ -3069,6 +3147,13 @@ class PinnacleAdapter(BookAdapter):
         an empty / accepted-only slip is a clean no-op. Real mouse clicks (not JS .click) for the same reason
         odds buttons need them: the site's handlers expect a full pointer sequence. Pure cleanup -- every caller
         swallows any exception so a trim hiccup can never change a BetResult or crash the organic loop."""
+        # ⚠ CAMPING HOLDS A SELECTION ON PURPOSE. Gated HERE rather than at the call sites because there
+        # are five of them — the idle organic trim (two constructions), the 25s sweep, the post-quote
+        # trim and the post-bet trim — and a guard added to some but not all would disarm the camper
+        # intermittently, which is the hardest possible thing to diagnose. `post-bet` is deliberately
+        # still allowed: after a placement the slip SHOULD be cleared, and the camper re-arms.
+        if getattr(self, "_camping", False) and source != "post-bet":
+            return {"trimmed": False, "reason": f"camping — armed slip preserved (source={source})"}
         if not self._betslip_trim:
             return {"trimmed": False, "reason": "disabled"}
         if page is None:
