@@ -394,6 +394,24 @@ class CampRequest(BaseModel):
     stake: float
 
 
+@app.post("/inplay/start")
+async def inplay_start():
+    """One live tab, no tab manager, camp-aware idle. REPLACES the tab pool — no pre-live coverage while
+    it runs. See PinnacleAdapter.start_inplay."""
+    fn = getattr(adapter, "start_inplay", None)
+    if not callable(fn):
+        raise HTTPException(404, f"book '{adapter.name}' has no in-play mode")
+    return await fn()
+
+
+@app.post("/inplay/stop")
+async def inplay_stop():
+    fn = getattr(adapter, "stop_inplay", None)
+    if not callable(fn):
+        return {"ok": True, "running": False}
+    return await fn()
+
+
 @app.post("/camp/start")
 async def camp_start(req: CampRequest):
     """Park on a live game with the Quick Bet armed, so the next arb on it costs one press.

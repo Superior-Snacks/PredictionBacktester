@@ -2678,6 +2678,41 @@ class PinnacleAdapter(BookAdapter):
             print(f"[PINNACLE BET] TEST ({mode}) {selection_id} stake={stake:.2f} max_odds>={max_odds:.4f}")
             return await self._place_via_ui(selection_id, stake, max_odds, submit=submit)
 
+    # ── IN-PLAY MODE ──────────────────────────────────────────────────────────
+    async def start_inplay(self) -> dict:
+        """One live tab, no tab manager, camp-aware idle. PINNACLE_INPLAY=1.
+
+        REPLACES the tab pool rather than sitting beside it (operator's call): flipping tabs while a slip
+        is armed is the one thing guaranteed to lose the window camping exists to catch. The cost is
+        real — no pre-live coverage while this runs — so it is a MODE, not a background extra.
+        """
+        if getattr(self, "_inplay", None) is not None:
+            return {"ok": True, "already": True, **self._inplay.status()}
+        page = self._primary_page()
+        if page is None:
+            return {"ok": False, "error": "no primary page"}
+        try:
+            from inplay import InPlayActivity, LIVE_URL
+        except Exception as e:
+            return {"ok": False, "error": f"inplay unavailable: {type(e).__name__}: {e}"}
+        try:
+            if LIVE_URL.split("?")[0] not in (page.url or ""):
+                await page.goto(LIVE_URL, wait_until="domcontentloaded")
+        except Exception as e:
+            return {"ok": False, "error": f"could not open {LIVE_URL}: {type(e).__name__}: {e}"}
+        self._inplay = InPlayActivity(page, self._human_click_loc,
+                                      lambda m: print(f"[PINNACLE INPLAY] {m}", flush=True))
+        self._inplay.start()
+        return {"ok": True, **self._inplay.status()}
+
+    async def stop_inplay(self) -> dict:
+        ip = getattr(self, "_inplay", None)
+        if ip is None:
+            return {"ok": True, "running": False}
+        await ip.stop()
+        self._inplay = None
+        return {"ok": True, "running": False}
+
     # ── IN-PLAY CAMPING ───────────────────────────────────────────────────────
     async def camp_start(self, selection_id: str, stake: float) -> dict:
         """Park on a live game with the Quick Bet OPEN and the stake entered, then hold.
@@ -2721,8 +2756,20 @@ class PinnacleAdapter(BookAdapter):
         if not armed:
             self._camping = False
             return {"ok": False, "error": f"could not arm: {res.reason}"}
+        # Idle behaviour must change WITH the camp, not alongside it. Browsing while armed would scroll
+        # the board under the slip and open a different market's Quick Bet over the one being held.
+        # getattr, not self._inplay: the attribute only exists once in-play mode has started, and a bare
+        # access inside a swallowing try/except would turn "idle never switched to hover" into silence —
+        # the camper would keep browsing and scrolling the board out from under its own armed slip.
+        ip = getattr(self, "_inplay", None)
+        if ip is not None:
+            ip.set_camping(True)
+        else:
+            print("[PINNACLE CAMP] note: in-play idle is not running, so nothing was switched to hover. "
+                  "Camping still works, but whatever idle IS running may scroll the slip away.",
+                  flush=True)
         print(f"[PINNACLE CAMP] armed on {selection_id} stake={stake:.2f} @ {res.actual_odds} — "
-              f"betslip trimming suspended until camp_stop", flush=True)
+              f"betslip trimming suspended, idle switched to hover", flush=True)
         return {"ok": True, "armed": True, "selection_id": selection_id,
                 "stake": stake, "odds": res.actual_odds}
 
@@ -2737,6 +2784,9 @@ class PinnacleAdapter(BookAdapter):
         if not getattr(self, "_camping", False):
             return {"ok": True, "camping": False}
         self._camping = False                      # release FIRST so the trim below is allowed to run
+        ip = getattr(self, "_inplay", None)
+        if ip is not None:
+            ip.set_camping(False)
         page = self._primary_page()
         try:
             if page is not None:
