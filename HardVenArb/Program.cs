@@ -530,12 +530,25 @@ var cts = new CancellationTokenSource();
 // Convention: a value <= 0 in the environment is treated as UNSET and falls back, EXCEPT where zero is a
 // meaningful setting (a zero buffer, a zero cooldown) — those pass allowZero: true. That keeps a typo'd or
 // empty env var from silently disabling a safety limit, while still letting you deliberately set one to 0.
+// A value that is SET but unreadable is a different thing from one that is unset, and silently treating them
+// alike is how a limit ends up wrong with nothing in the log to say so. Set-but-unparseable now announces
+// itself; unset stays quiet, because that is the ordinary case.
+static void WarnUnparseable(string name, string raw, object fallback)
+{
+    Console.ForegroundColor = ConsoleColor.Yellow;
+    Console.WriteLine($"[ENV] {name}=\"{raw}\" could not be read as a number — using {fallback}. " +
+                      "(A trailing `# comment` on the same line used to end up inside the value; if this is " +
+                      "from an old .env, put the comment on its own line.)");
+    Console.ResetColor();
+}
+
 static decimal EnvDec(string name, decimal fallback, bool allowZero = false)
 {
     string? raw = Environment.GetEnvironmentVariable(name);
     if (decimal.TryParse(raw, NumberStyles.Any, CultureInfo.InvariantCulture, out var v)
         && (v > 0m || (allowZero && v == 0m)))
         return v;
+    if (!string.IsNullOrWhiteSpace(raw)) WarnUnparseable(name, raw, fallback);
     return fallback;
 }
 
@@ -545,6 +558,7 @@ static int EnvInt(string name, int fallback, bool allowZero = false)
     if (int.TryParse(raw, NumberStyles.Any, CultureInfo.InvariantCulture, out var v)
         && (v > 0 || (allowZero && v == 0)))
         return v;
+    if (!string.IsNullOrWhiteSpace(raw)) WarnUnparseable(name, raw, fallback);
     return fallback;
 }
 
@@ -555,6 +569,15 @@ static bool EnvBool(string name, bool fallback)
     string? raw = (Environment.GetEnvironmentVariable(name) ?? "").Trim();
     if (raw == "1" || raw.Equals("true", StringComparison.OrdinalIgnoreCase)) return true;
     if (raw == "0" || raw.Equals("false", StringComparison.OrdinalIgnoreCase)) return false;
+    // Same reasoning as WarnUnparseable, and it matters MORE here: a bad number is at least out of range,
+    // whereas `HARDVEN_INPLAY_CAMP=1  # camp mode` just reads as "not 1" and turns the feature off.
+    if (raw.Length > 0)
+    {
+        Console.ForegroundColor = ConsoleColor.Yellow;
+        Console.WriteLine($"[ENV] {name}=\"{raw}\" is neither 1/true nor 0/false — using {fallback}. " +
+                          "(Put any `# comment` on its own line, not after the value.)");
+        Console.ResetColor();
+    }
     return fallback;
 }
 

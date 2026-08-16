@@ -29,6 +29,25 @@ public class KalshiApiConfig
     /// Handles 'export KEY=VALUE' and bare 'KEY=VALUE' syntax.
     /// Does not overwrite variables already set in the environment.
     /// </summary>
+    /// <summary>Drop a trailing <c> # comment</c> from an UNQUOTED .env value.
+    ///
+    /// <para>Annotated .env lines are normal, and without this the comment becomes part of the value. Here that
+    /// fails SILENTLY, which is the dangerous half: <c>HARDVEN_BOOK_FIRST=1  # press first</c> is not "1" any
+    /// more, so the leg-ordering model quietly reverts, and <c>HARDVEN_BALANCE_BUFFER_USD=0  # no reserve</c>
+    /// fails to parse and falls back to the percentage reserve — both of which change what the bot trades with
+    /// no message anywhere (observed 2026-08-16).</para>
+    ///
+    /// <para>Whitespace-delimited, and quoted values are left alone, because '#' is legitimate inside a password
+    /// or a URL fragment: <c>PASS=hunter#2</c> and <c>PASS="a # b"</c> both survive intact.</para></summary>
+    private static string StripInlineComment(string v)
+    {
+        if (v.Length == 0 || v[0] == '"' || v[0] == '\'') return v;
+        for (int i = 1; i < v.Length; i++)
+            if (v[i] == '#' && char.IsWhiteSpace(v[i - 1]))
+                return v[..i].TrimEnd();
+        return v;
+    }
+
     private static void LoadDotEnv()
     {
         var searchDirs = new[]
@@ -56,7 +75,7 @@ public class KalshiApiConfig
                 if (eq <= 0) continue;
 
                 var key = line[..eq].Trim();
-                var val = line[(eq + 1)..].Trim().Trim('"').Trim('\'');
+                var val = StripInlineComment(line[(eq + 1)..].Trim()).Trim('"').Trim('\'');
 
                 if (!string.IsNullOrEmpty(key) &&
                     Environment.GetEnvironmentVariable(key) is null)

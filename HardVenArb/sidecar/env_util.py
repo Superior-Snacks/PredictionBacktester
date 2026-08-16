@@ -65,6 +65,26 @@ def _candidate_paths() -> list[Path]:
     return paths
 
 
+def _strip_inline_comment(v: str) -> str:
+    """Drop a trailing ` # comment` from an UNQUOTED value.
+
+    Every .env in the wild carries annotated lines, and without this they become part of the value. The
+    failure is silent far more often than not: `PINNACLE_CAMP_MAX_SKIPS=1  # 30 min` at least raises on
+    int(), but `HARDVEN_BET_ENABLE=1  # required` simply is not "1" any more, so placement turns itself off
+    and nothing says why (observed 2026-08-16).
+
+    WHITESPACE-DELIMITED, and quoted values are left alone, because '#' is a legitimate character inside a
+    password or a URL fragment. `PASS=hunter#2` and `PASS="a # b"` both survive; only ` #` after a value is
+    treated as a comment.
+    """
+    if not v or v[0] in "\"'":
+        return v
+    for i in range(1, len(v)):
+        if v[i] == "#" and v[i - 1].isspace():
+            return v[:i].rstrip()
+    return v
+
+
 def load_dotenv_upwards() -> None:
     for env in _candidate_paths():
         try:
@@ -79,7 +99,7 @@ def load_dotenv_upwards() -> None:
             if line[:7].lower() == "export ":
                 line = line[7:]
             k, _, v = line.partition("=")
-            k, v = k.strip(), v.strip().strip('"').strip("'")
+            k, v = k.strip(), _strip_inline_comment(v.strip()).strip('"').strip("'")
             if k and k not in os.environ:
                 os.environ[k] = v
         print(f"[SIDECAR] loaded env from {env}")
