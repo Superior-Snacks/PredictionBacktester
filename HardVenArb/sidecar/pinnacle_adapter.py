@@ -2523,8 +2523,16 @@ class PinnacleAdapter(BookAdapter):
             return BetResult(accepted=False, stake=stake,
                              reason=f"no catalog entry for {selection_id} -- cannot verify the market before betting")
         url = self._league_url_for(lid)
-        if not url:
+        if not url and self.mode != "inplay":
             return BetResult(accepted=False, stake=stake, reason=f"no league URL known for lid {lid}")
+        if not url:
+            # IN-PLAY DOES NOT NAVIGATE. The league URL exists so the bot can open a focused league page
+            # and find the row there; in-play is already parked on the live list with the match on it,
+            # and _select_bet_tab is deliberately restricted to the primary page in this mode. Requiring
+            # a URL we will never visit rejected live matches purely because their league had never been
+            # mapped — 217192 was on screen at the time.
+            print(f"[PINNACLE INPLAY] lid {lid} has no mapped league URL; searching the live list "
+                  f"directly (no navigation needed in this mode)", flush=True)
 
         # Freeze all human-activity loops for the bet BEFORE touching a tab, so per-tab organic / the tab sweep
         # can't steal focus or re-point the tab mid-bet. Resumed in the finally.
