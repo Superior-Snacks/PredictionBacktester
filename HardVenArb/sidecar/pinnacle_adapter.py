@@ -483,6 +483,7 @@ class PinnacleAdapter(BookAdapter):
         self._tab_organic = None                               # TabOrganic: light per-tab human activity
         self._banking_mode = False                             # operator banking window: all automation frozen
         self._banking_task: Optional[asyncio.Task] = None
+        self._camp_nav_page = None                             # page whose navigations invalidate the camp
         self._manual_mode = False                              # operator is driving the browser by hand
         self._manual_until = 0.0                               # 0 = until switched off; else auto-release at this ts
         self._manual_task: Optional[asyncio.Task] = None
@@ -3128,6 +3129,21 @@ class PinnacleAdapter(BookAdapter):
                 self._browser.set_camp_hold(True)
         except Exception:
             pass
+        # A NAVIGATION KILLS THE SLIP, SO IT MUST KILL THE CAMP — AT THE INSTANT IT HAPPENS.
+        # The Quick Bet portal does not survive a reload, and every poller that could notice is on a timer:
+        # the in-play watcher runs on its 12-45s idle gap and the C# health check every 30s. In between,
+        # `_camping` still says armed, which suppresses betslip trimming and lets a fire press Place on
+        # whatever the reloaded page happens to be showing. Observed while testing the hold: the page
+        # refreshed and the bot went on believing the slip was up.
+        #
+        # `framenavigated` on the MAIN frame is the earliest possible signal and costs nothing when idle.
+        # A soft SPA route change fires it too and does NOT destroy the portal, so the handler verifies
+        # against the DOM instead of assuming — otherwise it would tear down healthy camps.
+        try:
+            page.on("framenavigated", self._on_camp_nav)
+            self._camp_nav_page = page
+        except Exception:
+            pass
         ip = getattr(self, "_inplay", None)
         if ip is not None:
             ip.set_camping(True)
@@ -3173,6 +3189,126 @@ class PinnacleAdapter(BookAdapter):
         print(f"[PINNACLE CAMP] odds-changed prompt ({why}) - reading it for {delay:.1f}s, then DECLINE",
               flush=True)
         await asyncio.sleep(delay)
+
+    def _on_camp_nav(self, frame) -> None:
+        """Main-frame navigation while camped → check whether the armed slip survived it.
+
+        Sync callback (Playwright's event signature), so the DOM check is deferred to a task. Ignores
+        sub-frames: ads and widgets navigate constantly and none of them can touch the Quick Bet."""
+        try:
+            if not getattr(self, "_camping", False):
+                return
+            pg = getattr(self, "_camp_nav_page", None)
+            if pg is None or frame != pg.main_frame:
+                return
+            asyncio.create_task(self._camp_nav_check())
+        except Exception:
+            pass
+
+    async def _camp_nav_check(self) -> None:
+        await asyncio.sleep(0.8)                   # let the new document mount before judging it
+        if not getattr(self, "_camping", False):
+            return
+        pg = getattr(self, "_camp_nav_page", None)
+        if pg is None:
+            return
+        try:
+            if await pg.locator("#quick-bet-portal").count():
+                return                             # soft SPA nav: the portal is mounted at app root, it lives
+        except Exception:
+            pass
+        print("[PINNACLE CAMP] the page navigated and the Quick Bet did not survive it - releasing the camp "
+              "now rather than waiting for a poll to notice.", flush=True)
+        try:
+            await self.camp_stop()
+        except Exception:
+            pass
+
+    async def _dismiss_quick_bet(self, page=None) -> bool:
+        """Leave NOTHING loaded on the page. Returns True once the Quick Bet is gone (or was never there).
+
+        THE DEFAULT WAY OUT OF EVERY SITUATION, not just a refused prompt. Whatever the panel is showing —
+        an armed slip, a re-ask in either rendering, a placement confirmation, or something not seen before —
+        dismissing it is safe and correct, so nothing needs to recognise the state first. That is the whole
+        value: the failure this replaces was the bot sitting in front of a panel it could not classify.
+
+        DISMISSING CANNOT CANCEL A PLACED BET. An accepted bet lives server-side and is established by its
+        own POST /bets/straight 200 and the account's bet list; the popover is just a control surface. So
+        this is safe to run after a SUCCESS too — and it should be, because a leftover confirmation panel is
+        what the next arm has to click through.
+
+        Ordered by how much it assumes about the DOM, least first:
+          1. DECLINE, when the panel has one. The site's own affordance and the most honest signal to it.
+          2. the popover's close control.
+          3. Escape.
+          4. a click on empty page, well away from the panel — the only step that assumes nothing about the
+             markup at all. A click landing on nothing cannot place a bet whatever the slip is rendering,
+             which is exactly the property wanted from a last resort.
+
+        Trusts none of them on its own: each is verified against the portal actually disappearing, and a
+        panel that survives all four is REPORTED rather than assumed away — a Quick Bet still sitting there
+        with a stake in it is the one thing that must never be left behind silently.
+        """
+        if page is None:
+            page = self._primary_page()
+        try:
+            if page is None or page.is_closed():
+                return True
+        except Exception:
+            return True
+        portal = page.locator("#quick-bet-portal")
+
+        async def gone() -> bool:
+            try:
+                return not await portal.count()
+            except Exception:
+                return True                       # page/frame went away: nothing is left armed
+
+        if await gone():
+            return True
+
+        try:
+            dec = portal.get_by_text("DECLINE", exact=False)
+            if await dec.count():
+                await self._human_click_loc(page, dec.first)
+                await asyncio.sleep(0.4)
+                if await gone():
+                    return True
+        except Exception:
+            pass
+        for sel in ('button[aria-label*="Remove"]', 'button[aria-label*="Close"]',
+                    'button[aria-label*="remove"]', 'button[aria-label*="close"]'):
+            try:
+                x = portal.locator(sel).first
+                if await x.count():
+                    await self._human_click_loc(page, x)
+                    await asyncio.sleep(0.4)
+                    if await gone():
+                        return True
+            except Exception:
+                pass
+        try:
+            await page.keyboard.press("Escape")
+            await asyncio.sleep(0.4)
+            if await gone():
+                return True
+        except Exception:
+            pass
+        # Click away. Top-left of the viewport, offset off the very corner so it is a plausible resting
+        # place for a hand rather than a screen edge, and clear of the panel (which renders right/centre).
+        try:
+            ax, ay = random.uniform(60, 150), random.uniform(180, 320)
+            await self._human_move_page(page, ax, ay)
+            await page.mouse.click(ax, ay)
+            await asyncio.sleep(0.5)
+            if await gone():
+                return True
+        except Exception:
+            pass
+        print("[PINNACLE CAMP] WARNING: could not dismiss the Quick Bet - it is STILL ON THE PAGE with a "
+              "stake in it. Nothing was placed by this call, but clear it by hand before re-arming.",
+              flush=True)
+        return False
 
     async def camp_fire(self, min_odds: float, stake: float = None) -> dict:
         """Press PLACE BET on the armed slip. THE ONLY FUNCTION HERE THAT COMMITS MONEY.
@@ -3284,8 +3420,25 @@ class PinnacleAdapter(BookAdapter):
             # THE DECISION IS THE SAME ONE AS BEFORE PRESSING: the prompt shows the NEW price in the same
             # position, so re-read it and apply the same floor. At or above it the arb still stands and
             # this accepts; below it the edge is gone and DECLINE is the correct answer, not a retry.
+            # THERE ARE TWO RE-ASK RENDERINGS, not one. Captured 2026-08-17 on a fast-moving live tennis
+            # line, with the account's own "accept odds changes" setting ON:
+            #
+            #   A  "… | DECLINE | PLACE BET | …"                  two buttons, an explicit refuse
+            #   B  "Odds changed: | 4.000 | 3.720 | ▲ | … | PLACE BET | …"
+            #                                                      a BANNER and ONE button — re-press to take
+            #
+            # Only A was handled, so B fell through the whole 15s wait doing nothing and reported "the bet MAY
+            # be live" for a panel that was simply sitting there waiting to be pressed again. Worse than
+            # useless: that message means "you may hold an unhedged leg", which halts the bot.
+            #
+            # ABANDONING IS A CLICK-AWAY, NOT A HUNT FOR A BUTTON. B has no DECLINE at all, and A's DECLINE
+            # shares a class with PLACE BET so only its text distinguishes it — text that has now been seen in
+            # two forms and could take a third. Dismissing the popover cannot place anything no matter what
+            # the panel is rendering, which makes it the safe universal answer; the named control is tried
+            # first only because it is the site's own affordance.
             body: dict = {}
-            prompt_done = False
+            accepts = 0
+            max_accepts = int(os.environ.get("PINNACLE_CAMP_MAX_REPRESS", "2"))
             for _ in range(60):
                 await asyncio.sleep(0.25)
                 if "_resp" in placed:
@@ -3294,46 +3447,71 @@ class PinnacleAdapter(BookAdapter):
                     except Exception:
                         body = {}
                     break
-                if prompt_done:
-                    continue
-                try:
-                    dec = portal.get_by_text("DECLINE", exact=False)
-                    if not await dec.count():
-                        continue
-                except Exception:
-                    continue
                 t2 = ""
                 try:
                     t2 = (await portal.first.inner_text()).replace("\n", " | ")
                 except Exception:
-                    pass
+                    continue                       # portal gone mid-read; the checks below need its text
+                has_decline = "DECLINE" in t2.upper()
+                changed = "ODDS CHANGED" in t2.upper()
+                if not has_decline and not changed:
+                    continue                       # ordinary in-flight wait
                 m2 = self._CAMP_PRICE_RX.search(t2)
                 newp = float(m2.group(1)) if m2 else None
+                state = "A (decline+place)" if has_decline else "B (odds-changed banner)"
+
                 if newp is None:
-                    await self._decline_pause("unreadable price")
-                    await self._human_click_loc(page, dec.first)
+                    await self._decline_pause(f"{state}, price unreadable")
+                    await self._dismiss_quick_bet(page)
                     return {"ok": False, "fired": False, "declined": True,
-                            "error": "odds-changed prompt appeared and its price was unreadable — "
-                                     "DECLINED rather than accept an unknown price"}
+                            "error": f"re-ask appeared [{state}] and its price was unreadable — abandoned "
+                                     f"rather than accept an unknown price"}
                 if newp < min_odds - 1e-9:
                     await self._decline_pause(f"{live} -> {newp} is under the {min_odds} floor")
-                    await self._human_click_loc(page, dec.first)
-                    print(f"[PINNACLE CAMP] odds moved {live} -> {newp}, below the {min_odds} floor — "
-                          f"DECLINED, no bet placed", flush=True)
+                    await self._dismiss_quick_bet(page)
+                    print(f"[PINNACLE CAMP] odds moved {live} -> {newp}, below the {min_odds} floor "
+                          f"[{state}] - abandoned, no bet placed", flush=True)
                     return {"ok": False, "fired": False, "declined": True,
                             "live_odds": newp, "min_odds": min_odds,
                             "error": f"odds changed to {newp}, below the {min_odds} the arb needs — "
-                                     f"declined, nothing placed"}
-                print(f"[PINNACLE CAMP] odds moved {live} -> {newp}, still clears {min_odds} — "
-                      f"accepting", flush=True)
+                                     f"abandoned, nothing placed"}
+
+                # Still clears the floor. Press again to take the new price — but BOUNDED. On a line moving
+                # this fast the site can re-ask on every press, and an unbounded accept loop is a machine
+                # chasing a price, which is both a detectable pattern and a way to fill at something well
+                # away from what the arb was sized on.
+                if accepts >= max_accepts:
+                    await self._dismiss_quick_bet(page)
+                    print(f"[PINNACLE CAMP] re-asked {accepts + 1}x [{state}] - giving up rather than "
+                          f"chasing the price", flush=True)
+                    return {"ok": False, "fired": False, "declined": True,
+                            "live_odds": newp, "min_odds": min_odds,
+                            "error": f"the panel re-asked {accepts + 1} times (last {newp}) — abandoned "
+                                     f"rather than chase a moving price; nothing placed"}
+                accepts += 1
+                print(f"[PINNACLE CAMP] odds moved {live} -> {newp}, still clears {min_odds} [{state}] - "
+                      f"accepting (press {accepts}/{max_accepts})", flush=True)
                 live = newp
-                prompt_done = True
-                await self._human_click_loc(page, portal.get_by_text("PLACE BET", exact=False).last,
-                                            fast=True)
+                try:
+                    await self._human_click_loc(page, portal.get_by_text("PLACE BET", exact=False).last,
+                                                fast=True)
+                except Exception as e:
+                    await self._dismiss_quick_bet(page)
+                    return {"ok": False, "fired": False, "declined": True,
+                            "error": f"could not re-press PLACE BET ({type(e).__name__}: {e}) — abandoned"}
             if "_resp" not in placed:
-                return {"ok": False, "fired": True, "confirmed": False,
+                # UNCLASSIFIED. 15s of a panel that never produced a POST and never showed a re-ask we
+                # recognise. Clear it rather than walk away and leave a slip with a stake in it — that costs
+                # nothing if no bet went out, and cannot un-place one if it did.
+                #
+                # The ambiguity itself does NOT go away, and must not be softened: no POST was seen, so this
+                # still reports unconfirmed and the C# side still hard-halts. Clearing the panel is hygiene,
+                # not evidence.
+                cleared = await self._dismiss_quick_bet(page)
+                return {"ok": False, "fired": True, "confirmed": False, "slip_cleared": cleared,
                         "error": "PLACE BET clicked but no /bets/straight response in 15s — the bet MAY "
-                                 "be live. Reconcile against My Bets; do NOT hedge against this."}
+                                 "be live. Reconcile against My Bets; do NOT hedge against this."
+                                 + ("" if cleared else " The Quick Bet also would not close — clear it by hand.")}
             if placed.get("status") != 200:
                 return {"ok": False, "fired": True, "confirmed": False,
                         "error": f"Pinnacle refused the placement (HTTP {placed.get('status')})"}
@@ -3404,6 +3582,15 @@ class PinnacleAdapter(BookAdapter):
         if not getattr(self, "_camping", False):
             return {"ok": True, "camping": False}
         self._camping = False                      # release FIRST so the trim below is allowed to run
+        # Drop the navigation watcher with the camp. Left attached it accumulates a handler per arm on a
+        # long-lived page, and each one would fire on every later navigation.
+        try:
+            pg = getattr(self, "_camp_nav_page", None)
+            if pg is not None:
+                pg.remove_listener("framenavigated", self._on_camp_nav)
+        except Exception:
+            pass
+        self._camp_nav_page = None
         try:
             if self._browser is not None:
                 self._browser.set_camp_hold(False)      # the session may re-mint again
@@ -3413,6 +3600,23 @@ class PinnacleAdapter(BookAdapter):
         if ip is not None:
             ip.set_camping(False)
         page = self._primary_page()
+        # DISMISS THE QUICK BET FIRST, and unconditionally.
+        #
+        # This is the failsafe every exit path shares. camp_stop runs on success, on a decline, on a timeout
+        # we could not classify, on relocation, on idle release and on shutdown — so doing it here means no
+        # caller has to remember, and no unrecognised panel state can leave a loaded slip behind. The old
+        # code only ran `_trim_betslip`, which clears the SIDE betslip and does not touch the Quick Bet
+        # portal at all, so the popover routinely survived a "stop".
+        #
+        # It runs after a SUCCESSFUL placement too. Dismissing cannot cancel a bet that was accepted (that
+        # lives server-side), and the panel left behind is a confirmation the next arm would otherwise have
+        # to click through — so clearing it is how the camper gets a clean page to re-arm on.
+        try:
+            if page is not None and not await self._dismiss_quick_bet(page):
+                print("[PINNACLE CAMP] camp released but the Quick Bet would not close - clear it by hand "
+                      "before re-arming.", flush=True)
+        except Exception:
+            pass
         try:
             if page is not None:
                 await self._trim_betslip(page, source="camp-stop")
