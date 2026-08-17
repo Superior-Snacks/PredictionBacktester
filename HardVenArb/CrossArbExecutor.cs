@@ -1281,7 +1281,25 @@ public class CrossArbExecutor
         // It costs seconds, so Kalshi is re-read from its live book afterwards and the whole arb re-tested:
         // a slip that takes 3s is 3s in which Kalshi can move away, and firing on a stale Kalshi would just
         // relocate the problem to the other leg.
-        if (_restVerifier != null && !testMode && (!_dryRun || _slipQuoteInDryRun) && _slipQuoteEnabled)
+        //
+        // NOT WHEN THE LEG IS THE ARMED CAMP — and this is a deadlock, not an optimisation. A slip quote
+        // opens a Quick Bet, in-play mode has ONE tab, and the sidecar therefore (correctly) refuses to quote
+        // while camping: doing it would open a second popover over the armed one and destroy the camp. So the
+        // quote can only fail, the failure is treated as "cannot confirm the price", and the camp becomes
+        // structurally incapable of ever firing. Observed 2026-08-17: the executor reached the camp seam 11
+        // times and 15 attempts died as SLIP_QUOTE_FAILED without one press.
+        //
+        // Skipping it loses nothing. The purpose of the quote is to read the price the venue will actually
+        // honour rather than the cached feed price — and the ARMED SLIP IS THAT QUOTE, already open on the
+        // exact selection. camp_fire re-reads the live price off that panel immediately before committing and
+        // applies `min_odds` as a floor, including through an odds-changed re-prompt. That is a stricter
+        // check than this one, and it happens at the instant of the press instead of seconds before it.
+        bool campWillPress = _camp is not null && _camp.IsArmedOn(hardvenToken);
+        if (campWillPress)
+            DebugLog.Trades($"ExecuteAsync {pair.Label}: armed camp — skipping the slip quote (the armed slip " +
+                            "IS the quote; camp_fire re-reads it against min_odds at the press)");
+        if (_restVerifier != null && !testMode && !campWillPress
+            && (!_dryRun || _slipQuoteInDryRun) && _slipQuoteEnabled)
         {
             var (slipPrice, slipErr) = await _restVerifier.SlipQuoteAsync(hardvenToken, _slipQuoteTimeoutSec);
             if (slipErr == "unsupported")
