@@ -483,6 +483,9 @@ class PinnacleAdapter(BookAdapter):
         self._tab_organic = None                               # TabOrganic: light per-tab human activity
         self._banking_mode = False                             # operator banking window: all automation frozen
         self._banking_task: Optional[asyncio.Task] = None
+        self._manual_mode = False                              # operator is driving the browser by hand
+        self._manual_until = 0.0                               # 0 = until switched off; else auto-release at this ts
+        self._manual_task: Optional[asyncio.Task] = None
         self._validate_task: Optional[asyncio.Task] = None      # proves a fresh capture before advertising it
         self._bet_page = None                                  # cold last-resort bet tab (see _select_bet_tab)
         self._bet_cursor = None                                # tracked mouse pos for human-like placement moves
@@ -1486,6 +1489,9 @@ class PinnacleAdapter(BookAdapter):
         # and the camped selection is on the live list this tab is showing — so it takes the already-live
         # short-circuit above and never reaches here. Anything that DOES reach here is a different league,
         # i.e. exactly the case that is not worth a navigation mid-camp.
+        if self._manual_mode:
+            return {"ok": False, "verified": False,
+                    "error": "manual mode - not navigating a tab while the operator is driving"}
         if getattr(self, "_camping", False):
             return {"ok": False, "verified": False,
                     "error": "camping - not navigating a tab while a slip is armed"}
@@ -2143,6 +2149,9 @@ class PinnacleAdapter(BookAdapter):
             # analogue, attached to the session that places the bets. Free to drop, so drop it.
             if self.mode == "inplay":
                 continue
+            # Nothing automated should be talking to the venue on this account while a human is using it.
+            if self._manual_mode:
+                continue
             # authed re-seed needs a live session; guest is public → runs regardless
             if self._reseed_source != "guest" and self._session_source == "browser" and not self._session_ready:
                 continue
@@ -2419,6 +2428,13 @@ class PinnacleAdapter(BookAdapter):
                                                      bet-slip automation, DEFERRED (raises until built).
 
         This guarantees real money can never fire without the explicit env gate AND an implemented UI path."""
+        # 0. the operator is driving — a placement would seize the browser out from under them, and a bet
+        #    placed while a human is clicking around the same account is unattributable afterwards.
+        if self._manual_mode:
+            return BetResult(accepted=False, stake=stake,
+                             reason="MANUAL MODE is on — the operator is driving the browser, nothing is "
+                                    "placed. Toggle it off ('m' in the sidecar window, or POST "
+                                    "/control/manual) to resume trading.")
         # 1. hard stake cap
         if stake > self._max_stake:
             return BetResult(accepted=False, stake=stake,
@@ -2458,6 +2474,9 @@ class PinnacleAdapter(BookAdapter):
         # open a DIFFERENT market's Quick Bet on top of the armed one and then close it on the way out. The
         # camp would die silently and the C# side would keep believing it was armed. Refuse instead: the
         # caller treats an error as "not sampled" and refunds its budget, which costs a measurement, not a camp.
+        blocked = self.manual_blocked("a slip quote")
+        if blocked:
+            return blocked
         if getattr(self, "_camping", False):
             return {"ok": False, "error": "camping — a slip quote would open a second Quick Bet over the "
                                           "armed one on the single live tab"}
@@ -2890,7 +2909,7 @@ class PinnacleAdapter(BookAdapter):
                         await self._human_click_loc(page, live_link.first)
                         await page.wait_for_load_state("domcontentloaded")
                 except Exception as e:
-                    print(f"[PINNACLE INPLAY] board->live nav did not take ({type(e).__name__}: {e}) — "
+                    print(f"[PINNACLE INPLAY] board->live nav did not take ({type(e).__name__}: {e}) - "
                           f"going straight to the live list", flush=True)
             if LIVE_URL.split("?")[0] not in (page.url or ""):
                 await page.goto(LIVE_URL, wait_until="domcontentloaded")
@@ -3070,6 +3089,9 @@ class PinnacleAdapter(BookAdapter):
 
         Nothing is placed. The slip sits armed until camp_fire, camp_stop, or the venue clears it.
         """
+        blocked = self.manual_blocked("arming a camp")
+        if blocked:
+            return blocked
         if self._session_source == "browser" and not self._session_ready:
             return {"ok": False, "error": "no live Pinnacle session"}
         if self._bet_lock.locked():
@@ -3148,7 +3170,7 @@ class PinnacleAdapter(BookAdapter):
         if hi_ms < lo_ms:
             lo_ms, hi_ms = hi_ms, lo_ms
         delay = random.uniform(lo_ms, hi_ms) / 1000.0
-        print(f"[PINNACLE CAMP] odds-changed prompt ({why}) — reading it for {delay:.1f}s, then DECLINE",
+        print(f"[PINNACLE CAMP] odds-changed prompt ({why}) - reading it for {delay:.1f}s, then DECLINE",
               flush=True)
         await asyncio.sleep(delay)
 
@@ -3170,6 +3192,9 @@ class PinnacleAdapter(BookAdapter):
         CONFIRM. The POST answers PENDING_ACCEPTANCE with no bet id; acceptance is established against
         the account's own bet list. See _confirm_bet.
         """
+        blocked = self.manual_blocked("firing a camp")
+        if blocked:
+            return blocked
         if not getattr(self, "_camping", False):
             return {"ok": False, "error": "not camping"}
         if not self._bet_enabled:
@@ -3809,6 +3834,10 @@ class PinnacleAdapter(BookAdapter):
                 # between two correct behaviours. `_camping` is held for the life of a camp.
                 if getattr(self, "_camping", False):
                     continue
+                # The operator's own selections are indistinguishable from strays, and this loop's whole job
+                # is deleting anything it does not recognise. Off while they are driving.
+                if self._manual_mode:
+                    continue
                 if not self._betslip_trim or self._bet_lock.locked():
                     continue
                 pages = []
@@ -3930,6 +3959,81 @@ class PinnacleAdapter(BookAdapter):
         ip = getattr(self, "_inplay", None)
         if ip is not None:
             ip.pause()
+
+    # ── MANUAL MODE (operator is driving) ─────────────────────────────────────
+    def manual_blocked(self, what: str) -> Optional[dict]:
+        """One refusal used by every automated action. Returns a dict to return, or None to carry on.
+
+        Centralised deliberately. The lesson from the betslip-trim guard is that a hold added at some call
+        sites and not others is worse than no hold, because the remaining ones fire rarely and look like
+        random misbehaviour rather than a missing check."""
+        if not self._manual_mode:
+            return None
+        return {"ok": False, "accepted": False, "manual": True,
+                "error": f"MANUAL MODE is on — {what} refused. The operator is driving the browser. "
+                         f"Toggle it off (press 'm' in the sidecar window, or POST /control/manual) to resume."}
+
+    async def manual_mode(self, on: bool, minutes: float = 0.0) -> dict:
+        """Freeze / unfreeze EVERY automation that touches the browser, so the site can be used by hand.
+
+        Distinct from the banking window, which shares the freeze but also overrides the schedule, opens the
+        cashier in its own tab, and auto-reverts into a halt. This does none of that: it changes no trading
+        state, navigates nowhere, and leaves the page exactly where the operator put it. It is purely "stop
+        touching things".
+
+        WHAT IT HOLDS, and each of these was found by asking what would still move the page:
+          * session organic (mouse/keyboard/nav) and the per-tab organic
+          * the tab manager's open/close/re-point sweep
+          * the in-play idle loop (scroll, random slip peeks, hover)
+          * the periodic session-refresh RELOAD               (session.set_manual)
+          * the board-drift watchdog, which is the sneaky one (session.set_manual)
+          * the 25s betslip sweep, which would delete the operator's own selections
+          * the reader re-seed's REST traffic
+          * every placement path: /bet, camp arm, camp fire, slip quotes, WS verify
+
+        `minutes` sets a safety auto-release; 0 means it stays on until switched off. The default is 0 on
+        purpose — an operator halfway through something does not want a timer deciding they are finished —
+        but the state is reported everywhere so a forgotten toggle is visible rather than mysterious.
+        """
+        on = bool(on)
+        was = self._manual_mode
+        self._manual_mode = on
+        self._manual_until = (time.time() + minutes * 60.0) if (on and minutes > 0) else 0.0
+        try:
+            if self._browser is not None:
+                self._browser.set_manual(on)
+        except Exception:
+            pass
+        if on:
+            self._pause_all_organic()
+            if self._manual_task is None or self._manual_task.done():
+                self._manual_task = asyncio.create_task(self._manual_expiry_loop())
+            until = ("until you switch it off" if not self._manual_until
+                     else f"for {minutes:g}m")
+            print(f"[PINNACLE MANUAL] ON {until} - organic, tab churn, in-play idle, session reloads, the "
+                  f"board-drift watchdog, the betslip sweep and REST re-seeds are all OFF. Nothing will be "
+                  f"placed. The browser is yours.", flush=True)
+        else:
+            # Do NOT resume in-play idle here if in-play is not running; _resume_all_organic is already
+            # mode-aware, so this restores exactly what was running before.
+            self._resume_all_organic()
+            if was:
+                print("[PINNACLE MANUAL] OFF - automation resumed.", flush=True)
+        return self.manual_status()
+
+    def manual_status(self) -> dict:
+        left = max(0.0, self._manual_until - time.time()) if self._manual_until else 0.0
+        return {"ok": True, "manual": self._manual_mode,
+                "expires_in_sec": round(left, 1) if self._manual_until else None,
+                "mode": self.mode}
+
+    async def _manual_expiry_loop(self) -> None:
+        while self._manual_mode:
+            await asyncio.sleep(2.0)
+            if self._manual_until and time.time() >= self._manual_until:
+                print("[PINNACLE MANUAL] timer expired - resuming automation.", flush=True)
+                await self.manual_mode(False)
+                return
 
     def _on_banking(self, on: bool) -> None:
         """Lifecycle hook for the operator's banking window: freeze every automation that touches the browser,

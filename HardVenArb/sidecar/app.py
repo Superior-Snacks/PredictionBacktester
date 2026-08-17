@@ -67,11 +67,41 @@ def load_adapter() -> BookAdapter:
 adapter: BookAdapter = load_adapter()
 
 
+async def _toggle_manual() -> None:
+    """The 'm' key. Reads the CURRENT state and inverts it, rather than tracking a local flag — the mode can
+    also be changed over HTTP, and a toggle that disagrees with the thing it toggles is worse than no key."""
+    fn = getattr(adapter, "manual_mode", None)
+    st = getattr(adapter, "manual_status", None)
+    if not callable(fn) or not callable(st):
+        print(f"[SIDECAR KEYS] book '{adapter.name}' has no manual mode.", flush=True)
+        return
+    await fn(not st().get("manual", False))
+
+
+async def _print_manual_status() -> None:
+    st = getattr(adapter, "manual_status", None)
+    if callable(st):
+        print(f"[SIDECAR KEYS] {st()}", flush=True)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await adapter.startup()
     print(f"[SIDECAR] HardVen book adapter '{adapter.name}' ready.")
+    keys = None
+    if hasattr(adapter, "manual_mode"):
+        try:
+            from hotkeys import HotkeyListener
+            keys = HotkeyListener(asyncio.get_running_loop(), {
+                "m": ("toggle MANUAL mode (freeze all automation so you can drive)", _toggle_manual),
+                "s": ("show manual/mode status", _print_manual_status),
+            })
+            keys.start()
+        except Exception as e:
+            print(f"[SIDECAR KEYS] not started: {type(e).__name__}: {e}", flush=True)
     yield
+    if keys is not None:
+        keys.stop()
     await adapter.shutdown()
 
 
@@ -149,6 +179,10 @@ async def health():
         # prelive vs inplay — two different personalities sharing one adapter, and nearly every
         # behaviour below branches on it. Published so a run can be attributed without reading logs.
         "mode": getattr(adapter, "mode", "n/a"),
+        # MANUAL mode refuses every placement, so a bot reporting "no arbs taken" while this is True has a
+        # one-word explanation. Cheap to publish, and the alternative is an operator debugging a dead bot
+        # that is behaving exactly as instructed.
+        "manual": bool(getattr(adapter, "_manual_mode", False)),
         "click_mode": os.environ.get("BIA_CLICK_MODE", "playwright"),
         "organic": os.environ.get("BIA_ORGANIC", "1"),
         "place_pause_sec": os.environ.get("BIA_PLACE_STEP_PAUSE_SEC", "(default: 1.0 rehearsal / 0 live)"),
@@ -646,6 +680,37 @@ async def control_resume(req: ControlRequest):
 @app.post("/control/force_open")
 async def control_force_open(req: ControlRequest):
     return await _lifecycle().force_open(req.minutes, req.reason)
+
+
+class ManualRequest(BaseModel):
+    on: bool | None = None          # omit to TOGGLE — the same semantics as the 'm' key
+    minutes: float = 0.0            # 0 = stays on until switched off
+
+
+@app.post("/control/manual")
+async def control_manual(req: ManualRequest):
+    """HANDS OFF: freeze every automation that touches the browser so the site can be driven by hand.
+
+    Organic activity, tab churn, the in-play idle loop, the periodic session reload, the board-drift
+    watchdog, the betslip sweep and the REST re-seeds all stop, and nothing will be placed. Nothing is
+    navigated and no trading state is changed — the page stays exactly where you left it.
+
+    Not the same as /control/banking, which shares the freeze but also overrides the schedule, opens the
+    cashier in its own tab, and reverts into a halt."""
+    fn = getattr(adapter, "manual_mode", None)
+    st = getattr(adapter, "manual_status", None)
+    if not callable(fn) or not callable(st):
+        raise HTTPException(404, f"book '{adapter.name}' has no manual mode")
+    on = (not st().get("manual", False)) if req.on is None else bool(req.on)
+    return await fn(on, req.minutes)
+
+
+@app.get("/control/manual")
+async def control_manual_status():
+    st = getattr(adapter, "manual_status", None)
+    if not callable(st):
+        return {"manual": False, "supported": False}
+    return st()
 
 
 @app.post("/control/banking")

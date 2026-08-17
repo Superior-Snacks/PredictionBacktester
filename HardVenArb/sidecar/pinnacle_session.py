@@ -210,6 +210,7 @@ class PinnacleBrowserSession:
         self._ctx = None
         self._page = None
         self._banking_hold = False        # operator banking window → suppress the session-refresh reload
+        self._manual_hold  = False        # operator is driving → also suppress the board-drift watchdog
         self._activity_task: Optional[asyncio.Task] = None
         # captured creds
         self._session = ""
@@ -837,6 +838,12 @@ class PinnacleBrowserSession:
             if getattr(self, "_banking_hold", False):
                 print("[PINNACLE SESSION] session refresh SKIPPED - operator banking window is open.")
                 continue
+            # A reload while the operator is mid-navigation throws away whatever they were looking at, and
+            # unlike the camp hold there is nothing to bound it against: the session can simply be logged
+            # back in afterwards, whereas an interrupted human is just interrupted.
+            if getattr(self, "_manual_hold", False):
+                print("[PINNACLE SESSION] session refresh SKIPPED - manual mode (operator is driving).")
+                continue
             # A CAMP IS AN ARMED BETSLIP, AND reload() DESTROYS IT. Soft SPA navigation leaves the Quick
             # Bet portal mounted; a hard reload does not — measured 2026-08-16, a camp died at ~5.4min
             # against a 7min refresh cadence. BOUNDED, because this reload is what re-mints the
@@ -1099,6 +1106,13 @@ class PinnacleBrowserSession:
         while a login is settling or a bet holds the page."""
         if self._page is None or not self._home_url:
             return
+        # MANUAL MODE OWNS THE URL. Every page the operator deliberately opens is, to this watchdog,
+        # indistinguishable from drift — so left running it waits out its 180s and then yanks them back to
+        # the trading sport mid-task. That is the single most disruptive automation there is for someone
+        # trying to use the site by hand, and the one people least expect, because it fires on a timer with
+        # no other symptom.
+        if getattr(self, "_manual_hold", False):
+            return
         if time.time() - self._last_login_submit < self._home_settle_sec:
             return
         try:
@@ -1157,6 +1171,19 @@ class PinnacleBrowserSession:
                 pass
 
     # ── execution interlock (delegates to the organic loop) ───────────────────────
+    def set_manual(self, on: bool) -> None:
+        """OPERATOR IS DRIVING. Suppress the two things that move the page on their own timer.
+
+        Distinct from `set_banking` because it holds one thing banking does not: the BOARD-DRIFT WATCHDOG.
+        Banking opens the cashier in its own tab, so the watchdog dragging the main page home is harmless
+        there. Manual mode is the opposite case — the operator is navigating the main page deliberately, and
+        every URL they choose looks to the watchdog exactly like drift. Left on, it hauls them back to the
+        trading sport ~180s into whatever they were doing, which is precisely the "disturbance" being
+        removed."""
+        self._manual_hold = bool(on)
+        what = "ON - session reloads AND the board-drift watchdog are off" if on else "OFF"
+        print(f"[PINNACLE SESSION] manual hold {what}.")
+
     def set_banking(self, on: bool) -> None:
         """Operator banking window: suppress the periodic re-login RELOAD. `pause_activity` isn't enough — the
         refresh loop pauses activity around itself and reloads anyway, which would wipe a part-filled deposit
