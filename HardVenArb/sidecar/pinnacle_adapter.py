@@ -3125,6 +3125,33 @@ class PinnacleAdapter(BookAdapter):
     _CAMP_PRICE_RX = re.compile(r"(\d+\.\d+)\s*\|\s*Max Bet", re.I)
     _CAMP_MAXBET_RX = re.compile(r"Max Bet:\s*(?:EUR|€|\$|£)?\s*([\d,]+\.?\d*)", re.I)
 
+    async def _decline_pause(self, why: str) -> None:
+        """Sit on the odds-changed prompt for a beat before pressing DECLINE.
+
+        ACCEPT AND DECLINE ARE NOT THE SAME KIND OF DECISION, so they should not have the same timing.
+        Accepting is a race — the price is live and the panel re-quotes under you, so that click stays fast.
+        Declining races nothing: the bet is not going to happen either way, and the only thing the timing
+        can affect is how it looks. A prompt that says "the price moved, is that still OK?" answered in
+        120ms, every single time, is a reaction no hand produces; it is the machine-regularity that gives a
+        bot away, not the speed of any one click.
+
+        So this reads the changed price the way a person would — a second or three — and the variance is the
+        point, not the mean. PINNACLE_DECLINE_DELAY_MS as "min-max" (default "2000-3000").
+        """
+        spec = os.environ.get("PINNACLE_DECLINE_DELAY_MS", "2000-3000")
+        try:
+            lo, _, hi = spec.partition("-")
+            lo_ms = float(lo)
+            hi_ms = float(hi) if hi else lo_ms
+        except Exception:
+            lo_ms, hi_ms = 2000.0, 3000.0
+        if hi_ms < lo_ms:
+            lo_ms, hi_ms = hi_ms, lo_ms
+        delay = random.uniform(lo_ms, hi_ms) / 1000.0
+        print(f"[PINNACLE CAMP] odds-changed prompt ({why}) — reading it for {delay:.1f}s, then DECLINE",
+              flush=True)
+        await asyncio.sleep(delay)
+
     async def camp_fire(self, min_odds: float, stake: float = None) -> dict:
         """Press PLACE BET on the armed slip. THE ONLY FUNCTION HERE THAT COMMITS MONEY.
 
@@ -3258,12 +3285,14 @@ class PinnacleAdapter(BookAdapter):
                 m2 = self._CAMP_PRICE_RX.search(t2)
                 newp = float(m2.group(1)) if m2 else None
                 if newp is None:
-                    await self._human_click_loc(page, dec.first, fast=True)
+                    await self._decline_pause("unreadable price")
+                    await self._human_click_loc(page, dec.first)
                     return {"ok": False, "fired": False, "declined": True,
                             "error": "odds-changed prompt appeared and its price was unreadable — "
                                      "DECLINED rather than accept an unknown price"}
                 if newp < min_odds - 1e-9:
-                    await self._human_click_loc(page, dec.first, fast=True)
+                    await self._decline_pause(f"{live} -> {newp} is under the {min_odds} floor")
+                    await self._human_click_loc(page, dec.first)
                     print(f"[PINNACLE CAMP] odds moved {live} -> {newp}, below the {min_odds} floor — "
                           f"DECLINED, no bet placed", flush=True)
                     return {"ok": False, "fired": False, "declined": True,
