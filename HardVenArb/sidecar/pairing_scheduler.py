@@ -29,7 +29,8 @@ ROOT = SIDECAR.parent                     # HardVenArb/ (where pairHard.py + the
 
 class PairingScheduler:
     def __init__(self, hour: int = 5, initial_delay: float = 8.0, interval_min: int = 0,
-                 steps: "list[tuple[str, list[str], object]] | None" = None):
+                 steps: "list[tuple[str, list[str], object]] | None" = None,
+                 wait_ready: "object | None" = None, wait_ready_sec: float = 90.0):
         # `steps` = [(label, [script, *args], cwd)]. None keeps the historic Pinnacle chain, so nothing
         # changes for the venue that already uses this. A second book supplies its own chain instead of
         # getting a scheduler of its own -- the cadence logic is the part worth sharing.
@@ -42,6 +43,13 @@ class PairingScheduler:
         # The re-pair is account-free (Kalshi public + Pinnacle guest /catalog) and MERGE-safe (pairHard carries
         # over filled pairs), so a frequent re-run can't drop a working live pairing.
         self._interval_min = max(0, interval_min)
+        # An asyncio.Event set once the venue session has PROVEN itself with a live authed call. The Pinnacle
+        # fill step makes authed /leagues/*/markets/straight requests, and running it against a captured-but-
+        # dead session is not merely useless: on 2026-08-17 the startup run fired fourteen of them into guest
+        # redirects, which tripped the mass-logout detector and forced a re-mint the login was already
+        # handling. Waiting costs seconds and removes the cascade.
+        self._wait_ready = wait_ready
+        self._wait_ready_sec = max(0.0, wait_ready_sec)
 
     async def run(self) -> None:
         try:
@@ -68,9 +76,33 @@ class PairingScheduler:
             target += timedelta(days=1)
         return (target - now).total_seconds()
 
+    async def _wait_for_session(self, reason: str) -> None:
+        """Hold the run until the venue session has proven itself, or the grace period runs out.
+
+        TIMES OUT RATHER THAN BLOCKS. The Kalshi scaffold and the derivative pairer are account-free, so a
+        session that never comes up must not cost the whole pairing run — a day with no pairs is worse than a
+        day whose Pinnacle fill guest-redirects. The wait exists to fix the ORDER of a normal startup, not to
+        add a new way for pairing to fail."""
+        evt = self._wait_ready
+        if evt is None or self._wait_ready_sec <= 0:
+            return
+        try:
+            if evt.is_set():
+                return
+            print(f"[PAIR SCHED] {reason}: waiting up to {self._wait_ready_sec:.0f}s for the venue session to "
+                  f"prove itself before the authed fill (a captured-but-dead session guest-redirects).")
+            await asyncio.wait_for(evt.wait(), timeout=self._wait_ready_sec)
+            print("[PAIR SCHED] session proven - pairing now.")
+        except asyncio.TimeoutError:
+            print(f"[PAIR SCHED] session still unproven after {self._wait_ready_sec:.0f}s - pairing anyway; "
+                  f"the account-free steps still work and the Pinnacle fill may guest-redirect.")
+        except Exception:
+            pass
+
     async def _pair_once(self, reason: str) -> None:
         sports = os.environ.get("HARDVEN_SPORTS") or "<all enabled>"
         print(f"[PAIR SCHED] {reason} pairing run — sports={sports}")
+        await self._wait_for_session(reason)
         if self._steps is not None:
             for label, script_args, cwd in self._steps:
                 await self._run_step(label, script_args, cwd)

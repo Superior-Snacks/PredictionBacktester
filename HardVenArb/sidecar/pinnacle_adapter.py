@@ -488,6 +488,13 @@ class PinnacleAdapter(BookAdapter):
         self._manual_until = 0.0                               # 0 = until switched off; else auto-release at this ts
         self._manual_task: Optional[asyncio.Task] = None
         self._validate_task: Optional[asyncio.Task] = None      # proves a fresh capture before advertising it
+        # CAPTURED != LOGGED IN. `_session_ready` means "credentials were seen"; a saved Chrome profile
+        # replays a DEAD x-session and produces exactly that state, headers and all. `_session_proven` means
+        # an authed call has actually COME BACK — the only evidence that distinguishes the two. Authed REST
+        # waits on this one, so a startup that begins with a stale profile no longer fires a burst of
+        # /leagues/*/markets/straight into a guest redirect before the re-login has even been attempted.
+        self._session_proven = False
+        self._proven_evt = asyncio.Event()
         self._bet_page = None                                  # cold last-resort bet tab (see _select_bet_tab)
         self._bet_cursor = None                                # tracked mouse pos for human-like placement moves
         self._tab_manager_on = os.environ.get("HARDVEN_TAB_MANAGER") == "1"
@@ -805,8 +812,13 @@ class PinnacleAdapter(BookAdapter):
         # AUTO-PAIR: schedule the daily re-pairing pipeline (account-free; independent of the session/mode).
         if self._auto_pair:
             from pairing_scheduler import PairingScheduler
-            self._pairing = PairingScheduler(hour=self._pair_hour, initial_delay=self._pair_startup_delay,
-                                             interval_min=self._pair_interval_min)
+            self._pairing = PairingScheduler(
+                hour=self._pair_hour, initial_delay=self._pair_startup_delay,
+                interval_min=self._pair_interval_min,
+                # Only the browser source can be "captured but dead"; env/rest sources are proven by
+                # construction, so passing the event only there keeps their behaviour unchanged.
+                wait_ready=(self._proven_evt if self._session_source == "browser" else None),
+                wait_ready_sec=float(os.environ.get("HARDVEN_PAIR_WAIT_SESSION_SEC", "90")))
             self._pairing_task = asyncio.create_task(self._pairing.run())
             cadence = (f"every {self._pair_interval_min} min (intraday — pairs live/late-appearing games)"
                        if self._pair_interval_min > 0 else f"daily {self._pair_hour:02d}:00 local")
@@ -980,9 +992,19 @@ class PinnacleAdapter(BookAdapter):
             print(f"[PINNACLE] session validation errored ({type(ex).__name__}: {ex}) — treating as UNPROVEN.")
             bal = None
         if bal is not None:
+            self._session_proven = True
+            try:
+                self._proven_evt.set()
+            except Exception:
+                pass
             print(f"[PINNACLE] session VALIDATED — authed call succeeded (wallet {bal:.2f} "
-                  f"{self._balance_currency or ''}). The bot is GO.")
+                  f"{self._balance_currency or ''}). Authed REST is now UNBLOCKED. The bot is GO.")
             return
+        self._session_proven = False
+        try:
+            self._proven_evt.clear()
+        except Exception:
+            pass
         self._session_expired = True
         print("[PINNACLE] *** CAPTURED SESSION FAILED VALIDATION *** — the authed probe did not come back. "
               "This is the saved profile replaying a DEAD x-session, not a live login. NOT advertising the "
@@ -1024,6 +1046,14 @@ class PinnacleAdapter(BookAdapter):
                     pass
         was_ready = self._session_ready
         self._session_ready = bool(creds.get("ready"))
+        # A fresh capture is UNPROVEN until _validate_capture says otherwise, even when it looks ready:
+        # "looks ready" is precisely the state a replayed dead x-session produces.
+        if not self._session_ready:
+            self._session_proven = False
+            try:
+                self._proven_evt.clear()
+            except Exception:
+                pass
         # A NEW live session begins on the ready FALSE→TRUE transition (initial login OR recovery-after-logout) OR
         # when the token ROTATES while already live. NB: on initial login the session value is stored above before
         # `ready` flips true, so `sess != old_session` is false by now — the became_ready check is what catches it.
@@ -2026,10 +2056,36 @@ class PinnacleAdapter(BookAdapter):
                     n += 1
         return n
 
+    def _authed_rest_blocked(self, why: str) -> bool:
+        """True when an authed REST call must not be made yet, logged ONCE per blocked stretch.
+
+        Startup order is the problem this solves. A saved Chrome profile replays its old x-session the moment
+        the page loads, so credentials appear, `_session_ready` flips true, and everything downstream believes
+        it is logged in — while the token is dead. Observed 2026-08-17: the startup pairing fill fired
+        fourteen /leagues/*/markets/straight calls into guest redirects before the re-login had been
+        attempted, which then tripped the mass-logout detector and forced a re-mint. The burst was not a
+        symptom of the dead session; it was what escalated it.
+
+        Waiting on `_session_proven` costs a few seconds at startup and removes the whole cascade. The per-
+        call log is collapsed to one line because fourteen identical messages is how the actual cause
+        (a stale profile) got buried the first time.
+        """
+        if self._session_source != "browser" or self._session_proven:
+            self._authed_block_logged = False
+            return False
+        if not getattr(self, "_authed_block_logged", False):
+            self._authed_block_logged = True
+            print(f"[PINNACLE] authed REST HELD ({why}) - the session is captured but has not proven itself "
+                  f"with a live call yet. Waiting for validation rather than firing into a guest redirect; "
+                  f"this unblocks itself the moment the probe succeeds.", flush=True)
+        return True
+
     async def _refresh_league(self, lid: str) -> None:
         """One-shot pre-match SNAPSHOT seed of a league (moneyline + spread + total) via the AUTHED API. Prices
         carry `designation` (home/away/draw or over/under) and `points` DIRECTLY — exactly like the WS — via the
         SAME `_market_tokens` builder, so seeded tokens key identically to WS tokens and to pair_derivatives."""
+        if self._authed_rest_blocked("league seed"):
+            return
         markets = await self._http_get(f"/leagues/{lid}/markets/straight", count_429=True)
         if markets:
             self._apply_straight_markets(lid, markets, time.time())
@@ -2041,6 +2097,9 @@ class PinnacleAdapter(BookAdapter):
         if self._reseed_source == "guest":
             markets = await self._guest_get(f"/leagues/{lid}/markets/straight")
         else:
+            # The guest path is public and always safe; only the authed one needs a proven session.
+            if self._authed_rest_blocked("league re-seed"):
+                return 0
             markets = await self._http_get(f"/leagues/{lid}/markets/straight", count_429=True)
         return self._apply_straight_markets(lid, markets, time.time()) if markets else 0
 
@@ -2241,6 +2300,11 @@ class PinnacleAdapter(BookAdapter):
             return
         self._session_expired = True
         self._session_ready = False                         # WS is ALSO down → a genuine logout
+        self._session_proven = False
+        try:
+            self._proven_evt.clear()
+        except Exception:
+            pass
         self._give_up_ws(f"{reason} (session dead — WS also down)")
 
     async def _http_get(self, path: str, count_429: bool = False, authed: bool = True):
