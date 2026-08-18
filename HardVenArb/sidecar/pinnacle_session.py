@@ -241,7 +241,19 @@ class PinnacleBrowserSession:
         self._login_locked_out = False
         self._login_max_fails = int(os.environ.get('PINNACLE_LOGIN_MAX_FAILS', '5'))
         self._login_verify_sec = float(os.environ.get('PINNACLE_LOGIN_VERIFY_SEC', '20'))
+        # SETTLE BEFORE SUBMITTING. A reload re-mints the session and re-renders the form, and the watcher
+        # ticks fast enough to catch the page mid-mount: observed 2026-08-18 submitting the instant a force
+        # re-mint finished, which made the page flicker, produced a session that failed validation, and only
+        # worked on the following attempt. Chrome also needs a beat to actually autofill. So a submit waits
+        # this long after any navigation before it is allowed to fire.
+        self._login_settle_sec = float(os.environ.get('PINNACLE_LOGIN_SETTLE_SEC', '4'))
         self._login_submit_at = 0.0
+        # REST-SIDE PROOF OF A LOGOUT. The DOM signal only works where a LOG IN control is rendered, and
+        # Pinnacle does NOT render one on the sport boards (verified 2026-08-18: /tennis/matchups/ carries
+        # odds buttons and an icon button, nothing else). The adapter, meanwhile, knows the session is dead
+        # the moment authed REST starts guest-redirecting. So it tells us, and the watcher navigates to the
+        # login URL where the form demonstrably exists.
+        self._known_logged_out = ""
         self._ever_logged_in = False   # have we EVER captured a session with this profile? (evidence creds are saved)
         self._ws_urls_seen: set = set()
         self._debug_storage = os.environ.get("PINNACLE_DEBUG_STORAGE") == "1"   # dump localStorage on capture
@@ -433,6 +445,7 @@ class PinnacleBrowserSession:
                           f"attempt(s) - breaker reset.")
                 self._login_fail_streak = 0
                 self._login_submit_at = 0.0
+                self._known_logged_out = ""
                 print("[PINNACLE SESSION] captured x-session (REST auth ready).")
             if sess and sess != self._session:
                 self._session = sess; changed = True
@@ -983,6 +996,16 @@ class PinnacleBrowserSession:
                   "treating this as a REAL logout (a logged-out page keeps sending its dead x-session).")
         if (not force) and session_looks_live:
             return False
+        # LET THE PAGE SETTLE FIRST. Both a reload and a fresh browser open leave the form mounting for a
+        # moment; submitting into that races the render and Chrome's autofill. Cheap to wait — the watcher
+        # re-checks every few seconds anyway, so this delays recovery by one tick at most.
+        now_ = time.time()
+        for stamp, what in ((getattr(self, "_last_main_refresh", 0.0), "page re-mint"),
+                            (float(getattr(self, "_opened_at", 0.0) or 0.0), "browser open")):
+            if stamp and now_ - stamp < self._login_settle_sec:
+                print(f"[PINNACLE SESSION] login form is up but the {what} was "
+                      f"{now_ - stamp:.1f}s ago - letting it settle before submitting.", flush=True)
+                return False
         if time.time() - self._last_login_submit < self._login_submit_cooldown:
             return False                                   # don't hammer the login form
         self._last_login_submit = time.time()
@@ -1068,6 +1091,15 @@ class PinnacleBrowserSession:
         except Exception as ex:
             print(f"[PINNACLE SESSION] breaker: browser close failed: {type(ex).__name__}: {ex}", flush=True)
 
+    def note_logged_out(self, reason: str) -> None:
+        """Called by the adapter when authed REST proves the session is gone (guest-redirect burst / auth
+        streak). Idempotent and safe to call repeatedly; cleared on the next successful capture."""
+        if self._known_logged_out:
+            return
+        self._known_logged_out = reason or "REST says logged out"
+        print(f"[PINNACLE SESSION] logout reported by the REST side ({self._known_logged_out}) - the login "
+              f"watcher will recover it.", flush=True)
+
     async def _looks_logged_out(self) -> bool:
         """A visible LOG IN control on the board means the account is OUT. A logged-in page shows the balance
         and account menu there instead, never a login button — so this is the cheapest reliable signal, and
@@ -1084,9 +1116,55 @@ class PinnacleBrowserSession:
         Guarded the same way the submit is: only when the session does NOT look live. Clicking LOG IN on a
         healthy session would at best be a stray dialog and at worst rotate a working login, so 'no form on
         the page' is treated as logged-out ONLY when the other evidence agrees."""
-        if not await self._looks_logged_out():
+        dom_says_out = await self._looks_logged_out()
+        if not dom_says_out and not self._known_logged_out:
             return False
         now = time.time()
+        # THE BOARD HAS NO LOGIN CONTROL. Measured 2026-08-18 on /tennis/matchups/ while genuinely logged
+        # out: the page renders odds buttons and one icon button, and nothing matching a login affordance —
+        # so the DOM signal is simply unavailable there. When the REST side has proved the session is dead,
+        # navigate to the login URL (the homepage DOES render 'LOG IN' and the form) and look again. Without
+        # this the watcher can be correct, awake, and permanently unable to see the thing it is watching for.
+        if not dom_says_out:
+            # DON'T RACE THE OTHER RECOVERY. A guest-redirect burst also triggers `force_remint` (reload +
+            # re-login), and the reload re-mints the session on its own — observed 2026-08-18 recovering ~2s
+            # after this path had already declared failure. Navigating to the login URL on top of an
+            # in-flight reload competes with it for the page and turns a working recovery into a race.
+            #
+            # So stand down while EITHER is fresh: a reload (`_last_main_refresh`) or a submit
+            # (`_last_login_submit`). If both go quiet and we are still out, this fires on the next tick.
+            for stamp, what in ((getattr(self, "_last_main_refresh", 0.0), "a page re-mint"),
+                                (self._last_login_submit, "a login submit")):
+                if stamp and now - stamp < self._login_submit_cooldown:
+                    return False
+            if now - getattr(self, "_last_login_open", 0.0) < self._login_submit_cooldown:
+                return False
+            self._last_login_open = now
+            try:
+                # EXACT path compare, not a substring. The login URL is the site ROOT
+                # (…/en/), which is a prefix of literally every other page — so `in` reports
+                # "already there" from any page on the site and the navigation never happens.
+                cur = (self._page.url or "").split("?")[0].split("#")[0].rstrip("/")
+                if cur != self._login_url.split("?")[0].split("#")[0].rstrip("/"):
+                    print(f"[PINNACLE SESSION] logged out ({self._known_logged_out}) but this page has no "
+                          f"login control - going to {self._login_url} to sign back in.", flush=True)
+                    await self._page.goto(self._login_url, wait_until="domcontentloaded", timeout=45_000)
+                    await asyncio.sleep(2.0)
+                if await self._page.locator("input[type=password]:visible").count():
+                    return True                 # the homepage renders the form inline
+                dom_says_out = await self._looks_logged_out()
+            except Exception as ex:
+                print(f"[PINNACLE SESSION] could not reach the login page: {type(ex).__name__}: {ex}",
+                      flush=True)
+                return False
+            if not dom_says_out:
+                # NOT an error, and deliberately not phrased as one. The other recovery paths (force re-mint,
+                # the profile's own autofill on reload) frequently land within seconds of this, so telling the
+                # operator to intervene here would be wrong far more often than right. The BREAKER is what
+                # escalates a genuine failure, after five scored attempts.
+                print("[PINNACLE SESSION] no login control on the login page yet - leaving it to the re-mint "
+                      "path and re-checking next tick.", flush=True)
+                return False
         # NO TOKEN-FRESHNESS VETO HERE, deliberately. The obvious guard - "authed traffic and a WS login
         # say we're in, so ignore the button" - cannot work: `_have_ws` is set on the first successful
         # login and NEVER cleared, and a logged-out SPA keeps replaying its dead x-session so
@@ -1230,9 +1308,15 @@ class PinnacleBrowserSession:
         """Every clickable-looking control on the current page, for diagnosing a missed submit selector."""
         out = []
         try:
-            els = self._page.locator("button:visible, input[type=submit]:visible, "
-                                     "[role=button]:visible, a[href*='login' i]:visible")
-            for i in range(min(await els.count(), 14)):
+            # WIDER THAN IT LOOKS IT NEEDS TO BE, on purpose. The narrow version (button / [role=button] /
+            # a[href*=login]) reported "no login control" on a page that visibly had one — because a login
+            # affordance here can be a plain <a> or a <div>, and a diagnostic that misses the thing being
+            # diagnosed is worse than none. Anything clickable-looking is listed; the reader filters.
+            els = self._page.locator(
+                "button:visible, input[type=submit]:visible, [role=button]:visible, "
+                "a:visible, [class*='login' i]:visible, [class*='signin' i]:visible, "
+                "[data-test-id*='login' i]:visible")
+            for i in range(min(await els.count(), 40)):
                 e = els.nth(i)
                 try:
                     txt = ((await e.inner_text()) or "").strip().replace("\n", " ")[:44]
@@ -1244,6 +1328,8 @@ class PinnacleBrowserSession:
                     cls = ((await e.get_attribute("class")) or "")[:44]
                 except Exception:
                     tag = typ = cls = "?"
+                if len(txt) > 30 and not any(k in cls.lower() for k in ("login", "signin")):
+                    continue                     # odds cells and content blocks, not controls
                 out.append(f"<{tag} type={typ!r}> {txt!r}  class={cls!r}")
         except Exception:
             pass

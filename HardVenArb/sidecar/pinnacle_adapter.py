@@ -1297,6 +1297,15 @@ class PinnacleAdapter(BookAdapter):
             print(f"[PINNACLE] standing the WS + keepalive DOWN{why} — expected close, session was healthy. "
                   "Books go stale -> C# clears them; reopens on the next window.")
         else:
+            # TELL THE LOGIN WATCHER. This is the moment we have PROOF of a logout (authed REST is
+            # guest-redirecting and the WS is down) — and it is proof the DOM cannot give us on a sport
+            # board, which renders no login control at all. Without this hand-off the watcher stays awake
+            # and blind, which is exactly how the bot sat logged out on 2026-08-18.
+            try:
+                if self._browser is not None and hasattr(self._browser, "note_logged_out"):
+                    self._browser.note_logged_out(reason or "authed REST guest-redirecting, WS down")
+            except Exception:
+                pass
             print(f"[PINNACLE] STOPPING the WS + keepalive{why} - a dead/stale session isn't worth re-trying. "
                   "Refresh PINNACLE_SESSION + PINNACLE_WS_PASSWORD (= newsession|dGGR) and restart, or keep a "
                   "browser open to hold the session (or PINNACLE_ODDS_MODE=rest). Books go stale -> C# clears them.")
