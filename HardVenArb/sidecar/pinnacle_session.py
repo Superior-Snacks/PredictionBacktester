@@ -233,6 +233,15 @@ class PinnacleBrowserSession:
         self._seen_req = False
         self._seen_ws = False
         self._logged_session = False
+        # CIRCUIT BREAKER on repeated failed logins. Submitting credentials over and over is the one
+        # retry loop on this bot with a real-world cost: it is what credential-stuffing looks like, and
+        # this account has already been shown a captcha once. After PINNACLE_LOGIN_MAX_FAILS consecutive
+        # submits that never produce a session, stop and go dark rather than keep knocking.
+        self._login_fail_streak = 0
+        self._login_locked_out = False
+        self._login_max_fails = int(os.environ.get('PINNACLE_LOGIN_MAX_FAILS', '5'))
+        self._login_verify_sec = float(os.environ.get('PINNACLE_LOGIN_VERIFY_SEC', '20'))
+        self._login_submit_at = 0.0
         self._ever_logged_in = False   # have we EVER captured a session with this profile? (evidence creds are saved)
         self._ws_urls_seen: set = set()
         self._debug_storage = os.environ.get("PINNACLE_DEBUG_STORAGE") == "1"   # dump localStorage on capture
@@ -416,6 +425,14 @@ class PinnacleBrowserSession:
             if sess and not self._logged_session:
                 self._logged_session = True
                 self._ever_logged_in = True   # profile just proved it holds a live login → auto-login may submit later
+                # A capture is the ONLY thing that proves a submit worked, so it is the only thing that
+                # clears the breaker. Anything else (a form disappearing, a redirect) can happen without
+                # being logged in.
+                if self._login_fail_streak:
+                    print(f"[PINNACLE SESSION] login recovered after {self._login_fail_streak} failed "
+                          f"attempt(s) - breaker reset.")
+                self._login_fail_streak = 0
+                self._login_submit_at = 0.0
                 print("[PINNACLE SESSION] captured x-session (REST auth ready).")
             if sess and sess != self._session:
                 self._session = sess; changed = True
@@ -919,10 +936,21 @@ class PinnacleBrowserSession:
         so we never submit blanks. No credentials are typed — the profile fills them. Never raises."""
         if self._page is None:
             return False
+        if self._login_locked_out:
+            return False                                   # breaker tripped; see _score_login_attempt
         try:
             pw = self._page.locator("input[type=password]:visible").first
             if await pw.count() == 0:
-                return False
+                # NO PASSWORD FIELD IS NOT THE SAME AS LOGGED IN. This used to return immediately, which made
+                # the whole watcher a no-op in the most common real logout: Pinnacle drops you back to the
+                # BOARD with a 'LOG IN' button in the header and NO form on the page. The form only exists
+                # after that button is clicked. So the watcher ticked every 8s against a logged-out session
+                # and did nothing — found 2026-08-18 after the bot sat logged out indefinitely.
+                if not await self._open_login_form():
+                    return False
+                pw = self._page.locator("input[type=password]:visible").first
+                if await pw.count() == 0:
+                    return False
             val = await pw.input_value()
         except Exception:
             return False
@@ -958,8 +986,10 @@ class PinnacleBrowserSession:
         if time.time() - self._last_login_submit < self._login_submit_cooldown:
             return False                                   # don't hammer the login form
         self._last_login_submit = time.time()
+        self._login_submit_at = self._last_login_submit     # scored by _score_login_attempt on the next ticks
         print(f"[PINNACLE SESSION] login form detected — submitting saved credentials for unattended re-login "
-              f"(value_readable={bool(val)}).")
+              f"(attempt {self._login_fail_streak + 1}/{self._login_max_fails}, "
+              f"value_readable={bool(val)}).")
         self.pause_activity()                              # don't let an organic gesture fight the submit
         try:
             # HUMAN BEAT: a real user reads the page and pauses before submitting; a sub-second auto-submit at a
@@ -995,6 +1025,98 @@ class PinnacleBrowserSession:
         finally:
             self.resume_activity()
         return True
+
+    # ANCHORED to the whole trimmed label on purpose. A substring match also hits things like
+    # "Login history" or "Sign in help" that exist on a LOGGED-IN page, which would make the
+    # logged-out signal fire against a healthy session and click a stray control.
+    _LOGIN_RX = re.compile(r"^\s*(log\s*in|sign\s*in)\s*$", re.I)
+
+    async def _score_login_attempt(self) -> None:
+        """Decide whether the last submit worked, and trip the breaker after enough that did not.
+
+        A submit is scored only once, `_login_verify_sec` after it was made — long enough for the page to
+        navigate, the SPA to re-auth and the x-session to be captured. SUCCESS IS A CAPTURE, nothing weaker:
+        the form disappearing proves only that the form disappeared, and a logged-out board has no form on it
+        either, which is the whole reason this bug existed.
+
+        On the fifth consecutive failure it stops trying and closes the browser. Repeated credential submits
+        are the one retry loop here with an external cost — that pattern is what triggers lockouts and
+        captchas, and this account has already seen one. Going dark is recoverable by a human; a locked
+        account is not."""
+        at = getattr(self, "_login_submit_at", 0.0)
+        if not at or self._login_locked_out:
+            return
+        if time.time() - at < self._login_verify_sec:
+            return                                         # too early to judge
+        self._login_submit_at = 0.0
+        if self._logged_session:
+            return                                         # the capture path already reset the streak
+        self._login_fail_streak += 1
+        n, cap = self._login_fail_streak, self._login_max_fails
+        if n < cap:
+            print(f"[PINNACLE SESSION] login attempt {n}/{cap} did not produce a session after "
+                  f"{self._login_verify_sec:.0f}s - will retry.", flush=True)
+            return
+        self._login_locked_out = True
+        print(f"[PINNACLE SESSION] *** LOGIN BREAKER TRIPPED after {n} consecutive failures *** No further "
+              f"login attempts will be made, and the browser is closing. Repeated credential submits are what "
+              f"trigger lockouts and captchas, so this stops rather than keeps knocking. Check the account by "
+              f"hand (password change? verification hold? captcha?), then restart the sidecar. "
+              f"PINNACLE_LOGIN_MAX_FAILS raises the limit.", flush=True)
+        try:
+            await self.stop()
+        except Exception as ex:
+            print(f"[PINNACLE SESSION] breaker: browser close failed: {type(ex).__name__}: {ex}", flush=True)
+
+    async def _looks_logged_out(self) -> bool:
+        """A visible LOG IN control on the board means the account is OUT. A logged-in page shows the balance
+        and account menu there instead, never a login button — so this is the cheapest reliable signal, and
+        the only one available when no form is rendered."""
+        try:
+            b = self._page.locator("button:visible, a:visible").filter(has_text=self._LOGIN_RX)
+            return bool(await b.count())
+        except Exception:
+            return False
+
+    async def _open_login_form(self) -> bool:
+        """Click the header LOG IN so the password form exists to submit. Returns True if a form appeared.
+
+        Guarded the same way the submit is: only when the session does NOT look live. Clicking LOG IN on a
+        healthy session would at best be a stray dialog and at worst rotate a working login, so 'no form on
+        the page' is treated as logged-out ONLY when the other evidence agrees."""
+        if not await self._looks_logged_out():
+            return False
+        now = time.time()
+        # NO TOKEN-FRESHNESS VETO HERE, deliberately. The obvious guard - "authed traffic and a WS login
+        # say we're in, so ignore the button" - cannot work: `_have_ws` is set on the first successful
+        # login and NEVER cleared, and a logged-out SPA keeps replaying its dead x-session so
+        # `_last_capture` never goes stale either. Both would still read healthy minutes after a real
+        # logout, so the veto would block every recovery for the life of the process. (Checked
+        # 2026-08-18: _have_ws is written in exactly one place and only ever set True.)
+        #
+        # A rendered LOG IN control is far stronger evidence than either token: a logged-in board shows
+        # the balance and account menu in that slot and never a login button. So the DOM decides, and the
+        # anchored regex above is what keeps that signal honest.
+        self._have_ws = False               # demonstrably out; stop claiming a live WS login
+        if now - getattr(self, "_last_login_open", 0.0) < self._login_submit_cooldown:
+            return False                    # don't hammer the header button
+        self._last_login_open = now
+        try:
+            b = self._page.locator("button:visible, a:visible").filter(has_text=self._LOGIN_RX).first
+            print("[PINNACLE SESSION] logged OUT (a LOG IN control is on the board and no form is open) — "
+                  "opening the login form.", flush=True)
+            await self._human_approach(b)
+            await asyncio.sleep(random.uniform(0.4, 1.1))
+            await b.click(timeout=5000)
+            for _ in range(12):             # the form is a client-side panel; give it a moment to mount
+                await asyncio.sleep(0.5)
+                if await self._page.locator("input[type=password]:visible").count():
+                    print("[PINNACLE SESSION] login form opened.", flush=True)
+                    return True
+            print("[PINNACLE SESSION] clicked LOG IN but no password field appeared within 6s.", flush=True)
+        except Exception as ex:
+            print(f"[PINNACLE SESSION] could not open the login form: {type(ex).__name__}: {ex}", flush=True)
+        return False
 
     async def _typed_credentials_if_blank(self, pw) -> bool:
         """Type PINNACLE_USERNAME / PINNACLE_PASSWORD when autofill left the form empty.
@@ -1069,9 +1191,17 @@ class PinnacleBrowserSession:
         returned in silence when all three missed — so a renamed or restructured submit control looked
         exactly like "the bot is sitting there doing nothing", which is precisely how it was reported. If
         none match, dump what IS on the page so the next selector can be written from evidence."""
+        # ORDERED BY WHAT PINNACLE ACTUALLY RENDERS. Captured 2026-08-18 from /debug/login:
+        #     <button type='button'> 'LOG IN'  class='button-l9TRHt6rdY ellipsis small-CmHfQVtx1F'
+        # `type='button'` — so `button[type=submit]` and `input[type=submit]` can NEVER match here, and there
+        # is likely no native form submit behind Enter either. That makes the TEXT match the only real path,
+        # not a fallback, so it is tried first and by two independent routes: a direct element text match, and
+        # the accessible-name role match (which depends on name computation and can quietly stop matching).
+        _rx = re.compile(r"log\s*in|sign\s*in", re.I)
         tried = []
-        for name, loc in (("role=button log/sign in",
-                           self._page.get_by_role("button", name=re.compile(r"log\s*in|sign\s*in", re.I))),
+        for name, loc in (("button:has-text", self._page.locator("button:visible").filter(has_text=_rx)),
+                          ("role=button log/sign in",
+                           self._page.get_by_role("button", name=_rx)),
                           ("button[type=submit]", self._page.locator('button[type="submit"]:visible')),
                           ("input[type=submit]", self._page.locator('input[type="submit"]:visible'))):
             try:
@@ -1137,6 +1267,9 @@ class PinnacleBrowserSession:
             out["read_error"] = f"{type(ex).__name__}: {ex}"
         now = time.time()
         out["auto_login_enabled"] = bool(self._auto_login)
+        out["login_fail_streak"] = self._login_fail_streak
+        out["login_max_fails"] = self._login_max_fails
+        out["login_locked_out"] = self._login_locked_out
         out["ever_logged_in"] = bool(self._ever_logged_in)
         out["profile_has_saved_login"] = self._profile_has_saved_login()
         out["have_ws_login"] = bool(getattr(self, "_have_ws", False))
@@ -1148,6 +1281,12 @@ class PinnacleBrowserSession:
                                   and (now - self._last_capture) < self._login_healthy_grace)
         out["session_looks_live"] = session_looks_live
         out["would_skip_because_session_looks_live"] = session_looks_live and not out["cooldown_blocking"]
+        try:
+            out["looks_logged_out"] = await self._looks_logged_out()
+        except Exception:
+            out["looks_logged_out"] = None
+        # The case that made the watcher a no-op: OUT, but with no form on the page to submit.
+        out["logged_out_with_no_form"] = bool(out.get("looks_logged_out")) and not out.get("password_field")
         out["buttons"] = await self._login_buttons_on_page()
         return out
 
@@ -1297,6 +1436,7 @@ class PinnacleBrowserSession:
             except asyncio.CancelledError:
                 break
             try:
+                await self._score_login_attempt()          # judge the PREVIOUS submit before making another
                 await self._ensure_logged_in()
             except Exception:
                 pass
