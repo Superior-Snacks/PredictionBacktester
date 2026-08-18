@@ -2196,19 +2196,23 @@ class PinnacleAdapter(BookAdapter):
                 await asyncio.sleep(self._reader_reseed_sec)
             except asyncio.CancelledError:
                 break
-            # IN-PLAY MODE DOES NOT NEED THIS, AND IT IS THE LOUDEST THING THE SIDECAR DOES.
+            # ⚠ DO NOT SKIP THIS IN IN-PLAY MODE. It was skipped on 2026-08-17 on the reasoning that one tab
+            # parked on the live list already gets WS deltas for the markets being traded, so the re-seed was
+            # pure duplicated traffic and a machine-regular polling tell. The first half was true; the
+            # conclusion was wrong, and the cost was measured within the hour:
             #
-            # The backstop exists for STABLE PRE-MATCH and TAIL leagues: lines that barely move, on leagues with
-            # no tab, where the WS may push nothing for minutes and a book would otherwise age out. In-play is
-            # the exact opposite regime — one tab parked on the live list, whose WS pushes in-play deltas
-            # continuously for precisely the markets being traded. So every re-seed here re-fetches a price the
-            # WS already delivered.
+            #     before: books K=252/314  P=180/216      <- reseed running
+            #     after:  books K=290/378  P=  6/242      <- reseed skipped in in-play
             #
-            # And the cost is not zero. It is an authed REST call per active league on a fixed cadence, from an
-            # account that is otherwise sitting on one page: a machine-regular polling signature with no human
-            # analogue, attached to the session that places the bets. Free to drop, so drop it.
-            if self.mode == "inplay":
-                continue
+            # The single tab's WS covers the handful of leagues that tab is SUBSCRIBED to. Detection needs a
+            # fresh price on EVERY paired market, because that is what decides whether an arb window opens at
+            # all — and the camp target selector then chooses among the pairs that produced windows. With 6 of
+            # 242 books fresh, almost no window can open, so the camper had nothing to camp on and sat roving
+            # for 42 minutes on an evening that did have live games. Blinding detection to save request volume
+            # trades the entire strategy for a fingerprint improvement.
+            #
+            # If the polling signature needs reducing, the lever is PINNACLE_READER_RESEED_SEC (cadence) or
+            # PINNACLE_RESEED_SOURCE=guest (public endpoint, no account attached) — not switching it off.
             # Nothing automated should be talking to the venue on this account while a human is using it.
             if self._manual_mode:
                 continue
