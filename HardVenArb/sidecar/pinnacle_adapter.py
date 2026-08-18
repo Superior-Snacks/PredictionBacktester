@@ -3668,6 +3668,33 @@ class PinnacleAdapter(BookAdapter):
             out["lost"] = ("the Quick Bet is no longer on the page — "
                            + ("the tab navigated away" if "/live/" not in url
                               else "it was closed or expired in place"))
+            return out
+
+        # PRESENT IS NOT THE SAME AS TRADEABLE. A market can go offline — suspended, taken down between
+        # points, or pulled when the game state changes — and the popover STAYS on the page showing a dead
+        # panel. Observed 2026-08-18: a camp held Figl vs Castagnola for its full 25-minute cap with the
+        # moneyline offline, reporting healthy the whole time, because the only health signal was "does
+        # #quick-bet-portal exist".
+        #
+        # So report what the panel can actually do: is there a readable PRICE, and is PLACE BET pressable.
+        # Both are reported RAW, per sample — the caller decides how many consecutive bad reads mean dead,
+        # because in-play tennis suspends between points constantly and a single sample proves nothing.
+        try:
+            portal = page.locator("#quick-bet-portal")
+            txt = (await portal.first.inner_text()).replace("\n", " | ")
+            m = self._CAMP_PRICE_RX.search(txt)
+            out["price"] = float(m.group(1)) if m else None
+            mb = self._CAMP_MAXBET_RX.search(txt)
+            out["max_bet"] = float(mb.group(1).replace(",", "")) if mb else None
+            pb = portal.get_by_text("PLACE BET", exact=False).last
+            out["placeable"] = (not await pb.is_disabled()) if await pb.count() else False
+            out["tradeable"] = bool(out["price"]) and bool(out["placeable"])
+            if not out["tradeable"]:
+                out["why"] = ("no price on the panel" if not out["price"]
+                              else "PLACE BET is disabled (suspended, or the stake is under the minimum)")
+        except Exception as e:
+            out["check_error"] = f"{type(e).__name__}: {e}"
+            out["tradeable"] = None              # unknown, NOT dead — never kill a camp on a read error
         return out
 
     async def camp_stop(self) -> dict:

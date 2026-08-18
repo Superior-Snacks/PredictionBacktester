@@ -971,6 +971,21 @@ class PinnacleBrowserSession:
             except Exception:
                 pass
             await asyncio.sleep(random.uniform(0.3, 0.7))
+
+            # DID THE AUTOFILL ACTUALLY LAND? The click is meant to commit Chrome's hidden autofill, so after it
+            # the value should be readable. When it is not, the field is genuinely EMPTY — the saved-login store
+            # exists (that is why we got here) but Chrome is not populating it any more: a profile change, a
+            # Chrome update, or a form change on the venue's side.
+            #
+            # The old code pressed Enter regardless. On an empty field that submits nothing, so the caret just
+            # sits in the password box and the watcher retries every 30s, forever, silently. That is exactly the
+            # reported symptom, and it is indistinguishable from "the bot is doing nothing".
+            #
+            # So: type the credentials ourselves if we have them. PINNACLE_USERNAME / PINNACLE_PASSWORD were
+            # already in the environment and simply never read here.
+            if not await self._typed_credentials_if_blank(pw):
+                return True                                # nothing to submit; the reason was logged
+
             await pw.press("Enter")                        # submit (common human flow for a filled login)
             await asyncio.sleep(2.5)
             if await self._page.locator("input[type=password]:visible").count() > 0:
@@ -980,6 +995,60 @@ class PinnacleBrowserSession:
         finally:
             self.resume_activity()
         return True
+
+    async def _typed_credentials_if_blank(self, pw) -> bool:
+        """Type PINNACLE_USERNAME / PINNACLE_PASSWORD when autofill left the form empty.
+
+        Returns True if there is now something worth submitting, False if not (and says why).
+
+        THE PROFILE IS STILL THE PRIMARY PATH. This runs only after the click failed to produce a readable
+        value, so a healthy autofill is untouched and no credentials are typed in the normal case. But
+        "autofill will always work" is an assumption about someone else's browser, and when it breaks the old
+        behaviour was an invisible no-op on a 30s loop.
+
+        Typed with a per-key delay rather than `fill()`: `fill()` sets the value in one step and dispatches a
+        single input event, which a login form can treat differently from a person typing — and this is the
+        one form on the site where looking wrong has consequences beyond a failed click.
+        """
+        try:
+            val = await pw.input_value()
+        except Exception:
+            val = ""
+        if val:
+            return True                                    # autofill worked (or the click committed it)
+
+        user = os.environ.get("PINNACLE_USERNAME", "").strip()
+        pwd = os.environ.get("PINNACLE_PASSWORD", "")
+        if not user or not pwd:
+            print("[PINNACLE SESSION] *** LOGIN FORM IS EMPTY AND AUTOFILL DID NOT POPULATE IT *** — the "
+                  "profile has a saved-login store but Chrome is not filling it. Nothing was submitted "
+                  "(pressing Enter on a blank form does nothing, which is why this looked like the bot "
+                  "hanging). Set PINNACLE_USERNAME / PINNACLE_PASSWORD so it can type them, or log in by "
+                  "hand once in the managed window to re-save the credentials.", flush=True)
+            return False
+
+        try:
+            # The username field: whatever visible non-password text/email input sits on the form.
+            for sel in ('input[type=email]:visible', 'input[name*="ser" i]:visible',
+                        'input[type=text]:visible'):
+                u = self._page.locator(sel).first
+                if await u.count():
+                    if not (await u.input_value() or "").strip():
+                        await self._human_approach(u)
+                        await u.click()
+                        await u.type(user, delay=random.uniform(55, 130))
+                        await asyncio.sleep(random.uniform(0.25, 0.6))
+                    break
+            await self._human_approach(pw)
+            await pw.click()
+            await pw.type(pwd, delay=random.uniform(55, 130))
+            await asyncio.sleep(random.uniform(0.3, 0.8))
+            print("[PINNACLE SESSION] autofill was empty — typed the saved credentials from the environment "
+                  "instead.", flush=True)
+            return True
+        except Exception as ex:
+            print(f"[PINNACLE SESSION] could not type credentials: {type(ex).__name__}: {ex}", flush=True)
+            return False
 
     async def _human_approach(self, locator) -> None:
         """Best-effort: move the mouse to a locator's centre along organic's HUMAN path before acting, so a
@@ -994,21 +1063,93 @@ class PinnacleBrowserSession:
             pass
 
     async def _click_login_button(self) -> None:
-        """Fallback submit: click a visible Log In / Sign In button, cursor-approaching it first (human path)."""
-        for loc in (self._page.get_by_role("button", name=re.compile(r"log\s*in|sign\s*in", re.I)),
-                    self._page.locator('button[type="submit"]:visible'),
-                    self._page.locator('input[type="submit"]:visible')):
+        """Fallback submit: click a visible Log In / Sign In button, cursor-approaching it first (human path).
+
+        FAILS LOUDLY. Every candidate used to be tried inside a bare `except: continue`, and the function
+        returned in silence when all three missed — so a renamed or restructured submit control looked
+        exactly like "the bot is sitting there doing nothing", which is precisely how it was reported. If
+        none match, dump what IS on the page so the next selector can be written from evidence."""
+        tried = []
+        for name, loc in (("role=button log/sign in",
+                           self._page.get_by_role("button", name=re.compile(r"log\s*in|sign\s*in", re.I))),
+                          ("button[type=submit]", self._page.locator('button[type="submit"]:visible')),
+                          ("input[type=submit]", self._page.locator('input[type="submit"]:visible'))):
             try:
                 b = loc.first
-                if await b.count() == 0:
+                n = await b.count()
+                if n == 0:
+                    tried.append(f"{name}=0")
                     continue
                 await self._human_approach(b)
                 await asyncio.sleep(random.uniform(0.1, 0.35))
                 await b.click(timeout=3000)
-                print("[PINNACLE SESSION] auto-login: clicked submit button (cursor-approached).")
+                print(f"[PINNACLE SESSION] auto-login: clicked submit button via {name} (cursor-approached).")
                 return
-            except Exception:
-                continue
+            except Exception as ex:
+                tried.append(f"{name}!{type(ex).__name__}")
+        print(f"[PINNACLE SESSION] *** AUTO-LOGIN COULD NOT SUBMIT *** Enter did not submit and no submit "
+              f"control matched ({', '.join(tried)}). The form stays filled and nothing happens — this is the "
+              f"'caret blinking, bot idle' state. Buttons actually on the page:", flush=True)
+        try:
+            for b in await self._login_buttons_on_page():
+                print(f"      {b}", flush=True)
+        except Exception:
+            pass
+
+    async def _login_buttons_on_page(self) -> list:
+        """Every clickable-looking control on the current page, for diagnosing a missed submit selector."""
+        out = []
+        try:
+            els = self._page.locator("button:visible, input[type=submit]:visible, "
+                                     "[role=button]:visible, a[href*='login' i]:visible")
+            for i in range(min(await els.count(), 14)):
+                e = els.nth(i)
+                try:
+                    txt = ((await e.inner_text()) or "").strip().replace("\n", " ")[:44]
+                except Exception:
+                    txt = ""
+                try:
+                    tag = await e.evaluate("el => el.tagName.toLowerCase()")
+                    typ = await e.get_attribute("type") or ""
+                    cls = ((await e.get_attribute("class")) or "")[:44]
+                except Exception:
+                    tag = typ = cls = "?"
+                out.append(f"<{tag} type={typ!r}> {txt!r}  class={cls!r}")
+        except Exception:
+            pass
+        return out or ["(none found)"]
+
+    async def login_debug(self) -> dict:
+        """Read-only snapshot of what the auto-login watcher sees RIGHT NOW, and which guard is stopping it.
+
+        Written because the failure mode is invisible from the outside: the page looks like a filled login
+        form, and every reason the watcher might decline (session looks live, submit cooldown, no saved
+        credentials) returns quietly. This answers 'why is it not pressing' without another guessing round."""
+        out: dict = {"ok": True}
+        if self._page is None:
+            return {"ok": False, "error": "no page"}
+        try:
+            out["url"] = (self._page.url or "")[:120]
+            pw = self._page.locator("input[type=password]:visible").first
+            out["password_field"] = bool(await pw.count())
+            out["password_filled"] = bool((await pw.input_value()) or "") if out["password_field"] else None
+        except Exception as ex:
+            out["read_error"] = f"{type(ex).__name__}: {ex}"
+        now = time.time()
+        out["auto_login_enabled"] = bool(self._auto_login)
+        out["ever_logged_in"] = bool(self._ever_logged_in)
+        out["profile_has_saved_login"] = self._profile_has_saved_login()
+        out["have_ws_login"] = bool(getattr(self, "_have_ws", False))
+        out["last_capture_age_sec"] = round(now - self._last_capture, 1) if self._last_capture else None
+        out["secs_since_last_submit"] = round(now - self._last_login_submit, 1)
+        out["submit_cooldown_sec"] = self._login_submit_cooldown
+        out["cooldown_blocking"] = (now - self._last_login_submit) < self._login_submit_cooldown
+        session_looks_live = bool(self._logged_session and self._last_capture
+                                  and (now - self._last_capture) < self._login_healthy_grace)
+        out["session_looks_live"] = session_looks_live
+        out["would_skip_because_session_looks_live"] = session_looks_live and not out["cooldown_blocking"]
+        out["buttons"] = await self._login_buttons_on_page()
+        return out
 
     def set_camp_hold(self, on: bool) -> None:
         """Ask the session-refresh loop to postpone its reload while a betslip is armed.

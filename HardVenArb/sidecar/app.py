@@ -576,6 +576,30 @@ async def debug_probe_bets():
     return await fn()
 
 
+@app.get("/debug/login")
+async def debug_login():
+    """Why is auto-login not submitting? Reports what the watcher sees and which guard is stopping it —
+    password field present/filled, the session-looks-live and cooldown guards, and every button on the page
+    so a missed submit selector is visible rather than inferred. Reads only; presses nothing."""
+    br = getattr(adapter, "_browser", None)
+    fn = getattr(br, "login_debug", None) if br is not None else None
+    if not callable(fn):
+        raise HTTPException(404, "no browser session (this book has no managed login)")
+    return await fn()
+
+
+@app.post("/debug/login_submit")
+async def debug_login_submit():
+    """Force ONE auto-login submit attempt now, bypassing the session-looks-live guard and the cooldown.
+    Use after /debug/login shows a filled form that nothing is submitting."""
+    br = getattr(adapter, "_browser", None)
+    fn = getattr(br, "_ensure_logged_in", None) if br is not None else None
+    if not callable(fn):
+        raise HTTPException(404, "no browser session")
+    br._last_login_submit = 0.0            # clear the cooldown for this one call
+    return {"ok": True, "submitted": await fn(force=True)}
+
+
 @app.get("/debug/visibility")
 async def debug_visibility():
     """What the SITE sees about each managed tab: document.visibilityState / hidden / hasFocus.

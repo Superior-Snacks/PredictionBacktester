@@ -91,6 +91,10 @@ public sealed class CampManager
     private readonly int     _rearmSec;
     private readonly int     _healthSec;
     private readonly double  _depthCapContracts;
+    // Consecutive not-tradeable health checks before a camp is declared dead. At the default 30s cadence,
+    // 3 is ~90s of a market being offline — far longer than a between-points suspension, short enough that a
+    // genuinely dead game does not hold the tab for the full idle budget.
+    private readonly int     _deadChecks;
 
     /// <summary>Mirrors the executor's HARDVEN_MONEYLINE_ONLY gate, because a camp on a leg the executor will
     /// never place is worse than no camp at all: the slip holds, the game produces windows, every one of them
@@ -111,6 +115,9 @@ public sealed class CampManager
     private DateTime  _lastActionAt;         // arm, fire attempt, or a window opening on the camped selection
     private DateTime  _lastHealthAt;
     private int       _idleBudgetSec;        // _idleSec ± jitter, re-rolled per camp
+    // Consecutive health checks that found the armed panel present but NOT tradeable. In-play tennis
+    // suspends between points constantly, so one bad read proves nothing — only a run of them does.
+    private int       _untradeableStreak;
     private DateTime  _rearmAfter = DateTime.MaxValue;
     private string    _rearmPairId = "";
 
@@ -171,6 +178,7 @@ public sealed class CampManager
         _rearmSec     = EnvInt("HARDVEN_CAMP_REARM_SEC", 20);
         _healthSec    = EnvInt("HARDVEN_CAMP_HEALTH_SEC", 30);
         _depthCapContracts = (double)EnvDec("HARDVEN_CAMP_DEPTH_CAP", 50m);
+        _deadChecks        = EnvInt("HARDVEN_CAMP_DEAD_CHECKS", 3);
     }
 
     // ── public surface ────────────────────────────────────────────────────────
@@ -484,6 +492,7 @@ public sealed class CampManager
             lock (_lock) { _lastHealthAt = now; }
             var (ok, body) = await GetAsync(_fastHttp, "/camp/status", ct);
             bool alive = false, camping = false; string lost = "";
+            bool? tradeable = null; string whyNot = "";
             if (ok)
             {
                 try
@@ -492,8 +501,45 @@ public sealed class CampManager
                     camping = Flag(doc.RootElement, "camping");
                     alive   = camping && Flag(doc.RootElement, "armed");
                     lost    = Str(doc.RootElement, "lost");
+                    whyNot  = Str(doc.RootElement, "why");
+                    if (doc.RootElement.TryGetProperty("tradeable", out var tv) &&
+                        (tv.ValueKind == JsonValueKind.True || tv.ValueKind == JsonValueKind.False))
+                        tradeable = tv.ValueKind == JsonValueKind.True;
                 }
                 catch { }
+            }
+
+            // ── THE MARKET WENT OFFLINE UNDER US ──────────────────────────────
+            // The panel is still there, so the popover check says healthy, but the price is gone or Place is
+            // dead. A camp in that state is worth less than no camp: it holds the one tab, blocks every other
+            // in-play arb at the pre-live gate, and its own pair keeps resetting the idle clock — so it can
+            // ride all the way to the hard cap doing nothing. Measured 2026-08-18: 25 minutes of exactly that.
+            //
+            // A STREAK, not a sample. Tennis moneylines suspend between points, and treating one bad read as
+            // death would abandon healthy camps several times a game. `tradeable == null` (a read error) is
+            // explicitly NOT counted — unknown must never be evidence.
+            if (alive && tradeable == false)
+            {
+                int streak = ++_untradeableStreak;
+                if (streak < _deadChecks)
+                {
+                    Console.WriteLine($"[CAMP] {label}: not tradeable ({whyNot}) — {streak}/{_deadChecks} " +
+                                      "consecutive checks. Suspensions are normal in-play; holding for now.");
+                }
+                else
+                {
+                    Console.ForegroundColor = ConsoleColor.Yellow;
+                    Console.WriteLine($"[CAMP] {label}: market OFFLINE for {streak} checks ({whyNot}) — " +
+                                      "releasing and moving to the best live target.");
+                    Console.ResetColor();
+                    await ReleaseAsync($"market offline ({whyNot})", ct, quiet: true);
+                    await ArmBestAvailableAsync("previous camp went offline", ct);
+                    return;
+                }
+            }
+            else if (tradeable == true)
+            {
+                _untradeableStreak = 0;
             }
             if (ok && !alive)
             {
@@ -598,6 +644,24 @@ public sealed class CampManager
 
     // ── sidecar operations ────────────────────────────────────────────────────
 
+    /// <summary>Move straight to the best scoring live target, rather than dropping to ROVING and waiting for
+    /// a fresh window to trigger a camp. Used when the current camp is abandoned for a reason that says
+    /// nothing about the rest of the board — a dead market, not a quiet one. Silently does nothing when there
+    /// is no scored target yet, which correctly leaves the normal event-driven path to pick it up.</summary>
+    private async Task ArmBestAvailableAsync(string why, CancellationToken ct)
+    {
+        var best = BestTarget();
+        if (best.PairId.Length == 0) return;
+        var pair = _telemetry.GetPair(best.PairId);
+        if (pair == null) return;
+        string arbType = DominantArbType(best.PairId);
+        string tok = TokenFor(pair, arbType);
+        if (tok.Length == 0 || !IsCampable(tok)) return;
+        bool claimed = false;
+        lock (_lock) { if (_phase == CampPhase.Roving) { _phase = CampPhase.Arming; claimed = true; } }
+        if (claimed) await ArmAsync(best.PairId, tok, pair.Label, arbType, why, ct);
+    }
+
     private async Task ArmAsync(string pairId, string token, string label, string arbType, string why,
                                 CancellationToken ct)
     {
@@ -641,6 +705,7 @@ public sealed class CampManager
                 // Jitter the release so it is not metronomic. A camp that is abandoned at exactly 600.0s every
                 // time is a schedule, and a schedule is a signature.
                 _idleBudgetSec = (int)(_idleSec * (0.8 + _rng.NextDouble() * 0.4));
+                _untradeableStreak = 0;
                 _armCount++;
             }
             Console.ForegroundColor = ConsoleColor.Cyan;
