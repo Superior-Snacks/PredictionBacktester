@@ -77,25 +77,35 @@ class PairingScheduler:
         return (target - now).total_seconds()
 
     async def _wait_for_session(self, reason: str) -> None:
-        """Hold the run until the venue session has proven itself, or the grace period runs out.
+        """DISABLED BY DEFAULT — pairing does not need a session, and waiting for one is actively harmful.
 
-        TIMES OUT RATHER THAN BLOCKS. The Kalshi scaffold and the derivative pairer are account-free, so a
-        session that never comes up must not cost the whole pairing run — a day with no pairs is worse than a
-        day whose Pinnacle fill guest-redirects. The wait exists to fix the ORDER of a normal startup, not to
-        add a new way for pairing to fail."""
+        Added 2026-08-17 to stop the startup pairing run firing authed /leagues/*/markets/straight calls into
+        guest redirects. That diagnosis was wrong: pair_pinnacle.py talks ONLY to the sidecar's /catalog, which
+        is `_guest_get` — account-free. The redirect burst came from the reseed / league-seed path, which is
+        now gated properly at `_authed_rest_blocked`. Every pairing step (Kalshi scaffold, Pinnacle catalog
+        fill, derivatives) works with no session at all.
+
+        The cost of the wait was not merely a wasted 90s. Under PINNACLE_LIFECYCLE the browser is DARK between
+        scheduled windows, so the session cannot prove itself for hours — and the lifecycle PLAN is built from
+        the paired games this run produces. Delaying pairing therefore delays the very file the schedule reads,
+        which is the opposite of what a startup run is for.
+
+        Kept behind an explicit opt-in (`wait_ready_sec` > 0 AND HARDVEN_PAIR_WAIT_SESSION=1) rather than
+        deleted, so a venue whose catalog IS authed can turn it back on."""
         evt = self._wait_ready
         if evt is None or self._wait_ready_sec <= 0:
+            return
+        if os.environ.get("HARDVEN_PAIR_WAIT_SESSION") != "1":
             return
         try:
             if evt.is_set():
                 return
-            print(f"[PAIR SCHED] {reason}: waiting up to {self._wait_ready_sec:.0f}s for the venue session to "
-                  f"prove itself before the authed fill (a captured-but-dead session guest-redirects).")
+            print(f"[PAIR SCHED] {reason}: waiting up to {self._wait_ready_sec:.0f}s for the venue session "
+                  f"(HARDVEN_PAIR_WAIT_SESSION=1).")
             await asyncio.wait_for(evt.wait(), timeout=self._wait_ready_sec)
             print("[PAIR SCHED] session proven - pairing now.")
         except asyncio.TimeoutError:
-            print(f"[PAIR SCHED] session still unproven after {self._wait_ready_sec:.0f}s - pairing anyway; "
-                  f"the account-free steps still work and the Pinnacle fill may guest-redirect.")
+            print(f"[PAIR SCHED] session still unproven after {self._wait_ready_sec:.0f}s - pairing anyway.")
         except Exception:
             pass
 
