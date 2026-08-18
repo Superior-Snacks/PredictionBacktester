@@ -608,6 +608,7 @@ public sealed class CampManager
             Console.WriteLine($"[CAMP] arming on {label} ({why}) — {token} @ stake {_armStake:0.##}…");
             var (ok, body) = await PostAsync(_uiHttp, "/camp/start", payload, ct);
             bool armed = false; string err = Truncate(body); decimal odds = 0m;
+            bool? placeable = null; decimal maxBet = 0m;
             if (ok)
             {
                 try
@@ -616,6 +617,10 @@ public sealed class CampManager
                     armed = Flag(doc.RootElement, "ok") && Flag(doc.RootElement, "armed");
                     err   = Str(doc.RootElement, "error");
                     odds  = Dec(doc.RootElement, "odds");
+                    maxBet = Dec(doc.RootElement, "max_bet");
+                    if (doc.RootElement.TryGetProperty("placeable", out var pl) &&
+                        (pl.ValueKind == JsonValueKind.True || pl.ValueKind == JsonValueKind.False))
+                        placeable = pl.ValueKind == JsonValueKind.True;
                 }
                 catch { }
             }
@@ -640,8 +645,22 @@ public sealed class CampManager
             }
             Console.ForegroundColor = ConsoleColor.Cyan;
             Console.WriteLine($"[CAMP] ARMED on {label} @ {odds:0.000} ({SideName(arbType)}) — the next window here " +
-                              $"is one press. Releasing in ~{_idleBudgetSec / 60.0:0.0}m if nothing happens.");
+                              $"is one press. Releasing in ~{_idleBudgetSec / 60.0:0.0}m if nothing happens." +
+                              (maxBet > 0m ? $" Book max bet {maxBet:0.##}." : ""));
             Console.ResetColor();
+            // A camp that cannot be pressed is worse than no camp: it holds the tab, blocks every other
+            // in-play arb through the pre-live gate, and only reveals itself at the first window.
+            if (placeable == false)
+            {
+                Console.ForegroundColor = ConsoleColor.Yellow;
+                Console.WriteLine($"[CAMP] ⚠ {label}: PLACE BET is DISABLED at the {_armStake:0.##} arm stake — " +
+                                  $"below Pinnacle's minimum for {odds:0.000}. The press re-types the ladder's rung " +
+                                  $"first, so this only fires if that rung is LARGER" +
+                                  (StakeLadder.MaxStakeAccount > 0m
+                                     ? $" — and HARDVEN_STAKE_MAX pins it to {StakeLadder.MaxStakeAccount:0.##}, so it will not."
+                                     : ".") );
+                Console.ResetColor();
+            }
             _ = _discord.AlertAsync($"⛺ camped on **{label}** ({SideName(arbType)} @ {odds:0.000}) — {why}");
         }
         finally { _gate.Release(); }

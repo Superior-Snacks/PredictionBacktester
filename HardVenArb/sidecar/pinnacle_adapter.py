@@ -3219,10 +3219,35 @@ class PinnacleAdapter(BookAdapter):
             print("[PINNACLE CAMP] note: in-play idle is not running, so nothing was switched to hover. "
                   "Camping still works, but whatever idle IS running may scroll the slip away.",
                   flush=True)
-        print(f"[PINNACLE CAMP] armed on {selection_id} stake={stake:.2f} @ {res.actual_odds} — "
+        # IS THIS STAKE EVEN PLACEABLE? Pinnacle enforces a per-price minimum, and below it the panel blanks
+        # "Max Bet" and DISABLES Place. The arm stake is only a placeholder — camp_fire re-types the ladder's
+        # rung before pressing — but when the two are the same number (HARDVEN_STAKE_MAX pins every bet to one
+        # rung, which is the supervised-test configuration) a camp can sit armed for ten minutes and be
+        # incapable of firing the whole time. Reading it HERE turns that from a surprise at the first window
+        # into a line at arm time, and costs one DOM read.
+        placeable, max_bet = None, None
+        try:
+            txt = (await page.locator("#quick-bet-portal").first.inner_text()).replace("\n", " | ")
+            mb = self._CAMP_MAXBET_RX.search(txt)
+            max_bet = float(mb.group(1).replace(",", "")) if mb else None
+            pb = page.locator("#quick-bet-portal").get_by_text("PLACE BET", exact=False).last
+            placeable = (not await pb.is_disabled()) if await pb.count() else None
+        except Exception:
+            pass
+        self._camp["placeable_at_arm"] = placeable
+        self._camp["max_bet"] = max_bet
+        if placeable is False or (max_bet is None and placeable is not True):
+            print(f"[PINNACLE CAMP] *** {stake:.2f} IS BELOW PINNACLE'S MINIMUM at {res.actual_odds} *** "
+                  f"(Max Bet is blank and PLACE BET is disabled). The camp is armed and will hold, but it can "
+                  f"only fire if the ladder sends a LARGER stake at press time. With HARDVEN_STAKE_MAX pinning "
+                  f"the rung to the same figure, it cannot.", flush=True)
+        print(f"[PINNACLE CAMP] armed on {selection_id} stake={stake:.2f} @ {res.actual_odds} "
+              f"(place={'enabled' if placeable else 'DISABLED' if placeable is False else '?'}"
+              f"{f', max bet {max_bet:g}' if max_bet else ''}) — "
               f"betslip trimming suspended, idle switched to hover", flush=True)
         return {"ok": True, "armed": True, "selection_id": selection_id,
-                "stake": stake, "odds": res.actual_odds}
+                "stake": stake, "odds": res.actual_odds,
+                "placeable": placeable, "max_bet": max_bet}
 
     # The panel renders "... | {selection} | {price} | Max Bet: {limit} | Win | ...", and when the stake
     # is below the minimum the limit is blank ("Max Bet: | Win"). The price is the last decimal BEFORE
@@ -3709,12 +3734,59 @@ class PinnacleAdapter(BookAdapter):
                 self._cat_cache = getattr(self, "_cat_cache", {})
         entry = getattr(self, "_cat_cache", {}).get(selection_id)
         if not entry:
-            return None
+            return self._expected_from_pairs(selection_id)
         ev = entry.event or ""
         for sep in (" vs ", " - ", " v "):
             if sep in ev:
                 a, b = ev.split(sep, 1)
                 return {"nameA": a.strip(), "nameB": b.strip(), "side": (entry.selection_name or "").strip()}
+        return self._expected_from_pairs(selection_id)
+
+    def _expected_from_pairs(self, selection_id: str) -> Optional[dict]:
+        """Fallback expectation from cross_pairs.json when the live catalog has no entry for this token.
+
+        WHY THIS IS NEEDED, and it is not an edge case. `catalog()` is built from the GUEST straight-markets
+        feed and keeps only matchups carrying an available full-game moneyline. Measured 2026-08-18 on a live
+        ITF league: THREE OF SIX live matchups had no such moneyline in the guest feed at all, persistently.
+        The bot still prices those tokens — its odds come from the AUTHED re-seed and the browser WS, which do
+        carry them — so it detects arbs on markets the catalog cannot describe, and the camp then refuses to
+        arm with "no catalog entry". That cost the second-most-productive game of the run (24 windows).
+        Finished leagues drop out the same way once their matchups empty.
+        THE PAIR FILE IS A SOUND SOURCE for this specific question. `pair_pinnacle.py` wrote `event_title`
+        from the SAME `f"{home} vs {away}"` catalog construction, so the ordering is home-then-away by
+        definition, and the token's own designation says which side we want. It cannot drift from the catalog
+        because it was produced by it.
+
+        This is deliberately NOT a weakening of the check. The popover is still verified against real
+        participant names before anything is armed; only the SOURCE of those names falls back."""
+        parts = (selection_id or "").split(":")
+        if len(parts) < 3 or parts[2] not in ("home", "away"):
+            return None
+        cache = getattr(self, "_pair_names", None)
+        if cache is None or time.time() - getattr(self, "_pair_names_ts", 0) > 300:
+            cache = {}
+            try:
+                path = Path(__file__).parent.parent / "cross_pairs.json"
+                for e in json.loads(path.read_text(encoding="utf-8")):
+                    ev = (e.get("event_title") or "").strip()
+                    if not ev:
+                        continue
+                    for tok in (e.get("hardven_yes_token") or "", e.get("hardven_no_token") or ""):
+                        if tok.count(":") >= 2:
+                            cache[tok] = ev
+            except Exception:
+                cache = getattr(self, "_pair_names", None) or {}
+            self._pair_names = cache
+            self._pair_names_ts = time.time()
+        ev = cache.get(selection_id) or ""
+        for sep in (" vs ", " - ", " v "):
+            if sep in ev:
+                a, b = (x.strip() for x in ev.split(sep, 1))
+                side = b if parts[2] == "away" else a          # catalog builds "{home} vs {away}"
+                if a and b and side:
+                    print(f"[PINNACLE] {selection_id}: not in the live catalog — verifying against the paired "
+                          f"names instead ({ev}).", flush=True)
+                    return {"nameA": a, "nameB": b, "side": side}
         return None
 
     def _league_url_for(self, lid: str) -> str:
