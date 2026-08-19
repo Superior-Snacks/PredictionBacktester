@@ -2931,6 +2931,38 @@ class PinnacleAdapter(BookAdapter):
     _RECEIPT_WORDS_RX = re.compile(r"bet placed|bet accepted|accepted|receipt|your bet|wager placed|"
                                    r"bet id|ticket|confirmation", re.I)
 
+    async def _dump_panel_controls(self, page, sel: str) -> None:
+        """List every control in the placement panel, once. Four escalating dismiss attempts have now failed
+        twice (2026-08-19) and a fifth guessed selector is not a plan - this prints what is ACTUALLY there so
+        the close control can be targeted by name instead of hoped for. Reads through locators only."""
+        if getattr(self, "_panel_dumped", False):
+            return
+        self._panel_dumped = True
+        try:
+            out = []
+            for kind in ("button", "[role=button]", "[data-test-id]", "svg", "[class*='close' i]"):
+                loc = page.locator(f"{sel} {kind}")
+                for i in range(min(await loc.count(), 12)):
+                    el = loc.nth(i)
+                    try:
+                        txt = (await el.inner_text() or "").strip().replace(chr(10), " ")[:40]
+                    except Exception:
+                        txt = ""
+                    attrs = {}
+                    for a in ("aria-label", "data-test-id", "class", "title"):
+                        try:
+                            v = await el.get_attribute(a)
+                        except Exception:
+                            v = None
+                        if v:
+                            attrs[a] = v[:60]
+                    if txt or attrs:
+                        out.append(f"    {kind:22s} text={txt!r} {attrs}")
+            body = chr(10).join(out) if out else "    (none)"
+            print(f"[PINNACLE PANEL] controls inside {sel}:" + chr(10) + body, flush=True)
+        except Exception as ex:
+            print(f"[PINNACLE PANEL] could not enumerate {sel} ({type(ex).__name__}: {ex})", flush=True)
+
     async def _watch_receipt_dom(self, page, t0: float, out: dict = None, budget: float = 40.0,
                                  exclude: set = None) -> dict:
         """Watch the placement panel for a RECEIPT, and publish what it finds into `out` as it goes.
@@ -3006,6 +3038,19 @@ class PinnacleAdapter(BookAdapter):
                             print(f"[PINNACLE RECEIPT] bet id {st['bet_id']} visible in {which} "
                                   f"{st['bet_id_ms']:.0f}ms after the press "
                                   f"(receipt wording {'present' if st['words'] else 'ABSENT'})", flush=True)
+                            await self._dump_panel_controls(page, which)
+                # "Processing Live Bet..." is the venue HOLDING the bet, not the receipt. The settled
+                # receipt replaces it, and THAT is the panel carrying the close control - so keep looking
+                # rather than stopping at the first change.
+                if st.get("processing_ms") is None and "processing" in txt.lower():
+                    st["processing_ms"] = round((time.time() - t0) * 1000, 1)
+                elif (st.get("settled_ms") is None and st.get("processing_ms") is not None
+                        and "processing" not in txt.lower()):
+                    st["settled_ms"] = round((time.time() - t0) * 1000, 1)
+                    print(f"[PINNACLE RECEIPT] processing CLEARED at {st['settled_ms']:.0f}ms "
+                          f"(held {st['settled_ms'] - st['processing_ms']:.0f}ms) | now: {txt[:220]}",
+                          flush=True)
+                    await self._dump_panel_controls(page, which)
                 await asyncio.sleep(0.2)
         finally:
             if st["first_change_ms"] is None:
@@ -3334,7 +3379,8 @@ class PinnacleAdapter(BookAdapter):
         prev = getattr(self, "_camp_cleanup", None)
         if prev is not None and not prev.done():
             try:
-                await asyncio.wait_for(asyncio.shield(prev), timeout=6.0)
+                # Covers HARDVEN_RECEIPT_OBSERVE_SEC (10s) plus the dismissal escalation itself.
+                await asyncio.wait_for(asyncio.shield(prev), timeout=20.0)
             except Exception:
                 print("[PINNACLE CAMP] the previous camp's page cleanup is still running - arming anyway.",
                       flush=True)
@@ -3978,11 +4024,10 @@ class PinnacleAdapter(BookAdapter):
                     "total_ms": round((time.time()-t0)*1000, 1),
                     "elapsed_s": round(time.time() - t0, 2)}
         finally:
-            try:
-                if _receipt is not None:
-                    _receipt.cancel()
-            except Exception:
-                pass
+            # NOT CANCELLED ANY MORE. The receipt we actually need lands AFTER "Processing Live Bet..."
+            # clears, which is after this returns - cancelling here is why every fire so far has only ever
+            # shown us the processing state. Its own budget bounds it, and it gates nothing.
+            _ = _receipt
             try:
                 page.remove_listener("response", _on_resp)
             except Exception:
@@ -4147,7 +4192,17 @@ class PinnacleAdapter(BookAdapter):
                 pass
 
         if background_dom:
-            self._camp_cleanup = asyncio.create_task(_clear_page())
+            # LET THE RECEIPT EXIST FIRST. The settled receipt is the panel we still have to learn to close,
+            # and dismissing at ~0ms after the fire destroys it before the watcher can read it or enumerate
+            # its controls. Deferred by HARDVEN_RECEIPT_OBSERVE_SEC (default 10s) - which costs nothing on
+            # the money path, because this whole branch is already off it.
+            async def _observe_then_clear():
+                try:
+                    await asyncio.sleep(float(os.environ.get("HARDVEN_RECEIPT_OBSERVE_SEC", "10")))
+                except Exception:
+                    pass
+                await _clear_page()
+            self._camp_cleanup = asyncio.create_task(_observe_then_clear())
         else:
             await _clear_page()
         c = getattr(self, "_camp", {}) or {}
@@ -4300,20 +4355,30 @@ class PinnacleAdapter(BookAdapter):
         # WHEEL TOWARD IT FIRST. `scroll_into_view_if_needed` teleports the scroll position in one step;
         # this site runs Microsoft Clarity, which records scroll. Wheeling in notches costs nothing and
         # is what the BIA cursor already does — the jump was the last instant-teleport in either path.
+        # PHASE TIMING ON THE EXECUTION PATH. The 2026-08-19 fire spent 1709ms here against a venue that
+        # answered in 951ms, and nothing said which of the five steps owned it - so the only honest way to
+        # get it to 500ms is to see the split first. Costs a few perf_counter calls, and only prints fast.
+        _t = time.perf_counter(); _ph = {}
+        def _mark(name):
+            nonlocal _t
+            now = time.perf_counter(); _ph[name] = round((now - _t) * 1000); _t = now
         try:
             box = await loc.bounding_box()
             if box and not (80 <= box["y"] <= 700):
                 await CURSOR.scroll(page, box["y"] - 320)
         except Exception:
             pass
+        _mark("wheel")
         try:
             await loc.scroll_into_view_if_needed(timeout=4000)   # fallback for virtualised panes
         except Exception:
             pass
+        _mark("scrollinto")
         try:
             box = await loc.bounding_box()
         except Exception:
             box = None
+        _mark("box")
         if box:
             # OFF-CENTRE. This aimed at the exact geometric centre on every click; people do not, and
             # "always dead centre" is a signature that survives however good the approach path is.
@@ -4322,16 +4387,22 @@ class PinnacleAdapter(BookAdapter):
                                         box["y"] + box["height"] * random.uniform(0.35, 0.65))
             # Dwell measured against 37 recorded gestures (mouse_record.py): a reach ends in a settle,
             # not an immediate press. Shared with the BIA path so both stay in step.
+            _mark("move")
             try:
                 from human_mouse import dwell as _dwell
                 await asyncio.sleep(await _dwell(fast=fast))
             except Exception:
                 await asyncio.sleep(random.uniform(0.15, 0.45))
+            _mark("dwell")
         try:
             # 42-92ms measured across the same 37 gestures; the old floor of 30 was below anything real.
             await loc.click(timeout=5000, delay=random.randint(42, 92))
         except Exception:
             return False
+        _mark("click")
+        if fast:
+            print("[PINNACLE CLICK] " + " ".join(f"{k}={v}ms" for k, v in _ph.items())
+                  + f" total={sum(_ph.values())}ms", flush=True)
         return True
 
     async def _position_over_list(self, page) -> bool:

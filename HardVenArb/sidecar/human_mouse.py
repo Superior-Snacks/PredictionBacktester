@@ -145,12 +145,22 @@ async def dwell(fast: bool = False) -> float:
     """
     global _DWELL_LOGGED
     import os as _os
+    # (imported before the fast branch below - it reads HARDVEN_FAST_DWELL_MS)
     # FAST = the EXECUTION path. An arb window is measured in seconds and a missed one is a certain
     # loss, whereas the dwell is insurance against a hypothesis that was FALSIFIED on BetInAsia (the
     # slip died there for an unrelated reason). Paying 1.5s per click while the price ticks is the wrong
     # trade — so idle/organic clicks get the full human settle, and placement gets the short one.
     if fast:
-        return random.uniform(0.10, 0.28)
+        # Measured on the 2026-08-19 camp fire: the whole approach-and-press came to 1709ms, against a
+        # venue that answered the POST in 951ms. On an in-play line that is the largest thing we control,
+        # so the settle is trimmed and the budget is now an env knob rather than a constant. The click
+        # itself stays real (curved approach, off-centre aim, 42-92ms button delay) - this only shortens
+        # the pause between arriving and pressing.
+        try:
+            hi = float(_os.environ.get("HARDVEN_FAST_DWELL_MS", "160")) / 1000.0
+        except ValueError:
+            hi = 0.16
+        return random.uniform(hi * 0.55, hi)
     try:
         centre = float(_os.environ.get("HARDVEN_CLICK_DWELL_MS",
                                        _os.environ.get("BIA_CLICK_DWELL_MS", "600"))) / 1000.0

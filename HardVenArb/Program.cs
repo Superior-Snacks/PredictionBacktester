@@ -507,6 +507,40 @@ bool IsExcludedTicker(string ticker) =>
 if (excludeSubs.Count > 0)
     Console.WriteLine($"[CONFIG] --exclude active — skipping tickers containing: {string.Join(", ", excludeSubs)}");
 
+// Does a pairing row agree with ITSELF about which player the two legs sit on? See the call site for the
+// live failure this exists to stop. Returns true when the row is consistent OR when there is not enough in
+// it to judge — an unjudgeable row is the pre-existing state and is left to the other checks, whereas a row
+// that positively contradicts itself is known-broken.
+bool PairSidesAgree(string kalshiOutcome, string eventTitle, string yesToken, out string why)
+{
+    why = "";
+    string desig = (yesToken ?? "").Split(':') is { Length: 3 } tp ? tp[2] : "";
+    if (desig is not ("home" or "away")) return true;          // derivative or malformed — not this check's job
+    string[] sep = { " vs ", " v ", " - " };
+    string title = eventTitle ?? "";
+    int at = -1; int seplen = 0;
+    foreach (var sp in sep) { at = title.IndexOf(sp, StringComparison.OrdinalIgnoreCase); if (at > 0) { seplen = sp.Length; break; } }
+    if (at <= 0) return true;                                   // no parsable title — cannot judge
+    string home = title[..at].Trim(), away = title[(at + seplen)..].Trim();
+    if (home.Length == 0 || away.Length == 0 || string.IsNullOrWhiteSpace(kalshiOutcome)) return true;
+
+    static HashSet<string> Words(string s) => new(
+        new string((s ?? "").ToLowerInvariant().Select(c => char.IsLetter(c) || c == ' ' ? c : ' ').ToArray())
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries), StringComparer.Ordinal);
+
+    var outcome = Words(kalshiOutcome);
+    // The side this token BUYS, per the title's "{home} vs {away}" ordering — the same rule the sidecar's
+    // _expected_from_pairs uses to verify the slip, so the two cannot drift apart.
+    var mine  = Words(desig == "away" ? away : home);
+    var other = Words(desig == "away" ? home : away);
+    bool matchesMine  = outcome.Overlaps(mine);
+    bool matchesOther = outcome.Overlaps(other);
+    if (matchesMine || !matchesOther) return true;              // agrees, or names neither side (unjudgeable)
+    why = $"kalshi_outcome '{kalshiOutcome}' is the '{(desig == "away" ? home : away)}' side of "
+        + $"'{title}', but hardven_yes_token is ':{desig}' which buys '{(desig == "away" ? away : home)}'";
+    return false;
+}
+
 // --wN: rolling execution window — only execute arbs whose Kalshi close date is within N weeks of today.
 // Evaluated live in the executor (not a startup filter), so the window rolls forward each day and far-out
 // pairs become eligible as they approach. 0 = no window (all dates eligible).
@@ -716,6 +750,7 @@ if (File.Exists(manualPath))
     {
         using var manDoc = JsonDocument.Parse(File.ReadAllText(manualPath));
         int excludedCount = 0;
+        int inconsistentSides = 0;
         foreach (var el in manDoc.RootElement.EnumerateArray())
         {
             string kTicker  = el.TryGetProperty("kalshi_ticker",  out var kt)  ? (kt.GetString()  ?? "") : "";
@@ -735,11 +770,79 @@ if (File.Exists(manualPath))
                 string pairId = $"MANUAL_{kTicker}__{yesToken[..Math.Min(8, yesToken.Length)]}";
                 // The Kalshi YES side's NAME — the executor cross-checks the book leg against it.
                 string kOutcome = el.TryGetProperty("kalshi_outcome", out var kOut) ? (kOut.GetString() ?? "") : "";
+                string eventTitle = el.TryGetProperty("event_title", out var etl) ? (etl.GetString() ?? "") : "";
+                // ── SIDE SANITY: DOES THIS ROW AGREE WITH ITSELF? ────────────────────────────────────
+                // A pairing row carries the answer twice: `kalshi_outcome` names the player the Kalshi YES
+                // pays on, and `event_title` ("{home} vs {away}") plus the token's home/away designation
+                // names the player the Pinnacle YES leg buys. When those disagree the two legs sit on the
+                // SAME outcome, and every downstream number is computed as though they were opposite —
+                // the arb, the LOCK, the P&L, all of it.
+                //
+                // Observed live 2026-08-19 on KXITFMATCH-26AUG19IZQREY-REY: outcome "Matias Reyniak"
+                // against token ...:home on title "Izquierdo Luque vs Reyniak". Two fires bought Kalshi-NO
+                // (Izquierdo) alongside Pinnacle-Izquierdo and booked both as locked arbs; the giveaway
+                // was an "actualNet" of 0.7535, an edge that does not exist in a two-venue tennis market.
+                //
+                // The name check the camp already runs CANNOT see this: it derives what the slip should
+                // show from this same event_title, so it confirms the venue's own home/away and passes.
+                // Nothing else in the pipeline compares the two halves of the row against each other.
+                //
+                // Refusing the row is the only safe answer. A pairing that contradicts itself gives no
+                // basis for guessing which half is right, and trading either reading is a coin flip
+                // dressed as an arb.
+                // A HINT, NOT A VERDICT. `event_title` is KALSHI's event title (pairHard.py writes
+                // ev.get("title")), so its "A vs B" order is Kalshi's convention and carries no claim about
+                // which side PINNACLE designates home. A row where the two orders differ may be inverted or
+                // may simply be two venues naming a fixture differently, and nothing in the file tells them
+                // apart — so this warns and the structural check below is what actually drops.
+                if (!PairSidesAgree(kOutcome, eventTitle, yesToken, out string sideWhy))
+                {
+                    inconsistentSides++;
+                    Console.WriteLine($"[CONFIG ?] {kTicker}: {sideWhy} — Kalshi's title order and the token's "
+                                    + $"designation disagree. Not conclusive on its own; see the event check.");
+                }
                 manualPairs.Add(new CrossPair(pairId, label, kTicker, yesToken, noToken, eventId, settlementDate, isNegRisk, hardvenMinSize, threeWay, kOutcome));
             }
         }
+        // ── THE EVENT CHECK: ASSUMPTION-FREE, AND THE ONE THAT DROPS ────────────────────────────────
+        // The two markets of a binary Kalshi event are opposite outcomes of ONE fixture. So their Pinnacle
+        // tokens must name the SAME matchup on OPPOSITE designations. Two rows on ":home", or two different
+        // matchup ids, is a contradiction visible without knowing either venue's naming conventions — which
+        // is exactly what the title-order check cannot claim.
+        //
+        // BOTH ROWS GO. When a pair of rows disagree, nothing in the file says which one is right, and
+        // trading the "surviving" one is a coin flip dressed as an arb. Observed 2026-08-19: the survivor of
+        // the one mismatched-matchup event pointed at a matchup its own sibling contradicted.
+        //
+        // This is what caught the live failure — both legs of KXITFMATCH-26AUG19IZQREY-REY on the same
+        // outcome, booked as two locked arbs at an "actualNet" of 0.7535.
+        var byEvent = manualPairs.Where(p => !string.IsNullOrEmpty(p.EventId))
+                                 .GroupBy(p => p.EventId)
+                                 .Where(g => g.Count() == 2);
+        var brokenEvents = new HashSet<string>();
+        foreach (var g in byEvent)
+        {
+            var seg = g.Select(p => (p.HardVenYesTokenId ?? "").Split(':')).ToList();
+            if (seg.Any(x => x.Length != 3)) continue;                 // derivative/malformed — not this check
+            string why = seg[0][1] != seg[1][1]
+                ? $"the two markets name DIFFERENT Pinnacle matchups ({seg[0][1]} vs {seg[1][1]})"
+                : seg[0][2] == seg[1][2]
+                    ? $"both markets buy the ':{seg[0][2]}' side — opposite outcomes cannot share one"
+                    : "";
+            if (why.Length == 0) continue;
+            brokenEvents.Add(g.Key);
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"[CONFIG ⚠] DROPPED both markets of {g.Key}: {why}. "
+                            + $"Which row is wrong is not knowable from the file — re-pair the event.");
+            foreach (var p in g) Console.WriteLine($"             {p.KalshiTicker} -> {p.HardVenYesTokenId}");
+            Console.ResetColor();
+        }
+        int droppedRows = manualPairs.RemoveAll(p => brokenEvents.Contains(p.EventId ?? ""));
+
         Console.WriteLine($"[CONFIG] {manualPairs.Count} manual pair(s) loaded from {pairsFileName}"
-                          + (excludedCount > 0 ? $" ({excludedCount} skipped by --exclude)" : ""));
+                          + (excludedCount > 0 ? $" ({excludedCount} skipped by --exclude)" : "")
+                          + (droppedRows > 0 ? $" ({droppedRows} DROPPED from {brokenEvents.Count} contradictory event(s))" : "")
+                          + (inconsistentSides > 0 ? $" ({inconsistentSides} title-order warning(s))" : ""));
     }
     catch (Exception ex)
     {

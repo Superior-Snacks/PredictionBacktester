@@ -363,7 +363,15 @@ class PinnacleBrowserSession:
         self._wire_page(self._page)
         await self._start_cdp_capture()                  # 2nd WS-login capture path (sees worker WS page.on misses)
         try:
-            await self._page.goto(self._login_url, wait_until="domcontentloaded", timeout=60_000)
+            # LAND WHERE WE TRADE, as a bookmark would. This opened the site ROOT and then _go_home_once
+            # navigated away a moment later - so every session began with a page change right on top of the
+            # login, which is the sequence the operator saw log the site straight back out (2026-08-19).
+            # Starting on the destination removes that navigation entirely in the normal case: already
+            # authenticated, already where we belong, nothing to move. When we are NOT logged in the login
+            # flow still navigates to the login URL on its own, so nothing depends on landing there first.
+            start_url = self._home_url or self._login_url
+            await self._page.goto(start_url, wait_until="domcontentloaded", timeout=60_000)
+            print(f"[PINNACLE SESSION] opened on {start_url}", flush=True)
             self._last_main_refresh = time.time()
         except Exception as ex:
             print(f"[PINNACLE SESSION] initial navigation slow/failed ({ex}); the window is open — browse manually.")
@@ -1458,20 +1466,10 @@ class PinnacleBrowserSession:
                 self._went_home = True
                 return
             self.pause_activity()
-            # ENTER A LIVE LIST THE WAY A PERSON DOES: sport board, a beat, then the live page. Nobody
-            # types /tennis/matchups/live/ as their first navigation after login - they land on the sport
-            # and click Live. Costs one page load, once per session. The adapter's start_inplay does the
-            # same hop with a real click on the Live control; this one only has to make sure the FIRST
-            # navigation of the session is not a deep link, because by the time start_inplay runs the page
-            # is already where it wanted to be and its own hop is skipped.
-            if re.search(r"/(live|live-?betting)/?$", self._home_url.split("?")[0]):
-                board = self._home_url.split("?")[0].rstrip("/").rsplit("/", 1)[0] + "/"
-                try:
-                    await self._page.goto(board, wait_until="domcontentloaded", timeout=45_000)
-                    await asyncio.sleep(random.uniform(1.8, 4.2))
-                except Exception as ex:
-                    print(f"[PINNACLE SESSION] board hop to {board} did not take "
-                          f"({type(ex).__name__}: {ex}) - going straight to the live list.")
+            # NO BOARD HOP. An earlier version routed sport-board -> live so the first navigation would
+            # not be a deep link. The operator's call is that a bookmark straight to the live page is not
+            # odd behaviour, and it is one fewer page change next to the login - which is the thing actually
+            # suspected of dropping the session.
             await self._page.goto(self._home_url, wait_until="domcontentloaded", timeout=45_000)
             self._went_home = True
             self._last_main_refresh = time.time()
