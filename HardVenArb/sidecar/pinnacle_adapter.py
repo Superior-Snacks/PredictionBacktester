@@ -386,6 +386,9 @@ class PinnacleAdapter(BookAdapter):
             self._reader_reseed_sec = float(os.environ.get("PINNACLE_READER_RESEED_SEC") or 90.0)
         except ValueError:
             self._reader_reseed_sec = 90.0
+        # In-play does not run the periodic re-seed (see _reader_reseed_loop). Opt back in with =1.
+        self._reseed_inplay = os.environ.get("PINNACLE_RESEED_INPLAY", "0") == "1"
+        self._reseed_inplay_noted = False
         self._reader_reseed_task: Optional[asyncio.Task] = None
         # Re-seed SOURCE: "authed" (DEFAULT) hits /markets/straight on the logged-in session → REAL, non-delayed
         # prices (the guest feed can lag enough to swamp a 1¢ pre-live edge). It's the single most common request
@@ -791,6 +794,8 @@ class PinnacleAdapter(BookAdapter):
                 print(f"[PINNACLE] reader price backstop ON — {self._reseed_source} re-seed of every active league "
                       f"every {self._reader_reseed_sec:g}s (keeps stable/tail pre-live lines fresh; the WS gives "
                       "live in-play deltas). _read_cache serves the REAL per-token ts so frozen books age out."
+                      + ("" if self._reseed_inplay else
+                         " PAUSES while in-play is running (PINNACLE_RESEED_INPLAY=1 to keep it on).")
                       + ("" if self._reseed_source == "guest" else
                          " (authed = real prices; guest can lag a thin edge — PINNACLE_RESEED_SOURCE=guest to switch)"))
         else:
@@ -1409,6 +1414,22 @@ class PinnacleAdapter(BookAdapter):
                 await asyncio.sleep(self._session_ka_sec)
             except asyncio.CancelledError:
                 break
+            # SAME GATE AS THE READER RE-SEED, and for a stronger reason: this one was MEASURED not to
+            # work. The docstring's own caveat - "if the timeout turns out to be UI-activity-based, this
+            # won't help" - is exactly what happened. Pinnacle's idle logout (~30min) is driven by UI
+            # activity; mouse moves, scrolls and authed API hits do NOT reset it, which is why the organic
+            # layer had to start doing keyboard-scrolls and sport-nav clicks instead. So in-play was paying
+            # a 22-request authed burst every 4 minutes for a session timer it does not touch.
+            #
+            # Left running pre-live, where it still serves as the drift reconcile its docstring describes
+            # and the traffic sits among a browsing session rather than one parked tab.
+            if self.mode == "inplay" and not self._reseed_inplay:
+                if not getattr(self, "_ka_inplay_noted", False):
+                    self._ka_inplay_noted = True
+                    print("[PINNACLE] session keepalive PAUSED for in-play - the logout timer is UI-based, "
+                          "so this never reset it; organic activity is what holds the session.", flush=True)
+                continue
+            self._ka_inplay_noted = False
             leagues = list(self._active_leagues.keys())
             for lid in leagues:
                 if self._ws_gave_up:
@@ -2205,24 +2226,38 @@ class PinnacleAdapter(BookAdapter):
                 await asyncio.sleep(self._reader_reseed_sec)
             except asyncio.CancelledError:
                 break
-            # ⚠ DO NOT SKIP THIS IN IN-PLAY MODE. It was skipped on 2026-08-17 on the reasoning that one tab
-            # parked on the live list already gets WS deltas for the markets being traded, so the re-seed was
-            # pure duplicated traffic and a machine-regular polling tell. The first half was true; the
-            # conclusion was wrong, and the cost was measured within the hour:
+            # OFF IN IN-PLAY. This is a REVERSAL of the 2026-08-17 decision, and the measurement that
+            # drove that one still stands - skipping the re-seed then took books from P=180/216 to 6/242
+            # and the camper sat roving for 42 minutes with nothing fresh enough to camp on. What changed
+            # is not the number, it is what the in-play bot needs from it:
             #
-            #     before: books K=252/314  P=180/216      <- reseed running
-            #     after:  books K=290/378  P=  6/242      <- reseed skipped in in-play
+            #   * THE PRICE THAT DECIDES A FIRE IS THE BETSLIP, and camp_fire reads it off the panel
+            #     directly, re-reading it immediately before the press. A REST snapshot cannot improve on
+            #     the number the venue is contractually showing us.
+            #   * 216 fresh PRE-MATCH books served pre-live coverage. In-play camps on LIVE games, and the
+            #     live list's own WS is subscribed to exactly those - which is why `matchups=NN` on the
+            #     WS-READ heartbeat is the coverage number that now matters, not the total.
+            #   * The traffic is the cost, not a side effect. A 90s metronome against the same endpoints
+            #     from the same IP, running for hours beside a session that is otherwise one parked tab,
+            #     is a trail no hand produces.
             #
-            # The single tab's WS covers the handful of leagues that tab is SUBSCRIBED to. Detection needs a
-            # fresh price on EVERY paired market, because that is what decides whether an arb window opens at
-            # all — and the camp target selector then chooses among the pairs that produced windows. With 6 of
-            # 242 books fresh, almost no window can open, so the camper had nothing to camp on and sat roving
-            # for 42 minutes on an evening that did have live games. Blinding detection to save request volume
-            # trades the entire strategy for a fingerprint improvement.
+            # GUEST IS NOT THE ANSWER and offering it was wrong: it is the delayed feed (thin edges lag),
+            # and it leaves from the same IP - so it trades price quality away for nothing.
             #
-            # If the polling signature needs reducing, the lever is PINNACLE_READER_RESEED_SEC (cadence) or
-            # PINNACLE_RESEED_SOURCE=guest (public endpoint, no account attached) — not switching it off.
-            # Nothing automated should be talking to the venue on this account while a human is using it.
+            # WHAT SURVIVES: the ONE-TIME seed in `odds()` when a league is first subscribed (the WS streams
+            # changes, not an on-subscribe snapshot, so a stable line would otherwise never arrive), and
+            # catalog/pairing. Both are "find out what exists", which is a thing a browser does too.
+            #
+            # PINNACLE_RESEED_INPLAY=1 restores the cadence if in-play coverage turns out to need it.
+            if self.mode == "inplay" and not self._reseed_inplay:
+                if not getattr(self, "_reseed_inplay_noted", False):
+                    self._reseed_inplay_noted = True
+                    print("[PINNACLE] reader re-seed PAUSED for in-play - the betslip is the price that "
+                          "decides a fire and the live list's WS covers the live games. Watch `matchups=` "
+                          "on the WS-READ heartbeat for coverage. PINNACLE_RESEED_INPLAY=1 to restore.",
+                          flush=True)
+                continue
+            self._reseed_inplay_noted = False
             if self._manual_mode:
                 continue
             # authed re-seed needs a live session; guest is public → runs regardless
@@ -2885,34 +2920,47 @@ class PinnacleAdapter(BookAdapter):
     # data-test-id sweep rather than a guess at one selector: the receipt's markup is unknown, and the
     # point of this is to FIND it, not to assume it.
     # Where a placement receipt can land. The camp path fires through the Quick Bet popover, so THAT is
-    # the container to watch — the first version only looked at the side Betslip column and saw nothing,
+    # the container to watch - the first version only looked at the side Betslip column and saw nothing,
     # which is why the 2026-08-19 fire produced no reading at all.
     _RECEIPT_CONTAINERS = ("#quick-bet-portal",
                            '[data-test-id="Betslip"]',
                            '[class*="betslip" i]')
+    # A Pinnacle bet id as it appears in our own records: 2258936819, 2258987331. Guarded on both sides so
+    # it cannot latch onto part of a decimal - a stake, a price or a return must never be read as an id.
+    _RECEIPT_BETID_RX = re.compile(r"(?<![\d.])(\d{9,12})(?![\d.])")
+    _RECEIPT_WORDS_RX = re.compile(r"bet placed|bet accepted|accepted|receipt|your bet|wager placed|"
+                                   r"bet id|ticket|confirmation", re.I)
 
-    async def _watch_receipt_dom(self, page, t0: float, budget: float = 25.0) -> dict:
-        """Sample the placement panel while a bet confirms, and report WHEN it first changed.
+    async def _watch_receipt_dom(self, page, t0: float, out: dict = None, budget: float = 40.0,
+                                 exclude: set = None) -> dict:
+        """Watch the placement panel for a RECEIPT, and publish what it finds into `out` as it goes.
 
-        WHY: confirmation waits on network — the /bets/straight POST, then the page's own GET /0.1/bets
-        polling. If the UI shows a receipt before that resolves, the DOM is the better signal and the
-        network wait is latency we are choosing to pay.
+        TWO JOBS, and the second is new. It still measures WHEN the UI knows, so the network path can be
+        judged against it. But it now also acts as the confirmation FALLBACK: `_confirm_bet` depends on the
+        page choosing to poll GET /0.1/bets, and on 2026-08-19 we could not establish from the logs whether
+        that had happened on an earlier fire - a route we cannot verify is a route that needs a backstop.
 
-        This only WATCHES. It gates nothing and changes no behaviour — it exists to capture the timing so
-        the switch can be made from evidence rather than a guess about markup.
+        WHAT COUNTS AS PROOF. Not "the panel changed" - a panel changes on an error, a re-ask, or simply
+        being cleared, and reading any of those as an acceptance would hedge against a bet that is not on,
+        which is the naked-leg failure this whole path exists to avoid. The only DOM evidence accepted is a
+        BET ID: the venue's own identifier for a bet it has taken, which can also be reconciled afterwards.
+        Keywords are recorded but never sufficient on their own.
 
-        READS THROUGH LOCATORS, NOT page.evaluate. Locators run in an isolated world; evaluate runs in the
+        READS THROUGH LOCATORS, NOT page.evaluate - locators run in an isolated world; evaluate runs in the
         page's own and is script the site could see. Same reading, nothing injected.
 
-        REPORTS EVEN WHEN CANCELLED. camp_fire cancels this the moment it returns, which used to kill the
-        task mid-sleep and print nothing — leaving "the panel never changed" and "the probe threw every
-        time" indistinguishable, both looking like silence. The summary is now in a finally and carries the
-        error count, so a quiet run is a RESULT.
+        REPORTS EVEN WHEN CANCELLED. camp_fire cancels this when it returns, which used to kill the task
+        mid-sleep and print nothing, leaving "the panel never changed" and "the probe threw every time"
+        indistinguishable. The summary is now in a finally and carries the counts, so silence is a RESULT.
         """
-        first = None
+        st = out if out is not None else {}
+        st.setdefault("first_change_ms", None)
+        st.setdefault("bet_id", None)
+        st.setdefault("bet_id_ms", None)
+        st.setdefault("words", None)
+        st.setdefault("text", None)
         base = None
-        errors = 0
-        samples = 0
+        errors = samples = 0
         which = None
         try:
             while time.time() - t0 < budget:
@@ -2921,7 +2969,7 @@ class PinnacleAdapter(BookAdapter):
                     try:
                         loc = page.locator(sel).first
                         if await loc.count():
-                            txt = (await loc.inner_text()).replace(chr(10), " | ").strip()[:300]
+                            txt = (await loc.inner_text()).replace(chr(10), " | ").strip()[:400]
                             which = sel
                             break
                     except Exception:
@@ -2931,20 +2979,45 @@ class PinnacleAdapter(BookAdapter):
                     await asyncio.sleep(0.2)
                     continue
                 samples += 1
+                st["text"] = txt
+                st["container"] = which
                 if base is None:
                     base = txt
-                elif first is None and txt != base:
-                    first = round((time.time() - t0) * 1000, 1)
-                    print(f"[PINNACLE RECEIPT] {which} changed {first:.0f}ms after the press | "
-                          f"was: {base[:120]} | now: {txt[:160]}", flush=True)
+                elif st["first_change_ms"] is None and txt != base:
+                    st["first_change_ms"] = round((time.time() - t0) * 1000, 1)
+                    print(f"[PINNACLE RECEIPT] {which} changed {st['first_change_ms']:.0f}ms after the press "
+                          f"| was: {base[:110]} | now: {txt[:200]}", flush=True)
+                if st["bet_id"] is None:
+                    # Only look for an id in text that has CHANGED from the armed state. The armed slip
+                    # cannot already contain a bet id, but pinning it to post-change text means a stray
+                    # long number in the resting panel can never be mistaken for one.
+                    if base is not None and txt != base:
+                        # EXCLUDE THE IDS WE PUT THERE. A Pinnacle MATCHUP id is the same shape as a bet
+                        # id - the camped selection 214120:1634228795:home carries a 10-digit matchup id
+                        # that a bare digit-run match reads as a receipt (caught in test, not in
+                        # production). The camp already knows its own league and matchup, so they can be
+                        # ruled out exactly rather than guessed at with more regex.
+                        m = next((g for g in self._RECEIPT_BETID_RX.findall(txt)
+                                  if g not in (exclude or set())), None)
+                        if m:
+                            st["bet_id"] = m
+                            st["bet_id_ms"] = round((time.time() - t0) * 1000, 1)
+                            st["words"] = bool(self._RECEIPT_WORDS_RX.search(txt))
+                            print(f"[PINNACLE RECEIPT] bet id {st['bet_id']} visible in {which} "
+                                  f"{st['bet_id_ms']:.0f}ms after the press "
+                                  f"(receipt wording {'present' if st['words'] else 'ABSENT'})", flush=True)
                 await asyncio.sleep(0.2)
         finally:
-            if first is None:
+            if st["first_change_ms"] is None:
                 print(f"[PINNACLE RECEIPT] no change seen in {(time.time() - t0) * 1000:.0f}ms "
                       f"({samples} sample(s) of {which or 'NO container matched'}, {errors} unreadable) "
                       f"- the DOM is not a faster signal here, or the receipt lands somewhere else.",
                       flush=True)
-        return {"first_change_ms": first, "container": which, "samples": samples, "errors": errors}
+            elif st["bet_id"] is None:
+                print(f"[PINNACLE RECEIPT] panel changed but NO bet id in it - "
+                      f"cannot be used as confirmation. Text: {(st.get('text') or '')[:240]}", flush=True)
+            st["samples"], st["errors"] = samples, errors
+        return st
 
     async def _confirm_bet(self, req_id: str, bets_seen: list, timeout: float = None,
                            evt: "asyncio.Event" = None) -> dict:
@@ -3700,6 +3773,7 @@ class PinnacleAdapter(BookAdapter):
         # after the click instead, which is still "before the receipt" by a whole server round trip, and it
         # times from the press rather than from the read that preceded it.
         _receipt = None
+        receipt: dict = {}          # filled LIVE by the watcher; readable without awaiting the task
         try:
             if not await self._human_click_loc(page, place, fast=True):
                 return {"ok": False, "fired": False, "error": "could not click PLACE BET"}
@@ -3707,7 +3781,9 @@ class PinnacleAdapter(BookAdapter):
             # how much was our approach-and-click and how much was Pinnacle answering. Only one of those is
             # worth paying for - the human click is the point; everything else is overhead to hunt down.
             t_click = time.time()
-            _receipt = asyncio.create_task(self._watch_receipt_dom(page, t_click))
+            _receipt = asyncio.create_task(self._watch_receipt_dom(
+                page, t_click, out=receipt,
+                exclude={p for p in str(c.get("selection_id") or "").split(":") if p.isdigit()}))
             # ── THE ODDS-CHANGED RE-PROMPT ───────────────────────────────────────────────────────────
             # When the price moves against you between press and submit, Pinnacle does NOT place — it
             # re-renders the panel with DECLINE alongside PLACE BET and waits. No dialog, no new element
@@ -3826,19 +3902,58 @@ class PinnacleAdapter(BookAdapter):
             # if it dominates, 'the book leg is slow' is a statement about this code, not about Pinnacle.
             post_ms = round((t_post - t0) * 1000, 1)
             click_ms = round((t_click - t0) * 1000, 1)
+            confirm_source = "post-body"          # overwritten by whichever route actually establishes it
             req_id = str(body.get("requestId") or body.get("requestID") or "") or None
             bid = str(body.get("betId") or body.get("id") or "") or None
             if not bid and req_id:
                 conf = await self._confirm_bet(req_id, bets_seen, evt=bets_evt)
+                if conf.get("accepted"):
+                    confirm_source = "bets-list"
                 if conf.get("rejected"):
                     return {"ok": False, "fired": True, "confirmed": True, "accepted": False,
                             "error": f"Pinnacle REJECTED the bet ({conf.get('status')}) — nothing is on"}
                 if not conf.get("accepted"):
-                    return {"ok": False, "fired": True, "confirmed": False,
-                            "error": f"unconfirmed after {conf.get('waited_s', 0):.0f}s (requestId "
-                                     f"{req_id}) — state UNKNOWN, do not hedge against this"}
-                bid, live = conf.get("bet_id") or bid, float(conf.get("price") or live)
+                    # THE DOM IS THE BACKSTOP. The bets-list route depends on the page choosing to poll
+                    # GET /0.1/bets, and we could not establish from the logs that it always does - so a
+                    # timeout there is not evidence of anything, and burning a pressed bet on it would be
+                    # the worst reading available.
+                    #
+                    # ONLY A BET ID COUNTS. The watcher refuses to treat "the panel changed" as acceptance,
+                    # because errors, re-asks and a cleared slip all change it too; an id is the venue's own
+                    # identifier for a bet it has taken. The PRICE is not recoverable this way, so `live`
+                    # stays the panel price the floor was checked against, and the below-floor check below
+                    # still runs against it.
+                    dom_bid = receipt.get("bet_id")
+                    # NOT THE LAST FIRE'S RECEIPT. _dismiss_quick_bet can fail (observed 2026-08-19: all
+                    # four escalation steps, panel still up), so the next press can start against a panel
+                    # that already carries an old id. The watcher only reads ids out of text that CHANGED
+                    # from this press's baseline, which covers most of it; refusing an id we have already
+                    # returned closes the rest.
+                    if dom_bid and dom_bid == getattr(self, "_last_bet_id", None):
+                        print(f"[PINNACLE CAMP] the panel shows bet {dom_bid}, but that is the id from the "
+                              f"PREVIOUS fire - refusing to read a stale receipt as this press's "
+                              f"confirmation.", flush=True)
+                        dom_bid = None
+                    if dom_bid:
+                        print(f"[PINNACLE CAMP] the bet list did not answer in "
+                              f"{conf.get('waited_s', 0):.0f}s, but the panel is showing bet {dom_bid} "
+                              f"({receipt.get('bet_id_ms', 0):.0f}ms after the press) - CONFIRMED FROM THE "
+                              f"DOM. Price is the panel's {live}, not a venue-reported fill; reconcile it.",
+                              flush=True)
+                        bid, confirm_source = dom_bid, "dom-receipt"
+                    else:
+                        return {"ok": False, "fired": True, "confirmed": False,
+                                "error": f"unconfirmed after {conf.get('waited_s', 0):.0f}s (requestId "
+                                         f"{req_id}) — state UNKNOWN, do not hedge against this. The "
+                                         f"panel showed no bet id either"
+                                         + (f" (it did change at {receipt['first_change_ms']:.0f}ms: "
+                                            f"{(receipt.get('text') or '')[:160]})"
+                                            if receipt.get("first_change_ms") else " (and never changed)"),
+                                "receipt": receipt}
+                else:
+                    bid, live = conf.get("bet_id") or bid, float(conf.get("price") or live)
             c["fires"] = c.get("fires", 0) + 1
+            self._last_bet_id = bid or getattr(self, "_last_bet_id", None)
             below = live < min_odds - 1e-9
             _tot = round((time.time() - t0) * 1000, 1); _conf = round(_tot - post_ms, 1)
             print(f"[PINNACLE CAMP] timing: click {click_ms:.0f}ms (ours) + venue {post_ms - click_ms:.0f}ms "
@@ -3856,6 +3971,9 @@ class PinnacleAdapter(BookAdapter):
             return {"ok": True, "fired": True, "confirmed": True, "accepted": True,
                     "bet_id": bid, "odds": live, "stake": want_stake,
                     "checked_odds": checked_odds, "min_odds": min_odds, "below_floor": below,
+                    "confirm_source": confirm_source,
+                    "receipt_first_change_ms": receipt.get("first_change_ms"),
+                    "receipt_bet_id_ms": receipt.get("bet_id_ms"),
                     "post_ms": post_ms, "confirm_ms": round((time.time()-t0)*1000 - post_ms, 1),
                     "total_ms": round((time.time()-t0)*1000, 1),
                     "elapsed_s": round(time.time() - t0, 2)}

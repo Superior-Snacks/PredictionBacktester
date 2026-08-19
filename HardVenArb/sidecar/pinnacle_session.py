@@ -1416,6 +1416,14 @@ class PinnacleBrowserSession:
         for u in self._browse_urls:
             m = re.search(r"/en/([a-z][a-z-]*)/", u or "")
             if m and m.group(1) not in ("account", "login"):
+                # A LIVE BROWSE URL STAYS LIVE. This rebuilt the sport's PRE-MATCH board from the sport
+                # name alone, silently discarding the `/live/` the operator had asked for. The drift
+                # watchdog then enforced that board, so /inplay/stop -> set_home_url(None) walked the page
+                # off the live list at shutdown (observed 2026-08-19) and any drift check would have done
+                # the same mid-run. In-play re-points home at the live list while it runs; deriving it
+                # correctly means the default no longer fights that.
+                if re.search(r"/(live|live-?betting)/?$", (u or "").split("?")[0]):
+                    return u.split("?")[0]
                 return f"https://www.pinnacle.bet/en/{m.group(1)}/matchups/"
         try:
             import sports as _sports_cfg
@@ -1450,6 +1458,20 @@ class PinnacleBrowserSession:
                 self._went_home = True
                 return
             self.pause_activity()
+            # ENTER A LIVE LIST THE WAY A PERSON DOES: sport board, a beat, then the live page. Nobody
+            # types /tennis/matchups/live/ as their first navigation after login - they land on the sport
+            # and click Live. Costs one page load, once per session. The adapter's start_inplay does the
+            # same hop with a real click on the Live control; this one only has to make sure the FIRST
+            # navigation of the session is not a deep link, because by the time start_inplay runs the page
+            # is already where it wanted to be and its own hop is skipped.
+            if re.search(r"/(live|live-?betting)/?$", self._home_url.split("?")[0]):
+                board = self._home_url.split("?")[0].rstrip("/").rsplit("/", 1)[0] + "/"
+                try:
+                    await self._page.goto(board, wait_until="domcontentloaded", timeout=45_000)
+                    await asyncio.sleep(random.uniform(1.8, 4.2))
+                except Exception as ex:
+                    print(f"[PINNACLE SESSION] board hop to {board} did not take "
+                          f"({type(ex).__name__}: {ex}) - going straight to the live list.")
             await self._page.goto(self._home_url, wait_until="domcontentloaded", timeout=45_000)
             self._went_home = True
             self._last_main_refresh = time.time()

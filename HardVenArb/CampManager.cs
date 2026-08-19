@@ -360,12 +360,26 @@ public sealed class CampManager
             decimal odds   = Dec(root, "odds");
             decimal stake  = Dec(root, "stake");
             string betId   = Str(root, "bet_id");
+            // WHICH ROUTE ESTABLISHED THIS. "bets-list" is the page's own GET /0.1/bets; "dom-receipt" is
+            // the fallback reading a bet id straight off the panel, used when the bet list did not answer.
+            // Both are real confirmations, but they are not equally well understood - the DOM route has no
+            // venue-reported PRICE behind it, so `odds` there is the panel price we pressed against rather
+            // than a reported fill. Printed so a run that quietly starts leaning on the fallback is visible
+            // in the log instead of looking identical to a normal fire.
+            string cSource = Str(root, "confirm_source");
 
             if (okFlag && accepted)
             {
                 Interlocked.Increment(ref _placedCount);
                 Console.ForegroundColor = ConsoleColor.Green;
-                Console.WriteLine($"[CAMP FIRE] {label} · {stake:0.##} @ {odds:0.000} · bet {betId}");
+                Console.WriteLine($"[CAMP FIRE] {label} · {stake:0.##} @ {odds:0.000} · bet {betId}"
+                                + (string.IsNullOrEmpty(cSource) || cSource == "bets-list"
+                                       ? "" : $" · confirmed via {cSource}"));
+                if (cSource == "dom-receipt")
+                    Console.WriteLine($"[CAMP FIRE] {label}: the account bet list never answered — this was " +
+                                      $"confirmed off the betslip panel. The bet IS on (the id is the venue's " +
+                                      $"own), but {odds:0.000} is the price we pressed against, not a reported " +
+                                      $"fill. Reconcile it against My Bets.");
                 Console.ResetColor();
 
                 // THE FLOOR IS NOT ENFORCED AT THE VENUE ON THIS PATH. `/bet` sends max_odds and Pinnacle
