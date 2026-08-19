@@ -1401,6 +1401,22 @@ class PinnacleAdapter(BookAdapter):
                 await asyncio.sleep(self._status_ping_sec)
             except asyncio.CancelledError:
                 break
+            # PREFER THE REAL ONE. When a browser tab is open it polls /status itself, and that request has
+            # the page's own TLS fingerprint, cookies and timing. Ours adds a second, differently-shaped
+            # copy of the same call — the opposite of camouflage. So it only fires when the page has NOT
+            # made one recently (or when there is no browser at all, e.g. PINNACLE_SESSION_SOURCE=env).
+            br = self._browser
+            last = getattr(br, "last_page_status_ts", 0.0) if br is not None else 0.0
+            if last and time.time() - last < self._status_ping_sec * 2:
+                if not getattr(self, "_status_standby", False):
+                    self._status_standby = True
+                    print("[PINNACLE] liveness ping STANDING DOWN — the page is polling /status itself.",
+                          flush=True)
+                continue
+            if getattr(self, "_status_standby", False):
+                self._status_standby = False
+                print("[PINNACLE] the page stopped polling /status — resuming our own liveness ping.",
+                      flush=True)
             await self._http_get("/status", authed=False)   # camouflage only — carries no session; never an auth signal
 
     async def _session_keepalive(self) -> None:
@@ -3969,7 +3985,23 @@ class PinnacleAdapter(BookAdapter):
                     # identifier for a bet it has taken. The PRICE is not recoverable this way, so `live`
                     # stays the panel price the floor was checked against, and the below-floor check below
                     # still runs against it.
-                    dom_bid = receipt.get("bet_id")
+                    # OFF BY DEFAULT UNTIL THE RECEIPT HAS BEEN SEEN. Everything about how this reads a
+                    # receipt is an ASSUMPTION: that the settled panel contains a bet id, that a Pinnacle
+                    # bet id renders as a bare 9-12 digit run, that nothing else in that panel does. Not one
+                    # of those has been observed — every fire so far has been cancelled while the panel
+                    # still said "Processing Live Bet...", so the settled state has never been captured.
+                    #
+                    # A wrong reading here is the expensive direction: it reports a bet as confirmed and the
+                    # hedge goes out against something that may not exist. So the watcher OBSERVES and logs
+                    # on every fire, and only counts as confirmation once HARDVEN_DOM_CONFIRM=1 — which
+                    # should be set after a real receipt has been read in the log, not before.
+                    dom_ok = os.environ.get("HARDVEN_DOM_CONFIRM") == "1"
+                    dom_bid = receipt.get("bet_id") if dom_ok else None
+                    if receipt.get("bet_id") and not dom_ok:
+                        print(f"[PINNACLE RECEIPT] the panel shows a candidate bet id "
+                              f"{receipt['bet_id']} — NOT used as confirmation (HARDVEN_DOM_CONFIRM is not "
+                              f"set). Check it against My Bets; if it is the real id, the fallback is ready "
+                              f"to enable.", flush=True)
                     # NOT THE LAST FIRE'S RECEIPT. _dismiss_quick_bet can fail (observed 2026-08-19: all
                     # four escalation steps, panel still up), so the next press can start against a panel
                     # that already carries an old id. The watcher only reads ids out of text that CHANGED
@@ -4242,13 +4274,23 @@ class PinnacleAdapter(BookAdapter):
         carry them — so it detects arbs on markets the catalog cannot describe, and the camp then refuses to
         arm with "no catalog entry". That cost the second-most-productive game of the run (24 windows).
         Finished leagues drop out the same way once their matchups empty.
-        THE PAIR FILE IS A SOUND SOURCE for this specific question. `pair_pinnacle.py` wrote `event_title`
-        from the SAME `f"{home} vs {away}"` catalog construction, so the ordering is home-then-away by
-        definition, and the token's own designation says which side we want. It cannot drift from the catalog
-        because it was produced by it.
+        THE SOURCE IN THE PAIR FILE IS `hardven_yes_name` / `hardven_no_name` — the Pinnacle names the
+        pairing actually RESOLVED this token to. Not `event_title`.
+
+        This used to read event_title and split it as "{home} vs {away}". That premise was FALSE:
+        `pairHard.py` writes `"event_title": ev.get("title")` straight from the KALSHI event, so its A-vs-B
+        ordering is Kalshi's naming convention and makes no claim about which side Pinnacle designates home.
+        The check therefore confirmed the venue's own home/away against itself and passed on a row whose
+        sides were inverted — 2026-08-19, two live fires bought Kalshi-NO on Reyniak alongside
+        Pinnacle-Izquierdo, both legs on the same outcome, and this function said the slip was correct.
+
+        The resolved-name fields carry no such assumption: they are what `_pick_book_team` chose out of
+        Pinnacle's OWN team list for this exact token. Rows written before those fields existed simply have
+        no entry, and get None — which the caller already treats as "cannot verify", the safe answer.
 
         This is deliberately NOT a weakening of the check. The popover is still verified against real
-        participant names before anything is armed; only the SOURCE of those names falls back."""
+        participant names before anything is armed; only the SOURCE of those names changed — to the one
+        that cannot be right about the match and wrong about the side."""
         parts = (selection_id or "").split(":")
         if len(parts) < 3 or parts[2] not in ("home", "away"):
             return None
@@ -4258,25 +4300,28 @@ class PinnacleAdapter(BookAdapter):
             try:
                 path = Path(__file__).parent.parent / "cross_pairs.json"
                 for e in json.loads(path.read_text(encoding="utf-8")):
-                    ev = (e.get("event_title") or "").strip()
-                    if not ev:
-                        continue
-                    for tok in (e.get("hardven_yes_token") or "", e.get("hardven_no_token") or ""):
-                        if tok.count(":") >= 2:
-                            cache[tok] = ev
+                    yn = (e.get("hardven_yes_name") or "").strip()
+                    nn = (e.get("hardven_no_name") or "").strip()
+                    if not (yn and nn):
+                        continue                    # pre-fix row: no resolved names, so nothing to verify against
+                    yt = e.get("hardven_yes_token") or ""
+                    nt = e.get("hardven_no_token") or ""
+                    # Each token maps to (the name IT buys, the opponent). Both directions are stored so the
+                    # NO token is verifiable too, not just the YES one.
+                    if yt.count(":") >= 2:
+                        cache[yt] = (yn, nn)
+                    if nt.count(":") >= 2:
+                        cache[nt] = (nn, yn)
             except Exception:
                 cache = getattr(self, "_pair_names", None) or {}
             self._pair_names = cache
             self._pair_names_ts = time.time()
-        ev = cache.get(selection_id) or ""
-        for sep in (" vs ", " - ", " v "):
-            if sep in ev:
-                a, b = (x.strip() for x in ev.split(sep, 1))
-                side = b if parts[2] == "away" else a          # catalog builds "{home} vs {away}"
-                if a and b and side:
-                    print(f"[PINNACLE] {selection_id}: not in the live catalog — verifying against the paired "
-                          f"names instead ({ev}).", flush=True)
-                    return {"nameA": a, "nameB": b, "side": side}
+        got = cache.get(selection_id)
+        if got:
+            side, other = got
+            print(f"[PINNACLE] {selection_id}: not in the live catalog — verifying against the name the "
+                  f"pairing resolved for THIS token ('{side}').", flush=True)
+            return {"nameA": side, "nameB": other, "side": side}
         return None
 
     def _league_url_for(self, lid: str) -> str:

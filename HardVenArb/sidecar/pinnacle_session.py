@@ -188,6 +188,7 @@ class PinnacleBrowserSession:
         self._opened_at = 0.0          # when the browser window was (re)opened, for the grace above
         self._last_login_submit = 0.0
         self._login_task: Optional[asyncio.Task] = None
+        self.last_page_status_ts = 0.0        # when the PAGE last requested /status (see _on_request)
         # sport pages the organic loop occasionally browses to (real session). Default = the home page only
         # (always valid); override with PINNACLE_BROWSE_URLS once you've confirmed the sport-page URLs.
         self._browse_urls = [u.strip() for u in os.environ.get("PINNACLE_BROWSE_URLS", "").split(",") if u.strip()] \
@@ -434,6 +435,17 @@ class PinnacleBrowserSession:
         try:
             if "arcadia.pinnacle.com" not in (request.url or ""):
                 return
+            # THE PAGE'S OWN LIVENESS PING. The adapter used to fire its own GET /status every 30s as
+            # "camouflage" — but if the tab already polls it, ours is a DUPLICATE arriving on a separate
+            # httpx connection with a different TLS fingerprint, next to the real one. That is worse than
+            # sending nothing: it is the same request twice, and only one of them looks like the browser.
+            # Recording the page's calls lets the adapter stand down whenever the real thing is running.
+            if "/status" in (request.url or ""):
+                self.last_page_status_ts = time.time()
+                if not getattr(self, "_status_seen", False):
+                    self._status_seen = True
+                    print("[PINNACLE SESSION] the page polls /status itself — our own liveness ping will "
+                          "stand down while it does.", flush=True)
             if not self._seen_req:
                 self._seen_req = True
                 print("[PINNACLE SESSION] seeing Arcadia API requests from the page (auth headers visible).")
