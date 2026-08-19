@@ -3297,38 +3297,50 @@ class PinnacleAdapter(BookAdapter):
         # one answer this was added to get: whether the arm stake clears Pinnacle's per-price minimum.
         # Text-first with a class fallback, matching camp_fire, because in some panel states the class
         # changes and only the text is stable.
+        # ⚠ EVERYTHING BELOW IS A DIAGNOSTIC AND MUST NEVER FAIL THE ARM. The slip is already open and
+        # armed by this point — the expensive part is done. Letting a probe raise turns a SUCCESSFUL arm
+        # into `POST /camp/start 500`, and the camper then re-arms in a loop, opening a real betslip every
+        # time. Observed 2026-08-19: "VERIFY-ONLY OK … popover matched" immediately followed by a 500, over
+        # and over. A measurement that can destroy the thing it measures is worse than no measurement.
         placeable, max_bet = None, None
-        portal_l = page.locator("#quick-bet-portal")
-        for _attempt in range(6):                      # ~3s of settling, checked every 0.5s
-            try:
-                txt = (await portal_l.first.inner_text()).replace("\n", " | ")
-                mb = self._CAMP_MAXBET_RX.search(txt)
-                if mb:
-                    max_bet = float(mb.group(1).replace(",", ""))
-                pb = portal_l.get_by_text("PLACE BET", exact=False).last
-                if not await pb.count():
-                    pb = portal_l.locator('button[class*="placeBet-"]').first
-                if await pb.count():
-                    placeable = not await pb.is_disabled()
-                    break
-            except Exception:
-                pass
-            await asyncio.sleep(0.5)
-        if placeable is None:
-            print("[PINNACLE CAMP] could not find a PLACE BET control on the armed slip after 3s - the "
-                  "minimum-stake check is UNAVAILABLE for this camp (panel still rendering, or its "
-                  "markup changed).", flush=True)
-        self._camp["placeable_at_arm"] = placeable
-        self._camp["max_bet"] = max_bet
-        if placeable is False or (max_bet is None and placeable is not True):
-            print(f"[PINNACLE CAMP] *** {stake:.2f} IS BELOW PINNACLE'S MINIMUM at {res.actual_odds} *** "
-                  f"(Max Bet is blank and PLACE BET is disabled). The camp is armed and will hold, but it can "
-                  f"only fire if the ladder sends a LARGER stake at press time. With HARDVEN_STAKE_MAX pinning "
-                  f"the rung to the same figure, it cannot.", flush=True)
-        print(f"[PINNACLE CAMP] armed on {selection_id} stake={stake:.2f} @ {res.actual_odds} "
-              f"(place={'enabled' if placeable else 'DISABLED' if placeable is False else '?'}"
-              f"{f', max bet {max_bet:g}' if max_bet else ''}) — "
-              f"betslip trimming suspended, idle switched to hover", flush=True)
+        try:
+            portal_l = page.locator("#quick-bet-portal")
+            for _attempt in range(6):                      # ~3s of settling, checked every 0.5s
+                try:
+                    txt = (await portal_l.first.inner_text()).replace("\n", " | ")
+                    mb = self._CAMP_MAXBET_RX.search(txt)
+                    if mb:
+                        max_bet = float(mb.group(1).replace(",", ""))
+                    pb = portal_l.get_by_text("PLACE BET", exact=False).last
+                    if not await pb.count():
+                        pb = portal_l.locator('button[class*="placeBet-"]').first
+                    if await pb.count():
+                        placeable = not await pb.is_disabled()
+                        break
+                except Exception:
+                    pass
+                await asyncio.sleep(0.5)
+            if placeable is None:
+                print("[PINNACLE CAMP] could not find a PLACE BET control on the armed slip after 3s - the "
+                      "minimum-stake check is UNAVAILABLE for this camp (panel still rendering, or its "
+                      "markup changed).", flush=True)
+            # `self._camp` can be None by now: the framenavigated watcher attached above may have fired
+            # and called camp_stop() during the 3s probe, which clears it. Guard rather than assume.
+            if isinstance(getattr(self, "_camp", None), dict):
+                self._camp["placeable_at_arm"] = placeable
+                self._camp["max_bet"] = max_bet
+            if placeable is False:
+                print(f"[PINNACLE CAMP] *** {stake:.2f} IS BELOW PINNACLE'S MINIMUM at {res.actual_odds} *** "
+                      f"(PLACE BET is disabled and Max Bet is blank). The camp will hold, but it can only "
+                      f"fire if the ladder sends a LARGER stake at press time.", flush=True)
+            mb_txt = f", max bet {max_bet:g}" if max_bet else ""
+            place_txt = "enabled" if placeable else ("DISABLED" if placeable is False else "?")
+            print(f"[PINNACLE CAMP] armed on {selection_id} stake={stake:.2f} @ {res.actual_odds} "
+                  f"(place={place_txt}{mb_txt}) — betslip trimming suspended, idle switched to hover",
+                  flush=True)
+        except Exception as ex:
+            print(f"[PINNACLE CAMP] armed on {selection_id} @ {res.actual_odds} — the placeability probe "
+                  f"failed ({type(ex).__name__}: {ex}) but the CAMP IS FINE and stands.", flush=True)
         return {"ok": True, "armed": True, "selection_id": selection_id,
                 "stake": stake, "odds": res.actual_odds,
                 "placeable": placeable, "max_bet": max_bet}
