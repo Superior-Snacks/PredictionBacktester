@@ -188,7 +188,11 @@ class PinnacleLifecycle:
                 self._pinned_spans = pins
                 mode += f" + {len(pins)} pinned"
         if self._jitter_min > 0:                   # human wobble; applied AFTER selection so blocks don't change
-            new = sched.apply_jitter(new, self._jitter_min)
+            # "shift" moves each window as a unit and keeps its length; "ends" (default) wobbles the edges
+            # independently. At a small spread they are equivalent in spirit; at +/-60min they are not —
+            # see apply_jitter. PINNACLE_JITTER_MODE selects.
+            new = sched.apply_jitter(new, self._jitter_min,
+                                     mode=(os.environ.get("PINNACLE_JITTER_MODE") or "ends").strip().lower())
         # HARD BOUNDS, applied LAST — after merge + jitter, because both can close a gap or lengthen a block.
         # Downtime first (it shortens windows, which can only help the budget), then the daily ceiling.
         pre_bound = sum((c - o for o, c, _ in new), timedelta())
@@ -322,11 +326,17 @@ class PinnacleLifecycle:
             if self._notify.enabled:
                 self._notify.send_bg(f"🏦 banking window closed — back to **{prev or 'schedule'}**."
                                      + (" Send `resume` when the balance is topped up." if prev else ""))
+        # A finished BLOCK expires at its own window's close, then the schedule resumes normally. This is
+        # the "drained the bank, go dark early" case, and it is deliberately NOT a halt: draining is the
+        # intended end of a work block, not a fault, so it must not need an operator to clear it.
+        if self._override == "blockdone" and self._override_until and now >= self._override_until:
+            print("[PINNACLE LIFECYCLE] block finished early - back on schedule for the next window.")
+            self._set_override(None, "")
         if self._override == "banking":
             inside = True                        # site must be UP; this is the one override that opens on a halt
             cur = cur or (now, self._override_until or now, 0)
-        elif self._override in ("paused", "halted"):
-            inside = False                       # operator pause / balance halt beats the schedule
+        elif self._override in ("paused", "halted", "blockdone"):
+            inside = False                       # operator pause / balance halt / block already done
         elif self._override == "forced":
             inside = True
             cur = cur or (now, self._override_until or now, 0)
@@ -348,9 +358,10 @@ class PinnacleLifecycle:
             self._alert_close(now)
         self.state = ("banking" if self._override == "banking"
                       else "paused" if self._override == "paused" else "halted" if self._override == "halted"
+                      else "blockdone" if self._override == "blockdone"
                       else "forced" if self._override == "forced"
                       else "open" if self._open else "dark")
-        if self._override in ("paused", "halted"):
+        if self._override in ("paused", "halted", "blockdone"):
             secs = None                          # nothing will change until an operator resumes
         elif self._override in ("forced", "banking") and self._override_until:
             secs = max(0.0, (self._override_until - now).total_seconds())
@@ -448,6 +459,30 @@ class PinnacleLifecycle:
             self._notify.send_bg(f"🛑 **HALTED — {reason}**\nSchedule ended and the site is closed. "
                                  "Top up and send `resume` to restart.")
         print(f"[PINNACLE LIFECYCLE] HALTED: {reason}")
+        return self.status()
+
+    async def end_block(self, reason: str) -> dict:
+        """This work block is DONE — go dark now, come back for the next scheduled window.
+
+        The difference from `halt` is who has to act. A halt means something is wrong and stays dark until an
+        operator resumes; this means the block achieved what it was for. Under the two-blocks-a-day plan the
+        bank running dry IS the block finishing, so halting there would need a manual resume before every
+        session and would read as an alert for the expected outcome.
+
+        Expires at the current window's own close time, so it can never swallow the NEXT window — and if
+        there is no active window it clears immediately, because there is no block to end.
+        """
+        if self._override in ("blockdone", "halted"):
+            return self.status()                  # already dark for a reason; don't downgrade a halt
+        cur = sched.active_window(self._windows, sched._utcnow())
+        until = cur[1] if cur else sched._utcnow()
+        self._set_override("blockdone", reason, until=until)
+        await self.tick()
+        if self._notify.enabled:
+            self._notify.send_bg(f"✅ **block finished early — {reason}**" + chr(10)
+                                 + f"Dark until the next window. {self._next_line()}")
+        print(f"[PINNACLE LIFECYCLE] BLOCK DONE ({reason}) — dark until "
+              f"{sched._local(until):%H:%M}, then back on schedule.")
         return self.status()
 
     def _next_line(self) -> str:

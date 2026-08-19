@@ -18,6 +18,12 @@ as stale in the status instead of tripping the guard.
     HARDVEN_MIN_BALANCE_USD   floor for the Kalshi balance, USD (default 10)
     HARDVEN_BALANCE_CHECK_SEC how often to poll Pinnacle (default 300)
     HARDVEN_BALANCE_GUARD     0 = monitor + report but never halt (default 1 = halt)
+    HARDVEN_BALANCE_ACTION    halt (default) = stay dark until an operator resumes — the account is
+                              unexpectedly empty and someone should look.
+                              end_block = go dark for the REST OF THIS WINDOW and come back for the next
+                              one on schedule. For the two-blocks-a-day plan, where working the bank down
+                              is what a block is FOR: there a halt would demand a manual resume before
+                              every session and alert on the expected outcome.
 """
 from __future__ import annotations
 
@@ -45,13 +51,18 @@ class BalanceGuard:
         self._unreadable = 0            # consecutive logged-in-but-unreadable book reads
         self._unreadable_warn_after = int(os.environ.get("HARDVEN_BALANCE_UNREADABLE_WARN", "3") or 3)
 
+    @property
+    def _action(self) -> str:
+        return (os.environ.get("HARDVEN_BALANCE_ACTION") or "halt").strip().lower()
+
     def start(self) -> None:
         if self._task is None or self._task.done():
             self._task = asyncio.create_task(self._run())
             # Wording matters: "guard on (HALT)" was read as "the bot has halted" (2026-08-06). Say what it
             # WILL do on a breach, and say plainly that nothing has happened yet.
-            mode = ("will halt the schedule if a floor is breached" if self._enabled
-                    else "report-only, will NEVER halt")
+            mode = (("will end the BLOCK early if a floor is breached (back for the next window)"
+                     if self._action == "end_block" else "will halt the schedule if a floor is breached")
+                    if self._enabled else "report-only, will NEVER halt")
             print(f"[BALANCE] guard armed - {mode}. Floors: book {self._min_book:g}, "
                   f"kalshi ${self._min_kalshi:g}. Checked every {self._check_sec:g}s. (Not halted.)")
 
@@ -139,7 +150,11 @@ class BalanceGuard:
             self._book_ts = time.time()
         breaches = self._breaches()
         if breaches and self._enabled and self._lifecycle is not None:
-            await self._lifecycle.halt("low balance: " + "; ".join(breaches))
+            why = "low balance: " + "; ".join(breaches)
+            if self._action == "end_block" and hasattr(self._lifecycle, "end_block"):
+                await self._lifecycle.end_block(why)
+            else:
+                await self._lifecycle.halt(why)
         elif breaches and not self._low_warned:
             self._low_warned = True
             msg = "⚠️ **LOW BALANCE** (guard is report-only): " + "; ".join(breaches)

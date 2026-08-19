@@ -646,16 +646,32 @@ def describe_games(games, limit: int = 6) -> str:
     return ", ".join(out) + (f" (+{extra} more)" if extra > 0 else "")
 
 
-def apply_jitter(windows, spread_min: float = 0.0):
+def apply_jitter(windows, spread_min: float = 0.0, mode: str = "ends"):
     """Nudge each window's open/close by a stable pseudo-random amount so the session rhythm isn't
     machine-precise. Applied AFTER block selection (never changes WHICH blocks are chosen), keeps each
-    window at least 10 minutes long, and trims any overlap jitter introduces so windows stay disjoint."""
+    window at least 10 minutes long, and trims any overlap jitter introduces so windows stay disjoint.
+
+    TWO MODES, because at large spreads they mean very different things:
+
+      "ends"  (default) jitters open and close INDEPENDENTLY. Right for small nudges (the original ~7min
+              use): a session starts a few minutes late and runs a few minutes over, as people do.
+
+      "shift" moves the window as a UNIT, preserving its length. Right for a BIG spread. At +/-60min on a
+              2h window "ends" can draw open +60 and close -60 and produce a 10-minute session, or the
+              reverse and produce a 4-hour one — so the length becomes the random variable, which is not
+              what "be open for two hours, starting somewhere around 8" means. A person's session drifts
+              in START time; it does not randomly double or vanish.
+    """
     if spread_min <= 0 or not windows:
         return windows
     out = []
     for o, c, g in windows:
-        o2 = o + _jitter(o, "open", spread_min)
-        c2 = c + _jitter(o, "close", spread_min)
+        if mode == "shift":
+            d = _jitter(o, "shift", spread_min)
+            o2, c2 = o + d, c + d
+        else:
+            o2 = o + _jitter(o, "open", spread_min)
+            c2 = c + _jitter(o, "close", spread_min)
         if c2 - o2 < timedelta(minutes=10):                   # jitter must never invert/erase a window
             o2, c2 = o, c
         if out and o2 < out[-1][1]:                           # keep windows disjoint after the nudge
@@ -759,8 +775,14 @@ def main() -> None:
                     help="schedule on the WHOLE board instead of only Kalshi-PAIRED games (default: paired "
                          "only — unpaired games can't be arbed, so they shouldn't buy a session)")
     ap.add_argument("--jitter", type=float, default=0.0,
-                    help="randomize each window's open/close by up to +/- this many minutes (deterministic "
-                         "per window, so it doesn't drift across recomputes). Try 7.")
+                    help="randomize each window by up to +/- this many minutes (deterministic per window, so "
+                         "it doesn't drift across recomputes). Try 7 with --jitter-mode ends, 60 with shift.")
+    ap.add_argument("--jitter-mode", choices=("ends", "shift"), default="ends",
+                    help="'ends' jitters open/close independently (small nudges); 'shift' moves the whole "
+                         "window and KEEPS ITS LENGTH (use for a big spread — see apply_jitter)")
+    ap.add_argument("--pin-only", action="store_true",
+                    help="plan ONLY the --pin hours: no density blocks at all. For a fixed two-block day "
+                         "where the slate decides nothing.")
     ap.add_argument("--pin", default="",
                     help="operator-pinned LOCAL hours always included in the plan, e.g. '09:00-12:00' or "
                          "'08:30-11:00,20:00-23:00' (immune to --min-games/--max-blocks; matches "
@@ -796,12 +818,17 @@ def main() -> None:
         dropped = len(all_merged) - len(windows)
         sel = f" (selected the densest {len(windows)} of {len(all_merged)}; dropped {dropped})" if dropped else ""
     pins = pinned_windows(parse_pin_hours(args.pin)) if args.pin else []
-    if pins:
+    if pins and args.pin_only:
+        # The slate decides nothing here: these two blocks ARE the day. Density selection is skipped
+        # entirely rather than merged, so a busy afternoon cannot bolt a third session onto the plan.
+        windows = pins
+        sel = f" (PIN-ONLY: {len(pins)} operator block(s); the slate was not consulted)"
+    elif pins:
         windows = merge_windows(windows, pins)
         sel += f" [+{len(pins)} pinned]"
     if args.jitter > 0:
-        windows = apply_jitter(windows, args.jitter)
-        sel += f" [jitter +/-{args.jitter:g}m]"
+        windows = apply_jitter(windows, args.jitter, mode=args.jitter_mode)
+        sel += f" [jitter +/-{args.jitter:g}m {args.jitter_mode}]"
     per, _left = assign_games(windows, starts)
     windows = [(o, c, len(per[i])) for i, (o, c, _n) in enumerate(windows)]
     print(f"\n[SCHED] {len(windows)} work window(s){sel} (local time):")
