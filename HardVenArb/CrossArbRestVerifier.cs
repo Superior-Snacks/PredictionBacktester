@@ -273,6 +273,11 @@ public class CrossArbRestVerifier
     // Uses /markets/{ticker} convenience price fields (yes_ask_dollars / no_ask_dollars).
     // K_YES_P_NO: we buy YES on Kalshi → want yes_ask
     // K_NO_P_YES: we buy NO  on Kalshi → want no_ask
+    /// <summary>Kalshi ask straight from REST, for SHADOW measurement only. Public so the telemetry can
+    /// poll it without going through any of the verify plumbing — and deliberately nothing else: the value
+    /// must never reach a book, a price or a decision, or the comparison it exists to make is worthless.</summary>
+    public Task<decimal> ShadowKalshiAskAsync(string ticker, string arbType) => GetKalshiAskAsync(ticker, arbType);
+
     private async Task<decimal> GetKalshiAskAsync(string ticker, string arbType)
     {
         using var doc = await _kalshi.GetMarketAsync(ticker);

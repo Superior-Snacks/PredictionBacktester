@@ -267,7 +267,17 @@ public class CrossPlatformArbTelemetryStrategy
         // the other leg's ENTRY price. HedgeGapMs = how long the survivor outlived the first to go —
         // i.e. how long you have to hedge after one side fills. HedgeCensored names any leg still
         // hedgeable when the watch ended, whose figure is therefore a floor, not a measurement.
-        "KalshiHedgeMs,HardVenHedgeMs,HedgeFirstOut,HedgeGapMs,HedgeCensored";
+        "KalshiHedgeMs,HardVenHedgeMs,HedgeFirstOut,HedgeGapMs,HedgeCensored," +
+        // DID THE HEDGE HAVE TIME TO LAND? 1/0, measured from the moment the book price was FOUND
+        // (window open) — the same clock KalshiHedgeMs uses. 13s is the observed ceiling for an
+        // in-play Pinnacle press to confirm; 6s is the realistic target. A window that fails the 6s
+        // test was never takeable by this execution model however good its edge looked.
+        "KalshiOpen6s,KalshiOpen13s," +
+        // THE SECOND OPINION. WsOpenMs is DurationMs restated for symmetry; RestOpenMs is how long an
+        // independent 1/sec REST poll of the Kalshi ask agreed the arb existed, Pinnacle held at its
+        // open price so the ONLY variable is the data source. -1 = the shadow poll was off or never
+        // agreed there was an arb at all, which is itself the finding.
+        "WsOpenMs,RestOpenMs";
     private const string HedgeCsvHeader =
         "OpenTime,PairId,Label,ArbType,OffsetMs," +
         "EntryKalshiAsk,KalshiUnwindBid,KalshiOppositeAsk,KalshiEntryAskNow," +
@@ -450,6 +460,38 @@ public class CrossPlatformArbTelemetryStrategy
         _slipAccaFlagged = slipAccaFlagged;
         _slipClose   = slipClose;    // releases the subscription — without it every event is one-shot
     }
+    // ── SHADOW REST POLL ──────────────────────────────────────────────────────
+    // A SECOND OPINION ON HOW LONG THE ARB WAS ACTUALLY OPEN. The whole tape measures window life from the
+    // WS book, and the WS book is precisely what is under suspicion: it showed Kalshi at 0.40 while a fill
+    // seconds later paid 0.4455, and only 13% of windows survive an independent re-read.
+    //
+    // So while a window is open, poll Kalshi's REST ask once a second and ask the same question of it:
+    // is this pair still under the threshold? The answer goes into its OWN column and NOWHERE ELSE — it
+    // never touches a book, a price, a gate or a size. A shadow that fed back into decisions would stop
+    // being a control.
+    private Func<string, string, Task<decimal>>? _shadowKalshiAsk;
+    private readonly ConcurrentDictionary<string, ShadowProbe> _shadow = new(StringComparer.Ordinal);
+    private static readonly bool ShadowEnabled =
+        Environment.GetEnvironmentVariable("HARDVEN_SHADOW_REST") == "1";
+    private static readonly int ShadowMaxSec =
+        int.TryParse(Environment.GetEnvironmentVariable("HARDVEN_SHADOW_REST_MAX_SEC"), out var _sms) && _sms > 0
+            ? _sms : 60;
+
+    private sealed class ShadowProbe
+    {
+        public DateTime OpenedAt;
+        public decimal  OpenPLeg;          // Pinnacle held at its open price, same convention as the hedge watch
+        public string   ArbType = "";
+        public string   Ticker = "";
+        public string   HvToken = "";
+        public int      Polls;
+        public DateTime LastStillArb;      // last REST sample that still showed the pair under threshold
+        public bool     EverArb;           // did REST EVER agree there was an arb here
+    }
+
+    /// <summary>Wire the shadow REST reader (CrossArbRestVerifier.ShadowKalshiAskAsync). Null = disabled.</summary>
+    public void SetShadowKalshiAsk(Func<string, string, Task<decimal>>? f) => _shadowKalshiAsk = f;
+
     private Func<string>? _slipVia;
     private Func<bool>?   _slipClicked;
     private Func<bool>?   _slipAccaFlagged;
@@ -1005,7 +1047,10 @@ public class CrossPlatformArbTelemetryStrategy
         }
 
         if (invokeOnArbOpened)
+        {
             OnArbOpened?.Invoke(pair.PairId, bestNet, bestType, bestDepth, kLegPrice, pLegPrice);
+            StartShadowProbe(pair, bestType, pLegPrice);
+        }
 
         if (_debugPrices && invokeOnArbOpened)
             DumpPrices(pair, bestType, bestNet, bestGross, bestKFee, bestPFee,
@@ -1101,6 +1146,62 @@ public class CrossPlatformArbTelemetryStrategy
     }
 
     // NOTE: must be called while holding _windowLock
+    /// <summary>Poll Kalshi's REST ask once a second for the life of a window, recording how long REST
+    /// agreed an arb existed. Fire-and-forget, best-effort, and strictly write-only into `_shadow`.</summary>
+    private void StartShadowProbe(CrossPair pair, string arbType, decimal pLegAtOpen)
+    {
+        if (!ShadowEnabled || _shadowKalshiAsk is null) return;
+        string key = pair.PairId;
+        if (_shadow.ContainsKey(key)) return;                 // one probe per pair at a time
+        string hvToken = arbType == "K_YES_P_NO" ? pair.HardVenNoTokenId : pair.HardVenYesTokenId;
+        var probe = new ShadowProbe
+        {
+            OpenedAt = DateTime.UtcNow, OpenPLeg = pLegAtOpen, ArbType = arbType,
+            Ticker = pair.KalshiTicker, HvToken = hvToken, LastStillArb = DateTime.MinValue,
+        };
+        if (!_shadow.TryAdd(key, probe)) return;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var deadline = probe.OpenedAt.AddSeconds(ShadowMaxSec);
+                while (DateTime.UtcNow < deadline)
+                {
+                    decimal kRest;
+                    try { kRest = await _shadowKalshiAsk(probe.Ticker, probe.ArbType); }
+                    catch { kRest = -1m; }
+                    probe.Polls++;
+                    if (kRest > 0m)
+                    {
+                        // SAME TEST THE WINDOW USES, with Pinnacle held at its open price so the only
+                        // variable is which source the Kalshi number came from.
+                        decimal net = kRest + KalshiFee(kRest) + probe.OpenPLeg
+                                    + HardVenFee(probe.OpenPLeg, probe.HvToken);
+                        if (net < _arbThreshold)
+                        {
+                            probe.EverArb = true;
+                            probe.LastStillArb = DateTime.UtcNow;
+                        }
+                        else if (probe.EverArb)
+                        {
+                            break;                            // REST says it is over; stop paying for polls
+                        }
+                    }
+                    await Task.Delay(1000);
+                }
+            }
+            catch { /* shadow only: a failure must never disturb anything */ }
+        });
+    }
+
+    /// <summary>How long REST said the arb lasted, in ms. -1 when the probe never ran or never agreed.</summary>
+    private long ShadowOpenMs(string pairId)
+    {
+        if (!_shadow.TryRemove(pairId, out var pr) || pr is null) return -1;
+        if (!pr.EverArb || pr.Polls == 0) return pr.Polls == 0 ? -1 : 0;
+        return (long)(pr.LastStillArb - pr.OpenedAt).TotalMilliseconds;
+    }
+
     private void CloseWindow(string pairId, ActiveWindow w, DateTime endTime, string closedBy,
         string closedSide = "", long kLegAgeMs = -1, long pLegAgeMs = -1, bool pHeld = false)
     {
@@ -1165,6 +1266,10 @@ public class CrossPlatformArbTelemetryStrategy
         long hedgeGapMs = Math.Abs(kHedgeMs - pHedgeMs);
         string hedgeCensored = kCensored && pCensored ? "BOTH" : kCensored ? "KALSHI"
                              : pCensored ? "HARDVEN" : "";
+        // Censoring works IN FAVOUR here: a censored Kalshi leg was still hedgeable when the watch ended, so
+        // kHedgeMs is a floor — if the floor already clears the threshold, the answer is unambiguously yes.
+        string kOpen6  = kHedgeMs >= 6_000  ? "1" : "0";
+        string kOpen13 = kHedgeMs >= 13_000 ? "1" : "0";
 
         // the bookmaker selection_id this arb's book leg actually used — the exact join key for the audit
         // tape (verify_arbs.py): K_NO_P_YES backs HardVen YES, K_YES_P_NO backs HardVen NO.
@@ -1250,7 +1355,7 @@ public class CrossPlatformArbTelemetryStrategy
             pHedgeMs,
             firstOut,
             hedgeGapMs,
-            hedgeCensored
+            hedgeCensored, kOpen6, kOpen13, durationMs, ShadowOpenMs(pairId)
         );
 
         EnqueueCsvRow(row);

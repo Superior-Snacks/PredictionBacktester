@@ -851,6 +851,10 @@ telemetry.OnArbOpened += restVerifier.OnArbOpened;
 // Sampled betslip measurement (HARDVEN_SLIP_VERIFY=1). Independent of the executor: it runs in ANY mode,
 // including telemetry-only, because its whole point is measuring what the board price is worth before
 // trusting it with money. Wired here because the verifier needs the strategy to exist first.
+// SHADOW REST POLL (HARDVEN_SHADOW_REST=1): an independent 1/sec Kalshi REST read for the life of each
+// window, written to its own CSV columns and fed into NOTHING. It exists to answer whether the WS book —
+// which every price, gate and size depends on — agrees with the venue about how long an arb was open.
+telemetry.SetShadowKalshiAsk(restVerifier.ShadowKalshiAskAsync);
 telemetry.SetSlipVerifier(restVerifier.SlipQuoteAsync,
                           () => restVerifier.LastSlipVia,
                           () => restVerifier.LastSlipClicked,

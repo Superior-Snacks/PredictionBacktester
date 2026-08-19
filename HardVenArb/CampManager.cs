@@ -466,11 +466,11 @@ public sealed class CampManager
 
     private async Task TickAsync(CancellationToken ct)
     {
-        CampPhase phase; string pairId, label; DateTime armedAt, lastAction, lastHealth; int idleBudget;
+        CampPhase phase; string pairId, label, token; DateTime armedAt, lastAction, lastHealth; int idleBudget;
         DateTime rearmAfter; string rearmPair;
         lock (_lock)
         {
-            phase = _phase; pairId = _campPairId; label = _campLabel;
+            phase = _phase; pairId = _campPairId; label = _campLabel; token = _campToken;
             armedAt = _armedAt; lastAction = _lastActionAt; lastHealth = _lastHealthAt;
             idleBudget = _idleBudgetSec; rearmAfter = _rearmAfter; rearmPair = _rearmPairId;
         }
@@ -526,6 +526,32 @@ public sealed class CampManager
                     if (doc.RootElement.TryGetProperty("tradeable", out var tv) &&
                         (tv.ValueKind == JsonValueKind.True || tv.ValueKind == JsonValueKind.False))
                         tradeable = tv.ValueKind == JsonValueKind.True;
+
+                    // ── IS THE ARMED SLIP KEEPING UP WITH THE FEED? ───────────────────────────────
+                    // The open question behind the whole camp design: an armed Quick Bet might re-quote
+                    // more slowly than the board, in which case the press is committing to a laggy price
+                    // no matter how carefully it is re-read. Nothing measured it, because the slip
+                    // verifier (which does exactly this comparison) is REFUSED while camping — a second
+                    // popover would destroy the camp.
+                    //
+                    // But the health check already fetches the panel price every 30s, and the WS book for
+                    // the same token is sitting in memory. Comparing two numbers we already hold costs
+                    // nothing and no venue traffic at all.
+                    decimal slipOdds = Dec(doc.RootElement, "price");
+                    if (slipOdds > 1.0m && _books.TryGetValue($"H:{token}", out var hb))
+                    {
+                        decimal wsPrice = hb.GetBestAskPrice();
+                        if (wsPrice > 0m)
+                        {
+                            decimal wsOdds = 1m / wsPrice;
+                            decimal diffPct = (slipOdds - wsOdds) / wsOdds * 100m;
+                            long ageMs = (long)(DateTime.UtcNow - hb.LastDeltaAt).TotalMilliseconds;
+                            if (Math.Abs(diffPct) >= 1.0m)
+                                Console.WriteLine($"[CAMP SLIP-vs-WS] {label}: slip {slipOdds:0.000} vs feed " +
+                                                  $"{wsOdds:0.000} ({diffPct:+0.0;-0.0}%), feed age {ageMs}ms" +
+                                                  (Math.Abs(diffPct) >= 5m ? "  <- the slip is NOT tracking the feed" : ""));
+                        }
+                    }
                 }
                 catch { }
             }

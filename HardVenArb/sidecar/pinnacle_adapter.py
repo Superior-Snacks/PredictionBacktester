@@ -3639,6 +3639,7 @@ class PinnacleAdapter(BookAdapter):
                     await self._dismiss_quick_bet(page)
                     return {"ok": False, "fired": False, "declined": True,
                             "error": f"could not re-press PLACE BET ({type(e).__name__}: {e}) — abandoned"}
+            t_post = time.time()
             if "_resp" not in placed:
                 # UNCLASSIFIED. 15s of a panel that never produced a POST and never showed a re-ask we
                 # recognise. Clear it rather than walk away and leave a slip with a stake in it — that costs
@@ -3656,6 +3657,12 @@ class PinnacleAdapter(BookAdapter):
                 return {"ok": False, "fired": True, "confirmed": False,
                         "error": f"Pinnacle refused the placement (HTTP {placed.get('status')})"}
 
+            # SPLIT THE WAIT. Two different things are being timed and they have different fixes:
+            #   press -> POST      the venue accepting the click (their latency)
+            #   POST  -> confirmed our polling of the account bet list (OUR latency)
+            # The POST answers PENDING_ACCEPTANCE with no bet id, so the second phase is entirely ours -
+            # if it dominates, 'the book leg is slow' is a statement about this code, not about Pinnacle.
+            post_ms = round((t_post - t0) * 1000, 1)
             req_id = str(body.get("requestId") or body.get("requestID") or "") or None
             bid = str(body.get("betId") or body.get("id") or "") or None
             if not bid and req_id:
@@ -3670,6 +3677,11 @@ class PinnacleAdapter(BookAdapter):
                 bid, live = conf.get("bet_id") or bid, float(conf.get("price") or live)
             c["fires"] = c.get("fires", 0) + 1
             below = live < min_odds - 1e-9
+            _tot = round((time.time() - t0) * 1000, 1); _conf = round(_tot - post_ms, 1)
+            print(f"[PINNACLE CAMP] timing: press->POST {post_ms:.0f}ms, POST->confirmed {_conf:.0f}ms, "
+                  f"total {_tot:.0f}ms"
+                  + ("   <- OUR confirmation polling is the bottleneck" if _conf > post_ms else ""),
+                  flush=True)
             print(f"[PINNACLE CAMP] FIRED {want_stake:g} @ {live} on {c.get('selection_id')} "
                   f"(bet {bid}) in {time.time() - t0:.1f}s "
                   f"| floor {min_odds} · panel-at-check {checked_odds} · accepted {live}", flush=True)
@@ -3681,6 +3693,8 @@ class PinnacleAdapter(BookAdapter):
             return {"ok": True, "fired": True, "confirmed": True, "accepted": True,
                     "bet_id": bid, "odds": live, "stake": want_stake,
                     "checked_odds": checked_odds, "min_odds": min_odds, "below_floor": below,
+                    "post_ms": post_ms, "confirm_ms": round((time.time()-t0)*1000 - post_ms, 1),
+                    "total_ms": round((time.time()-t0)*1000, 1),
                     "elapsed_s": round(time.time() - t0, 2)}
         finally:
             try:

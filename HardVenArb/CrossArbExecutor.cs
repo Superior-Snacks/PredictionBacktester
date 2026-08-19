@@ -1741,6 +1741,18 @@ public class CrossArbExecutor
             // sent, so a miss costs nothing — that is the whole +$47 vs -$914 gap on the 509-window tape.
             // Firing both at once turns the same miss into a naked Kalshi leg and an unwind at -0.0399/share
             // against a -0.0113 break-even floor.
+            // THE CLOCK THAT ACTUALLY MATTERS. Every capturability number in the telemetry is measured from
+            // WINDOW OPEN, but the hedge does not start there — it starts when the irreversible book leg
+            // CONFIRMS. On an in-play Pinnacle press that confirmation is a POST answering PENDING_ACCEPTANCE
+            // followed by polling the account's bet list, and the gap has never been recorded anywhere.
+            //
+            // Without it, `KalshiHedgeMs = 34.4s` and "we hedged 4.5c through the break-even ceiling" cannot
+            // be reconciled: both are consistent if the confirm took ~30s, and both are alarming if it took 3.
+            // So stamp the press, the fill, and the hedge, and print the Kalshi ask at each.
+            DateTime tPress = DateTime.UtcNow;
+            decimal kAskAtPress = _books.TryGetValue(
+                arbType == "K_YES_P_NO" ? $"K:{pair.KalshiTicker}" : $"K:{pair.KalshiTicker}_NO",
+                out var kbPress) ? kbPress.GetBestAskPrice() : -1m;
             try
             {
                 (pFilled, pActualPrice) = await PlaceHardVenLegAsync(
@@ -1748,6 +1760,7 @@ public class CrossArbExecutor
                     stakeAccount: ladderStakeAccount);
             }
             catch (Exception ex) { legException = ex; }
+            DateTime tFilled = DateTime.UtcNow;
 
             if (pFilled <= 0m)
             {
@@ -1783,17 +1796,39 @@ public class CrossArbExecutor
                 // sake of a stale number. Hedging at a worse price beats not hedging: the alternative to a
                 // thin hedge is an open directional position, not a better one.
                 decimal kNow = kLegAsk;
+                decimal kLiveBookDepth = 0m;
                 string kBookKeyNow = arbType == "K_YES_P_NO"
                     ? $"K:{pair.KalshiTicker}" : $"K:{pair.KalshiTicker}_NO";
                 if (_books.TryGetValue(kBookKeyNow, out var kLiveBook))
                 {
                     decimal live = kLiveBook.GetBestAskPrice();
                     if (live > 0m) kNow = live;
+                    // Depth AT the price we are about to pay — the number sizing should key off, and the one
+                    // that decides whether 18 contracts fill at the touch or walk. Never recorded before.
+                    kLiveBookDepth = kLiveBook.GetAskVolumeAtOrBelow(
+                        (decimal)Math.Floor((double)(kNow + 0.01m) * 100.0) / 100m);
                 }
                 int kCentsNow = (int)Math.Floor((kNow + 0.01m) * 100m);   // same ask+1c tick as above
                 if (kCentsNow != kPriceCents)
                     Emit(execLog, $"[HEDGE REPRICE] {pair.Label} | Kalshi ask {kLegAsk:0.0000} -> {kNow:0.0000} "
                                + $"while the book leg filled; limit {kPriceCents}c -> {kCentsNow}c");
+
+                // How long the irreversible leg took, and what Kalshi did during it. `bookMs` is the number
+                // that has to be subtracted from KalshiHedgeMs before that figure means anything for
+                // execution — a 34s hedge window with a 30s confirm leaves 4 seconds of real room.
+                double bookMs = (tFilled - tPress).TotalMilliseconds;
+                double hedgeMs = (DateTime.UtcNow - tFilled).TotalMilliseconds;
+                decimal drift = kAskAtPress > 0m ? kNow - kAskAtPress : 0m;
+                Emit(execLog, $"[HEDGE LATENCY] {pair.Label} | book leg took {bookMs:0}ms to confirm, hedge sent "
+                            + $"{hedgeMs:0}ms later (total {bookMs + hedgeMs:0}ms) | Kalshi ask "
+                            + $"{(kAskAtPress > 0m ? kAskAtPress.ToString("0.0000") : "?")} at press -> "
+                            + $"{kNow:0.0000} at hedge ({drift:+0.0000;-0.0000;0.0000} drift)");
+                await JournalAsync(JsonSerializer.Serialize(new {
+                    t = DateTime.UtcNow, @event = "HEDGE_LATENCY", execId, pairId, arbType,
+                    bookConfirmMs = Math.Round(bookMs, 1), hedgeSendMs = Math.Round(hedgeMs, 1),
+                    kAskAtPress, kAskAtHedge = kNow, kDrift = drift,
+                    kDepthAtHedge = Math.Round(kLiveBookDepth, 2)
+                }));
                 try
                 {
                     (kOrderId, kStatus, kFilled, kAvgFill) = await PlaceKalshiLegAsync(
