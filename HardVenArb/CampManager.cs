@@ -620,6 +620,18 @@ public sealed class CampManager
             {
                 _untradeableStreak = 0;
             }
+            // A FAILED STATUS CALL IS NOT A HEALTHY CAMP. With `ok` false every branch below was skipped,
+            // so a sidecar that had died produced no camp logging whatsoever — the camp simply looked fine
+            // and silent, which is exactly how an hour of dry run can be spent measuring nothing. Observed
+            // 2026-08-19: the sidecar pipeline broke and the bot kept reporting an armed camp.
+            if (!ok)
+            {
+                Console.ForegroundColor = ConsoleColor.Yellow;
+                Console.WriteLine($"[CAMP] {label}: /camp/status did not answer ({Truncate(body)}) — the camp " +
+                                  "state is UNKNOWN and nothing is being measured. Is the sidecar up?");
+                Console.ResetColor();
+                return;
+            }
             if (ok && !alive)
             {
                 bool took = false;
