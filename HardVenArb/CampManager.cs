@@ -569,13 +569,19 @@ public sealed class CampManager
                             int updates = (int)Dec(doc.RootElement, "price_updates");
                             long staticMs = (long)Dec(doc.RootElement, "price_static_ms");
                             bool frozen = staticMs > 120_000 && ageMs < 30_000;
-                            if (Math.Abs(diffPct) >= 1.0m || frozen)
-                                Console.WriteLine($"[CAMP SLIP-vs-WS] {label}: slip {slipOdds:0.000} vs feed " +
-                                                  $"{wsOdds:0.000} ({diffPct:+0.0;-0.0}%), feed age {ageMs}ms | " +
-                                                  $"slip re-quotes={updates}, unchanged for {staticMs / 1000}s" +
-                                                  (frozen ? "  <- SLIP LOOKS FROZEN while the feed is live"
-                                                          : Math.Abs(diffPct) >= 5m
-                                                            ? "  <- the slip is NOT tracking the feed" : ""));
+                            // LOG EVERY SAMPLE, not just the alarming ones. This started as an
+                            // exception report (>=1% divergence or frozen), which meant a slip that
+                            // tracked the feed produced NOTHING — indistinguishable from the check not
+                            // running at all. For a measurement whose entire purpose is "does the slip
+                            // keep up", the quiet samples are the evidence, so they get printed too and
+                            // the loud cases just carry an extra clause. One line per camp per 30s.
+                            Console.WriteLine($"[CAMP SLIP-vs-WS] {label}: slip {slipOdds:0.000} vs feed " +
+                                              $"{wsOdds:0.000} ({diffPct:+0.0;-0.0}%), feed age {ageMs}ms | " +
+                                              $"slip re-quotes={updates}, unchanged for {staticMs / 1000}s" +
+                                              (frozen ? "  <- SLIP LOOKS FROZEN while the feed is live"
+                                                      : Math.Abs(diffPct) >= 5m
+                                                        ? "  <- the slip is NOT tracking the feed"
+                                                      : Math.Abs(diffPct) >= 1.0m ? "  <- drifting" : ""));
                         }
                     }
                 }
