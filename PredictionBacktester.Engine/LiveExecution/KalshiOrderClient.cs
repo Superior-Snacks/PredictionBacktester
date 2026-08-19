@@ -323,7 +323,25 @@ public class KalshiOrderClient : IKalshiOrderExecutor, IDisposable
         // silently too good by that cent (on a 1-2c arb, most of the edge). V2 reports DOLLARS as a string,
         // which ReadDecimalFlexible already handles. 0 = absent (no fill, or an older payload) — the caller
         // must then fall back rather than treat it as a free trade.
-        decimal avgFill = ReadDecimalFlexible(root, "average_fill_price");
+        // ...IN THE CALLER'S DENOMINATION, WHICH IS NOT THE ONE THE VENUE ANSWERS IN. V2 is a YES-book:
+        // the request above was translated to a yes price, and `average_fill_price` comes back on that same
+        // yes scale. A buy-NO leg therefore reads back `1 - what we paid`, and returning it raw made the
+        // caller price a NO fill at its complement.
+        //
+        // OBSERVED LIVE 2026-08-19 (bet 2258987331): screened NO ask 0.4800, order sent NO 49c, venue
+        // answered average_fill_price 0.52. The executor logged "actually paid 0.5200 (+4.00c/share)" and
+        // declared the arb eaten by slippage — but 0.52 is ABOVE the 0.49 limit, which an IOC cannot do.
+        // 1 - 0.52 = 0.48 = exactly the screened ask: the fill was clean and the slippage was arithmetic.
+        //
+        // The simulator returns `priceCents / 100m` — already the caller's side — so sim and live disagreed
+        // and no dry run could ever surface this. Converting HERE keeps the one contract both honour:
+        // priceCents goes in as the price of `side`, AvgFillPrice comes back as the price of `side`.
+        // Guard on > 0: 0 means absent, and 1 - 0 would report a NO fill at 1.00.
+        decimal avgFillYes = ReadDecimalFlexible(root, "average_fill_price");
+        decimal avgFill    = avgFillYes <= 0m ? 0m
+                           : (string.Equals(side, "yes", StringComparison.OrdinalIgnoreCase)
+                                 ? avgFillYes
+                                 : 1m - avgFillYes);
         // V2 returns NO status field (only fill_count / remaining_count). Claim "executed" only on a full
         // immediate fill; anything else reports "resting" so the caller falls through to its GET poll,
         // which is still the authoritative source. Costs one poll on a partial/no fill, and guessing

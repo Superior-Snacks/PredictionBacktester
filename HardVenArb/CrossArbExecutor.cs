@@ -1728,6 +1728,13 @@ public class CrossArbExecutor
         Exception? legException = null;
         string kOrderId = ""; string kStatus = "error";
         decimal kFilled = 0m, kAvgFill = 0m, pFilled = 0m, pActualPrice = 0m;
+        // THE LIMIT THE ORDER ACTUALLY WENT IN AT, which on the book-first path is NOT kPriceCents — that
+        // leg is re-priced off the live ask after the book fill (see kCentsNow). Reporting fill quality
+        // against the screened ask instead conflates two different things and misattributes the loss:
+        // on bet 2258936819 the Kalshi ask drifted 0.40 -> 0.44 during a 54s book confirm, the hedge went in
+        // at 45c and filled at 0.4455 — clean against its limit — yet the log read "+4.55c/share slippage"
+        // as though the fill were bad. The cost was the CONFIRM, and the two have different fixes.
+        int kLimitCentsUsed = kPriceCents;
 
         if (_bookFirst)
         {
@@ -1831,6 +1838,7 @@ public class CrossArbExecutor
                 }));
                 try
                 {
+                    kLimitCentsUsed = kCentsNow;
                     (kOrderId, kStatus, kFilled, kAvgFill) = await PlaceKalshiLegAsync(
                         pair.KalshiTicker, kalshiSide, kCentsNow, kContracts, execId, execLog);
                 }
@@ -1913,9 +1921,13 @@ public class CrossArbExecutor
             // Actual net cost per set using confirmed fill prices + fees. pActualPrice is HardVen's
             // reported average fill price and may exceed pLegAsk if the book was walked.
             actualNetPerSet = kPaid + pActualPrice + KalshiFee(kPaid) + HardVenFee(pActualPrice, hardvenToken);
+            decimal kLimitUsed = kLimitCentsUsed / 100m;
             if (kAvgFill > 0m && Math.Abs(kAvgFill - kLegAsk) > 0.00005m)
-                Emit(execLog, $"[KALSHI FILL] {pair.Label} | screened ask {kLegAsk:0.0000} -> actually paid "
-                            + $"{kAvgFill:0.0000} ({(kAvgFill - kLegAsk) * 100:+0.00;-0.00}c/share on {balancedQty})");
+                // Split the two contributions rather than blaming the fill for both. `vs limit` is the only
+                // one that is fill QUALITY; `vs screened` includes any drift the re-price already absorbed.
+                Emit(execLog, $"[KALSHI FILL] {pair.Label} | screened {kLegAsk:0.0000} · limit {kLimitUsed:0.0000} "
+                            + $"-> paid {kAvgFill:0.0000} | vs limit {(kAvgFill - kLimitUsed) * 100:+0.00;-0.00}c, "
+                            + $"vs screened {(kAvgFill - kLegAsk) * 100:+0.00;-0.00}c/share on {balancedQty}");
             else if (kAvgFill <= 0m)
                 Emit(execLog, $"[KALSHI FILL] {pair.Label} | venue reported no average_fill_price — "
                             + $"P/L below ASSUMES the screened ask {kLegAsk:0.0000}");

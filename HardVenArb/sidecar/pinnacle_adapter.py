@@ -2884,62 +2884,70 @@ class PinnacleAdapter(BookAdapter):
     # What the BETSLIP COLUMN looks like, sampled while a bet is being confirmed. Deliberately a
     # data-test-id sweep rather than a guess at one selector: the receipt's markup is unknown, and the
     # point of this is to FIND it, not to assume it.
-    _RECEIPT_PROBE_JS = r"""
-    () => {
-      const out = {ids: [], text: ""};
-      document.querySelectorAll('[data-test-id]').forEach(el => {
-        const id = el.getAttribute('data-test-id') || '';
-        if (/betslip|receipt|accept|confirm|placed|ticket/i.test(id)) out.ids.push(id);
-      });
-      const col = document.querySelector('[data-test-id="Betslip"]')
-               || document.querySelector('[class*="betslip" i]');
-      if (col) out.text = (col.innerText || '').replace(/
-/g, ' | ').slice(0, 300);
-      return out;
-    }
-    """
+    # Where a placement receipt can land. The camp path fires through the Quick Bet popover, so THAT is
+    # the container to watch — the first version only looked at the side Betslip column and saw nothing,
+    # which is why the 2026-08-19 fire produced no reading at all.
+    _RECEIPT_CONTAINERS = ("#quick-bet-portal",
+                           '[data-test-id="Betslip"]',
+                           '[class*="betslip" i]')
 
     async def _watch_receipt_dom(self, page, t0: float, budget: float = 25.0) -> dict:
-        """Sample the betslip column while a placement confirms, and report WHEN it first changed.
+        """Sample the placement panel while a bet confirms, and report WHEN it first changed.
 
-        WHY: confirmation currently waits on network — the /bets/straight POST, then the page's own
-        GET /0.1/bets polling. Measured 2026-08-19 that path took ~54s end to end on a live in-play fire,
-        against a hand-observed ~6-9s for the receipt to APPEAR IN THE UI. If the DOM knows first, it is
-        the better signal and the network wait is pure latency we are choosing to pay.
+        WHY: confirmation waits on network — the /bets/straight POST, then the page's own GET /0.1/bets
+        polling. If the UI shows a receipt before that resolves, the DOM is the better signal and the
+        network wait is latency we are choosing to pay.
 
-        This only WATCHES. It changes no behaviour and gates nothing — it exists to capture the selector
-        and the timing so the switch can be made from evidence rather than from a guess about markup we
-        have never actually seen.
+        This only WATCHES. It gates nothing and changes no behaviour — it exists to capture the timing so
+        the switch can be made from evidence rather than a guess about markup.
+
+        READS THROUGH LOCATORS, NOT page.evaluate. Locators run in an isolated world; evaluate runs in the
+        page's own and is script the site could see. Same reading, nothing injected.
+
+        REPORTS EVEN WHEN CANCELLED. camp_fire cancels this the moment it returns, which used to kill the
+        task mid-sleep and print nothing — leaving "the panel never changed" and "the probe threw every
+        time" indistinguishable, both looking like silence. The summary is now in a finally and carries the
+        error count, so a quiet run is a RESULT.
         """
         first = None
         base = None
-        seen_ids: set = set()
-        while time.time() - t0 < budget:
-            try:
-                st = await page.evaluate(self._RECEIPT_PROBE_JS)
-            except Exception:
-                await asyncio.sleep(0.25)
-                continue
-            ids = set(st.get("ids") or [])
-            txt = st.get("text") or ""
-            if base is None:
-                base, seen_ids = txt, ids
-            else:
-                newids = ids - seen_ids
-                if first is None and (txt != base or newids):
+        errors = 0
+        samples = 0
+        which = None
+        try:
+            while time.time() - t0 < budget:
+                txt = None
+                for sel in self._RECEIPT_CONTAINERS:
+                    try:
+                        loc = page.locator(sel).first
+                        if await loc.count():
+                            txt = (await loc.inner_text()).replace(chr(10), " | ").strip()[:300]
+                            which = sel
+                            break
+                    except Exception:
+                        continue
+                if txt is None:
+                    errors += 1
+                    await asyncio.sleep(0.2)
+                    continue
+                samples += 1
+                if base is None:
+                    base = txt
+                elif first is None and txt != base:
                     first = round((time.time() - t0) * 1000, 1)
-                    print(f"[PINNACLE RECEIPT] betslip column changed {first:.0f}ms after the press"
-                          + (f" | new data-test-ids: {sorted(newids)[:6]}" if newids else "")
-                          + f" | text: {txt[:160]}", flush=True)
-                seen_ids |= ids
-            await asyncio.sleep(0.25)
-        if first is None:
-            print(f"[PINNACLE RECEIPT] betslip column did not change within {budget:.0f}s of the press "
-                  f"- the DOM is not a faster confirmation signal here (or the receipt lands elsewhere).",
-                  flush=True)
-        return {"first_change_ms": first}
+                    print(f"[PINNACLE RECEIPT] {which} changed {first:.0f}ms after the press | "
+                          f"was: {base[:120]} | now: {txt[:160]}", flush=True)
+                await asyncio.sleep(0.2)
+        finally:
+            if first is None:
+                print(f"[PINNACLE RECEIPT] no change seen in {(time.time() - t0) * 1000:.0f}ms "
+                      f"({samples} sample(s) of {which or 'NO container matched'}, {errors} unreadable) "
+                      f"- the DOM is not a faster signal here, or the receipt lands somewhere else.",
+                      flush=True)
+        return {"first_change_ms": first, "container": which, "samples": samples, "errors": errors}
 
-    async def _confirm_bet(self, req_id: str, bets_seen: list, timeout: float = None) -> dict:
+    async def _confirm_bet(self, req_id: str, bets_seen: list, timeout: float = None,
+                           evt: "asyncio.Event" = None) -> dict:
         """Did `req_id` actually become a bet? Returns {accepted|rejected, bet_id, price, status, waited_s}.
 
         WHY THIS IS NEEDED AT ALL: `POST /0.1/bets/straight` answers `PENDING_ACCEPTANCE` — the request
@@ -2957,6 +2965,10 @@ class PinnacleAdapter(BookAdapter):
         t0 = time.time()
         seen_ids = set()
         while time.time() < deadline:
+            # Cleared BEFORE the scan, never after: a response arriving mid-scan then re-sets it and the
+            # wait below returns immediately. Clearing afterwards would swallow exactly that wakeup.
+            if evt is not None:
+                evt.clear()
             # Walk newest first; the poll that carries our bet is usually the most recent one.
             for resp in list(reversed(bets_seen)):
                 if id(resp) in seen_ids:
@@ -2986,7 +2998,17 @@ class PinnacleAdapter(BookAdapter):
                     if bid or st in self._BET_OK:
                         return {"accepted": True, "bet_id": bid, "price": price, "status": st,
                                 "waited_s": time.time() - t0}
-            await asyncio.sleep(0.25)
+            # Wake the instant the next /0.1/bets response lands rather than sitting out a fixed tick. The
+            # page polls that endpoint at ~0.2s, so a flat 0.25s sleep was landing roughly a whole poll late
+            # on average - and this wait sits directly in front of the Kalshi hedge. Falls back to the same
+            # 0.25s as a ceiling when no event is supplied (or none arrives).
+            if evt is not None:
+                try:
+                    await asyncio.wait_for(evt.wait(), timeout=0.25)
+                except asyncio.TimeoutError:
+                    pass
+            else:
+                await asyncio.sleep(0.25)
         return {"accepted": False, "rejected": False, "status": "UNCONFIRMED",
                 "waited_s": time.time() - t0}
 
@@ -3232,6 +3254,18 @@ class PinnacleAdapter(BookAdapter):
             return {"ok": False, "error": "no live Pinnacle session"}
         if self._bet_lock.locked():
             return {"ok": False, "error": "a bet is in flight"}
+        # LET THE PREVIOUS CAMP FINISH LETTING GO. camp_fire defers its page cleanup (camp_stop's dismiss
+        # + trim) so it does not sit in front of the hedge — which means at this point it may still be
+        # clicking. Its last resort is a click on empty page, and that would clear the slip armed below.
+        # Bounded: the cleanup is best-effort, so a slow one must not block re-arming forever.
+        prev = getattr(self, "_camp_cleanup", None)
+        if prev is not None and not prev.done():
+            try:
+                await asyncio.wait_for(asyncio.shield(prev), timeout=6.0)
+            except Exception:
+                print("[PINNACLE CAMP] the previous camp's page cleanup is still running - arming anyway.",
+                      flush=True)
+        self._camp_cleanup = None
         # Set BEFORE driving the UI: _place_via_ui's own post-quote trim would otherwise clear the very
         # selection this is placing, and the guard lives in _trim_betslip.
         self._camping = True
@@ -3633,6 +3667,14 @@ class PinnacleAdapter(BookAdapter):
         # ── COMMITTING ───────────────────────────────────────────────────────────────────────────────
         placed: dict = {}
         bets_seen: list = []
+        # WAKE ON THE RESPONSE, DO NOT POLL FOR IT. Both waits below ran on a flat 0.25s sleep, so a POST
+        # that landed 1ms after a tick sat unread for the rest of it - dead time standing in front of an
+        # irreversible leg's hedge, on the placement and again on the confirm. The listener already fires
+        # the instant the response arrives; these just let it say so. The 0.25s cadence is KEPT as the
+        # timeout, because the re-ask check still has to read the portal and there is no event for
+        # "the panel re-rendered".
+        placed_evt = asyncio.Event()
+        bets_evt = asyncio.Event()
 
         def _on_resp(resp):
             try:
@@ -3640,9 +3682,11 @@ class PinnacleAdapter(BookAdapter):
                         and resp.request.method == "POST":
                     placed["status"] = resp.status
                     placed["_resp"] = resp
+                    placed_evt.set()
                 elif "/0.1/bets" in resp.url and resp.request.method == "GET":
                     bets_seen.append(resp)
                     del bets_seen[:-12]
+                    bets_evt.set()
             except Exception:
                 pass
 
@@ -3650,10 +3694,20 @@ class PinnacleAdapter(BookAdapter):
         t0 = time.time()
         # Runs CONCURRENTLY with the network wait and gates nothing — see _watch_receipt_dom. If the UI
         # shows a receipt seconds before /bets/straight answers, that is the signal we should be using.
-        _receipt = asyncio.create_task(self._watch_receipt_dom(page, t0))
+        # STARTED AFTER THE CLICK, NOT BEFORE. Playwright serialises commands over one CDP session, so a
+        # watcher sampling the DOM every 200ms is competing with the approach and the press itself for the
+        # same pipe - latency bought for a measurement that gates nothing. Its baseline is taken a few ms
+        # after the click instead, which is still "before the receipt" by a whole server round trip, and it
+        # times from the press rather than from the read that preceded it.
+        _receipt = None
         try:
             if not await self._human_click_loc(page, place, fast=True):
                 return {"ok": False, "fired": False, "error": "could not click PLACE BET"}
+            # WHERE press->POST ACTUALLY GOES. That number was 4798ms on bet 2258987331 with nothing to say
+            # how much was our approach-and-click and how much was Pinnacle answering. Only one of those is
+            # worth paying for - the human click is the point; everything else is overhead to hunt down.
+            t_click = time.time()
+            _receipt = asyncio.create_task(self._watch_receipt_dom(page, t_click))
             # ── THE ODDS-CHANGED RE-PROMPT ───────────────────────────────────────────────────────────
             # When the price moves against you between press and submit, Pinnacle does NOT place — it
             # re-renders the panel with DECLINE alongside PLACE BET and waits. No dialog, no new element
@@ -3683,7 +3737,12 @@ class PinnacleAdapter(BookAdapter):
             accepts = 0
             max_accepts = int(os.environ.get("PINNACLE_CAMP_MAX_REPRESS", "2"))
             for _ in range(60):
-                await asyncio.sleep(0.25)
+                # Returns the moment /bets/straight answers; falls through on the 0.25s tick to check the
+                # portal for a re-ask, which has no event of its own.
+                try:
+                    await asyncio.wait_for(placed_evt.wait(), timeout=0.25)
+                except asyncio.TimeoutError:
+                    pass
                 if "_resp" in placed:
                     try:
                         body = await placed["_resp"].json()
@@ -3766,10 +3825,11 @@ class PinnacleAdapter(BookAdapter):
             # The POST answers PENDING_ACCEPTANCE with no bet id, so the second phase is entirely ours -
             # if it dominates, 'the book leg is slow' is a statement about this code, not about Pinnacle.
             post_ms = round((t_post - t0) * 1000, 1)
+            click_ms = round((t_click - t0) * 1000, 1)
             req_id = str(body.get("requestId") or body.get("requestID") or "") or None
             bid = str(body.get("betId") or body.get("id") or "") or None
             if not bid and req_id:
-                conf = await self._confirm_bet(req_id, bets_seen)
+                conf = await self._confirm_bet(req_id, bets_seen, evt=bets_evt)
                 if conf.get("rejected"):
                     return {"ok": False, "fired": True, "confirmed": True, "accepted": False,
                             "error": f"Pinnacle REJECTED the bet ({conf.get('status')}) — nothing is on"}
@@ -3781,8 +3841,8 @@ class PinnacleAdapter(BookAdapter):
             c["fires"] = c.get("fires", 0) + 1
             below = live < min_odds - 1e-9
             _tot = round((time.time() - t0) * 1000, 1); _conf = round(_tot - post_ms, 1)
-            print(f"[PINNACLE CAMP] timing: press->POST {post_ms:.0f}ms, POST->confirmed {_conf:.0f}ms, "
-                  f"total {_tot:.0f}ms"
+            print(f"[PINNACLE CAMP] timing: click {click_ms:.0f}ms (ours) + venue {post_ms - click_ms:.0f}ms "
+                  f"= press->POST {post_ms:.0f}ms, POST->confirmed {_conf:.0f}ms, total {_tot:.0f}ms"
                   + ("   <- OUR confirmation polling is the bottleneck" if _conf > post_ms else ""),
                   flush=True)
             print(f"[PINNACLE CAMP] FIRED {want_stake:g} @ {live} on {c.get('selection_id')} "
@@ -3801,7 +3861,8 @@ class PinnacleAdapter(BookAdapter):
                     "elapsed_s": round(time.time() - t0, 2)}
         finally:
             try:
-                _receipt.cancel()
+                if _receipt is not None:
+                    _receipt.cancel()
             except Exception:
                 pass
             try:
@@ -3809,8 +3870,21 @@ class PinnacleAdapter(BookAdapter):
             except Exception:
                 pass
             # The slip is consumed by a placement. Release so nothing stale is fired again.
+            #
+            # NOT ON THE RESPONSE PATH. camp_stop's DOM half (dismiss the Quick Bet, trim the betslip) is
+            # four escalating click attempts with ~1.7s of sleeps and human-paced moves between them, and
+            # every one of those milliseconds used to land BEFORE this handler answered — which is before
+            # the C# side sends the Kalshi hedge. Measured 2026-08-19 on bet 2258987331: the sidecar had
+            # the bet confirmed at 11.7s, the executor saw the leg complete at 17.4s. The 5.7s gap was
+            # cleanup, held in front of the irreversible leg's hedge, and on that fire the dismissal failed
+            # all four steps so it cost the full budget.
+            #
+            # Clearing a panel cannot cancel a placed bet and nothing downstream reads it, so it has no
+            # business gating the hedge. The state release inside camp_stop is instant and still synchronous
+            # (see background_dom) — only the page work is deferred, and camp_start waits on it before it
+            # arms so a late dismissal can never click away a freshly-armed slip.
             try:
-                await self.camp_stop()
+                await self.camp_stop(background_dom=True)
             except Exception:
                 pass
 
@@ -3900,8 +3974,15 @@ class PinnacleAdapter(BookAdapter):
             out["tradeable"] = None              # unknown, NOT dead — never kill a camp on a read error
         return out
 
-    async def camp_stop(self) -> dict:
-        """Release the camp and clear the armed selection, so nothing is left loaded."""
+    async def camp_stop(self, background_dom: bool = False) -> dict:
+        """Release the camp and clear the armed selection, so nothing is left loaded.
+
+        `background_dom=True` splits this in two: the STATE release stays synchronous (instant, and the
+        thing every caller actually depends on), while the page work — dismiss the Quick Bet, trim the
+        betslip — runs as a task. Used by camp_fire, where the cleanup was sitting between an irreversible
+        book leg and its hedge; see the note at that call site. camp_start awaits the pending task before
+        arming, so a deferred dismissal can never reach a slip that has since been re-armed.
+        """
         if not getattr(self, "_camping", False):
             return {"ok": True, "camping": False}
         self._camping = False                      # release FIRST so the trim below is allowed to run
@@ -3934,17 +4015,23 @@ class PinnacleAdapter(BookAdapter):
         # It runs after a SUCCESSFUL placement too. Dismissing cannot cancel a bet that was accepted (that
         # lives server-side), and the panel left behind is a confirmation the next arm would otherwise have
         # to click through — so clearing it is how the camper gets a clean page to re-arm on.
-        try:
-            if page is not None and not await self._dismiss_quick_bet(page):
-                print("[PINNACLE CAMP] camp released but the Quick Bet would not close - clear it by hand "
-                      "before re-arming.", flush=True)
-        except Exception:
-            pass
-        try:
-            if page is not None:
-                await self._trim_betslip(page, source="camp-stop")
-        except Exception:
-            pass
+        async def _clear_page() -> None:
+            try:
+                if page is not None and not await self._dismiss_quick_bet(page):
+                    print("[PINNACLE CAMP] camp released but the Quick Bet would not close - clear it by "
+                          "hand before re-arming.", flush=True)
+            except Exception:
+                pass
+            try:
+                if page is not None:
+                    await self._trim_betslip(page, source="camp-stop")
+            except Exception:
+                pass
+
+        if background_dom:
+            self._camp_cleanup = asyncio.create_task(_clear_page())
+        else:
+            await _clear_page()
         c = getattr(self, "_camp", {}) or {}
         print(f"[PINNACLE CAMP] stopped after {time.time() - c.get('since', time.time()):.0f}s, "
               f"{c.get('fires', 0)} fire(s)", flush=True)
