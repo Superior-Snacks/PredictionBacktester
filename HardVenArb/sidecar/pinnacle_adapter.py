@@ -3753,11 +3753,38 @@ class PinnacleAdapter(BookAdapter):
             txt = (await portal.first.inner_text()).replace("\n", " | ")
             m = self._CAMP_PRICE_RX.search(txt)
             out["price"] = float(m.group(1)) if m else None
+            if out["price"] is None:
+                # AN UNREADABLE PRICE IS TWO DIFFERENT PROBLEMS and they need different answers:
+                # the market is suspended (normal in-play, wait), or the panel layout changed and the
+                # regex no longer matches (a bug that silently disables the floor check on the money
+                # path). Only the actual panel text separates them, and it is never needed EXCEPT here —
+                # so it is attached only on failure rather than shipped on every poll.
+                out["text_head"] = txt[:160]
             mb = self._CAMP_MAXBET_RX.search(txt)
             out["max_bet"] = float(mb.group(1).replace(",", "")) if mb else None
             pb = portal.get_by_text("PLACE BET", exact=False).last
             out["placeable"] = (not await pb.is_disabled()) if await pb.count() else False
             out["tradeable"] = bool(out["price"]) and bool(out["placeable"])
+
+            # DOES THE ARMED SLIP ACTUALLY RE-QUOTE, AND HOW OFTEN? The camp's whole premise is that an
+            # open Quick Bet tracks the market, so the next window costs one press. If it instead freezes
+            # at the price it was armed at, every press commits to a stale number and no amount of
+            # re-reading helps — the design would have to become hover-then-click.
+            #
+            # Tracked HERE because this is the only thing that looks at the panel on a schedule. A price
+            # that has not changed for minutes on a live in-play line is the signal; the counter separates
+            # "never updates" from "updates but slowly".
+            c2 = getattr(self, "_camp", None) or {}
+            now2 = time.time()
+            prev = c2.get("last_price")
+            if out["price"] and out["price"] != prev:
+                c2["last_price"] = out["price"]
+                c2["last_price_at"] = now2
+                c2["price_updates"] = int(c2.get("price_updates", 0)) + 1
+            c2.setdefault("last_price_at", now2)
+            out["price_updates"] = int(c2.get("price_updates", 0))
+            out["price_static_ms"] = int((now2 - c2["last_price_at"]) * 1000)
+            out["odds_at_arm"] = c2.get("odds_at_arm")
             if not out["tradeable"]:
                 out["why"] = ("no price on the panel" if not out["price"]
                               else "PLACE BET is disabled (suspended, or the stake is under the minimum)")

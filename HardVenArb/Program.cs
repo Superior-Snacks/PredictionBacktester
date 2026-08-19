@@ -652,6 +652,22 @@ if (string.IsNullOrEmpty(kalshiConfig.ApiKeyId) || string.IsNullOrEmpty(kalshiCo
 }
 
 using var orderClient = new KalshiOrderClient(kalshiConfig);
+// 429s BACK OFF SILENTLY OTHERWISE, and silence is the problem: the client retries up to 5 times honouring
+// Retry-After, so a rate limit does not fail — it just makes everything slower, and "the bot got slow" is
+// indistinguishable from a dozen other causes. It matters more now that the shadow REST poll adds a request
+// per second per open window: if that budget starts colliding with the verification path, this is the only
+// place it becomes visible.
+int rateLimitHits = 0;
+orderClient.RateLimitRetryLogger = info =>
+{
+    int n = Interlocked.Increment(ref rateLimitHits);
+    Console.ForegroundColor = ConsoleColor.Yellow;
+    Console.WriteLine($"[KALSHI 429] {info.Method} {info.Path} — attempt {info.Attempt}/{info.MaxAttempts}, "
+                    + $"backing off {info.DelaySeconds:0.0}s (hit #{n} this run)"
+                    + (n == 10 ? "  <- sustained rate limiting; consider HARDVEN_SHADOW_REST=0 or a longer poll" : ""));
+    Console.ResetColor();
+    DebugLog.Trades($"KALSHI_429 {info.Method} {info.Path} attempt={info.Attempt} delay={info.DelaySeconds:0.00}s");
+};
 if (isDebug)
     orderClient.RawResponseLogger = (path, body) => DebugLog.Books($"[KALSHI REST] {path}\n{body}");
 else

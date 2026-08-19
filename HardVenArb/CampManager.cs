@@ -538,6 +538,23 @@ public sealed class CampManager
                     // the same token is sitting in memory. Comparing two numbers we already hold costs
                     // nothing and no venue traffic at all.
                     decimal slipOdds = Dec(doc.RootElement, "price");
+                    // THE PRICE BEING UNREADABLE IS ITSELF A RESULT, and it used to produce no line at all —
+                    // the comparison below simply skipped and the camp looked healthy. Two very different
+                    // causes hide behind it: the market is suspended (normal in-play, and the dead-market
+                    // streak will handle it), or the panel changed shape and _CAMP_PRICE_RX no longer
+                    // matches — which silently disables the floor check that stands between us and a bad
+                    // fill. Printing the panel text is what tells them apart.
+                    if (slipOdds <= 0m && alive)
+                    {
+                        long feedAge = _books.TryGetValue($"H:{token}", out var fb)
+                            ? (long)(DateTime.UtcNow - fb.LastDeltaAt).TotalMilliseconds : -1;
+                        string head = Str(doc.RootElement, "text_head");
+                        Console.ForegroundColor = ConsoleColor.Yellow;
+                        Console.WriteLine($"[CAMP SLIP] {label}: NO PRICE readable on the armed slip " +
+                                          $"(feed age {feedAge}ms — {(feedAge >= 0 && feedAge < 30_000 ? "the feed IS live, so this is the panel, not the market" : "the feed is quiet too, so the market is probably suspended")}). " +
+                                          (head.Length > 0 ? $"panel: {head}" : "panel text unavailable."));
+                        Console.ResetColor();
+                    }
                     if (slipOdds > 1.0m && _books.TryGetValue($"H:{token}", out var hb))
                     {
                         decimal wsPrice = hb.GetBestAskPrice();
@@ -546,10 +563,19 @@ public sealed class CampManager
                             decimal wsOdds = 1m / wsPrice;
                             decimal diffPct = (slipOdds - wsOdds) / wsOdds * 100m;
                             long ageMs = (long)(DateTime.UtcNow - hb.LastDeltaAt).TotalMilliseconds;
-                            if (Math.Abs(diffPct) >= 1.0m)
+                            // How many times the slip has re-quoted, and how long the CURRENT number has
+                            // stood. A slip that has not moved in minutes while the feed is ticking is the
+                            // clearest possible statement that camping presses a stale price.
+                            int updates = (int)Dec(doc.RootElement, "price_updates");
+                            long staticMs = (long)Dec(doc.RootElement, "price_static_ms");
+                            bool frozen = staticMs > 120_000 && ageMs < 30_000;
+                            if (Math.Abs(diffPct) >= 1.0m || frozen)
                                 Console.WriteLine($"[CAMP SLIP-vs-WS] {label}: slip {slipOdds:0.000} vs feed " +
-                                                  $"{wsOdds:0.000} ({diffPct:+0.0;-0.0}%), feed age {ageMs}ms" +
-                                                  (Math.Abs(diffPct) >= 5m ? "  <- the slip is NOT tracking the feed" : ""));
+                                                  $"{wsOdds:0.000} ({diffPct:+0.0;-0.0}%), feed age {ageMs}ms | " +
+                                                  $"slip re-quotes={updates}, unchanged for {staticMs / 1000}s" +
+                                                  (frozen ? "  <- SLIP LOOKS FROZEN while the feed is live"
+                                                          : Math.Abs(diffPct) >= 5m
+                                                            ? "  <- the slip is NOT tracking the feed" : ""));
                         }
                     }
                 }
