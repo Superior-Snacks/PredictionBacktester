@@ -231,8 +231,13 @@ def main() -> None:
 
     pairs = json.loads(Path(args.pairs).read_text(encoding="utf-8"))
     filled = already = skipped_dupe = fuzzy_n = anchor_rejected = 0
+    mirror_conflicts: set[str] = set()
     unmatched: list[str] = []
     done_events: set[str] = set()   # 2-way mirror dedupe (per Kalshi event_id)
+    # What each event already resolved to: event_id -> (matchup_id, yes_key, ticker). The two markets of a
+    # binary event are OPPOSITE outcomes of ONE fixture, so the second must land on the same matchup and the
+    # OTHER side. Resolving them independently and never comparing is how both ended up on ':home'.
+    event_resolution: dict[str, tuple] = {}
 
     for e in pairs:
         tk = e.get("kalshi_ticker", "?")
@@ -296,7 +301,34 @@ def main() -> None:
             yes_tok = entry["teams"][yes_key]
             no_tok = entry["teams"][next(k for k in entry["teams"] if k != yes_key)]
 
+        # ── THE MIRROR ASSERTION ─────────────────────────────────────────────────────────────────────
+        # Fail here, loudly, rather than write a row whose two legs sit on the same outcome. On 2026-08-19
+        # four events wrote contradictory rows — two markets both on ':home', or naming different Pinnacle
+        # matchups — and two of them reached real money as "locked arbs" that were doubled directional bets.
+        # Nothing downstream could tell, because each row is individually plausible; only the PAIR is wrong.
+        ev_id = e.get("event_id") or ""
+        if not is_tie and ev_id:
+            prev = event_resolution.get(ev_id)
+            if prev:
+                prev_mid, prev_key, prev_tk = prev
+                bad = ("names a different Pinnacle matchup than its sibling "
+                       f"({_game_id(yes_tok)} vs {prev_mid})" if _game_id(yes_tok) != prev_mid
+                       else f"resolved to the SAME side ('{yes_key}') as {prev_tk}" if yes_key == prev_key
+                       else "")
+                if bad:
+                    unmatched.append(f"{tk} MIRROR CONFLICT: {bad} — both markets of {ev_id} left unpaired")
+                    mirror_conflicts.add(ev_id)
+                    continue
+            event_resolution[ev_id] = (_game_id(yes_tok), yes_key, tk)
+
         e["hardven_yes_token"], e["hardven_no_token"] = yes_tok, no_tok
+        # The Pinnacle names this row actually resolved to. Downstream verification has had to infer the
+        # side from Kalshi's event_title ordering, which is Kalshi's convention and says nothing about which
+        # side Pinnacle calls home — so it could confirm a slip while the sides were inverted. Recording the
+        # resolved names makes that check sound.
+        if not is_tie:
+            e["hardven_yes_name"] = yes_key
+            e["hardven_no_name"]  = next(k for k in entry["teams"] if k != yes_key)
         if entry["three_way"]:
             e["three_way"] = True   # NO-only hedge (Kalshi NO + Pinnacle back-this-outcome)
         if is_fuzzy:
@@ -338,6 +370,20 @@ def main() -> None:
             start_n += 1
     if url_n or start_n:
         print(f"[PAIR] tagged {url_n} pair(s) with a league URL, {start_n} with a start_time (tab manager)")
+
+    # A conflict discovered on the SECOND market has to retract the first — it was written before the
+    # contradiction was visible, and which of the two is right is not knowable here.
+    retracted = 0
+    for e in pairs:
+        if (e.get("event_id") or "") in mirror_conflicts and e.get("hardven_yes_token"):
+            e.pop("hardven_yes_token", None); e.pop("hardven_no_token", None)
+            e.pop("hardven_yes_name", None);  e.pop("hardven_no_name", None)
+            retracted += 1
+    if mirror_conflicts:
+        print(chr(10) + f"[PAIR] {len(mirror_conflicts)} event(s) had CONTRADICTORY markets — {retracted} row(s) "
+              f"left unpaired rather than risk inverted sides:")
+        for ev in sorted(mirror_conflicts):
+            print(f"         {ev}")
 
     valid = sum(1 for e in pairs if e.get("hardven_yes_token") and e.get("hardven_no_token"))
     if args.write and (filled or gate[1] or gate[2] or url_n or start_n):

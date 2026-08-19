@@ -99,23 +99,67 @@ def kalshi_key(entry: dict):
     return None
 
 
-def _pick_book_team(outcome: str, team_keys):
-    """Which book team key IS the Kalshi outcome — exact/substring → token-overlap → fuzzy. Safe even on
-    fuzzy (it's a choice between the 2 teams of an already-matched game): 'rinky hijikata'→'hijikata',
-    'boston'→'boston red sox', 'congo dr'→'dr congo', 'ryszard lewicki'→'ryszard lewicky'."""
+def _score_book_team(outcome: str, k: str) -> int:
+    """How strongly does book team `k` claim to BE the Kalshi outcome? 0-100, higher is stronger.
+
+    Split out of _pick_book_team so both candidates can be scored on the same scale and COMPARED. The
+    previous version returned the first key that satisfied a tier, which is only safe when at most one can
+    - and in a two-player field that is not true. A shared token is the obvious case: 'Maria Fernanda
+    Lopes' and 'Maria Sousa Salazar' share 'maria', so an overlap test hands back whichever happened to be
+    first in the dict.
+
+    Shared tokens are therefore weighted by how DISTINCTIVE they are. A surname carries the identity; a
+    particle or initial ('de', 'del', 'van', 'm', 'jr') is shared by half a draw and decides nothing.
+    """
+    if k == outcome:
+        return 100
+    if outcome in k or k in outcome:
+        return 95
+    ot, kt = outcome.split(), k.split()
+    shared = set(ot) & set(kt)
+    if shared:
+        # 4+ characters and not a known particle = a real name token, not a connector.
+        strong = {t for t in shared if len(t) >= 4 and t not in _NAME_PARTICLES}
+        if not strong:
+            return 62
+        # THE SURNAME CARRIES THE IDENTITY. Two players in one draw share a given name far more often
+        # than a surname, so "same last token" is near-decisive while "same first name only" is weak —
+        # which is exactly the pair that used to invert: 'Maria Fernanda Lopes' vs 'Maria Sousa Salazar'
+        # share 'maria', and scoring that alongside a full containment made the field look like a tie.
+        if ot and kt and ot[-1] == kt[-1]:
+            return 88
+        return 85 if len(strong) >= 2 else 70
+    return int(fuzz.token_set_ratio(outcome, k)) if fuzz is not None else 0
+
+
+# Tokens that recur across unrelated names and so cannot identify anyone on their own.
+_NAME_PARTICLES = {"del", "dela", "della", "van", "von", "der", "den", "dos", "das", "santos",
+                   "junior", "senior", "sousa", "silva"}
+
+
+def _pick_book_team(outcome: str, team_keys, min_margin: int = 12):
+    """Which book team key IS the Kalshi outcome — or None when the field cannot say.
+
+    RETURNS None ON A TIE, and that is the point. This used to answer with the first key that matched any
+    tier, so an ambiguous field silently produced a CONFIDENT wrong answer: the yes/no tokens came back
+    inverted, both legs of the "arb" sat on the same outcome, and every number downstream — the arb, the
+    LOCK, the P&L — was computed as though they were opposite. Two of those reached real money on
+    2026-08-19 (KXITFMATCH-26AUG19IZQREY-REY and its siblings) and nothing in the pipeline could see it.
+
+    A refused pair costs one market for one day. An inverted pair costs the stake, and looks like a win
+    until it settles — so when the two candidates are within `min_margin` of each other, the honest answer
+    is that this outcome is not resolvable and the caller should leave it unmatched.
+    """
     keys = list(team_keys)
-    for k in keys:
-        if k == outcome or k in outcome or outcome in k:
-            return k
-    ot = set(outcome.split())
-    for k in keys:
-        if ot & set(k.split()):
-            return k
-    if fuzz is not None and keys:
-        score, best = max((fuzz.token_set_ratio(outcome, k), k) for k in keys)
-        if score >= 60:
-            return best
-    return None
+    if not keys:
+        return None
+    scored = sorted(((_score_book_team(outcome, k), k) for k in keys), reverse=True)
+    best_score, best_key = scored[0]
+    if best_score < 60:
+        return None
+    if len(scored) > 1 and best_score - scored[1][0] < min_margin:
+        return None                      # too close to call — see the docstring
+    return best_key
 
 
 def _team_sim(k: str, b: str) -> int:
