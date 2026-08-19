@@ -3274,11 +3274,22 @@ class PinnacleAdapter(BookAdapter):
         # `framenavigated` on the MAIN frame is the earliest possible signal and costs nothing when idle.
         # A soft SPA route change fires it too and does NOT destroy the portal, so the handler verifies
         # against the DOM instead of assuming — otherwise it would tear down healthy camps.
+        # BIND THE PAGE ONCE, HERE. camp_start delegates the drive to _place_via_ui and never had a `page`
+        # of its own, so both this watcher and the placeability probe referenced an undefined name. The
+        # probe surfaced it as a 500; THIS one was inside a bare `except: pass` and simply never attached —
+        # meaning the navigation invalidation built to stop a reload leaving a phantom armed camp has been
+        # a no-op since it was written. A swallowed NameError is indistinguishable from a working feature.
+        page = self._primary_page()
         try:
-            page.on("framenavigated", self._on_camp_nav)
-            self._camp_nav_page = page
-        except Exception:
-            pass
+            if page is not None and not page.is_closed():
+                page.on("framenavigated", self._on_camp_nav)
+                self._camp_nav_page = page
+            else:
+                print("[PINNACLE CAMP] no primary page — the navigation watcher is NOT attached, so a "
+                      "reload will not invalidate this camp.", flush=True)
+        except Exception as ex:
+            print(f"[PINNACLE CAMP] could not attach the navigation watcher ({type(ex).__name__}: {ex}) — "
+                  f"a reload will not invalidate this camp.", flush=True)
         ip = getattr(self, "_inplay", None)
         if ip is not None:
             ip.set_camping(True)
@@ -3304,6 +3315,8 @@ class PinnacleAdapter(BookAdapter):
         # and over. A measurement that can destroy the thing it measures is worse than no measurement.
         placeable, max_bet = None, None
         try:
+            if page is None or page.is_closed():
+                raise RuntimeError("no primary page to probe")
             portal_l = page.locator("#quick-bet-portal")
             for _attempt in range(6):                      # ~3s of settling, checked every 0.5s
                 try:
@@ -4774,6 +4787,17 @@ class PinnacleAdapter(BookAdapter):
         rather than mistake a page problem for 'no open bets'. Skipped while a bet is in flight — never navigate
         tabs mid-placement."""
         if self._browser is None or self._bet_lock.locked():
+            return None
+        # ⚠ NOT WHILE CAMPING. This opens (or re-navigates) a separate account/bets tab and brings it up.
+        # `_bet_lock` guards the pre-live placement path, but camp_fire does NOT take that lock, so during
+        # an in-play press this could fire concurrently — which is what put the open-bets tab on screen
+        # right after a fire (2026-08-19), with nothing on it because the bet had not landed yet.
+        #
+        # Two things break if it runs: the receipt watcher is sampling the CAMPED page's betslip column and
+        # a foreground tab switch is exactly the disturbance it cannot tolerate, and in-play mode exists to
+        # keep ONE tab still. The caller treats None as "no reading", which is the safe answer — it falls
+        # back to the in-memory fill record rather than inventing a position.
+        if getattr(self, "_camping", False) or self.mode == "inplay":
             return None
         captured: dict = {}
 
