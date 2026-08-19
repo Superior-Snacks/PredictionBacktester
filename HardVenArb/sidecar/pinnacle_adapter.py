@@ -3492,6 +3492,44 @@ class PinnacleAdapter(BookAdapter):
         except Exception as e:
             return {"ok": False, "error": f"could not evaluate PLACE BET: {type(e).__name__}: {e}"}
 
+        # ── RE-READ THE PRICE IMMEDIATELY BEFORE PRESSING ────────────────────────────────────────────
+        # THE SLIP PRICE IS THE ONE THE VENUE HONOURS, so it must be the one the floor is applied to — and
+        # until 2026-08-19 it was not. `live` was parsed ONCE at the top, then the stake was typed (0.35s),
+        # the panel re-read into `text` WITHOUT re-parsing the price, the Place control was resolved and
+        # its disabled state queried. Several hundred milliseconds of an in-play tennis line, and the panel
+        # re-quotes continuously (measured: 1.155 at arm -> 1.335 twenty minutes on, Place enabled
+        # throughout). So the floor was being checked against a price the slip had already replaced.
+        #
+        # That is what booked a fill at 1.581 against a 1.745 floor with no odds-changed prompt: there was
+        # never a disagreement for the venue to prompt about. The slip said 1.581, we pressed 1.581, and
+        # only our own stale variable said otherwise.
+        try:
+            text = (await portal.first.inner_text()).replace("\n", " | ")
+            m3 = self._CAMP_PRICE_RX.search(text)
+            if not m3:
+                return {"ok": False, "fired": False,
+                        "error": "the slip price became unreadable just before the press — not firing"}
+            fresh = float(m3.group(1))
+        except Exception as e:
+            return {"ok": False, "fired": False,
+                    "error": f"could not re-read the slip before pressing: {type(e).__name__}: {e}"}
+        if fresh != live:
+            print(f"[PINNACLE CAMP] slip moved {live} -> {fresh} between the first read and the press "
+                  f"(floor {min_odds})", flush=True)
+        if fresh < min_odds - 1e-9:
+            return {"ok": False, "fired": False, "live_odds": fresh, "min_odds": min_odds,
+                    "first_read": live,
+                    "error": f"slip shows {fresh} at press time, below the {min_odds} the arb needs — "
+                             f"not firing (it read {live} a moment earlier)"}
+        live = fresh
+
+        # THE PRICE THE FLOOR WAS CHECKED AGAINST. Recorded separately from the CONFIRMED price so the two
+        # can be compared afterwards. On 2026-08-19 a camp fired with min_odds 1.745, and the account's bet
+        # list came back at 1.581 - a fill 9% below the floor that every local check had passed. Either the
+        # panel moved between the read and the submit, or the venue prices an in-play bet when it CLEARS
+        # rather than when it is pressed. Those need different fixes, and only this pair of numbers tells
+        # them apart.
+        checked_odds = live
         # ── COMMITTING ───────────────────────────────────────────────────────────────────────────────
         placed: dict = {}
         bets_seen: list = []
@@ -3631,10 +3669,18 @@ class PinnacleAdapter(BookAdapter):
                                      f"{req_id}) — state UNKNOWN, do not hedge against this"}
                 bid, live = conf.get("bet_id") or bid, float(conf.get("price") or live)
             c["fires"] = c.get("fires", 0) + 1
+            below = live < min_odds - 1e-9
             print(f"[PINNACLE CAMP] FIRED {want_stake:g} @ {live} on {c.get('selection_id')} "
-                  f"(bet {bid}) in {time.time() - t0:.1f}s", flush=True)
+                  f"(bet {bid}) in {time.time() - t0:.1f}s "
+                  f"| floor {min_odds} · panel-at-check {checked_odds} · accepted {live}", flush=True)
+            if below:
+                print(f"[PINNACLE CAMP] *** ACCEPTED BELOW THE FLOOR *** pressed against a panel showing "
+                      f"{checked_odds} with a floor of {min_odds}, and the account booked it at {live}. "
+                      f"The pre-press check CANNOT protect this fill - the venue priced it after the click. "
+                      f"Treat the local floor as advisory on in-play until this is understood.", flush=True)
             return {"ok": True, "fired": True, "confirmed": True, "accepted": True,
                     "bet_id": bid, "odds": live, "stake": want_stake,
+                    "checked_odds": checked_odds, "min_odds": min_odds, "below_floor": below,
                     "elapsed_s": round(time.time() - t0, 2)}
         finally:
             try:

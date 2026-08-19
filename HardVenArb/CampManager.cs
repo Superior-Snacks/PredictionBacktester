@@ -122,6 +122,7 @@ public sealed class CampManager
     private string    _rearmPairId = "";
 
     private int _armCount, _relocCount, _releaseCount, _lostCount, _fireCount, _placedCount, _ambiguousCount;
+    private int _belowFloorCount;   // fills the venue booked under the arb's floor — see FireAsync
 
     // pairId → decayed catchable-money score
     private readonly ConcurrentDictionary<string, PairScore> _scores = new(StringComparer.Ordinal);
@@ -366,6 +367,26 @@ public sealed class CampManager
                 Console.ForegroundColor = ConsoleColor.Green;
                 Console.WriteLine($"[CAMP FIRE] {label} · {stake:0.##} @ {odds:0.000} · bet {betId}");
                 Console.ResetColor();
+
+                // THE FLOOR IS NOT ENFORCED AT THE VENUE ON THIS PATH. `/bet` sends max_odds and Pinnacle
+                // itself refuses a worse price; a camp press sends nothing — it clicks a button and takes
+                // what the venue books. Observed 2026-08-19: floor 1.745, booked 1.581, and every local
+                // check had passed. So the only defence left is to notice afterwards and STOP, because a
+                // second fill on the same broken assumption is the same loss again.
+                if (odds > 0m && minOdds > 0m && odds < minOdds - 0.0001m)
+                {
+                    Interlocked.Increment(ref _belowFloorCount);
+                    Console.ForegroundColor = ConsoleColor.Red;
+                    Console.WriteLine($"[CAMP FIRE ⚠] {label}: BOOKED AT {odds:0.000}, BELOW THE {minOdds:0.000} " +
+                                      $"floor the arb was sized on. The pre-press check passed, so the venue " +
+                                      $"priced this after the click — the local floor cannot protect an in-play " +
+                                      $"fill. Halting rather than repeating it.");
+                    Console.ResetColor();
+                    _ = _discord.AlertAsync($"🚨 **CAMP FILLED BELOW FLOOR** — {label}\n" +
+                                            $"booked {odds:0.000} vs floor {minOdds:0.000}. The venue re-priced " +
+                                            $"after the press. Trading halted.");
+                    _onUnconfirmed?.Invoke($"{label}: booked {odds:0.000} below the {minOdds:0.000} floor");
+                }
                 return new CampFireResult(true, odds, stake, betId, false, "accepted");
             }
 
@@ -826,7 +847,8 @@ public sealed class CampManager
                                 $"idle {(DateTime.UtcNow - lastAction).TotalMinutes:0.0}/{budget / 60.0:0.0}m",
         };
         return $"camp: {head} | arms={_armCount} relocs={_relocCount} released={_releaseCount} lost={_lostCount} " +
-               $"fires={_fireCount} placed={_placedCount}" + (_ambiguousCount > 0 ? $" ⚠unconfirmed={_ambiguousCount}" : "");
+               $"fires={_fireCount} placed={_placedCount}" + (_ambiguousCount > 0 ? $" ⚠unconfirmed={_ambiguousCount}" : "")
+               + (_belowFloorCount > 0 ? $" ⚠belowFloor={_belowFloorCount}" : "");
     }
 
     /// <summary>The current camp shortlist, best first — what the relocation decision is actually looking at.</summary>

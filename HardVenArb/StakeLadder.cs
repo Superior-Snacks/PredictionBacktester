@@ -26,6 +26,29 @@ public static class StakeLadder
     /// <summary>Fraction of the book's accepted max we are willing to take. Default 1/3 — never bet the max.</summary>
     public static readonly decimal MaxDepthFraction = ReadFraction("HARDVEN_MAX_DEPTH_FRACTION", 1m / 3m);
 
+    /// <summary>Fraction of KALSHI's visible depth we are willing to consume. Default 1/2.
+    ///
+    /// <para>This existed for the book side and not for Kalshi, and the asymmetry was never a decision — the
+    /// book fraction is there so repeated max-size bets don't get the account stake-limited, a risk an
+    /// exchange doesn't carry. But there is a SECOND reason to leave headroom that applies to Kalshi with
+    /// full force: sizing to 100% of the visible depth means any book movement between sizing and placing
+    /// walks you into the levels behind it.</para>
+    ///
+    /// <para>Measured on the first live fire (2026-08-19): sized 18 contracts against the depth at a 41c
+    /// limit, the book moved while the Pinnacle leg filled, the limit repriced to 45c and it paid an average
+    /// of 44.55c — 4.55c of slippage on a 1.42c edge. Taking half leaves a level of cushion for exactly that
+    /// move.</para></summary>
+    public static readonly decimal KalshiMaxDepthFraction =
+        ReadFraction("HARDVEN_KALSHI_MAX_DEPTH_FRACTION", 0.5m);
+
+    /// <summary>Minimum Kalshi contracts that must be visible at our limit before trading at all. 0 = off
+    /// (default), because the right value depends on the size being traded.
+    ///
+    /// <para>A depth FRACTION protects against the book moving; a depth FLOOR protects against the book being
+    /// thin in the first place. A 6-contract top-of-book is the kind that evaporates between the screen and
+    /// the fill, and the fraction alone would still happily take 3 of those 6.</para></summary>
+    public static readonly decimal KalshiMinDepth = ReadAmount("HARDVEN_KALSHI_MIN_DEPTH", 0m);
+
     /// <summary>Smallest rung. Below this there is no bet worth placing. Default 10; set
     /// <c>HARDVEN_STAKE_MIN_RUNG</c> lower (e.g. 5) for small supervised test bets — 5 is still a round,
     /// human stake. Values below 10 add exactly one extra rung at that value (5, then 10,20,…).</summary>
@@ -69,10 +92,17 @@ public static class StakeLadder
     {
         if (hardvenPrice <= 0m || fxToUsd <= 0m || contractCeiling <= 0) return (0, 0m);
 
-        // Ceiling in contracts: the tightest of what we'll spend, what Kalshi can fill, and our
-        // self-imposed fraction of what Pinnacle would accept.
+        // TOO THIN TO TRADE AT ALL. Checked before the fraction, against the RAW depth: half of a book that
+        // is about to disappear is still a book that is about to disappear.
+        if (KalshiMinDepth > 0m && kalshiDepth < KalshiMinDepth) return (0, 0m);
+
+        // Ceiling in contracts: the tightest of what we'll spend, our fraction of what Kalshi shows, and our
+        // fraction of what Pinnacle would accept. BOTH sides get a fraction now — Kalshi's is about slippage
+        // (leave a level of cushion so a book move doesn't walk us through it), Pinnacle's is about not
+        // looking like an arber. Same mechanism, different reasons, and Kalshi had none until 2026-08-19.
         decimal hardvenAllowed = hardvenDepth * MaxDepthFraction;
-        decimal ceiling = Math.Min(contractCeiling, Math.Min(kalshiDepth, hardvenAllowed));
+        decimal kalshiAllowed  = kalshiDepth  * KalshiMaxDepthFraction;
+        decimal ceiling = Math.Min(contractCeiling, Math.Min(kalshiAllowed, hardvenAllowed));
         if (ceiling <= 0m) return (0, 0m);
 
         // contracts → account-currency stake, capped, then snapped down to a rung.
