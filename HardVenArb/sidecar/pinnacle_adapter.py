@@ -111,6 +111,12 @@ def _cutoff_ts(cutoff) -> Optional[float]:
         return None
 
 
+def _norm_name(name: str) -> str:
+    """Lowercased letters-and-spaces only — the same shape the pairing stores its resolved names in, so a
+    redirect compares like with like ('Milena Steinkamp' vs 'milena steinkamp')."""
+    return " ".join(re.sub(r"[^a-z ]", " ", (name or "").lower()).split())
+
+
 def _strip_units(name: str) -> str:
     """Drop Pinnacle's per-matchup unit suffix: 'Zizou Bergs (Sets)' / 'Toby Samuel (Games)' -> the bare name.
     The winner matchup is sometimes labelled '(Sets)' (no clean variant exists), so we keep it but clean the
@@ -428,6 +434,10 @@ class PinnacleAdapter(BookAdapter):
         self._seeded: set[str] = set()                    # leagueIds REST-seeded once (pre-match snapshot)
         self._http: Optional[httpx.AsyncClient] = None     # authed (live odds seed + rest mode)
         self._guest_http: Optional[httpx.AsyncClient] = None  # guest (catalog/pairing — no session needed)
+        # "{lid}:{parentMid}" -> ("{lid}:{liveMid}", {designation: name}, units). Learned from the WS push's
+        # own parentId; see _apply. Lets a pair that holds the PRE-MATCH matchup follow the fixture in-play
+        # without re-pairing and without asking the guest API anything.
+        self._live_child: dict[str, tuple] = {}
         # ── WS state ──
         self._client = None
         self._connected = False
@@ -920,6 +930,59 @@ class PinnacleAdapter(BookAdapter):
                 self._start_ws()                          # LAZY connect (the reconciler subscribes leagues gradually)
         return self._read_cache(selection_ids, now)
 
+    def _pair_side_name(self, sid: str) -> str:
+        """The Pinnacle name this token BUYS, per the pairing file. Sync twin of _expected_from_pairs's lookup
+        (that one is async and this runs inside the cache lock's caller). Empty when unknown."""
+        cache = getattr(self, "_pair_names", None)
+        if cache is None or time.time() - getattr(self, "_pair_names_ts", 0) > 300:
+            cache = {}
+            try:
+                path = Path(__file__).parent.parent / "cross_pairs.json"
+                for e in json.loads(path.read_text(encoding="utf-8")):
+                    yn = (e.get("hardven_yes_name") or "").strip()
+                    nn = (e.get("hardven_no_name") or "").strip()
+                    if not (yn and nn):
+                        continue
+                    yt, nt = e.get("hardven_yes_token") or "", e.get("hardven_no_token") or ""
+                    if yt.count(":") >= 2:
+                        cache[yt] = (yn, nn)
+                    if nt.count(":") >= 2:
+                        cache[nt] = (nn, yn)
+            except Exception:
+                cache = getattr(self, "_pair_names", None) or {}
+            self._pair_names, self._pair_names_ts = cache, time.time()
+        got = cache.get(sid)
+        return got[0] if got else ""
+
+    def _redirect_sid(self, sid: str) -> str:
+        """A retired pre-match token -> the live matchup's token for the SAME side. "" when it cannot be done.
+
+        MATCHED BY NAME, NOT BY DESIGNATION. Carrying ':home' across to the new matchup would be one
+        assumption away from buying the wrong player, and that failure does not announce itself — it books
+        as a locked arb with both legs on one outcome (see the 2026-08-19 fires). So the side is resolved by
+        the name the pairing recorded for this token, checked against the live matchup's own participants.
+        A row with no recorded name is not redirected at all: unknown is a safe answer, wrong is not.
+
+        `(Games)` children are refused too. Pinnacle spawns a games-count matchup alongside the sets one with
+        the same players, and its moneyline is a different market entirely.
+        """
+        parts = sid.split(":")
+        if len(parts) != 3 or parts[2] not in _SIDES:
+            return ""
+        got = self._live_child.get(f"{parts[0]}:{parts[1]}")
+        if not got:
+            return ""
+        child, names, units = got
+        if "game" in (units or "").lower():
+            return ""
+        want = _norm_name(self._pair_side_name(sid))
+        if not want:
+            return ""
+        for desig, nm in names.items():
+            if _norm_name(nm) == want:
+                return f"{child}:{desig}"
+        return ""
+
     def _feed_live(self) -> bool:
         """True only while the Pinnacle feed is GENUINELY live — WS connected, session not expired, and (browser
         source) logged in. Drives the ts-freshness stamp below: while live, a stable price is still fresh (the WS
@@ -960,7 +1023,15 @@ class PinnacleAdapter(BookAdapter):
             for sid in selection_ids:
                 s = self._cache.get(sid)
                 if not s:
-                    continue
+                    # FOLLOW THE FIXTURE IN-PLAY. Nothing is cached for this token because Pinnacle retired
+                    # the matchup when the match went live (see _apply). If the push told us which matchup
+                    # replaced it, serve THAT price under the id the caller asked for, so a pair written
+                    # pre-match keeps working in-play with no re-pairing and no extra request.
+                    red = self._redirect_sid(sid)
+                    if red:
+                        s = self._cache.get(red)
+                    if not s:
+                        continue
                 # WS push: stamp ts=now WHILE the feed is LIVE (connection = freshness; a stable price won't
                 # re-tick but is still live — Pinnacle pushes any change/suspend). Not live (disconnected / given
                 # up / logged out) → serve stored ts → it ages → C# clears. REST mode: the poller already stamps
@@ -1920,6 +1991,33 @@ class PinnacleAdapter(BookAdapter):
         prefix = f"{lid}:{mid}:"
         if self._ws_dump_path:
             self._dump_ws_record(data, lid, mid)
+        # ── WHEN A MATCH GOES LIVE, PINNACLE RE-ISSUES THE MATCHUP ─────────────────────────────────────
+        # The pre-match matchup does not go in-play; a NEW one is created with the old id as its `parentId`,
+        # and the old one leaves the board. Confirmed 2026-08-20 across three fixtures, e.g. Steur vs
+        # Steinkamp: paired as 214887:1634341865, actually trading as 214887:1634373627 (parent 1634341865),
+        # and the parent had dropped out of /catalog entirely.
+        #
+        # Everything downstream held the PARENT: the book went stale, the camp armed a superseded market and
+        # found it "offline" three checks later, the row could not be located on the live page, and a press
+        # came back HTTP 400. It reads as a dozen unrelated in-play failures and it is one cause.
+        #
+        # The link is free — `parentId` and the participant names are already in every push, they were only
+        # being written to a debug dump. Recording it here needs no extra request to anyone, which is the
+        # whole point: the guest endpoint must not be polled to discover something the live feed states.
+        #
+        # Names are stored per designation so a redirect can be verified rather than assumed. Home/away
+        # LOOKS preserved between parent and child, but "looks preserved" is how sides get inverted, and the
+        # cost of being wrong is both legs on one outcome.
+        parent = rec.get("parentId")
+        if parent is not None and live:
+            names = {}
+            for pt in (rec.get("participants") or []):
+                al = pt.get("alignment")
+                if al in _SIDES and pt.get("name"):
+                    names[al] = _strip_units(pt["name"])
+            if names:
+                self._live_child[f"{lid}:{parent}"] = (f"{lid}:{mid}", names,
+                                                       _strip_units(str(rec.get("units") or "")))
         if data.get("op") == "del":
             with self._cache_lock:
                 for k in [k for k in self._cache if k.startswith(prefix)]:
