@@ -3504,6 +3504,10 @@ class PinnacleAdapter(BookAdapter):
         # Set BEFORE driving the UI: _place_via_ui's own post-quote trim would otherwise clear the very
         # selection this is placing, and the guard lives in _trim_betslip.
         self._camping = True
+        # HOW LONG DOES GETTING TO A MONEYLINE ACTUALLY COST? The camp exists to pay this once instead of
+        # inside every window, and the case for dropping it entirely rests on this number being small. It
+        # has never been measured — so measure it, and let the answer decide rather than an estimate.
+        _t_arm = time.time()
         self._camp = {"selection_id": selection_id, "stake": stake, "since": time.time(),
                       "fires": 0, "armed": False}
         try:
@@ -3618,8 +3622,8 @@ class PinnacleAdapter(BookAdapter):
             mb_txt = f", max bet {max_bet:g}" if max_bet else ""
             place_txt = "enabled" if placeable else ("DISABLED" if placeable is False else "?")
             print(f"[PINNACLE CAMP] armed on {selection_id} stake={stake:.2f} @ {res.actual_odds} "
-                  f"(place={place_txt}{mb_txt}) — betslip trimming suspended, idle switched to hover",
-                  flush=True)
+                  f"(place={place_txt}{mb_txt}) in {(time.time() - _t_arm) * 1000:.0f}ms "
+                  f"— betslip trimming suspended, idle switched to hover", flush=True)
         except Exception as ex:
             print(f"[PINNACLE CAMP] armed on {selection_id} @ {res.actual_odds} — the placeability probe "
                   f"failed ({type(ex).__name__}: {ex}) but the CAMP IS FINE and stands.", flush=True)
@@ -3937,15 +3941,19 @@ class PinnacleAdapter(BookAdapter):
         _receipt = None
         receipt: dict = {}          # filled LIVE by the watcher; readable without awaiting the task
         try:
+            # BEFORE THE PRESS, not after. The frame worth having is the panel the venue was SHOWN — a shot
+            # taken once the click has landed can already be the confirmation, the re-ask, or an error, and
+            # on 2026-08-20 the open question was exactly "what did the panel look like when we pressed a
+            # line that came back HTTP 400". Started as a task so the shot itself never sits on the press
+            # path: it captures within milliseconds of the click without delaying it.
+            _shot = asyncio.create_task(
+                self.snap(page, "fire-press", f"about to press {live} on {c.get('selection_id')}"))
             if not await self._human_click_loc(page, place, fast=True):
                 return {"ok": False, "fired": False, "error": "could not click PLACE BET"}
             # WHERE press->POST ACTUALLY GOES. That number was 4798ms on bet 2258987331 with nothing to say
             # how much was our approach-and-click and how much was Pinnacle answering. Only one of those is
             # worth paying for - the human click is the point; everything else is overhead to hunt down.
             t_click = time.time()
-            # AT THE PRESS. The panel as it was when PLACE BET went down — the one frame that says what the
-            # venue was actually shown, next to whatever it answers.
-            asyncio.create_task(self.snap(page, "fire-press", f"pressed {live} on {c.get('selection_id')}"))
             _receipt = asyncio.create_task(self._watch_receipt_dom(
                 page, t_click, out=receipt,
                 exclude={p for p in str(c.get("selection_id") or "").split(":") if p.isdigit()}))
@@ -4605,11 +4613,18 @@ class PinnacleAdapter(BookAdapter):
                                         float(a["h"]) * random.uniform(0.35, 0.60))
         return False
 
-    async def _wheel(self, page, notches: int = 1) -> None:
-        """A few small wheel notches at the CURRENT cursor position (call _position_over_list first)."""
+    async def _wheel(self, page, notches: int = 1, hard: float = 1.0) -> None:
+        """A few small wheel notches at the CURRENT cursor position (call _position_over_list first).
+
+        `hard` scales how far each notch travels, NOT how many there are. Covering ground by adding notches
+        buys nothing — each one carries its own pacing sleep, so the time per pixel stays flat and a deep
+        scan costs exactly as much either way (modelled 2026-08-20: 10 passes went 6.0s -> 8.4s that way,
+        i.e. worse). A bigger delta per notch is also the more human of the two: someone who has not found
+        what they are looking for flicks harder, they do not spin the same tiny amount more times.
+        """
         for _ in range(random.randint(2, 4) * max(1, notches)):
             try:
-                await page.mouse.wheel(0, random.randint(120, 260))
+                await page.mouse.wheel(0, int(random.randint(120, 260) * hard))
             except Exception:
                 return
             await asyncio.sleep(random.uniform(0.05, 0.16))
@@ -4689,14 +4704,24 @@ class PinnacleAdapter(BookAdapter):
         cands = await _find()
         positioned = False
         scanned = 0
+        t_scan = time.time()
         while not cands and scanned < 10:
             if not positioned:
                 await self._position_over_list(page)   # park the cursor over the LIST once (not 10 curved moves)
                 positioned = True
-            await self._wheel(page)                    # then just spin the wheel; the row surfaces if it's there
-            await asyncio.sleep(0.2)
+            # SCROLL HARDER, NOT MORE. Each pass travels further than the last (see _wheel's `hard`), so
+            # the ground covered grows while the number of wheel events — and therefore the time — does
+            # not. The flat 0.2s settle goes too: the wheel already paces itself between notches, and that
+            # fixed wait was being paid on every one of up to ten passes.
+            await self._wheel(page, hard=1.0 + 0.6 * scanned)
+            await asyncio.sleep(0.08)                  # the wheel already paces itself between notches
             cands = await _find()
             scanned += 1
+        if scanned:
+            print(f"[PINNACLE ROW] found after {scanned} scroll pass(es) in "
+                  f"{(time.time() - t_scan) * 1000:.0f}ms" if cands else
+                  f"[PINNACLE ROW] gave up after {scanned} pass(es) in {(time.time() - t_scan) * 1000:.0f}ms",
+                  flush=True)
         if not cands:
             try:
                 await page.evaluate("() => window.scrollTo(0, 0)")
@@ -4712,21 +4737,28 @@ class PinnacleAdapter(BookAdapter):
         result = {"ok": False, "error": "no candidate matched"}
         try:
             for h in cands[:20]:
-                # MODE-DEPENDENT. Pre-live reaches this while an arb is ticking, so it takes the fast
-                # lane. In-play reaches it while ARMING a camp — nothing is racing, the fire comes
-                # later, and the full human settle costs nothing there.
-                if not await self._human_click_loc(page, h, fast=(self.mode == "prelive")):
+                # FAST IN BOTH MODES NOW. This used to take the full human settle in-play on the reasoning
+                # that "nothing is racing, the fire comes later" — true when a camp was armed once and held
+                # for twenty minutes. It is not true any more: 2026-08-20 saw 25 arm attempts in a session,
+                # a third of them retries after a failure, and the loop below will try up to 20 candidates
+                # — so the slow settle was being paid over and over while windows went past. The click is
+                # still a real one (curved approach, off-centre aim, 42-92ms button delay); only the pause
+                # between arriving and pressing shortens.
+                if not await self._human_click_loc(page, h, fast=True):
                     tried.append("no box")
                     continue
                 pop = None
-                for _ in range(15):                       # popover renders in ~0.3-0.5s; 1.5s is ample
-                    await asyncio.sleep(0.08)
+                # READ FIRST, THEN WAIT. This slept 80ms before its first look, every time, on a popover
+                # that renders in ~300ms — so the cheapest possible outcome still cost a tick. Same 1.5s
+                # ceiling, finer granularity, and the common case returns as soon as it is actually there.
+                for _i in range(30):
                     try:
                         pop = await page.evaluate(_UI_READ_POP_JS)
                     except Exception:
                         pop = None
                     if pop:
                         break
+                    await asyncio.sleep(0.05)
                 if not pop:
                     tried.append("no popover")
                     continue
