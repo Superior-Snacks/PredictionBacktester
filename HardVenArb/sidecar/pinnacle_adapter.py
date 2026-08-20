@@ -2953,6 +2953,73 @@ class PinnacleAdapter(BookAdapter):
     _RECEIPT_WORDS_RX = re.compile(r"bet placed|bet accepted|accepted|receipt|your bet|wager placed|"
                                    r"bet id|ticket|confirmation", re.I)
 
+    def suspend_token(self, selection_id: str, why: str) -> bool:
+        """Force a token to `suspended` in the odds cache, so the C# book clears and no arb is computed on it.
+
+        WHY THIS IS NEEDED AT ALL: the WS keeps PUSHING a price for a market the site will not take a bet on.
+        The adapter already knows two ways a market goes offline — the push stops carrying it (reconcile
+        suspends it) and `cutoffAt` passes — but neither covers a line the venue has simply LOCKED while
+        still streaming its last price. `mk["status"]` stays "open" through it (confirmed 2026-07-02 on 785
+        markets) and `cutoffAt` is absent on in-play tennis, so nothing downstream can tell.
+
+        Result, observed 2026-08-20: the book stayed live, the executor kept detecting arbs on it, the camp
+        armed, and the venue answered the placement with HTTP 400. Detection has to learn the market is gone
+        or it will keep spending presses on it.
+
+        Deliberately one-way. The next genuine WS push for this token overwrites the entry with a fresh
+        `open`, so a market that comes back needs no un-suspending here — and nothing has to decide when a
+        lock has lifted, which is not a judgement this has any evidence for.
+        """
+        with self._cache_lock:
+            old = self._cache.get(selection_id)
+            if old is None or old.status == "suspended":
+                return False
+            self._cache[selection_id] = Selection(old.selection_id, old.decimal_odds, old.max_stake,
+                                                  status="suspended", ts=time.time(),
+                                                  live=old.live, cutoff=old.cutoff)
+        print(f"[PINNACLE STATUS] {selection_id} forced SUSPENDED — {why}. The book clears; no arb can be "
+              f"computed on it until the feed pushes it open again.", flush=True)
+        return True
+
+    async def probe_lock(self, page, selection_id: str) -> dict:
+        """Is this selection actually BETTABLE on the page right now? Reads the armed popover.
+
+        WHAT IS PROVEN AND WHAT IS NOT. Two signals here need no knowledge of Pinnacle's markup and are used
+        as the verdict: there is no parsable price, or the PLACE BET control is disabled. Everything else —
+        the padlock glyph, the greyed cell, whatever class carries it — has NOT been observed, so instead of
+        guessing a selector this DUMPS the panel's attributes the first time it sees a lock. Same discipline
+        as the receipt: the detector gets sharpened on evidence, not on a plausible-sounding class name.
+
+        Returns {"locked": True|False|None, "why": str}. None means "could not read" and must never be
+        treated as locked — in-play markets suspend between points constantly, and a read error is not a
+        market state.
+        """
+        out = {"locked": None, "why": ""}
+        try:
+            portal = page.locator("#quick-bet-portal")
+            if not await portal.count():
+                out["why"] = "no popover on the page"
+                return out
+            txt = (await portal.first.inner_text()).replace(chr(10), " | ")
+            price = self._CAMP_PRICE_RX.search(txt)
+            pb = portal.get_by_text("PLACE BET", exact=False).last
+            disabled = (await pb.is_disabled()) if await pb.count() else True
+            if price and not disabled:
+                out["locked"] = False
+                return out
+            out["locked"] = True
+            out["why"] = ("no price on the panel" if not price else "PLACE BET is disabled")
+            if not getattr(self, "_lock_dumped", False):
+                self._lock_dumped = True
+                print(f"[PINNACLE LOCK] first locked panel seen for {selection_id} ({out['why']}). "
+                      f"Panel text: {txt[:300]}", flush=True)
+                await self._dump_panel_controls(page, "#quick-bet-portal")
+                await self.snap(page, f"locked-{selection_id.replace(':','-')}", out["why"])
+        except Exception as e:
+            out["locked"] = None
+            out["why"] = f"{type(e).__name__}: {e}"
+        return out
+
     async def snap(self, page, tag: str, note: str = "") -> str:
         """Screenshot the page. Returns the path written, or "" if it could not be taken.
 
@@ -4212,6 +4279,24 @@ class PinnacleAdapter(BookAdapter):
             if not out["tradeable"]:
                 out["why"] = ("no price on the panel" if not out["price"]
                               else "PLACE BET is disabled (suspended, or the stake is under the minimum)")
+                # TELL DETECTION, not just the camper. The C# side releases the camp after 3 bad checks, but
+                # nothing was clearing the BOOK — so the WS kept pushing a price, the executor kept finding
+                # arbs on a locked line, and a press against it came back HTTP 400 (2026-08-20). Suspending
+                # the token here is what stops the next arb from being detected at all.
+                #
+                # ONE sample is enough for the BOOK even though three are needed to move the CAMP: a
+                # suspension is undone by the next genuine push, so the cost of being early is a book that
+                # re-opens a second later, while the cost of being late is a press into a market that will
+                # refuse it.
+                sid = (getattr(self, "_camp", None) or {}).get("selection_id")
+                if sid:
+                    self.suspend_token(sid, f"panel says not tradeable ({out['why']})")
+                    if not getattr(self, "_lock_dumped", False):
+                        self._lock_dumped = True
+                        print(f"[PINNACLE LOCK] first locked panel seen for {sid} ({out['why']}). "
+                              f"Panel text: {txt[:300]}", flush=True)
+                        await self._dump_panel_controls(page, "#quick-bet-portal")
+                        await self.snap(page, f"locked-{sid.replace(':','-')}", out["why"])
         except Exception as e:
             out["check_error"] = f"{type(e).__name__}: {e}"
             out["tradeable"] = None              # unknown, NOT dead — never kill a camp on a read error
