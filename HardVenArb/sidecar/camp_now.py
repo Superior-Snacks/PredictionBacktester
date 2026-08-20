@@ -1,10 +1,17 @@
 #!/usr/bin/env python3
 """camp_now.py — pick a game that is ACTUALLY on the live board and camp on it, to time the arm.
 
+    python camp_now.py --inplay        # switch the sidecar to in-play, then arm  <- the one to use
     python camp_now.py                 # pick the best candidate and arm it
     python camp_now.py --list          # show candidates, arm nothing
     python camp_now.py --stake 10
     python camp_now.py --stop          # release whatever is camped
+
+THE C# BOT IS NOT REQUIRED. Everything here talks to the sidecar only, so the arm can be timed with no
+executor running and no possibility of an order. But the sidecar must be in IN-PLAY mode or the number is
+not the one we are after: pre-live picks a bet tab across four tiers (dedicated -> rove -> board -> cold)
+and may navigate one, while in-play uses the primary page alone. Those are different code paths with
+different costs. Normally the C# camper turns in-play on at startup; `--inplay` does it directly.
 
 WHY THIS EXISTS. Timing the arm by hand kept failing on the wrong thing: tokens picked from
 `cross_pairs.json` were quoted `open` but PRE-MATCH, and the in-play board only lists live games — so the
@@ -57,6 +64,8 @@ def main() -> int:
     ap.add_argument("--stake", type=float, default=10.0)
     ap.add_argument("--list", action="store_true", help="show candidates, arm nothing")
     ap.add_argument("--stop", action="store_true", help="release the current camp")
+    ap.add_argument("--inplay", action="store_true",
+                    help="POST /inplay/start first, so the arm takes the same path the live bot would")
     a = ap.parse_args()
 
     try:
@@ -67,6 +76,16 @@ def main() -> int:
         if not h.get("session_ready"):
             print("[camp_now] the sidecar has no live Pinnacle session — log in first; nothing to arm.")
             return 2
+        mode = (h.get("switches") or {}).get("mode")
+        if a.inplay and mode != "inplay":
+            print("[camp_now] switching the sidecar to in-play (one live tab, tab manager held)...")
+            print("   ", json.dumps(_post("/inplay/start")))
+            mode = "inplay"
+        if mode != "inplay":
+            print(f"[camp_now] NOTE: the sidecar is in '{mode}' mode. The arm will still work, but it takes "
+                  f"the PRE-LIVE tab path (four tiers, possibly a navigation) rather than the in-play one "
+                  f"(primary page only) — so the timing is not the number we are chasing. Re-run with "
+                  f"--inplay for that.")
         cands = candidates()
     except Exception as ex:
         print(f"[camp_now] could not reach the sidecar at {SIDE} ({type(ex).__name__}: {ex}). Is it running?")
