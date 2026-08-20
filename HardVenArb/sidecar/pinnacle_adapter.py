@@ -79,6 +79,25 @@ USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHT
               "Chrome/149.0.0.0 Safari/537.36")
 _SIDES = ("home", "away", "draw")
 
+# Is the board's own scroller at its end? The live list scrolls an INNER pane, not the window, so this walks
+# up from a rendered row to whichever ancestor actually scrolls and asks that one. Returns true when the
+# window is the scroller and it is at the end too, so a layout change cannot make "bottom" unreachable.
+_SCROLL_AT_BOTTOM_JS = r"""
+() => {
+  const btn = document.querySelector('button.market-btn');
+  let el = btn ? btn.parentElement : null;
+  while (el) {
+    const s = getComputedStyle(el);
+    if (el.scrollHeight > el.clientHeight + 4 && /auto|scroll/.test(s.overflowY)) {
+      return el.scrollTop + el.clientHeight >= el.scrollHeight - 8;
+    }
+    el = el.parentElement;
+  }
+  const d = document.scrollingElement || document.documentElement;
+  return d.scrollTop + d.clientHeight >= d.scrollHeight - 8;
+}
+"""
+
 
 def american_to_decimal(american) -> float:
     """American odds -> decimal. +135 -> 2.35, -159 -> 1.629. 0/invalid -> 0.0."""
@@ -191,6 +210,37 @@ _ROW_MATCH_JS = r"""
     row = row.parentElement;
   }
   return false;
+}
+"""
+
+# THE SAME TEST, RUN ONCE FOR EVERY BUTTON AT A TIME. `_ROW_MATCH_JS` is evaluated per ElementHandle, which
+# is one CDP round trip PER BUTTON — with ~70-100 odds buttons rendered that is 70-100 round trips for a
+# single _find(), repeated on every scroll pass. This returns the matching INDICES from one call instead.
+# Document order matches query_selector_all's, so the caller indexes straight into the handles it already has.
+_ROWS_MATCH_ALL_JS = r"""
+(a) => {
+  const norm = (s) => (s || "").toLowerCase().replace(/\s+/g, " ");
+  const isOdds = (b) => { const t = b.textContent || ""; return /\d{1,3}\.\d{2,3}/.test(t) || /[+-]\d{2,4}\b/.test(t); };
+  const cap = a.maxBtns || 10;
+  const out = [];
+  const all = document.querySelectorAll("button.market-btn");
+  for (let i = 0; i < all.length; i++) {
+    const el = all[i];
+    if (el.closest && el.closest('[class*="carousel"]')) continue;
+    if (!isOdds(el)) continue;
+    let row = el, hops = 0, hit = false;
+    while (row && hops++ < 9) {
+      const t = norm(row.textContent || "");
+      if (t.includes(a.A) && t.includes(a.B)) {
+        const odds = Array.from(row.querySelectorAll("button.market-btn")).filter(isOdds).length;
+        hit = odds <= cap;
+        break;
+      }
+      row = row.parentElement;
+    }
+    if (hit) out.push(i);
+  }
+  return out;
 }
 """
 
@@ -2808,9 +2858,19 @@ class PinnacleAdapter(BookAdapter):
             print(f"[PINNACLE INPLAY] lid {lid} has no mapped league URL; searching the live list "
                   f"directly (no navigation needed in this mode)", flush=True)
 
+        # WHERE THE ARM ACTUALLY GOES. The 2026-08-20 arm took 9077ms with the row already on screen, and
+        # only 2722ms of it was accounted for by the two [PINNACLE CLICK] lines — the other ~6.3s had no
+        # owner at all. Each phase is stamped so the next slow arm names its own bottleneck rather than
+        # inviting another guess.
+        _ph: dict = {}
+        _tp = [time.time()]
+        def _mark(name: str):
+            now = time.time(); _ph[name] = round((now - _tp[0]) * 1000); _tp[0] = now
+
         # Freeze all human-activity loops for the bet BEFORE touching a tab, so per-tab organic / the tab sweep
         # can't steal focus or re-point the tab mid-bet. Resumed in the finally.
         self._pause_all_organic()
+        _mark("pause")
 
         # Authoritative bet id / accepted price come from the app's own POST response, not from scraping.
         placed: dict = {}
@@ -2840,7 +2900,10 @@ class PinnacleAdapter(BookAdapter):
             # board when it's showing the league, else a reader tab already on it, else the roving tail tab.
             # Selection places nothing (only opens the popover), so trying tabs in turn is safe.
             page, tab_kind, sel_ok = await self._select_bet_tab(lid, url, exp)
+            _mark("select")
             if page is None or not sel_ok or not sel_ok.get("ok"):
+                print("[PINNACLE ARM] " + " ".join(f"{k}={v}ms" for k, v in _ph.items())
+                      + f" (FAILED at select)", flush=True)
                 # THE ROW WAS NOT THERE — but the log can only say that, not show it. On 2026-08-20 this
                 # fired three times on the day's best pair ("no row mentions both 'miron' and 'mazzola',
                 # scanned 10 viewports") and nothing recorded whether the row was absent, renamed,
@@ -2864,6 +2927,7 @@ class PinnacleAdapter(BookAdapter):
                                  reason=f"odds moved: offered {shown:.4f} < required {max_odds:.4f}")
 
             filled = await page.evaluate(_UI_STAKE_JS, {"stake": stake})
+            _mark("stake")
             if not filled or not filled.get("ok"):
                 await page.evaluate(_UI_CLOSE_JS)
                 return BetResult(accepted=False, stake=stake,
@@ -2883,6 +2947,9 @@ class PinnacleAdapter(BookAdapter):
                 # requirements, one flag — the default stays "clean up".
                 if not keep_open:
                     await page.evaluate(_UI_CLOSE_JS)
+                _mark("verify")
+                print("[PINNACLE ARM] " + " ".join(f"{k}={v}ms" for k, v in _ph.items())
+                      + f" total={sum(_ph.values())}ms", flush=True)
                 print(f"[PINNACLE BET] VERIFY-ONLY OK {selection_id} @ {shown} stake {stake:.2f} "
                       f"(max bet {max_bet}) - popover matched, NOTHING placed"
                       + (" — LEFT OPEN for camping" if keep_open else ""))
@@ -4775,6 +4842,25 @@ class PinnacleAdapter(BookAdapter):
         if not (A and B and S):
             return {"ok": False, "error": "incomplete expected names"}
 
+        # ── DON'T HUNT A PRE-MATCH GAME ON THE LIVE BOARD ────────────────────────────────────────────
+        # In-play pins the page to /matchups/live/, which lists LIVE games only — so a token whose match
+        # has not started is not on it, and never will be. The scan below cannot know that: it wheels ten
+        # viewports and reports "no row mentions both X and Y", which reads like a markup problem.
+        #
+        # Measured 2026-08-20: six of those, 11.6s to 14.9s EACH — around 75 seconds spent scrolling a list
+        # that could not contain the answer, while the arb windows they were meant to catch went past.
+        #
+        # The feed already knows. `live` comes off the same WS record that prices the token, so this costs
+        # nothing and fails in microseconds instead of fifteen seconds. Only applies in-play: pre-live can
+        # legitimately reach a pre-match row through a rove tab or the sport board.
+        if self.mode == "inplay":
+            with self._cache_lock:
+                cached = self._cache.get(selection_id)
+            if cached is not None and not cached.live:
+                return {"ok": False, "not_live": True,
+                        "error": f"{selection_id} is a PRE-MATCH market and the board is the live list — "
+                                 f"it cannot be on the page. Not scanning for it."}
+
         # Candidate buttons as STABLE ElementHandles (never positional indices — the live board reorders, so an
         # index lands on the wrong button). Filter to those whose row mentions both players; scroll to surface
         # off-screen/virtualised rows before concluding it's absent.
@@ -4784,10 +4870,18 @@ class PinnacleAdapter(BookAdapter):
                 handles = await page.query_selector_all("button.market-btn")
             except Exception:
                 return out
-            for h in handles:
+            # ONE CALL, NOT ONE PER BUTTON. Same test, evaluated across the whole board in a single round
+            # trip; the per-handle path below remains as the fallback if it ever fails. Indices line up
+            # because both sides walk document order.
+            idx = None
+            try:
+                idx = set(await page.evaluate(_ROWS_MATCH_ALL_JS, {"A": A, "B": B, "maxBtns": 10}))
+            except Exception:
+                idx = None
+            for i, h in enumerate(handles):
                 keep = False
                 try:
-                    keep = bool(await h.evaluate(_ROW_MATCH_JS, {"A": A, "B": B, "maxBtns": 10}))
+                    keep = (i in idx) if idx is not None else                         bool(await h.evaluate(_ROW_MATCH_JS, {"A": A, "B": B, "maxBtns": 10}))
                 except Exception:
                     keep = False
                 if keep:
@@ -4803,6 +4897,18 @@ class PinnacleAdapter(BookAdapter):
         positioned = False
         scanned = 0
         t_scan = time.time()
+        # THE LIVE LIST IS THREE SCREENS LONG. Measured 2026-08-20 via /debug/board_scan: 2398px, bottom
+        # reached in 3 scroll steps, 12 matchups in the DOM. The loop below was willing to wheel TEN times —
+        # so a row that genuinely was not there spent seven further passes scrolling a list that had already
+        # ended, which is the whole of the 11.6-14.9s that six failed scans cost that day.
+        #
+        # Reaching the bottom is proof of absence, and it arrives in about a fifth of the time the pass
+        # budget does. The count stays as a backstop for a list that never reports a bottom.
+        async def _at_bottom() -> bool:
+            try:
+                return bool(await page.evaluate(_SCROLL_AT_BOTTOM_JS))
+            except Exception:
+                return False
         while not cands and scanned < 10:
             if not positioned:
                 await self._position_over_list(page)   # park the cursor over the LIST once (not 10 curved moves)
@@ -4815,6 +4921,10 @@ class PinnacleAdapter(BookAdapter):
             await asyncio.sleep(0.08)                  # the wheel already paces itself between notches
             cands = await _find()
             scanned += 1
+            if not cands and await _at_bottom():
+                print(f"[PINNACLE ROW] bottom of the list after {scanned} pass(es) — the row is not on this "
+                      f"board, not merely below the fold.", flush=True)
+                break
         if scanned:
             print(f"[PINNACLE ROW] found after {scanned} scroll pass(es) in "
                   f"{(time.time() - t_scan) * 1000:.0f}ms" if cands else
@@ -4829,6 +4939,31 @@ class PinnacleAdapter(BookAdapter):
 
         try:
             await page.evaluate(_UI_CLOSE_JS)                 # start clean
+        except Exception:
+            pass
+        # ORDER BEFORE CLICKING. Every candidate costs a full human approach — 2041ms on the arm measured
+        # 2026-08-20, where the FIRST button tried failed verification and the second succeeded. The row text
+        # already says which button belongs to the side we want, and reading it is one cheap call against a
+        # click that is two orders of magnitude dearer. So score first, click in that order.
+        async def _rank(h):
+            try:
+                txt = (await h.evaluate("e => (e.closest('[class*=row i]') || e.parentElement || e).innerText || ''")
+                       or "").lower()
+            except Exception:
+                return 0
+            score = 0
+            if S and S in txt:
+                score += 2                       # the row names the side we intend to back
+            if "money" in txt:
+                score += 1                       # a moneyline cell rather than a handicap/total alongside it
+            for bad in ("(games)", "(sets)"):
+                if bad in txt:
+                    score -= 1                   # derivative shells carry the same player names
+            return score
+        try:
+            scored = [(await _rank(h), i, h) for i, h in enumerate(cands[:20])]
+            scored.sort(key=lambda t: (-t[0], t[1]))     # best first, original order as the tiebreak
+            cands = [t[2] for t in scored] + cands[20:]
         except Exception:
             pass
         tried = []
