@@ -2909,6 +2909,21 @@ class PinnacleAdapter(BookAdapter):
             # Choose the tab to bet on and VERIFY the intended market on it, most natural first: the primary
             # board when it's showing the league, else a reader tab already on it, else the roving tail tab.
             # Selection places nothing (only opens the popover), so trying tabs in turn is safe.
+            # ── DON'T HUNT A PRE-MATCH GAME ON THE LIVE BOARD ────────────────────────────────────
+            # In-play pins the page to /matchups/live/, which lists LIVE games only — so a token whose match
+            # has not started is not on it and never will be. The row scan cannot know that: it wheels the
+            # list and reports "no row mentions both X and Y", which reads like a markup problem.
+            # Measured 2026-08-20: six of those at 11.6-14.9s EACH, ~75s spent scrolling a list that could
+            # not contain the answer. The feed already knows — `live` rides the same WS record that prices
+            # the token — so this costs nothing and fails in microseconds.
+            # Pre-live is exempt: it can legitimately reach a pre-match row via a rove tab or the board.
+            if self.mode == "inplay":
+                with self._cache_lock:
+                    _c = self._cache.get(selection_id)
+                if _c is not None and not _c.live:
+                    return BetResult(accepted=False, stake=stake,
+                                     reason=f"{selection_id} is a PRE-MATCH market and the board is the "
+                                            f"live list — it cannot be on the page. Not scanning for it.")
             page, tab_kind, sel_ok = await self._select_bet_tab(lid, url, exp)
             _mark("select")
             if page is None or not sel_ok or not sel_ok.get("ok"):
@@ -3341,7 +3356,14 @@ class PinnacleAdapter(BookAdapter):
                     print(f"[PINNACLE RECEIPT] processing CLEARED at {st['settled_ms']:.0f}ms "
                           f"(held {st['settled_ms'] - st['processing_ms']:.0f}ms) | now: {txt[:220]}",
                           flush=True)
+                    # THE FRAME WE ACTUALLY NEED. Whatever replaces "Processing Live Bet..." is the venue's
+                    # answer — a receipt, a decline, a re-ask, an error. It arrives AFTER camp_fire's own
+                    # re-ask loop has stopped reading (that loop exits the moment the POST responds), so
+                    # this watcher is the only thing looking by then. Controls AND a screenshot, because the
+                    # dump names what is clickable and the picture shows what it looks like, and the decline
+                    # panel has never been seen by either.
                     await self._dump_panel_controls(page, which)
+                    await self.snap(page, "post-processing", txt[:80])
                 await asyncio.sleep(0.2)
         finally:
             if st["first_change_ms"] is None:
@@ -3676,6 +3698,25 @@ class PinnacleAdapter(BookAdapter):
                 print("[PINNACLE CAMP] the previous camp's page cleanup is still running - arming anyway.",
                       flush=True)
         self._camp_cleanup = None
+        # ── NEVER ARM ON TOP OF A PANEL THAT WOULD NOT CLOSE ─────────────────────────────────────────
+        # A Quick Bet left up with a stake in it is not cosmetic: the next arm clicks a row underneath it,
+        # and what that click reaches is not something this code decides. Dismissal has failed all four of
+        # its escalation steps on live fires, so this is a state that genuinely occurs.
+        #
+        # One more attempt, then REFUSE. Refusing costs one camp; arming blind risks pressing whatever the
+        # stale panel is showing — which on a fire path is a bet on the wrong thing.
+        pg = self._primary_page()
+        if pg is not None:
+            try:
+                if await pg.locator("#quick-bet-portal").count():
+                    print("[PINNACLE CAMP] a Quick Bet is already open before arming — clearing it first.",
+                          flush=True)
+                    if not await self._dismiss_quick_bet(pg):
+                        return {"ok": False, "error": "a Quick Bet from a previous action is STILL open and "
+                                                      "will not close — refusing to arm on top of it. Clear "
+                                                      "it by hand (see the [PINNACLE PANEL] dump)."}
+            except Exception:
+                pass
         # Set BEFORE driving the UI: _place_via_ui's own post-quote trim would otherwise clear the very
         # selection this is placing, and the guard lives in _trim_betslip.
         self._camping = True
@@ -3906,6 +3947,9 @@ class PinnacleAdapter(BookAdapter):
                 return True
         except Exception:
             return True
+        # Each attempt gets its own dump — the panel that would not close may be a DIFFERENT panel each time
+        # (a receipt, a re-ask, an error), and one-shot dumping would only ever show us the first kind.
+        self._panel_dumped = False
         portal = page.locator("#quick-bet-portal")
 
         async def gone() -> bool:
@@ -3955,9 +3999,20 @@ class PinnacleAdapter(BookAdapter):
                 return True
         except Exception:
             pass
+        # ALL FOUR STEPS FAILED, AND THAT HAS NOW HAPPENED ON EVERY FIRE. DECLINE, the close control,
+        # Escape and a click on empty page — none of them shifted it (2026-08-19, three consecutive). A
+        # fifth guessed selector would be a fourth guess; what is missing is knowing what the panel actually
+        # contains, so dump it. The next failure names the control instead of describing the symptom.
+        await self._dump_panel_controls(page, "#quick-bet-portal")
+        await self.snap(page, "dismiss-failed", "four escalation steps, panel still up")
+        try:
+            txt = (await portal.first.inner_text()).replace(chr(10), " | ")[:300]
+        except Exception:
+            txt = "(unreadable)"
         print("[PINNACLE CAMP] WARNING: could not dismiss the Quick Bet - it is STILL ON THE PAGE with a "
-              "stake in it. Nothing was placed by this call, but clear it by hand before re-arming.",
-              flush=True)
+              f"stake in it. Nothing was placed by this call, but clear it by hand before re-arming. "
+              f"Panel text: {txt}", flush=True)
+        self._dismiss_failed_at = time.time()
         return False
 
     async def camp_fire(self, min_odds: float, stake: float = None) -> dict:
@@ -4180,10 +4235,37 @@ class PinnacleAdapter(BookAdapter):
                     continue                       # portal gone mid-read; the checks below need its text
                 has_decline = "DECLINE" in t2.upper()
                 changed = "ODDS CHANGED" in t2.upper()
-                if not has_decline and not changed:
-                    continue                       # ordinary in-flight wait
                 m2 = self._CAMP_PRICE_RX.search(t2)
                 newp = float(m2.group(1)) if m2 else None
+                # ── A THIRD RENDERING WE HAVE NOT SEEN ───────────────────────────────────────────────
+                # The two known re-asks are recognised by their WORDS: "DECLINE", "Odds changed". The code
+                # that found the second one noted the text "could take a third", and a third would fall
+                # straight through this loop — fifteen seconds of doing nothing, then "the bet MAY be live"
+                # for a panel that was only ever waiting to be pressed again.
+                #
+                # So classify on STATE as well as words, because the state is markup-independent: the panel
+                # is still up, no POST has gone out, and the price it is showing is no longer the price we
+                # pressed. Nothing else produces that combination — an in-flight press does not re-render a
+                # different number, it just has not answered yet.
+                #
+                # Deliberately conservative. A re-ask found this way is NEVER auto-accepted (we cannot know
+                # what the unrecognised control does); it is dismissed and reported, with the panel's text
+                # and controls dumped so the third rendering can be handled properly next time.
+                if not has_decline and not changed and newp is not None                         and abs(newp - live) > 1e-9 and time.time() - t_click > 1.5:
+                    print(f"[PINNACLE CAMP] UNRECOGNISED RE-ASK: the panel now shows {newp} where we pressed "
+                          f"{live}, with no DECLINE and no 'odds changed' wording — a rendering this code "
+                          f"has not seen. Abandoning rather than pressing an unknown control.", flush=True)
+                    await self._dump_panel_controls(page, "#quick-bet-portal")
+                    await self.snap(page, "reask-unknown", f"pressed {live}, panel now {newp}")
+                    await self._decline_pause("unrecognised re-ask rendering")
+                    cleared = await self._dismiss_quick_bet(page)
+                    return {"ok": False, "fired": False, "declined": True,
+                            "live_odds": newp, "min_odds": min_odds, "slip_cleared": cleared,
+                            "error": f"the panel re-quoted {live} -> {newp} in a rendering this code does "
+                                     f"not recognise — nothing pressed, nothing placed"
+                                     + ("" if cleared else ". The Quick Bet also would not close.")}
+                if not has_decline and not changed:
+                    continue                       # ordinary in-flight wait
                 state = "A (decline+place)" if has_decline else "B (odds-changed banner)"
 
                 if newp is None:
@@ -4851,25 +4933,6 @@ class PinnacleAdapter(BookAdapter):
         A, B, S = self._surname(exp["nameA"]), self._surname(exp["nameB"]), self._surname(exp["side"])
         if not (A and B and S):
             return {"ok": False, "error": "incomplete expected names"}
-
-        # ── DON'T HUNT A PRE-MATCH GAME ON THE LIVE BOARD ────────────────────────────────────────────
-        # In-play pins the page to /matchups/live/, which lists LIVE games only — so a token whose match
-        # has not started is not on it, and never will be. The scan below cannot know that: it wheels ten
-        # viewports and reports "no row mentions both X and Y", which reads like a markup problem.
-        #
-        # Measured 2026-08-20: six of those, 11.6s to 14.9s EACH — around 75 seconds spent scrolling a list
-        # that could not contain the answer, while the arb windows they were meant to catch went past.
-        #
-        # The feed already knows. `live` comes off the same WS record that prices the token, so this costs
-        # nothing and fails in microseconds instead of fifteen seconds. Only applies in-play: pre-live can
-        # legitimately reach a pre-match row through a rove tab or the sport board.
-        if self.mode == "inplay":
-            with self._cache_lock:
-                cached = self._cache.get(selection_id)
-            if cached is not None and not cached.live:
-                return {"ok": False, "not_live": True,
-                        "error": f"{selection_id} is a PRE-MATCH market and the board is the live list — "
-                                 f"it cannot be on the page. Not scanning for it."}
 
         # Candidate buttons as STABLE ElementHandles (never positional indices — the live board reorders, so an
         # index lands on the wrong button). Filter to those whose row mentions both players; scroll to surface
