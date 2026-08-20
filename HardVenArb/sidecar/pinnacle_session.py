@@ -187,6 +187,24 @@ class PinnacleBrowserSession:
         self._ws_login_grace = float(os.environ.get("PINNACLE_WS_LOGIN_GRACE_SEC", "45"))
         self._opened_at = 0.0          # when the browser window was (re)opened, for the grace above
         self._last_login_submit = 0.0
+        # ── HOW OLD IS THE ACCOUNT'S LOGIN? ─────────────────────────────────────────────────────────
+        # NOT the same question as "how long has this sidecar had a session", and confusing the two cost a
+        # session on 2026-08-20: Pinnacle logged the account out for "exceeding the maximum amount of time
+        # logged in" while the log read "SESSION HELD 16m". Sixteen minutes was the SIDECAR's age — the
+        # Chrome profile is persistent, the login was hours older, and nothing the bot tracked could see it.
+        #
+        # Stamped on the page's FIRST authed request after a submit we made, and persisted beside the
+        # profile so a sidecar restart does not reset it. `None` when unknown (a reused profile that was
+        # logged in before this bot ever ran) — unknown must stay distinguishable from zero, because
+        # treating an ancient login as brand new is exactly the failure being fixed.
+        self._login_stamp_path = Path(self._user_data).parent / ".pinnacle_login_age.json"
+        self._login_at: float | None = self._read_login_stamp()
+        # Re-login BEFORE the cap rather than being kicked mid-session. 0 = off, which is the default
+        # because the real cap has never been measured — see _note_login_age_on_logout, which measures it.
+        try:
+            self._max_login_min = float(os.environ.get("PINNACLE_MAX_LOGIN_MIN", "0") or 0)
+        except ValueError:
+            self._max_login_min = 0.0
         self._login_task: Optional[asyncio.Task] = None
         self.last_page_status_ts = 0.0        # when the PAGE last requested /status (see _on_request)
         # sport pages the organic loop occasionally browses to (real session). Default = the home page only
@@ -464,9 +482,15 @@ class PinnacleBrowserSession:
                     print(f"[PINNACLE SESSION] login recovered after {self._login_fail_streak} failed "
                           f"attempt(s) - breaker reset.")
                 self._login_fail_streak = 0
+                submitted = self._login_submit_at
                 self._login_submit_at = 0.0
                 self._known_logged_out = ""
                 print("[PINNACLE SESSION] captured x-session (REST auth ready).")
+                # Only a capture that follows OUR submit starts the clock. A capture off a profile that was
+                # already signed in says nothing about when the login happened.
+                if submitted:
+                    self.note_login_established()
+                self._logout_age_noted = False        # next logout is a new measurement
             if sess and sess != self._session:
                 self._session = sess; changed = True
             if dev and dev != self._device:
@@ -1074,6 +1098,84 @@ class PinnacleBrowserSession:
     # logged-out signal fire against a healthy session and click a stray control.
     _LOGIN_RX = re.compile(r"^\s*(log\s*in|sign\s*in)\s*$", re.I)
 
+    def _read_login_stamp(self) -> float | None:
+        try:
+            d = json.loads(self._login_stamp_path.read_text(encoding="utf-8"))
+            at = float(d.get("at") or 0)
+            return at or None
+        except Exception:
+            return None
+
+    def _write_login_stamp(self, at: float | None) -> None:
+        try:
+            if at is None:
+                self._login_stamp_path.unlink(missing_ok=True)
+            else:
+                self._login_stamp_path.write_text(json.dumps({"at": at}), encoding="utf-8")
+        except Exception:
+            pass
+
+    def login_age_sec(self) -> float | None:
+        """Seconds since the account logged in, across sidecar restarts. None = unknown."""
+        return None if self._login_at is None else max(0.0, time.time() - self._login_at)
+
+    def login_age_str(self) -> str:
+        """For the heartbeat: 'login 84m' / 'login age unknown (profile reused)'."""
+        a = self.login_age_sec()
+        return "login age unknown (profile reused)" if a is None else f"login {a / 60.0:.0f}m"
+
+    def should_relogin(self) -> bool:
+        """Is the login old enough that we should re-auth BEFORE the venue kicks us? Off unless
+        PINNACLE_MAX_LOGIN_MIN is set, because guessing a cap we have not measured would throw away
+        perfectly good sessions."""
+        if self._max_login_min <= 0:
+            return False
+        a = self.login_age_sec()
+        return a is not None and a >= self._max_login_min * 60.0
+
+    def note_login_established(self) -> None:
+        """A submit WE made has produced a live session — the login clock starts now.
+
+        Only called from the capture path, because a capture is the only proof a submit worked. A reused
+        profile that was already logged in does NOT come through here, and correctly leaves the age unknown
+        rather than claiming a fresh login.
+        """
+        self._login_at = time.time()
+        self._write_login_stamp(self._login_at)
+        print("[PINNACLE SESSION] login clock STARTED — this is a fresh login, so the account's maximum "
+              "session age is measured from now.", flush=True)
+
+    def note_login_age_on_logout(self, reason: str) -> None:
+        """Record how old the login was when it died. THIS is how the cap gets measured.
+
+        The venue never states the limit, so the only way to learn it is to watch what age the logouts
+        happen at. Printed prominently and left in the stamp file's history so a pattern can be seen across
+        days rather than guessed at once.
+        """
+        age = self.login_age_sec()
+        if age is None:
+            print("[PINNACLE SESSION] logged out, but the login age is UNKNOWN (profile was already logged "
+                  "in when this sidecar started) — this tells us nothing about the cap. It will once a "
+                  "login made BY the bot is the one that dies.", flush=True)
+            return
+        print(f"[PINNACLE SESSION] *** LOGIN DIED AT {age / 60.0:.1f} MINUTES OLD *** ({reason}) — if this "
+              f"repeats near the same age it is the venue's maximum-session cap, and "
+              f"PINNACLE_MAX_LOGIN_MIN should be set a little below it to re-login first.", flush=True)
+        try:
+            hist = []
+            try:
+                hist = json.loads(self._login_stamp_path.with_suffix(".history.json")
+                                  .read_text(encoding="utf-8"))
+            except Exception:
+                hist = []
+            hist.append({"died_at": round(time.time()), "age_min": round(age / 60.0, 1), "reason": reason})
+            self._login_stamp_path.with_suffix(".history.json").write_text(
+                json.dumps(hist[-40:], indent=1), encoding="utf-8")
+        except Exception:
+            pass
+        self._login_at = None
+        self._write_login_stamp(None)
+
     async def _score_login_attempt(self) -> None:
         """Decide whether the last submit worked, and trip the breaker after enough that did not.
 
@@ -1111,6 +1213,13 @@ class PinnacleBrowserSession:
         except Exception as ex:
             print(f"[PINNACLE SESSION] breaker: browser close failed: {type(ex).__name__}: {ex}", flush=True)
 
+    def _note_logged_out_age(self, reason: str) -> None:
+        """Hook so every logout path measures the login age exactly once."""
+        if getattr(self, "_logout_age_noted", False):
+            return
+        self._logout_age_noted = True
+        self.note_login_age_on_logout(reason)
+
     def note_logged_out(self, reason: str) -> None:
         """Called by the adapter when authed REST proves the session is gone (guest-redirect burst / auth
         streak). Idempotent and safe to call repeatedly; cleared on the next successful capture."""
@@ -1119,6 +1228,9 @@ class PinnacleBrowserSession:
         self._known_logged_out = reason or "REST says logged out"
         print(f"[PINNACLE SESSION] logout reported by the REST side ({self._known_logged_out}) - the login "
               f"watcher will recover it.", flush=True)
+        # MEASURE THE CAP. Every logout is a data point about how long a login is allowed to live, and it is
+        # the only way the limit can be learned — the venue does not publish it.
+        self._note_logged_out_age(self._known_logged_out)
 
     async def _looks_logged_out(self) -> bool:
         """A visible LOG IN control on the board means the account is OUT. A logged-in page shows the balance

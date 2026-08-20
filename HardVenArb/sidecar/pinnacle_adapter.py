@@ -1506,8 +1506,18 @@ class PinnacleAdapter(BookAdapter):
                         hb = f", ws_hb={now - laf:.0f}s" if laf else ", ws_hb=none"
                     extra = (f" | reader: applied={self._browser_odds_msgs}, "
                              f"{fresh}/{len(snap)} fresh, {live_n} live{hb}, feed_live={self._feed_live()}")
+                # BOTH AGES, always together. "session held 16m" was read as the account's login age on
+                # 2026-08-20 and it is not — it counts from THIS sidecar's capture and resets on restart,
+                # while the login can be hours older behind a persistent profile. Printing them side by side
+                # makes the difference impossible to misread.
+                age_txt = ""
+                try:
+                    if self._browser is not None and hasattr(self._browser, "login_age_str"):
+                        age_txt = " | " + self._browser.login_age_str()
+                except Exception:
+                    pass
                 print(f"[PINNACLE] session held {held_m:.0f}m  (ready={self._session_ready}, ws={ws}, "
-                      f"cache={len(self._cache)} sel){extra}")
+                      f"cache={len(self._cache)} sel){age_txt}{extra}")
                 if not self._survive_logged and held_m >= self._survive_min:
                     self._survive_logged = True           # unattended pass signal — glance for this line when you're back
                     print(f"[PINNACLE] *** SESSION SURVIVED past {self._survive_min:.0f}m — keepalive is HOLDING "
