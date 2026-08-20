@@ -239,6 +239,33 @@ def main() -> None:
     # OTHER side. Resolving them independently and never comparing is how both ended up on ':home'.
     event_resolution: dict[str, tuple] = {}
 
+    # ── BACKFILL: resolved names for rows that were paired BEFORE those fields existed ───────────────
+    # `hardven_yes_name`/`hardven_no_name` are what the slip check verifies against. A paired row without
+    # them cannot be verified, so the camp refuses to arm on it — "no catalog entry ... cannot verify the
+    # market before betting". Measured 2026-08-20: 66 of 134 paired rows had no names, i.e. HALF the board
+    # was uncampable, and the day's most productive pair was among them.
+    #
+    # The names come from the CATALOG, keyed by the token itself, so this asserts nothing about naming
+    # order — it reads which side Pinnacle actually calls home for this exact selection id. Rows whose
+    # matchup is no longer on the board are left alone; they will fill on a later run when it returns.
+    sid_names: dict[str, str] = {}
+    for _teamset, _games in book.items():
+        for _g in _games:
+            for _nm, _sid in _g["teams"].items():
+                sid_names[_sid] = _nm
+    backfilled = 0
+    for e in pairs:
+        yt, nt = e.get("hardven_yes_token") or "", e.get("hardven_no_token") or ""
+        if not (yt and nt) or (e.get("hardven_yes_name") and e.get("hardven_no_name")):
+            continue
+        yn, nn = sid_names.get(yt), sid_names.get(nt)
+        if yn and nn and yn != nn:
+            e["hardven_yes_name"], e["hardven_no_name"] = yn, nn
+            backfilled += 1
+    if backfilled:
+        print(f"[PAIR] backfilled resolved names on {backfilled} previously-paired row(s) — those markets "
+              f"can be verified (and therefore camped) again.")
+
     for e in pairs:
         tk = e.get("kalshi_ticker", "?")
         if e.get("hardven_yes_token") and e.get("hardven_no_token"):
@@ -386,7 +413,7 @@ def main() -> None:
             print(f"         {ev}")
 
     valid = sum(1 for e in pairs if e.get("hardven_yes_token") and e.get("hardven_no_token"))
-    if args.write and (filled or gate[1] or gate[2] or url_n or start_n):
+    if args.write and (filled or gate[1] or gate[2] or url_n or start_n or backfilled):
         atomic_write_json(args.pairs, pairs)   # atomic → the C# hot-reload never reads a partial cross_pairs.json
         print(f"\n[PAIR] wrote {valid} filled pair(s) → {args.pairs}")
     elif not args.write:

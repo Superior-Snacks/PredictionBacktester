@@ -2743,6 +2743,12 @@ class PinnacleAdapter(BookAdapter):
             # Selection places nothing (only opens the popover), so trying tabs in turn is safe.
             page, tab_kind, sel_ok = await self._select_bet_tab(lid, url, exp)
             if page is None or not sel_ok or not sel_ok.get("ok"):
+                # THE ROW WAS NOT THERE — but the log can only say that, not show it. On 2026-08-20 this
+                # fired three times on the day's best pair ("no row mentions both 'miron' and 'mazzola',
+                # scanned 10 viewports") and nothing recorded whether the row was absent, renamed,
+                # collapsed under a league header, or just below the last viewport scanned.
+                await self.snap(page or self._primary_page(), f"arm-no-row-{lid}",
+                                f"looking for {selection_id}: {sel_ok and sel_ok.get('error')}")
                 return BetResult(accepted=False, stake=stake,
                                  reason=f"could not select the intended market: {sel_ok and sel_ok.get('error')}")
             print(f"[PINNACLE BET] using {tab_kind} tab for {selection_id}")
@@ -2946,6 +2952,33 @@ class PinnacleAdapter(BookAdapter):
     _RECEIPT_BETID_RX = re.compile(r"(?<![\d.])(\d{9,12})(?![\d.])")
     _RECEIPT_WORDS_RX = re.compile(r"bet placed|bet accepted|accepted|receipt|your bet|wager placed|"
                                    r"bet id|ticket|confirmation", re.I)
+
+    async def snap(self, page, tag: str, note: str = "") -> str:
+        """Screenshot the page. Returns the path written, or "" if it could not be taken.
+
+        WHY: the money moments happen in under two seconds and the operator cannot watch every one — an arm
+        that could not find its row, a placement the venue refused with an HTTP 400, a panel that would not
+        close. All of those leave a log line saying WHAT failed and nothing showing what the page looked
+        like when it did. On 2026-08-20 a camp failed to arm three times on the day's best pair with
+        "no row mentions both 'miron' and 'mazzola' (scanned 10 viewports)" and there is no way to tell from
+        here whether the row was absent, renamed, collapsed under a league header, or simply below the fold.
+
+        Best-effort by construction: a failed screenshot must never turn a recoverable failure into an
+        exception on the placement path, so everything here is swallowed.
+        """
+        try:
+            if page is None or page.is_closed():
+                return ""
+            d = Path(__file__).parent.parent / "shots"
+            d.mkdir(exist_ok=True)
+            name = f"{time.strftime('%H%M%S')}_{re.sub(r'[^A-Za-z0-9_-]', '', tag)[:40]}.png"
+            path = d / name
+            await page.screenshot(path=str(path), full_page=False)
+            print(f"[PINNACLE SHOT] {name}" + (f" — {note}" if note else ""), flush=True)
+            return str(path)
+        except Exception as ex:
+            print(f"[PINNACLE SHOT] could not capture '{tag}' ({type(ex).__name__}: {ex})", flush=True)
+            return ""
 
     async def _dump_panel_controls(self, page, sel: str) -> None:
         """List every control in the placement panel, once. Four escalating dismiss attempts have now failed
@@ -3843,6 +3876,9 @@ class PinnacleAdapter(BookAdapter):
             # how much was our approach-and-click and how much was Pinnacle answering. Only one of those is
             # worth paying for - the human click is the point; everything else is overhead to hunt down.
             t_click = time.time()
+            # AT THE PRESS. The panel as it was when PLACE BET went down — the one frame that says what the
+            # venue was actually shown, next to whatever it answers.
+            asyncio.create_task(self.snap(page, "fire-press", f"pressed {live} on {c.get('selection_id')}"))
             _receipt = asyncio.create_task(self._watch_receipt_dom(
                 page, t_click, out=receipt,
                 exclude={p for p in str(c.get("selection_id") or "").split(":") if p.isdigit()}))
@@ -3954,8 +3990,20 @@ class PinnacleAdapter(BookAdapter):
                                  "be live. Reconcile against My Bets; do NOT hedge against this."
                                  + ("" if cleared else " The Quick Bet also would not close — clear it by hand.")}
             if placed.get("status") != 200:
-                return {"ok": False, "fired": True, "confirmed": False,
-                        "error": f"Pinnacle refused the placement (HTTP {placed.get('status')})"}
+                # A REFUSAL WITH NO EXPLANATION. Observed 2026-08-20 on Lorenzo Giustino: HTTP 400 from
+                # /bets/straight, nothing placed, and no way afterwards to see what the panel objected to.
+                # Capture the page AND the body — the response almost certainly says why.
+                body_txt = ""
+                try:
+                    body_txt = (await placed["_resp"].text())[:400]
+                except Exception:
+                    pass
+                await self.snap(page, f"fire-refused-{placed.get('status')}", "venue refused the placement")
+                print(f"[PINNACLE CAMP] placement REFUSED (HTTP {placed.get('status')}) — body: "
+                      f"{body_txt or '(unreadable)'}", flush=True)
+                return {"ok": False, "fired": True, "confirmed": False, "venue_body": body_txt,
+                        "error": f"Pinnacle refused the placement (HTTP {placed.get('status')})"
+                                 + (f": {body_txt[:160]}" if body_txt else "")}
 
             # SPLIT THE WAIT. Two different things are being timed and they have different fixes:
             #   press -> POST      the venue accepting the click (their latency)
