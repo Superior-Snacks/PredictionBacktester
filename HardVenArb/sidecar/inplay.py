@@ -209,6 +209,37 @@ class InPlayActivity:
         except Exception:
             return False
 
+    async def _camped_keepalive(self) -> bool:
+        """Keyboard-scroll the board UNDER the armed slip. Returns False if the slip did not survive.
+
+        THE GAP THIS CLOSES. Camping did nothing that resets Pinnacle's idle logout. The camped branch ran
+        `_hover_drift` and nothing else, and the keepalive work established that mouse movement does NOT
+        reset the timer — keyboard input and navigation clicks do. So the longer a camp held, the closer it
+        drifted to being logged out, and the symptom (a long-lived slip dying) looked like the venue killing
+        it rather than the session simply expiring underneath.
+
+        WHY THIS IS SAFE WHERE SCROLLING WAS NOT. The original rule was "no scrolling while armed" because a
+        scroll moves the board under the slip. That is true of the BOARD and irrelevant to the popover: the
+        Quick Bet is an overlay, not a row. What would genuinely be dangerous is keyboard input landing in
+        the STAKE FIELD — PageDown in a focused number input edits the bet, not the page — so this refuses to
+        run at all unless focus is on the body.
+
+        The slip is re-checked afterwards, and a slip that did not survive is reported rather than assumed.
+        """
+        try:
+            focused = await self._page.evaluate(
+                "() => { const a = document.activeElement;"
+                " return a ? (a.tagName + '|' + (a.getAttribute('type') || '')) : ''; }")
+        except Exception:
+            return True                       # cannot tell -> do nothing, and do not call the camp dead
+        if focused and focused.split("|")[0].upper() in ("INPUT", "TEXTAREA", "SELECT"):
+            return True                       # the stake field has focus; keys would edit the bet
+        await self._keyboard_scroll()
+        if not await self._popover_alive():
+            self._log("the armed slip did not survive a keyboard scroll — treating the camp as lost.")
+            return False
+        return True
+
     async def _hover_drift(self) -> None:
         """Small drift over the armed slip — a held mouse, not a parked coordinate.
 
@@ -223,6 +254,26 @@ class InPlayActivity:
             return
         cx = box["x"] + box["width"] * random.uniform(0.35, 0.65)
         cy = box["y"] + box["height"] * random.uniform(0.35, 0.65)
+        # LOOK AT THE OTHER SIDE NOW AND THEN. A person holding a slip glances at the opposing price —
+        # it is the number that tells them whether their side still looks right. Purely a MOVE: the cursor
+        # travels to the other cell and comes back, and nothing is ever pressed there.
+        #
+        # IT MUST NEVER BECOME A CLICK. Clicking the opposite odds button re-arms the slip on the OTHER
+        # OUTCOME, and camp_fire would then buy the wrong side of the match against a Kalshi leg chosen for
+        # this one — the same both-legs-on-one-outcome failure that cost real money on 2026-08-19, arrived
+        # at from the other direction.
+        if random.random() < 0.3:
+            try:
+                cells = self._page.locator("#quick-bet-portal button.market-btn")
+                n = await cells.count()
+                if n >= 2:
+                    ob = await cells.nth(random.randint(0, n - 1)).bounding_box()
+                    if ob:
+                        await self._page.mouse.move(ob["x"] + ob["width"] * 0.5,
+                                                    ob["y"] + ob["height"] * 0.5)
+                        await asyncio.sleep(random.uniform(0.6, 1.8))
+            except Exception:
+                pass
         for _ in range(random.randint(2, 6)):
             if not self._gate.is_set():
                 return
@@ -259,6 +310,16 @@ class InPlayActivity:
                             except Exception:
                                 pass
                         continue
+                    # KEEPALIVE, THEN DRIFT. Only occasionally: the point is to touch the keyboard often
+                    # enough to hold the session, not to sit there paging up and down for twenty minutes.
+                    if random.random() < 0.35:
+                        if not await self._camped_keepalive():
+                            if self._on_lost is not None:
+                                try:
+                                    await self._on_lost()
+                                except Exception:
+                                    pass
+                            continue
                     await self._hover_drift()
                     continue
                 await self._pin_url()

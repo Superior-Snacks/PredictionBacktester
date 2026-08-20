@@ -861,6 +861,43 @@ public class CrossArbExecutor
         });
     }
 
+    /// <summary>FIRE-FIRST re-check: the camp has just armed on <paramref name="pairId"/> — is the arb still
+    /// on? Runs the ordinary execution path, so every gate that protects a normal fire protects this one:
+    /// the floor, the ladder, balance, Kalshi depth, the plausibility rail and the pre-live gate (which now
+    /// passes, because the leg IS the armed camp).
+    ///
+    /// Prices are read LIVE rather than passed in. The detection that triggered the arm is by now a whole
+    /// UI drive old — several seconds during which the point may have finished — and re-using those numbers
+    /// would be the stale-slip mistake in a new place: pressing against a price nothing has re-read.
+    ///
+    /// Silent when there is no arb any more. That is the expected outcome much of the time and it costs
+    /// nothing: the camp is armed either way and fires on the next window exactly as it always did.</summary>
+    public async Task TryFireArmedAsync(string pairId, CancellationToken ct)
+    {
+        if (_halted || _connectionHalted || ct.IsCancellationRequested) return;
+        var pair = _telemetry.GetPair(pairId);
+        if (pair == null) return;
+
+        // Whichever direction currently prices as an arb, read off the live books — not the direction that
+        // was true when the arm started.
+        foreach (var arbType in new[] { "K_YES_P_NO", "K_NO_P_YES" })
+        {
+            string kKey = arbType == "K_YES_P_NO" ? $"K:{pair.KalshiTicker}" : $"K:{pair.KalshiTicker}_NO";
+            string pKey = arbType == "K_YES_P_NO" ? $"H:{pair.HardVenNoTokenId}" : $"H:{pair.HardVenYesTokenId}";
+            if (!_books.TryGetValue(kKey, out var kb) || !_books.TryGetValue(pKey, out var pb)) continue;
+            decimal kAsk = kb.GetBestAskPrice(), pAsk = pb.GetBestAskPrice();
+            if (kAsk <= 0m || pAsk <= 0m) continue;
+            decimal net = kAsk + pAsk + KalshiFee(kAsk) + HardVenFee(pAsk, pair.HardVenYesTokenId);
+            if (net >= _execNetFloor) continue;
+            Console.WriteLine($"[EXEC FIRE-FIRST] {pair.Label} | {arbType} | K={kAsk:0.0000} P={pAsk:0.0000} " +
+                              $"net={net:0.0000} < floor {_execNetFloor:0.000} — taking it now rather than " +
+                              $"waiting for the next window.");
+            await ExecuteAsync(pairId, arbType, kAsk, pAsk).ConfigureAwait(false);
+            return;
+        }
+        DebugLog.Trades($"TryFireArmedAsync: {pairId} armed but no arb on either side at re-check.");
+    }
+
     // ── Core execution ────────────────────────────────────────────────────────
 
     /// <summary>DRY-RUN gate tester (the `I`/`O` inject keys): fire a SYNTHETIC arb straight into the execution

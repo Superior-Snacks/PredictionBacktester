@@ -70,6 +70,25 @@ public sealed class CampManager
     private Action<string>? _onUnconfirmed;
     public void SetUnconfirmedHandler(Action<string>? h) => _onUnconfirmed = h;
 
+    // ── FIRE-FIRST (HARDVEN_CAMP_FIRE_FIRST=1) ───────────────────────────────────────────────────────
+    // Camping was built on the premise that the UI drive is too slow to do inside a window, so the cost is
+    // paid once up front and the window costs one press. That premise is worth testing rather than assuming:
+    // press->confirm measured 10.9-11.7s, and 79% of in-play windows hold their entry price past 11s — so an
+    // arb detected NOW may well still be there after an arm.
+    //
+    // This does not replace camping, it front-runs it. Arm as usual, then immediately ask whether the arb is
+    // still on; if it is, take it. If the price moved on the way, the arm has still happened and the camp
+    // behaves exactly as before — so the worst case is the current behaviour, not a lost window.
+    //
+    // The re-check is the executor's, not ours: it owns the ladder, the balance, the Kalshi depth and the
+    // floor, and a second opinion computed here would be a second definition of "is this an arb".
+    private Func<string, CancellationToken, Task>? _onArmedTryFire;
+    /// <summary>Called right after a camp arms, when fire-first is on. Wired to the executor's own
+    /// re-evaluation of that pair, so nothing here decides what counts as an arb.</summary>
+    public void SetArmedTryFireHandler(Func<string, CancellationToken, Task>? h) => _onArmedTryFire = h;
+    private static readonly bool FireFirst =
+        (Environment.GetEnvironmentVariable("HARDVEN_CAMP_FIRE_FIRST") ?? "0").Trim() == "1";
+
     // Arming drives the UI (find the row, click, type) and can run for tens of seconds on a scroll-miss, so it
     // gets its own long-timeout client. Status/stop are instant reads and must not be stuck behind an arm.
     private readonly HttpClient _uiHttp   = new() { Timeout = TimeSpan.FromSeconds(90) };
@@ -834,6 +853,26 @@ public sealed class CampManager
             _ = _discord.AlertAsync($"⛺ camped on **{label}** ({SideName(arbType)} @ {odds:0.000}) — {why}");
         }
         finally { _gate.Release(); }
+
+        // TRY IT NOW. Outside the gate deliberately: the fire path takes the same lock to press, so holding
+        // it here would deadlock against the thing we are asking to run. Every arm gets this — the first one
+        // and every relocation — because a relocation only happens when another game looks better, which is
+        // exactly when its window is most likely to still be open.
+        if (FireFirst && _onArmedTryFire is not null)
+        {
+            try
+            {
+                Console.WriteLine($"[CAMP] fire-first: armed on {label} — asking the executor whether the arb " +
+                                  $"is still on before settling in to camp.");
+                await _onArmedTryFire(pairId, ct);
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[CAMP] fire-first re-check failed ({ex.GetType().Name}: {ex.Message}) — " +
+                                  $"the camp is armed and unaffected; it will fire on the next window as usual.");
+            }
+        }
     }
 
     /// <summary>Drop the camp and go back to browsing. Refuses while a press is in flight unless

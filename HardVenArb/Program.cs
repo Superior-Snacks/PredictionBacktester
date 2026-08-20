@@ -79,6 +79,11 @@ using PredictionBacktester.Engine.LiveExecution;
 //    HARDVEN_CAMP_ARM_STAKE        account-currency stake typed at arm time (default = HARDVEN_STAKE_MIN_RUNG).
 //                                  Not the bet size: the executor sizes each fire and the slip is re-typed.
 //    HARDVEN_CAMP_MIN_HOLD_MS      a window shorter than this was never pressable, so it does not score (1500)
+//    HARDVEN_CAMP_FIRE_FIRST=1     FIRE-FIRST: after every arm (the first and every relocation), re-read the
+//                                  books and take the arb immediately if it is still on, instead of waiting
+//                                  for the next window on that pair. If the price moved during the drive the
+//                                  camp just holds as usual — the fallback IS the current behaviour, so this
+//                                  can only add fills, never lose a window. Default 0 (camp-then-wait).
 //    HARDVEN_CAMP_SCORE_HALFLIFE_SEC  half-life of the catchable-money score (600)
 //    HARDVEN_CAMP_DEPTH_CAP        contracts one window may contribute, so a single deep book can't dominate (50)
 //    HARDVEN_CAMP_SWITCH_MARGIN    a challenger must beat the incumbent by this multiple to take the camp (2.0)
@@ -1301,6 +1306,11 @@ if (isLive || isDryRun)
         // it looks like a free miss and may be an unhedged live bet. Stop trading and leave the process up so
         // the browser is still there to check My Bets with.
         campManager.SetUnconfirmedHandler(executor.HaltForUnconfirmedBet);
+        // FIRE-FIRST (HARDVEN_CAMP_FIRE_FIRST=1): the camp asks the executor, right after it arms, whether the
+        // arb is still on — and the executor answers with its OWN gates, so "is this worth taking" keeps one
+        // definition. Wired unconditionally; the toggle lives in CampManager, which simply never calls it when
+        // the flag is off.
+        campManager.SetArmedTryFireHandler(executor.TryFireArmedAsync);
         if (!await campManager.StartAsync(cts.Token))
             campManager = null;                       // in-play mode refused — fall back to pre-live behaviour
     }
