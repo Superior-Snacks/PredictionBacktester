@@ -872,30 +872,57 @@ public class CrossArbExecutor
     ///
     /// Silent when there is no arb any more. That is the expected outcome much of the time and it costs
     /// nothing: the camp is armed either way and fires on the next window exactly as it always did.</summary>
-    public async Task TryFireArmedAsync(string pairId, CancellationToken ct)
+    public async Task TryFireArmedAsync(string pairId, string armedToken, decimal armedOdds,
+                                        CancellationToken ct)
     {
         if (_halted || _connectionHalted || ct.IsCancellationRequested) return;
         var pair = _telemetry.GetPair(pairId);
         if (pair == null) return;
 
-        // Whichever direction currently prices as an arb, read off the live books — not the direction that
-        // was true when the arm started.
-        foreach (var arbType in new[] { "K_YES_P_NO", "K_NO_P_YES" })
+        // ── THE SLIP IS THE PINNACLE PRICE, NOT THE BOOK ────────────────────────────────────────────
+        // This first version read both legs out of `_books`, which contradicted the reason the periodic
+        // re-seed was turned off in-play: the panel is what the venue will honour, and camp_fire already
+        // re-reads it at press time. Consulting the book instead meant fire-first could not evaluate a
+        // market whose book had gone stale — and on 2026-08-21 that was 98 of 104 paired tokens
+        // (`books P=6/104`), so it silently did nothing on the very games it had just armed.
+        //
+        // `armedOdds` comes straight off the armed popover, decimal, seconds old. Kalshi still comes from
+        // its book, which is fine: that side is a real order book, it is 184/192 covered, and it is the leg
+        // we hedge with rather than the leg we press.
+        decimal pAsk = armedOdds > 1.0m ? 1m / armedOdds : 0m;
+        // Which direction the camp is on is decided by WHICH token it armed, not by scanning both.
+        string arbType = armedToken == pair.HardVenYesTokenId ? "K_NO_P_YES"
+                       : armedToken == pair.HardVenNoTokenId  ? "K_YES_P_NO" : "";
+        if (arbType.Length == 0 || pAsk <= 0m)
         {
-            string kKey = arbType == "K_YES_P_NO" ? $"K:{pair.KalshiTicker}" : $"K:{pair.KalshiTicker}_NO";
-            string pKey = arbType == "K_YES_P_NO" ? $"H:{pair.HardVenNoTokenId}" : $"H:{pair.HardVenYesTokenId}";
-            if (!_books.TryGetValue(kKey, out var kb) || !_books.TryGetValue(pKey, out var pb)) continue;
-            decimal kAsk = kb.GetBestAskPrice(), pAsk = pb.GetBestAskPrice();
-            if (kAsk <= 0m || pAsk <= 0m) continue;
-            decimal net = kAsk + pAsk + KalshiFee(kAsk) + HardVenFee(pAsk, pair.HardVenYesTokenId);
-            if (net >= _execNetFloor) continue;
-            Console.WriteLine($"[EXEC FIRE-FIRST] {pair.Label} | {arbType} | K={kAsk:0.0000} P={pAsk:0.0000} " +
-                              $"net={net:0.0000} < floor {_execNetFloor:0.000} — taking it now rather than " +
-                              $"waiting for the next window.");
-            await ExecuteAsync(pairId, arbType, kAsk, pAsk).ConfigureAwait(false);
+            Console.WriteLine($"[EXEC FIRE-FIRST] {pair.Label}: cannot evaluate — armed token {armedToken} "
+                            + $"is not either leg of this pair, or the slip price ({armedOdds}) is unusable.");
             return;
         }
-        DebugLog.Trades($"TryFireArmedAsync: {pairId} armed but no arb on either side at re-check.");
+        string kKey = arbType == "K_YES_P_NO" ? $"K:{pair.KalshiTicker}" : $"K:{pair.KalshiTicker}_NO";
+        if (!_books.TryGetValue(kKey, out var kb))
+        {
+            Console.WriteLine($"[EXEC FIRE-FIRST] {pair.Label}: no KALSHI book ({kKey}) — the hedge leg "
+                            + $"cannot be priced, so there is nothing to fire against. Camping as usual.");
+            return;
+        }
+        decimal kAsk = kb.GetBestAskPrice();
+        if (kAsk <= 0m)
+        {
+            Console.WriteLine($"[EXEC FIRE-FIRST] {pair.Label}: Kalshi book is empty at the touch — camping.");
+            return;
+        }
+        decimal net = kAsk + pAsk + KalshiFee(kAsk) + HardVenFee(pAsk, pair.HardVenYesTokenId);
+        if (net >= _execNetFloor)
+        {
+            Console.WriteLine($"[EXEC FIRE-FIRST] {pair.Label}: no arb at re-check — slip {armedOdds:0.000} "
+                            + $"(={pAsk:0.0000}) + K {kAsk:0.0000} = net {net:0.0000}, floor "
+                            + $"{_execNetFloor:0.000}. Camping as usual.");
+            return;
+        }
+        Console.WriteLine($"[EXEC FIRE-FIRST] {pair.Label} | {arbType} | slip {armedOdds:0.000} (={pAsk:0.0000}) "
+                        + $"K={kAsk:0.0000} net={net:0.0000} < floor {_execNetFloor:0.000} — taking it now.");
+        await ExecuteAsync(pairId, arbType, kAsk, pAsk).ConfigureAwait(false);
     }
 
     // ── Core execution ────────────────────────────────────────────────────────

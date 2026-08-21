@@ -82,10 +82,15 @@ public sealed class CampManager
     //
     // The re-check is the executor's, not ours: it owns the ladder, the balance, the Kalshi depth and the
     // floor, and a second opinion computed here would be a second definition of "is this an arb".
-    private Func<string, CancellationToken, Task>? _onArmedTryFire;
+    // Carries the ARMED SLIP's price with it. The book is not the authority for the Pinnacle leg here —
+    // the panel is, which is the whole reason the periodic book re-seed was switched off in-play. Passing
+    // the slip price means fire-first works on a market whose BOOK is stale or missing entirely, which on
+    // 2026-08-21 was 98 of 104 of them.
+    private Func<string, string, decimal, CancellationToken, Task>? _onArmedTryFire;
     /// <summary>Called right after a camp arms, when fire-first is on. Wired to the executor's own
     /// re-evaluation of that pair, so nothing here decides what counts as an arb.</summary>
-    public void SetArmedTryFireHandler(Func<string, CancellationToken, Task>? h) => _onArmedTryFire = h;
+    public void SetArmedTryFireHandler(Func<string, string, decimal, CancellationToken, Task>? h)
+        => _onArmedTryFire = h;
     private static readonly bool FireFirst =
         (Environment.GetEnvironmentVariable("HARDVEN_CAMP_FIRE_FIRST") ?? "0").Trim() == "1";
 
@@ -789,6 +794,9 @@ public sealed class CampManager
     private async Task ArmAsync(string pairId, string token, string label, string arbType, string why,
                                 CancellationToken ct)
     {
+        // Declared OUTSIDE the try so the fire-first block after the `finally` can still see it — the
+        // armed slip's price is the Pinnacle leg fire-first prices against, so it has to outlive the gate.
+        decimal armedOdds = 0m;
         await _gate.WaitAsync(ct);
         try
         {
@@ -805,6 +813,7 @@ public sealed class CampManager
                     armed = Flag(doc.RootElement, "ok") && Flag(doc.RootElement, "armed");
                     err   = Str(doc.RootElement, "error");
                     odds  = Dec(doc.RootElement, "odds");
+                    armedOdds = odds;
                     maxBet = Dec(doc.RootElement, "max_bet");
                     if (doc.RootElement.TryGetProperty("placeable", out var pl) &&
                         (pl.ValueKind == JsonValueKind.True || pl.ValueKind == JsonValueKind.False))
@@ -864,7 +873,7 @@ public sealed class CampManager
             {
                 Console.WriteLine($"[CAMP] fire-first: armed on {label} — asking the executor whether the arb " +
                                   $"is still on before settling in to camp.");
-                await _onArmedTryFire(pairId, ct);
+                await _onArmedTryFire(pairId, token, armedOdds, ct);
             }
             catch (OperationCanceledException) { }
             catch (Exception ex)

@@ -3719,12 +3719,14 @@ class PinnacleAdapter(BookAdapter):
         # Bounded: the cleanup is best-effort, so a slow one must not block re-arming forever.
         prev = getattr(self, "_camp_cleanup", None)
         if prev is not None and not prev.done():
+            self._arm_waiting = True          # tells _observe_then_clear to stop observing and clean up now
             try:
                 # Covers HARDVEN_RECEIPT_OBSERVE_SEC (10s) plus the dismissal escalation itself.
                 await asyncio.wait_for(asyncio.shield(prev), timeout=20.0)
             except Exception:
                 print("[PINNACLE CAMP] the previous camp's page cleanup is still running - arming anyway.",
                       flush=True)
+        self._arm_waiting = False
         self._camp_cleanup = None
         # ── NEVER ARM ON TOP OF A PANEL THAT WOULD NOT CLOSE ─────────────────────────────────────────
         # A Quick Bet left up with a stake in it is not cosmetic: the next arm clicks a row underneath it,
@@ -4655,10 +4657,20 @@ class PinnacleAdapter(BookAdapter):
             # its controls. Deferred by HARDVEN_RECEIPT_OBSERVE_SEC (default 10s) - which costs nothing on
             # the money path, because this whole branch is already off it.
             async def _observe_then_clear():
+                # WAIT, UNLESS SOMEONE IS WAITING ON US. The observation window lets a receipt exist long
+                # enough to be read — worth 10s when nothing else needs the page. But camp_start awaits this
+                # task before arming, so on a busy board it became 10s of dead time in FRONT of every
+                # re-arm: measured 2026-08-21, arms reported 8.1-9.6s total against an ARM phase of only
+                # ~2.7s, and the missing ~6s was this sleep.
+                #
+                # An arm is worth more than a diagnostic, so it polls the flag rather than sleeping once,
+                # and gives way the moment a camp wants the page.
                 try:
-                    await asyncio.sleep(float(os.environ.get("HARDVEN_RECEIPT_OBSERVE_SEC", "10")))
-                except Exception:
-                    pass
+                    deadline = time.time() + float(os.environ.get("HARDVEN_RECEIPT_OBSERVE_SEC", "10"))
+                except ValueError:
+                    deadline = time.time() + 10.0
+                while time.time() < deadline and not getattr(self, "_arm_waiting", False):
+                    await asyncio.sleep(0.2)
                 await _clear_page()
             self._camp_cleanup = asyncio.create_task(_observe_then_clear())
         else:
