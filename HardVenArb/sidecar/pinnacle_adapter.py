@@ -895,7 +895,10 @@ class PinnacleAdapter(BookAdapter):
                 # Only the browser source can be "captured but dead"; env/rest sources are proven by
                 # construction, so passing the event only there keeps their behaviour unchanged.
                 wait_ready=(self._proven_evt if self._session_source == "browser" else None),
-                wait_ready_sec=float(os.environ.get("HARDVEN_PAIR_WAIT_SESSION_SEC", "90")))
+                wait_ready_sec=float(os.environ.get("HARDVEN_PAIR_WAIT_SESSION_SEC", "90")),
+                # The reader is the ONLY source that describes in-play matchups, so the startup run waits
+                # for it to see something rather than pairing an hour of live games out of existence.
+                reader_probe=self.reader_live_mids)
             self._pairing_task = asyncio.create_task(self._pairing.run())
             cadence = (f"every {self._pair_interval_min} min (intraday — pairs live/late-appearing games)"
                        if self._pair_interval_min > 0 else f"daily {self._pair_hour:02d}:00 local")

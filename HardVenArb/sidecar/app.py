@@ -509,7 +509,16 @@ async def camp_stop():
     fn = getattr(adapter, "camp_stop", None)
     if not callable(fn):
         return {"ok": True, "camping": False, "supported": False}
-    return await fn()
+    # DEFER THE PAGE WORK. Releasing is a state change; clearing the popover is housekeeping, and the four
+    # escalating dismiss steps carry ~3s of sleeps and human-paced moves between them. A RELOCATION is
+    # release-then-arm, so that housekeeping was landing squarely between the camper deciding to move and
+    # the new slip existing: measured 2026-08-21, ARM phases of 2.0-3.4s inside camp totals of 7.2-10.5s.
+    # camp_start already waits on the deferred task and tells it to give way, so nothing can arm on top of
+    # a slip that is still being cleared.
+    try:
+        return await fn(background_dom=True)
+    except TypeError:
+        return await fn()                     # older adapter without the split
 
 
 @app.get("/debug/slip_watch")

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -30,7 +31,8 @@ ROOT = SIDECAR.parent                     # HardVenArb/ (where pairHard.py + the
 class PairingScheduler:
     def __init__(self, hour: int = 5, initial_delay: float = 8.0, interval_min: int = 0,
                  steps: "list[tuple[str, list[str], object]] | None" = None,
-                 wait_ready: "object | None" = None, wait_ready_sec: float = 90.0):
+                 wait_ready: "object | None" = None, wait_ready_sec: float = 90.0,
+                 reader_probe: "object | None" = None):
         # `steps` = [(label, [script, *args], cwd)]. None keeps the historic Pinnacle chain, so nothing
         # changes for the venue that already uses this. A second book supplies its own chain instead of
         # getting a scheduler of its own -- the cadence logic is the part worth sharing.
@@ -50,10 +52,55 @@ class PairingScheduler:
         # handling. Waiting costs seconds and removes the cascade.
         self._wait_ready = wait_ready
         self._wait_ready_sec = max(0.0, wait_ready_sec)
+        # Callable returning the matchups the odds READER has actually seen. The startup run waits for it to
+        # report something — see _wait_for_reader.
+        self._reader_probe = reader_probe
+
+    async def _wait_for_reader(self) -> None:
+        """Hold the STARTUP run until the odds reader has actually seen the board.
+
+        The guest feed does not list in-play matchups, so the only description of the live board comes from
+        the reader — and at startup+8s the reader has seen nothing. Measured 2026-08-21: the startup pairing
+        finished BEFORE the reader's first 15s heartbeat, the catalog could describe 5 live matchups, and 8
+        of 16 live ones stayed unpairable until the next cadence 90 minutes later. On a board whose games
+        last about two hours, ninety minutes late is most of the way to never.
+
+        Bounded and non-fatal: a reader that never reports (pre-live-only setups, a dark browser) must not
+        block pairing at all — the pre-match half of the board pairs perfectly well without it.
+        """
+        probe = self._reader_probe
+        if probe is None:
+            return
+        try:
+            cap = float(os.environ.get("HARDVEN_PAIR_WAIT_READER_SEC", "150") or 150)
+        except ValueError:
+            cap = 150.0
+        if cap <= 0:
+            return
+        deadline = time.time() + cap
+        said = False
+        while time.time() < deadline:
+            try:
+                n = len(probe() or [])
+            except Exception:
+                return                        # no probe to speak of; do not hold up pairing over it
+            if n:
+                if said:
+                    print(f"[PAIR SCHED] reader is seeing {n} matchup(s) - pairing now.")
+                return
+            if not said:
+                said = True
+                print(f"[PAIR SCHED] waiting up to {cap:.0f}s for the odds reader to see the board "
+                      f"(the guest feed does not list in-play matchups; HARDVEN_PAIR_WAIT_READER_SEC=0 "
+                      f"to skip).")
+            await asyncio.sleep(3)
+        print(f"[PAIR SCHED] reader still quiet after {cap:.0f}s - pairing on the guest board alone "
+              f"(in-play matchups will fill on the next cadence).")
 
     async def run(self) -> None:
         try:
             await asyncio.sleep(self._initial_delay)     # let the sidecar HTTP server come up (/catalog)
+            await self._wait_for_reader()
             await self._pair_once("startup")
             while True:
                 if self._interval_min > 0:
