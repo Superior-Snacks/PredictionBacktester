@@ -23,6 +23,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "KalshiPolyCross", "KalshiPo
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "HardVenArb", "HardVenArb\HardVenArb.csproj", "{692E717A-5376-43DC-A7A0-EB8D453B7FC7}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "KalshiEvBot", "KalshiEvBot\KalshiEvBot.csproj", "{8C237B8D-B4DB-444F-AD8E-3E3994BDDA33}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -153,6 +155,18 @@ Global
 		{692E717A-5376-43DC-A7A0-EB8D453B7FC7}.Release|x64.Build.0 = Release|Any CPU
 		{692E717A-5376-43DC-A7A0-EB8D453B7FC7}.Release|x86.ActiveCfg = Release|Any CPU
 		{692E717A-5376-43DC-A7A0-EB8D453B7FC7}.Release|x86.Build.0 = Release|Any CPU
+		{8C237B8D-B4DB-444F-AD8E-3E3994BDDA33}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{8C237B8D-B4DB-444F-AD8E-3E3994BDDA33}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{8C237B8D-B4DB-444F-AD8E-3E3994BDDA33}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{8C237B8D-B4DB-444F-AD8E-3E3994BDDA33}.Debug|x64.Build.0 = Debug|Any CPU
+		{8C237B8D-B4DB-444F-AD8E-3E3994BDDA33}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{8C237B8D-B4DB-444F-AD8E-3E3994BDDA33}.Debug|x86.Build.0 = Debug|Any CPU
+		{8C237B8D-B4DB-444F-AD8E-3E3994BDDA33}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{8C237B8D-B4DB-444F-AD8E-3E3994BDDA33}.Release|Any CPU.Build.0 = Release|Any CPU
+		{8C237B8D-B4DB-444F-AD8E-3E3994BDDA33}.Release|x64.ActiveCfg = Release|Any CPU
+		{8C237B8D-B4DB-444F-AD8E-3E3994BDDA33}.Release|x64.Build.0 = Release|Any CPU
+		{8C237B8D-B4DB-444F-AD8E-3E3994BDDA33}.Release|x86.ActiveCfg = Release|Any CPU
+		{8C237B8D-B4DB-444F-AD8E-3E3994BDDA33}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
