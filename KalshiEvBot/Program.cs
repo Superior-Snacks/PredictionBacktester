@@ -59,6 +59,14 @@ internal static class Program
             return 2;
         }
 
+        // M1: grade what has already been logged. REST only — no WebSocket is opened, so this is safe to
+        // run while another bot holds the account's single socket.
+        if (args.Contains("--resolve"))
+        {
+            using var rk = new KalshiOrderClient(config);
+            return await ResolveAsync(rk, ArgValue(args, "--resolve-glob"), !args.Contains("--all-obs"));
+        }
+
         // Stop before ANY connection. Kalshi allows one WebSocket per account, and a second one connects
         // happily and receives nothing — so "just checking the pair file" must never be able to silently
         // blind a bot that is already running.
@@ -92,6 +100,7 @@ internal static class Program
 
         using var kalshi    = new KalshiOrderClient(config);
         using var telemetry = new EvTelemetry();
+        using var snapshots = new OracleSnapshotLog();
         var oracle = new PinnacleOracle(sidecar, tokens);
         var feed   = new KalshiBookFeed(kalshi, config, tickers);
         var eval   = new EvEvaluator(pairs, oracle, feed, kalshi, telemetry, cfg) { Verbose = verbose };
@@ -104,6 +113,8 @@ internal static class Program
         };
 
         Console.WriteLine($"[TELEMETRY] {telemetry.Path}");
+        Console.WriteLine($"[SNAPSHOT ] {snapshots.Path}  (every {EvConfig.Env("EV_SNAPSHOT_MIN", 5):0} min, "
+                        + "oracle only — this is what M1 grades soonest)");
 
         using var cts = new CancellationTokenSource();
         Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
@@ -119,13 +130,14 @@ internal static class Program
 
         await RefreshBankrollAsync(kalshi, eval, cfg, announce: true);
         var bankrollTask = BankrollLoopAsync(kalshi, eval, cfg, cts.Token);
+        var snapTask     = SnapshotLoopAsync(snapshots, oracle, feed, pairs, cfg, cts.Token);
 
         if (bookAudit)
         {
             await WaitWarmAsync(feed, oracle, cts.Token, TimeSpan.FromSeconds(45));
             await BookAuditAsync(feed, kalshi, oracle, pairs, ArgInt(args, "--book-audit") ?? 10);
             cts.Cancel();
-            await SafeAll(feedTask, oracleTask, evalTask, bankrollTask);
+            await SafeAll(feedTask, oracleTask, evalTask, bankrollTask, snapTask);
             return 0;
         }
 
@@ -134,6 +146,7 @@ internal static class Program
             if (!await WaitWarmAsync(feed, oracle, cts.Token, TimeSpan.FromSeconds(45)))
                 Console.WriteLine("[ONCE] feeds did not fully warm up — evaluating with what arrived.");
             await Task.Delay(3_000, cts.Token).ContinueWith(_ => { });
+            SnapshotOnce(snapshots, oracle, feed, pairs, cfg);   // one oracle row per pair before we exit
             eval.SweepAll();
             // Bounded: the oracle keeps re-sweeping every few seconds, so Pending is not guaranteed to
             // reach zero on its own and an unbounded wait would simply never return.
@@ -143,15 +156,102 @@ internal static class Program
             await Task.Delay(3_000, cts.Token).ContinueWith(_ => { });   // let in-flight REST calls land
             PrintStatus(eval, feed, oracle, telemetry, pairs.Count);
             cts.Cancel();
-            await SafeAll(feedTask, oracleTask, evalTask, bankrollTask);
+            await SafeAll(feedTask, oracleTask, evalTask, bankrollTask, snapTask);
             return 0;
         }
 
         var statusTask = StatusLoopAsync(eval, feed, oracle, telemetry, pairs.Count, cts.Token);
-        await SafeAll(feedTask, oracleTask, evalTask, bankrollTask, statusTask);
+        await SafeAll(feedTask, oracleTask, evalTask, bankrollTask, snapTask, statusTask);
         PrintStatus(eval, feed, oracle, telemetry, pairs.Count);
         Console.WriteLine($"[DONE] {telemetry.RowsWritten} row(s) → {telemetry.Path}");
         return 0;
+    }
+
+    // ── M1: grade what has been logged ────────────────────────────────────────────────────────────────
+    /// <summary>
+    /// Reads every telemetry and snapshot CSV in the working directory, fetches each market's settlement,
+    /// and prints the calibration report. REST only — no WebSocket, so it is safe to run at any time,
+    /// including while another bot holds the account's single socket.
+    /// </summary>
+    private static async Task<int> ResolveAsync(KalshiOrderClient kalshi, string? glob, bool dedupe)
+    {
+        string dir = Directory.GetCurrentDirectory();
+        var files = new List<string>();
+        foreach (var pattern in glob is null ? new[] { "EvTelemetry_*.csv", "EvOracleSnap_*.csv" } : new[] { glob })
+            files.AddRange(Directory.GetFiles(dir, pattern));
+        files = files.Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(f => f).ToList();
+
+        if (files.Count == 0)
+        {
+            Console.WriteLine($"[RESOLVE] no EvTelemetry_*.csv or EvOracleSnap_*.csv in {dir}. "
+                            + "Run the bot first, or pass --resolve-glob <pattern>.");
+            return 1;
+        }
+
+        var rows = new List<Dictionary<string, string>>();
+        foreach (var f in files)
+        {
+            var r = Csv.Read(f);
+            Console.WriteLine($"[RESOLVE] {System.IO.Path.GetFileName(f),-34} {r.Count,6} row(s)");
+            rows.AddRange(r);
+        }
+        if (rows.Count == 0) { Console.WriteLine("[RESOLVE] nothing logged yet."); return 1; }
+
+        var tickers = rows.Select(r => Csv.Str(r, "Ticker")).Where(t => t.Length > 0)
+                          .Distinct(StringComparer.Ordinal).ToList();
+        Console.WriteLine($"[RESOLVE] fetching settlement for {tickers.Count} market(s)…");
+
+        var resolver = new SettlementResolver(kalshi);
+        var settled  = await resolver.ResolveAsync(tickers);
+        Console.WriteLine($"[RESOLVE] {resolver.Fetched} fetched, {resolver.FromCache} cached, "
+                        + $"{resolver.Failed} failed; {settled.Values.Count(s => s.IsFinal)} finalized.");
+
+        Calibration.Report(Calibration.FromTelemetry(rows, settled), settled, dedupe);
+        return 0;
+    }
+
+    // ── Oracle snapshots ──────────────────────────────────────────────────────────────────────────────
+    /// <summary>
+    /// Writes one oracle row per pair on a timer. This is the cheap half of M1: it needs no Kalshi REST
+    /// call and no +EV window, so the sharp-book question accumulates evidence at the rate matches are
+    /// PLAYED rather than at the rate signals happen.
+    /// </summary>
+    private static async Task SnapshotLoopAsync(OracleSnapshotLog log, PinnacleOracle oracle,
+                                                KalshiBookFeed feed, List<EvPair> pairs, EvConfig cfg,
+                                                CancellationToken ct)
+    {
+        var every = TimeSpan.FromMinutes(Math.Max(0.5, EvConfig.Env("EV_SNAPSHOT_MIN", 5)));
+        // A short first delay so the opening snapshot lands on warm books rather than an empty cache.
+        try { await Task.Delay(TimeSpan.FromSeconds(20), ct); } catch (OperationCanceledException) { return; }
+
+        while (!ct.IsCancellationRequested)
+        {
+            int written = SnapshotOnce(log, oracle, feed, pairs, cfg);
+            if (written > 0) Console.WriteLine($"[SNAPSHOT] {written} pair(s) recorded ({log.RowsWritten} total)");
+            try { await Task.Delay(every, ct); } catch (OperationCanceledException) { break; }
+        }
+    }
+
+    /// <summary>One pass over every pair. Skips anything the oracle cannot currently price — a snapshot of
+    /// a stale or suspended quote is not an observation, it is a guess that would be graded as one.</summary>
+    private static int SnapshotOnce(OracleSnapshotLog log, PinnacleOracle oracle, KalshiBookFeed feed,
+                                    List<EvPair> pairs, EvConfig cfg)
+    {
+        int n = 0;
+        foreach (var p in pairs)
+        {
+            var yes = oracle.Get(p.YesToken);
+            var no  = oracle.Get(p.NoToken);
+            if (yes is null || no is null || !yes.Open || !no.Open) continue;
+            if (!oracle.Fresh(yes) || !oracle.Fresh(no)) continue;
+            try
+            {
+                log.Write(p, yes, no, oracle.AgeMs(yes), feed.Top(p.KalshiTicker).YesAsk, cfg.DeVigMethod);
+                n++;
+            }
+            catch (Exception ex) { Console.WriteLine($"[SNAPSHOT] {p.KalshiTicker}: {ex.Message}"); }
+        }
+        return n;
     }
 
     // ── Bankroll ──────────────────────────────────────────────────────────────────────────────────────
@@ -420,6 +520,9 @@ internal static class Program
 
               --self-test          run the offline arithmetic checks and exit (no venue, no network)
               --check              load + validate the pair file and exit; opens NO connection
+              --resolve            grade every logged row against Kalshi settlement (REST only, no WS)
+              --resolve-glob <p>   restrict --resolve to CSVs matching this pattern
+              --all-obs            --resolve without deduping to one observation per ticker+side
               --once               warm up, evaluate every pair once, print the tally, exit
               --book-audit [N]     dump the local WS ask ladder against REST for N markets and exit
               --pairs <path>       cross_pairs.json to read (default: HardVenArb's, or EV_PAIRS_FILE)
@@ -428,7 +531,7 @@ internal static class Program
 
             Environment: EV_MIN, EV_PRESCREEN_SLACK, EV_MIN_PRICE, EV_MAX_PRICE, EV_DEVIG (proportional|shin),
             EV_FEE_RATE, EV_RECHECK_COOLDOWN_MS, EV_REST_CONCURRENCY, EV_MAX_TRADE_FRACTION, EV_BANKROLL_USD,
-            EV_ORACLE_POLL_MS, EV_ORACLE_MAX_AGE_MS, EV_PAIRS_FILE, HARDVEN_SIDECAR_URL.
+            EV_ORACLE_POLL_MS, EV_ORACLE_MAX_AGE_MS, EV_SNAPSHOT_MIN, EV_PAIRS_FILE, HARDVEN_SIDECAR_URL.
             """);
     }
 }

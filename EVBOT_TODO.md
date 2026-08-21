@@ -104,13 +104,32 @@ Not yet exercised against live feeds — that needs the sidecar running and the 
 
 ---
 
-## 2. M1 — Settlement validation (build second, before any money)
+## 2. M1 — Settlement validation — **TOOLS BUILT 2026-08-21**
 
-- [ ] **Resolver** — for each logged signal, fetch the Kalshi settlement once the market is `finalized`.
-      `GetMarketAsync` returns the status; lifecycle values are in memory (`reference_kalshi_api`).
-- [ ] **Calibration report** — bucket signals by `P_true` (deciles) and compare predicted vs realised
-      frequency. This is the only thing that separates a wrong model from bad luck.
-- [ ] **Realised vs quoted EV** — per signal and in aggregate.
+Run with `dotnet run --project KalshiEvBot -- --resolve`. **REST only, no WebSocket**, so it is safe to run
+while another bot holds the account's single socket.
+
+- [x] **Resolver** (`SettlementResolver.cs`) — fetches `status`/`result` per ticker, caches to
+      `ev_settlements.json`. Field shape verified live: `status` is `"active"`/`"finalized"`, `result` is
+      `""` until final then `"yes"`/`"no"`. **Only finalized results are cached** — caching "active" would
+      freeze a market as never-settled and quietly shrink the sample forever, which is the one failure a
+      calibration report cannot detect from its own output.
+- [x] **Calibration report** (`Calibration.cs`) — deciles of `P_true` vs realised frequency, pooled bias
+      with a standard error and a z, and a **Brier score for proportional vs Shin** (the one number that
+      compares the two de-vig methods without arguing about thresholds).
+- [x] **Splits** — in-play vs pre-match and oracle-age buckets, which is how the oracle-lag question gets
+      answered: if in-play calibrates worse, the in-play signals were us reading Pinnacle late.
+- [x] **Realised vs quoted EV** — reported LAST and labelled colour, not evidence. See the note below on
+      why P&L is the slow way to ask this.
+- [x] **Dedupe to one observation per (ticker, side)** by default. The cooldown logs one live opportunity
+      repeatedly — six rows in five minutes on one market — and those share a single outcome. Counting them
+      as six trials would shrink every interval by over half and manufacture significance from a repeat.
+      `--all-obs` overrides.
+- [x] **CSV reader** (`Csv.cs`) — hand-rolled RFC4180, handles the quoting the writer emits.
+
+**Settlement timing, measured:** a played match finalizes promptly (an ATP challenger settled within the
+hour of its signal). A postponed one sits `active` for days against a fallback `close_time` two weeks out.
+So "not settled yet" is normal, not an error, and the report says so rather than showing an empty table.
 - [ ] **Three questions M1 exists to answer:**
       - Is Pinnacle's line predictive **on ITF/challenger tennis specifically**? The sharp-book assumption
         is established for majors; these are small events where Pinnacle's own limits are €500–2000.
@@ -129,6 +148,24 @@ Testing whether `P_true` is **calibrated** — pooled predicted vs realised freq
 a few hundred settlements give roughly ±2 points, which is enough to see the 2–4 point bias that would eat
 the whole edge. Grade the model, not the money.
 
+### The fast path: calibration does not need SIGNALS
+Signal rows are not independent bets. First session: 8 signal rows = **3** distinct (ticker, side) = **2**
+matches, because the re-check cooldown logs the same live opportunity again every 15s. Counting rows
+badly overstates how quickly "hundreds of signals" arrives.
+
+But the question that decides the strategy — *is Pinnacle's de-vigged line predictive on this kind of
+tennis?* — needs `(P_true, outcome)` pairs, **not** +EV signals. Every logged row carries `P_true`, signal
+or not, so all 144 rows of that session are gradeable, not 8.
+
+- [x] **Oracle snapshot log** (`OracleSnapshotLog.cs`) — **BUILT**. One row per pair every
+      `EV_SNAPSHOT_MIN` minutes (default 5) to `EvOracleSnap_YYYYMMDD.csv`: `P_true` by both methods,
+      Pinnacle's two prices, vig, in-play flag, settlement ticker. **No REST call and no Kalshi
+      dependency** — pure sidecar data the bot already polls. Evidence now accumulates at the rate matches
+      are PLAYED rather than the rate signals happen, and it accrues even if no +EV window ever opens.
+      One row per PAIR, not per side: de-vig forces `P_true(NO) = 1 − P_true(YES)`, so a NO row is the same
+      observation written twice and would halve every confidence interval for free. Column names match the
+      signal telemetry where they overlap, so one code path grades both files.
+
 ### M1 acceptance
 **Hundreds of settled signals.** At ~70 +EV signals/day that is 1–2 weeks of M0 running. The build is a
 day; the answer is a fortnight. Start M0 early for that reason alone.
@@ -138,6 +175,32 @@ day; the answer is a fortnight. Start M0 early for that reason alone.
 ## 3. M2 / M3 — later
 - [ ] **M2** — live at minimum size, IOC only, all §6 guardrails, only after M1 shows calibration holding.
 - [ ] **M3** — size up; then evaluate the maker variant (`KellyStrat.MD` §7).
+
+### M2 PREREQUISITE, not yet in the design: the bot has no position awareness
+It evaluates each side of each market independently and does not know what it already holds. Harmless in
+M0, which buys nothing. In M2 it is not:
+
+* **The cooldown would re-BUY, not just re-log.** `KXWTAMATCH-…BEJKEY-BEJ` NO logged as a signal **six
+  times** in five minutes on one opportunity. In M2 that is six orders and ~188 contracts, not one.
+* **Both sides of one market can be held at different times, and that is CORRECT** — see below — but it
+  must be a deliberate exit, not an accident.
+* §6.2's correlated-event cap is specified and **not implemented**.
+
+**Both sides at once is structurally impossible, so it needs no guard.** De-vig forces
+`P_true(YES) + P_true(NO) = 1`, while Kalshi's two asks sum to `1 + spread`, so
+`EV(YES) + EV(NO) = −spread − fee(yesAsk) − fee(noAsk)`, which is always negative — about −3.6c at the
+measured 1c spread. Confirmed on every same-instant pair logged: asks summed to 1.0100, EV sums −0.0173 and
+−0.0121, never both positive. The arb bot could see both sides because it compared Kalshi against a
+*second venue* that drifts independently; here both sides are priced against one number that sums to 1 by
+construction.
+
+**Both sides at DIFFERENT times is how you exit.** Owning 1 YES + 1 NO is $1 guaranteed, so buying the
+opposite side closes the position. Observed live: `BEJKEY-BEJ` YES at 0.25 (Bejlek a 28% underdog, 18:25),
+then NO at 0.11–0.18 once she was an 83% favourite (18:52–18:57). At the logged sizes that is 0.4116 paid
+for a certain 1.0000 — **+0.59 locked per pair**, the first leg having come good and the second banking it.
+The reverse case locks a *loss*, and even that is correct EV behaviour (it converts a mark-to-market loss
+into a smaller certain one), but it pays a second fee and ties up capital. Either way M2 must do it
+knowingly.
 
 ---
 
