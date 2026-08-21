@@ -204,8 +204,13 @@ class InPlayActivity:
 
     async def _popover_alive(self) -> bool:
         """Is the Quick Bet still on the page? Locator count only — no JS, nothing the page can see."""
+        # EMPTINESS, NOT EXISTENCE. `#quick-bet-portal` is always mounted — Pinnacle leaves the container
+        # in the DOM and puts the popover INTO it — so a count-based test answers "the slip is alive"
+        # forever. That is why a camp whose slip had died was never reported: this said it was fine.
+        # Proven 2026-08-21 by a panel dump showing the portal present with no controls and no text.
         try:
-            return bool(await self._page.locator(PORTAL).count())
+            txt = await self._page.locator(PORTAL).first.inner_text()
+            return bool((txt or "").strip())
         except Exception:
             return False
 

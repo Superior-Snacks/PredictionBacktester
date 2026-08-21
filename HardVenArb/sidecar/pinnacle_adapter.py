@@ -3187,8 +3187,8 @@ class PinnacleAdapter(BookAdapter):
         out = {"locked": None, "why": ""}
         try:
             portal = page.locator("#quick-bet-portal")
-            if not await portal.count():
-                out["why"] = "no popover on the page"
+            if not await self._slip_open(page):
+                out["why"] = "no popover on the page"      # the container is always there; content is not
                 return out
             txt = (await portal.first.inner_text()).replace(chr(10), " | ")
             price = self._CAMP_PRICE_RX.search(txt)
@@ -3236,6 +3236,34 @@ class PinnacleAdapter(BookAdapter):
         except Exception as ex:
             print(f"[PINNACLE SHOT] could not capture '{tag}' ({type(ex).__name__}: {ex})", flush=True)
             return ""
+
+    @staticmethod
+    async def _slip_open(page) -> bool:
+        """Is a Quick Bet ACTUALLY open? Emptiness, not existence.
+
+        `#quick-bet-portal` IS ALWAYS IN THE DOM. Pinnacle leaves the container mounted and empty; a popover
+        is content placed INTO it. So `portal.count()` is 1 whether or not anything is showing, and every
+        check built on that count has been answering "yes, a slip is open" permanently.
+
+        Proven 2026-08-21 by the panel dump this file now takes on a failed dismissal:
+
+            [PINNACLE PANEL] controls inside #quick-bet-portal:
+                (none)
+            Panel text:
+
+        No controls, no text — an empty container being reported as a stuck betslip. That is why all four
+        dismissal steps "failed" on every single fire: there was nothing to dismiss and the count could
+        never reach zero. It also stopped the bot dead once camp_start began refusing to arm over a
+        supposedly-stuck panel, because the panel was never going away.
+
+        `_UI_READ_POP_JS` had this right from the start ("if (!p || !p.textContent.trim()) return null") —
+        the rest of the file simply did not follow it. This is that one test, in one place.
+        """
+        try:
+            txt = await page.locator("#quick-bet-portal").first.inner_text()
+        except Exception:
+            return False                      # no portal / page gone -> nothing is open
+        return bool((txt or "").strip())
 
     async def _dump_panel_controls(self, page, sel: str) -> None:
         """List every control in the placement panel, once. Four escalating dismiss attempts have now failed
@@ -3580,7 +3608,7 @@ class PinnacleAdapter(BookAdapter):
                      "url": (page.url or "")[:100]}
         try:
             portal = page.locator("#quick-bet-portal")
-            if not await portal.count():
+            if not await self._slip_open(page):
                 return {**out, "ok": False, "error": "no Quick Bet on the page"}
             try:
                 out["text"] = (await portal.first.inner_text()).replace("\n", " | ")[:600]
@@ -3708,7 +3736,7 @@ class PinnacleAdapter(BookAdapter):
         pg = self._primary_page()
         if pg is not None:
             try:
-                if await pg.locator("#quick-bet-portal").count():
+                if await self._slip_open(pg):
                     print("[PINNACLE CAMP] a Quick Bet is already open before arming — clearing it first.",
                           flush=True)
                     if not await self._dismiss_quick_bet(pg):
@@ -3954,7 +3982,7 @@ class PinnacleAdapter(BookAdapter):
 
         async def gone() -> bool:
             try:
-                return not await portal.count()
+                return not await self._slip_open(page)
             except Exception:
                 return True                       # page/frame went away: nothing is left armed
 
@@ -4045,7 +4073,7 @@ class PinnacleAdapter(BookAdapter):
             return {"ok": False, "error": "no page"}
         portal = page.locator("#quick-bet-portal")
         try:
-            if not await portal.count():
+            if not await self._slip_open(page):
                 await self.camp_stop()
                 return {"ok": False, "error": "the armed slip is gone — nothing to fire"}
             text = (await portal.first.inner_text()).replace("\n", " | ")
