@@ -211,6 +211,22 @@ class PinnacleBrowserSession:
         # (always valid); override with PINNACLE_BROWSE_URLS once you've confirmed the sport-page URLs.
         self._browse_urls = [u.strip() for u in os.environ.get("PINNACLE_BROWSE_URLS", "").split(",") if u.strip()] \
             or [self._login_url]
+        # DROP BROWSE URLS FOR A SPORT WE ARE NOT TRADING. The organic loop navigates the primary page around
+        # this list to keep the session alive, so a leftover tennis URL does not merely sit in the env — it
+        # actively walks the board off the sport being watched, between drift checks, forever. HARDVEN_SPORTS
+        # is the single source of truth for which sport we trade; anything here that disagrees with it is
+        # stale configuration, and silently obeying it is how the page and the feed end up on different games.
+        _slug = self._active_sport_slug()
+        if _slug:
+            _keep, _drop = [], []
+            for _u in self._browse_urls:
+                _m = re.search(r"/en/([a-z][a-z-]*)/", _u or "")
+                (_keep if (not _m or _m.group(1) in ("account", "login") or _m.group(1) == _slug)
+                        else _drop).append(_u)
+            if _drop:
+                print(f"[PINNACLE SESSION] dropped {len(_drop)} browse URL(s) for another sport "
+                      f"(trading '{_slug}'): {', '.join(_drop)}", flush=True)
+                self._browse_urls = _keep or [self._login_url]
         # HOME PAGE: where the main board should SIT once we're logged in. Landing on the site root leaves the
         # board showing whatever Pinnacle promotes, so the operator had to click through to the sport by hand
         # every session — and until they did, the board's sport-topic WS wasn't streaming the sport we trade.
@@ -1542,11 +1558,38 @@ class PinnacleBrowserSession:
         print(f"[PINNACLE SESSION] board home is now {self._home_url}", flush=True)
         return self._home_url
 
+    @staticmethod
+    def _active_sport_slug() -> str:
+        """The one sport we trade, as Pinnacle spells it in a URL. Single source of truth: HARDVEN_SPORTS."""
+        try:
+            import sports as _sports_cfg
+            keys = [s.key for s in _sports_cfg.enabled_sports()]
+            return keys[0] if keys else ""
+        except Exception:
+            return ""
+
     def _derive_home_url(self) -> str:
-        """First browsed sport's matchups page, else the active sport from the shared catalog, else the site
-        root. Keeps 'which sport do we trade' in ONE place (HARDVEN_SPORTS) rather than a second env var."""
+        """Where the board SITS: the live in-play list of the sport we trade.
+
+        HARDVEN_SPORTS decides, and a browse URL naming a DIFFERENT sport is treated as a stale leftover
+        rather than a preference. That precedence is the fix for a specific failure: this method read
+        `_browse_urls` first, so a tennis URL left in the env survived a switch to soccer, became the home
+        page, and the drift watchdog then dragged the board back to tennis every few minutes while the feed,
+        the catalog and the pairing had all moved. Nothing looked broken; the page and the data simply
+        disagreed about the sport.
+
+        Defaults to the LIVE board rather than the pre-match one, because that is where the operator wants
+        to sit. Set PINNACLE_HOME_BOARD=prematch if slip placement needs the pre-match list — the live board
+        lists live games ONLY, so a pre-match row is not on it and cannot be found by scanning.
+        """
+        slug = self._active_sport_slug()
         for u in self._browse_urls:
             m = re.search(r"/en/([a-z][a-z-]*)/", u or "")
+            if m and slug and m.group(1) not in ("account", "login") and m.group(1) != slug:
+                print(f"[PINNACLE SESSION] ignoring browse URL for '{m.group(1)}' — HARDVEN_SPORTS says we "
+                      f"trade '{slug}'. Update PINNACLE_BROWSE_URLS or it will keep pulling the board off "
+                      f"the sport we are actually watching.", flush=True)
+                break                      # a wrong-sport list is not partially usable — derive instead
             if m and m.group(1) not in ("account", "login"):
                 # A LIVE BROWSE URL STAYS LIVE. This rebuilt the sport's PRE-MATCH board from the sport
                 # name alone, silently discarding the `/live/` the operator had asked for. The drift
@@ -1557,13 +1600,10 @@ class PinnacleBrowserSession:
                 if re.search(r"/(live|live-?betting)/?$", (u or "").split("?")[0]):
                     return u.split("?")[0]
                 return f"https://www.pinnacle.bet/en/{m.group(1)}/matchups/"
-        try:
-            import sports as _sports_cfg
-            keys = [s.key for s in _sports_cfg.active()] if hasattr(_sports_cfg, "active") else []
-            if keys:
-                return f"https://www.pinnacle.bet/en/{keys[0]}/matchups/"
-        except Exception:
-            pass
+        if slug:
+            board = "matchups/" if (os.environ.get("PINNACLE_HOME_BOARD", "live").strip().lower()
+                                    == "prematch") else "matchups/live/"
+            return f"https://www.pinnacle.bet/en/{slug}/{board}"
         return self._login_url
 
     async def _go_home_once(self) -> None:

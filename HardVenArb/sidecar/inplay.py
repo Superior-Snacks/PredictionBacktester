@@ -35,8 +35,31 @@ ODDS_BTN = "button.market-btn"
 PORTAL = "#quick-bet-portal"
 CLOSE_BTN = (f'{PORTAL} button[aria-label*="Remove"], {PORTAL} button[aria-label*="Close"]')
 
-LIVE_URL = os.environ.get("PINNACLE_INPLAY_URL",
-                          "https://www.pinnacle.bet/en/tennis/matchups/live/")
+def _derive_live_url() -> str:
+    """The in-play board FOR THE SPORT WE TRADE, from the one place that decides it: HARDVEN_SPORTS.
+
+    This was hardcoded to tennis. Everything else in the stack already followed `sports.active()` — the
+    catalog, the scheduler, the pairing allowlist — so switching HARDVEN_SPORTS to soccer moved every one of
+    them and left the browser sitting on the tennis live board, which the drift watchdog then dutifully
+    enforced every few minutes. The page and the feed were watching different sports.
+
+    Pinnacle spells the sport the same way `sports.py` keys it (`/en/tennis/`, `/en/soccer/`), which is the
+    assumption `_derive_home_url` already makes. `PINNACLE_INPLAY_URL` still overrides for anything else.
+    """
+    explicit = (os.environ.get("PINNACLE_INPLAY_URL") or "").strip()
+    if explicit:
+        return explicit
+    try:
+        import sports as _sports_cfg
+        keys = [s.key for s in _sports_cfg.enabled_sports()]
+        if keys:
+            return f"https://www.pinnacle.bet/en/{keys[0]}/matchups/live/"
+    except Exception:
+        pass
+    return "https://www.pinnacle.bet/en/tennis/matchups/live/"
+
+
+LIVE_URL = _derive_live_url()
 
 
 class InPlayActivity:
