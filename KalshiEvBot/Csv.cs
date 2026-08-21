@@ -10,13 +10,23 @@ namespace KalshiEvBot;
 /// </summary>
 public static class Csv
 {
-    /// <summary>Reads a CSV into header-keyed rows. Returns an empty list for a missing or header-only file.</summary>
+    /// <summary>
+    /// Reads a CSV into header-keyed rows. Returns an empty list for a missing or header-only file.
+    ///
+    /// <para><b>Opened with <c>FileShare.ReadWrite</c>, which is not optional here.</b> These files are read
+    /// while the bot still has them open for appending — by <c>--resolve</c> from another process, and by
+    /// <c>--verify</c> from inside the same one. A plain <c>StreamReader(path)</c> requests share-Read,
+    /// which conflicts with the writer's existing Write handle and throws a sharing violation reported as
+    /// "used by another process". Observed 2026-08-21: it crashed <c>--verify</c> outright and would have
+    /// broken the "safe to run alongside" guarantee for <c>--resolve</c>.</para>
+    /// </summary>
     public static List<Dictionary<string, string>> Read(string path)
     {
         var rows = new List<Dictionary<string, string>>();
         if (!File.Exists(path)) return rows;
 
-        using var r = new StreamReader(path);
+        using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        using var r = new StreamReader(fs);
         string? headerLine = r.ReadLine();
         if (headerLine is null) return rows;
         var header = SplitLine(headerLine);

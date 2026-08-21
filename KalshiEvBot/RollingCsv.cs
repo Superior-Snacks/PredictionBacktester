@@ -62,9 +62,18 @@ public sealed class RollingCsv : IDisposable
         if (fresh) _w.WriteLine(_header);
     }
 
+    /// <summary>Share-ReadWrite for the same reason <see cref="Csv.Read"/> needs it: yesterday's file may
+    /// still be held open elsewhere, and a sharing violation here would look like a header mismatch and
+    /// silently roll to a spurious _v2.</summary>
     private static string? ReadHeader(string path)
     {
-        try { using var r = new StreamReader(path); return r.ReadLine(); } catch { return null; }
+        try
+        {
+            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            using var r = new StreamReader(fs);
+            return r.ReadLine();
+        }
+        catch { return null; }
     }
 
     public void WriteRow(string[] fields)

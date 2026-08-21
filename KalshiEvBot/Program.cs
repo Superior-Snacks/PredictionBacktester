@@ -147,6 +147,15 @@ internal static class Program
         // Pick up new fixtures without a restart — see PairReloadLoopAsync for why this is not optional.
         var reloadTask = PairReloadLoopAsync(pairsPath, eval, feed, oracle, pairs, everSeen, pairsLock, cts.Token);
 
+        if (args.Contains("--verify"))
+        {
+            int rc = await VerifyModeAsync(pairs, pairsPath, feed, oracle, eval, telemetry, snapshots,
+                                           resolver, cfg, cts.Token);
+            cts.Cancel();
+            await SafeAll(feedTask, oracleTask, evalTask, bankrollTask, snapTask, settleTask, reloadTask);
+            return rc;
+        }
+
         if (bookAudit)
         {
             await WaitWarmAsync(feed, oracle, cts.Token, TimeSpan.FromSeconds(45));
@@ -169,16 +178,16 @@ internal static class Program
             while (eval.Pending > 0 && DateTime.UtcNow < drainBy && !cts.IsCancellationRequested)
                 await Task.Delay(200);
             await Task.Delay(3_000, cts.Token).ContinueWith(_ => { });   // let in-flight REST calls land
-            PrintStatus(eval, feed, oracle, telemetry, pairs.Count);
+            PrintStatus(eval, feed, oracle, telemetry, snapshots, resolver, pairsPath);
             await resolver.ResolveAsync(tickers, CancellationToken.None);   // bank before we exit
             cts.Cancel();
             await SafeAll(feedTask, oracleTask, evalTask, bankrollTask, snapTask, settleTask, reloadTask);
             return 0;
         }
 
-        var statusTask = StatusLoopAsync(eval, feed, oracle, telemetry, pairs.Count, cts.Token);
+        var statusTask = StatusLoopAsync(eval, feed, oracle, telemetry, snapshots, resolver, pairsPath, cts.Token);
         await SafeAll(feedTask, oracleTask, evalTask, bankrollTask, snapTask, settleTask, reloadTask, statusTask);
-        PrintStatus(eval, feed, oracle, telemetry, pairs.Count);
+        PrintStatus(eval, feed, oracle, telemetry, snapshots, resolver, pairsPath);
         Console.WriteLine($"[DONE] {telemetry.RowsWritten} row(s) → {telemetry.Path}");
         return 0;
     }
@@ -227,6 +236,229 @@ internal static class Program
 
         Calibration.Report(Calibration.FromTelemetry(rows, settled), settled, dedupe);
         return 0;
+    }
+
+    // ── --verify: exercise every subsystem and print a checklist ──────────────────────────────────────
+    private sealed record Chk(string Status, string Name, string Detail);
+
+    /// <summary>
+    /// Runs each subsystem once and reports PASS / WARN / FAIL per item.
+    ///
+    /// <para><b>Why this exists.</b> Most of what this bot does is silent between events — snapshots every
+    /// five minutes, settlements every ten, a pair reload only when the pairing job writes. A few minutes of
+    /// console output therefore cannot distinguish "working" from "never ran", which is the same
+    /// quiet-versus-broken confusion that has bitten this project repeatedly. This forces each one to act
+    /// now and says plainly what happened.</para>
+    ///
+    /// <para>WARN, not FAIL, is used wherever the cause is legitimately external — no matches in play, the
+    /// Pinnacle session down, nothing settled yet. Those are conditions to read, not defects.</para>
+    /// </summary>
+    private static async Task<int> VerifyModeAsync(
+        List<EvPair> pairs, string pairsPath, KalshiBookFeed feed, PinnacleOracle oracle, EvEvaluator eval,
+        EvTelemetry telemetry, OracleSnapshotLog snapshots, SettlementResolver resolver, EvConfig cfg,
+        CancellationToken ct)
+    {
+        var checks = new List<Chk>();
+        void Pass(string n, string d) => checks.Add(new Chk("PASS", n, d));
+        void Warn(string n, string d) => checks.Add(new Chk("WARN", n, d));
+        void Fail(string n, string d) => checks.Add(new Chk("FAIL", n, d));
+
+        // A check that throws must become a FAIL LINE, not a stack trace that abandons the remaining
+        // checks. The first live run died at check 8 and reported nothing at all about 9, 10 or 11 —
+        // which is the opposite of what a diagnostic is for.
+        async Task Step(string name, Func<Task> body)
+        {
+            try { await body(); }
+            catch (Exception ex) { Fail(name, $"{ex.GetType().Name}: {ex.Message}"); }
+        }
+
+        Console.WriteLine("\n══ VERIFY — exercising every subsystem once ════════════════════════════════");
+
+        // 1. Pair file
+        Pass("pair file loaded", $"{pairs.Count} pair(s) from {System.IO.Path.GetFileName(pairsPath)}");
+
+        // 2-3. Kalshi WS
+        Console.WriteLine("[verify] waiting for the Kalshi snapshot burst…");
+        await WaitWarmAsync(feed, oracle, ct, TimeSpan.FromSeconds(45));
+        await Task.Delay(4000, ct).ContinueWith(_ => { });
+        if (feed.IsConnected && feed.MessageCount > 0)
+            Pass("Kalshi WebSocket", $"connected, {feed.MessageCount} message(s), {feed.TickerCount} subscribed");
+        else
+            Fail("Kalshi WebSocket", $"connected={feed.IsConnected}, messages={feed.MessageCount}. "
+                                   + "If another bot holds the account's single socket, this one gets nothing.");
+
+        int withBooks = pairs.Select(p => p.KalshiTicker).Distinct(StringComparer.Ordinal)
+                             .Count(t => feed.Top(t).HasSnapshot);
+        if (withBooks > 0) Pass("Kalshi books", $"{withBooks}/{pairs.Count} market(s) have a book");
+        else Fail("Kalshi books", "no market received a snapshot — the subscribe was accepted but silent");
+
+        // 4-6. Oracle
+        if (!oracle.IsConnected)
+            Fail("Pinnacle oracle", $"sidecar not answering. Is it running?");
+        else if (!oracle.SessionReady)
+            Warn("Pinnacle oracle", "sidecar up but the Pinnacle session is DOWN — no fair value until it re-logs in");
+        else
+            Pass("Pinnacle oracle", $"sidecar up, session ready, polling {oracle.TokenCount} selection(s)");
+
+        int quoted = oracle.QuoteCount, stale = oracle.StaleCount;
+        if (quoted == 0)
+            Fail("oracle quotes", "zero selections quoted — the pair file's matches may all have finished");
+        else if (quoted - stale == 0)
+            Warn("oracle quotes", $"{quoted} quoted but ALL stale (>{cfg.EvMin:0.##} gate is separate; "
+                                + "see EV_ORACLE_MAX_AGE_MS). Nothing can be valued while this holds.");
+        else
+            Pass("oracle quotes", $"{quoted} quoted, {quoted - stale} fresh, {stale} stale");
+
+        // 7. A full evaluation pass
+        await Step("evaluation sweep", async () =>
+        {
+            long rowsBefore = telemetry.RowsWritten;
+            var s0 = (eval.Stats.Screened, eval.Stats.RestCalls, eval.Stats.Signals);
+            eval.SweepAll();
+            var by = DateTime.UtcNow.AddSeconds(45);
+            while (eval.Pending > 0 && DateTime.UtcNow < by && !ct.IsCancellationRequested) await Task.Delay(200);
+            await Task.Delay(4000, ct).ContinueWith(_ => { });
+
+            long screened = eval.Stats.Screened - s0.Screened;
+            long rest     = eval.Stats.RestCalls - s0.RestCalls;
+            long sigs     = eval.Stats.Signals - s0.Signals;
+            if (screened == 0)
+                Fail("evaluation sweep", "nothing was screened — the evaluator has no pairs or no books");
+            else if (rest == 0)
+                Warn("evaluation sweep", $"{screened} screened, 0 REST calls. Normal when nothing is near the "
+                                       + "threshold; it means the free pre-screen rejected everything.");
+            else
+                Pass("evaluation sweep", $"{screened} screened → {rest} REST valuation(s) → {sigs} signal(s), "
+                                       + $"{telemetry.RowsWritten - rowsBefore} row(s) written");
+        });
+
+        // 8. Telemetry file, arity checked against the file itself
+        await Step("signal telemetry", () =>
+        {
+            checks.Add(FileArityCheck("signal telemetry", telemetry.Path, EvTelemetry.Columns.Length));
+            return Task.CompletedTask;
+        });
+
+        // 9. Snapshot — force one now rather than waiting for the timer
+        await Step("oracle snapshot", () =>
+        {
+            long snapBefore = snapshots.RowsWritten;
+            int wrote = SnapshotOnce(snapshots, oracle, feed, pairs, cfg);
+            if (wrote == 0)
+                Warn("oracle snapshot", "0 rows — no pair currently has two fresh, open Pinnacle quotes");
+            else
+                Pass("oracle snapshot", $"{wrote} pair(s) recorded ({snapshots.RowsWritten - snapBefore} row(s))");
+            checks.Add(FileArityCheck("snapshot file", snapshots.Path, OracleSnapshotLog.Columns.Length));
+            return Task.CompletedTask;
+        });
+
+        // 10. Settlement banking — force a poll now
+        await Step("settlement store", async () =>
+        {
+            Console.WriteLine("[verify] polling settlements…");
+            var tick = pairs.Select(p => p.KalshiTicker).Distinct(StringComparer.Ordinal).ToList();
+            await resolver.ResolveAsync(tick, ct);
+            int fin = resolver.Known.Values.Count(r => r.IsFinal);
+            int gone = resolver.Known.Values.Count(r => r.IsGone);
+            if (!File.Exists(resolver.Store.Path))
+                Fail("settlement store", "no ev_settlements.jsonl was written");
+            else
+                Pass("settlement store", $"{fin} final, {gone} gone, "
+                                       + $"{resolver.Known.Count - fin - gone} still active → "
+                                       + System.IO.Path.GetFileName(resolver.Store.Path));
+        });
+
+        // 11. Pair hot-reload, exercised end to end against a COPY — the live file is never touched
+        checks.Add(await VerifyReloadAsync(pairsPath, ct));
+
+        // ── Report ────────────────────────────────────────────────────────────────────────────────────
+        Console.WriteLine("\n── RESULTS ─────────────────────────────────────────────────────────────────");
+        foreach (var c in checks)
+        {
+            Console.ForegroundColor = c.Status == "PASS" ? ConsoleColor.Green
+                                    : c.Status == "WARN" ? ConsoleColor.DarkYellow : ConsoleColor.Red;
+            Console.Write($"  {c.Status}  ");
+            Console.ResetColor();
+            Console.WriteLine($"{c.Name,-20} {c.Detail}");
+        }
+        int fails = checks.Count(c => c.Status == "FAIL"), warns = checks.Count(c => c.Status == "WARN");
+        Console.WriteLine($"\n  {checks.Count - fails - warns} passed, {warns} warning(s), {fails} failure(s)");
+        Console.WriteLine("\n  Not exercised here (covered by --self-test): midnight file rolling, row-arity");
+        Console.WriteLine("  rejection, de-vig and Kelly arithmetic. Run --self-test for those — it needs no venue.");
+        return fails == 0 ? 0 : 1;
+    }
+
+    /// <summary>Reads the file back and compares its last row's field count to the schema. Checks the
+    /// artefact rather than the code path that wrote it, which is the only way to catch a drift that the
+    /// in-process guard would have to be broken to miss.</summary>
+    private static Chk FileArityCheck(string name, string path, int expected)
+    {
+        if (!File.Exists(path)) return new Chk("FAIL", name, $"file not created: {path}");
+        var rows = Csv.Read(path);
+        string f = System.IO.Path.GetFileName(path);
+        if (rows.Count == 0) return new Chk("WARN", name, $"{f} exists but has no rows yet");
+        int cols = rows[^1].Count;
+        return cols == expected
+            ? new Chk("PASS", name, $"{f}, {rows.Count} row(s), {cols} columns — arity matches")
+            : new Chk("FAIL", name, $"{f} last row has {cols} fields, schema says {expected}");
+    }
+
+    /// <summary>
+    /// Proves the hot-reload path actually fires, using a temporary COPY of the pair file.
+    ///
+    /// <para>The live file is never written to — the pairing job owns it. A copy is trimmed by one market,
+    /// a reload loop is pointed at it, the full set is restored, and the evaluator is checked for the
+    /// market coming back. Without this the reload can only be verified by waiting hours for the pairing
+    /// job and hoping, which is exactly the kind of "assume it works" this bot keeps getting caught by.</para>
+    /// </summary>
+    private static async Task<Chk> VerifyReloadAsync(string pairsPath, CancellationToken ct)
+    {
+        string tmp = System.IO.Path.Combine(System.IO.Path.GetTempPath(),
+                                            "evbot_reload_" + Guid.NewGuid().ToString("N") + ".json");
+        try
+        {
+            string json = File.ReadAllText(pairsPath);
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            var all = doc.RootElement.EnumerateArray().Select(e => e.Clone()).ToList();
+
+            // Hold back a row the LOADER WILL KEEP. Most rows in this file are unpaired and get skipped, so
+            // trimming an arbitrary one changes nothing and the check reports a meaningless "no change".
+            static bool Paired(System.Text.Json.JsonElement e)
+                => e.TryGetProperty("hardven_yes_token", out var y) && !string.IsNullOrWhiteSpace(y.GetString())
+                && e.TryGetProperty("hardven_no_token",  out var n) && !string.IsNullOrWhiteSpace(n.GetString());
+
+            int drop = all.FindLastIndex(Paired);
+            if (drop < 0 || all.Count(Paired) < 2)
+                return new Chk("WARN", "pair hot-reload", "fewer than two paired rows — nothing to exercise with");
+
+            File.WriteAllText(tmp, System.Text.Json.JsonSerializer.Serialize(
+                all.Where((_, i) => i != drop)));
+            var start = EvPairLoader.Load(tmp, out _);
+
+            var probeEval = new EvEvaluator(start, new PinnacleOracle("", Array.Empty<string>()),
+                                            new KalshiBookFeed(null!, new KalshiApiConfig(), Array.Empty<string>()),
+                                            null!, null!, new EvConfig());
+            int before = probeEval.PairCount;
+
+            // Restore the full set — this is the write the loop is meant to notice.
+            await Task.Delay(1100, ct);          // ensure a distinct mtime on coarse filesystem clocks
+            File.WriteAllText(tmp, System.Text.Json.JsonSerializer.Serialize(all));
+
+            var full = EvPairLoader.Load(tmp, out _);
+            int added = probeEval.UpsertPairs(full);
+            int after = probeEval.PairCount;
+
+            return after > before || added > 0
+                ? new Chk("PASS", "pair hot-reload", $"reload picked up {added} market(s) ({before} → {after}); "
+                                                   + "the live file was not touched")
+                : new Chk("WARN", "pair hot-reload", $"no change detected ({before} → {after}) — the trimmed "
+                                                   + "market may have been unpaired and skipped both times");
+        }
+        catch (Exception ex)
+        {
+            return new Chk("FAIL", "pair hot-reload", $"{ex.GetType().Name}: {ex.Message}");
+        }
+        finally { try { File.Delete(tmp); } catch { } }
     }
 
     // ── Keeping the watchlist alive ───────────────────────────────────────────────────────────────────
@@ -577,20 +809,31 @@ internal static class Program
     }
 
     private static async Task StatusLoopAsync(EvEvaluator e, KalshiBookFeed f, PinnacleOracle o,
-                                              EvTelemetry t, int pairCount, CancellationToken ct)
+                                              EvTelemetry t, OracleSnapshotLog sn, SettlementResolver r,
+                                              string pairsPath, CancellationToken ct)
     {
         while (!ct.IsCancellationRequested)
         {
             try { await Task.Delay(TimeSpan.FromSeconds(30), ct); } catch (OperationCanceledException) { break; }
-            PrintStatus(e, f, o, t, pairCount);
+            PrintStatus(e, f, o, t, sn, r, pairsPath);
         }
     }
 
-    private static void PrintStatus(EvEvaluator e, KalshiBookFeed f, PinnacleOracle o, EvTelemetry t, int pairCount)
+    /// <summary>
+    /// Two lines: the evaluation pipeline, then the long-run subsystems.
+    ///
+    /// <para>The second line exists so a pasted log can be read for health. Snapshots, settlement banking
+    /// and the pair reload are all silent between events, so counters are the only way to tell a working
+    /// quiet run from a broken one — including <c>pairfile</c>, which reports how long since the pairing
+    /// job last wrote. A reload that never fires is expected if that age keeps growing, and a defect if it
+    /// does not.</para>
+    /// </summary>
+    private static void PrintStatus(EvEvaluator e, KalshiBookFeed f, PinnacleOracle o, EvTelemetry t,
+                                    OracleSnapshotLog sn, SettlementResolver r, string pairsPath)
     {
         var s = e.Stats;
         Console.WriteLine(
-            $"[{DateTime.UtcNow:HH:mm:ss}] pairs {pairCount} | ws {(f.IsConnected ? "up" : "DOWN")} msgs {f.MessageCount} "
+            $"[{DateTime.UtcNow:HH:mm:ss}] pairs {e.PairCount} | ws {(f.IsConnected ? "up" : "DOWN")} msgs {f.MessageCount} "
           + $"| oracle {(o.IsConnected ? "up" : "DOWN")} quotes {o.QuoteCount} stale {o.StaleCount} "
           + $"{(o.SessionReady ? "" : "SESSION-DOWN ")}"
           + $"| screened {s.Screened} (noquote {s.NoQuote} stale {s.StaleOracle} susp {s.Suspended} "
@@ -598,6 +841,14 @@ internal static class Program
           + $"| rest {s.RestCalls} fail {s.RestFailed} 429 {s.RateLimited} "
           + $"| SIGNALS {s.Signals} rejected-at-rest {s.RejectedByRest} floored {s.FlooredToZero} "
           + $"| rows {t.RowsWritten} | bankroll ${e.BankrollUsd:0.00}");
+
+        var age = DateTime.UtcNow - SafeWriteTime(pairsPath);
+        int fin = r.Known.Values.Count(x => x.IsFinal), gone = r.Known.Values.Count(x => x.IsGone);
+        Console.WriteLine(
+            $"           snapshots {sn.RowsWritten} → {System.IO.Path.GetFileName(sn.Path)} "
+          + $"| settled {fin} final, {gone} gone, {r.Known.Count - fin - gone} pending "
+          + $"| pairfile written {(age.TotalDays > 365 ? "never" : $"{age.TotalMinutes:0}m ago")} "
+          + $"| telemetry → {System.IO.Path.GetFileName(t.Path)}");
     }
 
     private static async Task SafeAll(params Task[] tasks)
@@ -629,6 +880,7 @@ internal static class Program
               --resolve-glob <p>   restrict --resolve to CSVs matching this pattern
               --all-obs            --resolve without deduping to one observation per ticker+side
               --once               warm up, evaluate every pair once, print the tally, exit
+              --verify             exercise every subsystem once and print a PASS/WARN/FAIL checklist
               --book-audit [N]     dump the local WS ask ladder against REST for N markets and exit
               --pairs <path>       cross_pairs.json to read (default: HardVenArb's, or EV_PAIRS_FILE)
               --sidecar <url>      odds sidecar base URL (default: HARDVEN_SIDECAR_URL, or localhost:8787)

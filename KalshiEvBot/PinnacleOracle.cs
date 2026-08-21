@@ -39,6 +39,8 @@ public sealed class PinnacleOracle
     public volatile int  StaleCount;
     private bool _feedPolicy, _feedAlive = true;
     private int  _lastReady = -1;
+    private string _lastError = "";
+    private int _sameErrorCount;
 
     public PinnacleOracle(string sidecarBaseUrl, IEnumerable<string> tokens)
     {
@@ -131,7 +133,15 @@ public sealed class PinnacleOracle
             catch (Exception ex)
             {
                 IsConnected = false;
-                Console.WriteLine($"[ORACLE] poll error: {ex.GetType().Name}: {ex.Message}");
+                // Throttled: a sidecar that is simply not running fails every poll, and at a 3s cadence
+                // that buries every other line in the log under the same sentence. Say it once, then
+                // periodically with a count so the condition stays visible without drowning the console.
+                string msg = $"{ex.GetType().Name}: {ex.Message}";
+                _sameErrorCount = msg == _lastError ? _sameErrorCount + 1 : 1;
+                _lastError = msg;
+                if (_sameErrorCount == 1 || _sameErrorCount % 100 == 0)
+                    Console.WriteLine($"[ORACLE] poll error: {msg}"
+                                    + (_sameErrorCount > 1 ? $"  (x{_sameErrorCount})" : ""));
             }
 
             try { await Task.Delay(_pollMs, ct); } catch (OperationCanceledException) { break; }

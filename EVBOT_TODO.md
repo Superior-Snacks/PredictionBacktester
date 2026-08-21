@@ -113,6 +113,24 @@ is what made them worth hunting before starting rather than after.
       was still writing `…_20260821.csv` on the 30th — nothing lost, but every date filter downstream reads
       nine days as one. `RollingCsv.cs` now rolls on the UTC date and is shared by both writers.
 
+- [x] **`--verify`** — runs each subsystem once and prints PASS / WARN / FAIL per item, because most of
+      this bot is silent between events (snapshots every 5 min, settlements every 10, a reload only when the
+      pairing job writes). A few minutes of console output therefore cannot tell "working" from "never ran",
+      which is the same quiet-versus-broken confusion that has caught this project repeatedly. WARN is used
+      wherever the cause is legitimately external — no matches in play, session down, nothing settled — so
+      those read as conditions rather than defects. The hot-reload check exercises the real path against a
+      temporary COPY (the live file is never written), holding back a row the loader will actually keep.
+- [x] **Status line now has a second row** carrying snapshot rows, settlement counts, and how long since the
+      pairing job last wrote — so a pasted log can be read for health, and a reload that never fires is
+      explicable rather than ambiguous.
+
+**Two bugs the first live `--verify` found, which is the argument for having it:**
+* `Csv.Read` opened files with share-Read, which conflicts with the writer's own Write handle — it crashed
+  `--verify` outright and would have broken the advertised "safe to run alongside" guarantee for
+  `--resolve`. Both readers now use `FileShare.ReadWrite`.
+* A throwing check aborted the whole run, so checks 9–11 reported nothing at all. Each step is now wrapped
+  and a failure becomes a FAIL line.
+
 **Operational dependency:** the reload only helps if the pairing job is actually rewriting
 `cross_pairs.json` on a schedule. If that file never changes, the bot has nothing new to pick up.
 
@@ -121,7 +139,8 @@ A fortnight is well under 100 MB.
 
 ### Running it
 ```
-dotnet run --project KalshiEvBot -- --self-test     # offline, safe any time
+dotnet run --project KalshiEvBot -- --self-test     # offline, safe any time (50 checks)
+dotnet run --project KalshiEvBot -- --verify        # exercise every subsystem once, PASS/WARN/FAIL
 dotnet run --project KalshiEvBot -- --check         # validates pairs, opens nothing
 dotnet run --project KalshiEvBot -- --once          # needs the sidecar up AND the arb bot stopped
 dotnet run --project KalshiEvBot -- --book-audit 15
