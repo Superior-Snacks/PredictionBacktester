@@ -215,6 +215,7 @@ def main() -> None:
 
     cat = fetch_catalog(args.sidecar, args.catalog_timeout)
     book = index_catalog(cat)
+
     # From the SAME catalog fetch: leagueId -> (sport, league name) for the tab-manager URL, and
     # matchupId -> ISO start_time so the tab manager can rank gaps by SOONEST game start (near-term games get
     # the dedicated live-WS tabs; the rest ride the roving tail tab).
@@ -230,6 +231,30 @@ def main() -> None:
     print(f"[PAIR] {sum(len(v) for v in book.values())} Pinnacle games ({len(book)} matchups) in /catalog")
 
     pairs = json.loads(Path(args.pairs).read_text(encoding="utf-8"))
+    # ── OBSERVE THE SLATE, EVERY RUN ─────────────────────────────────────────────────────────────────
+    # Pairing already holds the whole board, so recording it costs nothing extra and answers a question a
+    # single look cannot: WHEN are games actually live, and how late do they appear? A schedule built from
+    # one morning's board is built from a fraction of that day. See slate_log.py.
+    # Best-effort by construction — a logging failure must never cost a pairing run.
+    try:
+        import slate_log
+        _paired_mids = {(e.get("hardven_yes_token") or "").split(":")[1]
+                        for e in pairs if (e.get("hardven_yes_token") or "").count(":") >= 2}
+        _obs = []
+        for _teams, _games in book.items():
+            for _g in _games:
+                _mid = next((str(_sid).split(":")[1] for _sid in _g["teams"].values()
+                             if str(_sid).count(":") >= 2), "")
+                if _mid:
+                    _obs.append({"matchup_id": _mid, "start_time": _g.get("start"),
+                                 "league": _g.get("league_name", ""), "sport": _g.get("sport", ""),
+                                 "paired": _mid in _paired_mids})
+        _r = slate_log.record(_obs)
+        if _r.get("ok"):
+            print("[PAIR] slate logged: %d game(s) on the board, %d seen for the first time -> %s"
+                  % (_r["games"], _r["new_games"], slate_log.LOG.name))
+    except Exception as _ex:
+        print("[PAIR] slate log skipped (%s: %s)" % (type(_ex).__name__, _ex))
     filled = already = skipped_dupe = fuzzy_n = anchor_rejected = 0
     mirror_conflicts: set[str] = set()
     unmatched: list[str] = []

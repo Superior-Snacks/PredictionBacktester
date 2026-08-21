@@ -104,6 +104,65 @@ def compute_windows(starts: list[tuple[datetime, str]], lead_min: int = 25, trai
     return [(o, c, g) for o, c, g in kept]
 
 
+def compute_inplay_blocks(starts, block_hours: float = 2.0, max_blocks: int = 2,
+                          min_gap_hours: float = 3.0, min_games: int = 1
+                          ) -> list[tuple[datetime, datetime, int]]:
+    """Blocks chosen for IN-PLAY concurrency: when the most games are actually RUNNING at once.
+
+    DIFFERENT QUESTION FROM compute_sessions, which ranks by game STARTS. A start-density peak is where the
+    most matches BEGIN — the right target when the edge is pre-match, because a line is priced before the
+    off. In-play needs games already under way, and a tennis match runs 1-3 hours after its start, so the
+    two peaks are hours apart: the moment lots of matches start is the moment few are yet in play.
+    (2026-08-21: the operator watched a board with exactly ONE live non-suspended game while the schedule
+    thought it was inside a work window.)
+
+    So this integrates CONCURRENCY. Each game occupies [start, start + duration]; the score of a candidate
+    block is the average number of games live across it, sampled every 5 minutes. Greedy: take the best
+    block, then exclude everything within `min_gap_hours` of it before taking the next, so the two blocks
+    are genuinely spread across the day rather than adjacent halves of one peak.
+    """
+    items = []
+    for it in starts:
+        st, sport = _g(it, 0), _g(it, 1, "")
+        dur = DURATION.get(sport, DEFAULT_DURATION)
+        items.append((st, st + timedelta(minutes=dur)))
+    if not items:
+        return []
+    span = timedelta(hours=block_hours)
+    step = timedelta(minutes=5)
+    lo = min(a for a, _ in items)
+    hi = max(b for _, b in items)
+    # Candidate block starts every 5 minutes across the slate.
+    cands: list[tuple[float, datetime]] = []
+    t = lo
+    while t + span <= hi + span:
+        tot, n = 0, 0
+        u = t
+        while u < t + span:
+            tot += sum(1 for a, b in items if a <= u < b)
+            n += 1
+            u += step
+        cands.append((tot / max(1, n), t))
+        t += step
+    cands.sort(key=lambda c: (-c[0], c[1]))
+    picked: list[tuple[datetime, datetime, int]] = []
+    gap = timedelta(hours=min_gap_hours)
+    for score, start in cands:
+        if len(picked) >= max_blocks:
+            break
+        end = start + span
+        # Spread them out: a new block must sit clear of every block already taken, by min_gap_hours
+        # measured between the blocks themselves (not their centres), or the "two blocks" are one.
+        if any(start < b + gap and a - gap < end for a, b, _ in picked):
+            continue
+        live = sum(1 for a, b in items if a < end and start < b)
+        if live < min_games:
+            continue
+        picked.append((start, end, live))
+    picked.sort(key=lambda w: w[0])
+    return picked
+
+
 def compute_sessions(starts: list[tuple[datetime, str]], session_hours: float = 2.0, lead_min: int = 15,
                      trail_min: int = 45, min_games: int = 2, max_blocks: int = 4
                      ) -> list[tuple[datetime, datetime, int]]:
@@ -780,6 +839,12 @@ def main() -> None:
     ap.add_argument("--jitter-mode", choices=("ends", "shift"), default="ends",
                     help="'ends' jitters open/close independently (small nudges); 'shift' moves the whole "
                          "window and KEEPS ITS LENGTH (use for a big spread — see apply_jitter)")
+    ap.add_argument("--inplay-blocks", type=float, default=0.0,
+                    help="IN-PLAY mode: pick the N densest blocks of this many hours by how many games are "
+                         "actually RUNNING (not starting). Use with --max-blocks and --min-block-gap. "
+                         "0 = off. Try 2.")
+    ap.add_argument("--min-block-gap", type=float, default=3.0,
+                    help="hours that must separate the in-play blocks (default 3)")
     ap.add_argument("--pin-only", action="store_true",
                     help="plan ONLY the --pin hours: no density blocks at all. For a fixed two-block day "
                          "where the slate decides nothing.")
@@ -807,7 +872,12 @@ def main() -> None:
     print(f"[SCHED] {len(starts)} games: " + ", ".join(f"{k}={v}" for k, v in sorted(bysport.items())))
 
     max_blocks = args.max_blocks or None      # 0 = unlimited
-    if args.session_hours > 0:                 # SESSION mode: discrete density sessions (continuous-sport friendly)
+    if args.inplay_blocks > 0:
+        windows = compute_inplay_blocks(starts, args.inplay_blocks, args.max_blocks or 2,
+                                        args.min_block_gap, args.min_games)
+        sel = (f" (densest {len(windows)} x {args.inplay_blocks:g}h by GAMES IN PLAY, "
+               f">={args.min_block_gap:g}h apart)")
+    elif args.session_hours > 0:                 # SESSION mode: discrete density sessions (continuous-sport friendly)
         windows = compute_sessions(starts, args.session_hours, args.lead, args.trail,
                                    min_games=args.min_games, max_blocks=args.max_blocks or 4)
         sel = f" (densest {len(windows)} × ~{args.session_hours:g}h sessions by game-start density)"

@@ -494,6 +494,9 @@ class PinnacleAdapter(BookAdapter):
         # own parentId; see _apply. Lets a pair that holds the PRE-MATCH matchup follow the fixture in-play
         # without re-pairing and without asking the guest API anything.
         self._live_child: dict[str, tuple] = {}
+        # (leagueId, frozenset(normalised player names)) -> ("{lid}:{mid}", {designation: name}, units).
+        # The name-based twin of _live_child, for pushes that carry no parentId at all.
+        self._live_by_names: dict = {}
         # ── WS state ──
         self._client = None
         self._connected = False
@@ -1010,6 +1013,15 @@ class PinnacleAdapter(BookAdapter):
         got = cache.get(sid)
         return got[0] if got else ""
 
+    def _pair_both_names(self, sid: str):
+        """Both Pinnacle player names for a token, from the pairing file. () when unknown."""
+        cache = getattr(self, "_pair_names", None) or {}
+        got = cache.get(sid)
+        if not got:
+            self._pair_side_name(sid)                 # populates/refreshes the cache
+            got = (getattr(self, "_pair_names", None) or {}).get(sid)
+        return got if got else ()
+
     def _redirect_sid(self, sid: str) -> str:
         """A retired pre-match token -> the live matchup's token for the SAME side. "" when it cannot be done.
 
@@ -1026,6 +1038,13 @@ class PinnacleAdapter(BookAdapter):
         if len(parts) != 3 or parts[2] not in _SIDES:
             return ""
         got = self._live_child.get(f"{parts[0]}:{parts[1]}")
+        if not got:
+            # NO parentId LINK — ask who is playing instead. The pairing recorded both Pinnacle names for
+            # this token, so the fixture can be identified by its players and found among the matchups that
+            # are actually pushing in the same league.
+            both = self._pair_both_names(sid)
+            if both:
+                got = self._live_by_names.get((parts[0], frozenset(_norm_name(n) for n in both)))
         if not got:
             return ""
         child, names, units = got
@@ -1078,6 +1097,16 @@ class PinnacleAdapter(BookAdapter):
         with self._cache_lock:
             for sid in selection_ids:
                 s = self._cache.get(sid)
+                # A RETIRED PARENT USUALLY HAS A CACHE ENTRY — an old one. The first version only redirected
+                # on a cache MISS, so the common case (parent cached from before the match went in-play, now
+                # ageing out) took the ordinary path and aged out anyway. Redirect whenever the parent is
+                # missing OR stale and a live child is known.
+                if s is not None and reader_mode:
+                    _mid = ":".join(sid.split(":")[:2])
+                    if _mid in self._live_child and now - s.ts > self._mid_quiet_ttl:
+                        _r = self._redirect_sid(sid)
+                        if _r and _r in self._cache:
+                            s = self._cache[_r]
                 if not s:
                     # FOLLOW THE FIXTURE IN-PLAY. Nothing is cached for this token because Pinnacle retired
                     # the matchup when the match went live (see _apply). If the push told us which matchup
@@ -2098,8 +2127,35 @@ class PinnacleAdapter(BookAdapter):
         # Names are stored per designation so a redirect can be verified rather than assumed. Home/away
         # LOOKS preserved between parent and child, but "looks preserved" is how sides get inverted, and the
         # cost of being wrong is both legs on one outcome.
+        # NOT GATED ON `live`. `live` here means the message arrived on a `/live/*` TOPIC, which is not the
+        # same as "this matchup is in play" — the reader also receives the matchup on other topics, and the
+        # parent link is a property of the RECORD, identical either way. Requiring the live topic meant the
+        # mapping was often never learned, so the redirect that depends on it never fired and the paired
+        # PARENT token stayed unpriced. Observed 2026-08-21: 1 of 42 paired matchups receiving pushes, while
+        # the reader was pushing the live CHILDREN of several of them.
+        # ── THE PLAYERS ARE THE RELIABLE KEY ────────────────────────────────────────────────────────
+        # `parentId` is the direct link and is used first, but it is only present when Pinnacle chooses to
+        # send it, and a record without one leaves a paired parent stranded. The PARTICIPANTS are always
+        # there, and a fixture is the same fixture whatever id it is wearing — so index every pushing
+        # matchup by its league plus its set of player names, and a retired parent can find its live
+        # replacement by asking "who is playing" instead of "what were you called".
+        #
+        # Scoped to the LEAGUE because matchup ids are league-scoped and names repeat across tournaments;
+        # a Smith vs Jones in Lesa must never resolve to a Smith vs Jones in Santander.
+        try:
+            _pn = {_norm_name(_strip_units(pt.get("name") or ""))
+                   for pt in (rec.get("participants") or []) if pt.get("name")}
+            if len(_pn) >= 2:
+                _by_desig = {pt.get("alignment"): _strip_units(pt.get("name") or "")
+                             for pt in (rec.get("participants") or [])
+                             if pt.get("alignment") in _SIDES and pt.get("name")}
+                if _by_desig:
+                    self._live_by_names[(str(lid), frozenset(_pn))] = (
+                        f"{lid}:{mid}", _by_desig, _strip_units(str(rec.get("units") or "")))
+        except Exception:
+            pass
         parent = rec.get("parentId")
-        if parent is not None and live:
+        if parent is not None:
             names = {}
             for pt in (rec.get("participants") or []):
                 al = pt.get("alignment")

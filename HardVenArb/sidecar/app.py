@@ -837,7 +837,11 @@ async def debug_reader(ttl: float = 30.0):
     mids = fn(ttl) if fn else []
     bfn = getattr(adapter, "board_lids", None)
     board = sorted(bfn()) if bfn else []   # leagues the FEATURED BOARD streams (sport-level topics)
-    return {"live_mids": mids, "count": len(mids), "board_lids": board, "board_count": len(board)}
+    # The parent -> live-child map the redirect depends on. Without it in the diagnostic there is no way to
+    # tell "no live child known" from "redirect ran and still found nothing", and those need different fixes.
+    lc = getattr(adapter, "_live_child", {}) or {}
+    return {"live_mids": mids, "count": len(mids), "board_lids": board, "board_count": len(board),
+            "live_child": {k: v[0] for k, v in list(lc.items())[:60]}, "live_child_count": len(lc)}
 
 
 @app.get("/debug/straight")
