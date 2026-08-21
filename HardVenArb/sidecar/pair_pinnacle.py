@@ -204,7 +204,7 @@ def main() -> None:
     ap.add_argument("--no-league-anchor", action="store_true",
                     help="skip the league/sport anchor (match across all sports)")
     ap.add_argument("--catalog-timeout", type=float,
-                    default=float(os.environ.get("HARDVEN_CATALOG_TIMEOUT", "60")),
+                    default=float(os.environ.get("HARDVEN_CATALOG_TIMEOUT", "600")),
                     help="seconds to wait for /catalog (default 60)")
     args = ap.parse_args()
 

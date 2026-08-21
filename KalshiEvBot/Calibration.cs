@@ -84,9 +84,14 @@ public static class Calibration
         var graded = obs.Where(o => o.Won.HasValue).ToList();
 
         // ── 1. Coverage ───────────────────────────────────────────────────────────────────────────────
-        int distinctTickers = all.Select(o => o.Ticker).Distinct(StringComparer.Ordinal).Count();
-        int active = settled.Values.Count(s => !s.Terminal);
-        int lost   = settled.Values.Count(s => s.IsGone);
+        // Count only the markets THIS dataset actually contains. Counting the whole store reported "32
+        // market(s) still active" under 25 observations across 17 markets — three numbers that cannot all
+        // be about the same thing, because the store also holds markets from earlier sessions whose rows
+        // are not in these files.
+        var mine = all.Select(o => o.Ticker).Distinct(StringComparer.Ordinal).ToHashSet(StringComparer.Ordinal);
+        int distinctTickers = mine.Count;
+        int active = settled.Where(kv => mine.Contains(kv.Key)).Count(kv => !kv.Value.Terminal);
+        int lost   = settled.Where(kv => mine.Contains(kv.Key)).Count(kv => kv.Value.IsGone);
         Console.WriteLine($"\n1. COVERAGE");
         Console.WriteLine($"   {all.Count} logged row(s) → {obs.Count} independent observation(s) "
                         + $"({(dedupe ? "one per ticker+side" : "NOT deduped")}) across {distinctTickers} market(s)");
@@ -150,10 +155,35 @@ public static class Calibration
             Console.WriteLine($"   {label,-22} n={l.Count,4}  predicted {pred:0.000}  realised {real:0.000}  "
                             + $"diff {real - pred:+0.000;-0.000} ± {se:0.000}");
         }
-        Split("in-play", graded.Where(o => o.InPlay));
-        Split("pre-match", graded.Where(o => !o.InPlay));
-        Split("oracle < 2s old", graded.Where(o => o.OracleAgeMs >= 0 && o.OracleAgeMs < 2000));
-        Split("oracle >= 2s old", graded.Where(o => o.OracleAgeMs >= 2000));
+        var inPlay = graded.Where(o => o.InPlay).ToList();
+        var pre    = graded.Where(o => !o.InPlay).ToList();
+        Split("in-play", inPlay);
+        Split("pre-match", pre);
+
+        // ORACLE AGE, WITHIN IN-PLAY ONLY. Split across the whole sample it is not a second test at all:
+        // in-play quotes are pushed constantly and pre-match ones sit quiet, so "age" and "in-play" are the
+        // same variable wearing two names — the first run reported byte-identical numbers for both pairs.
+        // A lag effect can only show up as a gradient among rows that are otherwise alike.
+        Split("  in-play, oracle <1s", inPlay.Where(o => o.OracleAgeMs >= 0 && o.OracleAgeMs < 1000));
+        Split("  in-play, oracle >=1s", inPlay.Where(o => o.OracleAgeMs >= 1000));
+
+        double Corr(Func<Obs, double> a, Func<Obs, double> b)
+        {
+            if (graded.Count < 3) return double.NaN;
+            double ma = graded.Average(a), mb = graded.Average(b);
+            double sab = graded.Sum(o => (a(o) - ma) * (b(o) - mb));
+            double sa = Math.Sqrt(graded.Sum(o => Math.Pow(a(o) - ma, 2)));
+            double sb = Math.Sqrt(graded.Sum(o => Math.Pow(b(o) - mb, 2)));
+            return sa * sb > 0 ? sab / (sa * sb) : double.NaN;
+        }
+        double conf = Corr(o => o.InPlay ? 1 : 0, o => Math.Min(o.OracleAgeMs, 10_000));
+        if (double.IsFinite(conf))
+            Console.WriteLine($"   in-play vs oracle-age correlation: {conf:+0.00;-0.00}"
+                            + (Math.Abs(conf) > 0.9
+                                ? "  — CONFOUNDED. These two splits are measuring one variable; the lag "
+                                + "question cannot be answered until the sample contains quiet in-play rows "
+                                + "or busy pre-match ones."
+                                : "  — separable enough to read the two splits independently."));
         Console.WriteLine("   If in-play calibrates WORSE than pre-match, the in-play signals are oracle lag:");
         Console.WriteLine("   we are seeing Pinnacle a second late while Kalshi has already repriced.");
 

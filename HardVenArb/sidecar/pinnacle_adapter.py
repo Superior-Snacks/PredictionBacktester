@@ -2719,11 +2719,21 @@ class PinnacleAdapter(BookAdapter):
         return list(dict.fromkeys(ids))   # dedupe, preserve order
 
     async def catalog(self) -> list[CatalogEntry]:
+        _t0 = time.time()
         league_ids = await self._catalog_league_ids()
         if not league_ids:
             print("[PINNACLE] catalog(): set PINNACLE_CATALOG_LEAGUES (CSV league ids, e.g. 246=MLB) and/or "
                   "PINNACLE_CATALOG_SPORTS (CSV sport ids, e.g. 33=Tennis) for auto-discovery.")
             return []
+        # SAY HOW BIG THIS IS BEFORE DOING IT. The walk is two guest requests per league, sequential, with
+        # jitter between — so wall time is linear in league count and the caller's timeout is the thing that
+        # decides whether it ever finishes. Tennis discovers a few dozen ephemeral tournament-rounds; soccer
+        # discovers every competition Pinnacle lists, which is a different order of magnitude, and the first
+        # soccer run simply timed out at the client's 60s with no clue as to why (2026-08-21). A caller that
+        # knows the count can pick a sane timeout instead of guessing.
+        print(f"[PINNACLE] catalog: walking {len(league_ids)} league(s) × 2 guest request(s) — "
+              f"expect roughly {len(league_ids) * 2 * 0.4:.0f}s. Raise HARDVEN_CATALOG_TIMEOUT / "
+              f"--catalog-timeout if the caller gives up first.", flush=True)
         out: list[CatalogEntry] = []
         for i, lid in enumerate(league_ids):
             matchups = await self._guest_get(f"/leagues/{lid}/matchups") or []
@@ -2826,6 +2836,8 @@ class PinnacleAdapter(BookAdapter):
         if added:
             print(f"[PINNACLE] catalog: +{added} LIVE matchup(s) from the reader that the guest feed does "
                   f"not list (in-play markets are otherwise unpairable).", flush=True)
+        print(f"[PINNACLE] catalog: {len(out)} selection(s) from {len(league_ids)} league(s) "
+              f"in {time.time() - _t0:.0f}s.", flush=True)
         return out
 
     # ── M1 (later): betting + wallet confirmation ──

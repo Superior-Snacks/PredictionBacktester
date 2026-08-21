@@ -38,6 +38,17 @@ internal static class Program
             return 2;
         }
 
+        // M1 FIRST, BEFORE ANYTHING TOUCHES THE PAIR FILE. Grading reads logged CSVs and settlement; it has
+        // no interest in today's fixtures. Sitting behind the pair checks meant an empty or freshly-rescanned
+        // pair file killed it outright — observed 2026-08-21, `--resolve` refused with "nothing to watch"
+        // while three telemetry files sat next to it waiting to be graded. Historical data must stay
+        // readable whatever the board looks like right now.
+        if (args.Contains("--resolve"))
+        {
+            using var rk = new KalshiOrderClient(config);
+            return await ResolveAsync(rk, ArgValue(args, "--resolve-glob"), !args.Contains("--all-obs"));
+        }
+
         string? pairsPath = EvPairLoader.Locate(pairsArg);
         if (pairsPath is null)
         {
@@ -57,14 +68,6 @@ internal static class Program
             Console.WriteLine("[FATAL] nothing to watch. Run the pairing job first — this bot never pairs, "
                             + "it reads the file the arb bot's pairing job maintains.");
             return 2;
-        }
-
-        // M1: grade what has already been logged. REST only — no WebSocket is opened, so this is safe to
-        // run while another bot holds the account's single socket.
-        if (args.Contains("--resolve"))
-        {
-            using var rk = new KalshiOrderClient(config);
-            return await ResolveAsync(rk, ArgValue(args, "--resolve-glob"), !args.Contains("--all-obs"));
         }
 
         // Stop before ANY connection. Kalshi allows one WebSocket per account, and a second one connects

@@ -596,7 +596,7 @@ def main() -> None:
                     help="skip the league/sport anchor (match across all sports — disable if a sport's label "
                          "is over-rejecting valid pairs)")
     ap.add_argument("--catalog-timeout", type=float,
-                    default=float(os.environ.get("HARDVEN_CATALOG_TIMEOUT", "120")),
+                    default=float(os.environ.get("HARDVEN_CATALOG_TIMEOUT", "600")),
                     help="seconds to wait for /catalog — raise on a slow/cold server Chrome (default 120)")
     args = ap.parse_args()
 
