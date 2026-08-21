@@ -174,10 +174,30 @@ public class BookRefresherService
         {
             using var doc = await _kalshi.GetMarketOrderBookAsync(ticker);
             var root  = doc.RootElement;
-            var obEl  = root.TryGetProperty("orderbook", out var ob) ? ob : root;
+            var obEl  = root.TryGetProperty("orderbook_fp", out var obFp) ? obFp
+                      : root.TryGetProperty("orderbook",    out var ob)   ? ob
+                      : root;
 
             // YES ask (implied) = 1 - best NO bid
             decimal bestNoBid  = GetBestBidFromKalshiSide(obEl, "no");
+
+            // COULD NOT READ the payload. Not the same thing as an empty book, and it must never be treated
+            // as one: when the endpoint moved to `orderbook_fp`/`no_dollars` this parser stopped finding a
+            // side, returned -1, and the branch below read that as "REST confirmed empty" and MarkDead()'d
+            // both books of every Kalshi market it refreshed — with nothing in the log but a debug line
+            // (observed 2026-08-21). Unreadable now leaves the book untouched and says so, once.
+            if (bestNoBid < 0m)
+            {
+                if (!_warnedShape)
+                {
+                    _warnedShape = true;
+                    Console.WriteLine($"[BOOK REFRESH WARN] Kalshi {ticker}: /orderbook payload not recognised "
+                                    + "(no yes/no side found) — books left untouched. The endpoint shape may "
+                                    + "have changed; expected orderbook_fp.{yes,no}_dollars.");
+                }
+                return;
+            }
+
             decimal restYesAsk = bestNoBid > 0m ? Math.Round(1m - bestNoBid, 4) : -1m;
 
             decimal wsYesAsk = yesBook.GetBestAskPrice();
@@ -213,19 +233,41 @@ public class BookRefresherService
         }
     }
 
+    /// <summary>One-shot guard so an unrecognised payload warns once, not once per ticker per cycle.</summary>
+    private static bool _warnedShape;
+
+    /// <summary>
+    /// Best bid on one side of a REST <c>/orderbook</c> payload, in DOLLARS.
+    ///
+    /// <para>Tri-state on purpose: <b>0</b> means the side was read and is empty (a genuinely dead book),
+    /// <b>-1</b> means the side could not be read at all. Collapsing those two is what let a shape change
+    /// masquerade as "every market is dead".</para>
+    ///
+    /// <para>Shape verified against the live API 2026-08-21:
+    /// <c>{"orderbook_fp": {"yes_dollars": [["0.4300","80"], …], "no_dollars": […]}}</c> — side keys carry a
+    /// <c>_dollars</c> suffix and prices are dollar STRINGS, not cent integers. Both namings and both price
+    /// scales are accepted so a future revision degrades to a visible mismatch rather than to silence.</para>
+    /// </summary>
     private static decimal GetBestBidFromKalshiSide(JsonElement book, string side)
     {
-        if (!book.TryGetProperty(side, out var arr)) return -1m;
+        JsonElement arr = default;
+        bool found = false;
+        foreach (var key in new[] { side + "_dollars", side })
+            if (book.TryGetProperty(key, out arr) && arr.ValueKind == JsonValueKind.Array) { found = true; break; }
+        if (!found) return -1m;
+
         decimal best = 0m;
         foreach (var lvl in arr.EnumerateArray())
         {
             var items = lvl.EnumerateArray().ToArray();
             if (items.Length < 2) continue;
-            decimal priceCents = items[0].ValueKind == JsonValueKind.Number
+            decimal price = items[0].ValueKind == JsonValueKind.Number
                 ? items[0].GetDecimal()
                 : decimal.TryParse(items[0].GetString(), NumberStyles.Any,
                       CultureInfo.InvariantCulture, out decimal p) ? p : 0m;
-            best = Math.Max(best, priceCents / 100m);
+            // A bid is a probability: "0.43" can only be dollars and "43" can only be cents — no ambiguity.
+            if (price > 1m) price /= 100m;
+            best = Math.Max(best, price);
         }
         return best;
     }

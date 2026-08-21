@@ -111,10 +111,23 @@ Not yet exercised against live feeds — that needs the sidecar running and the 
 - [ ] **Calibration report** — bucket signals by `P_true` (deciles) and compare predicted vs realised
       frequency. This is the only thing that separates a wrong model from bad luck.
 - [ ] **Realised vs quoted EV** — per signal and in aggregate.
-- [ ] **Two questions M1 exists to answer:**
+- [ ] **Three questions M1 exists to answer:**
       - Is Pinnacle's line predictive **on ITF/challenger tennis specifically**? The sharp-book assumption
         is established for majors; these are small events where Pinnacle's own limits are €500–2000.
       - Is calibration flat across 0.20–0.80, or is one end carrying all the error?
+      - **Is the in-play edge real, or is it oracle lag?** Both signals in the first session were in-play,
+        against a Pinnacle quote 594–1111ms old (WS → sidecar → our ≤3s poll). In-play tennis reprices every
+        point, so "Kalshi is mispriced against Pinnacle" and "we are a second behind and Kalshi already
+        moved" are the *same observation* at detection time. Split the M1 calibration by `InPlay` and by
+        `OracleAgeMs` — if in-play signals settle worse than pre-match ones, this is the reason.
+
+### Why M1 is a calibration report and not a P&L tally
+A single signal at p≈0.28 has a payoff standard deviation near 0.45 against an edge of ~0.02 — the noise is
+twenty times the signal, and contracts within one signal share an outcome so they do not average it down.
+Detecting a 2c edge in **realised P&L** at 2σ therefore needs on the order of a *thousand* settled signals.
+Testing whether `P_true` is **calibrated** — pooled predicted vs realised frequency — converges far faster:
+a few hundred settlements give roughly ±2 points, which is enough to see the 2–4 point bias that would eat
+the whole edge. Grade the model, not the money.
 
 ### M1 acceptance
 **Hundreds of settled signals.** At ~70 +EV signals/day that is 1–2 weeks of M0 running. The build is a
