@@ -43,50 +43,16 @@ public sealed class EvTelemetry : IDisposable
         "OrderFeeUsd", "StakeUsd", "InPriceWindow", "Decision",
     };
 
-    private readonly StreamWriter _w;
-    private readonly object _lock = new();
-    public string Path { get; }
-    public long RowsWritten { get; private set; }
+    private readonly RollingCsv _csv;
+    public string Path => _csv.Path;
+    public long RowsWritten => _csv.RowsWritten;
 
     public EvTelemetry(string? directory = null)
-    {
-        string dir = directory ?? Directory.GetCurrentDirectory();
-        Directory.CreateDirectory(dir);
-        string header = string.Join(",", Columns);
-        string stem = $"EvTelemetry_{DateTime.UtcNow:yyyyMMdd}";
+        => _csv = new RollingCsv(directory ?? Directory.GetCurrentDirectory(), "EvTelemetry", Columns);
 
-        // Daily append, but NEVER into a file whose header differs from ours. A schema change mid-day
-        // would otherwise interleave rows of two different shapes in one file, and the corruption is
-        // invisible until an analysis silently reads the wrong column as EV.
-        string p = System.IO.Path.Combine(dir, stem + ".csv");
-        for (int v = 2; File.Exists(p) && ReadHeader(p) is string h && h != header; v++)
-        {
-            Console.WriteLine($"[TELEMETRY] {System.IO.Path.GetFileName(p)} has a different column set — "
-                            + $"rotating rather than mixing schemas in one file.");
-            p = System.IO.Path.Combine(dir, $"{stem}_v{v}.csv");
-        }
-        Path = p;
-
-        bool fresh = !File.Exists(Path) || new FileInfo(Path).Length == 0;
-        _w = new StreamWriter(new FileStream(Path, FileMode.Append, FileAccess.Write, FileShare.Read),
-                              new UTF8Encoding(false)) { AutoFlush = true };
-        if (fresh) _w.WriteLine(header);
-    }
-
-    private static string? ReadHeader(string path)
-    {
-        try { using var r = new StreamReader(path); return r.ReadLine(); } catch { return null; }
-    }
-
-    private static string N(double v, int dp = 6)
-        => double.IsFinite(v) ? Math.Round(v, dp).ToString(CultureInfo.InvariantCulture) : "";
-    private static string N(decimal v, int dp = 6)
-        => Math.Round(v, dp).ToString(CultureInfo.InvariantCulture);
-    private static string Q(string? s)
-    {
-        s ??= "";
-        return s.IndexOfAny(new[] { ',', '"', '\n', '\r' }) < 0 ? s : "\"" + s.Replace("\"", "\"\"") + "\"";
-    }
+    private static string N(double v, int dp = 6) => RollingCsv.N(v, dp);
+    private static string N(decimal v, int dp = 6) => RollingCsv.N(v, dp);
+    private static string Q(string? s) => RollingCsv.Q(s);
 
     public void Write(EvSignal s)
     {
@@ -105,16 +71,10 @@ public sealed class EvTelemetry : IDisposable
             N(s.OrderFeeUsd, 2), N(s.StakeUsd, 2), s.InPriceWindow ? "1" : "0", Q(s.Decision),
         };
 
-        // THE ARITY CHECK. A one-column drift corrupts every row from that point on and reads as plausible
-        // data forever — it nearly happened on the arb telemetry. Fail loudly at the write, not quietly in
-        // an analysis six weeks later.
-        if (f.Length != Columns.Length)
-            throw new InvalidOperationException(
-                $"EvTelemetry row/header arity mismatch: {f.Length} values for {Columns.Length} columns. "
-              + "A column was added to one and not the other.");
-
-        lock (_lock) { _w.WriteLine(string.Join(",", f)); RowsWritten++; }
+        // Arity is checked inside WriteRow, on EVERY row. A one-column drift corrupts everything after it
+        // and still reads as plausible data forever — it nearly happened on the arb telemetry.
+        _csv.WriteRow(f);
     }
 
-    public void Dispose() { try { _w.Flush(); _w.Dispose(); } catch { } }
+    public void Dispose() => _csv.Dispose();
 }

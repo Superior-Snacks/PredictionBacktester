@@ -29,6 +29,8 @@ public sealed class PinnacleOracle
     private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(15) };
     private readonly ConcurrentDictionary<string, OracleQuote> _quotes = new(StringComparer.Ordinal);
     private readonly List<string> _tokens;
+    private readonly HashSet<string> _tokenSet;
+    private readonly object _tokenLock = new();
     private readonly int _pollMs, _chunk;
     private readonly double _maxAgeSec;
 
@@ -42,6 +44,7 @@ public sealed class PinnacleOracle
     {
         _base   = (sidecarBaseUrl ?? "").TrimEnd('/');
         _tokens = tokens.Distinct(StringComparer.Ordinal).ToList();
+        _tokenSet = new HashSet<string>(_tokens, StringComparer.Ordinal);
         _pollMs = EnvInt("EV_ORACLE_POLL_MS", 3000);
         _chunk  = EnvInt("EV_ORACLE_CHUNK", 200);
         _maxAgeSec = EnvInt("EV_ORACLE_MAX_AGE_MS", 30_000) / 1000.0;
@@ -57,6 +60,20 @@ public sealed class PinnacleOracle
     public event Action? OnPolled;
 
     public OracleQuote? Get(string token) => _quotes.TryGetValue(token, out var q) ? q : null;
+
+    /// <summary>Adds selections discovered after startup (a pair reload). Safe from any thread.
+    /// Without this a run longer than a day polls only the matches that existed when it started.</summary>
+    public int AddTokens(IEnumerable<string> tokens)
+    {
+        int added = 0;
+        lock (_tokenLock)
+            foreach (var t in tokens)
+                if (!string.IsNullOrWhiteSpace(t) && !_tokenSet.Contains(t))
+                { _tokenSet.Add(t); _tokens.Add(t); added++; }
+        return added;
+    }
+
+    public int TokenCount { get { lock (_tokenLock) return _tokens.Count; } }
 
     public int QuoteCount => _quotes.Count;
 
@@ -90,9 +107,11 @@ public sealed class PinnacleOracle
             try
             {
                 bool anyOk = false; int stale = 0;
-                for (int i = 0; i < _tokens.Count; i += _chunk)
+                List<string> toks;
+                lock (_tokenLock) toks = _tokens.ToList();   // snapshot: the list can grow mid-poll
+                for (int i = 0; i < toks.Count; i += _chunk)
                 {
-                    string q = Uri.EscapeDataString(string.Join(",", _tokens.Skip(i).Take(_chunk)));
+                    string q = Uri.EscapeDataString(string.Join(",", toks.Skip(i).Take(_chunk)));
                     using var resp = await _http.GetAsync($"{_base}/odds?selections={q}", ct);
                     if (!resp.IsSuccessStatusCode) continue;
                     stale += Apply(await resp.Content.ReadAsStringAsync(ct));

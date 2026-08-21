@@ -92,6 +92,33 @@ Runs a full session without touching the order API — structurally true, the or
 gated — and produces a CSV whose `Ev` column is computed from the **REST** ask. Both WS and REST prices are
 columns, with the gap between them, so the phantom is measured rather than assumed.
 
+### Fit for a LONG run — fixed 2026-08-21
+Two defects would each have quietly wasted a multi-day session. Both looked healthy from the console, which
+is what made them worth hunting before starting rather than after.
+
+- [x] **The watchlist was frozen at startup.** `cross_pairs.json` was read once, so by day two every match
+      being watched had finished and none of the day's fixtures were. A fortnight's run would have returned
+      one day of data and printed a normal status line throughout. Now `PairReloadLoopAsync` re-reads the
+      file whenever the pairing job rewrites it (`EV_PAIR_RELOAD_SEC`, default 120) and wires new markets
+      into all three consumers: `KalshiBookFeed.EnqueueSubscribe`, `PinnacleOracle.AddTokens`,
+      `EvEvaluator.UpsertPairs`. Existing entries are overwritten, because the pairing job re-points a
+      market at a new Pinnacle matchup id when a fixture is re-issued and the stale id prices against a
+      dead selection.
+      * Markets are **only added, never removed**. A finished market costs one dead subscription; dropping
+        it would take it out of the settlement watcher before its result was banked, and the venue does not
+        keep obscure markets to be asked again later.
+      * A reconnect re-subscribes the CURRENT list, not the startup one.
+      * A read landing mid-write is treated as "retry next tick", not as a reason to stop watching.
+- [x] **The CSVs never rolled at midnight.** The filename stamp was taken once, so a bot started on the 21st
+      was still writing `…_20260821.csv` on the 30th — nothing lost, but every date filter downstream reads
+      nine days as one. `RollingCsv.cs` now rolls on the UTC date and is shared by both writers.
+
+**Operational dependency:** the reload only helps if the pairing job is actually rewriting
+`cross_pairs.json` on a schedule. If that file never changes, the bot has nothing new to pick up.
+
+**Volume, for planning:** ~38 pairs → roughly 11k snapshot rows and 8k telemetry rows per day, about 6 MB.
+A fortnight is well under 100 MB.
+
 ### Running it
 ```
 dotnet run --project KalshiEvBot -- --self-test     # offline, safe any time

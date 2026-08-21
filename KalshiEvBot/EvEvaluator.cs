@@ -49,7 +49,7 @@ public sealed class EvStats
 /// </summary>
 public sealed class EvEvaluator
 {
-    private readonly Dictionary<string, EvPair> _byTicker;
+    private readonly ConcurrentDictionary<string, EvPair> _byTicker;
     private readonly PinnacleOracle _oracle;
     private readonly KalshiBookFeed _feed;
     private readonly KalshiOrderClient _kalshi;
@@ -73,7 +73,8 @@ public sealed class EvEvaluator
     public EvEvaluator(IEnumerable<EvPair> pairs, PinnacleOracle oracle, KalshiBookFeed feed,
                        KalshiOrderClient kalshi, EvTelemetry telemetry, EvConfig cfg)
     {
-        _byTicker  = pairs.GroupBy(p => p.KalshiTicker).ToDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal);
+        _byTicker  = new ConcurrentDictionary<string, EvPair>(
+            pairs.GroupBy(p => p.KalshiTicker).ToDictionary(g => g.Key, g => g.First()), StringComparer.Ordinal);
         _oracle    = oracle;
         _feed      = feed;
         _kalshi    = kalshi;
@@ -97,6 +98,22 @@ public sealed class EvEvaluator
     /// still, and a bot that only woke on Kalshi ticks would never see those. The screen itself is free;
     /// only the ones that survive it cost a REST call.</summary>
     public void SweepAll() { foreach (var t in _byTicker.Keys) Nudge(t); }
+
+    /// <summary>Adds or replaces pairs after a reload of cross_pairs.json. Returns how many are new.
+    /// Existing entries are overwritten because the pairing job re-points a market at a new Pinnacle
+    /// matchup id when a fixture is re-issued, and the stale id would price against a dead selection.</summary>
+    public int UpsertPairs(IEnumerable<EvPair> pairs)
+    {
+        int added = 0;
+        foreach (var p in pairs)
+        {
+            if (!_byTicker.ContainsKey(p.KalshiTicker)) added++;
+            _byTicker[p.KalshiTicker] = p;
+        }
+        return added;
+    }
+
+    public int PairCount => _byTicker.Count;
 
     /// <summary>Runs <c>EV_REST_CONCURRENCY</c> worker loops, not one. A single loop awaits its REST call
     /// inside the loop body, so the concurrency semaphore could never reach 2 and one slow market stalled

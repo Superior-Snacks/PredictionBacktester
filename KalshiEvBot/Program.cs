@@ -135,15 +135,24 @@ internal static class Program
         // Bank settlements WHILE THE BOT RUNS. Kalshi does not keep obscure markets available forever, so
         // resolving days later is a race we can only lose — and lose silently, since a purged market is
         // indistinguishable from one that never settled unless we recorded the difference at the time.
-        var resolver     = new SettlementResolver(kalshi);
-        var settleTask   = resolver.WatchAsync(() => tickers, cts.Token);
+        //
+        // It watches EVERY ticker ever seen this session, not just the current watchlist: yesterday's
+        // fixtures leave the pair file the moment they finish, which is exactly when their result appears.
+        var everSeen  = new HashSet<string>(tickers, StringComparer.Ordinal);
+        var pairsLock = new object();
+        var resolver  = new SettlementResolver(kalshi);
+        var settleTask = resolver.WatchAsync(
+            () => { lock (pairsLock) return everSeen.ToList(); }, cts.Token);
+
+        // Pick up new fixtures without a restart — see PairReloadLoopAsync for why this is not optional.
+        var reloadTask = PairReloadLoopAsync(pairsPath, eval, feed, oracle, pairs, everSeen, pairsLock, cts.Token);
 
         if (bookAudit)
         {
             await WaitWarmAsync(feed, oracle, cts.Token, TimeSpan.FromSeconds(45));
             await BookAuditAsync(feed, kalshi, oracle, pairs, ArgInt(args, "--book-audit") ?? 10);
             cts.Cancel();
-            await SafeAll(feedTask, oracleTask, evalTask, bankrollTask, snapTask, settleTask);
+            await SafeAll(feedTask, oracleTask, evalTask, bankrollTask, snapTask, settleTask, reloadTask);
             return 0;
         }
 
@@ -163,12 +172,12 @@ internal static class Program
             PrintStatus(eval, feed, oracle, telemetry, pairs.Count);
             await resolver.ResolveAsync(tickers, CancellationToken.None);   // bank before we exit
             cts.Cancel();
-            await SafeAll(feedTask, oracleTask, evalTask, bankrollTask, snapTask, settleTask);
+            await SafeAll(feedTask, oracleTask, evalTask, bankrollTask, snapTask, settleTask, reloadTask);
             return 0;
         }
 
         var statusTask = StatusLoopAsync(eval, feed, oracle, telemetry, pairs.Count, cts.Token);
-        await SafeAll(feedTask, oracleTask, evalTask, bankrollTask, snapTask, settleTask, statusTask);
+        await SafeAll(feedTask, oracleTask, evalTask, bankrollTask, snapTask, settleTask, reloadTask, statusTask);
         PrintStatus(eval, feed, oracle, telemetry, pairs.Count);
         Console.WriteLine($"[DONE] {telemetry.RowsWritten} row(s) → {telemetry.Path}");
         return 0;
@@ -220,6 +229,90 @@ internal static class Program
         return 0;
     }
 
+    // ── Keeping the watchlist alive ───────────────────────────────────────────────────────────────────
+    /// <summary>
+    /// Re-reads <c>cross_pairs.json</c> whenever the pairing job rewrites it, and wires the new markets
+    /// into the feed, the oracle and the evaluator.
+    ///
+    /// <para><b>Without this the bot is useful for one day.</b> The watchlist was fixed at startup, so by
+    /// day two every match on it has finished and none of the day's new fixtures are being watched — a
+    /// fortnight's run would return a day's data and look, from the console, exactly like a healthy one.</para>
+    ///
+    /// <para>Markets are only ever ADDED here, never removed. A finished market costs one dead subscription
+    /// and nothing else, whereas dropping it would take it out of the settlement watcher's list before its
+    /// result was banked — and Kalshi does not keep obscure markets around to be asked again later.</para>
+    /// </summary>
+    private static async Task PairReloadLoopAsync(string path, EvEvaluator eval, KalshiBookFeed feed,
+                                                  PinnacleOracle oracle, List<EvPair> livePairs,
+                                                  HashSet<string> everSeen, object pairsLock,
+                                                  CancellationToken ct)
+    {
+        var every = TimeSpan.FromSeconds(Math.Max(30, EvConfig.Env("EV_PAIR_RELOAD_SEC", 120)));
+        DateTime lastWrite = SafeWriteTime(path);
+        Console.WriteLine($"[PAIRS] watching {System.IO.Path.GetFileName(path)} for updates every "
+                        + $"{every.TotalSeconds:0}s — new fixtures are picked up without a restart.");
+
+        while (!ct.IsCancellationRequested)
+        {
+            try { await Task.Delay(every, ct); } catch (OperationCanceledException) { break; }
+            try
+            {
+                var w = SafeWriteTime(path);
+                if (w <= lastWrite) continue;
+                lastWrite = w;
+
+                // The pairing job writes this file; a read landing mid-write yields a truncated document.
+                // Treat that as "try again next tick" rather than as a reason to stop watching.
+                List<EvPair> fresh;
+                try { fresh = EvPairLoader.Load(path, out _); }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[PAIRS] reload skipped (file mid-write?): {ex.GetType().Name}");
+                    lastWrite = DateTime.MinValue;      // force a retry next tick
+                    continue;
+                }
+                if (fresh.Count == 0) continue;
+
+                int newPairs = eval.UpsertPairs(fresh);
+                var newTickers = fresh.Select(p => p.KalshiTicker)
+                                      .Where(t => !everSeen.Contains(t)).Distinct(StringComparer.Ordinal).ToList();
+                feed.EnqueueSubscribe(newTickers);
+                int newTokens = oracle.AddTokens(fresh.SelectMany(p => new[] { p.YesToken, p.NoToken }));
+
+                // One lock per resource, each taken consistently everywhere it is touched: `pairsLock`
+                // guards everSeen (shared with the settlement watcher), the list instance guards itself
+                // (shared with the snapshot loop, which locks the same instance).
+                int seenCount;
+                lock (pairsLock)
+                {
+                    foreach (var t in newTickers) everSeen.Add(t);
+                    seenCount = everSeen.Count;
+                }
+                lock (livePairs)
+                {
+                    // The snapshot loop holds this instance, so replace the CONTENTS rather than the list.
+                    var byTicker = livePairs.ToDictionary(p => p.KalshiTicker, StringComparer.Ordinal);
+                    foreach (var p in fresh) byTicker[p.KalshiTicker] = p;
+                    livePairs.Clear();
+                    livePairs.AddRange(byTicker.Values);
+                }
+
+                if (newPairs > 0 || newTokens > 0)
+                    Console.WriteLine($"[PAIRS] reloaded: +{newPairs} market(s), +{newTokens} Pinnacle "
+                                    + $"selection(s) — now {eval.PairCount} watched, {seenCount} ever seen "
+                                    + "(finished markets are kept until their result is banked).");
+            }
+            catch (OperationCanceledException) { break; }
+            catch (Exception ex) { Console.WriteLine($"[PAIRS] reload error: {ex.GetType().Name}: {ex.Message}"); }
+        }
+    }
+
+    private static DateTime SafeWriteTime(string path)
+    {
+        try { return File.Exists(path) ? File.GetLastWriteTimeUtc(path) : DateTime.MinValue; }
+        catch { return DateTime.MinValue; }
+    }
+
     // ── Oracle snapshots ──────────────────────────────────────────────────────────────────────────────
     /// <summary>
     /// Writes one oracle row per pair on a timer. This is the cheap half of M1: it needs no Kalshi REST
@@ -248,7 +341,9 @@ internal static class Program
                                     List<EvPair> pairs, EvConfig cfg)
     {
         int n = 0;
-        foreach (var p in pairs)
+        List<EvPair> snapshot;
+        lock (pairs) snapshot = pairs.ToList();   // the reload loop mutates this list in place
+        foreach (var p in snapshot)
         {
             var yes = oracle.Get(p.YesToken);
             var no  = oracle.Get(p.NoToken);

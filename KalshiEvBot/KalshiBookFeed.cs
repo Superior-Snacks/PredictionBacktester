@@ -46,7 +46,34 @@ public sealed class KalshiBookFeed
     private readonly int               _batchSize;
     private readonly decimal           _minBookPrice;
     private readonly ConcurrentDictionary<string, Book> _books = new(StringComparer.Ordinal);
+    private readonly ConcurrentQueue<List<string>> _pendingSubs = new();
+    private readonly object _tickerLock = new();
     private int _msgId = 1;
+
+    /// <summary>
+    /// Subscribes to markets discovered after startup. Safe from any thread.
+    ///
+    /// <para>Required for a run measured in days rather than hours: yesterday's matches settle and today's
+    /// appear, so a watchlist frozen at startup means the bot spends day two watching finished markets.
+    /// Queued rather than sent here because the socket is owned by the receive loop.</para>
+    /// </summary>
+    public void EnqueueSubscribe(IEnumerable<string> tickers)
+    {
+        var fresh = new List<string>();
+        lock (_tickerLock)
+        {
+            foreach (var t in tickers)
+            {
+                if (string.IsNullOrWhiteSpace(t) || _books.ContainsKey(t)) continue;
+                _books[t] = new Book();
+                _tickers.Add(t);
+                fresh.Add(t);
+            }
+        }
+        if (fresh.Count > 0) _pendingSubs.Enqueue(fresh);
+    }
+
+    public int TickerCount { get { lock (_tickerLock) return _tickers.Count; } }
 
     public volatile bool IsConnected;
     private long _lastMessageTicks = DateTime.UtcNow.Ticks;
@@ -117,14 +144,19 @@ public sealed class KalshiBookFeed
                 await ws.ConnectAsync(new Uri(_config.BaseWsUrl), ct);
                 Console.WriteLine($"[KALSHI WS] connected to {_config.BaseWsUrl}");
 
-                for (int i = 0; i < _tickers.Count; i += _batchSize)
+                // Re-subscribe the CURRENT list on every connect, not the startup one: a reconnect after a
+                // pair reload must carry the markets added since, or they are silently never watched again.
+                List<string> current;
+                lock (_tickerLock) current = _tickers.ToList();
+                _pendingSubs.Clear();                       // superseded by this full re-subscribe
+                for (int i = 0; i < current.Count; i += _batchSize)
                 {
-                    string arr = string.Join(",", _tickers.Skip(i).Take(_batchSize).Select(t => $"\"{t}\""));
+                    string arr = string.Join(",", current.Skip(i).Take(_batchSize).Select(t => $"\"{t}\""));
                     string sub = $"{{\"id\":{_msgId++},\"cmd\":\"subscribe\",\"params\":{{\"channels\":[\"orderbook_delta\"],\"market_tickers\":[{arr}]}}}}";
                     await ws.SendAsync(Encoding.UTF8.GetBytes(sub), WebSocketMessageType.Text, true, ct);
                     await Task.Delay(100, ct);
                 }
-                Console.WriteLine($"[KALSHI WS] subscribed to {_tickers.Count} ticker(s)");
+                Console.WriteLine($"[KALSHI WS] subscribed to {current.Count} ticker(s)");
                 IsConnected = true;
 
                 // A reconnect leaves every book frozen at whatever it held when the socket died. Clearing
@@ -159,6 +191,15 @@ public sealed class KalshiBookFeed
                         Volatile.Write(ref _lastMessageTicks, DateTime.UtcNow.Ticks);
                         Interlocked.Increment(ref MessageCount);
                         Process(message);
+
+                        // Drain markets added by a pair reload since the last message.
+                        while (_pendingSubs.TryDequeue(out var add))
+                        {
+                            string arr = string.Join(",", add.Select(t => $"\"{t}\""));
+                            string sub = $"{{\"id\":{_msgId++},\"cmd\":\"subscribe\",\"params\":{{\"channels\":[\"orderbook_delta\"],\"market_tickers\":[{arr}]}}}}";
+                            await ws.SendAsync(Encoding.UTF8.GetBytes(sub), WebSocketMessageType.Text, true, ct);
+                            Console.WriteLine($"[KALSHI WS] subscribed to {add.Count} new ticker(s)");
+                        }
                     }
                 }
                 finally { ArrayPool<byte>.Shared.Return(buf); }

@@ -163,6 +163,39 @@ public static class SelfTest
             finally { try { Directory.Delete(dir, true); } catch { } }
         }
 
+        // ── Rolling CSV ───────────────────────────────────────────────────────────────────────────────
+        Console.WriteLine("\nRolling CSV writer");
+        {
+            string dir = Path.Combine(Path.GetTempPath(), "kalshievbot_csv_" + Guid.NewGuid().ToString("N"));
+            try
+            {
+                string[] cols = { "A", "B", "C" };
+                string first;
+                using (var c = new RollingCsv(dir, "T", cols))
+                {
+                    first = c.Path;
+                    c.WriteRow(new[] { "1", "2", "3" });
+                    bool threw = false;
+                    try { c.WriteRow(new[] { "1", "2" }); } catch (InvalidOperationException) { threw = true; }
+                    Check(threw, "a short row THROWS rather than writing a silently-shifted line");
+                    Check(c.RowsWritten == 1, "the rejected row was not counted", $"{c.RowsWritten}");
+                }
+                // Re-opening the same day must APPEND, not restate the header.
+                using (var c = new RollingCsv(dir, "T", cols)) { c.WriteRow(new[] { "4", "5", "6" }); }
+                var lines = File.ReadAllLines(first);
+                Check(lines.Length == 3, "re-opening the same day appends", string.Join(" | ", lines));
+                Check(lines.Count(l => l == "A,B,C") == 1, "the header is written exactly once");
+
+                // A different column set must never interleave into the same file.
+                using (var c = new RollingCsv(dir, "T", new[] { "A", "B", "C", "D" })) { c.WriteRow(new[] { "1", "2", "3", "4" }); }
+                Check(Directory.GetFiles(dir, "T_*.csv").Length == 2,
+                      "a changed schema rolls to a NEW file instead of mixing shapes",
+                      string.Join(", ", Directory.GetFiles(dir, "T_*.csv").Select(Path.GetFileName)));
+                Check(File.ReadAllLines(first).Length == 3, "…and the original file is untouched");
+            }
+            finally { try { Directory.Delete(dir, true); } catch { } }
+        }
+
         // ── Pair guards ───────────────────────────────────────────────────────────────────────────────
         Console.WriteLine("\nPair guards");
         {
