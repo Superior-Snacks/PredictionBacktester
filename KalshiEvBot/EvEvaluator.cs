@@ -37,7 +37,8 @@ public sealed class EvConfig
 public sealed class EvStats
 {
     public long Screened, NoQuote, StaleOracle, Suspended, BelowPrescreen, Cooldown,
-                RestCalls, RestFailed, Signals, RejectedByRest, FlooredToZero, RateLimited;
+                RestCalls, RestFailed, Signals, RejectedByRest, FlooredToZero, RateLimited,
+                IncompleteBook;
 }
 
 /// <summary>
@@ -215,6 +216,29 @@ public sealed class EvEvaluator
         var prop = DeVig.ProportionalN(odds);
         var shin = DeVig.ShinN(odds);
         if (!prop.Ok || !shin.Ok) return null;
+
+        // ── THE INCOMPLETE-BOOK GUARD ─────────────────────────────────────────────────────────────────
+        // A bookmaker never offers a negative margin, so S < 1 does not mean a generous price — it means we
+        // are looking at only PART of the outcome set and dividing by a sum that is missing a leg.
+        //
+        // This is not hypothetical. The sidecar's live-board catalog path hardcodes `three_way=False` and
+        // builds its legs from participants, and a soccer matchup exposes only home and away as
+        // participants — the draw is a PRICE, not a participant. So an in-play soccer game arrives here
+        // looking exactly like a tennis two-way. De-vigging 2.30/3.10 as if it were the whole book gives
+        // S = 0.758 and P(home) = 0.574 against a true 0.40: a phantom edge on every leg, in the direction
+        // that makes us bet.
+        //
+        // Deliberately keyed on the arithmetic rather than on the sport or the three_way flag, because the
+        // flag is exactly what was wrong. Any future venue or market that loses a leg is caught the same way.
+        if (prop.Overround < -0.005)
+        {
+            Interlocked.Increment(ref Stats.IncompleteBook);
+            if (Verbose)
+                Console.WriteLine($"      {pair.KalshiTicker} {side}: book sums to {prop.Overround + 1.0:0.000} "
+                                + $"(<1) across {odds.Length} leg(s) — INCOMPLETE outcome set, not a free "
+                                + "margin. Skipped. A soccer 1X2 catalogued as a two-way looks exactly like this.");
+            return null;
+        }
 
         int yi = pair.YesLegIndex;
         var mine = quotes[yi];

@@ -56,6 +56,10 @@ public sealed class OracleSnapshotLog : IDisposable
         var prop = DeVig.ProportionalN(odds);
         var shin = DeVig.ShinN(odds);
         if (!prop.Ok || !shin.Ok) return;
+        // S < 1 means the leg set is INCOMPLETE, not that the book is generous — see the guard in
+        // EvEvaluator.Screen. Recording such a row would poison the calibration file with a P_true that
+        // was never Pinnacle's opinion, and M1 cannot tell the difference months later.
+        if (prop.Overround < -0.005) return;
         double pProp = prop.PTrue[yi], pShin = shin.PTrue[yi];
         if (pProp <= 0 || pProp >= 1) return;                // unquotable — nothing to grade later
 

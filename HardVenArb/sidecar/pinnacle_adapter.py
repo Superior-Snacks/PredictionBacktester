@@ -2805,12 +2805,23 @@ class PinnacleAdapter(BookAdapter):
             away = _strip_units(names.get("away", ""))
             if not (home and away):
                 continue
+            # three_way must be DERIVED, not hardcoded. It was False here, which described an in-play soccer
+            # game as a two-way: the draw is a PRICE, not a participant, so `names` legitimately holds only
+            # home and away, and the flag was the only thing that could say otherwise. Downstream then
+            # de-vigged 2.30/3.10 as if it were the whole book (S = 0.758) and read P(home) = 0.574 against a
+            # true 0.40 — a phantom edge on every leg, in the direction that makes us bet.
+            #
+            # Flagging it true does NOT complete the book: no draw leg is emitted on this path, so the
+            # pairing writes no `hardven_legs` and the EV bot drops the row loudly. That is the intended
+            # outcome — in-play soccer is not yet pairable, and saying so is the whole point.
+            live_sport = meta.get("sport", "") or "Tennis"
+            live_three_way = live_sport.strip().lower() == "soccer"
             for desig, nm in names.items():
                 out.append(CatalogEntry(
-                    selection_id=f"{mid_key}:{desig}", sport=meta.get("sport", "") or "Tennis",
+                    selection_id=f"{mid_key}:{desig}", sport=live_sport,
                     league=meta.get("league", ""), event=f"{home} vs {away}", market="moneyline",
                     selection_name=_strip_units(nm), start_time=meta.get("start", ""),
-                    three_way=False))
+                    three_way=live_three_way))
             added += 1
         if added:
             print(f"[PINNACLE] catalog: +{added} LIVE matchup(s) from the reader that the guest feed does "

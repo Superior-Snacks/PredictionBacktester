@@ -187,9 +187,29 @@ future n-way market for free.
       missing draw invalidates the whole book, that the 2-way and n-way paths agree exactly, and that the
       two de-vigs visibly diverge on a 0.98 favourite — which is why both are still logged.
 
-**Still unverified:** whether the sidecar's catalog emits `three_way` and a `:draw` designation for these
-leagues. `index_catalog` reads both off the selection, so the adapter must supply them. One `/catalog` call
-answers it, and it is the only thing that can still block this.
+### The sidecar question — ANSWERED, and it found a defect (2026-08-21)
+**Pre-match: works.** `pinnacle_adapter.catalog()` sets `three_way = sport == "soccer"` and synthesises the
+draw leg from the moneyline's `draw` PRICE (`"draw" in winner_desigs`), because a soccer matchup exposes only
+two *participants* — the draw is a price, not a participant. `_SIDES` already includes `draw`, so the odds
+path serves `{lid}:{mid}:draw` too. Nothing was missing.
+
+**In-play: was silently broken.** The live-board catalog path — the one that exists because the guest feed
+does not list in-play matchups — **hardcoded `three_way=False`** and built legs from participants. So an
+in-play soccer game arrived looking exactly like a tennis two-way, and would have been de-vigged on two legs
+of a three-way: `S = 1/2.30 + 1/3.10 = 0.758`, giving `P(home) = 0.574` against a true `0.40`. A phantom
+edge on every leg, in the direction that makes us bet, on the board the operator was actually watching.
+
+- [x] **Sidecar fix** — `three_way` on the live path is now derived from sport rather than hardcoded. This
+      does NOT complete the book (no draw leg is emitted there), so the pairing writes no `hardven_legs` and
+      the EV bot drops the row loudly. That is the intended outcome: in-play soccer is not pairable yet, and
+      saying so is the point.
+- [x] **The incomplete-book guard** (`EvEvaluator.Screen`, and the snapshot log) — reject any book whose
+      overround is negative. A bookmaker never offers a negative margin, so `S < 1` is not a generous price,
+      it is proof that a leg is missing. Keyed on the **arithmetic**, not on the sport or the `three_way`
+      flag, because the flag is exactly what was wrong; any future venue or market that loses a leg is
+      caught the same way. Counted as `incomplete-book` on the status line.
+- [ ] **In-play soccer coverage** — needs the live path to emit the draw leg from the reader's prices
+      (the odds path already tokenises `:draw`). Until then those rows are dropped, not mispriced.
 
 ---
 

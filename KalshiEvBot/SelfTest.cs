@@ -76,6 +76,18 @@ public static class SelfTest
             Check(!DeVig.Quotable(new[] { oH, 0.0, oA }), "a 1X2 with a missing draw price is NOT quotable");
             Check(!DeVig.ProportionalN(new[] { oH, 0.0, oA }).Ok, "…and yields no probabilities at all");
 
+            // THE DANGEROUS CASE: a 1X2 silently presented as a two-way. It is arithmetically detectable,
+            // because a book that sums BELOW 1 is not generous — it is incomplete.
+            var truncated = DeVig.ProportionalN(new[] { oH, oA });   // draw quietly dropped
+            Check(truncated.Overround < 0,
+                  "dropping the draw makes the book sum BELOW 1 — the signature of a missing leg",
+                  $"S={truncated.Overround + 1:0.###}");
+            Check(truncated.PTrue[0] > p.PTrue[0] + 0.10,
+                  "…and it inflates P(home) far above the truth, in the direction that makes us bet",
+                  $"truncated={truncated.PTrue[0]:0.###} true={p.PTrue[0]:0.###}");
+            Check(DeVig.ProportionalN(new[] { oH, oD, oA }).Overround > 0,
+                  "a COMPLETE book always sums above 1 — no bookmaker offers a negative margin");
+
             // The two-way path must still agree with the n-way one — they are the same code now, and a
             // divergence here would mean tennis and soccer had drifted apart.
             var two = DeVig.Proportional(1.869, 2.030);
