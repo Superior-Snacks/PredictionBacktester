@@ -28,7 +28,7 @@ public sealed class OracleSnapshotLog : IDisposable
         "Timestamp", "Ticker", "EventId", "Side", "Outcome", "EventTitle", "SettlementDate", "InPlay",
         "PinOddsMine", "PinOddsOther", "PinSumS", "Vig", "ShinZ",
         "PTrueProp", "PTrueShin", "PTrueUsed", "DeVigMethod", "OracleAgeMs", "OracleDepth",
-        "KalshiWsAsk", "Source", "NumLegs", "PinOddsAll",
+        "KalshiWsAsk", "Source", "NumLegs", "PinOddsAll", "OracleWsVerified",
     };
 
     private readonly RollingCsv _csv;
@@ -76,6 +76,7 @@ public sealed class OracleSnapshotLog : IDisposable
             N((double)wsYesAsk, 4), "snapshot",
             odds.Length.ToString(CultureInfo.InvariantCulture),
             Q(string.Join(";", odds.Select(o => o.ToString("0.####", CultureInfo.InvariantCulture)))),
+            legQuotes.All(q => q.WsVerified) ? "1" : "0",
         };
 
         // Same arity discipline as the signal telemetry, enforced inside WriteRow on every row.

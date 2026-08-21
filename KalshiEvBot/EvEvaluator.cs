@@ -26,6 +26,10 @@ public sealed class EvConfig
     /// <summary>"proportional" (the spec's primary) or "shin". Both are always computed and logged; this
     /// only selects which one drives the decision.</summary>
     public string DeVigMethod     = (Environment.GetEnvironmentVariable("EV_DEVIG") ?? "proportional").ToLowerInvariant();
+    /// <summary>Require every Pinnacle leg to be under LIVE WS coverage before a row counts as a signal.
+    /// A screening-only quote carries a FRESH timestamp but a DELAYED price, so the age gate cannot see it.
+    /// Set 0 to log such rows as signals anyway (observation only — they are still logged either way).</summary>
+    public bool RequireWsVerified = Env("EV_REQUIRE_WS_VERIFIED", 1) != 0;
 
     public static double Env(string k, double dflt)
         => double.TryParse(Environment.GetEnvironmentVariable(k), NumberStyles.Any,
@@ -38,7 +42,7 @@ public sealed class EvStats
 {
     public long Screened, NoQuote, StaleOracle, Suspended, BelowPrescreen, Cooldown,
                 RestCalls, RestFailed, Signals, RejectedByRest, FlooredToZero, RateLimited,
-                IncompleteBook;
+                IncompleteBook, ScreeningOnly;
 }
 
 /// <summary>
@@ -116,6 +120,11 @@ public sealed class EvEvaluator
 
     public int PairCount => _byTicker.Count;
 
+    /// <summary>Drops every per-ticker cooldown. Used by --verify: the markets it wants to exercise were
+    /// just evaluated by the live loop, so without this the sweep makes zero REST calls and the check
+    /// reports "nothing near the threshold" — a confident, wrong explanation of its own throttling.</summary>
+    public void ClearCooldowns() => _cooldownUntil.Clear();
+
     /// <summary>Runs <c>EV_REST_CONCURRENCY</c> worker loops, not one. A single loop awaits its REST call
     /// inside the loop body, so the concurrency semaphore could never reach 2 and one slow market stalled
     /// the screening of every other.</summary>
@@ -140,7 +149,7 @@ public sealed class EvEvaluator
                                    double Vig, double ShinZ, double PinMine, double PinOther, double PinSum,
                                    double OracleAgeMs, double OracleDepth, bool InPlay,
                                    decimal WsAsk, decimal WsDepth, double WsBookAge, double EvWs,
-                                   int NumLegs, string PinOddsAll);
+                                   int NumLegs, string PinOddsAll, bool WsVerified);
 
     private async Task EvaluateAsync(string ticker, CancellationToken ct)
     {
@@ -269,7 +278,8 @@ public sealed class EvEvaluator
                             _oracle.AgeMs(mine), mine.MaxContracts, mine.Live,
                             wsAsk, yes ? top.YesAskDepth : top.NoAskDepth, top.AgeMs, evWs,
                             odds.Length,
-                            string.Join(";", odds.Select(o => o.ToString("0.####", CultureInfo.InvariantCulture))));
+                            string.Join(";", odds.Select(o => o.ToString("0.####", CultureInfo.InvariantCulture))),
+                            quotes.All(q => q.WsVerified));
     }
 
     /// <summary>Values a screened candidate at the REST ask, sizes it, and logs it — signal or not.
@@ -286,7 +296,24 @@ public sealed class EvEvaluator
         double limit   = EvMath.BreakEvenLimit(c.PTrueUsed, _cfg.EvMin);
         bool   inWin   = px >= _cfg.MinPrice && px <= _cfg.MaxPrice;
         var    size    = EvMath.Size(c.PTrueUsed, px, c.Vig, BankrollUsd, ActiveExposureFraction, _cfg.MaxTradeFrac);
-        bool   signal  = ev >= _cfg.EvMin;
+        bool   clears  = ev >= _cfg.EvMin;
+
+        // ── THE SCREENING-ONLY GATE ───────────────────────────────────────────────────────────────────
+        // `wv` is the sidecar saying whether this selection is under LIVE WS coverage or is a SCREENING-ONLY
+        // re-seed of an untabbed league. A screening-only quote carries a FRESH timestamp and a DELAYED
+        // price, so the freshness gate cannot see it — it is fresh by every measure we had, and wrong.
+        //
+        // That is not theoretical. With the reader parked on the live soccer page, tennis leagues go
+        // untabbed and re-seed from the delayed feed; observed 2026-08-21, Pinnacle read 0.378 on a
+        // challenger match whose Kalshi book had already moved to 0.17 — a 20c "edge" that was simply an old
+        // price. The size of the disagreement is the tell: on a complete book, twenty cents against a sharp
+        // book is far likelier to be a stale oracle than an edge.
+        //
+        // The row is still WRITTEN — M0 exists to observe, and comparing the calibration of verified against
+        // unverified rows is exactly how M1 measures what this costs. It just does not count as a signal.
+        bool unverified = _cfg.RequireWsVerified && !c.WsVerified;
+        bool signal     = clears && !unverified;
+        if (unverified && clears) Interlocked.Increment(ref Stats.ScreeningOnly);
 
         if (signal) Interlocked.Increment(ref Stats.Signals);
         else        Interlocked.Increment(ref Stats.RejectedByRest);
@@ -300,18 +327,20 @@ public sealed class EvEvaluator
             c.WsAsk, restAsk, c.WsBookAge, c.WsDepth,
             fee, cost, evProp, evShin, ev, c.EvWs, limit,
             size, BankrollUsd, EvMath.OrderFee(px, size.Contracts), size.Contracts * px,
-            inWin, signal ? "SIGNAL" : "REJECTED_REST", c.NumLegs, c.PinOddsAll));
+            inWin, signal ? "SIGNAL" : clears ? "SIGNAL_UNVERIFIED" : "REJECTED_REST",
+            c.NumLegs, c.PinOddsAll, c.WsVerified));
 
-        if (signal)
+        if (clears)
         {
-            var col = inWin ? ConsoleColor.Green : ConsoleColor.DarkYellow;
+            var col = !signal ? ConsoleColor.DarkGray : inWin ? ConsoleColor.Green : ConsoleColor.DarkYellow;
             Console.ForegroundColor = col;
             Console.WriteLine(
-                $"[+EV] {pair.KalshiTicker} {c.Side,-3} ev={ev * 100:+0.00;-0.00}c  "
+                $"{(signal ? "[+EV]" : "[~EV]")} {pair.KalshiTicker} {c.Side,-3} ev={ev * 100:+0.00;-0.00}c  "
               + $"pTrue={c.PTrueUsed:0.0000}  rest={restAsk:0.0000} (ws {c.WsAsk:0.0000}, "
               + $"gap {(double)(restAsk - c.WsAsk) * 100:+0.0;-0.0}c)  limit={limit:0.0000}  "
               + $"size={size.Contracts}  vig={c.Vig:0.0000}{(c.NumLegs > 2 ? $"  [{c.NumLegs}-way]" : "")}{(inWin ? "" : "  [outside price window]")}"
-              + $"{(size.FlooredToZero ? "  [floored to 0 contracts]" : "")}");
+              + $"{(size.FlooredToZero ? "  [floored to 0 contracts]" : "")}"
+              + $"{(signal ? "" : "  [SCREENING-ONLY oracle: fresh timestamp, DELAYED price — not a signal]")}");
             Console.ResetColor();
         }
         else if (Verbose)

@@ -314,6 +314,7 @@ internal static class Program
         {
             long rowsBefore = telemetry.RowsWritten;
             var s0 = (eval.Stats.Screened, eval.Stats.RestCalls, eval.Stats.Signals);
+            eval.ClearCooldowns();   // else the live loop's recent pass throttles this one to zero REST calls
             eval.SweepAll();
             var by = DateTime.UtcNow.AddSeconds(45);
             while (eval.Pending > 0 && DateTime.UtcNow < by && !ct.IsCancellationRequested) await Task.Delay(200);
@@ -845,7 +846,7 @@ internal static class Program
           + $"| oracle {(o.IsConnected ? "up" : "DOWN")} quotes {o.QuoteCount} stale {o.StaleCount} "
           + $"{(o.SessionReady ? "" : "SESSION-DOWN ")}"
           + $"| screened {s.Screened} (noquote {s.NoQuote} stale {s.StaleOracle} susp {s.Suspended} "
-          + $"below {s.BelowPrescreen} cooldown {s.Cooldown} incomplete-book {s.IncompleteBook}) "
+          + $"below {s.BelowPrescreen} cooldown {s.Cooldown} incomplete-book {s.IncompleteBook} unverified {s.ScreeningOnly}) "
           + $"| rest {s.RestCalls} fail {s.RestFailed} 429 {s.RateLimited} "
           + $"| SIGNALS {s.Signals} rejected-at-rest {s.RejectedByRest} floored {s.FlooredToZero} "
           + $"| rows {t.RowsWritten} | bankroll ${e.BankrollUsd:0.00}");
