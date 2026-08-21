@@ -75,6 +75,34 @@ public sealed class PinnacleOracle
         return added;
     }
 
+    /// <summary>
+    /// REPLACES the polled set with the current pair file's selections. Returns (added, removed).
+    ///
+    /// <para>Adding without ever removing is what breaks a long run. Each daily re-pair brings a fresh slate
+    /// — at ~800 soccer pairs that is ~870 selections a day — while yesterday's finished matches stay in the
+    /// list forever. A fortnight becomes eleven thousand selections polled every three seconds, nearly all
+    /// of them games that ended days ago, and the poll grows without bound until it cannot keep cadence.</para>
+    ///
+    /// <para>Safe to drop them here because the settlement watcher keeps its OWN archive of every ticker it
+    /// has ever seen: results still get banked for markets that have left the board. This list is the LIVE
+    /// watchlist, not the record.</para>
+    /// </summary>
+    public (int Added, int Removed) SetTokens(IEnumerable<string> tokens)
+    {
+        var want = new HashSet<string>(tokens.Where(t => !string.IsNullOrWhiteSpace(t)), StringComparer.Ordinal);
+        lock (_tokenLock)
+        {
+            int added = want.Count(t => !_tokenSet.Contains(t));
+            var gone  = _tokenSet.Where(t => !want.Contains(t)).ToList();
+            _tokens.Clear();
+            _tokens.AddRange(want);
+            _tokenSet.Clear();
+            foreach (var t in want) _tokenSet.Add(t);
+            foreach (var t in gone) _quotes.TryRemove(t, out _);   // else the cache grows as the list shrinks
+            return (added, gone.Count);
+        }
+    }
+
     public int TokenCount { get { lock (_tokenLock) return _tokens.Count; } }
 
     public int QuoteCount => _quotes.Count;

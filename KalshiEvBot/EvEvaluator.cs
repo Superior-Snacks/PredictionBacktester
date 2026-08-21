@@ -118,6 +118,25 @@ public sealed class EvEvaluator
         return added;
     }
 
+    /// <summary>REPLACES the watched set with the current pair file. Returns (added, removed).
+    /// The sweep runs over every entry on every oracle poll, so a set that only grows turns a fortnight's
+    /// daily re-pairs into thousands of finished matches re-screened every three seconds. Settlements for
+    /// dropped markets are still banked — the settlement watcher keeps its own archive.</summary>
+    public (int Added, int Removed) ReplacePairs(IEnumerable<EvPair> pairs)
+    {
+        var fresh = pairs.GroupBy(p => p.KalshiTicker)
+                         .ToDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal);
+        int added = fresh.Keys.Count(k => !_byTicker.ContainsKey(k));
+        int removed = 0;
+        foreach (var t in _byTicker.Keys.Where(k => !fresh.ContainsKey(k)).ToList())
+        {
+            if (_byTicker.TryRemove(t, out _)) removed++;
+            _cooldownUntil.TryRemove(t, out _);
+        }
+        foreach (var kv in fresh) _byTicker[kv.Key] = kv.Value;
+        return (added, removed);
+    }
+
     public int PairCount => _byTicker.Count;
 
     /// <summary>Drops every per-ticker cooldown. Used by --verify: the markets it wants to exercise were

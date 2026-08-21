@@ -309,14 +309,24 @@ internal static class Program
         else
             Pass("Pinnacle oracle", $"sidecar up, session ready, polling {oracle.TokenCount} selection(s)");
 
-        int quoted = oracle.QuoteCount, stale = oracle.StaleCount;
+        int quoted = oracle.QuoteCount, stale = oracle.StaleCount, fresh = quoted - stale;
+        double freshFrac = quoted > 0 ? (double)fresh / quoted : 0;
         if (quoted == 0)
             Fail("oracle quotes", "zero selections quoted — the pair file's matches may all have finished");
-        else if (quoted - stale == 0)
-            Warn("oracle quotes", $"{quoted} quoted but ALL stale (>{cfg.EvMin:0.##} gate is separate; "
-                                + "see EV_ORACLE_MAX_AGE_MS). Nothing can be valued while this holds.");
+        else if (fresh == 0)
+            Warn("oracle quotes", $"{quoted} quoted but ALL stale (see EV_ORACLE_MAX_AGE_MS). "
+                                + "Nothing can be valued while this holds.");
+        else if (freshFrac < 0.25)
+            // A PASS here is a lie by omission. 858 quoted / 57 fresh reported PASS while the bot was
+            // working from 7% of its watchlist — the Pinnacle reader can only tab a handful of leagues, so
+            // pairing far more markets than it covers does not widen coverage, it just adds selections whose
+            // prices are frozen or screening-only. That is a supply problem the checklist must not hide.
+            Warn("oracle quotes", $"{quoted} quoted but only {fresh} FRESH ({freshFrac:0%}) — the reader "
+                                + $"covers a fraction of {oracle.TokenCount} selection(s). The bot is working "
+                                + "from that fraction; the rest are frozen or screening-only. Narrow the "
+                                + "pairing to leagues the reader actually tabs, or expect this yield.");
         else
-            Pass("oracle quotes", $"{quoted} quoted, {quoted - stale} fresh, {stale} stale");
+            Pass("oracle quotes", $"{quoted} quoted, {fresh} fresh ({freshFrac:0%}), {stale} stale");
 
         // 7. A full evaluation pass
         await Step("evaluation sweep", async () =>
@@ -515,11 +525,14 @@ internal static class Program
                 }
                 if (fresh.Count == 0) continue;
 
-                int newPairs = eval.UpsertPairs(fresh);
+                // REPLACE, don't accumulate. See ReplacePairs / SetTokens: the live watchlist is whatever the
+                // pairing job currently says, and yesterday's finished fixtures must leave it or a fortnight's
+                // daily re-pairs compound into thousands of dead markets swept every three seconds.
+                var (newPairs, dropped) = eval.ReplacePairs(fresh);
                 var newTickers = fresh.Select(p => p.KalshiTicker)
                                       .Where(t => !everSeen.Contains(t)).Distinct(StringComparer.Ordinal).ToList();
                 feed.EnqueueSubscribe(newTickers);
-                int newTokens = oracle.AddTokens(fresh.SelectMany(p => p.Legs));   // legs, not the pair — see above
+                var (newTokens, goneTokens) = oracle.SetTokens(fresh.SelectMany(p => p.Legs));
 
                 // One lock per resource, each taken consistently everywhere it is touched: `pairsLock`
                 // guards everSeen (shared with the settlement watcher), the list instance guards itself
@@ -539,10 +552,11 @@ internal static class Program
                     livePairs.AddRange(byTicker.Values);
                 }
 
-                if (newPairs > 0 || newTokens > 0)
-                    Console.WriteLine($"[PAIRS] reloaded: +{newPairs} market(s), +{newTokens} Pinnacle "
-                                    + $"selection(s) — now {eval.PairCount} watched, {seenCount} ever seen "
-                                    + "(finished markets are kept until their result is banked).");
+                if (newPairs > 0 || newTokens > 0 || dropped > 0 || goneTokens > 0)
+                    Console.WriteLine($"[PAIRS] reloaded: +{newPairs}/-{dropped} market(s), "
+                                    + $"+{newTokens}/-{goneTokens} Pinnacle selection(s) — now "
+                                    + $"{eval.PairCount} watched, {seenCount} ever seen (dropped markets "
+                                    + "still have their settlements banked).");
             }
             catch (OperationCanceledException) { break; }
             catch (Exception ex) { Console.WriteLine($"[PAIRS] reload error: {ex.GetType().Name}: {ex.Message}"); }
