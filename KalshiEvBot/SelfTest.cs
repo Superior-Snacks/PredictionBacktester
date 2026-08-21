@@ -53,6 +53,47 @@ public static class SelfTest
             Check(!DeVig.Quotable(1.0, 2.0), "a one-sided/nonsense book is not quotable");
         }
 
+        // ── Three-way de-vig (soccer 1X2) ─────────────────────────────────────────────────────────────
+        Console.WriteLine("\nThree-way de-vig");
+        {
+            // A realistic La Liga 1X2. Kalshi listed this fixture at 0.42 / 0.24 / 0.35.
+            double oH = 2.30, oD = 3.40, oA = 3.10;
+            var p = DeVig.ProportionalN(new[] { oH, oD, oA });
+            var s = DeVig.ShinN(new[] { oH, oD, oA });
+            Near(p.PTrue.Sum(), 1.0, 1e-9, "proportional: three legs sum to 1");
+            Near(s.PTrue.Sum(), 1.0, 1e-6, "shin: three legs sum to 1");
+            Check(p.Overround > 0, "overround is positive on a real 1X2", $"{p.Overround:0.####}");
+            Check(s.ShinZ > 0, "shin z is positive with margin to attribute", $"{s.ShinZ:0.#####}");
+
+            // THE MAPPING THAT MATTERS: Kalshi NO on the home team pays on draw OR away, and taking the
+            // complement of the home leg must equal exactly that sum. Getting this wrong is the single
+            // most dangerous 3-way bug — every number stays plausible.
+            Near(1.0 - p.PTrue[0], p.PTrue[1] + p.PTrue[2], 1e-12,
+                 "P(home NO) == P(draw) + P(away) — the complement rule holds for 3 legs");
+            Near(1.0 - p.PTrue[1], p.PTrue[0] + p.PTrue[2], 1e-12, "…and for the draw leg");
+
+            // A missing leg must invalidate the WHOLE book, not just that leg.
+            Check(!DeVig.Quotable(new[] { oH, 0.0, oA }), "a 1X2 with a missing draw price is NOT quotable");
+            Check(!DeVig.ProportionalN(new[] { oH, 0.0, oA }).Ok, "…and yields no probabilities at all");
+
+            // The two-way path must still agree with the n-way one — they are the same code now, and a
+            // divergence here would mean tennis and soccer had drifted apart.
+            var two = DeVig.Proportional(1.869, 2.030);
+            var twoN = DeVig.ProportionalN(new[] { 1.869, 2.030 });
+            Near(two.PTrue, twoN.PTrue[0], 1e-15, "the 2-way helper and the n-way form agree exactly");
+            var twoS = DeVig.Shin(1.869, 2.030);
+            var twoSN = DeVig.ShinN(new[] { 1.869, 2.030 });
+            Near(twoS.PTrue, twoSN.PTrue[0], 1e-15, "…and likewise for Shin");
+
+            // Heavy favourite: exactly where proportional de-vig is least trustworthy, so the two methods
+            // must visibly disagree rather than silently coincide.
+            var hp = DeVig.ProportionalN(new[] { 1.02, 26.0, 41.0 });
+            var hs = DeVig.ShinN(new[] { 1.02, 26.0, 41.0 });
+            Check(Math.Abs(hp.PTrue[0] - hs.PTrue[0]) > 1e-6,
+                  "on a 0.98 favourite the two de-vigs differ — the reason both are logged",
+                  $"prop={hp.PTrue[0]:0.#####} shin={hs.PTrue[0]:0.#####}");
+        }
+
         // ── Fees ──────────────────────────────────────────────────────────────────────────────────────
         Console.WriteLine("\nFees");
         {
@@ -152,7 +193,8 @@ public static class SelfTest
                                          1.869, 2.030, 1.0072, 0.0072, 0.001, 0.52, 0.521, 0.52, "proportional",
                                          120, 500, 0.51m, 0.55m, 0, 40,
                                          EvMath.FeePerContract(0.55), EvMath.CostPerContract(0.55),
-                                         -0.04, -0.04, -0.04, 0.0, 0.6, sz, 5000, 1.0, 27.5, true, "SIGNAL"));
+                                         -0.04, -0.04, -0.04, 0.0, 0.6, sz, 5000, 1.0, 27.5, true, "SIGNAL",
+                                         2, "1.869;2.030"));
                 }
                 var lines = File.ReadAllLines(Directory.GetFiles(dir, "*.csv")[0]);
                 Check(lines.Length == 2, "header + one row written", $"{lines.Length} line(s)");
@@ -207,6 +249,75 @@ public static class SelfTest
                   "an unparsable title is not judged (a guard that fires on noise is noise)");
             Check(EvPairLoader.SidesAgree("Anyone", "A vs B", "1:2:over", out _),
                   "a derivative token is out of scope for this guard");
+        }
+
+        // ── Three-way pair loading ────────────────────────────────────────────────────────────────────
+        Console.WriteLine("\nThree-way pair loading");
+        {
+            string dir = Path.Combine(Path.GetTempPath(), "kalshievbot_pairs_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(dir);
+            try
+            {
+                string Row(string tk, string yes, string no, bool tw, string? legs) =>
+                    "{\"kalshi_ticker\":\"" + tk + "\",\"event_id\":\"EV1\",\"event_title\":\"Arsenal vs Coventry\","
+                  + "\"kalshi_outcome\":\"Arsenal\",\"settlement_date\":\"2026-08-21\","
+                  + "\"hardven_yes_token\":\"" + yes + "\",\"hardven_no_token\":\"" + no + "\""
+                  + (tw ? ",\"three_way\":true" : "")
+                  + (legs is null ? "" : ",\"hardven_legs\":" + legs) + "}";
+
+                // Complete 3-way: three rows, one matchup, distinct legs, identical leg sets.
+                string legs = "[\"9:77:home\",\"9:77:away\",\"9:77:draw\"]";
+                string good = Path.Combine(dir, "good.json");
+                File.WriteAllText(good, "[" + string.Join(",", new[]
+                {
+                    Row("K-ARS", "9:77:home", "9:77:away", true, legs),
+                    Row("K-COV", "9:77:away", "9:77:home", true, legs),
+                    Row("K-TIE", "9:77:draw", "9:77:home", true, legs),
+                }) + "]");
+                var okPairs = EvPairLoader.Load(good, out var rep1);
+                Check(okPairs.Count == 3, "a complete 3-way event loads all three markets", $"{okPairs.Count}");
+                Check(okPairs.All(p => p.ThreeWay && p.Legs.Count == 3 && p.LegsUsable),
+                      "each row carries the full leg set and finds its own YES leg");
+                Check(okPairs.Single(p => p.KalshiTicker == "K-TIE").YesLegIndex == 2,
+                      "the Tie row points at the draw leg");
+
+                // Missing legs must be DROPPED, never silently treated as a two-way.
+                string bad = Path.Combine(dir, "bad.json");
+                File.WriteAllText(bad, "[" + Row("K-ARS", "9:77:home", "9:77:away", true, null) + "]");
+                var badPairs = EvPairLoader.Load(bad, out var rep2);
+                Check(badPairs.Count == 0, "a 3-way row without hardven_legs is dropped, not downgraded",
+                      $"{badPairs.Count}");
+                Check(rep2.Any(r => r.Contains("three-way")), "…and the drop is reported, not silent");
+
+                // Two markets resolving to the SAME Pinnacle leg is a contradiction: drop the whole event.
+                string dup = Path.Combine(dir, "dup.json");
+                File.WriteAllText(dup, "[" + string.Join(",", new[]
+                {
+                    Row("K-ARS", "9:77:home", "9:77:away", true, legs),
+                    Row("K-COV", "9:77:home", "9:77:away", true, legs),   // same leg as its sibling
+                    Row("K-TIE", "9:77:draw", "9:77:home", true, legs),
+                }) + "]");
+                var dupPairs = EvPairLoader.Load(dup, out var rep3);
+                Check(dupPairs.Count == 0, "a 3-way event with two markets on one leg drops entirely",
+                      $"{dupPairs.Count}");
+                Check(rep3.Any(r => r.Contains("SAME Pinnacle leg")), "…for the stated reason");
+
+                // A 2-way file must be unaffected by any of this.
+                string two = Path.Combine(dir, "two.json");
+                File.WriteAllText(two, "[" + Row("K-2W", "9:88:home", "9:88:away", false, null) + "]");
+                var twoPairs = EvPairLoader.Load(two, out _);
+                Check(twoPairs.Count == 1 && !twoPairs[0].ThreeWay && twoPairs[0].Legs.Count == 2,
+                      "a two-way row still loads and synthesises its own leg pair");
+
+                // A settlement-rule mismatch pairs perfectly on names, so only a blocklist can stop it.
+                string blk = Path.Combine(dir, "blocked.json");
+                File.WriteAllText(blk, "[" + Row("KXUCLADVANCE-26AUG25X", "9:99:home", "9:99:away", false, null) + "]");
+                var blkPairs = EvPairLoader.Load(blk, out var rep4);
+                Check(blkPairs.Count == 0, "KXUCLADVANCE is blocked (extra time / penalties vs Pinnacle's 90min)",
+                      $"{blkPairs.Count}");
+                Check(rep4.Any(r => r.Contains("SETTLEMENT-RULE")), "…and the reason is stated");
+            }
+            finally { try { Directory.Delete(dir, true); } catch { } }
         }
 
         Console.WriteLine($"\n{_pass} passed, {_fail} failed.");

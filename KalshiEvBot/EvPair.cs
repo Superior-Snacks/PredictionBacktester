@@ -18,12 +18,53 @@ public sealed record EvPair(
     string Label,
     string SettlementDate,
     string YesToken,          // Pinnacle selection that pays when Kalshi YES resolves YES
-    string NoToken,           // the other side of the same matchup
+    string NoToken,           // 2-way: the true complement. 3-way: merely ANOTHER leg — see below.
     string YesName,
-    string NoName);
+    string NoName,
+    bool ThreeWay,
+    IReadOnlyList<string> Legs)   // every mutually-exclusive outcome of the matchup, YesToken among them
+{
+    /// <summary>
+    /// <b>The trap this type exists to close.</b> On a two-way, <c>NoToken</c> is the complement of
+    /// <c>YesToken</c> and <c>P(no) = 1 - P(yes)</c> follows. On a soccer 1X2 it is not: "not Arsenal" is
+    /// Coventry <i>plus</i> the draw, while <c>NoToken</c> points at Coventry alone. Using it as a
+    /// complement there yields a confidently wrong <c>P_true</c> that nothing downstream can detect,
+    /// because every individual number still looks plausible.
+    ///
+    /// <para>So nothing in the evaluator reads <c>NoToken</c> for pricing. It works from <see cref="Legs"/>,
+    /// which is the complete outcome set for both shapes, and takes the complement as
+    /// <c>1 - P(YesToken)</c> — correct for any number of legs.</para>
+    /// </summary>
+    public int YesLegIndex => Legs is null ? -1 : Legs.ToList().IndexOf(YesToken);
+
+    /// <summary>A pair is only usable if its YES leg is actually in the leg set — otherwise there is no
+    /// probability to read out and the row is a data fault, not a trade.</summary>
+    public bool LegsUsable => Legs is { Count: >= 2 } && YesLegIndex >= 0;
+}
 
 public static class EvPairLoader
 {
+    /// <summary>
+    /// Kalshi series whose SETTLEMENT RULE does not match the Pinnacle market we pair against, whatever the
+    /// names say. These are dropped outright, because nothing downstream can detect the mismatch: the teams
+    /// are right, the matchup is right, the prices look sane, and the bet is simply resolved by a different
+    /// rule than the one it was priced under.
+    ///
+    /// <para><c>KXUCLADVANCE</c> is the live example. It is structurally a clean two-way ("X advances past
+    /// Y") so it would pair without complaint, but "advances" includes extra time and penalties while
+    /// Pinnacle's 1X2 is explicitly <i>90 minutes plus stoppage, not extra time or penalties</i> — the
+    /// Kalshi rules text says so outright. Every knockout tie level after 90 minutes would be mispriced,
+    /// and only on the ties that go long, which is exactly when it costs most.</para>
+    ///
+    /// <para>Pairing these correctly needs Pinnacle's separate to-advance market, not the moneyline.</para>
+    /// </summary>
+    public static readonly HashSet<string> BlockedSeries = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "KXUCLADVANCE",
+    };
+
+    private static string SeriesOf(string ticker) => (ticker ?? "").Split('-')[0];
+
     /// <summary>Finds cross_pairs.json without being told. Order matters: an explicit env var wins, then
     /// the arb bot's copy (which the pairing job rewrites and re-points, so it is the live one), then the
     /// working directory. Never bundles its own copy — a second file would drift from the pairing job
@@ -50,7 +91,7 @@ public static class EvPairLoader
         report = new List<string>();
         var raw = JsonDocument.Parse(File.ReadAllText(path));
         var all = new List<EvPair>();
-        int noTokens = 0;
+        int noTokens = 0, badLegs = 0, threeWayCount = 0, blocked = 0;
 
         foreach (var el in raw.RootElement.EnumerateArray())
         {
@@ -60,14 +101,47 @@ public static class EvPairLoader
             string yes    = S("hardven_yes_token");
             string no     = S("hardven_no_token");
             if (string.IsNullOrWhiteSpace(ticker)) continue;
+            if (BlockedSeries.Contains(SeriesOf(ticker))) { blocked++; continue; }
             if (string.IsNullOrWhiteSpace(yes) || string.IsNullOrWhiteSpace(no)) { noTokens++; continue; }
 
+            bool threeWay = el.TryGetProperty("three_way", out var tw) && tw.ValueKind == JsonValueKind.True;
+
+            // The leg set: every mutually-exclusive outcome of the matchup. Two-way rows synthesise it from
+            // the pair, which is exactly right there. Three-way rows MUST carry it explicitly — the two
+            // tokens on the row are two of three outcomes, and there is no way to infer the third.
+            List<string> legs;
+            if (threeWay)
+            {
+                legs = el.TryGetProperty("hardven_legs", out var lg) && lg.ValueKind == JsonValueKind.Array
+                     ? lg.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.String)
+                         .Select(x => x.GetString() ?? "").Where(x => x.Length > 0).Distinct(StringComparer.Ordinal).ToList()
+                     : new List<string>();
+
+                // NO SILENT FALLBACK. Treating an incomplete three-way as a two-way would divide by the
+                // wrong S and produce a plausible-looking P_true that is simply wrong — the exact failure
+                // mode nothing downstream can catch. Skip the row and say so.
+                if (legs.Count < 3 || !legs.Contains(yes, StringComparer.Ordinal)) { badLegs++; continue; }
+                threeWayCount++;
+            }
+            else legs = new List<string> { yes, no };
+
             all.Add(new EvPair(ticker, S("event_id"), S("event_title"), S("kalshi_outcome"), S("label"),
-                               S("settlement_date"), yes, no, S("hardven_yes_name"), S("hardven_no_name")));
+                               S("settlement_date"), yes, no, S("hardven_yes_name"), S("hardven_no_name"),
+                               threeWay, legs));
         }
         if (noTokens > 0)
             report.Add($"{noTokens} row(s) skipped: unpaired (no Pinnacle token). A one-sided row cannot be "
                      + "de-vigged — there is no two-way sum to remove the margin from.");
+        if (badLegs > 0)
+            report.Add($"{badLegs} three-way row(s) skipped: `hardven_legs` missing, short, or not containing "
+                     + "the YES token. A 1X2 needs all three prices to de-vig; there is no safe two-way "
+                     + "fallback, so these are dropped rather than mispriced. Re-run the pairing job.");
+        if (blocked > 0)
+            report.Add($"{blocked} row(s) skipped: series blocked for a SETTLEMENT-RULE mismatch "
+                     + $"({string.Join(", ", BlockedSeries)}). These pair cleanly on names but resolve "
+                     + "under a different rule than the Pinnacle price we would value them with.");
+        if (threeWayCount > 0)
+            report.Add($"{threeWayCount} three-way row(s) loaded (soccer 1X2 and similar).");
 
         // ── Guard 1: title order vs token designation (advisory) ──────────────────────────────────────
         foreach (var p in all)
@@ -80,7 +154,31 @@ public static class EvPairLoader
         // nothing in the file says which row is wrong, so BOTH go — trading the survivor is a coin flip
         // wearing an arb's clothes. This is the check that caught two legs booked on one outcome.
         var broken = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var g in all.Where(p => !string.IsNullOrEmpty(p.EventId))
+
+        // ── 3-WAY arm. Without this the check keys on Count()==2 and silently skips every soccer event —
+        // leaving the rows with the MOST ways to be wrong as the only ones with no cross-check at all.
+        // Three outcomes of one fixture must name one matchup, hold three DISTINCT yes legs, and agree on
+        // what the leg set even is.
+        foreach (var g in all.Where(p => p.ThreeWay && !string.IsNullOrEmpty(p.EventId))
+                             .GroupBy(p => p.EventId))
+        {
+            var rows = g.ToList();
+            var mids = rows.Select(p => p.YesToken.Split(':') is { Length: 3 } s ? s[1] : "").Distinct().ToList();
+            string why =
+                  mids.Count != 1 || mids[0].Length == 0
+                      ? $"the markets name {mids.Count} different Pinnacle matchups"
+                : rows.Select(p => p.YesToken).Distinct(StringComparer.Ordinal).Count() != rows.Count
+                      ? "two markets resolved to the SAME Pinnacle leg — three outcomes cannot share one"
+                : rows.Select(p => string.Join("|", p.Legs.OrderBy(x => x, StringComparer.Ordinal)))
+                      .Distinct(StringComparer.Ordinal).Count() != 1
+                      ? "the markets disagree about the matchup's leg set"
+                : "";
+            if (why.Length == 0) continue;
+            broken.Add(g.Key);
+            report.Add($"[DROP] all {rows.Count} market(s) of {g.Key}: {why}.");
+        }
+
+        foreach (var g in all.Where(p => !p.ThreeWay && !string.IsNullOrEmpty(p.EventId))
                              .GroupBy(p => p.EventId).Where(g => g.Count() == 2))
         {
             var seg = g.Select(p => p.YesToken.Split(':')).ToList();

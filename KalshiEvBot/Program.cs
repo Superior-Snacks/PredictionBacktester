@@ -577,13 +577,21 @@ internal static class Program
         lock (pairs) snapshot = pairs.ToList();   // the reload loop mutates this list in place
         foreach (var p in snapshot)
         {
-            var yes = oracle.Get(p.YesToken);
-            var no  = oracle.Get(p.NoToken);
-            if (yes is null || no is null || !yes.Open || !no.Open) continue;
-            if (!oracle.Fresh(yes) || !oracle.Fresh(no)) continue;
+            if (!p.LegsUsable) continue;
+            // Every leg, not just the two named on the row: a 1X2 with a missing draw price has no valid S,
+            // so its home and away legs are unusable too.
+            var quotes = new List<OracleQuote>(p.Legs.Count);
+            foreach (var tok in p.Legs)
+            {
+                var q = oracle.Get(tok);
+                if (q is null || !q.Open || !oracle.Fresh(q)) { quotes.Clear(); break; }
+                quotes.Add(q);
+            }
+            if (quotes.Count != p.Legs.Count) continue;
             try
             {
-                log.Write(p, yes, no, oracle.AgeMs(yes), feed.Top(p.KalshiTicker).YesAsk, cfg.DeVigMethod);
+                log.Write(p, quotes, oracle.AgeMs(quotes[p.YesLegIndex]),
+                          feed.Top(p.KalshiTicker).YesAsk, cfg.DeVigMethod);
                 n++;
             }
             catch (Exception ex) { Console.WriteLine($"[SNAPSHOT] {p.KalshiTicker}: {ex.Message}"); }

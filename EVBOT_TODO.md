@@ -150,6 +150,49 @@ Not yet exercised against live feeds — that needs the sidecar running and the 
 
 ---
 
+## 1b. THREE-WAY SUPPORT — **BUILT 2026-08-21** (soccer 1X2 and anything else n-way)
+
+Not "add soccer". `pair_pinnacle.py` is one pipeline for every sport and the EV bot has **zero** sport-specific
+code — tennis worked only because tennis is two-way. Supporting the 3-way *shape* unlocks ~230 open soccer
+events at once (`KXNCAAMSOCCERGAME` 96, `KXMLSGAME` 31, `KXLALIGAGAME` 25, `KXEPLGAME`/`KXSERIEAGAME`/
+`KXLIGUE1GAME` 21 each, `KXBUNDESLIGAGAME` 10, `KXUCLGAME` 7 — all verified 3 markets per event), and every
+future n-way market for free.
+
+- [x] **`DeVig` generalised to n legs** — `ProportionalN` / `ShinN` over an odds vector; the two-way helpers
+      now delegate to them, so tennis and soccer cannot drift apart. Shin's bisection already summed over i,
+      so it generalised unchanged.
+- [x] **`EvPair.Legs`** — the complete outcome set, with `ThreeWay`. Two-way rows synthesise `[yes, no]`.
+- [x] **Nothing reads `NoToken` for pricing any more.** *This was the trap.* On a two-way it is the true
+      complement; on a 1X2 it is merely another leg — "not Arsenal" is Coventry **plus** the draw, while
+      `NoToken` points at Coventry alone. The evaluator works from `Legs` and takes the complement as
+      `1 − P(YesToken)`, which is correct for any number of legs and needs no knowledge of which leg is which.
+- [x] **No silent fallback.** A three-way row without a complete `hardven_legs` is DROPPED and reported,
+      never downgraded to two-way — that would divide by the wrong S and yield a plausible, wrong `P_true`
+      that nothing downstream could catch.
+- [x] **Every leg must be fresh, open and quotable**, not just the two named on the row: a 1X2 missing its
+      draw price has no valid S, so its home and away legs are unusable too.
+- [x] **The event-contradiction guard gained a 3-way arm.** It keyed on `Count() == 2`, so it silently
+      skipped every soccer event — leaving the rows with the most ways to be wrong as the only ones with no
+      cross-check. Now: one matchup, three distinct YES legs, identical leg sets, or the whole event drops.
+- [x] **`pair_pinnacle.py` emits `hardven_legs`** on 3-way rows (it already detected the draw designation,
+      handled Tie markets and set `three_way`).
+- [x] **`SERIES_SPORT` gained the major soccer leagues.** It had `KXLALIGA2GAME` — the *second* division —
+      but none of the top ones, so ~230 events were matching with no league anchor at all.
+- [x] **`KXUCLADVANCE` blocked on a settlement mismatch.** It is structurally a clean two-way and pairs
+      without complaint, but "advances" includes extra time and penalties while Pinnacle's 1X2 is explicitly
+      90 minutes plus stoppage. Every tie level after 90 minutes would be mispriced — and only the ties that
+      go long, which is when it costs most. Correct pairing needs Pinnacle's separate to-advance market.
+- [x] **Telemetry gained `NumLegs` and `PinOddsAll`**; the console tags a signal `[3-way]`.
+- [x] **Self-tests: 71** (from 50), including the complement rule `P(home NO) == P(draw) + P(away)`, that a
+      missing draw invalidates the whole book, that the 2-way and n-way paths agree exactly, and that the
+      two de-vigs visibly diverge on a 0.98 favourite — which is why both are still logged.
+
+**Still unverified:** whether the sidecar's catalog emits `three_way` and a `:draw` designation for these
+leagues. `index_catalog` reads both off the selection, so the adapter must supply them. One `/catalog` call
+answers it, and it is the only thing that can still block this.
+
+---
+
 ## 2. M1 — Settlement validation — **TOOLS BUILT 2026-08-21**
 
 Run with `dotnet run --project KalshiEvBot -- --resolve`. **REST only, no WebSocket**, so it is safe to run

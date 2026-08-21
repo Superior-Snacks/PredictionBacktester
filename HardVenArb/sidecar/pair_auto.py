@@ -188,6 +188,14 @@ SERIES_SPORT = {
     "KXNCAABBGAME": {"BASKETBALL"},
     "KXWCGAME": {"FIFA WORLD CUP", "SOCCER"}, "KXUSLGAME": {"SOCCER"}, "KXUSLCUPGAME": {"SOCCER"},
     "KXLALIGA2GAME": {"SOCCER"}, "KXCHLLDPGAME": {"SOCCER"}, "KXBOLPDIVGAME": {"SOCCER"},
+    # The major soccer leagues. Previously absent — including the top divisions while KXLALIGA2GAME (the
+    # SECOND division) was listed — so ~230 open 1X2 events were matched with NO league anchor at all, the
+    # one guard that stops a Kalshi market fuzzy-grabbing a similarly-named game in another sport.
+    # All verified 3-way (Home / Away / Tie) against the live API on 2026-08-21.
+    "KXEPLGAME": {"SOCCER"}, "KXLALIGAGAME": {"SOCCER"}, "KXSERIEAGAME": {"SOCCER"},
+    "KXLIGUE1GAME": {"SOCCER"}, "KXLIGUE2GAME": {"SOCCER"}, "KXBUNDESLIGAGAME": {"SOCCER"},
+    "KXBUNDESLIGA2GAME": {"SOCCER"}, "KXMLSGAME": {"SOCCER"}, "KXUCLGAME": {"SOCCER"},
+    "KXUCLWGAME": {"SOCCER"}, "KXNCAAMSOCCERGAME": {"SOCCER"}, "KXUAEPLGAME": {"SOCCER"},
     "KXNFLGAME": {"FOOTBALL"}, "KXNCAAFGAME": {"FOOTBALL"}, "KXCFLGAME": {"FOOTBALL"},
     "KXAFLGAME": {"AUSSIE RULES"},
     "KXATPMATCH": {"TENNIS"}, "KXWTAMATCH": {"TENNIS"}, "KXITFMATCH": {"TENNIS"}, "KXITFWMATCH": {"TENNIS"},

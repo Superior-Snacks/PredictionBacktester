@@ -138,7 +138,8 @@ public sealed class EvEvaluator
     private sealed record Screened(string Side, double PTrueProp, double PTrueShin, double PTrueUsed,
                                    double Vig, double ShinZ, double PinMine, double PinOther, double PinSum,
                                    double OracleAgeMs, double OracleDepth, bool InPlay,
-                                   decimal WsAsk, decimal WsDepth, double WsBookAge, double EvWs);
+                                   decimal WsAsk, decimal WsDepth, double WsBookAge, double EvWs,
+                                   int NumLegs, string PinOddsAll);
 
     private async Task EvaluateAsync(string ticker, CancellationToken ct)
     {
@@ -194,21 +195,38 @@ public sealed class EvEvaluator
     {
         Interlocked.Increment(ref Stats.Screened);
         bool yes = side == "YES";
-        // The Pinnacle selection that pays when THIS side wins, and its opposite. Both are needed: the vig
-        // only exists across the pair, so a one-sided quote cannot be de-vigged at all.
-        var mine  = _oracle.Get(yes ? pair.YesToken : pair.NoToken);
-        var other = _oracle.Get(yes ? pair.NoToken  : pair.YesToken);
-        if (mine is null || other is null) { Interlocked.Increment(ref Stats.NoQuote); return null; }
-        if (!mine.Open || !other.Open)     { Interlocked.Increment(ref Stats.Suspended); return null; }
+        if (!pair.LegsUsable) return null;
 
-        // A value bet against a stale oracle is a bet against nothing.
-        if (!_oracle.Fresh(mine) || !_oracle.Fresh(other))
-        { Interlocked.Increment(ref Stats.StaleOracle); return null; }
+        // EVERY leg of the matchup must be quotable, open and fresh — not just the two named on this row.
+        // On a 1X2 a missing draw price invalidates the home and away legs as well: S is wrong without it,
+        // so there is nothing correct to normalise by. Deliberately NOT reading NoToken, which is the true
+        // complement on a two-way and merely another leg on a three-way.
+        var quotes = new OracleQuote[pair.Legs.Count];
+        for (int i = 0; i < pair.Legs.Count; i++)
+        {
+            var q = _oracle.Get(pair.Legs[i]);
+            if (q is null)          { Interlocked.Increment(ref Stats.NoQuote);     return null; }
+            if (!q.Open)            { Interlocked.Increment(ref Stats.Suspended);   return null; }
+            if (!_oracle.Fresh(q))  { Interlocked.Increment(ref Stats.StaleOracle); return null; }  // a value bet against a stale oracle is a bet against nothing
+            quotes[i] = q;
+        }
 
-        var prop = DeVig.Proportional(mine.DecimalOdds, other.DecimalOdds);
-        var shin = DeVig.Shin(mine.DecimalOdds, other.DecimalOdds);
-        if (prop.PTrue <= 0 || prop.PTrue >= 1) return null;
-        double pTrue = _cfg.DeVigMethod == "shin" ? shin.PTrue : prop.PTrue;
+        var odds = quotes.Select(q => q.DecimalOdds).ToArray();
+        var prop = DeVig.ProportionalN(odds);
+        var shin = DeVig.ShinN(odds);
+        if (!prop.Ok || !shin.Ok) return null;
+
+        int yi = pair.YesLegIndex;
+        var mine = quotes[yi];
+
+        // The Kalshi YES side pays on ITS leg; the NO side pays on everything else. Taking the complement as
+        // 1 - P(yes) is correct for ANY number of legs — on a 1X2 it is exactly P(other team) + P(draw),
+        // without needing to know which leg is which.
+        double propYes = prop.PTrue[yi], shinYes = shin.PTrue[yi];
+        if (propYes <= 0 || propYes >= 1) return null;
+        double pProp = yes ? propYes : 1.0 - propYes;
+        double pShin = yes ? shinYes : 1.0 - shinYes;
+        double pTrue = _cfg.DeVigMethod == "shin" ? pShin : pProp;
 
         var top = _feed.Top(pair.KalshiTicker);
         if (!top.HasSnapshot) return null;
@@ -220,10 +238,14 @@ public sealed class EvEvaluator
         if (evWs < _cfg.EvMin - _cfg.PrescreenSlack)
         { Interlocked.Increment(ref Stats.BelowPrescreen); return null; }
 
-        return new Screened(side, prop.PTrue, shin.PTrue, pTrue, prop.Overround, shin.ShinZ,
-                            mine.DecimalOdds, other.DecimalOdds, prop.Overround + 1.0,
+        return new Screened(side, pProp, pShin, pTrue, prop.Overround, shin.ShinZ,
+                            mine.DecimalOdds,
+                            odds.Length == 2 ? odds[1 - yi] : double.NaN,   // meaningful only on a two-way
+                            prop.Overround + 1.0,
                             _oracle.AgeMs(mine), mine.MaxContracts, mine.Live,
-                            wsAsk, yes ? top.YesAskDepth : top.NoAskDepth, top.AgeMs, evWs);
+                            wsAsk, yes ? top.YesAskDepth : top.NoAskDepth, top.AgeMs, evWs,
+                            odds.Length,
+                            string.Join(";", odds.Select(o => o.ToString("0.####", CultureInfo.InvariantCulture))));
     }
 
     /// <summary>Values a screened candidate at the REST ask, sizes it, and logs it — signal or not.
@@ -254,7 +276,7 @@ public sealed class EvEvaluator
             c.WsAsk, restAsk, c.WsBookAge, c.WsDepth,
             fee, cost, evProp, evShin, ev, c.EvWs, limit,
             size, BankrollUsd, EvMath.OrderFee(px, size.Contracts), size.Contracts * px,
-            inWin, signal ? "SIGNAL" : "REJECTED_REST"));
+            inWin, signal ? "SIGNAL" : "REJECTED_REST", c.NumLegs, c.PinOddsAll));
 
         if (signal)
         {
@@ -264,7 +286,7 @@ public sealed class EvEvaluator
                 $"[+EV] {pair.KalshiTicker} {c.Side,-3} ev={ev * 100:+0.00;-0.00}c  "
               + $"pTrue={c.PTrueUsed:0.0000}  rest={restAsk:0.0000} (ws {c.WsAsk:0.0000}, "
               + $"gap {(double)(restAsk - c.WsAsk) * 100:+0.0;-0.0}c)  limit={limit:0.0000}  "
-              + $"size={size.Contracts}  vig={c.Vig:0.0000}{(inWin ? "" : "  [outside price window]")}"
+              + $"size={size.Contracts}  vig={c.Vig:0.0000}{(c.NumLegs > 2 ? $"  [{c.NumLegs}-way]" : "")}{(inWin ? "" : "  [outside price window]")}"
               + $"{(size.FlooredToZero ? "  [floored to 0 contracts]" : "")}");
             Console.ResetColor();
         }

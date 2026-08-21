@@ -28,7 +28,7 @@ public sealed class OracleSnapshotLog : IDisposable
         "Timestamp", "Ticker", "EventId", "Side", "Outcome", "EventTitle", "SettlementDate", "InPlay",
         "PinOddsMine", "PinOddsOther", "PinSumS", "Vig", "ShinZ",
         "PTrueProp", "PTrueShin", "PTrueUsed", "DeVigMethod", "OracleAgeMs", "OracleDepth",
-        "KalshiWsAsk", "Source",
+        "KalshiWsAsk", "Source", "NumLegs", "PinOddsAll",
     };
 
     private readonly RollingCsv _csv;
@@ -41,21 +41,37 @@ public sealed class OracleSnapshotLog : IDisposable
     private static string N(double v, int dp = 6) => RollingCsv.N(v, dp);
     private static string Q(string? s) => RollingCsv.Q(s);
 
-    public void Write(EvPair pair, OracleQuote yes, OracleQuote no, double ageMs,
+    /// <summary>
+    /// Records one pair's fair value. <paramref name="legQuotes"/> is EVERY outcome of the matchup in
+    /// <c>pair.Legs</c> order — two for a tennis moneyline, three for a soccer 1X2. The probability written
+    /// is always that of the Kalshi market's YES leg, so a NO row would be its complement and is not written.
+    /// </summary>
+    public void Write(EvPair pair, IReadOnlyList<OracleQuote> legQuotes, double ageMs,
                       decimal wsYesAsk, string deVigMethod)
     {
-        var prop = DeVig.Proportional(yes.DecimalOdds, no.DecimalOdds);
-        var shin = DeVig.Shin(yes.DecimalOdds, no.DecimalOdds);
-        if (prop.PTrue <= 0 || prop.PTrue >= 1) return;      // unquotable — nothing to grade later
+        int yi = pair.YesLegIndex;
+        if (yi < 0 || legQuotes.Count != pair.Legs.Count) return;
 
+        var odds = legQuotes.Select(q => q.DecimalOdds).ToArray();
+        var prop = DeVig.ProportionalN(odds);
+        var shin = DeVig.ShinN(odds);
+        if (!prop.Ok || !shin.Ok) return;
+        double pProp = prop.PTrue[yi], pShin = shin.PTrue[yi];
+        if (pProp <= 0 || pProp >= 1) return;                // unquotable — nothing to grade later
+
+        var mine = legQuotes[yi];
         string[] f =
         {
             DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture), Q(pair.KalshiTicker), Q(pair.EventId),
-            "YES", Q(pair.KalshiOutcome), Q(pair.EventTitle), Q(pair.SettlementDate), yes.Live ? "1" : "0",
-            N(yes.DecimalOdds, 4), N(no.DecimalOdds, 4), N(prop.Overround + 1.0), N(prop.Overround), N(shin.ShinZ),
-            N(prop.PTrue), N(shin.PTrue), N(deVigMethod == "shin" ? shin.PTrue : prop.PTrue),
-            Q(deVigMethod), N(ageMs, 0), N(yes.MaxContracts, 2),
+            "YES", Q(pair.KalshiOutcome), Q(pair.EventTitle), Q(pair.SettlementDate), mine.Live ? "1" : "0",
+            N(mine.DecimalOdds, 4),
+            N(odds.Length == 2 ? odds[1 - yi] : double.NaN, 4),   // meaningful only on a two-way
+            N(prop.Overround + 1.0), N(prop.Overround), N(shin.ShinZ),
+            N(pProp), N(pShin), N(deVigMethod == "shin" ? pShin : pProp),
+            Q(deVigMethod), N(ageMs, 0), N(mine.MaxContracts, 2),
             N((double)wsYesAsk, 4), "snapshot",
+            odds.Length.ToString(CultureInfo.InvariantCulture),
+            Q(string.Join(";", odds.Select(o => o.ToString("0.####", CultureInfo.InvariantCulture)))),
         };
 
         // Same arity discipline as the signal telemetry, enforced inside WriteRow on every row.

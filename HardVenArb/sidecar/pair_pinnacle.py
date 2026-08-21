@@ -412,6 +412,20 @@ def main() -> None:
             e["hardven_no_name"]  = next(k for k in entry["teams"] if k != yes_key)
         if entry["three_way"]:
             e["three_way"] = True   # NO-only hedge (Kalshi NO + Pinnacle back-this-outcome)
+            # THE COMPLETE OUTCOME SET, written on every row of the event.
+            #
+            # yes/no_token alone cannot describe a 1X2. On a two-way they are complements and "not this" is
+            # "the other one"; on a three-way `no_token` is merely ANOTHER leg (for a Tie row it is an
+            # arbitrary team, chosen as plumbing) and "not Arsenal" is Coventry PLUS the draw. Anything that
+            # de-vigs needs every price to form S, and a consumer given two of three legs cannot tell it is
+            # missing one — it just divides by the wrong number and produces a plausible, wrong probability.
+            #
+            # Written per row rather than per event so a single row is self-describing, and omitted entirely
+            # when the draw leg is absent: the EV bot drops such rows rather than silently treating them as
+            # two-way, which is the safe direction.
+            legs = list(entry["teams"].values()) + ([entry["draw"]] if entry["draw"] else [])
+            if len(legs) >= 3:
+                e["hardven_legs"] = legs
         if is_fuzzy:
             e["fuzzy"] = True        # sub-100 name variant — verify before M1 (the back-test gates real money)
             fuzzy_n += 1
