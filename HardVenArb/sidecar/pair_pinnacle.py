@@ -278,6 +278,35 @@ def main() -> None:
         for _g in _games:
             for _nm, _sid in _g["teams"].items():
                 sid_names[_sid] = _nm
+    # ── RE-POINT ROWS WHOSE MATCHUP HAS BEEN RETIRED ────────────────────────────────────────────────
+    # A filled row is SKIPPED by the loop below ("already"), which is right for a pair that still stands and
+    # wrong for one whose matchup no longer exists. Pinnacle retires the pre-match matchup when a game goes
+    # in-play and issues a new one, so a row paired this morning can be pointing at an id that has left the
+    # board — and nothing here ever revisited it. Observed 2026-08-21: 42 paired matchups, 1 of them still
+    # receiving pushes.
+    #
+    # Clearing the tokens hands the row back to the normal matcher, which re-fills it against the CURRENT
+    # catalog. Only for matchups the catalog no longer knows: a row whose matchup is still listed is left
+    # exactly as it is, so this cannot churn good pairs.
+    #
+    # This is the file-level twin of the runtime redirect (adapter `_redirect_sid`). Both exist on purpose —
+    # the redirect keeps a stale row TRADEABLE within a session, this stops it being stale tomorrow.
+    _cat_mids = {str(c.selection_id).rsplit(":", 1)[0] for c in cat
+                 if str(getattr(c, "selection_id", "")).count(":") >= 2}
+    retired = 0
+    for e in pairs:
+        _yt = e.get("hardven_yes_token") or ""
+        if _yt.count(":") != 2:
+            continue
+        if ":".join(_yt.split(":")[:2]) in _cat_mids:
+            continue                       # still on the board -> leave it alone
+        for _k in ("hardven_yes_token", "hardven_no_token", "hardven_yes_name", "hardven_no_name"):
+            e.pop(_k, None)
+        retired += 1
+    if retired:
+        print(f"[PAIR] {retired} row(s) pointed at a matchup that has left the board — cleared so they "
+              f"re-pair against the current one.")
+
     backfilled = 0
     for e in pairs:
         yt, nt = e.get("hardven_yes_token") or "", e.get("hardven_no_token") or ""
@@ -438,7 +467,7 @@ def main() -> None:
             print(f"         {ev}")
 
     valid = sum(1 for e in pairs if e.get("hardven_yes_token") and e.get("hardven_no_token"))
-    if args.write and (filled or gate[1] or gate[2] or url_n or start_n or backfilled):
+    if args.write and (filled or gate[1] or gate[2] or url_n or start_n or backfilled or retired):
         atomic_write_json(args.pairs, pairs)   # atomic → the C# hot-reload never reads a partial cross_pairs.json
         print(f"\n[PAIR] wrote {valid} filled pair(s) → {args.pairs}")
     elif not args.write:
