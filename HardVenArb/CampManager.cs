@@ -91,6 +91,55 @@ public sealed class CampManager
     /// re-evaluation of that pair, so nothing here decides what counts as an arb.</summary>
     public void SetArmedTryFireHandler(Func<string, string, decimal, CancellationToken, Task>? h)
         => _onArmedTryFire = h;
+
+    // ── MOVE FOR A LIVE, TAKEABLE ARB ────────────────────────────────────────────────────────────────
+    // The score decides where to SIT; this decides when to GO. The executor calls it when an in-play arb
+    // clears the execution floor on a game the camp is not on — the one situation where abandoning a hold
+    // is obviously right, because there is a tradeable edge on screen and the camp is pointed elsewhere.
+    //
+    // Bypasses the 2x score margin and the minimum dwell on purpose: both exist to stop the camp chasing
+    // NOISE, and a floor-clearing arb is the opposite of noise. It does NOT bypass the arming machinery —
+    // the move goes through the ordinary path, so verification, the placeability probe and fire-first all
+    // still run.
+    //
+    // Rate-limited per pair so a market that sits below the floor for a minute cannot produce a stream of
+    // moves; and refused outright while a press is in flight, because relocating mid-fire would clear the
+    // slip being pressed.
+    private readonly ConcurrentDictionary<string, DateTime> _moveAsk = new();
+    public void RequestMove(string pairId, string token, string label, string arbType, decimal net)
+    {
+        if (!FireFirst) return;               // the move only pays if arriving means trying immediately
+        if (Phase is CampPhase.Off or CampPhase.Firing or CampPhase.Arming) return;
+        if (_campToken == token) return;      // already here
+        var now = DateTime.UtcNow;
+        if (_moveAsk.TryGetValue(pairId, out var last) && (now - last).TotalSeconds < MoveCooldownSec) return;
+        _moveAsk[pairId] = now;
+        Console.ForegroundColor = ConsoleColor.Cyan;
+        Console.WriteLine($"[CAMP] MOVE: {label} is showing a takeable arb (net {net:0.0000}) and the camp is " +
+                          $"{(AnyCampArmed ? $"on {_campLabel}" : "roving")} — going there now rather than " +
+                          $"waiting for it to out-score over ten minutes.");
+        Console.ResetColor();
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                if (AnyCampArmed) await ReleaseAsync("moving to a takeable arb", CancellationToken.None);
+                bool claimed = false;
+                lock (_lock) { if (_phase == CampPhase.Roving) { _phase = CampPhase.Arming; claimed = true; } }
+                if (claimed)
+                    await ArmAsync(pairId, token, label, arbType, "takeable arb on this game",
+                                   CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[CAMP] move to {label} failed ({ex.GetType().Name}: {ex.Message}) — " +
+                                  $"the camper carries on as before.");
+                lock (_lock) { if (_phase == CampPhase.Arming) _phase = CampPhase.Roving; }
+            }
+        });
+    }
+    private static readonly int MoveCooldownSec =
+        EnvInt("HARDVEN_CAMP_MOVE_COOLDOWN_SEC", 45);
     private static readonly bool FireFirst =
         (Environment.GetEnvironmentVariable("HARDVEN_CAMP_FIRE_FIRST") ?? "0").Trim() == "1";
 

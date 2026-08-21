@@ -4485,6 +4485,33 @@ class PinnacleAdapter(BookAdapter):
                             "error": f"odds changed to {newp}, below the {min_odds} the arb needs — "
                                      f"abandoned, nothing placed"}
 
+                # ── A RE-QUOTE IS NOT THE TRADE THAT WAS MEASURED ────────────────────────────────────
+                # The floor this checks against is a PINNACLE floor, derived when the arb was sized. Passing
+                # it says the Pinnacle leg is still good enough on its own — it says nothing about Kalshi,
+                # which has been moving throughout and is NOT re-read here. So accepting a re-quote takes a
+                # trade whose actual net nobody has computed.
+                #
+                # It also breaks the only evidence base there is. Every net in the telemetry is a PAIR of
+                # prices observed together; a fill at a third price belongs to no measured distribution, so
+                # "would this have been profitable?" becomes unanswerable for exactly the trades that
+                # deviated. The 2026-08-19 fill at 1.581 against a 1.745 floor is what that looks like.
+                #
+                # Default is therefore to DECLINE any change and stay camped — the next window on this game
+                # is one press away, and a median 41s gap is a cheap thing to wait for.
+                # HARDVEN_CAMP_ACCEPT_REQUOTE=1 restores the old accept-if-it-clears-the-floor behaviour;
+                # =better accepts only a move in our favour (higher decimal odds).
+                _rq = (os.environ.get("HARDVEN_CAMP_ACCEPT_REQUOTE") or "0").strip().lower()
+                _improved = newp > live + 1e-9
+                if _rq == "0" or (_rq == "better" and not _improved):
+                    await self._decline_pause(f"{live} -> {newp}, re-quote")
+                    cleared = await self._dismiss_quick_bet(page)
+                    print(f"[PINNACLE CAMP] odds moved {live} -> {newp} [{state}] — DECLINED. The arb was "
+                          f"measured at {live}; this is a different trade and the Kalshi leg has not been "
+                          f"re-checked. Staying camped for the next window.", flush=True)
+                    return {"ok": False, "fired": False, "declined": True, "requote": True,
+                            "live_odds": newp, "min_odds": min_odds, "slip_cleared": cleared,
+                            "error": f"the panel re-quoted {live} -> {newp} — declined by policy "
+                                     f"(HARDVEN_CAMP_ACCEPT_REQUOTE=0); nothing placed"}
                 # Still clears the floor. Press again to take the new price — but BOUNDED. On a line moving
                 # this fast the site can re-ask on every press, and an unbounded accept loop is a machine
                 # chasing a price, which is both a detectable pattern and a way to fill at something well

@@ -1140,11 +1140,29 @@ public class CrossArbExecutor
         bool campArmedHere = _camp is not null && _camp.IsArmedOn(hardvenToken);
         if (_preLiveOnly && !testMode && chosenHardVenBook.IsLive && !campArmedHere)
         {
+            // ── A FLOOR-CLEARING ARB SOMEWHERE ELSE IS A REASON TO MOVE ─────────────────────────────
+            // The camp's own ranking is HISTORICAL: it scores a pair by the windows it has produced over a
+            // 10-minute half-life, and relocates only on a 2x lead after a 2-minute dwell. That is the right
+            // way to choose where to SIT when nothing is happening, and the wrong way to react to something
+            // happening right now — a game with many thin windows outranks one that just printed the only
+            // takeable edge on the board, and the camper stays put through it.
+            //
+            // Worth separating because the two are not the same question. "Which game usually pays" is a
+            // score; "there is a tradeable arb on that game THIS SECOND" is an event. Only the second one
+            // justifies abandoning a camp mid-hold, and only when the edge actually clears the floor —
+            // relocating for a 0.995 would thrash the camp for something that was never going to be taken.
+            decimal netHere = kLegAsk + pLegAsk
+                            + KalshiFee(kLegAsk) + HardVenFee(pLegAsk, pair.HardVenYesTokenId);
+            bool worthMoving = netHere < _execNetFloor;
             string why = _camp is null
                 ? "HARDVEN_PRELIVE_ONLY=0 to allow in-play"
                 : $"not the camped selection (camp is {(_camp.AnyCampArmed ? "on another game" : "roving")}) — " +
                   "in-play is only taken at press speed";
-            Console.WriteLine($"[EXEC SKIP] {pair.Label}: IN-PLAY — pre-live-only gate is ON ({why})");
+            Console.WriteLine($"[EXEC SKIP] {pair.Label}: IN-PLAY — pre-live-only gate is ON ({why})"
+                            + (worthMoving ? $" | net {netHere:0.0000} CLEARS the {_execNetFloor:0.000} floor "
+                                           + "— asking the camp to move here" : ""));
+            if (worthMoving && _camp is not null)
+                _camp.RequestMove(pairId, hardvenToken, pair.Label, arbType, netHere);
             return;
         }
         if (campArmedHere)
