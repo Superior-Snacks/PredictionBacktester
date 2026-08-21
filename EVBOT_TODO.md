@@ -128,12 +128,31 @@ day; the answer is a fortnight. Start M0 early for that reason alone.
 
 ---
 
-## 4. Known issue carried over: the Kalshi WS book is ~4c optimistic
+## 4. The Kalshi WS book was ~4c optimistic — **DOES NOT REPRODUCE in KalshiEvBot**
 
-**Not fixed. Characterised only.** The EV bot inherits `KalshiWebsocketFeed.cs` / `LocalOrderBook.cs`, so it
-inherits this.
+**Result 2026-08-21.** `--book-audit` on 10 live markets: **20/20 comparisons at exactly +0.0c**, p10 =
+median = p90 = 0.0c, REST worse for us in **0/20**. The 39 telemetry rows from the same session agree —
+`WsRestGapCents` is 0 on all but one, and that one is **−1c** (the WS was *pessimistic*, the opposite
+direction). **59 of 59 observations show no phantom.**
 
-Measured over ~400 windows (2026-08-20/21):
+The EV bot does NOT inherit `KalshiWebsocketFeed.cs` / `LocalOrderBook.cs`. It has its own
+`KalshiBookFeed.cs`, which applies the `_minBookPrice` guard on the **snapshot path as well as the delta
+path** — candidate cause #1 below, fixed by construction.
+
+**What this does and does not establish.** It clears the blocker: EV computed on this bot's WS book is not
+measurably optimistic, so §1's acceptance criterion is met on price. It does *not* prove the arb bot's +4c
+was that guard. A second explanation survives: the original figure came only from windows that had **passed
+an arb screen** — by construction the moments the WS showed an unusually good price — so a book that
+occasionally invents a level would be sampled precisely when it did. This bot's pre-screen is far looser,
+and `--book-audit` samples markets rather than signals, so neither is subject to that selection. Separating
+the two would mean re-running the arb bot's book code side by side, which is not worth doing now.
+
+**One caveat before treating it as settled: this sample was quiet.** Book ages 152–1913ms, mostly pre-match
+tennis. A snapshot/delta race bites hardest on a fast in-play book, which is what the original sample was
+full of. Re-run the audit during a busy in-play window before closing this out.
+
+### The original measurement, for the record
+Measured over ~400 windows (2026-08-20/21) on the ARB bot's book implementation:
 * REST ask minus WS ask: **p10 +1c · median +4c · p90 +7c**, worse for us **95%** of the time.
 * Pinnacle, same test: **median +0.00c**, wrong 7% — Pinnacle is exact.
 * **It is not staleness.** 389 of 400 windows opened on a book aged **0ms**, and those carry the +4c.
@@ -141,21 +160,38 @@ Measured over ~400 windows (2026-08-20/21):
   with an error introduced *on the tick* rather than one that decays.
 * The real fill arbitrated it: WS 0.6000, REST 0.6300, **filled 0.6151** — nearer REST.
 
-Candidate causes, unproven:
-- [ ] `ApplySnapshot` does **not** apply the `_minBookPrice` guard that `ApplyDelta` does, so a level
-      admitted by a snapshot can never be removed by a delta. Real bug; probably too narrow to explain a
-      +1..+7c spread on its own.
+Candidate causes:
+- [x] `ApplySnapshot` did **not** apply the `_minBookPrice` guard that `ApplyDelta` does, so a level admitted
+      by a snapshot could never be removed by a delta. Real bug. `KalshiBookFeed.cs` guards both paths.
 - [ ] The implied-level derivation (`yesBook` asks built from `noBook` bids, `1 − price`) around delta
-      application.
+      application. Untested; moot unless the gap returns.
 
-**Decisive test, needs the bot running:** dump the local book's top three ask levels alongside
-`GET /markets/{ticker}` at the same instant, for one live ticker. **Now a command:**
-`dotnet run --project KalshiEvBot -- --book-audit 15` prints both ladders per market and a p10/median/p90
-of the gap. If they disagree on a market that just ticked, the bug is in our book building; if they agree,
-the +4c came from somewhere else and this section needs rewriting.
+**The test is a command:** `dotnet run --project KalshiEvBot -- --book-audit 15`.
 
-**Expect this to show as a low fill rate on signals that looked good.** That is the bug, not the absence of
-edge — worth remembering before concluding the strategy does not work.
+---
+
+## 4b. The NEW book problem: the price is right, the SIZE is not
+
+Surfaced by the same audit — a different failure mode, and this one is not fixed.
+
+**Top-of-book can be a sliver.** `KXITFMATCH-26AUG20RAHWEI-RAH` YES quoted an ask ladder of
+`0.22×<1 · 0.37×17 · 0.38×18`. The best ask is right, and REST confirms it — but there is **less than one
+contract** behind it (it printed as `x0`; the ladder format rounded a fractional size to zero, since fixed) and real liquidity starts **15c worse**. Screening on top-of-book gives a correct EV
+for a size nobody can trade.
+
+The IOC limit keeps this safe rather than costly: an order limited at break-even fills the sliver and
+cancels the rest, so the money is never at risk. What breaks is the *record* — the `Contracts` column logs a
+size that was never available, and M1 would weight its calibration by it.
+
+**And the size UNIT is unverified.** Depths across the same audit span four orders of magnitude:
+ITF quotes 11–107, while `KXATPMATCH-26AUG21FRINAK-FRI` shows `0.64×553465` — half a million contracts,
+$354k at that price, on an ATP match. Not credible as contract counts.
+
+- [ ] **Run `--book-audit` again** — it now fetches `/markets/{ticker}/orderbook` and prints a ws/rest
+      **size ratio**. Ratio ~1 means the number is genuine and simply large; anything else means the two
+      sources are on different scales and every size in the telemetry is in an unknown unit.
+- [ ] **Then decide how M1 weights a signal**: by requested size, or by size actually available at the
+      limit. The second is the honest one and needs the depth figure to mean something first.
 
 ---
 

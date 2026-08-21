@@ -199,47 +199,106 @@ internal static class Program
                                              List<string> tickers, int count)
     {
         Console.WriteLine("\n══ BOOK AUDIT — local WS ladder vs REST, same instant ══");
-        Console.WriteLine($"{"Ticker",-34} {"side",-4} {"wsAsk",8} {"restAsk",8} {"gap(c)",7} {"age(ms)",8}  ws top-3");
+        Console.WriteLine("PRICE is checked against /markets, DEPTH against /markets/{ticker}/orderbook.");
+        Console.WriteLine($"{"Ticker",-34} {"side",-4} {"wsAsk",8} {"restAsk",8} {"gap(c)",7} {"age(ms)",8}");
 
         var live = tickers.Where(t => feed.Top(t).HasSnapshot).Take(Math.Max(1, count)).ToList();
         if (live.Count == 0) { Console.WriteLine("(no market has a snapshot yet)"); return; }
 
         var gaps = new List<double>();
+        var sizeRatios = new List<double>();
         foreach (var t in live)
         {
             var top = feed.Top(t);
             decimal ry, rn;
+            List<(decimal Price, decimal Size)> restYesLadder, restNoLadder;
             try
             {
                 using var doc = await kalshi.GetMarketAsync(t);
                 var mkt = doc.RootElement.TryGetProperty("market", out var m) ? m : doc.RootElement;
                 ry = EvEvaluator.AskDollars(mkt, yes: true);
                 rn = EvEvaluator.AskDollars(mkt, yes: false);
+
+                using var obDoc = await kalshi.GetMarketOrderBookAsync(t);
+                var ob = obDoc.RootElement.TryGetProperty("orderbook", out var o) ? o : obDoc.RootElement;
+                restYesLadder = RestAskLadder(ob, yesSide: true);
+                restNoLadder  = RestAskLadder(ob, yesSide: false);
             }
             catch (Exception ex) { Console.WriteLine($"{t,-34} REST failed: {ex.GetType().Name}"); continue; }
 
-            foreach (var (side, ws, rest) in new[] { ("YES", top.YesAsk, ry), ("NO", top.NoAsk, rn) })
+            foreach (var (side, ws, rest, restLadder) in new[]
+                     { ("YES", top.YesAsk, ry, restYesLadder), ("NO", top.NoAsk, rn, restNoLadder) })
             {
                 if (ws >= 1m || rest <= 0m) continue;
                 double gap = (double)(rest - ws) * 100.0;
                 gaps.Add(gap);
-                string ladder = string.Join(" ", feed.AskLadder(t, side == "YES")
-                                                     .Select(l => $"{l.Price:0.00}x{l.Size:0}"));
+                var wsLadder = feed.AskLadder(t, side == "YES");
                 Console.WriteLine($"{Trunc(t, 34),-34} {side,-4} {ws,8:0.0000} {rest,8:0.0000} "
-                                + $"{gap,7:+0.0;-0.0} {top.AgeMs,8:0}  {ladder}");
+                                + $"{gap,7:+0.0;-0.0} {top.AgeMs,8:0}");
+                Console.WriteLine($"       ws   {Ladder(wsLadder)}");
+                Console.WriteLine($"       rest {Ladder(restLadder)}");
+
+                // DEPTH, which the price comparison says nothing about. If these disagree by orders of
+                // magnitude the two sources are on different size scales, and the Contracts column in the
+                // telemetry is denominated in a unit nobody has checked.
+                if (wsLadder.Count > 0 && restLadder.Count > 0 && restLadder[0].Size > 0m
+                    && wsLadder[0].Price == restLadder[0].Price)
+                    sizeRatios.Add((double)(wsLadder[0].Size / restLadder[0].Size));
             }
-            await Task.Delay(120);   // polite spacing; this is a diagnostic, not a hot path
+            await Task.Delay(150);   // polite spacing; this is a diagnostic, not a hot path
         }
 
         if (gaps.Count == 0) { Console.WriteLine("\n(nothing comparable)"); return; }
         gaps.Sort();
-        double Pct(double q) => gaps[Math.Min(gaps.Count - 1, (int)(gaps.Count * q))];
+        static double Pct(List<double> v, double q) => v[Math.Min(v.Count - 1, (int)(v.Count * q))];
         int worse = gaps.Count(g => g > 0);
-        Console.WriteLine($"\n{gaps.Count} comparison(s):  p10 {Pct(.10):+0.0;-0.0}c   median {Pct(.50):+0.0;-0.0}c   "
-                        + $"p90 {Pct(.90):+0.0;-0.0}c    REST worse for us in {worse}/{gaps.Count} "
-                        + $"({100.0 * worse / gaps.Count:0}%)");
+        Console.WriteLine($"\nPRICE — {gaps.Count} comparison(s):  p10 {Pct(gaps, .10):+0.0;-0.0}c   "
+                        + $"median {Pct(gaps, .50):+0.0;-0.0}c   p90 {Pct(gaps, .90):+0.0;-0.0}c    "
+                        + $"REST worse for us in {worse}/{gaps.Count} ({100.0 * worse / gaps.Count:0}%)");
         Console.WriteLine("A positive gap means the WS ask is optimistic — the price we would have screened "
                         + "on is cheaper than the one actually offered.");
+
+        if (sizeRatios.Count > 0)
+        {
+            sizeRatios.Sort();
+            double med = Pct(sizeRatios, .50);
+            Console.WriteLine($"\nDEPTH — {sizeRatios.Count} top-of-book size(s), ws/rest ratio:  "
+                            + $"min {sizeRatios[0]:0.####}   median {med:0.####}   max {sizeRatios[^1]:0.####}");
+            Console.WriteLine(Math.Abs(med - 1.0) < 0.01
+                ? "Ratio ~1: both sources agree on size, so depth is whatever /orderbook reports."
+                : "Ratio NOT ~1: the two sources are on DIFFERENT SIZE SCALES. Every Contracts figure in the "
+                + "telemetry is then in an unverified unit — resolve before M2 sizes against it.");
+        }
+    }
+
+    private static string Ladder(List<(decimal Price, decimal Size)> l)
+        => l.Count == 0 ? "(empty)" : string.Join("  ", l.Select(x => $"{x.Price:0.00}x{x.Size:0.##}"));
+
+    /// <summary>Ask ladder from a REST <c>/orderbook</c> payload. That endpoint reports BIDS on both sides
+    /// in CENTS, so an ask is the complement of the opposite side's bid — the same transform the WS feed
+    /// applies, which is precisely what makes comparing the two meaningful.</summary>
+    private static List<(decimal Price, decimal Size)> RestAskLadder(System.Text.Json.JsonElement ob,
+                                                                     bool yesSide, int depth = 3)
+    {
+        var levels = new List<(decimal Price, decimal Size)>();
+        if (!ob.TryGetProperty(yesSide ? "no" : "yes", out var arr) ||
+            arr.ValueKind != System.Text.Json.JsonValueKind.Array)
+            return levels;
+        foreach (var lvl in arr.EnumerateArray())
+        {
+            var it = lvl.EnumerateArray().ToArray();
+            if (it.Length < 2) continue;
+            if (!TryNum(it[0], out decimal cents) || !TryNum(it[1], out decimal size) || size <= 0m) continue;
+            levels.Add((Math.Round(1m - cents / 100m, 4), size));
+        }
+        return levels.OrderBy(x => x.Price).Take(depth).ToList();   // cheapest ask first
+    }
+
+    private static bool TryNum(System.Text.Json.JsonElement el, out decimal v)
+    {
+        if (el.ValueKind == System.Text.Json.JsonValueKind.Number) { v = el.GetDecimal(); return true; }
+        return decimal.TryParse(el.GetString(), System.Globalization.NumberStyles.Any,
+                                System.Globalization.CultureInfo.InvariantCulture, out v);
     }
 
     // ── Plumbing ──────────────────────────────────────────────────────────────────────────────────────
