@@ -259,7 +259,7 @@ public class CrossPlatformArbTelemetryStrategy
         "KalshiWsDropsAtOpen,HardVenWsDropsAtOpen,DropDuringWindow," +
         "UpdateCount,ClosedBy," +
         "DaysToSettlement,AprHoldToSettle," +
-        "RestChecked,RestConfirmed,RestKalshiAsk,RestHardVenAsk,RestDelayMs," +
+        "RestChecked,RestConfirmed,RestKalshiAsk,RestHardVenAsk,RestNetCost,RestDelayMs," +
         "OpenedBy,ClosedBySide,KalshiLegAgeMsAtClose,HardVenLegAgeMsAtClose,HardVenLegHeld,HardVenLegId," +
         "KalshiLegWithinMs,HardVenLegWithinMs," +
         "HardVenInPlay,HardVenWsVerified," +
@@ -1306,6 +1306,14 @@ public class CrossPlatformArbTelemetryStrategy
 
         string restKalshi = w.RestKalshiAsk >= 0 ? w.RestKalshiAsk.ToString("0.0000") : "";
         string restHardVen   = w.RestHardVenAsk   >= 0 ? w.RestHardVenAsk.ToString("0.0000")   : "";
+        // THE HONEST NET. EntryNetCost is fee-inclusive but priced off the WS book, which was measured on
+        // 2026-08-20/21 to quote the Kalshi leg a median 4c better than REST will actually sell it (95% of
+        // 368 windows). So it answers "what did we think" — this column answers "what was there", using the
+        // REST prices and the same fee model. Where both exist, the gap between them IS the phantom rate.
+        string restNet = (w.RestKalshiAsk >= 0 && w.RestHardVenAsk >= 0)
+            ? (w.RestKalshiAsk + w.RestHardVenAsk + KalshiFee(w.RestKalshiAsk)
+               + HardVenFee(w.RestHardVenAsk, "")).ToString("0.0000")   // Pinnacle charges no per-bet fee
+            : "";
         string restDelay  = w.RestDelayMs   >= 0 ? w.RestDelayMs.ToString()            : "";
         string dts        = w.DaysToSettlement >= 0 ? w.DaysToSettlement.ToString()       : "";
         string apr        = w.AprHoldToSettle  >= 0 ? w.AprHoldToSettle.ToString("0.0000") : "";
@@ -1347,6 +1355,7 @@ public class CrossPlatformArbTelemetryStrategy
             w.RestConfirmed ? "1" : "0",
             restKalshi,
             restHardVen,
+            restNet,
             restDelay,
             w.OpenedBy,
             closedBy == "PRICE" ? closedSide : "",

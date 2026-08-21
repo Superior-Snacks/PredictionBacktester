@@ -1272,10 +1272,30 @@ public class CrossArbExecutor
             double maxAgeMs = Math.Max(kAgeMs, pAgeMs);
             bool staleByAge = maxAgeMs >= AbsoluteStaleMs;
 
-            if (!testMode && (venueSkewMs >= StaleGateMs || staleByAge) && _restVerifier != null)
+            // ── ALWAYS RE-PRICE KALSHI OFF REST BEFORE COMMITTING ───────────────────────────────────
+            // This used to run only when the books looked STALE (clock skew or age). But the WS-derived
+            // Kalshi ask is not merely stale sometimes — it is OPTIMISTIC nearly always. Measured across
+            // 368 REST-checked windows on 2026-08-20/21:
+            //
+            //     REST ask MINUS detected ask:  p10 +1c   median +4c   p90 +7c   worse 95% of the time
+            //     the Pinnacle side, same test: median +0.00c, worse 7% of the time
+            //
+            // So detection prices the leg we HEDGE with about four cents better than the book will sell it,
+            // and a 1c "edge" is routinely a 3c loss. That is not a staleness condition to be detected; it
+            // is the normal state, and the only safe reading is to treat the WS ask as a POINTER — good
+            // enough to say "look here" — and the REST book as the price.
+            //
+            // Confirmed on real money 2026-08-21: detected K=0.6000, REST said 0.6300, the fill landed at
+            // 0.6151 — between the two and much nearer REST. The trade finished 0.48c down.
+            //
+            // One extra round trip (~250-500ms measured) on a path that fires rarely. HARDVEN_REST_BEFORE_FIRE=0
+            // restores the old conditional behaviour.
+            bool alwaysRest = (Environment.GetEnvironmentVariable("HARDVEN_REST_BEFORE_FIRE") ?? "1") != "0";
+            if (!testMode && (alwaysRest || venueSkewMs >= StaleGateMs || staleByAge) && _restVerifier != null)
             {
                 string reason = staleByAge && venueSkewMs < StaleGateMs
-                    ? $"age={maxAgeMs:0}ms" : $"skew={venueSkewMs:0}ms";
+                    ? $"age={maxAgeMs:0}ms" : venueSkewMs >= StaleGateMs ? $"skew={venueSkewMs:0}ms"
+                    : "pre-fire re-price (the WS ask runs ~4c optimistic)";
                 Console.WriteLine($"[STALE GATE] {pair.Label} | {reason} — REST-verifying before firing");
                 var (freshK, freshP, pVenueFresh) = await _restVerifier.GetCurrentAsksAsync(pair, arbType);
                 if (freshK <= 0m || freshP <= 0m)
@@ -1283,10 +1303,15 @@ public class CrossArbExecutor
                     Console.WriteLine($"[STALE GATE] {pair.Label} | REST fetch failed — skipping");
                     return;
                 }
-                if (pVenueFresh == false)
+                // A HardVen refetch failure is only disqualifying when the gate fired BECAUSE the book was
+                // suspect — then falling back to its cache would answer "is this stale?" with the stale
+                // price. On the UNCONDITIONAL pass there is no such suspicion, and the Pinnacle price is the
+                // one measured to be exact (median +0.00c against REST), so the cached value stands and only
+                // the Kalshi leg is re-priced. Refusing here instead would block every fire on a venue
+                // hiccup, for the leg that was never the problem.
+                bool suspect = venueSkewMs >= StaleGateMs || staleByAge;
+                if (pVenueFresh == false && suspect)
                 {
-                    // This gate fired BECAUSE the book is suspect. Falling back to the cached HardVen price
-                    // here would answer "is this price stale?" with the stale price itself.
                     Console.WriteLine($"[STALE GATE] {pair.Label} | HardVen refetch from the venue FAILED — " +
                                       $"cannot confirm a suspect price against its own cache, skipping");
                     await JournalAsync(JsonSerializer.Serialize(new {
@@ -1295,6 +1320,8 @@ public class CrossArbExecutor
                     }));
                     return;
                 }
+                if (pVenueFresh == false)
+                    freshP = pLegAsk;         // books not suspect: keep the Pinnacle price we already had
                 decimal freshNet = freshK + freshP + KalshiFee(freshK) + HardVenFee(freshP, hardvenToken);
                 if (freshNet >= _executionThreshold)
                 {
