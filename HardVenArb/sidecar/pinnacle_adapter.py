@@ -497,6 +497,9 @@ class PinnacleAdapter(BookAdapter):
         # (leagueId, frozenset(normalised player names)) -> ("{lid}:{mid}", {designation: name}, units).
         # The name-based twin of _live_child, for pushes that carry no parentId at all.
         self._live_by_names: dict = {}
+        # "{lid}:{mid}" -> catalog-shaped description of a matchup the READER is seeing. Merged into
+        # catalog() so pairing can reach live matchups the guest feed omits.
+        self._live_meta: dict = {}
         # ── WS state ──
         self._client = None
         self._connected = False
@@ -2152,6 +2155,18 @@ class PinnacleAdapter(BookAdapter):
                 if _by_desig:
                     self._live_by_names[(str(lid), frozenset(_pn))] = (
                         f"{lid}:{mid}", _by_desig, _strip_units(str(rec.get("units") or "")))
+                    # Everything needed to DESCRIBE this matchup the way /catalog does. The guest feed does
+                    # not carry the live matchups at all — measured 2026-08-21, the catalog knew 0 of the 13
+                    # the reader was pushing — so pairing could never reach them and the whole in-play board
+                    # was unpairable. The reader already has the names, the league and the start; recording
+                    # them turns the live feed into a catalog source in its own right.
+                    self._live_meta[f"{lid}:{mid}"] = {
+                        "names": dict(_by_desig),
+                        "league": (rec.get("league") or {}).get("name") or str(lid),
+                        "sport": ((rec.get("league") or {}).get("sport") or {}).get("name") or "",
+                        "start": rec.get("startTime") or "",
+                        "units": _strip_units(str(rec.get("units") or "")),
+                        "ts": time.time()}
         except Exception:
             pass
         parent = rec.get("parentId")
@@ -2759,6 +2774,44 @@ class PinnacleAdapter(BookAdapter):
                         three_way=three_way))
             if i + 1 < len(league_ids) and self._jitter_ms > 0:
                 await asyncio.sleep(random.uniform(0, self._jitter_ms / 1000.0))   # gentle between many leagues
+
+        # ── THE LIVE BOARD, WHICH THE GUEST FEED DOES NOT CARRY ──────────────────────────────────────
+        # Everything above comes from the guest straight-markets feed, and that feed does not list the
+        # matchups a game gets when it goes IN-PLAY. Measured 2026-08-21: the reader was pushing 18 live
+        # matchups and the catalog described 0 of them, so pairing could not reach the in-play board at all
+        # — 7 of 38 paired rows were on a market anyone was still quoting.
+        #
+        # The reader is already receiving those matchups WITH their participants, league and start, which is
+        # exactly what a catalog entry is. Adding them costs no request: this is the feed we already have,
+        # described in the shape the pairer expects.
+        #
+        # Guest entries WIN on a conflict — they carry the market filtering (period-0 moneyline, 2-3 prices)
+        # that decides a matchup is really a singles winner market, and this path has no equivalent. These
+        # only ever ADD matchups the guest feed is silent about.
+        have = {e.selection_id.rsplit(":", 1)[0] for e in out}
+        added = 0
+        for mid_key, meta in list(self._live_meta.items()):
+            if mid_key in have or time.time() - meta.get("ts", 0) > 900:
+                continue                       # already described, or the reader stopped seeing it
+            if "game" in (meta.get("units") or "").lower():
+                continue                       # the games-count shell is a different market
+            names = meta.get("names") or {}
+            if len(names) < 2:
+                continue
+            home = _strip_units(names.get("home", ""))
+            away = _strip_units(names.get("away", ""))
+            if not (home and away):
+                continue
+            for desig, nm in names.items():
+                out.append(CatalogEntry(
+                    selection_id=f"{mid_key}:{desig}", sport=meta.get("sport", "") or "Tennis",
+                    league=meta.get("league", ""), event=f"{home} vs {away}", market="moneyline",
+                    selection_name=_strip_units(nm), start_time=meta.get("start", ""),
+                    three_way=False))
+            added += 1
+        if added:
+            print(f"[PINNACLE] catalog: +{added} LIVE matchup(s) from the reader that the guest feed does "
+                  f"not list (in-play markets are otherwise unpairable).", flush=True)
         return out
 
     # ── M1 (later): betting + wallet confirmation ──
