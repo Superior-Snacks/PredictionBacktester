@@ -3912,6 +3912,12 @@ class PinnacleAdapter(BookAdapter):
     # "Max Bet", which holds in both renderings — anchoring on the selection name would not, because the
     # name also appears in the matchup line above it.
     _CAMP_PRICE_RX = re.compile(r"(\d+\.\d+)\s*\|\s*Max Bet", re.I)
+    # The odds-changed BANNER, captured live 2026-08-21:
+    #     "Odds changed: | 1.970 | 1.662 | ▲ | Live | Tristan Mccormick - Goncalo Marques | Money Line ..."
+    # old price first, then the new one. Read as a SECOND OPINION on the slip price, never as the price
+    # itself: _CAMP_PRICE_RX anchors on "| Max Bet" and so reads what the slip will actually charge, which
+    # is the number that matters. The banner is how we check that read is the NEW price and not the old.
+    _CAMP_BANNER_RX = re.compile(r"odds\s*changed[^0-9]*(\d+\.\d+)\s*\|\s*(\d+\.\d+)", re.I)
     _CAMP_MAXBET_RX = re.compile(r"Max Bet:\s*(?:EUR|€|\$|£)?\s*([\d,]+\.?\d*)", re.I)
 
     async def _decline_pause(self, why: str) -> None:
@@ -4297,6 +4303,24 @@ class PinnacleAdapter(BookAdapter):
                 changed = "ODDS CHANGED" in t2.upper()
                 m2 = self._CAMP_PRICE_RX.search(t2)
                 newp = float(m2.group(1)) if m2 else None
+                # ── CROSS-CHECK AGAINST THE BANNER ───────────────────────────────────────────────────
+                # The banner states old and new explicitly. If the slip parse came back as the OLD price,
+                # the anchor has moved and we are about to judge a re-quote against the number it replaced —
+                # which is the stale-read mistake that booked a fill at 1.581 against a 1.745 floor on
+                # 2026-08-19, in a new place. Treat it as unreadable and abandon rather than accept it.
+                mb2 = self._CAMP_BANNER_RX.search(t2)
+                if mb2 and newp is not None:
+                    b_old, b_new = float(mb2.group(1)), float(mb2.group(2))
+                    if abs(newp - b_old) < 1e-9 and abs(b_new - b_old) > 1e-9:
+                        print(f"[PINNACLE CAMP] the slip parse returned {newp}, which is the OLD price the "
+                              f"banner says was replaced by {b_new} — the price anchor has moved. Abandoning "
+                              f"rather than judging against a number the venue has already withdrawn.",
+                              flush=True)
+                        await self._dump_panel_controls(page, "#quick-bet-portal")
+                        newp = None
+                    elif abs(newp - b_new) > 1e-9:
+                        print(f"[PINNACLE CAMP] note: slip says {newp}, banner says {b_new} — using the "
+                              f"slip, which is what the venue charges.", flush=True)
                 # ── A THIRD RENDERING WE HAVE NOT SEEN ───────────────────────────────────────────────
                 # The two known re-asks are recognised by their WORDS: "DECLINE", "Odds changed". The code
                 # that found the second one noted the text "could take a third", and a third would fall
@@ -4326,7 +4350,12 @@ class PinnacleAdapter(BookAdapter):
                                      + ("" if cleared else ". The Quick Bet also would not close.")}
                 if not has_decline and not changed:
                     continue                       # ordinary in-flight wait
-                state = "A (decline+place)" if has_decline else "B (odds-changed banner)"
+                # BOTH SIGNALS CAN BE PRESENT AT ONCE, which the original either/or wording hid: the panel
+                # captured on 2026-08-21 carried the "Odds changed:" banner AND a DECLINE button, and was
+                # reported simply as "A". Naming what is actually there keeps the log honest about which
+                # shapes have really been seen.
+                state = ("A+B (decline & banner)" if has_decline and changed
+                         else "A (decline+place)" if has_decline else "B (odds-changed banner)")
 
                 if newp is None:
                     await self._decline_pause(f"{state}, price unreadable")
@@ -5089,26 +5118,53 @@ class PinnacleAdapter(BookAdapter):
         # already says which button belongs to the side we want, and reading it is one cheap call against a
         # click that is two orders of magnitude dearer. So score first, click in that order.
         async def _rank(h):
+            """Score a candidate WITHOUT clicking it. Higher is tried first.
+
+            THE ROW IS NOT ENOUGH. The first version read the row's text and looked for the side's name in
+            it — but a row carries BOTH players, so home and away scored identically and document order
+            decided, which meant every ':away' arm clicked home first, failed verification, and paid a
+            second full approach. Measured 2026-08-21: two clicks and select=2298ms on away arms against
+            one click and select=1133ms on a home arm the day before, ~1.1s of pure waste per away arm.
+            
+            So rank on POSITION. Within a row Pinnacle lists the participants in a fixed order and their
+            odds buttons follow it, so "our side is the second name" implies "our button is the second odds
+            button". That is a layout assumption, but a cheap and self-correcting one: it only decides what
+            to TRY FIRST, and _verify_pop still reads the popover and rejects a wrong pick exactly as
+            before. Being wrong costs the extra click we are already paying; being right removes it.
+            """
             try:
-                txt = (await h.evaluate("e => (e.closest('[class*=row i]') || e.parentElement || e).innerText || ''")
-                       or "").lower()
+                info = await h.evaluate(
+                    "(e) => {"
+                    r"  const isOdds = (b) => { const t = b.textContent || '';"
+                    r"    return /\d{1,3}\.\d{2,3}/.test(t) || /[+-]\d{2,4}\b/.test(t); };"
+                    "  let row = e, hops = 0;"
+                    "  while (row && hops++ < 9 && !(row.querySelectorAll('button.market-btn').length > 1))"
+                    "    row = row.parentElement;"
+                    "  row = row || e.parentElement || e;"
+                    "  const odds = Array.from(row.querySelectorAll('button.market-btn')).filter(isOdds);"
+                    "  return {text: (row.innerText || '').toLowerCase(), idx: odds.indexOf(e), n: odds.length};"
+                    "}")
             except Exception:
                 return 0
+            txt = (info or {}).get("text") or ""
+            idx, n = (info or {}).get("idx", -1), (info or {}).get("n", 0)
             score = 0
             if S and S in txt:
                 score += 2                       # the row names the side we intend to back
             if "money" in txt:
-                score += 1                       # a moneyline cell rather than a handicap/total alongside it
+                score += 1                       # a moneyline cell, not a handicap/total alongside it
             for bad in ("(games)", "(sets)"):
                 if bad in txt:
                     score -= 1                   # derivative shells carry the same player names
+            # Which of the two participants is ours, by where the names sit in the row's own text.
+            if idx >= 0 and n >= 2 and A and B:
+                ia, ib = txt.find(A), txt.find(B)
+                if ia >= 0 and ib >= 0 and ia != ib:
+                    want = 0 if (S == A) == (ia < ib) else 1
+                    if idx == want:
+                        score += 3               # dominates the row-level signals, which cannot separate sides
             return score
-        try:
-            scored = [(await _rank(h), i, h) for i, h in enumerate(cands[:20])]
-            scored.sort(key=lambda t: (-t[0], t[1]))     # best first, original order as the tiebreak
-            cands = [t[2] for t in scored] + cands[20:]
-        except Exception:
-            pass
+
         tried = []
         result = {"ok": False, "error": "no candidate matched"}
         try:
