@@ -407,6 +407,12 @@ class PinnacleAdapter(BookAdapter):
         self._browser_odds_last = 0.0    # unix ts of the last odds PUBLISH off the browser WS (feeds _feed_live)
         self._browser_odds_msgs = 0      # count of applied browser-WS odds messages (diagnostic)
         self._browser_odds_mid_ts: dict = {}   # "lid:mid" -> last ts the READER actually pushed odds for it
+        # How long after a matchup's last push its OTHER tokens still count as current. Covers the gap
+        # between pushes on a quiet market without covering a matchup that has dropped off the feed.
+        try:
+            self._mid_quiet_ttl = float(os.environ.get("PINNACLE_MID_QUIET_TTL_SEC", "180") or 180)
+        except ValueError:
+            self._mid_quiet_ttl = 180.0
                                                # (coverage truth — distinct from /odds freshness, which _read_cache
                                                # re-stamps for any SERVED token; see /debug/reader + coverage_check)
         self._board_odds_lid_ts: dict = {}     # lid -> last ts seen on a SPORT-LEVEL topic (matchups/…/sp/{id}/…)
@@ -1086,7 +1092,31 @@ class PinnacleAdapter(BookAdapter):
                 # re-tick but is still live — Pinnacle pushes any change/suspend). Not live (disconnected / given
                 # up / logged out) → serve stored ts → it ages → C# clears. REST mode: the poller already stamps
                 # ts on each fetch, so serve it as-is.
-                ts = s.ts if reader_mode else (now if (self._mode == "ws" and live) else s.ts)
+                # ── SILENCE ON A SUBSCRIBED MARKET MEANS "UNCHANGED", NOT "UNKNOWN" ──────────────────
+                # Pinnacle pushes every change and every suspension. So for a matchup the reader IS
+                # receiving, no push since the last one is positive information: the price still stands.
+                # Ageing it out anyway threw away good prices — with the in-play re-seed off, book coverage
+                # fell to 6 of 104 paired tokens (2026-08-21) and detection was running on ~6% of the board.
+                #
+                # WHY IT WAS WRITTEN THE OTHER WAY, and the part that stays true: in reader mode the WS only
+                # carries leagues the PAGE is subscribed to. A token in a league nobody is watching gets no
+                # pushes EITHER WAY, and stamping that fresh is the "phantom" the original comment warns
+                # about — a frozen line held against a live Kalshi leg.
+                #
+                # The distinction the old code could not make, and this one can, is WHICH of those two a
+                # quiet token is. `_browser_odds_mid_ts` records the last push per matchup, so a matchup
+                # that is pushing at all is a matchup we are subscribed to — and its quiet tokens are
+                # unchanged rather than unknown. A matchup that has gone silent entirely still ages out.
+                #
+                # The backstop is unchanged and is the real one: nothing is pressed on a book price. The
+                # armed slip is re-read immediately before the click, and that is what the venue honours.
+                ts = s.ts
+                if reader_mode:
+                    mid_seen = self._browser_odds_mid_ts.get(":".join(sid.split(":")[:2]), 0.0)
+                    if mid_seen and now - mid_seen < self._mid_quiet_ttl:
+                        ts = now                      # subscribed and quiet -> the price still stands
+                elif self._mode == "ws" and live:
+                    ts = now
                 # Pass through the cached STATUS ("open" / "suspended") so an OFFLINE Pinnacle market reaches
                 # the C# as suspended → empty book → no arb. (Was hardcoded "open", which hid suspensions.)
                 status = s.status

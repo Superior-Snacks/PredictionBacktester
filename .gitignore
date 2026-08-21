@@ -423,6 +423,7 @@ bia_place_trace.log
 #inportant data
 *.env
 *.key
+*.png
 # `*.env` only matches names ENDING in .env — it does NOT cover .env.merged,
 # .env.restructured, .env.bak or any other suffixed variant, and those hold the
 # same credentials. Ignore the whole family; allow a redacted example through.
