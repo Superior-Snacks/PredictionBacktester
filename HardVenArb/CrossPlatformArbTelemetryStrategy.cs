@@ -658,8 +658,15 @@ public class CrossPlatformArbTelemetryStrategy
             string label = pair?.Label ?? pairId;
             decimal depth = Math.Min(w.KalshiDepth, w.HardVenDepth);
             string aprStr = w.AprHoldToSettle >= 0m ? $" APR={w.AprHoldToSettle:P0}" : "";
+            // GROSS AND NET ARE NOT THE SAME NUMBER, and this line called the gross one "net". Kalshi's fee
+            // is 0.07*p*(1-p) — up to 1.75c per contract, and near the money it IS most of a thin edge. The
+            // fill on 2026-08-21 was confirmed here as "net=$0.9831" when the true net was 0.9998: it read
+            // as 1.7c of room and had 0.02c. Every REST confirmation has been overstated by the fee.
+            decimal restGross = kalshiAsk + hardvenAsk;
+            decimal restNet   = restGross + KalshiFee(kalshiAsk);
             Console.WriteLine($"[CONFIRMED ARB] {label} | {w.ArbType} | " +
-                              $"K={kalshiAsk:0.0000} P={hardvenAsk:0.0000} net=${kalshiAsk + hardvenAsk:0.0000} | " +
+                              $"K={kalshiAsk:0.0000} P={hardvenAsk:0.0000} gross=${restGross:0.0000} " +
+                              $"net=${restNet:0.0000}{(restNet >= 1m ? " (NO EDGE after fees)" : "")} | " +
                               $"depth={depth:0.0} (K={w.KalshiDepth:0.0}/P={w.HardVenDepth:0.0}){aprStr} | verified in {delayMs}ms");
         }
     }

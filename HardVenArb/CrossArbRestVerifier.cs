@@ -12,6 +12,12 @@ namespace HardVenArb;
 /// </summary>
 public class CrossArbRestVerifier
 {
+    // ONE definition of Kalshi's fee, matching CrossArbExecutor and the telemetry strategy. Duplicated
+    // rather than shared only because this class has no reference to either; if a third copy appears it
+    // should become a single helper instead.
+    private const decimal KalshiFeeRate = 0.07m;
+    private static decimal KalshiFee(decimal p) => KalshiFeeRate * p * (1m - p);
+
     private readonly KalshiOrderClient _kalshi;
     private readonly HttpClient _http;
     private readonly CrossPlatformArbTelemetryStrategy _telemetry;
@@ -245,8 +251,20 @@ public class CrossArbRestVerifier
             DebugLog.Trades($"VerifyAsync {pair.Label}: HardVen ask={pAsk:0.0000} venueFresh={pVenueFresh}");
 
             sw.Stop();
-            bool confirmed = kAsk > 0m && pAsk > 0m && (kAsk + pAsk) < 1.00m;
-            DebugLog.Trades($"VerifyAsync {pair.Label}: sum={kAsk + pAsk:0.0000} confirmed={confirmed} in {sw.ElapsedMilliseconds}ms");
+            // ── THE FEE IS PART OF THE PRICE ────────────────────────────────────────────────────────
+            // This confirmed on the GROSS sum, so it called an arb whenever the two asks were under a
+            // dollar — ignoring Kalshi's 0.07*p*(1-p), which is up to 1.75c per contract and near the money
+            // is most of a thin edge. Every REST confirmation was therefore up to 1.75c optimistic, and the
+            // confirm rate looked correspondingly better than it was.
+            //
+            // Seen on real money 2026-08-21: a window confirmed at gross 0.9831 had a true net of 0.9998 —
+            // announced as 1.7c of room, actually 0.02c — and the fill that followed finished 0.48c down.
+            // This is the LAST check before a press, so it is exactly the wrong place to be optimistic.
+            decimal gross = kAsk + pAsk;
+            decimal net   = gross + KalshiFee(kAsk);
+            bool confirmed = kAsk > 0m && pAsk > 0m && net < 1.00m;
+            DebugLog.Trades($"VerifyAsync {pair.Label}: gross={gross:0.0000} net={net:0.0000} " +
+                            $"confirmed={confirmed} in {sw.ElapsedMilliseconds}ms");
 
             _telemetry.UpdateRestVerification(pairId, confirmed, kAsk, pAsk, sw.ElapsedMilliseconds);
 
@@ -254,7 +272,7 @@ public class CrossArbRestVerifier
             {
                 string verdict = kAsk < 0m || pAsk < 0m ? "FETCH_FAIL" : "NO_ARB";
                 Console.WriteLine($"[REST CHECK] {pair.Label} | {arbType} | " +
-                                  $"K={kAsk:0.0000} P={pAsk:0.0000} sum={(kAsk + pAsk):0.0000} | " +
+                                  $"K={kAsk:0.0000} P={pAsk:0.0000} gross={gross:0.0000} net={net:0.0000} | " +
                                   $"{verdict} in {sw.ElapsedMilliseconds}ms");
             }
         }
