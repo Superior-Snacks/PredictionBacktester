@@ -77,7 +77,7 @@ internal static class Program
         {
             Console.WriteLine($"[CHECK] {pairs.Count} pair(s), "
                             + $"{pairs.Select(p => p.KalshiTicker).Distinct().Count()} ticker(s), "
-                            + $"{pairs.SelectMany(p => new[] { p.YesToken, p.NoToken }).Distinct().Count()} "
+                            + $"{pairs.SelectMany(p => p.Legs).Distinct().Count()} "
                             + "Pinnacle selection(s). No connection was opened.");
             foreach (var p in pairs.Take(5))
                 Console.WriteLine($"        {p.KalshiTicker,-38} {Trunc(p.EventTitle, 26),-26} "
@@ -98,7 +98,13 @@ internal static class Program
                         + "arb bot. The second connection succeeds and silently receives no books.");
 
         var tickers = pairs.Select(p => p.KalshiTicker).Distinct(StringComparer.Ordinal).ToList();
-        var tokens  = pairs.SelectMany(p => new[] { p.YesToken, p.NoToken })
+        // POLL THE LEG SET, NOT THE TOKEN PAIR. `Legs` is the complete outcome set (identical to
+        // {Yes,No} on a two-way, all three on a 1X2), and it is what the evaluator prices from. Building
+        // the poll list from Yes/No only WORKS BY ACCIDENT on soccer: across an event's three rows the
+        // YesTokens happen to cover home, away and draw — but only while all three markets pair. Let the
+        // Tie row fail to match and the draw token still sits in its siblings' Legs while nothing ever
+        // fetches it, so every row of that event returns NoQuote forever with nothing in the log to say why.
+        var tokens  = pairs.SelectMany(p => p.Legs)
                            .Distinct(StringComparer.Ordinal).ToList();
 
         using var kalshi    = new KalshiOrderClient(config);
@@ -513,7 +519,7 @@ internal static class Program
                 var newTickers = fresh.Select(p => p.KalshiTicker)
                                       .Where(t => !everSeen.Contains(t)).Distinct(StringComparer.Ordinal).ToList();
                 feed.EnqueueSubscribe(newTickers);
-                int newTokens = oracle.AddTokens(fresh.SelectMany(p => new[] { p.YesToken, p.NoToken }));
+                int newTokens = oracle.AddTokens(fresh.SelectMany(p => p.Legs));   // legs, not the pair — see above
 
                 // One lock per resource, each taken consistently everywhere it is touched: `pairsLock`
                 // guards everSeen (shared with the settlement watcher), the list instance guards itself

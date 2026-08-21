@@ -63,6 +63,16 @@ public static class Calibration
         return l.Count == 0 ? double.NaN : l.Average(x => Math.Pow(x.P - (x.Won ? 1.0 : 0.0), 2));
     }
 
+    /// <summary>Standard error of a realised proportion, Agresti-Coull adjusted (add two successes and two
+    /// failures). The naive sqrt(p(1-p)/n) returns EXACTLY ZERO whenever a bucket is all wins or all losses,
+    /// so a 2-for-2 split printed "+/- 0.000" — perfect confidence from two observations. This never
+    /// collapses and is better behaved at the small n every early bucket has.</summary>
+    private static double Se(int wins, int n)
+    {
+        double pa = (wins + 1.0) / (n + 2.0);
+        return Math.Sqrt(pa * (1 - pa) / (n + 2.0));
+    }
+
     private static string Bar(double predicted, double realised, int width = 22)
     {
         int a = (int)Math.Round(Math.Clamp(predicted, 0, 1) * width);
@@ -134,7 +144,7 @@ public static class Calibration
         {
             double pred = graded.Average(sel);
             double real = graded.Count(o => o.Won!.Value) / (double)graded.Count;
-            double se   = Math.Sqrt(Math.Max(1e-12, real * (1 - real)) / graded.Count);
+            double se   = Se(graded.Count(o => o.Won!.Value), graded.Count);
             double z    = se > 0 ? (real - pred) / se : 0;
             double brier = Brier(graded.Select(o => (sel(o), o.Won!.Value)));
             Console.WriteLine($"   {name,-13} predicted {pred:0.0000}   realised {real:0.0000}   "
@@ -151,9 +161,8 @@ public static class Calibration
             var l = sub.ToList();
             if (l.Count == 0) { Console.WriteLine($"   {label,-22} (none)"); return; }
             double pred = l.Average(o => o.PProp), real = l.Count(o => o.Won!.Value) / (double)l.Count;
-            double se = Math.Sqrt(Math.Max(1e-12, real * (1 - real)) / l.Count);
             Console.WriteLine($"   {label,-22} n={l.Count,4}  predicted {pred:0.000}  realised {real:0.000}  "
-                            + $"diff {real - pred:+0.000;-0.000} ± {se:0.000}");
+                            + $"diff {real - pred:+0.000;-0.000} +/- {Se(l.Count(o => o.Won!.Value), l.Count):0.000}");
         }
         var inPlay = graded.Where(o => o.InPlay).ToList();
         var pre    = graded.Where(o => !o.InPlay).ToList();
@@ -179,7 +188,7 @@ public static class Calibration
         double conf = Corr(o => o.InPlay ? 1 : 0, o => Math.Min(o.OracleAgeMs, 10_000));
         if (double.IsFinite(conf))
             Console.WriteLine($"   in-play vs oracle-age correlation: {conf:+0.00;-0.00}"
-                            + (Math.Abs(conf) > 0.9
+                            + (Math.Abs(conf) > 0.7
                                 ? "  — CONFOUNDED. These two splits are measuring one variable; the lag "
                                 + "question cannot be answered until the sample contains quiet in-play rows "
                                 + "or busy pre-match ones."
