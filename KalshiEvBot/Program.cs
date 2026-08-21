@@ -123,7 +123,7 @@ internal static class Program
         if (bookAudit)
         {
             await WaitWarmAsync(feed, oracle, cts.Token, TimeSpan.FromSeconds(45));
-            await BookAuditAsync(feed, kalshi, tickers, ArgInt(args, "--book-audit") ?? 10);
+            await BookAuditAsync(feed, kalshi, oracle, pairs, ArgInt(args, "--book-audit") ?? 10);
             cts.Cancel();
             await SafeAll(feedTask, oracleTask, evalTask, bankrollTask);
             return 0;
@@ -196,19 +196,41 @@ internal static class Program
     /// If they agree, the +4c came from somewhere else and §4 needs rewriting.</para>
     /// </summary>
     private static async Task BookAuditAsync(KalshiBookFeed feed, KalshiOrderClient kalshi,
-                                             List<string> tickers, int count)
+                                             PinnacleOracle oracle, List<EvPair> pairs, int count)
     {
         Console.WriteLine("\n══ BOOK AUDIT — local WS ladder vs REST, same instant ══");
         Console.WriteLine("PRICE is checked against /markets, DEPTH against /markets/{ticker}/orderbook.");
         Console.WriteLine($"{"Ticker",-34} {"side",-4} {"wsAsk",8} {"restAsk",8} {"gap(c)",7} {"age(ms)",8}");
 
-        var live = tickers.Where(t => feed.Top(t).HasSnapshot).Take(Math.Max(1, count)).ToList();
-        if (live.Count == 0) { Console.WriteLine("(no market has a snapshot yet)"); return; }
+        // WHICH MARKETS TO SAMPLE. Taking them in file order sampled whatever the pairing job happened to
+        // write first — which is yesterday's finished matches, i.e. dead books, exactly the ones that cannot
+        // exhibit a snapshot/delta race. Order by how recently the book moved instead, so the busiest markets
+        // are measured first. That is where the suspected bug would live, and it needs no timing by hand.
+        var sample = pairs.Select(p => p.KalshiTicker).Distinct(StringComparer.Ordinal)
+                          .Where(t => feed.Top(t).HasSnapshot)
+                          .OrderBy(t => feed.Top(t).AgeMs)
+                          .Take(Math.Max(1, count)).ToList();
+        if (sample.Count == 0) { Console.WriteLine("(no market has a snapshot yet)"); return; }
+
+        // Pinnacle's in-play flag, so each row says which regime it came from. A gap that only appears on a
+        // fast in-play book is a completely different finding from one that appears everywhere.
+        var inPlayOf = pairs.GroupBy(p => p.KalshiTicker)
+                            .ToDictionary(g => g.Key,
+                                          g => oracle.Get(g.First().YesToken)?.Live ?? false,
+                                          StringComparer.Ordinal);
+        int liveCount = sample.Count(t => inPlayOf.TryGetValue(t, out bool b) && b);
+        Console.WriteLine($"Sampling {sample.Count} market(s), busiest book first — {liveCount} in-play, "
+                        + $"{sample.Count - liveCount} pre-match.");
+        if (liveCount == 0)
+            Console.WriteLine("NOTE: nothing in-play right now. A quiet-book result does not close out the "
+                            + "fast-book question — re-run while matches are actually being played.");
 
         var gaps = new List<double>();
+        var gapsInPlay = new List<double>();
         var sizeRatios = new List<double>();
-        foreach (var t in live)
+        foreach (var t in sample)
         {
+            bool inPlay = inPlayOf.TryGetValue(t, out bool ip) && ip;
             var top = feed.Top(t);
             decimal ry, rn;
             List<(decimal Price, decimal Size)> restYesLadder, restNoLadder;
@@ -220,7 +242,10 @@ internal static class Program
                 rn = EvEvaluator.AskDollars(mkt, yes: false);
 
                 using var obDoc = await kalshi.GetMarketOrderBookAsync(t);
-                var ob = obDoc.RootElement.TryGetProperty("orderbook", out var o) ? o : obDoc.RootElement;
+                var obRoot = obDoc.RootElement;
+                var ob = obRoot.TryGetProperty("orderbook_fp", out var ofp) ? ofp
+                       : obRoot.TryGetProperty("orderbook",    out var o)   ? o
+                       : obRoot;
                 restYesLadder = RestAskLadder(ob, yesSide: true);
                 restNoLadder  = RestAskLadder(ob, yesSide: false);
             }
@@ -232,9 +257,10 @@ internal static class Program
                 if (ws >= 1m || rest <= 0m) continue;
                 double gap = (double)(rest - ws) * 100.0;
                 gaps.Add(gap);
+                if (inPlay) gapsInPlay.Add(gap);
                 var wsLadder = feed.AskLadder(t, side == "YES");
                 Console.WriteLine($"{Trunc(t, 34),-34} {side,-4} {ws,8:0.0000} {rest,8:0.0000} "
-                                + $"{gap,7:+0.0;-0.0} {top.AgeMs,8:0}");
+                                + $"{gap,7:+0.0;-0.0} {top.AgeMs,8:0} {(inPlay ? "LIVE" : "pre")}");
                 Console.WriteLine($"       ws   {Ladder(wsLadder)}");
                 Console.WriteLine($"       rest {Ladder(restLadder)}");
 
@@ -258,6 +284,21 @@ internal static class Program
         Console.WriteLine("A positive gap means the WS ask is optimistic — the price we would have screened "
                         + "on is cheaper than the one actually offered.");
 
+        // The regime split is the point of the whole exercise: the original +4c came from an in-play-heavy
+        // sample, so a clean pre-match result answers a question nobody asked.
+        if (gapsInPlay.Count > 0)
+        {
+            gapsInPlay.Sort();
+            Console.WriteLine($"PRICE, IN-PLAY ONLY — {gapsInPlay.Count} comparison(s):  "
+                            + $"median {Pct(gapsInPlay, .50):+0.0;-0.0}c   "
+                            + $"worse for us in {gapsInPlay.Count(g => g > 0)}/{gapsInPlay.Count}");
+        }
+        else
+        {
+            Console.WriteLine("PRICE, IN-PLAY ONLY — no in-play markets in this sample, so the fast-book "
+                            + "case is still UNTESTED. This result covers quiet books only.");
+        }
+
         if (sizeRatios.Count > 0)
         {
             sizeRatios.Sort();
@@ -274,22 +315,36 @@ internal static class Program
     private static string Ladder(List<(decimal Price, decimal Size)> l)
         => l.Count == 0 ? "(empty)" : string.Join("  ", l.Select(x => $"{x.Price:0.00}x{x.Size:0.##}"));
 
-    /// <summary>Ask ladder from a REST <c>/orderbook</c> payload. That endpoint reports BIDS on both sides
-    /// in CENTS, so an ask is the complement of the opposite side's bid — the same transform the WS feed
-    /// applies, which is precisely what makes comparing the two meaningful.</summary>
+    /// <summary>
+    /// Ask ladder from a REST <c>/orderbook</c> payload. The endpoint reports BIDS on both sides, so an ask
+    /// is the complement of the opposite side's bid — the same transform the WS feed applies, which is
+    /// precisely what makes the two comparable.
+    ///
+    /// <para>Shape verified against the live API 2026-08-21, because it is not what the rest of this repo
+    /// assumes: the wrapper is <c>orderbook_fp</c> (not <c>orderbook</c>), the side keys are
+    /// <c>yes_dollars</c> / <c>yes</c> (not <c>yes</c> alone), and prices are DOLLAR strings
+    /// (<c>"0.4300"</c>), not cent integers. Parsing it as cents yielded an empty ladder on every market and
+    /// the depth check silently did nothing. Both namings are accepted so an API revision degrades to a
+    /// visible mismatch rather than to silence.</para>
+    /// </summary>
     private static List<(decimal Price, decimal Size)> RestAskLadder(System.Text.Json.JsonElement ob,
                                                                      bool yesSide, int depth = 3)
     {
         var levels = new List<(decimal Price, decimal Size)>();
-        if (!ob.TryGetProperty(yesSide ? "no" : "yes", out var arr) ||
-            arr.ValueKind != System.Text.Json.JsonValueKind.Array)
-            return levels;
+        System.Text.Json.JsonElement arr = default;
+        foreach (var key in yesSide ? new[] { "no_dollars", "no" } : new[] { "yes_dollars", "yes" })
+            if (ob.TryGetProperty(key, out arr) && arr.ValueKind == System.Text.Json.JsonValueKind.Array) break;
+        if (arr.ValueKind != System.Text.Json.JsonValueKind.Array) return levels;
+
         foreach (var lvl in arr.EnumerateArray())
         {
             var it = lvl.EnumerateArray().ToArray();
             if (it.Length < 2) continue;
-            if (!TryNum(it[0], out decimal cents) || !TryNum(it[1], out decimal size) || size <= 0m) continue;
-            levels.Add((Math.Round(1m - cents / 100m, 4), size));
+            if (!TryNum(it[0], out decimal price) || !TryNum(it[1], out decimal size) || size <= 0m) continue;
+            // Dollars if it carries a fraction or is <= 1; cents otherwise. A bid is a probability, so
+            // "0.43" can only be dollars and "43" can only be cents — there is no ambiguous case.
+            if (price > 1m) price /= 100m;
+            levels.Add((Math.Round(1m - price, 4), size));
         }
         return levels.OrderBy(x => x.Price).Take(depth).ToList();   // cheapest ask first
     }

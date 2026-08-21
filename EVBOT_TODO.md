@@ -147,9 +147,11 @@ occasionally invents a level would be sampled precisely when it did. This bot's 
 and `--book-audit` samples markets rather than signals, so neither is subject to that selection. Separating
 the two would mean re-running the arb bot's book code side by side, which is not worth doing now.
 
-**One caveat before treating it as settled: this sample was quiet.** Book ages 152–1913ms, mostly pre-match
-tennis. A snapshot/delta race bites hardest on a fast in-play book, which is what the original sample was
-full of. Re-run the audit during a busy in-play window before closing this out.
+**In-play now covered too (second audit, busiest-book-first selection).** 20 comparisons, 6 of them on
+live in-progress matches: median +0.0c overall and +0.0c in-play, REST worse in 1/20. The single non-zero
+pair is one market straddling a 1c spread — YES −1.0c and NO +1.0c on the same ticker at 15ms book age,
+i.e. the whole book shifted one tick between the two reads. That is a live match moving, not systematic
+optimism. Six in-play comparisons is a thin sample, but the fast-book case is no longer untested.
 
 ### The original measurement, for the record
 Measured over ~400 windows (2026-08-20/21) on the ARB bot's book implementation:
@@ -183,15 +185,35 @@ The IOC limit keeps this safe rather than costly: an order limited at break-even
 cancels the rest, so the money is never at risk. What breaks is the *record* — the `Contracts` column logs a
 size that was never available, and M1 would weight its calibration by it.
 
-**And the size UNIT is unverified.** Depths across the same audit span four orders of magnitude:
-ITF quotes 11–107, while `KXATPMATCH-26AUG21FRINAK-FRI` shows `0.64×553465` — half a million contracts,
-$354k at that price, on an ATP match. Not credible as contract counts.
+**The size UNIT question is CLOSED — not a unit bug (2026-08-21).** Checked directly against
+`/markets/{ticker}/orderbook`:
 
-- [ ] **Run `--book-audit` again** — it now fetches `/markets/{ticker}/orderbook` and prints a ws/rest
-      **size ratio**. Ratio ~1 means the number is genuine and simply large; anything else means the two
-      sources are on different scales and every size in the telemetry is in an unknown unit.
-- [ ] **Then decide how M1 weights a signal**: by requested size, or by size actually available at the
-      limit. The second is the honest one and needs the depth figure to mean something first.
+| market | WS top-of-book | REST top-of-book |
+|---|---|---|
+| `KXWTAMATCH-…GAUKOS-GAU` YES | 0.57×232599 | 0.57×236155 |
+| `KXWTAMATCH-…GAUKOS-GAU` NO | 0.44×29461 | 0.44×29361 |
+| `KXITFWMATCH-…PIENAG-NAG` NO | 0.67×20 | 0.67×20 |
+
+Same scale, same prices, differences only where the book moved between reads. The four-orders-of-magnitude
+spread is **real liquidity**: headline WTA names (Gauff, Swiatek/Pegula) carry genuinely deep books while
+obscure ITF matches show 4–20 contracts at the top. Sizes can be trusted; the *thinness* cannot.
+
+- [ ] **Decide how M1 weights a signal**: by requested size, or by size actually available at the limit.
+      The second is the honest one, and the depth figure is now known to be sound enough to use.
+
+### Parsing note — the shape is not what this repo assumes
+`GET /markets/{ticker}/orderbook` returns `{"orderbook_fp": {"yes_dollars": [["0.4300","80"], …],
+"no_dollars": […]}}`. The wrapper is `orderbook_fp`, the side keys carry a `_dollars` suffix, and prices are
+**dollar strings, not cent integers**. The first version of the audit parser looked for
+`orderbook`→`yes`/`no` in cents and returned an empty ladder on every market — the depth check ran and
+silently measured nothing. `RestAskLadder` now accepts both namings and both price scales.
+
+**The same wrong assumption is live in the arb bot.** `HardVenArb/BookRefresherService.cs`
+(`GetBestBidFromKalshiSide`, wired at `Program.cs:2143`; `KalshiPolyCross` has a copy) reads
+`orderbook`→`no` in cents. Against the real payload it finds nothing, returns −1, and takes the
+`restYesAsk < 0` branch — which calls `MarkDead()` on both books of every Kalshi market it refreshes.
+Traced as far as the honest-book count (`Program.cs:1612`) and camp eligibility; not traced to whether it
+gates detection. Not fixed here — the arb bot is being retired — but it is a real fault if it is ever run again.
 
 ---
 
