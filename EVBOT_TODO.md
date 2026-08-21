@@ -109,11 +109,31 @@ Not yet exercised against live feeds — that needs the sidecar running and the 
 Run with `dotnet run --project KalshiEvBot -- --resolve`. **REST only, no WebSocket**, so it is safe to run
 while another bot holds the account's single socket.
 
-- [x] **Resolver** (`SettlementResolver.cs`) — fetches `status`/`result` per ticker, caches to
-      `ev_settlements.json`. Field shape verified live: `status` is `"active"`/`"finalized"`, `result` is
-      `""` until final then `"yes"`/`"no"`. **Only finalized results are cached** — caching "active" would
-      freeze a market as never-settled and quietly shrink the sample forever, which is the one failure a
-      calibration report cannot detect from its own output.
+### THE VENUE IS NOT AN ARCHIVE — this drove the design
+Kalshi does not keep obscure markets available indefinitely. An ITF or challenger match that settled last
+week may simply not answer today. So the outcome must be **captured while it exists and stored permanently
+by us**; anything that treats the venue as a place to look things up later is a race we can only lose, and
+lose *silently* — a purged market is indistinguishable from one that never settled unless the difference
+was recorded at the time.
+
+- [x] **Permanent store** (`SettlementStore.cs`) — **append-only JSONL** (`ev_settlements.jsonl`), not a
+      cache and not a rewritten JSON blob. It is the only copy, so a failure must cost at most the line
+      being written: one interrupted rewrite or one disk-full would otherwise take the whole history with
+      nothing to reconstruct it from. Nothing is ever deleted or overwritten — re-reading takes the last
+      record per ticker, so a market seen active and later finalized just gains a line, which also leaves
+      an audit trail of *when* each outcome was first seen. Imports the older `ev_settlements.json` once.
+- [x] **Live watcher** (`SettlementResolver.WatchAsync`) — the half that actually protects the data. The
+      running bot polls its own markets every `EV_SETTLE_POLL_MIN` (default 10) and banks each result within
+      minutes of settlement. A played match finalizes within the hour, so this wins the race comfortably;
+      `--resolve` days later does not.
+- [x] **`gone` as a terminal state** — a 404 is recorded as `status: "gone"`, distinct from `active`. "We
+      never got an answer" has to be visible in the data, not hidden as a market that is forever pending.
+      The calibration report prints lost markets in red and says outright that those observations are
+      unrecoverable.
+- [x] **Resolver** (`SettlementResolver.cs`) — fetches `status`/`result`/title/close times per ticker.
+      Field shape verified live: `status` is `"active"`/`"finalized"`, `result` is `""` until final then
+      `"yes"`/`"no"`. Writes only on change or on terminal, so a market re-checked every ten minutes for a
+      fortnight does not add two thousand identical lines.
 - [x] **Calibration report** (`Calibration.cs`) — deciles of `P_true` vs realised frequency, pooled bias
       with a standard error and a z, and a **Brier score for proportional vs Shin** (the one number that
       compares the two de-vig methods without arguing about thresholds).

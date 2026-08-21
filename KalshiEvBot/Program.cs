@@ -132,12 +132,18 @@ internal static class Program
         var bankrollTask = BankrollLoopAsync(kalshi, eval, cfg, cts.Token);
         var snapTask     = SnapshotLoopAsync(snapshots, oracle, feed, pairs, cfg, cts.Token);
 
+        // Bank settlements WHILE THE BOT RUNS. Kalshi does not keep obscure markets available forever, so
+        // resolving days later is a race we can only lose — and lose silently, since a purged market is
+        // indistinguishable from one that never settled unless we recorded the difference at the time.
+        var resolver     = new SettlementResolver(kalshi);
+        var settleTask   = resolver.WatchAsync(() => tickers, cts.Token);
+
         if (bookAudit)
         {
             await WaitWarmAsync(feed, oracle, cts.Token, TimeSpan.FromSeconds(45));
             await BookAuditAsync(feed, kalshi, oracle, pairs, ArgInt(args, "--book-audit") ?? 10);
             cts.Cancel();
-            await SafeAll(feedTask, oracleTask, evalTask, bankrollTask, snapTask);
+            await SafeAll(feedTask, oracleTask, evalTask, bankrollTask, snapTask, settleTask);
             return 0;
         }
 
@@ -155,13 +161,14 @@ internal static class Program
                 await Task.Delay(200);
             await Task.Delay(3_000, cts.Token).ContinueWith(_ => { });   // let in-flight REST calls land
             PrintStatus(eval, feed, oracle, telemetry, pairs.Count);
+            await resolver.ResolveAsync(tickers, CancellationToken.None);   // bank before we exit
             cts.Cancel();
-            await SafeAll(feedTask, oracleTask, evalTask, bankrollTask, snapTask);
+            await SafeAll(feedTask, oracleTask, evalTask, bankrollTask, snapTask, settleTask);
             return 0;
         }
 
         var statusTask = StatusLoopAsync(eval, feed, oracle, telemetry, pairs.Count, cts.Token);
-        await SafeAll(feedTask, oracleTask, evalTask, bankrollTask, snapTask, statusTask);
+        await SafeAll(feedTask, oracleTask, evalTask, bankrollTask, snapTask, settleTask, statusTask);
         PrintStatus(eval, feed, oracle, telemetry, pairs.Count);
         Console.WriteLine($"[DONE] {telemetry.RowsWritten} row(s) → {telemetry.Path}");
         return 0;
@@ -202,9 +209,12 @@ internal static class Program
         Console.WriteLine($"[RESOLVE] fetching settlement for {tickers.Count} market(s)…");
 
         var resolver = new SettlementResolver(kalshi);
+        int alreadyKnown = resolver.Known.Values.Count(r => r.Terminal);
         var settled  = await resolver.ResolveAsync(tickers);
-        Console.WriteLine($"[RESOLVE] {resolver.Fetched} fetched, {resolver.FromCache} cached, "
-                        + $"{resolver.Failed} failed; {settled.Values.Count(s => s.IsFinal)} finalized.");
+        Console.WriteLine($"[RESOLVE] {resolver.Fetched} fetched, {alreadyKnown} already on record, "
+                        + $"{resolver.Failed} failed; {settled.Values.Count(s => s.IsFinal)} final, "
+                        + $"{settled.Values.Count(s => s.IsGone)} gone from the venue.");
+        Console.WriteLine($"[RESOLVE] permanent record: {resolver.Store.Path}");
 
         Calibration.Report(Calibration.FromTelemetry(rows, settled), settled, dedupe);
         return 0;

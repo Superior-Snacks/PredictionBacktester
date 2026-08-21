@@ -27,7 +27,7 @@ public static class Calibration
 {
     /// <summary>Turns raw telemetry rows into gradeable observations.</summary>
     public static List<Obs> FromTelemetry(IEnumerable<Dictionary<string, string>> rows,
-                                          IReadOnlyDictionary<string, Settlement> settled)
+                                          IReadOnlyDictionary<string, SettlementRecord> settled)
     {
         var outp = new List<Obs>();
         foreach (var r in rows)
@@ -75,7 +75,7 @@ public static class Calibration
     }
 
     // ── The report ────────────────────────────────────────────────────────────────────────────────────
-    public static void Report(List<Obs> all, IReadOnlyDictionary<string, Settlement> settled, bool dedupe = true)
+    public static void Report(List<Obs> all, IReadOnlyDictionary<string, SettlementRecord> settled, bool dedupe = true)
     {
         Console.WriteLine();
         Console.WriteLine("══ CALIBRATION REPORT ══════════════════════════════════════════════════════");
@@ -85,12 +85,24 @@ public static class Calibration
 
         // ── 1. Coverage ───────────────────────────────────────────────────────────────────────────────
         int distinctTickers = all.Select(o => o.Ticker).Distinct(StringComparer.Ordinal).Count();
-        int unresolved = settled.Values.Count(s => !s.IsFinal);
+        int active = settled.Values.Count(s => !s.Terminal);
+        int lost   = settled.Values.Count(s => s.IsGone);
         Console.WriteLine($"\n1. COVERAGE");
         Console.WriteLine($"   {all.Count} logged row(s) → {obs.Count} independent observation(s) "
                         + $"({(dedupe ? "one per ticker+side" : "NOT deduped")}) across {distinctTickers} market(s)");
         Console.WriteLine($"   settled: {graded.Count}   awaiting settlement: {obs.Count - graded.Count} "
-                        + $"({unresolved} market(s) still active)");
+                        + $"({active} market(s) still active)");
+        if (lost > 0)
+        {
+            // Not a rounding error in the sample — it is data that can never be recovered, so it is stated
+            // outright rather than absorbed into "awaiting settlement" where it would look like patience.
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"   LOST: {lost} market(s) are GONE from Kalshi with no result ever banked — "
+                            + "those observations are unrecoverable.");
+            Console.WriteLine("   Keep the bot running (it banks settlements every EV_SETTLE_POLL_MIN minutes) "
+                            + "rather than relying on --resolve after the fact.");
+            Console.ResetColor();
+        }
         if (graded.Count == 0)
         {
             Console.WriteLine("\n   Nothing has settled yet — no calibration is possible. This is normal early:");

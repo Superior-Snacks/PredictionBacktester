@@ -1,118 +1,163 @@
+using System.Net;
 using System.Text.Json;
 using PredictionBacktester.Engine.LiveExecution;
 
 namespace KalshiEvBot;
 
-/// <summary>How a Kalshi market ended. <c>Result</c> is "yes" | "no" once <c>Status</c> is "finalized".</summary>
-public readonly record struct Settlement(string Ticker, string Status, string Result, DateTime FetchedUtc)
-{
-    public bool IsFinal => Status == "finalized" && (Result == "yes" || Result == "no");
-
-    /// <summary>Did the side we would have bought win? Null while the market is unresolved.</summary>
-    public bool? WonFor(string side)
-        => !IsFinal ? null
-         : string.Equals(side, "YES", StringComparison.OrdinalIgnoreCase) ? Result == "yes" : Result == "no";
-}
-
 /// <summary>
-/// Fetches Kalshi settlements for logged signals and caches them on disk.
+/// Asks Kalshi how a market ended and writes the answer down permanently.
 ///
-/// <para><b>Only finalized results are cached.</b> An unresolved market is re-fetched every run — caching
-/// "active" would freeze a market as never-settled and quietly shrink the sample forever, which is the one
-/// failure mode a calibration report cannot detect from its own output.</para>
+/// <para><b>The venue is not an archive.</b> Kalshi does not keep obscure markets available indefinitely —
+/// an ITF or challenger match that settled last week may simply not answer today. The outcome therefore has
+/// to be captured while it still exists, which makes this a WRITER first and a reader second: every answer
+/// goes straight into an append-only <see cref="SettlementStore"/> the moment it arrives, and nothing is
+/// ever re-derived from the venue afterwards.</para>
 ///
-/// <para>Field shape verified against the live API 2026-08-21: <c>status</c> is <c>"active"</c> or
-/// <c>"finalized"</c> (never "open" — see <c>reference_kalshi_api</c>), and <c>result</c> is an empty string
-/// until finalized, then <c>"yes"</c>/<c>"no"</c>. Settlement is prompt when it happens — an ATP challenger
-/// finalized within the hour — but matches that are postponed sit <c>active</c> for days against a fallback
-/// <c>close_time</c> two weeks out, so "not settled yet" is normal and not an error.</para>
+/// <para>That is also why <see cref="WatchAsync"/> exists. Resolving only when someone remembers to run
+/// <c>--resolve</c> races the purge and loses; the live bot polls its own markets and banks each result
+/// within minutes of settlement.</para>
+///
+/// <para>A 404 is recorded as the terminal status <c>"gone"</c>, distinct from <c>"active"</c>. That
+/// distinction is the whole point: "we never got an answer" must be visible in the data, not hidden as a
+/// market that is forever pending.</para>
+///
+/// <para>Field shape verified live 2026-08-21: <c>status</c> is <c>"active"</c>/<c>"finalized"</c> (never
+/// "open"), <c>result</c> is <c>""</c> until final then <c>"yes"</c>/<c>"no"</c>. A played match finalizes
+/// within the hour; a postponed one sits active for days against a fallback <c>close_time</c> two weeks out.</para>
 /// </summary>
 public sealed class SettlementResolver
 {
     private readonly KalshiOrderClient _kalshi;
-    private readonly string _cachePath;
-    private readonly Dictionary<string, Settlement> _cache = new(StringComparer.Ordinal);
+    private readonly SettlementStore _store;
+    private Dictionary<string, SettlementRecord> _known;
 
     public int Fetched { get; private set; }
-    public int FromCache { get; private set; }
+    public int NewlyFinal { get; private set; }
+    public int Gone { get; private set; }
     public int Failed { get; private set; }
 
-    public SettlementResolver(KalshiOrderClient kalshi, string? cachePath = null)
+    public SettlementStore Store => _store;
+
+    public SettlementResolver(KalshiOrderClient kalshi, SettlementStore? store = null)
     {
-        _kalshi    = kalshi;
-        _cachePath = cachePath ?? Path.Combine(Directory.GetCurrentDirectory(), "ev_settlements.json");
-        Load();
+        _kalshi = kalshi;
+        _store  = store ?? new SettlementStore();
+        _known  = _store.LoadLatest();
     }
 
-    private void Load()
+    public IReadOnlyDictionary<string, SettlementRecord> Known => _known;
+
+    /// <summary>Markets with no terminal record yet — the only ones still worth a request.</summary>
+    public List<string> Pending(IEnumerable<string> tickers)
+        => tickers.Distinct(StringComparer.Ordinal)
+                  .Where(t => !(_known.TryGetValue(t, out var r) && r.Terminal))
+                  .ToList();
+
+    /// <summary>
+    /// Fetches one market and banks the answer. Returns the record, or null if the request failed in a way
+    /// that is not informative (network, 5xx) — those are retried later rather than recorded, because
+    /// writing them as terminal would throw away a result we could still have got.
+    /// </summary>
+    public async Task<SettlementRecord?> FetchAndStoreAsync(string ticker)
     {
         try
         {
-            if (!File.Exists(_cachePath)) return;
-            using var doc = JsonDocument.Parse(File.ReadAllText(_cachePath));
-            foreach (var p in doc.RootElement.EnumerateObject())
+            using var doc = await _kalshi.GetMarketAsync(ticker);
+            var m = doc.RootElement.TryGetProperty("market", out var mk) ? mk : doc.RootElement;
+            string S(string k) => m.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.String
+                                ? (v.GetString() ?? "") : "";
+
+            var rec = new SettlementRecord(ticker, S("status"), S("result"), S("title"), S("event_ticker"),
+                                           S("close_time"), S("expected_expiration_time"), DateTime.UtcNow);
+            Fetched++;
+
+            // Only write when something CHANGED, or when it is terminal. An active market re-checked every
+            // ten minutes for a fortnight would otherwise add two thousand identical lines per market.
+            bool known = _known.TryGetValue(ticker, out var prev);
+            if (!known || prev!.Status != rec.Status || prev.Result != rec.Result)
             {
-                string status = p.Value.TryGetProperty("status", out var s) ? s.GetString() ?? "" : "";
-                string result = p.Value.TryGetProperty("result", out var r) ? r.GetString() ?? "" : "";
-                var at = p.Value.TryGetProperty("at", out var a) && a.TryGetDateTime(out var d) ? d : DateTime.UtcNow;
-                var st = new Settlement(p.Name, status, result, at);
-                if (st.IsFinal) _cache[p.Name] = st;      // only finals survive a restart
+                _store.Append(rec);
+                _known[ticker] = rec;
+                if (rec.IsFinal) NewlyFinal++;
             }
+            return rec;
+        }
+        catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.NotFound)
+        {
+            // The venue has stopped serving it. Record that as terminal and unrecoverable — if we never
+            // banked a result before this point, that observation is lost, and the data must say so rather
+            // than leave the market looking eternally pending.
+            var rec = new SettlementRecord(ticker, "gone", "", "", "", "", "", DateTime.UtcNow,
+                                           "HTTP 404 — Kalshi no longer serves this market");
+            if (!(_known.TryGetValue(ticker, out var prev) && prev.Terminal))
+            {
+                _store.Append(rec);
+                _known[ticker] = rec;
+                Gone++;
+                Console.WriteLine($"[SETTLE] {ticker}: GONE from Kalshi with no result banked — "
+                                + "that observation is unrecoverable.");
+            }
+            return rec;
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[RESOLVE] cache unreadable ({ex.GetType().Name}) — starting fresh.");
+            Failed++;
+            Console.WriteLine($"[SETTLE] {ticker}: {ex.GetType().Name}: {ex.Message} (will retry)");
+            return null;
         }
     }
 
-    private void Save()
+    /// <summary>Batch resolve, for <c>--resolve</c>. Only touches markets without a terminal record.</summary>
+    public async Task<Dictionary<string, SettlementRecord>> ResolveAsync(IEnumerable<string> tickers,
+                                                                         CancellationToken ct = default)
     {
-        try
-        {
-            var obj = _cache.Where(kv => kv.Value.IsFinal).ToDictionary(
-                kv => kv.Key,
-                kv => new { status = kv.Value.Status, result = kv.Value.Result, at = kv.Value.FetchedUtc });
-            File.WriteAllText(_cachePath,
-                JsonSerializer.Serialize(obj, new JsonSerializerOptions { WriteIndented = true }));
-        }
-        catch (Exception ex) { Console.WriteLine($"[RESOLVE] could not write cache: {ex.Message}"); }
-    }
-
-    public async Task<Dictionary<string, Settlement>> ResolveAsync(IEnumerable<string> tickers,
-                                                                   CancellationToken ct = default)
-    {
-        var want = tickers.Distinct(StringComparer.Ordinal).ToList();
-        var outp = new Dictionary<string, Settlement>(StringComparer.Ordinal);
+        var pending = Pending(tickers);
         int i = 0;
-
-        foreach (var t in want)
+        foreach (var t in pending)
         {
             ct.ThrowIfCancellationRequested();
-            if (_cache.TryGetValue(t, out var hit) && hit.IsFinal)
-            {
-                outp[t] = hit; FromCache++; continue;
-            }
+            await FetchAndStoreAsync(t);
+            if (++i % 20 == 0) Console.Write($"\r[SETTLE] {i}/{pending.Count}…");
+            await Task.Delay(120, ct);      // polite: a batch job, not a hot path
+        }
+        if (i >= 20) Console.WriteLine($"\r[SETTLE] {i}/{pending.Count} done.          ");
+        _known = _store.LoadLatest();
+        return _known;
+    }
+
+    /// <summary>
+    /// Background loop for the live bot: bank every settlement while the venue still has it.
+    ///
+    /// <para>This is the half that actually protects the data. A market settles within the hour of the
+    /// match, so polling its own watchlist every few minutes captures the result long before any purge —
+    /// whereas a <c>--resolve</c> run days later is a race we can only lose, and lose silently.</para>
+    /// </summary>
+    public async Task WatchAsync(Func<IEnumerable<string>> tickers, CancellationToken ct)
+    {
+        var every = TimeSpan.FromMinutes(Math.Max(1, EvConfig.Env("EV_SETTLE_POLL_MIN", 10)));
+        Console.WriteLine($"[SETTLE] watching for settlements every {every.TotalMinutes:0} min → {_store.Path}");
+
+        while (!ct.IsCancellationRequested)
+        {
+            try { await Task.Delay(every, ct); } catch (OperationCanceledException) { break; }
             try
             {
-                using var doc = await _kalshi.GetMarketAsync(t);
-                var m = doc.RootElement.TryGetProperty("market", out var mk) ? mk : doc.RootElement;
-                string status = m.TryGetProperty("status", out var s) ? s.GetString() ?? "" : "";
-                string result = m.TryGetProperty("result", out var r) ? r.GetString() ?? "" : "";
-                var st = new Settlement(t, status, result, DateTime.UtcNow);
-                outp[t] = st;
-                if (st.IsFinal) _cache[t] = st;
-                Fetched++;
+                var pending = Pending(tickers());
+                if (pending.Count == 0) continue;
+                int before = NewlyFinal, gone = Gone;
+                foreach (var t in pending)
+                {
+                    if (ct.IsCancellationRequested) break;
+                    await FetchAndStoreAsync(t);
+                    await Task.Delay(150, ct);
+                }
+                if (NewlyFinal > before || Gone > gone)
+                    Console.WriteLine($"[SETTLE] banked {NewlyFinal - before} new result(s)"
+                                    + (Gone > gone ? $", {Gone - gone} market(s) went missing" : "")
+                                    + $" — {Known.Values.Count(r => r.IsFinal)} final on record");
             }
-            catch (Exception ex)
-            {
-                Failed++;
-                Console.WriteLine($"[RESOLVE] {t}: {ex.GetType().Name}: {ex.Message}");
-            }
-            if (++i % 20 == 0) Console.Write($"\r[RESOLVE] {i}/{want.Count}…");
-            await Task.Delay(120, ct);   // polite: this is a batch job, not a hot path
+            catch (OperationCanceledException) { break; }
+            catch (Exception ex) { Console.WriteLine($"[SETTLE] watch error: {ex.GetType().Name}: {ex.Message}"); }
         }
-        if (i >= 20) Console.WriteLine($"\r[RESOLVE] {i}/{want.Count} done.        ");
-        Save();
-        return outp;
     }
 }
