@@ -41,6 +41,7 @@ public sealed class PinnacleOracle
     private int  _lastReady = -1;
     private string _lastError = "";
     private int _sameErrorCount;
+    private bool _sawUnverified, _wvNoticeShown;
 
     public PinnacleOracle(string sidecarBaseUrl, IEnumerable<string> tokens)
     {
@@ -223,6 +224,22 @@ public sealed class PinnacleOracle
                 WsVerified  : !s.TryGetProperty("wv", out var wv) || wv.ValueKind != JsonValueKind.False);
             _quotes[prop.Name] = q;
             if (!Fresh(q)) stale++;
+            if (!q.WsVerified) _sawUnverified = true;
+        }
+
+        // THE SCREENING-ONLY GATE GOES QUIET IN DEDICATED-WS MODE, AND ITS SILENCE LOOKS LIKE SUCCESS.
+        // `ws_verified_map` reports every selection verified unless the sidecar is in window-reader mode
+        // ("paho/REST subscribe every active league -> all True"). That is honest — a dedicated connection
+        // really does subscribe every active league — but it means the guard that caught the +19c phantoms
+        // can no longer discriminate, and `unverified 0` on the status line would read as "the phantoms
+        // stopped" rather than "the detector stopped". Say which it is, once.
+        if (!_wvNoticeShown && _quotes.Count >= 20 && !_sawUnverified)
+        {
+            _wvNoticeShown = true;
+            Console.WriteLine($"[ORACLE] every one of {_quotes.Count} selection(s) reports WS-verified. That is "
+                            + "expected in DEDICATED-WS mode (the sidecar subscribes each active league "
+                            + "directly), but it means the screening-only gate cannot flag anything here — "
+                            + "quote FRESHNESS is the only remaining guard against a delayed price.");
         }
         return stale;
     }

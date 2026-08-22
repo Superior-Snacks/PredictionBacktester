@@ -182,9 +182,55 @@ def duration_by_name() -> dict[str, int]:
     return {s.key: s.duration_min for s in CATALOG.values()}
 
 
+# ── TIER 1: the series worth watching when breadth costs more than it returns ─────────────────────────────
+# Soccer's full catalogue is 59 series. Scaffolding all of them paired 810 markets across ~40 Pinnacle
+# leagues, and every one of those leagues then has to be carried by the odds feed — which is the load that
+# made the reader's page unusable. Breadth is not free, and most of it never produces a signal.
+#
+# Chosen on TWO criteria, not one:
+#   * DEPTH — a Kalshi book thick enough that a fill is real rather than a top-of-book sliver.
+#   * ORACLE SHARPNESS — measured vig on 2026-08-21: EPL 3.80%, La Liga 3.84%, Liga MX 3.66% sit level with
+#     tennis (WTA 1.94%), while Bolivia 9.33% and Brasileiro 9.10% are twice that. A wide vig means Pinnacle
+#     itself is unsure, which both shrinks alpha to its floor AND makes P_true least trustworthy — the two
+#     reasons to bet less arrive together, so those leagues earn their exclusion twice over.
+#
+# Deliberately a SHORTLIST, not a ranking: add to it from settlement evidence, not from intuition about
+# which leagues "should" be efficient.
+TIER1_SERIES: set[str] = {
+    # soccer — the majors plus the two deepest non-European books
+    "KXEPLGAME", "KXLALIGAGAME", "KXSERIEAGAME", "KXBUNDESLIGAGAME", "KXLIGUE1GAME",
+    "KXUCLGAME", "KXUELGAME", "KXEFLCHAMPIONSHIPGAME", "KXMLSGAME", "KXLIGAMXGAME",
+    # tennis — the main tours (challengers/ITF stay out: thin books, and the reason M1 exists is doubt
+    # about whether Pinnacle is even predictive there)
+    "KXATPMATCH", "KXWTAMATCH",
+}
+
+
 def moneyline_series() -> set[str]:
-    """Kalshi per-game winner series for the active sports — pairHard's default scaffold allowlist."""
-    return {m for s in enabled_sports() for m in s.moneyline}
+    """Kalshi per-game winner series for the active sports — pairHard's default scaffold allowlist.
+
+    HARDVEN_SERIES_ALLOW narrows it: `tier1` for the curated shortlist above, or an explicit CSV of series
+    prefixes. Unset = every series of every enabled sport, as before.
+
+    This is the ONE place breadth is decided. pairHard scaffolds from it, so everything downstream — which
+    markets pair, which Pinnacle selections get polled, which leagues the odds WS subscribes, what the EV
+    bot sweeps — narrows with it and cannot drift out of step.
+    """
+    base = {m for s in enabled_sports() for m in s.moneyline}
+    sel = (os.environ.get("HARDVEN_SERIES_ALLOW") or "").strip()
+    if not sel:
+        return base
+
+    allow = TIER1_SERIES if sel.lower() == "tier1" else {x.strip().upper() for x in sel.split(",") if x.strip()}
+    kept = {m for m in base if m.upper() in allow}
+    if not kept:
+        # Never silently watch nothing: an allowlist that matches no enabled series is a typo, and returning
+        # an empty set would look exactly like "no games today" for as long as it took someone to notice.
+        print(f"[SPORTS] HARDVEN_SERIES_ALLOW={sel!r} matched NONE of the {len(base)} series for the enabled "
+              f"sport(s) — ignoring it and watching all of them. Check the spelling.", file=sys.stderr)
+        return base
+    print(f"[SPORTS] series allowlist: {len(kept)}/{len(base)} series kept ({sel}).", file=sys.stderr)
+    return kept
 
 
 def derivative_series() -> dict[str, tuple[str, int]]:

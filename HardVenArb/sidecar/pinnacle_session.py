@@ -1656,6 +1656,13 @@ class PinnacleBrowserSession:
         while a login is settling or a bet holds the page."""
         if self._page is None or not self._home_url:
             return
+        # GIVE UP IF HOME DOES NOT HOLD. If the home URL redirects — a sport with no live list right now, a
+        # wrong slug, a locale the account lacks — then `goto` lands somewhere else, the next tick sees the
+        # same drift, and this navigates the page every few minutes forever. To an operator that is a site
+        # that will not let them click anything and a refresh that never settles, with nothing in the log
+        # naming the cause. `_pin_url` already learned this lesson; this watchdog had not.
+        if getattr(self, "_drift_disabled", False):
+            return
         # MANUAL MODE OWNS THE URL. Every page the operator deliberately opens is, to this watchdog,
         # indistinguishable from drift — so left running it waits out its 180s and then yanks them back to
         # the trading sport mid-task. That is the single most disruptive automation there is for someone
@@ -1689,6 +1696,16 @@ class PinnacleBrowserSession:
             self.pause_activity()
             await self._page.goto(self._home_url, wait_until="domcontentloaded", timeout=45_000)
             self._last_main_refresh = time.time()
+            landed = (self._page.url or "").split("#")[0].split("?")[0].rstrip("/").lower()
+            if landed != home:
+                # The URL did not hold. Navigating again next tick would fight the redirect forever, so
+                # stand down permanently and say which URL is wrong — the operator can then fix
+                # PINNACLE_HOME_URL / PINNACLE_HOME_BOARD instead of wondering why the site is unusable.
+                self._drift_disabled = True
+                print(f"[PINNACLE SESSION] board-drift watchdog DISABLED: {self._home_url} redirects to "
+                      f"{landed[:70]}, so it can never be reached. Set PINNACLE_HOME_URL to a URL that "
+                      f"holds, or PINNACLE_HOME_BOARD=prematch. Leaving the board where it is.", flush=True)
+                return
             print(f"[PINNACLE SESSION] board had drifted to {cur[:70]} for "
                   f"{self._board_drift_sec:.0f}s - returned to the trading sport.")
         except Exception as ex:

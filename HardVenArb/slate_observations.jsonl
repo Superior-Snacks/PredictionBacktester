@@ -1367,3 +1367,448 @@
 {"t": "game", "at": "2026-08-21T23:23:47", "mid": "1634452283", "start": "2026-08-21T23:00:00", "lead_min": -24, "league": "Mexico - Liga MX Women", "sport": "Soccer", "paired": false}
 {"t": "game", "at": "2026-08-21T23:23:47", "mid": "1634440757", "start": "2026-08-21T21:30:00", "lead_min": -114, "league": "Paraguay - Division Profesional", "sport": "Soccer", "paired": false}
 {"t": "slate", "at": "2026-08-21T23:23:47", "n_games": 1117, "n_paired": 0, "n_new": 99, "live_by_hour": {"2026-08-21T23:00:00": 13, "2026-08-22T00:00:00": 14, "2026-08-22T01:00:00": 19, "2026-08-22T02:00:00": 14, "2026-08-22T03:00:00": 13, "2026-08-22T04:00:00": 15, "2026-08-22T05:00:00": 20, "2026-08-22T06:00:00": 28, "2026-08-22T07:00:00": 30, "2026-08-22T08:00:00": 46, "2026-08-22T09:00:00": 74, "2026-08-22T10:00:00": 67, "2026-08-22T11:00:00": 56, "2026-08-22T12:00:00": 87, "2026-08-22T13:00:00": 85, "2026-08-22T14:00:00": 174, "2026-08-22T15:00:00": 186, "2026-08-22T16:00:00": 72, "2026-08-22T17:00:00": 71, "2026-08-22T18:00:00": 52, "2026-08-22T19:00:00": 73, "2026-08-22T20:00:00": 67, "2026-08-22T21:00:00": 33, "2026-08-22T22:00:00": 27}, "live_by_hour_paired": {"2026-08-21T23:00:00": 0, "2026-08-22T00:00:00": 0, "2026-08-22T01:00:00": 0, "2026-08-22T02:00:00": 0, "2026-08-22T03:00:00": 0, "2026-08-22T04:00:00": 0, "2026-08-22T05:00:00": 0, "2026-08-22T06:00:00": 0, "2026-08-22T07:00:00": 0, "2026-08-22T08:00:00": 0, "2026-08-22T09:00:00": 0, "2026-08-22T10:00:00": 0, "2026-08-22T11:00:00": 0, "2026-08-22T12:00:00": 0, "2026-08-22T13:00:00": 0, "2026-08-22T14:00:00": 0, "2026-08-22T15:00:00": 0, "2026-08-22T16:00:00": 0, "2026-08-22T17:00:00": 0, "2026-08-22T18:00:00": 0, "2026-08-22T19:00:00": 0, "2026-08-22T20:00:00": 0, "2026-08-22T21:00:00": 0, "2026-08-22T22:00:00": 0}}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634094599", "start": "2026-08-22T13:00:00", "lead_min": -166, "league": "Brazil - Carioca U20", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634107481", "start": "2026-08-22T18:00:00", "lead_min": 134, "league": "Brazil - Carioca U20", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634112944", "start": "2026-08-22T18:00:00", "lead_min": 134, "league": "Brazil - Carioca U20", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634509725", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "England - Northern Premier League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634164778", "start": "2026-08-23T16:00:00", "lead_min": 1454, "league": "Portugal - Liga 3", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634147007", "start": "2026-08-23T10:00:00", "lead_min": 1094, "league": "Portugal - Liga 3", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634164787", "start": "2026-08-23T16:00:00", "lead_min": 1454, "league": "Portugal - Liga 3", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634165057", "start": "2026-08-23T16:30:00", "lead_min": 1484, "league": "Portugal - Liga 3", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634481782", "start": "2026-08-22T14:30:00", "lead_min": -76, "league": "Poland - 2nd Liga", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634121964", "start": "2026-08-22T22:00:00", "lead_min": 374, "league": "Brazil - Gaucho 2", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634112971", "start": "2026-08-22T20:00:00", "lead_min": 254, "league": "Brazil - Gaucho 2", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634094839", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "Latvia - 1st Liga", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634243901", "start": "2026-08-22T16:30:00", "lead_min": 44, "league": "Finland - Kolmonen", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634094684", "start": "2026-08-22T14:30:00", "lead_min": -76, "league": "North Macedonia - 2nd League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634580859", "start": "2026-08-22T14:30:00", "lead_min": -76, "league": "North Macedonia - 2nd League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634580863", "start": "2026-08-22T14:30:00", "lead_min": -76, "league": "North Macedonia - 2nd League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634097816", "start": "2026-08-22T14:30:00", "lead_min": -76, "league": "North Macedonia - 2nd League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634425769", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "Switzerland - 2. Liga Interregional", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634164139", "start": "2026-08-23T13:00:00", "lead_min": 1274, "league": "Sweden - Damallsvenskan", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634147055", "start": "2026-08-23T12:00:00", "lead_min": 1214, "league": "Sweden - Damallsvenskan", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634147498", "start": "2026-08-23T11:00:00", "lead_min": 1154, "league": "Sweden - Damallsvenskan", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634094606", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "Faroe Islands - 1. Deild", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634147504", "start": "2026-08-23T11:00:00", "lead_min": 1154, "league": "China - League One", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634147030", "start": "2026-08-23T11:00:00", "lead_min": 1154, "league": "China - League One", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634478197", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "Scotland - League Two", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634478198", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "Scotland - League Two", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634478193", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "Scotland - League Two", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634243790", "start": "2026-08-22T18:00:00", "lead_min": 134, "league": "Brazil - Paulista U20", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1632011705", "start": "2026-08-24T18:45:00", "lead_min": 3059, "league": "Italy - Serie A", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1632003658", "start": "2026-08-23T18:45:00", "lead_min": 1619, "league": "Italy - Serie A", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634165946", "start": "2026-08-23T16:30:00", "lead_min": 1484, "league": "Italy - Serie A Bookings", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1632011700", "start": "2026-08-23T18:45:00", "lead_min": 1619, "league": "Italy - Serie A", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1632011609", "start": "2026-08-23T16:30:00", "lead_min": 1484, "league": "Italy - Serie A", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634568143", "start": "2026-08-23T09:30:00", "lead_min": 1064, "league": "Denmark - Elitedivisionen Women", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634478233", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "Sweden - Division 1 Norra", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634530331", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "Northern Ireland - Conference Premier", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634243922", "start": "2026-08-23T14:00:00", "lead_min": 1334, "league": "Armenia - Premier League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634247253", "start": "2026-08-23T17:00:00", "lead_min": 1514, "league": "Armenia - Premier League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634572832", "start": "2026-08-22T15:00:00", "lead_min": -46, "league": "Austria - Regionalliga South", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634572824", "start": "2026-08-22T15:00:00", "lead_min": -46, "league": "Austria - Regionalliga South", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634535507", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "England - League 1", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634534761", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "England - League 1", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634534733", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "England - League 1", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634534003", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "England - League 1", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634533242", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "England - League 1", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634533249", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "England - League 1", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634534755", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "England - League 1", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634490453", "start": "2026-08-22T15:00:00", "lead_min": -46, "league": "Iceland - 1. Deild", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634269176", "start": "2026-08-25T19:15:00", "lead_min": 4529, "league": "Iceland - 1. Deild", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634112833", "start": "2026-08-22T16:00:00", "lead_min": 14, "league": "Portugal - U19 Championship", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634112920", "start": "2026-08-22T16:00:00", "lead_min": 14, "league": "Portugal - U19 Championship", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634112838", "start": "2026-08-22T16:00:00", "lead_min": 14, "league": "Portugal - U19 Championship", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634585197", "start": "2026-08-22T16:00:00", "lead_min": 14, "league": "Portugal - U19 Championship", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634112836", "start": "2026-08-22T16:00:00", "lead_min": 14, "league": "Portugal - U19 Championship", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634094836", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "Scotland - Highland League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634097775", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "Scotland - Highland League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634094831", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "Scotland - Highland League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634097771", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "Scotland - Highland League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634097770", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "Scotland - Highland League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634094832", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "Scotland - Highland League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634521733", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "Finland - Veikkausliiga", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634520537", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "Finland - Veikkausliiga", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634243829", "start": "2026-08-29T10:00:00", "lead_min": 9734, "league": "Portugal - Liga 2", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634112804", "start": "2026-08-23T16:30:00", "lead_min": 1484, "league": "Bosnia and Herzegovina - Premier Liga", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634482802", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "England - National League North", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634482809", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "England - National League North", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634482784", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "England - National League North", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634482785", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "England - National League North", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634482821", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "England - National League North", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634482815", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "England - National League North", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634482772", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "England - National League North", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634482839", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "England - National League North", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634482818", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "England - National League North", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634570826", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "England - Isthmian Division 1 North", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634146979", "start": "2026-08-23T07:00:00", "lead_min": 914, "league": "Korea Republic - K4 League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634147448", "start": "2026-08-23T08:00:00", "lead_min": 974, "league": "Korea Republic - K4 League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634481836", "start": "2026-08-22T14:30:00", "lead_min": -76, "league": "Azerbaijan - Premier League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634229301", "start": "2026-08-22T18:30:00", "lead_min": 164, "league": "Italy - Serie D Cup", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634525029", "start": "2026-08-22T14:30:00", "lead_min": -76, "league": "Netherlands - Eredivisie", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634502135", "start": "2026-08-22T15:30:00", "lead_min": -16, "league": "Austria - 2. Liga", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634515256", "start": "2026-08-22T15:15:00", "lead_min": -31, "league": "France - Ligue 1", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634101095", "start": "2026-08-22T18:45:00", "lead_min": 179, "league": "France - Ligue 1 Bookings", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634469375", "start": "2026-08-22T15:00:00", "lead_min": -46, "league": "Ukraine - Cup", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634530135", "start": "2026-08-22T16:00:00", "lead_min": 14, "league": "France - National 1", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634530341", "start": "2026-08-22T16:00:00", "lead_min": 14, "league": "France - National 1", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634530224", "start": "2026-08-22T16:00:00", "lead_min": 14, "league": "France - National 1", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634530130", "start": "2026-08-22T16:00:00", "lead_min": 14, "league": "France - National 1", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634530342", "start": "2026-08-22T17:00:00", "lead_min": 74, "league": "France - National 1", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634530143", "start": "2026-08-22T16:00:00", "lead_min": 14, "league": "France - National 1", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634530336", "start": "2026-08-22T18:00:00", "lead_min": 134, "league": "France - National 1", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634530133", "start": "2026-08-22T16:00:00", "lead_min": 14, "league": "France - National 1", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634530227", "start": "2026-08-22T16:00:00", "lead_min": 14, "league": "France - National 1", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634530132", "start": "2026-08-22T16:00:00", "lead_min": 14, "league": "France - National 1", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634530065", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "Sweden - Division 2", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634586019", "start": "2026-08-22T15:00:00", "lead_min": -46, "league": "Sweden - Division 2", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634215921", "start": "2026-08-22T19:00:00", "lead_min": 194, "league": "Costa Rica - Ascenso", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634496133", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "England - Premier League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634290731", "start": "2026-08-22T17:00:00", "lead_min": 74, "league": "Netherlands - Derde Divisie", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634223820", "start": "2026-08-22T16:00:00", "lead_min": 14, "league": "Netherlands - Derde Divisie", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634121843", "start": "2026-08-22T21:00:00", "lead_min": 314, "league": "Honduras - Liga Nacional", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634243540", "start": "2026-08-22T15:00:00", "lead_min": -46, "league": "Spain - Segunda Division Bookings", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634482863", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "England - National League South", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634482887", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "England - National League South", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634482877", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "England - National League South", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634482869", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "England - National League South", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634482881", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "England - National League South", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634482886", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "England - National League South", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634482843", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "England - National League South", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634107492", "start": "2026-08-22T19:00:00", "lead_min": 194, "league": "Brazil - Capixaba Serie B", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634107464", "start": "2026-08-22T16:15:00", "lead_min": 29, "league": "Saudi Arabia - Division 1", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634107479", "start": "2026-08-22T17:50:00", "lead_min": 124, "league": "Saudi Arabia - Division 1", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634107466", "start": "2026-08-22T16:20:00", "lead_min": 34, "league": "Saudi Arabia - Division 1", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634107460", "start": "2026-08-22T16:00:00", "lead_min": 14, "league": "Georgia - Erovnuli Liga 2", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634112835", "start": "2026-08-22T16:00:00", "lead_min": 14, "league": "Georgia - Erovnuli Liga 2", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634112851", "start": "2026-08-22T17:00:00", "lead_min": 74, "league": "Georgia - Erovnuli Liga 2", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634471629", "start": "2026-08-28T18:45:00", "lead_min": 8819, "league": "Ireland - Premier", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634514085", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "UAE - Pro League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634530845", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "UAE - Pro League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634215919", "start": "2026-08-23T16:00:00", "lead_min": 1454, "league": "Italy - Serie C Group C", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634290438", "start": "2026-08-22T19:00:00", "lead_min": 194, "league": "Italy - Serie C Group C", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634510376", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "Latvia - Virsliga", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634509662", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "Argentina - Primera Division Women", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634571163", "start": "2026-08-22T14:30:00", "lead_min": -76, "league": "Hungary - Cup", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634462520", "start": "2026-08-22T16:00:00", "lead_min": 14, "league": "Chile - Tercera Division A", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634422342", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "Austria - Regionalliga North", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634462510", "start": "2026-08-22T18:00:00", "lead_min": 134, "league": "Brazil - Catarinense U20", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634471632", "start": "2026-08-22T18:30:00", "lead_min": 164, "league": "Brazil - Copa Goias U20", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634462572", "start": "2026-08-22T18:30:00", "lead_min": 164, "league": "Brazil - Copa Goias U20", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634571181", "start": "2026-08-22T14:30:00", "lead_min": -76, "league": "North Macedonia - 1st League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634148664", "start": "2026-08-23T12:00:00", "lead_min": 1214, "league": "England - Premier League 2 U21", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634148648", "start": "2026-08-23T11:00:00", "lead_min": 1154, "league": "England - Premier League 2 U21", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634530352", "start": "2026-08-26T03:00:00", "lead_min": 4994, "league": "Portugal - Primeira Liga", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634524896", "start": "2026-08-22T14:30:00", "lead_min": -76, "league": "Portugal - Primeira Liga", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634570209", "start": "2026-08-29T10:00:00", "lead_min": 9734, "league": "Japan - J2 League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634570206", "start": "2026-08-29T10:00:00", "lead_min": 9734, "league": "Japan - J2 League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634570207", "start": "2026-08-29T10:00:00", "lead_min": 9734, "league": "Japan - J2 League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634570191", "start": "2026-08-29T09:30:00", "lead_min": 9704, "league": "Japan - J2 League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634530113", "start": "2026-08-22T16:00:00", "lead_min": 14, "league": "Serbia - U19 League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634107456", "start": "2026-08-22T18:30:00", "lead_min": 164, "league": "Serbia - U19 League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634581792", "start": "2026-08-22T15:00:00", "lead_min": -46, "league": "Serbia - U19 League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634583569", "start": "2026-08-22T15:30:00", "lead_min": -16, "league": "Croatia - 2. NL", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634112818", "start": "2026-08-22T15:30:00", "lead_min": -16, "league": "Croatia - 2. NL", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634583570", "start": "2026-08-22T15:30:00", "lead_min": -16, "league": "Croatia - 2. NL", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634585819", "start": "2026-08-22T15:30:00", "lead_min": -16, "league": "Croatia - 2. NL", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634608549", "start": "2026-08-22T15:30:00", "lead_min": -16, "league": "Croatia - 2. NL", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634107446", "start": "2026-08-22T15:30:00", "lead_min": -16, "league": "Croatia - 2. NL", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634112817", "start": "2026-08-22T15:30:00", "lead_min": -16, "league": "Croatia - 2. NL", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634097817", "start": "2026-08-22T15:00:00", "lead_min": -46, "league": "Poland - Ekstraliga Women", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634602169", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "Poland - Ekstraliga Women", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634498592", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "England - Championship", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634498560", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "England - Championship", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634497343", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "England - Championship", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634497361", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "England - Championship", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634497333", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "England - Championship", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634497633", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "England - Championship", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634497336", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "England - Championship", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634210957", "start": "2026-08-22T19:00:00", "lead_min": 194, "league": "Italy - Serie C Group B", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634473787", "start": "2026-08-28T18:00:00", "lead_min": 8774, "league": "France - Ligue 2", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634528898", "start": "2026-08-22T15:00:00", "lead_min": -46, "league": "Russia - Premier League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634580337", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "Ireland - U20 League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634580341", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "Ireland - U20 League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634121932", "start": "2026-08-23T05:00:00", "lead_min": 794, "league": "Australia - Victoria Premier League 1", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634215787", "start": "2026-08-23T05:15:00", "lead_min": 809, "league": "Australia - Victoria Premier League 1", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634279120", "start": "2026-08-22T17:00:00", "lead_min": 74, "league": "Montenegro - Druga Liga", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634107484", "start": "2026-08-23T15:30:00", "lead_min": 1424, "league": "Montenegro - Druga Liga", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634146978", "start": "2026-08-23T08:00:00", "lead_min": 974, "league": "Korea Republic - K3 League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634147447", "start": "2026-08-23T08:00:00", "lead_min": 974, "league": "Korea Republic - K3 League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634148620", "start": "2026-08-23T10:00:00", "lead_min": 1094, "league": "Korea Republic - K3 League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634440458", "start": "2026-08-28T11:35:00", "lead_min": 8389, "league": "China - Super League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634568154", "start": "2026-08-29T11:00:00", "lead_min": 9794, "league": "China - Super League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634568153", "start": "2026-08-29T11:00:00", "lead_min": 9794, "league": "China - Super League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634570822", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "UAE - Reserve League U23", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634570823", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "UAE - Reserve League U23", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634478236", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "Sweden - Division 1 Sodra", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634478228", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "Sweden - Division 1 Sodra", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634478235", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "Sweden - Division 1 Sodra", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634530112", "start": "2026-08-22T16:00:00", "lead_min": 14, "league": "Italy - Serie A Cup Women", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634112962", "start": "2026-08-22T19:00:00", "lead_min": 194, "league": "Brazil - Brasileiro Women A2", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634243762", "start": "2026-08-22T18:00:00", "lead_min": 134, "league": "Croatia - U19 League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634223819", "start": "2026-08-22T15:00:00", "lead_min": -46, "league": "Bosnia and Herzegovina - 1st League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634422340", "start": "2026-08-22T16:00:00", "lead_min": 14, "league": "Bosnia and Herzegovina - 1st League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634581800", "start": "2026-08-22T15:00:00", "lead_min": -46, "league": "Bosnia and Herzegovina - 1st League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634581793", "start": "2026-08-22T15:00:00", "lead_min": -46, "league": "Bosnia and Herzegovina - 1st League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634568289", "start": "2026-08-22T18:00:00", "lead_min": 134, "league": "Brazil - Alagoano U20", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634148580", "start": "2026-08-23T08:00:00", "lead_min": 974, "league": "Hong Kong - Premier League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634147021", "start": "2026-08-23T10:30:00", "lead_min": 1124, "league": "Hong Kong - Premier League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634601817", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "Egypt - Premier League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634172478", "start": "2026-08-23T17:00:00", "lead_min": 1514, "league": "Egypt - Premier League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634571170", "start": "2026-08-22T14:25:00", "lead_min": -81, "league": "Israel - U19 Elite Division", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634444785", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "Israel - U19 Elite Division", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634570254", "start": "2026-08-22T14:15:00", "lead_min": -91, "league": "Israel - U19 Elite Division", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634570832", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "Israel - U19 Elite Division", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634573129", "start": "2026-08-22T15:30:00", "lead_min": -16, "league": "Israel - U19 Elite Division", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634575798", "start": "2026-08-22T15:30:00", "lead_min": -16, "league": "Croatia - Prva NL", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634575799", "start": "2026-08-22T15:30:00", "lead_min": -16, "league": "Croatia - Prva NL", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634381025", "start": "2026-08-23T01:00:00", "lead_min": 554, "league": "USA - Major League Soccer Bookings", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634384165", "start": "2026-08-23T02:30:00", "lead_min": 644, "league": "USA - Major League Soccer Bookings", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634384164", "start": "2026-08-23T02:30:00", "lead_min": 644, "league": "USA - Major League Soccer Bookings", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634383417", "start": "2026-08-23T01:30:00", "lead_min": 584, "league": "USA - Major League Soccer Bookings", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634383409", "start": "2026-08-23T00:30:00", "lead_min": 524, "league": "USA - Major League Soccer Bookings", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634378620", "start": "2026-08-23T00:30:00", "lead_min": 524, "league": "USA - Major League Soccer Bookings", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634384012", "start": "2026-08-23T02:30:00", "lead_min": 644, "league": "USA - Major League Soccer Bookings", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634377860", "start": "2026-08-22T23:30:00", "lead_min": 464, "league": "USA - Major League Soccer Bookings", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634380990", "start": "2026-08-22T23:30:00", "lead_min": 464, "league": "USA - Major League Soccer Bookings", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634568300", "start": "2026-08-22T15:00:00", "lead_min": -46, "league": "Mexico - U21 League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634473780", "start": "2026-08-22T17:30:00", "lead_min": 104, "league": "Mexico - U19 League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634568173", "start": "2026-08-22T15:00:00", "lead_min": -46, "league": "Mexico - U21 League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634462553", "start": "2026-08-22T17:30:00", "lead_min": 104, "league": "Mexico - U19 League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634471606", "start": "2026-08-22T17:30:00", "lead_min": 104, "league": "Mexico - U19 League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634535511", "start": "2026-08-22T15:00:00", "lead_min": -46, "league": "Austria - Bundesliga", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634481786", "start": "2026-08-22T14:30:00", "lead_min": -76, "league": "Slovakia - 2. Liga", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634481827", "start": "2026-08-22T14:30:00", "lead_min": -76, "league": "Slovakia - 2. Liga", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634481794", "start": "2026-08-22T14:30:00", "lead_min": -76, "league": "Slovakia - 2. Liga", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634481808", "start": "2026-08-22T14:30:00", "lead_min": -76, "league": "Slovakia - 2. Liga", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634481807", "start": "2026-08-22T14:30:00", "lead_min": -76, "league": "Slovakia - 2. Liga", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634112849", "start": "2026-08-22T17:00:00", "lead_min": 74, "league": "Moldova - Divizia Nationala", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634146996", "start": "2026-08-23T09:00:00", "lead_min": 1034, "league": "Japan - Women Empowerment League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634148596", "start": "2026-08-23T09:00:00", "lead_min": 1034, "league": "Japan - Women Empowerment League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634147465", "start": "2026-08-23T09:00:00", "lead_min": 1034, "league": "Japan - Women Empowerment League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634570253", "start": "2026-08-22T17:15:00", "lead_min": 89, "league": "Finland - U21 League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634172709", "start": "2026-08-22T18:00:00", "lead_min": 134, "league": "Argentina - Torneo Federal A", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634210947", "start": "2026-08-25T10:30:00", "lead_min": 4004, "league": "Korea Republic - K League 1", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634210946", "start": "2026-08-25T10:30:00", "lead_min": 4004, "league": "Korea Republic - K League 1", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634215733", "start": "2026-08-25T10:30:00", "lead_min": 4004, "league": "Korea Republic - K League 1", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634147525", "start": "2026-08-23T12:00:00", "lead_min": 1214, "league": "Germany - Regionalliga North", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634328787", "start": "2026-08-23T05:00:00", "lead_min": 794, "league": "Australia - NPL Northern NSW", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634328786", "start": "2026-08-23T03:00:00", "lead_min": 674, "league": "Australia - NPL Northern NSW", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634197141", "start": "2026-08-22T18:00:00", "lead_min": 134, "league": "Brazil - Copa Paulista", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634195404", "start": "2026-08-22T18:00:00", "lead_min": 134, "league": "Brazil - Copa Paulista", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634210893", "start": "2026-08-22T18:00:00", "lead_min": 134, "league": "Brazil - Copa Paulista", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634229389", "start": "2026-08-22T18:00:00", "lead_min": 134, "league": "Brazil - Copa Paulista", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634290421", "start": "2026-08-22T18:00:00", "lead_min": 134, "league": "Brazil - Copa Paulista", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634195407", "start": "2026-08-22T18:00:00", "lead_min": 134, "league": "Brazil - Copa Paulista", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634210890", "start": "2026-08-22T18:00:00", "lead_min": 134, "league": "Brazil - Copa Paulista", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634197140", "start": "2026-08-22T18:00:00", "lead_min": 134, "league": "Brazil - Copa Paulista", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634580334", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "Albania - Superliga", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634580335", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "Albania - Superliga", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634440440", "start": "2026-08-28T10:30:00", "lead_min": 8324, "league": "Korea Republic - K League 2", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634568265", "start": "2026-08-29T10:30:00", "lead_min": 9764, "league": "Korea Republic - K League 2", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634478137", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "Scotland - League One", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634478135", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "Scotland - League One", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634478134", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "Scotland - League One", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634356262", "start": "2026-08-23T21:30:00", "lead_min": 1784, "league": "Brazil - Serie A Bookings", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634349553", "start": "2026-08-23T19:00:00", "lead_min": 1634, "league": "Brazil - Serie A Bookings", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634356415", "start": "2026-08-23T21:30:00", "lead_min": 1784, "league": "Brazil - Serie A Bookings", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634266979", "start": "2026-08-22T19:00:00", "lead_min": 194, "league": "Brazil - Serie A Bookings", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634513748", "start": "2026-08-22T14:30:00", "lead_min": -76, "league": "Netherlands - Eredivisie Women", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634513701", "start": "2026-08-22T14:30:00", "lead_min": -76, "league": "Netherlands - Eredivisie Women", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634229327", "start": "2026-08-25T09:30:00", "lead_min": 3944, "league": "Australia - Cup", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634229322", "start": "2026-08-22T16:00:00", "lead_min": 14, "league": "Club Friendlies", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634530232", "start": "2026-08-22T17:00:00", "lead_min": 74, "league": "Club Friendlies", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634282800", "start": "2026-08-22T16:30:00", "lead_min": 44, "league": "Club Friendlies", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634218950", "start": "2026-08-22T16:00:00", "lead_min": 14, "league": "Club Friendlies", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634223441", "start": "2026-08-22T17:00:00", "lead_min": 74, "league": "Club Friendlies", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634223813", "start": "2026-08-22T16:00:00", "lead_min": 14, "league": "Club Friendlies", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634530111", "start": "2026-08-22T18:00:00", "lead_min": 134, "league": "Club Friendlies", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634530345", "start": "2026-08-22T17:30:00", "lead_min": 104, "league": "Club Friendlies", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634278415", "start": "2026-08-22T18:00:00", "lead_min": 134, "league": "Club Friendlies", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634243889", "start": "2026-08-22T18:00:00", "lead_min": 134, "league": "Club Friendlies", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634282814", "start": "2026-08-22T16:00:00", "lead_min": 14, "league": "Club Friendlies", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634290734", "start": "2026-08-22T17:30:00", "lead_min": 104, "league": "Club Friendlies", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634530313", "start": "2026-08-22T18:00:00", "lead_min": 134, "league": "Club Friendlies", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634218951", "start": "2026-08-22T16:00:00", "lead_min": 14, "league": "Club Friendlies", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634440405", "start": "2026-08-22T16:30:00", "lead_min": 44, "league": "Club Friendlies", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634164210", "start": "2026-08-23T16:15:00", "lead_min": 1469, "league": "Faroe Islands - Premier League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634164150", "start": "2026-08-23T14:00:00", "lead_min": 1334, "league": "Faroe Islands - Premier League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634164994", "start": "2026-08-23T14:00:00", "lead_min": 1334, "league": "Faroe Islands - Premier League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634243758", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "Northern Ireland - Championship", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634229345", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "Northern Ireland - Championship", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634243884", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "Northern Ireland - Championship", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634279121", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "Northern Ireland - Championship", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634243885", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "Northern Ireland - Championship", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634502064", "start": "2026-08-22T15:30:00", "lead_min": -16, "league": "Hungary - NB 1", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634121884", "start": "2026-08-22T23:30:00", "lead_min": 464, "league": "Bolivia - Primera Division", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634097814", "start": "2026-08-22T15:00:00", "lead_min": -46, "league": "Poland - 3rd Liga", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634568282", "start": "2026-08-22T16:00:00", "lead_min": 14, "league": "Poland - 3rd Liga", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634572988", "start": "2026-08-22T15:00:00", "lead_min": -46, "league": "Poland - 3rd Liga", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634112802", "start": "2026-08-22T15:00:00", "lead_min": -46, "league": "Poland - 3rd Liga", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634572975", "start": "2026-08-22T15:00:00", "lead_min": -46, "league": "Poland - 3rd Liga", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634112862", "start": "2026-08-22T18:00:00", "lead_min": 134, "league": "Poland - 3rd Liga", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634112921", "start": "2026-08-22T16:00:00", "lead_min": 14, "league": "Poland - 3rd Liga", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634572976", "start": "2026-08-22T15:00:00", "lead_min": -46, "league": "Poland - 3rd Liga", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634094685", "start": "2026-08-22T15:00:00", "lead_min": -46, "league": "Poland - 3rd Liga", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634530242", "start": "2026-08-22T19:00:00", "lead_min": 194, "league": "Bolivia - Copa Simon Bolivar", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634440473", "start": "2026-08-22T15:00:00", "lead_min": -46, "league": "Bolivia - Copa Simon Bolivar", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634440472", "start": "2026-08-22T19:00:00", "lead_min": 194, "league": "Bolivia - Copa Simon Bolivar", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634568213", "start": "2026-08-22T19:00:00", "lead_min": 194, "league": "Bolivia - Copa Simon Bolivar", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634549411", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "Iceland - 1. Deild Women", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634546710", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "Iceland - 1. Deild Women", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634328745", "start": "2026-08-22T18:00:00", "lead_min": 134, "league": "El Salvador - Reserve League U20", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634094611", "start": "2026-08-22T17:00:00", "lead_min": 74, "league": "COSAFA - Champions League Women", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634530114", "start": "2026-08-22T16:00:00", "lead_min": 14, "league": "Switzerland - 1. Liga Classic", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634530208", "start": "2026-08-22T16:00:00", "lead_min": 14, "league": "Switzerland - 1. Liga Classic", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634580867", "start": "2026-08-22T14:30:00", "lead_min": -76, "league": "Kosovo - Superliga", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634279108", "start": "2026-08-22T19:00:00", "lead_min": 194, "league": "El Salvador - Reserve League U20", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634218956", "start": "2026-08-23T13:00:00", "lead_min": 1274, "league": "South Africa - 8 Cup", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634112964", "start": "2026-08-22T19:00:00", "lead_min": 194, "league": "Brazil - Goiano 2", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634195421", "start": "2026-08-22T19:00:00", "lead_min": 194, "league": "Brazil - Goiano 2", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634516240", "start": "2026-08-22T15:00:00", "lead_min": -46, "league": "Czech Republic - 3. Liga", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634513190", "start": "2026-08-22T14:30:00", "lead_min": -76, "league": "Czech Republic - 3. Liga", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634146987", "start": "2026-08-23T08:15:00", "lead_min": 989, "league": "Czech Republic - 3. Liga", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634147461", "start": "2026-08-23T08:30:00", "lead_min": 1004, "league": "Czech Republic - 3. Liga", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634148587", "start": "2026-08-23T08:15:00", "lead_min": 989, "league": "Czech Republic - 3. Liga", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634147453", "start": "2026-08-23T08:15:00", "lead_min": 989, "league": "Czech Republic - 3. Liga", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634513194", "start": "2026-08-22T14:30:00", "lead_min": -76, "league": "Czech Republic - 3. Liga", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634146988", "start": "2026-08-23T08:15:00", "lead_min": 989, "league": "Czech Republic - 3. Liga", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634148588", "start": "2026-08-23T08:15:00", "lead_min": 989, "league": "Czech Republic - 3. Liga", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634148586", "start": "2026-08-23T08:15:00", "lead_min": 989, "league": "Czech Republic - 3. Liga", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634229348", "start": "2026-08-22T21:00:00", "lead_min": 314, "league": "Guatemala - Primera Division de Ascenso", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634243963", "start": "2026-08-22T18:00:00", "lead_min": 134, "league": "Argentina - Primera C Metropolitana", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634247246", "start": "2026-08-22T18:00:00", "lead_min": 134, "league": "Argentina - Primera C Metropolitana", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634273348", "start": "2026-08-22T18:00:00", "lead_min": 134, "league": "Argentina - Primera C Metropolitana", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634112883", "start": "2026-08-22T18:00:00", "lead_min": 134, "league": "Argentina - Primera C Metropolitana", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634267952", "start": "2026-08-22T18:00:00", "lead_min": 134, "league": "Argentina - Primera C Metropolitana", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634273349", "start": "2026-08-22T18:00:00", "lead_min": 134, "league": "Argentina - Primera C Metropolitana", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634215745", "start": "2026-08-22T18:00:00", "lead_min": 134, "league": "Argentina - Primera C Metropolitana", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634094679", "start": "2026-08-22T15:00:00", "lead_min": -46, "league": "Slovenia - 3. SNL", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634107443", "start": "2026-08-22T15:30:00", "lead_min": -16, "league": "Slovenia - 3. SNL", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634112850", "start": "2026-08-22T17:00:00", "lead_min": 74, "league": "Slovenia - 3. SNL", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634097811", "start": "2026-08-22T15:00:00", "lead_min": -46, "league": "Slovenia - 3. SNL", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634148665", "start": "2026-08-23T12:00:00", "lead_min": 1214, "league": "England - Professional Development League U21", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634462513", "start": "2026-08-22T19:00:00", "lead_min": 194, "league": "Paraguay - Women League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634229347", "start": "2026-08-22T18:00:00", "lead_min": 134, "league": "Brazil - Mineiro U20", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634341852", "start": "2026-08-23T09:00:00", "lead_min": 1034, "league": "Italy - Primavera U20", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634124554", "start": "2026-08-23T00:00:00", "lead_min": 494, "league": "Mexico - Liga MX Women", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634121903", "start": "2026-08-23T01:06:00", "lead_min": 560, "league": "Mexico - Liga MX Women", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634121991", "start": "2026-08-22T23:00:00", "lead_min": 434, "league": "Nicaragua - Primera Division", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634215769", "start": "2026-08-23T01:00:00", "lead_min": 554, "league": "Nicaragua - Primera Division", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634576484", "start": "2026-08-22T15:00:00", "lead_min": -46, "league": "Slovenia - 2. SNL", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634572991", "start": "2026-08-22T15:00:00", "lead_min": -46, "league": "Slovenia - 2. SNL", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634572984", "start": "2026-08-22T15:00:00", "lead_min": -46, "league": "Slovenia - 2. SNL", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634549966", "start": "2026-08-22T15:30:00", "lead_min": -16, "league": "Romania - Liga 1", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634530184", "start": "2026-08-22T16:30:00", "lead_min": 44, "league": "Finland - Kansallinen Women", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634581796", "start": "2026-08-22T15:00:00", "lead_min": -46, "league": "Poland - 4th Liga", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634581799", "start": "2026-08-22T15:00:00", "lead_min": -46, "league": "Poland - 4th Liga", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634541131", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "England - League 2", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634540305", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "England - League 2", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634541023", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "England - League 2", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634540301", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "England - League 2", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634542535", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "England - League 2", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634541887", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "England - League 2", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634541776", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "England - League 2", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634182964", "start": "2026-08-23T17:00:00", "lead_min": 1514, "league": "Belarus - Premier League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634122031", "start": "2026-08-22T16:00:00", "lead_min": 14, "league": "Portugal - Campeonato de Portugal Prio", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634112923", "start": "2026-08-22T16:00:00", "lead_min": 14, "league": "Portugal - Campeonato de Portugal Prio", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634148595", "start": "2026-08-23T09:00:00", "lead_min": 1034, "league": "Japan - J3 League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634530115", "start": "2026-08-22T16:00:00", "lead_min": 14, "league": "Bolivia - Liga Nacional U19", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634425830", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "Bolivia - Liga Nacional U19", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634530209", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "Bolivia - Liga Nacional U19", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634147521", "start": "2026-08-23T12:00:00", "lead_min": 1214, "league": "Netherlands - Tweede Divisie", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634031263", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "Norway - Cup", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634031388", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "Norway - Cup", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634014745", "start": "2026-08-22T16:00:00", "lead_min": 14, "league": "Norway - Cup", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634014737", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "Norway - Cup", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634031389", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "Norway - Cup", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634471577", "start": "2026-08-22T15:30:00", "lead_min": -16, "league": "Bolivia - Primera Division Women", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634440475", "start": "2026-08-22T15:00:00", "lead_min": -46, "league": "Chile - Primera Division Women", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634542639", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "Uruguay - Primera Division", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634091380", "start": "2026-08-22T15:00:00", "lead_min": -46, "league": "Spain - La Liga Bookings", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634096806", "start": "2026-08-22T17:30:00", "lead_min": 104, "league": "Spain - La Liga Bookings", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634581988", "start": "2026-08-29T12:45:00", "lead_min": 9899, "league": "France - Ligue 3", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634581989", "start": "2026-08-29T12:45:00", "lead_min": 9899, "league": "France - Ligue 3", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634568191", "start": "2026-08-29T12:45:00", "lead_min": 9899, "league": "France - Ligue 3", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634568192", "start": "2026-08-29T12:45:00", "lead_min": 9899, "league": "France - Ligue 3", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634107485", "start": "2026-08-22T18:00:00", "lead_min": 134, "league": "Belgium - 2nd Amateur Division", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634112857", "start": "2026-08-22T17:30:00", "lead_min": 104, "league": "Belgium - 2nd Amateur Division", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634112866", "start": "2026-08-22T18:00:00", "lead_min": 134, "league": "Belgium - 2nd Amateur Division", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634097765", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "Austria - Landesliga", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634573120", "start": "2026-08-22T15:30:00", "lead_min": -16, "league": "Austria - Landesliga", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634031305", "start": "2026-08-29T01:00:00", "lead_min": 9194, "league": "Mexico - Liga MX", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634147052", "start": "2026-08-23T12:00:00", "lead_min": 1214, "league": "Germany - Regionalliga West", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634388847", "start": "2026-08-23T12:00:00", "lead_min": 1214, "league": "Germany - Regionalliga West", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634471585", "start": "2026-08-22T18:00:00", "lead_min": 134, "league": "Brazil - Copa Pernambuco U20", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634112871", "start": "2026-08-22T18:30:00", "lead_min": 164, "league": "Brazil - Paranaense 3", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634491601", "start": "2026-08-22T14:15:00", "lead_min": -91, "league": "Qatar - Stars League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634568238", "start": "2026-08-29T09:30:00", "lead_min": 9704, "league": "Japan - J League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634568244", "start": "2026-08-29T10:00:00", "lead_min": 9734, "league": "Japan - J League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634570204", "start": "2026-08-29T10:00:00", "lead_min": 9734, "league": "Japan - J League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634568245", "start": "2026-08-29T10:00:00", "lead_min": 9734, "league": "Japan - J League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634568243", "start": "2026-08-29T10:00:00", "lead_min": 9734, "league": "Japan - J League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634568229", "start": "2026-08-29T09:00:00", "lead_min": 9674, "league": "Japan - J League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634568121", "start": "2026-08-29T09:30:00", "lead_min": 9704, "league": "Japan - J League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634570203", "start": "2026-08-29T10:00:00", "lead_min": 9734, "league": "Japan - J League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634243796", "start": "2026-08-23T15:30:00", "lead_min": 1424, "league": "Tunisia - League 1", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634575793", "start": "2026-08-22T15:30:00", "lead_min": -16, "league": "Tunisia - League 1", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634516457", "start": "2026-08-22T15:30:00", "lead_min": -16, "league": "Tunisia - League 1", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634164976", "start": "2026-08-23T13:00:00", "lead_min": 1274, "league": "Switzerland - Promotion League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634495949", "start": "2026-08-22T15:00:00", "lead_min": -46, "league": "Switzerland - Promotion League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634573047", "start": "2026-08-22T15:00:00", "lead_min": -46, "league": "Georgia - Erovnuli Liga", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634282786", "start": "2026-08-22T17:00:00", "lead_min": 74, "league": "Georgia - Erovnuli Liga", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634572938", "start": "2026-08-22T15:00:00", "lead_min": -46, "league": "Georgia - Erovnuli Liga", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634572828", "start": "2026-08-22T15:00:00", "lead_min": -46, "league": "Bulgaria - Second League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634112934", "start": "2026-08-22T17:00:00", "lead_min": 74, "league": "Austria - Regionalliga Ost", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634112916", "start": "2026-08-22T16:00:00", "lead_min": 14, "league": "Austria - Regionalliga Ost", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634091445", "start": "2026-08-29T12:00:00", "lead_min": 9854, "league": "Germany - 3. Liga", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1633921464", "start": "2026-08-27T18:45:00", "lead_min": 7379, "league": "England - National League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1633981518", "start": "2026-08-28T18:45:00", "lead_min": 8819, "league": "England - National League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1633981517", "start": "2026-08-28T18:45:00", "lead_min": 8819, "league": "England - National League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634014681", "start": "2026-08-28T18:45:00", "lead_min": 8819, "league": "England - National League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634014683", "start": "2026-08-28T18:45:00", "lead_min": 8819, "league": "England - National League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1633981520", "start": "2026-08-28T18:45:00", "lead_min": 8819, "league": "England - National League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634530288", "start": "2026-08-29T01:00:00", "lead_min": 9194, "league": "Mexico - Liga de Expansi\u00f3n MX", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634462525", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "Panama - Liga Prom", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634488934", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "Scotland - Championship", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634444713", "start": "2026-08-22T14:30:00", "lead_min": -76, "league": "Slovakia - 3. Liga", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634373206", "start": "2026-08-22T14:30:00", "lead_min": -76, "league": "Slovakia - 3. Liga", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634365616", "start": "2026-08-22T14:30:00", "lead_min": -76, "league": "Slovakia - 3. Liga", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634373205", "start": "2026-08-22T16:30:00", "lead_min": 44, "league": "Slovakia - 3. Liga", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634094862", "start": "2026-08-22T14:30:00", "lead_min": -76, "league": "Slovakia - 3. Liga", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634094866", "start": "2026-08-22T14:30:00", "lead_min": -76, "league": "Slovakia - 3. Liga", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634545656", "start": "2026-08-22T15:30:00", "lead_min": -16, "league": "Poland - Ekstraklasa", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634570819", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "England - FA Cup Qualification", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634570863", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "England - FA Cup Qualification", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634570820", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "England - FA Cup Qualification", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634570859", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "England - FA Cup Qualification", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634462573", "start": "2026-08-22T18:00:00", "lead_min": 134, "league": "Iraq - Stars League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634473797", "start": "2026-08-22T15:30:00", "lead_min": -16, "league": "Iraq - Stars League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634473820", "start": "2026-08-22T15:00:00", "lead_min": -46, "league": "Hungary - NB 1 Women", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634172648", "start": "2026-08-22T20:15:00", "lead_min": 269, "league": "Peru - Liga 2", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634571180", "start": "2026-08-22T14:30:00", "lead_min": -76, "league": "Czech Republic - 4. Liga", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634572829", "start": "2026-08-22T15:00:00", "lead_min": -46, "league": "Czech Republic - 4. Liga", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634107449", "start": "2026-08-22T16:00:00", "lead_min": 14, "league": "Czech Republic - 4. Liga", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634572831", "start": "2026-08-22T15:00:00", "lead_min": -46, "league": "Czech Republic - 4. Liga", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634580437", "start": "2026-08-22T15:00:00", "lead_min": -46, "league": "Czech Republic - 4. Liga", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634243759", "start": "2026-08-22T14:30:00", "lead_min": -76, "league": "Czech Republic - 4. Liga", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634223453", "start": "2026-08-22T15:00:00", "lead_min": -46, "league": "Czech Republic - 4. Liga", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634572840", "start": "2026-08-22T15:00:00", "lead_min": -46, "league": "Czech Republic - 4. Liga", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634571183", "start": "2026-08-22T14:30:00", "lead_min": -76, "league": "Czech Republic - 4. Liga", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634572830", "start": "2026-08-22T15:00:00", "lead_min": -46, "league": "Czech Republic - 4. Liga", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634243761", "start": "2026-08-22T14:30:00", "lead_min": -76, "league": "Czech Republic - 4. Liga", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634243887", "start": "2026-08-22T14:30:00", "lead_min": -76, "league": "Czech Republic - 4. Liga", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634574163", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "Estonia - Meistriliiga", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634161684", "start": "2026-08-23T13:00:00", "lead_min": 1274, "league": "England - Premier League Bookings", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634496581", "start": "2026-08-22T14:00:00", "lead_min": -106, "league": "England - Premier League", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634146977", "start": "2026-08-23T11:30:00", "lead_min": 1184, "league": "China - League Two", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634147445", "start": "2026-08-23T11:30:00", "lead_min": 1184, "league": "China - League Two", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634147443", "start": "2026-08-23T11:30:00", "lead_min": 1184, "league": "China - League Two", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634146976", "start": "2026-08-23T11:30:00", "lead_min": 1184, "league": "China - League Two", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634147444", "start": "2026-08-23T11:30:00", "lead_min": 1184, "league": "China - League Two", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634243822", "start": "2026-08-22T22:00:00", "lead_min": 374, "league": "Ecuador - Primera Women", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634548227", "start": "2026-08-22T15:00:00", "lead_min": -46, "league": "Czech Republic - First Liga", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634548160", "start": "2026-08-22T15:00:00", "lead_min": -46, "league": "Czech Republic - First Liga", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634548161", "start": "2026-08-22T15:00:00", "lead_min": -46, "league": "Czech Republic - First Liga", "sport": "Soccer", "paired": false}
+{"t": "game", "at": "2026-08-22T15:46:03", "mid": "1634502143", "start": "2026-08-22T15:30:00", "lead_min": -16, "league": "Slovenia - Prva Liga", "sport": "Soccer", "paired": false}
+{"t": "slate", "at": "2026-08-22T15:46:03", "n_games": 1071, "n_paired": 194, "n_new": 444, "live_by_hour": {"2026-08-22T15:00:00": 222, "2026-08-22T16:00:00": 167, "2026-08-22T17:00:00": 140, "2026-08-22T18:00:00": 112, "2026-08-22T19:00:00": 130, "2026-08-22T20:00:00": 84, "2026-08-22T21:00:00": 37, "2026-08-22T22:00:00": 31, "2026-08-22T23:00:00": 24, "2026-08-23T00:00:00": 40, "2026-08-23T01:00:00": 37, "2026-08-23T02:00:00": 22, "2026-08-23T03:00:00": 14, "2026-08-23T04:00:00": 7, "2026-08-23T05:00:00": 5, "2026-08-23T06:00:00": 7, "2026-08-23T07:00:00": 2, "2026-08-23T08:00:00": 5, "2026-08-23T09:00:00": 19, "2026-08-23T10:00:00": 15, "2026-08-23T11:00:00": 31, "2026-08-23T12:00:00": 45, "2026-08-23T13:00:00": 38, "2026-08-23T14:00:00": 34}, "live_by_hour_paired": {"2026-08-22T15:00:00": 0, "2026-08-22T16:00:00": 4, "2026-08-22T17:00:00": 11, "2026-08-22T18:00:00": 10, "2026-08-22T19:00:00": 18, "2026-08-22T20:00:00": 20, "2026-08-22T21:00:00": 12, "2026-08-22T22:00:00": 11, "2026-08-22T23:00:00": 10, "2026-08-23T00:00:00": 13, "2026-08-23T01:00:00": 11, "2026-08-23T02:00:00": 4, "2026-08-23T03:00:00": 3, "2026-08-23T04:00:00": 2, "2026-08-23T05:00:00": 0, "2026-08-23T06:00:00": 0, "2026-08-23T07:00:00": 0, "2026-08-23T08:00:00": 0, "2026-08-23T09:00:00": 0, "2026-08-23T10:00:00": 0, "2026-08-23T11:00:00": 4, "2026-08-23T12:00:00": 7, "2026-08-23T13:00:00": 6, "2026-08-23T14:00:00": 9}}
