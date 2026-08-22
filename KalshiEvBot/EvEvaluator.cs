@@ -30,6 +30,25 @@ public sealed class EvConfig
     /// A screening-only quote carries a FRESH timestamp but a DELAYED price, so the age gate cannot see it.
     /// Set 0 to log such rows as signals anyway (observation only — they are still logged either way).</summary>
     public bool RequireWsVerified = Env("EV_REQUIRE_WS_VERIFIED", 1) != 0;
+    /// <summary>Largest believable gap between our P_true and Kalshi's own price. Beyond this the row is
+    /// logged as IMPLAUSIBLE rather than as a signal: every such case so far has been a pairing fault, and
+    /// the measured taker edge distribution puts almost nothing past 3.5c, let alone 20c.</summary>
+    public double MaxDisagree     = Env("EV_MAX_DISAGREE", 0.15);
+    /// <summary>Only count a row as a signal while the match is actually being PLAYED.
+    ///
+    /// <para>Measured 2026-08-21/22: all 6 genuine signals were in-play; all 44 phantoms and the one bad
+    /// SIGNAL were pre-match. That is not coincidence — a fixture days out carries a wide, unformed
+    /// Pinnacle line (vig ~9% against ~4% at kickoff), a thin Kalshi book, and no pressure on either side
+    /// to be right yet, so a disagreement means far less. It is also where a mispair survives longest,
+    /// because nothing is moving to contradict it.</para>
+    ///
+    /// <para>It also protects the strategy's premise: the case for this bot is fast capital rollover, and
+    /// a bet on Sunday's match ties up the stake until Sunday.</para>
+    ///
+    /// <para>Pre-match rows are still WRITTEN and still snapshotted — that is where the calibration volume
+    /// is (336 fixtures against a handful live), and whether Pinnacle is predictive pre-match is a
+    /// question worth answering rather than assuming. They just do not count as things to trade.</para></summary>
+    public bool RequireInPlay     = Env("EV_REQUIRE_IN_PLAY", 1) != 0;
 
     public static double Env(string k, double dflt)
         => double.TryParse(Environment.GetEnvironmentVariable(k), NumberStyles.Any,
@@ -42,7 +61,7 @@ public sealed class EvStats
 {
     public long Screened, NoQuote, StaleOracle, Suspended, BelowPrescreen, Cooldown,
                 RestCalls, RestFailed, Signals, RejectedByRest, FlooredToZero, RateLimited,
-                IncompleteBook, ScreeningOnly;
+                IncompleteBook, ScreeningOnly, Implausible, PreMatch;
 }
 
 /// <summary>
@@ -335,9 +354,30 @@ public sealed class EvEvaluator
         //
         // The row is still WRITTEN — M0 exists to observe, and comparing the calibration of verified against
         // unverified rows is exactly how M1 measures what this costs. It just does not count as a signal.
+        // ── THE IMPLAUSIBILITY BAND ───────────────────────────────────────────────────────────────────
+        // A sharp book and a liquid prediction market do not disagree by twenty points about a football
+        // match. When they appear to, the cause has been a data fault every single time: swapped team legs,
+        // a wrong-game match, a stale price. Never once an edge.
+        //
+        // The measured taker EV distribution is the argument. Median −2.09c; only 0.9% of windows exceed
+        // 3.5c. A 20c edge is not the tail of that distribution, it is a different distribution — and the
+        // pairing's own price gate cannot be relied on to catch it, because its tolerance (0.25) was set to
+        // reject GROSS mispairs and a 0.23 disagreement passes while still being worth 18c of phantom EV.
+        //
+        // Checked HERE rather than at pairing time because this uses the CURRENT prices on both sides: a
+        // pair that validated cleanly at 03:00 can still be reading a frozen price at 19:00.
+        //
+        // The row is still WRITTEN, with its own decision. M0 exists to observe, and if these ever do settle
+        // in our favour that is something M1 must be able to see rather than something we quietly deleted.
+        double disagree = Math.Abs(c.PTrueUsed - px);
+        bool implausible = disagree > _cfg.MaxDisagree;
+        if (implausible && clears) Interlocked.Increment(ref Stats.Implausible);
+
+        bool prematch   = _cfg.RequireInPlay && !c.InPlay;
         bool unverified = _cfg.RequireWsVerified && !c.WsVerified;
-        bool signal     = clears && !unverified;
+        bool signal     = clears && !unverified && !implausible && !prematch;
         if (unverified && clears) Interlocked.Increment(ref Stats.ScreeningOnly);
+        if (prematch && clears)   Interlocked.Increment(ref Stats.PreMatch);
 
         if (signal) Interlocked.Increment(ref Stats.Signals);
         else        Interlocked.Increment(ref Stats.RejectedByRest);
@@ -351,7 +391,9 @@ public sealed class EvEvaluator
             c.WsAsk, restAsk, c.WsBookAge, c.WsDepth,
             fee, cost, evProp, evShin, ev, c.EvWs, limit,
             size, BankrollUsd, EvMath.OrderFee(px, size.Contracts), size.Contracts * px,
-            inWin, signal ? "SIGNAL" : clears ? "SIGNAL_UNVERIFIED" : "REJECTED_REST",
+            inWin, signal ? "SIGNAL" : !clears ? "REJECTED_REST"
+                          : implausible ? "IMPLAUSIBLE"
+                          : prematch ? "SIGNAL_PREMATCH" : "SIGNAL_UNVERIFIED",
             c.NumLegs, c.PinOddsAll, c.WsVerified, depthToLimit, capacityUsd));
 
         if (clears)
@@ -364,7 +406,10 @@ public sealed class EvEvaluator
               + $"gap {(double)(restAsk - c.WsAsk) * 100:+0.0;-0.0}c)  limit={limit:0.0000}  "
               + $"size={size.Contracts}/{depthToLimit:0} avail (${capacityUsd:0})  vig={c.Vig:0.0000}{(c.NumLegs > 2 ? $"  [{c.NumLegs}-way]" : "")}{(inWin ? "" : "  [outside price window]")}"
               + $"{(size.FlooredToZero ? "  [floored to 0 contracts]" : "")}"
-              + $"{(signal ? "" : "  [SCREENING-ONLY oracle: fresh timestamp, DELAYED price — not a signal]")}");
+              + $"{(signal ? "" : implausible ? $"  [IMPLAUSIBLE: we say {c.PTrueUsed:0.000}, Kalshi says {px:0.000} — "
+                                     + $"a {disagree * 100:0}pt gap is a pairing fault, not an edge]"
+                                   : prematch ? "  [PRE-MATCH: logged for calibration, not tradeable]"
+                                   : "  [SCREENING-ONLY oracle: fresh timestamp, DELAYED price — not a signal]")}");
             Console.ResetColor();
         }
         else if (Verbose)

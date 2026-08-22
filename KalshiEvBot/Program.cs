@@ -893,7 +893,7 @@ internal static class Program
           + $"| oracle {(o.IsConnected ? "up" : "DOWN")} quotes {o.QuoteCount} stale {o.StaleCount} "
           + $"{(o.SessionReady ? "" : "SESSION-DOWN ")}"
           + $"| screened {s.Screened} (noquote {s.NoQuote} stale {s.StaleOracle} susp {s.Suspended} "
-          + $"below {s.BelowPrescreen} cooldown {s.Cooldown} incomplete-book {s.IncompleteBook} unverified {s.ScreeningOnly}) "
+          + $"below {s.BelowPrescreen} cooldown {s.Cooldown} incomplete-book {s.IncompleteBook} unverified {s.ScreeningOnly} implausible {s.Implausible} prematch {s.PreMatch}) "
           + $"| rest {s.RestCalls} fail {s.RestFailed} 429 {s.RateLimited} "
           + $"| SIGNALS {s.Signals} rejected-at-rest {s.RejectedByRest} floored {s.FlooredToZero} "
           + $"| rows {t.RowsWritten} | bankroll ${e.BankrollUsd:0.00}");
