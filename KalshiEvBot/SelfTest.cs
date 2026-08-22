@@ -1,3 +1,5 @@
+using PredictionBacktester.Engine.LiveExecution;
+
 namespace KalshiEvBot;
 
 /// <summary>
@@ -248,6 +250,52 @@ public static class SelfTest
                 Check(File.ReadAllLines(first).Length == 3, "…and the original file is untouched");
             }
             finally { try { Directory.Delete(dir, true); } catch { } }
+        }
+
+        // ── Follow-up tracker ─────────────────────────────────────────────────────────────────────────
+        Console.WriteLine("\nFollow-up (closing line value)");
+        {
+            string dir = Path.Combine(Path.GetTempPath(), "kalshievbot_fu_" + Guid.NewGuid().ToString("N"));
+            string? prevEnv = Environment.GetEnvironmentVariable("EV_FOLLOWUP_SEC");
+            try
+            {
+                Environment.SetEnvironmentVariable("EV_FOLLOWUP_SEC", "1");
+                // No venue objects behind these, so every checkpoint takes the UNREADABLE path — which is
+                // the one that only fires in production when a match ends, and therefore the one least
+                // likely to be noticed if its column count drifted.
+                // Disposed before reading: the writer holds the file, and a plain File.ReadAllLines is not
+                // share-tolerant — the same trap that crashed --verify until Csv.Read was taught to open
+                // with FileShare.ReadWrite.
+                using (var tr = new FollowUpTracker(
+                           new PinnacleOracle("", Array.Empty<string>()),
+                           new KalshiBookFeed(null!, new KalshiApiConfig(), Array.Empty<string>()), dir))
+                using (var cts = new CancellationTokenSource())
+                {
+                    var run = tr.RunAsync(cts.Token);
+                    tr.Schedule(new FollowUp(DateTime.UtcNow, "NOSUCH-TICKER", "YES",
+                                             new[] { "1:2:home", "1:2:away" }, 0, "SIGNAL", "STANDING",
+                                             0.50, 0.55, 0.02, "proportional"));
+                    Thread.Sleep(2600);
+                    cts.Cancel();
+                    try { run.Wait(2000); } catch { }
+                }
+
+                var files = Directory.GetFiles(dir, "EvFollowUp_*.csv");
+                Check(files.Length == 1, "a follow-up file is written", $"{files.Length} file(s)");
+                var lines = File.ReadAllLines(files[0]);
+                Check(lines.Length >= 2, "the unreadable checkpoint still writes a row rather than vanishing",
+                      $"{lines.Length} line(s)");
+                int head = lines[0].Split(',').Length;
+                Check(head == FollowUpTracker.Columns.Length, "header matches the schema", $"{head}");
+                Check(lines[1].Split(',').Length == head, "the unreadable row has full arity",
+                      $"row={lines[1].Split(',').Length} header={head}");
+                Check(lines[1].Contains("gone"), "…and says WHY it could not be read", lines[1]);
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable("EV_FOLLOWUP_SEC", prevEnv);
+                try { Directory.Delete(dir, true); } catch { }
+            }
         }
 
         // ── Pair guards ───────────────────────────────────────────────────────────────────────────────
