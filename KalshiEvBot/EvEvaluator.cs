@@ -49,6 +49,22 @@ public sealed class EvConfig
     /// is (336 fixtures against a handful live), and whether Pinnacle is predictive pre-match is a
     /// question worth answering rather than assuming. They just do not count as things to trade.</para></summary>
     public bool RequireInPlay     = Env("EV_REQUIRE_IN_PLAY", 1) != 0;
+    /// <summary>How far Kalshi must move since the last look before "who moved first" can rule.</summary>
+    public double LedMoveMin      = Env("EV_LED_MOVE_MIN", 0.03);
+    /// <summary>Our oracle counts as having FOLLOWED rather than led if it moved less than this fraction
+    /// of Kalshi's move. 0.34 = Kalshi moved at least three times as far as we did.</summary>
+    public double LedRatio        = Env("EV_LED_RATIO", 0.34);
+    /// <summary>Narrow signals to the thesis case only: our oracle moved and Kalshi has not caught up.
+    /// OFF by default — until settlement says which regime pays, filtering to one destroys the
+    /// comparison that would tell us.</summary>
+    public bool RequirePinnacleLed = Env("EV_REQUIRE_PINNACLE_LED", 0) != 0;
+    /// <summary>Ask Pinnacle directly before calling anything a signal. The only INDEPENDENT read of the
+    /// oracle we have; without it screening and verification share one cache and cannot disagree.</summary>
+    /// <summary>Ask Pinnacle by REST before signalling. OFF: the operator's call is to trust the WS, and
+    /// the evidence supports it — mid-event Pinnacle SUSPENDS, so a re-read returns nothing exactly when
+    /// it would matter, buying venue traffic for no answer. Freshness carries the weight instead, which
+    /// is why the in-play age gate is now seconds rather than half a minute.</summary>
+    public bool VerifyVenue       = Env("EV_VERIFY_VENUE", 0) != 0;
 
     public static double Env(string k, double dflt)
         => double.TryParse(Environment.GetEnvironmentVariable(k), NumberStyles.Any,
@@ -61,7 +77,8 @@ public sealed class EvStats
 {
     public long Screened, NoQuote, StaleOracle, Suspended, BelowPrescreen, Cooldown,
                 RestCalls, RestFailed, Signals, RejectedByRest, FlooredToZero, RateLimited,
-                IncompleteBook, ScreeningOnly, Implausible, PreMatch;
+                IncompleteBook, ScreeningOnly, Implausible, PreMatch, KalshiLed, PinnacleLed,
+                VenueVanished, VenueRefused;
 }
 
 /// <summary>
@@ -78,9 +95,13 @@ public sealed class EvEvaluator
     private readonly KalshiBookFeed _feed;
     private readonly KalshiOrderClient _kalshi;
     private readonly EvTelemetry _telemetry;
+    private FollowUpTracker? _followUp;
     private readonly EvConfig _cfg;
     private readonly SemaphoreSlim _restGate;
     private readonly ConcurrentDictionary<string, long> _cooldownUntil = new(StringComparer.Ordinal);
+
+    /// <summary>Last (Kalshi ask, P_true) seen per ticker+side, for the who-moved-first test below.</summary>
+    private readonly ConcurrentDictionary<string, (double Ask, double PTrue)> _lastSeen = new(StringComparer.Ordinal);
     private readonly ConcurrentQueue<string> _queue = new();
     private readonly ConcurrentDictionary<string, byte> _queued = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim _work = new(0);
@@ -155,6 +176,9 @@ public sealed class EvEvaluator
         foreach (var kv in fresh) _byTicker[kv.Key] = kv.Value;
         return (added, removed);
     }
+
+    /// <summary>Wired after construction: the tracker needs the oracle and feed, built alongside this.</summary>
+    public void SetFollowUp(FollowUpTracker? f) => _followUp = f;
 
     public int PairCount => _byTicker.Count;
 
@@ -233,7 +257,28 @@ public sealed class EvEvaluator
         {
             decimal restAsk = c.Side == "YES" ? restYes : restNo;
             if (restAsk <= 0m || restAsk >= 1m) continue;      // no REST price = nothing to value
-            Record(pair, c, restAsk);
+
+            // ── INDEPENDENT VENUE VERIFY, ON CANDIDATES ONLY ──────────────────────────────────────────
+            // Kalshi is read twice by two different paths; Pinnacle was read once, twice. Before calling
+            // anything a signal, ask the venue directly what this matchup is priced at NOW — the one check
+            // that can catch a cached price the world has moved past. Gated on the row already clearing the
+            // threshold, so it costs a handful of calls an hour rather than one per poll.
+            var    screened = c;
+            string verify   = "not-checked";
+            if (EvMath.Ev(c.PTrueUsed, (double)restAsk) >= _cfg.EvMin && _cfg.VerifyVenue)
+            {
+                verify = await _oracle.RefetchAsync(pair.Legs, ct);
+                if (verify == "ok")
+                {
+                    // Re-screen against what the venue just said. A candidate that evaporates here was
+                    // never there — it was our copy of the price being behind the play.
+                    var fresh = Screen(pair, c.Side);
+                    if (fresh is null) { Interlocked.Increment(ref Stats.VenueVanished); continue; }
+                    screened = fresh;
+                }
+                else if (verify == "failed") { Interlocked.Increment(ref Stats.VenueRefused); }
+            }
+            Record(pair, screened, restAsk, verify);
         }
     }
 
@@ -323,7 +368,7 @@ public sealed class EvEvaluator
     /// <summary>Values a screened candidate at the REST ask, sizes it, and logs it — signal or not.
     /// A row where the WS said +2c and REST said −2c is the most informative row in the file: it is the
     /// phantom being measured, and it is the reason both prices are columns.</summary>
-    private void Record(EvPair pair, Screened c, decimal restAsk)
+    private void Record(EvPair pair, Screened c, decimal restAsk, string venueVerify = "not-checked")
     {
         double px   = (double)restAsk;
         double fee  = EvMath.FeePerContract(px);
@@ -373,15 +418,72 @@ public sealed class EvEvaluator
         bool implausible = disagree > _cfg.MaxDisagree;
         if (implausible && clears) Interlocked.Increment(ref Stats.Implausible);
 
+        // ── WHO MOVED FIRST ───────────────────────────────────────────────────────────────────────────
+        // The edge this bot exists to capture is Pinnacle moving BEFORE Kalshi. The mirror image of that —
+        // Kalshi moving before our Pinnacle quote arrives — produces an identically-shaped signal pointing
+        // in exactly the wrong direction, and it is far more common, because a goal suspends Pinnacle while
+        // Kalshi keeps trading.
+        //
+        // Observed 2026-08-22, KXEREDIVISIEGAME-…-SPAFCU-SPA NO, one tick wide:
+        //     17:29:51  pTrue 0.8631  kalshi 0.8600   -0.53c
+        //     17:30:06  pTrue 0.8631  kalshi 0.7300  +11.93c   <- Sparta scored; only Kalshi knew
+        //     17:31:11  pTrue 0.6808  kalshi 0.6800   -1.44c   <- Pinnacle caught up
+        // Buying at 0.73 for something "worth" 0.86 meant buying something worth 0.68. Not a missed gain —
+        // a 5c loss, on a quote 2.9s old by its own timestamp. Freshness cannot see this: the price was
+        // current, the WORLD had changed.
+        //
+        // So compare the two sides' MOVEMENT since this market was last evaluated. Kalshi jumping while our
+        // oracle sits still is not an opportunity, it is the sound of being last to know.
+        double moveK = 0, moveP = 0;
+        bool haveHistory = _lastSeen.TryGetValue($"{pair.KalshiTicker}|{c.Side}", out var prev);
+        if (haveHistory)
+        {
+            moveK = Math.Abs(px - prev.Ask);
+            moveP = Math.Abs(c.PTrueUsed - prev.PTrue);
+        }
+        _lastSeen[$"{pair.KalshiTicker}|{c.Side}"] = (px, c.PTrueUsed);
+        bool kalshiLed    = haveHistory && moveK >= _cfg.LedMoveMin && moveP <= moveK * _cfg.LedRatio;
+        bool pinnacleLed  = haveHistory && moveP >= _cfg.LedMoveMin && moveK <= moveP * _cfg.LedRatio;
+        if (kalshiLed && clears) Interlocked.Increment(ref Stats.KalshiLed);
+        if (pinnacleLed && clears) Interlocked.Increment(ref Stats.PinnacleLed);
+
+        // THREE REGIMES, NOT TWO — and which of them pays is exactly what M0 exists to find out.
+        //   PINNACLE_LED  our oracle moved, Kalshi has not      -> the thesis: we are ahead
+        //   KALSHI_LED    Kalshi moved, our oracle has not      -> demonstrated adverse; suppressed
+        //   STANDING      neither moved                         -> a persistent disagreement
+        //   FIRST_LOOK    no history yet, cannot say
+        //
+        // STANDING is the interesting unknown. It is where a mispair hides, but it is also where a slow
+        // Kalshi book would sit if it simply had not corrected yet — and those look identical until they
+        // settle. Filtering it out now would make the data unable to answer the question, so it is LABELLED
+        // and still counted, and M1 can split realised outcomes by regime and say which of the three the
+        // edge actually lives in. `EV_REQUIRE_PINNACLE_LED=1` narrows to the thesis once that is known.
+        string regime = !haveHistory ? "FIRST_LOOK"
+                      : pinnacleLed  ? "PINNACLE_LED"
+                      : kalshiLed    ? "KALSHI_LED"
+                                     : "STANDING";
+
         bool prematch   = _cfg.RequireInPlay && !c.InPlay;
         bool unverified = _cfg.RequireWsVerified && !c.WsVerified;
-        bool signal     = clears && !unverified && !implausible && !prematch;
+        bool venueBad   = venueVerify == "failed";     // asked the venue, got nothing -> not confirmed
+        bool signal     = clears && !unverified && !implausible && !prematch && !kalshiLed && !venueBad
+                       && (!_cfg.RequirePinnacleLed || pinnacleLed);
         if (unverified && clears) Interlocked.Increment(ref Stats.ScreeningOnly);
         if (prematch && clears)   Interlocked.Increment(ref Stats.PreMatch);
 
         if (signal) Interlocked.Increment(ref Stats.Signals);
         else        Interlocked.Increment(ref Stats.RejectedByRest);
         if (size.FlooredToZero) Interlocked.Increment(ref Stats.FlooredToZero);
+
+        // FOLLOW EVERY CANDIDATE THAT CLEARED, including the ones a guard just suppressed. Grading a guard
+        // means watching what it threw away, and line movement answers that within a minute where settlement
+        // takes days — so the suppressed rows are exactly the ones worth following.
+        string decision = signal ? "SIGNAL"
+                        : venueBad ? "VENUE_REFUSED" : implausible ? "IMPLAUSIBLE"
+                        : kalshiLed ? "KALSHI_LED" : prematch ? "SIGNAL_PREMATCH" : "SIGNAL_UNVERIFIED";
+        if (clears)
+            _followUp?.Schedule(new FollowUp(DateTime.UtcNow, pair.KalshiTicker, c.Side, pair.Legs,
+                pair.YesLegIndex, decision, regime, px, c.PTrueUsed, ev, _cfg.DeVigMethod));
 
         _telemetry.Write(new EvSignal(
             DateTime.UtcNow, pair.KalshiTicker, pair.EventId, c.Side, pair.KalshiOutcome, pair.EventTitle,
@@ -393,8 +495,11 @@ public sealed class EvEvaluator
             size, BankrollUsd, EvMath.OrderFee(px, size.Contracts), size.Contracts * px,
             inWin, signal ? "SIGNAL" : !clears ? "REJECTED_REST"
                           : implausible ? "IMPLAUSIBLE"
+                          : venueBad ? "VENUE_REFUSED"
+                          : kalshiLed ? "KALSHI_LED"
+                          : _cfg.RequirePinnacleLed && !pinnacleLed ? "NOT_PINNACLE_LED"
                           : prematch ? "SIGNAL_PREMATCH" : "SIGNAL_UNVERIFIED",
-            c.NumLegs, c.PinOddsAll, c.WsVerified, depthToLimit, capacityUsd));
+            c.NumLegs, c.PinOddsAll, c.WsVerified, depthToLimit, capacityUsd, regime, venueVerify));
 
         if (clears)
         {
@@ -404,10 +509,12 @@ public sealed class EvEvaluator
                 $"{(signal ? "[+EV]" : "[~EV]")} {pair.KalshiTicker} {c.Side,-3} ev={ev * 100:+0.00;-0.00}c  "
               + $"pTrue={c.PTrueUsed:0.0000}  rest={restAsk:0.0000} (ws {c.WsAsk:0.0000}, "
               + $"gap {(double)(restAsk - c.WsAsk) * 100:+0.0;-0.0}c)  limit={limit:0.0000}  "
-              + $"size={size.Contracts}/{depthToLimit:0} avail (${capacityUsd:0})  vig={c.Vig:0.0000}{(c.NumLegs > 2 ? $"  [{c.NumLegs}-way]" : "")}{(inWin ? "" : "  [outside price window]")}"
+              + $"size={size.Contracts}/{depthToLimit:0} avail (${capacityUsd:0})  {regime}  vig={c.Vig:0.0000}{(c.NumLegs > 2 ? $"  [{c.NumLegs}-way]" : "")}{(inWin ? "" : "  [outside price window]")}"
               + $"{(size.FlooredToZero ? "  [floored to 0 contracts]" : "")}"
               + $"{(signal ? "" : implausible ? $"  [IMPLAUSIBLE: we say {c.PTrueUsed:0.000}, Kalshi says {px:0.000} — "
                                      + $"a {disagree * 100:0}pt gap is a pairing fault, not an edge]"
+                                   : kalshiLed ? $"  [KALSHI LED: it moved {moveK * 100:0.0}c since the last "
+                                                 + $"look, our oracle {moveP * 100:0.0}c — we are FOLLOWING, not ahead]"
                                    : prematch ? "  [PRE-MATCH: logged for calibration, not tradeable]"
                                    : "  [SCREENING-ONLY oracle: fresh timestamp, DELAYED price — not a signal]")}");
             Console.ResetColor();

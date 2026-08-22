@@ -2473,7 +2473,14 @@ class PinnacleAdapter(BookAdapter):
             except Exception as ex:
                 print(f"[PINNACLE] refetch_from_venue {lid}: {type(ex).__name__}: {ex}")
                 out[lid] = -1
-        return {"leagues": out, "ok": bool(lids) and all(v >= 0 for v in out.values())}
+        # ZERO IS NOT SUCCESS. `_reseed_league` returns 0 when the authed session is blocked, and 0 when the
+        # venue answered with nothing — neither is a confirmation, and `>= 0` quietly counted both as one.
+        # That is the exact failure this function exists to prevent, one level up: a caller asking "did the
+        # venue confirm this price?" would have been told yes while nothing was fetched at all. Only a
+        # league that actually applied tokens has been re-read.
+        applied = {lid: n for lid, n in out.items() if n > 0}
+        return {"leagues": out, "ok": bool(lids) and len(applied) == len(out),
+                "tokens_applied": sum(applied.values())}
 
     def _straight_prices(self, lid: str, markets: list) -> dict:
         """{token: decimal_odds} for a /markets/straight payload — same `_market_tokens` keying as the cache, so

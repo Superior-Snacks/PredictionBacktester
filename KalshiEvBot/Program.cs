@@ -113,6 +113,8 @@ internal static class Program
         var oracle = new PinnacleOracle(sidecar, tokens);
         var feed   = new KalshiBookFeed(kalshi, config, tickers);
         var eval   = new EvEvaluator(pairs, oracle, feed, kalshi, telemetry, cfg) { Verbose = verbose };
+        using var followUp = new FollowUpTracker(oracle, feed);
+        eval.SetFollowUp(followUp);
 
         kalshi.RateLimitRetryLogger = i =>
         {
@@ -122,6 +124,8 @@ internal static class Program
         };
 
         Console.WriteLine($"[TELEMETRY] {telemetry.Path}");
+        Console.WriteLine($"[FOLLOWUP ] {followUp.Path}  (both venues re-read at "
+                        + $"{followUp.CheckpointsDescription} after every candidate — closing-line value)");
         Console.WriteLine($"[SNAPSHOT ] {snapshots.Path}  (every {EvConfig.Env("EV_SNAPSHOT_MIN", 5):0} min, "
                         + "oracle only — this is what M1 grades soonest)");
 
@@ -140,6 +144,7 @@ internal static class Program
         await RefreshBankrollAsync(kalshi, eval, cfg, announce: true);
         var bankrollTask = BankrollLoopAsync(kalshi, eval, cfg, cts.Token);
         var snapTask     = SnapshotLoopAsync(snapshots, oracle, feed, pairs, cfg, cts.Token);
+        var followTask   = followUp.RunAsync(cts.Token);
 
         // Bank settlements WHILE THE BOT RUNS. Kalshi does not keep obscure markets available forever, so
         // resolving days later is a race we can only lose — and lose silently, since a purged market is
@@ -161,7 +166,7 @@ internal static class Program
             int rc = await VerifyModeAsync(pairs, pairsPath, feed, oracle, eval, telemetry, snapshots,
                                            resolver, cfg, cts.Token);
             cts.Cancel();
-            await SafeAll(feedTask, oracleTask, evalTask, bankrollTask, snapTask, settleTask, reloadTask);
+            await SafeAll(feedTask, oracleTask, evalTask, bankrollTask, snapTask, settleTask, reloadTask, followTask);
             return rc;
         }
 
@@ -170,7 +175,7 @@ internal static class Program
             await WaitWarmAsync(feed, oracle, cts.Token, TimeSpan.FromSeconds(45));
             await BookAuditAsync(feed, kalshi, oracle, pairs, ArgInt(args, "--book-audit") ?? 10);
             cts.Cancel();
-            await SafeAll(feedTask, oracleTask, evalTask, bankrollTask, snapTask, settleTask, reloadTask);
+            await SafeAll(feedTask, oracleTask, evalTask, bankrollTask, snapTask, settleTask, reloadTask, followTask);
             return 0;
         }
 
@@ -190,12 +195,12 @@ internal static class Program
             PrintStatus(eval, feed, oracle, telemetry, snapshots, resolver, pairsPath);
             await resolver.ResolveAsync(tickers, CancellationToken.None);   // bank before we exit
             cts.Cancel();
-            await SafeAll(feedTask, oracleTask, evalTask, bankrollTask, snapTask, settleTask, reloadTask);
+            await SafeAll(feedTask, oracleTask, evalTask, bankrollTask, snapTask, settleTask, reloadTask, followTask);
             return 0;
         }
 
         var statusTask = StatusLoopAsync(eval, feed, oracle, telemetry, snapshots, resolver, pairsPath, cts.Token);
-        await SafeAll(feedTask, oracleTask, evalTask, bankrollTask, snapTask, settleTask, reloadTask, statusTask);
+        await SafeAll(feedTask, oracleTask, evalTask, bankrollTask, snapTask, settleTask, reloadTask, followTask, statusTask);
         PrintStatus(eval, feed, oracle, telemetry, snapshots, resolver, pairsPath);
         Console.WriteLine($"[DONE] {telemetry.RowsWritten} row(s) → {telemetry.Path}");
         return 0;
@@ -893,7 +898,7 @@ internal static class Program
           + $"| oracle {(o.IsConnected ? "up" : "DOWN")} quotes {o.QuoteCount} stale {o.StaleCount} "
           + $"{(o.SessionReady ? "" : "SESSION-DOWN ")}"
           + $"| screened {s.Screened} (noquote {s.NoQuote} stale {s.StaleOracle} susp {s.Suspended} "
-          + $"below {s.BelowPrescreen} cooldown {s.Cooldown} incomplete-book {s.IncompleteBook} unverified {s.ScreeningOnly} implausible {s.Implausible} prematch {s.PreMatch}) "
+          + $"below {s.BelowPrescreen} cooldown {s.Cooldown} incomplete-book {s.IncompleteBook} unverified {s.ScreeningOnly} implausible {s.Implausible} prematch {s.PreMatch} kalshi-led {s.KalshiLed} pinnacle-led {s.PinnacleLed} venue-vanished {s.VenueVanished} venue-refused {s.VenueRefused}) "
           + $"| rest {s.RestCalls} fail {s.RestFailed} 429 {s.RateLimited} "
           + $"| SIGNALS {s.Signals} rejected-at-rest {s.RejectedByRest} floored {s.FlooredToZero} "
           + $"| rows {t.RowsWritten} | bankroll ${e.BankrollUsd:0.00}");

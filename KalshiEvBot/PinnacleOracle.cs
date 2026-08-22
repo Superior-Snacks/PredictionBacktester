@@ -49,7 +49,7 @@ public sealed class PinnacleOracle
     private readonly HashSet<string> _tokenSet;
     private readonly object _tokenLock = new();
     private readonly int _pollMs, _chunk;
-    private readonly double _maxAgeSec;
+    private readonly double _maxAgeSec, _maxAgeInPlaySec;
 
     public volatile bool IsConnected;
     public volatile bool SessionReady = true;
@@ -68,6 +68,7 @@ public sealed class PinnacleOracle
         _pollMs = EnvInt("EV_ORACLE_POLL_MS", 3000);
         _chunk  = EnvInt("EV_ORACLE_CHUNK", 200);
         _maxAgeSec = EnvInt("EV_ORACLE_MAX_AGE_MS", 30_000) / 1000.0;
+        _maxAgeInPlaySec = EnvInt("EV_ORACLE_MAX_AGE_INPLAY_MS", 5_000) / 1000.0;
     }
 
     private static int EnvInt(string k, int dflt)
@@ -137,12 +138,73 @@ public sealed class PinnacleOracle
     /// the sidecar declares the feed policy we follow the socket instead.
     /// </summary>
     public bool Fresh(OracleQuote q)
-        => _feedPolicy ? (_feedAlive && q.VenueTsUnix > 0)
-                       : (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 1000.0 - q.VenueTsUnix) <= _maxAgeSec;
+    {
+        if (_feedPolicy) return _feedAlive && q.VenueTsUnix > 0;
+        double age = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 1000.0 - q.VenueTsUnix;
+        // IN-PLAY GETS A FAR TIGHTER GATE, because there the two things age cannot distinguish diverge.
+        //
+        // 30s was set for pre-match, where a quiet market is genuinely quiet and a price hours old is still
+        // the right price. In-play on a subscribed league, silence means one of two things and neither is
+        // "nothing has changed": the market is SUSPENDED (Pinnacle stops quoting the instant something
+        // happens), or we are not really covered. Both are exactly when the price is about to move.
+        //
+        // Measured 2026-08-22: a quote 2.9s old and marked open was the last tick BEFORE a goal, while
+        // Kalshi had already repriced 13c. The market then went quiet for 65s — the suspension — and
+        // reopened 18c away. Under a 30s gate that pre-goal price stayed "fresh" the whole way down.
+        //
+        // 5s is a STARTING value, not a measured one. Every row logs OracleAgeMs, so M1 can bucket realised
+        // outcomes by age and say where the real cut is instead of us guessing twice.
+        return age <= (q.Live ? _maxAgeInPlaySec : _maxAgeSec);
+    }
 
     public double AgeMs(OracleQuote q)
         => q.VenueTsUnix <= 0 ? -1
          : Math.Round(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - q.VenueTsUnix * 1000.0);
+
+    /// <summary>
+    /// Forces an INDEPENDENT re-read of these selections from Pinnacle, then refreshes the local quotes.
+    /// Returns the sidecar's tri-state: "ok" (the venue answered), "failed" (we asked and got nothing),
+    /// "unsupported" (this book has no independent price read), or "" if the call itself failed.
+    ///
+    /// <para><b>Why this is not optional.</b> Kalshi is checked against itself twice — the WS finds a
+    /// candidate and REST prices it, two separate reads that can and do disagree. Pinnacle had no equivalent:
+    /// screening and "verification" both came from one sidecar cache, and a cache cannot disagree with
+    /// itself. The arb bot measured that exact failure — its HardVen leg confirmed 110/110 while the
+    /// independently-checked Kalshi leg disagreed 76% of the time — and concluded the gap was
+    /// instrumentation, not venue quality.</para>
+    ///
+    /// <para>It is what would have caught the 2026-08-22 Eredivisie phantom: a goal had moved Kalshi while
+    /// our cached Pinnacle price was still pre-goal but only 2.9s old. Age could not see it; asking the
+    /// venue again would have.</para>
+    ///
+    /// <para>Called only on a candidate that already clears the threshold — a few dozen times an hour, not
+    /// on the 3s poll — and it reuses the same authed REST call the sidecar's own backstop makes, so it adds
+    /// no new request shape to the venue.</para>
+    /// </summary>
+    public async Task<string> RefetchAsync(IEnumerable<string> tokens, CancellationToken ct = default)
+    {
+        var list = tokens.Distinct(StringComparer.Ordinal).ToList();
+        if (list.Count == 0 || string.IsNullOrWhiteSpace(_base)) return "";
+        try
+        {
+            string q = Uri.EscapeDataString(string.Join(",", list));
+            using var resp = await _http.GetAsync($"{_base}/odds?selections={q}&fresh=1", ct);
+            if (!resp.IsSuccessStatusCode) return "";
+            string body = await resp.Content.ReadAsStringAsync(ct);
+            Apply(body);                                   // refresh the cache with what the venue just said
+            using var doc = JsonDocument.Parse(body);
+            return doc.RootElement.TryGetProperty("venue_refetch", out var v) && v.ValueKind == JsonValueKind.String
+                 ? (v.GetString() ?? "") : "";
+        }
+        catch (Exception ex)
+        {
+            if (_verboseRefetch) Console.WriteLine($"[ORACLE] refetch failed: {ex.GetType().Name}: {ex.Message}");
+            return "";
+        }
+    }
+
+    private static readonly bool _verboseRefetch =
+        Environment.GetEnvironmentVariable("EV_VERBOSE_REFETCH") == "1";
 
     public async Task RunAsync(CancellationToken ct)
     {

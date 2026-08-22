@@ -6,7 +6,8 @@ namespace KalshiEvBot;
 public sealed record Obs(
     string Ticker, string Side, DateTime At, double PProp, double PShin, double PUsed,
     double RestAsk, double Cost, double Ev, int Contracts, bool InPlay, double OracleAgeMs,
-    bool IsSignal, bool? Won, int WsVerified);   // WsVerified: 1 yes, 0 no, -1 the row predates the column
+    bool IsSignal, bool? Won, int WsVerified,   // WsVerified: 1 yes, 0 no, -1 the row predates the column
+    string Regime, string Decision);            // who moved first, and what the bot did about it
 
 /// <summary>
 /// Grades logged predictions against Kalshi settlement.
@@ -43,7 +44,8 @@ public static class Calibration
                 Csv.Num(r, "KalshiRestAsk"), Csv.Num(r, "CostPerContract"), Csv.Num(r, "Ev"),
                 Csv.Int(r, "Contracts"), Csv.Str(r, "InPlay") == "1", Csv.Num(r, "OracleAgeMs"),
                 Csv.Str(r, "Decision") == "SIGNAL", won,
-                Csv.Str(r, "OracleWsVerified") is "1" ? 1 : Csv.Str(r, "OracleWsVerified") is "0" ? 0 : -1));
+                Csv.Str(r, "OracleWsVerified") is "1" ? 1 : Csv.Str(r, "OracleWsVerified") is "0" ? 0 : -1,
+                Csv.Str(r, "MoveRegime"), Csv.Str(r, "Decision")));
         }
         return outp;
     }
@@ -196,6 +198,29 @@ public static class Calibration
                                 : "  — separable enough to read the two splits independently."));
         Console.WriteLine("   If in-play calibrates WORSE than pre-match, the in-play signals are oracle lag:");
         Console.WriteLine("   we are seeing Pinnacle a second late while Kalshi has already repriced.");
+
+        // ── 4b. WHO LED, and WHAT THE GUARDS COST ─────────────────────────────────────────────────────
+        // The strategy's whole claim is that Pinnacle leads and Kalshi follows. If that is true, PINNACLE_LED
+        // rows should calibrate better than STANDING ones, and KALSHI_LED should be actively bad — we
+        // suppressed it on one demonstrated example, and this is where that call gets tested rather than
+        // assumed.
+        Console.WriteLine("\n4b. WHICH SIDE MOVED FIRST");
+        foreach (var g in graded.Where(o => o.Regime.Length > 0)
+                                .GroupBy(o => o.Regime).OrderByDescending(g => g.Count()))
+            Split(g.Key.ToLowerInvariant(), g);
+        if (!graded.Any(o => o.Regime.Length > 0))
+            Console.WriteLine("   (no rows carry MoveRegime yet — it was added 2026-08-22)");
+        Console.WriteLine("   PINNACLE_LED is the thesis. If STANDING calibrates just as well, the edge is not");
+        Console.WriteLine("   about speed at all. If KALSHI_LED calibrates BADLY, suppressing it was right.");
+
+        // Every guard writes its own Decision, so each one can be graded on what it REMOVED. Five filters
+        // were added in a single evening against single observed failures; this is the only thing that can
+        // say whether they cut noise or cut edge.
+        Console.WriteLine("\n4c. WHAT EACH GUARD SUPPRESSED  (did it remove noise, or remove edge?)");
+        foreach (var g in graded.Where(o => o.Decision.Length > 0 && o.Decision != "REJECTED_REST")
+                                .GroupBy(o => o.Decision).OrderByDescending(g => g.Count()))
+            Split(g.Key.ToLowerInvariant(), g);
+        Console.WriteLine("   A suppressed class that calibrates WELL is edge we threw away — loosen that guard.");
 
         // ── 5. Signals — colour only ──────────────────────────────────────────────────────────────────
         var sigs = graded.Where(o => o.IsSignal).ToList();
