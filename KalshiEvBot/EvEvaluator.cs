@@ -475,6 +475,22 @@ public sealed class EvEvaluator
         // would WANT, this says what is THERE, and only the smaller of the two is achievable.
         double depthToLimit = (double)_feed.DepthAtOrBetter(pair.KalshiTicker, c.Side == "YES", (decimal)limit);
         double capacityUsd  = depthToLimit * px;
+
+        // TRI-STATE DEPTH. EV is priced from REST; depth is walked on the WS ladder. They agree to the cent
+        // 98.6% of the time (9132 of 9266 rows), but when they DISAGREE the depth number is measured against
+        // a book that does not contain the price we are quoting — the WS best sits ABOVE the break-even
+        // limit while REST says the level is there and tradeable. The walk then truthfully returns 0, and
+        // the row reads "buy at 0.58" and "0 available at 0.58" at once, which cannot both describe one book.
+        //
+        // 0 and "cannot say" are DIFFERENT FACTS and collapsing them is the arb bot's MarkDead bug exactly:
+        // there, "read and empty" and "could not read" both came back -1 and a payload change masqueraded as
+        // every market being dead. Here it would quietly log a Contracts size that was never available, and
+        // M1 would weight its calibration by it.
+        //
+        // Measured 2026-08-22: 5 of 162 signals, and in 5 of those 5 the WS ask was above the limit — the
+        // mechanism accounts for every case, and for none of the 157 rows that reported real depth.
+        bool depthUnknown = depthToLimit <= 0 && (double)c.WsAsk > limit && px <= limit;
+        if (depthUnknown) { depthToLimit = -1; capacityUsd = -1; }
         bool   clears  = ev >= _cfg.EvMin;
 
         // ── THE SCREENING-ONLY GATE ───────────────────────────────────────────────────────────────────
@@ -637,7 +653,7 @@ public sealed class EvEvaluator
                 $"{(signal ? "[+EV]" : "[~EV]")} {pair.KalshiTicker} {c.Side,-3} ev={ev * 100:+0.00;-0.00}c  "
               + $"pTrue={c.PTrueUsed:0.0000}  rest={restAsk:0.0000} (ws {c.WsAsk:0.0000}, "
               + $"gap {(double)(restAsk - c.WsAsk) * 100:+0.0;-0.0}c)  limit={limit:0.0000}  "
-              + $"size={size.Contracts}/{depthToLimit:0} avail (${capacityUsd:0})  {regime}  vig={c.Vig:0.0000}{(c.NumLegs > 2 ? $"  [{c.NumLegs}-way]" : "")}{(inWin ? "" : "  [outside price window]")}"
+              + $"size={size.Contracts}/{(depthUnknown ? "?" : $"{depthToLimit:0}")} avail ({(depthUnknown ? "ws book does not reach the limit — REST says it is there" : $"${capacityUsd:0}")})  {regime}  vig={c.Vig:0.0000}{(c.NumLegs > 2 ? $"  [{c.NumLegs}-way]" : "")}{(inWin ? "" : "  [outside price window]")}"
               + $"{(size.FlooredToZero ? "  [floored to 0 contracts]" : "")}"
               + $"{(signal ? "" : implausible ? $"  [IMPLAUSIBLE: we say {c.PTrueUsed:0.000}, Kalshi says {px:0.000} — "
                                      + $"a {disagree * 100:0}pt gap is a pairing fault, not an edge]"
