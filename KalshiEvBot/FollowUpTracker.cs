@@ -61,12 +61,16 @@ public sealed class FollowUpTracker : IDisposable
         _oracle = oracle;
         _feed   = feed;
         _csv    = new RollingCsv(directory ?? Directory.GetCurrentDirectory(), "EvFollowUp", Columns);
-        var raw = (Environment.GetEnvironmentVariable("EV_FOLLOWUP_SEC") ?? "20,40,60")
+        // 20/40/60 catch the immediate race — who was ahead of whom on this tick. 300 answers a different
+        // question: five minutes later, with the goal digested and both books settled, does the position
+        // still look right? A gap that closes within a minute is a latency edge; one that is still there at
+        // five minutes is a genuine difference of opinion, and those are worth telling apart.
+        var raw = (Environment.GetEnvironmentVariable("EV_FOLLOWUP_SEC") ?? "20,40,60,300")
                   .Split(',', StringSplitOptions.RemoveEmptyEntries);
         _checkpoints = raw.Select(x => double.TryParse(x.Trim(), NumberStyles.Any, CultureInfo.InvariantCulture,
                                                        out var v) ? v : -1)
                           .Where(v => v > 0).OrderBy(v => v).ToArray();
-        if (_checkpoints.Length == 0) _checkpoints = new[] { 20.0, 40.0, 60.0 };
+        if (_checkpoints.Length == 0) _checkpoints = new[] { 20.0, 40.0, 60.0, 300.0 };
     }
 
     public string CheckpointsDescription => string.Join("/", _checkpoints.Select(c => $"{c:0}s"));
@@ -119,7 +123,26 @@ public sealed class FollowUpTracker : IDisposable
         var top = _feed.Top(e.Ticker);
         double nowAsk = (double)(e.Side == "YES" ? top.YesAsk : top.NoAsk);
         double nowP   = PTrueNow(e);
-        if (nowAsk <= 0 || nowAsk >= 1 || !double.IsFinite(nowP)) return;   // nothing readable = nothing to say
+
+        // AN UNREADABLE CHECKPOINT IS STILL A RESULT, AND IT IS NOT RANDOM. Over five minutes an in-play
+        // match can simply END: Kalshi's book empties, the oracle drops the selection, and there is nothing
+        // to compare. Returning silently would delete those rows — and they are not a random subset, they
+        // are the fastest-resolving matches, so the surviving 300s sample would quietly be biased toward
+        // slow ones. Write the row, say it was unreadable, and let the analysis decide what that means.
+        if (nowAsk <= 0 || nowAsk >= 1 || !double.IsFinite(nowP))
+        {
+            _csv.WriteRow(new[]
+            {
+                now.ToString("o", CultureInfo.InvariantCulture),
+                e.EntryUtc.ToString("o", CultureInfo.InvariantCulture),
+                RollingCsv.N((now - e.EntryUtc).TotalSeconds, 1),
+                RollingCsv.Q(e.Ticker), RollingCsv.Q(e.Side), RollingCsv.Q(e.Decision), RollingCsv.Q(e.Regime),
+                RollingCsv.N(e.EntryAsk, 4), RollingCsv.N(e.EntryPTrue, 4), RollingCsv.N(e.EntryEv * 100, 2),
+                "", "", "", "", RollingCsv.N((e.EntryPTrue - e.EntryAsk) * 100, 2), "", "",
+                RollingCsv.Q(!double.IsFinite(nowP) ? "oracle-gone" : "book-gone"), "",
+            });
+            return;
+        }
 
         double kDrift = nowAsk - e.EntryAsk;                 // + = the price we bought rose
         double pDrift = nowP   - e.EntryPTrue;               // + = the oracle got MORE confident in our side
