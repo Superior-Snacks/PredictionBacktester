@@ -50,12 +50,36 @@ public static class Calibration
         return outp;
     }
 
-    /// <summary>First observation per (ticker, side). First, not last: a later one is closer to the outcome
-    /// and grading on it flatters the model for a reason that has nothing to do with the oracle.</summary>
+    /// <summary>One observation per (ticker, side): the FIRST row we would actually have ACTED on — the
+    /// earliest <c>SIGNAL</c> — falling back to the earliest row of any kind when the market never signalled.
+    ///
+    /// <para><b>First, not last</b>, either way: a later row is closer to the outcome and grading on it
+    /// flatters the model for a reason that has nothing to do with the oracle. Preferring the first SIGNAL
+    /// keeps that property — it is the first ACTIONABLE moment, not the one nearest the answer.</para>
+    ///
+    /// <para><b>Why not simply the first row seen.</b> That was the original rule, and it quietly made two
+    /// sections unable to answer their own questions. The first row of a market has NO history by
+    /// definition, so its regime is always <c>FIRST_LOOK</c> — §4b reported `first_look n=62` and could
+    /// never see the 41 settled <c>PINNACLE_LED</c> rows sitting in the same data. And because the first row
+    /// is usually a <c>REJECTED_REST</c> screening pass, §2/§3 were calibrating every market we GLANCED at
+    /// rather than the ones we would have traded. Both still worth measuring — hence the signals-only line
+    /// in §3 — but they are different questions and were being reported as one.</para></summary>
     public static List<Obs> Dedupe(IEnumerable<Obs> obs)
         => obs.GroupBy(o => (o.Ticker, o.Side))
-              .Select(g => g.OrderBy(o => o.At).First())
+              .Select(g => g.Where(o => o.IsSignal).OrderBy(o => o.At).FirstOrDefault()
+                        ?? g.OrderBy(o => o.At).First())
               .ToList();
+
+    /// <summary>Coarse sport from the Kalshi series. A heuristic, and deliberately a visible one: an
+    /// unrecognised series reads "other" rather than being silently folded into soccer.</summary>
+    public static string Sport(string ticker)
+    {
+        string t = ticker.ToUpperInvariant();
+        if (t.Contains("ATP") || t.Contains("WTA") || t.Contains("ITF")) return "tennis";
+        if (t.Contains("MLB") || t.Contains("KBO") || t.Contains("NPB") || t.Contains("LMB")) return "baseball";
+        if (t.Contains("GAME")) return "soccer";
+        return "other";
+    }
 
     // ── Statistics ────────────────────────────────────────────────────────────────────────────────────
     /// <summary>Mean squared error of a probability forecast. Lower is better, and it is the one number
@@ -157,15 +181,44 @@ public static class Calibration
         Console.WriteLine("   Lower Brier = better-calibrated forecast. A |z| under about 2 means the sample");
         Console.WriteLine("   cannot yet distinguish this bias from chance — collect more before acting on it.");
 
+        // ORACLE ACCURACY AND STRATEGY ACCURACY ARE DIFFERENT QUESTIONS. The pooled line above grades every
+        // market we looked at, which is the right test of whether the de-vig produces an honest probability
+        // — and it is answerable from ANY sport, including ones we have stopped trading. This line grades
+        // only the subset we would have BOUGHT. A de-vig can be well calibrated in general while the rows
+        // that clear an EV threshold are exactly the ones where it is wrong, and only the second line sees
+        // that. Reported separately rather than blended, because blending them answers neither.
+        var sigOnly = graded.Where(o => o.IsSignal).ToList();
+        if (sigOnly.Count > 0)
+        {
+            int smk = sigOnly.Select(o => o.Ticker).Distinct(StringComparer.Ordinal).Count();
+            double sp = sigOnly.Average(o => o.PProp), sr = sigOnly.Count(o => o.Won!.Value) / (double)sigOnly.Count;
+            Console.WriteLine($"   SIGNALS ONLY  n={sigOnly.Count} across {smk} market(s)  predicted {sp:0.0000}  "
+                            + $"realised {sr:0.0000}  diff {sr - sp:+0.0000;-0.0000} +/- "
+                            + $"{Se(sigOnly.Count(o => o.Won!.Value), sigOnly.Count):0.0000}");
+            if (smk < 5)
+                Console.WriteLine($"   ^ {smk} market(s) is not a sample. This line is a placeholder until the count grows.");
+        }
+        else Console.WriteLine("   SIGNALS ONLY  (none settled yet — the strategy itself is still ungraded)");
+
         // ── 4. Splits: the in-play / oracle-lag question ──────────────────────────────────────────────
         Console.WriteLine($"\n4. SPLITS  (does the edge survive where it was found?)");
+        // EVERY LINE CARRIES ITS DISTINCT-MARKET COUNT. A mean over observations that mostly come from ONE
+        // market is a mean over one outcome, and it reads exactly like a result: measured 2026-08-22, a
+        // guard-grading line showed "+3.50c, 11 up / 1 down" that was a single WTA match sampled twelve
+        // times, and a 125-signal drift figure that was three football matches. Both were briefly believed.
+        // Printing `mk=` next to `n=` makes that visible at the point of reading rather than three analyses
+        // later, and `n >> mk` earns an explicit warning rather than a footnote.
         void Split(string label, IEnumerable<Obs> sub)
         {
             var l = sub.ToList();
             if (l.Count == 0) { Console.WriteLine($"   {label,-22} (none)"); return; }
+            int mk = l.Select(o => o.Ticker).Distinct(StringComparer.Ordinal).Count();
             double pred = l.Average(o => o.PProp), real = l.Count(o => o.Won!.Value) / (double)l.Count;
-            Console.WriteLine($"   {label,-22} n={l.Count,4}  predicted {pred:0.000}  realised {real:0.000}  "
-                            + $"diff {real - pred:+0.000;-0.000} +/- {Se(l.Count(o => o.Won!.Value), l.Count):0.000}");
+            string warn = mk == 1 && l.Count > 2 ? "  <- ONE MARKET"
+                        : l.Count >= 4 * Math.Max(mk, 1) ? "  <- few markets"
+                        : "";
+            Console.WriteLine($"   {label,-22} n={l.Count,4} mk={mk,3}  predicted {pred:0.000}  realised {real:0.000}  "
+                            + $"diff {real - pred:+0.000;-0.000} +/- {Se(l.Count(o => o.Won!.Value), l.Count):0.000}{warn}");
         }
         var inPlay = graded.Where(o => o.InPlay).ToList();
         var pre    = graded.Where(o => !o.InPlay).ToList();
@@ -221,6 +274,27 @@ public static class Calibration
                                 .GroupBy(o => o.Decision).OrderByDescending(g => g.Count()))
             Split(g.Key.ToLowerInvariant(), g);
         Console.WriteLine("   A suppressed class that calibrates WELL is edge we threw away — loosen that guard.");
+
+        // ── 4d. BY SPORT ──────────────────────────────────────────────────────────────────────────────
+        // SPLIT, NOT FILTER. It is tempting to delete a sport once it has been ruled out for trading —
+        // soccer was, on 44,246 rows showing zero oracle-led moves. But that verdict was about CAPTURABILITY
+        // (Pinnacle suspends on goals, so we are structurally last), not about whether the de-vigged number
+        // was CORRECT. Those are independent, and §2/§3 test the second one. On 2026-08-22 soccer held 96 of
+        // the 104 settled outcomes: dropping it would have left the de-vig validated by eight observations.
+        // So a retired sport still pays rent as evidence about the ORACLE, and the split is what keeps it
+        // from contaminating conclusions about the STRATEGY.
+        Console.WriteLine();
+        Console.WriteLine("4d. BY SPORT  (a retired sport still grades the DE-VIG, just not the strategy)");
+        foreach (var g in graded.GroupBy(o => Sport(o.Ticker)).OrderByDescending(g => g.Count()))
+            Split(g.Key, g);
+        var sigBySport = graded.Where(o => o.IsSignal).GroupBy(o => Sport(o.Ticker)).ToList();
+        if (sigBySport.Count > 0)
+        {
+            Console.WriteLine("   signals only:");
+            foreach (var g in sigBySport.OrderByDescending(g => g.Count())) Split("  " + g.Key, g);
+        }
+        Console.WriteLine("   Capturability is per-sport; de-vig accuracy should NOT be. If one sport");
+        Console.WriteLine("   calibrates far worse than another, that is the MODEL failing, not the venue.");
 
         // ── 5. Signals — colour only ──────────────────────────────────────────────────────────────────
         var sigs = graded.Where(o => o.IsSignal).ToList();

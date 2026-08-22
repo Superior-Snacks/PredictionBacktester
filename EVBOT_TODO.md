@@ -442,3 +442,64 @@ CSV writer shape, and the `--camp-check`-style offline self-test idea (an EV/Kel
       Wired to `EV_FEE_RATE` so the correction needs no rebuild.
 - [ ] **Is the arb bot retired or kept runnable?** If kept, be explicit about which process owns the
       sidecar's in-play/camping mode.
+
+
+---
+
+## 7. ESTIMATOR IMPROVEMENTS — deferred until the tennis sample matches soccer's (opened 2026-08-22)
+
+### The bar before ANY of this gets tuned
+Soccer settled **93 distinct markets**; tennis has **10**. Do not choose between the options below until
+tennis is at a comparable count (~90 settled markets). Every one of them is a knob that will happily fit
+itself to 16 observations and tell you it worked.
+
+### What the first settlement data actually said
+```
+POOLED (all obs)   n=141  predicted 0.4081  realised 0.3901  diff -0.0180 +/- 0.0408   <- oracle is FINE
+SIGNALS ONLY       n=16   predicted 0.3708  realised 0.1875  diff -0.1833 +/- 0.0980   <- the subset is NOT
+  soccer signals   n=9    predicted 0.232   realised 0.000
+  tennis signals   n=7    predicted 0.549   realised 0.429   (-0.120 +/- 0.166, inside noise)
+```
+
+**Diagnosis: this is most likely SELECTION ON A NOISY ESTIMATE, not a broken de-vig.** We filter on
+`EV = P_true - cost`. If `P_true = true_p + e`, then conditioning on `EV > threshold` selects rows where `e`
+happened to be POSITIVE. The winner's curse — and it explains how the oracle calibrates at -0.011 overall
+while its EV-clearing subset calibrates at -0.23. **A better de-vig does not fix selection-on-noise**; it
+only shrinks `e`. Any fix has to either reduce the noise or correct for the conditioning.
+
+### The levers, ranked by expected impact
+- [ ] **1. Shrink the ESTIMATE toward Kalshi, not just the SIZE.** Today `alpha` shrinks the Kelly fraction
+      while `P_true` is used at face value and Kalshi's price is treated as pure noise. It is not — it is a
+      market forecast carrying information. Standard forecast combination:
+      `P = w*P_pinnacle + (1-w)*P_kalshi_implied`, `w` from RELATIVE PRECISION.
+      Attacks the failure directly because it penalises LARGE disagreements most, and large disagreements
+      are exactly where we are wrong. **DANGER: shrinking toward the market mechanically reduces
+      disagreement and therefore signal count. `w` must come from measured precision — never tune it upward
+      until signals reappear, that is fitting the knob to the outcome you wanted.**
+- [ ] **2. Empirical recalibration.** Fit `P_calibrated = f(P_raw)` on settled outcomes (Platt scaling or
+      isotonic regression) and apply it. Corrects decile-level miscalibration directly, including the
+      favourite-longshot inflation measured 2026-08-22 (EV was a smooth FUNCTION OF PRICE: +6.57c at
+      sub-5c decaying to ~0 mid-book). Needs a few hundred settlements to fit without overfitting.
+- [ ] **3. Add the POWER de-vig as a third method.** `P_i proportional to q_i^k`, solve `k` so they sum to 1.
+      Handles favourite-longshot bias differently from Shin and often better. `EvProp`/`EvShin` are already
+      logged and Brier-scored per row, so a third costs two columns and lets SETTLEMENT pick the winner
+      rather than us picking now.
+- [ ] **4. Two signals already logged and never used.**
+      `Vig` — a wide book is a less informative de-vig, so bias plausibly scales with it.
+      `OracleDepth` (Pinnacle `max_contracts`; 2,387-3,433 on tennis 2026-08-22) — a line with high limits
+      is one they are confident in. Both are testable from data already on disk once settlements land.
+- [ ] **5. Raise `EV_MIN`.** Crude, and it fights the measured distribution — only **0.9%** of taker windows
+      exceeded 3.5c, so a threshold set above the bias nearly eliminates volume. Last resort.
+
+### The principle for tomorrow: INSTRUMENT, DO NOT TUNE
+With 16 settled signals, tuning any of the above overfits spectacularly — and the tennis drift may not even
+happen (it is currently -0.120 +/- 0.166, i.e. undetermined). **Add the power-method estimate and a
+market-shrunk estimate as LOGGED COLUMNS that do NOT drive the decision.** Then when the settlements arrive,
+compare four Brier scores and pick — instead of choosing a fix now and discovering in a fortnight it was the
+wrong one. Roughly an hour in `DeVig.cs` plus two telemetry columns.
+
+### The decision rule this is all feeding
+If tennis signal bias converges toward **zero** as the market count grows, the strategy is real and the
+sport was the fix. If it drifts toward soccer's **-0.23**, the same selection effect is present in tennis
+too and the sport was never the fix — at which point levers 1 and 2 are the only ones that address the
+actual mechanism.
