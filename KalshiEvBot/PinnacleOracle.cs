@@ -4,6 +4,23 @@ using System.Text.Json;
 
 namespace KalshiEvBot;
 
+/// <summary>
+/// The venue's own report on its ODDS SOCKET, published on every /odds poll. Separate from quote age on
+/// purpose: a quiet market on a healthy feed and a dead feed full of recently-cached quotes look identical
+/// to an age check, and only one of them is safe to trade against.
+/// </summary>
+public readonly record struct FeedHealth(
+    bool Alive, bool Connected, string Source, double LastFrameAge,
+    int Subscribed, int ActiveLeagues, int LiveMsgs, int PreMsgs)
+{
+    public bool Known => !string.IsNullOrEmpty(Source);
+    public override string ToString()
+        => !Known ? "feed (not reported)"
+         : $"{Source} {(Alive ? "alive" : "DOWN")}{(Connected ? "" : " disconnected")}"
+         + (double.IsFinite(LastFrameAge) ? $", last frame {LastFrameAge:0}s ago" : ", no frame yet")
+         + $", {Subscribed}/{ActiveLeagues} league(s) subscribed, {LiveMsgs + PreMsgs} msg(s)";
+}
+
 /// <summary>One Pinnacle selection as the sidecar last served it, plus when WE received it.</summary>
 public sealed record OracleQuote(
     double DecimalOdds, double MaxContracts, string Status, bool Live,
@@ -108,6 +125,9 @@ public sealed class PinnacleOracle
 
     public int QuoteCount => _quotes.Count;
 
+    /// <summary>Last reported odds-socket health. Default (Known=false) until the venue publishes it.</summary>
+    public FeedHealth Feed { get; private set; }
+
     /// <summary>
     /// Is this quote recent enough to be a fair value? Two policies, because the same symptom means
     /// opposite things at different venues. Pinnacle serves the last-known price when its own fetch fails,
@@ -203,6 +223,24 @@ public sealed class PinnacleOracle
             _feedPolicy = fe.TryGetProperty("quote_age_policy", out var qp)
                        && string.Equals(qp.GetString(), "feed", StringComparison.OrdinalIgnoreCase);
             _feedAlive  = !fe.TryGetProperty("alive", out var al) || al.ValueKind != JsonValueKind.False;
+
+            // The venue's own view of its odds SOCKET, distinct from any one quote's age. A market can be
+            // quiet for minutes on a healthy feed, and every cached quote can look recent on a dead one —
+            // so a bot that only watches quote age cannot tell a slow evening from a socket that dropped.
+            string S(string k) => fe.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.String
+                                ? (v.GetString() ?? "") : "";
+            int? I(string k) => fe.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.Number
+                              ? v.GetInt32() : null;
+            Feed = new FeedHealth(
+                Alive       : _feedAlive,
+                Connected   : !fe.TryGetProperty("connected", out var cn) || cn.ValueKind != JsonValueKind.False,
+                Source      : S("source"),
+                LastFrameAge: fe.TryGetProperty("last_frame_age", out var lf) && lf.ValueKind == JsonValueKind.Number
+                              ? lf.GetDouble() : double.NaN,
+                Subscribed  : I("subscribed_leagues") ?? -1,
+                ActiveLeagues: I("active_leagues") ?? -1,
+                LiveMsgs    : I("live_msgs") ?? -1,
+                PreMsgs     : I("pre_msgs") ?? -1);
         }
 
         if (!root.TryGetProperty("selections", out var sels) || sels.ValueKind != JsonValueKind.Object) return 0;

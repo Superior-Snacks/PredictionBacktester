@@ -290,11 +290,18 @@ internal static class Program
         Console.WriteLine("[verify] waiting for the Kalshi snapshot burst…");
         await WaitWarmAsync(feed, oracle, ct, TimeSpan.FromSeconds(45));
         await Task.Delay(4000, ct).ContinueWith(_ => { });
-        if (feed.IsConnected && feed.MessageCount > 0)
-            Pass("Kalshi WebSocket", $"connected, {feed.MessageCount} message(s), {feed.TickerCount} subscribed");
-        else
+        // CONNECTED IS NOT HEALTHY. A socket that subscribed and then went silent — a failed resubscribe,
+        // a venue that quietly stopped publishing — reports connected forever. Silence is the real test.
+        double quiet = EvConfig.Env("EV_WS_SILENT_SEC", 120);
+        if (!feed.IsConnected || feed.MessageCount == 0)
             Fail("Kalshi WebSocket", $"connected={feed.IsConnected}, messages={feed.MessageCount}. "
                                    + "If another bot holds the account's single socket, this one gets nothing.");
+        else if (feed.SilenceSec > quiet)
+            Warn("Kalshi WebSocket", $"connected and subscribed to {feed.TickerCount}, but SILENT for "
+                                   + $"{feed.SilenceSec:0}s. Connected is not the same as receiving.");
+        else
+            Pass("Kalshi WebSocket", $"connected, {feed.MessageCount} message(s), {feed.TickerCount} subscribed, "
+                                   + $"last frame {feed.SilenceSec:0}s ago");
 
         int withBooks = pairs.Select(p => p.KalshiTicker).Distinct(StringComparer.Ordinal)
                              .Count(t => feed.Top(t).HasSnapshot);
@@ -308,6 +315,23 @@ internal static class Program
             Warn("Pinnacle oracle", "sidecar up but the Pinnacle session is DOWN — no fair value until it re-logs in");
         else
             Pass("Pinnacle oracle", $"sidecar up, session ready, polling {oracle.TokenCount} selection(s)");
+
+        // The ODDS SOCKET, as distinct from the sidecar's HTTP being up. The sidecar answers /odds perfectly
+        // well from a cache whose feed died ten minutes ago, so "oracle up" says nothing about whether new
+        // prices are still arriving.
+        var fh = oracle.Feed;
+        if (!fh.Known)
+            Warn("Pinnacle odds feed", "the venue publishes no feed health — cannot tell a quiet market from "
+                                     + "a dead socket. Expected only on an adapter that predates feed_health().");
+        else if (!fh.Alive || !fh.Connected)
+            Fail("Pinnacle odds feed", $"{fh}");
+        else if (double.IsFinite(fh.LastFrameAge) && fh.LastFrameAge > EvConfig.Env("EV_FEED_SILENT_SEC", 300))
+            Warn("Pinnacle odds feed", $"{fh} — connected but nothing has arrived in a while.");
+        else if (fh.Subscribed == 0 && fh.ActiveLeagues > 0)
+            Warn("Pinnacle odds feed", $"{fh} — {fh.ActiveLeagues} league(s) active but NONE subscribed yet; "
+                                     + "the reconciler subscribes one per tick, so this clears on its own.");
+        else
+            Pass("Pinnacle odds feed", $"{fh}");
 
         int quoted = oracle.QuoteCount, stale = oracle.StaleCount, fresh = quoted - stale;
         double freshFrac = quoted > 0 ? (double)fresh / quoted : 0;
@@ -865,7 +889,7 @@ internal static class Program
     {
         var s = e.Stats;
         Console.WriteLine(
-            $"[{DateTime.UtcNow:HH:mm:ss}] pairs {e.PairCount} | ws {(f.IsConnected ? "up" : "DOWN")} msgs {f.MessageCount} "
+            $"[{DateTime.UtcNow:HH:mm:ss}] pairs {e.PairCount} | ws {(f.IsConnected ? "up" : "DOWN")} msgs {f.MessageCount} (silent {f.SilenceSec:0}s) "
           + $"| oracle {(o.IsConnected ? "up" : "DOWN")} quotes {o.QuoteCount} stale {o.StaleCount} "
           + $"{(o.SessionReady ? "" : "SESSION-DOWN ")}"
           + $"| screened {s.Screened} (noquote {s.NoQuote} stale {s.StaleOracle} susp {s.Suspended} "
@@ -881,6 +905,9 @@ internal static class Program
           + $"| settled {fin} final, {gone} gone, {r.Known.Count - fin - gone} pending "
           + $"| pairfile written {(age.TotalDays > 365 ? "never" : $"{age.TotalMinutes:0}m ago")} "
           + $"| telemetry → {System.IO.Path.GetFileName(t.Path)}");
+        // The venue's own socket report. Quote age cannot distinguish a quiet market from a dead feed;
+        // this can, and on an unattended run it is the difference between "slow night" and "broken".
+        if (o.Feed.Known) Console.WriteLine($"           pinnacle feed: {o.Feed}");
     }
 
     private static async Task SafeAll(params Task[] tasks)

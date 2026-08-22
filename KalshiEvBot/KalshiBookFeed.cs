@@ -80,6 +80,11 @@ public sealed class KalshiBookFeed
     public DateTime LastMessageAt => new(Volatile.Read(ref _lastMessageTicks), DateTimeKind.Utc);
     public long MessageCount;
 
+    /// <summary>Seconds since the last WS frame of ANY kind. A socket can sit connected and silent —
+    /// after a failed resubscribe, or when the venue quietly stops publishing — and `IsConnected` alone
+    /// reports that as healthy. This is the number that tells the two apart.</summary>
+    public double SilenceSec => (DateTime.UtcNow - LastMessageAt).TotalSeconds;
+
     /// <summary>Fired with the ticker whose top of book just changed. Runs on the socket thread, so
     /// handlers must be cheap and must not block — the evaluator queues and returns.</summary>
     public event Action<string>? OnBookChanged;

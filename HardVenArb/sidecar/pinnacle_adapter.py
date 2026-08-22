@@ -663,6 +663,7 @@ class PinnacleAdapter(BookAdapter):
         # actually being delivered (in-play arbs went missing after day 1 — see _refresh_league live-preserve fix).
         self._ws_live_msgs = 0
         self._ws_pre_msgs = 0
+        self._ws_last_msg_ts = 0.0        # unix ts of the last odds frame from EITHER WS source
         self._requested_ids: set = set()   # selection ids the C# bot actually asks for (the PAIRED tokens) — to
                                            # measure how many WATCHED tokens are live vs the whole cache being live
         # ── REST-mode state ──
@@ -1673,6 +1674,7 @@ class PinnacleAdapter(BookAdapter):
             self._ws_live_msgs += 1
         else:
             self._ws_pre_msgs += 1
+        self._ws_last_msg_ts = time.time()
         try:
             self._apply(data, live)
         except Exception as ex:
@@ -1705,6 +1707,37 @@ class PinnacleAdapter(BookAdapter):
             self._apply(data, live)
         except Exception as ex:
             print(f"[PINNACLE WINDOW-WS] apply error: {type(ex).__name__}: {ex}")
+
+    def feed_health(self) -> dict:
+        """Is the ODDS SOCKET alive, independent of any one market's age? Rides along on every /odds.
+
+        Pinnacle published nothing like this — only BetInAsia did — so the bot could see a quote's age but
+        never the socket's. Those answer different questions: a market can be legitimately quiet for minutes
+        while the feed is perfectly healthy, and a feed can be dead for minutes while every cached quote
+        still looks recent. Without the second signal, a dedicated WS that dropped and never resubscribed
+        reads as "a slow evening".
+
+        <b>Deliberately does NOT set `quote_age_policy`.</b> BetInAsia declares "feed" because it is push-only
+        and a stale timestamp there means a quiet market. Pinnacle re-serves its LAST KNOWN price when a fetch
+        fails, with the timestamp frozen at the last success — so an old ts really can mean "our session
+        died", and per-quote age must remain the gate. This is diagnostics, not a policy change.
+        """
+        now = time.time()
+        age = (now - self._ws_last_msg_ts) if self._ws_last_msg_ts else None
+        return {
+            "book": "pinnacle",
+            "alive": bool(self._feed_live()),
+            "connected": bool(self._connected),
+            "source": ("dedicated-ws" if self._dedicated_ws else
+                       "window-reader" if self._window_ws_read else self._mode),
+            "last_frame_age": round(age, 1) if age is not None else None,
+            "subscribed_leagues": len(self._subscribed),
+            "active_leagues": len(self._active_leagues),
+            "live_msgs": self._ws_live_msgs,
+            "pre_msgs": self._ws_pre_msgs,
+            "session_ready": bool(self._session_ready) if self._session_source == "browser" else True,
+            "session_expired": bool(self._session_expired),
+        }
 
     def ws_verified_map(self, selection_ids: list, ttl: float | None = None) -> dict:
         """Per-selection: is its league under LIVE WS coverage (a manager tab, OR its matchup pushed over the WS
