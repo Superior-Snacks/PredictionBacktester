@@ -91,7 +91,7 @@ public static class EvPairLoader
         report = new List<string>();
         var raw = JsonDocument.Parse(File.ReadAllText(path));
         var all = new List<EvPair>();
-        int noTokens = 0, badLegs = 0, threeWayCount = 0, blocked = 0;
+        int noTokens = 0, badLegs = 0, threeWayCount = 0, blocked = 0, unvalidated = 0;
 
         foreach (var el in raw.RootElement.EnumerateArray())
         {
@@ -121,6 +121,15 @@ public static class EvPairLoader
                 // wrong S and produce a plausible-looking P_true that is simply wrong — the exact failure
                 // mode nothing downstream can catch. Skip the row and say so.
                 if (legs.Count < 3 || !legs.Contains(yes, StringComparer.Ordinal)) { badLegs++; continue; }
+
+                // A three-way the pairing could not PRICE-CHECK is unverified, not merely unlucky. Swapping
+                // the two team legs leaves both markets on different sides of the right matchup, so the
+                // structural checks all pass and only a comparison against real prices can catch it. When
+                // that comparison did not happen there is no defence left, and the failure is silent and
+                // enormous: 2026-08-22 produced 30 such events reading up to 42c of phantom edge, with
+                // Manchester City valued at 23% against Kalshi's 65%.
+                if (el.TryGetProperty("price_unvalidated", out var pu) && pu.ValueKind == JsonValueKind.True)
+                { unvalidated++; continue; }
                 threeWayCount++;
             }
             else legs = new List<string> { yes, no };
@@ -140,6 +149,11 @@ public static class EvPairLoader
             report.Add($"{blocked} row(s) skipped: series blocked for a SETTLEMENT-RULE mismatch "
                      + $"({string.Join(", ", BlockedSeries)}). These pair cleanly on names but resolve "
                      + "under a different rule than the Pinnacle price we would value them with.");
+        if (unvalidated > 0)
+            report.Add($"{unvalidated} three-way row(s) skipped: the pairing could not PRICE-CHECK them "
+                     + "(`price_unvalidated`). A swapped pair of team legs passes every structural check, "
+                     + "so without that comparison there is no defence — re-run the pairing once the "
+                     + "Pinnacle feed is warm and these become usable.");
         if (threeWayCount > 0)
             report.Add($"{threeWayCount} three-way row(s) loaded (soccer 1X2 and similar).");
 

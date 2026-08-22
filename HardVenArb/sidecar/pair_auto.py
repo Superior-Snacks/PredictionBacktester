@@ -34,6 +34,7 @@ import json
 import os
 import re
 import sys
+import time
 import unicodedata
 import urllib.request
 from datetime import datetime, timedelta
@@ -536,7 +537,36 @@ def price_validate(pairs: list[dict], sidecar: str, tol: float) -> tuple:
     Kawano Cho at 0.465/0.50). `sibling_validate` above is the check that actually covers this, because it
     is structural rather than numeric. Run it FIRST."""
     tokens = {e[k] for e in pairs for k in ("hardven_yes_token", "hardven_no_token") if e.get(k)}
+
+    # WAIT FOR PRICES — THE FIRST FETCH IS WHAT WAKES THE FEED.
+    #
+    # The odds WS is LAZY: it connects on the first /odds that names a league. On a cold start the pair file
+    # is empty, so nothing has ever asked for a league, so the feed is down and the cache holds nothing —
+    # and this gate, the ONLY check that can catch a three-way with its team legs swapped, silently passes
+    # every pair. Measured 2026-08-22: the scheduler waited 150s for a browser reader that does not exist in
+    # dedicated-WS mode, paired against `cache=0 sel`, and wrote 170 pairs of which 30 were inverted and
+    # produced "+EV signals" up to 42c.
+    #
+    # `_fetch_implied` IS the /odds call that triggers the connect, so the first pass necessarily comes back
+    # empty. Ask again, a few times, and give the feed the seconds it needs to seed. Bounded so a genuinely
+    # dead feed still lets pairing finish rather than hanging the sidecar's startup.
+    try:
+        _tries = int(os.environ.get("HARDVEN_PRICE_GATE_RETRIES", "6"))
+        _wait = float(os.environ.get("HARDVEN_PRICE_GATE_WAIT_SEC", "10"))
+    except ValueError:
+        _tries, _wait = 6, 10.0
     implied = _fetch_implied(sidecar, tokens)
+    _want = max(1, len(tokens) // 2)          # half priced is plenty to validate against
+    while _tries > 0 and len(implied) < _want:
+        print(f"[PAIR] price gate: only {len(implied)}/{len(tokens)} token(s) priced — the odds feed is still "
+              f"waking (it connects on the first /odds). Waiting {_wait:.0f}s, {_tries} attempt(s) left.")
+        time.sleep(_wait)
+        implied = _fetch_implied(sidecar, tokens)
+        _tries -= 1
+    if len(implied) < _want:
+        print(f"[PAIR] price gate: STILL only {len(implied)}/{len(tokens)} token(s) priced. Three-way pairs "
+              f"that cannot be checked will be marked `price_unvalidated` and the EV bot will skip them — "
+              f"a swapped 1X2 passes every other check, so an unchecked one is not safe to trade.")
     consistent = inverted = rejected = unvalidated = 0
     for e in pairs:
         yt, nt = e.get("hardven_yes_token"), e.get("hardven_no_token")
@@ -546,7 +576,18 @@ def price_validate(pairs: list[dict], sidecar: str, tol: float) -> tuple:
         by = implied.get(yt)
         if ky is None or by is None:
             unvalidated += 1
+            # A 3-WAY THAT COULD NOT BE PRICED HAS NO CHECK AT ALL, so say so on the row itself.
+            # The sibling/mirror assertion cannot catch a 3-way swap: swapping the two team legs still
+            # leaves the markets on DIFFERENT sides of the same matchup, which is all that check tests.
+            # This gate is the only thing that compares them to reality — so when it cannot run, the pair is
+            # unverified rather than fine, and the consumer must be able to tell. Observed 2026-08-22:
+            # pairing ran seconds after a sidecar restart, before any league had been subscribed, so every
+            # book price was missing; 30 events paired with their two team legs swapped and produced +EV
+            # "signals" up to 42c (Man City read at 23% against Kalshi's 65%).
+            if e.get("three_way"):
+                e["price_unvalidated"] = True
             continue
+        e.pop("price_unvalidated", None)          # a later run that CAN price it clears the mark
         d_agree, d_invert = abs(ky - by), abs(ky - (1.0 - by))
         tk = e.get("kalshi_ticker", "?")
         if e.get("three_way"):
