@@ -206,7 +206,7 @@ public static class SelfTest
                                          120, 500, 0.51m, 0.55m, 0, 40,
                                          EvMath.FeePerContract(0.55), EvMath.CostPerContract(0.55),
                                          -0.04, -0.04, -0.04, 0.0, 0.6, sz, 5000, 1.0, 27.5, true, "SIGNAL",
-                                         2, "1.869;2.030", true));
+                                         2, "1.869;2.030", true, 250, 137.5));
                 }
                 var lines = File.ReadAllLines(Directory.GetFiles(dir, "*.csv")[0]);
                 Check(lines.Length == 2, "header + one row written", $"{lines.Length} line(s)");

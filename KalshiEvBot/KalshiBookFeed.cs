@@ -114,6 +114,29 @@ public sealed class KalshiBookFeed
             HasSnapshot : b.HasSnapshot);
     }
 
+    /// <summary>
+    /// Total contracts offered at or below <paramref name="maxPrice"/> — the real capacity of an
+    /// opportunity, as opposed to the top-of-book size.
+    ///
+    /// <para>An IOC limit sweeps every level up to its limit, so "how big could this bet be" is the
+    /// CUMULATIVE depth to the break-even price, not the quantity resting at the best ask. The two differ by
+    /// orders of magnitude in both directions: a market can show 104 contracts at the touch and thousands
+    /// more a cent worse, or show a fat top level and nothing behind it. Reported alongside the Kelly size
+    /// so the log says which of the two was actually binding — the edge or the book.</para>
+    /// </summary>
+    public decimal DepthAtOrBetter(string ticker, bool yesSide, decimal maxPrice)
+    {
+        if (!_books.TryGetValue(ticker, out var b) || maxPrice <= 0m) return 0m;
+        var src = yesSide ? b.NoBids : b.YesBids;          // asks are the complement of the opposite bids
+        decimal total = 0m;
+        foreach (var kv in src)
+        {
+            if (kv.Value <= 0m) continue;
+            if (Math.Round(1m - kv.Key, 4) <= maxPrice) total += kv.Value;
+        }
+        return total;
+    }
+
     /// <summary>Top three ask levels on one side, for the book audit. Returns (price, size) descending
     /// by attractiveness (cheapest ask first).</summary>
     public List<(decimal Price, decimal Size)> AskLadder(string ticker, bool yesSide, int depth = 3)

@@ -315,6 +315,11 @@ public sealed class EvEvaluator
         double limit   = EvMath.BreakEvenLimit(c.PTrueUsed, _cfg.EvMin);
         bool   inWin   = px >= _cfg.MinPrice && px <= _cfg.MaxPrice;
         var    size    = EvMath.Size(c.PTrueUsed, px, c.Vig, BankrollUsd, ActiveExposureFraction, _cfg.MaxTradeFrac);
+        // CAPACITY: how many contracts the book actually offers at or below the break-even limit, and what
+        // that is worth. This is the answer to "how big could this bet be" — the Kelly size says what we
+        // would WANT, this says what is THERE, and only the smaller of the two is achievable.
+        double depthToLimit = (double)_feed.DepthAtOrBetter(pair.KalshiTicker, c.Side == "YES", (decimal)limit);
+        double capacityUsd  = depthToLimit * px;
         bool   clears  = ev >= _cfg.EvMin;
 
         // ── THE SCREENING-ONLY GATE ───────────────────────────────────────────────────────────────────
@@ -347,7 +352,7 @@ public sealed class EvEvaluator
             fee, cost, evProp, evShin, ev, c.EvWs, limit,
             size, BankrollUsd, EvMath.OrderFee(px, size.Contracts), size.Contracts * px,
             inWin, signal ? "SIGNAL" : clears ? "SIGNAL_UNVERIFIED" : "REJECTED_REST",
-            c.NumLegs, c.PinOddsAll, c.WsVerified));
+            c.NumLegs, c.PinOddsAll, c.WsVerified, depthToLimit, capacityUsd));
 
         if (clears)
         {
@@ -357,7 +362,7 @@ public sealed class EvEvaluator
                 $"{(signal ? "[+EV]" : "[~EV]")} {pair.KalshiTicker} {c.Side,-3} ev={ev * 100:+0.00;-0.00}c  "
               + $"pTrue={c.PTrueUsed:0.0000}  rest={restAsk:0.0000} (ws {c.WsAsk:0.0000}, "
               + $"gap {(double)(restAsk - c.WsAsk) * 100:+0.0;-0.0}c)  limit={limit:0.0000}  "
-              + $"size={size.Contracts}  vig={c.Vig:0.0000}{(c.NumLegs > 2 ? $"  [{c.NumLegs}-way]" : "")}{(inWin ? "" : "  [outside price window]")}"
+              + $"size={size.Contracts}/{depthToLimit:0} avail (${capacityUsd:0})  vig={c.Vig:0.0000}{(c.NumLegs > 2 ? $"  [{c.NumLegs}-way]" : "")}{(inWin ? "" : "  [outside price window]")}"
               + $"{(size.FlooredToZero ? "  [floored to 0 contracts]" : "")}"
               + $"{(signal ? "" : "  [SCREENING-ONLY oracle: fresh timestamp, DELAYED price — not a signal]")}");
             Console.ResetColor();

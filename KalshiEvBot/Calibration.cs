@@ -6,7 +6,7 @@ namespace KalshiEvBot;
 public sealed record Obs(
     string Ticker, string Side, DateTime At, double PProp, double PShin, double PUsed,
     double RestAsk, double Cost, double Ev, int Contracts, bool InPlay, double OracleAgeMs,
-    bool IsSignal, bool? Won);
+    bool IsSignal, bool? Won, int WsVerified);   // WsVerified: 1 yes, 0 no, -1 the row predates the column
 
 /// <summary>
 /// Grades logged predictions against Kalshi settlement.
@@ -42,7 +42,8 @@ public static class Calibration
                 Csv.Num(r, "PTrueProp"), Csv.Num(r, "PTrueShin"), Csv.Num(r, "PTrueUsed"),
                 Csv.Num(r, "KalshiRestAsk"), Csv.Num(r, "CostPerContract"), Csv.Num(r, "Ev"),
                 Csv.Int(r, "Contracts"), Csv.Str(r, "InPlay") == "1", Csv.Num(r, "OracleAgeMs"),
-                Csv.Str(r, "Decision") == "SIGNAL", won));
+                Csv.Str(r, "Decision") == "SIGNAL", won,
+                Csv.Str(r, "OracleWsVerified") is "1" ? 1 : Csv.Str(r, "OracleWsVerified") is "0" ? 0 : -1));
         }
         return outp;
     }
@@ -204,9 +205,22 @@ public static class Calibration
         double realis = sigs.Sum(o => ((o.Won!.Value ? 1.0 : 0.0) - o.Cost) * Math.Max(1, o.Contracts));
         int won = sigs.Count(o => o.Won!.Value);
         Console.WriteLine($"   won {won}/{sigs.Count}   quoted EV ${quoted:0.00}   realised ${realis:+0.00;-0.00}");
+        int preGate = sigs.Count(o => o.WsVerified < 0);
+        if (preGate > 0)
+        {
+            // Rows written before OracleWsVerified existed cannot be told apart from verified ones by the
+            // Decision column alone, yet they were logged under a rule that no longer applies — a
+            // screening-only quote could be labelled SIGNAL then and would be SIGNAL_UNVERIFIED now.
+            // Counting them silently would grade a rule the bot has since abandoned.
+            Console.ForegroundColor = ConsoleColor.DarkYellow;
+            Console.WriteLine($"   NOTE: {preGate} of these predate the WS-verified gate (blank column) and "
+                            + "were logged under the older, looser rule. Marked '?' below.");
+            Console.ResetColor();
+        }
         foreach (var o in sigs.OrderBy(o => o.At))
             Console.WriteLine($"     {o.At:MM-dd HH:mm}  {o.Ticker,-42} {o.Side,-3} "
                             + $"ask {o.RestAsk:0.00}  ev {o.Ev * 100:+0.0;-0.0}c  x{o.Contracts,-3} "
+                            + $"{(o.WsVerified < 0 ? "?" : o.WsVerified == 1 ? "wv" : "  ")} "
                             + $"→ {(o.Won!.Value ? "WON " : "lost")} "
                             + $"{((o.Won!.Value ? 1.0 : 0.0) - o.Cost) * Math.Max(1, o.Contracts),+7:+0.00;-0.00}");
         Console.WriteLine($"\n   With {sigs.Count} settled signal(s), this line is noise. It becomes evidence in");
