@@ -21,7 +21,8 @@ public sealed record EvSignal(
     double Fee, double Cost, double EvProp, double EvShin, double Ev, double EvWs, double LimitPrice,
     SizeResult Size, double BankrollUsd, double OrderFeeUsd, double StakeUsd,
     bool InPriceWindow, string Decision, int NumLegs, string PinOddsAll, bool OracleWsVerified,
-    double WsDepthToLimit, double CapacityUsd, string MoveRegime, string VenueVerify);
+    double WsDepthToLimit, double CapacityUsd, string MoveRegime, string VenueVerify,
+    double PinnacleRiseCents, bool DeVigAgree);
 
 /// <summary>
 /// Append-only CSV of every REST-valued candidate. This file IS milestone M1 — the bot places no orders,
@@ -41,7 +42,7 @@ public sealed class EvTelemetry : IDisposable
         "KalshiWsAsk", "KalshiRestAsk", "WsRestGapCents", "WsBookAgeMs", "WsAskDepth",
         "FeePerContract", "CostPerContract", "EvProp", "EvShin", "Ev", "EvWs", "LimitPrice",
         "KellyF", "Alpha", "Beta", "Fraction", "BankrollUsd", "TargetUsd", "Contracts", "FlooredToZero",
-        "OrderFeeUsd", "StakeUsd", "InPriceWindow", "Decision", "NumLegs", "PinOddsAll", "OracleWsVerified", "WsDepthToLimit", "CapacityUsd", "MoveRegime", "VenueVerify",
+        "OrderFeeUsd", "StakeUsd", "InPriceWindow", "Decision", "NumLegs", "PinOddsAll", "OracleWsVerified", "WsDepthToLimit", "CapacityUsd", "MoveRegime", "VenueVerify", "PinnacleRiseCents", "DeVigAgree",
     };
 
     private readonly RollingCsv _csv;
@@ -72,6 +73,7 @@ public sealed class EvTelemetry : IDisposable
             N(s.OrderFeeUsd, 2), N(s.StakeUsd, 2), s.InPriceWindow ? "1" : "0", Q(s.Decision),
             s.NumLegs.ToString(CultureInfo.InvariantCulture), Q(s.PinOddsAll), s.OracleWsVerified ? "1" : "0",
             N(s.WsDepthToLimit, 2), N(s.CapacityUsd, 2), Q(s.MoveRegime), Q(s.VenueVerify),
+            double.IsFinite(s.PinnacleRiseCents) ? N(s.PinnacleRiseCents, 2) : "", s.DeVigAgree ? "1" : "0",
         };
 
         // Arity is checked inside WriteRow, on EVERY row. A one-column drift corrupts everything after it

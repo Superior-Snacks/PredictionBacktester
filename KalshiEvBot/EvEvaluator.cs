@@ -26,6 +26,41 @@ public sealed class EvConfig
     /// <summary>"proportional" (the spec's primary) or "shin". Both are always computed and logged; this
     /// only selects which one drives the decision.</summary>
     public string DeVigMethod     = (Environment.GetEnvironmentVariable("EV_DEVIG") ?? "proportional").ToLowerInvariant();
+    /// <summary>Require BOTH de-vig methods to clear EvMin, not just the selected one.
+    ///
+    /// <para>Proportional and Shin disagree by up to 0.87c inside the price band (measured 2026-08-22 at
+    /// 0.35-0.50: prop +0.22c against Shin -0.65c), which is most of a 1c threshold. A row that clears on
+    /// one and fails the other is a coin-flip on an unverified modelling assumption, not an edge.</para>
+    ///
+    /// <para>Requiring agreement is robust to WHICH method is right, so it does not depend on settling that
+    /// question first — and settlement will settle it anyway, since both are logged on every row.</para></summary>
+    public bool RequireDeVigAgree = Env("EV_REQUIRE_DEVIG_AGREE", 1) != 0;
+    /// <summary>THE KINETIC FILTER. Require our own fair value to have moved UP over the last
+    /// <see cref="KineticWindowSec"/> seconds before a row counts as a signal.
+    ///
+    /// <para><b>Static EV cannot tell an opportunity from a falling knife.</b> A gap opens for two opposite
+    /// reasons: Kalshi's price DROPPED and we have not caught up (we are last to know), or our fair value
+    /// ROSE and Kalshi has not caught up (the thesis). Both look identical at a single instant — a number
+    /// below our P_true — and only the direction of recent movement separates them.</para>
+    ///
+    /// <para>The existing PINNACLE_LED regime does NOT close this: `moveP` is an ABSOLUTE value, so it
+    /// fires on our oracle moving in either direction, including down. Buying because our price is falling
+    /// fast is the same mistake from the other end.</para>
+    ///
+    /// <para><b>Measured 2026-08-22, and the reason this guard exists:</b> of in-play P_true moves above
+    /// 0.5c, <b>26 were DOWN and 0 were UP</b>. Every signal that session was on a declining side. The
+    /// mechanism is specific — all three logged legs were soccer 1X2 sides in level matches, where the draw
+    /// probability climbs with the clock and drags home, away AND not-tie down together. Expect this filter
+    /// to suppress nearly everything at first; that is the finding, not a malfunction.</para></summary>
+    public bool RequirePinnacleRising = Env("EV_REQUIRE_PINNACLE_RISING", 1) != 0;
+    /// <summary>Window for the kinetic filter. Default 5s per the operator's spec. NOTE the interaction
+    /// with `EV_ORACLE_POLL_MS` (default 3000): a 5s window holds only one or two polls, so it is sensitive
+    /// to poll jitter. 10s holds three or four and is the safer setting if signals look erratic.</summary>
+    public double KineticWindowSec = Env("EV_KINETIC_WINDOW_SEC", 5);
+    /// <summary>How far P_true must have risen across the window to count as rising. Grounded, not guessed:
+    /// consecutive in-play P_true samples were EXACTLY unchanged 79% of the time, p90 = 0.28c, p95 = 0.75c.
+    /// P_true only moves when the odds move, so the noise floor is near zero and 0.5c sits above p90.</summary>
+    public double KineticMinRise = Env("EV_KINETIC_MIN_RISE", 0.005);
     /// <summary>Require every Pinnacle leg to be under LIVE WS coverage before a row counts as a signal.
     /// A screening-only quote carries a FRESH timestamp but a DELAYED price, so the age gate cannot see it.
     /// Set 0 to log such rows as signals anyway (observation only — they are still logged either way).</summary>
@@ -78,7 +113,7 @@ public sealed class EvStats
     public long Screened, NoQuote, StaleOracle, Suspended, BelowPrescreen, Cooldown,
                 RestCalls, RestFailed, Signals, RejectedByRest, FlooredToZero, RateLimited,
                 IncompleteBook, ScreeningOnly, Implausible, PreMatch, KalshiLed, PinnacleLed,
-                VenueVanished, VenueRefused, OutOfBand;
+                VenueVanished, VenueRefused, OutOfBand, NotRising, NoKineticHistory, DeVigSplit;
 }
 
 /// <summary>
@@ -102,6 +137,55 @@ public sealed class EvEvaluator
 
     /// <summary>Last (Kalshi ask, P_true) seen per ticker+side, for the who-moved-first test below.</summary>
     private readonly ConcurrentDictionary<string, (double Ask, double PTrue)> _lastSeen = new(StringComparer.Ordinal);
+    /// <summary>Short rolling P_true history per (market, side), sampled at SCREENING rate rather than at
+    /// the REST cooldown. This distinction is the whole point: `_lastSeen` above only updates after a REST
+    /// valuation, so at a 15s cooldown its "previous look" is 15 seconds old and a 5-second window is not
+    /// expressible from it. Screening runs on every WS update and every oracle poll, so this sees the
+    /// oracle move at close to its true resolution.</summary>
+    private readonly ConcurrentDictionary<string, PTrueTrack> _ptrue = new(StringComparer.Ordinal);
+
+    /// <summary>Bounded time-series of one side's de-vigged fair value.</summary>
+    internal sealed class PTrueTrack
+    {
+        private readonly object _gate = new();
+        private readonly List<(DateTime T, double P)> _s = new();
+
+        public void Add(DateTime t, double p, TimeSpan keep)
+        {
+            lock (_gate)
+            {
+                // FIXED 250ms SAMPLING FLOOR, not a value-change trigger. Screening fires far faster than
+                // the oracle updates — many times a second on a busy book — and an unbounded append rate
+                // lets the count cap below truncate the buffer to span LESS than the window it must cover.
+                // That surfaces as "cannot answer" on exactly the busiest, most interesting books, which is
+                // both wrong and silent (caught by the 5000-sample self-test). The filter asks about motion
+                // over SECONDS, so 250ms resolution costs nothing and bounds the buffer to ~4/second.
+                if (_s.Count > 0 && (t - _s[^1].T).TotalMilliseconds < 250) return;
+                _s.Add((t, p));
+                var cut = t - keep;
+                int i = 0; while (i < _s.Count && _s[i].T < cut) i++;
+                if (i > 0) _s.RemoveRange(0, i);
+                // Defensive only: at 4 samples/sec against a `keep` of 30-60s this cap can never bind.
+                if (_s.Count > 1024) _s.RemoveRange(0, _s.Count - 1024);
+            }
+        }
+
+        /// <summary>Change in P_true across <paramref name="window"/>. FALSE when no sample is old enough to
+        /// span it — an unmeasurable window must not read as a flat one, or a market we just started
+        /// watching would silently pass a filter that has nothing to say about it yet.</summary>
+        public bool TryRise(DateTime now, TimeSpan window, out double rise)
+        {
+            rise = 0;
+            lock (_gate)
+            {
+                if (_s.Count == 0) return false;
+                var cut = now - window;
+                for (int i = _s.Count - 1; i >= 0; i--)
+                    if (_s[i].T <= cut) { rise = _s[^1].P - _s[i].P; return true; }
+                return false;
+            }
+        }
+    }
     private readonly ConcurrentQueue<string> _queue = new();
     private readonly ConcurrentDictionary<string, byte> _queued = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim _work = new(0);
@@ -344,6 +428,13 @@ public sealed class EvEvaluator
         double pShin = yes ? shinYes : 1.0 - shinYes;
         double pTrue = _cfg.DeVigMethod == "shin" ? pShin : pProp;
 
+        // Sample the fair value HERE — before the WS/prescreen returns below. The kinetic filter asks a
+        // question about the ORACLE, so its history must not be conditional on Kalshi's book being readable
+        // or on this row looking interesting; sampling only the interesting passes would build a history
+        // made entirely of moments we already liked.
+        _ptrue.GetOrAdd($"{pair.KalshiTicker}|{side}", _ => new PTrueTrack())
+              .Add(DateTime.UtcNow, pTrue, TimeSpan.FromSeconds(Math.Max(30, _cfg.KineticWindowSec * 4)));
+
         var top = _feed.Top(pair.KalshiTicker);
         if (!top.HasSnapshot) return null;
         decimal wsAsk = yes ? top.YesAsk : top.NoAsk;
@@ -463,6 +554,18 @@ public sealed class EvEvaluator
                       : kalshiLed    ? "KALSHI_LED"
                                      : "STANDING";
 
+        // ── THE KINETIC FILTER ────────────────────────────────────────────────────────────────────────
+        // Did OUR fair value rise over the window, or are we buying into a decline? See RequirePinnacleRising.
+        double kineticRise = 0;
+        bool   haveKinetic = _ptrue.TryGetValue($"{pair.KalshiTicker}|{c.Side}", out var track)
+                          && track.TryRise(DateTime.UtcNow, TimeSpan.FromSeconds(_cfg.KineticWindowSec), out kineticRise);
+        bool   pinRising   = haveKinetic && kineticRise >= _cfg.KineticMinRise;
+        bool   notRising   = _cfg.RequirePinnacleRising && !pinRising;
+
+        // Both de-vig methods must clear, not just the selected one. See RequireDeVigAgree.
+        bool   devigAgree  = evProp >= _cfg.EvMin && evShin >= _cfg.EvMin;
+        bool   devigSplit  = _cfg.RequireDeVigAgree && !devigAgree;
+
         bool prematch   = _cfg.RequireInPlay && !c.InPlay;
         bool unverified = _cfg.RequireWsVerified && !c.WsVerified;
         bool venueBad   = venueVerify == "failed";     // asked the venue, got nothing -> not confirmed
@@ -476,11 +579,17 @@ public sealed class EvEvaluator
         // trade set and every conclusion drawn from it.
         bool outOfBand  = !inWin;
         bool signal     = clears && !unverified && !implausible && !prematch && !kalshiLed && !venueBad
-                       && !outOfBand
+                       && !outOfBand && !notRising && !devigSplit
                        && (!_cfg.RequirePinnacleLed || pinnacleLed);
         if (unverified && clears) Interlocked.Increment(ref Stats.ScreeningOnly);
         if (prematch && clears)   Interlocked.Increment(ref Stats.PreMatch);
         if (outOfBand && clears)  Interlocked.Increment(ref Stats.OutOfBand);
+        if (notRising && clears)
+        {
+            if (haveKinetic) Interlocked.Increment(ref Stats.NotRising);
+            else             Interlocked.Increment(ref Stats.NoKineticHistory);
+        }
+        if (devigSplit && clears) Interlocked.Increment(ref Stats.DeVigSplit);
 
         if (signal) Interlocked.Increment(ref Stats.Signals);
         else        Interlocked.Increment(ref Stats.RejectedByRest);
@@ -492,7 +601,10 @@ public sealed class EvEvaluator
         string decision = signal ? "SIGNAL"
                         : venueBad ? "VENUE_REFUSED" : implausible ? "IMPLAUSIBLE"
                         : kalshiLed ? "KALSHI_LED" : prematch ? "SIGNAL_PREMATCH"
-                        : outOfBand ? "OUT_OF_BAND" : "SIGNAL_UNVERIFIED";
+                        : outOfBand ? "OUT_OF_BAND"
+                        : devigSplit ? "DEVIG_DISAGREE"
+                        : notRising ? (haveKinetic ? "NOT_RISING" : "NO_KINETIC_HISTORY")
+                        : "SIGNAL_UNVERIFIED";
         if (clears)
             _followUp?.Schedule(new FollowUp(DateTime.UtcNow, pair.KalshiTicker, c.Side, pair.Legs,
                 pair.YesLegIndex, decision, regime, px, c.PTrueUsed, ev, _cfg.DeVigMethod));
@@ -510,9 +622,12 @@ public sealed class EvEvaluator
                           : venueBad ? "VENUE_REFUSED"
                           : kalshiLed ? "KALSHI_LED"
                           : outOfBand ? "OUT_OF_BAND"
+                          : devigSplit ? "DEVIG_DISAGREE"
+                          : notRising ? (haveKinetic ? "NOT_RISING" : "NO_KINETIC_HISTORY")
                           : _cfg.RequirePinnacleLed && !pinnacleLed ? "NOT_PINNACLE_LED"
                           : prematch ? "SIGNAL_PREMATCH" : "SIGNAL_UNVERIFIED",
-            c.NumLegs, c.PinOddsAll, c.WsVerified, depthToLimit, capacityUsd, regime, venueVerify));
+            c.NumLegs, c.PinOddsAll, c.WsVerified, depthToLimit, capacityUsd, regime, venueVerify,
+            haveKinetic ? kineticRise * 100 : double.NaN, devigAgree));
 
         if (clears)
         {

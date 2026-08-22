@@ -208,7 +208,8 @@ public static class SelfTest
                                          120, 500, 0.51m, 0.55m, 0, 40,
                                          EvMath.FeePerContract(0.55), EvMath.CostPerContract(0.55),
                                          -0.04, -0.04, -0.04, 0.0, 0.6, sz, 5000, 1.0, 27.5, true, "SIGNAL",
-                                         2, "1.869;2.030", true, 250, 137.5, "PINNACLE_LED", "ok"));
+                                         2, "1.869;2.030", true, 250, 137.5, "PINNACLE_LED", "ok",
+                                         1.25, true));
                 }
                 var lines = File.ReadAllLines(Directory.GetFiles(dir, "*.csv")[0]);
                 Check(lines.Length == 2, "header + one row written", $"{lines.Length} line(s)");
@@ -380,7 +381,57 @@ public static class SelfTest
             finally { try { Directory.Delete(dir, true); } catch { } }
         }
 
-        Console.WriteLine($"\n{_pass} passed, {_fail} failed.");
+        // -- THE KINETIC FILTER --------------------------------------------------------------------
+        // The guard's value rests entirely on TryRise refusing to answer when it cannot: a window it has no
+        // samples for must NOT read as "flat", or a market we just started watching passes a filter that has
+        // no evidence about it. That failure would be silent and look exactly like normal operation.
+        Console.WriteLine();
+        Console.WriteLine("-- kinetic filter (P_true motion) --");
+        {
+            var keep = TimeSpan.FromSeconds(60);
+            var win  = TimeSpan.FromSeconds(5);
+            var now  = new DateTime(2026, 8, 22, 12, 0, 0, DateTimeKind.Utc);
+
+            var empty = new EvEvaluator.PTrueTrack();
+            Check(!empty.TryRise(now, win, out _), "no history at all -> cannot answer (not 'flat')");
+
+            var young = new EvEvaluator.PTrueTrack();
+            young.Add(now.AddSeconds(-2), 0.40, keep);
+            young.Add(now, 0.46, keep);
+            Check(!young.TryRise(now, win, out _),
+                  "history shorter than the window -> cannot answer, even though it rose 6c");
+
+            var rising = new EvEvaluator.PTrueTrack();
+            rising.Add(now.AddSeconds(-8), 0.40, keep);
+            rising.Add(now.AddSeconds(-1), 0.46, keep);
+            bool okR = rising.TryRise(now, win, out double riseR);
+            Check(okR && Math.Abs(riseR - 0.06) < 1e-9, "spans the window -> +6c measured", $"{riseR:0.0000}");
+
+            // The case the whole guard exists for: a gap opening because OUR price is falling.
+            var falling = new EvEvaluator.PTrueTrack();
+            falling.Add(now.AddSeconds(-8), 0.60, keep);
+            falling.Add(now.AddSeconds(-1), 0.52, keep);
+            bool okF = falling.TryRise(now, win, out double riseF);
+            Check(okF && riseF < 0, "a DECLINING fair value reports negative rise -> suppressed", $"{riseF:0.0000}");
+
+            // A static market must still carry a reference point, or the filter suppresses everything for
+            // want of HISTORY rather than for want of MOTION -- a different thing, and logged differently.
+            var flat = new EvEvaluator.PTrueTrack();
+            for (int i = 12; i >= 0; i--) flat.Add(now.AddSeconds(-i), 0.33, keep);
+            bool okS = flat.TryRise(now, win, out double riseS);
+            Check(okS && Math.Abs(riseS) < 1e-9, "static market: answerable, and the answer is 'not rising'");
+
+            // A BUSY book must stay answerable. 5000 screening passes with a value changing every one of
+            // them, across 20s: the 250ms floor keeps the buffer small, and small must not mean "shorter
+            // than the window". This is the case a pure count cap silently broke.
+            var busy = new EvEvaluator.PTrueTrack();
+            for (int i = 0; i < 5000; i++) busy.Add(now.AddMilliseconds(i * 4), 0.5 + (i % 7) * 1e-4, keep);
+            Check(busy.TryRise(now.AddMilliseconds(4 * 4999), win, out _),
+                  "5000 rapid samples over 20s: still spans the 5s window");
+        }
+
+        Console.WriteLine();
+        Console.WriteLine($"{_pass} passed, {_fail} failed.");
         return _fail == 0 ? 0 : 1;
     }
 }
