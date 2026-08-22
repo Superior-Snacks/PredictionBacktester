@@ -152,10 +152,17 @@ public sealed class FollowUpTracker : IDisposable
 
         // WHICH SIDE DID THE CONVERGING? The whole question in one field. Kalshi moving to us means we were
         // early; our own price moving to Kalshi means we were late and the edge was an artefact.
-        string who = Math.Abs(closed) < 0.005 ? "neither"
-                   : Math.Abs(kDrift) >= Math.Abs(pDrift) * 2 ? "kalshi-came-to-us"
-                   : Math.Abs(pDrift) >= Math.Abs(kDrift) * 2 ? "we-went-to-kalshi"
-                   : "both";
+        // CONVERGENCE AND DIVERGENCE ARE NOT THE SAME EVENT. The first cut keyed on |closed|, so a gap that
+        // WIDENED while Kalshi moved more was labelled "kalshi-came-to-us" — the opposite of what happened,
+        // and the most flattering possible misreading of a position going against us.
+        string mover = Math.Abs(kDrift) >= Math.Abs(pDrift) * 2 ? "kalshi"
+                     : Math.Abs(pDrift) >= Math.Abs(kDrift) * 2 ? "us"
+                     : "both";
+        string who = closed > 0.005  ? (mover == "kalshi" ? "kalshi-came-to-us"
+                                      : mover == "us"     ? "we-went-to-kalshi" : "both-converged")
+                   : closed < -0.005 ? (mover == "kalshi" ? "diverged-kalshi-away"
+                                      : mover == "us"     ? "diverged-we-moved" : "both-diverged")
+                   : "neither";
 
         _csv.WriteRow(new[]
         {

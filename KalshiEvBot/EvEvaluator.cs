@@ -78,7 +78,7 @@ public sealed class EvStats
     public long Screened, NoQuote, StaleOracle, Suspended, BelowPrescreen, Cooldown,
                 RestCalls, RestFailed, Signals, RejectedByRest, FlooredToZero, RateLimited,
                 IncompleteBook, ScreeningOnly, Implausible, PreMatch, KalshiLed, PinnacleLed,
-                VenueVanished, VenueRefused;
+                VenueVanished, VenueRefused, OutOfBand;
 }
 
 /// <summary>
@@ -466,10 +466,21 @@ public sealed class EvEvaluator
         bool prematch   = _cfg.RequireInPlay && !c.InPlay;
         bool unverified = _cfg.RequireWsVerified && !c.WsVerified;
         bool venueBad   = venueVerify == "failed";     // asked the venue, got nothing -> not confirmed
+        // THE PRICE WINDOW WAS DECORATION. `inWin` was computed, printed, and used to pick a console colour,
+        // but never entered this expression — so the 0.20-0.80 band suppressed nothing. Measured 2026-08-22:
+        // 85 of 125 signals sat BELOW 0.20 and 21 of them below 0.05, all written with Decision=SIGNAL.
+        // That matters beyond the trades it would have taken. Cheap in-play longshots decay toward zero on
+        // the clock alone, so they drag the closing-line-value measurement negative no matter how good the
+        // model is; and the tails are exactly where proportional de-vig is least trustworthy, because
+        // favourite-longshot bias concentrates there. Leaving them labelled SIGNAL contaminated both the
+        // trade set and every conclusion drawn from it.
+        bool outOfBand  = !inWin;
         bool signal     = clears && !unverified && !implausible && !prematch && !kalshiLed && !venueBad
+                       && !outOfBand
                        && (!_cfg.RequirePinnacleLed || pinnacleLed);
         if (unverified && clears) Interlocked.Increment(ref Stats.ScreeningOnly);
         if (prematch && clears)   Interlocked.Increment(ref Stats.PreMatch);
+        if (outOfBand && clears)  Interlocked.Increment(ref Stats.OutOfBand);
 
         if (signal) Interlocked.Increment(ref Stats.Signals);
         else        Interlocked.Increment(ref Stats.RejectedByRest);
@@ -480,7 +491,8 @@ public sealed class EvEvaluator
         // takes days — so the suppressed rows are exactly the ones worth following.
         string decision = signal ? "SIGNAL"
                         : venueBad ? "VENUE_REFUSED" : implausible ? "IMPLAUSIBLE"
-                        : kalshiLed ? "KALSHI_LED" : prematch ? "SIGNAL_PREMATCH" : "SIGNAL_UNVERIFIED";
+                        : kalshiLed ? "KALSHI_LED" : prematch ? "SIGNAL_PREMATCH"
+                        : outOfBand ? "OUT_OF_BAND" : "SIGNAL_UNVERIFIED";
         if (clears)
             _followUp?.Schedule(new FollowUp(DateTime.UtcNow, pair.KalshiTicker, c.Side, pair.Legs,
                 pair.YesLegIndex, decision, regime, px, c.PTrueUsed, ev, _cfg.DeVigMethod));
@@ -497,6 +509,7 @@ public sealed class EvEvaluator
                           : implausible ? "IMPLAUSIBLE"
                           : venueBad ? "VENUE_REFUSED"
                           : kalshiLed ? "KALSHI_LED"
+                          : outOfBand ? "OUT_OF_BAND"
                           : _cfg.RequirePinnacleLed && !pinnacleLed ? "NOT_PINNACLE_LED"
                           : prematch ? "SIGNAL_PREMATCH" : "SIGNAL_UNVERIFIED",
             c.NumLegs, c.PinOddsAll, c.WsVerified, depthToLimit, capacityUsd, regime, venueVerify));
