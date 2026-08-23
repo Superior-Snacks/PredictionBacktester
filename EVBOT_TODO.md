@@ -503,3 +503,52 @@ If tennis signal bias converges toward **zero** as the market count grows, the s
 sport was the fix. If it drifts toward soccer's **-0.23**, the same selection effect is present in tennis
 too and the sport was never the fix — at which point levers 1 and 2 are the only ones that address the
 actual mechanism.
+
+
+---
+
+## 8. LOGIN DETECTION + SESSION RECOVERY — the blocker on data rate (opened 2026-08-23)
+
+### Why this is not maintenance work
+Coverage is the measured bottleneck on the whole M1 timeline: **23 of 95 tennis matches were ever seen
+in-play, and 61% of in-play matches signal.** Being live for all 95 is roughly **4x the data rate** — it
+turns "~19 sessions to rule out the catastrophic regime" into about five. But Pinnacle caps how long an
+account may stay logged in, so long runs are not available. **A reliable login flow is what converts that
+cap from a hard stop into a short gap.** It unblocks the data collection rather than sitting beside it.
+
+### DO NOT BUILD: the mouse-position recorder
+Operator's own instinct was right ("the bigger issue is detecting the login itself"). Recorded coordinates
+break on any viewport/layout change and say nothing about login STATE. Memory 2026-08-18 already
+established text-match is the only viable click path anyway (`type='button'`, class shared with
+DECLINE/PLACE BET), and clicking has succeeded before. The click is not what fails.
+
+### DO BUILD: positive login detection
+Today detection is REACTIVE — `pinnacle_session.py` learns of a logout only when authed REST starts
+guest-redirecting, because *"Pinnacle does NOT render a LOG IN control on the sport boards (verified
+2026-08-18: /tennis/matchups/ carries odds buttons and an icon button, nothing else)"*. Inverting it to a
+POSITIVE signal (balance / account dropdown present ⇒ logged IN) works exactly where the negative signal is
+blind — the boards the bot actually sits on.
+
+- [ ] **FIRST, the cheap check that decides it (needs the session UP, do it during a run):** dump a sport
+      board's DOM while logged in and find out whether the balance or account menu renders there. **That
+      "icon button" may BE the account dropdown.** `/debug/login` already reports every clickable control.
+      If the balance only exists on the homepage, this approach does not help where it matters and the
+      REST-side proof stays the primary signal.
+- [ ] Wire the positive signal as the primary "am I logged in" check; keep the REST guest-redirect proof as
+      the backstop (two independent signals, neither sufficient alone).
+
+### Patience after login — and the SAFETY reason, which is the real one
+- [ ] Replace the fixed `PINNACLE_LOGIN_SETTLE_SEC=4` sleep with **waiting for the account element to
+      RENDER**, up to a cap. A render-wait is the right shape; a timer is a guess.
+- [ ] **Back off after a post-login logout instead of immediately re-logging in.** Not politeness:
+      *"repeated credential submits are what trigger lockouts/captchas, and this account has seen one
+      already."* A login→logout→login loop burns the 5-fail breaker (`PINNACLE_LOGIN_MAX_FAILS`) and risks
+      the account. Operator observed the site is finicky about navigating to leagues right after login and
+      often logs out again — so this path WILL be hit.
+
+### Already built — do not rebuild
+REST-side logout proof (`note_logged_out`) · `PINNACLE_LOGIN_MAX_FAILS`=5 breaker that CLOSES the browser
+on trip · login-AGE tracking persisted at `.pinnacle_login_age.json` (the sidecar's uptime is NOT the
+login's age — confusing them cost a session on 2026-08-20) · `PINNACLE_WS_LOGIN_GRACE_SEC`=45 ·
+`PINNACLE_HOME_SETTLE_SEC`=20 · `/debug/login` and `/debug/login_submit`.
+**A real logout already recovers unaided in ~130s. Slow is not broken — do not mistake one for the other.**

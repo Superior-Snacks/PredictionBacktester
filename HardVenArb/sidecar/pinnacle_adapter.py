@@ -62,6 +62,7 @@ import sports as sports_cfg   # unified sport catalog (active sport ids default 
 # corpus replay. Imported at module level on purpose: a lazy import inside a try/except would turn a
 # missing name into a silently skipped scroll.
 from human_mouse import CURSOR
+import datetime as _dt
 
 REST_BASE = os.environ.get("PINNACLE_API_BASE", "https://api.arcadia.pinnacle.com/0.1")
 # GUEST API: same board structure (sports/leagues/matchups/markets, incl. price `designation`) served with ONLY
@@ -1582,7 +1583,11 @@ class PinnacleAdapter(BookAdapter):
                         age_txt = " | " + self._browser.login_age_str()
                 except Exception:
                     pass
-                print(f"[PINNACLE] session held {held_m:.0f}m  (ready={self._session_ready}, ws={ws}, "
+                # LOCAL wall-clock on the heartbeat. Every other timestamp in this system is UTC or an
+                # elapsed duration, which is correct for the data but useless when the operator is trying to
+                # line a log line up against what they saw on screen, or against a match's start time.
+                stamp = _dt.datetime.now().strftime("%H:%M:%S")
+                print(f"[{stamp}] [PINNACLE] session held {held_m:.0f}m  (ready={self._session_ready}, ws={ws}, "
                       f"cache={len(self._cache)} sel){age_txt}{extra}")
                 if not self._survive_logged and held_m >= self._survive_min:
                     self._survive_logged = True           # unattended pass signal — glance for this line when you're back
