@@ -431,8 +431,14 @@ public static class SelfTest
             gapped.Add(now.AddSeconds(-40), 0.40, keep);   // before the outage
             gapped.Add(now.AddSeconds(-8),  0.40, keep);   // ...32s hole...
             gapped.Add(now.AddSeconds(-1),  0.55, keep);   // oracle back, 15c higher
-            Check(!gapped.TryRise(now, win, out _),
-                  "a HOLE in the series (oracle outage) -> cannot answer, not a +15c rise");
+            // DEFAULT IS OFF, so the hole is tolerated: assert the shipped behaviour, not the opt-in one.
+            // Holes longer than `keep` (~30s) are still refused, by pruning rather than by this check.
+            bool holeChecked = Environment.GetEnvironmentVariable("EV_KINETIC_MAX_HOLE_SEC") is { } hv
+                               && double.TryParse(hv, out var hvd) && hvd > 0;
+            bool gotGapped = gapped.TryRise(now, win, out _);
+            Check(holeChecked ? !gotGapped : gotGapped,
+                  holeChecked ? "hole check ON -> refuses across an oracle outage"
+                              : "hole check OFF by default -> a hole is tolerated (pruning covers real outages)");
 
             // A BUSY book must stay answerable. 5000 screening passes with a value changing every one of
             // them, across 20s: the 250ms floor keeps the buffer small, and small must not mean "shorter

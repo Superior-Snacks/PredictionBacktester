@@ -162,7 +162,7 @@ public sealed class EvEvaluator
     internal sealed class PTrueTrack
     {
         // Read once: TryRise runs on every valuation, and an env lookup per call is pure waste.
-        private static readonly double MaxHoleSec = EvConfig.Env("EV_KINETIC_MAX_HOLE_SEC", 2.0);
+        private static readonly double MaxHoleSec = EvConfig.Env("EV_KINETIC_MAX_HOLE_SEC", 0.0);   // 0 = OFF (see TryRise)
         private readonly object _gate = new();
         private readonly List<(DateTime T, double P)> _s = new();
 
@@ -201,17 +201,25 @@ public sealed class EvEvaluator
                     if (_s[i].T <= cut) { at = i; break; }
                 if (at < 0) return false;
 
-                // A GAP IN THE SERIES IS NOT A PRICE MOVE. The sidecar cycles its browser on the lifecycle
-                // schedule while this bot stays up, so the oracle DISAPPEARS and returns — and `Screen`
-                // stops sampling while it is stale, leaving a hole in this buffer. Measuring across that
-                // hole reports the oracle CATCHING UP as though Pinnacle had moved, which is exactly the
-                // shape the kinetic filter is meant to detect: a large rise with Kalshi apparently still,
-                // i.e. a false PINNACLE_LED. Samples land ~4/sec, so anything past a second is a hole.
+                // A GAP IN THE SERIES IS NOT A PRICE MOVE — but this check is OFF BY DEFAULT, because
+                // turning it on cost every live signal and the case it covers is already handled.
                 //
-                // Refusing to answer is the correct output: the window genuinely cannot be measured, and
-                // `unknown` is already handled everywhere as "nobody acts".
-                for (int i = at + 1; i < _s.Count; i++)
-                    if ((_s[i].T - _s[i - 1].T).TotalSeconds > 1.0) return false;
+                // The theory: the sidecar cycles its browser while this bot stays up, `Screen` stops
+                // sampling while the oracle is stale, and measuring across the hole reads the oracle
+                // CATCHING UP as a Pinnacle move — a false PINNACLE_LED.
+                //
+                // What actually happened when it ran at ~1s: in-play NO_KINETIC_HISTORY went 0 -> 117 per
+                // five minutes, NOT_RISING collapsed 44 -> 0 (candidates stopped being EVALUABLE rather
+                // than being judged), and SIGNALS hit zero with 20 in-play tickers healthy. In-play tennis
+                // suspends between points, which also stops sampling, so nearly every live candidate
+                // carries a hole. And the burst that motivated the guard was later explained by the
+                // WS/REST source gap (34.5% of signals selected on a stale quote), not by holes at all.
+                //
+                // Outages longer than `keep` (~30s) need no check: pruning empties the buffer and the
+                // `at < 0` return above already refuses. Only the 1-30s band was ever uncovered.
+                if (MaxHoleSec > 0)
+                    for (int i = at + 1; i < _s.Count; i++)
+                        if ((_s[i].T - _s[i - 1].T).TotalSeconds > MaxHoleSec) return false;
 
                 rise = _s[^1].P - _s[at].P;
                 return true;

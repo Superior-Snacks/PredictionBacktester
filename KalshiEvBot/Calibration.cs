@@ -60,6 +60,10 @@ public static class Calibration
     public static double MaxSourceGapCents => Env("EV_MAX_WS_REST_GAP", 0.03) * 100.0;
     public static int LastSourceGapDropped { get; private set; }
 
+    /// <summary>In-play rows dropped for a quote older than the live gate — a feed that was already dying.</summary>
+    public static double MaxInPlayAgeMs => Env("EV_ORACLE_MAX_AGE_INPLAY_MS", 1000);
+    public static int LastStaleAgeDropped { get; private set; }
+
     private static double Env(string k, double d)
         => double.TryParse(Environment.GetEnvironmentVariable(k), System.Globalization.NumberStyles.Any,
                            CultureInfo.InvariantCulture, out var v) ? v : d;
@@ -70,7 +74,7 @@ public static class Calibration
     {
         var outp = new List<Obs>();
         var misoriented = MisorientedTickers();
-        int droppedMis = 0, droppedGap = 0;
+        int droppedMis = 0, droppedGap = 0, droppedAge = 0;
         foreach (var r in rows)
         {
             string ticker = Csv.Str(r, "Ticker"), side = Csv.Str(r, "Side");
@@ -87,6 +91,14 @@ public static class Calibration
             // the all-day base rate was 0.62%.
             double srcGap = Math.Abs(Csv.Num(r, "WsRestGapCents"));
             if (srcGap > MaxSourceGapCents) { droppedGap++; continue; }
+            // A QUOTE THAT WAS AGEING is a feed dying, not a slow tick. The sidecar stamps ts=now only WHILE
+            // CONNECTED and serves the stored ts once the session drops, so age climbs with wall-clock the
+            // moment the feed goes — and a row can clear the gate on the last poll before it closes.
+            // Observed 2026-08-24: the final signal before a session drop sat at 4,855ms against a 5,000ms
+            // gate, while p99 across all 312 signals was 546ms. Mirrors the live
+            // EV_ORACLE_MAX_AGE_INPLAY_MS so the report grades the rule the bot now runs.
+            double ageMs = Csv.Num(r, "OracleAgeMs");
+            if (Csv.Str(r, "InPlay") == "1" && ageMs > MaxInPlayAgeMs) { droppedAge++; continue; }
             DateTime.TryParse(Csv.Str(r, "Timestamp"), CultureInfo.InvariantCulture,
                               DateTimeStyles.RoundtripKind, out var at);
             bool? won = settled.TryGetValue(ticker, out var s) ? s.WonFor(side) : null;
@@ -101,6 +113,7 @@ public static class Calibration
         }
         LastMisorientedDropped = droppedMis;
         LastSourceGapDropped = droppedGap;
+        LastStaleAgeDropped = droppedAge;
         return outp;
     }
 
@@ -202,6 +215,13 @@ public static class Calibration
             Console.WriteLine($"   EXCLUDED {LastSourceGapDropped} row(s) where the Kalshi WS book and REST "
                             + $"disagreed by >{MaxSourceGapCents:0.#}c — one source was stale, and the gap "
                             + "manufactures apparent edge through the prescreen slack.");
+            Console.ResetColor();
+        }
+        if (LastStaleAgeDropped > 0)
+        {
+            Console.ForegroundColor = ConsoleColor.DarkYellow;
+            Console.WriteLine($"   EXCLUDED {LastStaleAgeDropped} in-play row(s) whose oracle quote was older "
+                            + $"than {MaxInPlayAgeMs:0}ms — an ageing quote is a feed dying, not a slow tick.");
             Console.ResetColor();
         }
         Console.WriteLine($"   settled: {graded.Count}   awaiting settlement: {obs.Count - graded.Count} "
