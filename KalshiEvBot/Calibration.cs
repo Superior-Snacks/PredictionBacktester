@@ -187,6 +187,23 @@ public static class Calibration
         var obs = dedupe ? Dedupe(all) : all;
         var graded = obs.Where(o => o.Won.HasValue).ToList();
 
+        // RETIRED SPORTS ARE EVIDENCE ABOUT THE ORACLE, NOT ABOUT THE STRATEGY - so the split has to be
+        // real. Section 4d already argued exactly this, but only section 5 acted on it: 4, 4b and 4c POOLED
+        // every sport, and soccer is roughly two thirds of the settled volume while losing essentially all
+        // of it. That is not a small bias. Measured 2026-08-24: the pooled bias read -0.018, concealing
+        // tennis at +0.062 against soccer at -0.232; and an in-play oracle-age gradient that looked like a
+        // decisive staleness effect (0 wins in 7 above 1s) was seven in-play SOCCER rows - Pinnacle
+        // suspending on goals - while tennis has never once produced a signal on a quote older than 1s.
+        // An oracle-age guard was nearly shipped on the strength of that pooled number.
+        // So: 2 and 3 keep every sport, because the de-vig is sport-agnostic and needs the volume;
+        // 4/4b/4c/5 see only LIVE sports, because they answer strategy questions; 4d stays pooled,
+        // because it is the section whose whole job is to show the split.
+        var retired = (Environment.GetEnvironmentVariable("EV_REPORT_RETIRED_SPORTS") ?? "soccer")
+                      .Split(',', StringSplitOptions.RemoveEmptyEntries)
+                      .Select(x => x.Trim().ToLowerInvariant())
+                      .Where(x => x.Length > 0).ToHashSet();
+        var live = graded.Where(o => !retired.Contains(Sport(o.Ticker))).ToList();
+
         // ── 1. Coverage ───────────────────────────────────────────────────────────────────────────────
         // Count only the markets THIS dataset actually contains. Counting the whole store reported "32
         // market(s) still active" under 25 observations across 17 markets — three numbers that cannot all
@@ -293,7 +310,10 @@ public static class Calibration
         else Console.WriteLine("   SIGNALS ONLY  (none settled yet — the strategy itself is still ungraded)");
 
         // ── 4. Splits: the in-play / oracle-lag question ──────────────────────────────────────────────
-        Console.WriteLine($"\n4. SPLITS  (does the edge survive where it was found?)");
+        Console.WriteLine($"\n4. SPLITS  (does the edge survive where it was found?)"
+                        + (live.Count != graded.Count
+                           ? $"  [LIVE ONLY: {graded.Count - live.Count} row(s) from {string.Join(",", retired)} excluded]"
+                           : ""));
         // EVERY LINE CARRIES ITS DISTINCT-MARKET COUNT. A mean over observations that mostly come from ONE
         // market is a mean over one outcome, and it reads exactly like a result: measured 2026-08-22, a
         // guard-grading line showed "+3.50c, 11 up / 1 down" that was a single WTA match sampled twelve
@@ -312,8 +332,8 @@ public static class Calibration
             Console.WriteLine($"   {label,-22} n={l.Count,4} mk={mk,3}  predicted {pred:0.000}  realised {real:0.000}  "
                             + $"diff {real - pred:+0.000;-0.000} +/- {Se(l.Count(o => o.Won!.Value), l.Count):0.000}{warn}");
         }
-        var inPlay = graded.Where(o => o.InPlay).ToList();
-        var pre    = graded.Where(o => !o.InPlay).ToList();
+        var inPlay = live.Where(o => o.InPlay).ToList();
+        var pre    = live.Where(o => !o.InPlay).ToList();
         Split("in-play", inPlay);
         Split("pre-match", pre);
 
@@ -326,11 +346,11 @@ public static class Calibration
 
         double Corr(Func<Obs, double> a, Func<Obs, double> b)
         {
-            if (graded.Count < 3) return double.NaN;
-            double ma = graded.Average(a), mb = graded.Average(b);
-            double sab = graded.Sum(o => (a(o) - ma) * (b(o) - mb));
-            double sa = Math.Sqrt(graded.Sum(o => Math.Pow(a(o) - ma, 2)));
-            double sb = Math.Sqrt(graded.Sum(o => Math.Pow(b(o) - mb, 2)));
+            if (live.Count < 3) return double.NaN;
+            double ma = live.Average(a), mb = live.Average(b);
+            double sab = live.Sum(o => (a(o) - ma) * (b(o) - mb));
+            double sa = Math.Sqrt(live.Sum(o => Math.Pow(a(o) - ma, 2)));
+            double sb = Math.Sqrt(live.Sum(o => Math.Pow(b(o) - mb, 2)));
             return sa * sb > 0 ? sab / (sa * sb) : double.NaN;
         }
         double conf = Corr(o => o.InPlay ? 1 : 0, o => Math.Min(o.OracleAgeMs, 10_000));
@@ -350,10 +370,10 @@ public static class Calibration
         // suppressed it on one demonstrated example, and this is where that call gets tested rather than
         // assumed.
         Console.WriteLine("\n4b. WHICH SIDE MOVED FIRST");
-        foreach (var g in graded.Where(o => o.Regime.Length > 0)
+        foreach (var g in live.Where(o => o.Regime.Length > 0)
                                 .GroupBy(o => o.Regime).OrderByDescending(g => g.Count()))
             Split(g.Key.ToLowerInvariant(), g);
-        if (!graded.Any(o => o.Regime.Length > 0))
+        if (!live.Any(o => o.Regime.Length > 0))
             Console.WriteLine("   (no rows carry MoveRegime yet — it was added 2026-08-22)");
         Console.WriteLine("   PINNACLE_LED is the thesis. If STANDING calibrates just as well, the edge is not");
         Console.WriteLine("   about speed at all. If KALSHI_LED calibrates BADLY, suppressing it was right.");
@@ -362,7 +382,7 @@ public static class Calibration
         // were added in a single evening against single observed failures; this is the only thing that can
         // say whether they cut noise or cut edge.
         Console.WriteLine("\n4c. WHAT EACH GUARD SUPPRESSED  (did it remove noise, or remove edge?)");
-        foreach (var g in graded.Where(o => o.Decision.Length > 0 && o.Decision != "REJECTED_REST")
+        foreach (var g in live.Where(o => o.Decision.Length > 0 && o.Decision != "REJECTED_REST")
                                 .GroupBy(o => o.Decision).OrderByDescending(g => g.Count()))
             Split(g.Key.ToLowerInvariant(), g);
         Console.WriteLine("   A suppressed class that calibrates WELL is edge we threw away — loosen that guard.");
@@ -402,10 +422,6 @@ public static class Calibration
         // on 2026-08-24) - deleting it would leave the de-vig validated by a handful of observations. The
         // excluded rows are summarised in one line below, so the record is filtered rather than quietly
         // shortened. Set EV_REPORT_RETIRED_SPORTS= (empty) to restore them.
-        var retired = (Environment.GetEnvironmentVariable("EV_REPORT_RETIRED_SPORTS") ?? "soccer")
-                      .Split(',', StringSplitOptions.RemoveEmptyEntries)
-                      .Select(x => x.Trim().ToLowerInvariant())
-                      .Where(x => x.Length > 0).ToHashSet();
         var droppedSigs = sigs.Where(o => retired.Contains(Sport(o.Ticker))).ToList();
         if (droppedSigs.Count > 0) sigs = sigs.Where(o => !retired.Contains(Sport(o.Ticker))).ToList();
         Console.WriteLine($"\n5. SIGNALS ONLY — {sigs.Count} settled  (colour, NOT evidence: see the header)");

@@ -1206,6 +1206,16 @@ class PinnacleAdapter(BookAdapter):
         print("[PINNACLE] *** CAPTURED SESSION FAILED VALIDATION *** — the authed probe did not come back. "
               "This is the saved profile replaying a DEAD x-session, not a live login. NOT advertising the "
               "venue as up; forcing the re-login path instead.")
+        # A 401 FROM AN AUTHED PROBE IS THE STRONGEST LOGOUT PROOF THIS BOT GETS, so it is where the login
+        # age has to be measured. The only path recording it was the guest-redirect burst in the request
+        # loop, which needs traffic to already be flowing - so a session that dies during scheduled
+        # downtime is discovered HERE instead, on the next window open, and was silently never measured.
+        # Today's 13:28 login was found dead at 19:00 and produced no data point for exactly this reason.
+        try:
+            if self._browser is not None and hasattr(self._browser, "note_logged_out"):
+                self._browser.note_logged_out("authed probe returned 401 - the saved session is dead")
+        except Exception:
+            pass
 
     # ── browser session source: receive live creds + expose status ────────────────
     def _on_browser_creds(self, creds: dict) -> None:

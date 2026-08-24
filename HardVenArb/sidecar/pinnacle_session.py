@@ -488,7 +488,14 @@ class PinnacleBrowserSession:
             dev = h.get("x-device-uuid")
             key = h.get("x-api-key")
             changed = False
-            if sess and not self._logged_session:
+            # A FRESH CAPTURE IS A NEW TOKEN, NOT THE FIRST ONE THIS PROCESS EVER SAW. This was latched on
+            # `not self._logged_session`, which fires exactly once per process - so when a saved profile
+            # replayed a DEAD x-session first, that dead token consumed the latch and the REAL token from
+            # the unattended re-login behind it skipped this whole block: the login clock never started,
+            # the failure breaker never reset, and the next logout was never measured. Keying on the token
+            # CHANGING lets the first login and every re-login inside one process both come through here.
+            if sess and sess != self._session:
+                first = not self._logged_session
                 self._logged_session = True
                 self._ever_logged_in = True   # profile just proved it holds a live login → auto-login may submit later
                 # A capture is the ONLY thing that proves a submit worked, so it is the only thing that
@@ -501,7 +508,9 @@ class PinnacleBrowserSession:
                 submitted = self._login_submit_at
                 self._login_submit_at = 0.0
                 self._known_logged_out = ""
-                print("[PINNACLE SESSION] captured x-session (REST auth ready).")
+                print("[PINNACLE SESSION] captured x-session (REST auth ready)." if first else
+                      "[PINNACLE SESSION] captured a NEW x-session - the token rotated, which is exactly "
+                      "what a successful re-login looks like from here.")
                 # Only a capture that follows OUR submit starts the clock. A capture off a profile that was
                 # already signed in says nothing about when the login happened.
                 if submitted:
@@ -1230,8 +1239,11 @@ class PinnacleBrowserSession:
         if time.time() - at < self._login_verify_sec:
             return                                         # too early to judge
         self._login_submit_at = 0.0
-        if self._logged_session:
-            return                                         # the capture path already reset the streak
+        # SUCCESS IS THE STAMP BEING CLEARED, NOT A PROCESS-WIDE FLAG. This used to bail out on
+        # `self._logged_session`, which latches True on the first token ever seen - including a dead one
+        # replayed from a saved profile. Past that point no failed submit could EVER be counted and the
+        # breaker could not trip, which is the exact opposite of what it is for. A fresh capture zeroes
+        # _login_submit_at, so reaching this line at all already proves no capture followed our submit.
         self._login_fail_streak += 1
         n, cap = self._login_fail_streak, self._login_max_fails
         if n < cap:
