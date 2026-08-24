@@ -38,6 +38,13 @@ public sealed class KalshiBookFeed
         public readonly ConcurrentDictionary<decimal, decimal> NoBids  = new();
         public long LastUpdateTicks = DateTime.UtcNow.Ticks;
         public volatile bool HasSnapshot;
+        /// <summary>Last `seq` seen on a delta for this book, 0 = none yet. Kalshi numbers deltas so a
+        /// consumer can tell it missed one; without checking it a dropped frame is INVISIBLE and the book
+        /// diverges silently until the next reconnect.</summary>
+        public long LastSeq;
+        /// <summary>Set when a sequence gap proves this book is corrupt. The reader re-subscribes it, which
+        /// makes Kalshi resend a snapshot — the only way to rebuild from a known-good state.</summary>
+        public volatile bool NeedsResync;
     }
 
     private readonly KalshiOrderClient _client;
@@ -84,6 +91,19 @@ public sealed class KalshiBookFeed
     /// after a failed resubscribe, or when the venue quietly stops publishing — and `IsConnected` alone
     /// reports that as healthy. This is the number that tells the two apart.</summary>
     public double SilenceSec => (DateTime.UtcNow - LastMessageAt).TotalSeconds;
+    /// <summary>Deltas that arrived out of order — each one means a book was rebuilt from a bad state.</summary>
+    public long SeqGaps;
+    /// <summary>Books re-subscribed to force a fresh snapshot (sequence gap, or the periodic sweep).</summary>
+    public long Resyncs;
+    private bool _seqMissingLogged;
+    // Rotation state for the periodic re-snapshot. Defaults: a slice every 30s, 25 markets at a time, so
+    // ~160 tickers are fully refreshed about every 3 minutes without a burst that stalls the reader.
+    private DateTime _lastResyncSweep = DateTime.UtcNow;
+    private int _resyncCursor;
+    private readonly double _resyncSweepSec =
+        EvConfig.Env("EV_WS_RESYNC_SWEEP_SEC", 30);
+    private readonly int _resyncBatch =
+        (int)EvConfig.Env("EV_WS_RESYNC_BATCH", 25);
 
     /// <summary>Fired with the ticker whose top of book just changed. Runs on the socket thread, so
     /// handlers must be cheap and must not block — the evaluator queues and returns.</summary>
@@ -220,6 +240,43 @@ public sealed class KalshiBookFeed
                         Interlocked.Increment(ref MessageCount);
                         Process(message);
 
+                        // ── RESYNC: rebuild books that are corrupt, or simply old ────────────────────
+                        // Two triggers, and both re-subscribe, because re-subscribing is what makes Kalshi
+                        // resend a SNAPSHOT — the only way back to a known-good baseline once cumulative
+                        // deltas have drifted.
+                        //
+                        //   NeedsResync   a sequence gap PROVED this book missed a frame.
+                        //   periodic      a floor, for the case the `seq` field is absent or a delta was
+                        //                 corrupted without breaking the count. Without it a book can be
+                        //                 wrong for the whole session, which is what happened on
+                        //                 2026-08-24: hours of divergence with the socket reporting zero
+                        //                 silence, and 34.5% of all signals selected on the disagreement.
+                        //
+                        // Re-subscribing costs one snapshot per market, so the sweep is spread over time
+                        // rather than resubscribing everything at once and stalling the feed.
+                        if ((DateTime.UtcNow - _lastResyncSweep).TotalSeconds >= _resyncSweepSec)
+                        {
+                            _lastResyncSweep = DateTime.UtcNow;
+                            var stale = _books.Where(kv => kv.Value.NeedsResync).Select(kv => kv.Key).ToList();
+                            if (stale.Count == 0)
+                            {
+                                // nothing proven corrupt -> take the oldest slice on rotation instead
+                                lock (_tickerLock)
+                                    stale = _tickers.Skip(_resyncCursor).Take(_resyncBatch).ToList();
+                                _resyncCursor += _resyncBatch;
+                                lock (_tickerLock) if (_resyncCursor >= _tickers.Count) _resyncCursor = 0;
+                            }
+                            if (stale.Count > 0)
+                            {
+                                foreach (var t in stale)
+                                    if (_books.TryGetValue(t, out var bk)) bk.NeedsResync = false;
+                                string sarr = string.Join(",", stale.Select(t => $"\"{t}\""));
+                                string ssub = $"{{\"id\":{_msgId++},\"cmd\":\"subscribe\",\"params\":{{\"channels\":[\"orderbook_delta\"],\"market_tickers\":[{sarr}]}}}}";
+                                await ws.SendAsync(Encoding.UTF8.GetBytes(ssub), WebSocketMessageType.Text, true, ct);
+                                Interlocked.Add(ref Resyncs, stale.Count);
+                            }
+                        }
+
                         // Drain markets added by a pair reload since the last message.
                         while (_pendingSubs.TryDequeue(out var add))
                         {
@@ -289,6 +346,36 @@ public sealed class KalshiBookFeed
 
     private void ApplyDelta(Book b, JsonElement msg)
     {
+        // SEQUENCE CONTINUITY — the thing that makes a silent divergence detectable.
+        //
+        // Deltas apply CUMULATIVELY to a snapshot taken once at subscribe, so a single dropped or repeated
+        // frame corrupts this book permanently: nothing later contradicts it, and the only repair was a
+        // reconnect. Measured 2026-08-24: WS/REST agreement fell from 98% to 93% while the socket reported
+        // zero silence, and 34.5% of ALL signals had already been selected on a >3c disagreement — because
+        // the prescreen reads the WS book and the valuation reads REST, so a stale book manufactures edge.
+        //
+        // Kalshi numbers the deltas. Reading that number turns an undetectable fault into a flagged one.
+        // If the field is absent the check is skipped rather than guessed at (logged once so we find out).
+        if (msg.TryGetProperty("seq", out var qEl) && qEl.TryGetInt64(out long seq))
+        {
+            long prev = b.LastSeq;
+            if (prev != 0 && seq != prev + 1)
+            {
+                b.NeedsResync = true;
+                Interlocked.Increment(ref SeqGaps);
+                if (SeqGaps <= 10 || SeqGaps % 100 == 0)
+                    Console.WriteLine($"[KALSHI WS] sequence gap: expected {prev + 1}, got {seq} — this book "
+                                    + $"is corrupt and is queued for re-subscribe (total {SeqGaps}).");
+            }
+            b.LastSeq = seq;
+        }
+        else if (!_seqMissingLogged)
+        {
+            _seqMissingLogged = true;
+            Console.WriteLine("[KALSHI WS] deltas carry no `seq` field — sequence checking is OFF; the "
+                            + "periodic re-snapshot is the only protection against a silently drifted book.");
+        }
+
         if (!msg.TryGetProperty("price_dollars", out var pEl)) return;
         if (!msg.TryGetProperty("delta_fp",      out var dEl)) return;
         if (!msg.TryGetProperty("side",          out var sEl)) return;
@@ -315,5 +402,7 @@ public sealed class KalshiBookFeed
             foreach (var l in n.EnumerateArray())
                 if (TryLevel(l, out var p, out var s) && s > 0m && InRange(p)) b.NoBids[p] = s;
         b.HasSnapshot = true;
+        b.LastSeq = 0;              // a snapshot IS the new baseline; the next delta starts a fresh run
+        b.NeedsResync = false;
     }
 }

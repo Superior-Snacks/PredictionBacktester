@@ -894,7 +894,7 @@ internal static class Program
     {
         var s = e.Stats;
         Console.WriteLine(
-            $"[{DateTime.UtcNow:HH:mm:ss}] pairs {e.PairCount} | ws {(f.IsConnected ? "up" : "DOWN")} msgs {f.MessageCount} (silent {f.SilenceSec:0}s) "
+            $"[{DateTime.UtcNow:HH:mm:ss}] pairs {e.PairCount} | ws {(f.IsConnected ? "up" : "DOWN")} msgs {f.MessageCount} (silent {f.SilenceSec:0}s) seqgap {f.SeqGaps} resync {f.Resyncs} "
           + $"| oracle {(o.IsConnected ? "up" : "DOWN")} quotes {o.QuoteCount} stale {o.StaleCount} "
           + $"{(o.SessionReady ? "" : "SESSION-DOWN ")}"
           + $"| screened {s.Screened} (noquote {s.NoQuote} stale {s.StaleOracle} susp {s.Suspended} "
