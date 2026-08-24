@@ -12,10 +12,21 @@ public sealed record SettlementRecord(
     string Ticker, string Status, string Result, string Title, string EventTicker,
     string CloseTime, string ExpectedExpiration, DateTime AtUtc, string Note = "")
 {
-    public bool IsFinal => Status == "finalized" && (Result == "yes" || Result == "no");
+    /// <summary>The outcome is KNOWN and gradeable. Kalshi decides a market before it settles it, so
+    /// <c>determined</c> already carries the answer — measured 2026-08-23: five markets sat at
+    /// <c>determined</c> with a valid result while this property required <c>finalized</c>, so five known
+    /// outcomes were being discarded. Every settled observation counts at n=29.</summary>
+    public bool IsFinal => (Status == "finalized" || Status == "determined")
+                        && (Result == "yes" || Result == "no");
+
     /// <summary>Kalshi no longer serves this market. The outcome is unrecoverable from the venue.</summary>
     public bool IsGone  => Status == "gone";
-    public bool Terminal => IsFinal || IsGone;
+
+    /// <summary>Never ask again. DELIBERATELY NARROWER THAN <see cref="IsFinal"/>: a <c>determined</c>
+    /// market is gradeable but not yet settled, and Kalshi could still void or re-determine it. Keeping it
+    /// non-terminal means the resolver re-checks until it truly finalizes, so a reversal is caught rather
+    /// than frozen into the record — while the result is still available to grade in the meantime.</summary>
+    public bool Terminal => (Status == "finalized" && (Result == "yes" || Result == "no")) || IsGone;
 
     /// <summary>Did the side we would have bought win? Null while unresolved or unrecoverable.</summary>
     public bool? WonFor(string side)
