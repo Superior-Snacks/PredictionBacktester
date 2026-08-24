@@ -69,6 +69,19 @@ public sealed class EvConfig
     /// logged as IMPLAUSIBLE rather than as a signal: every such case so far has been a pairing fault, and
     /// the measured taker edge distribution puts almost nothing past 3.5c, let alone 20c.</summary>
     public double MaxDisagree     = Env("EV_MAX_DISAGREE", 0.15);
+    /// <summary>Largest tolerable disagreement between the two KALSHI sources (WS book vs REST valuation)
+    /// before a row stops counting as a signal.
+    ///
+    /// <para><b>They agree to the cent 97.3% of the time</b> (119,412 rows, 2026-08-24), so a material gap
+    /// means ONE OF THEM IS STALE — and nothing here can tell which. Pricing from REST while the candidate
+    /// was SCREENED from a WS book that disagrees by 8c is not a measurement of anything.</para>
+    ///
+    /// <para><b>The gap does not merely accompany big edges, it MANUFACTURES them.</b> The prescreen admits
+    /// a row when `evWs >= EvMin - PrescreenSlack`. If the WS ask reads 8c HIGHER than REST, that row only
+    /// survives when the REST-based EV is about +7c — so every stale-high WS quote that gets through
+    /// arrives wearing a large apparent edge. Measured the same day: signals ran 7-of-11 past a 3c gap
+    /// against a 1.1% base rate, immediately after the WS/REST agreement fell from 98% to 93%.</para></summary>
+    public double MaxSourceGap    = Env("EV_MAX_WS_REST_GAP", 0.03);
     /// <summary>Only count a row as a signal while the match is actually being PLAYED.
     ///
     /// <para>Measured 2026-08-21/22: all 6 genuine signals were in-play; all 44 phantoms and the one bad
@@ -113,7 +126,8 @@ public sealed class EvStats
     public long Screened, NoQuote, StaleOracle, Suspended, BelowPrescreen, Cooldown,
                 RestCalls, RestFailed, Signals, RejectedByRest, FlooredToZero, RateLimited,
                 IncompleteBook, ScreeningOnly, Implausible, PreMatch, KalshiLed, PinnacleLed,
-                VenueVanished, VenueRefused, OutOfBand, NotRising, NoKineticHistory, DeVigSplit;
+                VenueVanished, VenueRefused, OutOfBand, NotRising, NoKineticHistory, DeVigSplit,
+                SourceGap;
 }
 
 /// <summary>
@@ -147,6 +161,8 @@ public sealed class EvEvaluator
     /// <summary>Bounded time-series of one side's de-vigged fair value.</summary>
     internal sealed class PTrueTrack
     {
+        // Read once: TryRise runs on every valuation, and an env lookup per call is pure waste.
+        private static readonly double MaxHoleSec = EvConfig.Env("EV_KINETIC_MAX_HOLE_SEC", 2.0);
         private readonly object _gate = new();
         private readonly List<(DateTime T, double P)> _s = new();
 
@@ -180,9 +196,25 @@ public sealed class EvEvaluator
             {
                 if (_s.Count == 0) return false;
                 var cut = now - window;
+                int at = -1;
                 for (int i = _s.Count - 1; i >= 0; i--)
-                    if (_s[i].T <= cut) { rise = _s[^1].P - _s[i].P; return true; }
-                return false;
+                    if (_s[i].T <= cut) { at = i; break; }
+                if (at < 0) return false;
+
+                // A GAP IN THE SERIES IS NOT A PRICE MOVE. The sidecar cycles its browser on the lifecycle
+                // schedule while this bot stays up, so the oracle DISAPPEARS and returns — and `Screen`
+                // stops sampling while it is stale, leaving a hole in this buffer. Measuring across that
+                // hole reports the oracle CATCHING UP as though Pinnacle had moved, which is exactly the
+                // shape the kinetic filter is meant to detect: a large rise with Kalshi apparently still,
+                // i.e. a false PINNACLE_LED. Samples land ~4/sec, so anything past a second is a hole.
+                //
+                // Refusing to answer is the correct output: the window genuinely cannot be measured, and
+                // `unknown` is already handled everywhere as "nobody acts".
+                for (int i = at + 1; i < _s.Count; i++)
+                    if ((_s[i].T - _s[i - 1].T).TotalSeconds > 1.0) return false;
+
+                rise = _s[^1].P - _s[at].P;
+                return true;
             }
         }
     }
@@ -582,6 +614,9 @@ public sealed class EvEvaluator
         bool   devigAgree  = evProp >= _cfg.EvMin && evShin >= _cfg.EvMin;
         bool   devigSplit  = _cfg.RequireDeVigAgree && !devigAgree;
 
+        // The two Kalshi sources disagree materially -> one is stale and we cannot tell which. See MaxSourceGap.
+        bool sourceGap  = Math.Abs((double)(restAsk - c.WsAsk)) > _cfg.MaxSourceGap;
+
         bool prematch   = _cfg.RequireInPlay && !c.InPlay;
         bool unverified = _cfg.RequireWsVerified && !c.WsVerified;
         bool venueBad   = venueVerify == "failed";     // asked the venue, got nothing -> not confirmed
@@ -595,7 +630,7 @@ public sealed class EvEvaluator
         // trade set and every conclusion drawn from it.
         bool outOfBand  = !inWin;
         bool signal     = clears && !unverified && !implausible && !prematch && !kalshiLed && !venueBad
-                       && !outOfBand && !notRising && !devigSplit
+                       && !outOfBand && !notRising && !devigSplit && !sourceGap
                        && (!_cfg.RequirePinnacleLed || pinnacleLed);
         if (unverified && clears) Interlocked.Increment(ref Stats.ScreeningOnly);
         if (prematch && clears)   Interlocked.Increment(ref Stats.PreMatch);
@@ -606,6 +641,7 @@ public sealed class EvEvaluator
             else             Interlocked.Increment(ref Stats.NoKineticHistory);
         }
         if (devigSplit && clears) Interlocked.Increment(ref Stats.DeVigSplit);
+        if (sourceGap && clears)  Interlocked.Increment(ref Stats.SourceGap);
 
         if (signal) Interlocked.Increment(ref Stats.Signals);
         else        Interlocked.Increment(ref Stats.RejectedByRest);
@@ -618,6 +654,7 @@ public sealed class EvEvaluator
                         : venueBad ? "VENUE_REFUSED" : implausible ? "IMPLAUSIBLE"
                         : kalshiLed ? "KALSHI_LED" : prematch ? "SIGNAL_PREMATCH"
                         : outOfBand ? "OUT_OF_BAND"
+                        : sourceGap ? "SOURCE_DISAGREE"
                         : devigSplit ? "DEVIG_DISAGREE"
                         : notRising ? (haveKinetic ? "NOT_RISING" : "NO_KINETIC_HISTORY")
                         : "SIGNAL_UNVERIFIED";
@@ -638,6 +675,7 @@ public sealed class EvEvaluator
                           : venueBad ? "VENUE_REFUSED"
                           : kalshiLed ? "KALSHI_LED"
                           : outOfBand ? "OUT_OF_BAND"
+                          : sourceGap ? "SOURCE_DISAGREE"
                           : devigSplit ? "DEVIG_DISAGREE"
                           : notRising ? (haveKinetic ? "NOT_RISING" : "NO_KINETIC_HISTORY")
                           : _cfg.RequirePinnacleLed && !pinnacleLed ? "NOT_PINNACLE_LED"

@@ -55,18 +55,38 @@ public static class Calibration
     /// <summary>How many rows the last FromTelemetry call dropped as mis-oriented, for the coverage line.</summary>
     public static int LastMisorientedDropped { get; private set; }
 
+    /// <summary>Rows dropped because the WS book and the REST valuation disagreed by more than this many
+    /// CENTS. Mirrors the live bot's EV_MAX_WS_REST_GAP so the report grades the rule the bot now runs.</summary>
+    public static double MaxSourceGapCents => Env("EV_MAX_WS_REST_GAP", 0.03) * 100.0;
+    public static int LastSourceGapDropped { get; private set; }
+
+    private static double Env(string k, double d)
+        => double.TryParse(Environment.GetEnvironmentVariable(k), System.Globalization.NumberStyles.Any,
+                           CultureInfo.InvariantCulture, out var v) ? v : d;
+
     /// <summary>Turns raw telemetry rows into gradeable observations.</summary>
     public static List<Obs> FromTelemetry(IEnumerable<Dictionary<string, string>> rows,
                                           IReadOnlyDictionary<string, SettlementRecord> settled)
     {
         var outp = new List<Obs>();
         var misoriented = MisorientedTickers();
-        int droppedMis = 0;
+        int droppedMis = 0, droppedGap = 0;
         foreach (var r in rows)
         {
             string ticker = Csv.Str(r, "Ticker"), side = Csv.Str(r, "Side");
             if (ticker.Length == 0 || side.Length == 0) continue;
             if (misoriented.Contains(ticker)) { droppedMis++; continue; }
+            // THE TWO KALSHI SOURCES DISAGREED, so one of them was stale and nothing can say which. Rows
+            // written BEFORE EV_MAX_WS_REST_GAP existed carry Decision=SIGNAL even though the live bot
+            // would now suppress them, and grading them would score a rule the bot has abandoned — the
+            // same reasoning that already excludes pre-WS-verified rows in section 5.
+            //
+            // It matters more here than a stale quote usually would, because the gap MANUFACTURES the
+            // edge: with a 2c prescreen slack, a row whose WS ask reads 8c high only survives when the
+            // REST-based EV is ~+7c. Measured 2026-08-24: 7 of 11 signals in one burst sat past 3c while
+            // the all-day base rate was 0.62%.
+            double srcGap = Math.Abs(Csv.Num(r, "WsRestGapCents"));
+            if (srcGap > MaxSourceGapCents) { droppedGap++; continue; }
             DateTime.TryParse(Csv.Str(r, "Timestamp"), CultureInfo.InvariantCulture,
                               DateTimeStyles.RoundtripKind, out var at);
             bool? won = settled.TryGetValue(ticker, out var s) ? s.WonFor(side) : null;
@@ -80,6 +100,7 @@ public static class Calibration
                 Csv.Str(r, "MoveRegime"), Csv.Str(r, "Decision")));
         }
         LastMisorientedDropped = droppedMis;
+        LastSourceGapDropped = droppedGap;
         return outp;
     }
 
@@ -173,6 +194,14 @@ public static class Calibration
             Console.WriteLine($"   EXCLUDED {LastMisorientedDropped} row(s) from {MisorientedTickers().Count} "
                             + "MIS-ORIENTED ticker(s) (ev_misoriented.json) — their Pinnacle token named the "
                             + "OPPONENT, so their EV is a phantom. Still present in the telemetry.");
+            Console.ResetColor();
+        }
+        if (LastSourceGapDropped > 0)
+        {
+            Console.ForegroundColor = ConsoleColor.DarkYellow;
+            Console.WriteLine($"   EXCLUDED {LastSourceGapDropped} row(s) where the Kalshi WS book and REST "
+                            + $"disagreed by >{MaxSourceGapCents:0.#}c — one source was stale, and the gap "
+                            + "manufactures apparent edge through the prescreen slack.");
             Console.ResetColor();
         }
         Console.WriteLine($"   settled: {graded.Count}   awaiting settlement: {obs.Count - graded.Count} "

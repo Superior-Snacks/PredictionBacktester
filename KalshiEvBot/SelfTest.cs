@@ -402,15 +402,17 @@ public static class SelfTest
                   "history shorter than the window -> cannot answer, even though it rose 6c");
 
             var rising = new EvEvaluator.PTrueTrack();
-            rising.Add(now.AddSeconds(-8), 0.40, keep);
-            rising.Add(now.AddSeconds(-1), 0.46, keep);
+            // Dense sampling, as production produces (~4/sec). A sparse fixture would trip the hole
+            // check and test nothing about the rise itself.
+            for (int i = 80; i >= 10; i--) rising.Add(now.AddMilliseconds(-i * 100), 0.40, keep);
+            for (int i = 9;  i >= 0;  i--) rising.Add(now.AddMilliseconds(-i * 100), 0.46, keep);
             bool okR = rising.TryRise(now, win, out double riseR);
             Check(okR && Math.Abs(riseR - 0.06) < 1e-9, "spans the window -> +6c measured", $"{riseR:0.0000}");
 
             // The case the whole guard exists for: a gap opening because OUR price is falling.
             var falling = new EvEvaluator.PTrueTrack();
-            falling.Add(now.AddSeconds(-8), 0.60, keep);
-            falling.Add(now.AddSeconds(-1), 0.52, keep);
+            for (int i = 80; i >= 10; i--) falling.Add(now.AddMilliseconds(-i * 100), 0.60, keep);
+            for (int i = 9;  i >= 0;  i--) falling.Add(now.AddMilliseconds(-i * 100), 0.52, keep);
             bool okF = falling.TryRise(now, win, out double riseF);
             Check(okF && riseF < 0, "a DECLINING fair value reports negative rise -> suppressed", $"{riseF:0.0000}");
 
@@ -420,6 +422,17 @@ public static class SelfTest
             for (int i = 12; i >= 0; i--) flat.Add(now.AddSeconds(-i), 0.33, keep);
             bool okS = flat.TryRise(now, win, out double riseS);
             Check(okS && Math.Abs(riseS) < 1e-9, "static market: answerable, and the answer is 'not rising'");
+
+            // THE ORACLE-OUTAGE CASE. The sidecar cycles its browser on the lifecycle schedule while this
+            // bot stays up, leaving a HOLE in the series. Measuring across it reports the oracle catching
+            // up as though Pinnacle had moved — a false PINNACLE_LED, which is the exact shape the filter
+            // exists to detect.
+            var gapped = new EvEvaluator.PTrueTrack();
+            gapped.Add(now.AddSeconds(-40), 0.40, keep);   // before the outage
+            gapped.Add(now.AddSeconds(-8),  0.40, keep);   // ...32s hole...
+            gapped.Add(now.AddSeconds(-1),  0.55, keep);   // oracle back, 15c higher
+            Check(!gapped.TryRise(now, win, out _),
+                  "a HOLE in the series (oracle outage) -> cannot answer, not a +15c rise");
 
             // A BUSY book must stay answerable. 5000 screening passes with a value changing every one of
             // them, across 20s: the 250ms floor keeps the buffer small, and small must not mean "shorter
