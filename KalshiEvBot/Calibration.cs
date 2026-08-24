@@ -298,7 +298,33 @@ public static class Calibration
 
         // ── 5. Signals — colour only ──────────────────────────────────────────────────────────────────
         var sigs = graded.Where(o => o.IsSignal).ToList();
+        // RETIRED SPORTS ARE EXCLUDED FROM THE P&L LIST, and ONLY from here.
+        //
+        // Soccer is closed for this strategy on evidence (44,246 rows, zero oracle-led moves; goal
+        // suspensions mean we are structurally last), so its nine signals - all taken BEFORE the price band,
+        // de-vig agreement and kinetic filter existed - describe a configuration that no longer runs.
+        // Listing them beside live tennis rows makes the section harder to read and its total misleading.
+        //
+        // They are NOT dropped from the DATA and NOT from any other section. Sections 2/3 calibrate the
+        // ORACLE, which is sport-agnostic, and soccer supplies most of the settled volume there (520 of 661
+        // on 2026-08-24) - deleting it would leave the de-vig validated by a handful of observations. The
+        // excluded rows are summarised in one line below, so the record is filtered rather than quietly
+        // shortened. Set EV_REPORT_RETIRED_SPORTS= (empty) to restore them.
+        var retired = (Environment.GetEnvironmentVariable("EV_REPORT_RETIRED_SPORTS") ?? "soccer")
+                      .Split(',', StringSplitOptions.RemoveEmptyEntries)
+                      .Select(x => x.Trim().ToLowerInvariant())
+                      .Where(x => x.Length > 0).ToHashSet();
+        var droppedSigs = sigs.Where(o => retired.Contains(Sport(o.Ticker))).ToList();
+        if (droppedSigs.Count > 0) sigs = sigs.Where(o => !retired.Contains(Sport(o.Ticker))).ToList();
         Console.WriteLine($"\n5. SIGNALS ONLY — {sigs.Count} settled  (colour, NOT evidence: see the header)");
+        if (droppedSigs.Count > 0)
+        {
+            double dq = droppedSigs.Sum(o => o.Ev * Math.Max(1, o.Contracts));
+            double dr = droppedSigs.Sum(o => ((o.Won!.Value ? 1.0 : 0.0) - o.Cost) * Math.Max(1, o.Contracts));
+            Console.WriteLine($"   (excluding {droppedSigs.Count} settled signal(s) from retired sport(s) "
+                            + $"[{string.Join(",", retired)}]: {droppedSigs.Count(o => o.Won!.Value)} won, "
+                            + $"quoted ${dq:0.00}, realised ${dr:+0.00;-0.00} - still graded in sections 2-4d)");
+        }
         if (sigs.Count == 0) { Console.WriteLine("   none settled yet."); return; }
         double quoted = sigs.Sum(o => o.Ev * Math.Max(1, o.Contracts));
         double realis = sigs.Sum(o => ((o.Won!.Value ? 1.0 : 0.0) - o.Cost) * Math.Max(1, o.Contracts));
