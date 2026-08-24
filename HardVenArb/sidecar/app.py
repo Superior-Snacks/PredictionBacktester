@@ -388,6 +388,25 @@ async def debug_feed():
     return fn()
 
 
+@app.get("/debug/inplay")
+async def debug_inplay():
+    """WHY IS A LIVE MATCH TAGGED PRE-MATCH? The in-play tag drives EV_REQUIRE_IN_PLAY on the bot side, so
+    when it is wrong the bot goes blind to exactly the regime it trades — observed 2026-08-24 with only 2%
+    of rows in-play while four paired matches streamed live odds tagged `live=False`.
+
+    The tag can only be lost two ways, and this separates them:
+      `del_wiped_live` > 0   a `del` destroyed live tokens; a re-seed then restores them tagged pre-match,
+                             because both sticky-live guards work by consulting the OLD entry. Fix = tombstone.
+      `live_regressions` > 0 a /pre push downgraded a live token with no `del` to explain it. Fix = the guards.
+      BOTH zero            the tag was never SET — no /live/* message ever arrived for that league, which is
+                             a subscription or publishing question, not a downgrade one.
+    """
+    fn = getattr(adapter, "inplay_diagnostics", None)
+    if not callable(fn):
+        raise HTTPException(404, f"book '{adapter.name}' publishes no in-play diagnostics")
+    return fn()
+
+
 @app.post("/debug/aim")
 async def debug_aim(selection_id: str):
     """Move the PHYSICAL cursor onto this selection's price cell and stop. Presses nothing.

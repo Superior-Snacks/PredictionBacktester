@@ -664,6 +664,10 @@ class PinnacleAdapter(BookAdapter):
         # actually being delivered (in-play arbs went missing after day 1 — see _refresh_league live-preserve fix).
         self._ws_live_msgs = 0
         self._ws_pre_msgs = 0
+        self._del_wiped_live = 0        # live tokens destroyed by a `del` (see _on_message)
+        self._del_wiped_matchups = 0
+        self._live_regressions = 0      # tokens observed going live -> pre WITHOUT a del
+        self._ever_live: set = set()    # every token that has EVER carried live=True this run
         self._ws_last_msg_ts = 0.0        # unix ts of the last odds frame from EITHER WS source
         self._requested_ids: set = set()   # selection ids the C# bot actually asks for (the PAIRED tokens) — to
                                            # measure how many WATCHED tokens are live vs the whole cache being live
@@ -1459,15 +1463,52 @@ class PinnacleAdapter(BookAdapter):
         401-403. This loop just LOGS a prolonged outage once (so an operator knows), then keeps watching."""
         warn_after = float(os.environ.get("PINNACLE_WS_WARN_SEC")
                            or os.environ.get("PINNACLE_WS_GIVEUP_SEC", "120"))   # old env name kept for compat
+        # ── SILENCE WATCHDOG ──────────────────────────────────────────────────────────────────────────
+        # CONNECTED IS NOT THE SAME AS DELIVERING, and this loop used to only ask the first question. A
+        # half-open socket, or one whose SUBSCRIPTIONS were silently dropped, keeps `_connected` True — so
+        # the branch below reset its clock every 5s and could never notice that nothing was arriving.
+        #
+        # Cost of that blind spot, measured 2026-08-24: the sidecar sat "connected" with zero `/live/*`
+        # frames for 37 minutes. Every in-play match read as PRE-MATCH (the tag is set from the topic name),
+        # `EV_REQUIRE_IN_PLAY=1` suppressed all of them, and the EV bot logged 2% in-play rows while four
+        # paired matches streamed live odds. No error anywhere; a hand restart was the only cure.
+        #
+        # Two remedies, cheapest first. Re-subscribing is free and is exactly what a reconnect would do
+        # anyway, so it is tried alone before anything disruptive; a forced reconnect only follows if the
+        # silence outlives it.
+        silence_resub = float(os.environ.get("PINNACLE_WS_SILENCE_RESUB_SEC", "180"))
+        silence_recon = float(os.environ.get("PINNACLE_WS_SILENCE_RECONNECT_SEC", "420"))
         last_ok, warned = time.time(), False
+        last_resub = 0.0
         while not self._ws_gave_up:
             try:
                 await asyncio.sleep(5)
             except asyncio.CancelledError:
                 break
+            now = time.time()
             if self._connected:
-                last_ok, warned = time.time(), False
-            elif not warned and time.time() - last_ok > warn_after:
+                last_ok, warned = now, False
+                # Only judge silence when frames are EXPECTED: we are connected, we have leagues the bot is
+                # actively asking about, and at least one frame has arrived at some point (so a cold start
+                # is not mistaken for a stall).
+                quiet = (now - self._ws_last_msg_ts) if self._ws_last_msg_ts else 0.0
+                if self._active_leagues and quiet > silence_resub:
+                    if quiet > silence_recon:
+                        print(f"[PINNACLE WS] *** SILENT {quiet:.0f}s while CONNECTED - forcing a reconnect "
+                              f"(re-subscribe did not restore the feed). ***", flush=True)
+                        self._ws_last_msg_ts = now      # restart the clock so this cannot loop every 5s
+                        try:
+                            self._client.reconnect()    # on_connect clears _subscribed -> reconciler refills
+                        except Exception as ex:
+                            print(f"[PINNACLE WS] forced reconnect failed: {type(ex).__name__}: {ex}", flush=True)
+                    elif now - last_resub > silence_resub:
+                        last_resub = now
+                        n = len(self._subscribed)
+                        print(f"[PINNACLE WS] *** SILENT {quiet:.0f}s while CONNECTED - dropping {n} league "
+                              f"subscription(s) so the reconciler re-subscribes. *** (subscriptions do NOT "
+                              f"survive a reconnect and nothing else notices when they are lost)", flush=True)
+                        self._subscribed.clear()        # reconciler re-adds one per PINNACLE_SUBSCRIBE_GAP_SEC
+            elif not warned and now - last_ok > warn_after:
                 warned = True
                 print(f"[PINNACLE WS] down >{warn_after:.0f}s — still auto-reconnecting (transient; a DEAD "
                       "session would have stopped it). Books stay stale until it recovers.")
@@ -2222,8 +2263,23 @@ class PinnacleAdapter(BookAdapter):
                                                        _strip_units(str(rec.get("units") or "")))
         if data.get("op") == "del":
             with self._cache_lock:
-                for k in [k for k in self._cache if k.startswith(prefix)]:
+                doomed = [k for k in self._cache if k.startswith(prefix)]
+                # DIAGNOSTIC: a `del` is the ONLY path that clears the in-play tag, and both sticky-live
+                # guards work by consulting the OLD cache entry — so after this wipe a re-seed has nothing
+                # to preserve from and the matchup comes back tagged pre-match. The surrounding code assumes
+                # `del` means "the game ended", but if Pinnacle also sends it on a board/structure change
+                # this is where a live tag silently regresses. Counted and named so the question is settled
+                # by observation rather than by a third guess.
+                was_live = [k for k in doomed if getattr(self._cache.get(k), "live", False)]
+                for k in doomed:
                     del self._cache[k]
+            if was_live:
+                self._del_wiped_live += len(was_live)
+                self._del_wiped_matchups += 1
+                print(f"[PINNACLE WS] *** del WIPED {len(was_live)} LIVE token(s) for {lid}:{mid} *** "
+                      f"(total {self._del_wiped_live} across {self._del_wiped_matchups} matchup(s)) - if this "
+                      f"matchup re-seeds, it returns tagged PRE-MATCH and the EV bot stops seeing it in-play.",
+                      flush=True)
             return
         now = time.time()
         # Pinnacle pushes the WHOLE matchup record on any sub-market change, so the markets list is the full
@@ -2262,6 +2318,19 @@ class PinnacleAdapter(BookAdapter):
                     old = self._cache.get(token)
                     if old is not None and old.live:
                         sel.live = True
+            # REGRESSION WATCH: a token that has EVER been in-play arriving tagged pre-match, with no `del`
+            # to explain it. That is the OTHER way the tag could be lost — a downgrade slipping past the two
+            # sticky-live guards above — and it is worth separating from the `del` case, because the fixes
+            # are different: a tombstone across `del` vs a hole in the guards.
+            for token, sel in updates.items():
+                if getattr(sel, "live", False):
+                    self._ever_live.add(token)
+                elif token in self._ever_live:
+                    self._live_regressions += 1
+                    if self._live_regressions <= 20 or self._live_regressions % 50 == 0:
+                        print(f"[PINNACLE WS] *** live->pre REGRESSION on {token} *** (no del; total "
+                              f"{self._live_regressions}) - a /pre push downgraded an in-play token past "
+                              f"both sticky-live guards.", flush=True)
             self._cache.update(updates)
         if updates and self._debug_ws:
             legs = " ".join(f"{k.split(':', 2)[-1]}={v.decimal_odds:.3f}" for k, v in list(updates.items())[:6])
@@ -2306,6 +2375,40 @@ class PinnacleAdapter(BookAdapter):
                 token = f"{lid}:{mid}:{t}:{float(pts):g}:{desig}"
             yield token, Selection(token, decimal_odds=dec, max_stake=max_stake, status="open", ts=now,
                                    live=live, cutoff=cutoff or 0.0)
+
+    def inplay_diagnostics(self) -> dict:
+        """Everything needed to tell "the tag was LOST" from "the tag was never SET". See /debug/inplay."""
+        now = time.time()
+        with self._cache_lock:
+            items = list(self._cache.items())
+        live_now = [k for k, v in items if getattr(v, "live", False)]
+        # A token whose match has demonstrably started but which is still tagged pre-match is the symptom;
+        # listing them beside the counters is what turns the endpoint into a diagnosis rather than a dump.
+        ever = sorted(self._ever_live)
+        return {
+            "mode": self.mode,
+            "ws_msgs": {"live": self._ws_live_msgs, "pre": self._ws_pre_msgs},
+            # THE STALL METRIC. `connected` true with `quiet_sec` climbing is the exact 2026-08-24 failure:
+            # the socket is up, nothing is arriving, and every in-play match reads as pre-match. The silence
+            # watchdog re-subscribes past PINNACLE_WS_SILENCE_RESUB_SEC and reconnects past
+            # PINNACLE_WS_SILENCE_RECONNECT_SEC, so a climbing value here should self-correct.
+            "connected": bool(getattr(self, "_connected", False)),
+            "quiet_sec": round(time.time() - self._ws_last_msg_ts, 1) if self._ws_last_msg_ts else None,
+            "subscribed_leagues": len(getattr(self, "_subscribed", ()) or ()),
+            "active_leagues": len(getattr(self, "_active_leagues", {}) or {}),
+            "cache_tokens": len(items),
+            "live_now": len(live_now),
+            "ever_live": len(ever),
+            # THE DECIDING NUMBERS
+            "del_wiped_live": self._del_wiped_live,
+            "del_wiped_matchups": self._del_wiped_matchups,
+            "live_regressions": self._live_regressions,
+            # tokens that were live at some point and are not live now — the population that regressed
+            "lost_the_tag": [k for k in ever if k not in set(live_now)][:40],
+            "live_now_sample": live_now[:20],
+            "reseed_inplay": self._reseed_inplay,
+            "ts": now,
+        }
 
     def _dump_ws_record(self, data: dict, lid: str, mid: str) -> None:
         """RECON (PINNACLE_WS_DUMP=<path>): append a compact summary of EVERY incoming WS record so we can see

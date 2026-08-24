@@ -1045,6 +1045,26 @@ class PinnacleBrowserSession:
         # churn bug). `force` still bypasses everything.
         session_looks_live = (self._logged_session and self._last_capture
                               and (time.time() - self._last_capture) < self._login_healthy_grace)
+
+        # POSITIVE DOM EVIDENCE OVERRIDES THE TOKENS, and this is what unfroze the re-login.
+        #
+        # Both inputs to `session_looks_live` are known liars after a logout: `_last_capture` stays fresh
+        # because a logged-out SPA keeps replaying its dead x-session, and `_have_ws` is set on the first
+        # successful login and cleared in exactly one place — inside `_open_login_form`, which cannot be
+        # reached on a sport board because the old DOM check was blind there. So one blind spot made
+        # `session_looks_live` permanently true and skipped EVERY non-forced login for the life of the
+        # process. That is the intermittency: it worked whenever the page happened to be somewhere the old
+        # check could see, and silently never fired otherwise.
+        #
+        # A visible LOG IN control is stronger evidence than either token, so let it win outright. Note the
+        # test is `== "out"`, not "not in" — an `unknown` (page mid-load) must NOT be read as a logout.
+        if session_looks_live and (await self._login_state()) == "out":
+            session_looks_live = False
+            self._have_ws = False           # stop claiming a WS login the DOM just disproved
+            print("[PINNACLE SESSION] tokens say live but a LOG IN control is on the page - the DOM wins. "
+                  "(A logged-out SPA replays its dead x-session, so the tokens cannot see a logout.)",
+                  flush=True)
+
         have_ws = bool(getattr(self, "_have_ws", False))
         opened_at = float(getattr(self, "_opened_at", 0.0) or 0.0)
         ws_grace = float(getattr(self, "_ws_login_grace", 45.0))
@@ -1248,15 +1268,102 @@ class PinnacleBrowserSession:
         # the only way the limit can be learned — the venue does not publish it.
         self._note_logged_out_age(self._known_logged_out)
 
-    async def _looks_logged_out(self) -> bool:
-        """A visible LOG IN control on the board means the account is OUT. A logged-in page shows the balance
-        and account menu there instead, never a login button — so this is the cheapest reliable signal, and
-        the only one available when no form is rendered."""
+    # POSITIVE proof of a session, and the reason this exists at all.
+    #
+    # The old check asked "is a LOG IN control visible?" and its docstring called that "the cheapest reliable
+    # signal". It is not reliable where the bot actually sits: Pinnacle renders NO login control on a sport
+    # board (verified 2026-08-18 on /tennis/matchups/), so the check returned False whether we were in or
+    # out. That blindness is load-bearing — `_open_login_form` needs `dom_says_out` before it will clear
+    # `_have_ws`, and `session_looks_live` stays true forever while `_have_ws` is set, so a single blind spot
+    # froze every non-forced re-login for the life of the process.
+    #
+    # DEPOSIT is the fix because it is GLOBAL CHROME: the header carries it on every page of the site, so
+    # unlike LOG IN (homepage only) the signal is available wherever the bot happens to be parked. Verified
+    # present on the live tennis board 2026-08-24 alongside the balance and the account menu.
+    #
+    # TEXT, not class. `button-l9TRHt6rdY` is a hashed class shared site-wide with DECLINE and PLACE BET,
+    # and hashed classes change on every front-end rebuild — anchoring on one buys a silent failure at
+    # Pinnacle's next deploy. Text is the only durable handle here, the same conclusion the LOG IN control
+    # forced.
+    _DEPOSIT_RX = re.compile(r"^\s*deposit\s*$", re.I)
+
+    async def _account_chrome_visible(self) -> bool:
+        """Is a logged-in-only header control on the page right now?"""
         try:
-            b = self._page.locator("button:visible, a:visible").filter(has_text=self._LOGIN_RX)
+            b = self._page.locator("button:visible, a:visible").filter(has_text=self._DEPOSIT_RX)
             return bool(await b.count())
         except Exception:
             return False
+
+    # Public top-nav, present on every page in BOTH states — so it answers "has this page rendered yet",
+    # which is the question that separates a logout from a page still mounting. Text again, not class.
+    # ASSUMPTION worth validating: observed logged-IN 2026-08-24; that it survives a logout is inferred from
+    # it being public navigation, and `_log_login_markers` is what will confirm or kill that.
+    _NAV_RX = re.compile(r"^\s*(sports\s*betting|casino|live\s*centre)\s*$", re.I)
+
+    async def _login_state(self) -> str:
+        """TRI-STATE: 'in' | 'out' | 'unknown'.
+
+        The third value is the point. A page mid-navigation shows NEITHER a DEPOSIT control nor a LOG IN
+        one, and collapsing that into "logged out" would fire a credential submit at every reload — on an
+        account that has already been shown a captcha once. Absence of evidence is its own answer and is
+        acted on by nobody.
+
+        Both controls live in the same header slot and one of them is on every page, so in practice this
+        answers 'in' or 'out' and only says 'unknown' while a page is still mounting — which is exactly when
+        no one should act.
+        """
+        if await self._account_chrome_visible():
+            return "in"
+        try:
+            if await self._page.locator("button:visible, a:visible").filter(has_text=self._LOGIN_RX).count():
+                return "out"
+        except Exception:
+            pass
+        # WIDEN PAST button/a. The original check only ever looked at `button` and `a`, so a login affordance
+        # built as a clickable div/span is invisible to it ANYWHERE on the site — which would look exactly
+        # like the "blind on sport boards" story and is not ruled out by anything measured. The anchored
+        # regex keeps this specific; `get_by_text` is a fallback, tried only after the cheap selector misses.
+        try:
+            if await self._page.get_by_text(self._LOGIN_RX).filter(visible=True).count():
+                return "out"
+        except Exception:
+            pass
+        # NO NAV-BASED FALLBACK. An earlier cut inferred "page rendered + no DEPOSIT => logged out" from a
+        # 2026-08-18 note claiming the sport boards render no LOG IN control. The operator, looking at the
+        # live site 2026-08-24, reports the opposite: LOG IN and DEPOSIT occupy the SAME header slot and one
+        # of them is present on every page of the site. Direct observation beats a stale comment — and if it
+        # is right, that inference could only ever fire mid-render, i.e. it would submit credentials at a
+        # perfectly live session. `nav` is still recorded in the markers so a future logout can settle it,
+        # but nothing DECIDES on it.
+        return "unknown"
+
+    async def _log_login_markers(self) -> dict:
+        """Presence of every candidate marker, for validating them against a REAL logout.
+
+        Which selectors actually flip at a logout is an assumption until one is observed. Recording all of
+        them each tick means the next natural logout settles it — no forced sign-out required, which matters
+        because forcing one spends a credential submit on an account that has already seen a captcha."""
+        out = {}
+        for name, rx, sel in (("deposit", self._DEPOSIT_RX, "button:visible, a:visible"),
+                              ("login",   self._LOGIN_RX,   "button:visible, a:visible"),
+                              ("nav",     self._NAV_RX,     "a:visible")):
+            try: out[name] = bool(await self._page.locator(sel).filter(has_text=rx).count())
+            except Exception: out[name] = None
+        try: out["acct_btn"] = bool(await self._page.locator("button.btn-E8UAHkxHvO:visible").count())
+        except Exception: out["acct_btn"] = None
+        # Recorded separately from `login` so the log says WHICH selector saw it. If `login` is false while
+        # `login_any` is true, the control is not a button/anchor and the original check could never have
+        # found it — that would be the root cause, stated outright rather than inferred.
+        try: out["login_any"] = bool(await self._page.get_by_text(self._LOGIN_RX).filter(visible=True).count())
+        except Exception: out["login_any"] = None
+        try: out["deposit_any"] = bool(await self._page.get_by_text(self._DEPOSIT_RX).filter(visible=True).count())
+        except Exception: out["deposit_any"] = None
+        return out
+
+    async def _looks_logged_out(self) -> bool:
+        """True only on POSITIVE evidence of a logout. 'unknown' is not a logout."""
+        return (await self._login_state()) == "out"
 
     async def _open_login_form(self) -> bool:
         """Click the header LOG IN so the password form exists to submit. Returns True if a form appeared.
@@ -1264,7 +1371,16 @@ class PinnacleBrowserSession:
         Guarded the same way the submit is: only when the session does NOT look live. Clicking LOG IN on a
         healthy session would at best be a stray dialog and at worst rotate a working login, so 'no form on
         the page' is treated as logged-out ONLY when the other evidence agrees."""
-        dom_says_out = await self._looks_logged_out()
+        # One line per TRANSITION, never per tick — the watcher runs every PINNACLE_LOGIN_CHECK_SEC (8s)
+        # and a per-tick line would bury the log. The markers are what validate the selectors against a real
+        # logout, so they are printed at exactly the moment the state changes.
+        st = await self._login_state()
+        if st != getattr(self, "_last_login_state", None):
+            print(f"[PINNACLE SESSION] login state: {getattr(self, '_last_login_state', 'n/a')} -> {st}  "
+                  f"markers={await self._log_login_markers()}", flush=True)
+            self._last_login_state = st
+
+        dom_says_out = st == "out"
         if not dom_says_out and not self._known_logged_out:
             return False
         now = time.time()
@@ -1517,6 +1633,8 @@ class PinnacleBrowserSession:
         out["would_skip_because_session_looks_live"] = session_looks_live and not out["cooldown_blocking"]
         try:
             out["looks_logged_out"] = await self._looks_logged_out()
+            out["login_state"]  = await self._login_state()      # in | out | unknown
+            out["markers"]      = await self._log_login_markers()
         except Exception:
             out["looks_logged_out"] = None
         # The case that made the watcher a no-op: OUT, but with no form on the page to submit.
