@@ -447,6 +447,46 @@ def main() -> None:
             print(f"[PAIR] price-gate (tol={args.price_tol}): {gate[0]} consistent | {gate[1]} inverted-fixed | "
                   f"{gate[2]} wrong-game rejected | {gate[3]} unvalidated (no price)")
 
+    # ── ORIENTATION AUDIT: does the assigned token actually NAME the outcome? ─────────────────────────
+    # THE INVARIANT, checked against the RAW catalog rather than any structure derived from it.
+    #
+    # Two earlier guards cannot see this class of fault. `price_validate` above detects inversion from
+    # PRICES, so on a near-even match it is blind — the same blind spot that lets a flip slip under
+    # EV_MAX_DISAGREE=0.15 downstream. And a check against `sid_names` would be circular: that map is built
+    # FROM `book`'s `teams`, so if `teams` assigned the wrong side the check inherits the identical error
+    # and passes. (Both mistakes were made on the way to this one — the first cut of this audit did exactly
+    # that and reported zero while three rows were mis-oriented.)
+    #
+    # Measured 2026-08-24: 4 of 110 rows, then 3 of 143 on a fresh run, pointed at the OPPONENT. Each
+    # produced a phantom edge of roughly |1-2p| while the two venues actually AGREED, e.g. Kalshi's
+    # Andreeva contract priced against Pinnacle's Bolkvadze probability: pTrue 0.577 vs ask 0.430, and
+    # 1-0.577 = 0.423. The tell is arithmetic: (1-pTrue) tracks the ask instead of pTrue doing so.
+    #
+    # Name TOKENS, not substrings: "Felipe Meligeni Alves" vs "Felipe Meligeni Rodrigues Alves" and
+    # "Jazmin Ortenzi" vs "Jasmin Ortenzi" are the same player, and a substring test strips both (it did).
+    raw_names = {s_.get("selection_id"): (s_.get("selection_name") or "")
+                 for s_ in cat if s_.get("selection_id")}
+
+    def _ntok(x: str) -> set:
+        return {w for w in re.sub(r"[^a-z ]", " ", (x or "").lower()).split() if len(w) >= 3}
+
+    misoriented = 0
+    for e in pairs:
+        yt = e.get("hardven_yes_token") or ""
+        out = e.get("kalshi_outcome") or e.get("outcome") or ""
+        pin = raw_names.get(yt)
+        if not (yt and out and pin):
+            continue                      # unpaired, or the token is not on the board now -> cannot judge
+        if _ntok(out) & _ntok(pin):
+            continue                      # shares a name token => same player
+        misoriented += 1
+        print(f"[PAIR] MIS-ORIENTED {e.get('kalshi_ticker','?')}: Kalshi outcome '{out}' but the YES token "
+              f"names '{pin}' — cleared (its EV would be a phantom).")
+        for _k in ("hardven_yes_token", "hardven_no_token", "hardven_yes_name", "hardven_no_name"):
+            e.pop(_k, None)
+    if misoriented:
+        print(f"[PAIR] *** {misoriented} row(s) pointed at the WRONG PLAYER and were cleared. ***")
+
     # tab-manager metadata: league URL (one tab per gap league) + ISO start_time (rank gaps by soonest start).
     # Backfills EVERY filled pair — new AND previously-filled (pre-dating these fields) — that lacks them.
     url_n = start_n = 0

@@ -26,15 +26,47 @@ public sealed record Obs(
 /// </summary>
 public static class Calibration
 {
+    /// <summary>Tickers whose Pinnacle token pointed at the OPPONENT — their P_true is the COMPLEMENT of
+    /// the truth, so every EV from them is a phantom of roughly |1-2p| while the venues actually agree.
+    ///
+    /// <para>Read from <c>ev_misoriented.json</c> rather than compiled in, so a refined diagnosis is an edit
+    /// instead of a rebuild — one listed entry is ambiguous by construction (a flip near p=0.5 is nearly
+    /// undetectable) and must stay reversible.</para>
+    ///
+    /// <para><b>The rows are EXCLUDED here, never deleted from the telemetry.</b> Those CSVs are the
+    /// append-only record this milestone is made of; destroying evidence to clean a report is how a wrong
+    /// call becomes permanent.</para></summary>
+    public static HashSet<string> MisorientedTickers()
+    {
+        var outp = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            string path = Path.Combine(Directory.GetCurrentDirectory(), "ev_misoriented.json");
+            if (!File.Exists(path)) return outp;
+            using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(path));
+            if (doc.RootElement.TryGetProperty("tickers", out var t)
+                && t.ValueKind == System.Text.Json.JsonValueKind.Object)
+                foreach (var m in t.EnumerateObject()) outp.Add(m.Name);
+        }
+        catch (Exception ex) { Console.WriteLine($"[CAL] ev_misoriented.json unreadable: {ex.Message}"); }
+        return outp;
+    }
+
+    /// <summary>How many rows the last FromTelemetry call dropped as mis-oriented, for the coverage line.</summary>
+    public static int LastMisorientedDropped { get; private set; }
+
     /// <summary>Turns raw telemetry rows into gradeable observations.</summary>
     public static List<Obs> FromTelemetry(IEnumerable<Dictionary<string, string>> rows,
                                           IReadOnlyDictionary<string, SettlementRecord> settled)
     {
         var outp = new List<Obs>();
+        var misoriented = MisorientedTickers();
+        int droppedMis = 0;
         foreach (var r in rows)
         {
             string ticker = Csv.Str(r, "Ticker"), side = Csv.Str(r, "Side");
             if (ticker.Length == 0 || side.Length == 0) continue;
+            if (misoriented.Contains(ticker)) { droppedMis++; continue; }
             DateTime.TryParse(Csv.Str(r, "Timestamp"), CultureInfo.InvariantCulture,
                               DateTimeStyles.RoundtripKind, out var at);
             bool? won = settled.TryGetValue(ticker, out var s) ? s.WonFor(side) : null;
@@ -47,6 +79,7 @@ public static class Calibration
                 Csv.Str(r, "OracleWsVerified") is "1" ? 1 : Csv.Str(r, "OracleWsVerified") is "0" ? 0 : -1,
                 Csv.Str(r, "MoveRegime"), Csv.Str(r, "Decision")));
         }
+        LastMisorientedDropped = droppedMis;
         return outp;
     }
 
@@ -132,6 +165,16 @@ public static class Calibration
         Console.WriteLine($"\n1. COVERAGE");
         Console.WriteLine($"   {all.Count} logged row(s) → {obs.Count} independent observation(s) "
                         + $"({(dedupe ? "one per ticker+side" : "NOT deduped")}) across {distinctTickers} market(s)");
+        if (LastMisorientedDropped > 0)
+        {
+            // Stated, not silent. A quietly shorter dataset is indistinguishable from a quieter day, and the
+            // whole reason these rows are excluded is that they looked plausible row by row.
+            Console.ForegroundColor = ConsoleColor.DarkYellow;
+            Console.WriteLine($"   EXCLUDED {LastMisorientedDropped} row(s) from {MisorientedTickers().Count} "
+                            + "MIS-ORIENTED ticker(s) (ev_misoriented.json) — their Pinnacle token named the "
+                            + "OPPONENT, so their EV is a phantom. Still present in the telemetry.");
+            Console.ResetColor();
+        }
         Console.WriteLine($"   settled: {graded.Count}   awaiting settlement: {obs.Count - graded.Count} "
                         + $"({active} market(s) still active)");
         if (lost > 0)

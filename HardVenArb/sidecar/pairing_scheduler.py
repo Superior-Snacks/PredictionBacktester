@@ -166,12 +166,28 @@ class PairingScheduler:
             print(f"[PAIR SCHED] {reason} pairing run complete.")
             return
         # moneyline: scaffold -> fill (the fill reads the scaffold, so skip it if the scaffold failed)
+        #
+        # PRICE-TOL IS PASSED EXPLICITLY. `pair_pinnacle`'s own default is 0.25, so the scheduler was running
+        # a gate twice as loose as the one used by hand (0.12) — and that gate is one of the two things that
+        # catches an inverted side. Two configurations of the same guard, differing by who launched it, is
+        # exactly the kind of split that makes a fault look intermittent.
         if await self._run_step("scaffold (Kalshi)", ["pairHard.py"], ROOT):
-            await self._run_step("moneyline fill (Pinnacle)", ["pair_pinnacle.py", "--write"], SIDECAR)
+            await self._run_step("moneyline fill (Pinnacle)",
+                                 ["pair_pinnacle.py", "--write", "--price-tol",
+                                  os.environ.get("HARDVEN_PAIR_PRICE_TOL", "0.12")], SIDECAR)
         else:
             print("[PAIR SCHED]   scaffold failed — skipping the moneyline fill (nothing to fill).")
         # derivatives: independent (own file, guest API), so always attempt it
         await self._run_step("derivatives (spread/total)", ["pair_derivatives.py", "--write"], SIDECAR)
+        # LEDGER LAST, and unconditional. It records the mapping that ACTUALLY ended up on disk, which is
+        # the only state the bot will read. Running it earlier would capture the previous pairing and miss
+        # the change — the one thing it exists to catch. Cheap (append-only, no network) and idempotent, so
+        # a run that changed nothing simply adds no lines.
+        #
+        # Why it matters here specifically: this scheduler re-pairs on an intraday cadence, so cross_pairs.json
+        # is overwritten repeatedly. Without the ledger, a pair that was inverted at 14:00 and corrected at
+        # 15:30 leaves no evidence it was ever wrong, while the telemetry it produced lives on.
+        await self._run_step("ledger (record mapping)", ["pair_ledger.py"], SIDECAR)
         print(f"[PAIR SCHED] {reason} pairing run complete.")
 
     async def _run_step(self, name: str, script_args: list[str], cwd: Path) -> bool:
