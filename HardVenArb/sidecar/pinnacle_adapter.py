@@ -520,6 +520,11 @@ class PinnacleAdapter(BookAdapter):
         self._loop: Optional[asyncio.AbstractEventLoop] = None   # main loop, captured in _start_ws (paho callbacks are off-loop)
         self._ws_remints = 0                              # re-mints attempted this outage (reset on a clean connect)
         self._ws_remint_cap = int(os.environ.get("PINNACLE_WS_REMINT_CAP", "6"))
+        # ABSOLUTE ceiling on rejected credential auths since the last GOOD connect. Every other counter in
+        # this class is per-streak and can be re-armed by the recovery path - which is exactly how 131
+        # rejected auths got past a cap of 2 on 2026-08-25. This one answers to nothing but a clean connect.
+        self._ws_auth_total = 0
+        self._ws_auth_hard_cap = int(os.environ.get("PINNACLE_WS_AUTH_HARD_CAP", "6"))
         self._last_remint = 0.0
         self._remint_throttle_sec = float(os.environ.get("PINNACLE_WS_REMINT_THROTTLE_SEC", "30"))
         self._ws_watchdog_task: Optional[asyncio.Task] = None
@@ -1269,6 +1274,7 @@ class PinnacleAdapter(BookAdapter):
         if became_ready or rotated:
             self._session_expired = False
             self._ws_auth_rejects = self._rest_auth_fails = 0   # fresh creds → clear the death streaks
+            self._ws_auth_total = 0                             # ...including the absolute auth ceiling
             self._mark_session_started("browser login" if became_ready else "session rotated")  # (re)start age tracking
             # VALIDATE, don't assume. A page restoring from the SAVED profile replays a STALE x-session before it
             # re-authenticates, and capturing the first auth header we see declared "the bot is GO" on a session
@@ -1288,7 +1294,7 @@ class PinnacleAdapter(BookAdapter):
         if self._ws_gave_up and self._session_ready and ws_pass_changed:
             self._ws_gave_up = False
             self._ws_started = False
-            self._ws_auth_rejects = self._ws_remints = 0
+            self._ws_auth_rejects = self._ws_remints = self._ws_auth_total = 0
             self._session_expired = False
             self._seeded.clear()
             print("[PINNACLE] re-captured WS creds (suffix) → restarting the odds WS (was given up).")
@@ -1318,6 +1324,7 @@ class PinnacleAdapter(BookAdapter):
         self._ws_started = False
         self._session_expired = False
         self._ws_auth_rejects = self._rest_auth_fails = 0
+        self._ws_auth_total = 0                             # ...including the absolute auth ceiling
         self._seeded.clear()
         # Bring the league tabs back up with the session. Its own start delay covers the browser launch that
         # follows this hook, and a failed open_tab is handled per-tick, so starting early is safe.
@@ -1406,16 +1413,34 @@ class PinnacleAdapter(BookAdapter):
             print(f"[PINNACLE WS] subscribe {lid} error: {ex}")
 
     def _on_connect(self, client, userdata, flags, rc, *a) -> None:
+        # A HARD STOP MUST BE HARD. This callback had no give-up guard, and _give_up_ws early-returns once the
+        # latch is set - so after a scheduled dark close paho kept auto-reconnecting, kept landing here, and
+        # kept re-arming its own counters, with no path back to a stop. Measured 2026-08-25: 131 rejected
+        # credential auths across 167 minutes of a DARK window. Repeated failed logins are the single worst
+        # traffic pattern to emit at a sportsbook, so once stopped this does nothing but hang up.
+        if self._ws_gave_up:
+            try: client.disconnect()
+            except Exception: pass
+            return
         rc_val = getattr(rc, "value", rc)
         ok = (rc_val == 0)
         self._connected = ok
         if ok:
             self._ws_auth_rejects = 0                      # healthy connect clears the auth-fail streak
+            self._ws_auth_total = 0                        # ...and the absolute per-outage auth budget
             self._ws_remints = 0                           # recovered → re-arm the per-outage re-mint budget
             print("[PINNACLE WS] connected (rc=0).")
             self._subscribed.clear()                      # the reconciler re-subscribes active leagues gradually
         elif rc_val in (4, 5):                            # CONNACK 4=bad user/pass, 5=not authorized
             self._ws_auth_rejects += 1
+            self._ws_auth_total += 1
+            if self._ws_auth_total >= self._ws_auth_hard_cap:
+                # Checked FIRST, so no recovery branch below can reset a counter and keep the loop alive.
+                self._give_up_ws(f"{self._ws_auth_total} rejected auth(s) since the last good connect "
+                                 f"- hard ceiling PINNACLE_WS_AUTH_HARD_CAP={self._ws_auth_hard_cap}")
+                try: client.disconnect()
+                except Exception: pass
+                return
             print(f"[PINNACLE WS] connect REJECTED (rc={rc}) — session/WS-password invalid "
                   f"({self._ws_auth_rejects}/{self._ws_auth_giveup}).")
             if self._ws_auth_rejects >= self._ws_auth_giveup:
@@ -1425,9 +1450,12 @@ class PinnacleAdapter(BookAdapter):
                 # x-session → _on_browser_creds pushes it to paho) and let paho keep retrying. Only give up if the
                 # browser has no session, or re-mints keep failing (cap) — then it's a genuine logout.
                 if self._browser_has_session() and self._ws_remints < self._ws_remint_cap:
-                    self._ws_auth_rejects = 0             # give the re-mint a fresh streak (paho keeps reconnecting)
-                    if self._request_remint():           # only counts a re-mint that ACTUALLY fired (else throttled)
+                    # ONLY A RE-MINT THAT ACTUALLY FIRED EARNS A FRESH STREAK. This zeroed the reject counter
+                    # BEFORE testing, so a THROTTLED re-mint (30s gate) reset the streak without advancing the
+                    # re-mint budget - an unbounded loop in which neither counter could ever reach its cap.
+                    if self._request_remint():
                         self._ws_remints += 1
+                        self._ws_auth_rejects = 0
                         print(f"[PINNACLE WS] auth-reject but the browser is LOGGED IN — forcing a WS-cred re-mint "
                               f"({self._ws_remints}/{self._ws_remint_cap}); NOT giving up.")
                 else:
@@ -1442,7 +1470,12 @@ class PinnacleAdapter(BookAdapter):
         if self._browser is None:
             return False
         try:
-            return bool(self._browser.status().get("has_session"))
+            st = self._browser.status()
+            # A CACHED TOKEN IS NOT AN OPEN BROWSER. status()["has_session"] is bool(self._session), and
+            # session.stop() deliberately KEEPS captured creds so the next window can reuse them - so through
+            # every scheduled dark window this read True while the browser was shut, and the WS recovery path
+            # concluded "still logged in, keep retrying". Require a live page as well.
+            return bool(st.get("has_session")) and bool(st.get("page_open"))
         except Exception:
             return False
 
@@ -1463,6 +1496,11 @@ class PinnacleAdapter(BookAdapter):
 
     def _on_disconnect(self, client, userdata, rc, *a) -> None:
         self._connected = False
+        if self._ws_gave_up:
+            # Say what is true. Printing "auto-reconnecting" after a hard stop is precisely how a dark-window
+            # credential storm reads as normal operation to anyone scanning the log.
+            print(f"[PINNACLE WS] disconnected (rc={rc}) - STOPPED, not reconnecting.")
+            return
         print(f"[PINNACLE WS] disconnected (rc={rc}) — auto-reconnecting (books go stale until back).")
 
     async def _ws_watchdog(self) -> None:
@@ -1556,7 +1594,16 @@ class PinnacleAdapter(BookAdapter):
         c = self._client
         if c is not None:
             # loop_stop() must NOT run inside the paho loop thread (this can be called from a callback) → offload.
-            threading.Thread(target=c.loop_stop, daemon=True).start()
+            # DISCONNECT FIRST, THEN STOP THE LOOP. loop_stop() alone leaves paho's reconnect INTENT armed, so
+            # a client already inside its 1-60s backoff can keep dialling; disconnect() clears that intent.
+            # Both are offloaded because neither may run inside the paho loop thread (this can be called from
+            # a paho callback).
+            def _hard_stop(cl=c):
+                try: cl.disconnect()
+                except Exception: pass
+                try: cl.loop_stop()
+                except Exception: pass
+            threading.Thread(target=_hard_stop, daemon=True).start()
 
     async def _sub_reconciler(self) -> None:
         """Subscribe to pending (active-but-unsubscribed) leagues ONE AT A TIME with a gap, so the WS

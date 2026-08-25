@@ -333,6 +333,10 @@ class PinnacleBrowserSession:
         return {
             "ready": self.ready,
             "has_session": bool(self._session),
+            # IS THE BROWSER ACTUALLY OPEN? has_session is only a cached token, and stop() keeps the creds on
+            # purpose so the next scheduled window can reuse them - so callers asking "are we still logged in"
+            # got True all through a dark window. This is the honest answer.
+            "page_open": self._page is not None and self._ctx is not None,
             "has_ws_creds": self._have_ws,
             "account": (self._ws_user[:3] + "***") if self._ws_user else "",
             "last_capture_age_sec": round(time.time() - self._last_capture, 1) if self._last_capture else None,
