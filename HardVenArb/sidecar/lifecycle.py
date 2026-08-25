@@ -298,6 +298,45 @@ class PinnacleLifecycle:
                            "paired_only": self._paired_only, "today_only": self._today_only}
         print(f"[PINNACLE LIFECYCLE] {len(self._windows)} session(s) planned "
               f"({mode}, lead {self._lead_min}m{jit}; {scope}; {games_kept} in-window).")
+        # PRINT THE PLAN, NOT JUST ITS SIZE. "6 session(s) planned" is unverifiable at a glance: it cannot
+        # tell you whether a pin kept its span, whether a gap really cleared the downtime floor, or when the
+        # bot next wakes. Every scheduling bug found on 2026-08-25 - pins trimmed ~30% by the downtime/clip
+        # ordering, windows fitted to game density instead of the pin - was invisible in that one line and
+        # obvious the moment the windows were listed. Costs a few lines per replan; the replan is hourly.
+        now_p = sched._utcnow()
+        rows = sorted(self._windows)[:8]
+        for o, c, g in rows:
+            lo, lc = sched._local(o), sched._local(c)
+            mins = (c - o).total_seconds() / 60
+            if o <= now_p < c:
+                when = f"OPEN NOW, closes in {(c - now_p).total_seconds()/60:.0f}m"
+            elif o > now_p:
+                dt_h = (o - now_p).total_seconds() / 3600
+                when = f"in {dt_h:.1f}h" if dt_h >= 1 else f"in {(o - now_p).total_seconds()/60:.0f}m"
+            else:
+                when = "past"
+            print(f"[PINNACLE LIFECYCLE]    {lo:%a %d %b %H:%M}-{lc:%H:%M}  {mins:4.0f}m  "
+                  f"{g:3d} game(s)  {when}")
+        if len(self._windows) > len(rows):
+            print(f"[PINNACLE LIFECYCLE]    ... and {len(self._windows) - len(rows)} more")
+        # THE GAP LINE IS THE ONE THAT CATCHES TRIMMING. A window shortened to open a 45-minute gap looks
+        # perfectly reasonable on its own row; it is only wrong next to the neighbour it was shortened for.
+        gaps = [(sorted(self._windows)[i + 1][0] - sorted(self._windows)[i][1]).total_seconds() / 60
+                for i in range(len(self._windows) - 1)]
+        if gaps:
+            # PER LOCAL DAY, not a grand total. The plan spans today and tomorrow, so one summed figure reads
+            # like a daily number and is not one - which is the same class of confusion this whole printout
+            # exists to remove.
+            per_day: dict = {}
+            for o, c, _ in self._windows:
+                d = sched._local(o).date()
+                per_day[d] = per_day.get(d, timedelta()) + (c - o)
+            days_s = "  ".join(f"{d:%a}: {v.total_seconds()/3600:.2f}h" for d, v in sorted(per_day.items()))
+            print(f"[PINNACLE LIFECYCLE]    open per day - {days_s}")
+            print(f"[PINNACLE LIFECYCLE]    gaps "
+                  + "/".join(f"{g:.0f}m" for g in gaps[:7])
+                  + (f" (min {min(gaps):.0f}m vs downtime floor {self._min_downtime_min:g}m)"
+                     if self._min_downtime_min > 0 else ""))
         self._write_windows_file()
 
     def _burn_uptime(self, now) -> None:
