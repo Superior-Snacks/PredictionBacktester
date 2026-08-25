@@ -657,6 +657,14 @@ class PinnacleAdapter(BookAdapter):
         # AUTO-PAIR: opt-in scheduled re-pairing (startup + daily at HARDVEN_PAIR_HOUR local). Account-free
         # (Kalshi public + Pinnacle guest + the sidecar /catalog); the C# bot hot-reloads the result.
         self._auto_pair = os.environ.get("HARDVEN_AUTO_PAIR") == "1"
+        # AUTO-BLOCK (see the wiring below): opt-in, so an operator running a hand-tuned pin spec keeps it.
+        self._autoblock_on = os.environ.get("PINNACLE_AUTOBLOCK") == "1"
+        self._autoblock_hours = (os.environ.get("PINNACLE_AUTOBLOCK_HOURS") or "06,12").strip()
+        self._autoblock_budget_h = float(os.environ.get("PINNACLE_AUTOBLOCK_BUDGET_H", "10") or 10)
+        self._autoblock_earliest = (os.environ.get("PINNACLE_AUTOBLOCK_EARLIEST") or "06:00").strip()
+        self._autoblock_latest = (os.environ.get("PINNACLE_AUTOBLOCK_LATEST") or "23:00").strip()
+        self._blocks = None
+        self._blocks_task = None
         self._pair_hour = _cfg_int("HARDVEN_PAIR_HOUR", 5)
         self._pair_startup_delay = _cfg_int("HARDVEN_PAIR_STARTUP_DELAY", 8)
         # intraday re-pair cadence (min): pairs LIVE/late-appearing games that the daily 5am run would miss.
@@ -911,6 +919,32 @@ class PinnacleAdapter(BookAdapter):
                 # for it to see something rather than pairing an hour of live games out of existence.
                 reader_probe=self.reader_live_mids)
             self._pairing_task = asyncio.create_task(self._pairing.run())
+
+        # AUTO-BLOCK: re-author the work windows from the live slate instead of running a static pin spec.
+        # PINNACLE_PIN_HOURS is STATIC — pinned_windows() re-emits the same clock times every day — so with
+        # the density planner suppressed (PINNACLE_MIN_GAMES high) the bot would run yesterday's shape
+        # against today's slate indefinitely. Measured 2026-08-25 on tomorrow's board: the static pins scored
+        # 115/149 (77%) in 10.0h open, re-optimising scored 119/149 (80%) in 7.5h — the coverage gain is
+        # small, the 2.5h of open time saved is not, because every open hour is session age and login risk.
+        # Needs the lifecycle (it owns set_pins) and is a no-op without it.
+        if self._autoblock_on and self._lifecycle is not None:
+            from block_scheduler import BlockScheduler
+            self._blocks = BlockScheduler(
+                self._lifecycle, self._lifecycle_sports,
+                os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "cross_pairs.json"),
+                hours=self._autoblock_hours, budget_h=self._autoblock_budget_h,
+                # Author gaps a little WIDER than enforce_downtime's floor. Sitting exactly on it means a
+                # jittered edge can close the gap below the floor, and enforce_downtime then shortens a
+                # window to reopen it — which is the trimming this whole change exists to stop.
+                min_gap=int(max(self._lifecycle_min_downtime + 5, 50)),
+                jitter=int(self._lifecycle_jitter),
+                earliest=self._autoblock_earliest, latest=self._autoblock_latest,
+                horizon_h=self._lifecycle_horizon)
+            self._blocks_task = asyncio.create_task(self._blocks.run())
+            print(f"[PINNACLE] AUTO-BLOCK on — authoring work windows at startup then daily at "
+                  f"{self._autoblock_hours} local, budget {self._autoblock_budget_h:g}h, "
+                  f"window {self._autoblock_earliest}-{self._autoblock_latest}. "
+                  f"Static PINNACLE_PIN_HOURS is only the cold-start fallback now.")
             cadence = (f"every {self._pair_interval_min} min (intraday — pairs live/late-appearing games)"
                        if self._pair_interval_min > 0 else f"daily {self._pair_hour:02d}:00 local")
             print(f"[PINNACLE] AUTO-PAIR on — pairing at startup (+{self._pair_startup_delay}s) then {cadence}. "
@@ -922,7 +956,7 @@ class PinnacleAdapter(BookAdapter):
         if self._ws_watchdog_task and not self._ws_watchdog_task.done():
             self._ws_watchdog_task.cancel()
         for t in (self._reconciler_task, self._status_task, self._session_ka_task,
-                  self._lifecycle_task, self._pairing_task, self._session_age_task,
+                  self._lifecycle_task, self._pairing_task, self._blocks_task, self._session_age_task,
                   self._reader_reseed_task, self._betslip_task):
             if t and not t.done():
                 t.cancel()

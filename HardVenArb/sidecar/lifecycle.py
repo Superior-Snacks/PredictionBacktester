@@ -193,6 +193,22 @@ class PinnacleLifecycle:
             # see apply_jitter. PINNACLE_JITTER_MODE selects.
             new = sched.apply_jitter(new, self._jitter_min,
                                      mode=(os.environ.get("PINNACLE_JITTER_MODE") or "ends").strip().lower())
+        # ALLOWED-HOURS PASS ONE, BEFORE ANY BOUND THAT SHORTENS A WINDOW.
+        # clip_to_allowed also runs at the very end, and that final pass is the guarantee nothing escapes
+        # ONLY_HOURS. But running it ONLY there made the pins pay for neighbours that were about to be
+        # deleted: carve_out_pins leaves the density session's leftovers sitting flush against each pin,
+        # jitter then separates them by a minute or two, and enforce_downtime dutifully carved a 45-minute
+        # gap out of the PIN to make room for a fragment that the final clip then threw away.
+        # Measured 2026-08-25 on the live plan: pins totalling 450 min survived as 320 min
+        # (11:45-15:15 -> 11:48-14:32, 16:15-18:15 -> 16:15-17:36, 19:15-21:15 -> 19:19-20:34).
+        # Clipping first deletes those fragments while they are still harmless, and the pins keep the
+        # 60-minute gaps they were authored with, so downtime has nothing left to trim: 450 of 450 min.
+        # This pass is additive only in the sense that it REMOVES; it can never let anything escape, so the
+        # final pass keeps its role unchanged.
+        if self._only_ranges:
+            new = sched.clip_to_allowed(new, self._only_ranges, now=sched._utcnow(),
+                                        min_window_min=self._min_window_min)
+
         # HARD BOUNDS, applied LAST — after merge + jitter, because both can close a gap or lengthen a block.
         # Downtime first (it shortens windows, which can only help the budget), then the daily ceiling.
         pre_bound = sum((c - o for o, c, _ in new), timedelta())

@@ -296,7 +296,14 @@ public static class Calibration
         // only the subset we would have BOUGHT. A de-vig can be well calibrated in general while the rows
         // that clear an EV threshold are exactly the ones where it is wrong, and only the second line sees
         // that. Reported separately rather than blended, because blending them answers neither.
-        var sigOnly = graded.Where(o => o.IsSignal).ToList();
+        // LIVE SPORTS ONLY, unlike the two lines above it. Those grade the DE-VIG, which is
+        // sport-agnostic and needs soccer's volume to be worth reading. This one grades the STRATEGY,
+        // and a retired sport has no vote in that. Left pooled it was actively misleading: on
+        // 2026-08-25 seven soccer signals that went 0-for-7 against a predicted 0.220 dragged the
+        // headline signal diff from +0.016 (tennis, section 4c) to -0.005, flipping its sign on 7 of
+        // 78 rows — so the report's most prominent signal number disagreed with 4c and 4d for no
+        // reason a reader could see.
+        var sigOnly = live.Where(o => o.IsSignal).ToList();
         if (sigOnly.Count > 0)
         {
             int smk = sigOnly.Select(o => o.Ticker).Distinct(StringComparer.Ordinal).Count();
@@ -408,6 +415,176 @@ public static class Calibration
         Console.WriteLine("   Capturability is per-sport; de-vig accuracy should NOT be. If one sport");
         Console.WriteLine("   calibrates far worse than another, that is the MODEL failing, not the venue.");
 
+
+        // ── 4e. GUARD AUDIT: would the blocked candidates have PAID? ──────────────────────────────────
+        // SECTION 4c CANNOT ANSWER THIS, and the reason is structural rather than a tuning problem.
+        // Everything above runs on DEDUPED observations — one row per (ticker, side), preferring the first
+        // SIGNAL and otherwise the first row chronologically. But ~90% of ticker+sides open with a
+        // REJECTED_REST row, so that label wins the tiebreak and every guard decision that fired later on
+        // the same ticker is discarded. Measured 2026-08-25: NOT_RISING held 13,529 telemetry rows and
+        // reached 4c with ZERO; OUT_OF_BAND 10,105 rows reached it with 10. A guard blocking a thousand
+        // candidates a day was being graded on a sample of one.
+        //
+        // So this section deliberately does NOT dedupe the same way. For each guard it takes the
+        // (ticker, side) pairs where that guard fired and NO signal ever fired — if a signal fired we took
+        // the trade, so it was never suppressed — and grades the first such row against settlement.
+        //
+        // THE TEST IS `realised - cost`, NOT `realised - predicted`. A suppressed candidate asks one
+        // question: had we bought it at the recorded cost, would the payout have exceeded it? Break-even is
+        // the COST, never 0.500 — the whole point of buying below fair value is that a 50% win rate at 46c
+        // still pays. Two honest caveats: these are COUNTERFACTUAL fills at the logged REST cost (fair for a
+        // taker, but never observed), and one ticker can trip several guards, so the rows overlap and the
+        // n column does not sum.
+        Console.WriteLine();
+        Console.WriteLine("4e. GUARD AUDIT  (would what each guard BLOCKED have paid? break-even = cost)");
+        var tradedKeys = all.Where(o => o.IsSignal)
+                            .Select(o => (o.Ticker, o.Side)).ToHashSet();
+        var blocked = all.Where(o => o.Won.HasValue
+                                  && o.Decision.Length > 0
+                                  && o.Decision != "REJECTED_REST" && o.Decision != "SIGNAL"
+                                  && !retired.Contains(Sport(o.Ticker))
+                                  && !tradedKeys.Contains((o.Ticker, o.Side)))
+                         .GroupBy(o => (o.Ticker, o.Side, o.Decision))
+                         .Select(g => g.OrderBy(o => o.At).First())      // first firing per ticker+side+guard
+                         .GroupBy(o => o.Decision)
+                         .OrderByDescending(g => g.Count())
+                         .ToList();
+        if (blocked.Count == 0)
+            Console.WriteLine("   (nothing blocked has settled yet)");
+        foreach (var g in blocked)
+        {
+            var l = g.ToList();
+            int n = l.Count;
+            double cost = l.Average(o => o.Cost);
+            double real = l.Count(o => o.Won!.Value) / (double)n;
+            var pl = l.Select(o => (o.Won!.Value ? 1.0 : 0.0) - o.Cost).ToList();
+            double mean = pl.Average();
+            double sd = n > 1 ? Math.Sqrt(pl.Sum(x => Math.Pow(x - mean, 2)) / (n - 1)) : 0;
+            double se = n > 0 && sd > 0 ? sd / Math.Sqrt(n) : 0;
+            double t = se > 0 ? mean / se : 0;
+            // A guard only EARNS its keep at 2 sigma; anything less is a coin-flip dressed as a policy.
+            string verdict = t >= 2 ? "<- EDGE THROWN AWAY, loosen it"
+                           : t <= -2 ? "<- guard was RIGHT"
+                           : "inconclusive";
+            Console.WriteLine($"   {g.Key.ToLowerInvariant(),-20} n={n,4}  cost {cost:0.000}  realised {real:0.000}"
+                            + $"  edge/ctr {mean:+0.0000;-0.0000}  t={t:+0.00;-0.00}  {verdict}");
+        }
+        Console.WriteLine("   A guard that blocks PROFITABLE candidates is costing money AND slowing the");
+        Console.WriteLine("   verdict, because every suppressed trade is a settled sample we never collect.");
+
+
+        // ── 6. WHEN WILL WE KNOW? ─────────────────────────────────────────────────────────────────────
+        // THE TWO QUESTIONS ARE ONE QUESTION. Per-contract P/L is (realised - predicted) + quoted EV, so
+        // the calibration diff and the money question are the same number shifted by a constant. They
+        // therefore resolve at the SAME sample size — there is no separate, later P/L milestone to wait
+        // for. What makes P/L *look* slower is that it is usually quoted in dollars, where Kelly sizing
+        // adds variance that carries no information about whether the edge is real.
+        //
+        // BREAK-EVEN IS THE COST, NEVER 0.500. A signal may under-realise its predicted probability by its
+        // entire EV and still pay, because the price was below fair value to begin with. So the threshold
+        // the diff must clear is -EV, not zero.
+        void WhenWillWeKnow(List<Obs> sg)
+        {
+            Console.WriteLine();
+            Console.WriteLine("6. WHEN WILL WE KNOW?  (what has to be true, and how much more data it needs)");
+            if (sg.Count < 2) { Console.WriteLine("   (not enough settled signals yet)"); return; }
+            // ESTIMATE FROM SINGLE-SIDED MARKETS ONLY, and quote the target in the same unit.
+            // The first cut computed the required n from ALL signal rows using binomial variance, which
+            // assumes independent draws — but a market that signalled on BOTH sides is forced to exactly
+            // one win, so those rows are perfectly anti-correlated, not independent. Including them
+            // understates the variance, understates the n required, and leaves the headline target counted
+            // in ROWS while the progress line underneath counts MARKETS. Two different units, one of them
+            // wrong. Everything below is therefore computed on single-sided markets alone.
+            var byMkt = sg.GroupBy(o => o.Ticker, StringComparer.Ordinal).ToList();
+            var one   = byMkt.Where(g => g.Count() == 1).Select(g => g.First()).ToList();
+            int twoSidedMkts = byMkt.Count - one.Count;
+            if (one.Count < 2)
+            {
+                Console.WriteLine($"   only {one.Count} single-sided market(s) so far — nothing to project from yet.");
+                return;
+            }
+            var sgU = one;
+            int n = sgU.Count;
+            double pred = sgU.Average(o => o.PProp);
+            double cost = sgU.Average(o => o.Cost);
+            double real = sgU.Count(o => o.Won!.Value) / (double)n;
+            double ev   = pred - cost;                       // quoted edge per contract
+            double diff = real - pred;                       // calibration miss
+            double se   = Math.Sqrt(Math.Max(real * (1 - real), 1e-6) / n);
+            double edge = diff + ev;                         // = realised - cost = P/L per contract
+            double sig  = se > 0 ? edge / se : 0;
+            // n for the 2-sigma verdict: n > 4*var / edge^2. Quoted twice, because this figure scales as
+            // 1/edge^2 and the edge estimate is itself noisy — the optimistic and conservative cases differ
+            // by several times, and reporting only the first would badly understate the wait.
+            double var0 = Math.Max(real * (1 - real), 1e-6);
+            double nOpt = edge > 0 ? 4 * var0 / (edge * edge) : double.NaN;
+            double nCon = ev   > 0 ? 4 * var0 / (ev * ev)     : double.NaN;
+            Console.WriteLine($"   A. CALIBRATION DIFF  (realised - predicted, single-sided live-sport markets)");
+            Console.WriteLine($"      break-even   diff > {-ev:+0.0000;-0.0000}   (may under-realise by the whole EV and still pay)");
+            Console.WriteLine($"      now          n={n}  diff {diff:+0.0000;-0.0000} +/- {se:0.0000}"
+                            + $"   -> {sig:+0.00;-0.00} sigma above break-even");
+            Console.WriteLine($"   B. PER-CONTRACT P/L  (realised - cost; identical test, shifted by EV)");
+            Console.WriteLine($"      break-even   > 0");
+            Console.WriteLine($"      now          {edge:+0.0000;-0.0000} per contract"
+                            + $"   = {(cost > 0 ? 100 * edge / cost : 0):+0.0;-0.0}% ROI on a {cost:0.000} mean cost");
+            Console.WriteLine($"   VERDICT ARRIVES AT (2 sigma):");
+            if (double.IsFinite(nOpt))
+                Console.WriteLine($"      n ~= {nOpt,6:0}   if the CURRENT edge estimate ({edge:+0.0000;-0.0000}) is the true one");
+            if (double.IsFinite(nCon))
+                Console.WriteLine($"      n ~= {nCon,6:0}   if the true edge is only the quoted EV ({ev:+0.0000;-0.0000}), i.e. diff = 0");
+            // ── C. ALWAYS-VALID BOUND ────────────────────────────────────────────────────────────────
+            // A FIXED-n TEST IS ONLY VALID IF YOU LOOK ONCE, AT AN n YOU COMMITTED TO IN ADVANCE.
+            // Re-running --resolve every day and stopping the moment it looks good is exactly the optional-
+            // stopping error: given enough peeks, a coin will eventually clear 2 sigma. So the fixed-n
+            // targets above are the honest answer to "how long", but they are NOT licence to watch the
+            // number weekly and call it the day it crosses.
+            //
+            // Robbins' normal-mixture confidence sequence removes that problem: the bound below holds
+            // SIMULTANEOUSLY for every n, so it may be checked after every single settlement and acted on
+            // the moment it clears zero. X = won - cost lies in an interval of width 1, so Hoeffding's
+            // lemma gives sub-Gaussian sigma = 1/2. `rho` tunes where the boundary is tightest; it is set
+            // to the conservative target so the bound is sharpest in the region where a verdict is
+            // plausible.
+            //
+            // IT IS WIDER THAN THE FIXED-n INTERVAL AT THE SAME n, ALWAYS — that width is the price of
+            // looking whenever you like, and it is why this crosses later than the fixed-n date when the
+            // edge is exactly as estimated. It pays off in the other branch: if the true edge is BIGGER
+            // than estimated, this clears zero early and the run can stop honestly, years before a
+            // pre-committed n would have allowed.
+            double Radius(double m, double rho, double alpha = 0.05, double sigma = 0.5)
+            {
+                if (m < 1) return double.PositiveInfinity;
+                double a = m * rho + 1.0;
+                return Math.Sqrt(2.0 * sigma * sigma * a / (m * m * rho) * Math.Log(Math.Sqrt(a) / alpha));
+            }
+            double rhoTune = double.IsFinite(nCon) && nCon > 1 ? 1.0 / nCon : 1.0 / 1000.0;
+            double rad = Radius(n, rhoTune);
+            double lower = edge - rad;
+            Console.WriteLine("   C. ALWAYS-VALID BOUND  (safe to re-check after EVERY settlement)");
+            Console.WriteLine($"      now          95% lower bound on the edge = {lower:+0.0000;-0.0000}"
+                            + (lower > 0 ? "   *** CLEARS ZERO - verdict reached ***" : "   (needs > 0)"));
+            long cross = 0;
+            for (long m = n; m <= 200000; m = m < 2000 ? m + 10 : m + 250)
+                if (edge - Radius(m, rhoTune) > 0) { cross = m; break; }
+            Console.WriteLine(cross > 0
+                ? $"      crosses zero at n ~= {cross}  IF the current edge ({edge:+0.0000;-0.0000}) is the true one"
+                : "      does not cross within 200k at the current edge estimate");
+            Console.WriteLine("      Wider than the fixed-n interval by design: that width is what buys the right");
+            Console.WriteLine("      to look every day. Watch THIS one week to week, not A or B.");
+
+            // PROGRESS TRACKS THE ALWAYS-VALID TARGET, not the optimistic fixed-n one. Section C is the
+            // number that actually licenses a decision under the daily re-checking this report gets, so
+            // measuring progress against A's target would advertise a milestone that cannot be acted on.
+            double target = cross > 0 ? cross : nOpt;
+            double pct = double.IsFinite(target) && target > 0 ? 100.0 * n / target : 0;
+            Console.WriteLine($"   PROGRESS: {n} of ~{(double.IsFinite(target) ? target : 0),0:0} single-sided market(s)"
+                            + (pct > 0 ? $"  ({pct:0.#}%)" : "")
+                            + "  [against the always-valid target]");
+            Console.WriteLine($"      {sg.Count} signal row(s) span {byMkt.Count} market(s); {twoSidedMkts} signalled on BOTH");
+            Console.WriteLine( "      sides and are EXCLUDED above — a both-sides market is forced to exactly one win,");
+            Console.WriteLine( "      so it is deterministic and says nothing about edge.");
+        }
+
         // ── 5. Signals — colour only ──────────────────────────────────────────────────────────────────
         var sigs = graded.Where(o => o.IsSignal).ToList();
         // RETIRED SPORTS ARE EXCLUDED FROM THE P&L LIST, and ONLY from here.
@@ -433,7 +610,7 @@ public static class Calibration
                             + $"[{string.Join(",", retired)}]: {droppedSigs.Count(o => o.Won!.Value)} won, "
                             + $"quoted ${dq:0.00}, realised ${dr:+0.00;-0.00} - still graded in sections 2-4d)");
         }
-        if (sigs.Count == 0) { Console.WriteLine("   none settled yet."); return; }
+        if (sigs.Count == 0) { Console.WriteLine("   none settled yet."); WhenWillWeKnow(sigOnly); return; }
         double quoted = sigs.Sum(o => o.Ev * Math.Max(1, o.Contracts));
         double realis = sigs.Sum(o => ((o.Won!.Value ? 1.0 : 0.0) - o.Cost) * Math.Max(1, o.Contracts));
         int won = sigs.Count(o => o.Won!.Value);
@@ -458,5 +635,6 @@ public static class Calibration
                             + $"{((o.Won!.Value ? 1.0 : 0.0) - o.Cost) * Math.Max(1, o.Contracts),+7:+0.00;-0.00}");
         Console.WriteLine($"\n   With {sigs.Count} settled signal(s), this line is noise. It becomes evidence in");
         Console.WriteLine( "   the hundreds; section 3 gets there far sooner.");
+        WhenWillWeKnow(sigOnly);
     }
 }
