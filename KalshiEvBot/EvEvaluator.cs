@@ -32,6 +32,9 @@ public sealed class EvConfig
     public double MaxTradeFrac    = Env("EV_MAX_TRADE_FRACTION", 0.03);
     public int    CooldownMs      = (int)Env("EV_RECHECK_COOLDOWN_MS", 15_000);
     public int    RestConcurrency = (int)Env("EV_REST_CONCURRENCY", 2);
+    // Set = PIN the bankroll at this value and never read the live balance (see RefreshBankrollAsync).
+    // Unset (0) = read the venue. Pin it before --live, or Kelly sizing drifts with the balance and the
+    // telemetry stops being comparable across the M0/M1 boundary.
     public double BankrollFallback= Env("EV_BANKROLL_USD", 0);
     /// <summary>"proportional" (the spec's primary) or "shin". Both are always computed and logged; this
     /// only selects which one drives the decision.</summary>

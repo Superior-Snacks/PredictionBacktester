@@ -685,11 +685,26 @@ internal static class Program
     /// use to weight realised results, so a run with no bankroll logs correct EV and meaningless sizes.</summary>
     private static async Task RefreshBankrollAsync(KalshiOrderClient k, EvEvaluator eval, EvConfig cfg, bool announce)
     {
+        // A PINNED BANKROLL IS AUTHORITATIVE, NOT A FALLBACK. Kelly sizes off the bankroll, so once --live
+        // starts buying and settling, a LIVE balance makes the Contracts column - and every size-weighted
+        // figure built on it - drift under the dataset. The same signal logged on two different days would
+        // carry different sizes for a reason that has nothing to do with the edge. Pinning it keeps the
+        // telemetry comparable across the M0/M1 boundary, which is the whole point of collecting it.
+        // EV itself never depends on this; only the size columns do.
+        if (cfg.BankrollFallback > 0)
+        {
+            eval.BankrollUsd = cfg.BankrollFallback;
+            if (announce)
+                Console.WriteLine($"[BANKROLL] ${eval.BankrollUsd:0.00} PINNED (EV_BANKROLL_USD) - the live "
+                                + "balance is not read, so sizing stays comparable as --live moves it.");
+            return;
+        }
         try
         {
             long cents = await k.GetBalanceCentsAsync();
             eval.BankrollUsd = cents / 100.0;
-            if (announce) Console.WriteLine($"[BANKROLL] ${eval.BankrollUsd:0.00} (live Kalshi balance)");
+            if (announce) Console.WriteLine($"[BANKROLL] ${eval.BankrollUsd:0.00} (live Kalshi balance) - "
+                                          + "set EV_BANKROLL_USD to pin it before going live.");
         }
         catch (Exception ex)
         {
