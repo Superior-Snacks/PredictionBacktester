@@ -1,4 +1,6 @@
 using System.Globalization;
+using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace KalshiEvBot;
 
@@ -148,6 +150,139 @@ public static class Calibration
         return "other";
     }
 
+
+    /// <summary>Cross-checks every SIGNAL ticker's Kalshi outcome name against the Pinnacle selection name
+    /// recorded in pair_ledger.jsonl. A NAME check: it catches a token naming a different player, and is
+    /// blind to a venue catalog that is itself mislabelled. Silent when the ledger is absent.</summary>
+    private static void OrientationCheck(List<Obs> all)
+    {
+        string? path = new[]
+        {
+            Environment.GetEnvironmentVariable("EV_PAIR_LEDGER"),
+            Path.Combine(Directory.GetCurrentDirectory(), "pair_ledger.jsonl"),
+            Path.Combine(Directory.GetCurrentDirectory(), "HardVenArb", "pair_ledger.jsonl"),
+        }.FirstOrDefault(p => !string.IsNullOrWhiteSpace(p) && File.Exists(p));
+        if (path is null) return;                       // no ledger -> nothing to say, so say nothing
+
+        // FIRST entry per ticker: the pairing that was in force when it signalled, not a later rewrite.
+        var led = new Dictionary<string, (string Outcome, string Stored)>(StringComparer.Ordinal);
+        foreach (string line in File.ReadLines(path))
+        {
+            if (string.IsNullOrWhiteSpace(line)) continue;
+            try
+            {
+                using var d = JsonDocument.Parse(line);
+                var r = d.RootElement;
+                string tk = r.TryGetProperty("ticker", out var t) ? (t.GetString() ?? "") : "";
+                string oc = r.TryGetProperty("kalshi_outcome", out var o) ? (o.GetString() ?? "") : "";
+                string sn = r.TryGetProperty("stored_name", out var n) ? (n.GetString() ?? "") : "";
+                if (tk.Length > 0 && !led.ContainsKey(tk)) led[tk] = (oc, sn);
+            }
+            catch (JsonException) { }                   // a torn line is not a reason to skip the check
+        }
+        if (led.Count == 0) return;
+
+        static HashSet<string> Tok(string s) =>
+            Regex.Replace(s ?? "", "[^a-z ]", " ", RegexOptions.IgnoreCase).ToLowerInvariant()
+                 .Split(' ', StringSplitOptions.RemoveEmptyEntries)
+                 .Where(w => w.Length >= 3).ToHashSet(StringComparer.Ordinal);
+
+        int ok = 0, bad = 0, unknown = 0;
+        var flips = new List<string>();
+        foreach (string tk in all.Where(o => o.IsSignal).Select(o => o.Ticker).Distinct(StringComparer.Ordinal))
+        {
+            if (!led.TryGetValue(tk, out var e) || e.Outcome.Length == 0 || e.Stored.Length == 0) { unknown++; continue; }
+            if (Tok(e.Outcome).Overlaps(Tok(e.Stored))) ok++;
+            else { bad++; flips.Add($"{tk}: Kalshi '{e.Outcome}' but the token names '{e.Stored}'"); }
+        }
+        if (ok + bad == 0) return;
+
+        if (bad > 0) Console.ForegroundColor = ConsoleColor.Red;
+        Console.WriteLine($"   PAIR ORIENTATION: {ok} signal ticker(s) name-verified, {bad} MIS-ORIENTED"
+                        + (unknown > 0 ? $", {unknown} with no ledger entry" : ""));
+        foreach (string f in flips) Console.WriteLine($"      *** {f}");
+        if (bad > 0)
+        {
+            Console.WriteLine("      ^ add these to ev_misoriented.json - their EV is a phantom and every");
+            Console.WriteLine("        number below is contaminated until they are excluded.");
+        }
+        Console.ResetColor();
+    }
+
+
+    /// <summary>Section 7 — did the orders we tried actually fill? Silent until --live has written a row.</summary>
+    private static void LivePathReport(string dir)
+    {
+        var files = Directory.GetFiles(dir, "EvLive_*.csv").OrderBy(f => f).ToList();
+        if (files.Count == 0) return;                    // M0: nothing to say
+
+        var rows = new List<(string Ticker, string Side, double Limit, double RestPx, double Ev,
+                             int Req, string Status, double Fill, double Avg, double Ms, double Slip)>();
+        foreach (string f in files)
+        {
+            using var sr = new StreamReader(f);
+            string? head = sr.ReadLine();
+            if (head is null) continue;
+            var col = head.Split(',').Select((h, i) => (h.Trim('"'), i)).ToDictionary(x => x.Item1, x => x.i);
+            string? line;
+            while ((line = sr.ReadLine()) is not null)
+            {
+                var p = Csv.SplitLine(line);
+                double D(string k) => col.TryGetValue(k, out int i) && i < p.Count
+                                      && double.TryParse(p[i], NumberStyles.Any, CultureInfo.InvariantCulture,
+                                                         out double v) ? v : double.NaN;
+                string S(string k) => col.TryGetValue(k, out int i) && i < p.Count ? p[i] : "";
+                rows.Add((S("Ticker"), S("Side"), D("LimitPrice"), D("RestAsk"), D("EvCents"),
+                          (int)(double.IsNaN(D("Requested")) ? 0 : D("Requested")), S("Status"),
+                          D("FillCount"), D("AvgFillPrice"), D("LatencyMs"), D("SlippageCents")));
+            }
+        }
+        if (rows.Count == 0) return;
+
+        // ATTEMPTS ONLY. A "budget-exhausted" row is a decision not to try, not a failure to fill, and
+        // counting it as a miss would understate the fill rate by exactly the amount the caps impose.
+        var att = rows.Where(r => r.Req > 0).ToList();
+        var got = att.Where(r => r.Fill > 0).ToList();
+        Console.WriteLine();
+        Console.WriteLine("7. LIVE PATH  (can we actually buy what we find?)");
+        if (att.Count == 0)
+        {
+            Console.WriteLine($"   {rows.Count} row(s), none an actual attempt (all budget-capped).");
+            return;
+        }
+        double fillRate = 100.0 * got.Count / att.Count;
+        Console.WriteLine($"   attempts {att.Count}   FILLED {got.Count} ({fillRate:0.0}%)   "
+                        + $"no-fill {att.Count - got.Count}   skipped-by-budget {rows.Count - att.Count}");
+
+        if (got.Count > 0)
+        {
+            double contracts = got.Sum(r => r.Fill);
+            double spend = got.Sum(r => r.Fill * (r.Avg > 0 ? r.Avg : r.Limit));
+            var slips = got.Where(r => !double.IsNaN(r.Slip)).Select(r => r.Slip).OrderBy(x => x).ToList();
+            Console.WriteLine($"   bought {contracts:0} contract(s) for ${spend:0.00}");
+            if (slips.Count > 0)
+                Console.WriteLine($"   slippage vs the screened ask: median {slips[slips.Count / 2]:+0.00;-0.00}c  "
+                                + $"worst {slips[^1]:+0.00;-0.00}c   "
+                                + $"({slips.Count(x => x <= 0)}/{slips.Count} at or better than screened)");
+            // PARTIAL FILLS ARE THE QUIET FAILURE. Getting 3 of 12 contracts is not "a fill" for a strategy
+            // whose whole question is whether the size is there; it is reported separately rather than
+            // folded into the headline rate.
+            int partial = got.Count(r => r.Fill < r.Req);
+            if (partial > 0)
+                Console.WriteLine($"   PARTIAL on {partial} of {got.Count} fills — the depth was not there for "
+                                + "the full size.");
+        }
+        var lat = att.Where(r => !double.IsNaN(r.Ms)).Select(r => r.Ms).OrderBy(x => x).ToList();
+        if (lat.Count > 0)
+            Console.WriteLine($"   order round-trip: median {lat[lat.Count / 2]:0}ms  p90 {lat[(int)(0.9 * (lat.Count - 1))]:0}ms");
+        var bad = att.Where(r => r.Status.StartsWith("error", StringComparison.OrdinalIgnoreCase)).ToList();
+        if (bad.Count > 0)
+            Console.WriteLine($"   {bad.Count} attempt(s) ERRORED at the venue: "
+                            + string.Join(", ", bad.Select(b => b.Status).Distinct().Take(4)));
+        Console.WriteLine("   A low fill rate is the finding, not a fault: it means the book we screen is not");
+        Console.WriteLine("   the book we can trade, and the edge is smaller than the telemetry suggests.");
+    }
+
     // ── Statistics ────────────────────────────────────────────────────────────────────────────────────
     /// <summary>Mean squared error of a probability forecast. Lower is better, and it is the one number
     /// that compares two de-vig methods without arguing about thresholds.</summary>
@@ -243,6 +378,20 @@ public static class Calibration
         }
         Console.WriteLine($"   settled: {graded.Count}   awaiting settlement: {obs.Count - graded.Count} "
                         + $"({active} market(s) still active)");
+
+        // ── ORIENTATION SANITY: are the pairs behind these numbers pointing at the right player? ──────
+        // EVERY FIGURE BELOW ASSUMES THE PAIRING IS SOUND. A flipped pair - Pinnacle token naming the
+        // OPPONENT - still produces a de-vig, still clears EV, and still books; it simply prices one player
+        // against the other's probability, so its "edge" is a phantom of roughly |1-2p|. Ten such tickers
+        // are already excluded by ev_misoriented.json, and they were found only because their settled
+        // results were impossible. This runs the check up front instead, on every resolve, because a
+        // calibration report built on flipped pairs is confidently wrong rather than obviously broken.
+        //
+        // FREE AND LOCAL: pair_ledger.jsonl already records `kalshi_outcome` and `stored_name` (the Pinnacle
+        // selection our token pointed at) side by side, so this needs no API and no fixture mapping.
+        // NAME TOKENS, NOT SUBSTRINGS: "Felipe Meligeni Alves" vs "Felipe Meligeni Rodrigues Alves" are the
+        // same player and a substring test strips both - it did, once.
+        OrientationCheck(all);
         if (lost > 0)
         {
             // Not a rounding error in the sample — it is data that can never be recovered, so it is stated
@@ -636,5 +785,6 @@ public static class Calibration
         Console.WriteLine($"\n   With {sigs.Count} settled signal(s), this line is noise. It becomes evidence in");
         Console.WriteLine( "   the hundreds; section 3 gets there far sooner.");
         WhenWillWeKnow(sigOnly);
+        LivePathReport(Directory.GetCurrentDirectory());
     }
 }

@@ -315,8 +315,14 @@ class PinnacleLifecycle:
                 when = f"in {dt_h:.1f}h" if dt_h >= 1 else f"in {(o - now_p).total_seconds()/60:.0f}m"
             else:
                 when = "past"
-            print(f"[PINNACLE LIFECYCLE]    {lo:%a %d %b %H:%M}-{lc:%H:%M}  {mins:4.0f}m  "
-                  f"{g:3d} game(s)  {when}")
+            # "0 game(s)" ON A FUTURE DAY IS AN ARTEFACT, NOT AN EMPTY SLATE. With today_only the game list
+            # is filtered to today, so every window past midnight is attributed nothing - which reads as
+            # "the bot plans to open for no games" and would send an operator hunting a bug that is not
+            # there. Those windows are also the ones AUTO-BLOCK re-authors at 06:00 against the real board,
+            # so their counts are provisional by design. Say so instead of printing a zero.
+            gs = (f"{g:3d} game(s)" if g or not (self._today_only and lo.date() != sched._local(now_p).date())
+                  else "  (counted at the 06:00 re-author)")
+            print(f"[PINNACLE LIFECYCLE]    {lo:%a %d %b %H:%M}-{lc:%H:%M}  {mins:4.0f}m  {gs}  {when}")
         if len(self._windows) > len(rows):
             print(f"[PINNACLE LIFECYCLE]    ... and {len(self._windows) - len(rows)} more")
         # THE GAP LINE IS THE ONE THAT CATCHES TRIMMING. A window shortened to open a 45-minute gap looks
@@ -338,6 +344,48 @@ class PinnacleLifecycle:
                   + (f" (min {min(gaps):.0f}m vs downtime floor {self._min_downtime_min:g}m)"
                      if self._min_downtime_min > 0 else ""))
         self._write_windows_file()
+
+
+    def _fire_on_close(self) -> None:
+        """Run an external command once each window closes - used to post the EV report to Discord.
+
+        A WINDOW CLOSE IS THE RIGHT TRIGGER. It is the only moment when a block's signals are complete and
+        the venue is idle, so a resolve neither races the collection it is grading nor competes with live
+        screening for Kalshi's REST budget.
+
+        DETACHED AND NON-BLOCKING, because the resolve takes minutes and this is called from `tick()` - the
+        loop that decides when to open next. Waiting here would stall the schedule behind a report.
+
+        SKIPS IF THE PREVIOUS RUN IS STILL GOING. Windows can close ~45 minutes apart; a resolve that
+        overran would otherwise stack, and two concurrent runs would double the REST load for one answer.
+        """
+        cmd = (os.environ.get("PINNACLE_ON_CLOSE_CMD") or "").strip()
+        if not cmd:
+            return
+        prev = getattr(self, "_on_close_proc", None)
+        if prev is not None and prev.poll() is None:
+            print("[PINNACLE LIFECYCLE] on-close command still running from the last window - skipping.")
+            return
+        try:
+            import shlex
+            import subprocess
+            # NEITHER shlex MODE IS CORRECT ALONE ON WINDOWS. posix=True eats backslashes
+            # ("C:\Users\..." -> "CUsers..."), while posix=False preserves them but KEEPS the quote
+            # characters, so `-c "print(1)"` is passed as the literal '"print(1)"'. Split non-posix for the
+            # paths, then strip one matched pair of surrounding quotes per token.
+            def _unquote(tok: str) -> str:
+                if len(tok) >= 2 and tok[0] == tok[-1] and tok[0] in "\"'":
+                    return tok[1:-1]
+                return tok
+            argv = [_unquote(t) for t in shlex.split(cmd, posix=False)]
+            self._on_close_proc = subprocess.Popen(
+                argv, cwd=str(Path(__file__).resolve().parent.parent.parent),
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            print(f"[PINNACLE LIFECYCLE] on-close command started (pid {self._on_close_proc.pid}): {cmd}")
+        except Exception as ex:
+            # Never let a reporting hook take the schedule down with it.
+            print(f"[PINNACLE LIFECYCLE] on-close command FAILED to start ({type(ex).__name__}: {ex}) - "
+                  "the schedule is unaffected.")
 
     def _burn_uptime(self, now) -> None:
         """Bank the session that just ended against its local day's budget. Attributed to the day the session
@@ -411,6 +459,7 @@ class PinnacleLifecycle:
             self._on_close()                     # adapter stands the feed down (session_ready=False)
             print("[PINNACLE LIFECYCLE] window CLOSED → browser down (dark).")
             self._alert_close(now)
+            self._fire_on_close()
         self.state = ("banking" if self._override == "banking"
                       else "paused" if self._override == "paused" else "halted" if self._override == "halted"
                       else "blockdone" if self._override == "blockdone"

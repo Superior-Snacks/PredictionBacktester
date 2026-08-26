@@ -1,3 +1,4 @@
+using System.Globalization;
 using PredictionBacktester.Engine.LiveExecution;
 
 namespace KalshiEvBot;
@@ -24,11 +25,28 @@ internal static class Program
         bool verbose   = args.Contains("--verbose");
         bool bookAudit = args.Contains("--book-audit");
         string? pairsArg = ArgValue(args, "--pairs");
+        // M1. Opt-in and impossible to enter by accident: without this flag no LiveExecutor is constructed,
+        // so the order API is unreachable rather than merely unused.
+        bool live      = args.Contains("--live");
+        double stakeSide = ArgDouble(args, "--min-stake") ?? EvConfig.Env("EV_LIVE_STAKE_SIDE", 5.0);
+        double stakeGame = ArgDouble(args, "--max-stake-game") ?? EvConfig.Env("EV_LIVE_STAKE_GAME", 2 * stakeSide);
 
-        Console.WriteLine("┌─ Kalshi +EV taker bot — M0 (OBSERVATION ONLY) ─────────────────────────────");
-        Console.WriteLine("│  Pinnacle de-vigged = fair value.  Kalshi WS detects, Kalshi REST values.");
-        Console.WriteLine("│  No order API is wired in this build. Nothing here can place a trade.");
-        Console.WriteLine("└────────────────────────────────────────────────────────────────────────────");
+        if (live)
+        {
+            Console.WriteLine("┌─ Kalshi +EV taker bot — M1 (LIVE: REAL ORDERS) ────────────────────────────");
+            Console.WriteLine("│  Pinnacle de-vigged = fair value.  Kalshi WS detects, Kalshi REST values.");
+            Console.WriteLine($"│  IOC buys on every confirmed signal. ${stakeSide:0.00}/side, ${stakeGame:0.00}/game,");
+            Console.WriteLine("│  one FILLED entry per side. A no-fill costs nothing and may be retried.");
+            Console.WriteLine("│  THIS SPENDS REAL MONEY. Ctrl+C now if that was not the intention.");
+            Console.WriteLine("└────────────────────────────────────────────────────────────────────────────");
+        }
+        else
+        {
+            Console.WriteLine("┌─ Kalshi +EV taker bot — M0 (OBSERVATION ONLY) ─────────────────────────────");
+            Console.WriteLine("│  Pinnacle de-vigged = fair value.  Kalshi WS detects, Kalshi REST values.");
+            Console.WriteLine("│  No order API is wired in this build. Nothing here can place a trade.");
+            Console.WriteLine("└────────────────────────────────────────────────────────────────────────────");
+        }
 
         // ── Credentials + pairs ───────────────────────────────────────────────────────────────────────
         var config = KalshiApiConfig.FromEnvironment();      // also loads the solution-root .env
@@ -112,7 +130,17 @@ internal static class Program
         using var snapshots = new OracleSnapshotLog();
         var oracle = new PinnacleOracle(sidecar, tokens);
         var feed   = new KalshiBookFeed(kalshi, config, tickers);
+        cfg.Live = live;
+        cfg.LiveStakePerSideUsd = stakeSide;
+        cfg.LiveStakePerGameUsd = stakeGame;
         var eval   = new EvEvaluator(pairs, oracle, feed, kalshi, telemetry, cfg) { Verbose = verbose };
+        EvLiveLog? liveLog = null;
+        if (live)
+        {
+            liveLog = new EvLiveLog();
+            eval.EnableLive(new LiveExecutor(kalshi, liveLog, cfg));
+            Console.WriteLine($"[LIVE   ] {liveLog.Path}  (every order attempt, filled or not)");
+        }
         using var followUp = new FollowUpTracker(oracle, feed);
         eval.SetFollowUp(followUp);
 
@@ -932,6 +960,12 @@ internal static class Program
 
     private static int? ArgInt(string[] a, string flag)
         => int.TryParse(ArgValue(a, flag), out int v) ? v : null;
+
+    // InvariantCulture on purpose: "--min-stake 2.5" must mean two and a half dollars on a machine whose
+    // locale uses a comma decimal separator, not twenty-five.
+    private static double? ArgDouble(string[] a, string flag)
+        => double.TryParse(ArgValue(a, flag), NumberStyles.Any, CultureInfo.InvariantCulture, out double v)
+           ? v : null;
 
     private static void Usage()
     {

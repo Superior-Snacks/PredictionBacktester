@@ -65,7 +65,7 @@ public static class Csv
         return n;
     }
 
-    private static List<string> SplitLine(string line)
+    public static List<string> SplitLine(string line)
     {
         var outp = new List<string>();
         var sb = new StringBuilder();

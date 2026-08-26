@@ -13,6 +13,16 @@ public sealed class EvConfig
     /// 0.9% of windows as a taker — the bot would essentially never fire. 1c admits ~7%; observe there and
     /// set the live value from settlement results.</summary>
     public double EvMin           = Env("EV_MIN", 0.01);
+    // ── M1 LIVE EXECUTION ─────────────────────────────────────────────────────────────────────────────
+    // OFF unless --live is passed. The caps are deliberately tiny: M1 is measuring whether a found edge can
+    // be BOUGHT, not trying to earn from it, and the answer should cost almost nothing. $5 a side and $10 a
+    // game means a whole month of this cannot move the balance meaningfully.
+    public bool   Live                 = false;
+    public double LiveStakePerSideUsd  = Env("EV_LIVE_STAKE_SIDE", 5.0);
+    public double LiveStakePerGameUsd  = Env("EV_LIVE_STAKE_GAME", 10.0);
+    // A no-fill is free and does NOT consume the side's allowance, so the same market may be re-attempted
+    // on a later signal. This stops that becoming a hot loop against one stubborn book.
+    public double LiveRetryCooldownSec = Env("EV_LIVE_RETRY_COOLDOWN_SEC", 60);
     /// <summary>How far below EvMin a WS-implied EV may sit and still buy a REST call. The WS ask is
     /// optimistic 95% of the time, which makes WS EV an upper bound and pre-screening safe; this slack
     /// covers the other 5%.</summary>
@@ -143,6 +153,12 @@ public sealed class EvEvaluator
     private readonly PinnacleOracle _oracle;
     private readonly KalshiBookFeed _feed;
     private readonly KalshiOrderClient _kalshi;
+    private LiveExecutor? _live;                 // null unless --live; M0 keeps the order API unreachable
+
+    /// <summary>Arms live execution. Separate from the constructor so that M0 cannot reach the order API by
+    /// forgetting an argument — the executor has to be handed in deliberately.</summary>
+    public void EnableLive(LiveExecutor ex) => _live = ex;
+    public LiveExecutor? LiveExec => _live;
     private readonly EvTelemetry _telemetry;
     private FollowUpTracker? _followUp;
     private readonly EvConfig _cfg;
@@ -402,7 +418,7 @@ public sealed class EvEvaluator
                 }
                 else if (verify == "failed") { Interlocked.Increment(ref Stats.VenueRefused); }
             }
-            Record(pair, screened, restAsk, verify);
+            await Record(pair, screened, restAsk, verify, ct);
         }
     }
 
@@ -499,7 +515,11 @@ public sealed class EvEvaluator
     /// <summary>Values a screened candidate at the REST ask, sizes it, and logs it — signal or not.
     /// A row where the WS said +2c and REST said −2c is the most informative row in the file: it is the
     /// phantom being measured, and it is the reason both prices are columns.</summary>
-    private void Record(EvPair pair, Screened c, decimal restAsk, string venueVerify = "not-checked")
+    // ASYNC because M1 places the order from here, and it must be AWAITED: letting the screening loop
+    // run ahead of its own IOC is how one market gets bought twice. In M0 (_live == null) nothing
+    // awaits anything and this is a synchronous method wearing a Task.
+    private async Task Record(EvPair pair, Screened c, decimal restAsk, string venueVerify,
+                              CancellationToken ct)
     {
         double px   = (double)restAsk;
         double fee  = EvMath.FeePerContract(px);
@@ -666,6 +686,15 @@ public sealed class EvEvaluator
                         : devigSplit ? "DEVIG_DISAGREE"
                         : notRising ? (haveKinetic ? "NOT_RISING" : "NO_KINETIC_HISTORY")
                         : "SIGNAL_UNVERIFIED";
+        // ── M1: TAKE IT ───────────────────────────────────────────────────────────────────────────────
+        // FIRES ON `signal` ONLY, and immediately — no further checks between the decision and the order.
+        // Awaited rather than fire-and-forget: an IOC resolves in well under a second, and letting the
+        // screening loop run ahead of its own order is how the same market gets bought twice.
+        // `_live` is null in M0, so the order API is not merely unused but unreachable.
+        if (signal && _live is not null)
+            await _live.TryTakeAsync(pair.KalshiTicker, pair.EventId, c.Side, limit, px,
+                                     c.PTrueUsed, ev, ct);
+
         if (clears)
             _followUp?.Schedule(new FollowUp(DateTime.UtcNow, pair.KalshiTicker, c.Side, pair.Legs,
                 pair.YesLegIndex, decision, regime, px, c.PTrueUsed, ev, _cfg.DeVigMethod));
