@@ -152,8 +152,10 @@ internal static class Program
         if (live)
         {
             liveLog = new EvLiveLog();
-            eval.EnableLive(new LiveExecutor(kalshi, liveLog, cfg));
+            var posStore = new LivePositionStore();
+            eval.EnableLive(new LiveExecutor(kalshi, liveLog, cfg, posStore));
             Console.WriteLine($"[LIVE   ] {liveLog.Path}  (every order attempt, filled or not)");
+            Console.WriteLine($"[STATE  ] {posStore.Path}  — {posStore.LoadNote}");
         }
         using var followUp = new FollowUpTracker(oracle, feed);
         eval.SetFollowUp(followUp);

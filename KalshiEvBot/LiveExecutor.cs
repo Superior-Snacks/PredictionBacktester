@@ -68,10 +68,14 @@ public sealed class LiveExecutor
     private readonly KalshiOrderClient _kalshi;
     private readonly EvLiveLog _log;
     private readonly EvConfig _cfg;
+    private readonly LivePositionStore? _store;
+    // StakedUsd is a decimal, which has no Interlocked. With EV_REST_CONCURRENCY workers a bare += can
+    // lose an update, so both it and the persist below happen under one lock.
+    private readonly object _bookLock = new();
 
     // A side is CLOSED once it has filled. Keyed ticker|side, so both sides of one game can each hold a
     // position — hence the per-game cap below, which is what actually bounds a game's exposure.
-    private readonly ConcurrentDictionary<string, byte> _filled = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, string> _filled = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, decimal> _spentByEvent = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, DateTime> _lastAttempt = new(StringComparer.Ordinal);
     // One order at a time per ticker+side. Two WS deltas can land on the same market within milliseconds and
@@ -81,11 +85,20 @@ public sealed class LiveExecutor
     public long Attempted, Filled, NoFill, Rejected, Skipped;
     public decimal StakedUsd;
 
-    public LiveExecutor(KalshiOrderClient kalshi, EvLiveLog log, EvConfig cfg)
+    public LiveExecutor(KalshiOrderClient kalshi, EvLiveLog log, EvConfig cfg, LivePositionStore? store = null)
     {
         _kalshi = kalshi;
         _log = log;
         _cfg = cfg;
+        _store = store;
+        // RESUME, do not restart. Without this the per-side and per-game caps silently become per-PROCESS,
+        // and an unattended restart re-enters markets already bought.
+        if (_store is not null)
+        {
+            var (filled, spent) = _store.Load();
+            foreach (var (k, v) in filled) _filled[k] = v;
+            foreach (var (k, v) in spent)  _spentByEvent[k] = v;
+        }
     }
 
     /// <summary>Contracts to buy: the per-side cap, further bounded by what the game has left, floored to a
@@ -176,10 +189,17 @@ public sealed class LiveExecutor
             if (got)
             {
                 Interlocked.Increment(ref Filled);
-                _filled[key] = 0;                                   // side closed for this game
+                _filled[key] = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture);
                 decimal cost = fillCount * (avgFill > 0 ? avgFill : (decimal)(limitCents / 100.0));
                 _spentByEvent.AddOrUpdate(eventId, cost, (_, prev) => prev + cost);
-                StakedUsd += cost;
+                lock (_bookLock)
+                {
+                    StakedUsd += cost;
+                    // Persist BEFORE anything else can fail. A position that exists at the venue but not in
+                    // our record is the one state we must never be in: it is the double-entry we just paid
+                    // to prevent.
+                    _store?.Save(_filled, _spentByEvent);
+                }
             }
             else Interlocked.Increment(ref NoFill);
 

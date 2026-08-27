@@ -1,3 +1,4 @@
+using System.Globalization;
 using PredictionBacktester.Engine.LiveExecution;
 
 namespace KalshiEvBot;
@@ -447,6 +448,48 @@ public static class SelfTest
             for (int i = 0; i < 5000; i++) busy.Add(now.AddMilliseconds(i * 4), 0.5 + (i % 7) * 1e-4, keep);
             Check(busy.TryRise(now.AddMilliseconds(4 * 4999), win, out _),
                   "5000 rapid samples over 20s: still spans the 5s window");
+        }
+
+        // ── Live position persistence ─────────────────────────────────────────────────────────────────
+        // THE POINT OF THIS CLASS IS A CASE THAT ONLY HAPPENS AFTER A CRASH, so it would otherwise ship
+        // untested and its failure mode is silent: the caps quietly become per-process and the bot
+        // re-enters markets it already bought. Exercised here against a real temp file.
+        Console.WriteLine();
+        Console.WriteLine("-- live position store (restart safety) --");
+        {
+            string dir = Path.Combine(Path.GetTempPath(), "evbot-selftest-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(dir);
+            try
+            {
+                string f = Path.Combine(dir, "pos.json");
+                var now = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture);
+
+                var a = new LivePositionStore(f);
+                Check(a.Load().Filled.Count == 0, "missing file loads empty rather than throwing");
+
+                a.Save(new Dictionary<string, string> { ["KXATP-ABC|YES"] = now, ["KXATP-ABC|NO"] = now },
+                       new Dictionary<string, decimal> { ["KXATP-ABC"] = 9.75m });
+
+                var (fl, sp) = new LivePositionStore(f).Load();
+                Check(fl.Count == 2 && fl.ContainsKey("KXATP-ABC|YES"), "filled sides survive a reload");
+                Check(sp.TryGetValue("KXATP-ABC", out var v) && v == 9.75m,
+                      "per-event spend survives a reload exactly", $"got {(sp.TryGetValue("KXATP-ABC", out var g) ? g : -1)}");
+
+                // An entry past its TTL must not resurrect and block a market that settled long ago.
+                string old = DateTime.UtcNow.AddDays(-99).ToString("o", CultureInfo.InvariantCulture);
+                a.Save(new Dictionary<string, string> { ["OLD|YES"] = old, ["NEW|YES"] = now },
+                       new Dictionary<string, decimal>());
+                var pruned = new LivePositionStore(f).Load().Filled;
+                Check(pruned.ContainsKey("NEW|YES") && !pruned.ContainsKey("OLD|YES"),
+                      "expired entries are dropped, fresh ones kept");
+
+                // A half-written file must degrade to empty, not take the bot down on startup.
+                File.WriteAllText(f, "{ this is not json");
+                var corrupt = new LivePositionStore(f);
+                Check(corrupt.Load().Filled.Count == 0, "corrupt file loads empty without throwing");
+                Check(corrupt.LoadNote.Contains("CORRUPT"), "and says so, rather than looking like a clean start");
+            }
+            finally { try { Directory.Delete(dir, true); } catch { } }
         }
 
         Console.WriteLine();
