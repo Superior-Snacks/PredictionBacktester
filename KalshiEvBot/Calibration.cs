@@ -786,5 +786,107 @@ public static class Calibration
         Console.WriteLine( "   the hundreds; section 3 gets there far sooner.");
         WhenWillWeKnow(sigOnly);
         LivePathReport(Directory.GetCurrentDirectory());
+        StakeScaling(sigOnly, Directory.GetCurrentDirectory());
+    }
+
+    /// <summary>
+    /// 8. What the micro stake costs in rounded-up fees, and what a larger one would have returned.
+    ///
+    /// <para><b>The gap this measures.</b> <see cref="EvMath.Ev"/> prices the MARGINAL fee
+    /// (<c>rate*p*(1-p)</c>, no count), but Kalshi charges <see cref="EvMath.OrderFee"/> — the whole order
+    /// rounded UP to the cent. Three contracts at 50c pay $0.06 where the EV assumed $0.0525. That 0.25c per
+    /// contract is a quarter of a 1c edge, it is pure loss, and no telemetry column has ever carried it.
+    /// It shrinks as the order grows, which is precisely why the micro stake is the worst case.</para>
+    ///
+    /// <para><b>Why this projection is exact and not a guess.</b> The fee is a deterministic function of
+    /// price and count, so "what would we have paid at $50 a side" is computed, not estimated. The ONE thing
+    /// it cannot know is whether the book would have filled the larger size — that is the question M1 is
+    /// running to answer, and until it does, every row below the current stake is an upper bound.</para>
+    /// </summary>
+    private static void StakeScaling(List<Obs> sigs, string dir)
+    {
+        // Single-sided markets only, for the same reason section 6 uses them: a both-sides market is forced
+        // to exactly one win and carries no information about edge, so including it would quietly average
+        // a deterministic row into a P/L estimate.
+        var one = sigs.GroupBy(o => o.Ticker, StringComparer.Ordinal)
+                      .Where(g => g.Count() == 1).Select(g => g.First())
+                      .Where(o => o.Won.HasValue && o.RestAsk > 0 && o.RestAsk < 1).ToList();
+        Console.WriteLine();
+        Console.WriteLine("8. STAKE SCALING  (what the rounded-up fee costs, and what a bigger stake returns)");
+        if (one.Count < 2) { Console.WriteLine("   (not enough settled single-sided signals yet)"); return; }
+
+        Console.WriteLine($"   Kalshi rounds the fee UP to the cent on the WHOLE order; EV prices the marginal");
+        Console.WriteLine($"   fee. The difference is pure loss and it shrinks as the order grows. {one.Count} signal(s).");
+        Console.WriteLine();
+        Console.WriteLine("   stake/side   mean x   fee paid   fee priced   drag/ctr   net edge/ctr   if unrounded   per $100");
+        double[] ladder = { 5, 10, 25, 50, 100, 250 };
+        foreach (double stake in ladder)
+        {
+            double charged = 0, priced = 0, netPl = 0, rawPl = 0, staked = 0; long ctrs = 0; int tradable = 0;
+            foreach (var o in one)
+            {
+                int count = (int)Math.Floor(stake / o.RestAsk);
+                if (count < 1) continue;                      // the stake cannot buy one contract here
+                tradable++; ctrs += count; staked += count * o.RestAsk;
+                double fc = EvMath.OrderFee(o.RestAsk, count);
+                double fa = EvMath.FeePerContract(o.RestAsk) * count;
+                charged += fc; priced += fa;
+                // o.Cost already nets the MARGINAL fee, so only the rounding EXCESS is added back here.
+                double pl = count * ((o.Won!.Value ? 1.0 : 0.0) - o.Cost);
+                rawPl += pl;                                  // what EV assumed it would return
+                netPl += pl - (fc - fa);                       // what the venue's rounding actually leaves
+            }
+            if (tradable == 0 || ctrs == 0) continue;
+            double dragC = (charged - priced) / ctrs * 100.0;
+            Console.WriteLine($"   ${stake,-10:0}  {(double)ctrs / tradable,6:0.0}   ${charged,7:0.00}   ${priced,8:0.00}"
+                            + $"   {dragC,7:0.000}c   {netPl / ctrs,+10:+0.0000;-0.0000}"
+                            + $"   {rawPl / ctrs,+10:+0.0000;-0.0000}"
+                            + $"   {(staked > 0 ? 100 * netPl / staked : 0),+8:+0.00;-0.00}");
+        }
+        Console.WriteLine();
+        Console.WriteLine("   'if unrounded' is the SAME row without the ceiling — so the pair is apples to");
+        Console.WriteLine("   apples and the gap between them is exactly what rounding costs. It is the only");
+        Console.WriteLine("   honest read of the fee: everything else in the row moves with the stake too.");
+        Console.WriteLine();
+        // WHY THIS DOES NOT MATCH SECTION 6, stated rather than left as a puzzle. Section 6 weights every
+        // market EQUALLY (one settled market, one vote) because it is answering "is the edge real?" — a
+        // question about calibration, where a cheap market and a dear one are one observation each. This
+        // table weights by CONTRACTS, because it is answering "what would we have earned?" — and a $5 stake
+        // buys 25 contracts at 20c against 6 at 80c. The two differ whenever results correlate with price,
+        // which at n=101 is as likely to be noise as signal.
+        Console.WriteLine("   NOT COMPARABLE WITH SECTION 6, and the difference is not an error: section 6");
+        Console.WriteLine("   weights each market equally (is the edge real?), this weights by contracts");
+        Console.WriteLine("   (what would it have earned?). A $5 stake buys 25 contracts at 20c but 6 at 80c,");
+        Console.WriteLine("   so the two agree only if results are independent of price. At n=101 the gap");
+        Console.WriteLine("   between them is as likely to be noise as a real skew toward cheap signals.");
+        Console.WriteLine();
+        Console.WriteLine("   Every row above the current stake assumes the book would have filled the larger");
+        Console.WriteLine("   size — exactly what M1 is measuring. Upper bounds until section 7 says otherwise.");
+
+        // ── What we ACTUALLY paid, once live rows exist ────────────────────────────────────────────────
+        var files = Directory.GetFiles(dir, "EvLive_*.csv");
+        if (files.Length == 0) return;
+        double obsCharged = 0, obsPriced = 0; long obsCtrs = 0; int fills = 0, feeSkips = 0;
+        foreach (var f in files)
+            foreach (var r in Csv.Read(f))
+            {
+                if (Csv.Str(r, "Status") == "fee-rounding-negative") { feeSkips++; continue; }
+                double fill = Csv.Num(r, "FillCount");
+                if (fill <= 0) continue;
+                fills++; obsCtrs += (long)fill;
+                obsCharged += Csv.Num(r, "FeeChargedUsd");
+                obsPriced  += Csv.Num(r, "FeeAssumedUsd");
+            }
+        if (obsCtrs > 0)
+        {
+            Console.WriteLine();
+            Console.WriteLine($"   OBSERVED on {fills} fill(s), {obsCtrs} contract(s): paid ${obsCharged:0.00} in fees "
+                            + $"where EV priced ${obsPriced:0.00}");
+            Console.WriteLine($"   -> {(obsCharged - obsPriced) / obsCtrs * 100.0:0.000}c per contract of real, "
+                            + "unmodelled drag.");
+        }
+        if (feeSkips > 0)
+            Console.WriteLine($"   {feeSkips} order(s) were REFUSED because rounding erased the edge outright — "
+                            + "the stake is too small to trade at those prices.");
     }
 }

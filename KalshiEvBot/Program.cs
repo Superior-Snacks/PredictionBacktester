@@ -28,15 +28,28 @@ internal static class Program
         // M1. Opt-in and impossible to enter by accident: without this flag no LiveExecutor is constructed,
         // so the order API is unreachable rather than merely unused.
         bool live      = args.Contains("--live");
+        // --micro-bet is a LABEL, not a second configuration path. It states the intent of the run in the
+        // banner and changes nothing else: the stake comes from --min-stake / EV_LIVE_STAKE_SIDE either
+        // way. An earlier cut gave it its own EV_MICRO_STAKE_* pair, which meant two env vars silently
+        // fighting over one knob — passing the flag would have overridden a deliberate EV_LIVE_STAKE_SIDE
+        // without saying so. One knob, one source.
+        bool micro = args.Contains("--micro-bet");
         double stakeSide = ArgDouble(args, "--min-stake") ?? EvConfig.Env("EV_LIVE_STAKE_SIDE", 5.0);
         double stakeGame = ArgDouble(args, "--max-stake-game") ?? EvConfig.Env("EV_LIVE_STAKE_GAME", 2 * stakeSide);
+        if (micro && !live)
+            Console.WriteLine("[MICRO] --micro-bet is a label only; it places nothing on its own. "
+                            + "Add --live to trade.");
 
         if (live)
         {
-            Console.WriteLine("┌─ Kalshi +EV taker bot — M1 (LIVE: REAL ORDERS) ────────────────────────────");
+            Console.WriteLine($"┌─ Kalshi +EV taker bot — M1 (LIVE: REAL ORDERS){(micro ? " [MICRO-BET]" : "")} ─────────────────────");
             Console.WriteLine("│  Pinnacle de-vigged = fair value.  Kalshi WS detects, Kalshi REST values.");
             Console.WriteLine($"│  IOC buys on every confirmed signal. ${stakeSide:0.00}/side, ${stakeGame:0.00}/game,");
             Console.WriteLine("│  one FILLED entry per side. A no-fill costs nothing and may be retried.");
+            if (micro)
+                Console.WriteLine("│  MICRO-BET: sized to measure the FILL RATE, not to earn — at this size");
+            if (micro)
+                Console.WriteLine("│  the rounded-up fee is a real drag. See --resolve §8 for what it costs.");
             Console.WriteLine("│  THIS SPENDS REAL MONEY. Ctrl+C now if that was not the intention.");
             Console.WriteLine("└────────────────────────────────────────────────────────────────────────────");
         }
@@ -683,44 +696,97 @@ internal static class Program
     // ── Bankroll ──────────────────────────────────────────────────────────────────────────────────────
     /// <summary>Sizing needs a bankroll even though M0 buys nothing: the Contracts column is what M1 will
     /// use to weight realised results, so a run with no bankroll logs correct EV and meaningless sizes.</summary>
-    private static async Task RefreshBankrollAsync(KalshiOrderClient k, EvEvaluator eval, EvConfig cfg, bool announce)
+    /// <summary>The local date the standing snapshot was taken for. One decision per day, then held.</summary>
+    private static DateTime _bankrollDay = DateTime.MinValue;
+
+    /// <summary>Cash plus the liquidation value of open positions — the base Kelly should actually size
+    /// against. A held contract is capital COMMITTED, not capital lost, and sizing on cash alone would
+    /// shrink the stake merely because a position is open rather than because the account got smaller.
+    ///
+    /// <para>Positions are valued at the BID, which is what we could really get out at, and the bid is
+    /// derived from the OPPOSITE ask (<c>yes_bid = 1 − no_ask</c>) — the identity the book feed already
+    /// relies on. That reuses the proven <see cref="EvEvaluator.AskDollars"/> reader rather than assuming a
+    /// bid field exists in a payload we have never inspected. A side quoting no ask at all is valued at
+    /// zero rather than guessed at.</para></summary>
+    private static async Task<(double Cash, double Held, int Positions, string Note)>
+        ReadEquityAsync(KalshiOrderClient k)
     {
-        // A PINNED BANKROLL IS AUTHORITATIVE, NOT A FALLBACK. Kelly sizes off the bankroll, so once --live
-        // starts buying and settling, a LIVE balance makes the Contracts column - and every size-weighted
-        // figure built on it - drift under the dataset. The same signal logged on two different days would
-        // carry different sizes for a reason that has nothing to do with the edge. Pinning it keeps the
-        // telemetry comparable across the M0/M1 boundary, which is the whole point of collecting it.
-        // EV itself never depends on this; only the size columns do.
+        double cash = (await k.GetBalanceCentsAsync()) / 100.0;
+        double held = 0; int n = 0; string note = "";
+        try
+        {
+            foreach (var (ticker, qty) in await k.GetPositionsAsync())
+            {
+                if (qty == 0) continue;
+                using var doc = await k.GetMarketAsync(ticker);
+                var mkt = doc.RootElement.TryGetProperty("market", out var m) ? m : doc.RootElement;
+                decimal opp = EvEvaluator.AskDollars(mkt, yes: qty < 0);   // YES held -> read no_ask, and vice versa
+                if (opp <= 0m || opp >= 1m) continue;
+                held += Math.Abs(qty) * (double)(1m - opp);
+                n++;
+            }
+        }
+        catch (Exception ex) { note = $"  (positions unread: {ex.GetType().Name} — cash only)"; }
+        return (cash, held, n, note);
+    }
+
+    /// <summary>
+    /// Decide the bankroll for TODAY, once, and hold it.
+    ///
+    /// <para><b>Why daily and not live.</b> Kelly sizes off the bankroll, so a balance re-read every minute
+    /// makes the Contracts column — and every size-weighted figure built on it — drift under the dataset as
+    /// fills and settlements land. The same signal logged twice in one day would carry different sizes for
+    /// a reason that has nothing to do with the edge. One snapshot per local calendar day keeps every size
+    /// within a day directly comparable, while still letting the account compound from day to day. EV never
+    /// depends on this; only the size columns do.</para>
+    ///
+    /// <para><b>An explicit pin outranks the snapshot.</b> <c>EV_BANKROLL_USD</c> is authoritative and the
+    /// balance is not read at all — that is what keeps M0 and M1 telemetry on one basis across the
+    /// boundary.</para>
+    /// </summary>
+    private static async Task RefreshBankrollAsync(KalshiOrderClient k, EvEvaluator eval, EvConfig cfg,
+                                                   bool announce, bool force = false)
+    {
         if (cfg.BankrollFallback > 0)
         {
             eval.BankrollUsd = cfg.BankrollFallback;
+            _bankrollDay = DateTime.Now.Date;
             if (announce)
                 Console.WriteLine($"[BANKROLL] ${eval.BankrollUsd:0.00} PINNED (EV_BANKROLL_USD) - the live "
                                 + "balance is not read, so sizing stays comparable as --live moves it.");
             return;
         }
+        if (!force && _bankrollDay == DateTime.Now.Date) return;    // already decided for today
+        bool firstOfDay = _bankrollDay != DateTime.Now.Date;
         try
         {
-            long cents = await k.GetBalanceCentsAsync();
-            eval.BankrollUsd = cents / 100.0;
-            if (announce) Console.WriteLine($"[BANKROLL] ${eval.BankrollUsd:0.00} (live Kalshi balance) - "
-                                          + "set EV_BANKROLL_USD to pin it before going live.");
+            var (cash, held, npos, note) = await ReadEquityAsync(k);
+            eval.BankrollUsd = cash + held;
+            _bankrollDay = DateTime.Now.Date;
+            if (announce || firstOfDay)
+                Console.WriteLine($"[BANKROLL] ${eval.BankrollUsd:0.00} for {_bankrollDay:ddd dd MMM} "
+                                + $"= ${cash:0.00} cash + ${held:0.00} in {npos} open position(s).{note}"
+                                + "  Fixed for the day; set EV_BANKROLL_USD to pin it outright.");
         }
         catch (Exception ex)
         {
-            eval.BankrollUsd = cfg.BankrollFallback;
-            if (announce)
-                Console.WriteLine($"[BANKROLL] balance read failed ({ex.GetType().Name}) — using "
-                                + $"EV_BANKROLL_USD=${eval.BankrollUsd:0.00}. EV is unaffected; only the "
-                                + "size columns are.");
+            // DO NOT half-update. Leaving the previous day's figure standing is strictly better than sizing
+            // off a zero, and the next attempt will retry because _bankrollDay was never advanced.
+            if (eval.BankrollUsd <= 0) eval.BankrollUsd = cfg.BankrollFallback;
+            if (announce || firstOfDay)
+                Console.WriteLine($"[BANKROLL] balance read failed ({ex.GetType().Name}) — holding "
+                                + $"${eval.BankrollUsd:0.00}. EV is unaffected; only the size columns are.");
         }
     }
 
+    /// <summary>Wakes every few minutes but only ACTS on a local date rollover — the day check inside
+    /// <see cref="RefreshBankrollAsync"/> makes every other tick a no-op, so this costs one balance read
+    /// per day rather than one per minute.</summary>
     private static async Task BankrollLoopAsync(KalshiOrderClient k, EvEvaluator eval, EvConfig cfg, CancellationToken ct)
     {
         while (!ct.IsCancellationRequested)
         {
-            try { await Task.Delay(TimeSpan.FromSeconds(60), ct); } catch (OperationCanceledException) { break; }
+            try { await Task.Delay(TimeSpan.FromMinutes(5), ct); } catch (OperationCanceledException) { break; }
             await RefreshBankrollAsync(k, eval, cfg, announce: false);
         }
     }
@@ -999,9 +1065,20 @@ internal static class Program
               --sidecar <url>      odds sidecar base URL (default: HARDVEN_SIDECAR_URL, or localhost:8787)
               --verbose            log candidates that REST rejected, and 429 back-offs
 
+            M1 — PLACES REAL ORDERS. Nothing below trades without --live.
+              --live               IOC-buy every confirmed signal. Real money.
+              --micro-bet          label only: marks the run as a fill-rate test. Changes no sizing.
+              --min-stake <$>      per side (default 5); a no-fill is free and may be retried
+              --max-stake-game <$> per game (default 2x the side stake)
+
             Environment: EV_MIN, EV_PRESCREEN_SLACK, EV_MIN_PRICE, EV_MAX_PRICE, EV_DEVIG (proportional|shin),
             EV_FEE_RATE, EV_RECHECK_COOLDOWN_MS, EV_REST_CONCURRENCY, EV_MAX_TRADE_FRACTION, EV_BANKROLL_USD,
-            EV_ORACLE_POLL_MS, EV_ORACLE_MAX_AGE_MS, EV_SNAPSHOT_MIN, EV_PAIRS_FILE, HARDVEN_SIDECAR_URL.
+            EV_ORACLE_POLL_MS, EV_ORACLE_MAX_AGE_MS, EV_SNAPSHOT_MIN, EV_PAIRS_FILE, HARDVEN_SIDECAR_URL,
+            EV_LIVE_STAKE_SIDE, EV_LIVE_STAKE_GAME, EV_LIVE_RETRY_COOLDOWN_SEC.
+
+            BANKROLL: EV_BANKROLL_USD pins it outright and the balance is never read. Unset, the bot takes
+            ONE snapshot per local calendar day — cash plus the bid-value of open positions — and holds it,
+            so Kelly sizes stay comparable within a day while the account still compounds across days.
             """);
     }
 }

@@ -101,7 +101,32 @@ public sealed class LiveExecutor
             {
                 Interlocked.Increment(ref Skipped);
                 _log.Write(new EvLiveRow(t0, ticker, eventId, side, limitCents / 100.0, restAsk, pTrue, ev,
-                                         0, "", "budget-exhausted", 0, 0, 0));
+                                         0, "", "budget-exhausted", 0, 0, 0, 0, 0));
+                return false;
+            }
+
+            // THE FEE KALSHI CHARGES IS NOT THE FEE THE EV ASSUMED, and the gap is worst exactly here.
+            // EvMath.Ev prices the MARGINAL fee (rate*p*(1-p), no count), but the venue rounds the whole
+            // order UP to the cent: 3 contracts at 50c pay $0.06 against the $0.0525 the EV assumed. Spread
+            // over 3 contracts that is 0.25c each — a quarter of a 1c edge, invisible in the telemetry
+            // because no column has ever carried it. At micro-bet size it is the single largest correction
+            // to the quoted edge, so it is measured on every order and logged for §8 to total up.
+            double pxDollars  = limitCents / 100.0;
+            double feeCharged = EvMath.OrderFee(pxDollars, count);
+            double feeAssumed = EvMath.FeePerContract(pxDollars) * count;
+            double dragPerCtr = count > 0 ? (feeCharged - feeAssumed) / count : 0.0;
+            // A BACKSTOP, NOT A FILTER. It refuses only a buy the rounding has pushed to genuinely
+            // negative EV — never one that merely dipped below EvMin — because M1's whole job is to
+            // measure the fill rate, and a guard that trims the sample would corrupt that measurement to
+            // save a fraction of a cent. At these sizes (drag <= 0.25c against EvMin 1c) it should
+            // essentially never fire; if §8 shows it firing, the stake is too small to trade at all.
+            if (ev - dragPerCtr <= 0)
+            {
+                Interlocked.Increment(ref Skipped);
+                _log.Write(new EvLiveRow(t0, ticker, eventId, side, pxDollars, restAsk, pTrue, ev,
+                                         count, "", "fee-rounding-negative", 0, 0, 0, feeCharged, feeAssumed));
+                Console.WriteLine($"[LIVE] {ticker} {side}: skipped — rounded fee ${feeCharged:0.00} on "
+                                + $"{count} contract(s) erases the {ev * 100:0.0}c edge.");
                 return false;
             }
 
@@ -129,7 +154,7 @@ public sealed class LiveExecutor
 
             _log.Write(new EvLiveRow(t0, ticker, eventId, side, limitCents / 100.0, restAsk, pTrue, ev,
                                      count, orderId, got ? "filled" : (status.Length > 0 ? status : "no-fill"),
-                                     (double)fillCount, (double)avgFill, ms));
+                                     (double)fillCount, (double)avgFill, ms, feeCharged, feeAssumed));
             return got;
         }
         catch (Exception ex)
@@ -160,7 +185,8 @@ public sealed class LiveExecutor
 public readonly record struct EvLiveRow(
     DateTime At, string Ticker, string EventId, string Side,
     double LimitPrice, double RestAsk, double PTrue, double Ev,
-    int Requested, string OrderId, string Status, double FillCount, double AvgFillPrice, double LatencyMs);
+    int Requested, string OrderId, string Status, double FillCount, double AvgFillPrice, double LatencyMs,
+    double FeeCharged = 0, double FeeAssumed = 0);
 
 public sealed class EvLiveLog : IDisposable
 {
@@ -168,6 +194,7 @@ public sealed class EvLiveLog : IDisposable
     {
         "At", "Ticker", "EventId", "Side", "LimitPrice", "RestAsk", "PTrue", "EvCents",
         "Requested", "OrderId", "Status", "FillCount", "AvgFillPrice", "LatencyMs", "SlippageCents",
+        "FeeChargedUsd", "FeeAssumedUsd", "FeeDragCentsPerCtr",
     };
 
     private readonly RollingCsv _csv;
@@ -193,6 +220,9 @@ public sealed class EvLiveLog : IDisposable
             RollingCsv.Q(r.OrderId), RollingCsv.Q(r.Status),
             RollingCsv.N(r.FillCount, 2), RollingCsv.N(r.AvgFillPrice, 4), RollingCsv.N(r.LatencyMs, 1),
             double.IsNaN(slip) ? "" : RollingCsv.N(slip, 2),
+            RollingCsv.N(r.FeeCharged, 4), RollingCsv.N(r.FeeAssumed, 4),
+            // What the rounding actually cost per contract, in cents - the column section 8 sums.
+            RollingCsv.N(r.Requested > 0 ? (r.FeeCharged - r.FeeAssumed) / r.Requested * 100.0 : 0, 3),
         });
     }
 
