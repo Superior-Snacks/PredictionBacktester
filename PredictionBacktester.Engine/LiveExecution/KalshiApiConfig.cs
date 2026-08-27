@@ -13,6 +13,14 @@ public class KalshiApiConfig
     // Prod: wss://api.elections.kalshi.com/trade-api/ws/v2
     public string BaseWsUrl { get; set; } = "wss://api.elections.kalshi.com/trade-api/ws/v2";
 
+    /// <summary>REST timeout. .NET's HttpClient default is 100 SECONDS, which is never a useful wait for a
+    /// Kalshi call and is long enough to stall a bounded worker pool through an entire trading opportunity.
+    /// A hung socket should surface as a fast error the caller can log and move past, not as a stall.</summary>
+    public TimeSpan HttpTimeout { get; set; } =
+        TimeSpan.FromSeconds(double.TryParse(Environment.GetEnvironmentVariable("KALSHI_HTTP_TIMEOUT_SEC"),
+                             System.Globalization.NumberStyles.Any,
+                             System.Globalization.CultureInfo.InvariantCulture, out var t) && t > 0 ? t : 20);
+
     public static KalshiApiConfig FromEnvironment()
     {
         LoadDotEnv();

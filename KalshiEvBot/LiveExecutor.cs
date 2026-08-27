@@ -4,6 +4,36 @@ using PredictionBacktester.Engine.LiveExecution;
 
 namespace KalshiEvBot;
 
+/// <summary>Console writes serialised across the worker pool.
+///
+/// <para><b>Why this exists.</b> <c>Console.ForegroundColor</c> is process-global state, so the usual
+/// set-write-reset is three separate operations on a shared resource. With EV_REST_CONCURRENCY workers
+/// evaluating in parallel, one thread's colour routinely paints another thread's line — the fill/miss
+/// colours below would be actively misleading rather than merely untidy. Every coloured write goes
+/// through here, and it restores the previous colour rather than resetting, so nesting cannot leak.</para></summary>
+public static class Con
+{
+    public static readonly object Lock = new();
+
+    public static void Line(ConsoleColor c, string s)
+    {
+        lock (Lock)
+        {
+            var prev = Console.ForegroundColor;
+            Console.ForegroundColor = c;
+            Console.WriteLine(s);
+            Console.ForegroundColor = prev;
+        }
+    }
+}
+
+/// <summary>The book and oracle state at the instant we fired, carried into the live log so a MISS can be
+/// explained rather than merely counted. Depth is the load-bearing one: it separates "we were too slow"
+/// from "the size was never there", which is the difference between a latency problem and a capacity
+/// ceiling — and section 7's fill rate is uninterpretable without knowing which.</summary>
+public readonly record struct TakeCtx(double WsAsk, double DepthToLimit, bool InPlay,
+                                      double OracleAgeMs, double WsBookAgeMs, string Regime);
+
 /// <summary>
 /// Places the real Kalshi order behind a confirmed signal — M1's only new capability.
 ///
@@ -73,7 +103,7 @@ public sealed class LiveExecutor
     /// Returns true only when contracts were actually bought.</summary>
     public async Task<bool> TryTakeAsync(string ticker, string eventId, string side,
                                          double limitPrice, double restAsk, double pTrue, double ev,
-                                         CancellationToken ct)
+                                         TakeCtx ctx, CancellationToken ct)
     {
         string key = ticker + "|" + side;
         string why = "";
@@ -101,7 +131,7 @@ public sealed class LiveExecutor
             {
                 Interlocked.Increment(ref Skipped);
                 _log.Write(new EvLiveRow(t0, ticker, eventId, side, limitCents / 100.0, restAsk, pTrue, ev,
-                                         0, "", "budget-exhausted", 0, 0, 0, 0, 0));
+                                         0, "", "budget-exhausted", 0, 0, 0, 0, 0, ctx));
                 return false;
             }
 
@@ -124,9 +154,10 @@ public sealed class LiveExecutor
             {
                 Interlocked.Increment(ref Skipped);
                 _log.Write(new EvLiveRow(t0, ticker, eventId, side, pxDollars, restAsk, pTrue, ev,
-                                         count, "", "fee-rounding-negative", 0, 0, 0, feeCharged, feeAssumed));
-                Console.WriteLine($"[LIVE] {ticker} {side}: skipped — rounded fee ${feeCharged:0.00} on "
-                                + $"{count} contract(s) erases the {ev * 100:0.0}c edge.");
+                                         count, "", "fee-rounding-negative", 0, 0, 0, feeCharged, feeAssumed, ctx));
+                Con.Line(ConsoleColor.DarkYellow,
+                    $"[SKIP] {ticker} {side}: rounded fee ${feeCharged:0.00} on {count} contract(s) "
+                  + $"erases the {ev * 100:0.0}c edge.");
                 return false;
             }
 
@@ -152,9 +183,22 @@ public sealed class LiveExecutor
             }
             else Interlocked.Increment(ref NoFill);
 
+            string depth = ctx.DepthToLimit < 0 ? "?" : $"{ctx.DepthToLimit:0}";
+            if (got)
+                Con.Line(ConsoleColor.Blue,
+                    $"[FILL] {ticker} {side,-3} {fillCount:0}/{count} @ {(avgFill > 0 ? avgFill : (decimal)pxDollars):0.00} "
+                  + $"(limit {pxDollars:0.00}, ws {ctx.WsAsk:0.00})  ev {ev * 100:+0.0;-0.0}c  "
+                  + $"${(double)fillCount * (double)(avgFill > 0 ? avgFill : (decimal)pxDollars):0.00}  "
+                  + $"{ms:0}ms{(fillCount < count ? $"  [PARTIAL: {depth} showing at the limit]" : "")}");
+            else
+                Con.Line(ConsoleColor.Yellow,
+                    $"[MISS] {ticker} {side,-3} 0/{count} @ limit {pxDollars:0.00} (ws said {ctx.WsAsk:0.00}, "
+                  + $"rest {restAsk:0.00})  ev {ev * 100:+0.0;-0.0}c  {ms:0}ms  "
+                  + $"depth {depth} at the limit — {(status.Length > 0 ? status : "no fill")}");
+
             _log.Write(new EvLiveRow(t0, ticker, eventId, side, limitCents / 100.0, restAsk, pTrue, ev,
                                      count, orderId, got ? "filled" : (status.Length > 0 ? status : "no-fill"),
-                                     (double)fillCount, (double)avgFill, ms, feeCharged, feeAssumed));
+                                     (double)fillCount, (double)avgFill, ms, feeCharged, feeAssumed, ctx));
             return got;
         }
         catch (Exception ex)
@@ -162,9 +206,9 @@ public sealed class LiveExecutor
             Interlocked.Increment(ref Rejected);
             _log.Write(new EvLiveRow(t0, ticker, eventId, side, limitPrice, restAsk, pTrue, ev, 0, "",
                                      "error:" + ex.GetType().Name, 0, 0,
-                                     (DateTime.UtcNow - t0).TotalMilliseconds));
-            Console.WriteLine($"[LIVE] {ticker} {side}: order FAILED ({ex.GetType().Name}: {ex.Message}) "
-                            + "— screening continues.");
+                                     (DateTime.UtcNow - t0).TotalMilliseconds, 0, 0, ctx));
+            Con.Line(ConsoleColor.Red,
+                $"[ERR ] {ticker} {side}: order FAILED ({ex.GetType().Name}: {ex.Message}) — screening continues.");
             return false;
         }
         finally
@@ -186,7 +230,7 @@ public readonly record struct EvLiveRow(
     DateTime At, string Ticker, string EventId, string Side,
     double LimitPrice, double RestAsk, double PTrue, double Ev,
     int Requested, string OrderId, string Status, double FillCount, double AvgFillPrice, double LatencyMs,
-    double FeeCharged = 0, double FeeAssumed = 0);
+    double FeeCharged = 0, double FeeAssumed = 0, TakeCtx Ctx = default);
 
 public sealed class EvLiveLog : IDisposable
 {
@@ -195,6 +239,7 @@ public sealed class EvLiveLog : IDisposable
         "At", "Ticker", "EventId", "Side", "LimitPrice", "RestAsk", "PTrue", "EvCents",
         "Requested", "OrderId", "Status", "FillCount", "AvgFillPrice", "LatencyMs", "SlippageCents",
         "FeeChargedUsd", "FeeAssumedUsd", "FeeDragCentsPerCtr",
+        "WsAsk", "DepthToLimit", "InPlay", "OracleAgeMs", "WsBookAgeMs", "Regime",
     };
 
     private readonly RollingCsv _csv;
@@ -223,6 +268,9 @@ public sealed class EvLiveLog : IDisposable
             RollingCsv.N(r.FeeCharged, 4), RollingCsv.N(r.FeeAssumed, 4),
             // What the rounding actually cost per contract, in cents - the column section 8 sums.
             RollingCsv.N(r.Requested > 0 ? (r.FeeCharged - r.FeeAssumed) / r.Requested * 100.0 : 0, 3),
+            RollingCsv.N(r.Ctx.WsAsk, 4), RollingCsv.N(r.Ctx.DepthToLimit, 0),
+            r.Ctx.InPlay ? "1" : "0", RollingCsv.N(r.Ctx.OracleAgeMs, 0),
+            RollingCsv.N(r.Ctx.WsBookAgeMs, 0), RollingCsv.Q(r.Ctx.Regime ?? ""),
         });
     }
 

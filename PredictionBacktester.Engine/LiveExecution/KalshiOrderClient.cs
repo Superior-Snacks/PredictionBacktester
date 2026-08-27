@@ -44,7 +44,8 @@ public class KalshiOrderClient : IKalshiOrderExecutor, IDisposable
     {
         _config = config;
         _rsa = LoadPrivateKey(config.PrivateKeyPath);
-        _http = new HttpClient { BaseAddress = new Uri(config.BaseRestUrl) };
+        _http = new HttpClient { BaseAddress = new Uri(config.BaseRestUrl),
+                                 Timeout = config.HttpTimeout };
     }
 
     // ──────────────────────────────────────────────────────────────────────────

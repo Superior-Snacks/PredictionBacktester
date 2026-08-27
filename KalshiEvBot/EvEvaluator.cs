@@ -31,7 +31,10 @@ public sealed class EvConfig
     public double MaxPrice        = Env("EV_MAX_PRICE", 0.80);
     public double MaxTradeFrac    = Env("EV_MAX_TRADE_FRACTION", 0.03);
     public int    CooldownMs      = (int)Env("EV_RECHECK_COOLDOWN_MS", 15_000);
-    public int    RestConcurrency = (int)Env("EV_REST_CONCURRENCY", 2);
+    // 4, not 2. The pool is also what absorbs a slow venue call: at 2, two stalled requests halt
+    // evaluation entirely. Raising it costs burst REST rate, not average - the call volume is set by
+    // book updates, not by worker count. Watch for 429s if raising further.
+    public int    RestConcurrency = (int)Env("EV_REST_CONCURRENCY", 4);
     // Set = PIN the bankroll at this value and never read the live balance (see RefreshBankrollAsync).
     // Unset (0) = read the venue. Pin it before --live, or Kelly sizing drifts with the balance and the
     // telemetry stops being comparable across the M0/M1 boundary.
@@ -696,7 +699,9 @@ public sealed class EvEvaluator
         // `_live` is null in M0, so the order API is not merely unused but unreachable.
         if (signal && _live is not null)
             await _live.TryTakeAsync(pair.KalshiTicker, pair.EventId, c.Side, limit, px,
-                                     c.PTrueUsed, ev, ct);
+                                     c.PTrueUsed, ev,
+                                     new TakeCtx((double)c.WsAsk, depthUnknown ? -1 : depthToLimit,
+                                                 c.InPlay, c.OracleAgeMs, c.WsBookAge, regime), ct);
 
         if (clears)
             _followUp?.Schedule(new FollowUp(DateTime.UtcNow, pair.KalshiTicker, c.Side, pair.Legs,
@@ -726,8 +731,7 @@ public sealed class EvEvaluator
         if (clears)
         {
             var col = !signal ? ConsoleColor.DarkGray : inWin ? ConsoleColor.Green : ConsoleColor.DarkYellow;
-            Console.ForegroundColor = col;
-            Console.WriteLine(
+            Con.Line(col,
                 $"{(signal ? "[+EV]" : "[~EV]")} {pair.KalshiTicker} {c.Side,-3} ev={ev * 100:+0.00;-0.00}c  "
               + $"pTrue={c.PTrueUsed:0.0000}  rest={restAsk:0.0000} (ws {c.WsAsk:0.0000}, "
               + $"gap {(double)(restAsk - c.WsAsk) * 100:+0.0;-0.0}c)  limit={limit:0.0000}  "
@@ -739,7 +743,6 @@ public sealed class EvEvaluator
                                                  + $"look, our oracle {moveP * 100:0.0}c — we are FOLLOWING, not ahead]"
                                    : prematch ? "  [PRE-MATCH: logged for calibration, not tradeable]"
                                    : "  [SCREENING-ONLY oracle: fresh timestamp, DELAYED price — not a signal]")}");
-            Console.ResetColor();
         }
         else if (Verbose)
         {
