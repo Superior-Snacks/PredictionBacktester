@@ -118,6 +118,108 @@ def digest(out: str) -> tuple[str, bool]:
     return (msg[:1980], bad)
 
 
+def live_digest(root: str) -> str:
+    """Build the LIVE-PATH block from EvLive_*.csv directly, not from the report's text.
+
+    WHY THE CSV AND NOT SECTION 7. Section 7 prints a summary; the CSV carries the columns that make a
+    miss INTERPRETABLE - DepthToLimit above all. "Fill rate 60%" is not actionable on its own, because
+    depth-bound and latency-bound misses point at opposite fixes: the first says the size was never there
+    and firing sooner changes nothing, the second says the book moved while we were in a round trip. That
+    split is the single most useful thing M1 can report, and it exists nowhere in the printed report.
+
+    Returns "" when there are no live rows, so an M0 run posts nothing rather than an empty heading.
+    """
+    import csv, glob
+    rows = []
+    for f in sorted(glob.glob(os.path.join(root, "EvLive_*.csv"))):
+        try:
+            with io.open(f, encoding="utf-8", errors="replace", newline="") as fh:
+                rows.extend(list(csv.DictReader(fh)))
+        except Exception:
+            continue
+    if not rows:
+        return ""
+
+    def num(r, k, d=0.0):
+        try:
+            return float((r.get(k) or "").strip())
+        except (ValueError, AttributeError):
+            return d
+
+    # An attempt is a row we actually sent. budget-exhausted and the fee-rounding refusal are decisions
+    # NOT to try, and counting them as misses would understate the fill rate by exactly the caps' effect.
+    # An error counts as an attempt even where Requested reads 0: rows written before the size was
+    # hoisted out of the try block logged it that way, and dropping them would hide venue failures.
+    attempts = [r for r in rows
+                if ((r.get("Status") or "").startswith("error") or num(r, "Requested") > 0)
+                and (r.get("Status") or "") not in ("budget-exhausted", "fee-rounding-negative")]
+    fills = [r for r in attempts if num(r, "FillCount") > 0]
+    errs = [r for r in attempts if (r.get("Status") or "").startswith("error")]
+    misses = [r for r in attempts if num(r, "FillCount") <= 0 and r not in errs]
+    if not attempts:
+        return ""
+
+    L = ["🔵 **LIVE PATH** — can we buy what we find?"]
+    fr = 100.0 * len(fills) / len(attempts)
+    L.append(f"`attempts {len(attempts)}   FILLED {len(fills)} ({fr:.1f}%)   "
+             f"no-fill {len(misses)}   err {len(errs)}`")
+    if fills:
+        ctr = sum(num(r, "FillCount") for r in fills)
+        spend = sum(num(r, "FillCount") * (num(r, "AvgFillPrice") or num(r, "LimitPrice")) for r in fills)
+        L.append(f"`bought {ctr:.0f} contract(s) for ${spend:.2f}`")
+
+    # THE SPLIT THAT DECIDES WHAT TO FIX. DepthToLimit is size showing at or better than our limit when we
+    # fired; -1 means the WS book did not reach the limit but REST said it was there, which is unknowable
+    # rather than either category, so it is reported separately instead of being forced into one.
+    if misses:
+        depth_bound = sum(1 for r in misses
+                          if 0 <= num(r, "DepthToLimit", -1) < num(r, "Requested"))
+        unknown = sum(1 for r in misses if num(r, "DepthToLimit", -1) < 0)
+        other = len(misses) - depth_bound - unknown
+        L.append(f"**misses**: depth-bound {depth_bound}/{len(misses)}"
+                 + (f", book-moved {other}" if other else "")
+                 + (f", unknown {unknown}" if unknown else ""))
+        L.append("_depth-bound = the size was never there; firing sooner would not have helped._"
+                 if depth_bound >= max(1, len(misses) - depth_bound)
+                 else "_book-moved dominates: latency is costing fills._")
+
+    slips = sorted(num(r, "SlippageCents") for r in fills if (r.get("SlippageCents") or "").strip())
+    if slips:
+        better = sum(1 for x in slips if x <= 0)
+        L.append(f"`slippage vs screened: median {slips[len(slips)//2]:+.1f}c  "
+                 f"worst {slips[-1]:+.1f}c  ({better}/{len(slips)} at or better)`")
+    lat = sorted(num(r, "LatencyMs") for r in attempts if num(r, "LatencyMs") > 0)
+    if lat:
+        L.append(f"`round-trip: median {lat[len(lat)//2]:.0f}ms  p90 {lat[int(0.9*(len(lat)-1))]:.0f}ms`")
+    partial = sum(1 for r in fills if 0 < num(r, "FillCount") < num(r, "Requested"))
+    if partial:
+        L.append(f"`PARTIAL on {partial} of {len(fills)} fills — depth ran out mid-order`")
+
+    # Fee rounding: the real, unmodelled drag. Section 8 projects it; this is what we actually paid.
+    ctr_f = sum(num(r, "FillCount") for r in fills)
+    drag = sum(num(r, "FeeChargedUsd") - num(r, "FeeAssumedUsd") for r in fills)
+    if ctr_f > 0 and any((r.get("FeeChargedUsd") or "").strip() for r in fills):
+        L.append(f"`fee rounding actually paid: {drag / ctr_f * 100:.3f}c per contract`")
+
+    for label, want in (("in-play", "1"), ("pre-match", "0")):
+        sub = [r for r in attempts if (r.get("InPlay") or "") == want]
+        if len(sub) >= 3:
+            g = sum(1 for r in sub if num(r, "FillCount") > 0)
+            L.append(f"`{label:9} {g}/{len(sub)} filled ({100.0*g/len(sub):.0f}%)`")
+    skipped = sum(1 for r in rows if (r.get("Status") or "") == "budget-exhausted")
+    feeskip = sum(1 for r in rows if (r.get("Status") or "") == "fee-rounding-negative")
+    if skipped or feeskip:
+        L.append(f"_not attempted: {skipped} budget-capped, {feeskip} fee-rounding_")
+    if errs:
+        kinds = sorted({(r.get("Status") or "") for r in errs})
+        L.append(f"⚠️ `{len(errs)} venue error(s): {', '.join(kinds)[:90]}`")
+    # NOT clean()'d. That helper ASCII-folds, which is right for lines lifted out of the report's
+    # mixed-encoding capture but wrong here: this block is assembled from CSV fields we control, and
+    # folding turned its own status emoji into literal "?" - losing exactly the at-a-glance signal they
+    # exist to give. Every interpolated value here is a ticker, a count or an exception name, all ASCII.
+    return "\n".join(L)[:1980]
+
+
 def post(url: str, message: str) -> bool:
     """POST via httpx, NOT urllib.
 
@@ -187,7 +289,13 @@ def main() -> int:
         print(f"[EV] full report -> {a.save}")
 
     msg, bad = digest(out)
+    # A SECOND MESSAGE, NOT A LONGER ONE. Discord caps at 2000 characters, and appending the live block
+    # would push section 6 - the only part that says whether anything changed - off the bottom. They also
+    # answer different questions ("is the edge real?" vs "can we buy it?"), so they read better apart.
+    live = live_digest(a.root)
     print("\n" + msg + "\n")
+    if live:
+        print(live + "\n")
     if a.dry:
         return 2 if bad else 0
     url = load_webhook(os.path.join(a.root, ".env"))
@@ -195,6 +303,8 @@ def main() -> int:
         print("[DISCORD] DISCORD_WEBHOOK_URL not set - nothing posted.")
         return 1
     ok = post(url, msg)
+    if live and ok:
+        ok = post(url, live)
     print("[DISCORD] posted." if ok else "[DISCORD] post FAILED.")
     return 0 if ok and not bad else (2 if bad else 1)
 

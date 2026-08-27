@@ -121,6 +121,11 @@ public sealed class LiveExecutor
         string key = ticker + "|" + side;
         string why = "";
         var t0 = DateTime.UtcNow;
+        // DECLARED OUT HERE so the catch below can record what was actually attempted. Scoped inside the
+        // try, they were unreachable from the handler and every venue error logged Requested=0 - which
+        // reads as "not an attempt" and silently drops errored orders out of the fill-rate denominator.
+        int attemptCount = 0;
+        double attemptPx = 0;
 
         if (_filled.ContainsKey(key)) why = "side already filled";
         else if (_lastAttempt.TryGetValue(key, out var last)
@@ -140,6 +145,7 @@ public sealed class LiveExecutor
             int limitCents = (int)Math.Floor(limitPrice * 100.0);
             if (limitCents < 1 || limitCents > 99) { Interlocked.Increment(ref Skipped); return false; }
             int count = SizeFor(eventId, limitCents / 100.0);
+            attemptCount = count; attemptPx = limitCents / 100.0;
             if (count < 1)
             {
                 Interlocked.Increment(ref Skipped);
@@ -224,8 +230,9 @@ public sealed class LiveExecutor
         catch (Exception ex)
         {
             Interlocked.Increment(ref Rejected);
-            _log.Write(new EvLiveRow(t0, ticker, eventId, side, limitPrice, restAsk, pTrue, ev, 0, "",
-                                     "error:" + ex.GetType().Name, 0, 0,
+            _log.Write(new EvLiveRow(t0, ticker, eventId, side,
+                                     attemptPx > 0 ? attemptPx : limitPrice, restAsk, pTrue, ev,
+                                     attemptCount, "", "error:" + ex.GetType().Name, 0, 0,
                                      (DateTime.UtcNow - t0).TotalMilliseconds, 0, 0, ctx));
             Con.Line(ConsoleColor.Red,
                 $"[ERR ] {ticker} {side}: order FAILED ({ex.GetType().Name}: {ex.Message}) — screening continues.");
