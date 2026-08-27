@@ -262,7 +262,15 @@ public class KalshiOrderClient : IKalshiOrderExecutor, IDisposable
     /// (<c>deprecated_v1_order_endpoint</c>) — observed live 2026-08-11, when EVERY Kalshi leg failed and
     /// left the already-filled book leg naked. GET /portfolio/orders/{id} is NOT deprecated and still
     /// carries the authoritative status, so only order CREATION moved.</summary>
+    // V2 CREATE-ORDER. Confirmed against Kalshi's own docs 2026-08-27
+    // (docs.kalshi.com/api-reference/orders/create-order-v2): this path and this body shape are correct,
+    // and the older /portfolio/orders now answers 410 deprecated_v1_order_endpoint.
     private const string V2OrdersPath = "/portfolio/events/orders";
+
+    /// <summary>Exchange to place on. 0 = "Default" (GET /exchange/status). Env-overridable because it is
+    /// account shape, not code: an account trading a sub-exchange would need a different index.</summary>
+    private static readonly int ExchangeIndex =
+        int.TryParse(Environment.GetEnvironmentVariable("KALSHI_EXCHANGE_INDEX"), out var xi) && xi >= 0 ? xi : 0;
 
     /// <summary>
     /// Maps our (side, action) pair onto Kalshi V2's single YES-quoted book.
@@ -304,11 +312,18 @@ public class KalshiOrderClient : IKalshiOrderExecutor, IDisposable
             ["side"]          = bookSide,
             // V2 takes count and price as fixed-point STRINGS, not numbers. Prices are DOLLARS (V1 was cents).
             ["count"]         = count.ToString(CultureInfo.InvariantCulture),
-            ["price"]         = yesPrice.ToString("0.######", CultureInfo.InvariantCulture),
+            ["price"]         = yesPrice.ToString("0.00##", CultureInfo.InvariantCulture),
             ["time_in_force"] = "immediate_or_cancel",
             // Required by V2. taker_at_cross cancels OUR taker order if it would cross our own resting
             // order — the right choice for an IOC taker: never trade with ourselves, never rest.
             ["self_trade_prevention_type"] = "taker_at_cross",
+            // THE FIELD THAT WAS ACTUALLY MISSING, and the docs list it as OPTIONAL. Without it every
+            // POST answered 404 {"code":"user_not_found"} while the SAME credentials returned 200 on
+            // /portfolio/balance, /positions and /orders - so the account was fine and the order endpoint
+            // simply could not resolve a user. Adding it changes the error to market_not_found, i.e. the
+            // user now resolves and only the ticker is being judged. Proven 2026-08-27 by direct probe.
+            // Index 0 is "Default" per GET /exchange/status; override if a sub-exchange is ever used.
+            ["exchange_index"] = ExchangeIndex,
         };
         if (!string.IsNullOrEmpty(clientOrderId))
             body["client_order_id"] = clientOrderId;
