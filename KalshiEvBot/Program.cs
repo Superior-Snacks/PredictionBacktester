@@ -1,5 +1,6 @@
 using System.Globalization;
 using PredictionBacktester.Engine.LiveExecution;
+using PredictionBacktester.Engine.Notifications;
 
 namespace KalshiEvBot;
 
@@ -181,6 +182,84 @@ internal static class Program
         // the other, and a bot woken only by Kalshi would never see the second kind at all.
         feed.OnBookChanged += eval.Nudge;
         oracle.OnPolled    += eval.SweepAll;
+
+        // ── Discord: report and remote control ───────────────────────────────────────────────────
+        // WHY THE LISTENER CANNOT HURT TRADING. It is a poll loop on its own task; every failure inside it
+        // is swallowed and logged, it holds no lock the evaluator wants, and `resolve` runs OUT OF PROCESS.
+        // No-ops entirely unless BOTH a bot token and a channel id are set, so an unconfigured run is
+        // byte-identical to before.
+        var discord = new DiscordNotifier(Environment.GetEnvironmentVariable("DISCORD_WEBHOOK_URL"),
+                                          botName: "KalshiEvBot");
+        var started = DateTime.UtcNow;
+
+        async Task<string> BuildStatusAsync()
+        {
+            await Task.CompletedTask;
+            var up = DateTime.UtcNow - started;
+            var sb = new System.Text.StringBuilder();
+            sb.Append(live ? "**EV bot — LIVE**" : "**EV bot — observing (M0)**");
+            sb.AppendLine($"  _up {up.TotalHours:0.0}h_");
+            sb.Append($"`bankroll ${eval.BankrollUsd:0.00}   pairs {pairs.Count}   ");
+            sb.AppendLine($"signals {eval.Stats.Signals}   rest {eval.Stats.RestCalls}   429s {eval.Stats.RateLimited}`");
+            var ex = eval.LiveExec;
+            if (ex is not null)
+            {
+                sb.AppendLine($"`{ex.Summary()}`");
+                // The number M1 exists to produce. Called out separately from the counters so it is the
+                // thing the eye lands on.
+                if (ex.Attempted > 0)
+                    sb.Append($"**fill rate {100.0 * ex.Filled / ex.Attempted:0.0}%** "
+                            + $"({ex.Filled}/{ex.Attempted}), staked ${ex.StakedUsd:0.00}");
+            }
+            else sb.Append("_no orders in this build_");
+            return sb.ToString();
+        }
+
+        async Task ShutdownHookAsync()
+        {
+            await Task.CompletedTask;
+            Console.WriteLine("[DISCORD CMD] shutdown requested — cancelling.");
+            cts.Cancel();
+        }
+
+        // OUT OF PROCESS ON PURPOSE. A resolve takes minutes and competes for the same Kalshi REST budget;
+        // running it inline would stall screening for the whole of it. The digest script already knows how
+        // to run the report and post it, so this reuses it rather than re-implementing the formatting.
+        async Task ResolveHookAsync()
+        {
+            string root = Directory.GetCurrentDirectory();
+            string script = Path.Combine(root, "ev_report_discord.py");
+            if (!File.Exists(script)) { await discord.AlertAsync($"cannot find {script}"); return; }
+            var psi = new System.Diagnostics.ProcessStartInfo("python", $"\"{script}\"")
+            { WorkingDirectory = root, UseShellExecute = false,
+              RedirectStandardOutput = true, RedirectStandardError = true };
+            using var proc = System.Diagnostics.Process.Start(psi);
+            if (proc is null) { await discord.AlertAsync("could not start the report process."); return; }
+            await proc.WaitForExitAsync();
+            if (proc.ExitCode != 0)
+                await discord.AlertAsync($"report exited {proc.ExitCode} — check the console.");
+        }
+
+        var cmdListener = new DiscordCommandListener(
+            Environment.GetEnvironmentVariable("DISCORD_BOT_TOKEN"),
+            Environment.GetEnvironmentVariable("DISCORD_CHANNEL_ID"),
+            reply:      m => discord.AlertAsync(m),
+            onStatus:   BuildStatusAsync,
+            onShutdown: ShutdownHookAsync,
+            sidecarBaseUrl: sidecar,          // pause/resume/force/schedule/pin still reach the sidecar
+            botTag: "ev",
+            onResolve: ResolveHookAsync,
+            // The EV bot CONSUMES the sidecar as an odds oracle; it does not own the browser lifecycle.
+            // Tearing it down on `ev close` would stop a service the operator never asked to stop.
+            shutdownSidecarOnClose: false);
+        if (cmdListener.Enabled)
+        {
+            Console.WriteLine("[DISCORD CMD] remote commands ON — address them to this bot: "
+                            + "`ev status` / `ev resolve` / `ev close` (sidecar verbs also forwarded).");
+            _ = Task.Run(() => cmdListener.RunAsync(cts.Token));
+        }
+        if (discord.Enabled)
+            _ = Task.Run(() => PerformanceLoopAsync(discord, BuildStatusAsync, cts.Token));
 
         await RefreshBankrollAsync(kalshi, eval, cfg, announce: true);
         var bankrollTask = BankrollLoopAsync(kalshi, eval, cfg, cts.Token);
@@ -691,6 +770,41 @@ internal static class Program
             catch (Exception ex) { Console.WriteLine($"[SNAPSHOT] {p.KalshiTicker}: {ex.Message}"); }
         }
         return n;
+    }
+
+    /// <summary>Posts the live performance to Discord on a timer, so a session can be watched from away
+    /// from the machine without asking.
+    ///
+    /// <para><b>Quiet by default when nothing is happening.</b> An unattended bot that posts an identical
+    /// line every half hour trains the operator to ignore the channel, which is exactly when the one line
+    /// that mattered gets missed. This posts only when the status TEXT has changed since the last post, and
+    /// forces one through every EV_DISCORD_HEARTBEAT_MIN regardless so silence still means "alive".</para></summary>
+    private static async Task PerformanceLoopAsync(DiscordNotifier discord, Func<Task<string>> status,
+                                                   CancellationToken ct)
+    {
+        int everyMin  = (int)EvConfig.Env("EV_DISCORD_REPORT_MIN", 30);
+        int beatMin   = (int)EvConfig.Env("EV_DISCORD_HEARTBEAT_MIN", 240);
+        if (everyMin <= 0) return;
+        string last = "";
+        var lastPost = DateTime.UtcNow;
+        while (!ct.IsCancellationRequested)
+        {
+            try { await Task.Delay(TimeSpan.FromMinutes(everyMin), ct); }
+            catch (OperationCanceledException) { break; }
+            try
+            {
+                string now = await status();
+                bool stale = (DateTime.UtcNow - lastPost).TotalMinutes >= beatMin;
+                if (now == last && !stale) continue;
+                await discord.AlertAsync(now);
+                last = now; lastPost = DateTime.UtcNow;
+            }
+            catch (Exception ex)
+            {
+                // Never let the reporter take the bot down: it is a convenience, not a dependency.
+                Console.WriteLine($"[DISCORD] performance post failed: {ex.GetType().Name}: {ex.Message}");
+            }
+        }
     }
 
     // ── Bankroll ──────────────────────────────────────────────────────────────────────────────────────

@@ -3,6 +3,7 @@ using System.Text.Json;
 using HardVenArb;
 using PredictionBacktester.Engine;
 using PredictionBacktester.Engine.LiveExecution;
+using PredictionBacktester.Engine.Notifications;
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  USAGE

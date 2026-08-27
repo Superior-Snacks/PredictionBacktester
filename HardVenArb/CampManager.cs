@@ -4,6 +4,7 @@ using System.Net.Http;
 using System.Text;
 using System.Text.Json;
 using PredictionBacktester.Engine;
+using PredictionBacktester.Engine.Notifications;
 
 namespace HardVenArb;
 

@@ -2,7 +2,7 @@ using System.Net.Http;
 using System.Text;
 using System.Text.Json;
 
-namespace HardVenArb;
+namespace PredictionBacktester.Engine.Notifications;
 
 /// <summary>
 /// Fire-and-forget Discord webhook alerter. No-ops when no URL is configured. Every send is

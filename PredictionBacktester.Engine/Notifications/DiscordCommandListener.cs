@@ -3,7 +3,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 
-namespace HardVenArb;
+namespace PredictionBacktester.Engine.Notifications;
 
 /// <summary>
 /// Polls a Discord channel for operator COMMANDS (<c>status</c> / <c>close</c> / <c>end</c>) via a bot token, so
@@ -24,6 +24,11 @@ public sealed class DiscordCommandListener
     private readonly Func<string, Task> _reply;       // post a reply to the channel (reuses the webhook)
     private readonly Func<Task<string>> _onStatus;    // build the 'status' text
     private readonly Func<Task> _onShutdown;          // graceful stop (write sentinel + cancel)
+    private readonly Func<Task>? _onResolve;          // optional: run the calibration report (EV bot)
+    // WHETHER `close` ALSO STOPS THE SIDECAR. True for a bot that OWNS the browser lifecycle (HardVen);
+    // false for one that merely CONSUMES the sidecar as an odds oracle (the EV bot), where tearing it down
+    // on shutdown would kill a service the operator never asked to stop.
+    private readonly bool _shutdownSidecar;
     private readonly int _pollSec;
     private readonly string _sidecarBase;             // control plane lives in the sidecar (lifecycle owns it)
     private readonly HttpClient _ctlHttp = new() { Timeout = TimeSpan.FromSeconds(30) };
@@ -38,8 +43,11 @@ public sealed class DiscordCommandListener
 
     public DiscordCommandListener(string? botToken, string? channelId, Func<string, Task> reply,
                                   Func<Task<string>> onStatus, Func<Task> onShutdown, int pollSec = 10,
-                                  string sidecarBaseUrl = "", string botTag = "")
+                                  string sidecarBaseUrl = "", string botTag = "",
+                                  Func<Task>? onResolve = null, bool shutdownSidecarOnClose = true)
     {
+        _onResolve = onResolve;
+        _shutdownSidecar = shutdownSidecarOnClose;
         _token     = string.IsNullOrWhiteSpace(botToken)  ? null : botToken.Trim();
         _channelId = string.IsNullOrWhiteSpace(channelId) ? null : channelId.Trim();
         _reply     = reply;
@@ -168,7 +176,7 @@ public sealed class DiscordCommandListener
         return null;
     }
 
-    private static bool IsKnownTag(string s) => s is "pin" or "bia" or "all";
+    private static bool IsKnownTag(string s) => s is "pin" or "bia" or "ev" or "all";
 
     private async Task HandleAsync(string raw)
     {
@@ -188,14 +196,21 @@ public sealed class DiscordCommandListener
             case "end":
             case "kill":
                 Console.WriteLine($"[DISCORD CMD] '{cmd}' — graceful shutdown requested");
-                await SafeReply("🛑 shutdown requested — stopping the bot **and the sidecar** " +
-                                "(supervisor will NOT restart).");
+                await SafeReply(_shutdownSidecar
+                    ? "🛑 shutdown requested — stopping the bot **and the sidecar** (supervisor will NOT restart)."
+                    : "🛑 shutdown requested — stopping this bot. The sidecar is left running.");
                 // Tear the SIDECAR down too. This used to run only under the `--stop-sidecar` CLI flag, so a
                 // Discord `close` stopped the C# bot and left the sidecar running its own lifecycle — still
                 // opening/closing Pinnacle and holding a logged-in browser session. Observed 2026-08-08: the
                 // bot stopped at 08:32 and sidecar window alerts kept arriving until 15:17. "Stop the bot
                 // entirely" has to mean the venue session too; an unattended logged-in browser is the exact
                 // exposure the schedule exists to avoid. Sidecar first — it refuses while a bet is in flight.
+                if (!_shutdownSidecar)
+                {
+                    try { await _onShutdown(); }
+                    catch (Exception ex) { Console.WriteLine($"[DISCORD CMD] shutdown hook error: {ex.Message}"); }
+                    break;
+                }
                 try
                 {
                     using var sc = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
@@ -213,6 +228,18 @@ public sealed class DiscordCommandListener
                 }
                 try { await _onShutdown(); }
                 catch (Exception ex) { Console.WriteLine($"[DISCORD CMD] shutdown hook error: {ex.Message}"); }
+                break;
+
+            // Kicks the calibration report. OUT OF PROCESS on the EV bot, because a resolve takes minutes
+            // and shares Kalshi's REST budget - running it inline would stall the screening loop for the
+            // whole of it. Answers politely on bots that have no report rather than looking broken.
+            case "resolve":
+            case "report":
+                if (_onResolve is null) { await SafeReply("no calibration report on this bot."); break; }
+                Console.WriteLine("[DISCORD CMD] 'resolve' requested");
+                await SafeReply("running the calibration report - this takes a few minutes.");
+                try { await _onResolve(); }
+                catch (Exception ex) { await SafeReply($"resolve failed: {ex.GetType().Name}: {ex.Message}"); }
                 break;
 
             // ── session control (sidecar) ─────────────────────────────────────
