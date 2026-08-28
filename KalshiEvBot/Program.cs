@@ -887,33 +887,17 @@ internal static class Program
     /// relies on. That reuses the proven <see cref="EvEvaluator.AskDollars"/> reader rather than assuming a
     /// bid field exists in a payload we have never inspected. A side quoting no ask at all is valued at
     /// zero rather than guessed at.</para></summary>
-    private static async Task<(double Cash, double Held, int Positions, string Note)>
-        ReadEquityAsync(KalshiOrderClient k, int shard)
-    {
-        // SHARD BALANCE, NOT THE ACCOUNT TOTAL. Collateral is per exchange shard: money sitting on shard 0
-        // cannot buy a tennis market on shard 3. Sizing off the total would have said $576 while $188 was
-        // actually spendable - the same blind spot that let every order 404 on 2026-08-27 while the account
-        // looked healthy.
-        double cash = await k.ShardBalanceAsync(shard);
-        double held = 0; int n = 0; string note = "";
-        try
-        {
-            foreach (var (ticker, qty) in await k.GetPositionsAsync())
-            {
-                if (qty == 0) continue;
-                // Only positions on THIS shard are capital that comes back to THIS shard when they settle.
-                if (await k.ExchangeIndexForAsync(ticker) != shard) continue;
-                using var doc = await k.GetMarketAsync(ticker);
-                var mkt = doc.RootElement.TryGetProperty("market", out var m) ? m : doc.RootElement;
-                decimal opp = EvEvaluator.AskDollars(mkt, yes: qty < 0);   // YES held -> read no_ask, and vice versa
-                if (opp <= 0m || opp >= 1m) continue;
-                held += Math.Abs(qty) * (double)(1m - opp);
-                n++;
-            }
-        }
-        catch (Exception ex) { note = $"  (positions unread: {ex.GetType().Name} - cash only)"; }
-        return (cash, held, n, note);
-    }
+    /// <summary>Spendable collateral on the trading shard: CASH, and nothing else.
+    ///
+    /// <para><b>Open positions are deliberately not counted.</b> An earlier cut marked them to market at
+    /// the bid, which is the right way to value a portfolio and the wrong way to answer the only question
+    /// this number is asked: can we place an order? Kalshi's collateralisation check runs inside the
+    /// matching engine against the available balance, so a position worth $150 buys nothing — including it
+    /// would report headroom that does not exist, precisely when the account is running dry.</para>
+    ///
+    /// <para>It also removes an N+1 fetch (one market lookup per open position) from startup.</para></summary>
+    private static async Task<double> ReadShardCashAsync(KalshiOrderClient k, int shard)
+        => await k.ShardBalanceAsync(shard);
 
     /// <summary>
     /// Decide the bankroll for TODAY, once, and hold it.
@@ -951,15 +935,15 @@ internal static class Program
         bool firstOfDay = _bankrollDay != DateTime.Now.Date;
         try
         {
-            var (cash, held, npos, note) = await ReadEquityAsync(k, _tradingShard);
-            eval.LiveEquityUsd = cash + held;
+            double cash = await ReadShardCashAsync(k, _tradingShard);
+            eval.LiveEquityUsd = cash;
             // Only when nothing pinned it: unpinned, the telemetry basis follows the real account.
             if (cfg.BankrollFallback <= 0) eval.BankrollUsd = eval.LiveEquityUsd;
             _bankrollDay = DateTime.Now.Date;
             if (announce || firstOfDay)
-                Console.WriteLine($"[EQUITY  ] ${eval.LiveEquityUsd:0.00} REAL on shard {_tradingShard} "
-                                + $"= ${cash:0.00} cash + ${held:0.00} in {npos} open position(s).{note}"
-                                + $"  Snapshot for {_bankrollDay:ddd dd MMM}.");
+                Console.WriteLine($"[EQUITY  ] ${eval.LiveEquityUsd:0.00} spendable cash on shard "
+                                + $"{_tradingShard}. ONE snapshot for {_bankrollDay:ddd dd MMM} - held fixed "
+                                + "all day, so nothing downstream moves as fills and settlements land.");
             // OPEN POSITIONS ARE CAPITAL, NOT LOSSES: counting cash alone would shrink the bankroll every
             // time a bet is live and grow it back on settlement, which is sizing noise with no information
             // in it. The floor below is the only thing the bankroll gates in flat-stake mode - sizing there
