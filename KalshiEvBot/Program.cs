@@ -176,6 +176,11 @@ internal static class Program
         using var cts = new CancellationTokenSource();
         Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
 
+        // BEFORE the evaluator starts. M changes EV, the IOC limit and the Kelly size, and it is a live
+        // per-series field that can move under a running bot — so it is read once here rather than assumed,
+        // and a non-standard value is shouted in the banner instead of being discovered from a losing month.
+        await eval.PrimeFeeMultipliersAsync(cts.Token);
+
         var feedTask   = feed.RunAsync(cts.Token);
         var oracleTask = oracle.RunAsync(cts.Token);
         var evalTask   = eval.RunAsync(cts.Token);

@@ -256,6 +256,90 @@ public sealed class EvEvaluator
     /// <summary>Tickers waiting to be screened. Lets --once know when the sweep has drained.</summary>
     public int Pending => _queued.Count;
     public double BankrollUsd { get; set; }
+
+    /// <summary>Series -> Kalshi's fee multiplier M. Empty means "not primed", and every lookup then
+    /// returns the published default of 1.</summary>
+    private readonly ConcurrentDictionary<string, double> _feeM = new(StringComparer.Ordinal);
+
+    /// <summary>M for this ticker's series.
+    ///
+    /// <para><b>Self-healing for series that appear mid-run.</b> The pair file is re-read every couple of
+    /// minutes and can introduce a series the startup prime never saw; returning a silent 1.0 forever would
+    /// be exactly the assumption this whole mechanism exists to remove. An unknown series therefore kicks
+    /// off a one-shot background read and answers 1.0 (the published default) until it lands, which is at
+    /// most one evaluation cycle. 1.0 is also the safe direction to be wrong in: it UNDER-states the fee
+    /// for a series that turns out to be dearer only if that series is dearer than standard, and the IOC
+    /// limit still caps what we pay.</para></summary>
+    private double FeeM(string ticker)
+    {
+        string series = ticker.Split('-')[0];
+        if (_feeM.TryGetValue(series, out double m)) return m;
+        if (_feeMPending.TryAdd(series, 0))
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    double v = await _kalshi.FeeMultiplierForAsync(series);
+                    _feeM[series] = v;
+                    if (Math.Abs(v - 1.0) > 1e-9)
+                        Con.Line(ConsoleColor.Yellow,
+                            $"[FEES] NEW series {series} has a NON-STANDARD multiplier {v:0.##} — "
+                          + "EV, the IOC limit and the size are now scaled for it.");
+                    else Console.WriteLine($"[FEES] new series {series}: multiplier 1 (standard).");
+                }
+                catch { _feeM[series] = 1.0; }
+            });
+        return 1.0;
+    }
+
+    /// <summary>Series with a background multiplier read in flight, so a hot loop asks once, not per tick.</summary>
+    private readonly ConcurrentDictionary<string, byte> _feeMPending = new(StringComparer.Ordinal);
+
+    /// <summary>Reads M once per watched series, before any trading.
+    ///
+    /// <para>Done at STARTUP rather than lazily on the order path: it is six calls for the whole session,
+    /// it keeps the money path free of an extra round trip, and a multiplier that changed overnight is
+    /// something to see in the banner rather than discover from a losing month. The fee comes out of a
+    /// 1-2c edge, so a series quietly moving to M=2 would make every signal in it a loser while the
+    /// telemetry kept reporting a profit.</para></summary>
+    public async Task PrimeFeeMultipliersAsync(CancellationToken ct)
+    {
+        var series = _byTicker.Values.Select(p => p.KalshiTicker.Split('-')[0])
+                              .Distinct(StringComparer.Ordinal)
+                              .OrderBy(x => x, StringComparer.Ordinal).ToList();
+        var odd = new List<string>();
+        foreach (string sname in series)
+        {
+            if (ct.IsCancellationRequested) return;
+            try
+            {
+                double m = await _kalshi.FeeMultiplierForAsync(sname);
+                _feeM[sname] = m;
+                if (Math.Abs(m - 1.0) > 1e-9) odd.Add($"{sname}={m:0.##}");
+            }
+            catch { _feeM[sname] = 1.0; }
+        }
+        Console.WriteLine($"[FEES] {series.Count} series checked, multiplier read live from "
+                        + "/series/{ticker}.fee_multiplier"
+                        + (odd.Count == 0 ? " — all 1 (standard 0.07 taker)."
+                                          : "  NON-STANDARD: " + string.Join(", ", odd)));
+        // A fee SHAPE we do not implement is worse than a multiplier we misread: no scaling fixes it.
+        var badShapes = _kalshi.UnknownFeeTypes;
+        if (badShapes.Count > 0)
+        {
+            Con.Line(ConsoleColor.Red,
+                "[FEES] UNKNOWN fee_type on " + string.Join(", ", badShapes)
+              + " — our fee arithmetic assumes the quadratic shape and is NOT valid for these. "
+              + "Every EV on that series is suspect until this is implemented.");
+        }
+        if (odd.Count > 0)
+        {
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.WriteLine("[FEES] a multiplier != 1 changes EV, the IOC limit and the Kelly size for "
+                            + "that series. Those are applied, but check the series is still worth trading.");
+            Console.ResetColor();
+        }
+    }
     /// <summary>Fraction of bankroll already at risk. Always 0 in M0 — nothing is ever bought — but the
     /// damping term is computed from it so M2 inherits a sizer that has been exercised, not a new one.</summary>
     public double ActiveExposureFraction { get; set; }
@@ -320,6 +404,11 @@ public sealed class EvEvaluator
             _cooldownUntil.TryRemove(t, out _);
         }
         foreach (var kv in fresh) _byTicker[kv.Key] = kv.Value;
+        // A RELOAD CAN INTRODUCE A WHOLE NEW SERIES, whose fee multiplier the startup prime never read.
+        // Touch each one so the lazy path above resolves it now rather than on the first live signal.
+        foreach (string sname in fresh.Values.Select(v => v.KalshiTicker.Split('-')[0])
+                                      .Distinct(StringComparer.Ordinal))
+            if (!_feeM.ContainsKey(sname)) FeeM(sname);
         return (added, removed);
     }
 
@@ -388,6 +477,10 @@ public sealed class EvEvaluator
             Interlocked.Increment(ref Stats.RestCalls);
             using var doc = await _kalshi.GetMarketAsync(ticker);
             var mkt = doc.RootElement.TryGetProperty("market", out var m) ? m : doc.RootElement;
+            // Free shard resolution: this response already carries it, so the order never needs its own
+            // lookup and never falls back to Kalshi's slower auto-routing.
+            if (mkt.TryGetProperty("exchange_index", out var xi) && xi.ValueKind == JsonValueKind.Number)
+                _kalshi.NoteExchangeIndex(ticker, xi.GetInt32());
             restYes = AskDollars(mkt, yes: true);
             restNo  = AskDollars(mkt, yes: false);
         }
@@ -411,7 +504,7 @@ public sealed class EvEvaluator
             // threshold, so it costs a handful of calls an hour rather than one per poll.
             var    screened = c;
             string verify   = "not-checked";
-            if (EvMath.Ev(c.PTrueUsed, (double)restAsk) >= _cfg.EvMin && _cfg.VerifyVenue)
+            if (EvMath.Ev(c.PTrueUsed, (double)restAsk, FeeM(pair.KalshiTicker)) >= _cfg.EvMin && _cfg.VerifyVenue)
             {
                 verify = await _oracle.RefetchAsync(pair.Legs, ct);
                 if (verify == "ok")
@@ -503,7 +596,7 @@ public sealed class EvEvaluator
         if (wsAsk <= 0m || wsAsk >= 1m) return null;
 
         // WS EV is an UPPER BOUND (the ask reads low), so a candidate that fails here cannot pass at REST.
-        double evWs = EvMath.Ev(pTrue, (double)wsAsk);
+        double evWs = EvMath.Ev(pTrue, (double)wsAsk, FeeM(pair.KalshiTicker));
         if (evWs < _cfg.EvMin - _cfg.PrescreenSlack)
         { Interlocked.Increment(ref Stats.BelowPrescreen); return null; }
 
@@ -528,14 +621,15 @@ public sealed class EvEvaluator
                               CancellationToken ct)
     {
         double px   = (double)restAsk;
-        double fee  = EvMath.FeePerContract(px);
-        double cost = EvMath.CostPerContract(px);
+        double feeM = FeeM(pair.KalshiTicker);          // Kalshi's per-series multiplier, read at startup
+        double fee  = EvMath.FeePerContract(px, feeM);
+        double cost = EvMath.CostPerContract(px, feeM);
         double ev      = c.PTrueUsed  - cost;
         double evProp  = c.PTrueProp  - cost;
         double evShin  = c.PTrueShin  - cost;
-        double limit   = EvMath.BreakEvenLimit(c.PTrueUsed, _cfg.EvMin);
+        double limit   = EvMath.BreakEvenLimit(c.PTrueUsed, _cfg.EvMin, feeM);
         bool   inWin   = px >= _cfg.MinPrice && px <= _cfg.MaxPrice;
-        var    size    = EvMath.Size(c.PTrueUsed, px, c.Vig, BankrollUsd, ActiveExposureFraction, _cfg.MaxTradeFrac);
+        var    size    = EvMath.Size(c.PTrueUsed, px, c.Vig, BankrollUsd, ActiveExposureFraction, _cfg.MaxTradeFrac, feeM);
         // CAPACITY: how many contracts the book actually offers at or below the break-even limit, and what
         // that is worth. This is the answer to "how big could this bet be" — the Kelly size says what we
         // would WANT, this says what is THERE, and only the smaller of the two is achievable.
@@ -714,7 +808,7 @@ public sealed class EvEvaluator
             c.PTrueProp, c.PTrueShin, c.PTrueUsed, _cfg.DeVigMethod, c.OracleAgeMs, c.OracleDepth,
             c.WsAsk, restAsk, c.WsBookAge, c.WsDepth,
             fee, cost, evProp, evShin, ev, c.EvWs, limit,
-            size, BankrollUsd, EvMath.OrderFee(px, size.Contracts), size.Contracts * px,
+            size, BankrollUsd, EvMath.OrderFee(px, size.Contracts, feeM), size.Contracts * px,
             inWin, signal ? "SIGNAL" : !clears ? "REJECTED_REST"
                           : implausible ? "IMPLAUSIBLE"
                           : venueBad ? "VENUE_REFUSED"

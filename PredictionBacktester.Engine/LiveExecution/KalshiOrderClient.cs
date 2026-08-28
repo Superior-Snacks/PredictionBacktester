@@ -267,10 +267,116 @@ public class KalshiOrderClient : IKalshiOrderExecutor, IDisposable
     // and the older /portfolio/orders now answers 410 deprecated_v1_order_endpoint.
     private const string V2OrdersPath = "/portfolio/events/orders";
 
-    /// <summary>Exchange to place on. 0 = "Default" (GET /exchange/status). Env-overridable because it is
-    /// account shape, not code: an account trading a sub-exchange would need a different index.</summary>
-    private static readonly int ExchangeIndex =
+    /// <summary>Fallback exchange when a market's own index cannot be read. 0 = "Default".</summary>
+    private static readonly int ExchangeIndexFallback =
         int.TryParse(Environment.GetEnvironmentVariable("KALSHI_EXCHANGE_INDEX"), out var xi) && xi >= 0 ? xi : 0;
+
+    /// <summary>Ticker -> exchange shard, resolved once from the market itself.
+    ///
+    /// <para><b>Kalshi shards its exchange and an order must name the shard the market lives on.</b>
+    /// Observed 2026-08-28: every tennis market reports <c>exchange_index: 3</c> ("Tennis &amp; Baseball"),
+    /// while index 0 is "Default" — so posting a tennis order against 0 answers
+    /// <c>404 market_not_found</c>, which reads as a bad ticker rather than a routing mistake. A hardcoded
+    /// index is therefore wrong for any account trading more than one category, and the market object is
+    /// the only authority on which one is right.</para>
+    ///
+    /// <para>Cached because it is a property of the market, not of the moment.</para></summary>
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, int> _shard = new(StringComparer.Ordinal);
+
+    /// <summary>Ticker -> the SERIES fee multiplier M, read from the venue and remembered.
+    ///
+    /// <para><b>M is per series and Kalshi publishes it as a live field</b>
+    /// (<c>GET /series/{ticker}.fee_multiplier</c>), so nothing should assume 1. The published schedule
+    /// carries a "Non-Standard Fees" table where some series sit at 0 (free) and a combos series at 2, and
+    /// that table is dated — it can change under a running bot. Since the fee is subtracted from a 1-2c
+    /// edge, a silently doubled M would turn every signal in that series into a loss while the telemetry
+    /// went on reporting a profit.</para>
+    ///
+    /// <para>All six tennis series read 1 on 2026-08-28. This exists so that stays a measurement rather
+    /// than an assumption.</para></summary>
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, double> _feeMult = new(StringComparer.Ordinal);
+
+    /// <summary>Fee shapes whose arithmetic we actually implement. `quadratic` is
+    /// <c>M x rate x C x P x (1-P)</c>; the maker variant differs only in the MAKER leg, which an IOC
+    /// taker never pays. Anything else means Kalshi has introduced a shape we do not compute, and the
+    /// multiplier alone will not save us — hence the loud warning rather than a silent default.</summary>
+    private static readonly HashSet<string> KnownFeeTypes =
+        new(StringComparer.OrdinalIgnoreCase) { "quadratic", "quadratic_with_maker_fees" };
+
+    /// <summary>Set when a series reports a fee_type this client does not implement. Read it after
+    /// priming: the arithmetic downstream is only valid while this stays empty.</summary>
+    public IReadOnlyCollection<string> UnknownFeeTypes => _unknownFeeTypes;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _unknownSet = new(StringComparer.Ordinal);
+    private List<string> _unknownFeeTypes => _unknownSet.Keys.ToList();
+
+    public async Task<double> FeeMultiplierForAsync(string tickerOrSeries)
+    {
+        string series = tickerOrSeries.Split('-')[0];
+        if (_feeMult.TryGetValue(series, out double known)) return known;
+        double m = 1.0;
+        try
+        {
+            using var doc = await GetAsync($"/series/{series}");
+            var root = doc.RootElement.TryGetProperty("series", out var se) ? se : doc.RootElement;
+            if (root.TryGetProperty("fee_multiplier", out var fm) && fm.ValueKind == JsonValueKind.Number)
+                m = fm.GetDouble();
+            // THE MULTIPLIER IS ONLY HALF THE CONTRACT. It scales a formula whose SHAPE we hardcode, so a
+            // series that switched to a different fee_type would be mispriced no matter what M said.
+            string ft = root.TryGetProperty("fee_type", out var fe) && fe.ValueKind == JsonValueKind.String
+                      ? (fe.GetString() ?? "") : "";
+            if (ft.Length > 0 && !KnownFeeTypes.Contains(ft))
+                _unknownSet[$"{series}={ft}"] = 0;
+        }
+        catch { /* default 1 — the published default, and the safe direction is not to under-charge */ }
+        _feeMult[series] = m;
+        return m;
+    }
+
+    /// <summary>Record a market's shard from a response the caller already had.
+    ///
+    /// <para><b>This is the latency fix.</b> Kalshi auto-routes when exchange_index is omitted and warns
+    /// that "automatic routing will incur an additional latency cost"; naming the shard explicitly avoids
+    /// it (and bills only that shard's write budget instead of every shard's). But resolving the shard with
+    /// our OWN extra GET just moves the cost onto the first order for each market. The evaluator already
+    /// fetches the market to price it, and that response carries exchange_index — so feeding it here makes
+    /// the order path both explicitly routed AND free of any lookup.</para></summary>
+    /// <summary>Raised on every FILL with what the venue actually charged, so a caller can reconcile it
+    /// against whatever fee it modelled. (ticker, contractsFilled, avgFillPrice, feePaidPerContract).
+    ///
+    /// <para><b>Why this exists.</b> We read the per-series multiplier live, but the RATE (0.07), the
+    /// quadratic SHAPE and the centicent ROUNDING are all still hardcoded from a dated PDF. No API field
+    /// exposes them. The venue does, however, report <c>average_fee_paid</c> on every fill — so comparing
+    /// that against the model turns all three assumptions into a monitored invariant instead of a belief.
+    /// A silent fee change is otherwise invisible until it has eaten a month of a 1-2c edge.</para></summary>
+    public Action<string, decimal, decimal, decimal>? FeeObserved { get; set; }
+
+    /// <summary>The multiplier already resolved for this series, or 1 if it has not been read yet.
+    /// Synchronous on purpose: the fee-reconciliation callback runs on the order path and must not await.</summary>
+    public double CachedFeeMultiplier(string tickerOrSeries)
+        => _feeMult.TryGetValue(tickerOrSeries.Split('-')[0], out double m) ? m : 1.0;
+
+    public void NoteExchangeIndex(string ticker, int exchangeIndex)
+    {
+        if (exchangeIndex >= 0) _shard[ticker] = exchangeIndex;
+    }
+
+    /// <summary>The shard this market trades on, read from the market and remembered. Falls back rather
+    /// than throwing: a failed lookup should degrade to the old behaviour, not stop trading.</summary>
+    public async Task<int> ExchangeIndexForAsync(string ticker)
+    {
+        if (_shard.TryGetValue(ticker, out int known)) return known;
+        int idx = ExchangeIndexFallback;
+        try
+        {
+            using var doc = await GetMarketAsync(ticker);
+            var mkt = doc.RootElement.TryGetProperty("market", out var mm) ? mm : doc.RootElement;
+            if (mkt.TryGetProperty("exchange_index", out var xe) && xe.ValueKind == JsonValueKind.Number)
+                idx = xe.GetInt32();
+        }
+        catch { /* fall back; the order will report the real error if the shard is wrong */ }
+        _shard[ticker] = idx;
+        return idx;
+    }
 
     /// <summary>
     /// Maps our (side, action) pair onto Kalshi V2's single YES-quoted book.
@@ -305,6 +411,11 @@ public class KalshiOrderClient : IKalshiOrderExecutor, IDisposable
         string ticker, string side, int priceCents, int count,
         string action = "buy", string? clientOrderId = null)
     {
+        // Resolved here rather than plumbed in from every caller: the signature is fixed by
+        // IKalshiOrderExecutor (two simulated clients implement it too), and doing it inside means every
+        // consumer of this client is correct without touching any of them. Cached per ticker, so it costs
+        // one extra GET on the first order for a market and nothing thereafter.
+        int shard = await ExchangeIndexForAsync(ticker);
         var (bookSide, yesPrice) = MapToV2Book(side, priceCents, action);
         var body = new Dictionary<string, object>
         {
@@ -322,8 +433,8 @@ public class KalshiOrderClient : IKalshiOrderExecutor, IDisposable
             // /portfolio/balance, /positions and /orders - so the account was fine and the order endpoint
             // simply could not resolve a user. Adding it changes the error to market_not_found, i.e. the
             // user now resolves and only the ticker is being judged. Proven 2026-08-27 by direct probe.
-            // Index 0 is "Default" per GET /exchange/status; override if a sub-exchange is ever used.
-            ["exchange_index"] = ExchangeIndex,
+            // THE SHARD THE MARKET ACTUALLY LIVES ON, not a constant. Tennis is index 3.
+            ["exchange_index"] = shard,
         };
         if (!string.IsNullOrEmpty(clientOrderId))
             body["client_order_id"] = clientOrderId;
@@ -364,6 +475,11 @@ public class KalshiOrderClient : IKalshiOrderExecutor, IDisposable
         // "canceled" here would report a fill count we never confirmed.
         string status = fill >= count ? "executed" : "resting";
 
+        if (fill > 0 && FeeObserved is not null)
+        {
+            decimal feePaid = ReadDecimalFlexible(root, "average_fee_paid");
+            try { FeeObserved(ticker, fill, avgFillYes, feePaid); } catch { }
+        }
         return (orderId, status, fill, avgFill);
     }
 

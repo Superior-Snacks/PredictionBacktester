@@ -91,6 +91,23 @@ public sealed class LiveExecutor
         _log = log;
         _cfg = cfg;
         _store = store;
+        // RECONCILE THE FEE AGAINST THE VENUE ON EVERY FILL. The multiplier is read live, but the 0.07
+        // rate, the quadratic shape and the centicent rounding are hardcoded from a dated schedule and no
+        // API field exposes them. This is the only thing that would notice if any of them changed.
+        _kalshi.FeeObserved = (tk, filled, avgYes, feePaid) =>
+        {
+            if (filled <= 0 || feePaid <= 0) return;
+            double px = (double)avgYes;
+            if (px <= 0 || px >= 1) return;
+            // WITH the series multiplier, or a legitimately dearer series would look like a formula change.
+            double modelled = EvMath.OrderFee(px, (int)filled, _kalshi.CachedFeeMultiplier(tk)) / (double)filled;
+            double actual   = (double)feePaid;
+            double gapC     = (actual - modelled) * 100.0;
+            if (Math.Abs(gapC) > 0.05)          // half a hundredth of a cent per contract
+                Con.Line(ConsoleColor.Red,
+                    $"[FEE!] {tk}: venue charged {actual:0.0000}/contract, we modelled {modelled:0.0000} "
+                  + $"({gapC:+0.00;-0.00}c). The fee formula has changed — EV is now WRONG.");
+        };
         // RESUME, do not restart. Without this the per-side and per-game caps silently become per-PROCESS,
         // and an unattended restart re-enters markets already bought.
         if (_store is not null)

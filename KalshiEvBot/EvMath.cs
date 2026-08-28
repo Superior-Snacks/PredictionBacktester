@@ -17,6 +17,13 @@ public static class EvMath
     /// 0.07 is the published formula, but the taker multiplier has never been checked against one of our own
     /// fills (EVBOT_TODO.md §6). It is the largest single line item against a 1-2c edge, so when it is
     /// confirmed the correction must not need a rebuild.</summary>
+    /// <para><b>CONFIRMED 2026-08-28</b> by a real fill (order 01a0480d): 5 contracts at 0.5400 on the
+    /// Tennis &amp; Baseball shard moved the balance exactly $2.7870 = $2.70 cost + $0.0870 fee, and
+    /// 0.07 x 5 x 0.54 x 0.46 = 0.08694 rounds up to $0.0870. The published schedule (7 Jul 2026) gives
+    /// <c>fees = roundup(M x 0.07 x C x P x (1-P))</c> where the round-up is to a CENTICENT on
+    /// <i>fee + positionCost</i> — i.e. on the ORDER TOTAL, not per contract. M is per SERIES and is read
+    /// live from <c>GET /series/{ticker}.fee_multiplier</c>; all six tennis series read 1 on that date,
+    /// but Kalshi can change one at any time, so nothing here assumes it.</para>
     public static readonly double FeeRate =
         double.TryParse(Environment.GetEnvironmentVariable("EV_FEE_RATE"),
                         NumberStyles.Any, CultureInfo.InvariantCulture, out var r) && r >= 0 ? r : 0.07;
@@ -24,22 +31,36 @@ public static class EvMath
     /// <summary>Marginal fee per contract: rate * p * (1-p). Peaks at the money (1.75c at p=0.50 on the
     /// default rate) and is cheapest at the wings (0.33c at 0.05) — so the 0.20-0.80 operating window buys
     /// its protection from de-vig error by paying the most expensive part of this arc.</summary>
-    public static double FeePerContract(double p) => FeeRate * p * (1.0 - p);
+    public static double FeePerContract(double p, double m = 1.0) => m * FeeRate * p * (1.0 - p);
 
-    /// <summary>Fee on a whole order, rounded UP to the cent as Kalshi charges it. Differs from
-    /// <see cref="FeePerContract"/> x count only at tiny sizes — where it matters most, because a
-    /// single contract at 0.50 is charged 2c, not 1.75c, and M2 will trade at exactly that size.</summary>
-    /// <para>The inner Round is not cosmetic. 0.07 x 100 x 0.5 x 0.5 evaluates to 175.00000000000003 cents
-    /// in binary floating point, and a bare Ceiling turns that into 176 — an invented cent on every order
-    /// that lands exactly on a boundary, always against us. Snap off the representation noise first.</para>
-    public static double OrderFee(double p, int count)
-        => count <= 0 ? 0.0 : Math.Ceiling(Math.Round(FeeRate * count * p * (1.0 - p) * 100.0, 9)) / 100.0;
+    /// <summary>Fee on a whole order, as Kalshi actually charges it: the PER-CONTRACT fee ceiled to
+    /// $0.0001, then multiplied by the count.
+    ///
+    /// <para><b>MEASURED, not assumed</b> (2026-08-28, order 01a0480d, Tennis &amp; Baseball shard):
+    /// 5 contracts filled at 0.5400 reported <c>average_fee_paid = 0.0174</c> and moved the balance by
+    /// exactly $2.7870 = $2.70 + $0.0870. The model fee is 0.07 x 0.54 x 0.46 = 0.017388, so the venue
+    /// ceils PER CONTRACT to a hundredth of a cent (0.017388 -> 0.0174) and multiplies — it does not ceil
+    /// the order total to the cent.</para>
+    ///
+    /// <para><b>What this corrects.</b> The previous model ceiled the whole order to the cent, which
+    /// overstated the fee by up to a cent per ORDER — 0.2c per contract on a 5-lot, and the entire basis
+    /// of the "fee rounding drag" that section 8 projected. That drag is largely an artefact of this
+    /// function, not a cost the venue charges. EV itself was never affected: <see cref="Ev"/> prices
+    /// <see cref="FeePerContract"/>, which is the unrounded marginal fee and was always right.</para>
+    ///
+    /// <para>The same fill also confirmed the 0.07 multiplier on the sports shard, closing the
+    /// "assumed, not confirmed" caveat on <see cref="FeeRate"/>.</para></summary>
+    public static double OrderFee(double p, int count, double m = 1.0)
+        => count <= 0 ? 0.0
+         : Math.Ceiling(Math.Round(m * FeeRate * count * p * (1.0 - p) * 10000.0, 9)) / 10000.0;
 
     /// <summary>All-in cost of owning one contract: the price crossed plus the fee paid to cross.</summary>
-    public static double CostPerContract(double execPrice) => execPrice + FeePerContract(execPrice);
+    public static double CostPerContract(double execPrice, double m = 1.0)
+        => execPrice + FeePerContract(execPrice, m);
 
     /// <summary>Expected value per contract, fee included. Positive means the price is worth taking.</summary>
-    public static double Ev(double pTrue, double execPrice) => pTrue - CostPerContract(execPrice);
+    public static double Ev(double pTrue, double execPrice, double m = 1.0)
+        => pTrue - CostPerContract(execPrice, m);
 
     /// <summary>
     /// The highest price at which this signal still clears <paramref name="evMin"/> — i.e. the IOC limit.
@@ -53,11 +74,11 @@ public static class EvMath
     /// <para>Solves p + rate*p*(1-p) = pTrue - evMin for the root in [0,1]:
     /// p = [(1+r) - sqrt((1+r)^2 - 4rT)] / 2r, and the r -&gt; 0 limit p = T.</para>
     /// </summary>
-    public static double BreakEvenLimit(double pTrue, double evMin)
+    public static double BreakEvenLimit(double pTrue, double evMin, double m = 1.0)
     {
         double t = pTrue - evMin;
         if (t <= 0) return 0.0;
-        double r = FeeRate;
+        double r = m * FeeRate;
         if (r <= 0) return Math.Min(t, 1.0);
         double disc = (1 + r) * (1 + r) - 4 * r * t;
         if (disc < 0) return 0.0;                      // no price clears the threshold
@@ -69,9 +90,9 @@ public static class EvMath
     /// Uses the FEE-INCLUSIVE cost in the denominator as well as the numerator — pricing the odds off the
     /// bare quote while charging the fee only in EV over-sizes every bet slightly, and Kelly compounds.
     /// Clamped at 0: a negative f is the opposite bet, which this bot does not take.</summary>
-    public static double FullKelly(double pTrue, double execPrice)
+    public static double FullKelly(double pTrue, double execPrice, double m = 1.0)
     {
-        double cost = CostPerContract(execPrice);
+        double cost = CostPerContract(execPrice, m);
         if (cost <= 0 || cost >= 1.0) return 0.0;
         return Math.Max(0.0, (pTrue - cost) / (1.0 - cost));
     }
@@ -98,9 +119,9 @@ public static class EvMath
     /// </summary>
     public static SizeResult Size(double pTrue, double execPrice, double overround,
                                   double bankrollUsd, double activeExposureFraction,
-                                  double maxFractionPerTrade = 0.03)
+                                  double maxFractionPerTrade = 0.03, double m = 1.0)
     {
-        double f     = FullKelly(pTrue, execPrice);
+        double f     = FullKelly(pTrue, execPrice, m);
         double alpha = Alpha(overround);
         double beta  = Beta(activeExposureFraction);
         double frac  = Math.Min(maxFractionPerTrade, f * alpha * beta);

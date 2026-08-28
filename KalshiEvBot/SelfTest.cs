@@ -117,9 +117,31 @@ public static class SelfTest
             Check(EvMath.FeePerContract(0.50) > EvMath.FeePerContract(0.20),
                   "the 0.20-0.80 window pays MORE fee than the wings, not less");
             Near(EvMath.FeePerContract(0.30), EvMath.FeePerContract(0.70), 1e-12, "fee arc is symmetric");
-            // Kalshi rounds the order fee UP to the cent, which only bites at the sizes M2 will trade.
-            Near(EvMath.OrderFee(0.50, 1), 0.02, 1e-12, "one contract at 0.50 is charged 2c, not 1.75c");
+            // MEASURED against a real fill (2026-08-28, order 01a0480d): 5 contracts at 0.54 were charged
+            // average_fee_paid 0.0174 and the balance moved exactly $0.0870. So the venue ceils the
+            // PER-CONTRACT fee to $0.0001 and multiplies; it does NOT ceil the order total to the cent.
+            Near(EvMath.OrderFee(0.54, 5), 0.0870, 1e-9,
+                 "the observed fill: 5 @ 0.54 costs $0.0870, not the $0.09 a cent-ceiling would give");
+            Near(EvMath.OrderFee(0.50, 1), 0.0175, 1e-12, "one contract at 0.50 pays the marginal 1.75c");
             Near(EvMath.OrderFee(0.50, 100), 1.75, 1e-12, "100 contracts at 0.50 is charged $1.75");
+            Check(EvMath.OrderFee(0.54, 5) >= EvMath.FeePerContract(0.54) * 5,
+                  "the ceiling can only ever round the fee UP, never down");
+            // THE PUBLISHED RULE IS A CEILING ON THE ORDER TOTAL, not per contract: "rounds up such that
+            // the fee + positionCost is rounded to a centicent" (fee schedule, 7 Jul 2026). The two agree
+            // on the observed fill above and DIVERGE here, so this is the case that pins the right one:
+            //   total   = 0.07*7*0.33*0.67 = 0.1083390 -> ceil to $0.0001 = 0.1084
+            //   per-ctr = ceil(0.0154770)  = 0.0155 x 7                   = 0.1085
+            Near(EvMath.OrderFee(0.33, 7), 0.1084, 1e-9,
+                 "ceiling applies to the ORDER TOTAL (0.1084), not per contract (0.1085)");
+            // M is per series and read live from the venue; it scales the fee linearly.
+            Near(EvMath.OrderFee(0.50, 10, 2.0), 2 * EvMath.OrderFee(0.50, 10, 1.0), 1e-12,
+                 "a series multiplier of 2 doubles the fee");
+            Near(EvMath.OrderFee(0.50, 10, 0.0), 0.0, 1e-12, "a multiplier of 0 means the series is free");
+            // ...and it must reach EV and the limit too, or a doubled fee would be invisible where it counts.
+            Check(EvMath.Ev(0.60, 0.55, 2.0) < EvMath.Ev(0.60, 0.55, 1.0),
+                  "M reaches EV: a costlier series is worth less");
+            Check(EvMath.BreakEvenLimit(0.60, 0.01, 2.0) < EvMath.BreakEvenLimit(0.60, 0.01, 1.0),
+                  "M reaches the IOC limit: a costlier series must be bought cheaper");
         }
 
         // ── EV and the break-even limit ───────────────────────────────────────────────────────────────
