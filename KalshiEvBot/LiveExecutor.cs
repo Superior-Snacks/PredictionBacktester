@@ -239,9 +239,19 @@ public sealed class LiveExecutor
                   + $"rest {restAsk:0.00})  ev {ev * 100:+0.0;-0.0}c  {ms:0}ms  "
                   + $"depth {depth} at the limit — {(status.Length > 0 ? status : "no fill")}");
 
+            // LOG THE FEE ON WHAT FILLED, NOT WHAT WE ASKED FOR. feeCharged/feeAssumed above are computed
+            // pre-order on the INTENDED count because the negative-EV backstop needs them then — but the
+            // venue only charges for the contracts it actually gave us. Our first partial (10 of 14 at 0.35)
+            // logged $0.2230 against $0.1593 truly paid: overstated 40%, and section 8 and the Discord
+            // digest both read these columns. A no-fill costs nothing, so both are zero.
+            double fillPx   = (double)(avgFill > 0 ? avgFill : (decimal)pxDollars);
+            int    filledN  = (int)fillCount;
+            double feeReal  = got ? EvMath.OrderFee(fillPx, filledN) : 0.0;
+            double feeModel = got ? EvMath.FeePerContract(fillPx) * filledN : 0.0;
+
             _log.Write(new EvLiveRow(t0, ticker, eventId, side, limitCents / 100.0, restAsk, pTrue, ev,
                                      count, orderId, got ? "filled" : (status.Length > 0 ? status : "no-fill"),
-                                     (double)fillCount, (double)avgFill, ms, feeCharged, feeAssumed, ctx));
+                                     (double)fillCount, (double)avgFill, ms, feeReal, feeModel, ctx));
             return got;
         }
         catch (Exception ex)
