@@ -811,7 +811,8 @@ public sealed class EvEvaluator
             await _live.TryTakeAsync(pair.KalshiTicker, pair.EventId, c.Side, limit, px,
                                      c.PTrueUsed, ev,
                                      new TakeCtx((double)c.WsAsk, depthUnknown ? -1 : depthToLimit,
-                                                 c.InPlay, c.OracleAgeMs, c.WsBookAge, regime), ct);
+                                                 c.InPlay, c.OracleAgeMs, c.WsBookAge, regime,
+                                                 BankrollUsd, LiveEquityUsd), ct);
 
         if (clears)
             _followUp?.Schedule(new FollowUp(DateTime.UtcNow, pair.KalshiTicker, c.Side, pair.Legs,

@@ -32,7 +32,8 @@ public static class Con
 /// from "the size was never there", which is the difference between a latency problem and a capacity
 /// ceiling — and section 7's fill rate is uninterpretable without knowing which.</summary>
 public readonly record struct TakeCtx(double WsAsk, double DepthToLimit, bool InPlay,
-                                      double OracleAgeMs, double WsBookAgeMs, string Regime);
+                                      double OracleAgeMs, double WsBookAgeMs, string Regime,
+                                      double BankrollUsd = 0, double EquityUsd = 0);
 
 /// <summary>
 /// Places the real Kalshi order behind a confirmed signal — M1's only new capability.
@@ -324,6 +325,7 @@ public sealed class EvLiveLog : IDisposable
         "Requested", "OrderId", "Status", "FillCount", "AvgFillPrice", "LatencyMs", "SlippageCents",
         "FeeChargedUsd", "FeeAssumedUsd", "FeeDragCentsPerCtr",
         "WsAsk", "DepthToLimit", "InPlay", "OracleAgeMs", "WsBookAgeMs", "Regime", "FeeVenueUsd",
+        "BankrollUsd", "EquityUsd",
     };
 
     private readonly RollingCsv _csv;
@@ -356,6 +358,7 @@ public sealed class EvLiveLog : IDisposable
             r.Ctx.InPlay ? "1" : "0", RollingCsv.N(r.Ctx.OracleAgeMs, 0),
             RollingCsv.N(r.Ctx.WsBookAgeMs, 0), RollingCsv.Q(r.Ctx.Regime ?? ""),
             RollingCsv.N(r.FeeVenue, 4),
+            RollingCsv.N(r.Ctx.BankrollUsd, 2), RollingCsv.N(r.Ctx.EquityUsd, 2),
         });
     }
 

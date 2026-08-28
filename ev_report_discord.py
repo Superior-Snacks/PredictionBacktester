@@ -179,9 +179,65 @@ def live_digest(root: str) -> str:
         L.append(f"**misses**: depth-bound {depth_bound}/{len(misses)}"
                  + (f", book-moved {other}" if other else "")
                  + (f", unknown {unknown}" if unknown else ""))
-        L.append("_depth-bound = the size was never there; firing sooner would not have helped._"
-                 if depth_bound >= max(1, len(misses) - depth_bound)
-                 else "_book-moved dominates: latency is costing fills._")
+        # ONLY THE CLASSIFIED MISSES MAY DECIDE THIS. An earlier cut compared depth_bound against
+        # (misses - depth_bound), which folds `unknown` into `book-moved` and announced "latency is
+        # costing fills" off a single unclassifiable miss with zero book-moved rows behind it.
+        # `unknown` means the WS book never reached our limit while REST claimed it was there - which is
+        # itself a signal that the price was phantom, not evidence about speed.
+        known = depth_bound + other
+        if known < 5:
+            L.append(f"_{known} classified miss(es) — too few to say whether depth or latency dominates._")
+        elif depth_bound > other:
+            L.append("_depth-bound dominates: the size was never there; firing sooner would not help._")
+        elif other > depth_bound:
+            L.append("_book-moved dominates: latency is costing fills._")
+        else:
+            L.append("_depth and latency are running even._")
+
+    # THE DAY'S TWO MONEY FIGURES, which are different things and are labelled as such: the telemetry
+    # basis is frozen fake money that only sizes the CSV's Kelly column; equity is real spendable cash on
+    # the trading shard. Read from the newest row that carries them.
+    money = next((r for r in reversed(rows) if (r.get("EquityUsd") or "").strip()), None)
+    if money:
+        L.append(f"`bankroll: telemetry basis ${num(money,'BankrollUsd'):,.2f} (frozen)   "
+                 f"real cash on shard ${num(money,'EquityUsd'):,.2f}`")
+
+    # REAL P/L, on contracts we actually own — not section 5's hypothetical. Joins fills to settlement.
+    settled = {}
+    try:
+        for line in io.open(os.path.join(root, "ev_settlements.jsonl"), encoding="utf-8", errors="replace"):
+            try:
+                d = json.loads(line)
+            except Exception:
+                continue
+            t, res = d.get("ticker", ""), (d.get("result") or "").strip().lower()
+            if t and res in ("yes", "no"):
+                settled[t] = res
+    except Exception:
+        pass
+    done = open_n = 0
+    realised = at_risk = 0.0
+    for r in fills:
+        n = num(r, "FillCount")
+        px = num(r, "AvgFillPrice") or num(r, "LimitPrice")
+        fee = num(r, "FeeVenueUsd") or num(r, "FeeChargedUsd")
+        res = settled.get((r.get("Ticker") or "").strip())
+        if res is None:
+            open_n += 1
+            at_risk += n * px + fee
+            continue
+        won = (res == "yes") if (r.get("Side") or "").upper() == "YES" else (res == "no")
+        done += 1
+        realised += n * ((1.0 if won else 0.0) - px) - fee
+    if done or open_n:
+        bits = []
+        if done:
+            bits.append(f"**settled {done}: {realised:+.2f}**")
+        if open_n:
+            bits.append(f"open {open_n} (${at_risk:.2f} at risk)")
+        L.append("`P/L on real fills — " + "   ".join(bits) + "`")
+        if done and done < 10:
+            L.append(f"_{done} settled fill(s) is not a P/L, it is a sample. Watch slippage and fill rate._")
 
     slips = sorted(num(r, "SlippageCents") for r in fills if (r.get("SlippageCents") or "").strip())
     if slips:
