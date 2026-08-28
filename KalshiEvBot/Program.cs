@@ -291,7 +291,7 @@ internal static class Program
         if (args.Contains("--verify"))
         {
             int rc = await VerifyModeAsync(pairs, pairsPath, feed, oracle, eval, telemetry, snapshots,
-                                           resolver, cfg, cts.Token);
+                                           resolver, cfg, kalshi, cts.Token);
             cts.Cancel();
             await SafeAll(feedTask, oracleTask, evalTask, bankrollTask, snapTask, settleTask, reloadTask, followTask);
             return rc;
@@ -397,7 +397,7 @@ internal static class Program
     private static async Task<int> VerifyModeAsync(
         List<EvPair> pairs, string pairsPath, KalshiBookFeed feed, PinnacleOracle oracle, EvEvaluator eval,
         EvTelemetry telemetry, OracleSnapshotLog snapshots, SettlementResolver resolver, EvConfig cfg,
-        CancellationToken ct)
+        KalshiOrderClient rk, CancellationToken ct)
     {
         var checks = new List<Chk>();
         void Pass(string n, string d) => checks.Add(new Chk("PASS", n, d));
@@ -545,6 +545,42 @@ internal static class Program
         });
 
         // 11. Pair hot-reload, exercised end to end against a COPY — the live file is never touched
+        // ── The order path's two live-resolved inputs, checked WITHOUT placing anything ───────────────
+        // Kalshi shards markets and requires collateral on the shard the market lives on. Both were
+        // discovered the hard way on 2026-08-28 (404 market_not_found, then 404 user_not_found), and both
+        // fail at ORDER time — i.e. on a real signal, with money on the line and the opportunity gone by
+        // the time it is read. Everything below is a GET, so this can run before every session.
+        try
+        {
+            var probe = pairs.FirstOrDefault();
+            if (probe is not null)
+            {
+                int shard = await rk.ExchangeIndexForAsync(probe.KalshiTicker);
+                double mult = await rk.FeeMultiplierForAsync(probe.KalshiTicker);
+                Pass("exchange shard resolves", $"{probe.KalshiTicker} -> shard {shard} (read from the market, "
+                                              + "not assumed; a hardcoded 0 is what broke orders on 08-27)");
+                long cents = await rk.GetBalanceCentsAsync();
+                Pass("fee multiplier resolves", $"{probe.KalshiTicker.Split('-')[0]} M={mult:0.##}"
+                                              + (Math.Abs(mult - 1.0) < 1e-9 ? " (standard)" : "  NON-STANDARD"));
+                var bad = rk.UnknownFeeTypes;
+                if (bad.Count > 0) Fail("fee shape known", "unimplemented fee_type on " + string.Join(", ", bad));
+                else Pass("fee shape known", "quadratic — the form our arithmetic implements");
+                // Collateral is PER SHARD: a funded account on shard 0 still cannot trade shard 3.
+                double onShard = await rk.ShardBalanceAsync(shard);
+                if (onShard <= 0)
+                    Fail("collateral on the trading shard",
+                         $"$0.00 on shard {shard} — every order will 404 user_not_found. "
+                       + "Transfer via /portfolio/intra_exchange_instance_transfer.");
+                else if (onShard < cfg.LiveStakePerGameUsd)
+                    Warn("collateral on the trading shard",
+                         $"${onShard:0.00} on shard {shard} — below one game's cap (${cfg.LiveStakePerGameUsd:0.00}).");
+                else
+                    Pass("collateral on the trading shard",
+                         $"${onShard:0.00} on shard {shard} (total account ${cents / 100.0:0.00})");
+            }
+        }
+        catch (Exception ex) { Fail("order-path preflight", $"{ex.GetType().Name}: {ex.Message}"); }
+
         checks.Add(await VerifyReloadAsync(pairsPath, ct));
 
         // ── Report ────────────────────────────────────────────────────────────────────────────────────

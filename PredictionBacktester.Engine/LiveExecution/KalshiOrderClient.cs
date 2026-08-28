@@ -200,6 +200,26 @@ public class KalshiOrderClient : IKalshiOrderExecutor, IDisposable
     /// Paginates automatically. Throws on HTTP/parse errors — callers must distinguish
     /// failure from a genuinely empty account (empty list = no positions, exception = bad read).
     /// </summary>
+    /// <summary>Balance on ONE exchange shard.
+    ///
+    /// <para><see cref="GetBalanceCentsAsync"/> returns the ACCOUNT TOTAL, and that is precisely what made
+    /// the 2026-08-28 outage invisible: $576 in the account, $0 on the shard where the markets actually
+    /// lived, and every order answering 404 user_not_found. Collateral is per shard — check the shard.</para></summary>
+    public async Task<double> ShardBalanceAsync(int shard)
+    {
+        using var doc = await GetAsync("/portfolio/balance");
+        if (doc.RootElement.TryGetProperty("balance_breakdown", out var arr)
+            && arr.ValueKind == JsonValueKind.Array)
+            foreach (var b in arr.EnumerateArray())
+                if (b.TryGetProperty("exchange_index", out var xi) && xi.ValueKind == JsonValueKind.Number
+                    && xi.GetInt32() == shard && b.TryGetProperty("balance", out var bal))
+                {
+                    string? txt = bal.ValueKind == JsonValueKind.String ? bal.GetString() : bal.GetRawText();
+                    return double.TryParse(txt, NumberStyles.Any, CultureInfo.InvariantCulture, out double v) ? v : 0;
+                }
+        return 0;
+    }
+
     public async Task<List<(string Ticker, int Position)>> GetPositionsAsync()
     {
         var result = new List<(string, int)>();
