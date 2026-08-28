@@ -259,7 +259,19 @@ public sealed class EvEvaluator
     public readonly EvStats Stats = new();
     /// <summary>Tickers waiting to be screened. Lets --once know when the sweep has drained.</summary>
     public int Pending => _queued.Count;
+    /// <summary>The TELEMETRY bankroll — the basis the Kelly `Contracts` column is computed on.
+    ///
+    /// <para><b>Deliberately fake and deliberately frozen.</b> Contracts is an analysis quantity, not an
+    /// order size: live sizing is the flat per-side cap. Every row collected since 2026-08-22 was sized
+    /// against 576.29, so letting this drift with the real account would silently re-base a column that
+    /// months of calibration depend on — the same signal logged on two days would carry different sizes
+    /// for a reason that has nothing to do with the edge. Pinned via EV_BANKROLL_USD.</para></summary>
     public double BankrollUsd { get; set; }
+
+    /// <summary>The REAL money available on the trading shard: cash plus the bid-value of open positions
+    /// there. Snapshotted once a local day. This is what gates the low-collateral floor; it never touches
+    /// the telemetry above.</summary>
+    public double LiveEquityUsd { get; set; }
 
     /// <summary>Series -> Kalshi's fee multiplier M. Empty means "not primed", and every lookup then
     /// returns the published default of 1.</summary>

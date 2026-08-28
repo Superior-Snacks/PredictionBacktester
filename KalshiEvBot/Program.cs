@@ -189,6 +189,14 @@ internal static class Program
         // BEFORE the evaluator starts. M changes EV, the IOC limit and the Kelly size, and it is a live
         // per-series field that can move under a running bot — so it is read once here rather than assumed,
         // and a non-standard value is shouted in the banner instead of being discovered from a losing month.
+        // Resolve the trading shard BEFORE the first bankroll read, so equity is scoped correctly from
+        // the very first snapshot rather than defaulting to shard 0's balance.
+        try
+        {
+            var anyPair = pairs.FirstOrDefault();
+            if (anyPair is not null) _tradingShard = await kalshi.ExchangeIndexForAsync(anyPair.KalshiTicker);
+        }
+        catch { /* leave at 0; the bankroll line prints which shard it used */ }
         await eval.PrimeFeeMultipliersAsync(cts.Token);
 
         var feedTask   = feed.RunAsync(cts.Token);
@@ -866,6 +874,10 @@ internal static class Program
     /// <summary>The local date the standing snapshot was taken for. One decision per day, then held.</summary>
     private static DateTime _bankrollDay = DateTime.MinValue;
 
+    /// <summary>The exchange shard our markets live on, resolved once from a real ticker. Collateral and
+    /// balances are per shard, so every money figure has to be scoped to this one.</summary>
+    private static int _tradingShard;
+
     /// <summary>Cash plus the liquidation value of open positions — the base Kelly should actually size
     /// against. A held contract is capital COMMITTED, not capital lost, and sizing on cash alone would
     /// shrink the stake merely because a position is open rather than because the account got smaller.
@@ -876,15 +888,21 @@ internal static class Program
     /// bid field exists in a payload we have never inspected. A side quoting no ask at all is valued at
     /// zero rather than guessed at.</para></summary>
     private static async Task<(double Cash, double Held, int Positions, string Note)>
-        ReadEquityAsync(KalshiOrderClient k)
+        ReadEquityAsync(KalshiOrderClient k, int shard)
     {
-        double cash = (await k.GetBalanceCentsAsync()) / 100.0;
+        // SHARD BALANCE, NOT THE ACCOUNT TOTAL. Collateral is per exchange shard: money sitting on shard 0
+        // cannot buy a tennis market on shard 3. Sizing off the total would have said $576 while $188 was
+        // actually spendable - the same blind spot that let every order 404 on 2026-08-27 while the account
+        // looked healthy.
+        double cash = await k.ShardBalanceAsync(shard);
         double held = 0; int n = 0; string note = "";
         try
         {
             foreach (var (ticker, qty) in await k.GetPositionsAsync())
             {
                 if (qty == 0) continue;
+                // Only positions on THIS shard are capital that comes back to THIS shard when they settle.
+                if (await k.ExchangeIndexForAsync(ticker) != shard) continue;
                 using var doc = await k.GetMarketAsync(ticker);
                 var mkt = doc.RootElement.TryGetProperty("market", out var m) ? m : doc.RootElement;
                 decimal opp = EvEvaluator.AskDollars(mkt, yes: qty < 0);   // YES held -> read no_ask, and vice versa
@@ -893,7 +911,7 @@ internal static class Program
                 n++;
             }
         }
-        catch (Exception ex) { note = $"  (positions unread: {ex.GetType().Name} — cash only)"; }
+        catch (Exception ex) { note = $"  (positions unread: {ex.GetType().Name} - cash only)"; }
         return (cash, held, n, note);
     }
 
@@ -914,26 +932,43 @@ internal static class Program
     private static async Task RefreshBankrollAsync(KalshiOrderClient k, EvEvaluator eval, EvConfig cfg,
                                                    bool announce, bool force = false)
     {
+        // TWO DIFFERENT NUMBERS, AND MIXING THEM WAS THE BUG.
+        //   BankrollUsd   - the telemetry basis for Kelly's Contracts column. Frozen at EV_BANKROLL_USD so
+        //                   the dataset stays comparable with every row collected since 2026-08-22.
+        //   LiveEquityUsd - the real spendable money ON THE TRADING SHARD, snapshotted daily. Gates the
+        //                   low-collateral floor only.
+        // Flat-stake mode sizes off neither: it uses the per-side cap. So the telemetry can stay fake
+        // while the floor check stays honest.
         if (cfg.BankrollFallback > 0)
         {
             eval.BankrollUsd = cfg.BankrollFallback;
-            _bankrollDay = DateTime.Now.Date;
             if (announce)
-                Console.WriteLine($"[BANKROLL] ${eval.BankrollUsd:0.00} PINNED (EV_BANKROLL_USD) - the live "
-                                + "balance is not read, so sizing stays comparable as --live moves it.");
-            return;
+                Console.WriteLine($"[BANKROLL] telemetry basis ${eval.BankrollUsd:0.00} PINNED "
+                                + "(EV_BANKROLL_USD) - Kelly sizing in the CSV stays comparable across the "
+                                + "whole dataset. Live stakes do not use it.");
         }
-        if (!force && _bankrollDay == DateTime.Now.Date) return;    // already decided for today
+        if (!force && _bankrollDay == DateTime.Now.Date) return;    // equity already snapshotted for today
         bool firstOfDay = _bankrollDay != DateTime.Now.Date;
         try
         {
-            var (cash, held, npos, note) = await ReadEquityAsync(k);
-            eval.BankrollUsd = cash + held;
+            var (cash, held, npos, note) = await ReadEquityAsync(k, _tradingShard);
+            eval.LiveEquityUsd = cash + held;
+            // Only when nothing pinned it: unpinned, the telemetry basis follows the real account.
+            if (cfg.BankrollFallback <= 0) eval.BankrollUsd = eval.LiveEquityUsd;
             _bankrollDay = DateTime.Now.Date;
             if (announce || firstOfDay)
-                Console.WriteLine($"[BANKROLL] ${eval.BankrollUsd:0.00} for {_bankrollDay:ddd dd MMM} "
+                Console.WriteLine($"[EQUITY  ] ${eval.LiveEquityUsd:0.00} REAL on shard {_tradingShard} "
                                 + $"= ${cash:0.00} cash + ${held:0.00} in {npos} open position(s).{note}"
-                                + "  Fixed for the day; set EV_BANKROLL_USD to pin it outright.");
+                                + $"  Snapshot for {_bankrollDay:ddd dd MMM}.");
+            // OPEN POSITIONS ARE CAPITAL, NOT LOSSES: counting cash alone would shrink the bankroll every
+            // time a bet is live and grow it back on settlement, which is sizing noise with no information
+            // in it. The floor below is the only thing the bankroll gates in flat-stake mode - sizing there
+            // is the per-side cap, not Kelly.
+            if (cfg.Live && eval.LiveEquityUsd < cfg.LiveStakePerGameUsd)
+                Con.Line(ConsoleColor.Yellow,
+                    $"[EQUITY  ] LOW: ${eval.LiveEquityUsd:0.00} on shard {_tradingShard} is under one game's "
+                  + $"cap (${cfg.LiveStakePerGameUsd:0.00}). Orders will start failing for want of "
+                  + "collateral; move funds with /portfolio/intra_exchange_instance_transfer.");
         }
         catch (Exception ex)
         {
