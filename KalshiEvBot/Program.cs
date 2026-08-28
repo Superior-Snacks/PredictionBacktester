@@ -53,6 +53,16 @@ internal static class Program
                 Console.WriteLine("│  the rounded-up fee is a real drag. See --resolve §8 for what it costs.");
             Console.WriteLine("│  THIS SPENDS REAL MONEY. Ctrl+C now if that was not the intention.");
             Console.WriteLine("└────────────────────────────────────────────────────────────────────────────");
+            // A cap that defaults to OFF is useless on an unattended run, and silently changing the default
+            // would be worse. So make its absence loud instead: the per-side and per-game caps bound one
+            // market, nothing bounds the day, and settlements returning cash let the float turn over.
+            double dailyCap = EvConfig.Env("EV_LIVE_DAILY_USD", 0);
+            if (dailyCap > 0)
+                Console.WriteLine($"[CAP] daily limit ${dailyCap:0.00} — resets at local midnight, survives a restart.");
+            else
+                Con.Line(ConsoleColor.Yellow,
+                    "[CAP] NO daily spend limit set. Per-side and per-game caps bound one market; nothing "
+                  + "bounds the day. Set EV_LIVE_DAILY_USD before leaving this unattended.");
         }
         else
         {

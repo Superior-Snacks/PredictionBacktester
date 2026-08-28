@@ -23,6 +23,10 @@ public sealed class EvConfig
     // A no-fill is free and does NOT consume the side's allowance, so the same market may be re-attempted
     // on a later signal. This stops that becoming a hot loop against one stubborn book.
     public double LiveRetryCooldownSec = Env("EV_LIVE_RETRY_COOLDOWN_SEC", 60);
+    /// <summary>Hard stop on money SPENT in one local day. 0 = no cap. The per-side and per-game caps
+    /// bound one market; nothing bounds the day, and an unattended run turns the shard float over
+    /// repeatedly as settlements return. Resets at local midnight and survives a restart.</summary>
+    public double LiveDailyUsd = Env("EV_LIVE_DAILY_USD", 0);
     /// <summary>How far below EvMin a WS-implied EV may sit and still buy a REST call. The WS ask is
     /// optimistic 95% of the time, which makes WS EV an upper bound and pre-screening safe; this slack
     /// covers the other 5%.</summary>

@@ -866,7 +866,8 @@ public static class Calibration
         // ── What we ACTUALLY paid, once live rows exist ────────────────────────────────────────────────
         var files = Directory.GetFiles(dir, "EvLive_*.csv");
         if (files.Length == 0) return;
-        double obsCharged = 0, obsPriced = 0; long obsCtrs = 0; int fills = 0, feeSkips = 0;
+        double obsCharged = 0, obsPriced = 0, obsVenue = 0; long obsCtrs = 0;
+        int fills = 0, feeSkips = 0, venueRows = 0;
         foreach (var f in files)
             foreach (var r in Csv.Read(f))
             {
@@ -876,14 +877,26 @@ public static class Calibration
                 fills++; obsCtrs += (long)fill;
                 obsCharged += Csv.Num(r, "FeeChargedUsd");
                 obsPriced  += Csv.Num(r, "FeeAssumedUsd");
+                double v = Csv.Num(r, "FeeVenueUsd");
+                if (v > 0) { obsVenue += v; venueRows++; }
             }
         if (obsCtrs > 0)
         {
             Console.WriteLine();
-            Console.WriteLine($"   OBSERVED on {fills} fill(s), {obsCtrs} contract(s): paid ${obsCharged:0.00} in fees "
-                            + $"where EV priced ${obsPriced:0.00}");
-            Console.WriteLine($"   -> {(obsCharged - obsPriced) / obsCtrs * 100.0:0.000}c per contract of real, "
-                            + "unmodelled drag.");
+            // MODEL vs MODEL is not a check. FeeCharged and FeeAssumed are both OUR arithmetic, so their
+            // agreement proves only that we are self-consistent — an earlier cut of this line announced
+            // "0.000c of real, unmodelled drag" while its own total was $0.06 too high. The only honest
+            // comparison is against what the venue actually took, which FeeVenueUsd now records.
+            Console.WriteLine($"   OBSERVED on {fills} fill(s), {obsCtrs} contract(s): our ceiling model "
+                            + $"${obsCharged:0.0000} vs our marginal model ${obsPriced:0.0000} "
+                            + $"({(obsCharged - obsPriced) / obsCtrs * 100.0:0.000}c/contract of rounding)");
+            if (venueRows > 0)
+                Console.WriteLine($"   VENUE CHARGED ${obsVenue:0.0000} on {venueRows} of those fill(s) — model is "
+                                + $"{(obsCharged - obsVenue) / obsCtrs * 100.0:+0.000;-0.000}c/contract off reality. "
+                                + "THIS is the number that would catch a fee change.");
+            else
+                Console.WriteLine("   (no FeeVenueUsd recorded yet — rows predating that column cannot be "
+                                + "checked against the venue, only against ourselves.)");
         }
         if (feeSkips > 0)
             Console.WriteLine($"   {feeSkips} order(s) were REFUSED because rounding erased the edge outright — "

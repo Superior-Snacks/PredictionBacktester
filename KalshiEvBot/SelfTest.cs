@@ -492,7 +492,7 @@ public static class SelfTest
                 a.Save(new Dictionary<string, string> { ["KXATP-ABC|YES"] = now, ["KXATP-ABC|NO"] = now },
                        new Dictionary<string, decimal> { ["KXATP-ABC"] = 9.75m });
 
-                var (fl, sp) = new LivePositionStore(f).Load();
+                var (fl, sp, _) = new LivePositionStore(f).Load();
                 Check(fl.Count == 2 && fl.ContainsKey("KXATP-ABC|YES"), "filled sides survive a reload");
                 Check(sp.TryGetValue("KXATP-ABC", out var v) && v == 9.75m,
                       "per-event spend survives a reload exactly", $"got {(sp.TryGetValue("KXATP-ABC", out var g) ? g : -1)}");
@@ -506,6 +506,20 @@ public static class SelfTest
                       "expired entries are dropped, fresh ones kept");
 
                 // A half-written file must degrade to empty, not take the bot down on startup.
+                // THE CAP IS ONLY REAL IF IT SURVIVES A RESTART - an unattended crash-loop that reset it
+                // every time would spend without limit while appearing to be capped.
+                string today = DateTime.Now.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+                a.Save(new Dictionary<string, string>(), new Dictionary<string, decimal>(),
+                       new Dictionary<string, decimal> { [today] = 42.50m });
+                var back = new LivePositionStore(f).Load().Daily;
+                Check(back.TryGetValue(today, out var d1) && d1 == 42.50m,
+                      "today's spend survives a restart - the daily cap cannot be reset by relaunching",
+                      $"got {(back.TryGetValue(today, out var g2) ? g2 : -1)}");
+                a.Save(new Dictionary<string, string>(), new Dictionary<string, decimal>(),
+                       new Dictionary<string, decimal> { ["1999-01-01"] = 99m });
+                Check(new LivePositionStore(f).Load().Daily.Count == 0,
+                      "a previous day's spend is not carried forward");
+
                 File.WriteAllText(f, "{ this is not json");
                 var corrupt = new LivePositionStore(f);
                 Check(corrupt.Load().Filled.Count == 0, "corrupt file loads empty without throwing");

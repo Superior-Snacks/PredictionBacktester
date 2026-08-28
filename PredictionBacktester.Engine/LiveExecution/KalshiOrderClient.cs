@@ -368,7 +368,7 @@ public class KalshiOrderClient : IKalshiOrderExecutor, IDisposable
     /// exposes them. The venue does, however, report <c>average_fee_paid</c> on every fill — so comparing
     /// that against the model turns all three assumptions into a monitored invariant instead of a belief.
     /// A silent fee change is otherwise invisible until it has eaten a month of a 1-2c edge.</para></summary>
-    public Action<string, decimal, decimal, decimal>? FeeObserved { get; set; }
+    public Action<string, string, decimal, decimal, decimal>? FeeObserved { get; set; }
 
     /// <summary>The multiplier already resolved for this series, or 1 if it has not been read yet.
     /// Synchronous on purpose: the fee-reconciliation callback runs on the order path and must not await.</summary>
@@ -498,7 +498,7 @@ public class KalshiOrderClient : IKalshiOrderExecutor, IDisposable
         if (fill > 0 && FeeObserved is not null)
         {
             decimal feePaid = ReadDecimalFlexible(root, "average_fee_paid");
-            try { FeeObserved(ticker, fill, avgFillYes, feePaid); } catch { }
+            try { FeeObserved(clientOrderId ?? "", ticker, fill, avgFillYes, feePaid); } catch { }
         }
         return (orderId, status, fill, avgFill);
     }

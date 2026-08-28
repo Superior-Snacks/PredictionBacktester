@@ -72,6 +72,14 @@ public sealed class LiveExecutor
     // StakedUsd is a decimal, which has no Interlocked. With EV_REST_CONCURRENCY workers a bare += can
     // lose an update, so both it and the persist below happen under one lock.
     private readonly object _bookLock = new();
+    /// <summary>client_order_id -> the fee the VENUE actually charged for that order. Logged beside our
+    /// modelled fee so section 8 compares model against reality rather than model against model.</summary>
+    private readonly ConcurrentDictionary<string, decimal> _venueFee = new(StringComparer.Ordinal);
+    /// <summary>local date -> money spent that day. Persisted, so a restart cannot reset the cap.</summary>
+    private readonly ConcurrentDictionary<string, decimal> _daily = new(StringComparer.Ordinal);
+    private bool _dailyCapAnnounced;
+    private static string Today => DateTime.Now.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+    public decimal SpentToday => _daily.TryGetValue(Today, out var v) ? v : 0m;
 
     // A side is CLOSED once it has filled. Keyed ticker|side, so both sides of one game can each hold a
     // position — hence the per-game cap below, which is what actually bounds a game's exposure.
@@ -94,8 +102,10 @@ public sealed class LiveExecutor
         // RECONCILE THE FEE AGAINST THE VENUE ON EVERY FILL. The multiplier is read live, but the 0.07
         // rate, the quadratic shape and the centicent rounding are hardcoded from a dated schedule and no
         // API field exposes them. This is the only thing that would notice if any of them changed.
-        _kalshi.FeeObserved = (tk, filled, avgYes, feePaid) =>
+        _kalshi.FeeObserved = (coid, tk, filled, avgYes, feePaid) =>
         {
+            // Keyed by client_order_id: unique per attempt, so four workers cannot cross wires.
+            if (coid.Length > 0) _venueFee[coid] = feePaid * filled;
             if (filled <= 0 || feePaid <= 0) return;
             double px = (double)avgYes;
             if (px <= 0 || px >= 1) return;
@@ -112,9 +122,10 @@ public sealed class LiveExecutor
         // and an unattended restart re-enters markets already bought.
         if (_store is not null)
         {
-            var (filled, spent) = _store.Load();
+            var (filled, spent, daily) = _store.Load();
             foreach (var (k, v) in filled) _filled[k] = v;
             foreach (var (k, v) in spent)  _spentByEvent[k] = v;
+            foreach (var (k, v) in daily)  _daily[k] = v;
         }
     }
 
@@ -144,6 +155,21 @@ public sealed class LiveExecutor
         int attemptCount = 0;
         double attemptPx = 0;
 
+        // THE DAY'S HARD STOP. Per-side and per-game caps bound ONE market; nothing bounded the day, and
+        // an unattended run turns the shard float over repeatedly as settlements return cash. Checked first
+        // because once it binds nothing else matters. 0 disables it.
+        if (_cfg.LiveDailyUsd > 0 && SpentToday >= (decimal)_cfg.LiveDailyUsd)
+        {
+            if (!_dailyCapAnnounced)
+            {
+                _dailyCapAnnounced = true;
+                Con.Line(ConsoleColor.Yellow,
+                    $"[CAP] daily limit reached: ${SpentToday:0.00} of ${_cfg.LiveDailyUsd:0.00} spent today. "
+                  + "No further orders until local midnight. Screening and telemetry continue.");
+            }
+            Interlocked.Increment(ref Skipped);
+            return false;
+        }
         if (_filled.ContainsKey(key)) why = "side already filled";
         else if (_lastAttempt.TryGetValue(key, out var last)
                  && (t0 - last).TotalSeconds < _cfg.LiveRetryCooldownSec) why = "cooldown";
@@ -218,10 +244,12 @@ public sealed class LiveExecutor
                 lock (_bookLock)
                 {
                     StakedUsd += cost;
+                    _daily.AddOrUpdate(Today, cost, (_, prev) => prev + cost);
+                    _dailyCapAnnounced = false;      // a new day re-arms the message
                     // Persist BEFORE anything else can fail. A position that exists at the venue but not in
                     // our record is the one state we must never be in: it is the double-entry we just paid
                     // to prevent.
-                    _store?.Save(_filled, _spentByEvent);
+                    _store?.Save(_filled, _spentByEvent, _daily);
                 }
             }
             else Interlocked.Increment(ref NoFill);
@@ -248,10 +276,11 @@ public sealed class LiveExecutor
             int    filledN  = (int)fillCount;
             double feeReal  = got ? EvMath.OrderFee(fillPx, filledN) : 0.0;
             double feeModel = got ? EvMath.FeePerContract(fillPx) * filledN : 0.0;
+            _venueFee.TryRemove(coid, out decimal venueFee);
 
             _log.Write(new EvLiveRow(t0, ticker, eventId, side, limitCents / 100.0, restAsk, pTrue, ev,
                                      count, orderId, got ? "filled" : (status.Length > 0 ? status : "no-fill"),
-                                     (double)fillCount, (double)avgFill, ms, feeReal, feeModel, ctx));
+                                     (double)fillCount, (double)avgFill, ms, feeReal, feeModel, ctx, (double)venueFee));
             return got;
         }
         catch (Exception ex)
@@ -274,6 +303,7 @@ public sealed class LiveExecutor
     public string Summary() =>
         $"live: attempted {Attempted} filled {Filled} no-fill {NoFill} err {Rejected} skipped {Skipped} "
       + $"staked ${StakedUsd:0.00}"
+      + (_cfg.LiveDailyUsd > 0 ? $"  today ${SpentToday:0.00}/${_cfg.LiveDailyUsd:0.00}" : "")
       + (Attempted > 0 ? $" (fill rate {100.0 * Filled / Attempted:0.0}%)" : "");
 }
 
@@ -284,7 +314,7 @@ public readonly record struct EvLiveRow(
     DateTime At, string Ticker, string EventId, string Side,
     double LimitPrice, double RestAsk, double PTrue, double Ev,
     int Requested, string OrderId, string Status, double FillCount, double AvgFillPrice, double LatencyMs,
-    double FeeCharged = 0, double FeeAssumed = 0, TakeCtx Ctx = default);
+    double FeeCharged = 0, double FeeAssumed = 0, TakeCtx Ctx = default, double FeeVenue = 0);
 
 public sealed class EvLiveLog : IDisposable
 {
@@ -293,7 +323,7 @@ public sealed class EvLiveLog : IDisposable
         "At", "Ticker", "EventId", "Side", "LimitPrice", "RestAsk", "PTrue", "EvCents",
         "Requested", "OrderId", "Status", "FillCount", "AvgFillPrice", "LatencyMs", "SlippageCents",
         "FeeChargedUsd", "FeeAssumedUsd", "FeeDragCentsPerCtr",
-        "WsAsk", "DepthToLimit", "InPlay", "OracleAgeMs", "WsBookAgeMs", "Regime",
+        "WsAsk", "DepthToLimit", "InPlay", "OracleAgeMs", "WsBookAgeMs", "Regime", "FeeVenueUsd",
     };
 
     private readonly RollingCsv _csv;
@@ -325,6 +355,7 @@ public sealed class EvLiveLog : IDisposable
             RollingCsv.N(r.Ctx.WsAsk, 4), RollingCsv.N(r.Ctx.DepthToLimit, 0),
             r.Ctx.InPlay ? "1" : "0", RollingCsv.N(r.Ctx.OracleAgeMs, 0),
             RollingCsv.N(r.Ctx.WsBookAgeMs, 0), RollingCsv.Q(r.Ctx.Regime ?? ""),
+            RollingCsv.N(r.FeeVenue, 4),
         });
     }
 

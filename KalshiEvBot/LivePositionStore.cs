@@ -43,18 +43,23 @@ public sealed class LivePositionStore
     }
 
     private sealed record Spend(double Usd, string At);
-    private sealed record State(int Version, Dictionary<string, string> Filled, Dictionary<string, Spend> Spent);
+    private sealed record State(int Version, Dictionary<string, string> Filled, Dictionary<string, Spend> Spent,
+                                Dictionary<string, double>? Daily = null);
 
     /// <summary>Reads the record, dropping anything past its TTL. Never throws.</summary>
-    public (Dictionary<string, string> Filled, Dictionary<string, decimal> Spent) Load()
+    public (Dictionary<string, string> Filled, Dictionary<string, decimal> Spent,
+            Dictionary<string, decimal> Daily) Load()
     {
         var filled = new Dictionary<string, string>(StringComparer.Ordinal);
         var spent  = new Dictionary<string, decimal>(StringComparer.Ordinal);
+        // DAILY SPEND MUST SURVIVE A RESTART or the cap is per-process, which is exactly the bug the
+        // filled-set persistence exists to prevent: an unattended crash-loop would reset it every time.
+        var daily  = new Dictionary<string, decimal>(StringComparer.Ordinal);
         try
         {
-            if (!File.Exists(_path)) { LoadNote = "no prior state (first run)"; return (filled, spent); }
+            if (!File.Exists(_path)) { LoadNote = "no prior state (first run)"; return (filled, spent, daily); }
             var st = JsonSerializer.Deserialize<State>(File.ReadAllText(_path));
-            if (st is null) { LoadNote = "state file unreadable — starting empty"; return (filled, spent); }
+            if (st is null) { LoadNote = "state file unreadable — starting empty"; return (filled, spent, daily); }
             var cutoff = DateTime.UtcNow.AddDays(-_ttlDays);
             int dropped = 0;
             foreach (var (k, at) in st.Filled ?? new())
@@ -65,6 +70,10 @@ public sealed class LivePositionStore
             {
                 if (Fresh(v.At, cutoff)) spent[k] = (decimal)v.Usd; else dropped++;
             }
+            // Only TODAY's figure matters; older days are history and would grow the file forever.
+            string today = DateTime.Now.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+            foreach (var (k, v) in st.Daily ?? new())
+                if (k == today) daily[k] = (decimal)v;
             LoadedFilled = filled.Count; LoadedEvents = spent.Count;
             LoadNote = $"{filled.Count} filled side(s), {spent.Count} event(s) with spend"
                      + (dropped > 0 ? $"; {dropped} expired entr(y/ies) dropped" : "");
@@ -76,7 +85,7 @@ public sealed class LivePositionStore
             LoadNote = $"state file CORRUPT ({ex.GetType().Name}) — starting empty, "
                      + "so a side bought before the restart could be bought again";
         }
-        return (filled, spent);
+        return (filled, spent, daily);
     }
 
     /// <summary>Parses a round-trip ("o") timestamp back to UTC.
@@ -92,7 +101,8 @@ public sealed class LivePositionStore
 
     /// <summary>Persists the current caps. Never throws — a failed write must not take a trading bot down,
     /// and the in-memory state is still correct for this process.</summary>
-    public void Save(IReadOnlyDictionary<string, string> filled, IReadOnlyDictionary<string, decimal> spent)
+    public void Save(IReadOnlyDictionary<string, string> filled, IReadOnlyDictionary<string, decimal> spent,
+                     IReadOnlyDictionary<string, decimal>? daily = null)
     {
         try
         {
@@ -101,7 +111,9 @@ public sealed class LivePositionStore
                 spent.ToDictionary(kv => kv.Key,
                                    kv => new Spend((double)kv.Value,
                                                    DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture)),
-                                   StringComparer.Ordinal));
+                                   StringComparer.Ordinal),
+                daily is null ? null
+                              : daily.ToDictionary(kv => kv.Key, kv => (double)kv.Value, StringComparer.Ordinal));
             lock (_lock)
             {
                 string tmp = _path + ".tmp";
