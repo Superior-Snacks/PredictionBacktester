@@ -332,8 +332,8 @@ public sealed class EvLiveLog : IDisposable
     public long RowsWritten => _csv.RowsWritten;
     public string Path => _csv.Path;
 
-    public EvLiveLog(string? directory = null)
-        => _csv = new RollingCsv(directory ?? Directory.GetCurrentDirectory(), "EvLive", Columns);
+    public EvLiveLog(string? directory = null, string prefix = "EvLive")
+        => _csv = new RollingCsv(directory ?? Directory.GetCurrentDirectory(), prefix, Columns);
 
     public void Write(EvLiveRow r)
     {

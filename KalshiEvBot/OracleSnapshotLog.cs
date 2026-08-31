@@ -35,8 +35,11 @@ public sealed class OracleSnapshotLog : IDisposable
     public string Path => _csv.Path;
     public long RowsWritten => _csv.RowsWritten;
 
-    public OracleSnapshotLog(string? directory = null)
-        => _csv = new RollingCsv(directory ?? Directory.GetCurrentDirectory(), "EvOracleSnap", Columns);
+    /// <summary>`prefix` names the file — "EvDerivOracleSnap" for the derivative pipeline. Snapshots are
+    /// read by `--resolve` alongside the telemetry, so sharing one file would put derivative rows into
+    /// the moneyline calibration through the back door even with the telemetry separated.</summary>
+    public OracleSnapshotLog(string? directory = null, string prefix = "EvOracleSnap")
+        => _csv = new RollingCsv(directory ?? Directory.GetCurrentDirectory(), prefix, Columns);
 
     private static string N(double v, int dp = 6) => RollingCsv.N(v, dp);
     private static string Q(string? s) => RollingCsv.Q(s);

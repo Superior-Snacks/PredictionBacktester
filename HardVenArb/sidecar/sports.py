@@ -240,9 +240,26 @@ def moneyline_series() -> set[str]:
 
 
 def derivative_series() -> dict[str, tuple[str, int]]:
-    """Kalshi spread/total series -> ('spread'|'total', pinnacle_id) for the active sports — pair_derivatives."""
+    """Kalshi spread/total series -> ('spread'|'total', pinnacle_id) — pair_derivatives.
+
+    SEPARATE SELECTOR FROM THE MONEYLINE, defaulting to tennis only. The moneyline and the derivative
+    pairers do not cost the same thing: a tennis derivative rides matchups the moneyline pairs ALREADY
+    subscribe to, so it adds zero Pinnacle league sockets (measured 2026-08-31: 36 derivative pairs, 0 new
+    leagues). A baseball one does not — baseball is paired on Kalshi but has no moneyline pairs holding
+    those leagues open, so every MLB/KBO derivative is a NEW league subscription, and league sockets are
+    the scarce resource on the Pinnacle side.
+
+    So HARDVEN_SPORTS stays the moneyline's switch and HARDVEN_DERIV_SPORTS is the derivative's, defaulting
+    to "tennis". Set it to "all" (or "baseball,tennis") to take the baseball ladders — MLB totals run 11
+    lines deep, the widest available — accepting the socket cost. The CATALOG still lists those series, so
+    nothing is lost by the default; only the subscription is declined.
+    """
+    sel = (os.environ.get("HARDVEN_DERIV_SPORTS") or "tennis").strip().lower()
+    keys = None if sel in ("all", "*") else {k.strip() for k in sel.split(",") if k.strip()}
     out: dict[str, tuple[str, int]] = {}
     for s in enabled_sports():
+        if keys is not None and s.key not in keys:
+            continue
         for ser in s.spread:
             out[ser] = ("spread", s.pinnacle_id)
         for ser in s.total:

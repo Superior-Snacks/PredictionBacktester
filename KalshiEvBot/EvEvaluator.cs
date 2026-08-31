@@ -146,6 +146,73 @@ public sealed class EvConfig
     /// is why the in-play age gate is now seconds rather than half a minute.</summary>
     public bool VerifyVenue       = Env("EV_VERIFY_VENUE", 0) != 0;
 
+    /// <summary>
+    /// The derivative pipeline's config: a copy of this one, with every decision knob re-readable under an
+    /// EV_DERIV_* name that FALLS BACK to the moneyline value when unset.
+    ///
+    /// <para>Fallback rather than its own defaults, deliberately. Starting the two pipelines on identical
+    /// settings makes the first comparison meaningful — any difference in realised edge is then the market
+    /// type, not two different rule sets. Divergence is something you opt into once the derivative sample
+    /// says something, one variable at a time.</para>
+    ///
+    /// <para>MemberwiseClone is safe here: every field is a value type bar `DeVigMethod`, which is a string
+    /// and immutable. Adding a mutable reference field to this class would silently share it between the
+    /// two pipelines, so give it its own copy below if that ever happens.</para>
+    /// </summary>
+    public EvConfig CloneForDerivatives()
+    {
+        var d = (EvConfig)MemberwiseClone();
+        string? S(string k) => Environment.GetEnvironmentVariable(k);
+
+        d.EvMin          = Env("EV_DERIV_MIN",                    EvMin);
+        d.MinPrice       = Env("EV_DERIV_MIN_PRICE",              MinPrice);
+        d.MaxPrice       = Env("EV_DERIV_MAX_PRICE",              MaxPrice);
+        d.MaxTradeFrac   = Env("EV_DERIV_MAX_TRADE_FRACTION",     MaxTradeFrac);
+        d.PrescreenSlack = Env("EV_DERIV_PRESCREEN_SLACK",        PrescreenSlack);
+        d.CooldownMs     = (int)Env("EV_DERIV_RECHECK_COOLDOWN_MS", CooldownMs);
+
+        // THE ONE KNOB THAT DELIBERATELY DOES NOT INHERIT.
+        //
+        // `_restGate` is PER-EVALUATOR and KalshiOrderClient has no shared throttle, so two pipelines
+        // at the moneyline's 4 would put EIGHT concurrent REST calls on one account at peak. The
+        // resource being protected is Kalshi's per-ACCOUNT rate limit, which does not double because
+        // we added a second evaluator — a per-pipeline gate is simply the wrong scope for it.
+        //
+        // Average call VOLUME is unchanged (it is set by how many candidates clear the pre-screen, per
+        // market); what doubles is burst parallelism, and burst is what earns a 429. The client retries
+        // with backoff so nothing breaks — but a retry costs LATENCY, and the moneyline pipeline is the
+        // one placing orders, where latency costs fills. Derivatives sit on no fill path, so slowing
+        // them is free and slowing the moneyline is not.
+        //
+        // Hence 2, not RestConcurrency: total peak 6 rather than 8, and the moneyline keeps its full
+        // allowance rather than contending with derivatives for a shared one.
+        d.RestConcurrency = Math.Max(1, (int)Env("EV_DERIV_REST_CONCURRENCY", 2));
+        d.DeVigMethod    = (S("EV_DERIV_DEVIG") ?? DeVigMethod).ToLowerInvariant();
+
+        d.RequireDeVigAgree     = Env("EV_DERIV_REQUIRE_DEVIG_AGREE",     RequireDeVigAgree     ? 1 : 0) != 0;
+        d.RequirePinnacleRising = Env("EV_DERIV_REQUIRE_PINNACLE_RISING", RequirePinnacleRising ? 1 : 0) != 0;
+        d.RequireWsVerified     = Env("EV_DERIV_REQUIRE_WS_VERIFIED",     RequireWsVerified     ? 1 : 0) != 0;
+        d.RequireInPlay         = Env("EV_DERIV_REQUIRE_IN_PLAY",         RequireInPlay         ? 1 : 0) != 0;
+        d.RequirePinnacleLed    = Env("EV_DERIV_REQUIRE_PINNACLE_LED",    RequirePinnacleLed    ? 1 : 0) != 0;
+        d.VerifyVenue           = Env("EV_DERIV_VERIFY_VENUE",            VerifyVenue           ? 1 : 0) != 0;
+
+        d.KineticWindowSec = Env("EV_DERIV_KINETIC_WINDOW_SEC", KineticWindowSec);
+        d.KineticMinRise   = Env("EV_DERIV_KINETIC_MIN_RISE",   KineticMinRise);
+        d.MaxDisagree      = Env("EV_DERIV_MAX_DISAGREE",       MaxDisagree);
+        d.MaxSourceGap     = Env("EV_DERIV_MAX_WS_REST_GAP",    MaxSourceGap);
+        d.LedMoveMin       = Env("EV_DERIV_LED_MOVE_MIN",       LedMoveMin);
+        d.LedRatio         = Env("EV_DERIV_LED_RATIO",          LedRatio);
+
+        d.LiveStakePerSideUsd = Env("EV_DERIV_LIVE_STAKE_SIDE", LiveStakePerSideUsd);
+        d.LiveStakePerGameUsd = Env("EV_DERIV_LIVE_STAKE_GAME", LiveStakePerGameUsd);
+        d.LiveDailyUsd        = Env("EV_DERIV_LIVE_DAILY_USD",  LiveDailyUsd);
+
+        // THE ONE FIELD THAT IS NOT A COPY. Derivatives trade only when --live AND EV_LIVE_DERIVATIVES are
+        // both on; otherwise this pipeline is observation-only regardless of what the moneyline is doing.
+        d.Live = Live && LiveDerivatives;
+        return d;
+    }
+
     public static double Env(string k, double dflt)
         => double.TryParse(Environment.GetEnvironmentVariable(k), NumberStyles.Any,
                            CultureInfo.InvariantCulture, out var v) ? v : dflt;
@@ -181,6 +248,10 @@ public sealed class EvEvaluator
     private readonly KalshiBookFeed _feed;
     private readonly KalshiOrderClient _kalshi;
     private LiveExecutor? _live;                 // null unless --live; M0 keeps the order API unreachable
+
+    /// <summary>Console tag distinguishing two evaluators sharing one terminal, e.g. "DERIV". Empty on
+    /// the moneyline pipeline so its output is byte-identical to a single-pipeline run.</summary>
+    public string Label = "";
 
     /// <summary>Arms live execution. Separate from the constructor so that M0 cannot reach the order API by
     /// forgetting an argument — the executor has to be handed in deliberately.</summary>
@@ -867,7 +938,7 @@ public sealed class EvEvaluator
         {
             var col = !signal ? ConsoleColor.DarkGray : inWin ? ConsoleColor.Green : ConsoleColor.DarkYellow;
             Con.Line(col,
-                $"{(signal ? "[+EV]" : "[~EV]")} {pair.KalshiTicker} {c.Side,-3} ev={ev * 100:+0.00;-0.00}c  "
+                $"{(signal ? "[+EV]" : "[~EV]")}{(Label.Length > 0 ? $"[{Label}]" : "")} {pair.KalshiTicker} {c.Side,-3} ev={ev * 100:+0.00;-0.00}c  "
               + $"pTrue={c.PTrueUsed:0.0000}  rest={restAsk:0.0000} (ws {c.WsAsk:0.0000}, "
               + $"gap {(double)(restAsk - c.WsAsk) * 100:+0.0;-0.0}c)  limit={limit:0.0000}  "
               + $"size={size.Contracts}/{(depthUnknown ? "?" : $"{depthToLimit:0}")} avail ({(depthUnknown ? "ws book does not reach the limit — REST says it is there" : $"${capacityUsd:0}")})  {regime}  vig={c.Vig:0.0000}{(c.NumLegs > 2 ? $"  [{c.NumLegs}-way]" : "")}{(inWin ? "" : "  [outside price window]")}"

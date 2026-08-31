@@ -55,8 +55,11 @@ public sealed class EvTelemetry : IDisposable
     public string Path => _csv.Path;
     public long RowsWritten => _csv.RowsWritten;
 
-    public EvTelemetry(string? directory = null)
-        => _csv = new RollingCsv(directory ?? Directory.GetCurrentDirectory(), "EvTelemetry", Columns);
+    /// <summary>`prefix` names the file. The derivative pipeline passes "EvDerivTelemetry" so its rows
+    /// never land in the moneyline's CSV — which also means the default `--resolve` glob
+    /// ("EvTelemetry_*.csv") cannot pick them up by accident, and the separation needs no filter.</summary>
+    public EvTelemetry(string? directory = null, string prefix = "EvTelemetry")
+        => _csv = new RollingCsv(directory ?? Directory.GetCurrentDirectory(), prefix, Columns);
 
     private static string N(double v, int dp = 6) => RollingCsv.N(v, dp);
     private static string N(decimal v, int dp = 6) => RollingCsv.N(v, dp);

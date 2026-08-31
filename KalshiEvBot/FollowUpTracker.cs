@@ -56,11 +56,12 @@ public sealed class FollowUpTracker : IDisposable
     public string Path => _csv.Path;
     public int Scheduled;
 
-    public FollowUpTracker(PinnacleOracle oracle, KalshiBookFeed feed, string? directory = null)
+    public FollowUpTracker(PinnacleOracle oracle, KalshiBookFeed feed, string? directory = null,
+                           string prefix = "EvFollowUp")
     {
         _oracle = oracle;
         _feed   = feed;
-        _csv    = new RollingCsv(directory ?? Directory.GetCurrentDirectory(), "EvFollowUp", Columns);
+        _csv    = new RollingCsv(directory ?? Directory.GetCurrentDirectory(), prefix, Columns);
         // 20/40/60 catch the immediate race — who was ahead of whom on this tick. 300 answers a different
         // question: five minutes later, with the goal digested and both books settled, does the position
         // still look right? A gap that closes within a minute is a latency edge; one that is still there at

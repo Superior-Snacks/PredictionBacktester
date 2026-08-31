@@ -464,6 +464,77 @@ public static class SelfTest
             finally { try { Directory.Delete(dir, true); } catch { } }
         }
 
+        // ── DERIVATIVE PIPELINE CONFIG ────────────────────────────────────────────────────────────────
+        Console.WriteLine("\nDerivative pipeline config");
+        {
+            string?[] saved = { Environment.GetEnvironmentVariable("EV_DERIV_MIN"),
+                                Environment.GetEnvironmentVariable("EV_DERIV_DEVIG"),
+                                Environment.GetEnvironmentVariable("EV_DERIV_REQUIRE_IN_PLAY") };
+            try
+            {
+                Environment.SetEnvironmentVariable("EV_DERIV_MIN", null);
+                Environment.SetEnvironmentVariable("EV_DERIV_DEVIG", null);
+                Environment.SetEnvironmentVariable("EV_DERIV_REQUIRE_IN_PLAY", null);
+
+                // UNSET MUST MEAN "INHERIT", not "fall back to a hardcoded default". If the clone quietly
+                // reverted to shipped defaults, the first derivative-vs-moneyline comparison would be
+                // measuring two different rule sets and read as a market-type effect.
+                var b = new EvConfig { EvMin = 0.037, MinPrice = 0.11, MaxPrice = 0.93,
+                                       DeVigMethod = "shin", RequireInPlay = false, MaxDisagree = 0.42 };
+                var d = b.CloneForDerivatives();
+                Check(d.EvMin == b.EvMin && d.MinPrice == b.MinPrice && d.MaxPrice == b.MaxPrice,
+                      "no EV_DERIV_* set => the clone inherits the moneyline thresholds",
+                      $"{d.EvMin}/{d.MinPrice}/{d.MaxPrice}");
+                Check(d.DeVigMethod == "shin" && !d.RequireInPlay && d.MaxDisagree == 0.42,
+                      "…including the de-vig method and every guard");
+
+                // And an override must move ONE knob, leaving the rest inherited.
+                Environment.SetEnvironmentVariable("EV_DERIV_MIN", "0.05");
+                Environment.SetEnvironmentVariable("EV_DERIV_DEVIG", "PROPORTIONAL");
+                var d2 = b.CloneForDerivatives();
+                Check(Math.Abs(d2.EvMin - 0.05) < 1e-12, "EV_DERIV_MIN overrides only the derivative EvMin",
+                      $"{d2.EvMin}");
+                Check(b.EvMin == 0.037, "…and does NOT mutate the moneyline config it was cloned from",
+                      $"{b.EvMin}");
+                Check(d2.DeVigMethod == "proportional", "EV_DERIV_DEVIG is lower-cased like EV_DEVIG",
+                      d2.DeVigMethod);
+                Check(d2.MinPrice == b.MinPrice, "…while un-overridden knobs still inherit");
+
+                // REST CONCURRENCY IS THE EXCEPTION AND MUST STAY ONE. `_restGate` is per-evaluator and the
+                // Kalshi client has no shared throttle, so inheriting 4 would mean 8 concurrent calls on one
+                // account — double the burst that earns a 429, whose retry latency lands on the moneyline
+                // pipeline's fill path. If this ever starts inheriting, that regression is invisible until
+                // fills start missing.
+                var rc = new EvConfig { RestConcurrency = 4 }.CloneForDerivatives();
+                Check(rc.RestConcurrency < 4,
+                      "REST concurrency does NOT inherit — derivatives get a smaller share of one account's limit",
+                      $"{rc.RestConcurrency}");
+
+                // THE SAFETY INTERLOCK. --live alone must never buy a derivative: it takes --live AND
+                // EV_LIVE_DERIVATIVES. Program.cs only builds the derivative LiveExecutor when cfgD.Live is
+                // true, so this one boolean is the whole gate.
+                var onNoFlag  = new EvConfig { Live = true,  LiveDerivatives = false }.CloneForDerivatives();
+                var onWithFlag= new EvConfig { Live = true,  LiveDerivatives = true  }.CloneForDerivatives();
+                var offWithFlag=new EvConfig { Live = false, LiveDerivatives = true  }.CloneForDerivatives();
+                Check(!onNoFlag.Live,   "--live WITHOUT EV_LIVE_DERIVATIVES => derivative pipeline is observe-only");
+                Check(onWithFlag.Live,  "--live WITH EV_LIVE_DERIVATIVES => derivative pipeline trades");
+                Check(!offWithFlag.Live, "EV_LIVE_DERIVATIVES without --live trades nothing");
+
+                // Telemetry file names are what keeps `--resolve` from mixing the two; a shared prefix
+                // would silently fold derivative rows into the moneyline calibration.
+                Check(!"EvDerivTelemetry_2026-08-31.csv".StartsWith("EvTelemetry"),
+                      "EvDerivTelemetry does not match the default --resolve glob (EvTelemetry_*)");
+                Check(!"EvDerivOracleSnap_2026-08-31.csv".StartsWith("EvOracleSnap"),
+                      "EvDerivOracleSnap does not match the default snapshot glob either");
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable("EV_DERIV_MIN", saved[0]);
+                Environment.SetEnvironmentVariable("EV_DERIV_DEVIG", saved[1]);
+                Environment.SetEnvironmentVariable("EV_DERIV_REQUIRE_IN_PLAY", saved[2]);
+            }
+        }
+
         // -- THE KINETIC FILTER --------------------------------------------------------------------
         // The guard's value rests entirely on TryRise refusing to answer when it cannot: a window it has no
         // samples for must NOT read as "flat", or a market we just started watching passes a filter that has
