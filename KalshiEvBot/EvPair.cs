@@ -22,7 +22,9 @@ public sealed record EvPair(
     string YesName,
     string NoName,
     bool ThreeWay,
-    IReadOnlyList<string> Legs)   // every mutually-exclusive outcome of the matchup, YesToken among them
+    IReadOnlyList<string> Legs,   // every mutually-exclusive outcome of the matchup, YesToken among them
+    string MarketType = "moneyline",   // "moneyline" | "spread" | "total"
+    double Line = double.NaN)          // handicap/total the derivative is struck at; NaN on a moneyline
 {
     /// <summary>
     /// <b>The trap this type exists to close.</b> On a two-way, <c>NoToken</c> is the complement of
@@ -40,6 +42,13 @@ public sealed record EvPair(
     /// <summary>A pair is only usable if its YES leg is actually in the leg set — otherwise there is no
     /// probability to read out and the row is a data fault, not a trade.</summary>
     public bool LegsUsable => Legs is { Count: >= 2 } && YesLegIndex >= 0;
+
+    /// <summary>Spread or total rather than a match winner. A first-class flag rather than something
+    /// inferred from the ticker, because the series naming is Kalshi's and changes without notice — and
+    /// every consumer that needs to tell them apart (the live gate, the telemetry tag, the calibration
+    /// split) would then each carry its own copy of the same guess, to be fixed in three places.</summary>
+    public bool IsDerivative =>
+        !string.Equals(MarketType, "moneyline", StringComparison.OrdinalIgnoreCase);
 }
 
 public static class EvPairLoader
@@ -84,6 +93,31 @@ public static class EvPairLoader
         return null;
     }
 
+    /// <summary>
+    /// The derivative pair file that belongs WITH a given moneyline file. Derived from that file's own
+    /// path rather than searched for independently, so the two can never come from different
+    /// directories — the bot would then value today's spreads against yesterday's matchup ids and
+    /// nothing would say so. Mirrors HardVenArb's rule: cross_pairs.json -> derivative_pairs.json,
+    /// cross_pairs_bia.json -> derivative_pairs_bia.json.
+    ///
+    /// <para>Returns null when there is no such file. That is NORMAL, not an error: the derivative
+    /// pairer is a separate scheduler step and may simply not have run yet.</para>
+    /// </summary>
+    public static string? LocateDerivatives(string moneylinePath)
+    {
+        var explicitPath = Environment.GetEnvironmentVariable("EV_DERIV_PAIRS_FILE");
+        if (!string.IsNullOrWhiteSpace(explicitPath))
+            return File.Exists(explicitPath) ? Path.GetFullPath(explicitPath) : null;
+
+        string dir  = Path.GetDirectoryName(Path.GetFullPath(moneylinePath)) ?? ".";
+        string name = Path.GetFileName(moneylinePath);
+        string deriv = name.Contains("cross_pairs", StringComparison.OrdinalIgnoreCase)
+            ? name.Replace("cross_pairs", "derivative_pairs", StringComparison.OrdinalIgnoreCase)
+            : "derivative_pairs.json";
+        string full = Path.Combine(dir, deriv);
+        return File.Exists(full) ? Path.GetFullPath(full) : null;
+    }
+
     /// <summary>Reads the pair file and applies both side-consistency guards. Returns the survivors;
     /// <paramref name="report"/> receives one line per rejection so the count is never a mystery.</summary>
     public static List<EvPair> Load(string path, out List<string> report)
@@ -92,6 +126,7 @@ public static class EvPairLoader
         var raw = JsonDocument.Parse(File.ReadAllText(path));
         var all = new List<EvPair>();
         int noTokens = 0, badLegs = 0, threeWayCount = 0, blocked = 0, unvalidated = 0;
+        int derivCount = 0, derivUnvalidated = 0;
 
         foreach (var el in raw.RootElement.EnumerateArray())
         {
@@ -105,6 +140,26 @@ public static class EvPairLoader
             if (string.IsNullOrWhiteSpace(yes) || string.IsNullOrWhiteSpace(no)) { noTokens++; continue; }
 
             bool threeWay = el.TryGetProperty("three_way", out var tw) && tw.ValueKind == JsonValueKind.True;
+
+            // `market_type` is written ONLY by pair_derivatives.py, so its ABSENCE is what identifies a
+            // moneyline. That direction matters: a new derivative kind added to the pairer arrives here
+            // already tagged and is handled as a derivative by default, whereas a whitelist of known
+            // derivative names would silently admit it as a moneyline and trade it live on day one.
+            string marketType = S("market_type");
+            if (string.IsNullOrWhiteSpace(marketType)) marketType = "moneyline";
+            bool isDeriv = !marketType.Equals("moneyline", StringComparison.OrdinalIgnoreCase);
+            double line = el.TryGetProperty("line", out var ln) && ln.ValueKind == JsonValueKind.Number
+                        ? ln.GetDouble() : double.NaN;
+
+            // A derivative the pairing could not PRICE-CHECK is dropped, on the same reasoning that
+            // drops an unchecked three-way. Its ORIENTATION is safe without any price — Kalshi's YES on
+            // a totals market IS "Over L" by definition, which is exactly why that gate is reject-only
+            // — but what the price was checking is WRONG GAME, and a spread valued off the wrong
+            // fixture is the silent, entirely plausible-looking error that would poison the telemetry
+            // these rows are being added to collect.
+            if (isDeriv && el.TryGetProperty("price_unvalidated", out var dpu)
+                        && dpu.ValueKind == JsonValueKind.True)
+            { derivUnvalidated++; continue; }
 
             // The leg set: every mutually-exclusive outcome of the matchup. Two-way rows synthesise it from
             // the pair, which is exactly right there. Three-way rows MUST carry it explicitly — the two
@@ -133,10 +188,11 @@ public static class EvPairLoader
                 threeWayCount++;
             }
             else legs = new List<string> { yes, no };
+            if (isDeriv) derivCount++;
 
             all.Add(new EvPair(ticker, S("event_id"), S("event_title"), S("kalshi_outcome"), S("label"),
                                S("settlement_date"), yes, no, S("hardven_yes_name"), S("hardven_no_name"),
-                               threeWay, legs));
+                               threeWay, legs, marketType, line));
         }
         if (noTokens > 0)
             report.Add($"{noTokens} row(s) skipped: unpaired (no Pinnacle token). A one-sided row cannot be "
@@ -156,6 +212,13 @@ public static class EvPairLoader
                      + "Pinnacle feed is warm and these become usable.");
         if (threeWayCount > 0)
             report.Add($"{threeWayCount} three-way row(s) loaded (soccer 1X2 and similar).");
+        if (derivUnvalidated > 0)
+            report.Add($"{derivUnvalidated} derivative row(s) skipped: the pairing could not PRICE-CHECK "
+                     + "them (`price_unvalidated`), so a wrong-FIXTURE match would go undetected. Their "
+                     + "orientation was never in question — that price was checking WHICH GAME.");
+        if (derivCount > 0)
+            report.Add($"{derivCount} derivative row(s) loaded (spread/total), tagged `MarketType` in "
+                     + "the telemetry. EXCLUDED from live orders unless EV_LIVE_DERIVATIVES=1.");
 
         // ── Guard 1: title order vs token designation (advisory) ──────────────────────────────────────
         foreach (var p in all)
@@ -173,7 +236,7 @@ public static class EvPairLoader
         // leaving the rows with the MOST ways to be wrong as the only ones with no cross-check at all.
         // Three outcomes of one fixture must name one matchup, hold three DISTINCT yes legs, and agree on
         // what the leg set even is.
-        foreach (var g in all.Where(p => p.ThreeWay && !string.IsNullOrEmpty(p.EventId))
+        foreach (var g in all.Where(p => p.ThreeWay && !p.IsDerivative && !string.IsNullOrEmpty(p.EventId))
                              .GroupBy(p => p.EventId))
         {
             var rows = g.ToList();
@@ -192,7 +255,12 @@ public static class EvPairLoader
             report.Add($"[DROP] all {rows.Count} market(s) of {g.Key}: {why}.");
         }
 
-        foreach (var g in all.Where(p => !p.ThreeWay && !string.IsNullOrEmpty(p.EventId))
+        // Derivatives are excluded EXPLICITLY here, not left to the token-shape test inside the loop. A
+        // totals event holding exactly two lines would group, and "both markets buy the same side" is
+        // TRUE and CORRECT for Over 38.5 and Over 39.5 of one match — the check would drop sound rows.
+        // Its premise, that two markets of an event are OPPOSITE outcomes of one fixture, is a
+        // moneyline premise and simply does not hold for a ladder of lines.
+        foreach (var g in all.Where(p => !p.ThreeWay && !p.IsDerivative && !string.IsNullOrEmpty(p.EventId))
                              .GroupBy(p => p.EventId).Where(g => g.Count() == 2))
         {
             var seg = g.Select(p => p.YesToken.Split(':')).ToList();

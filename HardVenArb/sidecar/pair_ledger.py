@@ -26,7 +26,11 @@ import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+# BOTH pair files. Derivatives are written by a SEPARATE pairer into a SEPARATE file, and a ledger that
+# reads only the moneyline one leaves every spread/total signal permanently "unjudgeable" in
+# check_signal_names.py -- the exact blind spot this ledger exists to close, just moved to a new file.
 PAIRS = HERE.parent / "cross_pairs.json"
+PAIR_FILES = (PAIRS, HERE.parent / "derivative_pairs.json")
 LEDGER = HERE.parent.parent / "pair_ledger.jsonl"
 
 
@@ -61,7 +65,9 @@ def _known() -> set:
 
 
 def record(quiet: bool = False) -> int:
-    cur, seen = _load_pairs(PAIRS), _known()
+    cur, seen = {}, _known()
+    for _f in PAIR_FILES:
+        cur.update(_load_pairs(_f))       # tickers are globally unique, so a plain merge is safe
     new = 0
     with LEDGER.open("a", encoding="utf-8") as fh:
         for tk, v in sorted(cur.items()):
@@ -102,22 +108,23 @@ def report() -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--watch", type=float, default=0, help="poll cross_pairs.json every N seconds")
+    ap.add_argument("--watch", type=float, default=0, help="poll the pair files every N seconds")
     ap.add_argument("--report", action="store_true")
     a = ap.parse_args()
     if a.report:
         report(); return
     if a.watch <= 0:
         record(); return
-    print(f"[LEDGER] watching {PAIRS.name} every {a.watch:g}s -> {LEDGER.name}  (ctrl-c to stop)")
+    print(f"[LEDGER] watching {', '.join(f.name for f in PAIR_FILES)} every {a.watch:g}s -> "
+          f"{LEDGER.name}  (ctrl-c to stop)")
     last = None
     while True:
         try:
-            m = PAIRS.stat().st_mtime
+            m = tuple(f.stat().st_mtime if f.exists() else None for f in PAIR_FILES)
             if m != last:
                 last = m
                 record()
-        except FileNotFoundError:
+        except OSError:
             pass
         except KeyboardInterrupt:
             break

@@ -22,7 +22,12 @@ public sealed record EvSignal(
     SizeResult Size, double BankrollUsd, double OrderFeeUsd, double StakeUsd,
     bool InPriceWindow, string Decision, int NumLegs, string PinOddsAll, bool OracleWsVerified,
     double WsDepthToLimit, double CapacityUsd, string MoveRegime, string VenueVerify,
-    double PinnacleRiseCents, bool DeVigAgree);
+    double PinnacleRiseCents, bool DeVigAgree,
+    // APPENDED, never inserted — see Columns. "moneyline" | "spread" | "total"; Line is the
+    // handicap or total and is blank on a moneyline. LiveEligible records whether the order was
+    // allowed AT THE TIME, so a later flip of EV_LIVE_DERIVATIVES does not rewrite history: rows
+    // logged while derivatives were held must stay distinguishable from rows logged after.
+    string MarketType = "moneyline", double Line = double.NaN, bool LiveEligible = true);
 
 /// <summary>
 /// Append-only CSV of every REST-valued candidate. This file IS milestone M1 — the bot places no orders,
@@ -43,6 +48,7 @@ public sealed class EvTelemetry : IDisposable
         "FeePerContract", "CostPerContract", "EvProp", "EvShin", "Ev", "EvWs", "LimitPrice",
         "KellyF", "Alpha", "Beta", "Fraction", "BankrollUsd", "TargetUsd", "Contracts", "FlooredToZero",
         "OrderFeeUsd", "StakeUsd", "InPriceWindow", "Decision", "NumLegs", "PinOddsAll", "OracleWsVerified", "WsDepthToLimit", "CapacityUsd", "MoveRegime", "VenueVerify", "PinnacleRiseCents", "DeVigAgree",
+        "MarketType", "Line", "LiveEligible",
     };
 
     private readonly RollingCsv _csv;
@@ -74,6 +80,7 @@ public sealed class EvTelemetry : IDisposable
             s.NumLegs.ToString(CultureInfo.InvariantCulture), Q(s.PinOddsAll), s.OracleWsVerified ? "1" : "0",
             N(s.WsDepthToLimit, 2), N(s.CapacityUsd, 2), Q(s.MoveRegime), Q(s.VenueVerify),
             double.IsFinite(s.PinnacleRiseCents) ? N(s.PinnacleRiseCents, 2) : "", s.DeVigAgree ? "1" : "0",
+            Q(s.MarketType), double.IsFinite(s.Line) ? N(s.Line, 2) : "", s.LiveEligible ? "1" : "0",
         };
 
         // Arity is checked inside WriteRow, on EVERY row. A one-column drift corrupts everything after it

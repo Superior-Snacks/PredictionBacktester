@@ -9,7 +9,12 @@ public sealed record Obs(
     string Ticker, string Side, DateTime At, double PProp, double PShin, double PUsed,
     double RestAsk, double Cost, double Ev, int Contracts, bool InPlay, double OracleAgeMs,
     bool IsSignal, bool? Won, int WsVerified,   // WsVerified: 1 yes, 0 no, -1 the row predates the column
-    string Regime, string Decision);            // who moved first, and what the bot did about it
+    string Regime, string Decision,             // who moved first, and what the bot did about it
+    // Defaulted, because every row logged before derivatives existed has no such column and Csv.Str
+    // returns "" for it. Those rows ARE moneylines, so the default states a fact rather than papering
+    // over a gap — but it does mean this column cannot distinguish "moneyline" from "logged before
+    // the split existed", which only matters if a derivative is ever back-dated into an old file.
+    string MarketType = "moneyline");
 
 /// <summary>
 /// Grades logged predictions against Kalshi settlement.
@@ -111,7 +116,8 @@ public static class Calibration
                 Csv.Int(r, "Contracts"), Csv.Str(r, "InPlay") == "1", Csv.Num(r, "OracleAgeMs"),
                 Csv.Str(r, "Decision") == "SIGNAL", won,
                 Csv.Str(r, "OracleWsVerified") is "1" ? 1 : Csv.Str(r, "OracleWsVerified") is "0" ? 0 : -1,
-                Csv.Str(r, "MoveRegime"), Csv.Str(r, "Decision")));
+                Csv.Str(r, "MoveRegime"), Csv.Str(r, "Decision"),
+                Csv.Str(r, "MarketType") is { Length: > 0 } mt ? mt : "moneyline"));
         }
         LastMisorientedDropped = droppedMis;
         LastSourceGapDropped = droppedGap;
@@ -492,6 +498,25 @@ public static class Calibration
         var pre    = live.Where(o => !o.InPlay).ToList();
         Split("in-play", inPlay);
         Split("pre-match", pre);
+
+        // ── MARKET TYPE ───────────────────────────────────────────────────────────────────────────
+        // Printed ONLY once a derivative has actually settled. On a moneyline-only sample these lines
+        // are three rows saying the same thing as the header, and a report that pads itself with
+        // known-empty splits trains the reader to skim past the ones that do matter.
+        //
+        // This is the number that decides EV_LIVE_DERIVATIVES. Derivatives are watched and logged but
+        // never bought, precisely so this split can be read BEFORE any money is committed to them —
+        // none of the moneyline calibration transfers, because a total is a different market with its
+        // own depth profile priced off a different Pinnacle line.
+        if (live.Any(x => x.MarketType != "moneyline"))
+        {
+            foreach (var g in live.GroupBy(x => x.MarketType).OrderBy(g => g.Key, StringComparer.Ordinal))
+                Split($"type: {g.Key}", g);
+            Console.WriteLine("   Derivatives are NOT traded live (EV_LIVE_DERIVATIVES=0). Read their "
+                            + "line above as the");
+            Console.WriteLine("   evidence for turning that on — and mind mk=, a handful of markets "
+                            + "sampled often is not a sample.");
+        }
 
         // ORACLE AGE, WITHIN IN-PLAY ONLY. Split across the whole sample it is not a second test at all:
         // in-play quotes are pushed constantly and pre-match ones sit quiet, so "age" and "in-play" are the

@@ -21,7 +21,16 @@ TOKEN FORMAT (extends the moneyline "{lid}:{matchupId}:{designation}"):
   "(Games)" child; baseball: the main game). Resolvable later by the odds path (that matchup's {type}
   market, the price whose designation == {side} and points == {signedPoints}).
 
-Coverage: tennis = ATP only (WTA/ITF have no Kalshi games-spread/total); baseball = MLB + KBO (NPB none).
+Coverage (verified live 2026-08-31): tennis = ATP games spread+total, WTA games total (no WTA spread,
+no ITF markets at all — and ITF is the biggest moneyline source, so derivatives skew to ATP/WTA);
+baseball = MLB + KBO (NPB none). The dormant KXATPGAMESPREAD/KXATPGAMETOTAL duplicates are NOT used.
+
+SAFEGUARDS, mirrored from the moneyline pairer. An inverted derivative is WORSE than an inverted
+moneyline: backing Over when you meant Under, or the wrong player's handicap, both look entirely
+plausible by name, and no name check can see it. So every pair carries `kalshi_yes_price` and goes
+through a REJECT-ONLY price gate: live book prices drop wrong-game pairs, but orientation is never
+swapped (see the gate itself for why a swap is always wrong here). Fuzzy-matched games are tagged
+`fuzzy` for re-verification before real money.
 
   python pair_derivatives.py            # dry-run preview
   python pair_derivatives.py --write    # write derivative_pairs.json
@@ -43,7 +52,9 @@ import requests
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-from pair_auto import _norm, _book_name, _team_sim, _kalshi_dt, fuzz   # proven name/date primitives
+from pair_auto import _norm, _book_name, _team_sim, _kalshi_dt, fuzz, _fetch_implied  # proven primitives
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))       # pairHard lives beside the sidecar dir
+from pairHard import _yes_price                                       # noqa: E402  the SAME yes-price the                                                                      # moneyline gate uses
 from env_util import atomic_write_json
 from pair_pinnacle import _canon, _pin_dt                              # baseball aliases + ISO start parse
 import sports as sports_cfg                                           # unified sport catalog (spread/total series)
@@ -189,6 +200,9 @@ def _close_date(m: dict):
 
 
 # ── matching ─────────────────────────────────────────────────────────────────────────────────────────────
+_CANDIDATE_FUZZY: set = set()      # marks that the last _candidate_games call used the fuzzy name path
+
+
 def _candidate_games(teams: frozenset, kdt, sett: str, index: dict, thr: int) -> list:
     """ALL Pinnacle matchups for a Kalshi team-set + date (exact set, else bipartite containment >= thr). Returns
     a LIST (not one) because tennis lists the SAME players twice — the "(Games)" matchup (games handicap/total,
@@ -210,6 +224,7 @@ def _candidate_games(teams: frozenset, kdt, sett: str, index: dict, thr: int) ->
                     best_min, best = worse, games
             if best_min >= thr:
                 cands = best
+                _CANDIDATE_FUZZY.add(1)            # sub-100 name match: tag the pairs it produces
     if not cands:
         return []
     if kdt is not None:   # ticker time authoritative (baseball): within 6h (doubleheader-safe)
@@ -226,6 +241,12 @@ def main() -> None:
     ap.add_argument("--write", action="store_true", help="write derivative_pairs.json (default = dry run)")
     ap.add_argument("--days", type=int, default=10, help="keep markets settling within N days (default 10)")
     ap.add_argument("--threshold", type=int, default=85, help="min team-name score for a fuzzy game match")
+    ap.add_argument("--sidecar", default=os.environ.get("HARDVEN_SIDECAR_URL", "http://127.0.0.1:8787"),
+                    help="sidecar base URL — the price gate reads live book prices from its /odds")
+    ap.add_argument("--no-price-gate", action="store_true",
+                    help="skip the price gate (which rejects wrong-game pairs)")
+    ap.add_argument("--price-tol", type=float, default=0.25,
+                    help="price-gate tolerance 0-1: book vs Kalshi implied prob must agree within this")
     args = ap.parse_args()
 
     if fuzz is None:
@@ -254,7 +275,9 @@ def main() -> None:
                 if c:
                     sett = c.date().isoformat()
                     break
+            _CANDIDATE_FUZZY.clear()
             cands = _candidate_games(teams, kdt, sett, index, args.threshold)
+            _was_fuzzy = bool(_CANDIDATE_FUZZY)
             if sport_id == 33:   # tennis: KXATPG* are GAMES markets → only the "(Games)" matchup, never "(Sets)"
                 cands = [c for c in cands if c.get("units") == "Games"]
             if not cands:
@@ -278,6 +301,7 @@ def main() -> None:
                     yes = f'{g["lid"]}:{g["mid"]}:total:{_fmt(L)}:over'
                     no = f'{g["lid"]}:{g["mid"]}:total:{_fmt(L)}:under'
                     label = f'{g["home_name"]} vs {g["away_name"]} — Over {_fmt(L)}'
+                    yes_name = k_out = ""      # over/under names nobody -- nothing to check
                 else:  # spread
                     T = _spread_team(m.get("yes_sub_title", ""))
                     Tk = _canon(_book_name(T))
@@ -294,13 +318,118 @@ def main() -> None:
                     yes = f'{g["lid"]}:{g["mid"]}:spread:{_fmt(-L)}:{side}'
                     no = f'{g["lid"]}:{g["mid"]}:spread:{_fmt(L)}:{other}'
                     label = f'{g["home_name"]} vs {g["away_name"]} — {T} {_fmt(-L)}'
-                pairs.append({
+                    yes_name, k_out = g[f"{side}_name"], T
+                # kalshi_yes_price IS WHAT MAKES THE GATE WORK. The gate compares it against the
+                # book's implied probability to catch a pair matched to the WRONG GAME; without it
+                # every pair counts as `unvalidated` and the gate passes everything untested.
+                entry = {
                     "kalshi_ticker": tk, "market_type": mtype, "line": L, "label": label,
                     "event_id": ev_tk, "settlement_date": c.date().isoformat(),
                     "is_neg_risk": False, "hardven_min_size": 1.0,
                     "hardven_yes_token": yes, "hardven_no_token": no,
-                })
+                    "kalshi_yes_price": _yes_price(m),
+                    "hardven_yes_name": yes_name, "kalshi_outcome": k_out,
+                }
+                if _was_fuzzy:
+                    entry["fuzzy"] = True          # verify before real money
+                pairs.append(entry)
                 filled += 1
+
+    # -- NAME SELF-CHECK (SPREADS ONLY) -----------------------------------------------------------
+    # The side of a spread is chosen by ARGMAX over _team_sim, and an argmax ALWAYS returns a side --
+    # including when NEITHER candidate is the right player (a fuzzy game match, or a subtitle this
+    # parser read wrong). Token overlap can answer "neither", which is the one failure argmax cannot
+    # report, so this is not circular the way re-running _team_sim would be.
+    #
+    # Name TOKENS, not substrings: "Felipe Meligeni Alves" vs "Felipe Meligeni Rodrigues Alves" is the
+    # same player and a substring test strips both (it did, on the moneyline side).
+    #
+    # Totals are exempt on purpose: over/under names nobody, so no name check can judge one. Their
+    # orientation is structural instead -- see the price gate below for why that is stronger, not weaker.
+    # Canonicalise FIRST. The two venues write the same club differently ("A's" vs "Athletics"), and
+    # _canon is the alias table the pairer already matches on, so skipping it here would have this check
+    # disagree with the very matcher it is auditing.
+    def _ntok(x: str) -> set:
+        return {w for w in re.sub(r"[^a-z ]", " ", _canon(_book_name(x or "")).lower()).split()
+                if len(w) >= 3}
+
+    misoriented, kept = 0, []
+    for e in pairs:
+        out, pin = e.get("kalshi_outcome") or "", e.get("hardven_yes_name") or ""
+        a, b = _ntok(out), _ntok(pin)
+        # AN EMPTY TOKEN SET IS NO EVIDENCE, NOT A CONTRADICTION -- short names tokenise to nothing and a
+        # bare `not (a & b)` reads that as a mismatch. Caught live on 2026-08-31: Kalshi's "A's" lost both
+        # fragments to the >=3-char filter, so a correct Athletics pair was dropped as mis-oriented.
+        if e.get("market_type") == "spread" and a and b and not (a & b):
+            misoriented += 1
+            print(f"[DERIV] MIS-ORIENTED {e.get('kalshi_ticker','?')}: Kalshi names '{out}' but the YES "
+                  f"token is Pinnacle's '{pin}' -- dropped (its EV would be a phantom).")
+            continue
+        kept.append(e)
+    pairs = kept
+    if misoriented:
+        print(f"[DERIV] *** {misoriented} spread row(s) named the WRONG PLAYER and were dropped. ***")
+
+
+    # -- PRICE GATE: REJECT-ONLY. IT MUST NEVER SWAP. ---------------------------------------------
+    # pair_auto.price_validate does two jobs: reject wrong-game pairs, and FIX inverted sides by
+    # swapping the tokens. The first is wanted here. The second is actively harmful, for two reasons
+    # that compound:
+    #
+    #   1. A derivative's orientation is STRUCTURAL, not inferred. Kalshi's YES on a KXATPGTOTAL
+    #      market IS "Over L", so yes -> total:L:over is a definition, not a guess. There is nothing
+    #      for a price to correct, so any swap it makes can only break a pair that was already right.
+    #   2. Totals sit near 50/50 by construction, which is exactly where that gate says it is blind:
+    #      "picking wrong pairs Kalshi-YES with the book's SAME side, which the executor then buys
+    #      twice instead of hedging". The moneyline pairer survives that because sibling_validate
+    #      catches inversions structurally first; a derivative has no sibling market, so nothing would.
+    #
+    # Seen on the first dry run of this change (2026-08-31): price_validate swapped a share of the
+    # totals, so two identically-labelled "Over 39.5" markets came out with OPPOSITE tokens -- ARNDUC
+    # got yes=under while BERWAW got yes=over. Every one of those swaps was wrong.
+    #
+    # What a price CAN still settle is whether we paired the WRONG GAME: there neither orientation
+    # fits, which is unambiguous at any price level. So compare, drop the gross mismatches, and leave
+    # orientation exactly as the structural mapping built it.
+    if not args.no_price_gate and pairs:
+        toks = {e[k] for e in pairs for k in ("hardven_yes_token", "hardven_no_token") if e.get(k)}
+        # The odds WS is LAZY -- it connects on the first /odds that names a league, so a cold first
+        # pass comes back empty and an unretried gate silently passes everything. Same wake-and-wait
+        # the moneyline gate does, bounded so a genuinely dead feed still lets pairing finish.
+        implied = _fetch_implied(args.sidecar, toks)
+        want, tries, wait = max(1, len(toks) // 2), 6, 10.0
+        while tries > 0 and len(implied) < want:
+            print(f"[DERIV] price gate: only {len(implied)}/{len(toks)} token(s) priced -- the odds "
+                  f"feed is still waking. Waiting {wait:.0f}s, {tries} attempt(s) left.")
+            time.sleep(wait)
+            implied = _fetch_implied(args.sidecar, toks)
+            tries -= 1
+        priced = sum(1 for e in pairs if e.get("kalshi_yes_price") is not None)
+        print(f"[DERIV] price gate (reject-only): {priced}/{len(pairs)} pair(s) have a Kalshi price, "
+              f"{len(implied)}/{len(toks)} token(s) priced by the book")
+        ok = rej = unval = 0
+        kept = []
+        for e in pairs:
+            ky, by = e.get("kalshi_yes_price"), implied.get(e.get("hardven_yes_token"))
+            if ky is None or by is None:
+                e["price_unvalidated"] = True   # consumers can tell a checked pair from an unchecked one
+                unval += 1
+                kept.append(e)
+                continue
+            e.pop("price_unvalidated", None)
+            # WRONG-GAME ONLY: BOTH orientations must miss before this throws a pair away.
+            if min(abs(ky - by), abs(ky - (1.0 - by))) > args.price_tol:
+                print(f"[DERIV] PRICE-REJECT {e['kalshi_ticker']}  kalshi={ky:.2f} book={by:.2f} "
+                      f"(neither orientation within {args.price_tol}) -> wrong game")
+                rej += 1
+                continue
+            ok += 1
+            kept.append(e)
+        pairs = kept
+        print(f"[DERIV] price gate: {ok} plausible | {rej} wrong-game rejected | {unval} unvalidated "
+              f"(orientation NEVER altered)")
+    else:
+        print("[DERIV] price gate SKIPPED -- wrong-game pairs will NOT be caught.")
 
     pairs.sort(key=lambda e: (e["settlement_date"], e["kalshi_ticker"]))
     print(f"\n[DERIV] filled={filled}  no-Pinnacle-game={no_game}  line-not-offered={no_line}")

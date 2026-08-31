@@ -400,6 +400,66 @@ public static class SelfTest
                 Check(blkPairs.Count == 0, "KXUCLADVANCE is blocked (extra time / penalties vs Pinnacle's 90min)",
                       $"{blkPairs.Count}");
                 Check(rep4.Any(r => r.Contains("SETTLEMENT-RULE")), "…and the reason is stated");
+
+                // ── DERIVATIVES (spread/total) ────────────────────────────────────────────────
+                // Five-segment tokens, a `market_type`, and — the part most likely to regress —
+                // exemption from the sibling guard, whose premise does not hold for a line ladder.
+                string DRow(string tk, string ev, string type, double line, string yes, string no,
+                            bool unvalidated = false) =>
+                    "{\"kalshi_ticker\":\"" + tk + "\",\"event_id\":\"" + ev + "\","
+                  + "\"event_title\":\"Arnaldi vs Duckworth\",\"kalshi_outcome\":\"\","
+                  + "\"settlement_date\":\"2026-08-31\",\"market_type\":\"" + type + "\","
+                  + "\"line\":" + line.ToString(System.Globalization.CultureInfo.InvariantCulture) + ","
+                  + "\"hardven_yes_token\":\"" + yes + "\",\"hardven_no_token\":\"" + no + "\""
+                  + (unvalidated ? ",\"price_unvalidated\":true" : "") + "}";
+
+                string der = Path.Combine(dir, "deriv.json");
+                File.WriteAllText(der, "[" + string.Join(",", new[]
+                {
+                    // TWO TOTAL LINES OF ONE EVENT. Both buy ':over', and both are CORRECT — this is
+                    // the case that the moneyline sibling guard would read as "two markets on one
+                    // side" and drop. It groups by EventId and has exactly two rows, so nothing but
+                    // the explicit derivative exemption keeps it alive.
+                    DRow("KXATPGTOTAL-X-39", "EVT", "total", 38.5, "3451:99:total:38.5:over",
+                                                                    "3451:99:total:38.5:under"),
+                    DRow("KXATPGTOTAL-X-40", "EVT", "total", 39.5, "3451:99:total:39.5:over",
+                                                                    "3451:99:total:39.5:under"),
+                }) + "]");
+                var derPairs = EvPairLoader.Load(der, out var rep5);
+                Check(derPairs.Count == 2,
+                      "two total LINES of one event both survive - the sibling guard is a moneyline "
+                    + "check and must not fire on a line ladder", $"{derPairs.Count}");
+                Check(derPairs.All(x => x.IsDerivative && x.MarketType == "total"),
+                      "…and they are tagged as derivatives");
+                Check(derPairs.Any(x => Math.Abs(x.Line - 39.5) < 1e-9), "…carrying their line");
+                Check(rep5.Any(r => r.Contains("EV_LIVE_DERIVATIVES")),
+                      "…and the report says they are held back from live orders");
+
+                // A moneyline row has NO market_type, and absence must mean moneyline — not a guess
+                // from the ticker, which is Kalshi's naming and changes without notice.
+                Check(twoPairs[0].MarketType == "moneyline" && !twoPairs[0].IsDerivative,
+                      "a row with no market_type is a moneyline", twoPairs[0].MarketType);
+
+                // Unpriceable derivative: orientation was never in doubt, but WHICH GAME was.
+                string dun = Path.Combine(dir, "deriv_unval.json");
+                File.WriteAllText(dun, "[" + DRow("KXATPGTOTAL-Y-30", "EVU", "total", 29.5,
+                                                  "3451:98:total:29.5:over", "3451:98:total:29.5:under",
+                                                  unvalidated: true) + "]");
+                var dunPairs = EvPairLoader.Load(dun, out var rep6);
+                Check(dunPairs.Count == 0,
+                      "a price_unvalidated derivative is dropped (wrong-FIXTURE risk)", $"{dunPairs.Count}");
+                Check(rep6.Any(r => r.Contains("WHICH GAME")), "…for the right reason, not orientation");
+
+                // The two files must resolve to the SAME directory, or the bot values today's spreads
+                // against yesterday's matchup ids with nothing to say so.
+                string ml = Path.Combine(dir, "cross_pairs.json");
+                File.WriteAllText(ml, "[]");
+                File.WriteAllText(Path.Combine(dir, "derivative_pairs.json"), "[]");
+                Check(EvPairLoader.LocateDerivatives(ml) is string dp
+                      && Path.GetDirectoryName(dp) == Path.GetDirectoryName(Path.GetFullPath(ml)),
+                      "the derivative file is found BESIDE its moneyline file");
+                Check(EvPairLoader.LocateDerivatives(Path.Combine(dir, "nope", "cross_pairs.json")) is null,
+                      "a missing derivative file returns null rather than throwing (it is optional)");
             }
             finally { try { Directory.Delete(dir, true); } catch { } }
         }

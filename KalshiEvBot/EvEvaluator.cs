@@ -27,6 +27,18 @@ public sealed class EvConfig
     /// bound one market; nothing bounds the day, and an unattended run turns the shard float over
     /// repeatedly as settlements return. Resets at local midnight and survives a restart.</summary>
     public double LiveDailyUsd = Env("EV_LIVE_DAILY_USD", 0);
+    /// <summary>Let SPREAD/TOTAL markets place live orders. Default OFF, and deliberately so.
+    ///
+    /// <para>Derivatives arrive with no settled record of their own: every calibration number the
+    /// bot has — the edge, the fill rate, the WS/REST phantom rate — was measured on moneylines,
+    /// and none of it transfers for free. A total is a different market with a different depth
+    /// profile priced off a different Pinnacle line, and the one honest way to learn whether the
+    /// edge survives there is to LOG it for a while before spending on it.</para>
+    ///
+    /// <para>So they are watched, valued and written to telemetry exactly like a moneyline, and
+    /// only the order is withheld. Flip this once <c>--resolve</c> has a derivative sample worth
+    /// reading — the split is in the telemetry's <c>MarketType</c> column.</para></summary>
+    public bool   LiveDerivatives = Env("EV_LIVE_DERIVATIVES", 0) > 0.5;
     /// <summary>How far below EvMin a WS-implied EV may sit and still buy a REST call. The WS ask is
     /// optimistic 95% of the time, which makes WS EV an upper bound and pre-screening safe; this slack
     /// covers the other 5%.</summary>
@@ -147,7 +159,12 @@ public sealed class EvStats
                 RestCalls, RestFailed, Signals, RejectedByRest, FlooredToZero, RateLimited,
                 IncompleteBook, ScreeningOnly, Implausible, PreMatch, KalshiLed, PinnacleLed,
                 VenueVanished, VenueRefused, OutOfBand, NotRising, NoKineticHistory, DeVigSplit,
-                SourceGap;
+                SourceGap,
+                // Signals that WOULD have been bought but were held back for being a derivative.
+                // Counted separately from every other rejection because it is not a rejection: the
+                // row is a good signal by every test the bot has, and this number is the size of
+                // the sample being deliberately left on the table while they prove out.
+                DerivativeHeld;
 }
 
 /// <summary>
@@ -807,7 +824,13 @@ public sealed class EvEvaluator
         // Awaited rather than fire-and-forget: an IOC resolves in well under a second, and letting the
         // screening loop run ahead of its own order is how the same market gets bought twice.
         // `_live` is null in M0, so the order API is not merely unused but unreachable.
-        if (signal && _live is not null)
+        // Derivatives are held back HERE, at the order, and nowhere earlier. Everything above this
+        // line ran identically for them — screening, oracle, REST, sizing, telemetry — so the log
+        // records exactly what would have been bought, which is the whole point of watching them
+        // before trading them. Suppressing them at intake instead would produce no data at all.
+        if (signal && pair.IsDerivative && !_cfg.LiveDerivatives)
+            Interlocked.Increment(ref Stats.DerivativeHeld);
+        else if (signal && _live is not null)
             await _live.TryTakeAsync(pair.KalshiTicker, pair.EventId, c.Side, limit, px,
                                      c.PTrueUsed, ev,
                                      new TakeCtx((double)c.WsAsk, depthUnknown ? -1 : depthToLimit,
@@ -837,7 +860,8 @@ public sealed class EvEvaluator
                           : _cfg.RequirePinnacleLed && !pinnacleLed ? "NOT_PINNACLE_LED"
                           : prematch ? "SIGNAL_PREMATCH" : "SIGNAL_UNVERIFIED",
             c.NumLegs, c.PinOddsAll, c.WsVerified, depthToLimit, capacityUsd, regime, venueVerify,
-            haveKinetic ? kineticRise * 100 : double.NaN, devigAgree));
+            haveKinetic ? kineticRise * 100 : double.NaN, devigAgree,
+            pair.MarketType, pair.Line, !pair.IsDerivative || _cfg.LiveDerivatives));
 
         if (clears)
         {

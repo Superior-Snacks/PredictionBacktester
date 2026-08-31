@@ -50,8 +50,14 @@ CATALOG: dict[str, Sport] = {
         # NOT a moneyline. Pairing it would hedge a winner against a scoreline.
         moneyline=("KXATPMATCH", "KXWTAMATCH", "KXITFMATCH", "KXITFWMATCH",
                    "KXATPCHALLENGERMATCH", "KXWTACHALLENGERMATCH"),
-        spread=("KXATPGSPREAD",),   # games handicap — ATP only (WTA/ITF have no Kalshi games markets)
-        total=("KXATPGTOTAL",),
+        # GAMES markets, paired by pair_derivatives against Pinnacle's period-0 spread/total.
+        # Verified live 2026-08-31 (quoting market counts): KXATPGSPREAD 143, KXATPGTOTAL 140,
+        # KXWTAGTOTAL 134. The longer-named KXATPGAMESPREAD / KXATPGAMETOTAL are DORMANT duplicates
+        # (0 and 0 active) — do not add them.
+        # WTA has a games TOTAL but no games SPREAD, and ITF has neither, which is the real limit here:
+        # ITF is the largest source of moneyline signals and contributes nothing to derivatives.
+        spread=("KXATPGSPREAD",),
+        total=("KXATPGTOTAL", "KXWTAGTOTAL"),
         bia_sport="tennis", bia_path="/sportsbook/tennis",
     ),
     "soccer": Sport(

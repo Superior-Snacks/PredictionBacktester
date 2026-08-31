@@ -56,6 +56,20 @@ internal static class Program
             // A cap that defaults to OFF is useless on an unattended run, and silently changing the default
             // would be worse. So make its absence loud instead: the per-side and per-game caps bound one
             // market, nothing bounds the day, and settlements returning cash let the float turn over.
+            // State the derivative policy IN THE BANNER, not only in the pair report thirty lines up.
+            // This run may be unattended for days; "which markets is it allowed to buy" is the kind of
+            // thing that must be visible at the top of the log rather than reconstructed from a
+            // config file whose value at the time is no longer knowable.
+            if (EvConfig.Env("EV_LIVE_DERIVATIVES", 0) > 0.5)
+                Con.Line(ConsoleColor.Yellow,
+                    "[DERIV] EV_LIVE_DERIVATIVES=1 - spreads and totals WILL be bought with real "
+                  + "money. None of the calibration was measured on them; check --resolve section 4 "
+                  + "for a settled derivative sample before leaving this running.");
+            else
+                Console.WriteLine("[DERIV] spreads/totals are watched and logged but NOT bought "
+                                + "(EV_LIVE_DERIVATIVES=0). Their edge is unmeasured; --resolve "
+                                + "section 4 splits by MarketType once some have settled.");
+
             double dailyCap = EvConfig.Env("EV_LIVE_DAILY_USD", 0);
             if (dailyCap > 0)
                 Console.WriteLine($"[CAP] daily limit ${dailyCap:0.00} — resets at local midnight, survives a restart.");
@@ -105,6 +119,69 @@ internal static class Program
 
         Console.WriteLine($"[PAIRS] {pairs.Count} usable pair(s) from {pairsPath}");
         foreach (var line in report) Console.WriteLine($"[PAIRS] {line}");
+
+        // ── Derivatives (spread/total), from the SECOND pair file ────────────────────────────────
+        // Merged into one watchlist rather than kept in a parallel structure: every consumer below —
+        // the feed subscription, the oracle token set, the evaluator, the snapshot loop — wants "the
+        // markets we are watching", and a second list would have to be threaded through all of them
+        // with an easy-to-miss branch at each. The rows carry `MarketType`, so anything that needs to
+        // tell them apart can, and only the live gate currently does.
+        //
+        // A MISSING derivative file is not an error and must never be fatal — the derivative pairer is
+        // a separate scheduler step, and a moneyline-only run is the exact behaviour this bot had for
+        // its whole life to date.
+        string? derivPath = EvPairLoader.LocateDerivatives(pairsPath);
+        if (derivPath is null)
+        {
+            Console.WriteLine("[PAIRS] no derivative_pairs.json beside the moneyline file — "
+                            + "moneylines only. Run pair_derivatives.py --write to add spreads/totals.");
+        }
+        else
+        {
+            try
+            {
+                var derivs = EvPairLoader.Load(derivPath, out var dreport);
+                // Tickers are globally unique on Kalshi, so a collision means the two files disagree
+                // about one market. Say so rather than letting last-write-wins pick silently.
+                var seen = new HashSet<string>(pairs.Select(x => x.KalshiTicker), StringComparer.Ordinal);
+                var dupes = derivs.Where(x => seen.Contains(x.KalshiTicker)).Select(x => x.KalshiTicker).ToList();
+                if (dupes.Count > 0)
+                    Console.WriteLine($"[PAIRS] {dupes.Count} ticker(s) appear in BOTH pair files "
+                                    + $"({string.Join(", ", dupes.Take(3))}{(dupes.Count > 3 ? ", ..." : "")}) "
+                                    + "— the moneyline row wins. Two rows for one ticker means the "
+                                    + "pairers disagree; check which is right.");
+                var added = derivs.Where(x => !seen.Contains(x.KalshiTicker)).ToList();
+
+                // WHICH PINNACLE LEAGUES DO THESE ADD? The oracle asks the sidecar for every token it
+                // holds, and the sidecar connects a league socket on first request — so a derivative on
+                // a sport the moneylines do not already cover costs a NEW Pinnacle subscription, which
+                // is the scarce resource. Tennis derivatives are free (same matchups already watched);
+                // baseball ones are not. Reported rather than blocked: it is a budget decision, and
+                // silently dropping markets would be worse than naming the cost.
+                static string Lid(EvPair x) => x.YesToken.Split(':') is { Length: >= 1 } t ? t[0] : "";
+                var haveLids = new HashSet<string>(pairs.Select(Lid).Where(x => x.Length > 0), StringComparer.Ordinal);
+                var newLids  = added.Select(Lid).Where(x => x.Length > 0 && !haveLids.Contains(x))
+                                    .Distinct(StringComparer.Ordinal).ToList();
+
+                pairs.AddRange(added);
+                Console.WriteLine($"[PAIRS] +{added.Count} derivative pair(s) from {derivPath}");
+                if (newLids.Count > 0)
+                    Con.Line(ConsoleColor.Yellow,
+                        $"[PAIRS] these add {newLids.Count} Pinnacle league(s) not covered by the "
+                      + $"moneylines (lid {string.Join(", ", newLids.Take(6))}"
+                      + (newLids.Count > 6 ? ", ..." : "")
+                      + ") - each is a new league socket on the sidecar. Drop them from "
+                      + "sidecar/sports.py if that budget is tight.");
+                foreach (var line in dreport) Console.WriteLine($"[PAIRS] {line}");
+            }
+            catch (Exception ex)
+            {
+                // Degrade to moneylines rather than refusing to start. The derivative file is the new,
+                // optional half; a malformed one must not take down a bot that was working yesterday.
+                Console.WriteLine($"[PAIRS] derivative file unreadable ({ex.GetType().Name}: "
+                                + $"{ex.Message}) — continuing with moneylines only.");
+            }
+        }
         if (pairs.Count == 0)
         {
             Console.WriteLine("[FATAL] nothing to watch. Run the pairing job first — this bot never pairs, "
@@ -117,10 +194,15 @@ internal static class Program
         // blind a bot that is already running.
         if (args.Contains("--check"))
         {
-            Console.WriteLine($"[CHECK] {pairs.Count} pair(s), "
+            int nDeriv = pairs.Count(p => p.IsDerivative);
+            Console.WriteLine($"[CHECK] {pairs.Count} pair(s) "
+                            + $"({pairs.Count - nDeriv} moneyline + {nDeriv} derivative), "
                             + $"{pairs.Select(p => p.KalshiTicker).Distinct().Count()} ticker(s), "
                             + $"{pairs.SelectMany(p => p.Legs).Distinct().Count()} "
                             + "Pinnacle selection(s). No connection was opened.");
+            foreach (var g in pairs.GroupBy(p => p.MarketType).OrderBy(g => g.Key, StringComparer.Ordinal))
+                Console.WriteLine($"        {g.Key,-10} {g.Count(),4} pair(s)   "
+                                + $"{g.Select(x => x.KalshiTicker.Split('-')[0]).Distinct().Count()} series");
             foreach (var p in pairs.Take(5))
                 Console.WriteLine($"        {p.KalshiTicker,-38} {Trunc(p.EventTitle, 26),-26} "
                                 + $"yes={p.YesToken} no={p.NoToken}");
@@ -304,7 +386,8 @@ internal static class Program
             () => { lock (pairsLock) return everSeen.ToList(); }, cts.Token);
 
         // Pick up new fixtures without a restart — see PairReloadLoopAsync for why this is not optional.
-        var reloadTask = PairReloadLoopAsync(pairsPath, eval, feed, oracle, pairs, everSeen, pairsLock, cts.Token);
+        var reloadTask = PairReloadLoopAsync(pairsPath, derivPath, eval, feed, oracle, pairs, everSeen,
+                                             pairsLock, cts.Token);
 
         if (args.Contains("--verify"))
         {
@@ -704,23 +787,35 @@ internal static class Program
     /// and nothing else, whereas dropping it would take it out of the settlement watcher's list before its
     /// result was banked — and Kalshi does not keep obscure markets around to be asked again later.</para>
     /// </summary>
-    private static async Task PairReloadLoopAsync(string path, EvEvaluator eval, KalshiBookFeed feed,
+    private static async Task PairReloadLoopAsync(string path, string? derivPath, EvEvaluator eval,
+                                                  KalshiBookFeed feed,
                                                   PinnacleOracle oracle, List<EvPair> livePairs,
                                                   HashSet<string> everSeen, object pairsLock,
                                                   CancellationToken ct)
     {
         var every = TimeSpan.FromSeconds(Math.Max(30, EvConfig.Env("EV_PAIR_RELOAD_SEC", 120)));
-        DateTime lastWrite = SafeWriteTime(path);
-        Console.WriteLine($"[PAIRS] watching {System.IO.Path.GetFileName(path)} for updates every "
-                        + $"{every.TotalSeconds:0}s — new fixtures are picked up without a restart.");
+        // BOTH files, and a change to EITHER triggers a reload of BOTH. The scheduler rewrites them in
+        // separate steps minutes apart, so watching only one would rebuild the watchlist from a
+        // half-updated view — and because the reload REPLACES rather than accumulates, the untouched
+        // file's markets would be dropped every time the other one moved.
+        //
+        // derivPath is resolved ONCE at startup, so a derivative file created later is not picked up
+        // until a restart. That is deliberate: re-probing the path every tick would mean the bot's
+        // watchlist could change because an unrelated job dropped a file next to it.
+        var watched = new List<string> { path };
+        if (derivPath is not null) watched.Add(derivPath);
+        var lastWrite = watched.Select(SafeWriteTime).ToArray();
+        Console.WriteLine($"[PAIRS] watching {string.Join(" + ", watched.Select(System.IO.Path.GetFileName))} "
+                        + $"for updates every {every.TotalSeconds:0}s — new fixtures are picked up "
+                        + "without a restart.");
 
         while (!ct.IsCancellationRequested)
         {
             try { await Task.Delay(every, ct); } catch (OperationCanceledException) { break; }
             try
             {
-                var w = SafeWriteTime(path);
-                if (w <= lastWrite) continue;
+                var w = watched.Select(SafeWriteTime).ToArray();
+                if (!w.Where((t, i) => t > lastWrite[i]).Any()) continue;
                 lastWrite = w;
 
                 // The pairing job writes this file; a read landing mid-write yields a truncated document.
@@ -730,10 +825,32 @@ internal static class Program
                 catch (Exception ex)
                 {
                     Console.WriteLine($"[PAIRS] reload skipped (file mid-write?): {ex.GetType().Name}");
-                    lastWrite = DateTime.MinValue;      // force a retry next tick
+                    lastWrite = new DateTime[watched.Count];   // force a retry next tick
                     continue;
                 }
                 if (fresh.Count == 0) continue;
+
+                // A derivative file that fails to read leaves `fresh` as moneylines only — and because
+                // this REPLACES the watchlist, that would silently un-watch every spread and total.
+                // Skip the whole cycle instead: the current watchlist is still valid, and the next tick
+                // retries. Only an EMPTY-but-readable derivative file is allowed to clear them, because
+                // that is the pairer genuinely saying there are none today.
+                if (derivPath is not null)
+                {
+                    try
+                    {
+                        var dfresh = EvPairLoader.Load(derivPath, out _);
+                        var seen = new HashSet<string>(fresh.Select(x => x.KalshiTicker), StringComparer.Ordinal);
+                        fresh.AddRange(dfresh.Where(x => !seen.Contains(x.KalshiTicker)));
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[PAIRS] reload skipped — derivative file unreadable "
+                                        + $"({ex.GetType().Name}); keeping the current watchlist.");
+                        lastWrite = new DateTime[watched.Count];
+                        continue;
+                    }
+                }
 
                 // REPLACE, don't accumulate. See ReplacePairs / SetTokens: the live watchlist is whatever the
                 // pairing job currently says, and yesterday's finished fixtures must leave it or a fortnight's
@@ -1257,6 +1374,11 @@ internal static class Program
             M1 — PLACES REAL ORDERS. Nothing below trades without --live.
               --live               IOC-buy every confirmed signal. Real money.
               --micro-bet          label only: marks the run as a fill-rate test. Changes no sizing.
+
+            Derivatives (spread/total) are loaded from derivative_pairs.json beside the moneyline
+            pair file, watched and logged like any other market, and EXCLUDED from live orders.
+              EV_LIVE_DERIVATIVES=1   also place real orders on spreads and totals
+              EV_DERIV_PAIRS_FILE     override the derivative pair file path
               --min-stake <$>      per side (default 5); a no-fill is free and may be retried
               --max-stake-game <$> per game (default 2x the side stake)
 
