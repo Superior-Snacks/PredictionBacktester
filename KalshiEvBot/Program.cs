@@ -843,7 +843,10 @@ internal static class Program
     private static async Task PerformanceLoopAsync(DiscordNotifier discord, Func<Task<string>> status,
                                                    CancellationToken ct)
     {
-        int everyMin  = (int)EvConfig.Env("EV_DISCORD_REPORT_MIN", 30);
+        // OFF BY DEFAULT. The resolve digest posts the same figures with settlement attached, so a
+        // half-hourly heartbeat is duplicate noise that trains the operator to ignore the channel - which
+        // is exactly when the one message that mattered gets missed. Set EV_DISCORD_REPORT_MIN to re-enable.
+        int everyMin  = (int)EvConfig.Env("EV_DISCORD_REPORT_MIN", 0);
         int beatMin   = (int)EvConfig.Env("EV_DISCORD_HEARTBEAT_MIN", 240);
         if (everyMin <= 0) return;
         string last = "";

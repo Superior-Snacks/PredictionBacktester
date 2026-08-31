@@ -866,7 +866,8 @@ public static class Calibration
         // ── What we ACTUALLY paid, once live rows exist ────────────────────────────────────────────────
         var files = Directory.GetFiles(dir, "EvLive_*.csv");
         if (files.Length == 0) return;
-        double obsCharged = 0, obsPriced = 0, obsVenue = 0; long obsCtrs = 0;
+        double obsCharged = 0, obsPriced = 0, obsVenue = 0, obsChargedMatched = 0;
+        long obsCtrs = 0, obsCtrsMatched = 0;
         int fills = 0, feeSkips = 0, venueRows = 0;
         foreach (var f in files)
             foreach (var r in Csv.Read(f))
@@ -877,8 +878,19 @@ public static class Calibration
                 fills++; obsCtrs += (long)fill;
                 obsCharged += Csv.Num(r, "FeeChargedUsd");
                 obsPriced  += Csv.Num(r, "FeeAssumedUsd");
+                // COMPARE LIKE WITH LIKE. The venue total was summed over rows that CARRY FeeVenueUsd while
+                // the model total covered every fill, so rows predating that column made the model look
+                // permanently too expensive: 40 fills of model against 38 of venue read as +0.086c/contract
+                // of "error" that was really two missing rows. Keep a parallel model total over exactly the
+                // rows the venue figure covers.
                 double v = Csv.Num(r, "FeeVenueUsd");
-                if (v > 0) { obsVenue += v; venueRows++; }
+                if (v > 0)
+                {
+                    obsVenue += v;
+                    obsChargedMatched += Csv.Num(r, "FeeChargedUsd");
+                    obsCtrsMatched += (long)fill;
+                    venueRows++;
+                }
             }
         if (obsCtrs > 0)
         {
@@ -890,10 +902,11 @@ public static class Calibration
             Console.WriteLine($"   OBSERVED on {fills} fill(s), {obsCtrs} contract(s): our ceiling model "
                             + $"${obsCharged:0.0000} vs our marginal model ${obsPriced:0.0000} "
                             + $"({(obsCharged - obsPriced) / obsCtrs * 100.0:0.000}c/contract of rounding)");
-            if (venueRows > 0)
-                Console.WriteLine($"   VENUE CHARGED ${obsVenue:0.0000} on {venueRows} of those fill(s) — model is "
-                                + $"{(obsCharged - obsVenue) / obsCtrs * 100.0:+0.000;-0.000}c/contract off reality. "
-                                + "THIS is the number that would catch a fee change.");
+            if (venueRows > 0 && obsCtrsMatched > 0)
+                Console.WriteLine($"   VENUE CHARGED ${obsVenue:0.0000} on {venueRows} fill(s) / {obsCtrsMatched} "
+                                + $"contract(s); our model on the SAME rows ${obsChargedMatched:0.0000} — "
+                                + $"{(obsChargedMatched - obsVenue) / obsCtrsMatched * 100.0:+0.000;-0.000}c/contract "
+                                + "off reality. THIS is the number that would catch a fee change.");
             else
                 Console.WriteLine("   (no FeeVenueUsd recorded yet — rows predating that column cannot be "
                                 + "checked against the venue, only against ourselves.)");

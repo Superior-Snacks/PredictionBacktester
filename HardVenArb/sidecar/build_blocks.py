@@ -171,8 +171,14 @@ def main() -> int:
                     help="total open hours to spend (default 10; keep <= PINNACLE_MAX_DAILY_HOURS)")
     ap.add_argument("--min-gap", type=int, default=50,
                     help="minutes between blocks; must clear PINNACLE_MIN_DOWNTIME_MIN (default 50)")
-    ap.add_argument("--jitter", type=int, default=0,
-                    help="worst-case jitter to plan against (default 0; pair with PINNACLE_JITTER_MIN=0)")
+    # DEFAULT None, NOT 0. This flag means "worst-case jitter to PLAN AGAINST", but push() also writes it
+    # to the lifecycle as the jitter to APPLY - two different quantities sharing one value. With a default
+    # of 0, every --push silently set the live jitter to zero AND persisted it to control_state.json, where
+    # it was re-applied on every start and permanently overrode PINNACLE_JITTER_MIN. Diagnosed 2026-08-31:
+    # .env said 7, the running plan said 0.0, and every window opened on an exact :15/:45 for days.
+    # Unset now means "use whatever the lifecycle is configured with", and push() leaves it alone.
+    ap.add_argument("--jitter", type=int, default=None,
+                    help="worst-case jitter to plan against (default: PINNACLE_JITTER_MIN, and NOT pushed)")
     ap.add_argument("--earliest", default="06:00")
     ap.add_argument("--latest", default="23:00")
     ap.add_argument("--keep-before", default="",
@@ -228,7 +234,10 @@ def main() -> int:
 
     spent = sum(b.close_min - b.open_min for b in frozen)
     budget = max(int(a.budget_hours * 60) - spent, 0)
-    blocks = optimise(starts, budget, a.min_gap, a.jitter, earliest, hm(a.latest), now_min)
+    # Plan against the jitter the lifecycle will ACTUALLY apply, or coverage is scored against a schedule
+    # that will not happen.
+    plan_jitter = a.jitter if a.jitter is not None else int(float(os.environ.get("PINNACLE_JITTER_MIN", "7")))
+    blocks = optimise(starts, budget, a.min_gap, plan_jitter, earliest, hm(a.latest), now_min)
     allb = sorted(frozen + blocks)
     if not allb:
         print("[BLOCKS] nothing worth opening - leaving the schedule untouched.")
@@ -237,7 +246,7 @@ def main() -> int:
     pins = ",".join(str(b) for b in allb)
     times = sorted(t.hour * 60 + t.minute for t in (g[0] for g in starts))
     cov = sum(1 for t in times
-              if any(b.open_min + a.jitter <= t < b.close_min - a.jitter for b in allb))
+              if any(b.open_min + plan_jitter <= t < b.close_min - plan_jitter for b in allb))
     total = sum(b.close_min - b.open_min for b in allb)
     print("[BLOCKS] %s" % pins)
     print("[BLOCKS] %d block(s), %.2fh, covering %d/%d start(s) (%.0f%%)"
