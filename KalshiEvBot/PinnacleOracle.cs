@@ -58,6 +58,31 @@ public sealed class PinnacleOracle
     private int  _lastReady = -1;
     private string _lastError = "";
     private int _sameErrorCount;
+
+    // ── POLL WATCHDOG ────────────────────────────────────────────────────────────────────────────────
+    // Dropping the interval buys DETECTION LATENCY (a Pinnacle move sits unseen between polls) and buys it
+    // from the sidecar's event loop, which also runs the Pinnacle WS reader. That trade can go NEGATIVE:
+    // if /odds serialisation starts competing with the reader, quotes get STALER and we have paid for a
+    // worse oracle. Measured baseline before the change (2026-09-01): in-play quote age p50 41ms, p90 545ms.
+    //
+    // So the loop measures itself. `PollMs*` is our load on the sidecar; `QuoteAgeMs*` is what we get back.
+    // If the first rises and the second follows, the interval is too low for this machine.
+    private readonly object _statLock = new();
+    private readonly Queue<double> _pollMsHist = new();
+    private readonly Queue<double> _ageMsHist  = new();
+    private const int StatWindow = 240;
+    private long _polls, _saturated, _errors;
+    private DateTime _lastHealth = DateTime.UtcNow;
+
+    private static double Pct(Queue<double> q, double p) => Percentile(q, p);
+
+    /// <summary>Median round-trip of one full poll (all chunks). Our LOAD on the sidecar.</summary>
+    public double PollMsP50 { get { lock (_statLock) return Pct(_pollMsHist, 0.5); } }
+    public double PollMsP90 { get { lock (_statLock) return Pct(_pollMsHist, 0.9); } }
+    /// <summary>Median age of the quotes the poll returned. What we GET for that load.</summary>
+    public double QuoteAgeMsP50 { get { lock (_statLock) return Pct(_ageMsHist, 0.5); } }
+    /// <summary>Polls that took LONGER than the interval — the loop cannot hold the requested cadence.</summary>
+    public long SaturatedPolls { get { lock (_statLock) return _saturated; } }
     private bool _sawUnverified, _wvNoticeShown;
 
     public PinnacleOracle(string sidecarBaseUrl, IEnumerable<string> tokens)
@@ -217,6 +242,7 @@ public sealed class PinnacleOracle
 
         while (!ct.IsCancellationRequested)
         {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
             try
             {
                 bool anyOk = false; int stale = 0;
@@ -232,6 +258,7 @@ public sealed class PinnacleOracle
                 }
                 IsConnected = anyOk;
                 StaleCount  = stale;
+                if (anyOk) RecordPollStats(sw.Elapsed.TotalMilliseconds);
                 if (anyOk) { try { OnPolled?.Invoke(); } catch { /* a subscriber must not kill the poll */ } }
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
@@ -253,11 +280,131 @@ public sealed class PinnacleOracle
                 if (_sameErrorCount == 1 || _sameErrorCount % 100 == 0)
                     Console.WriteLine($"[ORACLE] poll error: {msg}"
                                     + (_sameErrorCount > 1 ? $"  (x{_sameErrorCount})" : ""));
+                lock (_statLock) _errors++;
             }
 
-            try { await Task.Delay(_pollMs, ct); } catch (OperationCanceledException) { break; }
+            // SLEEP THE REMAINDER, not the whole interval. Delaying a fixed _pollMs AFTER the work makes the
+            // real cadence interval+duration — invisible at 3000ms with a 100ms poll, but at 500ms a 300ms
+            // poll silently becomes 800ms and the change you thought you made is 60% undone.
+            int left = PollDelayMs(_pollMs, sw.Elapsed.TotalMilliseconds);
+            if (left > 1)
+            {
+                try { await Task.Delay(left, ct); } catch (OperationCanceledException) { break; }
+            }
+            else
+            {
+                // Cannot hold the cadence: the poll itself outlasts the interval. Yield briefly so the loop
+                // cannot starve everything else, and count it — SaturatedPolls is the number that says the
+                // interval is set below what this machine and sidecar can actually serve.
+                lock (_statLock) _saturated++;
+                try { await Task.Delay(1, ct); } catch (OperationCanceledException) { break; }
+            }
+            ReportHealth();
         }
         IsConnected = false;
+    }
+
+    /// <summary>
+    /// Milliseconds left to wait to hold <paramref name="intervalMs"/> between poll STARTS.
+    ///
+    /// <para>Sleeping the full interval AFTER the work makes the true cadence interval+duration. That is
+    /// invisible at 3000ms with a 100ms poll (3% off) and material at 500ms with a 300ms poll (60% off) —
+    /// the interval you set is not the interval you get, and the effect grows exactly as you tighten it.</para>
+    ///
+    /// <para>Clamped to [0, interval]: never negative, and never longer than the interval even if the clock
+    /// jumps backwards.</para>
+    /// </summary>
+    internal static int PollDelayMs(int intervalMs, double elapsedMs)
+        => (int)Math.Clamp(intervalMs - elapsedMs, 0, intervalMs);
+
+    /// <summary>Percentile of a rolling window; NaN when empty. Internal so the self-test can pin it.</summary>
+    internal static double Percentile(IEnumerable<double> src, double p)
+    {
+        var v = src.ToArray();
+        if (v.Length == 0) return double.NaN;
+        Array.Sort(v);
+        // NEAREST-RANK (ceil), not truncation. `(int)(p*(n-1))` rounds DOWN, so p90 of a five-sample window
+        // returns the fourth value — it UNDERSTATES the tail. In a latency watchdog that is the wrong
+        // direction to be wrong in: this number exists to notice trouble early, and a p90 that flatters
+        // itself is worse than no p90 at all.
+        int idx = (int)Math.Ceiling(p * v.Length) - 1;
+        return v[Math.Clamp(idx, 0, v.Length - 1)];
+    }
+
+    private void RecordPollStats(double ms)
+    {
+        // Quote age is sampled from the cache we just refreshed, so it measures what the sidecar HANDED US,
+        // which is the thing that must not degrade. Sampled rather than exhaustive: at two polls a second
+        // over a few hundred selections the median is identical and the cost is not.
+        double age = double.NaN;
+        var ages = new List<double>();
+        foreach (var q in _quotes.Values)
+        {
+            ages.Add(AgeMs(q));
+            if (ages.Count >= 256) break;
+        }
+        if (ages.Count > 0) { ages.Sort(); age = ages[ages.Count / 2]; }
+
+        lock (_statLock)
+        {
+            _polls++;
+            _pollMsHist.Enqueue(ms);
+            while (_pollMsHist.Count > StatWindow) _pollMsHist.Dequeue();
+            if (double.IsFinite(age))
+            {
+                _ageMsHist.Enqueue(age);
+                while (_ageMsHist.Count > StatWindow) _ageMsHist.Dequeue();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Periodic health line, and a LOUD one when the poll interval is hurting rather than helping.
+    ///
+    /// <para>Two failure shapes, and they need different responses. SATURATION (the poll outlasts its own
+    /// interval) means the cadence is simply unservable — raise it. DEGRADED QUOTES (poll time fine, but
+    /// the ages we are handed have climbed) means we are crowding the sidecar's event loop and the WS
+    /// reader is losing, which is the expensive failure because it makes the oracle worse while looking
+    /// like it is working.</para>
+    /// </summary>
+    private void ReportHealth()
+    {
+        double everyMin = EnvInt("EV_ORACLE_HEALTH_MIN", 10);
+        if (everyMin <= 0 || (DateTime.UtcNow - _lastHealth).TotalMinutes < everyMin) return;
+        _lastHealth = DateTime.UtcNow;
+
+        double p50, p90, age; long polls, sat, err;
+        lock (_statLock)
+        {
+            p50 = Pct(_pollMsHist, 0.5); p90 = Pct(_pollMsHist, 0.9); age = Pct(_ageMsHist, 0.5);
+            polls = _polls; sat = _saturated; err = _errors;
+        }
+        if (!double.IsFinite(p50)) return;
+
+        string line = $"[ORACLE] health: poll {p50:0}/{p90:0}ms (p50/p90) at a {_pollMs}ms interval, "
+                    + $"quote age p50 {age:0}ms, {polls} poll(s), {sat} saturated, {err} error(s)";
+
+        // AgeCeiling is a WARNING line, not a gate: the trading guard is EV_ORACLE_MAX_AGE_INPLAY_MS and
+        // this must never quietly change what the bot trades. Default 250ms sits well above the 41ms
+        // baseline and well below the 1000ms gate, so it fires on real degradation and not on noise.
+        double ageCeil = EnvInt("EV_ORACLE_AGE_WARN_MS", 250);
+        bool bad = sat > 0 || p50 > _pollMs * 0.5 || age > ageCeil;
+        if (bad)
+        {
+            Con.Line(ConsoleColor.Yellow, line);
+            if (sat > 0)
+                Con.Line(ConsoleColor.Yellow, $"[ORACLE] {sat} poll(s) took LONGER than the {_pollMs}ms "
+                       + "interval — the cadence is below what the sidecar can serve. Raise EV_ORACLE_POLL_MS.");
+            else if (p50 > _pollMs * 0.5)
+                Con.Line(ConsoleColor.Yellow, $"[ORACLE] a poll now costs {p50:0}ms of a {_pollMs}ms "
+                       + "interval — little headroom left before saturation.");
+            if (age > ageCeil)
+                Con.Line(ConsoleColor.Yellow, $"[ORACLE] quote age p50 {age:0}ms is above the {ageCeil:0}ms "
+                       + "warning line (baseline 41ms). Polling harder may be CROWDING the sidecar's WS "
+                       + "reader — that makes the oracle worse, not faster. Raise EV_ORACLE_POLL_MS and "
+                       + "see if it recovers.");
+        }
+        else Console.WriteLine(line);
     }
 
     /// <summary>Parses one /odds response into the quote cache. Returns how many quotes were stale.</summary>

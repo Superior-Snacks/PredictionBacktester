@@ -464,6 +464,30 @@ public static class SelfTest
             finally { try { Directory.Delete(dir, true); } catch { } }
         }
 
+        // ── ORACLE POLL CADENCE ───────────────────────────────────────────────────────────────────────
+        Console.WriteLine("\nOracle poll cadence + watchdog");
+        {
+            // THE WHOLE POINT OF THE 500ms CHANGE is that the interval is actually honoured. Sleeping the
+            // full interval after the work makes it interval+duration, which at 3000ms was a rounding error
+            // and at 500ms undoes most of the change — silently, because nothing in the log would show it.
+            Check(PinnacleOracle.PollDelayMs(500, 0) == 500, "an instant poll waits the whole interval");
+            Check(PinnacleOracle.PollDelayMs(500, 300) == 200,
+                  "a 300ms poll on a 500ms interval waits 200ms, not 500", $"{PinnacleOracle.PollDelayMs(500, 300)}");
+            Check(PinnacleOracle.PollDelayMs(500, 500) == 0, "a poll that fills the interval waits 0");
+            Check(PinnacleOracle.PollDelayMs(500, 900) == 0,
+                  "an OVERRUNNING poll never returns a negative delay", $"{PinnacleOracle.PollDelayMs(500, 900)}");
+            Check(PinnacleOracle.PollDelayMs(500, -50) == 500,
+                  "a backwards clock cannot make us wait longer than the interval");
+
+            Check(double.IsNaN(PinnacleOracle.Percentile(Array.Empty<double>(), 0.5)),
+                  "an empty window has no percentile - NaN, not 0 (0ms would read as perfect health)");
+            var w = new double[] { 5, 1, 4, 2, 3 };
+            Check(PinnacleOracle.Percentile(w, 0.5) == 3, "median of an UNSORTED window is correct",
+                  $"{PinnacleOracle.Percentile(w, 0.5)}");
+            Check(PinnacleOracle.Percentile(w, 0.9) == 5, "p90 lands on the top element of a short window");
+            Check(PinnacleOracle.Percentile(new double[] { 7 }, 0.9) == 7, "a single sample is its own p90");
+        }
+
         // ── DERIVATIVE PIPELINE CONFIG ────────────────────────────────────────────────────────────────
         Console.WriteLine("\nDerivative pipeline config");
         {
