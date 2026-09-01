@@ -216,31 +216,134 @@ public static class Calibration
     }
 
 
-    /// <summary>Section 7 — did the orders we tried actually fill? Silent until --live has written a row.</summary>
-    private static void LivePathReport(string dir)
+    /// <summary>
+    /// Section 9 — CLOSING LINE VALUE. Did Kalshi move toward the price we screened against?
+    ///
+    /// <para><b>This is the fastest honest verdict the bot has, by two orders of magnitude.</b> Settlement
+    /// is ground truth but section 6 puts the 2-sigma horizon in the thousands of markets — years at the
+    /// current rate. Line movement resolves in seconds, carries a fraction of the variance, and is what
+    /// actually distinguishes "we were early" from "we were lucky". If Kalshi does NOT come to us, the
+    /// thesis is wrong no matter what the settlement sample eventually says.</para>
+    ///
+    /// <para><b>The null is 50%, and only of the rows that MOVED.</b> A flat book carries no directional
+    /// information; counting it as a failure would bury the signal under pre-match rows that never tick
+    /// (measured: 97% of SIGNAL_PREMATCH follow-ups are flat, which reads as a catastrophic 2.6% if ties
+    /// are scored as losses). So ties are reported and then excluded from the test.</para>
+    ///
+    /// <para><b>ONE ROW PER TICKER+SIDE.</b> A market that signals repeatedly contributes many follow-ups
+    /// of the same disagreement — they are not independent, and pooling them shrinks the error bar on a
+    /// sample that has not actually grown.</para>
+    ///
+    /// <para><b>The alternative explanation to rule out is mean reversion.</b> A signal fires when the ask
+    /// sits below our fair value, so an ask depressed by a thin book or a transient will drift back up on
+    /// its own, with no reference to Pinnacle at all. The column that separates the two is REACHED: drifting
+    /// up is consistent with either story, arriving AT our price is not.</para>
+    /// </summary>
+    private static void ConvergenceReport(string dir, string followPrefix, string livePrefix)
     {
-        var files = Directory.GetFiles(dir, "EvLive_*.csv").OrderBy(f => f).ToList();
+        var files = Directory.GetFiles(dir, followPrefix + "_*.csv").OrderBy(f => f).ToList();
+        if (files.Count == 0) return;
+
+        double tol = EvConfig.Env("EV_CLV_TOL_CENTS", 1.0) / 100.0;
+
+        // Which markets actually got filled — "live" as opposed to merely screened.
+        var filled = new HashSet<string>(StringComparer.Ordinal);
+        foreach (string lf in Directory.GetFiles(dir, livePrefix + "_*.csv"))
+            foreach (var r in Csv.Read(lf))
+                if (Csv.Num(r, "FillCount") > 0)
+                    filled.Add(Csv.Str(r, "Ticker") + "|" + Csv.Str(r, "Side"));
+
+        // key -> (checkpoint, ticker|side) -> first observation
+        var seen = new Dictionary<(int Cp, string Key), (double Ea, double Ep, double Na)>();
+        var cps = new SortedSet<int>();
+        foreach (string f in files)
+            foreach (var r in Csv.Read(f))
+            {
+                if (Csv.Str(r, "Decision") != "SIGNAL") continue;
+                double age = Csv.Num(r, "AgeSec"), ea = Csv.Num(r, "EntryAsk"),
+                       ep = Csv.Num(r, "EntryPTrue"), na = Csv.Num(r, "NowAsk");
+                if (!double.IsFinite(age) || !double.IsFinite(ea) || !double.IsFinite(ep)
+                    || !double.IsFinite(na)) continue;          // book-gone / oracle-gone rows carry no NowAsk
+                int cp = (int)Math.Round(age);
+                foreach (int c in new[] { 5, 10, 20, 40, 60, 300 })
+                    if (Math.Abs(age - c) <= 4) { cp = c; break; }
+                cps.Add(cp);
+                var k = (cp, Csv.Str(r, "Ticker") + "|" + Csv.Str(r, "Side"));
+                if (!seen.ContainsKey(k)) seen[k] = (ea, ep, na);
+            }
+        if (seen.Count == 0) return;
+
+        Console.WriteLine();
+        Console.WriteLine("9. CONVERGENCE  (did Kalshi come to OUR price? the thesis guard - needs > 50%)");
+        Console.WriteLine($"   one row per ticker+side per checkpoint; ties excluded; reached = within {tol*100:0.#}c of entry P_true");
+
+        void Block(string label, Func<string, bool> keep)
+        {
+            var rowsOut = new List<string>();
+            foreach (int cp in cps)
+            {
+                var v = seen.Where(kv => kv.Key.Cp == cp && keep(kv.Key.Key)).Select(kv => kv.Value).ToList();
+                if (v.Count < 5) continue;
+                int our = 0, against = 0, flat = 0, reached = 0;
+                var moves = new List<double>();
+                foreach (var (ea, ep, na) in v)
+                {
+                    int dir = ep > ea ? 1 : -1;                 // a signal is ask BELOW fair, so dir is +1
+                    double d = (na - ea) * dir;
+                    if (d > 1e-9) our++; else if (d < -1e-9) against++; else flat++;
+                    if (dir > 0 ? na >= ep - tol : na <= ep + tol) reached++;
+                    moves.Add(d * 100);
+                }
+                int moved = our + against;
+                if (moved == 0) continue;
+                double p = (double)our / moved;
+                double se = Math.Sqrt(p * (1 - p) / moved) * 100;
+                moves.Sort();
+                double z = se > 0 ? (100 * p - 50.0) / se : 0;
+                rowsOut.Add($"   T+{cp,-4} n={v.Count,4} moved={moved,4}  CAME TO US {100*p,5:0.0}% +/-{se,4:0.0}  "
+                          + $"({z:+0.0;-0.0} sigma vs 50)   reached {100.0*reached/v.Count,5:0.0}%   "
+                          + $"median {moves[moves.Count/2]:+0.0;-0.0}c");
+            }
+            if (rowsOut.Count == 0) return;
+            Console.WriteLine($"   -- {label} --");
+            foreach (string l in rowsOut) Console.WriteLine(l);
+        }
+
+        Block("ALL SIGNALS (telemetry)", _ => true);
+        if (filled.Count > 0) Block("FILLED ONLY (real orders)", k => filled.Contains(k));
+
+        Console.WriteLine("   Below 50% means Kalshi moves AWAY from us after we act - the thesis is wrong");
+        Console.WriteLine("   and no settlement sample will rescue it. Watch REACHED too: a rising ask is");
+        Console.WriteLine("   also what a thin book does on its own, but arriving at our price is not.");
+    }
+
+    /// <summary>Section 7 — did the orders we tried actually fill, and did the ones that filled MAKE
+    /// MONEY? Silent until --live has written a row.</summary>
+    private static void LivePathReport(string dir, IReadOnlyDictionary<string, SettlementRecord> settled,
+                                       string livePrefix, double? shardCash, int shardIdx)
+    {
+        var files = Directory.GetFiles(dir, livePrefix + "_*.csv").OrderBy(f => f).ToList();
         if (files.Count == 0) return;                    // M0: nothing to say
 
         var rows = new List<(string Ticker, string Side, double Limit, double RestPx, double Ev,
-                             int Req, string Status, double Fill, double Avg, double Ms, double Slip)>();
+                             int Req, string Status, double Fill, double Avg, double Ms, double Slip,
+                             double Fee, double Equity, double Bank, string At)>();
+        // Csv.Read, NOT StreamReader. A bare StreamReader requests FileShare.Read, which CONFLICTS with the
+        // write handle the running bot holds on today's file — and the whole report dies on an IOException
+        // AFTER printing sections 1-6, so it looks like the report simply ends. Csv.Read opens with
+        // FileShare.ReadWrite for exactly this reason; its own docstring records the same bug being fixed in
+        // --verify on 2026-08-21. Hit again here 2026-09-01: --resolve crashed for any day the live bot had
+        // placed an order, which is every day it is doing its job.
         foreach (string f in files)
         {
-            using var sr = new StreamReader(f);
-            string? head = sr.ReadLine();
-            if (head is null) continue;
-            var col = head.Split(',').Select((h, i) => (h.Trim('"'), i)).ToDictionary(x => x.Item1, x => x.i);
-            string? line;
-            while ((line = sr.ReadLine()) is not null)
+            foreach (var row in Csv.Read(f))
             {
-                var p = Csv.SplitLine(line);
-                double D(string k) => col.TryGetValue(k, out int i) && i < p.Count
-                                      && double.TryParse(p[i], NumberStyles.Any, CultureInfo.InvariantCulture,
-                                                         out double v) ? v : double.NaN;
-                string S(string k) => col.TryGetValue(k, out int i) && i < p.Count ? p[i] : "";
+                double D(string k) => Csv.Num(row, k);
+                string S(string k) => Csv.Str(row, k);
                 rows.Add((S("Ticker"), S("Side"), D("LimitPrice"), D("RestAsk"), D("EvCents"),
                           (int)(double.IsNaN(D("Requested")) ? 0 : D("Requested")), S("Status"),
-                          D("FillCount"), D("AvgFillPrice"), D("LatencyMs"), D("SlippageCents")));
+                          D("FillCount"), D("AvgFillPrice"), D("LatencyMs"), D("SlippageCents"),
+                          D("FeeChargedUsd"), D("EquityUsd"), D("BankrollUsd"), S("At")));
             }
         }
         if (rows.Count == 0) return;
@@ -278,6 +381,213 @@ public static class Calibration
                 Console.WriteLine($"   PARTIAL on {partial} of {got.Count} fills — the depth was not there for "
                                 + "the full size.");
         }
+        // ── REALISED P&L, on the contracts we actually own ────────────────────────────────────────
+        // Section 5 asks "was the edge real?" over MODELLED contracts at a MODELLED cost. This asks a
+        // different question — "did we make money?" — over the contracts that actually filled, at the price
+        // actually paid, net of the fee the venue actually charged. The two can disagree and the gap is the
+        // point: a fill one cent worse than the screened ask is half of a 2c edge, and no amount of correct
+        // P_true recovers it. Quoted EV is shown beside realised for exactly that comparison.
+        if (got.Count > 0)
+        {
+            int settledN = 0, wonN = 0, pending = 0;
+            double pnl = 0, staked = 0, quotedUsd = 0, feesPaid = 0;
+            var nets = new List<double>();
+            var losers = new List<(string Ticker, string Side, double Loss)>();
+            foreach (var r in got)
+            {
+                bool? w = settled.TryGetValue(r.Ticker, out var rec) ? rec.WonFor(r.Side) : null;
+                if (w is null) { pending++; continue; }
+
+                // Price ACTUALLY paid, not the limit: the limit is the worst we allowed, and the gap
+                // between them is the slippage reported above. Fall back to the limit only when the venue
+                // did not report an average (older rows), which overstates cost rather than flattering it.
+                double px   = r.Avg > 0 ? r.Avg : r.Limit;
+                double fee  = double.IsNaN(r.Fee) ? 0.0 : r.Fee;
+                double cost = r.Fill * px + fee;
+
+                settledN++;
+                if (w.Value) wonN++;
+                staked    += cost;
+                feesPaid  += fee;
+                quotedUsd += (double.IsNaN(r.Ev) ? 0.0 : r.Ev / 100.0) * r.Fill;   // EvCents is per contract
+                double net = (w.Value ? r.Fill : 0.0) - cost;                       // Kalshi pays $1 a contract
+                pnl += net;
+                nets.Add(net);
+                if (net < 0) losers.Add((r.Ticker, r.Side, net));
+            }
+
+            Console.WriteLine();
+            if (settledN == 0)
+                Console.WriteLine($"   P&L: none of the {got.Count} fill(s) has settled yet.");
+            else
+            {
+                var col = pnl >= 0 ? ConsoleColor.Green : ConsoleColor.Red;
+                Console.WriteLine($"   REALISED  won {wonN}/{settledN}   staked ${staked:0.00}   "
+                                + $"quoted EV ${quotedUsd:+0.00;-0.00}");
+                Console.ForegroundColor = col;
+                Console.WriteLine($"   REALISED  P&L ${pnl:+0.00;-0.00}   "
+                                + $"({(staked > 0 ? 100.0 * pnl / staked : 0):+0.0;-0.0}% on stake)   "
+                                + $"fees ${feesPaid:0.00}");
+                Console.ResetColor();
+
+                // AN ERROR BAR, NOT A ROW-COUNT RULE OF THUMB. A dollar P&L is a sum of per-bet payoffs
+                // whose spread scales with CONTRACTS, so "n >= 30, therefore meaningful" is simply wrong
+                // here: 44 settled fills of ~12 contracts each carry a standard error near $40, and a
+                // +$19 result sits comfortably inside it. Printing the SE beside the number is the only
+                // honest way to show a green P&L that is not yet evidence of anything.
+                double se = 0;
+                if (nets.Count > 1)
+                {
+                    double m = nets.Average();
+                    se = Math.Sqrt(nets.Sum(x => (x - m) * (x - m)) / (nets.Count - 1)) * Math.Sqrt(nets.Count);
+                }
+                Console.WriteLine($"   quoted-vs-realised {pnl - quotedUsd:+0.00;-0.00}"
+                                + (se > 0
+                                   ? $"   |   P&L standard error +/- ${se:0.00} => "
+                                     + (Math.Abs(pnl) > 2 * se ? "distinguishable from zero."
+                                      : Math.Abs(pnl) > se     ? "INSIDE 2 sigma — suggestive, not evidence."
+                                      : "INSIDE 1 sigma — this is noise, not a result.")
+                                   : "."));
+                if (pending > 0)
+                    Console.WriteLine($"   {pending} fill(s) still open — not counted above.");
+                if (losers.Count > 0 && losers.Count <= 6)
+                    foreach (var l in losers.OrderBy(x => x.Loss))
+                        Console.WriteLine($"      lost ${-l.Loss:0.00}  {l.Ticker} {l.Side}");
+            }
+        }
+
+        // ── BALANCE ───────────────────────────────────────────────────────────────────────────────
+        // THREE DIFFERENT NUMBERS, and the report is useless if it blurs them (see the note in
+        // RefreshBankrollAsync, where mixing two of them was a real bug):
+        //   shard cash    - spendable money on the trading shard, RIGHT NOW, from the venue. Collateral is
+        //                   per shard, so the account total is the wrong number: it says we can trade when
+        //                   the tennis shard is empty.
+        //   equity in log - what the bot BELIEVED it had when each order went out (daily snapshot). Its
+        //                   first->last movement across the run is the account actually turning over.
+        //   bankroll      - the TELEMETRY BASIS. Pinned and deliberately fake; it sizes the Contracts
+        //                   column and is not spendable. Labelled as such so it is never read as money.
+        Console.WriteLine();
+        if (shardCash is double cash)
+        {
+            Console.WriteLine($"   BALANCE   shard {shardIdx} holds ${cash:0.00} spendable now");
+            // CROSS-CHECK, because the shard index is INFERRED and a wrong one reads as a plausible number.
+            // The equity in the log is what the bot itself read, on the shard it resolved from a live pair
+            // at startup — so a large disagreement means this line is quoting the wrong pot of money, not
+            // that the account moved.
+            var lastEq = rows.Where(r => !double.IsNaN(r.Equity) && r.Equity > 0)
+                             .OrderBy(r => r.At, StringComparer.Ordinal).LastOrDefault();
+            if (lastEq.Equity > 0 && Math.Abs(cash - lastEq.Equity) > Math.Max(50.0, 0.5 * lastEq.Equity))
+            {
+                Console.ForegroundColor = ConsoleColor.DarkYellow;
+                Console.WriteLine($"             ^ but the bot last recorded ${lastEq.Equity:0.00} of equity. "
+                                + "A gap this large usually means the");
+                Console.WriteLine("               shard above was INFERRED WRONG (the lookup falls back to 0 "
+                                + "on a market the venue has");
+                Console.WriteLine("               forgotten) — trust the logged figure, not this one.");
+                Console.ResetColor();
+            }
+        }
+        else
+            Console.WriteLine("   BALANCE   live balance not read (venue unavailable) — from the log only:");
+
+        var eq = rows.Where(r => !double.IsNaN(r.Equity) && r.Equity > 0)
+                     .OrderBy(r => r.At, StringComparer.Ordinal).ToList();
+        if (eq.Count > 0)
+        {
+            double first = eq[0].Equity, last = eq[^1].Equity;
+            Console.WriteLine($"             equity when ordering: ${first:0.00} -> ${last:0.00} "
+                            + $"({last - first:+0.00;-0.00} across {eq.Count} order(s))"
+                            + (Math.Abs(last - first) < 0.005
+                               ? "  — one snapshot, so the run has not crossed a local midnight yet"
+                               : ""));
+        }
+        var bk = rows.Select(r => r.Bank).Where(b => !double.IsNaN(b) && b > 0).Distinct().ToList();
+        if (bk.Count == 1)
+            Console.WriteLine($"             telemetry basis ${bk[0]:0.00} (PINNED and deliberately fake — "
+                            + "sizes the Contracts column, is NOT money)");
+        else if (bk.Count > 1)
+            Console.WriteLine($"             telemetry basis MOVED across the run ({string.Join(" -> ", bk.Select(b => $"${b:0.00}"))}) "
+                            + "— Kelly sizes are not comparable across that boundary.");
+
+        // ── EVERY FILL, ONE LINE EACH ─────────────────────────────────────────────────────────────
+        // Section 5 itemises signals; this itemises MONEY. The aggregate above cannot show which trades
+        // carried the result, and at these sample sizes the answer is usually "two of them" — worth seeing
+        // rather than inferring from a standard error.
+        if (got.Count > 0)
+        {
+            Console.WriteLine();
+            Console.WriteLine($"   FILLS ({got.Count})");
+            foreach (var r in got.OrderBy(r => r.At, StringComparer.Ordinal))
+            {
+                bool? w = settled.TryGetValue(r.Ticker, out var rec) ? rec.WonFor(r.Side) : null;
+                double px  = r.Avg > 0 ? r.Avg : r.Limit;
+                double fee = double.IsNaN(r.Fee) ? 0.0 : r.Fee;
+                double net = w is null ? double.NaN : (w.Value ? r.Fill : 0.0) - (r.Fill * px + fee);
+                string when = r.At.Length >= 16 ? r.At.Substring(5, 11).Replace('T', ' ') : r.At;
+                string slip = double.IsNaN(r.Slip) ? "     " : $"{r.Slip,+4:+0.0;-0.0}c";
+                string tk = r.Ticker.Length <= 42 ? r.Ticker : r.Ticker[..42];
+                Console.WriteLine($"     {when}  {tk,-42} {r.Side,-3} "
+                                + $"x{r.Fill,-4:0} @{px:0.00}  ev{(double.IsNaN(r.Ev) ? 0 : r.Ev),+5:+0.0;-0.0}c "
+                                + $"slip{slip} fee ${fee,4:0.00} "
+                                + (w is null ? "-> OPEN" : w.Value ? $"-> WON  {net,+7:+0.00;-0.00}"
+                                                                   : $"-> lost {net,+7:+0.00;-0.00}")
+                                + (r.Fill < r.Req ? $"   [partial {r.Fill:0}/{r.Req}]" : ""));
+            }
+        }
+
+        // ── THE COUNTERFACTUAL: would the MISSES have paid? ───────────────────────────────────────
+        // This is the adverse-selection test, and it is the question section 7 exists to ask. If the orders
+        // that did NOT fill would have won MORE often than the ones that did, then the book is choosing
+        // which of our bets to accept — the fills are the ones the other side was happy to give us, and the
+        // screened edge is systematically better than the tradeable one. Priced at OUR LIMIT, which is the
+        // worst we would have paid, so this is a conservative estimate of what was missed.
+        var missed = att.Where(r => r.Fill <= 0 && r.Req > 0).ToList();
+        if (missed.Count > 0 && got.Count > 0)
+        {
+            int mw = 0, mn = 0; double mpnl = 0;
+            foreach (var r in missed)
+            {
+                bool? w = settled.TryGetValue(r.Ticker, out var rec) ? rec.WonFor(r.Side) : null;
+                if (w is null) continue;
+                mn++; if (w.Value) mw++;
+                // CHARGE THE FEE. None was actually paid (no fill, no fee), but the counterfactual asks
+                // what the trade WOULD have earned, and it would have carried one. Omitting it flattered
+                // the figure by roughly the whole fee bill and made it incomparable with the realised P&L
+                // printed above, which is net.
+                mpnl += (w.Value ? r.Req : 0.0) - r.Req * r.Limit - EvMath.OrderFee(r.Limit, r.Req);
+            }
+            // The fills' side of the comparison is recomputed here rather than reusing the P&L above, so
+            // both halves come out of the SAME expression and any change to one is forced on the other.
+            int fw = 0, fn = 0; double fpnl = 0;
+            foreach (var r in got)
+            {
+                bool? w = settled.TryGetValue(r.Ticker, out var rec) ? rec.WonFor(r.Side) : null;
+                if (w is null) continue;
+                fn++; if (w.Value) fw++;
+                double fpx = r.Avg > 0 ? r.Avg : r.Limit;
+                fpnl += (w.Value ? r.Fill : 0.0) - (r.Fill * fpx + (double.IsNaN(r.Fee) ? 0.0 : r.Fee));
+            }
+            if (mn > 0 && fn > 0)
+            {
+                Console.WriteLine();
+                Console.WriteLine($"   MISSED ({mn} settled no-fills, priced at our limit)");
+                // PER CONTRACT, because the two samples are different sizes and different prices: 90
+                // missed trades making more in total than 51 fills is arithmetic, not evidence.
+                double mctr = missed.Where(r => settled.ContainsKey(r.Ticker)).Sum(r => (double)r.Req);
+                double fctr = got.Sum(r => r.Fill);
+                Console.WriteLine($"     would have won {mw}/{mn} ({100.0*mw/mn:0.0}%)   "
+                                + $"would have made ${mpnl:+0.00;-0.00} net of a modelled fee"
+                                + (mctr > 0 ? $"  ({mpnl/mctr*100:+0.00;-0.00}c/contract)" : ""));
+                Console.WriteLine($"     actually  won {fw}/{fn} ({100.0*fw/fn:0.0}%) on the fills"
+                                + (fctr > 0 ? $"                    ({fpnl/fctr*100:+0.00;-0.00}c/contract)" : ""));
+                double gap = (100.0 * mw / mn) - (100.0 * fw / fn);
+                Console.WriteLine($"     ADVERSE SELECTION CHECK: misses won {gap:+0.0;-0.0} points "
+                                + (gap > 10 ? "MORE than fills - the book may be picking which bets to take."
+                                 : gap < -10 ? "LESS than fills - if anything we get the better half."
+                                 : "different - no sign the book is selecting against us."));
+            }
+        }
+
         var lat = att.Where(r => !double.IsNaN(r.Ms)).Select(r => r.Ms).OrderBy(x => x).ToList();
         if (lat.Count > 0)
             Console.WriteLine($"   order round-trip: median {lat[lat.Count / 2]:0}ms  p90 {lat[(int)(0.9 * (lat.Count - 1))]:0}ms");
@@ -320,7 +630,14 @@ public static class Calibration
     }
 
     // ── The report ────────────────────────────────────────────────────────────────────────────────────
-    public static void Report(List<Obs> all, IReadOnlyDictionary<string, SettlementRecord> settled, bool dedupe = true)
+    /// <param name="livePrefix">Which pipeline's order log section 7 reads — "EvLive" or "EvDerivLive".
+    /// NOT optional-with-a-default on purpose: a default would silently make the derivative report show
+    /// MONEYLINE fills, which is the one failure this whole split exists to prevent and which no
+    /// number in the output would reveal.</param>
+    public static void Report(List<Obs> all, IReadOnlyDictionary<string, SettlementRecord> settled,
+                              bool dedupe, string livePrefix,
+                              double? shardCash = null, int shardIdx = 0,
+                              string followPrefix = "EvFollowUp")
     {
         Console.WriteLine();
         Console.WriteLine("══ CALIBRATION REPORT ══════════════════════════════════════════════════════");
@@ -544,20 +861,23 @@ public static class Calibration
                                 : "  — separable enough to read the two splits independently."));
         Console.WriteLine("   If in-play calibrates WORSE than pre-match, the in-play signals are oracle lag:");
         Console.WriteLine("   we are seeing Pinnacle a second late while Kalshi has already repriced.");
-
-        // ── 4b. WHO LED, and WHAT THE GUARDS COST ─────────────────────────────────────────────────────
-        // The strategy's whole claim is that Pinnacle leads and Kalshi follows. If that is true, PINNACLE_LED
-        // rows should calibrate better than STANDING ones, and KALSHI_LED should be actively bad — we
-        // suppressed it on one demonstrated example, and this is where that call gets tested rather than
-        // assumed.
-        Console.WriteLine("\n4b. WHICH SIDE MOVED FIRST");
+        // ── 4b. HOW BIG THE MOVE WAS, and WHAT THE GUARDS COST ────────────────────────────────────────
+        // NOT a test of who led. RequirePinnacleRising is on, so every SIGNAL already has our fair value
+        // rising - all of them are Pinnacle-initiated. PINNACLE_LED is only the subset whose move cleared
+        // LedMoveMin (3pt) with Kalshi following by under a third of it; STANDING is the RESIDUAL, which
+        // is dominated by moves SMALLER than 3pt. So this compares a big jump against an ordinary one.
+        // If STANDING does as well, size buys nothing and EV_REQUIRE_PINNACLE_LED only shrinks the sample.
+        Console.WriteLine("\n4b. HOW BIG WAS THE PINNACLE MOVE  (not who led - every signal is Pinnacle-led)");
         foreach (var g in live.Where(o => o.Regime.Length > 0)
                                 .GroupBy(o => o.Regime).OrderByDescending(g => g.Count()))
             Split(g.Key.ToLowerInvariant(), g);
         if (!live.Any(o => o.Regime.Length > 0))
             Console.WriteLine("   (no rows carry MoveRegime yet — it was added 2026-08-22)");
-        Console.WriteLine("   PINNACLE_LED is the thesis. If STANDING calibrates just as well, the edge is not");
-        Console.WriteLine("   about speed at all. If KALSHI_LED calibrates BADLY, suppressing it was right.");
+        Console.WriteLine("   THIS GRADES MOVE SIZE, NOT WHO LED. Every signal is already Pinnacle-initiated");
+        Console.WriteLine("   (RequirePinnacleRising is on), so PINNACLE_LED is only the subset whose move");
+        Console.WriteLine("   was >=3pt with Kalshi barely following, and STANDING is the RESIDUAL - mostly");
+        Console.WriteLine("   moves under 3pt. If STANDING does as well, a big jump buys nothing and");
+        Console.WriteLine("   EV_REQUIRE_PINNACLE_LED would only shrink the sample.");
 
         // Every guard writes its own Decision, so each one can be graded on what it REMOVED. Five filters
         // were added in a single evening against single observed failures; this is the only thing that can
@@ -810,8 +1130,9 @@ public static class Calibration
         Console.WriteLine($"\n   With {sigs.Count} settled signal(s), this line is noise. It becomes evidence in");
         Console.WriteLine( "   the hundreds; section 3 gets there far sooner.");
         WhenWillWeKnow(sigOnly);
-        LivePathReport(Directory.GetCurrentDirectory());
+        LivePathReport(Directory.GetCurrentDirectory(), settled, livePrefix, shardCash, shardIdx);
         StakeScaling(sigOnly, Directory.GetCurrentDirectory());
+        ConvergenceReport(Directory.GetCurrentDirectory(), followPrefix, livePrefix);
     }
 
     /// <summary>

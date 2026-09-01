@@ -819,10 +819,17 @@ public sealed class EvEvaluator
         if (pinnacleLed && clears) Interlocked.Increment(ref Stats.PinnacleLed);
 
         // THREE REGIMES, NOT TWO — and which of them pays is exactly what M0 exists to find out.
-        //   PINNACLE_LED  our oracle moved, Kalshi has not      -> the thesis: we are ahead
-        //   KALSHI_LED    Kalshi moved, our oracle has not      -> demonstrated adverse; suppressed
-        //   STANDING      neither moved                         -> a persistent disagreement
+        //   PINNACLE_LED  our oracle moved >=LedMoveMin (3pt) and Kalshi followed by <=34% of it
+        //   KALSHI_LED    the mirror image: Kalshi jumped >=3pt and we did not     -> suppressed
+        //   STANDING      THE RESIDUAL — everything neither test claimed
         //   FIRST_LOOK    no history yet, cannot say
+        //
+        // STANDING IS NOT "NEITHER MOVED", AND READING IT THAT WAY INVERTS THE CONCLUSION. It is whatever
+        // is left over, which is dominated by Pinnacle moves SMALLER than 3 points — i.e. most of them.
+        // And because RequirePinnacleRising defaults ON, every SIGNAL already has our fair value rising:
+        // all signals are Pinnacle-initiated. So these labels grade the SIZE of the move, not who caused
+        // it, and PINNACLE_LED vs STANDING is "big jump vs ordinary jump". (Misread twice, 2026-08 and
+        // 2026-09, both times as evidence about who leads — which this split cannot address at all.)
         //
         // STANDING is the interesting unknown. It is where a mispair hides, but it is also where a slow
         // Kalshi book would sit if it simply had not corrected yet — and those look identical until they

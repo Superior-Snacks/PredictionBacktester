@@ -105,13 +105,17 @@ internal static class Program
         if (args.Contains("--resolve") || args.Contains("--resolve-deriv"))
         {
             bool deriv = args.Contains("--resolve-deriv");
-            string? g = ArgValue(args, "--resolve-glob") ?? (deriv ? "EvDeriv*_*.csv" : null);
+            // The derivative pattern pair MIRRORS the moneyline default rather than widening to
+            // "EvDeriv*". A wildcard there also matches EvDerivLive_ and EvDerivFollowUp_, whose
+            // columns are different — those rows would parse as telemetry and be counted as
+            // observations, quietly inflating the very dataset this report exists to grade.
+            string? g = ArgValue(args, "--resolve-glob");
             if (deriv)
                 Console.WriteLine("[RESOLVE] DERIVATIVES ONLY (spread/total). These are a separate "
                                 + "pipeline with its own thresholds; none of the moneyline calibration "
                                 + "transfers, so read this on its own terms.");
             using var rk = new KalshiOrderClient(config);
-            return await ResolveAsync(rk, g, !args.Contains("--all-obs"));
+            return await ResolveAsync(rk, g, !args.Contains("--all-obs"), deriv);
         }
 
         string? pairsPath = EvPairLoader.Locate(pairsArg);
@@ -515,11 +519,14 @@ internal static class Program
     /// and prints the calibration report. REST only — no WebSocket, so it is safe to run at any time,
     /// including while another bot holds the account's single socket.
     /// </summary>
-    private static async Task<int> ResolveAsync(KalshiOrderClient kalshi, string? glob, bool dedupe)
+    private static async Task<int> ResolveAsync(KalshiOrderClient kalshi, string? glob, bool dedupe,
+                                                bool deriv = false)
     {
         string dir = Directory.GetCurrentDirectory();
         var files = new List<string>();
-        var patterns = glob is null ? new[] { "EvTelemetry_*.csv", "EvOracleSnap_*.csv" } : new[] { glob };
+        var patterns = glob is not null ? new[] { glob }
+                     : deriv ? new[] { "EvDerivTelemetry_*.csv", "EvDerivOracleSnap_*.csv" }
+                     :         new[] { "EvTelemetry_*.csv", "EvOracleSnap_*.csv" };
         foreach (var pattern in patterns)
             files.AddRange(Directory.GetFiles(dir, pattern));
         files = files.Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(f => f).ToList();
@@ -552,7 +559,36 @@ internal static class Program
                         + $"{settled.Values.Count(s => s.IsGone)} gone from the venue.");
         Console.WriteLine($"[RESOLVE] permanent record: {resolver.Store.Path}");
 
-        Calibration.Report(Calibration.FromTelemetry(rows, settled), settled, dedupe);
+        // BEST-EFFORT balance for section 7. Scoped to the SHARD these markets settle on, never the
+        // account total: collateral is per shard, so the total reports headroom that cannot be spent on a
+        // tennis market — the same blind spot that made the 2026-08-27 outage invisible. A failure here
+        // must not cost the whole report, which is why it degrades to the logged figures instead.
+        double? shardCash = null;
+        int shardIdx = 0;
+        try
+        {
+            // NEWEST tickers first, and try several. `ExchangeIndexForAsync` SWALLOWS a failed lookup and
+            // returns the fallback shard (0), so a ticker the venue has forgotten resolves to 0 with no
+            // error — and the oldest ticker in a weeks-long log is exactly the one most likely gone.
+            // Observed 2026-08-31: the first ticker resolved to shard 0 and reported $376.30 while the bot
+            // had been trading against ~$200 on shard 3. A wrong shard here is not a cosmetic error; it is
+            // the same "account total vs shard float" blind spot that hid the 2026-08-27 outage.
+            foreach (string t in Enumerable.Reverse(tickers).Take(6))
+            {
+                int idx = await kalshi.ExchangeIndexForAsync(t);
+                if (idx != 0) { shardIdx = idx; break; }      // a real non-zero answer beats a fallback
+            }
+            shardCash = await kalshi.ShardBalanceAsync(shardIdx);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[RESOLVE] live balance unavailable ({ex.GetType().Name}) — "
+                            + "section 7 will report the equity recorded in the log instead.");
+        }
+
+        Calibration.Report(Calibration.FromTelemetry(rows, settled), settled, dedupe,
+                           deriv ? "EvDerivLive" : "EvLive", shardCash, shardIdx,
+                           deriv ? "EvDerivFollowUp" : "EvFollowUp");
         return 0;
     }
 

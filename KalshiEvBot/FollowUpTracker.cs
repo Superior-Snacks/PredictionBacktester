@@ -66,12 +66,16 @@ public sealed class FollowUpTracker : IDisposable
         // question: five minutes later, with the goal digested and both books settled, does the position
         // still look right? A gap that closes within a minute is a latency edge; one that is still there at
         // five minutes is a genuine difference of opinion, and those are worth telling apart.
-        var raw = (Environment.GetEnvironmentVariable("EV_FOLLOWUP_SEC") ?? "20,40,60,300")
+        // 5 and 10 added 2026-09-01: an in-play tennis book reprices in seconds, so the interesting
+        // part of the convergence curve is BEFORE 20s — by then most of the move has happened and the
+        // measurement is of the tail rather than the event. The sampler already wakes every second, and
+        // both readings come from memory, so extra checkpoints cost arithmetic and no venue request.
+        var raw = (Environment.GetEnvironmentVariable("EV_FOLLOWUP_SEC") ?? "5,10,20,40,60,300")
                   .Split(',', StringSplitOptions.RemoveEmptyEntries);
         _checkpoints = raw.Select(x => double.TryParse(x.Trim(), NumberStyles.Any, CultureInfo.InvariantCulture,
                                                        out var v) ? v : -1)
                           .Where(v => v > 0).OrderBy(v => v).ToArray();
-        if (_checkpoints.Length == 0) _checkpoints = new[] { 20.0, 40.0, 60.0, 300.0 };
+        if (_checkpoints.Length == 0) _checkpoints = new[] { 5.0, 10.0, 20.0, 40.0, 60.0, 300.0 };
     }
 
     public string CheckpointsDescription => string.Join("/", _checkpoints.Select(c => $"{c:0}s"));
