@@ -198,6 +198,19 @@ def main() -> None:
     # default scope = the ACTIVE sports' moneyline series (unified config); --classic = the broad built-in set
     allowlist = CLASSIC_SERIES if args.classic else sports_cfg.moneyline_series()
     horizon = dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=args.days)
+    # WHY A GRACE PERIOD AND NOT `close < now`. Kalshi leaves a FINISHED match `status=active` until it
+    # settles, with close_time set to a far-future backstop (observed 2026-09-01: a match that ended
+    # 08-31 18:00 was still active with close_time 09-14). _close_date reads expected_expiration_time and
+    # so correctly reports yesterday -- but the horizon only tested the UPPER bound, so past fixtures were
+    # re-paired every run and sat in the watchlist burning a WS subscription and evaluation cycles.
+    #
+    # The cutoff cannot be `now`. expected_expiration_time is an ESTIMATE and tennis overruns it constantly:
+    # a match delayed by a backed-up court and then going five sets is hours past its estimate while still
+    # being exactly the in-play market we most want to hold. Dropping at `now` would un-watch the live ones.
+    # So allow a grace window: long enough for a badly delayed match, short enough that yesterday goes.
+    pair_grace_h = float(os.environ.get("HARDVEN_PAIR_GRACE_HOURS", "12"))
+    pair_floor = dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=pair_grace_h)
+    expired_n = 0
 
     print("[KALSHI] fetching open events…")
     events = fetch_open_events()
@@ -223,6 +236,9 @@ def main() -> None:
                 continue
             close = _close_date(m)
             if close is None or close > horizon:
+                continue
+            if close < pair_floor:
+                expired_n += 1
                 continue
             kept_series[st] = kept_series.get(st, 0) + 1
             entries.append({
@@ -275,6 +291,9 @@ def main() -> None:
     mode = "fresh rebuild" if args.fresh else f"merged ({carried} filled pair(s) carried over)"
     print(f"[OK] wrote {len(entries)} classic sports-game markets to {out_path.name} — {mode} "
           f"(Kalshi side filled; Pinnacle tokens filled by pair_pinnacle).")
+    if expired_n:
+        print(f"     dropped {expired_n} market(s) whose match ended >{pair_grace_h:g}h ago "
+              f"(Kalshi still reports them `active` until settlement)")
     if kept_series:
         print("     kept series: " + ", ".join(f"{k}={v}" for k, v in sorted(kept_series.items(), key=lambda x: -x[1])))
     else:

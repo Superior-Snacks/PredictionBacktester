@@ -255,6 +255,20 @@ def main() -> None:
 
     index = build_pinnacle_index()
     horizon = dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=args.days)
+    # WHY A GRACE PERIOD AND NOT `close < now`. Kalshi leaves a finished match `status=active` until it
+    # settles, with `close_time` set to a far-future backstop (observed 2026-09-01: a match that ended on
+    # 08-31 18:00 still active, close_time 09-14). `_close_date` reads `expected_expiration_time` and so
+    # correctly reports yesterday -- but the horizon only tested the UPPER bound, so past fixtures were paired
+    # every run and sat in the watchlist burning a WS subscription and evaluation cycles.
+    #
+    # The cutoff cannot be `now`, though. `expected_expiration_time` is an ESTIMATE, and tennis overruns it
+    # constantly: a match delayed by a backed-up court and then going five sets is hours past its estimate
+    # while still being exactly the in-play market we most want to hold. Dropping at `now` would un-watch the
+    # live ones. So allow a grace window -- long enough to cover a badly delayed match, short enough that
+    # yesterday's fixtures (24h+ past) go.
+    _grace_h = float(os.environ.get("HARDVEN_PAIR_GRACE_HOURS", "12"))
+    floor = dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=_grace_h)
+    expired = 0
 
     pairs: list[dict] = []
     filled = no_game = no_line = 0
@@ -287,6 +301,9 @@ def main() -> None:
             for m in mkts:
                 c = _close_date(m)
                 if c is None or c > horizon:
+                    continue
+                if c < floor:
+                    expired += 1
                     continue
                 L = m.get("floor_strike")
                 if L is None:
@@ -432,7 +449,8 @@ def main() -> None:
         print("[DERIV] price gate SKIPPED -- wrong-game pairs will NOT be caught.")
 
     pairs.sort(key=lambda e: (e["settlement_date"], e["kalshi_ticker"]))
-    print(f"\n[DERIV] filled={filled}  no-Pinnacle-game={no_game}  line-not-offered={no_line}")
+    print(f"\n[DERIV] filled={filled}  no-Pinnacle-game={no_game}  line-not-offered={no_line}"
+          + (f"  expired={expired} (settled >{_grace_h:g}h ago, still `active` on Kalshi)" if expired else ""))
     for p in pairs[:25]:
         print(f"  {p['kalshi_ticker']:<34} {p['label']:<46} YES={p['hardven_yes_token']}  NO={p['hardven_no_token']}")
     if len(pairs) > 25:
