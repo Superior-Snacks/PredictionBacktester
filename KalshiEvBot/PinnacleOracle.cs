@@ -70,6 +70,7 @@ public sealed class PinnacleOracle
     private readonly object _statLock = new();
     private readonly Queue<double> _pollMsHist = new();
     private readonly Queue<double> _ageMsHist  = new();
+    private readonly Queue<bool>   _satHist    = new();   // saturation over the RECENT window
     private const int StatWindow = 240;
     private long _polls, _saturated, _errors;
     private DateTime _lastHealth = DateTime.UtcNow;
@@ -350,6 +351,8 @@ public sealed class PinnacleOracle
             _polls++;
             _pollMsHist.Enqueue(ms);
             while (_pollMsHist.Count > StatWindow) _pollMsHist.Dequeue();
+            _satHist.Enqueue(ms >= _pollMs);
+            while (_satHist.Count > StatWindow) _satHist.Dequeue();
             if (double.IsFinite(age))
             {
                 _ageMsHist.Enqueue(age);
@@ -373,28 +376,52 @@ public sealed class PinnacleOracle
         if (everyMin <= 0 || (DateTime.UtcNow - _lastHealth).TotalMinutes < everyMin) return;
         _lastHealth = DateTime.UtcNow;
 
-        double p50, p90, age; long polls, sat, err;
+        double p50, p90, p99, age; long polls, sat, err; int satRecent, satWindow;
         lock (_statLock)
         {
             p50 = Pct(_pollMsHist, 0.5); p90 = Pct(_pollMsHist, 0.9); age = Pct(_ageMsHist, 0.5);
+            p99 = Pct(_pollMsHist, 0.99);
             polls = _polls; sat = _saturated; err = _errors;
+            satRecent = _satHist.Count(x => x); satWindow = _satHist.Count;
         }
         if (!double.IsFinite(p50)) return;
 
-        string line = $"[ORACLE] health: poll {p50:0}/{p90:0}ms (p50/p90) at a {_pollMs}ms interval, "
-                    + $"quote age p50 {age:0}ms, {polls} poll(s), {sat} saturated, {err} error(s)";
+        // DUTY CYCLE is the number that says whether there is room, so lead with it rather than making
+        // the reader divide two figures in their head.
+        // p99 as well as p50/p90, because THE TAIL IS WHAT SATURATES. Deciding whether a tighter
+        // interval is safe needs to know how often a poll lands near it, and a median of 83ms with a
+        // p90 of 99ms says nothing about the excursions that actually breach the deadline.
+        string line = $"[ORACLE] health: poll {p50:0}/{p90:0}/{p99:0}ms (p50/p90/p99) of a {_pollMs}ms interval "
+                    + $"({100.0 * p50 / Math.Max(1, _pollMs):0}% duty), quote age p50 {age:0}ms, "
+                    + $"{polls} poll(s), {sat} saturated, {err} error(s)";
 
         // AgeCeiling is a WARNING line, not a gate: the trading guard is EV_ORACLE_MAX_AGE_INPLAY_MS and
         // this must never quietly change what the bot trades. Default 250ms sits well above the 41ms
         // baseline and well below the 1000ms gate, so it fires on real degradation and not on noise.
         double ageCeil = EnvInt("EV_ORACLE_AGE_WARN_MS", 250);
-        bool bad = sat > 0 || p50 > _pollMs * 0.5 || age > ageCeil;
+
+        // A RATE OVER A RECENT WINDOW, NOT A CUMULATIVE COUNT.
+        //
+        // The first cut warned on `sat > 0` against a counter that never resets, so ONE transient — a GC
+        // pause, an OS scheduling blip — made this fire on every health line for the rest of the run,
+        // telling the operator to raise the interval. Observed 2026-09-01: 2 saturated polls out of
+        // 10,625 (0.019%) at 83/99ms against a 500ms interval — a 17% duty cycle with quote age
+        // unchanged at 41ms, i.e. a comfortable configuration that this line nagged about until the
+        // interval was raised on its advice.
+        //
+        // A monitor that cries wolf gets ignored, which costs more than the thing it watches for. So
+        // saturation only counts as trouble when it is HAPPENING: a nontrivial share of the last few
+        // hundred polls. The cumulative total stays in the health line as information, not as an alarm.
+        double satPct = EnvInt("EV_ORACLE_SAT_WARN_PCT", 2);
+        bool satBad = satWindow >= 30 && 100.0 * satRecent / satWindow >= satPct;
+        bool bad = satBad || p50 > _pollMs * 0.5 || age > ageCeil;
         if (bad)
         {
             Con.Line(ConsoleColor.Yellow, line);
-            if (sat > 0)
-                Con.Line(ConsoleColor.Yellow, $"[ORACLE] {sat} poll(s) took LONGER than the {_pollMs}ms "
-                       + "interval — the cadence is below what the sidecar can serve. Raise EV_ORACLE_POLL_MS.");
+            if (satBad)
+                Con.Line(ConsoleColor.Yellow, $"[ORACLE] {satRecent} of the last {satWindow} poll(s) "
+                       + $"outran the {_pollMs}ms interval ({100.0 * satRecent / satWindow:0.#}%) — the "
+                       + "cadence is below what the sidecar can currently serve. Raise EV_ORACLE_POLL_MS.");
             else if (p50 > _pollMs * 0.5)
                 Con.Line(ConsoleColor.Yellow, $"[ORACLE] a poll now costs {p50:0}ms of a {_pollMs}ms "
                        + "interval — little headroom left before saturation.");
