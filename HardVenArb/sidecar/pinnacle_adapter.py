@@ -682,6 +682,9 @@ class PinnacleAdapter(BookAdapter):
         self._live_regressions = 0      # tokens observed going live -> pre WITHOUT a del
         self._ever_live: set = set()    # every token that has EVER carried live=True this run
         self._ws_last_msg_ts = 0.0        # unix ts of the last odds frame from EITHER WS source
+        self._sub_pass_noted = False      # one-shot log while a subscription pass is in flight
+        self._sub_hold_since = 0.0        # when the watchdog started waiting on that pass
+        self._sub_hold_warned = False     # one-shot: backlog outlived its allowance
         self._requested_ids: set = set()   # selection ids the C# bot actually asks for (the PAIRED tokens) — to
                                            # measure how many WATCHED tokens are live vs the whole cache being live
         # ── REST-mode state ──
@@ -1574,6 +1577,50 @@ class PinnacleAdapter(BookAdapter):
                 # actively asking about, and at least one frame has arrived at some point (so a cold start
                 # is not mistaken for a stall).
                 quiet = (now - self._ws_last_msg_ts) if self._ws_last_msg_ts else 0.0
+
+                # DO NOT JUDGE SILENCE MID-SUBSCRIPTION. The reconciler adds ONE league per
+                # PINNACLE_SUBSCRIBE_GAP_SEC (3s) to look like a user navigating, so 56 active leagues take
+                # 168s to subscribe — against a 180s resub timer and a 420s reconnect timer. Both remedies
+                # CLEAR `_subscribed`, so each one restarts the pass from league 1.
+                #
+                # That is a livelock, and it was live on 2026-09-02: the log shows the same first ~20 league
+                # ids re-subscribing over and over, `WS msgs live=106332/pre=59304` frozen for 26 minutes,
+                # and the leagues actually carrying live tennis never reached. The watchdog's cure prevented
+                # the cure from finishing.
+                #
+                # "No frames" is only evidence of a stall once we have finished ASKING for frames. While a
+                # backlog remains, silence is expected, so hold the clock and let the pass complete.
+                pending_subs = [l for l in list(self._active_leagues.keys())
+                                if l not in self._subscribed]
+
+                # BOUNDED HOLD. "Wait while pending" must not become "wait forever": leagues are added as
+                # the bot's watchlist moves, so a backlog can be continuously refilled, and an unbounded
+                # hold would silence the watchdog permanently — trading a loud failure for a quiet one,
+                # which is strictly worse. Allow one pass plus a full silence window, then judge anyway.
+                eta = len(pending_subs) * self._subscribe_gap_sec
+                if pending_subs and self._sub_hold_since <= 0:
+                    self._sub_hold_since = now
+                held = (now - self._sub_hold_since) if self._sub_hold_since > 0 else 0.0
+                max_hold = eta + silence_resub
+
+                if pending_subs and held <= max_hold:
+                    self._ws_last_msg_ts = now          # hold the clock; the pass is still running
+                    if not self._sub_pass_noted:
+                        self._sub_pass_noted = True
+                        print(f"[PINNACLE WS] subscribing {len(pending_subs)} more league(s) "
+                              f"(~{eta:.0f}s at {self._subscribe_gap_sec:g}s each) — silence watchdog held "
+                              f"until the pass completes (max {max_hold:.0f}s).", flush=True)
+                    continue
+                if pending_subs and held > max_hold and not self._sub_hold_warned:
+                    self._sub_hold_warned = True
+                    print(f"[PINNACLE WS] still {len(pending_subs)} league(s) unsubscribed after "
+                          f"{held:.0f}s — the backlog is not draining. Judging silence anyway rather than "
+                          "holding the watchdog off indefinitely.", flush=True)
+                if not pending_subs:
+                    self._sub_pass_noted = False
+                    self._sub_hold_since = 0.0
+                    self._sub_hold_warned = False
+
                 if self._active_leagues and quiet > silence_resub:
                     if quiet > silence_recon:
                         print(f"[PINNACLE WS] *** SILENT {quiet:.0f}s while CONNECTED - forcing a reconnect "
