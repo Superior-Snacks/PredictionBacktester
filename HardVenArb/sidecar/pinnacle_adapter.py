@@ -685,6 +685,8 @@ class PinnacleAdapter(BookAdapter):
         self._sub_pass_noted = False      # one-shot log while a subscription pass is in flight
         self._sub_hold_since = 0.0        # when the watchdog started waiting on that pass
         self._sub_hold_warned = False     # one-shot: backlog outlived its allowance
+        self._sub_pass_done_ts = 0.0      # when the last full subscription pass completed
+        self._pass_after_drop = False     # that pass followed OUR drop, not a reconnect
         self._requested_ids: set = set()   # selection ids the C# bot actually asks for (the PAIRED tokens) — to
                                            # measure how many WATCHED tokens are live vs the whole cache being live
         # ── REST-mode state ──
@@ -1604,7 +1606,22 @@ class PinnacleAdapter(BookAdapter):
                 max_hold = eta + silence_resub
 
                 if pending_subs and held <= max_hold:
-                    self._ws_last_msg_ts = now          # hold the clock; the pass is still running
+                    # SKIP THE JUDGEMENT, DO NOT REWRITE THE CLOCK.
+                    #
+                    # The first cut set `_ws_last_msg_ts = now` here. That silenced the false drops, but it
+                    # also reset the timer every 5s for the whole 165s pass — so `quiet` could never climb
+                    # past the 180s DROP threshold to reach the 420s FORCED RECONNECT. Escalation became
+                    # unreachable, and a forced reconnect is the ONLY thing that applies re-captured MQTT
+                    # credentials (paho takes `username_pw_set` on the next CONNECT, never on a live socket).
+                    #
+                    # Observed 2026-09-04: after an rc=7 drop at 14:07 the feed went permanently silent, the
+                    # loop drop-refilled every ~6 minutes (14:13/14:19/14:24/14:30) and never once escalated,
+                    # while fresh creds captured at 14:28 sat unused on a connected client. Twenty-five
+                    # minutes of a dead feed that the watchdog was structurally unable to fix.
+                    #
+                    # `_ws_last_msg_ts` means "when a frame last arrived" and nothing else may write it.
+                    # Silence is measured from the later of that and the last completed pass, so a stall is
+                    # judged only on time we were actually subscribed — and still escalates.
                     if not self._sub_pass_noted:
                         self._sub_pass_noted = True
                         print(f"[PINNACLE WS] subscribing {len(pending_subs)} more league(s) "
@@ -1617,15 +1634,32 @@ class PinnacleAdapter(BookAdapter):
                           f"{held:.0f}s — the backlog is not draining. Judging silence anyway rather than "
                           "holding the watchdog off indefinitely.", flush=True)
                 if not pending_subs:
+                    # ONLY A PASS THAT FOLLOWED A RECONNECT MAY FORGIVE THE SILENCE BEFORE IT.
+                    #
+                    # A pass that followed OUR OWN watchdog drop must not: the drop is the remedy under
+                    # test, and if it did not work the silence that triggered it is still running. Advancing
+                    # the baseline there restarts the clock at 0 every cycle, so `quiet` tops out at the
+                    # 180s drop and can never reach the 420s reconnect — drop/refill forever, exactly the
+                    # 14:13/14:19/14:24/14:30 pattern observed on 2026-09-04.
+                    if self._pass_after_drop:
+                        self._pass_after_drop = False    # keep the old baseline; the stall is unresolved
+                    elif self._sub_pass_noted or self._sub_pass_done_ts <= 0:
+                        self._sub_pass_done_ts = now     # fresh socket: silence counts from here
                     self._sub_pass_noted = False
                     self._sub_hold_since = 0.0
                     self._sub_hold_warned = False
+
+                # Measure silence from the later of "last frame" and "last completed subscription pass".
+                # Before the pass finished we had not asked for the frames, so that time is not evidence.
+                quiet = now - max(self._ws_last_msg_ts, self._sub_pass_done_ts)
 
                 if self._active_leagues and quiet > silence_resub:
                     if quiet > silence_recon:
                         print(f"[PINNACLE WS] *** SILENT {quiet:.0f}s while CONNECTED - forcing a reconnect "
                               f"(re-subscribe did not restore the feed). ***", flush=True)
                         self._ws_last_msg_ts = now      # restart the clock so this cannot loop every 5s
+                        self._sub_pass_done_ts = 0.0    # fresh socket: let the next completed pass re-base
+                        self._pass_after_drop = False
                         try:
                             self._client.reconnect()    # on_connect clears _subscribed -> reconciler refills
                         except Exception as ex:
@@ -1636,6 +1670,7 @@ class PinnacleAdapter(BookAdapter):
                         print(f"[PINNACLE WS] *** SILENT {quiet:.0f}s while CONNECTED - dropping {n} league "
                               f"subscription(s) so the reconciler re-subscribes. *** (subscriptions do NOT "
                               f"survive a reconnect and nothing else notices when they are lost)", flush=True)
+                        self._pass_after_drop = True    # the refill must NOT reset the silence baseline
                         self._subscribed.clear()        # reconciler re-adds one per PINNACLE_SUBSCRIBE_GAP_SEC
             elif not warned and now - last_ok > warn_after:
                 warned = True
