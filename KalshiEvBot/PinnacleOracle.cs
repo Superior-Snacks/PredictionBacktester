@@ -425,11 +425,31 @@ public sealed class PinnacleOracle
             else if (p50 > _pollMs * 0.5)
                 Con.Line(ConsoleColor.Yellow, $"[ORACLE] a poll now costs {p50:0}ms of a {_pollMs}ms "
                        + "interval — little headroom left before saturation.");
+            // STALE QUOTES HAVE TWO CAUSES AND ONLY ONE IS OURS.
+            //
+            // Crowding the sidecar's event loop shows up as SLOW POLLS — that is the whole mechanism, our
+            // /odds calls competing with its WS reader. If the poll is fast and the quotes are old, the feed
+            // is simply not being fed: a dark window with the browser down, a dropped WS, a venue-wide
+            // suspension. Raising the poll interval then does nothing but slow detection.
+            //
+            // Observed 2026-09-07 during a scheduled dark period: 15/22/129ms polls at 6% duty against a
+            // 96-SECOND quote age, and this line told the operator to poll less. Blame our load only when
+            // our load is visible.
             if (age > ageCeil)
-                Con.Line(ConsoleColor.Yellow, $"[ORACLE] quote age p50 {age:0}ms is above the {ageCeil:0}ms "
-                       + "warning line (baseline 41ms). Polling harder may be CROWDING the sidecar's WS "
-                       + "reader — that makes the oracle worse, not faster. Raise EV_ORACLE_POLL_MS and "
-                       + "see if it recovers.");
+            {
+                bool ourFault = p50 > _pollMs * 0.25;
+                if (ourFault)
+                    Con.Line(ConsoleColor.Yellow, $"[ORACLE] quote age p50 {age:0}ms is above the "
+                           + $"{ageCeil:0}ms warning line (baseline 41ms) AND a poll costs {p50:0}ms of a "
+                           + $"{_pollMs}ms interval. Polling this hard may be CROWDING the sidecar's WS "
+                           + "reader — that makes the oracle worse, not faster. Raise EV_ORACLE_POLL_MS "
+                           + "and see if it recovers.");
+                else
+                    Con.Line(ConsoleColor.Yellow, $"[ORACLE] quote age p50 {age:0}ms — the SIDECAR'S FEED is "
+                           + $"stale, not our polling ({p50:0}ms of a {_pollMs}ms interval is "
+                           + $"{100.0 * p50 / Math.Max(1, _pollMs):0}% duty). Expected during a dark window; "
+                           + "otherwise check the Pinnacle WS. Raising EV_ORACLE_POLL_MS would NOT help.");
+            }
         }
         else Console.WriteLine(line);
     }
