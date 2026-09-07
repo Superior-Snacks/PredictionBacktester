@@ -464,6 +464,87 @@ public static class SelfTest
             finally { try { Directory.Delete(dir, true); } catch { } }
         }
 
+        // ── LIVE KELLY SIZING ─────────────────────────────────────────────────────────────────────────
+        Console.WriteLine("\nLive Kelly sizing");
+        {
+            // The Kelly fraction for a binary paying $1 at cost c is (p - c)/(1 - c). Check it against the
+            // textbook form f = (pb - q)/b with b = (1-c)/c, so a rearrangement error cannot pass.
+            double c0 = EvMath.CostPerContract(0.50, 1.0);
+            double b0 = (1 - c0) / c0;
+            double textbook = (0.60 * b0 - 0.40) / b0;
+            Check(Math.Abs(EvMath.FullKelly(0.60, 0.50) - textbook) < 1e-9,
+                  "FullKelly matches the textbook (pb-q)/b for a $1 binary",
+                  $"{EvMath.FullKelly(0.60, 0.50):F6} vs {textbook:F6}");
+            Check(EvMath.FullKelly(0.40, 0.50) == 0.0, "no edge => zero Kelly, never negative");
+            Check(EvMath.FullKelly(0.50, 0.50) == 0.0,
+                  "p equal to the ASK is still zero after the fee (cost > price)");
+
+            // THE FLOOR REFUSES, IT DOES NOT RAISE. Rounding a sub-minimum bet UP to the bound would
+            // stake MORE than Kelly says on exactly the signals Kelly likes least, and would make the floor
+            // rather than the model decide the size.
+            double tiny = EvMath.LiveStakeUsd(0.52, 0.50, 0.035, 50.0, 0.0, minUsd: 5.00, maxUsd: 25.0);
+            Check(tiny == 0.0, "a sub-minimum Kelly stake is REFUSED, not raised to the floor", $"{tiny:F4}");
+
+            // Every stake actually placed is the size the maths asked for (or the ceiling, downward).
+            double ok = EvMath.LiveStakeUsd(0.62, 0.50, 0.035, 5000.0, 0.0, minUsd: 5.00, maxUsd: 1e9);
+            double unb = EvMath.LiveStakeUsd(0.62, 0.50, 0.035, 5000.0, 0.0, minUsd: 0, maxUsd: 0);
+            Check(Math.Abs(ok - unb) < 1e-9, "above the floor the bounds do not touch the Kelly size",
+                  $"{ok:F4} vs {unb:F4}");
+            Check(EvMath.LiveStakeUsd(0.40, 0.50, 0.035, 5000.0, 0.0, 5.00, 25.0) == 0.0,
+                  "no edge stakes nothing");
+
+            // The ceiling binds on a big bankroll.
+            double big = EvMath.LiveStakeUsd(0.70, 0.50, 0.035, 100000.0, 0.0, minUsd: 2.00, maxUsd: 25.0);
+            Check(Math.Abs(big - 25.0) < 1e-9, "the max bound caps the stake", $"{big:F4}");
+
+            // EQUITY IS THE BASE. Doubling it must double the stake - this is the assertion that would have
+            // caught sizing off the pinned FAKE bankroll (576.29) instead of real shard cash (257.16), a
+            // 2.24x overbet that no other check in this file would have noticed.
+            double e1 = EvMath.LiveStakeUsd(0.62, 0.50, 0.035, 500.0, 0.0, 0.01, 1e9);
+            double e2 = EvMath.LiveStakeUsd(0.62, 0.50, 0.035, 1000.0, 0.0, 0.01, 1e9);
+            Check(Math.Abs(e2 - 2 * e1) < 1e-9, "stake scales linearly with the equity passed in",
+                  $"{e1:F4} -> {e2:F4}");
+
+            // Beta must actually damp. It read 1.0 on every one of 1547 logged signals because
+            // ActiveExposureFraction was never assigned; if that regresses, this fails.
+            double b_lo = EvMath.LiveStakeUsd(0.62, 0.50, 0.035, 500.0, 0.00, 0.01, 1e9);
+            double b_hi = EvMath.LiveStakeUsd(0.62, 0.50, 0.035, 500.0, 0.40, 0.01, 1e9);
+            Check(b_hi < b_lo, "concurrent exposure DAMPS the stake (Beta engages)", $"{b_lo:F4} -> {b_hi:F4}");
+            Check(EvMath.LiveStakeUsd(0.62, 0.50, 0.035, 500.0, 0.40, 0.01, 1e9, 0.03, 1.0, 0,
+                                      betaKnee: 0.10, betaZero: 0.30) == 0.0,
+                  "past the ZERO point nothing is staked");
+
+            // THE TELEMETRY BASIS MUST NOT MOVE. EvMath.Size takes the no-argument Beta, so its defaults are
+            // pinned at the original 0.10/0.30 no matter what the live path is configured to use.
+            Check(EvMath.Beta(0.20) == EvMath.Beta(0.20, 0.10, 0.30),
+                  "Size's Beta still defaults to the ORIGINAL 0.10/0.30 knee/zero");
+            Check(EvMath.Beta(0.20, 0.25, 0.75) == 1.0,
+                  "the gentler live knee (0.25) leaves 20% exposure undamped", $"{EvMath.Beta(0.20,0.25,0.75)}");
+            Check(EvMath.Beta(0.50, 0.25, 0.75) == 0.5,
+                  "…and halves exactly midway to the zero point", $"{EvMath.Beta(0.50,0.25,0.75)}");
+            Check(EvMath.Beta(0.40, 0.30, 0.30) == 0.0,
+                  "a degenerate knee>=zero refuses rather than dividing by nothing");
+
+            // Contracts priced at COST, not ask: buying at the ask overspends the target by the fee.
+            int atCost  = EvMath.ContractsFor(10.00, 0.50);
+            int atPrice = (int)Math.Floor(10.00 / 0.50);
+            Check(atCost <= atPrice, "ContractsFor charges the fee, so it never buys MORE than price alone",
+                  $"cost={atCost} price={atPrice}");
+            Check(atCost * EvMath.CostPerContract(0.50, 1.0) <= 10.0 + 1e-9,
+                  "…and the resulting outlay does not exceed the stake");
+            Check(EvMath.ContractsFor(0.10, 0.50) == 0, "a stake too small for one contract buys none");
+
+            // REGRESSION GUARD ON THE TELEMETRY COLUMN. `Size` feeds Contracts in the CSV and every row
+            // since 2026-08-22 is on that basis; the live sizer had to be a SEPARATE function precisely so
+            // this could not drift. These are the pre-change values.
+            var sz = EvMath.Size(0.60, 0.50, 0.035, 576.29, 0.0, 0.03, 1.0);
+            Check(sz.Contracts == (int)Math.Floor(sz.TargetUsd / 0.50),
+                  "Size still floors against PRICE (unchanged telemetry basis)", $"{sz.Contracts}");
+            Check(Math.Abs(sz.Fraction - Math.Min(0.03, EvMath.FullKelly(0.60, 0.50)
+                                                       * EvMath.Alpha(0.035) * EvMath.Beta(0.0))) < 1e-12,
+                  "…and its fraction chain is untouched");
+        }
+
         // ── ORACLE POLL CADENCE ───────────────────────────────────────────────────────────────────────
         Console.WriteLine("\nOracle poll cadence + watchdog");
         {

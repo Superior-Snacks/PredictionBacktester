@@ -132,20 +132,42 @@ public sealed class LiveExecutor
 
     /// <summary>Contracts to buy: the per-side cap, further bounded by what the game has left, floored to a
     /// whole contract. Returns 0 when the budget cannot buy even one — Kalshi's minimum is 1.</summary>
-    private int SizeFor(string eventId, double limitPrice)
+    private int SizeFor(string eventId, double limitPrice, double kellyStakeUsd, double feeM)
     {
         if (limitPrice <= 0 || limitPrice >= 1) return 0;
         decimal spent = _spentByEvent.TryGetValue(eventId, out var s) ? s : 0m;
-        decimal room = Math.Min((decimal)_cfg.LiveStakePerSideUsd, (decimal)_cfg.LiveStakePerGameUsd - spent);
-        if (room <= 0) return 0;
-        return (int)Math.Floor(room / (decimal)limitPrice);
+
+        // FLAT: the per-side cap, bounded by the game's remaining room. Unchanged.
+        if (kellyStakeUsd <= 0)
+        {
+            decimal flatRoom = Math.Min((decimal)_cfg.LiveStakePerSideUsd,
+                                        (decimal)_cfg.LiveStakePerGameUsd - spent);
+            return flatRoom <= 0 ? 0 : (int)Math.Floor(flatRoom / (decimal)limitPrice);
+        }
+
+        // KELLY: the stake arrives already bounded by LiveKellyMin/MaxUsd. The per-game and daily caps stay
+        // as BACKSTOPS — but the whole point of this mode is that Kelly is what decides the size, so when a
+        // cap cuts it we say so out loud. A cap that silently binds turns Kelly sizing into flat sizing
+        // wearing Kelly's name, and nothing in the telemetry would show the difference.
+        decimal gameRoom = (decimal)_cfg.LiveStakePerGameUsd - spent;
+        decimal stake = (decimal)kellyStakeUsd;
+        if (gameRoom < stake)
+        {
+            if (gameRoom <= 0) return 0;
+            Con.Line(ConsoleColor.DarkYellow,
+                $"[SIZE ] per-game cap cut Kelly ${kellyStakeUsd:0.00} -> ${gameRoom:0.00} on {eventId} "
+              + $"(EV_LIVE_STAKE_GAME={_cfg.LiveStakePerGameUsd:0.00}). Kelly is no longer the binding constraint.");
+            stake = gameRoom;
+        }
+        return EvMath.ContractsFor((double)stake, limitPrice, feeM);
     }
 
     /// <summary>Fire-and-record. Never throws: a venue error must not take the screening loop down with it.
     /// Returns true only when contracts were actually bought.</summary>
     public async Task<bool> TryTakeAsync(string ticker, string eventId, string side,
                                          double limitPrice, double restAsk, double pTrue, double ev,
-                                         TakeCtx ctx, CancellationToken ct)
+                                         TakeCtx ctx, CancellationToken ct,
+                                         double kellyStakeUsd = 0, double feeM = 1.0)
     {
         string key = ticker + "|" + side;
         string why = "";
@@ -188,7 +210,7 @@ public sealed class LiveExecutor
             // cent more than the limit we computed and could turn a 1c edge negative.
             int limitCents = (int)Math.Floor(limitPrice * 100.0);
             if (limitCents < 1 || limitCents > 99) { Interlocked.Increment(ref Skipped); return false; }
-            int count = SizeFor(eventId, limitCents / 100.0);
+            int count = SizeFor(eventId, limitCents / 100.0, kellyStakeUsd, feeM);
             attemptCount = count; attemptPx = limitCents / 100.0;
             if (count < 1)
             {

@@ -102,12 +102,28 @@ public static class EvMath
     /// above at 0.35 so a crossed book (V &lt; 0) cannot talk the sizer into betting MORE than full-alpha.</summary>
     public static double Alpha(double overround) => Math.Clamp(0.35 * (1.0 - overround / 0.08), 0.10, 0.35);
 
-    /// <summary>Damping for positions held simultaneously: Kelly assumes bets resolve one at a time, and
-    /// concurrent ones share the drawdown. Full size while under 10% of bankroll is at risk, tapering to
-    /// zero by 30%.</summary>
-    public static double Beta(double activeExposureFraction)
-        => activeExposureFraction <= 0.10 ? 1.0
-         : Math.Max(0.0, 1.0 - (activeExposureFraction - 0.10) / 0.20);
+    /// <summary>
+    /// Damping for positions held SIMULTANEOUSLY. Kelly's fraction is optimal only if bets resolve one at a
+    /// time — bet, settle, re-size against the new bankroll, bet again. Hold twenty at once and they all
+    /// draw on one bankroll, so a bad run compounds into a drawdown Kelly never priced because Kelly assumed
+    /// you would have sized down after each loss. That matters more here than in a generic book: our
+    /// concurrent positions are tennis matches on one slate, priced by one oracle through one de-vig model,
+    /// so when it is wrong it is wrong across all of them at once.
+    ///
+    /// <para><b>The knee and zero points are NOT derived.</b> The correct treatment is multi-asset Kelly
+    /// with a correlation matrix; this is a hand-chosen proxy for it. Defaults here are the ORIGINAL
+    /// 0.10/0.30 so <see cref="Size"/> — the frozen telemetry basis — cannot move. The live path passes its
+    /// own, gentler pair.</para>
+    ///
+    /// <para>Exposure is measured as money SPENT, which for a binary contract is exactly the maximum loss,
+    /// so it is the right quantity even though it reads like a cost.</para>
+    /// </summary>
+    public static double Beta(double activeExposureFraction, double knee = 0.10, double zero = 0.30)
+    {
+        if (activeExposureFraction <= knee) return 1.0;
+        if (zero <= knee) return 0.0;                       // degenerate config: refuse rather than divide
+        return Math.Max(0.0, 1.0 - (activeExposureFraction - knee) / (zero - knee));
+    }
 
     /// <summary>
     /// Full sizing chain: Kelly -> shrinkage -> damping -> hard 3% cap -> whole contracts.
@@ -117,6 +133,65 @@ public static class EvMath
     /// to one that is finding nothing — which is the wrong diagnosis to reach at exactly the moment the
     /// account is smallest.</para>
     /// </summary>
+    /// <summary>
+    /// The stake to actually PLACE, in dollars. Same Kelly chain as <see cref="Size"/>, three differences —
+    /// each of which exists because this one spends money and that one does not.
+    ///
+    /// <para><b>1. It sizes off REAL equity, never the pinned telemetry bankroll.</b> `BankrollUsd` is frozen
+    /// at EV_BANKROLL_USD so the CSV's Contracts column stays comparable across the whole dataset; it is
+    /// deliberately fake money. Sizing a real order off it was measured on 2026-09-07 as a 2.24x overbet —
+    /// $576.29 pinned against $257.16 actually on the shard.</para>
+    ///
+    /// <para><b>2. Contracts are floored against COST, not price.</b> `Size` divides the target by the ask,
+    /// so the real outlay is target + fee and every order quietly overspends its own Kelly target. Small
+    /// (~0.4%) but it is a systematic overbet in the same direction as everything else here.</para>
+    ///
+    /// <para><b>3. Bounded WITHOUT distorting the size Kelly asked for.</b> `maxUsd` cuts the stake — a
+    /// risk cap, and capping bets LESS than Kelly wants, which can only cost upside. `minUsd` REFUSES: a
+    /// stake under the floor is skipped, never raised to it.</para>
+    ///
+    /// <para><b>Raising a stake to the floor would bet MORE than Kelly says on exactly the signals Kelly
+    /// likes least</b> — over-betting the weakest edges is the one direction a bound must not err in, and
+    /// it makes the floor rather than the model decide the size. Measured 2026-09-07: at $257 equity a $5
+    /// floor would have decided 93% of stakes, at $576 65%. That is flat staking wearing Kelly's name.</para>
+    ///
+    /// <para>So the floor GATES rather than inflates: below it there is no bet, and the size of every bet
+    /// placed is the one the maths asked for (or the ceiling, downward).</para>
+    /// </summary>
+    public static double LiveStakeUsd(double pTrue, double execPrice, double overround,
+                                      double equityUsd, double activeExposureFraction,
+                                      double minUsd, double maxUsd,
+                                      double maxFractionPerTrade = 0.03, double m = 1.0,
+                                      double kellyFraction = 0.0,
+                                      double betaKnee = 0.10, double betaZero = 0.30)
+    {
+        if (equityUsd <= 0 || execPrice <= 0 || execPrice >= 1) return 0.0;
+        double f    = FullKelly(pTrue, execPrice, m);
+
+        // `kellyFraction > 0` OVERRIDES Alpha with a flat fraction (0.25 = quarter Kelly). Alpha is a
+        // VIG-based shrinkage — it scales with how wide Pinnacle's book is, as a proxy for how confident
+        // the oracle is — and it is NOT a discount for the strategy being unproven. Those are different
+        // quantities that happen to land near each other (Alpha p50 = 0.157, i.e. ~1/6.4, against the
+        // docstring's claimed ~0.20). Anyone choosing "quarter Kelly" means the flat one, so make that
+        // sayable instead of leaving it to be approximated by tuning a vig curve.
+        double shrink = kellyFraction > 0 ? kellyFraction : Alpha(overround);
+        double frac = Math.Min(maxFractionPerTrade,
+                               f * shrink * Beta(activeExposureFraction, betaKnee, betaZero));
+        if (frac <= 0) return 0.0;
+
+        double stake = equityUsd * frac;
+        if (maxUsd > 0) stake = Math.Min(stake, maxUsd);   // cap DOWN: costs upside, never over-bets
+        return stake < minUsd ? 0.0 : stake;               // REFUSE below the floor; never round up to it
+    }
+
+    /// <summary>Whole contracts a dollar stake buys, priced at COST (ask + marginal fee) so the outlay does
+    /// not exceed the stake. Kalshi's minimum is one contract, so this floors to 0 rather than rounding.</summary>
+    public static int ContractsFor(double stakeUsd, double execPrice, double m = 1.0)
+    {
+        double cost = CostPerContract(execPrice, m);
+        return cost <= 0 || stakeUsd <= 0 ? 0 : (int)Math.Floor(stakeUsd / cost);
+    }
+
     public static SizeResult Size(double pTrue, double execPrice, double overround,
                                   double bankrollUsd, double activeExposureFraction,
                                   double maxFractionPerTrade = 0.03, double m = 1.0)

@@ -27,6 +27,31 @@ public sealed class EvConfig
     /// bound one market; nothing bounds the day, and an unattended run turns the shard float over
     /// repeatedly as settlements return. Resets at local midnight and survives a restart.</summary>
     public double LiveDailyUsd = Env("EV_LIVE_DAILY_USD", 0);
+    /// <summary>"flat" (the per-side cap) or "kelly" (EvMath.LiveStakeUsd off REAL equity). Default flat, so
+    /// nothing about an existing run changes until this is set deliberately.</summary>
+    public string LiveSizing = (Environment.GetEnvironmentVariable("EV_LIVE_SIZING") ?? "flat").Trim().ToLowerInvariant();
+    /// <summary>Kelly floor. BELOW THIS THE ORDER IS SKIPPED, not rounded up — see LiveStakeUsd. $2 because
+    /// the ceiling-rounded fee stops being negligible under roughly that size (0.037c/contract at ~12
+    /// contracts, 0.25c at 1-3), and Kelly's measured median on real equity is $1.76.</summary>
+    public double LiveKellyMinUsd = Env("EV_LIVE_KELLY_MIN_USD", 2.00);
+    /// <summary>Kelly ceiling per side. The disaster bound: it caps what ONE wrong P_true can cost, which no
+    /// term in the Kelly chain does. Measured p90 is $4.37 and max $7.71 on current equity, so 25 does not
+    /// bind today — it is there for a bankroll that grows or a P_true that goes badly wrong.</summary>
+    public double LiveKellyMaxUsd = Env("EV_LIVE_KELLY_MAX_USD", 25.00);
+    /// <summary>Flat Kelly fraction (0.25 = quarter). 0 = use Alpha, the vig-based shrinkage, which is the
+    /// default and currently medians 0.157. Set this only as a deliberate choice: Alpha discounts for
+    /// ORACLE uncertainty, this discounts for STRATEGY uncertainty, and at t=+0.71 on the edge the second
+    /// argues for less rather than more.</summary>
+    public double LiveKellyFraction = Env("EV_LIVE_KELLY_FRACTION", 0);
+    /// <summary>Where the concurrent-exposure taper STARTS, as a fraction of equity. Above this, new stakes
+    /// shrink. 0.25 rather than EvMath's 0.10 default: at a small bankroll the original knee bit within a
+    /// handful of bets a day, and because a damped stake then falls under the floor and is REFUSED, the
+    /// afternoon simply went quiet. Raise the knee and the shard float still backstops total exposure —
+    /// collateral is per shard, so nothing can be at risk that is not sitting there.</summary>
+    public double KellyBetaKnee = Env("EV_KELLY_BETA_KNEE", 0.25);
+    /// <summary>Where the taper reaches zero. 0.75 rather than 0.30 — a gentler slope, so exposure buys a
+    /// smaller stake rather than switching the bot off mid-session.</summary>
+    public double KellyBetaZero = Env("EV_KELLY_BETA_ZERO", 0.75);
     /// <summary>Let SPREAD/TOTAL markets place live orders. Default OFF, and deliberately so.
     ///
     /// <para>Derivatives arrive with no settled record of their own: every calibration number the
@@ -231,7 +256,10 @@ public sealed class EvStats
                 // Counted separately from every other rejection because it is not a rejection: the
                 // row is a good signal by every test the bot has, and this number is the size of
                 // the sample being deliberately left on the table while they prove out.
-                DerivativeHeld;
+                DerivativeHeld,
+                // Signals Kelly priced below the floor (no bet) and signals cut by the ceiling. Neither
+                // over-bets; together they say how much of the flow the BOUNDS decided rather than Kelly.
+                KellyBelowFloor, KellyClampedDown;
 }
 
 /// <summary>
@@ -909,11 +937,57 @@ public sealed class EvEvaluator
         if (signal && pair.IsDerivative && !_cfg.LiveDerivatives)
             Interlocked.Increment(ref Stats.DerivativeHeld);
         else if (signal && _live is not null)
-            await _live.TryTakeAsync(pair.KalshiTicker, pair.EventId, c.Side, limit, px,
-                                     c.PTrueUsed, ev,
-                                     new TakeCtx((double)c.WsAsk, depthUnknown ? -1 : depthToLimit,
-                                                 c.InPlay, c.OracleAgeMs, c.WsBookAge, regime,
-                                                 BankrollUsd, LiveEquityUsd), ct);
+        {
+            // KELLY SIZES OFF REAL EQUITY. `size` above used the PINNED bankroll and stays that way: it is
+            // the telemetry Contracts column and every row since 2026-08-22 is on that basis. This is a
+            // SECOND, separate computation, for money rather than for the record.
+            //
+            // Beta needs concurrent exposure, and the honest proxy available here is what has been staked
+            // TODAY: an in-play tennis position resolves within hours, so today's spend is close to what is
+            // at risk at once. An approximation, and it is the term that was missing entirely -
+            // ActiveExposureFraction was never assigned anywhere, so Beta read exactly 1.0 on all 1547
+            // signal rows and the concurrent-position damping had never once engaged.
+            double kellyStake = 0;
+            if (_cfg.LiveSizing == "kelly")
+            {
+                // A LOCAL, NOT `ActiveExposureFraction`. That property is read by EvMath.Size earlier in
+                // this same method, and Size feeds the telemetry Contracts column — the frozen basis every
+                // row since 2026-08-22 sits on. Assigning it here would have left it at 0 for the first
+                // evaluation and non-zero for every one after, silently re-basing the column mid-dataset
+                // with nothing in the output to show the boundary.
+                double liveExposure = LiveEquityUsd > 0
+                                    ? (double)_live.SpentToday / LiveEquityUsd : 0.0;
+                // UNBOUNDED first, so the log can say whether Kelly decided the size or a bound did.
+                double raw = EvMath.LiveStakeUsd(c.PTrueUsed, px, c.Vig, LiveEquityUsd,
+                                                 liveExposure, 0, 0,
+                                                 _cfg.MaxTradeFrac, feeM, _cfg.LiveKellyFraction,
+                                                 _cfg.KellyBetaKnee, _cfg.KellyBetaZero);
+                kellyStake = EvMath.LiveStakeUsd(c.PTrueUsed, px, c.Vig, LiveEquityUsd,
+                                                 liveExposure, _cfg.LiveKellyMinUsd,
+                                                 _cfg.LiveKellyMaxUsd, _cfg.MaxTradeFrac, feeM,
+                                                 _cfg.LiveKellyFraction,
+                                                 _cfg.KellyBetaKnee, _cfg.KellyBetaZero);
+                if (raw > 0 && kellyStake <= 0)
+                {
+                    // Kelly wanted a stake below the floor, so there is NO BET. Counted and said, because a
+                    // silent skip is indistinguishable from the bot finding nothing — and at a floor set
+                    // high relative to equity this is most of the signal flow, not an edge case.
+                    Interlocked.Increment(ref Stats.KellyBelowFloor);
+                    Con.Line(ConsoleColor.DarkGray,
+                        $"[SIZE ] {pair.KalshiTicker} {c.Side}: Kelly asked ${raw:0.00}, below the "
+                      + $"${_cfg.LiveKellyMinUsd:0.00} floor - no bet.");
+                }
+                else if (raw > 0 && kellyStake < raw - 1e-9)
+                    Interlocked.Increment(ref Stats.KellyClampedDown);
+            }
+            if (_cfg.LiveSizing != "kelly" || kellyStake > 0)
+                await _live.TryTakeAsync(pair.KalshiTicker, pair.EventId, c.Side, limit, px,
+                                         c.PTrueUsed, ev,
+                                         new TakeCtx((double)c.WsAsk, depthUnknown ? -1 : depthToLimit,
+                                                     c.InPlay, c.OracleAgeMs, c.WsBookAge, regime,
+                                                     BankrollUsd, LiveEquityUsd), ct,
+                                         kellyStake, feeM);
+        }
 
         if (clears)
             _followUp?.Schedule(new FollowUp(DateTime.UtcNow, pair.KalshiTicker, c.Side, pair.Legs,

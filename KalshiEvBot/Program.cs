@@ -445,6 +445,36 @@ internal static class Program
         // ONE balance read, mirrored to the derivative pipeline. Two independent reads would drift apart
         // and the two telemetry files would stop being comparable — the one thing the split must not cost.
         await RefreshBankrollAsync(kalshi, eval, cfg, announce: true, mirror: evalD);
+
+        // ── KELLY PREFLIGHT ───────────────────────────────────────────────────────────────────────────
+        // A floor set above what Kelly can ever ask for does not throw, log, or fail a health check — the
+        // bot runs, screens, finds signals, and places NOTHING. That is indistinguishable from a quiet
+        // slate. Kelly's ceiling here is equity * MaxTradeFrac (the hard per-trade cap), so the test is
+        // arithmetic and can be done before the first order rather than inferred from a silent afternoon.
+        if (live && cfg.LiveSizing == "kelly")
+        {
+            double ceiling = Math.Min(eval.LiveEquityUsd * cfg.MaxTradeFrac, cfg.LiveKellyMaxUsd);
+            // 0.0068 is the MEASURED median of f*alpha*beta over 1547 logged signals; it is a description
+            // of this bot's own history, not a guess, and it is what makes "most signals" quantifiable.
+            double typical = eval.LiveEquityUsd * 0.0068;
+            string frac = cfg.LiveKellyFraction > 0
+                        ? $"flat {cfg.LiveKellyFraction:0.###} Kelly" : "Alpha (vig-based, ~0.157)";
+            Console.WriteLine($"[KELLY ] sizing on REAL equity ${eval.LiveEquityUsd:0.00} — {frac}, "
+                            + $"floor ${cfg.LiveKellyMinUsd:0.00}, ceiling ${cfg.LiveKellyMaxUsd:0.00}, "
+                            + $"beta knee {cfg.KellyBetaKnee:0.##}/zero {cfg.KellyBetaZero:0.##}");
+            Console.WriteLine($"[KELLY ] at this equity Kelly can ask at most ${ceiling:0.00} and typically "
+                            + $"asks about ${typical:0.00}.");
+            if (cfg.LiveKellyMinUsd >= ceiling)
+                Con.Line(ConsoleColor.Red,
+                    $"[KELLY ] *** THE FLOOR (${cfg.LiveKellyMinUsd:0.00}) IS ABOVE KELLY'S CEILING "
+                  + $"(${ceiling:0.00}). NO ORDER CAN EVER CLEAR IT. *** The bot will screen and log exactly "
+                  + "as normal and place nothing. Lower EV_LIVE_KELLY_MIN_USD or fund the shard.");
+            else if (cfg.LiveKellyMinUsd > typical)
+                Con.Line(ConsoleColor.Yellow,
+                    $"[KELLY ] the floor is above the TYPICAL Kelly ask (${typical:0.00}), so most signals "
+                  + "will be refused, not resized. Expect far fewer bets than signals — that is the floor "
+                  + "gating flow, not the strategy finding nothing.");
+        }
         var bankrollTask = BankrollLoopAsync(kalshi, eval, cfg, cts.Token, evalD);
         var snapTask     = SnapshotLoopAsync(snapshots, oracle, feed, mlPairs, cfg, cts.Token);
         var snapDTask    = snapshotsD is not null
