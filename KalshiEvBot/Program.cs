@@ -35,6 +35,13 @@ internal static class Program
         // fighting over one knob — passing the flag would have overridden a deliberate EV_LIVE_STAKE_SIDE
         // without saying so. One knob, one source.
         bool micro = args.Contains("--micro-bet");
+        // .ENV FIRST, BEFORE ANY Env() READ. FromEnvironment() loads it, but that is called ~50 lines
+        // below — so every value read up here silently took its code default while .env sat unread. That
+        // is not a display problem: `cfg.LiveStakePerGameUsd = stakeGame` further down OVERWRITES the
+        // correctly-loaded config value with the stale one. Measured 2026-09-07: EV_LIVE_STAKE_GAME=50 ran
+        // as 10, and the banner printed 10 as though it had been chosen.
+        KalshiApiConfig.EnsureDotEnvLoaded();
+
         double stakeSide = ArgDouble(args, "--min-stake") ?? EvConfig.Env("EV_LIVE_STAKE_SIDE", 5.0);
         double stakeGame = ArgDouble(args, "--max-stake-game") ?? EvConfig.Env("EV_LIVE_STAKE_GAME", 2 * stakeSide);
         if (micro && !live)
@@ -45,7 +52,13 @@ internal static class Program
         {
             Console.WriteLine($"┌─ Kalshi +EV taker bot — M1 (LIVE: REAL ORDERS){(micro ? " [MICRO-BET]" : "")} ─────────────────────");
             Console.WriteLine("│  Pinnacle de-vigged = fair value.  Kalshi WS detects, Kalshi REST values.");
-            Console.WriteLine($"│  IOC buys on every confirmed signal. ${stakeSide:0.00}/side, ${stakeGame:0.00}/game,");
+            string sizingMode = (Environment.GetEnvironmentVariable("EV_LIVE_SIZING") ?? "flat")
+                                .Trim().ToLowerInvariant();
+            if (sizingMode == "kelly")
+                Console.WriteLine($"│  IOC buys on every confirmed signal. KELLY sizing off live equity, "
+                                + $"${stakeGame:0.00}/game cap,");
+            else
+                Console.WriteLine($"│  IOC buys on every confirmed signal. ${stakeSide:0.00}/side, ${stakeGame:0.00}/game,");
             Console.WriteLine("│  one FILLED entry per side. A no-fill costs nothing and may be retried.");
             if (micro)
                 Console.WriteLine("│  MICRO-BET: sized to measure the FILL RATE, not to earn — at this size");

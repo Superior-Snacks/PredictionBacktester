@@ -56,6 +56,15 @@ public class KalshiApiConfig
         return v;
     }
 
+    /// <summary>Load the solution-root .env into the process environment WITHOUT building a config.
+    ///
+    /// <para>Callers that read env vars before constructing a config need this: anything read earlier gets
+    /// the code default no matter what .env says, silently. Observed 2026-09-07 — KalshiEvBot parsed its
+    /// stake caps at line 38 and only loaded .env at line 90 via FromEnvironment(), so EV_LIVE_STAKE_GAME=50
+    /// was ignored and the per-game cap ran at the built-in 10 while the banner reported 10 as if chosen.
+    /// Idempotent: LoadDotEnv does not overwrite variables already present.</para></summary>
+    public static void EnsureDotEnvLoaded() => LoadDotEnv();
+
     private static void LoadDotEnv()
     {
         var searchDirs = new[]
