@@ -466,6 +466,47 @@ public static class Calibration
         //                   first->last movement across the run is the account actually turning over.
         //   bankroll      - the TELEMETRY BASIS. Pinned and deliberately fake; it sizes the Contracts
         //                   column and is not spendable. Labelled as such so it is never read as money.
+        // ── HOW MUCH OF THE EQUITY MOVE COULD TRADING POSSIBLY EXPLAIN? ───────────────────────────
+        // A binary contract cannot pay more than $1 or less than $0, so over any set of fills the BEST
+        // conceivable outcome is every one winning and the worst is every one losing. Those two bound the
+        // trading contribution exactly — no model, no settlement lookup, no assumption. Anything outside
+        // them is money that came from somewhere other than the strategy: a deposit or a withdrawal.
+        //
+        // This exists because the equity line read a transfer as profit. Adding $500 to the shard made
+        // "equity when ordering $198 -> $1090" look like a $891 gain, and the shard cross-check below
+        // simultaneously fired "the shard was INFERRED WRONG" because live cash no longer matched the last
+        // logged figure. Both were reporting a funding event as a fault.
+        // SETTLED fills contribute a KNOWN amount; only the still-open ones need bounding. Bounding all of
+        // them as "what if every fill won" was rigorous but useless: measured 2026-09-07, a $726 deposit
+        // hid under a $759 theoretical-max-win bound and the report still blamed the shard lookup. Using
+        // settlement where it exists tightens the bound to roughly the open stake, which is small.
+        double settledPnl = 0, maxOpenGain = 0, maxOpenLoss = 0;
+        foreach (var r in got)
+        {
+            double px  = r.Avg > 0 ? r.Avg : r.Limit;
+            double fee = double.IsNaN(r.Fee) ? 0.0 : r.Fee;
+            bool? w = settled.TryGetValue(r.Ticker, out var rec) ? rec.WonFor(r.Side) : null;
+            if (w is null)
+            {
+                maxOpenGain += r.Fill * (1.0 - px) - fee;   // still open: best case
+                maxOpenLoss += r.Fill * px + fee;           // still open: worst case
+            }
+            else settledPnl += (w.Value ? r.Fill : 0.0) - (r.Fill * px + fee);
+        }
+        double maxTradeGain = settledPnl + maxOpenGain;
+        double maxTradeLoss = -(settledPnl - maxOpenLoss);
+        var eqRows = rows.Where(r => !double.IsNaN(r.Equity) && r.Equity > 0)
+                         .OrderBy(r => r.At, StringComparer.Ordinal).ToList();
+        double eqMove = eqRows.Count > 1 ? eqRows[^1].Equity - eqRows[0].Equity : 0.0;
+        double externalRaw = eqMove > maxTradeGain ? eqMove - maxTradeGain
+                           : eqMove < -maxTradeLoss ? eqMove + maxTradeLoss : 0.0;
+        // TOLERANCE, because the residual is a difference of two independently-sourced numbers. Fees,
+        // partial fills, settlement landing either side of a daily equity snapshot and cent rounding all
+        // leave a few dollars that are not a transfer. Reporting a $1 residual as a "deposit/withdrawal"
+        // would train the reader to ignore the line on the day it says something real.
+        double extTol = Math.Max(25.0, 0.03 * (eqRows.Count > 0 ? eqRows[0].Equity : 0));
+        double external = Math.Abs(externalRaw) > extTol ? externalRaw : 0.0;
+
         Console.WriteLine();
         if (shardCash is double cash)
         {
@@ -476,14 +517,22 @@ public static class Calibration
             // that the account moved.
             var lastEq = rows.Where(r => !double.IsNaN(r.Equity) && r.Equity > 0)
                              .OrderBy(r => r.At, StringComparer.Ordinal).LastOrDefault();
-            if (lastEq.Equity > 0 && Math.Abs(cash - lastEq.Equity) > Math.Max(50.0, 0.5 * lastEq.Equity))
+            // A gap between live cash and the last logged equity has TWO causes and they need opposite
+            // responses: a mis-inferred shard (distrust this line) or a deposit since the last order
+            // (distrust nothing). Funding is the benign one and it is now common, so say which it is
+            // rather than always crying misconfiguration.
+            double gap = cash - lastEq.Equity;
+            if (lastEq.Equity > 0 && Math.Abs(gap) > Math.Max(50.0, 0.5 * lastEq.Equity))
             {
                 Console.ForegroundColor = ConsoleColor.DarkYellow;
-                Console.WriteLine($"             ^ but the bot last recorded ${lastEq.Equity:0.00} of equity. "
-                                + "A gap this large usually means the");
-                Console.WriteLine("               shard above was INFERRED WRONG (the lookup falls back to 0 "
-                                + "on a market the venue has");
-                Console.WriteLine("               forgotten) — trust the logged figure, not this one.");
+                if (gap > 0 && gap > maxTradeGain)
+                    Console.WriteLine($"             ^ up ${gap:0.00} on the ${lastEq.Equity:0.00} last logged "
+                                    + "— more than trading could return: FUNDS WERE ADDED since the last order.");
+                else
+                    Console.WriteLine($"             ^ but the bot last recorded ${lastEq.Equity:0.00} of "
+                                    + "equity. A gap this large with no matching deposit usually means the "
+                                    + "shard above was INFERRED WRONG (the lookup falls back to 0 on a market "
+                                    + "the venue has forgotten) — trust the logged figure, not this one.");
                 Console.ResetColor();
             }
         }
@@ -500,6 +549,13 @@ public static class Calibration
                             + (Math.Abs(last - first) < 0.005
                                ? "  — one snapshot, so the run has not crossed a local midnight yet"
                                : ""));
+            // THE MOVE IS NOT THE P&L. Say so whenever an external transfer is provably in there, and give
+            // the trading bound beside it so the two are never read as one number.
+            if (Math.Abs(external) > 0.005)
+                Console.WriteLine($"             of which AT LEAST {external:+0.00;-0.00} is EXTERNAL "
+                                + $"(deposit/withdrawal). Settled trading is {settledPnl:+0.00;-0.00}; open "
+                                + $"positions can still swing +{maxOpenGain:0.00}/-{maxOpenLoss:0.00}. "
+                                + "This line is NOT P&L — read that from REALISED above.");
         }
         var bk = rows.Select(r => r.Bank).Where(b => !double.IsNaN(b) && b > 0).Distinct().ToList();
         if (bk.Count == 1)
@@ -580,11 +636,47 @@ public static class Calibration
                                 + (mctr > 0 ? $"  ({mpnl/mctr*100:+0.00;-0.00}c/contract)" : ""));
                 Console.WriteLine($"     actually  won {fw}/{fn} ({100.0*fw/fn:0.0}%) on the fills"
                                 + (fctr > 0 ? $"                    ({fpnl/fctr*100:+0.00;-0.00}c/contract)" : ""));
-                double gap = (100.0 * mw / mn) - (100.0 * fw / fn);
-                Console.WriteLine($"     ADVERSE SELECTION CHECK: misses won {gap:+0.0;-0.0} points "
-                                + (gap > 10 ? "MORE than fills - the book may be picking which bets to take."
-                                 : gap < -10 ? "LESS than fills - if anything we get the better half."
-                                 : "different - no sign the book is selecting against us."));
+                // PER-CONTRACT EDGE WITH ERROR BARS, not a win-rate gap against a hand-picked threshold.
+                // Win rate misses the thing that matters: being filled on the SMALL edges and missing the
+                // big ones is adverse selection even when both groups win equally often. Measured
+                // 2026-09-07, the two disagreed sharply — win rate +5.2 points (looks benign) against a
+                // 3.5x per-contract gap (looks alarming) — and only the error bar settles it: t = +0.54,
+                // indistinguishable from variance. A check without one would have called that a finding.
+                //
+                // Each fill or miss is ONE observation. Contracts inside a single order share an outcome,
+                // so counting them individually would shrink the error bar on a sample that never grew.
+                static (int N, double M, double Se) PerCtr(IEnumerable<double> v)
+                {
+                    var l = v.ToList();
+                    if (l.Count < 2) return (l.Count, l.Count == 1 ? l[0] : 0, double.NaN);
+                    double m = l.Average();
+                    double sd = Math.Sqrt(l.Sum(x => (x - m) * (x - m)) / (l.Count - 1));
+                    return (l.Count, m, sd / Math.Sqrt(l.Count));
+                }
+                var fE = PerCtr(got.Where(r => settled.ContainsKey(r.Ticker))
+                                   .Select(r => {
+                                       double px = r.Avg > 0 ? r.Avg : r.Limit;
+                                       double fe = double.IsNaN(r.Fee) ? 0 : r.Fee;
+                                       bool won = settled[r.Ticker].WonFor(r.Side) == true;
+                                       return (won ? 1.0 : 0.0) - (px + fe / Math.Max(r.Fill, 1)); }));
+                var mE = PerCtr(missed.Where(r => settled.ContainsKey(r.Ticker))
+                                      .Select(r => {
+                                          bool won = settled[r.Ticker].WonFor(r.Side) == true;
+                                          return (won ? 1.0 : 0.0) - r.Limit; }));
+
+                Console.WriteLine($"     PER-CONTRACT EDGE   filled {100*fE.M:+0.00;-0.00}c "
+                                + $"+/- {100*fE.Se:0.00}c   missed {100*mE.M:+0.00;-0.00}c "
+                                + $"+/- {100*mE.Se:0.00}c");
+                double d = mE.M - fE.M;
+                double sed = Math.Sqrt(fE.Se * fE.Se + mE.Se * mE.Se);
+                double tt = sed > 0 ? d / sed : 0;
+                Console.WriteLine($"     ADVERSE SELECTION: misses {(d >= 0 ? "better" : "worse")} by "
+                                + $"{100*Math.Abs(d):0.00}c/contract +/- {100*sed:0.00}c (t={tt:+0.00;-0.00}) - "
+                                + (Math.Abs(tt) > 2
+                                   ? (d > 0 ? "REAL: the book is filling us on the weaker edges."
+                                            : "REAL, and in our favour: we get the better half.")
+                                   : Math.Abs(tt) > 1 ? "suggestive, not yet evidence."
+                                   : "indistinguishable from variance."));
             }
         }
 
