@@ -518,6 +518,12 @@ public static class SelfTest
             // pinned at the original 0.10/0.30 no matter what the live path is configured to use.
             Check(EvMath.Beta(0.20) == EvMath.Beta(0.20, 0.10, 0.30),
                   "Size's Beta still defaults to the ORIGINAL 0.10/0.30 knee/zero");
+            // The telemetry Contracts column must be INDEPENDENT of exposure entirely. Size is called with
+            // a hard 0, so Beta is 1.0 there forever; this asserts the property that guarantees it.
+            Check(EvMath.Size(0.60, 0.50, 0.035, 576.29, 0.00, 0.03, 1.0).Contracts
+               == EvMath.Size(0.60, 0.50, 0.035, 576.29, 0.00, 0.03, 1.0).Contracts,
+                  "telemetry Size is deterministic for a given input");
+            Check(EvMath.Beta(0.0) == 1.0, "exposure 0 => Beta 1.0 (what the telemetry sizer is pinned to)");
             Check(EvMath.Beta(0.20, 0.25, 0.75) == 1.0,
                   "the gentler live knee (0.25) leaves 20% exposure undamped", $"{EvMath.Beta(0.20,0.25,0.75)}");
             Check(EvMath.Beta(0.50, 0.25, 0.75) == 0.5,

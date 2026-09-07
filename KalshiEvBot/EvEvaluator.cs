@@ -474,6 +474,9 @@ public sealed class EvEvaluator
     }
     /// <summary>Fraction of bankroll already at risk. Always 0 in M0 — nothing is ever bought — but the
     /// damping term is computed from it so M2 inherits a sizer that has been exercised, not a new one.</summary>
+    /// <summary>DEAD for the telemetry sizer, which now hard-wires 0 — see the Size call. Kept because
+    /// removing a public surface is not worth it, but assigning it changes NOTHING and must not be used to
+    /// try: the live path uses its own local.</summary>
     public double ActiveExposureFraction { get; set; }
     public bool Verbose;
 
@@ -761,7 +764,18 @@ public sealed class EvEvaluator
         double evShin  = c.PTrueShin  - cost;
         double limit   = EvMath.BreakEvenLimit(c.PTrueUsed, _cfg.EvMin, feeM);
         bool   inWin   = px >= _cfg.MinPrice && px <= _cfg.MaxPrice;
-        var    size    = EvMath.Size(c.PTrueUsed, px, c.Vig, BankrollUsd, ActiveExposureFraction, _cfg.MaxTradeFrac, feeM);
+        // EXPOSURE IS HARD-WIRED TO 0 HERE, i.e. Beta is always 1.0 for the telemetry sizer.
+        //
+        // Not because concurrent exposure does not matter, but because this call feeds the CSV's Contracts
+        // column and every row since 2026-08-22 was written with Beta at 1.0 — it read 1.0 on all 1547
+        // logged signals because nothing ever assigned ActiveExposureFraction. Letting it vary now would
+        // re-base the column mid-dataset with nothing in the output marking the boundary.
+        //
+        // Passing the literal rather than the property on purpose: this was previously protected only by
+        // "nobody assigns it", and one line added elsewhere silently broke that (caught 2026-09-07 — the
+        // live path assigned the property, which this call reads EARLIER in the same method). The live
+        // sizer takes its own `liveExposure` local and Beta is fully alive there.
+        var    size    = EvMath.Size(c.PTrueUsed, px, c.Vig, BankrollUsd, 0.0, _cfg.MaxTradeFrac, feeM);
         // CAPACITY: how many contracts the book actually offers at or below the break-even limit, and what
         // that is worth. This is the answer to "how big could this bet be" — the Kelly size says what we
         // would WANT, this says what is THERE, and only the smaller of the two is achievable.
@@ -934,8 +948,18 @@ public sealed class EvEvaluator
         // line ran identically for them — screening, oracle, REST, sizing, telemetry — so the log
         // records exactly what would have been bought, which is the whole point of watching them
         // before trading them. Suppressing them at intake instead would produce no data at all.
+        // WHAT THE LIVE PATH DID WITH THIS SIGNAL, for the console line below.
+        //
+        // The order was: refusal printed here in dark grey, then the [+EV] line printed GREEN a few lines
+        // later regardless — so a Kelly-refused signal read as "rejected... then taken anyway". Green is the
+        // strongest colour in the output and it was being spent on bets that never happened. The outcome now
+        // travels with the line that announces the signal, rather than in a dimmer line above it.
+        string liveNote = "";
         if (signal && pair.IsDerivative && !_cfg.LiveDerivatives)
+        {
             Interlocked.Increment(ref Stats.DerivativeHeld);
+            liveNote = "  [held: derivative, EV_LIVE_DERIVATIVES=0]";
+        }
         else if (signal && _live is not null)
         {
             // KELLY SIZES OFF REAL EQUITY. `size` above used the PINNED bankroll and stays that way: it is
@@ -973,12 +997,15 @@ public sealed class EvEvaluator
                     // silent skip is indistinguishable from the bot finding nothing — and at a floor set
                     // high relative to equity this is most of the signal flow, not an edge case.
                     Interlocked.Increment(ref Stats.KellyBelowFloor);
-                    Con.Line(ConsoleColor.DarkGray,
-                        $"[SIZE ] {pair.KalshiTicker} {c.Side}: Kelly asked ${raw:0.00}, below the "
-                      + $"${_cfg.LiveKellyMinUsd:0.00} floor - no bet.");
+                    liveNote = $"  [NO BET: Kelly ${raw:0.00} < ${_cfg.LiveKellyMinUsd:0.00} floor]";
                 }
                 else if (raw > 0 && kellyStake < raw - 1e-9)
+                {
                     Interlocked.Increment(ref Stats.KellyClampedDown);
+                    liveNote = $"  [stake ${kellyStake:0.00}, cut from ${raw:0.00} by the ceiling]";
+                }
+                else if (kellyStake > 0)
+                    liveNote = $"  [stake ${kellyStake:0.00}]";
             }
             if (_cfg.LiveSizing != "kelly" || kellyStake > 0)
                 await _live.TryTakeAsync(pair.KalshiTicker, pair.EventId, c.Side, limit, px,
@@ -1017,12 +1044,19 @@ public sealed class EvEvaluator
 
         if (clears)
         {
-            var col = !signal ? ConsoleColor.DarkGray : inWin ? ConsoleColor.Green : ConsoleColor.DarkYellow;
+            // GREEN MEANS MONEY WENT OUT. A signal the live path declined is dark yellow, so the colour
+            // cannot say "took it" about a bet that never happened — and in M0, where nothing ever trades,
+            // signals stay green because there is no live path to disagree with.
+            bool declined = liveNote.StartsWith("  [NO BET") || liveNote.StartsWith("  [held");
+            var col = !signal ? ConsoleColor.DarkGray
+                    : declined ? ConsoleColor.DarkYellow
+                    : inWin ? ConsoleColor.Green : ConsoleColor.DarkYellow;
             Con.Line(col,
                 $"{(signal ? "[+EV]" : "[~EV]")}{(Label.Length > 0 ? $"[{Label}]" : "")} {pair.KalshiTicker} {c.Side,-3} ev={ev * 100:+0.00;-0.00}c  "
               + $"pTrue={c.PTrueUsed:0.0000}  rest={restAsk:0.0000} (ws {c.WsAsk:0.0000}, "
               + $"gap {(double)(restAsk - c.WsAsk) * 100:+0.0;-0.0}c)  limit={limit:0.0000}  "
               + $"size={size.Contracts}/{(depthUnknown ? "?" : $"{depthToLimit:0}")} avail ({(depthUnknown ? "ws book does not reach the limit — REST says it is there" : $"${capacityUsd:0}")})  {regime}  vig={c.Vig:0.0000}{(c.NumLegs > 2 ? $"  [{c.NumLegs}-way]" : "")}{(inWin ? "" : "  [outside price window]")}"
+              + liveNote
               + $"{(size.FlooredToZero ? "  [floored to 0 contracts]" : "")}"
               + $"{(signal ? "" : implausible ? $"  [IMPLAUSIBLE: we say {c.PTrueUsed:0.000}, Kalshi says {px:0.000} — "
                                      + $"a {disagree * 100:0}pt gap is a pairing fault, not an edge]"
