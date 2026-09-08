@@ -318,7 +318,26 @@ public static class Calibration
     }
 
     /// <summary>Section 7 — did the orders we tried actually fill, and did the ones that filled MAKE
-    /// MONEY? Silent until --live has written a row.</summary>
+    /// MONEY? Silent until --live has written a row.
+    ///
+    /// <para><b>THERE ARE TWO FILL RATES AND THEY ARE BOTH TRUE.</b> One row of the live CSV is one ORDER,
+    /// and the same market signals repeatedly — measured 1.50 attempts per ticker+side — so counting orders
+    /// and counting positions give different answers to questions that sound identical:</para>
+    ///
+    /// <para>PER ATTEMPT asks "is our limit priced where the liquidity actually is?" Every order that
+    /// rested and died is a miss, including the ones on a market we went on to buy a minute later. This is
+    /// the number that degrades when our pricing or latency gets worse, so it stays the headline.</para>
+    ///
+    /// <para>PER MARKET asks "when we find an edge, do we end up holding it?" A ticker+side counts once and
+    /// counts as won if ANY attempt on it filled. Measured 2026-09-08: 39.0% per attempt against 58.3% per
+    /// market, and the entire gap is re-tries — 46 of 197 misses were on markets we did get. Half the
+    /// repeat-attempt markets (31 of 62) started with nothing offered at our limit and filled only once the
+    /// book showed size, which is the phantom-depth loop working as intended rather than 46 failures.</para>
+    ///
+    /// <para>Neither is the "right" one; reporting only the first understates the strategy and reporting
+    /// only the second hides the cost of waiting. A no-fill caused by OUR HTTP layer is split out too — that
+    /// is not the book refusing us, and it was silently inflating the miss count.</para>
+    /// </summary>
     private static void LivePathReport(string dir, IReadOnlyDictionary<string, SettlementRecord> settled,
                                        string livePrefix, double? shardCash, int shardIdx)
     {
@@ -359,9 +378,37 @@ public static class Calibration
             Console.WriteLine($"   {rows.Count} row(s), none an actual attempt (all budget-capped).");
             return;
         }
+        int noFill = att.Count - got.Count;
         double fillRate = 100.0 * got.Count / att.Count;
-        Console.WriteLine($"   attempts {att.Count}   FILLED {got.Count} ({fillRate:0.0}%)   "
-                        + $"no-fill {att.Count - got.Count}   skipped-by-budget {rows.Count - att.Count}");
+        Console.WriteLine($"   PER ATTEMPT  orders {att.Count}   FILLED {got.Count} ({fillRate:0.0}%)   "
+                        + $"no-fill {noFill}   skipped-by-budget {rows.Count - att.Count}");
+
+        // PER MARKET. The line above counts ORDERS, this one counts POSITIONS, and the difference is not a
+        // correction — it is a second measurement. A signal fires several times on one game, so an order
+        // that rested and died on a market we bought two minutes later is a real miss for pricing purposes
+        // and not a miss at all for "did we get the position". Both are printed because reporting either
+        // alone misleads in a predictable direction.
+        var byMarket = att.GroupBy(r => r.Ticker + "|" + r.Side).ToList();
+        int mktGot = byMarket.Count(g => g.Any(r => r.Fill > 0));
+        int retried = byMarket.Where(g => g.Any(r => r.Fill > 0)).Sum(g => g.Count(r => r.Fill <= 0));
+        int repeated = byMarket.Count(g => g.Count() > 1);
+        Console.WriteLine($"   PER MARKET   ticker+side {byMarket.Count}   EVENTUALLY FILLED {mktGot} "
+                        + $"({100.0 * mktGot / byMarket.Count:0.0}%)   never got {byMarket.Count - mktGot}");
+        if (retried > 0)
+            Console.WriteLine($"                the gap is RE-TRIES: {retried} of the {noFill} no-fill(s) sit on "
+                            + $"a market we DID get later ({(double)att.Count / byMarket.Count:0.00} orders per "
+                            + $"market, {repeated} market(s) tried more than once).");
+
+        // A DEAD HTTP CALL IS NOT THE BOOK REFUSING US. Folded into the miss count it reads as "the venue
+        // would not sell to us", which points at pricing when the fault is entirely on our side.
+        var errs = att.Where(r => r.Fill <= 0 && !string.IsNullOrEmpty(r.Status)
+                                  && r.Status.Contains("error", StringComparison.OrdinalIgnoreCase)).ToList();
+        if (errs.Count > 0)
+            Console.WriteLine($"                {errs.Count} of those were OUR errors, not the book: "
+                            + string.Join(", ", errs.GroupBy(r => r.Status)
+                                                    .OrderByDescending(g => g.Count())
+                                                    .Select(g => $"{g.Key} x{g.Count()}"))
+                            + $"  (book-only rate {100.0 * got.Count / (att.Count - errs.Count):0.0}%)");
 
         if (got.Count > 0)
         {
@@ -591,60 +638,115 @@ public static class Calibration
             }
         }
 
-        // ── THE COUNTERFACTUAL: would the MISSES have paid? ───────────────────────────────────────
+        // -- THE COUNTERFACTUAL: would the MISSES have paid? --------------------------------------
         // This is the adverse-selection test, and it is the question section 7 exists to ask. If the orders
         // that did NOT fill would have won MORE often than the ones that did, then the book is choosing
-        // which of our bets to accept — the fills are the ones the other side was happy to give us, and the
-        // screened edge is systematically better than the tradeable one. Priced at OUR LIMIT, which is the
-        // worst we would have paid, so this is a conservative estimate of what was missed.
-        var missed = att.Where(r => r.Fill <= 0 && r.Req > 0).ToList();
-        if (missed.Count > 0 && got.Count > 0)
+        // which of our bets to accept - the fills are the ones the other side was happy to give us, and the
+        // screened edge is systematically better than the tradeable one.
+        //
+        // -- TWO CORRECTIONS THE FIRST VERSION LACKED, both of which flattered the misses ----------
+        //
+        // (1) ONE OBSERVATION PER TICKER+SIDE. The same market signals repeatedly, so 195 missed ORDERS
+        //     came from 120 distinct markets - 37 of them repeated, one six times. Re-counting a market's
+        //     single settlement as several observations shrinks the error bar on a sample that never grew.
+        //     This is the same argument PerCtr already makes about contracts inside one order; it applies
+        //     just as forcefully one level up, and was not being applied there.
+        //
+        // (2) A MARKET WE ALSO FILLED CANNOT INFORM EITHER SIDE. 44 of those 195 sat on a ticker+side that
+        //     did fill on another attempt, so one settlement was being counted into BOTH groups of a
+        //     comparison between them. The question is "are the markets we CANNOT get better than the ones
+        //     we CAN?", and a market in both categories answers neither.
+        //
+        // Measured 2026-09-08: correcting these FLIPS THE SIGN. Every-order gave misses better by +2.55c
+        // (t=+0.46); one-per-market gives misses WORSE by 2.77c (t=-0.45); dropping the overlap, worse by
+        // 2.59c (t=-0.39). All three are inside 1 sigma, so the verdict never changes - but the point
+        // estimate and its direction were an artefact of counting repeats, and would have been read as a
+        // finding the moment the sample grew enough to look significant.
+        //
+        // -- PRICING THE COUNTERFACTUAL ------------------------------------------------------------
+        // Misses are valued at OUR LIMIT. The original comment called that "the worst we would have paid,
+        // so this is a conservative estimate" - that is backwards. We did not fill BECAUSE nobody sold at
+        // that limit; to have actually held the position we would have had to pay MORE. Section 9 makes it
+        // worse: "came to us" means the ask RISES toward fair value, so after a miss the position gets more
+        // expensive, not less. Valuing misses at a price that demonstrably became unavailable is therefore
+        // OPTIMISTIC for the missed group, and it is the one remaining bias in this test. It is kept
+        // because there is no defensible alternative price - but it is labelled honestly, and it means a
+        // "misses look better" result should be discounted, never taken at face value.
+        var missedAll = att.Where(r => r.Fill <= 0 && r.Req > 0).ToList();
+        if (missedAll.Count > 0 && got.Count > 0)
         {
-            int mw = 0, mn = 0; double mpnl = 0;
-            foreach (var r in missed)
+            bool Graded(string tk, string side)
+                => settled.TryGetValue(tk, out var rec) && rec.WonFor(side) is not null;
+            bool WonIt(string tk, string side) => settled[tk].WonFor(side) == true;
+            static string Key(string tk, string side) => tk + "|" + side;
+
+            // Markets that filled at least once - excluded from the missed side by (2) above.
+            var filledKeys = new HashSet<string>(got.Select(r => Key(r.Ticker, r.Side)), StringComparer.Ordinal);
+
+            // DESCRIPTIVE: every settled missed ORDER. This is the record of what we tried and did not get,
+            // so it stays on the raw order basis - it is a tally, not a test.
+            var missedGraded = missedAll.Where(r => Graded(r.Ticker, r.Side)).ToList();
+            int mw = missedGraded.Count(r => WonIt(r.Ticker, r.Side));
+            int mn = missedGraded.Count;
+
+            // COMPARISON SET: one row per ticker+side (first attempt), never a market that also filled.
+            var missedCmp = missedGraded.Where(r => !filledKeys.Contains(Key(r.Ticker, r.Side)))
+                                        .GroupBy(r => Key(r.Ticker, r.Side), StringComparer.Ordinal)
+                                        .Select(g => g.First()).ToList();
+            int overlap = missedGraded.Count(r => filledKeys.Contains(Key(r.Ticker, r.Side)));
+            int repeats = mn - overlap - missedCmp.Count;
+
+            double mpnl = 0, mctr = 0;
+            foreach (var r in missedGraded)
             {
-                bool? w = settled.TryGetValue(r.Ticker, out var rec) ? rec.WonFor(r.Side) : null;
-                if (w is null) continue;
-                mn++; if (w.Value) mw++;
                 // CHARGE THE FEE. None was actually paid (no fill, no fee), but the counterfactual asks
                 // what the trade WOULD have earned, and it would have carried one. Omitting it flattered
                 // the figure by roughly the whole fee bill and made it incomparable with the realised P&L
                 // printed above, which is net.
-                mpnl += (w.Value ? r.Req : 0.0) - r.Req * r.Limit - EvMath.OrderFee(r.Limit, r.Req);
+                mpnl += (WonIt(r.Ticker, r.Side) ? r.Req : 0.0) - r.Req * r.Limit
+                      - EvMath.OrderFee(r.Limit, r.Req);
+                mctr += r.Req;
             }
-            // The fills' side of the comparison is recomputed here rather than reusing the P&L above, so
-            // both halves come out of the SAME expression and any change to one is forced on the other.
-            int fw = 0, fn = 0; double fpnl = 0;
-            foreach (var r in got)
+
+            // The fills' side is recomputed here rather than reusing the P&L above, so both halves come out
+            // of the SAME expression and any change to one is forced on the other.
+            var gotGraded = got.Where(r => Graded(r.Ticker, r.Side)).ToList();
+            int fw = gotGraded.Count(r => WonIt(r.Ticker, r.Side));
+            int fn = gotGraded.Count;
+            double fpnl = 0, fctr = 0;
+            foreach (var r in gotGraded)
             {
-                bool? w = settled.TryGetValue(r.Ticker, out var rec) ? rec.WonFor(r.Side) : null;
-                if (w is null) continue;
-                fn++; if (w.Value) fw++;
                 double fpx = r.Avg > 0 ? r.Avg : r.Limit;
-                fpnl += (w.Value ? r.Fill : 0.0) - (r.Fill * fpx + (double.IsNaN(r.Fee) ? 0.0 : r.Fee));
+                fpnl += (WonIt(r.Ticker, r.Side) ? r.Fill : 0.0)
+                      - (r.Fill * fpx + (double.IsNaN(r.Fee) ? 0.0 : r.Fee));
+                fctr += r.Fill;
             }
+            // Fills are deduped by the same rule so the two sides of the test are built alike. In practice
+            // no market has ever filled twice (the executor will not re-enter a position it holds), so this
+            // is a no-op today - and it must stay here, because if that ever changes the test would start
+            // double-counting silently on the OTHER side.
+            var gotCmp = gotGraded.GroupBy(r => Key(r.Ticker, r.Side), StringComparer.Ordinal)
+                                  .Select(g => g.First()).ToList();
+
             if (mn > 0 && fn > 0)
             {
                 Console.WriteLine();
-                Console.WriteLine($"   MISSED ({mn} settled no-fills, priced at our limit)");
-                // PER CONTRACT, because the two samples are different sizes and different prices: 90
-                // missed trades making more in total than 51 fills is arithmetic, not evidence.
-                double mctr = missed.Where(r => settled.ContainsKey(r.Ticker)).Sum(r => (double)r.Req);
-                double fctr = got.Sum(r => r.Fill);
-                Console.WriteLine($"     would have won {mw}/{mn} ({100.0*mw/mn:0.0}%)   "
+                Console.WriteLine($"   MISSED ({mn} settled no-fill order(s), priced at our limit - see note)");
+                Console.WriteLine($"     would have won {mw}/{mn} ({100.0 * mw / mn:0.0}%)   "
                                 + $"would have made ${mpnl:+0.00;-0.00} net of a modelled fee"
-                                + (mctr > 0 ? $"  ({mpnl/mctr*100:+0.00;-0.00}c/contract)" : ""));
-                Console.WriteLine($"     actually  won {fw}/{fn} ({100.0*fw/fn:0.0}%) on the fills"
-                                + (fctr > 0 ? $"                    ({fpnl/fctr*100:+0.00;-0.00}c/contract)" : ""));
+                                + (mctr > 0 ? $"  ({mpnl / mctr * 100:+0.00;-0.00}c/contract)" : ""));
+                Console.WriteLine($"     actually  won {fw}/{fn} ({100.0 * fw / fn:0.0}%) on the fills"
+                                + (fctr > 0 ? $"                    ({fpnl / fctr * 100:+0.00;-0.00}c/contract)" : ""));
+                Console.WriteLine("     (those two c/contract figures are CONTRACT-weighted totals; the "
+                                + "per-contract edge below is ORDER-weighted, one vote per market.)");
+
                 // PER-CONTRACT EDGE WITH ERROR BARS, not a win-rate gap against a hand-picked threshold.
                 // Win rate misses the thing that matters: being filled on the SMALL edges and missing the
-                // big ones is adverse selection even when both groups win equally often. Measured
-                // 2026-09-07, the two disagreed sharply — win rate +5.2 points (looks benign) against a
-                // 3.5x per-contract gap (looks alarming) — and only the error bar settles it: t = +0.54,
-                // indistinguishable from variance. A check without one would have called that a finding.
+                // big ones is adverse selection even when both groups win equally often.
                 //
                 // Each fill or miss is ONE observation. Contracts inside a single order share an outcome,
-                // so counting them individually would shrink the error bar on a sample that never grew.
+                // and so do repeated orders on one market - both would shrink the error bar on a sample
+                // that never grew, so neither is counted more than once.
                 static (int N, double M, double Se) PerCtr(IEnumerable<double> v)
                 {
                     var l = v.ToList();
@@ -653,30 +755,42 @@ public static class Calibration
                     double sd = Math.Sqrt(l.Sum(x => (x - m) * (x - m)) / (l.Count - 1));
                     return (l.Count, m, sd / Math.Sqrt(l.Count));
                 }
-                var fE = PerCtr(got.Where(r => settled.ContainsKey(r.Ticker))
-                                   .Select(r => {
-                                       double px = r.Avg > 0 ? r.Avg : r.Limit;
-                                       double fe = double.IsNaN(r.Fee) ? 0 : r.Fee;
-                                       bool won = settled[r.Ticker].WonFor(r.Side) == true;
-                                       return (won ? 1.0 : 0.0) - (px + fe / Math.Max(r.Fill, 1)); }));
-                var mE = PerCtr(missed.Where(r => settled.ContainsKey(r.Ticker))
-                                      .Select(r => {
-                                          bool won = settled[r.Ticker].WonFor(r.Side) == true;
-                                          return (won ? 1.0 : 0.0) - r.Limit; }));
+                var fE = PerCtr(gotCmp.Select(r => {
+                                    double px = r.Avg > 0 ? r.Avg : r.Limit;
+                                    double fe = double.IsNaN(r.Fee) ? 0 : r.Fee;
+                                    return (WonIt(r.Ticker, r.Side) ? 1.0 : 0.0)
+                                         - (px + fe / Math.Max(r.Fill, 1)); }));
+                var mE = PerCtr(missedCmp.Select(r =>
+                                    (WonIt(r.Ticker, r.Side) ? 1.0 : 0.0) - r.Limit));
 
-                Console.WriteLine($"     PER-CONTRACT EDGE   filled {100*fE.M:+0.00;-0.00}c "
-                                + $"+/- {100*fE.Se:0.00}c   missed {100*mE.M:+0.00;-0.00}c "
-                                + $"+/- {100*mE.Se:0.00}c");
-                double d = mE.M - fE.M;
-                double sed = Math.Sqrt(fE.Se * fE.Se + mE.Se * mE.Se);
-                double tt = sed > 0 ? d / sed : 0;
-                Console.WriteLine($"     ADVERSE SELECTION: misses {(d >= 0 ? "better" : "worse")} by "
-                                + $"{100*Math.Abs(d):0.00}c/contract +/- {100*sed:0.00}c (t={tt:+0.00;-0.00}) - "
-                                + (Math.Abs(tt) > 2
-                                   ? (d > 0 ? "REAL: the book is filling us on the weaker edges."
-                                            : "REAL, and in our favour: we get the better half.")
-                                   : Math.Abs(tt) > 1 ? "suggestive, not yet evidence."
-                                   : "indistinguishable from variance."));
+                Console.WriteLine();
+                Console.WriteLine($"     COMPARISON SET  filled {fE.N} market(s)   missed {mE.N} market(s)"
+                                + $"   [dropped {repeats} repeat order(s) on a market already counted, and "
+                                + $"{overlap} order(s) on a market we DID fill]");
+
+                if (mE.N < 2 || fE.N < 2)
+                {
+                    Console.WriteLine("     not enough independent markets on one side to compare - no test run.");
+                }
+                else
+                {
+                    Console.WriteLine($"     PER-CONTRACT EDGE   filled {100 * fE.M:+0.00;-0.00}c "
+                                    + $"+/- {100 * fE.Se:0.00}c   missed {100 * mE.M:+0.00;-0.00}c "
+                                    + $"+/- {100 * mE.Se:0.00}c");
+                    double d = mE.M - fE.M;
+                    double sed = Math.Sqrt(fE.Se * fE.Se + mE.Se * mE.Se);
+                    double tt = sed > 0 ? d / sed : 0;
+                    Console.WriteLine($"     ADVERSE SELECTION: misses {(d >= 0 ? "better" : "worse")} by "
+                                    + $"{100 * Math.Abs(d):0.00}c/contract +/- {100 * sed:0.00}c (t={tt:+0.00;-0.00}) - "
+                                    + (Math.Abs(tt) > 2
+                                       ? (d > 0 ? "REAL: the book is filling us on the weaker edges."
+                                                : "REAL, and in our favour: we get the better half.")
+                                       : Math.Abs(tt) > 1 ? "suggestive, not yet evidence."
+                                       : "indistinguishable from variance."));
+                    if (d > 0)
+                        Console.WriteLine("     ^ misses are valued at a limit nobody sold at, which flatters "
+                                        + "them - discount a positive result here.");
+                }
             }
         }
 

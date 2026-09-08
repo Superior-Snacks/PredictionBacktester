@@ -419,12 +419,13 @@ internal static class Program
         // OUT OF PROCESS ON PURPOSE. A resolve takes minutes and competes for the same Kalshi REST budget;
         // running it inline would stall screening for the whole of it. The digest script already knows how
         // to run the report and post it, so this reuses it rather than re-implementing the formatting.
-        async Task ResolveHookAsync()
+        async Task RunReportAsync(string extraArgs)
         {
             string root = Directory.GetCurrentDirectory();
             string script = Path.Combine(root, "ev_report_discord.py");
             if (!File.Exists(script)) { await discord.AlertAsync($"cannot find {script}"); return; }
-            var psi = new System.Diagnostics.ProcessStartInfo("python", $"\"{script}\"")
+            string argLine = $"\"{script}\"" + (extraArgs.Length > 0 ? " " + extraArgs : "");
+            var psi = new System.Diagnostics.ProcessStartInfo("python", argLine)
             { WorkingDirectory = root, UseShellExecute = false,
               RedirectStandardOutput = true, RedirectStandardError = true };
             using var proc = System.Diagnostics.Process.Start(psi);
@@ -433,6 +434,8 @@ internal static class Program
             if (proc.ExitCode != 0)
                 await discord.AlertAsync($"report exited {proc.ExitCode} — check the console.");
         }
+
+        Task ResolveHookAsync() => RunReportAsync("");
 
         var cmdListener = new DiscordCommandListener(
             Environment.GetEnvironmentVariable("DISCORD_BOT_TOKEN"),
@@ -454,6 +457,10 @@ internal static class Program
         }
         if (discord.Enabled)
             _ = Task.Run(() => PerformanceLoopAsync(discord, BuildStatusAsync, cts.Token));
+        // THE END-OF-DAY DROP. Fires once, a set delay after the LAST work window closes, and posts the
+        // complete report as an attachment so the day can be read (and pasted) away from the machine.
+        if (discord.Enabled && EvConfig.Env("EV_REPORT_AFTER_BLOCKS", 1) > 0)
+            _ = Task.Run(() => FinalBlockReportLoopAsync(sidecar, discord, RunReportAsync, cts.Token));
 
         // ONE balance read, mirrored to the derivative pipeline. Two independent reads would drift apart
         // and the two telemetry files would stop being comparable — the one thing the split must not cost.
@@ -1111,6 +1118,145 @@ internal static class Program
         return n;
     }
 
+    /// <summary>
+    /// Posts the COMPLETE <c>--resolve</c> report to Discord once a day, a delay after the final work
+    /// window closes. For reading the day away from the machine.
+    ///
+    /// <para><b>WHY IT WAITS.</b> A report run the instant trading stops grades a slate that has not
+    /// finished: tennis settles when the match ends, not when the block does, and every unsettled market is
+    /// silently DROPPED from sections 5, 7 and 9 rather than counted — so an early report understates the
+    /// sample and reports a P&amp;L over whichever subset happened to finish first. <c>EV_REPORT_DELAY_MIN</c>
+    /// (default 30) is the grace period; it is a guess at how long the tail takes, not a measurement.</para>
+    ///
+    /// <para><b>WHY THE SIDECAR DECIDES WHEN.</b> The work windows are authored by the lifecycle planner and
+    /// re-authored during the day (the midday pass re-optimises the afternoon against a board Pinnacle only
+    /// publishes late), so "the last block" is not a clock time this process could hardcode. It is read from
+    /// <c>/debug/schedule</c> each pass, which means the drop follows the plan the bot actually ran.</para>
+    ///
+    /// <para><b>ONCE PER DAY, ACROSS RESTARTS.</b> The date of the last send is kept in a file, not in
+    /// memory: a restart in the evening would otherwise re-send, and this posts a 76KB attachment. A window
+    /// that closed longer than <c>EV_REPORT_MAX_LATE_MIN</c> ago is skipped entirely, so a bot started the
+    /// next morning does not drop yesterday's report as its first act.</para>
+    ///
+    /// <para>Every failure is swallowed. This is a convenience on its own task; it holds nothing the
+    /// evaluator wants, and the report runs OUT OF PROCESS exactly as the <c>ev resolve</c> command does.</para>
+    /// </summary>
+    private static async Task FinalBlockReportLoopAsync(string sidecarBase, DiscordNotifier discord,
+                                                        Func<string, Task> runReport, CancellationToken ct)
+    {
+        double delayMin   = EvConfig.Env("EV_REPORT_DELAY_MIN", 30);
+        double maxLateMin = EvConfig.Env("EV_REPORT_MAX_LATE_MIN", 240);
+        string marker     = Path.Combine(Directory.GetCurrentDirectory(), "ev_report_sent.txt");
+        using var http    = new HttpClient { Timeout = TimeSpan.FromSeconds(20) };
+        bool warned = false;
+        // THE PLAN IS NOT A RECORD, IT IS A FORECAST. Re-authoring PRUNES windows that have finished —
+        // observed 2026-09-08: the 12:00 pass dropped that morning's 06:14-11:21 block from the plan
+        // entirely. Re-authoring runs at 06:00 and 12:00 by default, so the evening block does survive the
+        // half hour we wait on it. But that is a coincidence of the cadence, not a guarantee: add an
+        // evening re-author hour and the block would vanish between closing and firing, and the report
+        // would simply stop arriving with nothing anywhere saying why.
+        //
+        // So the close time is latched the moment the block ends, and the wait runs against the latch
+        // rather than against the plan. (A restart inside that half hour loses the latch and falls back to
+        // the plan — fine today, and the marker file still prevents a double post either way.)
+        DateTime? seenFinal = null;
+
+        string LastSent()
+        {
+            try { return File.Exists(marker) ? File.ReadAllText(marker).Trim() : ""; }
+            catch { return ""; }
+        }
+
+        Console.WriteLine($"[REPORT] end-of-day drop ON — {delayMin:0} min after the final block closes.");
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                await Task.Delay(TimeSpan.FromMinutes(2), ct);
+
+                using var resp = await http.GetAsync($"{sidecarBase.TrimEnd('/')}/debug/schedule", ct);
+                if (!resp.IsSuccessStatusCode)
+                {
+                    // 400 = lifecycle not running. Say it ONCE: without a schedule there is no "final
+                    // block", and silently doing nothing forever is the failure mode worth naming.
+                    if (!warned)
+                    {
+                        warned = true;
+                        Console.WriteLine($"[REPORT] /debug/schedule returned {(int)resp.StatusCode} — no work "
+                                        + "windows to follow, so the end-of-day drop is idle "
+                                        + "(needs PINNACLE_LIFECYCLE=1 on the sidecar).");
+                    }
+                    continue;
+                }
+                warned = false;
+
+                using var doc = System.Text.Json.JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));
+                if (!doc.RootElement.TryGetProperty("windows_detail", out var wins)
+                    || wins.ValueKind != System.Text.Json.JsonValueKind.Array || wins.GetArrayLength() == 0)
+                    continue;
+
+                // THE SCHEDULE SPANS MORE THAN ONE DAY. Measured 2026-09-08: /debug/schedule returned
+                // five upcoming windows across Tue AND Wed, so "the latest close" is tomorrow evening — a
+                // rule that would have sat idle every day, always chasing a block one day out.
+                //
+                // Nor is "the last window whose close falls on today's date" right: a window that runs
+                // 22:00-01:00 belongs to tonight's session but carries tomorrow's date, and that rule would
+                // fire the report mid-session.
+                //
+                // What actually ends a day is the OVERNIGHT GAP. So a window is day-final when nothing
+                // follows it, or when the next one opens more than EV_REPORT_DAY_GAP_H later. On the
+                // measured plan the within-day gaps were 0.9-1.6h and the overnight gap 11.7h, so the
+                // default of 4h separates them with room on both sides.
+                var closes = new List<(DateTime Open, DateTime Close)>();
+                foreach (var w in wins.EnumerateArray())
+                {
+                    if (!w.TryGetProperty("close", out var cEl) || !w.TryGetProperty("open", out var oEl)
+                        || cEl.ValueKind != System.Text.Json.JsonValueKind.String
+                        || oEl.ValueKind != System.Text.Json.JsonValueKind.String) continue;
+                    const DateTimeStyles St = DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal;
+                    if (DateTime.TryParse(oEl.GetString(), CultureInfo.InvariantCulture, St, out var oo)
+                        && DateTime.TryParse(cEl.GetString(), CultureInfo.InvariantCulture, St, out var cc))
+                        closes.Add((oo, cc));
+                }
+                if (closes.Count == 0) continue;
+                closes.Sort((a, b) => a.Open.CompareTo(b.Open));
+
+                double gapH = EvConfig.Env("EV_REPORT_DAY_GAP_H", 4);
+                for (int i = 0; i < closes.Count; i++)
+                {
+                    bool dayFinal = i == closes.Count - 1
+                                 || (closes[i + 1].Open - closes[i].Close).TotalHours > gapH;
+                    // LATCH ON CLOSE, NOT ON DUE. Waiting for the delay to elapse before noticing the block
+                    // would leave the whole grace period dependent on the plan still listing it.
+                    if (dayFinal && closes[i].Close <= DateTime.UtcNow
+                        && (seenFinal is null || closes[i].Close > seenFinal))
+                        seenFinal = closes[i].Close;
+                }
+                if (seenFinal is null) continue;                             // no block has finished yet
+                DateTime lastClose = seenFinal.Value;
+
+                var fireAt = lastClose.AddMinutes(delayMin);
+                var now    = DateTime.UtcNow;
+                if (now < fireAt) continue;                                  // still inside the grace period
+                if ((now - fireAt).TotalMinutes > maxLateMin) continue;      // far too late to be this day's
+                string day = lastClose.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+                if (LastSent() == day) continue;                             // already dropped
+
+                // WRITE THE MARKER FIRST. The report takes minutes; if it crashed halfway through we would
+                // rather skip a day than post the attachment twice on the next pass.
+                try { File.WriteAllText(marker, day); } catch { }
+                Console.WriteLine($"[REPORT] final block closed {lastClose:HH:mm}Z — posting the full report.");
+                await runReport($"--full --label \"final block {day}\"");
+            }
+            catch (OperationCanceledException) { return; }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[REPORT] end-of-day drop: {ex.GetType().Name}: {ex.Message}");
+                try { await Task.Delay(TimeSpan.FromMinutes(5), ct); } catch { return; }
+            }
+        }
+    }
+
     /// <summary>Posts the live performance to Discord on a timer, so a session can be watched from away
     /// from the machine without asking.
     ///
@@ -1557,6 +1703,13 @@ internal static class Program
             EV_FEE_RATE, EV_RECHECK_COOLDOWN_MS, EV_REST_CONCURRENCY, EV_MAX_TRADE_FRACTION, EV_BANKROLL_USD,
             EV_ORACLE_POLL_MS, EV_ORACLE_MAX_AGE_MS, EV_SNAPSHOT_MIN, EV_PAIRS_FILE, HARDVEN_SIDECAR_URL,
             EV_LIVE_STAKE_SIDE, EV_LIVE_STAKE_GAME, EV_LIVE_RETRY_COOLDOWN_SEC.
+
+            END-OF-DAY REPORT: EV_REPORT_AFTER_BLOCKS (1 = on), EV_REPORT_DELAY_MIN (30, grace for the
+            slate to settle), EV_REPORT_DAY_GAP_H (4, the gap that separates one day's blocks from the
+            next), EV_REPORT_MAX_LATE_MIN (240, past which a missed drop is skipped rather than posted
+            late), EV_REPORT_INLINE_CHUNKS (0 = attachment only; N posts the report inline as up to N
+            code blocks, and declines if it would need more). Needs DISCORD_WEBHOOK_URL and the sidecar
+            running with PINNACLE_LIFECYCLE=1.
 
             BANKROLL: EV_BANKROLL_USD pins it outright and the balance is never read. Unset, the bot takes
             ONE snapshot per local calendar day — cash plus the bid-value of open positions — and holds it,

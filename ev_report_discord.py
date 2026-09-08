@@ -300,6 +300,57 @@ def post(url: str, message: str) -> bool:
     return False
 
 
+def post_file(url: str, message: str, filename: str, body: str) -> bool:
+    """POST the FULL report as a .txt attachment.
+
+    WHY AN ATTACHMENT AND NOT MESSAGES. Measured 2026-09-08: the report is 760 lines / 76,602 characters.
+    Discord caps a message at 2000, so posting it inline is ~40 messages - unreadable as a notification and
+    worse than useless on a phone. An attachment carries the whole thing in ONE item, byte-exact, with the
+    column alignment the report depends on intact, and it can be opened and copied whole later. That is
+    precisely the "read it away from the machine, paste it when home" case this exists for.
+
+    Uses the same httpx client as post() - Cloudflare answers `Python-urllib` with 403/1010.
+    """
+    try:
+        import httpx
+    except ImportError:
+        print("[DISCORD] httpx not installed (pip install httpx) - cannot post.")
+        return False
+    try:
+        with httpx.Client(timeout=60.0) as c:
+            r = c.post(url,
+                       data={"payload_json": json.dumps({"content": message[:1980]})},
+                       files={"files[0]": (filename, body.encode("utf-8"), "text/plain")})
+        if 200 <= r.status_code < 300:
+            return True
+        print(f"[DISCORD] file HTTP {r.status_code}: {r.text[:200]}")
+    except Exception as e:
+        print(f"[DISCORD] file {type(e).__name__}: {e}")
+    return False
+
+
+def chunk_blocks(text: str, limit: int = 1900, max_msgs: int = 0):
+    """Split `text` into ```-fenced messages on LINE boundaries. Empty list when max_msgs would be exceeded.
+
+    Only used when EV_REPORT_INLINE_CHUNKS asks for it. Off by default: see post_file's note on why 40
+    messages is the wrong shape for this report.
+    """
+    out, cur = [], []
+    n = 0
+    for line in text.splitlines():
+        line = line[:limit - 20]
+        if n + len(line) + 1 > limit - 12 and cur:
+            out.append("```\n" + "\n".join(cur) + "\n```")
+            cur, n = [], 0
+        cur.append(line)
+        n += len(line) + 1
+    if cur:
+        out.append("```\n" + "\n".join(cur) + "\n```")
+    if max_msgs and len(out) > max_msgs:
+        return []
+    return out
+
+
 def main() -> int:
     # The digest carries emoji so a bad run is visible at a glance in Discord, but a Windows console is
     # cp1252 and dies on them - the PREVIEW would crash while the POST (UTF-8 over HTTP) was perfectly fine.
@@ -317,6 +368,9 @@ def main() -> int:
     ap.add_argument("--from-log", default="", help="parse an existing --resolve capture instead of running it")
     ap.add_argument("--dry", action="store_true", help="print the digest, post nothing")
     ap.add_argument("--save", default="", help="also write the FULL report here")
+    ap.add_argument("--full", action="store_true",
+                    help="also post the COMPLETE report as a .txt attachment (the end-of-day drop)")
+    ap.add_argument("--label", default="", help="prefix for the attachment message (e.g. 'final block')")
     a = ap.parse_args()
 
     def decode(b: bytes) -> str:
@@ -361,6 +415,32 @@ def main() -> int:
     ok = post(url, msg)
     if live and ok:
         ok = post(url, live)
+
+    # THE FULL REPORT, AS A FILE. Posted AFTER the digest so the at-a-glance lines are what a notification
+    # shows; the attachment is what you open when you actually want to read or paste it.
+    if a.full:
+        stamp = dt.datetime.now().strftime("%Y%m%d_%H%M")
+        head = (a.label + " — " if a.label else "") + f"full `--resolve` report ({len(out.splitlines())} lines)"
+        if not post_file(url, head, f"ev_resolve_{stamp}.txt", out):
+            ok = False
+            print("[DISCORD] attachment FAILED.")
+        # OPTIONAL inline chunks, for reading without opening the file. Off unless asked, and it
+        # SILENTLY DECLINES rather than spamming when the report would need more messages than the cap.
+        try:
+            cap = int(os.environ.get("EV_REPORT_INLINE_CHUNKS", "0") or 0)
+        except ValueError:
+            cap = 0
+        if cap > 0:
+            blocks = chunk_blocks(out, max_msgs=cap)
+            if not blocks:
+                print(f"[DISCORD] report needs more than {cap} messages - inline chunks skipped "
+                      f"(the attachment has all of it).")
+            else:
+                for b in blocks:
+                    if not post(url, b):
+                        ok = False
+                        break
+
     print("[DISCORD] posted." if ok else "[DISCORD] post FAILED.")
     return 0 if ok and not bad else (2 if bad else 1)
 
