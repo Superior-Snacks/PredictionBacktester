@@ -38,6 +38,14 @@ FLAGS
   LATE_SETTLE   closed more than 6h after our last observation - delayed, postponed, or re-graded
   NOT_FINAL     not settled yet (or void/unknown result)
 
+DO NOT GROUP FILLS BY THESE FLAGS AND COMPARE WIN RATES. Three of them - QUIET_END, ABRUPT_END, UPSET_PATH -
+look up the WINNING side's last ask, and telemetry only logs a side while it looks +EV. When our side wins
+we have its rows; when it loses the winner usually has none, so `won_side in last_ask` is false and the
+flag cannot fire. They fire mostly on wins BY CONSTRUCTION. Measured 2026-09-13: splitting 172 fills on
+"any flag" gave 54% vs 43%; splitting on the outcome-independent flags only (SHORT_MATCH, BIG_JUMP,
+LATE_SETTLE) gave 55% vs 49% - and 49% vs a mean P_true of 52% is on target. The flags are for looking at
+ONE match and asking "did something odd happen"; they are not a stratification variable.
+
 USAGE
 -----
   python check_settlements.py XILLOG CANDEL SEKMAT        substrings are fine; matches any ticker containing them
