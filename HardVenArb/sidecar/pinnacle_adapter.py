@@ -1092,6 +1092,8 @@ class PinnacleAdapter(BookAdapter):
         the same players, and its moneyline is a different market entirely.
         """
         parts = sid.split(":")
+        if len(parts) == 5 and parts[2] in ("spread", "total"):
+            return self._redirect_deriv(sid, parts)
         if len(parts) != 3 or parts[2] not in _SIDES:
             return ""
         got = self._live_child.get(f"{parts[0]}:{parts[1]}")
@@ -1114,6 +1116,80 @@ class PinnacleAdapter(BookAdapter):
             if _norm_name(nm) == want:
                 return f"{child}:{desig}"
         return ""
+
+    def _deriv_side(self, sid: str):
+        """(name of the YES side, is_this_the_yes_token) for a derivative token, from derivative_pairs.json.
+        ("", None) when unknown. Sync, file-cached for 300s — the twin of _pair_side_name for the other pair file.
+
+        A derivative row records ONE name: `hardven_yes_name`, the player the Kalshi YES buys. The NO token on
+        the same row is the same line from the other player's side, so its name is "whoever is not that" —
+        resolvable against the live child's two participants without the file having to say it.
+        """
+        cache = getattr(self, "_deriv_names", None)
+        if cache is None or time.time() - getattr(self, "_deriv_names_ts", 0) > 300:
+            cache = {}
+            try:
+                path = Path(__file__).parent.parent / "derivative_pairs.json"
+                for e in json.loads(path.read_text(encoding="utf-8")):
+                    yn = (e.get("hardven_yes_name") or "").strip()
+                    yt, nt = e.get("hardven_yes_token") or "", e.get("hardven_no_token") or ""
+                    if yt.count(":") == 4:
+                        cache[yt] = (yn, True)
+                    if nt.count(":") == 4:
+                        cache[nt] = (yn, False)
+            except Exception:
+                cache = getattr(self, "_deriv_names", None) or {}
+            self._deriv_names, self._deriv_names_ts = cache, time.time()
+        got = cache.get(sid)
+        return got if got else ("", None)
+
+    def _redirect_deriv(self, sid: str, parts: list) -> str:
+        """A retired pre-match SPREAD/TOTAL token -> the live matchup's token for the same line and side.
+
+        WHY DERIVATIVES NEEDED THEIR OWN PATH. _redirect_sid refused anything that was not `lid:mid:side`, so
+        a spread or total token could never follow its fixture in-play at all — the parent sat in the cache
+        at its pre-match line, or went NO QUOTE after the `del`, and every in-play derivative signal that
+        would have existed was lost. Measured 2026-09-12: 36 of the 40 tokens in /debug/inplay's
+        `lost_the_tag` were spreads and totals.
+
+        PARENT-ID LINK ONLY, NEVER THE NAME INDEX. Pinnacle lists a tennis fixture twice — a Sets matchup
+        (the moneyline) and a Games matchup (spreads and totals in games) — with the SAME two players and
+        adjacent ids. `_live_by_names` keys on league + player names and therefore holds whichever of the two
+        pushed last; asking it for a Games parent could hand back the Sets child, whose "total 21.5" is a
+        different market entirely. `_live_child` is keyed on the exact parent id and cannot be confused.
+
+        THE LINE IS CARRIED, NOT RE-DERIVED. In-play the main line moves (a pre-match 22.5 total is a 20.5
+        after a set), but Pinnacle streams a ladder of alternates and the paired line is usually still on
+        it. If it is not, the child token is simply absent from the cache and the caller gets nothing —
+        which is right: a line the venue no longer offers has no price.
+
+        SIDE BY NAME, LINE UNCHANGED. A spread's `points` belong to the PLAYER, not to the home/away label:
+        "X -1.5" is X -1.5 whether X is listed home or away. So the same player is found on the child by
+        name (exactly as the moneyline redirect does, for exactly the same reason — a swapped side books
+        both legs on one outcome) and the points go across untouched. Totals carry no side at all.
+        """
+        lid, mid, kind, pts, desig = parts
+        got = self._live_child.get(f"{lid}:{mid}")
+        if not got:
+            return ""
+        child, names, _units = got
+        if kind == "total":
+            return f"{child}:total:{pts}:{desig}" if desig in ("over", "under") else ""
+        if desig not in ("home", "away") or not names:
+            return ""
+        yes_name, is_yes = self._deriv_side(sid)
+        if not yes_name or is_yes is None:
+            return ""                                     # unknown is a safe answer, wrong is not
+        want = _norm_name(yes_name)
+        if not any(_norm_name(nm) == want for nm in names.values()):
+            return ""                                     # our player is not on this child: refuse
+        if is_yes:
+            match = [d for d, nm in names.items() if _norm_name(nm) == want]
+        else:
+            match = [d for d, nm in names.items() if _norm_name(nm) != want]
+        if len(match) != 1:
+            return ""
+        return f"{child}:spread:{pts}:{match[0]}"
 
     def _feed_live(self) -> bool:
         """True only while the Pinnacle feed is GENUINELY live — WS connected, session not expired, and (browser
