@@ -14,7 +14,11 @@ public sealed record Obs(
     // returns "" for it. Those rows ARE moneylines, so the default states a fact rather than papering
     // over a gap — but it does mean this column cannot distinguish "moneyline" from "logged before
     // the split existed", which only matters if a derivative is ever back-dated into an old file.
-    string MarketType = "moneyline");
+    string MarketType = "moneyline",
+    // WsDepthToLimit at screen time: contracts on the WS ladder at-or-better than our limit. -1 is a
+    // SENTINEL (the WS ask sat above the limit, so the ladder never reached it), not a small depth; NaN
+    // when the row predates the column. See section 5's fillable split for why it is here.
+    double WsDepth = double.NaN);
 
 /// <summary>
 /// Grades logged predictions against Kalshi settlement.
@@ -117,7 +121,8 @@ public static class Calibration
                 Csv.Str(r, "Decision") == "SIGNAL", won,
                 Csv.Str(r, "OracleWsVerified") is "1" ? 1 : Csv.Str(r, "OracleWsVerified") is "0" ? 0 : -1,
                 Csv.Str(r, "MoveRegime"), Csv.Str(r, "Decision"),
-                Csv.Str(r, "MarketType") is { Length: > 0 } mt ? mt : "moneyline"));
+                Csv.Str(r, "MarketType") is { Length: > 0 } mt ? mt : "moneyline",
+                Csv.Num(r, "WsDepthToLimit")));
         }
         LastMisorientedDropped = droppedMis;
         LastSourceGapDropped = droppedGap;
@@ -239,7 +244,8 @@ public static class Calibration
     /// its own, with no reference to Pinnacle at all. The column that separates the two is REACHED: drifting
     /// up is consistent with either story, arriving AT our price is not.</para>
     /// </summary>
-    private static void ConvergenceReport(string dir, string followPrefix, string livePrefix)
+    private static void ConvergenceReport(string dir, string followPrefix, string livePrefix,
+                                          IReadOnlyList<Obs> obs)
     {
         var files = Directory.GetFiles(dir, followPrefix + "_*.csv").OrderBy(f => f).ToList();
         if (files.Count == 0) return;
@@ -250,11 +256,38 @@ public static class Calibration
         var filled = new HashSet<string>(StringComparer.Ordinal);
         foreach (string lf in Directory.GetFiles(dir, livePrefix + "_*.csv"))
             foreach (var r in Csv.Read(lf))
-                if (Csv.Num(r, "FillCount") > 0)
+                if (Csv.Num(r, "FillCount") >= 1)
                     filled.Add(Csv.Str(r, "Ticker") + "|" + Csv.Str(r, "Side"));
 
+        // DEPTH AT ENTRY, for rows written before the follow-up carried it. The telemetry row for the same
+        // ticker+side within 10s of EntryUtc is the same evaluation, so its WsDepthToLimit is the one the
+        // signal was screened on. Rows the follow-up now stamps itself skip this.
+        var depthIdx = new Dictionary<string, List<(DateTime At, double Depth)>>(StringComparer.Ordinal);
+        foreach (var ob in obs)
+        {
+            if (double.IsNaN(ob.WsDepth)) continue;
+            string k = ob.Ticker + "|" + ob.Side;
+            if (!depthIdx.TryGetValue(k, out var l)) depthIdx[k] = l = new List<(DateTime, double)>();
+            l.Add((ob.At, ob.WsDepth));
+        }
+        foreach (var l in depthIdx.Values) l.Sort((a, b) => a.At.CompareTo(b.At));
+        double DepthFor(string key, DateTime entry)
+        {
+            if (!depthIdx.TryGetValue(key, out var l) || l.Count == 0) return double.NaN;
+            int lo = 0, hi = l.Count;                              // first index with At >= entry
+            while (lo < hi) { int mid = (lo + hi) / 2; if (l[mid].At < entry) lo = mid + 1; else hi = mid; }
+            double best = double.NaN, bestD = 10.0;
+            foreach (int j in new[] { lo - 1, lo })
+                if (j >= 0 && j < l.Count)
+                {
+                    double d = Math.Abs((l[j].At - entry).TotalSeconds);
+                    if (d < bestD) { bestD = d; best = l[j].Depth; }
+                }
+            return best;
+        }
+
         // key -> (checkpoint, ticker|side) -> first observation
-        var seen = new Dictionary<(int Cp, string Key), (double Ea, double Ep, double Na)>();
+        var seen = new Dictionary<(int Cp, string Key), (double Ea, double Ep, double Na, double Nb, double Depth)>();
         var cps = new SortedSet<int>();
         foreach (string f in files)
             foreach (var r in Csv.Read(f))
@@ -268,53 +301,79 @@ public static class Calibration
                 foreach (int c in new[] { 5, 10, 20, 40, 60, 300 })
                     if (Math.Abs(age - c) <= 4) { cp = c; break; }
                 cps.Add(cp);
-                var k = (cp, Csv.Str(r, "Ticker") + "|" + Csv.Str(r, "Side"));
-                if (!seen.ContainsKey(k)) seen[k] = (ea, ep, na);
+                string key = Csv.Str(r, "Ticker") + "|" + Csv.Str(r, "Side");
+                var k = (cp, key);
+                if (seen.ContainsKey(k)) continue;
+                double nb = Csv.Num(r, "NowBid");                                   // NaN before the column
+                double depth = Csv.Num(r, "EntryDepth");                             // NaN before the column
+                if (double.IsNaN(depth)
+                    && DateTime.TryParse(Csv.Str(r, "EntryUtc"), CultureInfo.InvariantCulture,
+                                         DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var eu))
+                    depth = DepthFor(key, eu);
+                seen[k] = (ea, ep, na, nb, depth);
             }
         if (seen.Count == 0) return;
 
         Console.WriteLine();
-        Console.WriteLine("9. CONVERGENCE  (did Kalshi come to OUR price? the thesis guard - needs > 50%)");
-        Console.WriteLine($"   one row per ticker+side per checkpoint; ties excluded; reached = within {tol*100:0.#}c of entry P_true");
+        Console.WriteLine("9. CONVERGENCE  (did Kalshi come to OUR price? the thesis guard)");
+        Console.WriteLine("   one row per ticker+side per checkpoint.  MOVE = NowAsk - EntryAsk: the closing-line value,");
+        Console.WriteLine("   in cents, with its error bar. came-to-us = share that rose at all (ties excluded);");
+        Console.WriteLine($"   reached = arrived within {tol * 100:0.#}c of entry P_true; BID = NowBid - EntryAsk, could we have sold above cost.");
 
-        void Block(string label, Func<string, bool> keep)
+        void Block(string label, Func<string, (double Ea, double Ep, double Na, double Nb, double Depth), bool> keep)
         {
             var rowsOut = new List<string>();
             foreach (int cp in cps)
             {
-                var v = seen.Where(kv => kv.Key.Cp == cp && keep(kv.Key.Key)).Select(kv => kv.Value).ToList();
+                var v = seen.Where(kv => kv.Key.Cp == cp && keep(kv.Key.Key, kv.Value)).Select(kv => kv.Value).ToList();
                 if (v.Count < 5) continue;
-                int our = 0, against = 0, flat = 0, reached = 0;
-                var moves = new List<double>();
-                foreach (var (ea, ep, na) in v)
+                int our = 0, against = 0, reached = 0, nBid = 0;
+                var moves = new List<double>(); double bidSum = 0, gapSum = 0;
+                foreach (var (ea, ep, na, nb, _) in v)
                 {
                     int dir = ep > ea ? 1 : -1;                 // a signal is ask BELOW fair, so dir is +1
                     double d = (na - ea) * dir;
-                    if (d > 1e-9) our++; else if (d < -1e-9) against++; else flat++;
+                    if (d > 1e-9) our++; else if (d < -1e-9) against++;
                     if (dir > 0 ? na >= ep - tol : na <= ep + tol) reached++;
                     moves.Add(d * 100);
+                    gapSum += (ep - ea) * dir * 100;
+                    if (!double.IsNaN(nb)) { bidSum += (nb - ea) * dir * 100; nBid++; }
                 }
                 int moved = our + against;
                 if (moved == 0) continue;
-                double p = (double)our / moved;
-                double se = Math.Sqrt(p * (1 - p) / moved) * 100;
+                // THE HEADLINE IS THE MEAN MOVE WITH ITS ERROR BAR, not the share that rose. A direction
+                // test is passed by any thin book whose ask dipped and bounced — measured 2026-09-12, the
+                // UNBUYABLE half scored 95% on it while being untradeable — so it cannot distinguish "the
+                // market repriced toward Pinnacle" from "the ask mean-reverted". The size of the move
+                // against its own noise can: +1.5c ± 0.2 on a 4.2c gap is a claim that could be wrong.
+                double mean = moves.Average();
+                double sd   = moves.Count > 1 ? Math.Sqrt(moves.Sum(x => (x - mean) * (x - mean)) / (moves.Count - 1)) : 0;
+                double se   = moves.Count > 1 ? sd / Math.Sqrt(moves.Count) : double.NaN;
                 moves.Sort();
-                double z = se > 0 ? (100 * p - 50.0) / se : 0;
-                rowsOut.Add($"   T+{cp,-4} n={v.Count,4} moved={moved,4}  CAME TO US {100*p,5:0.0}% +/-{se,4:0.0}  "
-                          + $"({z:+0.0;-0.0} sigma vs 50)   reached {100.0*reached/v.Count,5:0.0}%   "
-                          + $"median {moves[moves.Count/2]:+0.0;-0.0}c");
+                double p = (double)our / moved;
+                string bid = nBid >= 5 ? $"   BID {bidSum / nBid:+0.00;-0.00}c (n={nBid})" : "";
+                rowsOut.Add($"   T+{cp,-4} n={v.Count,4}  MOVE {mean,+6:+0.00;-0.00}c +/-{se,4:0.00} "
+                          + $"(t={(se > 0 ? mean / se : 0),+5:+0.0;-0.0})  median {moves[moves.Count / 2],+5:+0.0;-0.0}c  "
+                          + $"of a {gapSum / v.Count,5:0.00}c gap   came-to-us {100 * p,5:0.0}%   "
+                          + $"reached {100.0 * reached / v.Count,5:0.0}%{bid}");
             }
             if (rowsOut.Count == 0) return;
             Console.WriteLine($"   -- {label} --");
             foreach (string l in rowsOut) Console.WriteLine(l);
         }
 
-        Block("ALL SIGNALS (telemetry)", _ => true);
-        if (filled.Count > 0) Block("FILLED ONLY (real orders)", k => filled.Contains(k));
+        // THE FILLABLE SPLIT. WsDepthToLimit = -1 is the WS ask sitting ABOVE our limit: nobody offering
+        // at the price we valued, and on the live path 0 of 94 such attempts ever filled. The two halves
+        // converge differently — the unbuyable half more, on the ask — and only one of them is the strategy.
+        Block("ALL SIGNALS (telemetry)", (_, __) => true);
+        Block("FILLABLE (book showed depth at our limit) - this is the strategy", (_, v) => !double.IsNaN(v.Depth) && v.Depth > 0);
+        Block("UNBUYABLE (nobody offering at our price)", (_, v) => !double.IsNaN(v.Depth) && v.Depth <= 0);
+        if (filled.Count > 0) Block("FILLED ONLY (real orders)", (k, _) => filled.Contains(k));
 
-        Console.WriteLine("   Below 50% means Kalshi moves AWAY from us after we act - the thesis is wrong");
-        Console.WriteLine("   and no settlement sample will rescue it. Watch REACHED too: a rising ask is");
-        Console.WriteLine("   also what a thin book does on its own, but arriving at our price is not.");
+        Console.WriteLine("   Read the FILLABLE MOVE line. Below zero, Kalshi moves AWAY from us after we act and");
+        Console.WriteLine("   no settlement sample will rescue the thesis. BID is the conservative version: the ask");
+        Console.WriteLine("   can rise on a widening spread alone, the bid cannot. Watch REACHED against came-to-us:");
+        Console.WriteLine("   drifting up is what a thin book does on its own; arriving at our price is not.");
     }
 
     /// <summary>Section 7 — did the orders we tried actually fill, and did the ones that filled MAKE
@@ -789,11 +848,45 @@ public static class Calibration
 
             if (mn > 0 && fn > 0)
             {
+                // THE DOLLAR TALLY IS NOT A P&L, AND IT WAS BEING READ AS ONE. Measured 2026-09-12: the
+                // tally said +$262 on 272 missed orders while the comparison set said the misses were flat
+                // (+0.29c). Decomposed, the 133 independent markets had LOST $55; the entire positive
+                // figure sat in the 139 orders the comparison excludes — 78 re-tries on a market already
+                // counted (+$214) and 61 orders on markets we later filled (+$102).
+                //
+                // Re-tries win far more than their share (52 of 78, +18.8c/contract) and it is not edge:
+                // the bot re-tries a market only while the signal PERSISTS, i.e. while the quoted edge is
+                // still large, and Kelly sizes largest on exactly those — so the repeated orders are the
+                // biggest orders on the most persistent signals, and when that market wins, EVERY repeat
+                // books the win at full size. NIKROT YES req 22 @ 0.22 appears twice at +$16.89 each. You
+                // cannot win a market twice.
+                //
+                // So the tally is printed WITH its split, and the reader is told which line to read.
+                double pnlCmp = 0, pnlRep = 0, pnlOvl = 0;
+                int nCmp = 0, nRep = 0, nOvl = 0;
+                {
+                    var cmpKeys = new HashSet<string>(missedCmp.Select(r => Key(r.Ticker, r.Side) + "|" + r.At),
+                                                      StringComparer.Ordinal);
+                    foreach (var r in missedGraded)
+                    {
+                        double pnl = (WonIt(r.Ticker, r.Side) ? r.Req : 0.0) - r.Req * r.Limit
+                                   - EvMath.OrderFee(r.Limit, r.Req);
+                        if (filledKeys.Contains(Key(r.Ticker, r.Side)))            { pnlOvl += pnl; nOvl++; }
+                        else if (cmpKeys.Contains(Key(r.Ticker, r.Side) + "|" + r.At)) { pnlCmp += pnl; nCmp++; }
+                        else                                                          { pnlRep += pnl; nRep++; }
+                    }
+                }
+
                 Console.WriteLine();
                 Console.WriteLine($"   MISSED ({mn} settled no-fill order(s), priced at our limit - see note)");
                 Console.WriteLine($"     would have won {mw}/{mn} ({100.0 * mw / mn:0.0}%)   "
                                 + $"would have made ${mpnl:+0.00;-0.00} net of a modelled fee"
                                 + (mctr > 0 ? $"  ({mpnl / mctr * 100:+0.00;-0.00}c/contract)" : ""));
+                Console.WriteLine($"       of which:  {nCmp} independent market(s) ${pnlCmp:+0.00;-0.00}   |   "
+                                + $"{nRep} re-tr{(nRep == 1 ? "y" : "ies")} on a market already counted ${pnlRep:+0.00;-0.00}   |   "
+                                + $"{nOvl} on market(s) we DID fill ${pnlOvl:+0.00;-0.00}");
+                Console.WriteLine("       ^ orders, not bets: a market that signals five times and wins is booked five times "
+                                + "here. Read the INDEPENDENT figure; the rest is the same winners repeated.");
                 Console.WriteLine($"     actually  won {fw}/{fn} ({100.0 * fw / fn:0.0}%) on the fills"
                                 + (fctr > 0 ? $"                    ({fpnl / fctr * 100:+0.00;-0.00}c/contract)" : ""));
                 Console.WriteLine("     (those two c/contract figures are CONTRACT-weighted totals; the "
@@ -1374,6 +1467,40 @@ public static class Calibration
         double realis = sigs.Sum(o => ((o.Won!.Value ? 1.0 : 0.0) - o.Cost) * Math.Max(1, o.Contracts));
         int won = sigs.Count(o => o.Won!.Value);
         Console.WriteLine($"   won {won}/{sigs.Count}   quoted EV ${quoted:0.00}   realised ${realis:+0.00;-0.00}");
+
+        // THE SAME LINE, FILLABLE SIGNALS ONLY. The headline above grades every signal, but roughly half
+        // of them were never buyable: WsDepthToLimit = -1 means the WS ask sat ABOVE our limit, i.e. nobody
+        // was offering at the price we valued. Measured 2026-09-08 on the live path: 0 of 94 such attempts
+        // ever filled, against 51 of 51 where the ladder showed size. This line is what the strategy could
+        // actually have traded.
+        //
+        // WHICH WAY IT CUTS WAS NOT WHAT SECTION 9 PREDICTED. Convergence finds the unbuyable half moves
+        // toward fair value MORE reliably (95% vs 80.5% came-to-us at T+20), so the expectation was that
+        // the headline is flattered by signals we can never hold. Measured 2026-09-12 at settlement, the
+        // opposite: fillable 107/208, quoted $81, realised +$164; unbuyable 145/286, quoted $61, realised
+        // -$7. Same win rate, all the money on the buyable side. Moving toward fair and settling in the
+        // money are different questions, and on this sample the half we can trade is the better half.
+        // Still colour (see the section header) — but colour in the direction one would want.
+        //
+        // > 0, not >= 0: a ladder that reached the limit and showed zero contracts there is not a book to
+        // buy from either (15 of 1830 rows; immaterial, but the definition should say what it means).
+        var withDepth = sigs.Where(o => !double.IsNaN(o.WsDepth) && o.WsDepth > 0).ToList();
+        var noDepth   = sigs.Where(o => !double.IsNaN(o.WsDepth) && o.WsDepth <= 0).ToList();
+        if (withDepth.Count > 0 || noDepth.Count > 0)
+        {
+            double qd = withDepth.Sum(o => o.Ev * Math.Max(1, o.Contracts));
+            double rd = withDepth.Sum(o => ((o.Won!.Value ? 1.0 : 0.0) - o.Cost) * Math.Max(1, o.Contracts));
+            double qn = noDepth.Sum(o => o.Ev * Math.Max(1, o.Contracts));
+            double rn = noDepth.Sum(o => ((o.Won!.Value ? 1.0 : 0.0) - o.Cost) * Math.Max(1, o.Contracts));
+            Console.WriteLine($"   FILLABLE (book showed depth at our limit)   won {withDepth.Count(o => o.Won!.Value)}/{withDepth.Count}"
+                            + $"   quoted EV ${qd:0.00}   realised ${rd:+0.00;-0.00}");
+            Console.WriteLine($"   unbuyable (nobody offering at our price)    won {noDepth.Count(o => o.Won!.Value)}/{noDepth.Count}"
+                            + $"   quoted EV ${qn:0.00}   realised ${rn:+0.00;-0.00}"
+                            + $"   <- the live path fills 0% of these; see section 9");
+            int undated = sigs.Count - withDepth.Count - noDepth.Count;
+            if (undated > 0)
+                Console.WriteLine($"   ({undated} signal(s) predate the depth column and sit in neither line)");
+        }
         int preGate = sigs.Count(o => o.WsVerified < 0);
         if (preGate > 0)
         {
@@ -1397,7 +1524,7 @@ public static class Calibration
         WhenWillWeKnow(sigOnly);
         LivePathReport(Directory.GetCurrentDirectory(), settled, livePrefix, shardCash, shardIdx);
         StakeScaling(sigOnly, Directory.GetCurrentDirectory());
-        ConvergenceReport(Directory.GetCurrentDirectory(), followPrefix, livePrefix);
+        ConvergenceReport(Directory.GetCurrentDirectory(), followPrefix, livePrefix, all);
     }
 
     /// <summary>

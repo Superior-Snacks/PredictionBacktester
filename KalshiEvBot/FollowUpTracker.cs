@@ -6,7 +6,11 @@ namespace KalshiEvBot;
 /// <summary>A candidate being watched after the fact, with the numbers it was judged on.</summary>
 public sealed record FollowUp(
     DateTime EntryUtc, string Ticker, string Side, IReadOnlyList<string> Legs, int YesLegIndex,
-    string Decision, string Regime, double EntryAsk, double EntryPTrue, double EntryEv, string DeVigMethod);
+    string Decision, string Regime, double EntryAsk, double EntryPTrue, double EntryEv, string DeVigMethod,
+    // WsDepthToLimit at entry. -1 = the WS ask sat above the limit (nobody offering at our price); a row
+    // written before this existed reads NaN. Section 9 splits on it, because the two populations converge
+    // differently and only one of them can be bought.
+    double EntryDepth = double.NaN);
 
 /// <summary>
 /// Re-reads both venues at fixed offsets after a candidate, to measure whether the line moved TOWARD the
@@ -44,6 +48,11 @@ public sealed class FollowUpTracker : IDisposable
         "EntryAsk", "EntryPTrue", "EntryEvCents",
         "NowAsk", "NowPTrue", "KalshiDriftCents", "PinnacleDriftCents",
         "GapEntryCents", "GapNowCents", "GapClosedCents", "WhoClosed", "NowEvCents",
+        // NowBid: the price we could SELL at right now (1 - the other side's ask on the WS book). NowAsk is
+        // the most flattering reference for a buyer's closing-line value; the bid is the most conservative.
+        // If the +1.5c the ask shows at T+20 survives on the bid, the market repriced; if not, the spread
+        // widened. EntryDepth: see the FollowUp record.
+        "NowBid", "EntryDepth",
     };
 
     private readonly RollingCsv _csv;
@@ -127,6 +136,9 @@ public sealed class FollowUpTracker : IDisposable
     {
         var top = _feed.Top(e.Ticker);
         double nowAsk = (double)(e.Side == "YES" ? top.YesAsk : top.NoAsk);
+        // Kalshi is a YES-book: the NO ask IS 1 - the YES bid, so our side's bid is 1 - the other side's ask.
+        double otherAsk = (double)(e.Side == "YES" ? top.NoAsk : top.YesAsk);
+        double nowBid   = otherAsk > 0 && otherAsk < 1 ? 1.0 - otherAsk : double.NaN;
         double nowP   = PTrueNow(e);
 
         // AN UNREADABLE CHECKPOINT IS STILL A RESULT, AND IT IS NOT RANDOM. Over five minutes an in-play
@@ -145,6 +157,7 @@ public sealed class FollowUpTracker : IDisposable
                 RollingCsv.N(e.EntryAsk, 4), RollingCsv.N(e.EntryPTrue, 4), RollingCsv.N(e.EntryEv * 100, 2),
                 "", "", "", "", RollingCsv.N((e.EntryPTrue - e.EntryAsk) * 100, 2), "", "",
                 RollingCsv.Q(!double.IsFinite(nowP) ? "oracle-gone" : "book-gone"), "",
+                "", RollingCsv.N(e.EntryDepth, 0),
             });
             return;
         }
@@ -181,6 +194,7 @@ public sealed class FollowUpTracker : IDisposable
             RollingCsv.N(gap0 * 100, 2), RollingCsv.N(gap1 * 100, 2), RollingCsv.N(closed * 100, 2),
             RollingCsv.Q(who),
             RollingCsv.N(EvMath.Ev(nowP, nowAsk) * 100, 2),
+            RollingCsv.N(nowBid, 4), RollingCsv.N(e.EntryDepth, 0),
         });
     }
 

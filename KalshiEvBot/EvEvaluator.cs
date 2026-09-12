@@ -1018,7 +1018,8 @@ public sealed class EvEvaluator
 
         if (clears)
             _followUp?.Schedule(new FollowUp(DateTime.UtcNow, pair.KalshiTicker, c.Side, pair.Legs,
-                pair.YesLegIndex, decision, regime, px, c.PTrueUsed, ev, _cfg.DeVigMethod));
+                pair.YesLegIndex, decision, regime, px, c.PTrueUsed, ev, _cfg.DeVigMethod,
+                depthUnknown ? -1 : depthToLimit));
 
         _telemetry.Write(new EvSignal(
             DateTime.UtcNow, pair.KalshiTicker, pair.EventId, c.Side, pair.KalshiOutcome, pair.EventTitle,
