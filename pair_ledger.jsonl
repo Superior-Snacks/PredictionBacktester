@@ -5736,3 +5736,5 @@
 {"at": 1789228362, "ticker": "KXITFMATCH-26SEP12AHODEL-AHO", "yes_token": "226054:1636423937:home", "no_token": "226054:1636423937:away", "kalshi_outcome": "Walid Ahouda", "stored_name": "walid ahouda", "verified": null}
 {"at": 1789228362, "ticker": "KXITFWMATCH-26SEP12CINAYA-AYA", "yes_token": "236385:1636421449:away", "no_token": "236385:1636421449:home", "kalshi_outcome": "Lourdes Ayala", "stored_name": "lourdes ayala", "verified": null}
 {"at": 1789228362, "ticker": "KXWTACHALLENGERMATCH-26SEP12GALFER-FER", "yes_token": "237553:1636409134:away", "no_token": "237553:1636409134:home", "kalshi_outcome": "Fiona Ferro", "stored_name": "fiona ferro", "verified": null}
+{"at": 1789233809, "ticker": "KXATPCHALLENGERMATCH-26SEP12DJEMAR-DJE", "yes_token": "222138:1636398590:home", "no_token": "222138:1636398590:away", "kalshi_outcome": "Laslo Djere", "stored_name": "laslo djere", "verified": null}
+{"at": 1789233809, "ticker": "KXATPCHALLENGERMATCH-26SEP12MUNDIA-DIA", "yes_token": "9707:1636409568:away", "no_token": "9707:1636409568:home", "kalshi_outcome": "Facundo Diaz Acosta", "stored_name": "facundo diaz acosta", "verified": null}
