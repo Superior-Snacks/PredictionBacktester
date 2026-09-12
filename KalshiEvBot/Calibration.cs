@@ -346,7 +346,7 @@ public static class Calibration
 
         var rows = new List<(string Ticker, string Side, double Limit, double RestPx, double Ev,
                              int Req, string Status, double Fill, double Avg, double Ms, double Slip,
-                             double Fee, double Equity, double Bank, string At)>();
+                             double Fee, double Equity, double Bank, string At, double Depth)>();
         // Csv.Read, NOT StreamReader. A bare StreamReader requests FileShare.Read, which CONFLICTS with the
         // write handle the running bot holds on today's file — and the whole report dies on an IOException
         // AFTER printing sections 1-6, so it looks like the report simply ends. Csv.Read opens with
@@ -362,7 +362,8 @@ public static class Calibration
                 rows.Add((S("Ticker"), S("Side"), D("LimitPrice"), D("RestAsk"), D("EvCents"),
                           (int)(double.IsNaN(D("Requested")) ? 0 : D("Requested")), S("Status"),
                           D("FillCount"), D("AvgFillPrice"), D("LatencyMs"), D("SlippageCents"),
-                          D("FeeChargedUsd"), D("EquityUsd"), D("BankrollUsd"), S("At")));
+                          D("FeeChargedUsd"), D("EquityUsd"), D("BankrollUsd"), S("At"),
+                          D("DepthToLimit")));
             }
         }
         if (rows.Count == 0) return;
@@ -427,6 +428,64 @@ public static class Calibration
             if (partial > 0)
                 Console.WriteLine($"   PARTIAL on {partial} of {got.Count} fills — the depth was not there for "
                                 + "the full size.");
+
+            // ── CAPACITY: how much COULD have been deployed on the markets we bought ──────────────
+            // DepthToLimit is the WS ladder walked at-or-better than our limit, in contracts, at the
+            // instant we screened. Times the price we paid, that is the dollars that were showing on
+            // every market we actually got into — the ceiling on what the strategy could absorb, as
+            // distinct from the Kelly stake, which is what we chose to put in.
+            //
+            // TWO NUMBERS, BECAUSE ONE IS A LIE. Measured 2026-09-11 over 162 fills: the raw total was
+            // $1.05M, but 8 fills held 51% of it and the top one alone (a WTA main-draw match showing
+            // 348,040 contracts) was $160k. That is a different liquidity regime — market-maker-backed
+            // main-tour books — from the ITF/Challenger tail where most signals live, and a "per day"
+            // built on it says the strategy can absorb capital it cannot. So the raw figure is printed
+            // beside one with the outliers removed on the standard IQR fence (Q3 + 1.5×IQR), which on
+            // that sample cut 10% of fills holding 68% of the dollars and left ~$22k/day against $70k.
+            //
+            // HOW HONEST IS THE SHOWING DEPTH? The partial fills are the direct test: on every one, the
+            // venue filled exactly what the WS showed (10 showing -> 10 got, 16 -> 16). Accurate at the
+            // sizes we trade; unverified at the sizes in the outliers, because we never took them.
+            //
+            // Fills under one contract are excluded. Kalshi's V2 API reports fractional fills, and four
+            // orders on a book showing ZERO depth came back with 0.01-0.02 of a contract — someone's dust
+            // resting order. They carry no depth and are not positions.
+            var capRows = got.Where(r => r.Fill >= 1 && !double.IsNaN(r.Depth) && r.Depth >= 0)
+                             .Select(r => (r.At, Usd: r.Depth * (r.Avg > 0 ? r.Avg : r.Limit),
+                                           Spent: r.Fill * (r.Avg > 0 ? r.Avg : r.Limit)))
+                             .ToList();
+            if (capRows.Count >= 5)
+            {
+                var days = att.Select(r => r.At.Length >= 10 ? r.At[..10] : r.At).Distinct().Count();
+                var usd  = capRows.Select(r => r.Usd).OrderBy(x => x).ToList();
+                double Pct(double p) => usd[Math.Max(0, Math.Min(usd.Count - 1, (int)Math.Ceiling(p * usd.Count) - 1))];
+                double q1 = Pct(0.25), q3 = Pct(0.75), fence = q3 + 1.5 * (q3 - q1);
+                double total   = usd.Sum();
+                double trimmed = capRows.Where(r => r.Usd <= fence).Sum(r => r.Usd);
+                int    cut     = capRows.Count(r => r.Usd > fence);
+                double spent   = capRows.Sum(r => r.Spent);
+                var perDayAll  = capRows.GroupBy(r => r.At.Length >= 10 ? r.At[..10] : r.At)
+                                        .Select(g => g.Sum(r => r.Usd)).OrderBy(x => x).ToList();
+                var perDayTrim = capRows.Where(r => r.Usd <= fence)
+                                        .GroupBy(r => r.At.Length >= 10 ? r.At[..10] : r.At)
+                                        .Select(g => g.Sum(r => r.Usd)).OrderBy(x => x).ToList();
+                double MedianOf(List<double> v) => v.Count == 0 ? 0 : v[v.Count / 2];
+
+                Console.WriteLine();
+                Console.WriteLine($"   CAPACITY  depth showing at our price on the {capRows.Count} market(s) we bought, "
+                                + $"over {days} day(s)");
+                Console.WriteLine($"     as showing        ${total,12:N0} total   ${total / Math.Max(1, days),10:N0}/day   "
+                                + $"median day ${MedianOf(perDayAll),9:N0}");
+                Console.WriteLine($"     outliers removed  ${trimmed,12:N0} total   ${trimmed / Math.Max(1, days),10:N0}/day   "
+                                + $"median day ${MedianOf(perDayTrim),9:N0}   "
+                                + $"[{cut} fill(s) above the ${fence:N0} IQR fence held "
+                                + $"{(total > 0 ? 100.0 * (total - trimmed) / total : 0):0}% of the total]");
+                Console.WriteLine($"     per fill          median ${Pct(0.5),9:N0}   p25 ${q1,9:N0}   p75 ${q3,9:N0}   "
+                                + $"p90 ${Pct(0.9),9:N0}   max ${usd[^1],9:N0}");
+                Console.WriteLine($"     we actually spent ${spent:N2} = {(total > 0 ? 100.0 * spent / total : 0):0.0}% of what was showing. "
+                                + "The trimmed figure is the one to plan on; the raw one is a few");
+                Console.WriteLine("     main-draw books whose depth we have never leaned on.");
+            }
         }
         // ── REALISED P&L, on the contracts we actually own ────────────────────────────────────────
         // Section 5 asks "was the edge real?" over MODELLED contracts at a MODELLED cost. This asks a

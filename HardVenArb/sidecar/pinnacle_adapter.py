@@ -680,6 +680,7 @@ class PinnacleAdapter(BookAdapter):
         self._del_wiped_live = 0        # live tokens destroyed by a `del` (see _on_message)
         self._del_wiped_matchups = 0
         self._live_regressions = 0      # tokens observed going live -> pre WITHOUT a del
+        self._parent_redirects = 0      # /odds served a LIVE child in place of a cached, non-live parent
         self._ever_live: set = set()    # every token that has EVER carried live=True this run
         self._ws_last_msg_ts = 0.0        # unix ts of the last odds frame from EITHER WS source
         self._sub_pass_noted = False      # one-shot log while a subscription pass is in flight
@@ -1163,6 +1164,32 @@ class PinnacleAdapter(BookAdapter):
                         _r = self._redirect_sid(sid)
                         if _r and _r in self._cache:
                             s = self._cache[_r]
+                # DEDICATED-WS MODE HAD NO STALE-PARENT REDIRECT AT ALL. The block above is reader-mode
+                # only, so with PINNACLE_DEDICATED_WS=1 a cached parent was served as long as it existed,
+                # and it kept existing: the session-keepalive re-fetches every active league from the
+                # pre-match REST endpoint, which still lists a matchup that has gone in-play, at its last
+                # pre-match line, status open. So the `del` wiped the parent and the next re-seed put it
+                # straight back - frozen, tagged pre-match, and stamped fresh by the feed-is-live rule.
+                #
+                # Observed 2026-09-12 13:15Z: Houkes v Xilas, 16 minutes into play, served at
+                # 1.219298245614035 (the American->decimal float of the REST seed) with live=False, while
+                # _live_child already held its replacement. Same for Banerjee v Zahraj at +46m. Of 9
+                # started matches on the pair file, ONE was tagged live; the keepalive line read
+                # WATCHED-live=18/304. The EV bot, which requires in-play, saw a quiet slate.
+                #
+                # The quietness test the reader path uses cannot work here either - the re-seed refreshes
+                # the parent's ts every few minutes, so it is never quiet for 180s. The right condition is
+                # simpler: a LIVE child is known and cached, and what we hold for the parent is NOT live.
+                # A live replacement existing IS the evidence the parent is retired. Only ever redirects
+                # TOWARD something the /live/* topic has tagged, never away from one.
+                if s is not None and not reader_mode and not getattr(s, "live", False):
+                    _mid = ":".join(sid.split(":")[:2])
+                    if _mid in self._live_child:
+                        _r = self._redirect_sid(sid)
+                        _c = self._cache.get(_r) if _r else None
+                        if _c is not None and getattr(_c, "live", False):
+                            s = _c
+                            self._parent_redirects += 1
                 if not s:
                     # FOLLOW THE FIXTURE IN-PLAY. Nothing is cached for this token because Pinnacle retired
                     # the matchup when the match went live (see _apply). If the push told us which matchup
@@ -2576,6 +2603,7 @@ class PinnacleAdapter(BookAdapter):
             "del_wiped_live": self._del_wiped_live,
             "del_wiped_matchups": self._del_wiped_matchups,
             "live_regressions": self._live_regressions,
+            "parent_redirects": self._parent_redirects,
             # tokens that were live at some point and are not live now — the population that regressed
             "lost_the_tag": [k for k in ever if k not in set(live_now)][:40],
             "live_now_sample": live_now[:20],
