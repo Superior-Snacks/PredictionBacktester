@@ -38,6 +38,14 @@ public sealed class EvConfig
     /// term in the Kelly chain does. Measured p90 is $4.37 and max $7.71 on current equity, so 25 does not
     /// bind today — it is there for a bankroll that grows or a P_true that goes badly wrong.</summary>
     public double LiveKellyMaxUsd = Env("EV_LIVE_KELLY_MAX_USD", 25.00);
+    /// <summary>Edge shrinkage: the largest per-contract edge Kelly is allowed to SIZE on, in dollars
+    /// (0.03 = 3c). A +6.7c signal still fires; it is staked as a +3c one. See EvMath.LiveStakeUsd for
+    /// why — the tail of the EV distribution is where the model is least trustworthy and Kelly scales
+    /// linearly with it. 0 = off.</summary>
+    public double LiveKellyMaxEdge = Env("EV_LIVE_KELLY_MAX_EDGE", 0.03);
+    /// <summary>Hard ceiling on contracts per order, on top of the dollar ceiling. Bounds the payout
+    /// swing of a position regardless of price — $25 of a 22c dog is 113 contracts. 0 = off.</summary>
+    public int    LiveMaxContracts = (int)Env("EV_LIVE_MAX_CONTRACTS", 25);
     /// <summary>Flat Kelly fraction (0.25 = quarter). 0 = use Alpha, the vig-based shrinkage, which is the
     /// default and currently medians 0.157. Set this only as a deliberate choice: Alpha discounts for
     /// ORACLE uncertainty, this discounts for STRATEGY uncertainty, and at t=+0.71 on the edge the second
@@ -259,7 +267,10 @@ public sealed class EvStats
                 DerivativeHeld,
                 // Signals Kelly priced below the floor (no bet) and signals cut by the ceiling. Neither
                 // over-bets; together they say how much of the flow the BOUNDS decided rather than Kelly.
-                KellyBelowFloor, KellyClampedDown;
+                KellyBelowFloor, KellyClampedDown,
+                // Signals whose quoted edge exceeded EV_LIVE_KELLY_MAX_EDGE and were sized as if it were
+                // the cap. Says how much of the flow the haircut touches.
+                KellyEdgeCapped;
 }
 
 /// <summary>
@@ -985,27 +996,38 @@ public sealed class EvEvaluator
                 double raw = EvMath.LiveStakeUsd(c.PTrueUsed, px, c.Vig, LiveEquityUsd,
                                                  liveExposure, 0, 0,
                                                  _cfg.MaxTradeFrac, feeM, _cfg.LiveKellyFraction,
-                                                 _cfg.KellyBetaKnee, _cfg.KellyBetaZero);
+                                                 _cfg.KellyBetaKnee, _cfg.KellyBetaZero,
+                                                 _cfg.LiveKellyMaxEdge);
                 kellyStake = EvMath.LiveStakeUsd(c.PTrueUsed, px, c.Vig, LiveEquityUsd,
                                                  liveExposure, _cfg.LiveKellyMinUsd,
                                                  _cfg.LiveKellyMaxUsd, _cfg.MaxTradeFrac, feeM,
                                                  _cfg.LiveKellyFraction,
-                                                 _cfg.KellyBetaKnee, _cfg.KellyBetaZero);
+                                                 _cfg.KellyBetaKnee, _cfg.KellyBetaZero,
+                                                 _cfg.LiveKellyMaxEdge);
+                // The haircut is a MODEL choice, not a bound, so it is reported on its own rather than
+                // folded into the floor/ceiling notes below: the reader should be able to see "this was
+                // a 6.7c signal sized as a 3c one" on the line where the signal appears.
+                string capNote = "";
+                if (_cfg.LiveKellyMaxEdge > 0 && ev > _cfg.LiveKellyMaxEdge + 1e-9)
+                {
+                    Interlocked.Increment(ref Stats.KellyEdgeCapped);
+                    capNote = $" edge {ev * 100:0.0}c sized as {_cfg.LiveKellyMaxEdge * 100:0.0}c;";
+                }
                 if (raw > 0 && kellyStake <= 0)
                 {
                     // Kelly wanted a stake below the floor, so there is NO BET. Counted and said, because a
                     // silent skip is indistinguishable from the bot finding nothing — and at a floor set
                     // high relative to equity this is most of the signal flow, not an edge case.
                     Interlocked.Increment(ref Stats.KellyBelowFloor);
-                    liveNote = $"  [NO BET: Kelly ${raw:0.00} < ${_cfg.LiveKellyMinUsd:0.00} floor]";
+                    liveNote = $"  [NO BET:{capNote} Kelly ${raw:0.00} < ${_cfg.LiveKellyMinUsd:0.00} floor]";
                 }
                 else if (raw > 0 && kellyStake < raw - 1e-9)
                 {
                     Interlocked.Increment(ref Stats.KellyClampedDown);
-                    liveNote = $"  [stake ${kellyStake:0.00}, cut from ${raw:0.00} by the ceiling]";
+                    liveNote = $"  [stake ${kellyStake:0.00},{capNote} cut from ${raw:0.00} by the ceiling]";
                 }
                 else if (kellyStake > 0)
-                    liveNote = $"  [stake ${kellyStake:0.00}]";
+                    liveNote = $"  [stake ${kellyStake:0.00}{(capNote.Length > 0 ? ";" + capNote.TrimEnd(';') : "")}]";
             }
             if (_cfg.LiveSizing != "kelly" || kellyStake > 0)
                 await _live.TryTakeAsync(pair.KalshiTicker, pair.EventId, c.Side, limit, px,

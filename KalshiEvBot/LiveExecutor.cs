@@ -92,6 +92,9 @@ public sealed class LiveExecutor
     private readonly ConcurrentDictionary<string, byte> _inFlight = new(StringComparer.Ordinal);
 
     public long Attempted, Filled, NoFill, Rejected, Skipped;
+    /// <summary>Orders whose count was cut by EV_LIVE_MAX_CONTRACTS. Kelly (or a dollar cap) asked for
+    /// more contracts than the ceiling allows — usually a cheap price, where dollars buy many.</summary>
+    public long ContractCapped;
     public decimal StakedUsd;
 
     public LiveExecutor(KalshiOrderClient kalshi, EvLiveLog log, EvConfig cfg, LivePositionStore? store = null)
@@ -159,7 +162,18 @@ public sealed class LiveExecutor
               + $"(EV_LIVE_STAKE_GAME={_cfg.LiveStakePerGameUsd:0.00}). Kelly is no longer the binding constraint.");
             stake = gameRoom;
         }
-        return EvMath.ContractsFor((double)stake, limitPrice, feeM);
+        int want = EvMath.ContractsFor((double)stake, limitPrice, feeM);
+        int got  = EvMath.ContractsFor((double)stake, limitPrice, feeM, _cfg.LiveMaxContracts);
+        if (got < want)
+        {
+            // Said out loud for the same reason the per-game cap is: a cap that binds silently makes the
+            // logged size lie about what decided it.
+            Interlocked.Increment(ref ContractCapped);
+            Con.Line(ConsoleColor.DarkYellow,
+                $"[SIZE ] contract cap cut {want} -> {got} on {eventId} at {limitPrice:0.00} "
+              + $"(EV_LIVE_MAX_CONTRACTS={_cfg.LiveMaxContracts}; ${(double)stake:0.00} would have bought {want}).");
+        }
+        return got;
     }
 
     /// <summary>Fire-and-record. Never throws: a venue error must not take the screening loop down with it.
@@ -325,6 +339,7 @@ public sealed class LiveExecutor
 
     public string Summary() =>
         $"live: attempted {Attempted} filled {Filled} no-fill {NoFill} err {Rejected} skipped {Skipped} "
+      + (ContractCapped > 0 ? $"ctr-capped {ContractCapped} " : "")
       + $"staked ${StakedUsd:0.00}"
       + (_cfg.LiveDailyUsd > 0 ? $"  today ${SpentToday:0.00}/${_cfg.LiveDailyUsd:0.00}" : "")
       + (Attempted > 0 ? $" (fill rate {100.0 * Filled / Attempted:0.0}%)" : "");

@@ -493,6 +493,31 @@ public static class SelfTest
             Check(EvMath.LiveStakeUsd(0.40, 0.50, 0.035, 5000.0, 0.0, 5.00, 25.0) == 0.0,
                   "no edge stakes nothing");
 
+            // ── EDGE SHRINKAGE ──────────────────────────────────────────────────────────────────
+            // A hcBig quoted edge is sized as if it were the cap; a hcSmall one is untouched; off means off.
+            // 0.50 + fee(0.0175) = 0.5175 cost. P_true 0.585 -> +6.75c edge; 0.535 -> +1.75c.
+            double hcBig   = EvMath.LiveStakeUsd(0.585, 0.50, 0.035, 5000.0, 0.0, 0, 0, 1.0, 1.0, 0.25, 0.10, 0.30, maxEdge: 0.03);
+            double hcAtCap = EvMath.LiveStakeUsd(0.5175 + 0.03, 0.50, 0.035, 5000.0, 0.0, 0, 0, 1.0, 1.0, 0.25, 0.10, 0.30, maxEdge: 0);
+            double hcBigNo = EvMath.LiveStakeUsd(0.585, 0.50, 0.035, 5000.0, 0.0, 0, 0, 1.0, 1.0, 0.25, 0.10, 0.30, maxEdge: 0);
+            Check(Math.Abs(hcBig - hcAtCap) < 1e-9, "a +6.75c edge is sized exactly as a +3c edge under a 3c cap",
+                  $"{hcBig:F4} vs {hcAtCap:F4}");
+            Check(hcBigNo > hcBig * 2, "...and would have been more than twice the size uncapped", $"{hcBigNo:F4}");
+            double hcSmall   = EvMath.LiveStakeUsd(0.535, 0.50, 0.035, 5000.0, 0.0, 0, 0, 1.0, 1.0, 0.25, 0.10, 0.30, maxEdge: 0.03);
+            double hcSmallNo = EvMath.LiveStakeUsd(0.535, 0.50, 0.035, 5000.0, 0.0, 0, 0, 1.0, 1.0, 0.25, 0.10, 0.30, maxEdge: 0);
+            Check(Math.Abs(hcSmall - hcSmallNo) < 1e-9, "a +1.75c edge is untouched by a 3c cap", $"{hcSmall:F4}");
+            // THE TELEMETRY BASIS MUST NOT MOVE: Size never passes maxEdge, so the default is off.
+            Check(Math.Abs(EvMath.LiveStakeUsd(0.585, 0.50, 0.035, 5000.0, 0.0, 0, 0, 1.0, 1.0, 0.25, 0.10, 0.30) - hcBigNo) < 1e-9,
+                  "maxEdge defaults to 0 (off): a call without it equals the explicit maxEdge:0 call");
+
+            // ── CONTRACT CAP ────────────────────────────────────────────────────────────────────
+            Check(EvMath.ContractsFor(25.0, 0.22) > 100, "$25 of a 22c contract is over 100 contracts uncapped",
+                  $"{EvMath.ContractsFor(25.0, 0.22)}");
+            Check(EvMath.ContractsFor(25.0, 0.22, 1.0, 25) == 25, "...and exactly 25 under a 25-contract cap");
+            Check(EvMath.ContractsFor(5.0, 0.60, 1.0, 25) == EvMath.ContractsFor(5.0, 0.60),
+                  "a cap above the natural count changes nothing");
+            Check(EvMath.ContractsFor(25.0, 0.22, 1.0, 0) == EvMath.ContractsFor(25.0, 0.22),
+                  "maxContracts 0 is off");
+
             // The ceiling binds on a big bankroll.
             double big = EvMath.LiveStakeUsd(0.70, 0.50, 0.035, 100000.0, 0.0, minUsd: 2.00, maxUsd: 25.0);
             Check(Math.Abs(big - 25.0) < 1e-9, "the max bound caps the stake", $"{big:F4}");

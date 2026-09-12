@@ -163,10 +163,24 @@ public static class EvMath
                                       double minUsd, double maxUsd,
                                       double maxFractionPerTrade = 0.03, double m = 1.0,
                                       double kellyFraction = 0.0,
-                                      double betaKnee = 0.10, double betaZero = 0.30)
+                                      double betaKnee = 0.10, double betaZero = 0.30,
+                                      double maxEdge = 0.0)
     {
         if (equityUsd <= 0 || execPrice <= 0 || execPrice >= 1) return 0.0;
-        double f    = FullKelly(pTrue, execPrice, m);
+        // EDGE SHRINKAGE. Kelly's numerator is the edge, and Kelly scales the stake linearly with it — so
+        // a +6.7c signal is staked at more than three times a +2c one. That is right if +6.7c is real.
+        // Measured 2026-09-12 it is where the model is least trustworthy: the win-rate-vs-P_true gap
+        // widens with quoted edge (0 points at 1-2c, 11 at 4-5c, 20 past the implausibility band), and
+        // on real fills the contract-weighted edge is ~0 while the order-weighted edge is +1.1c — the
+        // biggest orders are the worst ones. The tail of the EV distribution is where a stale quote, a
+        // swapped leg or a mispair hides, and Kelly amplifies exactly that.
+        //
+        // So the edge FED TO KELLY is capped. The signal still fires on its full EV (that gate is
+        // elsewhere); only the SIZE stops growing past `maxEdge`. A Bayesian reading: our posterior on a
+        // +6.7c edge is not +6.7c, it is "at least a few cents and probably less than claimed". 0 = off,
+        // which keeps every existing caller and the telemetry sizer exactly as they were.
+        double pForKelly = maxEdge > 0 ? Math.Min(pTrue, CostPerContract(execPrice, m) + maxEdge) : pTrue;
+        double f    = FullKelly(pForKelly, execPrice, m);
 
         // `kellyFraction > 0` OVERRIDES Alpha with a flat fraction (0.25 = quarter Kelly). Alpha is a
         // VIG-based shrinkage — it scales with how wide Pinnacle's book is, as a proxy for how confident
@@ -186,10 +200,16 @@ public static class EvMath
 
     /// <summary>Whole contracts a dollar stake buys, priced at COST (ask + marginal fee) so the outlay does
     /// not exceed the stake. Kalshi's minimum is one contract, so this floors to 0 rather than rounding.</summary>
-    public static int ContractsFor(double stakeUsd, double execPrice, double m = 1.0)
+    public static int ContractsFor(double stakeUsd, double execPrice, double m = 1.0, int maxContracts = 0)
     {
         double cost = CostPerContract(execPrice, m);
-        return cost <= 0 || stakeUsd <= 0 ? 0 : (int)Math.Floor(stakeUsd / cost);
+        if (cost <= 0 || stakeUsd <= 0) return 0;
+        int n = (int)Math.Floor(stakeUsd / cost);
+        // A CONTRACT CAP, NOT JUST A DOLLAR CAP. $25 buys 113 contracts of a 22c dog and 41 of a 60c
+        // favourite; the dog position pays out $113 or $0 and the favourite $41 or $0. The dollar ceiling
+        // bounds the loss; it does nothing for the variance, which is what actually compounds a bankroll
+        // down. Capping the count bounds the payout swing per position regardless of price. 0 = off.
+        return maxContracts > 0 ? Math.Min(n, maxContracts) : n;
     }
 
     public static SizeResult Size(double pTrue, double execPrice, double overround,

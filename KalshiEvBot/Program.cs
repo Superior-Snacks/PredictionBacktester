@@ -482,6 +482,11 @@ internal static class Program
             Console.WriteLine($"[KELLY ] sizing on REAL equity ${eval.LiveEquityUsd:0.00} — {frac}, "
                             + $"floor ${cfg.LiveKellyMinUsd:0.00}, ceiling ${cfg.LiveKellyMaxUsd:0.00}, "
                             + $"beta knee {cfg.KellyBetaKnee:0.##}/zero {cfg.KellyBetaZero:0.##}");
+            Console.WriteLine($"[KELLY ] haircut: edge fed to Kelly capped at "
+                            + (cfg.LiveKellyMaxEdge > 0 ? $"{cfg.LiveKellyMaxEdge * 100:0.0}c" : "OFF")
+                            + $", contracts per order capped at "
+                            + (cfg.LiveMaxContracts > 0 ? $"{cfg.LiveMaxContracts}" : "OFF")
+                            + " (EV_LIVE_KELLY_MAX_EDGE / EV_LIVE_MAX_CONTRACTS).");
             Console.WriteLine($"[KELLY ] at this equity Kelly can ask at most ${ceiling:0.00} and typically "
                             + $"asks about ${typical:0.00}.");
             if (cfg.LiveKellyMinUsd >= ceiling)
