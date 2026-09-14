@@ -33,6 +33,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import NamedTuple
 
+import maintenance
 import httpx
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -761,9 +762,10 @@ def status(windows, now: datetime | None = None) -> tuple[str, float | None]:
 def _guest(client: httpx.Client, path: str):
     try:
         r = client.get(GUEST_BASE + path)
-        return r.json() if r.status_code == 200 else None
     except Exception:
         return None
+    maintenance.note_status(r.status_code, f"slate {path}")     # the lifecycle's slate fetch doubles as a probe
+    return r.json() if r.status_code == 200 else None
 
 
 def fetch_starts(sports: list[int], horizon_hours: int = 36, back_hours: int = 4) -> list[tuple]:

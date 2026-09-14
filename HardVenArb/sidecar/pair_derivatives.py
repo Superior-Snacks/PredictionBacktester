@@ -82,14 +82,20 @@ def _fmt(p: float) -> str:
 
 
 # ── Pinnacle side (GUEST API): {frozenset(teamKeys): [game,...]} carrying spread/total lines ─────────────
+GUEST_FAILURES = 0     # any guest call that did not answer 200; read at write time
+
+
 def _guest(client: httpx.Client, path: str):
+    global GUEST_FAILURES
     try:
         r = client.get(GUEST_BASE + path)
     except Exception as ex:
         print(f"[GUEST] {path} error: {type(ex).__name__}: {ex}")
+        GUEST_FAILURES += 1
         return None
     if r.status_code != 200:
         print(f"[GUEST] {path} HTTP {r.status_code}")
+        GUEST_FAILURES += 1
         return None
     try:
         return r.json()
@@ -460,6 +466,15 @@ def main() -> None:
         for u in unmatched[:15]:
             print(f"   {u}")
 
+    # ZERO PAIRS WITH A FAILED VENUE CALL IS "CANNOT KNOW", NOT "NOTHING LISTED". Zero on its own can be
+    # legitimate — the main tour is dark some weeks and Kalshi lists no game spreads/totals — but zero
+    # AFTER the guest API refused us is the venue being down, and writing `[]` over a good file on that
+    # evidence is exactly what happened 2026-09-14 12:01 (HTTP 503, Pinnacle in maintenance; the 16
+    # pairs from 10:31 survived only in the .bak). Refuse; the previous file stands.
+    if args.write and not pairs and GUEST_FAILURES:
+        print(f"\n[DERIV] *** 0 pairs and {GUEST_FAILURES} failed guest call(s) — venue down? REFUSING to "
+              f"overwrite {OUT}. Nothing written. ***")
+        sys.exit(2)
     if args.write:
         if OUT.exists():
             shutil.copy2(OUT, OUT.with_suffix(".json.bak"))   # COPY (not move) → OUT stays present during backup

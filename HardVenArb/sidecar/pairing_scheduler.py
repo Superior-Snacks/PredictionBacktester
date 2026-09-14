@@ -17,6 +17,7 @@ HARDVEN_PAIR_STARTUP_DELAY seconds first so the sidecar's own HTTP server (which
 """
 from __future__ import annotations
 
+import maintenance
 import asyncio
 import os
 import time
@@ -158,6 +159,12 @@ class PairingScheduler:
 
     async def _pair_once(self, reason: str) -> None:
         sports = os.environ.get("HARDVEN_SPORTS") or "<all enabled>"
+        # The pairers now refuse to write on an empty catalog, but a run that is going to refuse is still
+        # a Kalshi fetch, three subprocesses and a log full of 503s. Skip it while the venue is down.
+        if maintenance.active():
+            print(f"[PAIR SCHED] {reason} pairing run SKIPPED - venue in maintenance "
+                  f"({maintenance.minutes():.0f} min). Will run on the next cadence after it answers.")
+            return
         print(f"[PAIR SCHED] {reason} pairing run — sports={sports}")
         await self._wait_for_session(reason)
         if self._steps is not None:

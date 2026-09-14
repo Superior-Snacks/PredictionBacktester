@@ -23,6 +23,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable
 
+import maintenance
 import schedule as sched
 from env_util import atomic_write_json
 from notify import Notifier
@@ -77,6 +78,7 @@ class PinnacleLifecycle:
         self._windows: list = []
         self._win_ts = 0.0
         self._open = False
+        self._wake = asyncio.Event()          # set by maintenance_close() so run() re-ticks immediately
         self._last_plan: dict = {}            # provenance of the current plan (mode, counts) for status()/file
         self._per_window: list = []           # games attributed to each window (parallel to _windows)
         self._left_behind: list = []          # games in NO window — what this schedule is giving up
@@ -117,7 +119,7 @@ class PinnacleLifecycle:
         self.state = "init"
         self.next_change_secs = None
 
-    async def _refresh_windows(self) -> None:
+    async def _refresh_windows(self, boundary: str = "") -> None:
         """Recompute work windows from the live slate. On a fetch failure OR a transient empty result, KEEP the
         last windows (don't yank the browser shut mid-session over a guest-API blip)."""
         if self._manual_plan:                        # TEST override: a hand-written plan; no slate fetch/compute
@@ -145,6 +147,24 @@ class PinnacleLifecycle:
                     self._notify.send_bg("🚨 **MANUAL PLAN FAILED TO LOAD** — no windows exist, the bot will "
                                          "never open. Fix `PINNACLE_MANUAL_PLAN` and restart.")
             return
+        # An empty slate during maintenance is not a slate. Re-planning off it produced "0 usable windows"
+        # fourteen times in one afternoon (2026-09-14). While latched, the periodic recompute is HELD - no
+        # contact with the venue - and only a block boundary (the scheduled replan hour, or a window open)
+        # gets one re-check. If the venue is still down, the last windows stand and we stay dark.
+        if maintenance.active():
+            if boundary:
+                if not await maintenance.recheck(boundary):
+                    print(f"[PINNACLE LIFECYCLE] {boundary}: venue still in maintenance "
+                          f"({maintenance.minutes():.0f} min) - keeping the last {len(self._windows)} window(s).")
+                    return
+                # 200: the latch just cleared inside recheck(); fall through and plan normally.
+            else:
+                if not getattr(self, "_maint_noted", False):
+                    self._maint_noted = True
+                    print(f"[PINNACLE LIFECYCLE] venue in maintenance ({maintenance.minutes():.0f} min) - site "
+                          f"closed, keeping the last {len(self._windows)} window(s); re-check at the next block.")
+                return
+        self._maint_noted = False
         try:
             starts = await asyncio.to_thread(sched.fetch_starts, self._sports, self._horizon)
         except Exception as ex:
@@ -435,16 +455,37 @@ class PinnacleLifecycle:
         if self._override == "blockdone" and self._override_until and now >= self._override_until:
             print("[PINNACLE LIFECYCLE] block finished early - back on schedule for the next window.")
             self._set_override(None, "")
+        # A maintenance close expires at its window's close too: the NEXT window's open is the re-check.
+        if self._override == "maintenance" and self._override_until and now >= self._override_until:
+            print("[PINNACLE LIFECYCLE] maintenance-closed block is over - the next window open will re-check.")
+            self._set_override(None, "", persist=False)
         if self._override == "banking":
             inside = True                        # site must be UP; this is the one override that opens on a halt
             cur = cur or (now, self._override_until or now, 0)
-        elif self._override in ("paused", "halted", "blockdone"):
-            inside = False                       # operator pause / balance halt / block already done
+        elif self._override in ("paused", "halted", "blockdone", "maintenance"):
+            inside = False                       # operator pause / balance halt / block done / venue down
         elif self._override == "forced":
             inside = True
             cur = cur or (now, self._override_until or now, 0)
         else:
             inside = cur is not None
+        if inside and not self._open and maintenance.active() and cur is not None:
+            # THE RE-CHECK. One guest GET before the browser comes up. Still down -> stay dark for this
+            # whole window (the close is the next boundary) and say when the next look is.
+            if not await maintenance.recheck("window open"):
+                self._set_override("maintenance", "venue in maintenance", until=cur[1], persist=False)
+                nxt = self._next_open_after(cur[1])
+                print(f"[PINNACLE LIFECYCLE] window would open but the venue is still in maintenance "
+                      f"({maintenance.minutes():.0f} min) - staying dark; next re-check "
+                      f"{sched._local(nxt):%a %H:%M} local." if nxt else
+                      f"[PINNACLE LIFECYCLE] window would open but the venue is still in maintenance "
+                      f"({maintenance.minutes():.0f} min) - staying dark; no later window planned yet.")
+                if self._notify.enabled:
+                    self._notify.send_bg(f"🛠️ still in maintenance ({maintenance.minutes():.0f} min) - skipping "
+                                         f"this block; next re-check {sched._local(nxt):%a %H:%M}." if nxt else
+                                         f"🛠️ still in maintenance ({maintenance.minutes():.0f} min) - skipping "
+                                         f"this block; no later window planned yet.")
+                inside = False
         if inside and not self._open:
             self._on_open()                      # adapter resets feed latches BEFORE the session comes up
             await self._browser.start()
@@ -464,9 +505,12 @@ class PinnacleLifecycle:
                       else "paused" if self._override == "paused" else "halted" if self._override == "halted"
                       else "blockdone" if self._override == "blockdone"
                       else "forced" if self._override == "forced"
+                      else "maintenance" if self._override == "maintenance"
                       else "open" if self._open else "dark")
         if self._override in ("paused", "halted", "blockdone"):
             secs = None                          # nothing will change until an operator resumes
+        elif self._override == "maintenance" and self._override_until:
+            secs = max(0.0, (self._override_until - now).total_seconds())
         elif self._override in ("forced", "banking") and self._override_until:
             secs = max(0.0, (self._override_until - now).total_seconds())
         else:
@@ -635,6 +679,7 @@ class PinnacleLifecycle:
         return {"applied": applied, **self.status()}
 
     async def run(self) -> None:
+        self._loop = asyncio.get_running_loop()      # for maintenance_close() called from a worker thread
         await self._refresh_windows()
         while True:
             try:
@@ -646,18 +691,53 @@ class PinnacleLifecycle:
                     print(f"[PINNACLE LIFECYCLE] scheduled replan at {loc:%H:%M} local - rebuilding the day's "
                           "windows now that the slate has filled in.")
                     self._win_ts = 0.0
-                    await self._refresh_windows()
+                    await self._refresh_windows(boundary="scheduled replan")
                 elif sched._utcnow().timestamp() - self._win_ts > self._recompute_sec:
                     await self._refresh_windows()
                 secs = await self.tick()
                 # wake at the next transition, but cap so we also re-poll/recompute periodically; floor avoids spin
                 sleep = min(secs if secs is not None else self._poll_cap, self._poll_cap)
-                await asyncio.sleep(max(sleep, 5.0))
+                try:
+                    await asyncio.wait_for(self._wake.wait(), timeout=max(sleep, 5.0))
+                except asyncio.TimeoutError:
+                    pass
+                self._wake.clear()
             except asyncio.CancelledError:
                 break
             except Exception as ex:
                 print(f"[PINNACLE LIFECYCLE] error: {type(ex).__name__}: {ex}")
                 await asyncio.sleep(60)
+
+    def _next_open_after(self, t):
+        """Open time of the first planned window that starts after `t`, or None."""
+        later = sorted(o for o, _c, _g in self._windows if o > t)
+        return later[0] if later else None
+
+    def maintenance_close(self) -> None:
+        """Called (from any thread) when the venue answers 5xx while we are open: close the site the way a
+        dark window does, and stay dark until this window's close. The next window's open is the re-check.
+        Idempotent; a no-op when already dark."""
+        if not self._open or self._override == "maintenance":
+            return
+        now = sched._utcnow()
+        cur = sched.active_window(self._windows, now)
+        until = cur[1] if cur else now + timedelta(minutes=30)
+        self._set_override("maintenance", "venue in maintenance", until=until, persist=False)
+        nxt = self._next_open_after(until)
+        print(f"[PINNACLE LIFECYCLE] MAINTENANCE - closing the site now; dark until "
+              f"{sched._local(until):%H:%M} local, next re-check "
+              f"{sched._local(nxt):%a %H:%M} local." if nxt else
+              f"[PINNACLE LIFECYCLE] MAINTENANCE - closing the site now; dark until "
+              f"{sched._local(until):%H:%M} local; no later window planned yet.", flush=True)
+        # From the slate-fetch worker thread this is NOT on the loop; asyncio.Event.set() is not
+        # thread-safe, so hop. On the loop (adapter catalog path) set directly.
+        loop = getattr(self, "_loop", None)
+        try:
+            asyncio.get_running_loop()
+            self._wake.set()                     # re-tick now: tick() sees inside=False and closes
+        except RuntimeError:
+            if loop is not None:
+                loop.call_soon_threadsafe(self._wake.set)
 
     def _is_pinned(self, window) -> bool:
         """Does this (possibly merged/jittered) window overlap an operator-pinned span?"""

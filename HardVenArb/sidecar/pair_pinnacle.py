@@ -214,6 +214,18 @@ def main() -> None:
               "Install it:  pip install rapidfuzz")
 
     cat = fetch_catalog(args.sidecar, args.catalog_timeout)
+    # AN EMPTY CATALOG IS "CANNOT KNOW", NEVER "NOTHING EXISTS". The retire step below strips the tokens
+    # from every row whose matchup the catalog no longer lists — correct when a match has been pulled,
+    # catastrophic when the catalog is empty because the venue is down: then EVERY row is "no longer
+    # listed", every token goes, `retired > 0` satisfies the write condition, and the pair file the bot
+    # hot-reloads is 260 rows with nothing to price. Observed 2026-09-14 12:01: Pinnacle in maintenance,
+    # GUEST GET /sports/33/leagues -> HTTP 503, "[PAIR] wrote 0 filled pair(s)", and the lifecycle then
+    # logged "no paired matchups found" for the rest of the day. Refuse before touching anything; the
+    # scheduler treats a non-zero exit as a failed step and the previous file stands.
+    if not cat:
+        print("[PAIR] *** /catalog returned NO selections — venue down or sidecar not loaded. REFUSING to "
+              "touch the pair file (an empty catalog would retire every existing pair). Nothing written. ***")
+        sys.exit(2)
     book = index_catalog(cat)
 
     # From the SAME catalog fetch: leagueId -> (sport, league name) for the tab-manager URL, and

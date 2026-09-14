@@ -10,6 +10,7 @@ BookAdapter subclass and registering it in load_adapter() below.
 """
 from __future__ import annotations
 
+import maintenance
 import asyncio
 import logging
 import os
@@ -172,6 +173,7 @@ async def health():
     h["code"] = _CODE_FP                     # source hashes as loaded; compare against disk
     h["started_at"] = _STARTED_AT
     h["uptime_sec"] = round(time.time() - _STARTED_AT, 1)
+    h["maintenance"] = maintenance.status()      # venue outage latch: active / since / minutes / probes
     # Behaviour switches that change what an experiment MEASURES. Published so a result can be attributed
     # without reading the console: a cdp_raw A/B run against a sidecar that never saw the env var looks
     # exactly like a cdp_raw failure.

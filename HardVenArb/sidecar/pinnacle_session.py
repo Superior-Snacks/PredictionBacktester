@@ -33,6 +33,7 @@ CONFIG (env): PINNACLE_LOGIN_URL (default https://www.pinnacle.bet/en/), PINNACL
 """
 from __future__ import annotations
 
+import maintenance
 import asyncio
 import base64
 import json
@@ -941,6 +942,12 @@ class PinnacleBrowserSession:
             if getattr(self, "_banking_hold", False):
                 print("[PINNACLE SESSION] session refresh SKIPPED - operator banking window is open.")
                 continue
+            # There is no session to re-mint on a maintenance page. Observed 2026-09-14: four reloads of
+            # the maintenance page, 15 minutes apart, each followed by the login watcher flapping.
+            if maintenance.active():
+                print(f"[PINNACLE SESSION] session refresh SKIPPED - venue in maintenance "
+                      f"({maintenance.minutes():.0f} min).")
+                continue
             # A reload while the operator is mid-navigation throws away whatever they were looking at, and
             # unlike the camp hold there is nothing to bound it against: the session can simply be logged
             # back in afterwards, whereas an interrupted human is just interrupted.
@@ -1789,6 +1796,10 @@ class PinnacleBrowserSession:
         (default 180s) — long enough to browse, short enough that an accidental click self-heals. Never runs
         while a login is settling or a bet holds the page."""
         if self._page is None or not self._home_url:
+            return
+        # The "drift" IS the maintenance page. Steering back to the trading sport lands on the same page
+        # and logs "returned to the trading sport" every three minutes - observed 2026-09-14, four times.
+        if maintenance.active():
             return
         # GIVE UP IF HOME DOES NOT HOLD. If the home URL redirects — a sport with no live list right now, a
         # wrong slug, a locale the account lacks — then `goto` lands somewhere else, the next tick sees the

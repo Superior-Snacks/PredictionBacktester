@@ -55,6 +55,7 @@ from typing import Optional
 import httpx
 
 from book_adapter import BookAdapter, BetResult, CatalogEntry, Selection
+import maintenance
 import sports as sports_cfg   # unified sport catalog (active sport ids default the lifecycle set)
 # Shared cursor: notched wheel scrolling, the measured dwell, and recorded-trajectory replay. This
 # adapter kept its own `_human_move_page`/`_human_click_loc` (the originals these were ported FROM) and
@@ -903,6 +904,15 @@ class PinnacleAdapter(BookAdapter):
         # session-age heartbeat (persistent across logout/recovery). Env mode is live from startup → mark now;
         # browser mode marks on capture (_on_browser_creds).
         self._session_age_task = asyncio.create_task(self._session_age_heartbeat())
+        # MAINTENANCE LATCH. On the first 5xx from the guest API: pause the organic layer, and have the
+        # lifecycle CLOSE the site the way a dark window does. No probe loop - the next block boundary
+        # (window open, or the scheduled replan) is the re-check. See maintenance.py.
+        if not getattr(self, "_maint_wired", False):
+            self._maint_wired = True
+            maintenance.bind_loop()
+            maintenance.on_enter(lambda: self._browser and self._browser.pause_activity())
+            maintenance.on_enter(lambda: self._lifecycle and self._lifecycle.maintenance_close())
+            maintenance.on_exit(lambda: self._browser and self._browser.resume_activity())
         # Betslip hygiene sweep: clears stray selections on every tab, independent of organic cadence.
         if self._betslip_trim and self._session_source == "browser":
             self._betslip_task = asyncio.create_task(self._betslip_sweep_loop())
@@ -3121,6 +3131,7 @@ class PinnacleAdapter(BookAdapter):
         except Exception as ex:
             print(f"[PINNACLE] GUEST GET {path} error: {type(ex).__name__}: {ex}")
             return None
+        maintenance.note_status(r.status_code, f"GUEST GET {path}")   # 5xx latches, 200 releases
         if r.status_code != 200:
             print(f"[PINNACLE] GUEST GET {path} HTTP {r.status_code}")
             return None
