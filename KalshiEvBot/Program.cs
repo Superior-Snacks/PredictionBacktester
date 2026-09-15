@@ -292,7 +292,9 @@ internal static class Program
             Console.WriteLine($"[STATE  ] {posStore.Path}  — {posStore.LoadNote}");
         }
         using var followUp = new FollowUpTracker(oracle, feed);
+        using var cooldownLog = new CooldownLog();             // what the recheck cooldown hides - see CooldownLog.cs
         eval.SetFollowUp(followUp);
+        eval.SetCooldownLog(cooldownLog);
 
         // Built only when there is something to watch, so a moneyline-only run creates no stray files
         // and behaves byte-identically to before this existed. `using` on a null is a no-op.
@@ -1634,7 +1636,7 @@ internal static class Program
           + $"| oracle {(o.IsConnected ? "up" : "DOWN")} quotes {o.QuoteCount} stale {o.StaleCount} "
           + $"{(o.SessionReady ? "" : "SESSION-DOWN ")}"
           + $"| screened {s.Screened} (noquote {s.NoQuote} stale {s.StaleOracle} susp {s.Suspended} "
-          + $"below {s.BelowPrescreen} cooldown {s.Cooldown} incomplete-book {s.IncompleteBook} unverified {s.ScreeningOnly} implausible {s.Implausible} prematch {s.PreMatch} out-of-band {s.OutOfBand} devig-split {s.DeVigSplit} source-gap {s.SourceGap} not-rising {s.NotRising} no-kinetic-hist {s.NoKineticHistory} kalshi-led {s.KalshiLed} pinnacle-led {s.PinnacleLed} venue-vanished {s.VenueVanished} venue-refused {s.VenueRefused}) "
+          + $"below {s.BelowPrescreen} cooldown {s.Cooldown} (hid {s.CooldownSignals} signal(s)) incomplete-book {s.IncompleteBook} unverified {s.ScreeningOnly} implausible {s.Implausible} prematch {s.PreMatch} out-of-band {s.OutOfBand} devig-split {s.DeVigSplit} source-gap {s.SourceGap} not-rising {s.NotRising} no-kinetic-hist {s.NoKineticHistory} kalshi-led {s.KalshiLed} pinnacle-led {s.PinnacleLed} venue-vanished {s.VenueVanished} venue-refused {s.VenueRefused}) "
           + $"| rest {s.RestCalls} fail {s.RestFailed} 429 {s.RateLimited} "
           + $"| SIGNALS {s.Signals} rejected-at-rest {s.RejectedByRest} floored {s.FlooredToZero} "
           + $"| rows {t.RowsWritten} | bankroll ${e.BankrollUsd:0.00}");

@@ -256,6 +256,10 @@ public sealed class EvConfig
 public sealed class EvStats
 {
     public long Screened, NoQuote, StaleOracle, Suspended, BelowPrescreen, Cooldown,
+                // DISTINCT candidates that cleared the EV threshold on the WS book while their ticker was
+                // in cooldown - one per (ticker, side, window), unlike `Cooldown` which ticks on every
+                // 250ms poll and says nothing about how many opportunities the gate actually hid.
+                CooldownSignals,
                 RestCalls, RestFailed, Signals, RejectedByRest, FlooredToZero, RateLimited,
                 IncompleteBook, ScreeningOnly, Implausible, PreMatch, KalshiLed, PinnacleLed,
                 VenueVanished, VenueRefused, OutOfBand, NotRising, NoKineticHistory, DeVigSplit,
@@ -298,6 +302,9 @@ public sealed class EvEvaluator
     public LiveExecutor? LiveExec => _live;
     private readonly EvTelemetry _telemetry;
     private FollowUpTracker? _followUp;
+    private CooldownLog? _cooldownLog;
+    // ticker -> the cooldown `until` value we last logged skips for, so each window logs at most once/side
+    private readonly ConcurrentDictionary<string, long> _cooldownLogged = new(StringComparer.Ordinal);
     private readonly EvConfig _cfg;
     private readonly SemaphoreSlim _restGate;
     private readonly ConcurrentDictionary<string, long> _cooldownUntil = new(StringComparer.Ordinal);
@@ -560,6 +567,7 @@ public sealed class EvEvaluator
 
     /// <summary>Wired after construction: the tracker needs the oracle and feed, built alongside this.</summary>
     public void SetFollowUp(FollowUpTracker? f) => _followUp = f;
+    public void SetCooldownLog(CooldownLog? l) => _cooldownLog = l;
 
     public int PairCount => _byTicker.Count;
 
@@ -612,6 +620,35 @@ public sealed class EvEvaluator
         if (_cooldownUntil.TryGetValue(ticker, out long until) && now < until)
         {
             Interlocked.Increment(ref Stats.Cooldown);
+            // WHAT THE GATE HID. Measured 2026-09-15 from the rows that got through: 73% of in-play
+            // signals fired at the instant their cooldown lifted, and the ask moves +1.73c in the five
+            // seconds after a signal - so a signal that appeared mid-window has typically lost half its
+            // edge by the time it is valued. Until now that was inferred; this records it. Once per
+            // (ticker, side, window), only for candidates that clear the FULL threshold on the WS book,
+            // and each one is scheduled into the follow-up tracker so its T+5/10/20 is graded exactly
+            // like a signal's. Nothing here touches the venue - every field is already in memory.
+            if (_cooldownLog is not null && _cooldownLogged.GetValueOrDefault(ticker) != until)
+            {
+                _cooldownLogged[ticker] = until;
+                double feeM_ = FeeM(pair.KalshiTicker);
+                foreach (var c in candidates)
+                {
+                    if (c.EvWs < _cfg.EvMin) continue;
+                    Interlocked.Increment(ref Stats.CooldownSignals);
+                    double limit_ = EvMath.BreakEvenLimit(c.PTrueUsed, _cfg.EvMin, feeM_);
+                    double depth_ = (double)_feed.DepthAtOrBetter(pair.KalshiTicker, c.Side == "YES", (decimal)limit_);
+                    if (depth_ <= 0 && (double)c.WsAsk > limit_) depth_ = -1;
+                    string regime_ = _lastSeen.TryGetValue($"{pair.KalshiTicker}|{c.Side}", out var pv)
+                        ? (Math.Abs(c.PTrueUsed - pv.PTrue) >= _cfg.LedMoveMin ? "PINNACLE_MOVED" : "STANDING")
+                        : "FIRST_LOOK";
+                    var at_ = DateTime.UtcNow;
+                    _cooldownLog.Write(at_, pair.KalshiTicker, c.Side, c.InPlay, c.WsAsk, c.PTrueUsed, c.EvWs,
+                                       depth_, (until - now) / 1000.0, regime_);
+                    _followUp?.Schedule(new FollowUp(at_, pair.KalshiTicker, c.Side, pair.Legs, pair.YesLegIndex,
+                                                     "COOLDOWN_SKIP", regime_, (double)c.WsAsk, c.PTrueUsed, c.EvWs,
+                                                     _cfg.DeVigMethod, depth_));
+                }
+            }
             return;
         }
         _cooldownUntil[ticker] = now + _cfg.CooldownMs;

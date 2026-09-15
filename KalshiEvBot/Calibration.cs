@@ -312,7 +312,7 @@ public static class Calibration
         var fillsAll = att.Where(r => r.Fill >= 1).OrderByDescending(r => r.At).ToList();
 
         Console.WriteLine();
-        Console.WriteLine($"10. ROLLING RADAR  (the last {window} fills - the two-day check; green = let it run, red = stop)");
+        Console.WriteLine($"11. ROLLING RADAR  (the last {window} fills - the two-day check; green = let it run, red = stop)");
         if (fillsAll.Count < window)
         {
             Console.WriteLine($"   {fillsAll.Count} fill(s) so far - the radar renders at {window}. Until then read sections 7 and 9.");
@@ -428,6 +428,157 @@ public static class Calibration
         Line(worst, worst == 0 ? "VERDICT       all green - ignore the P&L and let it run."
                   : worst == 1 ? "VERDICT       yellow - read the matching pooled section (7 for adverse selection, 9 for convergence) before deciding anything."
                                : "VERDICT       RED - stop before the next block and find out why. A red line here is not variance.");
+    }
+
+    /// <summary>
+    /// Section 11 — the COOLDOWN SHADOW. Every measurement the report makes on real signals, made on the
+    /// candidates the recheck cooldown hid — and kept strictly apart, because nothing here was traded and
+    /// the strategy is not to change while its own verdict is still open.
+    ///
+    /// <para><b>What a skip is.</b> A candidate that cleared the full EV threshold on the WS book while its
+    /// ticker was inside <c>EV_RECHECK_COOLDOWN_MS</c>. Logged once per (ticker, side, window) by the
+    /// evaluator's gate (see CooldownLog.cs), priced at the WS ask because there was no REST read, and
+    /// scheduled into the follow-up tracker under Decision=COOLDOWN_SKIP so its T+5/10/20/60 is sampled
+    /// exactly as a signal's would be.</para>
+    ///
+    /// <para><b>Three tests, same arithmetic as sections 9, 5/6 and 7:</b> did the ask move toward us after
+    /// the moment we could have fired (convergence); did the side we would have bought win, against the
+    /// P_true we would have bought it on (settlement); and on markets that had BOTH a skip and a later real
+    /// signal, how much more did the signal cost than the skip (the price of waiting). If the skipped edge
+    /// converges and settles like the signal edge, the cooldown is the largest lever in the pipeline; if it
+    /// does not, the 73% inference of 2026-09-15 was wrong and the cooldown is fine where it is.</para>
+    ///
+    /// <para>Silent until there is a skip file.</para>
+    /// </summary>
+    private static void CooldownShadow(string dir, string followPrefix,
+                                       IReadOnlyDictionary<string, SettlementRecord> settled, IReadOnlyList<Obs> obs)
+    {
+        var files = Directory.GetFiles(dir, "EvCooldownSkip_*.csv").OrderBy(f => f).ToList();
+        if (files.Count == 0) return;
+
+        var skips = new List<(string Key, string Ticker, string Side, DateTime At, bool InPlay, double WsAsk,
+                              double PTrue, double EvWs, double Depth, double SecsLeft)>();
+        foreach (string f in files)
+            foreach (var r in Csv.Read(f))
+            {
+                if (!DateTime.TryParse(Csv.Str(r, "Timestamp"), CultureInfo.InvariantCulture,
+                                       DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var at)) continue;
+                string tk = Csv.Str(r, "Ticker"), sd = Csv.Str(r, "Side");
+                skips.Add((tk + "|" + sd, tk, sd, at, Csv.Str(r, "InPlay") == "1", Csv.Num(r, "WsAsk"),
+                           Csv.Num(r, "PTrueUsed"), Csv.Num(r, "EvWsCents") / 100.0, Csv.Num(r, "WsDepthToLimit"),
+                           Csv.Num(r, "SecondsLeft")));
+            }
+        Console.WriteLine();
+        Console.WriteLine("10. COOLDOWN SHADOW  (signals the recheck cooldown hid - measured like real ones, traded by nobody)");
+        if (skips.Count == 0) { Console.WriteLine("   no skips logged yet."); return; }
+
+        static (int N, double M, double Se) Stat(IEnumerable<double> v)
+        {
+            var l = v.ToList();
+            if (l.Count < 2) return (l.Count, l.Count == 1 ? l[0] : 0, double.NaN);
+            double m = l.Average();
+            double sd = Math.Sqrt(l.Sum(x => (x - m) * (x - m)) / (l.Count - 1));
+            return (l.Count, m, sd / Math.Sqrt(l.Count));
+        }
+
+        // ── 1. how many, how often, what they looked like ───────────────────────────────────────
+        int days = skips.Select(k => k.At.Date).Distinct().Count();
+        int withDepth = skips.Count(k => !double.IsNaN(k.Depth) && k.Depth > 0);
+        var secs = skips.Where(k => !double.IsNaN(k.SecsLeft)).Select(k => k.SecsLeft).OrderBy(x => x).ToList();
+        var evs  = skips.Select(k => k.EvWs).OrderBy(x => x).ToList();
+        Console.WriteLine($"   skips: {skips.Count} over {days} day(s) = {skips.Count / (double)Math.Max(1, days):0.0}/day   "
+                        + $"distinct ticker+side {skips.Select(k => k.Key).Distinct().Count()}   "
+                        + $"in-play {100.0 * skips.Count(k => k.InPlay) / skips.Count:0}%");
+        Console.WriteLine($"   at the moment of the skip:  depth at our limit {100.0 * withDepth / skips.Count:0}%   "
+                        + $"WS EV p50 {100 * evs[evs.Count / 2]:+0.0}c   "
+                        + (secs.Count > 0 ? $"seconds left on the cooldown p50 {secs[secs.Count / 2]:0.0}s p90 {secs[(int)(0.9 * (secs.Count - 1))]:0.0}s" : ""));
+
+        // ── 2. convergence, same test as section 9, on the skip's own follow-up rows ────────────
+        var seen = new Dictionary<(int Cp, string Key), (double Ea, double Ep, double Na, double Depth)>();
+        var cps = new SortedSet<int>();
+        foreach (string f in Directory.GetFiles(dir, followPrefix + "_*.csv").OrderBy(f => f))
+            foreach (var r in Csv.Read(f))
+            {
+                if (Csv.Str(r, "Decision") != "COOLDOWN_SKIP") continue;
+                double age = Csv.Num(r, "AgeSec"), ea = Csv.Num(r, "EntryAsk"), ep = Csv.Num(r, "EntryPTrue"), na = Csv.Num(r, "NowAsk");
+                if (!double.IsFinite(age) || !double.IsFinite(ea) || !double.IsFinite(ep) || !double.IsFinite(na)) continue;
+                int cp = (int)Math.Round(age);
+                foreach (int c in new[] { 5, 10, 20, 40, 60, 300 })
+                    if (Math.Abs(age - c) <= 4) { cp = c; break; }
+                var k = (cp, Csv.Str(r, "Ticker") + "|" + Csv.Str(r, "Side"));
+                if (seen.ContainsKey(k)) continue;
+                cps.Add(cp);
+                seen[k] = (ea, ep, na, Csv.Num(r, "EntryDepth"));
+            }
+        if (seen.Count > 0)
+        {
+            Console.WriteLine("   -- CONVERGENCE after the moment we COULD have fired (section 9's test; entry = the WS ask at the skip) --");
+            foreach (var (label, keep) in new (string, Func<double, bool>)[]
+                     { ("fillable at the skip", d => !double.IsNaN(d) && d > 0), ("no depth at the skip", d => !double.IsNaN(d) && d <= 0) })
+            {
+                var rows = new List<string>();
+                foreach (int cp in cps)
+                {
+                    var v = seen.Where(kv => kv.Key.Cp == cp && keep(kv.Value.Depth)).Select(kv => kv.Value).ToList();
+                    if (v.Count < 10) continue;
+                    int our = 0, ag = 0; var mv = new List<double>();
+                    foreach (var (ea, ep, na, _) in v)
+                    {
+                        int dr = ep > ea ? 1 : -1; double d = (na - ea) * dr * 100;
+                        if (d > 1e-6) our++; else if (d < -1e-6) ag++;
+                        mv.Add(d);
+                    }
+                    var st = Stat(mv);
+                    rows.Add($"   T+{cp,-4} n={st.N,4}  MOVE {st.M,+6:+0.00;-0.00}c +/-{st.Se,4:0.00} (t={(st.Se > 0 ? st.M / st.Se : 0),+5:+0.0;-0.0})"
+                           + $"   came-to-us {(our + ag > 0 ? 100.0 * our / (our + ag) : 0),5:0.0}%");
+                }
+                if (rows.Count > 0) { Console.WriteLine($"      [{label}]"); rows.ForEach(Console.WriteLine); }
+            }
+            Console.WriteLine("      compare with section 9's FILLABLE line: the same MOVE means the cooldown hid real edge.");
+        }
+        else Console.WriteLine("   (no follow-up rows for skips yet - they arrive 5-300s after each skip)");
+
+        // ── 3. settlement, same test as sections 5/6: one per ticker+side, first skip WITH depth ─
+        bool Graded(string tk, string sd) => settled.TryGetValue(tk, out var rec) && rec.WonFor(sd) is not null;
+        var rep = skips.Where(k => !double.IsNaN(k.Depth) && k.Depth > 0 && k.WsAsk > 0 && k.WsAsk < 1 && Graded(k.Ticker, k.Side))
+                       .GroupBy(k => k.Key).Select(g => g.OrderBy(x => x.At).First()).ToList();
+        if (rep.Count >= 5)
+        {
+            var edge = rep.Select(k => (settled[k.Ticker].WonFor(k.Side) == true ? 1.0 : 0.0)
+                                      - (k.WsAsk + EvMath.FeePerContract(k.WsAsk))).ToList();
+            var st = Stat(edge);
+            int won = rep.Count(k => settled[k.Ticker].WonFor(k.Side) == true);
+            double pt = rep.Average(k => k.PTrue), q = rep.Average(k => k.EvWs);
+            Console.WriteLine($"   -- SETTLEMENT (sections 5/6's test; one per ticker+side, the first skip that had depth, at the WS ask + fee) --");
+            Console.WriteLine($"      n={rep.Count}   won {won}/{rep.Count} ({100.0 * won / rep.Count:0.0}%) vs P_true {100 * pt:0.0}%   "
+                            + $"quoted {100 * q:+0.00}c   realised {100 * st.M:+0.00;-0.00}c +/- {100 * st.Se:0.00}");
+        }
+        else Console.WriteLine($"   -- SETTLEMENT: {rep.Count} skip market(s) with depth have settled - needs 5 to print.");
+
+        // ── 4. the price of waiting: skip -> the later REAL signal on the same market ───────────
+        var sigByKey = obs.Where(o => o.IsSignal).GroupBy(o => o.Ticker + "|" + o.Side, StringComparer.Ordinal)
+                          .ToDictionary(g => g.Key, g => g.OrderBy(o => o.At).ToList(), StringComparer.Ordinal);
+        var paid = new List<double>(); var pmove = new List<double>(); var wait = new List<double>();
+        foreach (var g in skips.Where(k => !double.IsNaN(k.Depth) && k.Depth > 0).GroupBy(k => k.Key))
+        {
+            var first = g.OrderBy(k => k.At).First();
+            if (!sigByKey.TryGetValue(g.Key, out var sl)) continue;
+            var later = sl.FirstOrDefault(o => o.At > first.At && (o.At - first.At).TotalSeconds <= 60);
+            if (later is null || later.RestAsk <= 0) continue;
+            paid.Add((later.RestAsk - first.WsAsk) * 100);
+            pmove.Add((later.PUsed - first.PTrue) * 100);
+            wait.Add((later.At - first.At).TotalSeconds);
+        }
+        if (paid.Count >= 5)
+        {
+            var ps = Stat(paid); var pm = Stat(pmove); var ws = paid.OrderBy(x => x).ToList();
+            Console.WriteLine($"   -- THE PRICE OF WAITING (markets with a fillable skip AND a real signal within 60s) --");
+            Console.WriteLine($"      n={ps.N}   signal ask - skip ask = {ps.M:+0.00;-0.00}c +/- {ps.Se:0.00} (median {ws[ws.Count / 2]:+0.0;-0.0}c)   "
+                            + $"Pinnacle moved {pm.M:+0.00;-0.00}c meanwhile   waited {wait.Average():0.0}s on average");
+            Console.WriteLine($"      -> net edge given up per contract by waiting: {(ps.M - pm.M):+0.00;-0.00}c");
+        }
+        Console.WriteLine("   Nothing in this section was traded. It exists so the cooldown decision can be made on");
+        Console.WriteLine("   measurement rather than inference, without the strategy changing while its verdict is open.");
     }
 
     private static void ConvergenceReport(string dir, string followPrefix, string livePrefix,
@@ -1791,6 +1942,9 @@ public static class Calibration
         LivePathReport(Directory.GetCurrentDirectory(), settled, livePrefix, shardCash, shardIdx);
         StakeScaling(sigOnly, Directory.GetCurrentDirectory());
         ConvergenceReport(Directory.GetCurrentDirectory(), followPrefix, livePrefix, all);
+        CooldownShadow(Directory.GetCurrentDirectory(), followPrefix, settled, all);
+        // THE RADAR IS LAST, ALWAYS. It is the health check; anything printed after it would be the
+        // thing the eye lands on instead. New sections go ABOVE this line.
         RollingRadar(Directory.GetCurrentDirectory(), followPrefix, livePrefix, settled);
     }
 
