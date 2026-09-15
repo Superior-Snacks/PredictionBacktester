@@ -144,9 +144,25 @@ public static class Calibration
     /// is usually a <c>REJECTED_REST</c> screening pass, §2/§3 were calibrating every market we GLANCED at
     /// rather than the ones we would have traded. Both still worth measuring — hence the signals-only line
     /// in §3 — but they are different questions and were being reported as one.</para></summary>
+    /// <summary>One observation per ticker+side. The representative row is, in order of preference: the
+    /// first SIGNAL at which the WS book showed depth at our limit; else the first SIGNAL; else the first
+    /// row of any kind.
+    ///
+    /// <para><b>Why the first BUYABLE signal and not the first signal.</b> The live path buys a market at
+    /// whichever signal the book will fill, which is frequently not the first: measured 2026-09-15, 94 of
+    /// 621 settled signal markets started with the book above our limit and became buyable on a later
+    /// signal, and the live path filled 56 of them. Picking the first signal filed all 94 under "repriced,
+    /// no edge" (graded at a price nobody sold at) while the live path was holding positions in them -
+    /// so the telemetry's FILLABLE set was missing a quarter of the strategy's actual fills, and the
+    /// live-vs-telemetry edge gap was mostly a classification artefact. Graded at their first buyable
+    /// signal those 94 run +3.0c/contract; the 292 that NEVER had depth run -3.1c, which is the honest
+    /// no-edge bucket. Sections 2-3 (oracle calibration) move by a rounding error; sections 4-6 now grade
+    /// the signal the strategy would actually have traded.</para></summary>
     public static List<Obs> Dedupe(IEnumerable<Obs> obs)
         => obs.GroupBy(o => (o.Ticker, o.Side))
-              .Select(g => g.Where(o => o.IsSignal).OrderBy(o => o.At).FirstOrDefault()
+              .Select(g => g.Where(o => o.IsSignal && !double.IsNaN(o.WsDepth) && o.WsDepth > 0)
+                            .OrderBy(o => o.At).FirstOrDefault()
+                        ?? g.Where(o => o.IsSignal).OrderBy(o => o.At).FirstOrDefault()
                         ?? g.OrderBy(o => o.At).First())
               .ToList();
 
@@ -244,6 +260,176 @@ public static class Calibration
     /// its own, with no reference to Pinnacle at all. The column that separates the two is REACHED: drifting
     /// up is consistent with either story, arriving AT our price is not.</para>
     /// </summary>
+    /// <summary>
+    /// Section 10 — the ROLLING RADAR. Three numbers on the last N fills (default 200), each coloured, and one
+    /// verdict. Built for a check every two days by someone deliberately not watching the P&amp;L.
+    ///
+    /// <para><b>Why a rolling window and not the whole history.</b> Every other section pools since
+    /// 2026-08-22. A strategy that stops working shows up in a pooled number only after the new regime has
+    /// outweighed the old one — weeks. The last 200 fills is ~two weeks at the current pace, so a break
+    /// shows here first, and the pooled sections then confirm it.</para>
+    ///
+    /// <para><b>The three lines, and the failure each one catches:</b></para>
+    /// <para>VELOCITY — fills per day across the window against the lifetime rate. Falls when Kalshi volume
+    /// dries up, the sidecar stops feeding live matches (the 2026-09-12 frozen-parent bug would have shown
+    /// here as a halving), or a venue change makes us miss quotes.</para>
+    /// <para>ADVERSE SELECTION — per-contract edge on the window's fills against the misses in the same
+    /// span. Built exactly like section 7's comparison set (one market per ticker+side, markets we also
+    /// filled excluded). Breaks first if faster takers arrive: the misses turn positive while the fills
+    /// turn negative, because they are getting the good ones and leaving us the rest.</para>
+    /// <para>CONVERGENCE — section 9's T+20 MOVE, restricted to the window's fills. Kalshi's ask rising
+    /// after we buy is the thesis; if Kalshi upgrades its own feed and stops lagging Pinnacle, this goes to
+    /// zero and came-to-us goes to 50%.</para>
+    ///
+    /// <para><b>Colours are the verdict.</b> Green on all three: ignore the P&amp;L, let it run. Any yellow:
+    /// look at that line's pooled section. Any red: stop and find out why before the next block. The tags
+    /// [OK]/[WATCH]/[STOP] carry the colour into the Discord attachment, which has no colour.</para>
+    ///
+    /// <para>Renders only once there are <c>EV_RADAR_FILLS</c> fills (default 200); a smaller window is a
+    /// wider error bar wearing the same colours.</para>
+    /// </summary>
+    private static void RollingRadar(string dir, string followPrefix, string livePrefix,
+                                     IReadOnlyDictionary<string, SettlementRecord> settled)
+    {
+        int window = (int)EvConfig.Env("EV_RADAR_FILLS", 200);
+        var files = Directory.GetFiles(dir, livePrefix + "_*.csv").OrderBy(f => f).ToList();
+        if (files.Count == 0) return;
+
+        // every attempt, with what it needs
+        var att = new List<(string Key, string Ticker, string Side, DateTime At, double Fill, double Avg,
+                            double Limit, double Fee, string Status)>();
+        foreach (string f in files)
+            foreach (var row in Csv.Read(f))
+            {
+                double req = Csv.Num(row, "Requested");
+                if (double.IsNaN(req) || req <= 0) continue;
+                if (!DateTime.TryParse(Csv.Str(row, "At"), CultureInfo.InvariantCulture,
+                                       DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var at)) continue;
+                string tk = Csv.Str(row, "Ticker"), sd = Csv.Str(row, "Side");
+                att.Add((tk + "|" + sd, tk, sd, at, Csv.Num(row, "FillCount"), Csv.Num(row, "AvgFillPrice"),
+                         Csv.Num(row, "LimitPrice"), Csv.Num(row, "FeeChargedUsd"), Csv.Str(row, "Status")));
+            }
+        var fillsAll = att.Where(r => r.Fill >= 1).OrderByDescending(r => r.At).ToList();
+
+        Console.WriteLine();
+        Console.WriteLine($"10. ROLLING RADAR  (the last {window} fills - the two-day check; green = let it run, red = stop)");
+        if (fillsAll.Count < window)
+        {
+            Console.WriteLine($"   {fillsAll.Count} fill(s) so far - the radar renders at {window}. Until then read sections 7 and 9.");
+            return;
+        }
+        var win = fillsAll.Take(window).ToList();
+        DateTime newest = win[0].At, oldest = win[^1].At;
+        double days = Math.Max(1.0 / 24, (newest - oldest).TotalDays);
+        double lifeDays = Math.Max(1.0 / 24, (fillsAll[0].At - fillsAll[^1].At).TotalDays);
+
+        static (int N, double M, double Se) Stat(IEnumerable<double> v)
+        {
+            var l = v.ToList();
+            if (l.Count < 2) return (l.Count, l.Count == 1 ? l[0] : 0, double.NaN);
+            double m = l.Average();
+            double sd = Math.Sqrt(l.Sum(x => (x - m) * (x - m)) / (l.Count - 1));
+            return (l.Count, m, sd / Math.Sqrt(l.Count));
+        }
+        static void Line(int grade, string text)
+        {
+            // 0 green, 1 yellow, 2 red. Tag first so the attachment reads the same as the console.
+            string tag = grade == 0 ? "[OK]   " : grade == 1 ? "[WATCH]" : "[STOP] ";
+            Console.ForegroundColor = grade == 0 ? ConsoleColor.Green : grade == 1 ? ConsoleColor.Yellow : ConsoleColor.Red;
+            Console.WriteLine($"   {tag} {text}");
+            Console.ResetColor();
+        }
+        var grades = new List<int>();
+
+        // ── 1. VELOCITY ─────────────────────────────────────────────────────────────────────────
+        double rate = window / days, lifeRate = fillsAll.Count / lifeDays;
+        double ratio = lifeRate > 0 ? rate / lifeRate : 1.0;
+        int gV = ratio >= 0.75 ? 0 : ratio >= 0.40 ? 1 : 2;
+        grades.Add(gV);
+        Line(gV, $"VELOCITY      last {window} fills over {days:0.0} days = {rate:0.0} fills/day   "
+               + $"(lifetime {lifeRate:0.0}/day, ratio {ratio:0.00}; green >= 0.75, red < 0.40)");
+
+        // ── 2. ADVERSE SELECTION inside the window ──────────────────────────────────────────────
+        bool Graded(string tk, string sd) => settled.TryGetValue(tk, out var rec) && rec.WonFor(sd) is not null;
+        bool WonIt(string tk, string sd) => settled[tk].WonFor(sd) == true;
+        var inWin = att.Where(r => r.At >= oldest && r.At <= newest).ToList();
+        var fWin  = inWin.Where(r => r.Fill >= 1 && Graded(r.Ticker, r.Side))
+                         .GroupBy(r => r.Key).Select(g => g.First()).ToList();
+        var filledKeys = new HashSet<string>(inWin.Where(r => r.Fill >= 1).Select(r => r.Key));
+        var mWin  = inWin.Where(r => r.Fill <= 0 && Graded(r.Ticker, r.Side) && !filledKeys.Contains(r.Key)
+                                     && !(r.Status ?? "").Contains("error", StringComparison.OrdinalIgnoreCase))
+                         .GroupBy(r => r.Key).Select(g => g.First()).ToList();
+        var fE = Stat(fWin.Select(r => {
+                        double px = r.Avg > 0 ? r.Avg : r.Limit;
+                        double fe = double.IsNaN(r.Fee) ? 0 : r.Fee;
+                        return (WonIt(r.Ticker, r.Side) ? 1.0 : 0.0) - (px + fe / Math.Max(r.Fill, 1)); }));
+        var mE = Stat(mWin.Select(r => (WonIt(r.Ticker, r.Side) ? 1.0 : 0.0) - r.Limit));
+        if (fE.N >= 10 && mE.N >= 10 && !double.IsNaN(fE.Se) && !double.IsNaN(mE.Se))
+        {
+            double d = mE.M - fE.M, se = Math.Sqrt(fE.Se * fE.Se + mE.Se * mE.Se), t = se > 0 ? d / se : 0;
+            // Misses SIGNIFICANTLY better than fills is the toxic-flow signature. Misses worse, or a
+            // difference inside noise, is healthy. Misses are valued at a limit nobody sold at, which
+            // flatters them, so the bar for red is 2 sigma, not 1.
+            int gA = t >= 2 ? 2 : t >= 1 ? 1 : 0;
+            grades.Add(gA);
+            Line(gA, $"ADVERSE SEL.  filled {100 * fE.M:+0.00;-0.00}c (n={fE.N})   missed {100 * mE.M:+0.00;-0.00}c (n={mE.N})   "
+                   + $"misses {(d >= 0 ? "better" : "worse")} by {100 * Math.Abs(d):0.00}c  t={t:+0.00;-0.00}   "
+                   + "(red = misses better at 2 sigma: someone faster is taking the good ones)");
+        }
+        else
+        {
+            grades.Add(1);
+            Line(1, $"ADVERSE SEL.  filled n={fE.N}, missed n={mE.N} settled in the window - too few to compare yet");
+        }
+
+        // ── 3. CONVERGENCE T+20 on the window's fills ───────────────────────────────────────────
+        var winKeys = new HashSet<string>(win.Select(r => r.Key));
+        var seen = new Dictionary<string, double>();          // key -> signed ask move (cents) at T+20
+        int our = 0, against = 0;
+        foreach (string f in Directory.GetFiles(dir, followPrefix + "_*.csv").OrderBy(f => f))
+            foreach (var r in Csv.Read(f))
+            {
+                if (Csv.Str(r, "Decision") != "SIGNAL") continue;
+                double age = Csv.Num(r, "AgeSec");
+                if (double.IsNaN(age) || Math.Abs(age - 20) > 4) continue;
+                string key = Csv.Str(r, "Ticker") + "|" + Csv.Str(r, "Side");
+                if (!winKeys.Contains(key) || seen.ContainsKey(key)) continue;
+                if (!DateTime.TryParse(Csv.Str(r, "EntryUtc"), CultureInfo.InvariantCulture,
+                                       DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var eu)
+                    || eu < oldest.AddMinutes(-5) || eu > newest.AddMinutes(5)) continue;
+                double ea = Csv.Num(r, "EntryAsk"), ep = Csv.Num(r, "EntryPTrue"), na = Csv.Num(r, "NowAsk");
+                if (double.IsNaN(ea) || double.IsNaN(ep) || double.IsNaN(na)) continue;
+                int dir_ = ep > ea ? 1 : -1;
+                double mv = (na - ea) * dir_ * 100;
+                seen[key] = mv;
+                if (mv > 1e-6) our++; else if (mv < -1e-6) against++;
+            }
+        var cE = Stat(seen.Values);
+        if (cE.N >= 20 && !double.IsNaN(cE.Se))
+        {
+            double t = cE.Se > 0 ? cE.M / cE.Se : 0;
+            double pct = our + against > 0 ? 100.0 * our / (our + against) : 50;
+            // MOVE is the thesis. Positive at 2 sigma with the ask rising more often than not is green;
+            // positive but not yet significant, or came-to-us drifting toward a coin flip, is yellow; a
+            // non-positive move is red - Kalshi is no longer bending to Pinnacle after we buy.
+            int gC = cE.M <= 0 ? 2 : (t < 2 || pct < 55) ? 1 : 0;
+            grades.Add(gC);
+            Line(gC, $"CONVERGENCE   T+20 MOVE {cE.M:+0.00;-0.00}c +/-{cE.Se:0.00} (t={t:+0.0;-0.0})   came-to-us {pct:0.0}%   "
+                   + $"(n={cE.N}; green = positive at 2 sigma and > 55% rising; red = not positive)");
+        }
+        else
+        {
+            grades.Add(1);
+            Line(1, $"CONVERGENCE   only {cE.N} of the window's fills have a T+20 follow-up row - too few to read");
+        }
+
+        // ── verdict ─────────────────────────────────────────────────────────────────────────────
+        int worst = grades.Max();
+        Line(worst, worst == 0 ? "VERDICT       all green - ignore the P&L and let it run."
+                  : worst == 1 ? "VERDICT       yellow - read the matching pooled section (7 for adverse selection, 9 for convergence) before deciding anything."
+                               : "VERDICT       RED - stop before the next block and find out why. A red line here is not variance.");
+    }
+
     private static void ConvergenceReport(string dir, string followPrefix, string livePrefix,
                                           IReadOnlyList<Obs> obs)
     {
@@ -1392,10 +1578,26 @@ public static class Calibration
         // BREAK-EVEN IS THE COST, NEVER 0.500. A signal may under-realise its predicted probability by its
         // entire EV and still pay, because the price was below fair value to begin with. So the threshold
         // the diff must clear is -EV, not zero.
-        void WhenWillWeKnow(List<Obs> sg)
+        void WhenWillWeKnow(List<Obs> sgAll)
         {
             Console.WriteLine();
             Console.WriteLine("6. WHEN WILL WE KNOW?  (what has to be true, and how much more data it needs)");
+            Project(sgAll);
+            // THE SAME PROJECTION ON THE FILLABLE HALF. Section 5 established that signals split into two
+            // populations: Kalshi lagged (depth at our limit, +4.7c/contract realised) and Kalshi already
+            // repriced (no depth, graded at a price that was gone, ~minus the fee). The pooled projection
+            // above blends them, so its edge estimate and its "how long" both describe a strategy nobody
+            // is running. This block is the verdict clock for the one that is. Smaller n, so a later date
+            // by count - but a cleaner edge, so possibly an earlier one by time.
+            var fillable = sgAll.Where(o => !double.IsNaN(o.WsDepth) && o.WsDepth > 0).ToList();
+            Console.WriteLine();
+            Console.WriteLine($"   -- FILLABLE ONLY ({fillable.Count} of {sgAll.Count} markets had depth at our limit on some signal; "
+                            + "graded at the first such) - the same test on what the strategy can actually trade --");
+            Project(fillable);
+        }
+
+        void Project(List<Obs> sg)
+        {
             if (sg.Count < 2) { Console.WriteLine("   (not enough settled signals yet)"); return; }
             // ESTIMATE FROM SINGLE-SIDED MARKETS ONLY, and quote the target in the same unit.
             // The first cut computed the required n from ALL signal rows using binomial variance, which
@@ -1556,9 +1758,9 @@ public static class Calibration
             // signal; it is the same signal with Kalshi repricing as fast as Pinnacle. No edge remains,
             // the REST price is history, and a no-edge trade graded at a stale price settles at minus the
             // fee: -1.72c/contract realised against a 1.75c fee. "Flat" is the expected result, not a loss.
-            Console.WriteLine($"   FILLABLE (Kalshi lagged; edge was there to take)   won {withDepth.Count(o => o.Won!.Value)}/{withDepth.Count}"
+            Console.WriteLine($"   FILLABLE (book showed depth on SOME signal; graded at the first such)   won {withDepth.Count(o => o.Won!.Value)}/{withDepth.Count}"
                             + $"   quoted EV ${qd:0.00}   realised ${rd:+0.00;-0.00}   <- this is the strategy");
-            Console.WriteLine($"   REPRICED (Kalshi already moved; no edge left)       won {noDepth.Count(o => o.Won!.Value)}/{noDepth.Count}"
+            Console.WriteLine($"   NEVER FILLABLE (Kalshi already moved on every look; no edge)         won {noDepth.Count(o => o.Won!.Value)}/{noDepth.Count}"
                             + $"   quoted EV ${qn:0.00}   realised ${rn:+0.00;-0.00}"
                             + $"   <- graded at a price that was gone; expect ~minus the fee");
             int undated = sigs.Count - withDepth.Count - noDepth.Count;
@@ -1589,6 +1791,7 @@ public static class Calibration
         LivePathReport(Directory.GetCurrentDirectory(), settled, livePrefix, shardCash, shardIdx);
         StakeScaling(sigOnly, Directory.GetCurrentDirectory());
         ConvergenceReport(Directory.GetCurrentDirectory(), followPrefix, livePrefix, all);
+        RollingRadar(Directory.GetCurrentDirectory(), followPrefix, livePrefix, settled);
     }
 
     /// <summary>

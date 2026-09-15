@@ -65,6 +65,22 @@ def digest(out: str) -> tuple[str, bool]:
     bad = False
     L = []
 
+    # THE RADAR FIRST. Section 10 is the two-day check: three rolling-window lines and a verdict, each
+    # tagged [OK]/[WATCH]/[STOP]. It goes at the top because it is the only thing the reader needs when
+    # the answer is "all green", and the thing they need most when it is not. Tags become emoji here so
+    # the colour survives Discord. A [STOP] anywhere marks the whole digest alarming.
+    radar = re.findall(r"^\s*\[(OK|WATCH|STOP)\]\s+(VELOCITY|ADVERSE SEL\.|CONVERGENCE|VERDICT)\s+(.*)$", out, re.M)
+    if radar:
+        L.append("**RADAR** (last 200 fills)")
+        for tag, name, rest in radar:
+            rest = clean(rest)
+            rest = re.sub(r"\s*\((?:lifetime|red =|n=\d+; green|green >=)[^)]*\)\s*$", "", rest)   # drop the legend
+            icon = {"OK": "🟢", "WATCH": "🟡", "STOP": "🔴"}[tag]
+            if tag == "STOP":
+                bad = True
+            L.append(f"{icon} `{name:<13} {rest.strip()}`")
+        L.append("")
+
     orient = grab(out, r"^\s*PAIR ORIENTATION: .*$")
     if orient:
         n_flip = grab(out, r"PAIR ORIENTATION: \d+ signal ticker\(s\) name-verified, (\d+) MIS-ORIENTED", 1)
