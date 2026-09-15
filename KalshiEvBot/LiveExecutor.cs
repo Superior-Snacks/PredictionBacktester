@@ -33,7 +33,11 @@ public static class Con
 /// ceiling — and section 7's fill rate is uninterpretable without knowing which.</summary>
 public readonly record struct TakeCtx(double WsAsk, double DepthToLimit, bool InPlay,
                                       double OracleAgeMs, double WsBookAgeMs, string Regime,
-                                      double BankrollUsd = 0, double EquityUsd = 0);
+                                      double BankrollUsd = 0, double EquityUsd = 0,
+                                      // Quarter-Kelly stake with NO edge haircut, NO dollar min/max, NO contract
+                                      // cap: what the model asked for before any bound touched it. Logged so the
+                                      // caps' cost is a direct read from the row rather than a re-derivation.
+                                      double UncappedStakeUsd = 0);
 
 /// <summary>
 /// Places the real Kalshi order behind a confirmed signal — M1's only new capability.
@@ -363,6 +367,12 @@ public sealed class EvLiveLog : IDisposable
         "FeeChargedUsd", "FeeAssumedUsd", "FeeDragCentsPerCtr",
         "WsAsk", "DepthToLimit", "InPlay", "OracleAgeMs", "WsBookAgeMs", "Regime", "FeeVenueUsd",
         "BankrollUsd", "EquityUsd",
+        // UncappedContracts: the contract count Kelly wanted at this limit with the edge haircut, the $25
+        // ceiling and the 25-contract cap all OFF (per-game and daily backstops still apply to the order,
+        // not to this number). Requested - UncappedContracts < 0 means a cap bound. Measured 2026-09-15
+        // by re-deriving it: 19 of 37 fills were bound, all by the contract cap, costing +$15 over three
+        // days at 9-8 - inside noise, which is why it is now logged rather than re-derived each time.
+        "UncappedContracts",
     };
 
     private readonly RollingCsv _csv;
@@ -396,6 +406,9 @@ public sealed class EvLiveLog : IDisposable
             RollingCsv.N(r.Ctx.WsBookAgeMs, 0), RollingCsv.Q(r.Ctx.Regime ?? ""),
             RollingCsv.N(r.FeeVenue, 4),
             RollingCsv.N(r.Ctx.BankrollUsd, 2), RollingCsv.N(r.Ctx.EquityUsd, 2),
+            r.Ctx.UncappedStakeUsd > 0 && r.LimitPrice > 0
+                ? EvMath.ContractsFor(r.Ctx.UncappedStakeUsd, r.LimitPrice, 1.0).ToString(CultureInfo.InvariantCulture)
+                : "",
         });
     }
 

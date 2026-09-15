@@ -742,7 +742,7 @@ public static class Calibration
 
         var rows = new List<(string Ticker, string Side, double Limit, double RestPx, double Ev,
                              int Req, string Status, double Fill, double Avg, double Ms, double Slip,
-                             double Fee, double Equity, double Bank, string At, double Depth)>();
+                             double Fee, double Equity, double Bank, string At, double Depth, double Uncapped)>();
         // Csv.Read, NOT StreamReader. A bare StreamReader requests FileShare.Read, which CONFLICTS with the
         // write handle the running bot holds on today's file — and the whole report dies on an IOException
         // AFTER printing sections 1-6, so it looks like the report simply ends. Csv.Read opens with
@@ -759,7 +759,7 @@ public static class Calibration
                           (int)(double.IsNaN(D("Requested")) ? 0 : D("Requested")), S("Status"),
                           D("FillCount"), D("AvgFillPrice"), D("LatencyMs"), D("SlippageCents"),
                           D("FeeChargedUsd"), D("EquityUsd"), D("BankrollUsd"), S("At"),
-                          D("DepthToLimit")));
+                          D("DepthToLimit"), D("UncappedContracts")));
             }
         }
         if (rows.Count == 0) return;
@@ -824,6 +824,41 @@ public static class Calibration
             if (partial > 0)
                 Console.WriteLine($"   PARTIAL on {partial} of {got.Count} fills — the depth was not there for "
                                 + "the full size.");
+
+            // ── THE CAPS' RUNNING COST: what Kelly wanted vs what was sent, settled ──────────────
+            // UncappedContracts is logged on every order row from 2026-09-15: the count quarter-Kelly asked
+            // for with the edge haircut, the $25 ceiling and the 25-contract cap all off. Where it exceeds
+            // what filled, the extra contracts are valued at the same outcome and the same fill price, so
+            // this is "the P&L had the caps been off", bounded by the depth that was showing. Two numbers
+            // matter: how often a cap binds (a cap that binds on most fills is a flat-stake rule wearing
+            // Kelly's name) and whether the extra would have paid (nine-eight over three days when first
+            // measured - noise). Rows before the column read NaN and are simply not counted.
+            var capRows2 = got.Where(r => !double.IsNaN(r.Uncapped) && r.Uncapped > 0 && r.Fill >= 1).ToList();
+            if (capRows2.Count > 0)
+            {
+                var bound2 = capRows2.Where(r => r.Uncapped > r.Fill + 0.5).ToList();
+                double delta = 0; int nSet = 0, nWon = 0, nOpen = 0; double extraCtr = 0;
+                foreach (var r in bound2)
+                {
+                    double extra = Math.Min(r.Uncapped, r.Depth > 0 ? r.Depth : r.Uncapped) - r.Fill;
+                    if (extra <= 0) continue;
+                    bool? w = settled.TryGetValue(r.Ticker, out var rec) ? rec.WonFor(r.Side) : null;
+                    if (w is null) { nOpen++; continue; }
+                    double px = r.Avg > 0 ? r.Avg : r.Limit;
+                    delta += extra * ((w.Value ? 1.0 : 0.0) - px)
+                           - (EvMath.OrderFee(px, (int)Math.Round(r.Fill + extra)) - EvMath.OrderFee(px, (int)Math.Round(r.Fill)));
+                    extraCtr += extra; nSet++; if (w.Value) nWon++;
+                }
+                Console.WriteLine();
+                Console.WriteLine($"   CAPS      {bound2.Count} of {capRows2.Count} logged fill(s) were cut by a cap "
+                                + $"({100.0 * bound2.Count / capRows2.Count:0}%)   "
+                                + $"uncapped would have changed settled P&L by ${delta:+0.00;-0.00} "
+                                + $"({extraCtr:0} extra contract(s), {nWon}-{nSet - nWon} on {nSet} settled"
+                                + (nOpen > 0 ? $", {nOpen} open" : "") + ")");
+                if (bound2.Count > capRows2.Count / 2)
+                    Console.WriteLine("             ^ a cap is deciding the size on most fills - that is flat staking with a Kelly label. "
+                                    + "Raise EV_LIVE_MAX_CONTRACTS or accept it knowingly.");
+            }
 
             // ── CAPACITY: how much COULD have been deployed on the markets we bought ──────────────
             // DepthToLimit is the WS ladder walked at-or-better than our limit, in contracts, at the

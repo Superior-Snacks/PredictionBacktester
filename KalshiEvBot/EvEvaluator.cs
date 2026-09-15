@@ -1019,7 +1019,7 @@ public sealed class EvEvaluator
             // at risk at once. An approximation, and it is the term that was missing entirely -
             // ActiveExposureFraction was never assigned anywhere, so Beta read exactly 1.0 on all 1547
             // signal rows and the concurrent-position damping had never once engaged.
-            double kellyStake = 0;
+            double kellyStake = 0, uncappedStake = 0;
             if (_cfg.LiveSizing == "kelly")
             {
                 // A LOCAL, NOT `ActiveExposureFraction`. That property is read by EvMath.Size earlier in
@@ -1035,6 +1035,12 @@ public sealed class EvEvaluator
                                                  _cfg.MaxTradeFrac, feeM, _cfg.LiveKellyFraction,
                                                  _cfg.KellyBetaKnee, _cfg.KellyBetaZero,
                                                  _cfg.LiveKellyMaxEdge);
+                // And with the edge haircut off too - the number the row logs as UncappedContracts, so the
+                // caps' running cost can be read off the file instead of re-derived.
+                uncappedStake = EvMath.LiveStakeUsd(c.PTrueUsed, px, c.Vig, LiveEquityUsd,
+                                                    liveExposure, 0, 0,
+                                                    _cfg.MaxTradeFrac, feeM, _cfg.LiveKellyFraction,
+                                                    _cfg.KellyBetaKnee, _cfg.KellyBetaZero, 0.0);
                 kellyStake = EvMath.LiveStakeUsd(c.PTrueUsed, px, c.Vig, LiveEquityUsd,
                                                  liveExposure, _cfg.LiveKellyMinUsd,
                                                  _cfg.LiveKellyMaxUsd, _cfg.MaxTradeFrac, feeM,
@@ -1071,7 +1077,7 @@ public sealed class EvEvaluator
                                          c.PTrueUsed, ev,
                                          new TakeCtx((double)c.WsAsk, depthUnknown ? -1 : depthToLimit,
                                                      c.InPlay, c.OracleAgeMs, c.WsBookAge, regime,
-                                                     BankrollUsd, LiveEquityUsd), ct,
+                                                     BankrollUsd, LiveEquityUsd, uncappedStake), ct,
                                          kellyStake, feeM);
         }
 
