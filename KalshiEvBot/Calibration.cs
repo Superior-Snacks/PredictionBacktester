@@ -887,6 +887,44 @@ public static class Calibration
                                 + $"{nOvl} on market(s) we DID fill ${pnlOvl:+0.00;-0.00}");
                 Console.WriteLine("       ^ orders, not bets: a market that signals five times and wins is booked five times "
                                 + "here. Read the INDEPENDENT figure; the rest is the same winners repeated.");
+
+                // WHY THEY MISSED. A no-fill is one of two very different things, and only one of them is
+                // about us. DepthToLimit on the order row is the WS ladder at-or-better than our limit at the
+                // moment the order went out. -1 (or 0) means the live book was ALREADY above our limit: the
+                // edge was gone before the order existed, and no order speed catches a price that is not
+                // there - Kalshi repriced between Pinnacle's move and our VALUATION, which is detection
+                // latency (the recheck cooldown), not order latency. > 0 means depth was showing at our
+                // price and the order still came back empty: the only kind of miss faster ORDER placement
+                // (send before the REST read, move to a server) could ever recover. Measured 2026-09-15:
+                // 422 repriced, 12 truly missed - and 8 of the 12 were our own HTTP errors on one burst.
+                // A latency-miss rate under a few percent says the order path is not the constraint.
+                var missedAll_ = att.Where(r => r.Fill <= 0 && r.Req > 0).ToList();
+                var repriced   = missedAll_.Where(r => !double.IsNaN(r.Depth) && r.Depth <= 0).ToList();
+                var trueMiss   = missedAll_.Where(r => !double.IsNaN(r.Depth) && r.Depth > 0).ToList();
+                var depthUnk   = missedAll_.Count - repriced.Count - trueMiss.Count;
+                int tmErr      = trueMiss.Count(r => !string.IsNullOrEmpty(r.Status)
+                                                     && r.Status.Contains("error", StringComparison.OrdinalIgnoreCase));
+                int tmRested   = trueMiss.Count - tmErr;
+                int realOpps   = tmRested + got.Count;
+                Console.WriteLine($"     WHY THEY MISSED (all {missedAll_.Count} no-fill orders, settled or not):");
+                Console.WriteLine($"       REPRICED      {repriced.Count,4}  live book already above our limit when the order went out - the "
+                                + "edge was gone; no order speed would have caught it");
+                Console.WriteLine($"       TRULY MISSED  {trueMiss.Count,4}  depth was showing at our limit and the order still did not fill"
+                                + (tmErr > 0 ? $"  ({tmErr} of those were OUR HTTP errors, {tmRested} rested unfilled)" : ""));
+                if (depthUnk > 0)
+                    Console.WriteLine($"       unknown       {depthUnk,4}  rows that predate the DepthToLimit column");
+                if (realOpps > 0)
+                {
+                    double lmr = 100.0 * tmRested / realOpps;
+                    Console.WriteLine($"     LATENCY MISS RATE on real opportunities: {tmRested} / ({tmRested} + {got.Count} filled) = {lmr:0.0}%"
+                                    + (tmErr > 0 ? $"   ({100.0 * trueMiss.Count / (trueMiss.Count + got.Count):0.0}% counting the HTTP errors)" : ""));
+                    Console.WriteLine(lmr < 5
+                        ? "       -> the ORDER path is not the constraint. The repriced pile argues for DETECTION latency "
+                          + "(EV_RECHECK_COOLDOWN_MS), not for order speed or a server move."
+                        : lmr < 15
+                        ? "       -> a real but modest cost. Worth timing the REST+verify hop before spending on a server move."
+                        : "       -> order-placement latency is costing fills. Send before the REST read; consider co-location.");
+                }
                 Console.WriteLine($"     actually  won {fw}/{fn} ({100.0 * fw / fn:0.0}%) on the fills"
                                 + (fctr > 0 ? $"                    ({fpnl / fctr * 100:+0.00;-0.00}c/contract)" : ""));
                 Console.WriteLine("     (those two c/contract figures are CONTRACT-weighted totals; the "
@@ -942,6 +980,25 @@ public static class Calibration
                     if (d > 0)
                         Console.WriteLine("     ^ misses are valued at a limit nobody sold at, which flatters "
                                         + "them - discount a positive result here.");
+
+                    // THE SAME TEST ON THE TRULY MISSED ONLY. "Did the ones we were too slow for pay?" is the
+                    // adverse-selection question that actually bears on latency; the repriced pile cannot
+                    // answer it because there was never a price to be slow to. Usually too small to read -
+                    // which is itself the finding.
+                    var tmCmp = missedCmp.Where(r => !double.IsNaN(r.Depth) && r.Depth > 0
+                                                   && !(r.Status ?? "").Contains("error", StringComparison.OrdinalIgnoreCase)).ToList();
+                    if (tmCmp.Count >= 2)
+                    {
+                        var tE = PerCtr(tmCmp.Select(r => (WonIt(r.Ticker, r.Side) ? 1.0 : 0.0) - r.Limit));
+                        double dt = tE.M - fE.M, sdt = Math.Sqrt(fE.Se * fE.Se + (double.IsNaN(tE.Se) ? 0 : tE.Se * tE.Se));
+                        Console.WriteLine($"     TRULY MISSED only   n={tE.N}  edge {100 * tE.M:+0.00;-0.00}c"
+                                        + (double.IsNaN(tE.Se) ? "" : $" +/- {100 * tE.Se:0.00}c")
+                                        + $"   vs filled {100 * fE.M:+0.00;-0.00}c   diff {100 * dt:+0.00;-0.00}c"
+                                        + (sdt > 0 ? $" (t={dt / sdt:+0.00;-0.00})" : "")
+                                        + (tE.N < 10 ? "   - too few to read; that is the point" : ""));
+                    }
+                    else
+                        Console.WriteLine("     TRULY MISSED only   fewer than 2 settled - nothing to compare, which is the finding.");
                 }
             }
         }
@@ -1492,11 +1549,18 @@ public static class Calibration
             double rd = withDepth.Sum(o => ((o.Won!.Value ? 1.0 : 0.0) - o.Cost) * Math.Max(1, o.Contracts));
             double qn = noDepth.Sum(o => o.Ev * Math.Max(1, o.Contracts));
             double rn = noDepth.Sum(o => ((o.Won!.Value ? 1.0 : 0.0) - o.Cost) * Math.Max(1, o.Contracts));
-            Console.WriteLine($"   FILLABLE (book showed depth at our limit)   won {withDepth.Count(o => o.Won!.Value)}/{withDepth.Count}"
-                            + $"   quoted EV ${qd:0.00}   realised ${rd:+0.00;-0.00}");
-            Console.WriteLine($"   unbuyable (nobody offering at our price)    won {noDepth.Count(o => o.Won!.Value)}/{noDepth.Count}"
+            // WHAT THE SECOND LINE IS. Measured 2026-09-15 (n=385): on these rows the live WS ask was
+            // already 2.2c ABOVE the REST snapshot the signal was valued on, and within 20s Kalshi had
+            // closed all but 0.5c of the gap to Pinnacle - against 2.3c still open on fillable rows.
+            // Pinnacle's own drift after the signal is identical in both groups, so it is not a worse
+            // signal; it is the same signal with Kalshi repricing as fast as Pinnacle. No edge remains,
+            // the REST price is history, and a no-edge trade graded at a stale price settles at minus the
+            // fee: -1.72c/contract realised against a 1.75c fee. "Flat" is the expected result, not a loss.
+            Console.WriteLine($"   FILLABLE (Kalshi lagged; edge was there to take)   won {withDepth.Count(o => o.Won!.Value)}/{withDepth.Count}"
+                            + $"   quoted EV ${qd:0.00}   realised ${rd:+0.00;-0.00}   <- this is the strategy");
+            Console.WriteLine($"   REPRICED (Kalshi already moved; no edge left)       won {noDepth.Count(o => o.Won!.Value)}/{noDepth.Count}"
                             + $"   quoted EV ${qn:0.00}   realised ${rn:+0.00;-0.00}"
-                            + $"   <- the live path fills 0% of these; see section 9");
+                            + $"   <- graded at a price that was gone; expect ~minus the fee");
             int undated = sigs.Count - withDepth.Count - noDepth.Count;
             if (undated > 0)
                 Console.WriteLine($"   ({undated} signal(s) predate the depth column and sit in neither line)");
