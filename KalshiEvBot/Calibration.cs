@@ -458,19 +458,35 @@ public static class Calibration
 
         var skips = new List<(string Key, string Ticker, string Side, DateTime At, bool InPlay, double WsAsk,
                               double PTrue, double EvWs, double Depth, double SecsLeft)>();
+        // Rows without EvAtArmCents are the 2026-09-16/17 definition: "WS book still clears the threshold
+        // inside a window" - which every REST check satisfies 250ms later, and every guard-suppressed
+        // phantom satisfies all afternoon. They are re-sightings, not hidden signals (16,654 of them joined
+        // 100% to a REST valuation 90ms earlier). Counted so the header can say so; never averaged in.
+        int oldDef = 0; var oldDays = new HashSet<DateTime>();
+        // The follow-up tracker was fed by BOTH definitions (the old one scheduled ~16k COOLDOWN_SKIP
+        // follow-ups a day), so the convergence join below is keyed to the skips kept here - the skip's
+        // Timestamp and the follow-up's EntryUtc are the same DateTime written with the same format.
+        var keepEntry = new HashSet<string>(StringComparer.Ordinal);
         foreach (string f in files)
             foreach (var r in Csv.Read(f))
             {
                 if (!DateTime.TryParse(Csv.Str(r, "Timestamp"), CultureInfo.InvariantCulture,
                                        DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var at)) continue;
+                if (!r.ContainsKey("EvAtArmCents")) { oldDef++; oldDays.Add(at.Date); continue; }
                 string tk = Csv.Str(r, "Ticker"), sd = Csv.Str(r, "Side");
+                keepEntry.Add(tk + "|" + sd + "|" + Csv.Str(r, "Timestamp"));
                 skips.Add((tk + "|" + sd, tk, sd, at, Csv.Str(r, "InPlay") == "1", Csv.Num(r, "WsAsk"),
                            Csv.Num(r, "PTrueUsed"), Csv.Num(r, "EvWsCents") / 100.0, Csv.Num(r, "WsDepthToLimit"),
                            Csv.Num(r, "SecondsLeft")));
             }
         Console.WriteLine();
         Console.WriteLine("10. COOLDOWN SHADOW  (signals the recheck cooldown hid - measured like real ones, traded by nobody)");
-        if (skips.Count == 0) { Console.WriteLine("   no skips logged yet."); return; }
+        Console.WriteLine("   a skip = a candidate inside the price band that cleared the threshold on the WS book mid-cooldown with NEW information");
+        Console.WriteLine("   since the check that armed the window: the side was not a candidate then, or its WS EV improved by >= 1c. Once per side per window.");
+        if (oldDef > 0)
+            Console.WriteLine($"   ({oldDef} row(s) over {oldDays.Count} day(s) from the earlier definition set aside - every one was a re-sighting of a price "
+                            + "REST had valued 90ms before, not a hidden signal)");
+        if (skips.Count == 0) { Console.WriteLine("   no skips logged under this definition yet."); return; }
 
         static (int N, double M, double Se) Stat(IEnumerable<double> v)
         {
@@ -500,6 +516,7 @@ public static class Calibration
             foreach (var r in Csv.Read(f))
             {
                 if (Csv.Str(r, "Decision") != "COOLDOWN_SKIP") continue;
+                if (!keepEntry.Contains(Csv.Str(r, "Ticker") + "|" + Csv.Str(r, "Side") + "|" + Csv.Str(r, "EntryUtc"))) continue;
                 double age = Csv.Num(r, "AgeSec"), ea = Csv.Num(r, "EntryAsk"), ep = Csv.Num(r, "EntryPTrue"), na = Csv.Num(r, "NowAsk");
                 if (!double.IsFinite(age) || !double.IsFinite(ea) || !double.IsFinite(ep) || !double.IsFinite(na)) continue;
                 int cp = (int)Math.Round(age);

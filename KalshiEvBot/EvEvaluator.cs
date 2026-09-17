@@ -303,8 +303,15 @@ public sealed class EvEvaluator
     private readonly EvTelemetry _telemetry;
     private FollowUpTracker? _followUp;
     private CooldownLog? _cooldownLog;
-    // ticker -> the cooldown `until` value we last logged skips for, so each window logs at most once/side
+    // "ticker|side" -> the cooldown `until` value we last logged a skip for: at most one row per side per window
     private readonly ConcurrentDictionary<string, long> _cooldownLogged = new(StringComparer.Ordinal);
+    // "ticker|side" -> what that side's WS-side EV was at the REST check that armed the current window. The
+    // skip gate compares against this: a candidate that has not improved on it is the condition we just
+    // valued, still sitting on the WS book, and is NOT a hidden signal.
+    private readonly ConcurrentDictionary<string, (long Until, double EvWs)> _armedEv = new(StringComparer.Ordinal);
+    // A full cent better than at arming: a tick down on the ask, or Pinnacle moving our way by more than its
+    // sampling jitter (p95 of consecutive in-play P_true deltas is 0.75c). Below this it is the same price.
+    private const double CooldownLogMinImprove = 0.01;
     private readonly EvConfig _cfg;
     private readonly SemaphoreSlim _restGate;
     private readonly ConcurrentDictionary<string, long> _cooldownUntil = new(StringComparer.Ordinal);
@@ -555,6 +562,11 @@ public sealed class EvEvaluator
         {
             if (_byTicker.TryRemove(t, out _)) removed++;
             _cooldownUntil.TryRemove(t, out _);
+            foreach (string side in new[] { "YES", "NO" })
+            {
+                _cooldownLogged.TryRemove($"{t}|{side}", out _);
+                _armedEv.TryRemove($"{t}|{side}", out _);
+            }
         }
         foreach (var kv in fresh) _byTicker[kv.Key] = kv.Value;
         // A RELOAD CAN INTRODUCE A WHOLE NEW SERIES, whose fee multiplier the startup prime never read.
@@ -620,20 +632,34 @@ public sealed class EvEvaluator
         if (_cooldownUntil.TryGetValue(ticker, out long until) && now < until)
         {
             Interlocked.Increment(ref Stats.Cooldown);
-            // WHAT THE GATE HID. Measured 2026-09-15 from the rows that got through: 73% of in-play
-            // signals fired at the instant their cooldown lifted, and the ask moves +1.73c in the five
-            // seconds after a signal - so a signal that appeared mid-window has typically lost half its
-            // edge by the time it is valued. Until now that was inferred; this records it. Once per
-            // (ticker, side, window), only for candidates that clear the FULL threshold on the WS book,
-            // and each one is scheduled into the follow-up tracker so its T+5/10/20 is graded exactly
-            // like a signal's. Nothing here touches the venue - every field is already in memory.
-            if (_cooldownLog is not null && _cooldownLogged.GetValueOrDefault(ticker) != until)
+            // WHAT THE GATE HID - and only that. The first cut of this log (2026-09-16/17) wrote a row
+            // whenever the WS book still cleared the threshold inside a window. That is true 250ms after
+            // EVERY check, and true for hours on a guard-suppressed phantom (a 10c ask sits OUT_OF_BAND
+            // all afternoon and was re-logged every 15s). Two days gave 16,654 rows that collapsed to
+            // 2,477 standing conditions, every one of them REST-valued 90ms BEFORE its first "skip" row,
+            // and six candidates that actually appeared mid-window. A re-sighting of the price we just
+            // valued is not a hidden signal.
+            //
+            // So the test is NEW INFORMATION since the check that armed this window: this side was not a
+            // candidate then, or its WS-side EV has improved by a full cent (a tick down on the ask, or
+            // Pinnacle moving our way) - and the ask is inside the price band, because a candidate the
+            // band would refuse cannot become a signal however much it improves (replaying the two days
+            // with only the first test kept 158 rows; 48 were a pre-match book flickering 0.14/0.15/0.16
+            // below the floor). One row per (ticker, side, window), and each is scheduled into the
+            // follow-up tracker so its T+5/10/20 is graded exactly like a signal's. Nothing here touches
+            // the venue - every field is already in memory.
+            if (_cooldownLog is not null)
             {
-                _cooldownLogged[ticker] = until;
                 double feeM_ = FeeM(pair.KalshiTicker);
                 foreach (var c in candidates)
                 {
                     if (c.EvWs < _cfg.EvMin) continue;
+                    if ((double)c.WsAsk < _cfg.MinPrice || (double)c.WsAsk > _cfg.MaxPrice) continue;   // structurally unbuyable
+                    string key_ = $"{ticker}|{c.Side}";
+                    if (_cooldownLogged.GetValueOrDefault(key_) == until) continue;     // this window, this side: done
+                    double evArm_ = _armedEv.TryGetValue(key_, out var arm_) && arm_.Until == until ? arm_.EvWs : double.NaN;
+                    if (!double.IsNaN(evArm_) && c.EvWs < evArm_ + CooldownLogMinImprove) continue;   // same price we just valued
+                    _cooldownLogged[key_] = until;
                     Interlocked.Increment(ref Stats.CooldownSignals);
                     double limit_ = EvMath.BreakEvenLimit(c.PTrueUsed, _cfg.EvMin, feeM_);
                     double depth_ = (double)_feed.DepthAtOrBetter(pair.KalshiTicker, c.Side == "YES", (decimal)limit_);
@@ -643,7 +669,7 @@ public sealed class EvEvaluator
                         : "FIRST_LOOK";
                     var at_ = DateTime.UtcNow;
                     _cooldownLog.Write(at_, pair.KalshiTicker, c.Side, c.InPlay, c.WsAsk, c.PTrueUsed, c.EvWs,
-                                       depth_, (until - now) / 1000.0, regime_);
+                                       depth_, (until - now) / 1000.0, regime_, evArm_);
                     _followUp?.Schedule(new FollowUp(at_, pair.KalshiTicker, c.Side, pair.Legs, pair.YesLegIndex,
                                                      "COOLDOWN_SKIP", regime_, (double)c.WsAsk, c.PTrueUsed, c.EvWs,
                                                      _cfg.DeVigMethod, depth_));
@@ -652,6 +678,10 @@ public sealed class EvEvaluator
             return;
         }
         _cooldownUntil[ticker] = now + _cfg.CooldownMs;
+        // What each side looked like at the check that armed this window - the skip gate above needs it to
+        // tell a NEW opportunity from this one still sitting on the WS book. Every candidate, including the
+        // ones between the prescreen and the full threshold, so a creeping one is measured from here too.
+        foreach (var c in candidates) _armedEv[$"{ticker}|{c.Side}"] = (now + _cfg.CooldownMs, c.EvWs);
 
         decimal restYes, restNo;
         await _restGate.WaitAsync(ct);

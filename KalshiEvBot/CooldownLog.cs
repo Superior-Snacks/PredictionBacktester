@@ -17,13 +17,21 @@ namespace KalshiEvBot;
 ///
 /// <para>Costs nothing at the venue: every field is already in memory when the gate fires. Bounded by the
 /// dedupe to two rows per ticker per window.</para>
+///
+/// <para><b>Definition change 2026-09-17.</b> The first two days logged any candidate still clearing the
+/// threshold on the WS book inside a window - 16,654 rows, all of them re-sightings of a price that had been
+/// REST-valued 90ms earlier (join against the telemetry: 100% matched; six candidates genuinely appeared
+/// mid-window). Rows now require NEW information since the check that armed the window - the side was not a
+/// candidate then, or its WS EV improved by a full cent - and carry <c>EvAtArmCents</c> (empty when the side
+/// was not a candidate at arming). Files without that column are from the old definition; the report says
+/// so and ignores them rather than averaging the two.</para>
 /// </summary>
 public sealed class CooldownLog : IDisposable
 {
     public static readonly string[] Columns =
     {
         "Timestamp", "Ticker", "Side", "InPlay", "WsAsk", "PTrueUsed", "EvWsCents", "WsDepthToLimit",
-        "SecondsLeft", "MoveRegime",
+        "SecondsLeft", "MoveRegime", "EvAtArmCents",
     };
 
     private readonly RollingCsv _csv;
@@ -35,13 +43,14 @@ public sealed class CooldownLog : IDisposable
     public long RowsWritten => _csv.RowsWritten;
 
     public void Write(DateTime utc, string ticker, string side, bool inPlay, decimal wsAsk, double pTrue,
-                      double evWs, double depthToLimit, double secondsLeft, string regime)
+                      double evWs, double depthToLimit, double secondsLeft, string regime, double evAtArm)
     {
         _csv.WriteRow(new[]
         {
             utc.ToString("o", CultureInfo.InvariantCulture), RollingCsv.Q(ticker), RollingCsv.Q(side),
             inPlay ? "1" : "0", RollingCsv.N(wsAsk, 4), RollingCsv.N(pTrue, 6), RollingCsv.N(evWs * 100, 2),
             RollingCsv.N(depthToLimit, 0), RollingCsv.N(secondsLeft, 1), RollingCsv.Q(regime),
+            double.IsNaN(evAtArm) ? "" : RollingCsv.N(evAtArm * 100, 2),
         });
     }
 
