@@ -314,6 +314,14 @@ class PinnacleBrowserSession:
         self._probe_odds_ok = False      # confirmed a PUBLISH payload parses as odds JSON
         self._probe_start = 0.0
         self._probe_task = None
+        # PAGE-WS FRAME COUNT - the discriminator the 2026-09-18/19 outage lacked. The sidecar's own paho
+        # socket was connected and silent for 20h; whether the PAGE's socket (same account, same venue, the
+        # browser's own connection) was receiving would have said at once whether that was us (throttled/refused
+        # client) or them (venue not publishing). Counted on every Network.webSocketFrameReceived for an Arcadia
+        # socket: an integer increment, no decode, no parse. Chrome already emits these events (Network is
+        # enabled for the CONNECT capture); until now Python simply had no listener.
+        self._page_ws_frames = 0         # all received frames on the page's Arcadia socket(s), this browser run
+        self._page_ws_buckets: dict = {} # minute -> frames, last few minutes (for "N in the last 2 min")
         self._arcadia_last_frame = 0.0   # ts of the last ANY frame on an Arcadia WS (odds OR MQTT keepalive) —
                                          # a CONNECTION heartbeat for odds_ws_alive() (survives quiet odds spells)
 
@@ -338,6 +346,12 @@ class PinnacleBrowserSession:
             # purpose so the next scheduled window can reuse them - so callers asking "are we still logged in"
             # got True all through a dark window. This is the honest answer.
             "page_open": self._page is not None and self._ctx is not None,
+            # The browser's OWN Arcadia socket. Read this next to the adapter's `ws_msgs`: page receiving while
+            # the sidecar's socket is silent = the venue is publishing and OUR client is the problem.
+            "page_ws_frames": self._page_ws_frames,
+            "page_ws_recent_2m": self.page_ws_recent(120.0),
+            "page_ws_last_frame_age": (round(time.time() - self._arcadia_last_frame, 1)
+                                       if self._arcadia_last_frame > 0 else None),
             "has_ws_creds": self._have_ws,
             "account": (self._ws_user[:3] + "***") if self._ws_user else "",
             "last_capture_age_sec": round(time.time() - self._last_capture, 1) if self._last_capture else None,
@@ -351,7 +365,7 @@ class PinnacleBrowserSession:
         arrives even when NO line is moving, this stays True through a quiet-but-connected feed — so a stable
         pre-match price correctly reads LIVE — and flips false only on a real drop (no frames, not even pings, for
         ttl) or logout. Superior to an odds-recency gate, which false-deads a stable line the moment it stops
-        ticking. Requires the received-frame path to be armed (probe or reader mode)."""
+        ticking. The heartbeat is stamped by _on_cdp_ws_frame_count, which is always armed (2026-09-19)."""
         if not self._cdp_ws_reqs:
             return False                                  # no Arcadia odds WS open (clean close detected)
         return self._arcadia_last_frame > 0 and (time.time() - self._arcadia_last_frame) < ttl
@@ -630,8 +644,9 @@ class PinnacleBrowserSession:
         cdp.on("Network.webSocketCreated", self._on_cdp_ws_created)
         cdp.on("Network.webSocketFrameSent", self._on_cdp_ws_frame)
         cdp.on("Target.attachedToTarget", self._on_cdp_target)
+        cdp.on("Network.webSocketFrameReceived", self._on_cdp_ws_frame_count)   # always: count + heartbeat only
         if self._ws_read_probe or self._window_ws_read:
-            cdp.on("Network.webSocketFrameReceived", self._on_cdp_ws_frame_recv)
+            cdp.on("Network.webSocketFrameReceived", self._on_cdp_ws_frame_recv)  # reader/probe: decode + parse
             cdp.on("Network.webSocketClosed", self._on_cdp_ws_closed)
         try:
             await cdp.send("Network.enable")
@@ -646,7 +661,8 @@ class PinnacleBrowserSession:
         page.on("close", lambda: self._cdp_attached_pages.discard(id(page)))  # allow re-arm if id is reused
         if primary:
             self._cdp = cdp
-            print("[PINNACLE SESSION] CDP Network capture armed (worker-aware, multi-tab) — 2nd path for the WS login.")
+            print("[PINNACLE SESSION] CDP Network capture armed (worker-aware, multi-tab) — 2nd path for the WS login; "
+                  "also counting the page's own odds-WS frames (page-WS on the keepalive/SILENT lines).")
         else:
             print(f"[PINNACLE SESSION] CDP armed on a new tab (tabs captured: {len(self._cdp_sessions)}).")
         return True
@@ -733,6 +749,37 @@ class PinnacleBrowserSession:
         reqid = params.get("requestId")
         self._ws_stream_buf.pop(reqid, None)          # free the reassembly buffer for a closed WS
         self._cdp_ws_reqs.discard(reqid)              # drop it from the OPEN set so odds_ws_alive sees the close
+
+    def _on_cdp_ws_frame_count(self, params: dict) -> None:
+        """Every SERVER->CLIENT frame on the page's Arcadia socket: stamp the heartbeat and count it. Nothing is
+        decoded. This is the cheap half of _on_cdp_ws_frame_recv and runs whether or not the reader is on."""
+        if params.get("requestId") not in self._cdp_ws_reqs:
+            return                                        # localhost/devtools sockets
+        now = time.time()
+        self._arcadia_last_frame = now
+        self._page_ws_frames += 1
+        m = int(now) // 60
+        b = self._page_ws_buckets
+        if m not in b:
+            for k in [k for k in b if k < m - 5]:        # keep ~5 minutes; prune when a new minute opens
+                del b[k]
+            b[m] = 0
+        b[m] += 1
+
+    def page_ws_recent(self, secs: float = 120.0) -> int:
+        """Frames the PAGE's Arcadia socket received in the last `secs` (bucketed per minute, so +/- one minute)."""
+        now = time.time()
+        m0 = int(now - secs) // 60
+        return sum(n for m, n in self._page_ws_buckets.items() if m >= m0)
+
+    def page_ws_summary(self, secs: float = 120.0) -> str:
+        """One clause for a log line: how the browser's OWN odds socket is doing right now."""
+        if not self._cdp_ws_reqs:
+            return "page-WS: none open"
+        age = (time.time() - self._arcadia_last_frame) if self._arcadia_last_frame > 0 else None
+        return (f"page-WS: {self.page_ws_recent(secs)} frame(s) in {secs:.0f}s"
+                + (f", last {age:.0f}s ago" if age is not None else ", none yet")
+                + f", {self._page_ws_frames} this run")
 
     def _on_cdp_ws_frame_recv(self, params: dict) -> None:
         """Feed each SERVER->CLIENT frame on the Arcadia WS into a per-connection byte buffer, drain COMPLETE MQTT

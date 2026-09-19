@@ -1874,7 +1874,7 @@ class PinnacleAdapter(BookAdapter):
                 # the socket existed nothing could have arrived, so neither stretch is evidence.
                 quiet = now - max(self._ws_last_msg_ts, self._sub_pass_done_ts, self._ws_connected_ts)
                 acks = (f"SUBACKs {self._suback_ok} granted / {self._suback_refused} refused / "
-                        f"{len(self._sub_mids)} unanswered")
+                        f"{len(self._sub_mids)} unanswered; {self._page_ws_summary()}")
 
                 if self._active_leagues and quiet > silence_resub:
                     # From the first judgement the feed is SUSPECT: quotes stop being stamped fresh (see
@@ -1911,6 +1911,14 @@ class PinnacleAdapter(BookAdapter):
                 warned = True
                 print(f"[PINNACLE WS] down >{warn_after:.0f}s — still auto-reconnecting (transient; a DEAD "
                       "session would have stopped it). Books stay stale until it recovers.")
+
+    def _page_ws_summary(self) -> str:
+        """The browser's own odds socket, for the SILENT / FEED DEAD / keepalive lines. 'n/a' without a browser."""
+        try:
+            f = getattr(self._browser, "page_ws_summary", None)
+            return f() if f else "page-WS: n/a"
+        except Exception:
+            return "page-WS: n/a"
 
     def _notify_bg(self, message: str) -> None:
         """Discord, if the lifecycle has a notifier; silent otherwise. Never raises."""
@@ -2183,7 +2191,7 @@ class PinnacleAdapter(BookAdapter):
                     [sid for sid, s in self._cache.items() if getattr(s, "live", False)][:6]
                 print(f"[PINNACLE] session-keepalive: re-fetched {len(leagues)} league(s) (authed → resets the "
                       f"inactivity timer; cache={len(self._cache)} sel, {live_sel} live) | "
-                      f"WS msgs live={self._ws_live_msgs}/pre={self._ws_pre_msgs} | "
+                      f"WS msgs live={self._ws_live_msgs}/pre={self._ws_pre_msgs} | {self._page_ws_summary()} | "
                       f"WATCHED-live={len(watched_live)}/{len(self._requested_ids)} | "
                       f"sample live{'(watched)' if watched_live else ''}: {sample}")
 

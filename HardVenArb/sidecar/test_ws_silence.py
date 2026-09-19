@@ -240,10 +240,42 @@ async def main() -> int:
 
     time.time = REAL_TIME
     asyncio.sleep = REAL_SLEEP
+    results += page_ws_checks()
     n_ok = sum(results)
     print(f"\n{n_ok}/{len(results)} passed.")
     return 0 if n_ok == len(results) else 1
 
+
+
+# ── 9: the page's own socket is counted, and the adapter puts it on its lines ──────────────────────
+def page_ws_checks() -> list:
+    from pinnacle_session import PinnacleBrowserSession
+    out = []
+    sess = PinnacleBrowserSession(on_creds=lambda d: None)
+    out.append(check("no page socket yet -> 'none open'", sess.page_ws_summary() == "page-WS: none open"))
+    sess._on_cdp_ws_created({"url": "wss://api.arcadia.pinnacle.com/ws", "requestId": "r1"})
+    sess._on_cdp_ws_created({"url": "ws://127.0.0.1:9222/devtools", "requestId": "r2"})
+    for _ in range(7):
+        sess._on_cdp_ws_frame_count({"requestId": "r1", "response": {"opcode": 2, "payloadData": "AA=="}})
+    for _ in range(3):
+        sess._on_cdp_ws_frame_count({"requestId": "r2", "response": {"opcode": 2, "payloadData": "AA=="}})
+    st = sess.status()
+    out.append(check("only Arcadia frames counted (7, not 10)",
+                     sess._page_ws_frames == 7 and st["page_ws_frames"] == 7 and st["page_ws_recent_2m"] == 7,
+                     sess.page_ws_summary()))
+    out.append(check("heartbeat stamped by the counter", st["page_ws_last_frame_age"] is not None
+                     and st["page_ws_last_frame_age"] < 5))
+    a = PinnacleAdapter()
+    out.append(check("adapter without a browser says n/a", a._page_ws_summary() == "page-WS: n/a"))
+    a._browser = sess
+    out.append(check("adapter reads the session's summary", a._page_ws_summary().startswith("page-WS: 7 frame(s)")))
+    return out
+
+
+if __name__ == "__main__" and "--page-ws" in sys.argv:
+    r = page_ws_checks()
+    print(f"\n{sum(r)}/{len(r)} passed.")
+    sys.exit(0 if all(r) else 1)
 
 if __name__ == "__main__":
     sys.exit(asyncio.run(main()))
