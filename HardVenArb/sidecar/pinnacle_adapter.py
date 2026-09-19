@@ -689,6 +689,34 @@ class PinnacleAdapter(BookAdapter):
         self._sub_hold_warned = False     # one-shot: backlog outlived its allowance
         self._sub_pass_done_ts = 0.0      # when the last full subscription pass completed
         self._pass_after_drop = False     # that pass followed OUR drop, not a reconnect
+        # ── SILENCE WATCHDOG: what 2026-09-18/19 taught it ──────────────────────────────────────────
+        # The feed stopped delivering Friday evening and stayed dead through Saturday. The watchdog's remedy
+        # (drop/re-subscribe at 180s and 361s, reconnect at 421s) ran on the dead socket for every open
+        # minute: 5,275 league re-subscribes (x4 topics) and 38 reconnects in one 4.4h window, with no
+        # backoff and no give-up. Two defects made every window open worse: the silence baseline carried
+        # over from the previous window (the first judgement read "SILENT 12865s" and reconnected mid-pass),
+        # and the hold bound was recomputed from the REMAINING backlog, so a pass draining exactly on
+        # schedule was declared "not draining" 47s before it finished. The state below fixes both and adds
+        # the give-up.
+        self._ws_connected_ts = 0.0       # when the current socket came up; silence counts from no earlier
+        self._sub_hold_max_pending = 0    # largest backlog seen in this hold - the bound is sized from THIS
+        self._silence_cycles = 0          # forced reconnects since a frame last arrived
+        self._silence_backoff_sec = 0.0   # current backoff; 0 = not backing off. Doubles per silent retry.
+        self._silence_suspect = False     # watchdog judged the feed silent -> quotes stop being stamped fresh
+        self._silence_resume_task: Optional[asyncio.Task] = None
+        self._silence_giveup_cycles = int(os.environ.get("PINNACLE_WS_SILENCE_GIVEUP_CYCLES", "2"))
+        self._silence_backoff_min = float(os.environ.get("PINNACLE_WS_SILENCE_BACKOFF_MIN", "15"))
+        self._silence_backoff_cap = float(os.environ.get("PINNACLE_WS_SILENCE_BACKOFF_MAX_MIN", "60"))
+        self._silence_ages_quotes = os.environ.get("PINNACLE_WS_SILENCE_AGES_QUOTES", "1") != "0"
+        # SUBACK accounting. The broker answers every SUBSCRIBE; a granted QoS of 128 is a refusal. Never
+        # inspected before, so "connected and silent" could not be told apart from "connected and refused".
+        self._sub_mids: dict = {}         # mid -> (leagueId, topic) awaiting its SUBACK
+        self._suback_ok = 0
+        self._suback_refused = 0
+        # Leagues the C# bot has stopped asking about fall out of the active set after this long. Before,
+        # `_active_leagues` was never pruned: one four-day process grew from 25 to 123 leagues per keepalive
+        # pass (6 -> 27 authed GETs a minute) on tournaments that had finished days earlier.
+        self._active_league_ttl = float(os.environ.get("PINNACLE_ACTIVE_LEAGUE_TTL_SEC", "600"))
         self._requested_ids: set = set()   # selection ids the C# bot actually asks for (the PAIRED tokens) — to
                                            # measure how many WATCHED tokens are live vs the whole cache being live
         # ── REST-mode state ──
@@ -1211,7 +1239,10 @@ class PinnacleAdapter(BookAdapter):
         if self._session_source == "browser" and not self._session_ready:
             return False
         if self._connected:
-            return True                                   # dedicated paho WS connected
+            # Connected is not delivering. While the watchdog has judged the feed silent, the only thing
+            # refreshing the cache is the REST keepalive (minutes apart), and stamping THAT fresh is how an
+            # in-play bot ends up trading on a 4-minute-old price. Frames clear the flag (_on_message).
+            return not (self._silence_ages_quotes and self._silence_suspect)   # dedicated paho WS connected
         # WINDOW-WS READER path: liveness = the browser's Arcadia WS is still CONNECTED (delivering frames, incl.
         # MQTT keepalive), a connection heartbeat — NOT an odds-recency gate. This keeps a stable pre-match line
         # LIVE through a quiet spell (no line moving) while still ageing out on a real socket drop / logout. Falls
@@ -1478,6 +1509,13 @@ class PinnacleAdapter(BookAdapter):
         self._ws_auth_rejects = self._rest_auth_fails = 0
         self._ws_auth_total = 0                             # ...including the absolute auth ceiling
         self._seeded.clear()
+        # A new window is a new attempt: the silence backoff does not carry over, and a pending retry from
+        # the last window must not fire into this one on its own clock.
+        self._silence_cycles = 0
+        self._silence_backoff_sec = 0.0
+        self._silence_suspect = False
+        if self._silence_resume_task is not None and not self._silence_resume_task.done():
+            self._silence_resume_task.cancel()
         # Bring the league tabs back up with the session. Its own start delay covers the browser launch that
         # follows this hook, and a failed open_tab is handled per-tick, so starting early is safe.
         if self._tab_manager is not None:
@@ -1490,6 +1528,8 @@ class PinnacleAdapter(BookAdapter):
         """A scheduled window closed the browser → stand the feed DOWN: gate odds (no creds now) and stop the
         WS/keepalive so we don't poke Pinnacle during the dark stretch. The C# freshness gate clears the books."""
         self._session_ready = False
+        if self._silence_resume_task is not None and not self._silence_resume_task.done():
+            self._silence_resume_task.cancel()            # dark: no retry until the next open
         self._give_up_ws("scheduled dark window", clean=True)
         # Stand the tab manager down too. The browser is already stopped by the time this hook runs, so its
         # tabs are gone — stop() only needs to cancel the loop and forget them (it tolerates dead pages).
@@ -1534,6 +1574,7 @@ class PinnacleAdapter(BookAdapter):
         self._client.on_connect = self._on_connect
         self._client.on_disconnect = self._on_disconnect
         self._client.on_message = self._on_message
+        self._client.on_subscribe = self._on_subscribe
         try:
             self._loop = asyncio.get_running_loop()       # so paho's off-loop callbacks can schedule a re-mint
             self._client.connect_async(WS_HOST, 443, keepalive=60)
@@ -1547,6 +1588,26 @@ class PinnacleAdapter(BookAdapter):
         except Exception as ex:
             print(f"[PINNACLE WS] connect error: {ex}")
 
+    def _active_league_ids(self) -> list:
+        """Leagues the C# bot has asked about within PINNACLE_ACTIVE_LEAGUE_TTL_SEC - and PRUNE the rest.
+
+        `_active_leagues` records every league ever requested through /odds with its last-request time, but
+        nothing removed entries: the reconciler, the silence watchdog, the session keepalive and the in-play
+        re-seed all iterated the whole dict. Over one four-day process (2026-09-16..19) the keepalive pass grew
+        from 25 to 123 leagues - authed GETs from 6 to 27 a minute - almost all of them tournaments that had
+        finished days before. A league drops out of the pair file within 90 minutes of its last match; ten
+        minutes without a request is plenty of slack for a C# restart. Pruning here leaves `_subscribed` and
+        `_seeded` alone: the socket stays subscribed until its next reconnect (no traffic), and a league that
+        comes back is not re-seeded."""
+        now = time.time()
+        stale = [l for l, ts in self._active_leagues.items() if now - ts > self._active_league_ttl]
+        for l in stale:
+            self._active_leagues.pop(l, None)
+        if stale:
+            print(f"[PINNACLE] {len(stale)} league(s) not requested for {self._active_league_ttl:.0f}s dropped from "
+                  f"the active set ({len(self._active_leagues)} remain).", flush=True)
+        return list(self._active_leagues.keys())
+
     def _topics_for(self, lid: str):
         return [(f"matchups/reg/lg/{lid}/pre", 0),
                 (f"matchups/reg/lg/{lid}/live/ld", 0),
@@ -1558,11 +1619,36 @@ class PinnacleAdapter(BookAdapter):
             return
         try:
             for topic, qos in self._topics_for(lid):
-                self._client.subscribe(topic, qos)
+                rc, mid = self._client.subscribe(topic, qos)
+                if rc != 0:
+                    print(f"[PINNACLE WS] subscribe {topic} not sent (paho rc={rc})", flush=True)
+                elif mid is not None:
+                    if len(self._sub_mids) > 2000:        # SUBACKs never answered: keep the map bounded
+                        self._sub_mids.clear()
+                    self._sub_mids[mid] = (lid, topic)
             self._subscribed.add(lid)
             print(f"[PINNACLE WS] subscribed league {lid}")
         except Exception as ex:
             print(f"[PINNACLE WS] subscribe {lid} error: {ex}")
+
+    def _on_subscribe(self, client, userdata, mid, granted, *a) -> None:
+        """SUBACK. Granted QoS >= 128 is a REFUSAL - the broker took the connection but not this topic. Never
+        inspected before 2026-09-19, so a socket the broker had stopped serving read exactly like one the
+        venue had stopped publishing on. Counted into the SILENT lines and /health so the next outage says
+        which it was."""
+        lid, topic = self._sub_mids.pop(mid, ("?", "?"))
+        try:
+            codes = [int(getattr(q, "value", q)) for q in (granted if isinstance(granted, (list, tuple)) else [granted])]
+        except Exception:
+            codes = []
+        if any(c >= 128 for c in codes):
+            self._suback_refused += 1
+            if self._suback_refused <= 20 or self._suback_refused % 100 == 0:
+                print(f"[PINNACLE WS] *** SUBACK REFUSED {topic} (league {lid}, codes {codes}) - the broker accepted "
+                      f"the connection but not this subscription ({self._suback_refused} refused / "
+                      f"{self._suback_ok} granted on this socket). ***", flush=True)
+        else:
+            self._suback_ok += 1
 
     def _on_connect(self, client, userdata, flags, rc, *a) -> None:
         # A HARD STOP MUST BE HARD. This callback had no give-up guard, and _give_up_ws early-returns once the
@@ -1583,6 +1669,18 @@ class PinnacleAdapter(BookAdapter):
             self._ws_remints = 0                           # recovered → re-arm the per-outage re-mint budget
             print("[PINNACLE WS] connected (rc=0).")
             self._subscribed.clear()                      # the reconciler re-subscribes active leagues gradually
+            # A new socket is a new baseline. Without this the first judgement after a dark window measured
+            # silence from the PREVIOUS window's last frame (hours) and reconnected before the subscribe pass
+            # had finished. `_ws_last_msg_ts` keeps its meaning (when a frame last arrived); the watchdog takes
+            # the later of it and this.
+            self._ws_connected_ts = time.time()
+            self._sub_pass_done_ts = 0.0
+            self._sub_hold_since = 0.0
+            self._sub_hold_max_pending = 0
+            self._sub_hold_warned = False
+            self._sub_pass_noted = False
+            self._sub_mids.clear()
+            self._suback_ok = self._suback_refused = 0
         elif rc_val in (4, 5):                            # CONNACK 4=bad user/pass, 5=not authorized
             self._ws_auth_rejects += 1
             self._ws_auth_total += 1
@@ -1705,7 +1803,7 @@ class PinnacleAdapter(BookAdapter):
                 #
                 # "No frames" is only evidence of a stall once we have finished ASKING for frames. While a
                 # backlog remains, silence is expected, so hold the clock and let the pass complete.
-                pending_subs = [l for l in list(self._active_leagues.keys())
+                pending_subs = [l for l in self._active_league_ids()
                                 if l not in self._subscribed]
 
                 # BOUNDED HOLD. "Wait while pending" must not become "wait forever": leagues are added as
@@ -1715,8 +1813,16 @@ class PinnacleAdapter(BookAdapter):
                 eta = len(pending_subs) * self._subscribe_gap_sec
                 if pending_subs and self._sub_hold_since <= 0:
                     self._sub_hold_since = now
+                    self._sub_hold_max_pending = 0
+                # SIZE THE BOUND FROM THE LARGEST BACKLOG SEEN, NOT THE REMAINDER. Recomputing `eta` from what
+                # is still pending shrank the allowance as the pass drained: 94 leagues at 3s is 282s, and at
+                # 235s (78 done, exactly on schedule) the remaining 16 gave max_hold = 48 + 180 = 228 < 235 ->
+                # "the backlog is not draining" -> judged -> reconnected -> pass wiped. Every window open on
+                # 2026-09-18/19 did this. A backlog that grows mid-pass (the watchlist moved) raises the bound;
+                # one that drains on time keeps it; it is still finite.
+                self._sub_hold_max_pending = max(self._sub_hold_max_pending, len(pending_subs))
                 held = (now - self._sub_hold_since) if self._sub_hold_since > 0 else 0.0
-                max_hold = eta + silence_resub
+                max_hold = self._sub_hold_max_pending * self._subscribe_gap_sec + silence_resub
 
                 if pending_subs and held <= max_hold:
                     # SKIP THE JUDGEMENT, DO NOT REWRITE THE CLOCK.
@@ -1760,16 +1866,32 @@ class PinnacleAdapter(BookAdapter):
                         self._sub_pass_done_ts = now     # fresh socket: silence counts from here
                     self._sub_pass_noted = False
                     self._sub_hold_since = 0.0
+                    self._sub_hold_max_pending = 0
                     self._sub_hold_warned = False
 
-                # Measure silence from the later of "last frame" and "last completed subscription pass".
-                # Before the pass finished we had not asked for the frames, so that time is not evidence.
-                quiet = now - max(self._ws_last_msg_ts, self._sub_pass_done_ts)
+                # Measure silence from the latest of "last frame", "last completed subscription pass" and
+                # "this socket came up". Before the pass finished we had not asked for the frames, and before
+                # the socket existed nothing could have arrived, so neither stretch is evidence.
+                quiet = now - max(self._ws_last_msg_ts, self._sub_pass_done_ts, self._ws_connected_ts)
+                acks = (f"SUBACKs {self._suback_ok} granted / {self._suback_refused} refused / "
+                        f"{len(self._sub_mids)} unanswered")
 
                 if self._active_leagues and quiet > silence_resub:
+                    # From the first judgement the feed is SUSPECT: quotes stop being stamped fresh (see
+                    # _feed_live) so the C# gate ages them out instead of trading in-play on prices the REST
+                    # keepalive last touched minutes ago. Cleared by the next frame.
+                    self._silence_suspect = True
                     if quiet > silence_recon:
+                        self._silence_cycles += 1
+                        if self._silence_cycles >= self._silence_giveup_cycles:
+                            # THE GIVE-UP. Two full cycles without a frame means the remedy is not working,
+                            # and repeating it is the one thing guaranteed to look like abuse from the
+                            # venue's side. Stand the socket down, back off, retry once per backoff period.
+                            self._enter_silence_backoff(quiet, acks)
+                            break                       # this watchdog ends with its socket; the retry starts a new one
                         print(f"[PINNACLE WS] *** SILENT {quiet:.0f}s while CONNECTED - forcing a reconnect "
-                              f"(re-subscribe did not restore the feed). ***", flush=True)
+                              f"(re-subscribe did not restore the feed; cycle {self._silence_cycles}/"
+                              f"{self._silence_giveup_cycles} before backing off). {acks} ***", flush=True)
                         self._ws_last_msg_ts = now      # restart the clock so this cannot loop every 5s
                         self._sub_pass_done_ts = 0.0    # fresh socket: let the next completed pass re-base
                         self._pass_after_drop = False
@@ -1781,14 +1903,83 @@ class PinnacleAdapter(BookAdapter):
                         last_resub = now
                         n = len(self._subscribed)
                         print(f"[PINNACLE WS] *** SILENT {quiet:.0f}s while CONNECTED - dropping {n} league "
-                              f"subscription(s) so the reconciler re-subscribes. *** (subscriptions do NOT "
-                              f"survive a reconnect and nothing else notices when they are lost)", flush=True)
+                              f"subscription(s) so the reconciler re-subscribes. *** ({acks}; subscriptions do "
+                              f"NOT survive a reconnect and nothing else notices when they are lost)", flush=True)
                         self._pass_after_drop = True    # the refill must NOT reset the silence baseline
                         self._subscribed.clear()        # reconciler re-adds one per PINNACLE_SUBSCRIBE_GAP_SEC
             elif not warned and now - last_ok > warn_after:
                 warned = True
                 print(f"[PINNACLE WS] down >{warn_after:.0f}s — still auto-reconnecting (transient; a DEAD "
                       "session would have stopped it). Books stay stale until it recovers.")
+
+    def _notify_bg(self, message: str) -> None:
+        """Discord, if the lifecycle has a notifier; silent otherwise. Never raises."""
+        try:
+            n = getattr(self._lifecycle, "_notify", None)
+            if n is not None and getattr(n, "enabled", False):
+                n.send_bg(message)
+        except Exception:
+            pass
+
+    def _enter_silence_backoff(self, quiet: float, acks: str) -> None:
+        """The feed has been silent through PINNACLE_WS_SILENCE_GIVEUP_CYCLES forced reconnects. Stand the
+        socket DOWN and stop every feed loop for a backoff that doubles each time it fails (15 -> 30 -> 60 min,
+        capped), then reconnect ONCE. Frames arriving reset everything (see _on_message).
+
+        NOT _give_up_ws: that is session death - it tells the login watcher we are logged out and ends the
+        session-age clock. Here the session is fine (REST validated, CONNACK accepted); only delivery is dead.
+        The same latch is used so the background loops stop the same way, and `_connected` drops so _feed_live
+        returns False and the C# gate ages the frozen quotes out - a dead feed must not be served as fresh."""
+        if self._ws_gave_up:
+            return
+        self._silence_backoff_sec = (self._silence_backoff_min * 60 if self._silence_backoff_sec <= 0
+                                     else min(self._silence_backoff_sec * 2, self._silence_backoff_cap * 60))
+        mins = self._silence_backoff_sec / 60
+        # State first (a print can throw on a cp1252 console and these must not be skipped).
+        self._ws_gave_up = True
+        self._connected = False
+        self._silence_suspect = True
+        self._silence_cycles = 0
+        self._subscribed.clear()
+        self._sub_mids.clear()
+        c = self._client
+        if c is not None:
+            def _hard_stop(cl=c):            # neither call may run inside the paho loop thread -> offload
+                try: cl.disconnect()
+                except Exception: pass
+                try: cl.loop_stop()
+                except Exception: pass
+            threading.Thread(target=_hard_stop, daemon=True).start()
+        print(f"[PINNACLE WS] *** FEED DEAD: silent {quiet:.0f}s through {self._silence_giveup_cycles} reconnect "
+              f"cycle(s) ({acks}). Standing the socket DOWN for {mins:.0f} min, then ONE reconnect. Quotes age out "
+              f"meanwhile (C# clears the books). The session itself is fine - this is delivery, not login. ***",
+              flush=True)
+        self._notify_bg(f"📡 **Pinnacle feed silent** through {self._silence_giveup_cycles} reconnect cycles "
+                        f"({acks}). Socket down; retrying once in {mins:.0f} min.")
+        try:
+            if self._silence_resume_task is not None and not self._silence_resume_task.done():
+                self._silence_resume_task.cancel()
+            self._silence_resume_task = asyncio.create_task(self._silence_resume(self._silence_backoff_sec))
+        except RuntimeError:
+            pass                                          # no running loop (tests) - the next window open resets
+
+    async def _silence_resume(self, delay: float) -> None:
+        """One reconnect after the backoff. If the window has closed meanwhile the next open resets the latches
+        itself (_on_session_opening), so this does nothing during a dark stretch."""
+        try:
+            await asyncio.sleep(delay)
+        except asyncio.CancelledError:
+            return
+        if not self._ws_gave_up:
+            return                                        # something else already restarted the feed
+        if self._session_expired or (self._session_source == "browser" and not self._session_ready):
+            print("[PINNACLE WS] silence backoff elapsed but the session is down/dark - the next window open retries.")
+            return
+        print(f"[PINNACLE WS] silence backoff over ({delay / 60:.0f} min) - reconnecting once. Frames must arrive "
+              f"before the next judgement or the backoff doubles (cap {self._silence_backoff_cap:.0f} min).",
+              flush=True)
+        self._ws_gave_up = False
+        self._ws_started = False                          # the next /odds relands _start_ws(): new client, new loops
 
     def _give_up_ws(self, reason: str = "", clean: bool = False) -> None:
         if self._ws_gave_up:
@@ -1845,7 +2036,7 @@ class PinnacleAdapter(BookAdapter):
                 break
             if not self._connected:
                 continue
-            pending = [l for l in list(self._active_leagues.keys()) if l not in self._subscribed]
+            pending = [l for l in self._active_league_ids() if l not in self._subscribed]
             if pending:
                 self._subscribe_league(pending[0])        # one per tick = staggered, organic-looking
 
@@ -1975,7 +2166,7 @@ class PinnacleAdapter(BookAdapter):
                           "so this never reset it; organic activity is what holds the session.", flush=True)
                 continue
             self._ka_inplay_noted = False
-            leagues = list(self._active_leagues.keys())
+            leagues = self._active_league_ids()
             for lid in leagues:
                 if self._ws_gave_up:
                     break                                     # session died mid-cycle → stop immediately
@@ -2007,6 +2198,13 @@ class PinnacleAdapter(BookAdapter):
         else:
             self._ws_pre_msgs += 1
         self._ws_last_msg_ts = time.time()
+        if self._silence_suspect or self._silence_cycles or self._silence_backoff_sec:
+            # A frame is the only proof the feed is back. Everything the watchdog escalated resets here.
+            self._silence_suspect = False
+            self._silence_cycles = 0
+            self._silence_backoff_sec = 0.0
+            print("[PINNACLE WS] frames flowing again - silence state cleared, quotes stamp fresh from here.",
+                  flush=True)
         try:
             self._apply(data, live)
         except Exception as ex:
@@ -2682,6 +2880,11 @@ class PinnacleAdapter(BookAdapter):
             "quiet_sec": round(time.time() - self._ws_last_msg_ts, 1) if self._ws_last_msg_ts else None,
             "subscribed_leagues": len(getattr(self, "_subscribed", ()) or ()),
             "active_leagues": len(getattr(self, "_active_leagues", {}) or {}),
+            "suback": {"granted": self._suback_ok, "refused": self._suback_refused,
+                       "unanswered": len(self._sub_mids)},
+            "silence": {"suspect": self._silence_suspect, "cycles": self._silence_cycles,
+                        "backoff_min": round(self._silence_backoff_sec / 60, 1),
+                        "backing_off": bool(self._ws_gave_up and self._silence_backoff_sec > 0)},
             "cache_tokens": len(items),
             "live_now": len(live_now),
             "ever_live": len(ever),
@@ -2976,7 +3179,7 @@ class PinnacleAdapter(BookAdapter):
             # authed re-seed needs a live session; guest is public → runs regardless
             if self._reseed_source != "guest" and self._session_source == "browser" and not self._session_ready:
                 continue
-            leagues = list(self._active_leagues.keys())
+            leagues = self._active_league_ids()
             if not leagues:
                 continue
             t0 = time.perf_counter()
