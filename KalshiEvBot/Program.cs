@@ -437,7 +437,70 @@ internal static class Program
                 await discord.AlertAsync($"report exited {proc.ExitCode} — check the console.");
         }
 
-        Task ResolveHookAsync() => RunReportAsync("");
+        // ON REQUEST = THE WHOLE THING. `ev resolve` used to post only the digest; if someone asks for
+        // the report from their phone they want the file, the same drop the end of day produces.
+        Task ResolveHookAsync() => RunReportAsync("--full --label \"on request\"");
+
+        // ── EV-specific verbs. Everything the report side can produce, callable from the channel. ──
+        // Each one is a separate out-of-process run of the report script (see RunReportAsync), so none
+        // of them can touch the screening loop. `health` is the exception: it reads the sidecar's own
+        // status endpoints (local HTTP, no venue traffic) and formats the feed-health numbers directly.
+        async Task<bool> EvVerbAsync(string verb, string args)
+        {
+            switch (verb)
+            {
+                case "radar":
+                    await discord.AlertAsync("running the rolling-health radar (~30s).");
+                    await RunReportAsync("--radar");
+                    return true;
+                case "digest":
+                case "summary":
+                    await discord.AlertAsync("running the report digest (~30s).");
+                    await RunReportAsync("");
+                    return true;
+                case "section":
+                case "sec":
+                    if (args.Length == 0)
+                    {
+                        await discord.AlertAsync("which one? `ev section <n>` - 1 coverage · 2 calibration · 3 pooled bias · "
+                            + "4/4b/4c/4d/4e splits+guards · 5 signals · 6 when will we know · 7 live path · "
+                            + "8 stake scaling · 9 convergence · 10 cooldown shadow · 11 radar");
+                        return true;
+                    }
+                    await discord.AlertAsync($"fetching section {args} (~30s).");
+                    await RunReportAsync($"--section {args.Split(' ')[0]}");
+                    return true;
+                case "cooldown":  await RunReportAsync("--section 10"); return true;
+                case "caps":
+                case "live":      await RunReportAsync("--section 7");  return true;
+                case "clv":
+                    await discord.AlertAsync("running the pre-match CLV script.");
+                    await RunReportAsync("--script clv");
+                    return true;
+                case "settlements":
+                case "flags":
+                    await discord.AlertAsync("checking settlements for walkover/retirement flags.");
+                    await RunReportAsync("--script settlements");
+                    return true;
+                case "health":
+                case "feed":
+                    await discord.AlertAsync(await SidecarHealthAsync(sidecar));
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        const string EvHelp =
+            "**EV bot** (address as `ev <verb>` or `all <verb>`)\n"
+          + "`ev status` — bankroll, pairs, signals, fill rate\n"
+          + "`ev health` — feed: sockets, SUBACKs, page-WS, silence, session\n"
+          + "`ev radar` — the rolling 200-fill health check (what each block posts by default)\n"
+          + "`ev resolve` — the FULL `--resolve` report as an attachment (the end-of-day drop)\n"
+          + "`ev digest` — the short digest of every section\n"
+          + "`ev section <n>` — one section (1..11, 4b/4c/4d/4e) · `ev cooldown` = §10 · `ev live` = §7\n"
+          + "`ev clv` — pre-match CLV vs Pinnacle's close · `ev settlements` — walkover/retirement flags\n"
+          + "`ev close` — stop the EV bot (the sidecar stays up)";
 
         var cmdListener = new DiscordCommandListener(
             Environment.GetEnvironmentVariable("DISCORD_BOT_TOKEN"),
@@ -450,11 +513,13 @@ internal static class Program
             onResolve: ResolveHookAsync,
             // The EV bot CONSUMES the sidecar as an odds oracle; it does not own the browser lifecycle.
             // Tearing it down on `ev close` would stop a service the operator never asked to stop.
-            shutdownSidecarOnClose: false);
+            shutdownSidecarOnClose: false,
+            onExtra: EvVerbAsync, extraHelp: EvHelp);
         if (cmdListener.Enabled)
         {
             Console.WriteLine("[DISCORD CMD] remote commands ON — address them to this bot: "
-                            + "`ev status` / `ev resolve` / `ev close` (sidecar verbs also forwarded).");
+                            + "`ev status` / `ev health` / `ev radar` / `ev resolve` / `ev digest` / `ev section <n>` / "
+                            + "`ev clv` / `ev settlements` / `ev close` (sidecar verbs also forwarded; `commands` lists all).");
             _ = Task.Run(() => cmdListener.RunAsync(cts.Token));
         }
         if (discord.Enabled)
@@ -595,17 +660,22 @@ internal static class Program
             return 1;
         }
 
-        var rows = new List<Dictionary<string, string>>();
+        // Typed rows, from the per-file cache wherever the file has not changed since it was last parsed
+        // (every past day). Only today's file is parsed on a normal run - see ReportCache for why this
+        // stopped the report getting slower by a day's parsing every day.
+        var raw = new List<Obs>();
+        int rawRows = 0;
         foreach (var f in files)
         {
-            var r = Csv.Read(f);
-            Console.WriteLine($"[RESOLVE] {System.IO.Path.GetFileName(f),-34} {r.Count,6} row(s)");
-            rows.AddRange(r);
+            var t = ReportCache.LoadTelemetry(f);
+            Console.WriteLine($"[RESOLVE] {System.IO.Path.GetFileName(f),-34} {t.RawRows,6} row(s){(t.FromCache ? "  (cache)" : "")}");
+            rawRows += t.RawRows;
+            raw.AddRange(t.Rows);
         }
-        if (rows.Count == 0) { Console.WriteLine("[RESOLVE] nothing logged yet."); return 1; }
+        if (rawRows == 0) { Console.WriteLine("[RESOLVE] nothing logged yet."); return 1; }
+        Console.WriteLine($"[RESOLVE] {ReportCache.Summary()}");
 
-        var tickers = rows.Select(r => Csv.Str(r, "Ticker")).Where(t => t.Length > 0)
-                          .Distinct(StringComparer.Ordinal).ToList();
+        var tickers = raw.Select(o => o.Ticker).Distinct(StringComparer.Ordinal).ToList();
         Console.WriteLine($"[RESOLVE] fetching settlement for {tickers.Count} market(s)…");
 
         var resolver = new SettlementResolver(kalshi);
@@ -643,7 +713,7 @@ internal static class Program
                             + "section 7 will report the equity recorded in the log instead.");
         }
 
-        Calibration.Report(Calibration.FromTelemetry(rows, settled), settled, dedupe,
+        Calibration.Report(Calibration.Finalize(raw, settled), settled, dedupe,
                            deriv ? "EvDerivLive" : "EvLive", shardCash, shardIdx,
                            deriv ? "EvDerivFollowUp" : "EvFollowUp");
         return 0;
@@ -1271,6 +1341,44 @@ internal static class Program
     /// line every half hour trains the operator to ignore the channel, which is exactly when the one line
     /// that mattered gets missed. This posts only when the status TEXT has changed since the last post, and
     /// forces one through every EV_DISCORD_HEARTBEAT_MIN regardless so silence still means "alive".</para></summary>
+    /// <summary>`ev health`: the feed numbers that tell a dead feed from a dead venue, straight from the
+    /// sidecar's local endpoints. Never touches Pinnacle. Any failure comes back as text, not a throw.</summary>
+    private static async Task<string> SidecarHealthAsync(string sidecarBase)
+    {
+        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(6) };
+        try
+        {
+            using var h = System.Text.Json.JsonDocument.Parse(await http.GetStringAsync(sidecarBase.TrimEnd('/') + "/health"));
+            using var f = System.Text.Json.JsonDocument.Parse(await http.GetStringAsync(sidecarBase.TrimEnd('/') + "/debug/inplay"));
+            var hr = h.RootElement; var fr = f.RootElement;
+            static string S(System.Text.Json.JsonElement e, string path)
+            {
+                foreach (string k in path.Split('.'))
+                {
+                    if (e.ValueKind != System.Text.Json.JsonValueKind.Object || !e.TryGetProperty(k, out e)) return "?";
+                }
+                return e.ValueKind == System.Text.Json.JsonValueKind.Object ? e.GetRawText() : e.ToString();
+            }
+            bool ready = S(hr, "session_ready") == "True";
+            bool conn  = S(fr, "connected") == "True";
+            string maint = S(hr, "maintenance.active") == "True" ? $"  🛠️ MAINTENANCE {S(hr, "maintenance.minutes")}m" : "";
+            string sil = S(fr, "silence.backing_off") == "True" ? $"🔴 backing off {S(fr, "silence.backoff_min")}m"
+                       : S(fr, "silence.suspect") == "True" ? "🟡 silent, quotes ageing"
+                       : "🟢 delivering";
+            return $"**EV feed** · {DateTime.Now:HH:mm}{maint}\n"
+                 + $"session {(ready ? "🟢 ready" : "⚫ dark/not ready")}   socket {(conn ? "🟢 connected" : "⚫ down")}   {sil}\n"
+                 + $"`quiet {S(fr, "quiet_sec")}s   frames live {S(fr, "ws_msgs.live")} / pre {S(fr, "ws_msgs.pre")}   "
+                 + $"leagues {S(fr, "subscribed_leagues")} subscribed / {S(fr, "active_leagues")} active`\n"
+                 + $"`SUBACKs {S(fr, "suback.granted")} granted / {S(fr, "suback.refused")} refused / {S(fr, "suback.unanswered")} unanswered   "
+                 + $"page-WS {S(hr, "session.browser.page_ws_recent_2m")} frames/2min, last {S(hr, "session.browser.page_ws_last_frame_age")}s ago`\n"
+                 + $"`cache {S(fr, "cache_tokens")} tokens, {S(fr, "live_now")} live now`";
+        }
+        catch (Exception ex)
+        {
+            return $"sidecar health unavailable: {ex.GetType().Name}: {ex.Message}";
+        }
+    }
+
     private static async Task PerformanceLoopAsync(DiscordNotifier discord, Func<Task<string>> status,
                                                    CancellationToken ct)
     {

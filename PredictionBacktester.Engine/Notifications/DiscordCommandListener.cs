@@ -25,6 +25,10 @@ public sealed class DiscordCommandListener
     private readonly Func<Task<string>> _onStatus;    // build the 'status' text
     private readonly Func<Task> _onShutdown;          // graceful stop (write sentinel + cancel)
     private readonly Func<Task>? _onResolve;          // optional: run the calibration report (EV bot)
+    // Optional bot-specific verbs: (verb, args) -> handled? Consulted for anything the switch below does
+    // not know, so a bot can add its own commands without this shared class learning about them.
+    private readonly Func<string, string, Task<bool>>? _onExtra;
+    private readonly string _extraHelp;               // appended to the menu (already formatted lines)
     // WHETHER `close` ALSO STOPS THE SIDECAR. True for a bot that OWNS the browser lifecycle (HardVen);
     // false for one that merely CONSUMES the sidecar as an odds oracle (the EV bot), where tearing it down
     // on shutdown would kill a service the operator never asked to stop.
@@ -44,9 +48,12 @@ public sealed class DiscordCommandListener
     public DiscordCommandListener(string? botToken, string? channelId, Func<string, Task> reply,
                                   Func<Task<string>> onStatus, Func<Task> onShutdown, int pollSec = 10,
                                   string sidecarBaseUrl = "", string botTag = "",
-                                  Func<Task>? onResolve = null, bool shutdownSidecarOnClose = true)
+                                  Func<Task>? onResolve = null, bool shutdownSidecarOnClose = true,
+                                  Func<string, string, Task<bool>>? onExtra = null, string extraHelp = "")
     {
         _onResolve = onResolve;
+        _onExtra   = onExtra;
+        _extraHelp = extraHelp ?? "";
         _shutdownSidecar = shutdownSidecarOnClose;
         _token     = string.IsNullOrWhiteSpace(botToken)  ? null : botToken.Trim();
         _channelId = string.IsNullOrWhiteSpace(channelId) ? null : channelId.Trim();
@@ -69,7 +76,7 @@ public sealed class DiscordCommandListener
         // Post the menu once on startup so the operator never has to remember a command to discover commands.
         // DISCORD_POST_HELP_ON_START=0 to suppress (e.g. if the supervisor restarts often).
         if (Environment.GetEnvironmentVariable("DISCORD_POST_HELP_ON_START") != "0")
-            await SafeReply(HelpText);
+            await SafeReplyMenu();
         while (!ct.IsCancellationRequested)
         {
             try { await PollAsync(ct); }
@@ -290,9 +297,32 @@ public sealed class DiscordCommandListener
             case "cmds":
             case "help":
             case "?":
-                await SafeReply(HelpText);
+                await SafeReplyMenu();
+                break;
+            default:
+                if (_onExtra is not null && cmd.Length > 0)
+                {
+                    try
+                    {
+                        if (await _onExtra(cmd, args)) break;
+                    }
+                    catch (Exception ex) { await SafeReply($"`{cmd}` failed: {ex.GetType().Name}: {ex.Message}"); break; }
+                }
                 break;
         }
+    }
+
+    /// <summary>The menu as posted: the shared verbs plus whatever this bot added. Two messages when the
+    /// extras would push it past Discord's cap.</summary>
+    private string MenuText => _extraHelp.Length == 0 ? HelpText
+                             : HelpText.Length + _extraHelp.Length + 2 < 1900 ? HelpText + "\n" + _extraHelp
+                             : HelpText + "\n" + "_(more below)_";
+
+    private async Task SafeReplyMenu()
+    {
+        await SafeReply(MenuText);
+        if (_extraHelp.Length > 0 && HelpText.Length + _extraHelp.Length + 2 >= 1900)
+            await SafeReply(_extraHelp);
     }
 
     /// <summary>The operator's menu. Posted once at startup (so it's always in recent history) and on

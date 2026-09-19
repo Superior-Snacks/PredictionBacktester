@@ -60,6 +60,65 @@ def grab(text: str, pattern: str, group: int = 0) -> str:
     return (clean(m.group(group)).strip() if m else "")
 
 
+def radar_only(out: str) -> tuple[str, bool]:
+    """Just the rolling-health block: the three [OK|WATCH|STOP] lines and the verdict, as one short message.
+    This is the DEFAULT per-block post (PINNACLE_ON_CLOSE_CMD ... --radar): the two-day health check, and
+    nothing else, so the channel carries live/dark, errors, the radar, and one full report a day."""
+    bad = False
+    radar = re.findall(r"^\s*\[(OK|WATCH|STOP)\]\s+(VELOCITY|ADVERSE SEL\.|CONVERGENCE|VERDICT)\s+(.*)$", out, re.M)
+    if not radar:
+        n = grab(out, r"^\s*(\d+) fill\(s\) settled.*$")
+        return ("📡 **EV radar** — not enough settled fills for the rolling window yet"
+                + (f" (`{clean(n).strip()}`)" if n else "") + ".", False)
+    L = [f"📡 **EV radar** (last 200 fills) · {dt.datetime.now():%a %H:%M}"]
+    for tag, name, rest in radar:
+        rest = clean(rest)
+        rest = re.sub(r"\s*\((?:lifetime|red =|n=\d+; green|green >=)[^)]*\)\s*$", "", rest)
+        icon = {"OK": "🟢", "WATCH": "🟡", "STOP": "🔴"}[tag]
+        if tag == "STOP":
+            bad = True
+        L.append(f"{icon} `{name:<13} {rest.strip()}`")
+    fails = grab(out, r"^\[RESOLVE\] \d+ fetched.*?(\d+) failed", 1)
+    if fails and fails != "0":
+        bad = True
+        L.append(f"⚠️ `{fails} settlement fetch(es) failed`")
+    return ("\n".join(L), bad)
+
+
+def section_text(out: str, key: str) -> str:
+    """One numbered section of the report ('7', '4c', ...), header to the next header. '' if absent."""
+    key = key.strip().lower().rstrip(".")
+    lines = out.splitlines()
+    start = None
+    for i, ln in enumerate(lines):
+        m = re.match(r"^(\d+[a-z]?)\. [A-Z]", ln)
+        if m and start is None and m.group(1).lower() == key:
+            start = i
+        elif m and start is not None:
+            return "\n".join(clean(x) for x in lines[start:i]).rstrip()
+    return "\n".join(clean(x) for x in lines[start:]).rstrip() if start is not None else ""
+
+
+def post_text(url: str, head: str, body: str, filename: str, inline_max: int = 3) -> bool:
+    """Post `body` inline when it fits in `inline_max` messages, else as an attachment with the head line.
+    Sections 1-4 and 6-11 fit inline; section 5 (every settled signal) and the scripts' tables do not."""
+    blocks = chunk_blocks(body, max_msgs=inline_max)
+    if blocks:
+        ok = post(url, head)
+        for b in blocks:
+            ok = post(url, b) and ok
+        return ok
+    return post_file(url, head + f" ({len(body.splitlines())} lines - attached)", filename, body)
+
+
+# Scripts the `ev <name>` Discord verbs may run. A whitelist, not a passthrough: the listener relays
+# text from a chat channel, and "run this file" must never be one of the things it can be told.
+SCRIPTS = {
+    "clv":         ("clv_prematch.py",    [],                     "pre-match CLV vs Pinnacle's close"),
+    "settlements": ("check_settlements.py", ["--fills", "--flagged", "--brief"], "settlement flags on our fills (walkovers, retirements, abrupt ends)"),
+}
+
+
 def digest(out: str) -> tuple[str, bool]:
     """(message, alarming). `alarming` drives the leading emoji so a bad run is visible without reading."""
     bad = False
@@ -387,7 +446,34 @@ def main() -> int:
     ap.add_argument("--full", action="store_true",
                     help="also post the COMPLETE report as a .txt attachment (the end-of-day drop)")
     ap.add_argument("--label", default="", help="prefix for the attachment message (e.g. 'final block')")
+    ap.add_argument("--radar", action="store_true",
+                    help="post ONLY the rolling-health radar (the default per-block post)")
+    ap.add_argument("--section", default="", metavar="N",
+                    help="post ONLY section N of the report (e.g. 7, 4c, 10); attached if it is long")
+    ap.add_argument("--script", default="", choices=sorted(SCRIPTS),
+                    help="run one of the companion scripts and post its output instead of the report")
     a = ap.parse_args()
+
+    # ── a companion script, not the report ────────────────────────────────────────────────────────
+    if a.script:
+        name, sargs, what = SCRIPTS[a.script]
+        path = os.path.join(a.root, name)
+        if not os.path.exists(path):
+            print(f"[FATAL] {path} not found"); return 1
+        print(f"[EV] running {name} {' '.join(sargs)} ...")
+        p = subprocess.run([sys.executable, path] + sargs, cwd=a.root, capture_output=True)
+        body = (p.stdout or b"").decode("utf-8", "replace") + (p.stderr or b"").decode("utf-8", "replace")
+        body = body.strip() or "(no output)"
+        print(body[:3000])
+        if a.dry:
+            return 0
+        url = load_webhook(os.path.join(a.root, ".env"))
+        if not url:
+            print("[DISCORD] DISCORD_WEBHOOK_URL not set - nothing posted."); return 1
+        stamp = dt.datetime.now().strftime("%Y%m%d_%H%M")
+        ok = post_text(url, f"📎 **{what}** (`{name}`)", body, f"ev_{a.script}_{stamp}.txt")
+        print("[DISCORD] posted." if ok else "[DISCORD] post FAILED.")
+        return 0 if ok else 1
 
     def decode(b: bytes) -> str:
         # The report prints '±' and box-drawing; a Windows console may hand them back as cp1252.
@@ -413,6 +499,40 @@ def main() -> int:
     if a.save:
         io.open(a.save, "w", encoding="utf-8").write(out)
         print(f"[EV] full report -> {a.save}")
+
+    if a.radar:
+        msg, bad = radar_only(out)
+        print("\n" + msg + "\n")
+        if a.dry:
+            return 2 if bad else 0
+        url = load_webhook(os.path.join(a.root, ".env"))
+        if not url:
+            print("[DISCORD] DISCORD_WEBHOOK_URL not set - nothing posted."); return 1
+        ok = post(url, ("🔴 " if bad else "") + msg)
+        print("[DISCORD] posted." if ok else "[DISCORD] post FAILED.")
+        return 0 if ok and not bad else (2 if bad else 1)
+
+    if a.section:
+        body = section_text(out, a.section)
+        if not body:
+            heads = [m.group(1) for m in re.finditer(r"^(\d+[a-z]?)\. [A-Z]", out, re.M)]
+            msg = f"no section `{a.section}` in the report - sections: {', '.join(heads)}"
+            print(msg)
+            if not a.dry:
+                url = load_webhook(os.path.join(a.root, ".env"))
+                if url: post(url, msg)
+            return 1
+        print(body[:3000])
+        if a.dry:
+            return 0
+        url = load_webhook(os.path.join(a.root, ".env"))
+        if not url:
+            print("[DISCORD] DISCORD_WEBHOOK_URL not set - nothing posted."); return 1
+        stamp = dt.datetime.now().strftime("%Y%m%d_%H%M")
+        ok = post_text(url, f"📄 **section {a.section}** of `--resolve` · {dt.datetime.now():%a %H:%M}",
+                       body, f"ev_section{a.section}_{stamp}.txt")
+        print("[DISCORD] posted." if ok else "[DISCORD] post FAILED.")
+        return 0 if ok else 1
 
     msg, bad = digest(out)
     # A SECOND MESSAGE, NOT A LONGER ONE. Discord caps at 2000 characters, and appending the live block

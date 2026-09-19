@@ -431,3 +431,6 @@ bia_place_trace.log
 .env
 .env.*
 !.env.example
+
+# --resolve per-file parse cache (KalshiEvBot/ReportCache.cs); rebuilt on demand, safe to delete
+.evcache/

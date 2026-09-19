@@ -1159,7 +1159,11 @@ public sealed class EvEvaluator
                                    : kalshiLed ? $"  [KALSHI LED: it moved {moveK * 100:0.0}c since the last "
                                                  + $"look, our oracle {moveP * 100:0.0}c — we are FOLLOWING, not ahead]"
                                    : prematch ? "  [PRE-MATCH: logged for calibration, not tradeable]"
-                                   : "  [SCREENING-ONLY oracle: fresh timestamp, DELAYED price — not a signal]")}");
+                                   // Name the guard that actually fired. This used to fall through to the
+                                   // screening-only text for NOT_RISING / DEVIG_DISAGREE / OUT_OF_BAND / SOURCE_DISAGREE,
+                                   // which read as an oracle-coverage problem when the oracle was fine (2026-09-19).
+                                   : decision == "SIGNAL_UNVERIFIED" ? "  [SCREENING-ONLY oracle: fresh timestamp, DELAYED price — not a signal]"
+                                   : $"  [{decision}: not a signal]")}");
         }
         else if (Verbose)
         {

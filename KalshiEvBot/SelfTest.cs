@@ -795,6 +795,78 @@ public static class SelfTest
             finally { try { Directory.Delete(dir, true); } catch { } }
         }
 
+        // ── ReportCache: a cached file reads back identical, and a changed file is a miss ────────────
+        {
+            Console.WriteLine("\n-- report cache --");
+            string dir = Path.Combine(Path.GetTempPath(), "evcache_test_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(dir);
+            try
+            {
+                string f = Path.Combine(dir, "EvTelemetry_20260101.csv");
+                var cols = EvTelemetry.Columns;
+                var sb = new System.Text.StringBuilder(string.Join(",", cols) + "\n");
+                string Row(string ts, string tk, string side, string dec, string inplay, string ev, string gap, string depth)
+                {
+                    var d = cols.ToDictionary(c => c, _ => "");
+                    d["Timestamp"] = ts; d["Ticker"] = tk; d["Side"] = side; d["Decision"] = dec; d["InPlay"] = inplay;
+                    d["Ev"] = ev; d["WsRestGapCents"] = gap; d["WsDepthToLimit"] = depth; d["PTrueUsed"] = "0.5";
+                    d["KalshiRestAsk"] = "0.48"; d["CostPerContract"] = "0.4975"; d["Contracts"] = "7"; d["OracleAgeMs"] = "12";
+                    d["OracleWsVerified"] = "1"; d["MoveRegime"] = "STANDING"; d["EventTitle"] = "A, \"quoted\" title";
+                    return string.Join(",", cols.Select(c => d[c].Contains(',') || d[c].Contains('"')
+                                                             ? "\"" + d[c].Replace("\"", "\"\"") + "\"" : d[c]));
+                }
+                sb.Append(Row("2026-01-01T10:00:00.1234567Z", "KXT-A", "YES", "SIGNAL", "1", "0.0123", "0.5", "150") + "\n");
+                sb.Append(Row("2026-01-01T10:00:15.0000000Z", "KXT-A", "NO", "REJECTED_REST", "0", "-0.01", "4.2", "-1") + "\n");
+                sb.Append(Row("2026-01-01T10:01:00.0000000Z", "", "YES", "SIGNAL", "1", "0.02", "0", "3") + "\n");   // no ticker -> dropped
+                File.WriteAllText(f, sb.ToString());
+
+                var cold = ReportCache.LoadTelemetry(f);
+                Check(!cold.FromCache && cold.RawRows == 3 && cold.Rows.Count == 2, "first read parses the CSV",
+                      $"cache={cold.FromCache} raw={cold.RawRows} rows={cold.Rows.Count}");
+                var warm = ReportCache.LoadTelemetry(f);
+                Check(warm.FromCache && warm.RawRows == 3 && warm.Rows.Count == 2, "second read comes from the cache",
+                      $"cache={warm.FromCache} raw={warm.RawRows} rows={warm.Rows.Count}");
+                bool same = cold.Rows.Count == warm.Rows.Count
+                         && cold.Rows.Zip(warm.Rows).All(pr => pr.First == pr.Second);   // record equality: every field
+                Check(same, "cached rows are field-for-field identical to parsed rows",
+                      same ? "" : $"{cold.Rows[0]} vs {warm.Rows[0]}");
+                Check(warm.Rows[0].At.Kind == DateTimeKind.Utc && warm.Rows[0].At.Ticks == cold.Rows[0].At.Ticks,
+                      "timestamp survives with its Kind and full precision");
+                Check(warm.Rows[1].WsDepth == -1 && warm.Rows[1].Won is null && warm.Rows[1].SrcGapCents == 4.2,
+                      "sentinels and the source gap survive; Won is never cached");
+
+                // the exclusions live in Finalize, so a cache can never freeze them
+                var fin = Calibration.Finalize(warm.Rows, new Dictionary<string, SettlementRecord>());
+                Check(fin.Count == 1 && fin[0].Side == "YES" && Calibration.LastSourceGapDropped == 1,
+                      "Finalize applies the source-gap exclusion on cached rows",
+                      $"kept={fin.Count} gapDropped={Calibration.LastSourceGapDropped}");
+
+                File.AppendAllText(f, Row("2026-01-01T10:02:00.0000000Z", "KXT-B", "YES", "SIGNAL", "1", "0.03", "0", "9") + "\n");
+                File.SetLastWriteTimeUtc(f, DateTime.UtcNow.AddSeconds(2));
+                var grown = ReportCache.LoadTelemetry(f);
+                Check(!grown.FromCache && grown.RawRows == 4, "an appended file is a cache miss and re-parses",
+                      $"cache={grown.FromCache} raw={grown.RawRows}");
+                Check(ReportCache.LoadTelemetry(f).FromCache, "...and is cached again after that");
+
+                string cp = Path.Combine(dir, ".evcache", "EvTelemetry_20260101.obs.bin");
+                File.WriteAllBytes(cp, new byte[] { 1, 2, 3 });
+                var broken = ReportCache.LoadTelemetry(f);
+                Check(!broken.FromCache && broken.RawRows == 4, "a corrupt cache is a miss, not an error");
+
+                // follow-ups: typed, memoised
+                string ff = Path.Combine(dir, "EvFollowUp_20260101.csv");
+                File.WriteAllText(ff, string.Join(",", FollowUpTracker.Columns) + "\n"
+                    + "2026-01-01T10:00:20Z,2026-01-01T10:00:00.1234567Z,20,KXT-A,YES,SIGNAL,STANDING,0.48,0.5,1.2,0.47,0.5,-1,0,2,1,1,kalshi,2.1,0.46,150\n");
+                var fu = ReportCache.LoadFollowUps(dir, "EvFollowUp");
+                Check(fu.Count == 1 && fu[0].EntryUtc == "2026-01-01T10:00:00.1234567Z" && fu[0].AgeSec == 20
+                      && fu[0].NowBid == 0.46 && fu[0].EntryDepth == 150 && fu[0].EntryAt.Kind == DateTimeKind.Utc,
+                      "follow-up rows load typed with the raw EntryUtc kept for the string join",
+                      fu.Count == 1 ? fu[0].ToString() : $"count={fu.Count}");
+                Check(ReferenceEquals(fu, ReportCache.LoadFollowUps(dir, "EvFollowUp")), "follow-ups are loaded once per process");
+            }
+            finally { try { Directory.Delete(dir, true); } catch { } }
+        }
+
         Console.WriteLine();
         Console.WriteLine($"{_pass} passed, {_fail} failed.");
         return _fail == 0 ? 0 : 1;

@@ -18,7 +18,10 @@ public sealed record Obs(
     // WsDepthToLimit at screen time: contracts on the WS ladder at-or-better than our limit. -1 is a
     // SENTINEL (the WS ask sat above the limit, so the ladder never reached it), not a small depth; NaN
     // when the row predates the column. See section 5's fillable split for why it is here.
-    double WsDepth = double.NaN);
+    double WsDepth = double.NaN,
+    // |WsRestGapCents| as logged. Only read by Finalize's source-gap exclusion, but it must travel with
+    // the row so the exclusion can stay at LOAD time (retunable) while the parsed row is cached.
+    double SrcGapCents = double.NaN);
 
 /// <summary>
 /// Grades logged predictions against Kalshi settlement.
@@ -82,14 +85,41 @@ public static class Calibration
     /// <summary>Turns raw telemetry rows into gradeable observations.</summary>
     public static List<Obs> FromTelemetry(IEnumerable<Dictionary<string, string>> rows,
                                           IReadOnlyDictionary<string, SettlementRecord> settled)
+        => Finalize(rows.Select(ObsFromRow).Where(o => o is not null)!, settled);
+
+    /// <summary>The row-only half: one CSV row to an <see cref="Obs"/> with <c>Won</c> unset and no
+    /// exclusions applied. Everything here depends on the row alone, which is what makes the result
+    /// cacheable per file (<see cref="ReportCache"/>). Null when the row names no ticker/side.</summary>
+    public static Obs? ObsFromRow(Dictionary<string, string> r)
+    {
+        string ticker = Csv.Str(r, "Ticker"), side = Csv.Str(r, "Side");
+        if (ticker.Length == 0 || side.Length == 0) return null;
+        DateTime.TryParse(Csv.Str(r, "Timestamp"), CultureInfo.InvariantCulture,
+                          DateTimeStyles.RoundtripKind, out var at);
+        return new Obs(
+            ticker, side, at,
+            Csv.Num(r, "PTrueProp"), Csv.Num(r, "PTrueShin"), Csv.Num(r, "PTrueUsed"),
+            Csv.Num(r, "KalshiRestAsk"), Csv.Num(r, "CostPerContract"), Csv.Num(r, "Ev"),
+            Csv.Int(r, "Contracts"), Csv.Str(r, "InPlay") == "1", Csv.Num(r, "OracleAgeMs"),
+            Csv.Str(r, "Decision") == "SIGNAL", null,
+            Csv.Str(r, "OracleWsVerified") is "1" ? 1 : Csv.Str(r, "OracleWsVerified") is "0" ? 0 : -1,
+            Csv.Str(r, "MoveRegime"), Csv.Str(r, "Decision"),
+            Csv.Str(r, "MarketType") is { Length: > 0 } mt ? mt : "moneyline",
+            Csv.Num(r, "WsDepthToLimit"),
+            Math.Abs(Csv.Num(r, "WsRestGapCents")));
+    }
+
+    /// <summary>The load-time half: the exclusions that may be retuned or whose inputs change between runs
+    /// (mis-oriented list, source-gap and in-play-age gates), and the settlement outcome. Runs over cached
+    /// and freshly parsed rows alike, so a cache can never freeze a rule.</summary>
+    public static List<Obs> Finalize(IEnumerable<Obs> rows, IReadOnlyDictionary<string, SettlementRecord> settled)
     {
         var outp = new List<Obs>();
         var misoriented = MisorientedTickers();
         int droppedMis = 0, droppedGap = 0, droppedAge = 0;
-        foreach (var r in rows)
+        foreach (var o in rows)
         {
-            string ticker = Csv.Str(r, "Ticker"), side = Csv.Str(r, "Side");
-            if (ticker.Length == 0 || side.Length == 0) continue;
+            string ticker = o.Ticker, side = o.Side;
             if (misoriented.Contains(ticker)) { droppedMis++; continue; }
             // THE TWO KALSHI SOURCES DISAGREED, so one of them was stale and nothing can say which. Rows
             // written BEFORE EV_MAX_WS_REST_GAP existed carry Decision=SIGNAL even though the live bot
@@ -100,7 +130,7 @@ public static class Calibration
             // edge: with a 2c prescreen slack, a row whose WS ask reads 8c high only survives when the
             // REST-based EV is ~+7c. Measured 2026-08-24: 7 of 11 signals in one burst sat past 3c while
             // the all-day base rate was 0.62%.
-            double srcGap = Math.Abs(Csv.Num(r, "WsRestGapCents"));
+            double srcGap = o.SrcGapCents;
             if (srcGap > MaxSourceGapCents) { droppedGap++; continue; }
             // A QUOTE THAT WAS AGEING is a feed dying, not a slow tick. The sidecar stamps ts=now only WHILE
             // CONNECTED and serves the stored ts once the session drops, so age climbs with wall-clock the
@@ -108,21 +138,9 @@ public static class Calibration
             // Observed 2026-08-24: the final signal before a session drop sat at 4,855ms against a 5,000ms
             // gate, while p99 across all 312 signals was 546ms. Mirrors the live
             // EV_ORACLE_MAX_AGE_INPLAY_MS so the report grades the rule the bot now runs.
-            double ageMs = Csv.Num(r, "OracleAgeMs");
-            if (Csv.Str(r, "InPlay") == "1" && ageMs > MaxInPlayAgeMs) { droppedAge++; continue; }
-            DateTime.TryParse(Csv.Str(r, "Timestamp"), CultureInfo.InvariantCulture,
-                              DateTimeStyles.RoundtripKind, out var at);
+            if (o.InPlay && o.OracleAgeMs > MaxInPlayAgeMs) { droppedAge++; continue; }
             bool? won = settled.TryGetValue(ticker, out var s) ? s.WonFor(side) : null;
-            outp.Add(new Obs(
-                ticker, side, at,
-                Csv.Num(r, "PTrueProp"), Csv.Num(r, "PTrueShin"), Csv.Num(r, "PTrueUsed"),
-                Csv.Num(r, "KalshiRestAsk"), Csv.Num(r, "CostPerContract"), Csv.Num(r, "Ev"),
-                Csv.Int(r, "Contracts"), Csv.Str(r, "InPlay") == "1", Csv.Num(r, "OracleAgeMs"),
-                Csv.Str(r, "Decision") == "SIGNAL", won,
-                Csv.Str(r, "OracleWsVerified") is "1" ? 1 : Csv.Str(r, "OracleWsVerified") is "0" ? 0 : -1,
-                Csv.Str(r, "MoveRegime"), Csv.Str(r, "Decision"),
-                Csv.Str(r, "MarketType") is { Length: > 0 } mt ? mt : "moneyline",
-                Csv.Num(r, "WsDepthToLimit")));
+            outp.Add(won is null ? o : o with { Won = won });
         }
         LastMisorientedDropped = droppedMis;
         LastSourceGapDropped = droppedGap;
@@ -386,18 +404,16 @@ public static class Calibration
         var winKeys = new HashSet<string>(win.Select(r => r.Key));
         var seen = new Dictionary<string, double>();          // key -> signed ask move (cents) at T+20
         int our = 0, against = 0;
-        foreach (string f in Directory.GetFiles(dir, followPrefix + "_*.csv").OrderBy(f => f))
-            foreach (var r in Csv.Read(f))
+        foreach (var r in ReportCache.LoadFollowUps(dir, followPrefix))
             {
-                if (Csv.Str(r, "Decision") != "SIGNAL") continue;
-                double age = Csv.Num(r, "AgeSec");
+                if (r.Decision != "SIGNAL") continue;
+                double age = r.AgeSec;
                 if (double.IsNaN(age) || Math.Abs(age - 20) > 4) continue;
-                string key = Csv.Str(r, "Ticker") + "|" + Csv.Str(r, "Side");
+                string key = r.Ticker + "|" + r.Side;
                 if (!winKeys.Contains(key) || seen.ContainsKey(key)) continue;
-                if (!DateTime.TryParse(Csv.Str(r, "EntryUtc"), CultureInfo.InvariantCulture,
-                                       DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var eu)
-                    || eu < oldest.AddMinutes(-5) || eu > newest.AddMinutes(5)) continue;
-                double ea = Csv.Num(r, "EntryAsk"), ep = Csv.Num(r, "EntryPTrue"), na = Csv.Num(r, "NowAsk");
+                var eu = r.EntryAt;
+                if (eu == DateTime.MinValue || eu < oldest.AddMinutes(-5) || eu > newest.AddMinutes(5)) continue;
+                double ea = r.EntryAsk, ep = r.EntryPTrue, na = r.NowAsk;
                 if (double.IsNaN(ea) || double.IsNaN(ep) || double.IsNaN(na)) continue;
                 int dir_ = ep > ea ? 1 : -1;
                 double mv = (na - ea) * dir_ * 100;
@@ -512,20 +528,19 @@ public static class Calibration
         // ── 2. convergence, same test as section 9, on the skip's own follow-up rows ────────────
         var seen = new Dictionary<(int Cp, string Key), (double Ea, double Ep, double Na, double Depth)>();
         var cps = new SortedSet<int>();
-        foreach (string f in Directory.GetFiles(dir, followPrefix + "_*.csv").OrderBy(f => f))
-            foreach (var r in Csv.Read(f))
+        foreach (var r in ReportCache.LoadFollowUps(dir, followPrefix))
             {
-                if (Csv.Str(r, "Decision") != "COOLDOWN_SKIP") continue;
-                if (!keepEntry.Contains(Csv.Str(r, "Ticker") + "|" + Csv.Str(r, "Side") + "|" + Csv.Str(r, "EntryUtc"))) continue;
-                double age = Csv.Num(r, "AgeSec"), ea = Csv.Num(r, "EntryAsk"), ep = Csv.Num(r, "EntryPTrue"), na = Csv.Num(r, "NowAsk");
+                if (r.Decision != "COOLDOWN_SKIP") continue;
+                if (!keepEntry.Contains(r.Ticker + "|" + r.Side + "|" + r.EntryUtc)) continue;
+                double age = r.AgeSec, ea = r.EntryAsk, ep = r.EntryPTrue, na = r.NowAsk;
                 if (!double.IsFinite(age) || !double.IsFinite(ea) || !double.IsFinite(ep) || !double.IsFinite(na)) continue;
                 int cp = (int)Math.Round(age);
                 foreach (int c in new[] { 5, 10, 20, 40, 60, 300 })
                     if (Math.Abs(age - c) <= 4) { cp = c; break; }
-                var k = (cp, Csv.Str(r, "Ticker") + "|" + Csv.Str(r, "Side"));
+                var k = (cp, r.Ticker + "|" + r.Side);
                 if (seen.ContainsKey(k)) continue;
                 cps.Add(cp);
-                seen[k] = (ea, ep, na, Csv.Num(r, "EntryDepth"));
+                seen[k] = (ea, ep, na, r.EntryDepth);
             }
         if (seen.Count > 0)
         {
@@ -643,27 +658,24 @@ public static class Calibration
         // key -> (checkpoint, ticker|side) -> first observation
         var seen = new Dictionary<(int Cp, string Key), (double Ea, double Ep, double Na, double Nb, double Depth)>();
         var cps = new SortedSet<int>();
-        foreach (string f in files)
-            foreach (var r in Csv.Read(f))
+        foreach (var r in ReportCache.LoadFollowUps(dir, followPrefix))
             {
-                if (Csv.Str(r, "Decision") != "SIGNAL") continue;
-                double age = Csv.Num(r, "AgeSec"), ea = Csv.Num(r, "EntryAsk"),
-                       ep = Csv.Num(r, "EntryPTrue"), na = Csv.Num(r, "NowAsk");
+                if (r.Decision != "SIGNAL") continue;
+                double age = r.AgeSec, ea = r.EntryAsk,
+                       ep = r.EntryPTrue, na = r.NowAsk;
                 if (!double.IsFinite(age) || !double.IsFinite(ea) || !double.IsFinite(ep)
                     || !double.IsFinite(na)) continue;          // book-gone / oracle-gone rows carry no NowAsk
                 int cp = (int)Math.Round(age);
                 foreach (int c in new[] { 5, 10, 20, 40, 60, 300 })
                     if (Math.Abs(age - c) <= 4) { cp = c; break; }
                 cps.Add(cp);
-                string key = Csv.Str(r, "Ticker") + "|" + Csv.Str(r, "Side");
+                string key = r.Ticker + "|" + r.Side;
                 var k = (cp, key);
                 if (seen.ContainsKey(k)) continue;
-                double nb = Csv.Num(r, "NowBid");                                   // NaN before the column
-                double depth = Csv.Num(r, "EntryDepth");                             // NaN before the column
-                if (double.IsNaN(depth)
-                    && DateTime.TryParse(Csv.Str(r, "EntryUtc"), CultureInfo.InvariantCulture,
-                                         DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var eu))
-                    depth = DepthFor(key, eu);
+                double nb = r.NowBid;                                                // NaN before the column
+                double depth = r.EntryDepth;                                         // NaN before the column
+                if (double.IsNaN(depth) && r.EntryAt != DateTime.MinValue)
+                    depth = DepthFor(key, r.EntryAt);
                 seen[k] = (ea, ep, na, nb, depth);
             }
         if (seen.Count == 0) return;
