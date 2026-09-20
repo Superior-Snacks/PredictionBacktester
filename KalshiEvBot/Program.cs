@@ -295,6 +295,10 @@ internal static class Program
         using var cooldownLog = new CooldownLog();             // what the recheck cooldown hides - see CooldownLog.cs
         eval.SetFollowUp(followUp);
         eval.SetCooldownLog(cooldownLog);
+        using var errorLog = new ErrorLog();                   // what the venue SAID when something failed
+        eval.SetErrorLog(errorLog);
+        if (eval.LiveExec is { } lx0) lx0.Errors = errorLog;
+        Console.WriteLine($"[ERRORS   ] {errorLog.Path}  (every swallowed venue error with HTTP status + Kalshi's message)");
 
         // Built only when there is something to watch, so a moneyline-only run creates no stray files
         // and behaves byte-identically to before this existed. `using` on a null is a no-op.
@@ -324,6 +328,7 @@ internal static class Program
                 var posStoreD = new LivePositionStore(
                     System.IO.Path.Combine(Directory.GetCurrentDirectory(), "ev_deriv_live_positions.json"));
                 evalD.EnableLive(new LiveExecutor(kalshi, liveLogD, cfgD, posStoreD));
+                if (evalD.LiveExec is { } lxD) lxD.Errors = errorLog;
                 Con.Line(ConsoleColor.Yellow,
                     $"[DERIV  ] LIVE — derivatives WILL be bought with real money. {liveLogD.Path}");
             }
@@ -365,6 +370,7 @@ internal static class Program
         var feedTask   = feed.RunAsync(cts.Token);
         var oracleTask = oracle.RunAsync(cts.Token);
         var evalTask   = eval.RunAsync(cts.Token);
+        evalD?.SetErrorLog(errorLog);
         var evalDTask  = evalD?.RunAsync(cts.Token) ?? Task.CompletedTask;
 
         // Both triggers feed the same queue. Kalshi ticking is one source of signals; Pinnacle moving is
@@ -524,6 +530,8 @@ internal static class Program
         }
         if (discord.Enabled)
             _ = Task.Run(() => PerformanceLoopAsync(discord, BuildStatusAsync, cts.Token));
+        if (discord.Enabled && eval.LiveExec is { } lxN)
+            lxN.Notify = m => _ = discord.AlertAsync(m);       // one line on hold, one on release
         // THE END-OF-DAY DROP. Fires once, a set delay after the LAST work window closes, and posts the
         // complete report as an attachment so the day can be read (and pasted) away from the machine.
         if (discord.Enabled && EvConfig.Env("EV_REPORT_AFTER_BLOCKS", 1) > 0)

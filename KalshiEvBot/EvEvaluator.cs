@@ -580,6 +580,8 @@ public sealed class EvEvaluator
     /// <summary>Wired after construction: the tracker needs the oracle and feed, built alongside this.</summary>
     public void SetFollowUp(FollowUpTracker? f) => _followUp = f;
     public void SetCooldownLog(CooldownLog? l) => _cooldownLog = l;
+    private ErrorLog? _errorLog;
+    public void SetErrorLog(ErrorLog? l) => _errorLog = l;
 
     public int PairCount => _byTicker.Count;
 
@@ -700,6 +702,7 @@ public sealed class EvEvaluator
         catch (Exception ex)
         {
             Interlocked.Increment(ref Stats.RestFailed);
+            try { _errorLog?.Write("rest", ticker, "", ex); } catch { }
             if (Verbose) Console.WriteLine($"[REST] {ticker}: {ex.GetType().Name}: {ex.Message}");
             return;
         }

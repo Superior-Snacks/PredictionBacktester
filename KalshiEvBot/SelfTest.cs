@@ -867,6 +867,46 @@ public static class SelfTest
             finally { try { Directory.Delete(dir, true); } catch { } }
         }
 
+        // ── ErrorLog.Tag + Kalshi maintenance window ─────────────────────────────────────────────────
+        {
+            Console.WriteLine("\n-- venue errors --");
+            var maint = new HttpRequestException(
+                "Kalshi POST /portfolio/orders 503: {\"error\":{\"code\":\"exchange_maintenance\",\"message\":\"The exchange is closed\"}}",
+                null, System.Net.HttpStatusCode.ServiceUnavailable);
+            Check(ErrorLog.Tag(maint) == "error:503 exchange_maintenance", "a venue answer is tagged by status + Kalshi code",
+                  ErrorLog.Tag(maint));
+            var bare = new HttpRequestException("Kalshi POST /portfolio/orders 400: bad request", null, System.Net.HttpStatusCode.BadRequest);
+            Check(ErrorLog.Tag(bare) == "error:400", "no code in the body -> status alone", ErrorLog.Tag(bare));
+            Check(ErrorLog.Tag(new InvalidOperationException("x")) == "error:InvalidOperationException",
+                  "a non-HTTP failure keeps the type name (the old tag)");
+            Check(ErrorLog.VenueCode("{\"code\":\"insufficient_balance\"}") == "insufficient_balance"
+                  && ErrorLog.VenueCode("{\"code\":\"a,b\"}") == "", "venue code is a short safe token or nothing");
+
+            // Thursdays 03:00-05:00 US Eastern. EDT in September (UTC-4), EST in January (UTC-5).
+            Check(Calibration.InKalshiMaintenance("2026-09-17T07:30:00Z"), "Thu 07:30Z in Sept = 03:30 EDT -> maintenance");
+            Check(Calibration.InKalshiMaintenance("2026-09-17T08:54:00Z"), "Thu 08:54Z in Sept = 04:54 EDT -> maintenance");
+            Check(!Calibration.InKalshiMaintenance("2026-09-17T09:04:00Z"), "Thu 09:04Z in Sept = 05:04 EDT -> open");
+            Check(!Calibration.InKalshiMaintenance("2026-09-18T07:30:00Z"), "Friday same hour -> open");
+            Check(Calibration.InKalshiMaintenance("2026-01-15T08:30:00Z"), "Thu 08:30Z in Jan = 03:30 EST -> maintenance");
+            Check(!Calibration.InKalshiMaintenance("2026-01-15T07:30:00Z"), "Thu 07:30Z in Jan = 02:30 EST -> open");
+            Check(!Calibration.InKalshiMaintenance("not a date"), "garbage -> false, never a throw");
+
+            string dir = Path.Combine(Path.GetTempPath(), "everr_test_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(dir);
+            try
+            {
+                using (var log = new ErrorLog(dir))
+                    log.Write("order", "KXT-A", "YES", maint);
+                var rows = Csv.Read(Directory.GetFiles(dir, "EvErrors_*.csv")[0]);
+                Check(rows.Count == 1 && Csv.Str(rows[0], "HttpStatus") == "503"
+                      && Csv.Str(rows[0], "VenueCode") == "exchange_maintenance"
+                      && Csv.Str(rows[0], "Message").Contains("The exchange is closed"),
+                      "the error log carries status, code and the venue's message",
+                      rows.Count == 1 ? $"{Csv.Str(rows[0], "HttpStatus")} {Csv.Str(rows[0], "VenueCode")}" : $"rows={rows.Count}");
+            }
+            finally { try { Directory.Delete(dir, true); } catch { } }
+        }
+
         Console.WriteLine();
         Console.WriteLine($"{_pass} passed, {_fail} failed.");
         return _fail == 0 ? 0 : 1;

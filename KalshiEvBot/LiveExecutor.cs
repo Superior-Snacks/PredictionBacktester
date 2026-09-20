@@ -96,6 +96,25 @@ public sealed class LiveExecutor
     private readonly ConcurrentDictionary<string, byte> _inFlight = new(StringComparer.Ordinal);
 
     public long Attempted, Filled, NoFill, Rejected, Skipped;
+    // ── THE VENUE HOLD ────────────────────────────────────────────────────────────────────────────
+    // 2026-09-17: 66 orders in a row failed between 07:02 and 08:54, one per signal, each answered in
+    // ~120ms — Kalshi's weekly maintenance (Thursdays 03:00-05:00 ET). The bot had no notion of "the
+    // exchange is closed", so it knocked 66 times and booked each knock as its own error. Now: after
+    // any 5xx, or three consecutive failures, ask /exchange/status once. Not trading -> hold orders
+    // until the venue's own resume estimate (else 60s, doubling to 10 min while it keeps failing).
+    // Trading, but orders still failing -> the same backoff, because a gateway that is refusing us
+    // is not improved by asking faster. Screening and telemetry continue throughout; held signals are
+    // COUNTED, not logged as attempts - they were never sent. The first success clears everything.
+    public long HeldByVenue, VenueHolds;
+    private DateTime _venueHoldUntil = DateTime.MinValue;
+    private string _venueHoldWhy = "";
+    private int _consecutiveErrors;
+    private double _holdSec = 60;
+    private long _heldAtLastNote;
+    /// <summary>Where swallowed exceptions go with the venue's full answer (see <see cref="ErrorLog"/>).</summary>
+    public ErrorLog? Errors { get; set; }
+    /// <summary>One line per hold/release, for Discord. Optional.</summary>
+    public Action<string>? Notify { get; set; }
     /// <summary>Orders whose count was cut by EV_LIVE_MAX_CONTRACTS. Kelly (or a dollar cap) asked for
     /// more contracts than the ceiling allows — usually a cheap price, where dollars buy many.</summary>
     public long ContractCapped;
@@ -211,6 +230,11 @@ public sealed class LiveExecutor
             Interlocked.Increment(ref Skipped);
             return false;
         }
+        if (DateTime.UtcNow < _venueHoldUntil)
+        {
+            Interlocked.Increment(ref HeldByVenue);                  // counted, not attempted
+            return false;
+        }
         if (_filled.ContainsKey(key)) why = "side already filled";
         else if (_lastAttempt.TryGetValue(key, out var last)
                  && (t0 - last).TotalSeconds < _cfg.LiveRetryCooldownSec) why = "cooldown";
@@ -322,17 +346,21 @@ public sealed class LiveExecutor
             _log.Write(new EvLiveRow(t0, ticker, eventId, side, limitCents / 100.0, restAsk, pTrue, ev,
                                      count, orderId, got ? "filled" : (status.Length > 0 ? status : "no-fill"),
                                      (double)fillCount, (double)avgFill, ms, feeReal, feeModel, ctx, (double)venueFee));
+            VenueAccepted();
             return got;
         }
         catch (Exception ex)
         {
             Interlocked.Increment(ref Rejected);
+            string tag = ErrorLog.Tag(ex);
             _log.Write(new EvLiveRow(t0, ticker, eventId, side,
                                      attemptPx > 0 ? attemptPx : limitPrice, restAsk, pTrue, ev,
-                                     attemptCount, "", "error:" + ex.GetType().Name, 0, 0,
+                                     attemptCount, "", tag, 0, 0,
                                      (DateTime.UtcNow - t0).TotalMilliseconds, 0, 0, ctx));
+            try { Errors?.Write("order", ticker, side, ex); } catch { }
             Con.Line(ConsoleColor.Red,
                 $"[ERR ] {ticker} {side}: order FAILED ({ex.GetType().Name}: {ex.Message}) — screening continues.");
+            await ConsiderVenueHoldAsync(ex, tag);
             return false;
         }
         finally
@@ -341,8 +369,57 @@ public sealed class LiveExecutor
         }
     }
 
+    /// <summary>An order the venue accepted (filled or not): the venue is open, so any hold state ends.</summary>
+    private void VenueAccepted()
+    {
+        _consecutiveErrors = 0;
+        _holdSec = 60;
+        if (_venueHoldWhy.Length > 0)
+        {
+            long held = HeldByVenue - _heldAtLastNote;
+            _heldAtLastNote = HeldByVenue;
+            Con.Line(ConsoleColor.Green, $"[HOLD ] venue accepting orders again ({held} signal(s) were held during the hold).");
+            try { Notify?.Invoke($"✅ Kalshi accepting orders again ({held} signal(s) held meanwhile)."); } catch { }
+            _venueHoldWhy = "";
+        }
+    }
+
+    private async Task ConsiderVenueHoldAsync(Exception ex, string tag)
+    {
+        _consecutiveErrors++;
+        bool serverSide = ex is HttpRequestException h && h.StatusCode is { } sc && (int)sc >= 500;
+        if (!serverSide && _consecutiveErrors < 3) return;          // one 4xx is a datum, not a closure
+
+        bool tradingActive = true; DateTime? resume = null; string said;
+        try
+        {
+            var st = await _kalshi.GetExchangeStatusAsync();
+            tradingActive = st.TradingActive && st.ExchangeActive;
+            resume = st.Resume;
+            said = tradingActive ? "exchange reports trading ACTIVE - orders are failing anyway"
+                                 : "exchange reports trading NOT active"
+                                   + (resume is { } r0 ? $", est. resume {r0:HH:mm}Z" : "");
+        }
+        catch (Exception sx) { said = $"status check failed ({sx.GetType().Name})"; }
+
+        double sec = !tradingActive && resume is { } r && r > DateTime.UtcNow
+                   ? Math.Clamp((r - DateTime.UtcNow).TotalSeconds + 15, 60, 3600)
+                   : _holdSec;
+        _venueHoldUntil = DateTime.UtcNow.AddSeconds(sec);
+        bool first = _venueHoldWhy.Length == 0;
+        _venueHoldWhy = tag;
+        _holdSec = Math.Min(_holdSec * 2, 600);
+        Interlocked.Increment(ref VenueHolds);
+        string line = $"[HOLD ] {_consecutiveErrors} consecutive order failure(s) ({tag}); {said}. "
+                    + $"Holding orders for {sec / 60:0.0} min (until {_venueHoldUntil:HH:mm:ss}Z); screening continues.";
+        Con.Line(ConsoleColor.Yellow, line);
+        if (first)
+            try { Notify?.Invoke($"⏸️ Kalshi not taking orders ({tag}); {said}. Holding orders {sec / 60:0.0} min, then one retry."); } catch { }
+    }
+
     public string Summary() =>
         $"live: attempted {Attempted} filled {Filled} no-fill {NoFill} err {Rejected} skipped {Skipped} "
+      + (HeldByVenue > 0 ? $"held-by-venue {HeldByVenue} " : "")
       + (ContractCapped > 0 ? $"ctr-capped {ContractCapped} " : "")
       + $"staked ${StakedUsd:0.00}"
       + (_cfg.LiveDailyUsd > 0 ? $"  today ${SpentToday:0.00}/${_cfg.LiveDailyUsd:0.00}" : "")

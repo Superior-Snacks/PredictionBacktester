@@ -830,11 +830,21 @@ public static class Calibration
         var errs = att.Where(r => r.Fill <= 0 && !string.IsNullOrEmpty(r.Status)
                                   && r.Status.Contains("error", StringComparison.OrdinalIgnoreCase)).ToList();
         if (errs.Count > 0)
+        {
             Console.WriteLine($"                {errs.Count} of those were OUR errors, not the book: "
                             + string.Join(", ", errs.GroupBy(r => r.Status)
                                                     .OrderByDescending(g => g.Count())
                                                     .Select(g => $"{g.Key} x{g.Count()}"))
                             + $"  (book-only rate {100.0 * got.Count / (att.Count - errs.Count):0.0}%)");
+            // Kalshi's weekly maintenance (Thursdays 03:00-05:00 ET) refuses orders while reads work. 74 of
+            // the first 76 errors ever logged fell inside it (2026-09-03, 2026-09-17). Rows from before the
+            // executor learned to hold say only "HttpRequestException"; the window attributes them.
+            int inMaint = errs.Count(r => InKalshiMaintenance(r.At));
+            if (inMaint > 0)
+                Console.WriteLine($"                {inMaint} of the {errs.Count} fell inside Kalshi's weekly maintenance window "
+                                + "(Thu 03:00-05:00 ET) - the exchange was closed, not the order path. "
+                                + (errs.Count - inMaint > 0 ? $"{errs.Count - inMaint} outside it are the ones to read." : "None outside it."));
+        }
 
         if (got.Count > 0)
         {
@@ -1413,6 +1423,20 @@ public static class Calibration
                             + string.Join(", ", bad.Select(b => b.Status).Distinct().Take(4)));
         Console.WriteLine("   A low fill rate is the finding, not a fault: it means the book we screen is not");
         Console.WriteLine("   the book we can trade, and the edge is smaller than the telemetry suggests.");
+    }
+
+    /// <summary>True when a UTC timestamp string falls in Kalshi's documented weekly maintenance window,
+    /// Thursdays 03:00-05:00 US Eastern (DST-aware). Unparseable -> false.</summary>
+    public static bool InKalshiMaintenance(string atIso)
+    {
+        if (!DateTime.TryParse(atIso, CultureInfo.InvariantCulture,
+                               DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var utc)) return false;
+        TimeZoneInfo? tz = null;
+        foreach (string id in new[] { "America/New_York", "Eastern Standard Time" })
+            try { tz = TimeZoneInfo.FindSystemTimeZoneById(id); break; } catch { }
+        if (tz is null) return false;
+        var et = TimeZoneInfo.ConvertTimeFromUtc(utc, tz);
+        return et.DayOfWeek == DayOfWeek.Thursday && et.Hour >= 3 && et.Hour < 5;
     }
 
     // ── Statistics ────────────────────────────────────────────────────────────────────────────────────

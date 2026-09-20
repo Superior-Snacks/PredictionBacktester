@@ -205,6 +205,23 @@ public class KalshiOrderClient : IKalshiOrderExecutor, IDisposable
     /// <para><see cref="GetBalanceCentsAsync"/> returns the ACCOUNT TOTAL, and that is precisely what made
     /// the 2026-08-28 outage invisible: $576 in the account, $0 on the shard where the markets actually
     /// lived, and every order answering 404 user_not_found. Collateral is per shard — check the shard.</para></summary>
+    /// <summary>GET /exchange/status. Kalshi's weekly maintenance (Thursdays 03:00-05:00 ET) refuses
+    /// orders while every market read keeps working, so a failing POST alone cannot tell "closed" from
+    /// "broken"; this can. <c>Resume</c> is the venue's own estimate when it gives one.</summary>
+    public async Task<(bool ExchangeActive, bool TradingActive, DateTime? Resume)> GetExchangeStatusAsync()
+    {
+        using var doc = await GetAsync("/exchange/status");
+        var r = doc.RootElement;
+        bool ex = r.TryGetProperty("exchange_active", out var a) && a.ValueKind == JsonValueKind.True;
+        bool tr = r.TryGetProperty("trading_active", out var b) && b.ValueKind == JsonValueKind.True;
+        DateTime? resume = null;
+        if (r.TryGetProperty("exchange_estimated_resume_time", out var t) && t.ValueKind == JsonValueKind.String
+            && DateTime.TryParse(t.GetString(), CultureInfo.InvariantCulture,
+                                 DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var dt))
+            resume = dt;
+        return (ex, tr, resume);
+    }
+
     public async Task<double> ShardBalanceAsync(int shard)
     {
         using var doc = await GetAsync("/portfolio/balance");
