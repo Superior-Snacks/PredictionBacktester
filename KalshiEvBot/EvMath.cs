@@ -54,6 +54,15 @@ public static class EvMath
         => count <= 0 ? 0.0
          : Math.Ceiling(Math.Round(m * FeeRate * count * p * (1.0 - p) * 10000.0, 9)) / 10000.0;
 
+    /// <summary>The same charge for a FRACTIONAL fill. Kalshi fills dust (0.01-0.02 contracts) and ceils
+    /// the order fee to $0.0001 regardless: 0.01 contracts at 0.61 costs ceil($0.0001665) = $0.0002,
+    /// which is 2c "per contract". Verified against the venue on all seven dust fills through 2026-09-20.
+    /// The int overload above is for SIZING (whole contracts); this one is for reconciling what was
+    /// actually filled, where truncating 0.01 to 0 contracts made the venue look 2c dearer than the model.</summary>
+    public static double OrderFeeExact(double p, double count, double m = 1.0)
+        => count <= 0 ? 0.0
+         : Math.Ceiling(Math.Round(m * FeeRate * count * p * (1.0 - p) * 10000.0, 9)) / 10000.0;
+
     /// <summary>All-in cost of owning one contract: the price crossed plus the fee paid to cross.</summary>
     public static double CostPerContract(double execPrice, double m = 1.0)
         => execPrice + FeePerContract(execPrice, m);

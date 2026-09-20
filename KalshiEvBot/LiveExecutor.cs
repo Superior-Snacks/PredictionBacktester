@@ -137,13 +137,21 @@ public sealed class LiveExecutor
             double px = (double)avgYes;
             if (px <= 0 || px >= 1) return;
             // WITH the series multiplier, or a legitimately dearer series would look like a formula change.
-            double modelled = EvMath.OrderFee(px, (int)filled, _kalshi.CachedFeeMultiplier(tk)) / (double)filled;
-            double actual   = (double)feePaid;
-            double gapC     = (actual - modelled) * 100.0;
-            if (Math.Abs(gapC) > 0.05)          // half a hundredth of a cent per contract
+            // And with the FRACTIONAL count: `(int)filled` turned a 0.01-contract dust fill into 0 contracts,
+            // a $0 model, and a "+2.00c, the fee formula has changed" alarm on every dust fill (7 of them by
+            // 2026-09-20, $0.002 in total). Compared per ORDER in dollars, with one $0.0001 granule of slack,
+            // then reported per contract so the number means something.
+            double n            = (double)filled;
+            double modelledUsd  = EvMath.OrderFeeExact(px, n, _kalshi.CachedFeeMultiplier(tk));
+            double actualUsd    = (double)feePaid * n;
+            double modelled     = modelledUsd / n;
+            double actual       = (double)feePaid;
+            double gapC         = (actual - modelled) * 100.0;
+            if (Math.Abs(actualUsd - modelledUsd) > 0.0001 + 1e-9 && Math.Abs(gapC) > 0.05)
                 Con.Line(ConsoleColor.Red,
-                    $"[FEE!] {tk}: venue charged {actual:0.0000}/contract, we modelled {modelled:0.0000} "
-                  + $"({gapC:+0.00;-0.00}c). The fee formula has changed — EV is now WRONG.");
+                    $"[FEE!] {tk}: venue charged {actual:0.0000}/contract on {n:0.##}, we modelled {modelled:0.0000} "
+                  + $"({gapC:+0.00;-0.00}c; ${actualUsd:0.0000} vs ${modelledUsd:0.0000} on the order). "
+                  + "The fee formula has changed — EV is now WRONG.");
         };
         // RESUME, do not restart. Without this the per-side and per-game caps silently become per-PROCESS,
         // and an unattended restart re-enters markets already bought.
@@ -339,8 +347,8 @@ public sealed class LiveExecutor
             // digest both read these columns. A no-fill costs nothing, so both are zero.
             double fillPx   = (double)(avgFill > 0 ? avgFill : (decimal)pxDollars);
             int    filledN  = (int)fillCount;
-            double feeReal  = got ? EvMath.OrderFee(fillPx, filledN) : 0.0;
-            double feeModel = got ? EvMath.FeePerContract(fillPx) * filledN : 0.0;
+            double feeReal  = got ? EvMath.OrderFeeExact(fillPx, (double)fillCount) : 0.0;   // dust fills are charged too
+            double feeModel = got ? EvMath.FeePerContract(fillPx) * (double)fillCount : 0.0;
             _venueFee.TryRemove(coid, out decimal venueFee);
 
             _log.Write(new EvLiveRow(t0, ticker, eventId, side, limitCents / 100.0, restAsk, pTrue, ev,

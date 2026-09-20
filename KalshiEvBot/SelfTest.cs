@@ -123,6 +123,13 @@ public static class SelfTest
             Near(EvMath.OrderFee(0.54, 5), 0.0870, 1e-9,
                  "the observed fill: 5 @ 0.54 costs $0.0870, not the $0.09 a cent-ceiling would give");
             Near(EvMath.OrderFee(0.50, 1), 0.0175, 1e-12, "one contract at 0.50 pays the marginal 1.75c");
+            // DUST FILLS, as the venue actually charged them (FeeVenueUsd, 2026-08-30 .. 2026-09-20).
+            Near(EvMath.OrderFeeExact(0.61, 0.01), 0.0002, 1e-12, "0.01 contract at 0.61: ceil($0.0001665) = $0.0002 (venue: $0.0002)");
+            Near(EvMath.OrderFeeExact(0.77, 0.02), 0.0003, 1e-12, "0.02 at 0.77 = $0.0003 (venue: $0.0003)");
+            Near(EvMath.OrderFeeExact(0.68, 0.02), 0.0004, 1e-12, "0.02 at 0.68 = $0.0004 (venue: $0.0004)");
+            Near(EvMath.OrderFeeExact(0.24, 0.01), 0.0002, 1e-12, "0.01 at 0.24 = $0.0002 (venue: $0.0002)");
+            Near(EvMath.OrderFeeExact(0.54, 5.0), EvMath.OrderFee(0.54, 5), 1e-12, "whole counts agree with the int overload");
+            Check(EvMath.OrderFee(0.61, (int)0.01m) == 0.0, "the int overload truncates dust to $0 - which is why the check must not use it");
             Near(EvMath.OrderFee(0.50, 100), 1.75, 1e-12, "100 contracts at 0.50 is charged $1.75");
             Check(EvMath.OrderFee(0.54, 5) >= EvMath.FeePerContract(0.54) * 5,
                   "the ceiling can only ever round the fee UP, never down");
