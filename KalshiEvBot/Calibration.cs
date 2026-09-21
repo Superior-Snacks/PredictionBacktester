@@ -77,6 +77,15 @@ public static class Calibration
     /// <summary>In-play rows dropped for a quote older than the live gate — a feed that was already dying.</summary>
     public static double MaxInPlayAgeMs => Env("EV_ORACLE_MAX_AGE_INPLAY_MS", 1000);
     public static int LastStaleAgeDropped { get; private set; }
+    /// <summary>SIGNAL rows inside Kalshi's weekly maintenance window (Thu 03:00-05:00 ET): the order gateway
+    /// refuses everything, so a signal there says nothing about the strategy. 2026-09-17: 66 signals
+    /// in two hours, every one "fillable" on the WS book, none buyable. Non-signal rows are kept - they
+    /// grade the oracle, which the gateway does not touch.</summary>
+    public static int LastMaintenanceDropped { get; private set; }
+    /// <summary>Signals whose order attempt came back as a VENUE error (order log Status "error:...",
+    /// within 10s): a miss that was ours or the venue's, not the book's. Drops the strays the window
+    /// does not cover, and whatever the next outage produces.</summary>
+    public static int LastVenueErrorDropped { get; private set; }
 
     private static double Env(string k, double d)
         => double.TryParse(Environment.GetEnvironmentVariable(k), System.Globalization.NumberStyles.Any,
@@ -112,15 +121,44 @@ public static class Calibration
     /// <summary>The load-time half: the exclusions that may be retuned or whose inputs change between runs
     /// (mis-oriented list, source-gap and in-play-age gates), and the settlement outcome. Runs over cached
     /// and freshly parsed rows alike, so a cache can never freeze a rule.</summary>
-    public static List<Obs> Finalize(IEnumerable<Obs> rows, IReadOnlyDictionary<string, SettlementRecord> settled)
+    public static List<Obs> Finalize(IEnumerable<Obs> rows, IReadOnlyDictionary<string, SettlementRecord> settled,
+                                     IReadOnlyList<(string Ticker, string Side, DateTime At)>? venueErrors = null)
     {
         var outp = new List<Obs>();
         var misoriented = MisorientedTickers();
-        int droppedMis = 0, droppedGap = 0, droppedAge = 0;
+        int droppedMis = 0, droppedGap = 0, droppedAge = 0, droppedMaint = 0, droppedVenue = 0;
+        // ticker|side -> sorted attempt times that errored at the venue
+        var errIdx = new Dictionary<string, List<DateTime>>(StringComparer.Ordinal);
+        foreach (var (tk, sd, at) in venueErrors ?? Array.Empty<(string, string, DateTime)>())
+        {
+            string k = tk + "|" + sd;
+            if (!errIdx.TryGetValue(k, out var l)) errIdx[k] = l = new List<DateTime>();
+            l.Add(at);
+        }
+        foreach (var l in errIdx.Values) l.Sort();
+        bool ErroredAtVenue(string tk, string sd, DateTime at)
+        {
+            if (!errIdx.TryGetValue(tk + "|" + sd, out var l)) return false;
+            int lo = 0, hi = l.Count;                              // first error at or after `at` - 10s
+            var from = at.AddSeconds(-10);
+            while (lo < hi) { int mid = (lo + hi) / 2; if (l[mid] < from) lo = mid + 1; else hi = mid; }
+            return lo < l.Count && l[lo] <= at.AddSeconds(10);
+        }
         foreach (var o in rows)
         {
             string ticker = o.Ticker, side = o.Side;
             if (misoriented.Contains(ticker)) { droppedMis++; continue; }
+            // THE VENUE WAS CLOSED. Kalshi's weekly maintenance refuses orders while reads keep working, so a
+            // signal in that window is a perfectly good oracle reading and a perfectly useless strategy one:
+            // it enters section 5 as "fillable", section 9 as a convergence sample and the radar as a miss,
+            // and none of that was decidable by anything we control. Out, like the mis-oriented rows.
+            // Signals only: the other rows in those two hours are oracle readings (P_true vs settlement),
+            // which Kalshi's gateway has no bearing on, and sections 2-4 want them. Measured 2026-09-20:
+            // 88 signal rows on 17 markets inside the window against ~69,000 rows in total.
+            if (o.IsSignal && InKalshiMaintenance(o.At)) { droppedMaint++; continue; }
+            // AND THE ORDER THAT ERRORED. Same logic for any signal whose attempt the venue refused outside
+            // the window (one on 2026-08-27; whatever the next outage brings).
+            if (o.IsSignal && ErroredAtVenue(ticker, side, o.At)) { droppedVenue++; continue; }
             // THE TWO KALSHI SOURCES DISAGREED, so one of them was stale and nothing can say which. Rows
             // written BEFORE EV_MAX_WS_REST_GAP existed carry Decision=SIGNAL even though the live bot
             // would now suppress them, and grading them would score a rule the bot has abandoned — the
@@ -145,6 +183,8 @@ public static class Calibration
         LastMisorientedDropped = droppedMis;
         LastSourceGapDropped = droppedGap;
         LastStaleAgeDropped = droppedAge;
+        LastMaintenanceDropped = droppedMaint;
+        LastVenueErrorDropped = droppedVenue;
         return outp;
     }
 
@@ -682,6 +722,8 @@ public static class Calibration
 
         Console.WriteLine();
         Console.WriteLine("9. CONVERGENCE  (did Kalshi come to OUR price? the thesis guard)");
+        if (ReportCache.FollowMaintenanceDropped > 0)
+            Console.WriteLine($"   ({ReportCache.FollowMaintenanceDropped} follow-up row(s) inside Kalshi's maintenance window set aside, as in section 1)");
         Console.WriteLine("   one row per ticker+side per checkpoint.  MOVE = NowAsk - EntryAsk: the closing-line value,");
         Console.WriteLine("   in cents, with its error bar. came-to-us = share that rose at all (ties excluded);");
         Console.WriteLine($"   reached = arrived within {tol * 100:0.#}c of entry P_true; BID = NowBid - EntryAsk, could we have sold above cost.");
@@ -1428,14 +1470,25 @@ public static class Calibration
     /// <summary>True when a UTC timestamp string falls in Kalshi's documented weekly maintenance window,
     /// Thursdays 03:00-05:00 US Eastern (DST-aware). Unparseable -> false.</summary>
     public static bool InKalshiMaintenance(string atIso)
+        => DateTime.TryParse(atIso, CultureInfo.InvariantCulture,
+                             DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var utc)
+           && InKalshiMaintenance(utc);
+
+    private static TimeZoneInfo? _eastern;
+    private static bool _easternLooked;
+
+    public static bool InKalshiMaintenance(DateTime at)
     {
-        if (!DateTime.TryParse(atIso, CultureInfo.InvariantCulture,
-                               DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var utc)) return false;
-        TimeZoneInfo? tz = null;
-        foreach (string id in new[] { "America/New_York", "Eastern Standard Time" })
-            try { tz = TimeZoneInfo.FindSystemTimeZoneById(id); break; } catch { }
-        if (tz is null) return false;
-        var et = TimeZoneInfo.ConvertTimeFromUtc(utc, tz);
+        if (at == DateTime.MinValue) return false;
+        if (!_easternLooked)
+        {
+            _easternLooked = true;
+            foreach (string id in new[] { "America/New_York", "Eastern Standard Time" })
+                try { _eastern = TimeZoneInfo.FindSystemTimeZoneById(id); break; } catch { }
+        }
+        if (_eastern is null) return false;
+        var utc = at.Kind == DateTimeKind.Local ? at.ToUniversalTime() : DateTime.SpecifyKind(at, DateTimeKind.Utc);
+        var et = TimeZoneInfo.ConvertTimeFromUtc(utc, _eastern);
         return et.DayOfWeek == DayOfWeek.Thursday && et.Hour >= 3 && et.Hour < 5;
     }
 
@@ -1537,6 +1590,17 @@ public static class Calibration
             Console.ForegroundColor = ConsoleColor.DarkYellow;
             Console.WriteLine($"   EXCLUDED {LastStaleAgeDropped} in-play row(s) whose oracle quote was older "
                             + $"than {MaxInPlayAgeMs:0}ms — an ageing quote is a feed dying, not a slow tick.");
+            Console.ResetColor();
+        }
+        if (LastMaintenanceDropped > 0 || LastVenueErrorDropped > 0)
+        {
+            Console.ForegroundColor = ConsoleColor.DarkYellow;
+            if (LastMaintenanceDropped > 0)
+                Console.WriteLine($"   EXCLUDED {LastMaintenanceDropped} signal row(s) inside Kalshi's weekly maintenance window (Thu 03:00-05:00 ET) — "
+                                + "the venue refused every order; a signal there says nothing about the strategy. Non-signal rows stay (oracle calibration).");
+            if (LastVenueErrorDropped > 0)
+                Console.WriteLine($"   EXCLUDED {LastVenueErrorDropped} signal(s) whose order attempt errored at the venue — "
+                                + "a miss that was ours or Kalshi's, not the book's (section 7 still counts the attempts).");
             Console.ResetColor();
         }
         Console.WriteLine($"   settled: {graded.Count}   awaiting settlement: {obs.Count - graded.Count} "

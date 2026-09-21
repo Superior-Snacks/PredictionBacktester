@@ -119,6 +119,36 @@ SCRIPTS = {
 }
 
 
+def fills_line(root: str) -> str:
+    """'live fills: N total · today M filled of K attempts'. Counts, not money: the operator reads this
+    channel every two days on purpose, and a daily P&L number is exactly what they asked to keep out of it."""
+    import csv, glob
+    total = 0; today_f = 0; today_a = 0
+    today = dt.date.today()
+    for f in glob.glob(os.path.join(root, "EvLive_*.csv")):
+        try:
+            for r in csv.DictReader(io.open(f, encoding="utf-8", errors="replace")):
+                try:
+                    fc = float(r.get("FillCount") or 0)
+                except ValueError:
+                    fc = 0.0
+                at = (r.get("At") or "")[:10]
+                try:
+                    d = dt.date.fromisoformat(at)
+                except ValueError:
+                    d = None
+                if fc >= 1:
+                    total += 1
+                if d == today:
+                    today_a += 1
+                    if fc >= 1:
+                        today_f += 1
+        except OSError:
+            continue
+    rate = f" ({100.0 * today_f / today_a:.0f}%)" if today_a else ""
+    return f"🧾 live fills: **{total}** total · today **{today_f}** filled of {today_a} attempt(s){rate}"
+
+
 def digest(out: str) -> tuple[str, bool]:
     """(message, alarming). `alarming` drives the leading emoji so a bad run is visible without reading."""
     bad = False
@@ -534,6 +564,28 @@ def main() -> int:
         print("[DISCORD] posted." if ok else "[DISCORD] post FAILED.")
         return 0 if ok else 1
 
+    # THE END-OF-DAY DROP IS THE FILE, AND ONLY THE FILE. The digest used to precede it - the same P&L
+    # lines the radar and the two-day cadence exist to keep out of the channel. Now `--full` posts the
+    # attachment, then one counts line (fills total / today), and nothing else. `ev digest` still gives
+    # the digest on request.
+    if a.full:
+        fl = fills_line(a.root)
+        print(fl)
+        if a.dry:
+            return 0
+        url = load_webhook(os.path.join(a.root, ".env"))
+        if not url:
+            print("[DISCORD] DISCORD_WEBHOOK_URL not set - nothing posted.")
+            return 1
+        stamp = dt.datetime.now().strftime("%Y%m%d_%H%M")
+        head = (a.label + " — " if a.label else "") + f"full `--resolve` report ({len(out.splitlines())} lines)"
+        ok = post_file(url, head, f"ev_resolve_{stamp}.txt", out)
+        if not ok:
+            print("[DISCORD] attachment FAILED.")
+        ok = post(url, fl) and ok
+        print("[DISCORD] posted." if ok else "[DISCORD] post FAILED.")
+        return 0 if ok else 1
+
     msg, bad = digest(out)
     # A SECOND MESSAGE, NOT A LONGER ONE. Discord caps at 2000 characters, and appending the live block
     # would push section 6 - the only part that says whether anything changed - off the bottom. They also
@@ -551,31 +603,6 @@ def main() -> int:
     ok = post(url, msg)
     if live and ok:
         ok = post(url, live)
-
-    # THE FULL REPORT, AS A FILE. Posted AFTER the digest so the at-a-glance lines are what a notification
-    # shows; the attachment is what you open when you actually want to read or paste it.
-    if a.full:
-        stamp = dt.datetime.now().strftime("%Y%m%d_%H%M")
-        head = (a.label + " — " if a.label else "") + f"full `--resolve` report ({len(out.splitlines())} lines)"
-        if not post_file(url, head, f"ev_resolve_{stamp}.txt", out):
-            ok = False
-            print("[DISCORD] attachment FAILED.")
-        # OPTIONAL inline chunks, for reading without opening the file. Off unless asked, and it
-        # SILENTLY DECLINES rather than spamming when the report would need more messages than the cap.
-        try:
-            cap = int(os.environ.get("EV_REPORT_INLINE_CHUNKS", "0") or 0)
-        except ValueError:
-            cap = 0
-        if cap > 0:
-            blocks = chunk_blocks(out, max_msgs=cap)
-            if not blocks:
-                print(f"[DISCORD] report needs more than {cap} messages - inline chunks skipped "
-                      f"(the attachment has all of it).")
-            else:
-                for b in blocks:
-                    if not post(url, b):
-                        ok = False
-                        break
 
     print("[DISCORD] posted." if ok else "[DISCORD] post FAILED.")
     return 0 if ok and not bad else (2 if bad else 1)

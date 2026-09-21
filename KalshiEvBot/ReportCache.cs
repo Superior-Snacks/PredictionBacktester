@@ -38,6 +38,9 @@ public static class ReportCache
     private const string Magic = "EVCACHE";
 
     public static int Hits, Misses;
+    /// <summary>Follow-up rows whose entry fell in Kalshi's maintenance window, set aside at load time
+    /// (the cache itself stays raw). Section 9 prints it.</summary>
+    public static int FollowMaintenanceDropped;
     public static double ParseSeconds, CacheSeconds;
 
     private static string CachePath(string src, string kind)
@@ -150,6 +153,10 @@ public static class ReportCache
         var all = new List<FollowRow>();
         foreach (string f in Directory.GetFiles(dir, prefix + "_*.csv").OrderBy(f => f))
             all.AddRange(LoadFollowFile(f));
+        // Load-time policy, not cache content: a signal the venue could not fill has no convergence to grade.
+        int before = all.Count;
+        all.RemoveAll(r => Calibration.InKalshiMaintenance(r.EntryAt));
+        FollowMaintenanceDropped += before - all.Count;
         _followMemo[key] = all;
         return all;
     }

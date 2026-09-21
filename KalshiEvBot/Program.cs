@@ -721,7 +721,17 @@ internal static class Program
                             + "section 7 will report the equity recorded in the log instead.");
         }
 
-        Calibration.Report(Calibration.Finalize(raw, settled), settled, dedupe,
+        // Attempts the venue refused, so Finalize can set aside the signals behind them (the window catches
+        // Kalshi's maintenance; this catches the rest). Read straight from the order log - a few thousand rows.
+        var venueErrors = new List<(string Ticker, string Side, DateTime At)>();
+        foreach (string lf in Directory.GetFiles(dir, (deriv ? "EvDerivLive" : "EvLive") + "_*.csv"))
+            foreach (var r in Csv.Read(lf))
+                if (Csv.Str(r, "Status").StartsWith("error", StringComparison.OrdinalIgnoreCase)
+                    && DateTime.TryParse(Csv.Str(r, "At"), CultureInfo.InvariantCulture,
+                                         DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var eat))
+                    venueErrors.Add((Csv.Str(r, "Ticker"), Csv.Str(r, "Side"), eat));
+
+        Calibration.Report(Calibration.Finalize(raw, settled, venueErrors), settled, dedupe,
                            deriv ? "EvDerivLive" : "EvLive", shardCash, shardIdx,
                            deriv ? "EvDerivFollowUp" : "EvFollowUp");
         return 0;

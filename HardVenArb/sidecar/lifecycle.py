@@ -78,6 +78,7 @@ class PinnacleLifecycle:
         self._windows: list = []
         self._win_ts = 0.0
         self._open = False
+        self._plan_posted_date = None         # local date the morning plan was last posted to Discord
         self._wake = asyncio.Event()          # set by maintenance_close() so run() re-ticks immediately
         self._last_plan: dict = {}            # provenance of the current plan (mode, counts) for status()/file
         self._per_window: list = []           # games attributed to each window (parallel to _windows)
@@ -364,7 +365,42 @@ class PinnacleLifecycle:
                   + (f" (min {min(gaps):.0f}m vs downtime floor {self._min_downtime_min:g}m)"
                      if self._min_downtime_min > 0 else ""))
         self._write_windows_file()
+        self._post_morning_plan(now_p)
 
+    def _post_morning_plan(self, now_p) -> None:
+        """The day's windows to Discord, ONCE per local day, from the first replan at or after 06:00 - i.e.
+        the AUTO-BLOCK re-author against the real board, not the provisional overnight plan whose per-day
+        counts read "(counted at the 06:00 re-author)". A restart later in the day posts again, which is
+        the right behaviour: the operator is looking because something changed."""
+        if not self._notify.enabled:
+            return
+        today = sched._local(now_p).date()
+        if sched._local(now_p).hour < 6 or self._plan_posted_date == today:
+            return
+        self._plan_posted_date = today
+        todays = [w for w in sorted(self._windows) if sched._local(w[0]).date() == today]
+        p = self._last_plan or {}
+        scope = ""
+        if p.get("today") is not None:
+            scope = f" — {p.get('today')} game(s) today" + (f", {p.get('paired')} paired" if p.get("paired") is not None else "")
+        if not todays:
+            nxt = [w for w in sorted(self._windows) if w[0] > now_p]
+            msg = f"📅 **Plan for {today:%a %d %b}**{scope}\n• no windows today"
+            if nxt:
+                msg += f" — next open {sched._local(nxt[0][0]):%a %H:%M} local for {nxt[0][2]} game(s)"
+            self._notify.send_bg(msg)
+            return
+        open_h = sum((c - o).total_seconds() for o, c, _ in todays) / 3600
+        lines = [f"📅 **Plan for {today:%a %d %b}** — {len(todays)} window(s), {open_h:.1f}h open{scope}"]
+        for w in todays:
+            o, c, g = w
+            lo, lc = sched._local(o), sched._local(c)
+            mins = (c - o).total_seconds() / 60
+            state = "open now" if o <= now_p < c else ("done" if c <= now_p else "")
+            names = sched.describe_games(self._games_for(w), 3)
+            lines.append(f"• {lo:%H:%M}–{lc:%H:%M}  {mins:.0f}m  {g} game(s)" + (f"  _{state}_" if state else "")
+                         + (f"\n   {names}" if names else ""))
+        self._notify.send_bg("\n".join(lines)[:1900])
 
     def _fire_on_close(self) -> None:
         """Run an external command once each window closes - used to post the EV report to Discord.
@@ -760,28 +796,24 @@ class PinnacleLifecycle:
         mins = max(0, round((c - now).total_seconds() / 60))
         pinned = self._is_pinned(window)
         tag = " (operator hours)" if pinned else ""
-        lines = [f"🟢 **LIVE**{tag} until {sched._local(c):%H:%M} local (~{mins}m) — {n} target game(s)",
-                 f"• Targets: {sched.describe_games(games, 8)}"]
+        # COUNTS, NOT LISTS (2026-09-21). The game names were the bulk of every LIVE/DARK post and the
+        # operator never needed them there - the morning plan and `schedule` carry the detail. One line.
+        parts = [f"🟢 **LIVE**{tag} until {sched._local(c):%H:%M} local (~{mins}m) — {n} target game(s)"]
         if pinned:
-            # A pin's value is the LINES it watches: pre-live arbs surface hours before start, so list the
-            # paired games starting after this window whose prices are live right now.
             watching = sorted((g for p in self._per_window for g in p if g[0] > c), key=lambda g: g[0])
             watching += [g for g in self._left_behind if g[0] > c]
             if watching:
-                lines.append(f"• Watching lines for {len(watching)} later game(s): "
-                             f"{sched.describe_games(watching, 5)}")
-        # What we are NOT covering, and why. A skipped match the operator can see is a decision;
-        # an invisible one is a bug they'd never catch.
+                parts.append(f"watching {len(watching)} later")
         later = [g for g in self._left_behind if g[0] > c]
         if later:
-            lines.append(f"• Left behind ({len(later)} later today): {sched.describe_games(later, 4)}")
+            parts.append(f"{len(later)} left behind today")
         unp = self._skipped.get("unpaired") or []
         if unp:
-            lines.append(f"• Not bettable ({len(unp)} unpaired on the board): {sched.describe_games(unp, 3)}")
+            parts.append(f"{len(unp)} unpaired")
         nxt = [w for w in self._windows if w[0] > c]
         if nxt:
-            lines.append(f"• Next window: {sched._local(nxt[0][0]):%a %H:%M} ({nxt[0][2]} game(s))")
-        self._notify.send_bg("\n".join(lines))
+            parts.append(f"next {sched._local(nxt[0][0]):%a %H:%M} ({nxt[0][2]} game(s))")
+        self._notify.send_bg(" · ".join(parts))
 
     def _alert_close(self, now) -> None:
         if not self._notify.enabled:
@@ -790,15 +822,14 @@ class PinnacleLifecycle:
         if upcoming:
             o, c, n = upcoming[0]
             mins = round((o - now).total_seconds() / 60)
-            nxt = (f"next open {sched._local(o):%a %H:%M} local (in {mins // 60}h{mins % 60:02d}m) "
-                   f"for {n} game(s): {sched.describe_games(self._games_for(upcoming[0]), 5)}")
+            nxt = f"next open {sched._local(o):%a %H:%M} local (in {mins // 60}h{mins % 60:02d}m) for {n} game(s)"
         else:
             nxt = "no further windows planned (recomputes hourly)"
         skipping = [g for g in self._left_behind if g[0] > now]
-        lines = [f"⚫ **DARK** — closed at {sched._local(now):%H:%M} local", f"• {nxt}"]
+        parts = [f"⚫ **DARK** — closed at {sched._local(now):%H:%M} local", nxt]
         if skipping:
-            lines.append(f"• Sleeping through {len(skipping)} game(s): {sched.describe_games(skipping, 4)}")
-        self._notify.send_bg("\n".join(lines))
+            parts.append(f"sleeping through {len(skipping)} game(s)")
+        self._notify.send_bg(" · ".join(parts))
 
     def _write_windows_file(self) -> None:
         """Publish the CURRENT plan to work_windows.json on every recompute.
