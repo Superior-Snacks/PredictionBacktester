@@ -827,7 +827,8 @@ public static class Calibration
 
         var rows = new List<(string Ticker, string Side, double Limit, double RestPx, double Ev,
                              int Req, string Status, double Fill, double Avg, double Ms, double Slip,
-                             double Fee, double Equity, double Bank, string At, double Depth, double Uncapped)>();
+                             double Fee, double Equity, double Bank, string At, double Depth, double Uncapped,
+                             double PTrue, double FeeVenue, string OrderId)>();
         // Csv.Read, NOT StreamReader. A bare StreamReader requests FileShare.Read, which CONFLICTS with the
         // write handle the running bot holds on today's file — and the whole report dies on an IOException
         // AFTER printing sections 1-6, so it looks like the report simply ends. Csv.Read opens with
@@ -844,7 +845,8 @@ public static class Calibration
                           (int)(double.IsNaN(D("Requested")) ? 0 : D("Requested")), S("Status"),
                           D("FillCount"), D("AvgFillPrice"), D("LatencyMs"), D("SlippageCents"),
                           D("FeeChargedUsd"), D("EquityUsd"), D("BankrollUsd"), S("At"),
-                          D("DepthToLimit"), D("UncappedContracts")));
+                          D("DepthToLimit"), D("UncappedContracts"),
+                          D("PTrue"), D("FeeVenueUsd"), S("OrderId")));
             }
         }
         if (rows.Count == 0) return;
@@ -1077,6 +1079,40 @@ public static class Calibration
         {
             int settledN = 0, wonN = 0, pending = 0;
             double pnl = 0, staked = 0, quotedUsd = 0, feesPaid = 0, walkUsd = 0, ctrN = 0, wonCtr = 0;
+            // BOUGHT EV, EXACT. The bot's own P_true at the moment it ordered, times the contracts that
+            // actually filled, less what was actually paid for them. "Actually" in the strongest sense
+            // available, in this order:
+            //   1. Kalshi's per-fill records (EvFillLadder) - every level's count x price, and the fee Kalshi
+            //      itself charged. The ground truth; covers every order since the 2026-09-22 backfill.
+            //   2. the order's reported average price x filled count, plus the fee Kalshi reported (FeeVenueUsd).
+            //   3. the same with our modelled fee - only for rows written before FeeVenueUsd existed.
+            // Partial fills and every sizing bound (Kelly clamp, edge haircut, $ ceiling, contract cap) are in
+            // it by construction: it is priced on what FILLED, not on what the signal or Kelly asked for.
+            //
+            // The realised P&L below uses the IDENTICAL contracts and cost, so realised - bought is exactly
+            // sum(contracts x (won - P_true)): the outcome noise, plus whatever bias P_true had on the bets
+            // we took. Nothing about price, fees, slippage or sizing is left in that difference.
+            double boughtExact = 0, residual = 0, residVar = 0, generalBias = 0;
+            int fromLadder = 0, fromVenueFee = 0, fromModelFee = 0;
+            var ladderCost = new Dictionary<string, (double Ctr, double Notional, double Fee)>(StringComparer.Ordinal);
+            foreach (string lf in Directory.GetFiles(dir, "EvFillLadder_*.csv"))
+                foreach (var lr in Csv.Read(lf))
+                {
+                    string oid = Csv.Str(lr, "OrderId");
+                    string paid = Csv.Str(lr, "PaidLadder");
+                    if (oid.Length == 0 || paid.Length == 0) continue;
+                    double c = 0, notional = 0;
+                    foreach (string lvl in paid.Split('|', StringSplitOptions.RemoveEmptyEntries))
+                    {
+                        var at = lvl.Split('@');
+                        if (at.Length == 2
+                            && double.TryParse(at[0], NumberStyles.Any, CultureInfo.InvariantCulture, out double q)
+                            && double.TryParse(at[1], NumberStyles.Any, CultureInfo.InvariantCulture, out double pr))
+                        { c += q; notional += q * pr; }
+                    }
+                    double lfee = Csv.Num(lr, "FeeTotalUsd");
+                    if (c > 0) ladderCost[oid] = (c, notional, double.IsNaN(lfee) ? 0 : lfee);
+                }
             var nets = new List<double>();
             var losers = new List<(string Ticker, string Side, double Loss)>();
             foreach (var r in got)
@@ -1089,18 +1125,35 @@ public static class Calibration
                 // did not report an average (older rows), which overstates cost rather than flattering it.
                 double px   = r.Avg > 0 ? r.Avg : r.Limit;
                 double fee  = double.IsNaN(r.Fee) ? 0.0 : r.Fee;
-                double cost = r.Fill * px + fee;
-                wonCtr += w.Value ? r.Fill : 0;
+                double nCtr = r.Fill;
+                double cost;
+                if (r.OrderId.Length > 0 && ladderCost.TryGetValue(r.OrderId, out var lc))
+                {
+                    nCtr = lc.Ctr; cost = lc.Notional + lc.Fee; fee = lc.Fee; fromLadder++;
+                }
+                else if (!double.IsNaN(r.FeeVenue) && r.FeeVenue > 0)
+                {
+                    cost = r.Fill * px + r.FeeVenue; fee = r.FeeVenue; fromVenueFee++;
+                }
+                else
+                {
+                    cost = r.Fill * px + fee; fromModelFee++;
+                }
+                double pT = double.IsNaN(r.PTrue) ? 0.0 : r.PTrue;
+                boughtExact += nCtr * pT - cost;
+                residual    += nCtr * ((w.Value ? 1.0 : 0.0) - pT);
+                residVar    += nCtr * nCtr * pT * (1 - pT);         // its variance IF P_true were exactly right
+                generalBias += nCtr * (_decileDiff.TryGetValue(Math.Min(9, (int)(pT * 10)), out double dd) ? dd : 0.0);
+                wonCtr += w.Value ? nCtr : 0;
                 double rest = double.IsNaN(r.RestPx) || r.RestPx <= 0 ? px : r.RestPx;
-                walkUsd += r.Fill * rest + r.Fill * EvMath.FeePerContract(rest) - cost;   // <= 0 when we walked
-                ctrN    += r.Fill;
+                ctrN    += nCtr;
 
                 settledN++;
                 if (w.Value) wonN++;
                 staked    += cost;
                 feesPaid  += fee;
-                quotedUsd += (double.IsNaN(r.Ev) ? 0.0 : r.Ev / 100.0) * r.Fill;   // EvCents is per contract
-                double net = (w.Value ? r.Fill : 0.0) - cost;                       // Kalshi pays $1 a contract
+                quotedUsd += (double.IsNaN(r.Ev) ? 0.0 : r.Ev / 100.0) * nCtr;     // EvCents is per contract
+                double net = (w.Value ? nCtr : 0.0) - cost;                         // Kalshi pays $1 a contract
                 pnl += net;
                 nets.Add(net);
                 if (net < 0) losers.Add((r.Ticker, r.Side, net));
@@ -1115,14 +1168,18 @@ public static class Calibration
                 // TWO EV NUMBERS, NOT ONE. `quoted` prices every contract at the screened top-of-book ask;
                 // `bought` prices it at what we actually paid. The difference is the walk down the ladder,
                 // and it is the honest basis for any projection - see MeasuredWalk.
-                double boughtUsd = quotedUsd + walkUsd;
-                Console.WriteLine($"   REALISED  won {wonN}/{settledN}   staked ${staked:0.00}");
+                double boughtUsd = boughtExact;
+                walkUsd = boughtUsd - quotedUsd;
+                Console.WriteLine($"   REALISED  won {wonN}/{settledN}   staked ${staked:0.00} on {ctrN:0.##} contract(s)   "
+                                + $"cost basis: {fromLadder} from Kalshi's own fill records, {fromVenueFee} from the order average + Kalshi's fee"
+                                + (fromModelFee > 0 ? $", {fromModelFee} with our modelled fee (pre-dates the venue fee column)" : ""));
                 Console.WriteLine($"             quoted EV ${quotedUsd,8:+0.00;-0.00}  ({100 * quotedUsd / Math.Max(ctrN, 1),+5:+0.00;-0.00}c/ctr)   "
-                                + "OPTIMISTIC: the screened ask is the FIRST contract's price, applied to the whole order");
+                                + "OPTIMISTIC: every contract priced at the screened ask");
                 Console.WriteLine($"             bought EV ${boughtUsd,8:+0.00;-0.00}  ({100 * boughtUsd / Math.Max(ctrN, 1),+5:+0.00;-0.00}c/ctr)   "
-                                + "what we actually paid for - PROJECT FROM THIS ONE");
+                                + "EXACT: the bot's P_true x contracts that actually filled - what was actually paid (price + Kalshi's fee).");
+                Console.WriteLine("                                                 Partial fills, the Kelly clamp and every cap are already in it. PROJECT FROM THIS ONE.");
                 Console.WriteLine($"             the walk  ${walkUsd,8:+0.00;-0.00}  ({100 * walkUsd / Math.Max(ctrN, 1),+5:+0.00;-0.00}c/ctr)   "
-                                + "paid above the screened ask, by order size: " + MeasuredWalk(dir, livePrefix).BySize);
+                                + "quoted -> bought: slippage and fee rounding. By order size: " + MeasuredWalk(dir, livePrefix).BySize);
                 Console.ForegroundColor = col;
                 Console.WriteLine($"   REALISED  P&L ${pnl:+0.00;-0.00}   "
                                 + $"({(staked > 0 ? 100.0 * pnl / staked : 0):+0.0;-0.0}% on stake)   "
@@ -1135,7 +1192,12 @@ public static class Calibration
                 if (ctrN > 0)
                 {
                     double be = staked / ctrN, wr = wonCtr / ctrN;
-                    double seW = Math.Sqrt(0.25 / ctrN);
+                    // CLUSTERED, not binomial. The first cut used sqrt(0.25 / contracts), which treats 6,707
+                    // contracts as 6,707 independent coin flips - but every contract in one order shares that
+                    // order's outcome. That understated the error bar ~4.6x and printed +1.5 sigma for what is
+                    // really +0.3. The honest variance is sum over ORDERS of n^2 p(1-p), the same quantity the
+                    // residual's error bar uses.
+                    double seW = Math.Sqrt(residVar) / ctrN;
                     Console.WriteLine($"   BREAK-EVEN  we pay {be:0.0000}/contract all-in, so {100 * be:0.00}% of contracts must win; "
                                     + $"we are at {100 * wr:0.00}%");
                     Console.WriteLine($"               margin {100 * (wr - be):+0.00;-0.00}pt +/- {100 * seW:0.00}"
@@ -1157,7 +1219,32 @@ public static class Calibration
                 // SPLIT THE GAP. realised - quoted mixes two unrelated things: the walk (systematic, ours)
                 // and outcome-vs-P_true (luck, until the sample says otherwise). Reported apart so a run of
                 // bad results cannot be mistaken for an execution problem, or the reverse.
-                Console.WriteLine($"   bought-vs-realised {pnl - boughtUsd:+0.00;-0.00}   <- outcome vs P_true: luck until the SE below says otherwise");
+                // THE RESIDUAL, PROVED. Computed independently as sum(contracts x (won - P_true)) and checked
+                // against realised - bought: if a future edit ever prices the two on different contracts or a
+                // different cost, this says so instead of silently leaking execution into "variance".
+                double residSe = Math.Sqrt(residVar);
+                bool reconciles = Math.Abs((pnl - boughtUsd) - residual) < 0.005;
+                Console.WriteLine($"   RESIDUAL  realised - bought = ${pnl - boughtUsd:+0.00;-0.00}"
+                                + (reconciles ? $"  = sum(contracts x (won - P_true)) to the cent"
+                                              : $"  !! does NOT reconcile with sum(contracts x (won - P_true)) = ${residual:+0.00;-0.00} - the two are priced on different bases"));
+                Console.WriteLine($"             nothing about price, fees, slippage or sizing is left in it: it is outcome noise plus any bias P_true had");
+                Console.WriteLine($"             on the bets we took (adverse selection is one such bias).  +/- ${residSe:0.00} if P_true were exact"
+                                + $" -> {(residSe > 0 ? (pnl - boughtUsd) / residSe : 0):+0.00;-0.00} sigma"
+                                + (residSe > 0 && Math.Abs((pnl - boughtUsd) / residSe) < 2 ? "  = indistinguishable from variance." : "  = beyond variance: P_true is biased on our fills."));
+                // SPLIT IT. "Bias P_true had on the bets we took" has two sources, and only one of them is
+                // adverse selection. The oracle over- or under-predicts at a given P_true on EVERY row
+                // (section 2) - that part would cost the same whether or not anyone traded against us. What
+                // is left after removing it is the part that depends on having been FILLED: adverse selection,
+                // plus variance. Measured 2026-09-23: -$67.53 of a -$71.45 residual was general bias; -$3.92
+                // (-0.06pt a contract) was fill-specific. The lever is the oracle's calibration, not the fills.
+                if (_decileDiff.Count > 0 && ctrN > 0)
+                {
+                    double fillSpecific = residual - generalBias;
+                    Console.WriteLine($"             of which: the oracle's GENERAL bias ${generalBias,8:+0.00;-0.00}  ({100 * generalBias / ctrN:+0.00;-0.00}pt/ctr)"
+                                    + "   - section 2's miss at these P_trues; costs the same traded or not");
+                    Console.WriteLine($"                       FILL-SPECIFIC        ${fillSpecific,8:+0.00;-0.00}  ({100 * fillSpecific / ctrN:+0.00;-0.00}pt/ctr)"
+                                    + "   - adverse selection + variance: the only part that is about being filled");
+                }
                 Console.WriteLine($"   quoted-vs-realised {pnl - quotedUsd:+0.00;-0.00}"
                                 + (se > 0
                                    ? $"   |   P&L standard error +/- ${se:0.00} => "
@@ -1622,6 +1709,11 @@ public static class Calibration
 
     private static Walk? _walk;
 
+    /// <summary>Section 2's calibration miss per P_true decile (realised - predicted), over EVERY settled
+    /// observation. Section 7 uses it to say how much of the fills' residual is the oracle's general bias
+    /// - present whether or not we trade - and how much is specific to the bets that got filled.</summary>
+    private static readonly Dictionary<int, double> _decileDiff = new();
+
     public static Walk MeasuredWalk(string dir, string livePrefix)
     {
         if (_walk is { } cached) return cached;
@@ -1974,10 +2066,12 @@ public static class Calibration
         // ── 2. Calibration by decile ──────────────────────────────────────────────────────────────────
         Console.WriteLine($"\n2. CALIBRATION BY P_true DECILE  (proportional de-vig, {graded.Count} settled)");
         Console.WriteLine("   bucket        n   predicted   realised    diff   p=predicted r=realised");
+        _decileDiff.Clear();
         foreach (var g in graded.GroupBy(o => Math.Min(9, (int)(o.PProp * 10))).OrderBy(g => g.Key))
         {
             var l = g.ToList();
             double pred = l.Average(o => o.PProp), real = l.Count(o => o.Won!.Value) / (double)l.Count;
+            _decileDiff[g.Key] = real - pred;
             Console.WriteLine($"   {g.Key / 10.0:0.0}-{(g.Key + 1) / 10.0:0.0}  {l.Count,5}   "
                             + $"{pred,9:0.000}   {real,8:0.000}  {real - pred,+7:+0.000;-0.000}   {Bar(pred, real)}");
         }
