@@ -1110,7 +1110,10 @@ public sealed class EvEvaluator
                                          c.PTrueUsed, ev,
                                          new TakeCtx((double)c.WsAsk, depthUnknown ? -1 : depthToLimit,
                                                      c.InPlay, c.OracleAgeMs, c.WsBookAge, regime,
-                                                     BankrollUsd, LiveEquityUsd, uncappedStake), ct,
+                                                     BankrollUsd, LiveEquityUsd, uncappedStake,
+                                                     // the book we are about to cross, as we see it now
+                                                     string.Join("|", _feed.AskLadder(pair.KalshiTicker, c.Side == "YES", 5)
+                                                         .Select(l => $"{l.Price:0.00}x{l.Size:0.##}"))), ct,
                                          kellyStake, feeM);
         }
 

@@ -222,6 +222,40 @@ public class KalshiOrderClient : IKalshiOrderExecutor, IDisposable
         return (ex, tr, resume);
     }
 
+    /// <summary>Every individual fill of one order, so a multi-level execution can be told apart from a
+    /// single fill at a repriced level. The order log records only the AVERAGE price, which cannot.
+    ///
+    /// <para>Payload OBSERVED 2026-09-22, not assumed: <c>{cursor, fills[]}</c>, each fill carrying
+    /// <c>count_fp</c> (a decimal STRING - fractional fills are real), <c>yes_price_dollars</c> and
+    /// <c>no_price_dollars</c> (both always present), and <c>fee_cost</c>. Prices are returned on the side
+    /// asked for, so a NO fill reads as its own price rather than the YES complement.</para>
+    ///
+    /// <para>Never throws: a diagnostic that takes the bot down with it is worse than no diagnostic.
+    /// Returns an empty list on any failure.</para></summary>
+    public async Task<List<(decimal Price, decimal Count, decimal Fee)>> GetOrderFillsAsync(string orderId, bool yesSide)
+    {
+        var outp = new List<(decimal, decimal, decimal)>();
+        if (string.IsNullOrWhiteSpace(orderId)) return outp;
+        try
+        {
+            using var doc = await GetAsync($"/portfolio/fills?order_id={Uri.EscapeDataString(orderId)}&limit=200");
+            if (!doc.RootElement.TryGetProperty("fills", out var arr) || arr.ValueKind != JsonValueKind.Array)
+                return outp;
+            foreach (var f in arr.EnumerateArray())
+            {
+                decimal D(string k) => f.TryGetProperty(k, out var v)
+                    && decimal.TryParse(v.ValueKind == JsonValueKind.String ? v.GetString() : v.ToString(),
+                                        NumberStyles.Any, CultureInfo.InvariantCulture, out var d) ? d : 0m;
+                decimal count = D("count_fp");
+                decimal price = yesSide ? D("yes_price_dollars") : D("no_price_dollars");
+                if (count <= 0 || price <= 0) continue;
+                outp.Add((price, count, D("fee_cost")));
+            }
+        }
+        catch { /* diagnostic only */ }
+        return outp;
+    }
+
     public async Task<double> ShardBalanceAsync(int shard)
     {
         using var doc = await GetAsync("/portfolio/balance");

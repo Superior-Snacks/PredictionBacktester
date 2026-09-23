@@ -74,6 +74,20 @@ public static class Calibration
     public static double MaxSourceGapCents => Env("EV_MAX_WS_REST_GAP", 0.03) * 100.0;
     public static int LastSourceGapDropped { get; private set; }
 
+    /// <summary>How far back the per-row LISTINGS go (sections 5 and 7). 0 = everything.
+    ///
+    /// <para>The listings grew to 885 signals and 328 fills by 2026-09-22 - a thousand lines that push the
+    /// sections which actually answer something off the top of the terminal, and make the report unpastable.
+    /// Only the LISTS are trimmed: every number above them is still computed over the whole dataset, and the
+    /// full report is on disk and in the Discord attachment. `EV_REPORT_LIST_HOURS=0` restores the lot.</para></summary>
+    public static double ListHours => Env("EV_REPORT_LIST_HOURS", 48);
+
+    /// <summary>The cutoff for the listings: the newest row in the data, less <see cref="ListHours"/>.
+    /// Anchored to the DATA, not the wall clock, so a report run days later still shows the last session
+    /// rather than an empty list.</summary>
+    private static DateTime ListCutoff(DateTime newest)
+        => ListHours <= 0 || newest == DateTime.MinValue ? DateTime.MinValue : newest.AddHours(-ListHours);
+
     /// <summary>In-play rows dropped for a quote older than the live gate — a feed that was already dying.</summary>
     public static double MaxInPlayAgeMs => Env("EV_ORACLE_MAX_AGE_INPLAY_MS", 1000);
     public static int LastStaleAgeDropped { get; private set; }
@@ -906,6 +920,60 @@ public static class Calibration
                 Console.WriteLine($"   PARTIAL on {partial} of {got.Count} fills — the depth was not there for "
                                 + "the full size.");
 
+            // ── WHAT THE WALK ACTUALLY WAS, per Kalshi's own fill records ────────────────────────
+            // The order log carries ONE price per order - the average - so a fill 3c above the screened ask
+            // could be the book repricing before the IOC landed (every contract at one worse price) or the
+            // order eating through levels (several prices). Those have opposite implications for sizing, and
+            // the average cannot tell them apart. EvFillLadder records the individual fills.
+            //
+            // Measured 2026-09-22 across all 321 filled orders: 96% of the walk cost is REPRICING, 9% is
+            // ladder consumption, and ladder-eating is FLAT across order sizes (6% of orders under 15, 4%
+            // of 15-24, 5% of 25-lots). Size is not what makes us pay up - latency is. That settles whether
+            // a bigger EV_LIVE_MAX_CONTRACTS would widen the walk: it would not.
+            var lad = new List<(string Verdict, double Ctr, double Walk, double Fill)>();
+            foreach (string lf in Directory.GetFiles(dir, "EvFillLadder_*.csv").OrderBy(f => f))
+                foreach (var r in Csv.Read(lf))
+                {
+                    double fill = Csv.Num(r, "Filled"), walk = Csv.Num(r, "WalkCents");
+                    string v = Csv.Str(r, "Verdict");
+                    if (v.Length == 0 || double.IsNaN(fill) || fill <= 0 || double.IsNaN(walk)) continue;
+                    lad.Add((v, fill, walk, fill));
+                }
+            if (lad.Count > 0)
+            {
+                double totCost = lad.Sum(x => x.Ctr * x.Walk) / 100.0;
+                Console.WriteLine();
+                Console.WriteLine($"   THE WALK, PER FILL RECORD  ({lad.Count} order(s) read back from Kalshi's own fills)");
+                foreach (string v in new[] { "REPRICED", "LADDER", "AT-OR-BETTER", "single-price" })
+                {
+                    var g = lad.Where(x => x.Verdict == v).ToList();
+                    if (g.Count == 0) continue;
+                    double ctr = g.Sum(x => x.Ctr), cost = g.Sum(x => x.Ctr * x.Walk) / 100.0;
+                    string what = v switch
+                    {
+                        "REPRICED"     => "one price, worse than screened - the book moved before the IOC landed",
+                        "LADDER"       => "several prices - the order was bigger than the level it crossed",
+                        "AT-OR-BETTER" => "got the screened price or better",
+                        _              => "one price, nothing to compare against",
+                    };
+                    Console.WriteLine($"     {v,-13} {g.Count,4} order(s) {ctr,6:0} ctr   {g.Sum(x => x.Ctr * x.Walk) / ctr,+6:+0.00;-0.00}c   "
+                                    + $"${-cost,7:0.00} " + (Math.Abs(totCost) > 1e-9 ? $"({100 * cost / totCost,3:0}% of the walk)" : "") + "   " + what);
+                }
+                // Does SIZE predict eating the ladder? If it does, a bigger cap costs more than the
+                // counterfactual above assumes. If it does not, the cap is not what is protecting us.
+                var bySize = new[] { (1.0, 14.9, "under 15"), (15.0, 24.9, "15-24"), (25.0, 1e9, "25+") };
+                var parts = new List<string>();
+                foreach (var (lo, hi, lab) in bySize)
+                {
+                    var g = lad.Where(x => x.Fill >= lo && x.Fill <= hi).ToList();
+                    if (g.Count == 0) continue;
+                    parts.Add($"{lab} {100.0 * g.Count(x => x.Verdict == "LADDER") / g.Count:0}%");
+                }
+                if (parts.Count > 0)
+                    Console.WriteLine($"     share of orders that ate the ladder, by size: {string.Join(" · ", parts)}"
+                                    + "   (flat = size is not what makes us pay up; latency is)");
+            }
+
             // ── THE CAPS' RUNNING COST: what Kelly wanted vs what was sent, settled ──────────────
             // UncappedContracts is logged on every order row from 2026-09-15: the count quarter-Kelly asked
             // for with the edge haircut, the $25 ceiling and the 25-contract cap all off. Where it exceeds
@@ -1008,7 +1076,7 @@ public static class Calibration
         if (got.Count > 0)
         {
             int settledN = 0, wonN = 0, pending = 0;
-            double pnl = 0, staked = 0, quotedUsd = 0, feesPaid = 0;
+            double pnl = 0, staked = 0, quotedUsd = 0, feesPaid = 0, walkUsd = 0, ctrN = 0;
             var nets = new List<double>();
             var losers = new List<(string Ticker, string Side, double Loss)>();
             foreach (var r in got)
@@ -1022,6 +1090,9 @@ public static class Calibration
                 double px   = r.Avg > 0 ? r.Avg : r.Limit;
                 double fee  = double.IsNaN(r.Fee) ? 0.0 : r.Fee;
                 double cost = r.Fill * px + fee;
+                double rest = double.IsNaN(r.RestPx) || r.RestPx <= 0 ? px : r.RestPx;
+                walkUsd += r.Fill * rest + r.Fill * EvMath.FeePerContract(rest) - cost;   // <= 0 when we walked
+                ctrN    += r.Fill;
 
                 settledN++;
                 if (w.Value) wonN++;
@@ -1040,8 +1111,17 @@ public static class Calibration
             else
             {
                 var col = pnl >= 0 ? ConsoleColor.Green : ConsoleColor.Red;
-                Console.WriteLine($"   REALISED  won {wonN}/{settledN}   staked ${staked:0.00}   "
-                                + $"quoted EV ${quotedUsd:+0.00;-0.00}");
+                // TWO EV NUMBERS, NOT ONE. `quoted` prices every contract at the screened top-of-book ask;
+                // `bought` prices it at what we actually paid. The difference is the walk down the ladder,
+                // and it is the honest basis for any projection - see MeasuredWalk.
+                double boughtUsd = quotedUsd + walkUsd;
+                Console.WriteLine($"   REALISED  won {wonN}/{settledN}   staked ${staked:0.00}");
+                Console.WriteLine($"             quoted EV ${quotedUsd,8:+0.00;-0.00}  ({100 * quotedUsd / Math.Max(ctrN, 1),+5:+0.00;-0.00}c/ctr)   "
+                                + "OPTIMISTIC: the screened ask is the FIRST contract's price, applied to the whole order");
+                Console.WriteLine($"             bought EV ${boughtUsd,8:+0.00;-0.00}  ({100 * boughtUsd / Math.Max(ctrN, 1),+5:+0.00;-0.00}c/ctr)   "
+                                + "what we actually paid for - PROJECT FROM THIS ONE");
+                Console.WriteLine($"             the walk  ${walkUsd,8:+0.00;-0.00}  ({100 * walkUsd / Math.Max(ctrN, 1),+5:+0.00;-0.00}c/ctr)   "
+                                + "paid above the screened ask, by order size: " + MeasuredWalk(dir, livePrefix).BySize);
                 Console.ForegroundColor = col;
                 Console.WriteLine($"   REALISED  P&L ${pnl:+0.00;-0.00}   "
                                 + $"({(staked > 0 ? 100.0 * pnl / staked : 0):+0.0;-0.0}% on stake)   "
@@ -1059,6 +1139,10 @@ public static class Calibration
                     double m = nets.Average();
                     se = Math.Sqrt(nets.Sum(x => (x - m) * (x - m)) / (nets.Count - 1)) * Math.Sqrt(nets.Count);
                 }
+                // SPLIT THE GAP. realised - quoted mixes two unrelated things: the walk (systematic, ours)
+                // and outcome-vs-P_true (luck, until the sample says otherwise). Reported apart so a run of
+                // bad results cannot be mistaken for an execution problem, or the reverse.
+                Console.WriteLine($"   bought-vs-realised {pnl - boughtUsd:+0.00;-0.00}   <- outcome vs P_true: luck until the SE below says otherwise");
                 Console.WriteLine($"   quoted-vs-realised {pnl - quotedUsd:+0.00;-0.00}"
                                 + (se > 0
                                    ? $"   |   P&L standard error +/- ${se:0.00} => "
@@ -1190,8 +1274,21 @@ public static class Calibration
         if (got.Count > 0)
         {
             Console.WriteLine();
-            Console.WriteLine($"   FILLS ({got.Count})");
-            foreach (var r in got.OrderBy(r => r.At, StringComparer.Ordinal))
+            var fillsOrdered = got.OrderBy(r => r.At, StringComparer.Ordinal).ToList();
+            DateTime newestFill = DateTime.MinValue;
+            if (fillsOrdered.Count > 0)
+                DateTime.TryParse(fillsOrdered[^1].At, CultureInfo.InvariantCulture,
+                                  DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out newestFill);
+            var fillCut = ListCutoff(newestFill);
+            var fillsShown = fillsOrdered.Where(r =>
+                fillCut == DateTime.MinValue
+                || (DateTime.TryParse(r.At, CultureInfo.InvariantCulture,
+                                      DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var fa)
+                    && fa >= fillCut)).ToList();
+            Console.WriteLine(fillsShown.Count < fillsOrdered.Count
+                ? $"   FILLS (last {ListHours:0}h: {fillsShown.Count} of {fillsOrdered.Count}; the numbers above count all {fillsOrdered.Count})"
+                : $"   FILLS ({got.Count})");
+            foreach (var r in fillsShown)
             {
                 bool? w = settled.TryGetValue(r.Ticker, out var rec) ? rec.WonFor(r.Side) : null;
                 double px  = r.Avg > 0 ? r.Avg : r.Limit;
@@ -1490,6 +1587,211 @@ public static class Calibration
         var utc = at.Kind == DateTimeKind.Local ? at.ToUniversalTime() : DateTime.SpecifyKind(at, DateTimeKind.Utc);
         var et = TimeZoneInfo.ConvertTimeFromUtc(utc, _eastern);
         return et.DayOfWeek == DayOfWeek.Thursday && et.Hour >= 3 && et.Hour < 5;
+    }
+
+    /// <summary>What a real order pays ABOVE the price it was quoted at, measured on filled orders.
+    ///
+    /// <para><b>Why this exists.</b> Every EV in this report is priced at the Kalshi REST ask - the top of
+    /// the book, i.e. the price of the FIRST contract - and then multiplied by the whole order. A 25-lot
+    /// eats through that level into the next ones. Measured 2026-09-22 over 321 settled fills / 6,101
+    /// contracts: -0.93c per contract, of which orders of 20+ carried $49.87 of the $56.69. That is not a
+    /// loss of edge (the IOC limit IS the break-even limit, so 0 of 321 fills bought under the 1c floor)
+    /// but it is a permanent haircut on the QUOTE, and a projection that ignores it is optimistic by
+    /// roughly a third of the edge.</para>
+    ///
+    /// <para>Returned per contract in dollars, negative = we paid more than quoted. Includes the fee
+    /// difference (modelled vs charged), which is ~0.01c and rounds away. NaN when nothing has filled.</para>
+    /// </summary>
+    public readonly record struct Walk(double PerContract, double Contracts, double Dollars,
+                                       double ShareFromLargeOrders, string BySize);
+
+    private static Walk? _walk;
+
+    public static Walk MeasuredWalk(string dir, string livePrefix)
+    {
+        if (_walk is { } cached) return cached;
+        double ctr = 0, dollars = 0, bigDollars = 0;
+        var bucket = new (int Lo, int Hi, string Label, double Ctr, double Dol)[]
+            { (1, 9, "1-9", 0, 0), (10, 19, "10-19", 0, 0), (20, 24, "20-24", 0, 0), (25, int.MaxValue, "25+", 0, 0) };
+        foreach (string f in Directory.GetFiles(dir, livePrefix + "_*.csv"))
+            foreach (var r in Csv.Read(f))
+            {
+                double n = Csv.Num(r, "FillCount");
+                if (double.IsNaN(n) || n < 1) continue;
+                double px = Csv.Num(r, "AvgFillPrice");
+                if (double.IsNaN(px) || px <= 0) px = Csv.Num(r, "LimitPrice");
+                double rest = Csv.Num(r, "RestAsk");
+                if (double.IsNaN(rest) || rest <= 0) rest = px;
+                double feeCharged = Csv.Num(r, "FeeChargedUsd");
+                if (double.IsNaN(feeCharged)) feeCharged = 0;
+                // quoted cost = n * (rest + modelled fee);  paid = n * px + fee charged
+                double d = n * rest + n * EvMath.FeePerContract(rest) - (n * px + feeCharged);
+                ctr += n; dollars += d;
+                for (int i = 0; i < bucket.Length; i++)
+                    if (n >= bucket[i].Lo && n <= bucket[i].Hi)
+                    { bucket[i].Ctr += n; bucket[i].Dol += d; if (bucket[i].Lo >= 20) bigDollars += d; }
+            }
+        if (ctr <= 0) return (_walk = new Walk(double.NaN, 0, 0, double.NaN, "")).Value;
+        string bySize = string.Join(" · ", bucket.Where(b => b.Ctr > 0)
+            .Select(b => $"{b.Label} {-100 * b.Dol / b.Ctr:+0.00;-0.00}c"));
+        return (_walk = new Walk(dollars / ctr, ctr, dollars,
+                                 dollars < 0 ? bigDollars / dollars : double.NaN, bySize)).Value;
+    }
+
+    /// <summary>Depth bands, FIXED rather than quantiles. Quartile cuts move every time data arrives, so a
+    /// band means something different each week and nothing can be tracked across runs. Measured 2026-09-23
+    /// the quartile boundaries sat at 266 / 2152 / 10292; these are the round numbers beside them.</summary>
+    private static readonly (double Lo, double Hi, string Label)[] DepthBands =
+    {
+        (0, 250, "THIN <250"), (250, 2000, "MEDIUM 250-2k"),
+        (2000, 10000, "DEEP 2k-10k"), (10000, double.MaxValue, "DEEPEST >10k"),
+    };
+
+    /// <summary>
+    /// Is the edge worse where the book is deeper? A thick offer can mean a market maker who knows something
+    /// we do not; a thin one can mean a quote nobody has bothered to update. Both stories are plausible and
+    /// only the data settles it.
+    ///
+    /// <para><b>Depth at SCREEN time is a legitimate stratifier</b> — it is known before the outcome. This is
+    /// the distinction that invalidated the "ordinary matches win 43%" claim on 2026-09-14: those flags
+    /// (QUIET_END, ABRUPT_END, UPSET_PATH) were computed FROM the result, so splitting on them sorted the
+    /// wins from the losses by construction. Nothing here can do that.</para>
+    ///
+    /// <para><b>The headline is the monotone test, not the buckets.</b> With four buckets, the best of them
+    /// clears 2 sigma about one run in ten under the null — so a single glowing band is what noise looks
+    /// like, and reading one as a finding is how a strategy acquires a rule that costs money. Measured
+    /// 2026-09-23 on 491 settled fillable markets: no monotone relationship (r=-0.02, t=-0.53), while the
+    /// MEDIUM band showed +10.8c against +1.1/+1.6/+0.1 elsewhere. That bucket survived a permutation test
+    /// at quartile cuts (p=0.042) and failed at these fixed cuts (p=0.093) — fragile to where the boundary
+    /// is drawn, which is the signature of noise rather than structure. It is printed so it can be WATCHED,
+    /// with the n it would need to be believed.</para>
+    /// </summary>
+    private static void DepthToxicity(string dir, IReadOnlyDictionary<string, SettlementRecord> settled,
+                                      string livePrefix, IReadOnlyList<Obs> obs, string followPrefix)
+    {
+        // ── basis 1: every fillable signal, one per ticker+side (the widest independent sample) ──
+        var sig = obs.Where(o => o.IsSignal && !double.IsNaN(o.WsDepth) && o.WsDepth > 0 && o.Won is not null)
+                     .Select(o => (Depth: o.WsDepth, Edge: (o.Won!.Value ? 1.0 : 0.0) - o.Cost,
+                                   Won: o.Won!.Value ? 1.0 : 0.0, P: o.PUsed))
+                     .ToList();
+        // ── basis 2: what we actually bought ──
+        var fills = new List<(double Depth, double Edge, double Won, double P)>();
+        foreach (string f in Directory.GetFiles(dir, livePrefix + "_*.csv").OrderBy(x => x))
+            foreach (var r in Csv.Read(f))
+            {
+                double n = Csv.Num(r, "FillCount"), d = Csv.Num(r, "DepthToLimit");
+                if (double.IsNaN(n) || n < 1 || double.IsNaN(d) || d <= 0) continue;
+                string tk = Csv.Str(r, "Ticker"), sd = Csv.Str(r, "Side");
+                bool? w = settled.TryGetValue(tk, out var rec) ? rec.WonFor(sd) : null;
+                if (w is null) continue;
+                double px = Csv.Num(r, "AvgFillPrice");
+                if (double.IsNaN(px) || px <= 0) px = Csv.Num(r, "LimitPrice");
+                double fee = Csv.Num(r, "FeeChargedUsd");
+                if (double.IsNaN(fee)) fee = 0;
+                fills.Add((d, (w.Value ? 1.0 : 0.0) - (px + fee / n), w.Value ? 1.0 : 0.0, Csv.Num(r, "PTrue")));
+            }
+        if (sig.Count < 20 && fills.Count < 20) return;
+
+        Console.WriteLine();
+        Console.WriteLine("   ADVERSE SELECTION BY DEPTH  (is a thicker offer a better-informed one?)");
+        Console.WriteLine("     depth = contracts at or better than our limit WHEN WE SCREENED - known before the outcome, so this split is honest.");
+
+        static (int N, double M, double Se) Stat(IEnumerable<double> v)
+        {
+            var l = v.ToList();
+            if (l.Count < 2) return (l.Count, l.Count == 1 ? l[0] : 0, double.NaN);
+            double m = l.Average();
+            double sd = Math.Sqrt(l.Sum(x => (x - m) * (x - m)) / (l.Count - 1));
+            return (l.Count, m, sd / Math.Sqrt(l.Count));
+        }
+
+        static (double R, double T) Monotone(List<(double Depth, double Edge, double Won, double P)> v)
+        {
+            if (v.Count < 10) return (double.NaN, double.NaN);
+            var x = v.Select(a => Math.Log(Math.Max(a.Depth, 1))).ToList();
+            var y = v.Select(a => a.Edge).ToList();
+            double mx = x.Average(), my = y.Average();
+            double cov = 0, vx = 0, vy = 0;
+            for (int i = 0; i < x.Count; i++) { cov += (x[i] - mx) * (y[i] - my); vx += (x[i] - mx) * (x[i] - mx); vy += (y[i] - my) * (y[i] - my); }
+            if (vx <= 0 || vy <= 0) return (double.NaN, double.NaN);
+            double r = cov / Math.Sqrt(vx * vy);
+            return (r, Math.Abs(r) >= 1 ? double.NaN : r * Math.Sqrt((x.Count - 2) / (1 - r * r)));
+        }
+
+        void Basis(string name, List<(double Depth, double Edge, double Won, double P)> v)
+        {
+            if (v.Count < 20) { Console.WriteLine($"     {name}: {v.Count} settled - too few to split yet."); return; }
+            Console.WriteLine($"     -- {name} (n={v.Count}) --");
+            string peak = ""; double peakT = 0;
+            foreach (var (lo, hi, label) in DepthBands)
+            {
+                var g = v.Where(a => a.Depth >= lo && a.Depth < hi).ToList();
+                if (g.Count < 5) { Console.WriteLine($"       {label,-15} {g.Count,4}  (too few)"); continue; }
+                var st = Stat(g.Select(a => a.Edge));
+                double w = g.Average(a => a.Won), pt = g.Average(a => a.P);
+                double t = st.Se > 0 ? st.M / st.Se : 0;
+                if (Math.Abs(t) > Math.Abs(peakT)) { peakT = t; peak = label; }
+                Console.WriteLine($"       {label,-15} {g.Count,4}   edge {100 * st.M,+6:+0.00;-0.00}c +/- {100 * st.Se,4:0.00}"
+                                + $"   won {100 * w,5:0.0}% vs P_true {100 * pt,5:0.0}%   {100 * (w - pt),+5:+0.0;-0.0}pt");
+            }
+            var (r, tt) = Monotone(v);
+            if (double.IsFinite(tt))
+                Console.WriteLine($"       MONOTONE TEST  log(depth) vs edge: r={r:+0.000;-0.000} t={tt:+0.00;-0.00}   -> "
+                                + (Math.Abs(tt) < 2 ? "no depth effect. THIS is the honest headline."
+                                                    : tt < 0 ? "deeper books ARE worse - act on this."
+                                                             : "deeper books are BETTER - act on this."));
+            if (Math.Abs(peakT) >= 2 && Math.Abs(tt) < 2)
+                Console.WriteLine($"       ({peak} sits at {peakT:+0.0;-0.0} sigma, but the best of four bands clears 2 sigma about "
+                                + "one run in ten by chance. Watch whether it PERSISTS; do not size on it.)");
+        }
+
+        Basis("fillable signals, one per ticker+side", sig);
+        Basis("live fills", fills);
+
+        // ── CONVERGENCE BY DEPTH: the only test that can answer this in a useful timeframe ──────────
+        // Settlement is a binary draw with a ~0.5 standard deviation against a ~0.03 edge, so separating
+        // one depth band from the rest on P&L needs thousands of settled markets per band: at the measured
+        // spread, detecting a 2c gap in the DEEPEST band would take about SIX YEARS. Convergence does not
+        // wait for an outcome - it measures whether Kalshi moved to our price - and its t-statistics run
+        // an order of magnitude higher on the same number of signals.
+        //
+        // WHY IT ANSWERS THE QUESTION. "Toxic depth" means the size resting against us belongs to someone
+        // better informed. If that were true, their price would NOT come to ours after we took it. A band
+        // that converges is a band that was not picking us off, whatever its P&L has done so far.
+        //
+        // This matters more than it looks: 86% of all deployable dollars sit in the DEEPEST band
+        // (2026-09-23: $70.7k of $82.3k a day), so a filter that excluded it would cap the strategy at a
+        // fraction of its capacity forever. That trade is only worth making on evidence, and this is the
+        // only line that will produce evidence before the bankroll needs the answer.
+        var conv = new Dictionary<(int Band, string Key), double>();
+        foreach (var r in ReportCache.LoadFollowUps(dir, followPrefix))
+        {
+            if (r.Decision != "SIGNAL" || double.IsNaN(r.EntryDepth) || r.EntryDepth <= 0) continue;
+            if (!double.IsFinite(r.AgeSec) || !double.IsFinite(r.EntryAsk)
+                || !double.IsFinite(r.EntryPTrue) || !double.IsFinite(r.NowAsk)) continue;
+            if (Math.Abs(r.AgeSec - 20) > 4) continue;                    // the T+20 checkpoint
+            int b = 0;
+            for (int i = 0; i < DepthBands.Length; i++)
+                if (r.EntryDepth >= DepthBands[i].Lo && r.EntryDepth < DepthBands[i].Hi) { b = i; break; }
+            var key = (b, r.Ticker + "|" + r.Side);
+            if (conv.ContainsKey(key)) continue;
+            conv[key] = (r.NowAsk - r.EntryAsk) * (r.EntryPTrue > r.EntryAsk ? 1 : -1) * 100;
+        }
+        if (conv.Count >= 20)
+        {
+            Console.WriteLine("     -- convergence at T+20 by depth (resolves years sooner than settlement) --");
+            for (int b = 0; b < DepthBands.Length; b++)
+            {
+                var v = conv.Where(kv => kv.Key.Band == b).Select(kv => kv.Value).ToList();
+                if (v.Count < 10) { Console.WriteLine($"       {DepthBands[b].Label,-15} {v.Count,4}  (too few)"); continue; }
+                var st = Stat(v);
+                int up = v.Count(x => x > 1e-9), dn = v.Count(x => x < -1e-9);
+                Console.WriteLine($"       {DepthBands[b].Label,-15} {v.Count,4}   MOVE {st.M,+6:+0.00;-0.00}c +/- {st.Se,4:0.00}"
+                                + $" (t={(st.Se > 0 ? st.M / st.Se : 0),+5:+0.0;-0.0})   came-to-us {(up + dn > 0 ? 100.0 * up / (up + dn) : 0),5:0.0}%");
+            }
+            Console.WriteLine("       a band that still converges was NOT picking us off, whatever its P&L says. Negative MOVE in a band");
+            Console.WriteLine("       is the signature that would justify a depth filter - and would cost most of the strategy's capacity.");
+        }
     }
 
     // ── Statistics ────────────────────────────────────────────────────────────────────────────────────
@@ -1896,10 +2198,10 @@ public static class Calibration
             Console.WriteLine();
             Console.WriteLine($"   -- FILLABLE ONLY ({fillable.Count} of {sgAll.Count} markets had depth at our limit on some signal; "
                             + "graded at the first such) - the same test on what the strategy can actually trade --");
-            Project(fillable);
+            Project(fillable, fillableOnly: true);
         }
 
-        void Project(List<Obs> sg)
+        void Project(List<Obs> sg, bool fillableOnly = false)
         {
             if (sg.Count < 2) { Console.WriteLine("   (not enough settled signals yet)"); return; }
             // ESTIMATE FROM SINGLE-SIDED MARKETS ONLY, and quote the target in the same unit.
@@ -1941,6 +2243,20 @@ public static class Calibration
             Console.WriteLine($"      break-even   > 0");
             Console.WriteLine($"      now          {edge:+0.0000;-0.0000} per contract"
                             + $"   = {(cost > 0 ? 100 * edge / cost : 0):+0.0;-0.0}% ROI on a {cost:0.000} mean cost");
+            // THE PROJECTION, AFTER THE WALK. B above prices every contract at the screened ask; a real
+            // order pays more (MeasuredWalk). Applied only to the FILLABLE block, because that is the set
+            // the live path actually buys - on the all-signals block the number would be a haircut on
+            // trades that were never placeable anyway.
+            if (fillableOnly && MeasuredWalk(Directory.GetCurrentDirectory(), livePrefix) is { } wk
+                && !double.IsNaN(wk.PerContract) && wk.Contracts > 0)
+            {
+                double edgeW = edge + wk.PerContract;
+                double nW = edgeW > 0 ? 4 * var0 / (edgeW * edgeW) : double.NaN;
+                Console.WriteLine($"   B2. AFTER THE MEASURED WALK  (live orders paid {100 * wk.PerContract:+0.00;-0.00}c/contract over the screened ask, n={wk.Contracts:0})");
+                Console.WriteLine($"      now          {edgeW:+0.0000;-0.0000} per contract"
+                                + $"   = {(cost > 0 ? 100 * edgeW / cost : 0):+0.0;-0.0}% ROI"
+                                + (double.IsFinite(nW) ? $"   verdict at n ~= {nW:0}" : "   (no edge left after the walk)"));
+            }
             Console.WriteLine($"   VERDICT ARRIVES AT (2 sigma):");
             if (double.IsFinite(nOpt))
                 Console.WriteLine($"      n ~= {nOpt,6:0}   if the CURRENT edge estimate ({edge:+0.0000;-0.0000}) is the true one");
@@ -2082,7 +2398,13 @@ public static class Calibration
                             + "were logged under the older, looser rule. Marked '?' below.");
             Console.ResetColor();
         }
-        foreach (var o in sigs.OrderBy(o => o.At))
+        var sigsOrdered = sigs.OrderBy(o => o.At).ToList();
+        var sigCut = ListCutoff(sigsOrdered.Count > 0 ? sigsOrdered[^1].At : DateTime.MinValue);
+        var sigShown = sigsOrdered.Where(o => o.At >= sigCut).ToList();
+        if (sigShown.Count < sigsOrdered.Count)
+            Console.WriteLine($"   (listing the last {ListHours:0}h: {sigShown.Count} of {sigsOrdered.Count} settled signal(s); "
+                            + "every number above counts all of them. EV_REPORT_LIST_HOURS=0 to list them all.)");
+        foreach (var o in sigShown)
             Console.WriteLine($"     {o.At:MM-dd HH:mm}  {o.Ticker,-42} {o.Side,-3} "
                             + $"ask {o.RestAsk:0.00}  ev {o.Ev * 100:+0.0;-0.0}c  x{o.Contracts,-3} "
                             + $"{(o.WsVerified < 0 ? "?" : o.WsVerified == 1 ? "wv" : "  ")} "
@@ -2092,6 +2414,9 @@ public static class Calibration
         Console.WriteLine( "   the hundreds; section 3 gets there far sooner.");
         WhenWillWeKnow(sigOnly);
         LivePathReport(Directory.GetCurrentDirectory(), settled, livePrefix, shardCash, shardIdx);
+        // DEDUPED, not `all`: the cooldown logs the same live opportunity every 15s, and counting one
+        // market six times would shrink every error bar here by more than a factor of two.
+        DepthToxicity(Directory.GetCurrentDirectory(), settled, livePrefix, obs, followPrefix);
         StakeScaling(sigOnly, Directory.GetCurrentDirectory());
         ConvergenceReport(Directory.GetCurrentDirectory(), followPrefix, livePrefix, all);
         CooldownShadow(Directory.GetCurrentDirectory(), followPrefix, settled, all);

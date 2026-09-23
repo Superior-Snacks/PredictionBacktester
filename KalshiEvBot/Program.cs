@@ -297,8 +297,10 @@ internal static class Program
         eval.SetCooldownLog(cooldownLog);
         using var errorLog = new ErrorLog();                   // what the venue SAID when something failed
         eval.SetErrorLog(errorLog);
-        if (eval.LiveExec is { } lx0) lx0.Errors = errorLog;
+        using var ladderLog = new FillLadderLog();             // what each fill ACTUALLY paid, level by level
+        if (eval.LiveExec is { } lx0) { lx0.Errors = errorLog; lx0.Ladders = ladderLog; }
         Console.WriteLine($"[ERRORS   ] {errorLog.Path}  (every swallowed venue error with HTTP status + Kalshi's message)");
+        Console.WriteLine($"[LADDER   ] {ladderLog.Path}  (per-level fill detail: was a walk the book repricing, or us eating it?)");
 
         // Built only when there is something to watch, so a moneyline-only run creates no stray files
         // and behaves byte-identically to before this existed. `using` on a null is a no-op.
@@ -328,7 +330,7 @@ internal static class Program
                 var posStoreD = new LivePositionStore(
                     System.IO.Path.Combine(Directory.GetCurrentDirectory(), "ev_deriv_live_positions.json"));
                 evalD.EnableLive(new LiveExecutor(kalshi, liveLogD, cfgD, posStoreD));
-                if (evalD.LiveExec is { } lxD) lxD.Errors = errorLog;
+                if (evalD.LiveExec is { } lxD) { lxD.Errors = errorLog; lxD.Ladders = ladderLog; }
                 Con.Line(ConsoleColor.Yellow,
                     $"[DERIV  ] LIVE — derivatives WILL be bought with real money. {liveLogD.Path}");
             }

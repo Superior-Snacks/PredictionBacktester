@@ -37,7 +37,11 @@ public readonly record struct TakeCtx(double WsAsk, double DepthToLimit, bool In
                                       // Quarter-Kelly stake with NO edge haircut, NO dollar min/max, NO contract
                                       // cap: what the model asked for before any bound touched it. Logged so the
                                       // caps' cost is a direct read from the row rather than a re-derivation.
-                                      double UncappedStakeUsd = 0);
+                                      double UncappedStakeUsd = 0,
+                                      // The top ask levels as "0.40x120|0.41x55" at the moment we screened.
+                                      // Paired with the fills read back afterwards, it says whether a walk was
+                                      // us eating those levels or the book moving before the IOC arrived.
+                                      string AskLadder = "");
 
 /// <summary>
 /// Places the real Kalshi order behind a confirmed signal — M1's only new capability.
@@ -113,6 +117,8 @@ public sealed class LiveExecutor
     private long _heldAtLastNote;
     /// <summary>Where swallowed exceptions go with the venue's full answer (see <see cref="ErrorLog"/>).</summary>
     public ErrorLog? Errors { get; set; }
+    /// <summary>Per-level fill detail, written off the order path (see <see cref="FillLadderLog"/>).</summary>
+    public FillLadderLog? Ladders { get; set; }
     /// <summary>One line per hold/release, for Discord. Optional.</summary>
     public Action<string>? Notify { get; set; }
     /// <summary>Orders whose count was cut by EV_LIVE_MAX_CONTRACTS. Kelly (or a dollar cap) asked for
@@ -355,6 +361,29 @@ public sealed class LiveExecutor
                                      count, orderId, got ? "filled" : (status.Length > 0 ? status : "no-fill"),
                                      (double)fillCount, (double)avgFill, ms, feeReal, feeModel, ctx, (double)venueFee));
             VenueAccepted();
+            // OFF THE ORDER PATH, DELIBERATELY. The IOC has already resolved and its row is on disk; this
+            // adds a REST read that must never sit between a signal and its order. Detached, guarded, and
+            // delayed a beat because Kalshi registers the fill records a moment after it answers the POST.
+            if (got && Ladders is not null && orderId.Length > 0)
+            {
+                var lg = Ladders; var kl = _kalshi;
+                string oid = orderId, tk = ticker, sd = side, ladder = ctx.AskLadder;
+                int req = count; decimal fc = fillCount, af = avgFill;
+                double screened = restAsk, lim = limitCents / 100.0;
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await Task.Delay(1500);
+                        var lv = await kl.GetOrderFillsAsync(oid, sd == "YES");
+                        if (lv.Count == 0) return;
+                        lg.Write(DateTime.UtcNow, oid, tk, sd, req, fc, (decimal)screened, (decimal)lim,
+                                 af > 0 ? af : (decimal)lim,
+                                 lv.Select(x => (x.Price, x.Count)).ToList(), ladder, lv.Sum(x => x.Fee));
+                    }
+                    catch { /* diagnostic only */ }
+                });
+            }
             return got;
         }
         catch (Exception ex)

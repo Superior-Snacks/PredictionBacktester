@@ -914,6 +914,78 @@ public static class SelfTest
             finally { try { Directory.Delete(dir, true); } catch { } }
         }
 
+        // ── MeasuredWalk: the sign convention, which is the thing that silently inverts ──────────────
+        {
+            Console.WriteLine("\n-- the walk --");
+            string dir = Path.Combine(Path.GetTempPath(), "evwalk_test_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(dir);
+            try
+            {
+                var cols = EvLiveLog.Columns;
+                var sb = new System.Text.StringBuilder(string.Join(",", cols) + "\n");
+                void Row(double fill, double rest, double avg, double fee)
+                {
+                    var d = cols.ToDictionary(c => c, _ => "");
+                    d["At"] = "2026-09-22T10:00:00Z"; d["Ticker"] = "KXT-A"; d["Side"] = "YES";
+                    d["LimitPrice"] = avg.ToString(CultureInfo.InvariantCulture);
+                    d["RestAsk"] = rest.ToString(CultureInfo.InvariantCulture);
+                    d["FillCount"] = fill.ToString(CultureInfo.InvariantCulture);
+                    d["AvgFillPrice"] = avg.ToString(CultureInfo.InvariantCulture);
+                    d["FeeChargedUsd"] = fee.ToString(CultureInfo.InvariantCulture);
+                    d["Status"] = "filled";
+                    sb.Append(string.Join(",", cols.Select(c => d[c]))).Append('\n');
+                }
+                // 25 contracts screened at 0.40, filled at 0.42 -> paid 2c over, on 25 = -$0.50 before fees
+                Row(25, 0.40, 0.42, EvMath.OrderFee(0.42, 25));
+                // 5 contracts filled exactly at the screened ask -> no walk, fee as modelled
+                Row(5, 0.30, 0.30, EvMath.OrderFee(0.30, 5));
+                File.WriteAllText(Path.Combine(dir, "EvLive_20260922.csv"), sb.ToString());
+
+                var w = Calibration.MeasuredWalk(dir, "EvLive");
+                Check(w.Contracts == 30, "counts every filled contract", $"{w.Contracts}");
+                // the 25-lot: 25*0.40 + 25*fee(0.40) - (25*0.42 + orderfee(0.42,25))
+                double expect = 25 * 0.40 + 25 * EvMath.FeePerContract(0.40) - (25 * 0.42 + EvMath.OrderFee(0.42, 25))
+                              + 5 * 0.30 + 5 * EvMath.FeePerContract(0.30) - (5 * 0.30 + EvMath.OrderFee(0.30, 5));
+                Near(w.Dollars, expect, 1e-9, "dollars match the definition (quoted cost - paid cost)");
+                Check(w.Dollars < 0, "paying ABOVE the screened ask is a NEGATIVE walk", $"{w.Dollars:+0.0000}");
+                Near(w.PerContract, expect / 30, 1e-9, "per contract is dollars / contracts");
+                Check(w.BySize.Contains("25+") && w.BySize.Contains("1-9"),
+                      "the by-size string names the buckets that have fills", w.BySize);
+                // a 2c walk on the 25-lot must show as +2.0xc in its bucket (cost TO us, printed positive)
+                Check(w.BySize.Contains("25+ +2.0"), "the 25+ bucket reports the 2c walk as a positive cost", w.BySize);
+            }
+            finally { try { Directory.Delete(dir, true); } catch { } }
+        }
+
+        // ── FillLadderLog: the classification that decides whether size or latency causes the walk ──
+        {
+            Console.WriteLine("\n-- fill ladder --");
+            // Shapes taken from real orders, 2026-09-22.
+            var repriced = new List<(decimal, decimal)> { (0.43m, 25m) };                       // MINKUM: one worse price
+            var ladder   = new List<(decimal, decimal)> { (0.46m, 3m), (0.48m, 2.5m), (0.49m, 19.5m) };  // VRTCHA
+            var atPrice  = new List<(decimal, decimal)> { (0.40m, 25m) };
+            var better   = new List<(decimal, decimal)> { (0.38m, 25m) };
+            Check(FillLadderLog.Classify(0.40m, repriced) == "REPRICED",
+                  "one price above the screened ask = the book moved", FillLadderLog.Classify(0.40m, repriced));
+            Check(FillLadderLog.Classify(0.46m, ladder) == "LADDER",
+                  "several prices = we ate through levels", FillLadderLog.Classify(0.46m, ladder));
+            Check(FillLadderLog.Classify(0.40m, atPrice) == "AT-OR-BETTER", "filled at the screened ask");
+            Check(FillLadderLog.Classify(0.40m, better) == "AT-OR-BETTER", "filled BETTER than screened");
+            Check(FillLadderLog.Classify(0m, repriced) == "single-price", "no screened ask -> not judged");
+            Check(FillLadderLog.Classify(0.40m, new List<(decimal, decimal)>()) == "no-fills-returned",
+                  "an empty fill list says so rather than guessing");
+            // a LADDER must not be re-labelled just because every level was at or under the screened ask
+            var cheapLadder = new List<(decimal, decimal)> { (0.38m, 5m), (0.39m, 20m) };
+            Check(FillLadderLog.Classify(0.40m, cheapLadder) == "LADDER",
+                  "multiple prices is a LADDER even when all of them beat the screened ask");
+
+            Check(FillLadderLog.Ladder(ladder) == "3@0.4600|2.5@0.4800|19.5@0.4900",
+                  "ladder renders cheapest-first with fractional counts", FillLadderLog.Ladder(ladder));
+            var dupes = new List<(decimal, decimal)> { (0.49m, 10m), (0.46m, 3m), (0.49m, 9.5m) };
+            Check(FillLadderLog.Ladder(dupes) == "3@0.4600|19.5@0.4900",
+                  "repeat prints at one price are summed into a single level", FillLadderLog.Ladder(dupes));
+        }
+
         Console.WriteLine();
         Console.WriteLine($"{_pass} passed, {_fail} failed.");
         return _fail == 0 ? 0 : 1;
