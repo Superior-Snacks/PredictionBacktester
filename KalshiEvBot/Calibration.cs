@@ -1076,7 +1076,7 @@ public static class Calibration
         if (got.Count > 0)
         {
             int settledN = 0, wonN = 0, pending = 0;
-            double pnl = 0, staked = 0, quotedUsd = 0, feesPaid = 0, walkUsd = 0, ctrN = 0;
+            double pnl = 0, staked = 0, quotedUsd = 0, feesPaid = 0, walkUsd = 0, ctrN = 0, wonCtr = 0;
             var nets = new List<double>();
             var losers = new List<(string Ticker, string Side, double Loss)>();
             foreach (var r in got)
@@ -1090,6 +1090,7 @@ public static class Calibration
                 double px   = r.Avg > 0 ? r.Avg : r.Limit;
                 double fee  = double.IsNaN(r.Fee) ? 0.0 : r.Fee;
                 double cost = r.Fill * px + fee;
+                wonCtr += w.Value ? r.Fill : 0;
                 double rest = double.IsNaN(r.RestPx) || r.RestPx <= 0 ? px : r.RestPx;
                 walkUsd += r.Fill * rest + r.Fill * EvMath.FeePerContract(rest) - cost;   // <= 0 when we walked
                 ctrN    += r.Fill;
@@ -1127,6 +1128,20 @@ public static class Calibration
                                 + $"({(staked > 0 ? 100.0 * pnl / staked : 0):+0.0;-0.0}% on stake)   "
                                 + $"fees ${feesPaid:0.00}");
                 Console.ResetColor();
+                // HOW MANY HAVE TO WIN. The edge sounds comfortable as "+2c a contract" and is not: at a
+                // ~0.48 all-in cost it is a margin of about ONE PERCENTAGE POINT on the win rate. Saying it
+                // this way makes the size of the thing being measured obvious, and makes it obvious why a
+                // 3pt calibration miss in any large slice of the book would take the whole strategy with it.
+                if (ctrN > 0)
+                {
+                    double be = staked / ctrN, wr = wonCtr / ctrN;
+                    double seW = Math.Sqrt(0.25 / ctrN);
+                    Console.WriteLine($"   BREAK-EVEN  we pay {be:0.0000}/contract all-in, so {100 * be:0.00}% of contracts must win; "
+                                    + $"we are at {100 * wr:0.00}%");
+                    Console.WriteLine($"               margin {100 * (wr - be):+0.00;-0.00}pt +/- {100 * seW:0.00}"
+                                    + $" ({(seW > 0 ? (wr - be) / seW : 0):+0.0;-0.0} sigma) on {ctrN:0} contract(s)"
+                                    + " - the whole strategy is this one number.");
+                }
 
                 // AN ERROR BAR, NOT A ROW-COUNT RULE OF THUMB. A dollar P&L is a sum of per-bet payoffs
                 // whose spread scales with CONTRACTS, so "n >= 30, therefore meaningful" is simply wrong
@@ -1672,10 +1687,10 @@ public static class Calibration
         // ── basis 1: every fillable signal, one per ticker+side (the widest independent sample) ──
         var sig = obs.Where(o => o.IsSignal && !double.IsNaN(o.WsDepth) && o.WsDepth > 0 && o.Won is not null)
                      .Select(o => (Depth: o.WsDepth, Edge: (o.Won!.Value ? 1.0 : 0.0) - o.Cost,
-                                   Won: o.Won!.Value ? 1.0 : 0.0, P: o.PUsed))
+                                   Won: o.Won!.Value ? 1.0 : 0.0, P: o.PUsed, Quoted: o.Ev))
                      .ToList();
         // ── basis 2: what we actually bought ──
-        var fills = new List<(double Depth, double Edge, double Won, double P)>();
+        var fills = new List<(double Depth, double Edge, double Won, double P, double Quoted)>();
         foreach (string f in Directory.GetFiles(dir, livePrefix + "_*.csv").OrderBy(x => x))
             foreach (var r in Csv.Read(f))
             {
@@ -1688,7 +1703,8 @@ public static class Calibration
                 if (double.IsNaN(px) || px <= 0) px = Csv.Num(r, "LimitPrice");
                 double fee = Csv.Num(r, "FeeChargedUsd");
                 if (double.IsNaN(fee)) fee = 0;
-                fills.Add((d, (w.Value ? 1.0 : 0.0) - (px + fee / n), w.Value ? 1.0 : 0.0, Csv.Num(r, "PTrue")));
+                fills.Add((d, (w.Value ? 1.0 : 0.0) - (px + fee / n), w.Value ? 1.0 : 0.0, Csv.Num(r, "PTrue"),
+                           Csv.Num(r, "EvCents") / 100.0));
             }
         if (sig.Count < 20 && fills.Count < 20) return;
 
@@ -1705,7 +1721,7 @@ public static class Calibration
             return (l.Count, m, sd / Math.Sqrt(l.Count));
         }
 
-        static (double R, double T) Monotone(List<(double Depth, double Edge, double Won, double P)> v)
+        static (double R, double T) Monotone(List<(double Depth, double Edge, double Won, double P, double Quoted)> v)
         {
             if (v.Count < 10) return (double.NaN, double.NaN);
             var x = v.Select(a => Math.Log(Math.Max(a.Depth, 1))).ToList();
@@ -1718,7 +1734,7 @@ public static class Calibration
             return (r, Math.Abs(r) >= 1 ? double.NaN : r * Math.Sqrt((x.Count - 2) / (1 - r * r)));
         }
 
-        void Basis(string name, List<(double Depth, double Edge, double Won, double P)> v)
+        void Basis(string name, List<(double Depth, double Edge, double Won, double P, double Quoted)> v)
         {
             if (v.Count < 20) { Console.WriteLine($"     {name}: {v.Count} settled - too few to split yet."); return; }
             Console.WriteLine($"     -- {name} (n={v.Count}) --");
@@ -1731,8 +1747,16 @@ public static class Calibration
                 double w = g.Average(a => a.Won), pt = g.Average(a => a.P);
                 double t = st.Se > 0 ? st.M / st.Se : 0;
                 if (Math.Abs(t) > Math.Abs(peakT)) { peakT = t; peak = label; }
+                // CUSHION FRAMING. Quoted EV in cents IS the cushion in percentage points: a band quoting
+                // +3.2c survives a 3.2pt calibration miss and no more. Printing the miss beside the cushion
+                // shows how much of it a band has already spent - and printing the error bar shows that at
+                // this n the bar is WIDER than the cushion, which is the real reason nothing is decidable yet.
+                double cush = 100 * g.Average(a => a.Quoted);
+                var calSt = Stat(g.Select(a => a.Won - a.P));
                 Console.WriteLine($"       {label,-15} {g.Count,4}   edge {100 * st.M,+6:+0.00;-0.00}c +/- {100 * st.Se,4:0.00}"
-                                + $"   won {100 * w,5:0.0}% vs P_true {100 * pt,5:0.0}%   {100 * (w - pt),+5:+0.0;-0.0}pt");
+                                + $"   won {100 * w,5:0.0}% vs P_true {100 * pt,5:0.0}%   {100 * (w - pt),+5:+0.0;-0.0}pt"
+                                + $"   cushion {cush,+5:+0.0}pt, spent {100 * calSt.M,+5:+0.0;-0.0} +/- {100 * calSt.Se,3:0.0}"
+                                + (100 * calSt.Se > cush ? " (bar > cushion)" : ""));
             }
             var (r, tt) = Monotone(v);
             if (double.IsFinite(tt))
@@ -1763,7 +1787,7 @@ public static class Calibration
         // (2026-09-23: $70.7k of $82.3k a day), so a filter that excluded it would cap the strategy at a
         // fraction of its capacity forever. That trade is only worth making on evidence, and this is the
         // only line that will produce evidence before the bankroll needs the answer.
-        var conv = new Dictionary<(int Band, string Key), double>();
+        var conv = new Dictionary<(int Band, string Key), (double Move, double Gap)>();
         foreach (var r in ReportCache.LoadFollowUps(dir, followPrefix))
         {
             if (r.Decision != "SIGNAL" || double.IsNaN(r.EntryDepth) || r.EntryDepth <= 0) continue;
@@ -1775,7 +1799,8 @@ public static class Calibration
                 if (r.EntryDepth >= DepthBands[i].Lo && r.EntryDepth < DepthBands[i].Hi) { b = i; break; }
             var key = (b, r.Ticker + "|" + r.Side);
             if (conv.ContainsKey(key)) continue;
-            conv[key] = (r.NowAsk - r.EntryAsk) * (r.EntryPTrue > r.EntryAsk ? 1 : -1) * 100;
+            conv[key] = ((r.NowAsk - r.EntryAsk) * (r.EntryPTrue > r.EntryAsk ? 1 : -1) * 100,
+                         Math.Abs(r.EntryPTrue - r.EntryAsk) * 100);
         }
         if (conv.Count >= 20)
         {
@@ -1784,10 +1809,16 @@ public static class Calibration
             {
                 var v = conv.Where(kv => kv.Key.Band == b).Select(kv => kv.Value).ToList();
                 if (v.Count < 10) { Console.WriteLine($"       {DepthBands[b].Label,-15} {v.Count,4}  (too few)"); continue; }
-                var st = Stat(v);
-                int up = v.Count(x => x > 1e-9), dn = v.Count(x => x < -1e-9);
+                var st = Stat(v.Select(x => x.Move));
+                int up = v.Count(x => x.Move > 1e-9), dn = v.Count(x => x.Move < -1e-9);
+                // % OF GAP CLOSED is the confound-controlled version: a liquid book moves fewer cents just
+                // because it is liquid, so the raw MOVE penalises depth for being deep. The share of the
+                // gap it actually closes does not. Measured 2026-09-23 the deepest band had the BIGGEST gap
+                // (4.73c) and closed the SMALLEST share of it (21% vs 37-47%), so liquidity does not explain it.
+                double gap = v.Average(x => x.Gap);
                 Console.WriteLine($"       {DepthBands[b].Label,-15} {v.Count,4}   MOVE {st.M,+6:+0.00;-0.00}c +/- {st.Se,4:0.00}"
-                                + $" (t={(st.Se > 0 ? st.M / st.Se : 0),+5:+0.0;-0.0})   came-to-us {(up + dn > 0 ? 100.0 * up / (up + dn) : 0),5:0.0}%");
+                                + $" (t={(st.Se > 0 ? st.M / st.Se : 0),+5:+0.0;-0.0})   came-to-us {(up + dn > 0 ? 100.0 * up / (up + dn) : 0),5:0.0}%"
+                                + $"   gap {gap,4:0.00}c, closed {(gap > 0 ? 100 * st.M / gap : 0),5:0.0}%");
             }
             Console.WriteLine("       a band that still converges was NOT picking us off, whatever its P&L says. Negative MOVE in a band");
             Console.WriteLine("       is the signature that would justify a depth filter - and would cost most of the strategy's capacity.");
