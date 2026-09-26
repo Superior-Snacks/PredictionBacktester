@@ -256,6 +256,29 @@ public class KalshiOrderClient : IKalshiOrderExecutor, IDisposable
         return outp;
     }
 
+    /// <summary>When the account's LOCATION ATTESTATION for API trading expires (UTC), or null if the account
+    /// has never attested. Past this moment every order on Sports / Elections / Entertainment markets is refused
+    /// with HTTP 403 "Your location attestation for API trading is missing or expired" - market data keeps
+    /// flowing, so nothing else notices (Kalshi changelog 2026-08-16).
+    ///
+    /// <para>Payload OBSERVED 2026-09-26, not assumed: <c>GET /api_keys</c> returns
+    /// <c>{api_key_region_expiration_ts, api_keys[]}</c>, the timestamp an integer in UNIX SECONDS. A visit to the
+    /// Kalshi website or app re-verifies location and pushes it out exactly 7 days (14:36:45 -> +7d observed).
+    /// There is no API to renew it and there must not be one here: it is a compliance check on the person, so
+    /// the bot only READS it and tells the operator in good time.</para></summary>
+    public async Task<DateTime?> GetLocationAttestationExpiryAsync()
+    {
+        using var doc = await GetAsync("/api_keys");
+        if (!doc.RootElement.TryGetProperty("api_key_region_expiration_ts", out var t)) return null;
+        long secs = t.ValueKind switch
+        {
+            JsonValueKind.Number => t.GetInt64(),
+            JsonValueKind.String when long.TryParse(t.GetString(), NumberStyles.Any, CultureInfo.InvariantCulture, out var v) => v,
+            _ => 0,
+        };
+        return secs > 0 ? DateTimeOffset.FromUnixTimeSeconds(secs).UtcDateTime : null;
+    }
+
     public async Task<double> ShardBalanceAsync(int shard)
     {
         using var doc = await GetAsync("/portfolio/balance");

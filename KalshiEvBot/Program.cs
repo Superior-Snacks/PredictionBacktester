@@ -534,6 +534,20 @@ internal static class Program
             _ = Task.Run(() => PerformanceLoopAsync(discord, BuildStatusAsync, cts.Token));
         if (discord.Enabled && eval.LiveExec is { } lxN)
             lxN.Notify = m => _ = discord.AlertAsync(m);       // one line on hold, one on release
+        // LOCATION ATTESTATION: read now (so the startup banner says how long is left), then hourly. The
+        // hourly read is what produces the 48h / 12h warnings before anything is refused.
+        if (eval.LiveExec is { } lxA)
+        {
+            await lxA.RefreshAttestationAsync(announce: true);
+            _ = Task.Run(async () =>
+            {
+                while (!cts.IsCancellationRequested)
+                {
+                    try { await Task.Delay(TimeSpan.FromHours(1), cts.Token); } catch (OperationCanceledException) { break; }
+                    try { await lxA.RefreshAttestationAsync(); } catch { }
+                }
+            });
+        }
         // THE END-OF-DAY DROP. Fires once, a set delay after the LAST work window closes, and posts the
         // complete report as an attachment so the day can be read (and pasted) away from the machine.
         if (discord.Enabled && EvConfig.Env("EV_REPORT_AFTER_BLOCKS", 1) > 0)
@@ -940,6 +954,18 @@ internal static class Program
             }
         }
         catch (Exception ex) { Fail("order-path preflight", $"{ex.GetType().Name}: {ex.Message}"); }
+
+        // LOCATION ATTESTATION - lapsed on 2026-09-24 and refused two days of orders while every other
+        // check on this list read PASS. It is the one precondition that expires on a calendar.
+        await Step("location attestation", async () =>
+        {
+            var exp = await rk.GetLocationAttestationExpiryAsync();
+            var left = exp is { } e ? e - DateTime.UtcNow : TimeSpan.Zero;
+            if (exp is null) Fail("location attestation", "never attested - open the Kalshi app or website to verify location");
+            else if (left <= TimeSpan.Zero) Fail("location attestation", $"LAPSED at {exp:ddd dd MMM HH:mm}Z - every order will 403. Open the Kalshi app or website.");
+            else if (left < TimeSpan.FromHours(48)) Warn("location attestation", $"expires {exp:ddd dd MMM HH:mm}Z (in {left.TotalHours:0}h) - renew soon");
+            else Pass("location attestation", $"valid until {exp:ddd dd MMM HH:mm}Z ({left.TotalDays:0.0} days)");
+        });
 
         checks.Add(await VerifyReloadAsync(pairsPath, ct));
 

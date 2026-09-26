@@ -110,6 +110,18 @@ public sealed class LiveExecutor
     // is not improved by asking faster. Screening and telemetry continue throughout; held signals are
     // COUNTED, not logged as attempts - they were never sent. The first success clears everything.
     public long HeldByVenue, VenueHolds;
+    // ── LOCATION ATTESTATION ────────────────────────────────────────────────────────────────────────
+    // 2026-09-24 17:32 UTC the account's 7-day location attestation lapsed and every order for two days came
+    // back 403 while screening, telemetry and market data all looked healthy. Renewal is a person opening the
+    // Kalshi app or website - deliberately not something the bot can or should do. What it CAN do: read the
+    // expiry (GET /api_keys), warn well before it, refuse to send orders it knows will be refused, and resume
+    // the moment a renewal shows up.
+    public long HeldByAttestation;
+    private DateTime? _attestExpiry;
+    private DateTime _attestNextCheck = DateTime.MinValue;
+    private bool _attestLapsedNoted;
+    private readonly HashSet<string> _attestWarned = new();
+    public DateTime? AttestationExpiry => _attestExpiry;
     private DateTime _venueHoldUntil = DateTime.MinValue;
     private string _venueHoldWhy = "";
     private int _consecutiveErrors;
@@ -248,6 +260,17 @@ public sealed class LiveExecutor
         {
             Interlocked.Increment(ref HeldByVenue);                  // counted, not attempted
             return false;
+        }
+        // KNOWN-LAPSED ATTESTATION: do not send an order Kalshi is certain to refuse. Re-read the expiry at
+        // most every 5 minutes (one cheap GET, only while lapsed), and resume the moment it moves forward.
+        if (_attestExpiry is { } ax && ax <= DateTime.UtcNow)
+        {
+            if (DateTime.UtcNow >= _attestNextCheck) await RefreshAttestationAsync();
+            if (_attestExpiry is { } ax2 && ax2 <= DateTime.UtcNow)
+            {
+                Interlocked.Increment(ref HeldByAttestation);         // counted, not attempted
+                return false;
+            }
         }
         if (_filled.ContainsKey(key)) why = "side already filled";
         else if (_lastAttempt.TryGetValue(key, out var last)
@@ -395,6 +418,15 @@ public sealed class LiveExecutor
                                      attemptCount, "", tag, 0, 0,
                                      (DateTime.UtcNow - t0).TotalMilliseconds, 0, 0, ctx));
             try { Errors?.Write("order", ticker, side, ex); } catch { }
+            if (ErrorLog.IsLocationAttestation(ex))
+            {
+                // Not an outage and not ours to retry: the gate above now holds every order until the expiry
+                // moves forward. Mark it lapsed NOW rather than waiting for the hourly read to notice.
+                _attestExpiry = DateTime.UtcNow.AddSeconds(-1);
+                _attestNextCheck = DateTime.UtcNow.AddMinutes(5);
+                NoteAttestationLapsed();
+                return false;
+            }
             Con.Line(ConsoleColor.Red,
                 $"[ERR ] {ticker} {side}: order FAILED ({ex.GetType().Name}: {ex.Message}) — screening continues.");
             await ConsiderVenueHoldAsync(ex, tag);
@@ -405,6 +437,67 @@ public sealed class LiveExecutor
             _inFlight.TryRemove(key, out _);
         }
     }
+
+    /// <summary>Reads the attestation expiry and warns ahead of it: once at 48h, once at 12h, once on lapse,
+    /// once on renewal - each at most once per expiry value, so an hourly read never repeats itself.</summary>
+    public async Task RefreshAttestationAsync(bool announce = false)
+    {
+        DateTime? was = _attestExpiry;
+        try { _attestExpiry = await _kalshi.GetLocationAttestationExpiryAsync(); }
+        catch (Exception ex)
+        {
+            _attestNextCheck = DateTime.UtcNow.AddMinutes(5);
+            if (announce) Con.Line(ConsoleColor.Yellow, $"[ATTEST] could not read the location attestation ({ex.GetType().Name}) - will retry.");
+            return;
+        }
+        _attestNextCheck = DateTime.UtcNow.AddMinutes(5);
+        var now = DateTime.UtcNow;
+        if (_attestExpiry is not { } exp)
+        {
+            Con.Line(ConsoleColor.Red, "[ATTEST] this account has NEVER completed a location attestation - every order will be refused. "
+                   + "Open the Kalshi app or website to verify your location.");
+            NoteAttestationLapsed();
+            return;
+        }
+        var left = exp - now;
+        if (announce)
+            Con.Line(left > TimeSpan.FromHours(48) ? ConsoleColor.Gray : ConsoleColor.Yellow,
+                     $"[ATTEST] location attestation valid until {exp:ddd dd MMM HH:mm}Z ({Fmt(left)}) - "
+                   + "renewed by any visit to the Kalshi app or website; lasts 7 days.");
+        if (left <= TimeSpan.Zero) { NoteAttestationLapsed(); return; }
+        // renewed after a lapse (or simply pushed out): say so once and release the gate
+        if (_attestLapsedNoted || (was is { } w && w <= now))
+        {
+            _attestLapsedNoted = false;
+            Con.Line(ConsoleColor.Green, $"[ATTEST] location attestation RENEWED - valid until {exp:ddd dd MMM HH:mm}Z. Orders resume.");
+            try { Notify?.Invoke($"✅ Kalshi location attestation renewed — valid until {exp:ddd HH:mm}Z. Orders resume."); } catch { }
+        }
+        foreach (var (hours, label) in new[] { (48, "48h"), (12, "12h") })
+        {
+            string key = $"{exp:O}|{label}";
+            if (left <= TimeSpan.FromHours(hours) && _attestWarned.Add(key))
+            {
+                Con.Line(ConsoleColor.Yellow, $"[ATTEST] location attestation expires in {Fmt(left)} ({exp:ddd HH:mm}Z). "
+                       + "Open the Kalshi app or website before then or every order will be refused.");
+                try { Notify?.Invoke($"📍 Kalshi location attestation expires in **{Fmt(left)}** ({exp:ddd HH:mm}Z). "
+                                   + "Open the Kalshi app or website to renew it — otherwise orders stop."); } catch { }
+            }
+        }
+    }
+
+    private void NoteAttestationLapsed()
+    {
+        if (_attestLapsedNoted) return;
+        _attestLapsedNoted = true;
+        Con.Line(ConsoleColor.Red, "[ATTEST] *** LOCATION ATTESTATION LAPSED - Kalshi refuses every order until it is renewed. "
+               + "Open the Kalshi app or website to verify your location. Orders are HELD (not sent); screening and "
+               + "telemetry continue; the bot re-checks every 5 min and resumes on its own. ***");
+        try { Notify?.Invoke("🛑 **Kalshi location attestation LAPSED** — every order is refused. Open the Kalshi app or website "
+                           + "to verify your location. The bot is holding orders and will resume by itself within 5 min of renewal."); } catch { }
+    }
+
+    private static string Fmt(TimeSpan t)
+        => t <= TimeSpan.Zero ? "0h" : t.TotalHours >= 24 ? $"{(int)t.TotalDays}d{t.Hours:0}h" : $"{(int)t.TotalHours}h{t.Minutes:00}m";
 
     /// <summary>An order the venue accepted (filled or not): the venue is open, so any hold state ends.</summary>
     private void VenueAccepted()
@@ -457,6 +550,8 @@ public sealed class LiveExecutor
     public string Summary() =>
         $"live: attempted {Attempted} filled {Filled} no-fill {NoFill} err {Rejected} skipped {Skipped} "
       + (HeldByVenue > 0 ? $"held-by-venue {HeldByVenue} " : "")
+      + (HeldByAttestation > 0 ? $"held-by-attestation {HeldByAttestation} " : "")
+      + (_attestExpiry is { } ae ? (ae <= DateTime.UtcNow ? "ATTESTATION LAPSED " : $"attest {Fmt(ae - DateTime.UtcNow)} ") : "")
       + (ContractCapped > 0 ? $"ctr-capped {ContractCapped} " : "")
       + $"staked ${StakedUsd:0.00}"
       + (_cfg.LiveDailyUsd > 0 ? $"  today ${SpentToday:0.00}/${_cfg.LiveDailyUsd:0.00}" : "")

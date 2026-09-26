@@ -886,8 +886,13 @@ public static class SelfTest
             Check(ErrorLog.Tag(bare) == "error:400", "no code in the body -> status alone", ErrorLog.Tag(bare));
             Check(ErrorLog.Tag(new InvalidOperationException("x")) == "error:InvalidOperationException",
                   "a non-HTTP failure keeps the type name (the old tag)");
+            // Commas ARE captured - Kalshi's location-attestation code contains them - and made CSV-safe by
+            // RollingCsv.Q quoting the field on write. Spaces and quotes still end the token, so a code can
+            // never smuggle an extra column or a broken quote into the log.
             Check(ErrorLog.VenueCode("{\"code\":\"insufficient_balance\"}") == "insufficient_balance"
-                  && ErrorLog.VenueCode("{\"code\":\"a,b\"}") == "", "venue code is a short safe token or nothing");
+                  && ErrorLog.VenueCode("{\"code\":\"a,b\"}") == "a,b" && RollingCsv.Q("a,b") == "\"a,b\""
+                  && ErrorLog.VenueCode("{\"code\":\"a b\"}") == "",
+                  "venue code is captured whole, and the CSV writer quotes any comma in it");
 
             // Thursdays 03:00-05:00 US Eastern. EDT in September (UTC-4), EST in January (UTC-5).
             Check(Calibration.InKalshiMaintenance("2026-09-17T07:30:00Z"), "Thu 07:30Z in Sept = 03:30 EDT -> maintenance");
@@ -984,6 +989,22 @@ public static class SelfTest
             var dupes = new List<(decimal, decimal)> { (0.49m, 10m), (0.46m, 3m), (0.49m, 9.5m) };
             Check(FillLadderLog.Ladder(dupes) == "3@0.4600|19.5@0.4900",
                   "repeat prints at one price are summed into a single level", FillLadderLog.Ladder(dupes));
+        }
+
+        // ── location attestation: the exact 403 body Kalshi returned on 2026-09-24 ────────────────────
+        {
+            Console.WriteLine("\n-- location attestation --");
+            const string body = "Kalshi POST /portfolio/events/orders 403: {\"error\":{\"code\":\"Your_location_attestation_for_API_trading_is_missing_or_expired._Please_verify_your_location_in_the_Kalshi_app_or_website,_and_then_retry.\",\"message\":\"Your location attestation for API trading is missing or expired. Please verify your location in the Kalshi app or website, and then retry.\"}}";
+            var ex = new HttpRequestException(body, null, System.Net.HttpStatusCode.Forbidden);
+            Check(ErrorLog.IsLocationAttestation(ex), "the real 403 body is recognised as a lapsed attestation");
+            Check(ErrorLog.Tag(ex) == "error:403 location_attestation_expired",
+                  "it is tagged by what it IS, not by a 130-char sentence", ErrorLog.Tag(ex));
+            Check(ErrorLog.VenueCode(body).StartsWith("Your_location_attestation"),
+                  "the long venue code is now captured (the 48-char cap dropped it)", ErrorLog.VenueCode(body));
+            var other = new HttpRequestException("Kalshi POST /portfolio/orders 409: {\"error\":{\"code\":\"trading_is_paused\"}}",
+                                                 null, System.Net.HttpStatusCode.Conflict);
+            Check(!ErrorLog.IsLocationAttestation(other) && ErrorLog.Tag(other) == "error:409 trading_is_paused",
+                  "maintenance is NOT mistaken for an attestation lapse", ErrorLog.Tag(other));
         }
 
         Console.WriteLine();

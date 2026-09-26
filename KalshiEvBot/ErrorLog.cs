@@ -28,11 +28,19 @@ public sealed class ErrorLog : IDisposable
     public string Path => _csv.Path;
     public long RowsWritten => _csv.RowsWritten;
 
+    /// <summary>The venue's refusal because the account's LOCATION ATTESTATION has lapsed. Needs a person to
+    /// open the Kalshi app or website; no amount of retrying fixes it.</summary>
+    public static bool IsLocationAttestation(Exception ex)
+        => (ex.Message ?? "").Contains("location_attestation", StringComparison.OrdinalIgnoreCase)
+        || (ex.Message ?? "").Contains("location attestation", StringComparison.OrdinalIgnoreCase);
+
     /// <summary>The order log's Status string for a failed attempt: <c>error:503 exchange_maintenance</c>
     /// rather than <c>error:HttpRequestException</c> whenever the venue answered — so section 7 groups
     /// failures by what the venue said, and a closed exchange reads as one.</summary>
     public static string Tag(Exception ex)
     {
+        if (IsLocationAttestation(ex))
+            return "error:403 location_attestation_expired";     // Kalshi's own code is a 130-char sentence
         if (ex is HttpRequestException h && h.StatusCode is { } sc)
         {
             string code = VenueCode(ex.Message);
@@ -45,7 +53,9 @@ public sealed class ErrorLog : IDisposable
     /// short token so it is safe as a CSV cell and a grouping key.</summary>
     public static string VenueCode(string message)
     {
-        var m = Regex.Match(message ?? "", "\"code\"\\s*:\\s*\"([A-Za-z0-9_.-]{1,48})\"");
+        // 1..200, not 1..48: Kalshi's location-attestation code is a whole sentence with underscores
+        // (~130 chars), and the 48-char cap silently logged it as no code at all on 2026-09-24.
+        var m = Regex.Match(message ?? "", "\"code\"\\s*:\\s*\"([A-Za-z0-9_.,-]{1,200})\"");
         return m.Success ? m.Groups[1].Value : "";
     }
 
