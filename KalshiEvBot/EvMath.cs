@@ -167,13 +167,51 @@ public static class EvMath
     /// <para>So the floor GATES rather than inflates: below it there is no bet, and the size of every bet
     /// placed is the one the maths asked for (or the ceiling, downward).</para>
     /// </summary>
+    /// <summary>
+    /// The probability and the price Kelly should size on - which are NOT P_true and the ask.
+    ///
+    /// <para><b>The walk (<paramref name="walkK"/>).</b> The IOC limit is the break-even price, so an order pays
+    /// up toward it whenever the book moves between screen and fill. Measured 2026-09-28 on 379 filled orders:
+    /// <c>bought edge ≈ quoted - 0.63 x (limit - ask)</c>, residual 0.8c an order - a +4.4c signal is bought at
+    /// +2.2c. The headroom is known before the order, so the expected fill price is too:
+    /// <c>ask + walkK x (limit - ask)</c>. Sizing at the ask sized every high-EV signal on edge it never got.</para>
+    ///
+    /// <para><b>The shrink (<paramref name="shrink"/>).</b> We only act when Pinnacle sits above Kalshi, and that
+    /// selects Pinnacle's positive noise - the winner's curse. On UNSELECTED snapshots the oracle is unbiased
+    /// (-0.10pt ± 0.99); on the rows we trade it runs ~1pt high, the same under proportional and Shin, so no
+    /// de-vig model fixes it. The fix is to trust Pinnacle for only part of its disagreement with the price we
+    /// screened: <c>p = P_true - shrink x (P_true - ask)</c>. Unselected data puts that share near 86%
+    /// (slope -0.14 ± 0.12), i.e. shrink ≈ 0.15. It grows with the edge, so it trims the big signals most.</para>
+    ///
+    /// <para>Both default to 0, which returns exactly (P_true, ask) - every existing caller is unchanged.</para>
+    /// </summary>
+    public static (double P, double Exec) KellyBasis(double pTrue, double ask, double limitPrice = 0,
+                                                     double walkK = 0, double shrink = 0)
+    {
+        double p = shrink > 0 ? pTrue - shrink * (pTrue - ask) : pTrue;
+        double exec = walkK > 0 && limitPrice > ask ? ask + walkK * (limitPrice - ask) : ask;
+        return (p, exec);
+    }
+
+    /// <summary>The per-contract edge Kelly is actually fed, after the walk, the shrink and the tail cap.
+    /// For the console and the log, so "quoted +4.4c, sized on +1.6c" is readable where the signal appears.</summary>
+    public static double KellyEdge(double pTrue, double ask, double m = 1.0, double maxEdge = 0.0,
+                                   double limitPrice = 0, double walkK = 0, double shrink = 0)
+    {
+        var (p, exec) = KellyBasis(pTrue, ask, limitPrice, walkK, shrink);
+        double cost = CostPerContract(exec, m);
+        double pk = maxEdge > 0 ? Math.Min(p, cost + maxEdge) : p;
+        return pk - cost;
+    }
+
     public static double LiveStakeUsd(double pTrue, double execPrice, double overround,
                                       double equityUsd, double activeExposureFraction,
                                       double minUsd, double maxUsd,
                                       double maxFractionPerTrade = 0.03, double m = 1.0,
                                       double kellyFraction = 0.0,
                                       double betaKnee = 0.10, double betaZero = 0.30,
-                                      double maxEdge = 0.0)
+                                      double maxEdge = 0.0,
+                                      double limitPrice = 0, double walkK = 0, double marketShrink = 0)
     {
         if (equityUsd <= 0 || execPrice <= 0 || execPrice >= 1) return 0.0;
         // EDGE SHRINKAGE. Kelly's numerator is the edge, and Kelly scales the stake linearly with it — so
@@ -188,8 +226,12 @@ public static class EvMath
         // elsewhere); only the SIZE stops growing past `maxEdge`. A Bayesian reading: our posterior on a
         // +6.7c edge is not +6.7c, it is "at least a few cents and probably less than claimed". 0 = off,
         // which keeps every existing caller and the telemetry sizer exactly as they were.
-        double pForKelly = maxEdge > 0 ? Math.Min(pTrue, CostPerContract(execPrice, m) + maxEdge) : pTrue;
-        double f    = FullKelly(pForKelly, execPrice, m);
+        // THE CORRECTED BASIS (see KellyBasis): off by default, so pB == pTrue and exec == execPrice. The tail cap
+        // applies AFTER it, on the edge we expect to buy - the 7c+ band never converges (T+20 CLV -0.09c) and the
+        // walk would otherwise size those phantoms UP.
+        var (pB, exec) = KellyBasis(pTrue, execPrice, limitPrice, walkK, marketShrink);
+        double pForKelly = maxEdge > 0 ? Math.Min(pB, CostPerContract(exec, m) + maxEdge) : pB;
+        double f    = FullKelly(pForKelly, exec, m);
 
         // `kellyFraction > 0` OVERRIDES Alpha with a flat fraction (0.25 = quarter Kelly). Alpha is a
         // VIG-based shrinkage — it scales with how wide Pinnacle's book is, as a proxy for how confident

@@ -41,7 +41,12 @@ public readonly record struct TakeCtx(double WsAsk, double DepthToLimit, bool In
                                       // The top ask levels as "0.40x120|0.41x55" at the moment we screened.
                                       // Paired with the fills read back afterwards, it says whether a walk was
                                       // us eating those levels or the book moving before the IOC arrived.
-                                      string AskLadder = "");
+                                      string AskLadder = "",
+                                      // What the SUGGESTED Kelly corrections would have staked (USD, no floor), and
+                                      // the live walk/shrink this order was actually sized with - the regime marker,
+                                      // so rows sized before and after a knob is turned can never be mixed up.
+                                      double ShadowStakeA = 0, double ShadowStakeAB = 0,
+                                      double KellyWalkK = 0, double KellyShrink = 0);
 
 /// <summary>
 /// Places the real Kalshi order behind a confirmed signal — M1's only new capability.
@@ -582,6 +587,10 @@ public sealed class EvLiveLog : IDisposable
         // by re-deriving it: 19 of 37 fills were bound, all by the contract cap, costing +$15 over three
         // days at 9-8 - inside noise, which is why it is now logged rather than re-derived each time.
         "UncappedContracts",
+        // ShadowStakeA / AB: USD Kelly would stake with the walk-aware basis, and with the walk plus the
+        // winner's-curse shrink (EvMath.KellyBasis) - live ceiling and caps, NO floor. KellyWalkK / KellyShrink:
+        // the settings THIS order was sized with. Added 2026-09-28.
+        "ShadowStakeA", "ShadowStakeAB", "KellyWalkK", "KellyShrink",
     };
 
     private readonly RollingCsv _csv;
@@ -618,6 +627,8 @@ public sealed class EvLiveLog : IDisposable
             r.Ctx.UncappedStakeUsd > 0 && r.LimitPrice > 0
                 ? EvMath.ContractsFor(r.Ctx.UncappedStakeUsd, r.LimitPrice, 1.0).ToString(CultureInfo.InvariantCulture)
                 : "",
+            RollingCsv.N(r.Ctx.ShadowStakeA, 2), RollingCsv.N(r.Ctx.ShadowStakeAB, 2),
+            RollingCsv.N(r.Ctx.KellyWalkK, 3), RollingCsv.N(r.Ctx.KellyShrink, 3),
         });
     }
 

@@ -1007,6 +1007,41 @@ public static class SelfTest
                   "maintenance is NOT mistaken for an attestation lapse", ErrorLog.Tag(other));
         }
 
+        // ── Kelly basis: walk-aware + winner's-curse shrink ───────────────────────────────────────────
+        {
+            Console.WriteLine("\n-- kelly basis --");
+            // A typical +4.4c signal: P_true 0.50, ask 0.45, limit 0.48 (3c of headroom)
+            double pT = 0.50, ask = 0.45, lim = 0.48, eq = 1180, kf = 0.25, maxE = 0.03;
+            double S(double walk, double shr, double maxEdge = 0.03)
+                => EvMath.LiveStakeUsd(pT, ask, 0.04, eq, 0, 0, 25, 0.03, 1.0, kf, 0.25, 0.75, maxEdge, lim, walk, shr);
+            double legacy = EvMath.LiveStakeUsd(pT, ask, 0.04, eq, 0, 0, 25, 0.03, 1.0, kf, 0.25, 0.75, maxE);
+            Near(S(0, 0), legacy, 1e-12, "walk 0 + shrink 0 is EXACTLY today's stake (every existing caller unchanged)");
+            var (pb, ex) = EvMath.KellyBasis(pT, ask);
+            Check(pb == pT && ex == ask, "KellyBasis with no settings returns (P_true, ask) untouched");
+
+            var (_, exW) = EvMath.KellyBasis(pT, ask, lim, 0.63, 0);
+            Near(exW, 0.45 + 0.63 * 0.03, 1e-12, "walk: expected fill = ask + K x (limit - ask)");
+            Check(S(0.63, 0) < S(0, 0), "walk-aware Kelly stakes LESS on a signal with headroom",
+                  $"{S(0.63, 0):0.00} vs {S(0, 0):0.00}");
+            Near(EvMath.LiveStakeUsd(pT, ask, 0.04, eq, 0, 0, 25, 0.03, 1.0, kf, 0.25, 0.75, maxE, ask, 0.63, 0),
+                 legacy, 1e-12, "no headroom (limit == ask) -> the walk changes nothing");
+
+            var (pS, _) = EvMath.KellyBasis(pT, ask, 0, 0, 0.15);
+            Near(pS, 0.50 - 0.15 * 0.05, 1e-12, "shrink: p = P_true - S x (P_true - ask)");
+            Check(S(0, 0.15) < S(0, 0), "the shrink stakes LESS");
+            Check(EvMath.LiveStakeUsd(pT, ask, 0.04, eq, 0, 0, 25, 0.03, 1.0, kf, 0.25, 0.75, 0, lim, 0, 1.0) == 0,
+                  "shrink 1.0 = trust Kalshi entirely -> edge is minus the fee -> no stake");
+            Check(S(0.63, 0.15) < S(0.63, 0) && S(0.63, 0.15) < S(0, 0.15), "A+B stakes less than either alone");
+
+            // the tail cap still binds AFTER the walk: a +10c phantom must not be sized up by it
+            double pBig = 0.60, askBig = 0.45, limBig = 0.58;
+            double eK = EvMath.KellyEdge(pBig, askBig, 1.0, 0.03, limBig, 0.63, 0);
+            Check(eK <= 0.03 + 1e-12, "the 3c tail cap still caps the edge Kelly sees after the walk", $"{eK * 100:0.00}c");
+            // and KellyEdge agrees with the stake's direction
+            Check(EvMath.KellyEdge(pT, ask, 1.0, maxE, lim, 0.63, 0.15) < EvMath.KellyEdge(pT, ask, 1.0, maxE, lim, 0, 0),
+                  "KellyEdge falls with the corrections, like the stake");
+        }
+
         Console.WriteLine();
         Console.WriteLine($"{_pass} passed, {_fail} failed.");
         return _fail == 0 ? 0 : 1;

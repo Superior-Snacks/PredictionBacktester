@@ -46,6 +46,16 @@ public sealed class EvConfig
     /// <summary>Hard ceiling on contracts per order, on top of the dollar ceiling. Bounds the payout
     /// swing of a position regardless of price — $25 of a 22c dog is 113 contracts. 0 = off.</summary>
     public int    LiveMaxContracts = (int)Env("EV_LIVE_MAX_CONTRACTS", 25);
+    /// <summary>Walk-aware Kelly: size on the expected FILL price, ask + K x (limit - ask), not the ask.
+    /// 0 = off (the ask). Measured K = 0.63 on 379 fills (2026-09-28). See EvMath.KellyBasis.</summary>
+    public double LiveKellyWalkK  = Env("EV_LIVE_KELLY_WALK_K", 0.0);
+    /// <summary>Winner's-curse shrink: trust Pinnacle for (1 - S) of its disagreement with the ask. 0 = off.
+    /// Suggested 0.15. Lower EV_LIVE_KELLY_MIN_USD with it, or ~20% of bets fall under the floor and are skipped.</summary>
+    public double LiveKellyShrink = Env("EV_LIVE_KELLY_SHRINK", 0.0);
+    /// <summary>What the SHADOW columns are computed with - the suggested settings, logged on every order
+    /// whatever the live ones are, so section 7 can show what they would have staked before they are trusted.</summary>
+    public double ShadowKellyWalkK  = Env("EV_SHADOW_KELLY_WALK_K", 0.63);
+    public double ShadowKellyShrink = Env("EV_SHADOW_KELLY_SHRINK", 0.15);
     /// <summary>Flat Kelly fraction (0.25 = quarter). 0 = use Alpha, the vig-based shrinkage, which is the
     /// default and currently medians 0.157. Set this only as a deliberate choice: Alpha discounts for
     /// ORACLE uncertainty, this discounts for STRATEGY uncertainty, and at t=+0.71 on the edge the second
@@ -1052,7 +1062,8 @@ public sealed class EvEvaluator
             // at risk at once. An approximation, and it is the term that was missing entirely -
             // ActiveExposureFraction was never assigned anywhere, so Beta read exactly 1.0 on all 1547
             // signal rows and the concurrent-position damping had never once engaged.
-            double kellyStake = 0, uncappedStake = 0;
+            double kellyStake = 0, uncappedStake = 0, shadowA = 0, shadowAB = 0;
+            string walkNote = "";
             if (_cfg.LiveSizing == "kelly")
             {
                 // A LOCAL, NOT `ActiveExposureFraction`. That property is read by EvMath.Size earlier in
@@ -1067,23 +1078,43 @@ public sealed class EvEvaluator
                                                  liveExposure, 0, 0,
                                                  _cfg.MaxTradeFrac, feeM, _cfg.LiveKellyFraction,
                                                  _cfg.KellyBetaKnee, _cfg.KellyBetaZero,
-                                                 _cfg.LiveKellyMaxEdge);
+                                                 _cfg.LiveKellyMaxEdge,
+                                                 limit, _cfg.LiveKellyWalkK, _cfg.LiveKellyShrink);
                 // And with the edge haircut off too - the number the row logs as UncappedContracts, so the
                 // caps' running cost can be read off the file instead of re-derived.
                 uncappedStake = EvMath.LiveStakeUsd(c.PTrueUsed, px, c.Vig, LiveEquityUsd,
                                                     liveExposure, 0, 0,
                                                     _cfg.MaxTradeFrac, feeM, _cfg.LiveKellyFraction,
-                                                    _cfg.KellyBetaKnee, _cfg.KellyBetaZero, 0.0);
+                                                    _cfg.KellyBetaKnee, _cfg.KellyBetaZero, 0.0,
+                                                    limit, _cfg.LiveKellyWalkK, _cfg.LiveKellyShrink);
                 kellyStake = EvMath.LiveStakeUsd(c.PTrueUsed, px, c.Vig, LiveEquityUsd,
                                                  liveExposure, _cfg.LiveKellyMinUsd,
                                                  _cfg.LiveKellyMaxUsd, _cfg.MaxTradeFrac, feeM,
                                                  _cfg.LiveKellyFraction,
                                                  _cfg.KellyBetaKnee, _cfg.KellyBetaZero,
-                                                 _cfg.LiveKellyMaxEdge);
+                                                 _cfg.LiveKellyMaxEdge,
+                                                 limit, _cfg.LiveKellyWalkK, _cfg.LiveKellyShrink);
+                // THE SHADOWS: what the suggested corrections WOULD stake, with the live ceiling and caps but NO
+                // floor - so section 7 can apply any floor afterwards and show how many bets each would skip.
+                // Computed on every order whatever the live knobs are; costs nothing at the venue.
+                shadowA  = EvMath.LiveStakeUsd(c.PTrueUsed, px, c.Vig, LiveEquityUsd,
+                                               liveExposure, 0, _cfg.LiveKellyMaxUsd, _cfg.MaxTradeFrac, feeM,
+                                               _cfg.LiveKellyFraction, _cfg.KellyBetaKnee, _cfg.KellyBetaZero,
+                                               _cfg.LiveKellyMaxEdge, limit, _cfg.ShadowKellyWalkK, 0.0);
+                shadowAB = EvMath.LiveStakeUsd(c.PTrueUsed, px, c.Vig, LiveEquityUsd,
+                                               liveExposure, 0, _cfg.LiveKellyMaxUsd, _cfg.MaxTradeFrac, feeM,
+                                               _cfg.LiveKellyFraction, _cfg.KellyBetaKnee, _cfg.KellyBetaZero,
+                                               _cfg.LiveKellyMaxEdge, limit, _cfg.ShadowKellyWalkK, _cfg.ShadowKellyShrink);
+                if (_cfg.LiveKellyWalkK > 0 || _cfg.LiveKellyShrink > 0)
+                {
+                    double eK = EvMath.KellyEdge(c.PTrueUsed, px, feeM, _cfg.LiveKellyMaxEdge, limit,
+                                                 _cfg.LiveKellyWalkK, _cfg.LiveKellyShrink);
+                    walkNote = $" sized on {eK * 100:+0.0;-0.0}c (walk {_cfg.LiveKellyWalkK:0.00}, shrink {_cfg.LiveKellyShrink:0.00});";
+                }
                 // The haircut is a MODEL choice, not a bound, so it is reported on its own rather than
                 // folded into the floor/ceiling notes below: the reader should be able to see "this was
                 // a 6.7c signal sized as a 3c one" on the line where the signal appears.
-                string capNote = "";
+                string capNote = walkNote;
                 if (_cfg.LiveKellyMaxEdge > 0 && ev > _cfg.LiveKellyMaxEdge + 1e-9)
                 {
                     Interlocked.Increment(ref Stats.KellyEdgeCapped);
@@ -1113,7 +1144,8 @@ public sealed class EvEvaluator
                                                      BankrollUsd, LiveEquityUsd, uncappedStake,
                                                      // the book we are about to cross, as we see it now
                                                      string.Join("|", _feed.AskLadder(pair.KalshiTicker, c.Side == "YES", 5)
-                                                         .Select(l => $"{l.Price:0.00}x{l.Size:0.##}"))), ct,
+                                                         .Select(l => $"{l.Price:0.00}x{l.Size:0.##}")),
+                                                     shadowA, shadowAB, _cfg.LiveKellyWalkK, _cfg.LiveKellyShrink), ct,
                                          kellyStake, feeM);
         }
 

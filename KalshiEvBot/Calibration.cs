@@ -828,7 +828,8 @@ public static class Calibration
         var rows = new List<(string Ticker, string Side, double Limit, double RestPx, double Ev,
                              int Req, string Status, double Fill, double Avg, double Ms, double Slip,
                              double Fee, double Equity, double Bank, string At, double Depth, double Uncapped,
-                             double PTrue, double FeeVenue, string OrderId)>();
+                             double PTrue, double FeeVenue, string OrderId,
+                             double ShadowA, double ShadowAB, double KWalk, double KShrink)>();
         // Csv.Read, NOT StreamReader. A bare StreamReader requests FileShare.Read, which CONFLICTS with the
         // write handle the running bot holds on today's file — and the whole report dies on an IOException
         // AFTER printing sections 1-6, so it looks like the report simply ends. Csv.Read opens with
@@ -846,7 +847,8 @@ public static class Calibration
                           D("FillCount"), D("AvgFillPrice"), D("LatencyMs"), D("SlippageCents"),
                           D("FeeChargedUsd"), D("EquityUsd"), D("BankrollUsd"), S("At"),
                           D("DepthToLimit"), D("UncappedContracts"),
-                          D("PTrue"), D("FeeVenueUsd"), S("OrderId")));
+                          D("PTrue"), D("FeeVenueUsd"), S("OrderId"),
+                          D("ShadowStakeA"), D("ShadowStakeAB"), D("KellyWalkK"), D("KellyShrink")));
             }
         }
         if (rows.Count == 0) return;
@@ -1093,6 +1095,9 @@ public static class Calibration
             // sum(contracts x (won - P_true)): the outcome noise, plus whatever bias P_true had on the bets
             // we took. Nothing about price, fees, slippage or sizing is left in that difference.
             double boughtExact = 0, residual = 0, residVar = 0, generalBias = 0;
+            // per settled fill, on the EXACT cost basis, for the Kelly shadow below
+            var perFill = new List<(double N, double Cost, bool Won, double P, double Limit,
+                                    double ShadowA, double ShadowAB, double KWalk, double KShrink)>();
             int fromLadder = 0, fromVenueFee = 0, fromModelFee = 0;
             var ladderCost = new Dictionary<string, (double Ctr, double Notional, double Fee)>(StringComparer.Ordinal);
             foreach (string lf in Directory.GetFiles(dir, "EvFillLadder_*.csv"))
@@ -1140,6 +1145,7 @@ public static class Calibration
                     cost = r.Fill * px + fee; fromModelFee++;
                 }
                 double pT = double.IsNaN(r.PTrue) ? 0.0 : r.PTrue;
+                perFill.Add((nCtr, cost, w.Value, pT, r.Limit, r.ShadowA, r.ShadowAB, r.KWalk, r.KShrink));
                 boughtExact += nCtr * pT - cost;
                 residual    += nCtr * ((w.Value ? 1.0 : 0.0) - pT);
                 residVar    += nCtr * nCtr * pT * (1 - pT);         // its variance IF P_true were exactly right
@@ -1244,6 +1250,55 @@ public static class Calibration
                                     + "   - section 2's miss at these P_trues; costs the same traded or not");
                     Console.WriteLine($"                       FILL-SPECIFIC        ${fillSpecific,8:+0.00;-0.00}  ({100 * fillSpecific / ctrN:+0.00;-0.00}pt/ctr)"
                                     + "   - adverse selection + variance: the only part that is about being filled");
+                }
+
+                // ── KELLY SHADOW: the suggested corrections, priced on the SAME fills ───────────────────
+                // Every order since 2026-09-28 logs what two corrected Kelly bases would have staked
+                // (EvMath.KellyBasis): A = size on the expected FILL price (walk-aware), A+B = that plus the
+                // winner's-curse shrink toward the market. Priced here exactly like the live line above - same
+                // outcome, same cost per contract, never more contracts than actually filled (the depth was
+                // what it was) - so the three rows differ ONLY in size. What to read: whether the P&L's t
+                // holds up at the smaller size (the edge is in the per-contract numbers, which barely move)
+                // and how many bets each floor would refuse. Nothing here was traded.
+                var shadowRows = perFill.Where(x => !double.IsNaN(x.ShadowA) && !double.IsNaN(x.ShadowAB)
+                                                    && x.ShadowA >= 0 && x.Limit > 0 && x.N > 0).ToList();
+                if (shadowRows.Count > 0)
+                {
+                    int cap = (int)EvConfig.Env("EV_LIVE_MAX_CONTRACTS", 25);
+                    double liveFloor = EvConfig.Env("EV_LIVE_KELLY_MIN_USD", 2.0);
+                    var regimes = shadowRows.Select(x => $"walk {x.KWalk:0.00} shrink {x.KShrink:0.00}").Distinct().ToList();
+                    Console.WriteLine();
+                    Console.WriteLine($"   KELLY SHADOW  ({shadowRows.Count} settled fill(s) logged with shadow stakes; live basis: {string.Join(" / ", regimes)})");
+                    Console.WriteLine("     what the corrected Kelly would have staked on the SAME fills - same outcomes, same prices; only the size differs. Not traded.");
+                    Console.WriteLine("                          contracts   spend     bought EV        settled P&L ± SE (t)        skipped at $5 / $2 / $1");
+                    void Variant(string name, Func<(double N, double Cost, bool Won, double P, double Limit,
+                                                   double ShadowA, double ShadowAB, double KWalk, double KShrink), double> eff,
+                                 Func<(double N, double Cost, bool Won, double P, double Limit,
+                                      double ShadowA, double ShadowAB, double KWalk, double KShrink), double>? stake)
+                    {
+                        double ctr = 0, spend = 0, bought = 0, pnlV = 0, varV = 0;
+                        foreach (var x in shadowRows)
+                        {
+                            double e = eff(x), cpc = x.Cost / x.N;
+                            ctr += e; spend += e * cpc;
+                            bought += e * (x.P - cpc);
+                            pnlV   += e * ((x.Won ? 1.0 : 0.0) - cpc);
+                            varV   += e * e * x.P * (1 - x.P);
+                        }
+                        double seV = Math.Sqrt(varV);
+                        string skip = stake is null ? "      -"
+                            : string.Join(" / ", new[] { 5.0, 2.0, 1.0 }.Select(f =>
+                                  $"{100.0 * shadowRows.Count(x => stake(x) < f) / shadowRows.Count,3:0}%"));
+                        Console.WriteLine($"     {name,-20} {ctr / shadowRows.Count,6:0.0}/order  ${spend,8:0.00}   ${bought,+7:+0.00;-0.00} ({100 * bought / Math.Max(ctr, 1e-9),+5:+0.00;-0.00}c)"
+                                        + $"   ${pnlV,+8:+0.00;-0.00} ± {seV,6:0.00} ({(seV > 0 ? pnlV / seV : 0),+5:+0.00;-0.00})     {skip}");
+                    }
+                    double Eff(double stakeUsd, double limit, double n)
+                        => Math.Min(EvMath.ContractsFor(stakeUsd, limit, 1.0, cap), n);
+                    Variant("as traded", x => x.N, null);
+                    Variant("A   walk-aware", x => Eff(x.ShadowA, x.Limit, x.N), x => x.ShadowA);
+                    Variant("A+B + shrink", x => Eff(x.ShadowAB, x.Limit, x.N), x => x.ShadowAB);
+                    Console.WriteLine($"     P&L is at NO floor (the pure sizing effect). The live floor is ${liveFloor:0.00}; a bet under it is refused, not shrunk.");
+                    Console.WriteLine("     Turn on with EV_LIVE_KELLY_WALK_K=0.63 and EV_LIVE_KELLY_SHRINK=0.15 (lower EV_LIVE_KELLY_MIN_USD with the shrink).");
                 }
                 Console.WriteLine($"   quoted-vs-realised {pnl - quotedUsd:+0.00;-0.00}"
                                 + (se > 0

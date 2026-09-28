@@ -580,6 +580,12 @@ internal static class Program
                             + " (EV_LIVE_KELLY_MAX_EDGE / EV_LIVE_MAX_CONTRACTS).");
             Console.WriteLine($"[KELLY ] at this equity Kelly can ask at most ${ceiling:0.00} and typically "
                             + $"asks about ${typical:0.00}.");
+            Console.WriteLine("[KELLY ] basis: "
+                            + (cfg.LiveKellyWalkK > 0 ? $"walk-aware K={cfg.LiveKellyWalkK:0.00}" : "at the ask (walk OFF)")
+                            + ", "
+                            + (cfg.LiveKellyShrink > 0 ? $"shrink {cfg.LiveKellyShrink:0.00} toward the market" : "no shrink")
+                            + $"   | shadow logs K={cfg.ShadowKellyWalkK:0.00} / shrink {cfg.ShadowKellyShrink:0.00} on every order"
+                            + "  (EV_LIVE_KELLY_WALK_K / EV_LIVE_KELLY_SHRINK; section 7 KELLY SHADOW).");
             if (cfg.LiveKellyMinUsd >= ceiling)
                 Con.Line(ConsoleColor.Red,
                     $"[KELLY ] *** THE FLOOR (${cfg.LiveKellyMinUsd:0.00}) IS ABOVE KELLY'S CEILING "
