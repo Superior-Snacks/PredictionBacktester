@@ -2,12 +2,13 @@ using System.Globalization;
 
 namespace KalshiEvBot;
 
-/// <summary>One follow-up row, reduced to the ten columns the report reads. <c>EntryUtc</c> is kept as the
+/// <summary>One follow-up row, reduced to the columns the report reads. <c>EntryUtc</c> is kept as the
 /// exact string the tracker wrote (section 10 joins it against the cooldown log by string) and also parsed
-/// once into <c>EntryAt</c> (UTC; <c>DateTime.MinValue</c> when unparseable).</summary>
+/// once into <c>EntryAt</c> (UTC; <c>DateTime.MinValue</c> when unparseable). <c>NowPTrue</c> is the
+/// oracle's own price at the checkpoint, on our side - the radar's ORACLE DRIFT line.</summary>
 public sealed record FollowRow(string Ticker, string Side, string Decision, string EntryUtc, DateTime EntryAt,
                                double AgeSec, double EntryAsk, double EntryPTrue, double NowAsk, double NowBid,
-                               double EntryDepth);
+                               double EntryDepth, double NowPTrue = double.NaN);
 
 /// <summary>
 /// Per-file typed cache for the report's inputs.
@@ -36,6 +37,9 @@ public static class ReportCache
     /// <summary>Bump when the set of fields extracted per row changes: every cache is then rebuilt.</summary>
     public const int Version = 1;
     private const string Magic = "EVCACHE";
+    /// <summary>The follow-up cache's header tag. Bump ITS suffix when FollowRow's fields change: that
+    /// re-parses the follow-ups only, not the gigabyte of telemetry a Version bump would. v2 = NowPTrue.</summary>
+    private const string FollowKind = "follow.v2";
 
     public static int Hits, Misses;
     /// <summary>Follow-up rows whose entry fell in Kalshi's maintenance window, set aside at load time
@@ -180,7 +184,8 @@ public static class ReportCache
                               DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var at);
             rows.Add(new FollowRow(Csv.Str(r, "Ticker"), Csv.Str(r, "Side"), Csv.Str(r, "Decision"), eu, at,
                                    Csv.Num(r, "AgeSec"), Csv.Num(r, "EntryAsk"), Csv.Num(r, "EntryPTrue"),
-                                   Csv.Num(r, "NowAsk"), Csv.Num(r, "NowBid"), Csv.Num(r, "EntryDepth")));
+                                   Csv.Num(r, "NowAsk"), Csv.Num(r, "NowBid"), Csv.Num(r, "EntryDepth"),
+                                   Csv.Num(r, "NowPTrue")));
         }
         ParseSeconds += sw.Elapsed.TotalSeconds;
         TryWriteFollow(cp, fi, rows);
@@ -195,7 +200,7 @@ public static class ReportCache
             if (!File.Exists(cp)) return false;
             using var fs = new FileStream(cp, FileMode.Open, FileAccess.Read, FileShare.Read, 1 << 16);
             using var r = new BinaryReader(fs);
-            if (!HeaderOk(r, src, "follow", out _, out int n)) return false;
+            if (!HeaderOk(r, src, FollowKind, out _, out int n)) return false;
             var tbl = new List<string>();
             rows = new List<FollowRow>(n);
             for (int i = 0; i < n; i++)
@@ -204,7 +209,7 @@ public static class ReportCache
                 string eu = r.ReadString();
                 var at = DateTime.FromBinary(r.ReadInt64());
                 rows.Add(new FollowRow(ticker, side, dec, eu, at, r.ReadDouble(), r.ReadDouble(), r.ReadDouble(),
-                                       r.ReadDouble(), r.ReadDouble(), r.ReadDouble()));
+                                       r.ReadDouble(), r.ReadDouble(), r.ReadDouble(), r.ReadDouble()));
             }
             return true;
         }
@@ -219,7 +224,7 @@ public static class ReportCache
             using (var fs = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None, 1 << 16))
             using (var w = new BinaryWriter(fs))
             {
-                WriteHeader(w, src, "follow", rows.Count, rows.Count);
+                WriteHeader(w, src, FollowKind, rows.Count, rows.Count);
                 var tbl = new Dictionary<string, int>(StringComparer.Ordinal);
                 foreach (var o in rows)
                 {
@@ -227,7 +232,7 @@ public static class ReportCache
                     w.Write(o.EntryUtc);
                     w.Write(o.EntryAt.ToBinary());
                     w.Write(o.AgeSec); w.Write(o.EntryAsk); w.Write(o.EntryPTrue);
-                    w.Write(o.NowAsk); w.Write(o.NowBid); w.Write(o.EntryDepth);
+                    w.Write(o.NowAsk); w.Write(o.NowBid); w.Write(o.EntryDepth); w.Write(o.NowPTrue);
                 }
             }
             File.Move(tmp, cp, overwrite: true);

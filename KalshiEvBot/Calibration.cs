@@ -333,8 +333,9 @@ public static class Calibration
     /// up is consistent with either story, arriving AT our price is not.</para>
     /// </summary>
     /// <summary>
-    /// Section 10 — the ROLLING RADAR. Three numbers on the last N fills (default 200), each coloured, and one
-    /// verdict. Built for a check every two days by someone deliberately not watching the P&amp;L.
+    /// Section 10 — the ROLLING RADAR. Four numbers on the last N fills (default 200; first entries, one per
+    /// ticker+side), each coloured, and one verdict. Built for a check every two days by someone deliberately
+    /// not watching the P&amp;L.
     ///
     /// <para><b>Why a rolling window and not the whole history.</b> Every other section pools since
     /// 2026-08-22. A strategy that stops working shows up in a pooled number only after the new regime has
@@ -352,6 +353,10 @@ public static class Calibration
     /// <para>CONVERGENCE — section 9's T+20 MOVE, restricted to the window's fills. Kalshi's ask rising
     /// after we buy is the thesis; if Kalshi upgrades its own feed and stops lagging Pinnacle, this goes to
     /// zero and came-to-us goes to 50%.</para>
+    /// <para>ORACLE DRIFT — the winner's curse (added 2026-09-28): how far Pinnacle's OWN price falls back
+    /// after we select it, set against the edge we buy. The ~1pt it measures is what separates bought EV from
+    /// realised; the CUSHION (bought + drift) is the edge left after it. Breaks if Pinnacle gets noisier, or
+    /// if a guard change starts selecting more of its noise.</para>
     ///
     /// <para><b>Colours are the verdict.</b> Green on all three: ignore the P&amp;L, let it run. Any yellow:
     /// look at that line's pooled section. Any red: stop and find out why before the next block. The tags
@@ -369,7 +374,7 @@ public static class Calibration
 
         // every attempt, with what it needs
         var att = new List<(string Key, string Ticker, string Side, DateTime At, double Fill, double Avg,
-                            double Limit, double Fee, string Status)>();
+                            double Limit, double Fee, string Status, double PTrue)>();
         foreach (string f in files)
             foreach (var row in Csv.Read(f))
             {
@@ -379,9 +384,16 @@ public static class Calibration
                                        DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var at)) continue;
                 string tk = Csv.Str(row, "Ticker"), sd = Csv.Str(row, "Side");
                 att.Add((tk + "|" + sd, tk, sd, at, Csv.Num(row, "FillCount"), Csv.Num(row, "AvgFillPrice"),
-                         Csv.Num(row, "LimitPrice"), Csv.Num(row, "FeeChargedUsd"), Csv.Str(row, "Status")));
+                         Csv.Num(row, "LimitPrice"), Csv.Num(row, "FeeChargedUsd"), Csv.Str(row, "Status"),
+                         Csv.Num(row, "PTrue")));
             }
-        var fillsAll = att.Where(r => r.Fill >= 1).OrderByDescending(r => r.At).ToList();
+        // FIRST ENTRIES, NOT ORDERS. With EV_LIVE_REENTRY a side fills several times. Counted as orders,
+        // re-entries would lift VELOCITY exactly when first entries fall - a sidecar that lost half the live
+        // matches could hide behind twice the re-entries - and shrink the window's span. One row per
+        // ticker+side, its first fill. Identical to the old count on everything before 2026-09-28.
+        var fillsAll = att.Where(r => r.Fill >= 1)
+                          .GroupBy(r => r.Key).Select(g => g.OrderBy(r => r.At).First())
+                          .OrderByDescending(r => r.At).ToList();
 
         Console.WriteLine();
         Console.WriteLine($"11. ROLLING RADAR  (the last {window} fills - the two-day check; green = let it run, red = stop)");
@@ -493,10 +505,56 @@ public static class Calibration
             Line(1, $"CONVERGENCE   only {cE.N} of the window's fills have a T+20 follow-up row - too few to read");
         }
 
+        // ── 4. ORACLE DRIFT: the ~1pt winner's curse, in minutes instead of at settlement ─────────
+        // We buy when Pinnacle sits above Kalshi, and that filter catches Pinnacle at noisy highs as well as
+        // Kalshi being slow. A sharp de-vigged price is close to a martingale, so the noise shows up as
+        // Pinnacle's OWN price falling back toward Kalshi after we select it. Measured 2026-09-28 on 1161
+        // signals: -1.00c ± 0.34 by T+300 - the same 1pt settlement shows (-1.01pt on fills), at an eighth of
+        // the error bar. It comes out of what we BUY, so bought edge + drift = the CUSHION: the edge that
+        // survives the curse. Red when the cushion is negative at 2 sigma (the curse eats the whole bought
+        // edge); yellow when it is negative at all, or the window's drift is 2 sigma worse than lifetime.
+        // Every signal counts (the curse is in the selection, not the fill; fill-specific bias measured ~0),
+        // first signal per ticker+side, so a re-signalling market is one observation.
+        var driftAt = new Dictionary<string, (DateTime At, double Cents)>(StringComparer.Ordinal);
+        foreach (var r in ReportCache.LoadFollowUps(dir, followPrefix))
+        {
+            if (r.Decision != "SIGNAL" || double.IsNaN(r.AgeSec) || Math.Abs(r.AgeSec - 300) > 30) continue;
+            if (!double.IsFinite(r.EntryPTrue) || !double.IsFinite(r.NowPTrue) || r.EntryAt == DateTime.MinValue) continue;
+            string key = r.Ticker + "|" + r.Side;
+            if (driftAt.TryGetValue(key, out var have) && have.At <= r.EntryAt) continue;
+            driftAt[key] = (r.EntryAt, (r.NowPTrue - r.EntryPTrue) * 100);       // + = toward our side
+        }
+        var dLife = Stat(driftAt.Values.Select(v => v.Cents));
+        var dWin  = Stat(driftAt.Values.Where(v => v.At >= oldest && v.At <= newest).Select(v => v.Cents));
+        double bCtr = 0, bSum = 0;
+        foreach (var r in att.Where(r => r.Fill >= 1 && r.At >= oldest && r.At <= newest && double.IsFinite(r.PTrue)))
+        {
+            double px = r.Avg > 0 ? r.Avg : r.Limit;
+            double fe = double.IsNaN(r.Fee) ? 0 : r.Fee;
+            bSum += r.Fill * (r.PTrue - px) - fe;
+            bCtr += r.Fill;
+        }
+        if (dWin.N >= 30 && !double.IsNaN(dWin.Se) && bCtr > 0)
+        {
+            double bought = 100 * bSum / bCtr, cushion = bought + dWin.M;
+            double tC = dWin.Se > 0 ? cushion / dWin.Se : 0;
+            bool worse = !double.IsNaN(dLife.Se) && dWin.M - dLife.M < -2 * dWin.Se;
+            int gO = cushion + 2 * dWin.Se < 0 ? 2 : (cushion < 0 || worse) ? 1 : 0;
+            grades.Add(gO);
+            Line(gO, $"ORACLE DRIFT  Pinnacle {dWin.M:+0.00;-0.00}c +/-{dWin.Se:0.00} by T+300 (the winner's curse; lifetime {dLife.M:+0.00;-0.00})   "
+                   + $"bought {bought:+0.00;-0.00}c/ctr -> CUSHION {cushion:+0.00;-0.00}c (t={tC:+0.0;-0.0})   "
+                   + $"(n={dWin.N}; red = cushion negative at 2 sigma)");
+        }
+        else
+        {
+            grades.Add(1);
+            Line(1, $"ORACLE DRIFT  only {dWin.N} of the window's signals have a T+300 oracle reading - too few to read");
+        }
+
         // ── verdict ─────────────────────────────────────────────────────────────────────────────
         int worst = grades.Max();
         Line(worst, worst == 0 ? "VERDICT       all green - ignore the P&L and let it run."
-                  : worst == 1 ? "VERDICT       yellow - read the matching pooled section (7 for adverse selection, 9 for convergence) before deciding anything."
+                  : worst == 1 ? "VERDICT       yellow - read the matching pooled section (7 for adverse selection and the oracle's bias, 9 for convergence) before deciding anything."
                                : "VERDICT       RED - stop before the next block and find out why. A red line here is not variance.");
     }
 

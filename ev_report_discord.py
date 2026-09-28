@@ -61,11 +61,11 @@ def grab(text: str, pattern: str, group: int = 0) -> str:
 
 
 def radar_only(out: str) -> tuple[str, bool]:
-    """Just the rolling-health block: the three [OK|WATCH|STOP] lines and the verdict, as one short message.
+    """Just the rolling-health block: the four [OK|WATCH|STOP] lines and the verdict, as one short message.
     This is the DEFAULT per-block post (PINNACLE_ON_CLOSE_CMD ... --radar): the two-day health check, and
     nothing else, so the channel carries live/dark, errors, the radar, and one full report a day."""
     bad = False
-    radar = re.findall(r"^\s*\[(OK|WATCH|STOP)\]\s+(VELOCITY|ADVERSE SEL\.|CONVERGENCE|VERDICT)\s+(.*)$", out, re.M)
+    radar = re.findall(r"^\s*\[(OK|WATCH|STOP)\]\s+(VELOCITY|ADVERSE SEL\.|CONVERGENCE|ORACLE DRIFT|VERDICT)\s+(.*)$", out, re.M)
     if not radar:
         n = grab(out, r"^\s*(\d+) fill\(s\) settled.*$")
         return ("📡 **EV radar** — not enough settled fills for the rolling window yet"
@@ -73,7 +73,7 @@ def radar_only(out: str) -> tuple[str, bool]:
     L = [f"📡 **EV radar** (last 200 fills) · {dt.datetime.now():%a %H:%M}"]
     for tag, name, rest in radar:
         rest = clean(rest)
-        rest = re.sub(r"\s*\((?:lifetime|red =|n=\d+; green|green >=)[^)]*\)\s*$", "", rest)
+        rest = re.sub(r"\s*\((?:lifetime|red =|n=\d+; green|n=\d+; red|green >=)[^)]*\)\s*$", "", rest)
         icon = {"OK": "🟢", "WATCH": "🟡", "STOP": "🔴"}[tag]
         if tag == "STOP":
             bad = True
@@ -154,16 +154,16 @@ def digest(out: str) -> tuple[str, bool]:
     bad = False
     L = []
 
-    # THE RADAR FIRST. Section 10 is the two-day check: three rolling-window lines and a verdict, each
+    # THE RADAR FIRST. Section 10 is the two-day check: four rolling-window lines and a verdict, each
     # tagged [OK]/[WATCH]/[STOP]. It goes at the top because it is the only thing the reader needs when
     # the answer is "all green", and the thing they need most when it is not. Tags become emoji here so
     # the colour survives Discord. A [STOP] anywhere marks the whole digest alarming.
-    radar = re.findall(r"^\s*\[(OK|WATCH|STOP)\]\s+(VELOCITY|ADVERSE SEL\.|CONVERGENCE|VERDICT)\s+(.*)$", out, re.M)
+    radar = re.findall(r"^\s*\[(OK|WATCH|STOP)\]\s+(VELOCITY|ADVERSE SEL\.|CONVERGENCE|ORACLE DRIFT|VERDICT)\s+(.*)$", out, re.M)
     if radar:
         L.append("**RADAR** (last 200 fills)")
         for tag, name, rest in radar:
             rest = clean(rest)
-            rest = re.sub(r"\s*\((?:lifetime|red =|n=\d+; green|green >=)[^)]*\)\s*$", "", rest)   # drop the legend
+            rest = re.sub(r"\s*\((?:lifetime|red =|n=\d+; green|n=\d+; red|green >=)[^)]*\)\s*$", "", rest)   # drop the legend
             icon = {"OK": "🟢", "WATCH": "🟡", "STOP": "🔴"}[tag]
             if tag == "STOP":
                 bad = True
