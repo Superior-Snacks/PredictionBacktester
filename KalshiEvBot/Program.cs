@@ -59,7 +59,9 @@ internal static class Program
                                 + $"${stakeGame:0.00}/game cap,");
             else
                 Console.WriteLine($"│  IOC buys on every confirmed signal. ${stakeSide:0.00}/side, ${stakeGame:0.00}/game,");
-            Console.WriteLine("│  one FILLED entry per side. A no-fill costs nothing and may be retried.");
+            Console.WriteLine(EvConfig.Env("EV_LIVE_REENTRY", 0) != 0
+                ? $"│  RE-ENTRY ON: a filled side is bought again on later signals until the game holds ${stakeGame:0.00}."
+                : "│  one FILLED entry per side. A no-fill costs nothing and may be retried.");
             if (micro)
                 Console.WriteLine("│  MICRO-BET: sized to measure the FILL RATE, not to earn — at this size");
             if (micro)

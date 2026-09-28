@@ -23,6 +23,13 @@ public sealed class EvConfig
     // A no-fill is free and does NOT consume the side's allowance, so the same market may be re-attempted
     // on a later signal. This stops that becoming a hot loop against one stubborn book.
     public double LiveRetryCooldownSec = Env("EV_LIVE_RETRY_COOLDOWN_SEC", 60);
+    /// <summary>RE-ENTRY: may a side that has already FILLED be bought again on a later signal? 0 = no, the
+    /// M1 rule (one filled entry per side, ever - a fill-rate test's rule, never chosen for sizing). 1 = yes:
+    /// each order is Kelly-sized on its own signal and EV_LIVE_STAKE_GAME becomes the real bound on one game,
+    /// so set that deliberately with it. Measured 2026-09-28 before turning it on (389 fills, 31 days): 66% of
+    /// filled sides re-signal later (median 3.5 min), and the hypothetical second bet was not adverse
+    /// (win - P_true +0.85pt ± 3.0). The retry cooldown above still spaces the orders.</summary>
+    public bool   LiveReentry          = Env("EV_LIVE_REENTRY", 0) != 0;
     /// <summary>Hard stop on money SPENT in one local day. 0 = no cap. The per-side and per-game caps
     /// bound one market; nothing bounds the day, and an unattended run turns the shard float over
     /// repeatedly as settlements return. Resets at local midnight and survives a restart.</summary>
@@ -1105,20 +1112,27 @@ public sealed class EvEvaluator
                                                liveExposure, 0, _cfg.LiveKellyMaxUsd, _cfg.MaxTradeFrac, feeM,
                                                _cfg.LiveKellyFraction, _cfg.KellyBetaKnee, _cfg.KellyBetaZero,
                                                _cfg.LiveKellyMaxEdge, limit, _cfg.ShadowKellyWalkK, _cfg.ShadowKellyShrink);
-                if (_cfg.LiveKellyWalkK > 0 || _cfg.LiveKellyShrink > 0)
-                {
-                    double eK = EvMath.KellyEdge(c.PTrueUsed, px, feeM, _cfg.LiveKellyMaxEdge, limit,
-                                                 _cfg.LiveKellyWalkK, _cfg.LiveKellyShrink);
+                bool corrected = _cfg.LiveKellyWalkK > 0 || _cfg.LiveKellyShrink > 0;
+                double eK = corrected
+                          ? EvMath.KellyEdge(c.PTrueUsed, px, feeM, _cfg.LiveKellyMaxEdge, limit,
+                                             _cfg.LiveKellyWalkK, _cfg.LiveKellyShrink) : 0;
+                if (corrected)
                     walkNote = $" sized on {eK * 100:+0.0;-0.0}c (walk {_cfg.LiveKellyWalkK:0.00}, shrink {_cfg.LiveKellyShrink:0.00});";
-                }
                 // The haircut is a MODEL choice, not a bound, so it is reported on its own rather than
                 // folded into the floor/ceiling notes below: the reader should be able to see "this was
-                // a 6.7c signal sized as a 3c one" on the line where the signal appears.
+                // a 6.7c signal sized as a 3c one" on the line where the signal appears. With the Kelly
+                // corrections on, the cap applies AFTER them (KellyBasis, then the cap), so it binds only
+                // when the CORRECTED edge still exceeds it - a 6.7c signal usually corrects to ~2c and is
+                // never capped. Saying "sized as 3.0c" there would overstate the stake's basis.
                 string capNote = walkNote;
-                if (_cfg.LiveKellyMaxEdge > 0 && ev > _cfg.LiveKellyMaxEdge + 1e-9)
+                bool capBinds = _cfg.LiveKellyMaxEdge > 0
+                             && (corrected ? eK >= _cfg.LiveKellyMaxEdge - 1e-9 : ev > _cfg.LiveKellyMaxEdge + 1e-9);
+                if (capBinds)
                 {
                     Interlocked.Increment(ref Stats.KellyEdgeCapped);
-                    capNote = $" edge {ev * 100:0.0}c sized as {_cfg.LiveKellyMaxEdge * 100:0.0}c;";
+                    capNote = corrected
+                            ? $" edge {ev * 100:0.0}c sized as {eK * 100:0.0}c (walk {_cfg.LiveKellyWalkK:0.00}, shrink {_cfg.LiveKellyShrink:0.00}, then the cap);"
+                            : $" edge {ev * 100:0.0}c sized as {_cfg.LiveKellyMaxEdge * 100:0.0}c;";
                 }
                 if (raw > 0 && kellyStake <= 0)
                 {

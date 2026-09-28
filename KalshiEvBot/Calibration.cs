@@ -1097,7 +1097,16 @@ public static class Calibration
             double boughtExact = 0, residual = 0, residVar = 0, generalBias = 0;
             // per settled fill, on the EXACT cost basis, for the Kelly shadow below
             var perFill = new List<(double N, double Cost, bool Won, double P, double Limit,
-                                    double ShadowA, double ShadowAB, double KWalk, double KShrink)>();
+                                    double ShadowA, double ShadowAB, double KWalk, double KShrink,
+                                    string Key, bool Re)>();
+            // ONE OUTCOME PER SIDE, NOT PER ORDER. With EV_LIVE_REENTRY a side can fill several times, and
+            // every one of those orders wins or loses together - so error bars are built per ticker+side
+            // (sum of its contracts, squared) rather than per order. Until 2026-09-28 each side filled once
+            // and the two were identical; nothing printed before then changes.
+            var bySide = new Dictionary<string, (double N, double NP, double Net)>(StringComparer.Ordinal);
+            var firstFillAt = got.GroupBy(r => r.Ticker + "|" + r.Side, StringComparer.Ordinal)
+                                 .ToDictionary(g => g.Key, g => g.OrderBy(r => r.At, StringComparer.Ordinal).First().At,
+                                               StringComparer.Ordinal);
             int fromLadder = 0, fromVenueFee = 0, fromModelFee = 0;
             var ladderCost = new Dictionary<string, (double Ctr, double Notional, double Fee)>(StringComparer.Ordinal);
             foreach (string lf in Directory.GetFiles(dir, "EvFillLadder_*.csv"))
@@ -1145,10 +1154,13 @@ public static class Calibration
                     cost = r.Fill * px + fee; fromModelFee++;
                 }
                 double pT = double.IsNaN(r.PTrue) ? 0.0 : r.PTrue;
-                perFill.Add((nCtr, cost, w.Value, pT, r.Limit, r.ShadowA, r.ShadowAB, r.KWalk, r.KShrink));
+                string sideKey = r.Ticker + "|" + r.Side;
+                perFill.Add((nCtr, cost, w.Value, pT, r.Limit, r.ShadowA, r.ShadowAB, r.KWalk, r.KShrink,
+                             sideKey, r.At != firstFillAt[sideKey]));
                 boughtExact += nCtr * pT - cost;
                 residual    += nCtr * ((w.Value ? 1.0 : 0.0) - pT);
-                residVar    += nCtr * nCtr * pT * (1 - pT);         // its variance IF P_true were exactly right
+                var sideAcc = bySide.TryGetValue(sideKey, out var prevSideAcc) ? prevSideAcc : (N: 0.0, NP: 0.0, Net: 0.0);
+                bySide[sideKey] = (sideAcc.N + nCtr, sideAcc.NP + nCtr * pT, sideAcc.Net + (w.Value ? nCtr : 0.0) - cost);
                 generalBias += nCtr * (_decileDiff.TryGetValue(Math.Min(9, (int)(pT * 10)), out double dd) ? dd : 0.0);
                 wonCtr += w.Value ? nCtr : 0;
                 double rest = double.IsNaN(r.RestPx) || r.RestPx <= 0 ? px : r.RestPx;
@@ -1161,8 +1173,14 @@ public static class Calibration
                 quotedUsd += (double.IsNaN(r.Ev) ? 0.0 : r.Ev / 100.0) * nCtr;     // EvCents is per contract
                 double net = (w.Value ? nCtr : 0.0) - cost;                         // Kalshi pays $1 a contract
                 pnl += net;
-                nets.Add(net);
                 if (net < 0) losers.Add((r.Ticker, r.Side, net));
+            }
+            // Per SIDE (see bySide): the residual's variance IF P_true were exactly right, and the P&L's spread.
+            foreach (var sideTot in bySide.Values)
+            {
+                double pBar = sideTot.N > 0 ? sideTot.NP / sideTot.N : 0.0;
+                residVar += sideTot.N * sideTot.N * pBar * (1 - pBar);
+                nets.Add(sideTot.Net);
             }
 
             Console.WriteLine();
@@ -1272,20 +1290,24 @@ public static class Calibration
                     Console.WriteLine("     what the corrected Kelly would have staked on the SAME fills - same outcomes, same prices; only the size differs. Not traded.");
                     Console.WriteLine("                          contracts   spend     bought EV        settled P&L ± SE (t)        skipped at $5 / $2 / $1");
                     void Variant(string name, Func<(double N, double Cost, bool Won, double P, double Limit,
-                                                   double ShadowA, double ShadowAB, double KWalk, double KShrink), double> eff,
+                                                   double ShadowA, double ShadowAB, double KWalk, double KShrink,
+                                                   string Key, bool Re), double> eff,
                                  Func<(double N, double Cost, bool Won, double P, double Limit,
-                                      double ShadowA, double ShadowAB, double KWalk, double KShrink), double>? stake)
+                                      double ShadowA, double ShadowAB, double KWalk, double KShrink,
+                                      string Key, bool Re), double>? stake)
                     {
-                        double ctr = 0, spend = 0, bought = 0, pnlV = 0, varV = 0;
+                        double ctr = 0, spend = 0, bought = 0, pnlV = 0;
+                        var eBySide = new Dictionary<string, (double E, double P)>(StringComparer.Ordinal);
                         foreach (var x in shadowRows)
                         {
                             double e = eff(x), cpc = x.Cost / x.N;
                             ctr += e; spend += e * cpc;
                             bought += e * (x.P - cpc);
                             pnlV   += e * ((x.Won ? 1.0 : 0.0) - cpc);
-                            varV   += e * e * x.P * (1 - x.P);
+                            var ev0 = eBySide.TryGetValue(x.Key, out var evPrev) ? evPrev : (E: 0.0, P: x.P);
+                            eBySide[x.Key] = (ev0.E + e, ev0.P);            // one outcome per side
                         }
-                        double seV = Math.Sqrt(varV);
+                        double seV = Math.Sqrt(eBySide.Values.Sum(v => v.E * v.E * v.P * (1 - v.P)));
                         string skip = stake is null ? "      -"
                             : string.Join(" / ", new[] { 5.0, 2.0, 1.0 }.Select(f =>
                                   $"{100.0 * shadowRows.Count(x => stake(x) < f) / shadowRows.Count,3:0}%"));
@@ -1299,6 +1321,38 @@ public static class Calibration
                     Variant("A+B + shrink", x => Eff(x.ShadowAB, x.Limit, x.N), x => x.ShadowAB);
                     Console.WriteLine($"     P&L is at NO floor (the pure sizing effect). The live floor is ${liveFloor:0.00}; a bet under it is refused, not shrunk.");
                     Console.WriteLine("     Turn on with EV_LIVE_KELLY_WALK_K=0.63 and EV_LIVE_KELLY_SHRINK=0.15 (lower EV_LIVE_KELLY_MIN_USD with the shrink).");
+                }
+
+                // ── RE-ENTRIES (EV_LIVE_REENTRY=1): a side bought again on a later signal ──────────────────
+                // The question they answer is whether a signal that PERSISTS after we bought is still an edge,
+                // or Kalshi holding a price it has reason to hold. Measured before turning it on (2026-09-28,
+                // topup_scan): the hypothetical second bet ran +0.85pt ± 3.0 win-minus-P_true - fine, but that
+                // was priced off telemetry. This is the real one. Read the win-minus-P_true column: a re-entry
+                // group running clearly below the first entries is adverse selection, and re-entry comes off.
+                // Error bars are per SIDE: a first entry and its re-entries win or lose together.
+                if (perFill.Any(x => x.Re))
+                {
+                    Console.WriteLine();
+                    Console.WriteLine($"   RE-ENTRIES  ({perFill.Count(x => x.Re)} settled re-entry order(s) on "
+                                    + $"{perFill.Where(x => x.Re).Select(x => x.Key).Distinct().Count()} side(s))");
+                    Console.WriteLine("                          orders  contracts   bought EV    win - P_true (per side)     realised");
+                    foreach (var (label, pick) in new[] { ("first entries", false), ("re-entries", true) })
+                    {
+                        var grp = perFill.Where(x => x.Re == pick).ToList();
+                        double gCtr = grp.Sum(x => x.N);
+                        if (gCtr <= 0) continue;
+                        double gBought = grp.Sum(x => x.N * x.P - x.Cost);
+                        double gResid  = grp.Sum(x => x.N * ((x.Won ? 1.0 : 0.0) - x.P));
+                        double gReal   = grp.Sum(x => (x.Won ? x.N : 0.0) - x.Cost);
+                        double gVar    = grp.GroupBy(x => x.Key, StringComparer.Ordinal)
+                                            .Sum(g => { double n = g.Sum(x => x.N), p = g.Sum(x => x.N * x.P) / n;
+                                                        return n * n * p * (1 - p); });
+                        double gSe = Math.Sqrt(gVar) / gCtr;
+                        Console.WriteLine($"     {label,-20} {grp.Count,6}  {gCtr,9:0}   {100 * gBought / gCtr,+6:+0.00;-0.00}c"
+                                        + $"    {100 * gResid / gCtr,+6:+0.00;-0.00}pt ± {100 * gSe:0.00}"
+                                        + $"          {100 * gReal / gCtr,+6:+0.00;-0.00}c/ctr");
+                    }
+                    Console.WriteLine("     a re-entry is not a new outcome - it adds to a bet already made; the game cap (EV_LIVE_STAKE_GAME) bounds it.");
                 }
                 Console.WriteLine($"   quoted-vs-realised {pnl - quotedUsd:+0.00;-0.00}"
                                 + (se > 0
@@ -1546,10 +1600,9 @@ public static class Calibration
                       - (r.Fill * fpx + (double.IsNaN(r.Fee) ? 0.0 : r.Fee));
                 fctr += r.Fill;
             }
-            // Fills are deduped by the same rule so the two sides of the test are built alike. In practice
-            // no market has ever filled twice (the executor will not re-enter a position it holds), so this
-            // is a no-op today - and it must stay here, because if that ever changes the test would start
-            // double-counting silently on the OTHER side.
+            // Fills are deduped by the same rule so the two sides of the test are built alike. Until
+            // 2026-09-28 no market ever filled twice and this was a no-op; with EV_LIVE_REENTRY=1 they do, and
+            // this is what keeps the comparison one row per market instead of double-counting the fills.
             var gotCmp = gotGraded.GroupBy(r => Key(r.Ticker, r.Side), StringComparer.Ordinal)
                                   .Select(g => g.First()).ToList();
 

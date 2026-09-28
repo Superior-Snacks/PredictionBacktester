@@ -53,7 +53,8 @@ public readonly record struct TakeCtx(double WsAsk, double DepthToLimit, bool In
 ///
 /// <para><b>WHAT THIS IS FOR, AND IT IS NOT PROFIT.</b> The question M1 answers is "when we find a +EV, can
 /// we actually buy it?" — the fill rate inside our slippage tolerance. Everything here is sized so that the
-/// answer costs almost nothing to obtain: $5 a side, $10 a game, one FILLED entry per side. A month of this
+/// answer costs almost nothing to obtain: $5 a side, $10 a game, one FILLED entry per side (lifted by
+/// EV_LIVE_REENTRY=1, which leaves the per-game cap as the only bound on a game). A month of this
 /// cannot make or lose meaningful money, and that is the point.</para>
 ///
 /// <para><b>IOC, ALWAYS.</b> <see cref="KalshiOrderClient.PlaceOrderAsync"/> sends
@@ -95,8 +96,9 @@ public sealed class LiveExecutor
     private static string Today => DateTime.Now.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
     public decimal SpentToday => _daily.TryGetValue(Today, out var v) ? v : 0m;
 
-    // A side is CLOSED once it has filled. Keyed ticker|side, so both sides of one game can each hold a
-    // position — hence the per-game cap below, which is what actually bounds a game's exposure.
+    // A side is CLOSED once it has filled - unless EV_LIVE_REENTRY=1, when this is only the record that it
+    // has, and the per-game cap alone bounds it. Keyed ticker|side, so both sides of one game can each hold
+    // a position — hence the per-game cap below, which is what actually bounds a game's exposure.
     private readonly ConcurrentDictionary<string, string> _filled = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, decimal> _spentByEvent = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, DateTime> _lastAttempt = new(StringComparer.Ordinal);
@@ -206,16 +208,13 @@ public sealed class LiveExecutor
         // as BACKSTOPS — but the whole point of this mode is that Kelly is what decides the size, so when a
         // cap cuts it we say so out loud. A cap that silently binds turns Kelly sizing into flat sizing
         // wearing Kelly's name, and nothing in the telemetry would show the difference.
-        decimal gameRoom = (decimal)_cfg.LiveStakePerGameUsd - spent;
-        decimal stake = (decimal)kellyStakeUsd;
-        if (gameRoom < stake)
-        {
-            if (gameRoom <= 0) return 0;
+        decimal stake = GameBoundStake((decimal)kellyStakeUsd, (decimal)_cfg.LiveStakePerGameUsd, spent,
+                                       (decimal)_cfg.LiveKellyMinUsd);
+        if (stake <= 0) return 0;
+        if (stake < (decimal)kellyStakeUsd)
             Con.Line(ConsoleColor.DarkYellow,
-                $"[SIZE ] per-game cap cut Kelly ${kellyStakeUsd:0.00} -> ${gameRoom:0.00} on {eventId} "
+                $"[SIZE ] per-game cap cut Kelly ${kellyStakeUsd:0.00} -> ${stake:0.00} on {eventId} "
               + $"(EV_LIVE_STAKE_GAME={_cfg.LiveStakePerGameUsd:0.00}). Kelly is no longer the binding constraint.");
-            stake = gameRoom;
-        }
         int want = EvMath.ContractsFor((double)stake, limitPrice, feeM);
         int got  = EvMath.ContractsFor((double)stake, limitPrice, feeM, _cfg.LiveMaxContracts);
         if (got < want)
@@ -228,6 +227,16 @@ public sealed class LiveExecutor
               + $"(EV_LIVE_MAX_CONTRACTS={_cfg.LiveMaxContracts}; ${(double)stake:0.00} would have bought {want}).");
         }
         return got;
+    }
+
+    /// <summary>The Kelly stake bounded by what the game has left, with the Kelly FLOOR re-applied after the
+    /// cut. Without that, a game with $3 of room sent a $3 order - under the floor that exists to keep orders
+    /// clear of fee drag. Rare while a side could fill only once; with re-entry it is the normal end of every
+    /// game that re-signals, so it is enforced here. 0 = no order.</summary>
+    internal static decimal GameBoundStake(decimal kellyStake, decimal gameCap, decimal spentInGame, decimal floorUsd)
+    {
+        decimal stake = Math.Min(kellyStake, gameCap - spentInGame);
+        return stake <= 0 || stake < floorUsd ? 0 : stake;
     }
 
     /// <summary>Fire-and-record. Never throws: a venue error must not take the screening loop down with it.
@@ -277,7 +286,16 @@ public sealed class LiveExecutor
                 return false;
             }
         }
-        if (_filled.ContainsKey(key)) why = "side already filled";
+        // RE-ENTRY (EV_LIVE_REENTRY=1): a filled side stays open until its GAME is spent. Once the room left is
+        // under the floor it is skipped exactly as the one-fill rule skipped it - silently. Left to SizeFor, a
+        // capped game that keeps re-signalling would write a "budget-exhausted" row on EVERY signal (that path
+        // never sets _lastAttempt, so the retry cooldown does not space it).
+        bool reentry = _filled.ContainsKey(key);
+        decimal gameSpent = _spentByEvent.TryGetValue(eventId, out var gs) ? gs : 0m;
+        if (reentry && !_cfg.LiveReentry) why = "side already filled";
+        else if (reentry && kellyStakeUsd > 0
+                 && GameBoundStake((decimal)kellyStakeUsd, (decimal)_cfg.LiveStakePerGameUsd, gameSpent,
+                                   (decimal)_cfg.LiveKellyMinUsd) <= 0) why = "game at cap";
         else if (_lastAttempt.TryGetValue(key, out var last)
                  && (t0 - last).TotalSeconds < _cfg.LiveRetryCooldownSec) why = "cooldown";
         else if (!_inFlight.TryAdd(key, 0)) why = "order in flight";
@@ -362,12 +380,14 @@ public sealed class LiveExecutor
             else Interlocked.Increment(ref NoFill);
 
             string depth = ctx.DepthToLimit < 0 ? "?" : $"{ctx.DepthToLimit:0}";
+            decimal gameNow = _spentByEvent.TryGetValue(eventId, out var gn) ? gn : 0m;
             if (got)
                 Con.Line(ConsoleColor.Blue,
                     $"[FILL] {ticker} {side,-3} {fillCount:0}/{count} @ {(avgFill > 0 ? avgFill : (decimal)pxDollars):0.00} "
                   + $"(limit {pxDollars:0.00}, ws {ctx.WsAsk:0.00})  ev {ev * 100:+0.0;-0.0}c  "
                   + $"${(double)fillCount * (double)(avgFill > 0 ? avgFill : (decimal)pxDollars):0.00}  "
-                  + $"{ms:0}ms{(fillCount < count ? $"  [PARTIAL: {depth} showing at the limit]" : "")}");
+                  + $"{ms:0}ms{(fillCount < count ? $"  [PARTIAL: {depth} showing at the limit]" : "")}"
+                  + (reentry ? $"  [RE-ENTRY: game ${gameNow:0.00}/{_cfg.LiveStakePerGameUsd:0.00}]" : ""));
             else
                 Con.Line(ConsoleColor.Yellow,
                     $"[MISS] {ticker} {side,-3} 0/{count} @ limit {pxDollars:0.00} (ws said {ctx.WsAsk:0.00}, "

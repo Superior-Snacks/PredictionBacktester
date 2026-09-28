@@ -991,6 +991,20 @@ public static class SelfTest
                   "repeat prints at one price are summed into a single level", FillLadderLog.Ladder(dupes));
         }
 
+        // ── re-entry: the game cap, with the floor re-applied after it ───────────────────────────────────
+        {
+            Console.WriteLine("\n-- re-entry game cap --");
+            // a typical $11 Kelly order, a $25 game, the $5 floor
+            Check(LiveExecutor.GameBoundStake(11m, 25m, 0m, 5m) == 11m, "first order: the game has room, Kelly decides");
+            Check(LiveExecutor.GameBoundStake(11m, 25m, 11m, 5m) == 11m, "re-entry with $14 left: Kelly still decides");
+            Check(LiveExecutor.GameBoundStake(11m, 25m, 18m, 5m) == 7m, "re-entry with $7 left: cut to the room");
+            Check(LiveExecutor.GameBoundStake(11m, 25m, 22m, 5m) == 0m,
+                  "re-entry with $3 left: UNDER the floor -> no order (was a $3 order before)");
+            Check(LiveExecutor.GameBoundStake(11m, 25m, 25m, 5m) == 0m, "game spent -> no order");
+            Check(LiveExecutor.GameBoundStake(11m, 25m, 30m, 5m) == 0m, "game over-spent (a cap lowered mid-game) -> no order");
+            Check(LiveExecutor.GameBoundStake(11m, 25m, 22m, 0m) == 3m, "floor 0: the old behaviour, the remainder is sent");
+        }
+
         // ── location attestation: the exact 403 body Kalshi returned on 2026-09-24 ────────────────────
         {
             Console.WriteLine("\n-- location attestation --");
