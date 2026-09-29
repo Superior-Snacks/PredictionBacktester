@@ -119,6 +119,33 @@ SCRIPTS = {
 }
 
 
+REMINDERS_FILE = "ev_reminders.json"
+
+
+def reminders_due(root: str, today: "dt.date | None" = None) -> list:
+    """Dated reminders for the end-of-day post. ev_reminders.json is a list of
+    {"due": "YYYY-MM-DD", "text": "...", "days": 7}: each one is posted with the daily report from its due
+    date for `days` days (default 7), then lapses on its own, so nothing needs clearing. This channel is
+    where the operator looks every day, which is what makes it a reminder. A missing or malformed file
+    means no reminders, never a failed post."""
+    today = today or dt.date.today()
+    try:
+        items = json.load(io.open(os.path.join(root, REMINDERS_FILE), encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    out = []
+    for it in items if isinstance(items, list) else []:
+        try:
+            due = dt.date.fromisoformat(str(it.get("due", "")))
+            days = int(it.get("days", 7))
+            text = str(it.get("text", "")).strip()
+        except (ValueError, TypeError, AttributeError):
+            continue
+        if text and due <= today < due + dt.timedelta(days=days):
+            out.append(f"⏰ **Reminder** (due {due:%a %b %d}): {text}"[:1900])
+    return out
+
+
 def fills_line(root: str) -> str:
     """'live fills: N total · today M filled of K attempts'. Counts, not money: the operator reads this
     channel every two days on purpose, and a daily P&L number is exactly what they asked to keep out of it."""
@@ -570,7 +597,10 @@ def main() -> int:
     # the digest on request.
     if a.full:
         fl = fills_line(a.root)
+        due = reminders_due(a.root)
         print(fl)
+        for r in due:
+            print(r)
         if a.dry:
             return 0
         url = load_webhook(os.path.join(a.root, ".env"))
@@ -583,6 +613,8 @@ def main() -> int:
         if not ok:
             print("[DISCORD] attachment FAILED.")
         ok = post(url, fl) and ok
+        for r in due:
+            ok = post(url, r) and ok
         print("[DISCORD] posted." if ok else "[DISCORD] post FAILED.")
         return 0 if ok else 1
 
